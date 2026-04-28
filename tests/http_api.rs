@@ -1,12 +1,24 @@
 use salvo::test::{ResponseExt, TestClient};
 use serde_json::Value;
-use serverx::{db::Db, service, state::AppState};
+use serverx::{config::AppConfig, db::Db, service, state::AppState};
 
 use chrono::Utc;
 use contrix_sdk::{Commit, CommitId, Did, Hash, Operation, OperationId, Proof, SpaceId};
 
+fn test_config() -> AppConfig {
+    AppConfig {
+        bind: "127.0.0.1:0".parse().unwrap(),
+        public_base_url: "http://server".to_owned(),
+        service_did: "did:web:serverx.local".to_owned(),
+        database_url: None,
+        blob_root: std::env::temp_dir().join("serverx-test-blobs"),
+        cors_allow_origin: None,
+        development_mode: true,
+    }
+}
+
 fn app() -> salvo::Service {
-    service(AppState::new(Db { pool: None }))
+    service(AppState::new(test_config(), Db { pool: None }))
 }
 
 fn app_from_state(state: AppState) -> salvo::Service {
@@ -79,7 +91,7 @@ async fn health_and_describe_work() {
 
 #[tokio::test]
 async fn account_contacts_and_space_lifecycle_workflow() {
-    let state = AppState::new(Db { pool: None });
+    let state = AppState::new(test_config(), Db { pool: None });
     let alice = dev_token(state.clone()).await;
     let bob = register_account(state.clone(), "did:web:bob.example", "@bob", "dev_bob").await;
 
@@ -438,7 +450,7 @@ async fn postgres_startup_migrations_are_gated_by_database_url() {
 
     let db = Db::from_env().expect("postgres migrations should run");
     let health: Value = TestClient::get("http://server/health")
-        .send(&app_from_state(AppState::new(db)))
+        .send(&app_from_state(AppState::new(test_config(), db)))
         .await
         .take_json()
         .await
@@ -732,7 +744,7 @@ async fn broader_protocol_surface_returns_contract_shapes() {
 
 #[tokio::test]
 async fn push_profile_and_moderation_contracts_work() {
-    let state = AppState::new(Db { pool: None });
+    let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
     let profile: Value =
         TestClient::get("http://server/api/v1/profile/presence?did=did:web:alice.example")
@@ -788,7 +800,7 @@ async fn push_profile_and_moderation_contracts_work() {
 
 #[tokio::test]
 async fn auth_keys_device_messages_and_blobs_work() {
-    let state = AppState::new(Db { pool: None });
+    let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
 
     let upload: Value = TestClient::post("http://server/api/v1/keys/upload")
@@ -954,7 +966,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
 
 #[tokio::test]
 async fn server_preserves_e2ee_payloads_as_opaque_data() {
-    let state = AppState::new(Db { pool: None });
+    let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
     let ciphertext = "base64url-opaque-ciphertext";
 
@@ -1042,7 +1054,7 @@ async fn repo_submit_rejects_unsigned_commits() {
 
 #[tokio::test]
 async fn repo_adapter_memory_submit_list_get_and_sync_work() {
-    let state = AppState::new(Db { pool: None });
+    let state = AppState::new(test_config(), Db { pool: None });
     let alice = dev_token(state.clone()).await;
     let operation = Operation::create(
         OperationId::new("cx:operation:adapter-01").unwrap(),

@@ -1,8 +1,12 @@
+pub mod authz;
 pub mod config;
 pub mod db;
 pub mod handlers;
 pub mod hlc;
 pub mod ids;
+pub mod persistence;
+pub mod ratelimit;
+pub mod reducer;
 pub mod repo;
 pub mod schema;
 pub mod state;
@@ -12,15 +16,17 @@ use salvo::affix_state;
 use salvo::catcher::Catcher;
 use salvo::prelude::*;
 
-use crate::{handlers::*, state::AppState};
+use crate::{handlers::*, ratelimit::{RateLimiter, RateLimiterConfig, RateLimiterMiddleware}, state::AppState};
 
 pub fn service(state: AppState) -> Service {
     Service::new(router(state)).catcher(Catcher::default().hoop(error_catcher))
 }
 
 pub fn router(state: AppState) -> Router {
+    let rate_limiter = RateLimiter::new(RateLimiterConfig::default());
     Router::new()
         .hoop(affix_state::inject(state))
+        .hoop(RateLimiterMiddleware::new(rate_limiter))
         .push(Router::with_path("health").get(health))
         .push(
             Router::with_path("api/v1")
@@ -40,6 +46,16 @@ pub fn router(state: AppState) -> Router {
                         .delete(remove_space_member),
                 )
                 .push(Router::with_path("messages/send").post(send_message))
+                .push(Router::with_path("messages/revise").post(revise_message))
+                .push(Router::with_path("messages/redact").post(redact_message))
+                .push(Router::with_path("reactions").post(add_reaction).delete(remove_reaction))
+                .push(Router::with_path("read-markers").post(set_read_marker).get(get_read_markers))
+                .push(Router::with_path("entities").post(create_entity).get(list_entities))
+                .push(Router::with_path("entities/{entity_id}").get(get_entity).patch(update_entity).delete(delete_entity))
+                .push(Router::with_path("relations").post(create_relation).get(list_relations))
+                .push(Router::with_path("relations/{relation_id}").delete(delete_relation))
+                .push(Router::with_path("views").post(create_view))
+                .push(Router::with_path("views/{view_id}").get(get_view))
                 .push(Router::with_path("identity/describe").get(identity_describe))
                 .push(Router::with_path("identity/resolve").post(identity_resolve))
                 .push(Router::with_path("identity/document").get(identity_document))
@@ -79,6 +95,8 @@ pub fn router(state: AppState) -> Router {
                 .push(Router::with_path("repo/submit-commit").post(submit_commit))
                 .push(Router::with_path("authz/check").post(authz_check))
                 .push(Router::with_path("authz/effective-grants").get(effective_grants))
+                .push(Router::with_path("authz/grants").post(create_grant))
+                .push(Router::with_path("authz/grants/{grant_id}").delete(revoke_grant))
                 .push(Router::with_path("authz/invites").get(invites))
                 .push(Router::with_path("profile/presence").get(profile_presence))
                 .push(Router::with_path("push/register-device").post(push_register))

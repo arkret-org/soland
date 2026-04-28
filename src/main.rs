@@ -14,7 +14,7 @@ async fn main() -> anyhow::Result<()> {
             std::env::set_var("DATABASE_URL", database_url);
         }
     }
-    let state = AppState::new(Db::from_env()?);
+    let state = AppState::new(config.clone(), Db::from_env()?);
     let acceptor = TcpListener::new(config.bind.to_string()).bind().await;
     tracing::info!(
         bind = %config.bind,

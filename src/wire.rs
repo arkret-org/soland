@@ -725,3 +725,168 @@ pub fn sync_token() -> String {
 pub fn now() -> DateTime<Utc> {
     Utc::now()
 }
+
+// ── Conversation Model DTOs ──
+
+#[derive(Debug, Deserialize)]
+pub struct ReviseMessageRequest {
+    pub event_id: String,
+    pub content: Value,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ReviseMessageResponse {
+    pub event_id: String,
+    pub revision_of: String,
+    pub operation_id: String,
+    pub commit_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RedactMessageRequest {
+    pub event_id: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RedactMessageResponse {
+    pub redacted: bool,
+    pub event_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AddReactionRequest {
+    pub event_id: String,
+    pub key: String,
+    pub space_id: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ReactionResponse {
+    pub event_id: String,
+    pub actor: String,
+    pub key: String,
+    pub active: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RemoveReactionRequest {
+    pub event_id: String,
+    pub key: String,
+    pub space_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SetReadMarkerRequest {
+    pub space_id: String,
+    pub event_id: String,
+    pub scope_id: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ReadMarkerResponse {
+    pub space_id: String,
+    pub actor: String,
+    pub scope_id: String,
+    pub event_id: String,
+    pub read_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct GetReadMarkersRequest {
+    pub space_id: String,
+}
+
+// ── Entity/Relation/View DTOs ──
+
+#[derive(Debug, Deserialize)]
+pub struct CreateEntityRequest {
+    pub space_id: String,
+    pub entity_type: String,
+    pub title: Option<String>,
+    pub content: Option<Value>,
+    #[serde(default)]
+    pub fields: BTreeMap<String, Value>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct EntityResponse {
+    pub entity_id: String,
+    pub space_id: String,
+    pub entity_type: String,
+    pub title: Option<String>,
+    pub content: Option<Value>,
+    pub fields: BTreeMap<String, Value>,
+    pub deleted: bool,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateEntityRequest {
+    pub title: Option<String>,
+    pub content: Option<Value>,
+    #[serde(default)]
+    pub fields: BTreeMap<String, Value>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ListEntitiesRequest {
+    pub space_id: String,
+    pub entity_type: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateRelationRequest {
+    pub space_id: String,
+    pub relation_kind: String,
+    pub from: Option<String>,
+    pub to: Option<String>,
+    #[serde(default)]
+    pub fields: BTreeMap<String, Value>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RelationResponse {
+    pub relation_id: String,
+    pub space_id: String,
+    pub relation_kind: String,
+    pub from: Option<String>,
+    pub to: Option<String>,
+    pub fields: BTreeMap<String, Value>,
+    pub deleted: bool,
+    pub created_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ListRelationsRequest {
+    pub space_id: String,
+    pub relation_kind: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateViewRequest {
+    pub space_id: String,
+    pub kind: String,
+    pub title: Option<String>,
+    pub entity_type: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateGrantRequest {
+    pub space_id: String,
+    pub subject: String,
+    pub resource: String,
+    pub actions: Vec<String>,
+    #[serde(default)]
+    pub constraints: Vec<serde_json::Value>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ViewResponse {
+    pub view_id: String,
+    pub space_id: String,
+    pub kind: String,
+    pub title: Option<String>,
+    pub entities: Vec<EntityResponse>,
+    pub created_at: String,
+}

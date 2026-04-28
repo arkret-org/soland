@@ -44,6 +44,12 @@ use crate::{
         SendMessageRequest, SendMessageResponse, SnapshotHeadResponse, SpaceLifecycleResponse,
         SubmitCommitRequest, SubmitCommitResponse, SubmitDidOperationRequest,
         SubmitDidOperationResponse, SyncDescribeResponse, describe, now, sync_token,
+        AddReactionRequest, ReactionResponse, RemoveReactionRequest,
+        CreateEntityRequest, CreateGrantRequest, CreateRelationRequest, CreateViewRequest,
+        EntityResponse,
+        RedactMessageRequest, RedactMessageResponse, ReadMarkerResponse,
+        RelationResponse, ReviseMessageRequest, ReviseMessageResponse,
+        SetReadMarkerRequest, UpdateEntityRequest, ViewResponse,
     },
 };
 
@@ -66,6 +72,16 @@ pub async fn server_describe(depot: &mut Depot, res: &mut Response) {
 #[handler]
 pub async fn dev_login(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
+    // Only allow dev login in development mode
+    if !state.config.development_mode {
+        render_error(
+            res,
+            StatusCode::NOT_FOUND,
+            "not_found",
+            "endpoint not available",
+        );
+        return;
+    }
     let body = match req.parse_json::<DevLoginRequest>().await {
         Ok(body) => body,
         Err(_) => {
@@ -796,7 +812,7 @@ pub async fn send_message(depot: &mut Depot, req: &mut Request, res: &mut Respon
     let head_commit = match state.repo.submit_commit(
         &session.actor,
         expected_head.as_deref(),
-        vec![operation],
+        vec![operation.clone()],
         commit,
         &RequireProof,
     ) {
@@ -811,6 +827,10 @@ pub async fn send_message(depot: &mut Depot, req: &mut Request, res: &mut Respon
             return;
         }
     };
+    // Apply to deterministic reducer
+    if let Ok(mut proj) = state.projection.lock() {
+        proj.apply(&operation, &state.hlc);
+    }
     append_projection_event(state, projection_event);
 
     state
@@ -835,6 +855,951 @@ pub async fn send_message(depot: &mut Depot, req: &mut Request, res: &mut Respon
         head_commit,
         sync_token: sync_token(),
     }));
+}
+
+#[handler]
+pub async fn revise_message(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let Some(session) = auth_or_render(state, req, res) else {
+        return;
+    };
+    let body = match req.parse_json::<ReviseMessageRequest>().await {
+        Ok(body) => body,
+        Err(_) => {
+            render_error(res, StatusCode::BAD_REQUEST, "bad_json", "invalid revise request");
+            return;
+        }
+    };
+    let Some(original) = state.messages.lock().expect("messages lock").iter().find(|m| m.event_id == body.event_id).cloned() else {
+        render_error(res, StatusCode::NOT_FOUND, "not_found", "original message not found");
+        return;
+    };
+    if original.sender != session.actor {
+        render_error(res, StatusCode::FORBIDDEN, "capability_denied", "only the sender can revise a message");
+        return;
+    }
+    let new_event_id = ids::generate_event_id();
+    let operation_id = ids::generate_operation_id();
+    let commit_id = ids::generate_commit_id();
+    let payload = json!({
+        "target_event_id": body.event_id,
+        "new_event_id": new_event_id,
+        "sender": session.actor,
+        "content": body.content,
+        "thread_id": original.thread_id,
+        "encrypted": original.encrypted
+    });
+    let operation = contrix_sdk::Operation::create(
+        contrix_sdk::OperationId::new(operation_id.clone()).unwrap(),
+        contrix_sdk::SpaceId::new(original.space_id.clone()).unwrap(),
+        "message.revise",
+        payload,
+    );
+    let operation_digest = match operation.operation_digest() {
+        Ok(d) => d,
+        Err(e) => {
+            render_error(res, StatusCode::INTERNAL_SERVER_ERROR, "digest_error", &e.to_string());
+            return;
+        }
+    };
+    let mut commit = contrix_sdk::Commit::new(
+        contrix_sdk::CommitId::new(commit_id.clone()).unwrap(),
+        &session.actor,
+        contrix_sdk::Did::new(session.actor.clone()).unwrap(),
+        next_author_seq(state, &session.actor),
+    );
+    commit.operations.push(contrix_sdk::Hash::new(operation_digest).unwrap());
+    commit.proofs.push(dev_proof(&session.actor));
+    let expected_head = commit.prev_commit.as_ref().map(ToString::to_string);
+    match state.repo.submit_commit(
+        &session.actor,
+        expected_head.as_deref(),
+        vec![operation.clone()],
+        commit,
+        &DevProofVerifier,
+    ) {
+        Ok(_head_commit) => {
+            project_accepted_operations(state, &session.actor, std::slice::from_ref(&operation));
+            // Update in-memory message store
+            {
+                let mut messages = state.messages.lock().expect("messages lock");
+                messages.push(MessageRecord {
+                    event_id: new_event_id.clone(),
+                    space_id: original.space_id.clone(),
+                    sender: session.actor.clone(),
+                    thread_id: original.thread_id.clone(),
+                    content: body.content,
+                    encrypted: original.encrypted,
+                    created_at: now(),
+                });
+            }
+            res.render(Json(ReviseMessageResponse {
+                event_id: new_event_id,
+                revision_of: body.event_id,
+                operation_id,
+                commit_id,
+            }));
+        }
+        Err(error) => {
+            render_error(res, StatusCode::CONFLICT, "repo_conflict", &error.to_string());
+        }
+    }
+}
+
+#[handler]
+pub async fn redact_message(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let Some(session) = auth_or_render(state, req, res) else {
+        return;
+    };
+    let body = match req.parse_json::<RedactMessageRequest>().await {
+        Ok(body) => body,
+        Err(_) => {
+            render_error(res, StatusCode::BAD_REQUEST, "bad_json", "invalid redact request");
+            return;
+        }
+    };
+    // Verify message exists
+    let found = state.messages.lock().expect("messages lock").iter().any(|m| m.event_id == body.event_id);
+    if !found {
+        render_error(res, StatusCode::NOT_FOUND, "not_found", "message not found");
+        return;
+    }
+    let operation_id = ids::generate_operation_id();
+    let commit_id = ids::generate_commit_id();
+    let payload = json!({
+        "target_event_id": body.event_id
+    });
+    let space_id = state.messages.lock().expect("messages lock")
+        .iter()
+        .find(|m| m.event_id == body.event_id)
+        .map(|m| m.space_id.clone())
+        .unwrap_or_default();
+    let operation = contrix_sdk::Operation::create(
+        contrix_sdk::OperationId::new(operation_id.clone()).unwrap(),
+        contrix_sdk::SpaceId::new(space_id.clone()).unwrap(),
+        "redaction",
+        payload,
+    );
+    let operation_digest = match operation.operation_digest() {
+        Ok(d) => d,
+        Err(e) => {
+            render_error(res, StatusCode::INTERNAL_SERVER_ERROR, "digest_error", &e.to_string());
+            return;
+        }
+    };
+    let mut commit = contrix_sdk::Commit::new(
+        contrix_sdk::CommitId::new(commit_id.clone()).unwrap(),
+        &session.actor,
+        contrix_sdk::Did::new(session.actor.clone()).unwrap(),
+        next_author_seq(state, &session.actor),
+    );
+    commit.operations.push(contrix_sdk::Hash::new(operation_digest).unwrap());
+    commit.proofs.push(dev_proof(&session.actor));
+    let expected_head = commit.prev_commit.as_ref().map(ToString::to_string);
+    match state.repo.submit_commit(
+        &session.actor,
+        expected_head.as_deref(),
+        vec![operation.clone()],
+        commit,
+        &DevProofVerifier,
+    ) {
+        Ok(_head_commit) => {
+            project_accepted_operations(state, &session.actor, &[operation]);
+            res.render(Json(RedactMessageResponse {
+                redacted: true,
+                event_id: body.event_id,
+            }));
+        }
+        Err(error) => {
+            render_error(res, StatusCode::CONFLICT, "repo_conflict", &error.to_string());
+        }
+    }
+}
+
+#[handler]
+pub async fn add_reaction(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let Some(session) = auth_or_render(state, req, res) else {
+        return;
+    };
+    let body = match req.parse_json::<AddReactionRequest>().await {
+        Ok(body) => body,
+        Err(_) => {
+            render_error(res, StatusCode::BAD_REQUEST, "bad_json", "invalid reaction request");
+            return;
+        }
+    };
+    let operation_id = ids::generate_operation_id();
+    let commit_id = ids::generate_commit_id();
+    let payload = json!({
+        "event_id": body.event_id,
+        "actor": session.actor,
+        "key": body.key
+    });
+    let operation = contrix_sdk::Operation::create(
+        contrix_sdk::OperationId::new(operation_id.clone()).unwrap(),
+        contrix_sdk::SpaceId::new(body.space_id.clone()).unwrap(),
+        "reaction.add",
+        payload,
+    );
+    let operation_digest = match operation.operation_digest() {
+        Ok(d) => d,
+        Err(e) => {
+            render_error(res, StatusCode::INTERNAL_SERVER_ERROR, "digest_error", &e.to_string());
+            return;
+        }
+    };
+    let mut commit = contrix_sdk::Commit::new(
+        contrix_sdk::CommitId::new(commit_id.clone()).unwrap(),
+        &session.actor,
+        contrix_sdk::Did::new(session.actor.clone()).unwrap(),
+        next_author_seq(state, &session.actor),
+    );
+    commit.operations.push(contrix_sdk::Hash::new(operation_digest).unwrap());
+    commit.proofs.push(dev_proof(&session.actor));
+    let expected_head = commit.prev_commit.as_ref().map(ToString::to_string);
+    match state.repo.submit_commit(
+        &session.actor,
+        expected_head.as_deref(),
+        vec![operation.clone()],
+        commit,
+        &DevProofVerifier,
+    ) {
+        Ok(_head_commit) => {
+            project_accepted_operations(state, &session.actor, &[operation]);
+            res.render(Json(ReactionResponse {
+                event_id: body.event_id,
+                actor: session.actor.clone(),
+                key: body.key,
+                active: true,
+            }));
+        }
+        Err(error) => {
+            render_error(res, StatusCode::CONFLICT, "repo_conflict", &error.to_string());
+        }
+    }
+}
+
+#[handler]
+pub async fn remove_reaction(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let Some(session) = auth_or_render(state, req, res) else {
+        return;
+    };
+    let body = match req.parse_json::<RemoveReactionRequest>().await {
+        Ok(body) => body,
+        Err(_) => {
+            render_error(res, StatusCode::BAD_REQUEST, "bad_json", "invalid reaction request");
+            return;
+        }
+    };
+    let operation_id = ids::generate_operation_id();
+    let commit_id = ids::generate_commit_id();
+    let payload = json!({
+        "event_id": body.event_id,
+        "actor": session.actor,
+        "key": body.key
+    });
+    let operation = contrix_sdk::Operation::create(
+        contrix_sdk::OperationId::new(operation_id.clone()).unwrap(),
+        contrix_sdk::SpaceId::new(body.space_id.clone()).unwrap(),
+        "reaction.remove",
+        payload,
+    );
+    let operation_digest = match operation.operation_digest() {
+        Ok(d) => d,
+        Err(e) => {
+            render_error(res, StatusCode::INTERNAL_SERVER_ERROR, "digest_error", &e.to_string());
+            return;
+        }
+    };
+    let mut commit = contrix_sdk::Commit::new(
+        contrix_sdk::CommitId::new(commit_id.clone()).unwrap(),
+        &session.actor,
+        contrix_sdk::Did::new(session.actor.clone()).unwrap(),
+        next_author_seq(state, &session.actor),
+    );
+    commit.operations.push(contrix_sdk::Hash::new(operation_digest).unwrap());
+    commit.proofs.push(dev_proof(&session.actor));
+    let expected_head = commit.prev_commit.as_ref().map(ToString::to_string);
+    match state.repo.submit_commit(
+        &session.actor,
+        expected_head.as_deref(),
+        vec![operation.clone()],
+        commit,
+        &DevProofVerifier,
+    ) {
+        Ok(_head_commit) => {
+            project_accepted_operations(state, &session.actor, &[operation]);
+            res.render(Json(ReactionResponse {
+                event_id: body.event_id,
+                actor: session.actor.clone(),
+                key: body.key,
+                active: false,
+            }));
+        }
+        Err(error) => {
+            render_error(res, StatusCode::CONFLICT, "repo_conflict", &error.to_string());
+        }
+    }
+}
+
+#[handler]
+pub async fn set_read_marker(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let Some(session) = auth_or_render(state, req, res) else {
+        return;
+    };
+    let body = match req.parse_json::<SetReadMarkerRequest>().await {
+        Ok(body) => body,
+        Err(_) => {
+            render_error(res, StatusCode::BAD_REQUEST, "bad_json", "invalid read marker request");
+            return;
+        }
+    };
+    let operation_id = ids::generate_operation_id();
+    let commit_id = ids::generate_commit_id();
+    let scope_id = body.scope_id.clone().unwrap_or_else(|| "_default".to_owned());
+    let payload = json!({
+        "event_id": body.event_id,
+        "sender": session.actor,
+        "scope_id": scope_id
+    });
+    let operation = contrix_sdk::Operation::create(
+        contrix_sdk::OperationId::new(operation_id.clone()).unwrap(),
+        contrix_sdk::SpaceId::new(body.space_id.clone()).unwrap(),
+        "read_marker",
+        payload,
+    );
+    let operation_digest = match operation.operation_digest() {
+        Ok(d) => d,
+        Err(e) => {
+            render_error(res, StatusCode::INTERNAL_SERVER_ERROR, "digest_error", &e.to_string());
+            return;
+        }
+    };
+    let mut commit = contrix_sdk::Commit::new(
+        contrix_sdk::CommitId::new(commit_id.clone()).unwrap(),
+        &session.actor,
+        contrix_sdk::Did::new(session.actor.clone()).unwrap(),
+        next_author_seq(state, &session.actor),
+    );
+    commit.operations.push(contrix_sdk::Hash::new(operation_digest).unwrap());
+    commit.proofs.push(dev_proof(&session.actor));
+    let expected_head = commit.prev_commit.as_ref().map(ToString::to_string);
+    match state.repo.submit_commit(
+        &session.actor,
+        expected_head.as_deref(),
+        vec![operation.clone()],
+        commit,
+        &DevProofVerifier,
+    ) {
+        Ok(_head_commit) => {
+            project_accepted_operations(state, &session.actor, &[operation]);
+            res.render(Json(ReadMarkerResponse {
+                space_id: body.space_id,
+                actor: session.actor.clone(),
+                scope_id,
+                event_id: body.event_id,
+                read_at: now().to_rfc3339(),
+            }));
+        }
+        Err(error) => {
+            render_error(res, StatusCode::CONFLICT, "repo_conflict", &error.to_string());
+        }
+    }
+}
+
+#[handler]
+pub async fn get_read_markers(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let Some(session) = auth_or_render(state, req, res) else {
+        return;
+    };
+    let space_id = query_param(req, "space_id").unwrap_or_default();
+    let markers = {
+        let proj = state.projection.lock().expect("projection lock");
+        proj.read_markers
+            .values()
+            .filter(|m| m.actor == session.actor && (space_id.is_empty() || m.space_id == space_id))
+            .map(|m| ReadMarkerResponse {
+                space_id: m.space_id.clone(),
+                actor: m.actor.clone(),
+                scope_id: m.scope_id.clone(),
+                event_id: m.event_id.clone(),
+                read_at: m.read_at.to_rfc3339(),
+            })
+            .collect::<Vec<_>>()
+    };
+    res.render(Json(json!({ "markers": markers })));
+}
+
+// ── Entity CRUD ──
+
+#[handler]
+pub async fn create_entity(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let Some(session) = auth_or_render(state, req, res) else {
+        return;
+    };
+    let body = match req.parse_json::<CreateEntityRequest>().await {
+        Ok(body) => body,
+        Err(_) => {
+            render_error(res, StatusCode::BAD_REQUEST, "bad_json", "invalid entity request");
+            return;
+        }
+    };
+    if validate_space_id(&body.space_id).is_err() {
+        render_error(res, StatusCode::BAD_REQUEST, "invalid_param", "invalid space_id");
+        return;
+    }
+    let entity_id = ids::generate_entity_id();
+    let operation_id = ids::generate_operation_id();
+    let commit_id = ids::generate_commit_id();
+    let payload = json!({
+        "entity_id": entity_id,
+        "entity_type": body.entity_type,
+        "title": body.title,
+        "content": body.content,
+        "fields": body.fields
+    });
+    let operation = contrix_sdk::Operation::create(
+        contrix_sdk::OperationId::new(operation_id.clone()).unwrap(),
+        contrix_sdk::SpaceId::new(body.space_id.clone()).unwrap(),
+        "entity.create",
+        payload,
+    );
+    let operation_digest = match operation.operation_digest() {
+        Ok(d) => d,
+        Err(e) => {
+            render_error(res, StatusCode::INTERNAL_SERVER_ERROR, "digest_error", &e.to_string());
+            return;
+        }
+    };
+    let mut commit = contrix_sdk::Commit::new(
+        contrix_sdk::CommitId::new(commit_id.clone()).unwrap(),
+        &session.actor,
+        contrix_sdk::Did::new(session.actor.clone()).unwrap(),
+        next_author_seq(state, &session.actor),
+    );
+    commit.operations.push(contrix_sdk::Hash::new(operation_digest).unwrap());
+    commit.proofs.push(dev_proof(&session.actor));
+    let expected_head = commit.prev_commit.as_ref().map(ToString::to_string);
+    match state.repo.submit_commit(
+        &session.actor,
+        expected_head.as_deref(),
+        vec![operation.clone()],
+        commit,
+        &DevProofVerifier,
+    ) {
+        Ok(_head_commit) => {
+            project_accepted_operations(state, &session.actor, std::slice::from_ref(&operation));
+            // Read back from projection
+            let entity = {
+                let proj = state.projection.lock().expect("projection lock");
+                proj.entities.get(&entity_id).cloned()
+            };
+            if let Some(e) = entity {
+                res.render(Json(EntityResponse {
+                    entity_id: e.entity_id,
+                    space_id: e.space_id,
+                    entity_type: e.entity_type,
+                    title: e.title,
+                    content: e.content,
+                    fields: e.fields,
+                    deleted: e.deleted,
+                    created_at: e.created_at.to_rfc3339(),
+                    updated_at: e.updated_at.to_rfc3339(),
+                }));
+            } else {
+                render_error(res, StatusCode::INTERNAL_SERVER_ERROR, "projection_error", "entity not found after creation");
+            }
+        }
+        Err(error) => {
+            render_error(res, StatusCode::CONFLICT, "repo_conflict", &error.to_string());
+        }
+    }
+}
+
+#[handler]
+pub async fn get_entity(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let Some(_session) = auth_or_render(state, req, res) else {
+        return;
+    };
+    let Some(entity_id) = req.param::<String>("entity_id") else {
+        render_error(res, StatusCode::BAD_REQUEST, "missing_param", "entity_id is required");
+        return;
+    };
+    let entity = {
+        let proj = state.projection.lock().expect("projection lock");
+        proj.entities.get(&entity_id).cloned()
+    };
+    match entity {
+        Some(e) if !e.deleted => {
+            res.render(Json(EntityResponse {
+                entity_id: e.entity_id,
+                space_id: e.space_id,
+                entity_type: e.entity_type,
+                title: e.title,
+                content: e.content,
+                fields: e.fields,
+                deleted: e.deleted,
+                created_at: e.created_at.to_rfc3339(),
+                updated_at: e.updated_at.to_rfc3339(),
+            }));
+        }
+        _ => {
+            render_error(res, StatusCode::NOT_FOUND, "not_found", "entity not found");
+        }
+    }
+}
+
+#[handler]
+pub async fn update_entity(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let Some(session) = auth_or_render(state, req, res) else {
+        return;
+    };
+    let Some(entity_id) = req.param::<String>("entity_id") else {
+        render_error(res, StatusCode::BAD_REQUEST, "missing_param", "entity_id is required");
+        return;
+    };
+    let body = match req.parse_json::<UpdateEntityRequest>().await {
+        Ok(body) => body,
+        Err(_) => {
+            render_error(res, StatusCode::BAD_REQUEST, "bad_json", "invalid update request");
+            return;
+        }
+    };
+    // Find the entity to get its space_id
+    let space_id = {
+        let proj = state.projection.lock().expect("projection lock");
+        proj.entities.get(&entity_id).map(|e| e.space_id.clone())
+    };
+    let Some(space_id) = space_id else {
+        render_error(res, StatusCode::NOT_FOUND, "not_found", "entity not found");
+        return;
+    };
+    let operation_id = ids::generate_operation_id();
+    let commit_id = ids::generate_commit_id();
+    let mut payload = json!({ "entity_id": entity_id });
+    if let Some(title) = &body.title {
+        payload["title"] = json!(title);
+    }
+    if let Some(content) = &body.content {
+        payload["content"] = content.clone();
+    }
+    if !body.fields.is_empty() {
+        payload["fields"] = json!(body.fields);
+    }
+    let operation = contrix_sdk::Operation::create(
+        contrix_sdk::OperationId::new(operation_id.clone()).unwrap(),
+        contrix_sdk::SpaceId::new(space_id.clone()).unwrap(),
+        "entity.update",
+        payload,
+    );
+    let operation_digest = match operation.operation_digest() {
+        Ok(d) => d,
+        Err(e) => {
+            render_error(res, StatusCode::INTERNAL_SERVER_ERROR, "digest_error", &e.to_string());
+            return;
+        }
+    };
+    let mut commit = contrix_sdk::Commit::new(
+        contrix_sdk::CommitId::new(commit_id.clone()).unwrap(),
+        &session.actor,
+        contrix_sdk::Did::new(session.actor.clone()).unwrap(),
+        next_author_seq(state, &session.actor),
+    );
+    commit.operations.push(contrix_sdk::Hash::new(operation_digest).unwrap());
+    commit.proofs.push(dev_proof(&session.actor));
+    let expected_head = commit.prev_commit.as_ref().map(ToString::to_string);
+    match state.repo.submit_commit(
+        &session.actor,
+        expected_head.as_deref(),
+        vec![operation.clone()],
+        commit,
+        &DevProofVerifier,
+    ) {
+        Ok(_head_commit) => {
+            project_accepted_operations(state, &session.actor, std::slice::from_ref(&operation));
+            let entity = {
+                let proj = state.projection.lock().expect("projection lock");
+                proj.entities.get(&entity_id).cloned()
+            };
+            if let Some(e) = entity {
+                res.render(Json(EntityResponse {
+                    entity_id: e.entity_id,
+                    space_id: e.space_id,
+                    entity_type: e.entity_type,
+                    title: e.title,
+                    content: e.content,
+                    fields: e.fields,
+                    deleted: e.deleted,
+                    created_at: e.created_at.to_rfc3339(),
+                    updated_at: e.updated_at.to_rfc3339(),
+                }));
+            } else {
+                render_error(res, StatusCode::INTERNAL_SERVER_ERROR, "projection_error", "entity not found after update");
+            }
+        }
+        Err(error) => {
+            render_error(res, StatusCode::CONFLICT, "repo_conflict", &error.to_string());
+        }
+    }
+}
+
+#[handler]
+pub async fn delete_entity(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let Some(session) = auth_or_render(state, req, res) else {
+        return;
+    };
+    let Some(entity_id) = req.param::<String>("entity_id") else {
+        render_error(res, StatusCode::BAD_REQUEST, "missing_param", "entity_id is required");
+        return;
+    };
+    let space_id = {
+        let proj = state.projection.lock().expect("projection lock");
+        proj.entities.get(&entity_id).map(|e| e.space_id.clone())
+    };
+    let Some(space_id) = space_id else {
+        render_error(res, StatusCode::NOT_FOUND, "not_found", "entity not found");
+        return;
+    };
+    let operation_id = ids::generate_operation_id();
+    let commit_id = ids::generate_commit_id();
+    let operation = contrix_sdk::Operation::create(
+        contrix_sdk::OperationId::new(operation_id.clone()).unwrap(),
+        contrix_sdk::SpaceId::new(space_id).unwrap(),
+        "entity.delete",
+        json!({ "entity_id": entity_id }),
+    );
+    let operation_digest = match operation.operation_digest() {
+        Ok(d) => d,
+        Err(e) => {
+            render_error(res, StatusCode::INTERNAL_SERVER_ERROR, "digest_error", &e.to_string());
+            return;
+        }
+    };
+    let mut commit = contrix_sdk::Commit::new(
+        contrix_sdk::CommitId::new(commit_id.clone()).unwrap(),
+        &session.actor,
+        contrix_sdk::Did::new(session.actor.clone()).unwrap(),
+        next_author_seq(state, &session.actor),
+    );
+    commit.operations.push(contrix_sdk::Hash::new(operation_digest).unwrap());
+    commit.proofs.push(dev_proof(&session.actor));
+    let expected_head = commit.prev_commit.as_ref().map(ToString::to_string);
+    match state.repo.submit_commit(
+        &session.actor,
+        expected_head.as_deref(),
+        vec![operation.clone()],
+        commit,
+        &DevProofVerifier,
+    ) {
+        Ok(_head_commit) => {
+            project_accepted_operations(state, &session.actor, std::slice::from_ref(&operation));
+            res.render(Json(json!({ "deleted": true, "entity_id": entity_id })));
+        }
+        Err(error) => {
+            render_error(res, StatusCode::CONFLICT, "repo_conflict", &error.to_string());
+        }
+    }
+}
+
+#[handler]
+pub async fn list_entities(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let Some(_session) = auth_or_render(state, req, res) else {
+        return;
+    };
+    let space_id = query_param(req, "space_id").unwrap_or_default();
+    let entity_type = query_param(req, "entity_type");
+    let entities = {
+        let proj = state.projection.lock().expect("projection lock");
+        proj.entities_for_space(&space_id, entity_type.as_deref())
+            .into_iter()
+            .map(|e| EntityResponse {
+                entity_id: e.entity_id.clone(),
+                space_id: e.space_id.clone(),
+                entity_type: e.entity_type.clone(),
+                title: e.title.clone(),
+                content: e.content.clone(),
+                fields: e.fields.clone(),
+                deleted: e.deleted,
+                created_at: e.created_at.to_rfc3339(),
+                updated_at: e.updated_at.to_rfc3339(),
+            })
+            .collect::<Vec<_>>()
+    };
+    res.render(Json(json!({ "entities": entities })));
+}
+
+// ── Relation CRUD ──
+
+#[handler]
+pub async fn create_relation(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let Some(session) = auth_or_render(state, req, res) else {
+        return;
+    };
+    let body = match req.parse_json::<CreateRelationRequest>().await {
+        Ok(body) => body,
+        Err(_) => {
+            render_error(res, StatusCode::BAD_REQUEST, "bad_json", "invalid relation request");
+            return;
+        }
+    };
+    if validate_space_id(&body.space_id).is_err() {
+        render_error(res, StatusCode::BAD_REQUEST, "invalid_param", "invalid space_id");
+        return;
+    }
+    let relation_id = ids::generate_relation_id();
+    let operation_id = ids::generate_operation_id();
+    let commit_id = ids::generate_commit_id();
+    let payload = json!({
+        "relation_id": relation_id,
+        "relation_kind": body.relation_kind,
+        "from": body.from,
+        "to": body.to,
+        "fields": body.fields
+    });
+    let operation = contrix_sdk::Operation::create(
+        contrix_sdk::OperationId::new(operation_id.clone()).unwrap(),
+        contrix_sdk::SpaceId::new(body.space_id.clone()).unwrap(),
+        "relation.create",
+        payload,
+    );
+    let operation_digest = match operation.operation_digest() {
+        Ok(d) => d,
+        Err(e) => {
+            render_error(res, StatusCode::INTERNAL_SERVER_ERROR, "digest_error", &e.to_string());
+            return;
+        }
+    };
+    let mut commit = contrix_sdk::Commit::new(
+        contrix_sdk::CommitId::new(commit_id.clone()).unwrap(),
+        &session.actor,
+        contrix_sdk::Did::new(session.actor.clone()).unwrap(),
+        next_author_seq(state, &session.actor),
+    );
+    commit.operations.push(contrix_sdk::Hash::new(operation_digest).unwrap());
+    commit.proofs.push(dev_proof(&session.actor));
+    let expected_head = commit.prev_commit.as_ref().map(ToString::to_string);
+    match state.repo.submit_commit(
+        &session.actor,
+        expected_head.as_deref(),
+        vec![operation.clone()],
+        commit,
+        &DevProofVerifier,
+    ) {
+        Ok(_head_commit) => {
+            project_accepted_operations(state, &session.actor, std::slice::from_ref(&operation));
+            let relation = {
+                let proj = state.projection.lock().expect("projection lock");
+                proj.relations.get(&relation_id).cloned()
+            };
+            if let Some(r) = relation {
+                res.render(Json(RelationResponse {
+                    relation_id: r.relation_id,
+                    space_id: r.space_id,
+                    relation_kind: r.relation_kind,
+                    from: r.from_ref,
+                    to: r.to_ref,
+                    fields: r.fields,
+                    deleted: r.deleted,
+                    created_at: r.created_at.to_rfc3339(),
+                }));
+            } else {
+                render_error(res, StatusCode::INTERNAL_SERVER_ERROR, "projection_error", "relation not found after creation");
+            }
+        }
+        Err(error) => {
+            render_error(res, StatusCode::CONFLICT, "repo_conflict", &error.to_string());
+        }
+    }
+}
+
+#[handler]
+pub async fn delete_relation(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let Some(session) = auth_or_render(state, req, res) else {
+        return;
+    };
+    let Some(relation_id) = req.param::<String>("relation_id") else {
+        render_error(res, StatusCode::BAD_REQUEST, "missing_param", "relation_id is required");
+        return;
+    };
+    let space_id = {
+        let proj = state.projection.lock().expect("projection lock");
+        proj.relations.get(&relation_id).map(|r| r.space_id.clone())
+    };
+    let Some(space_id) = space_id else {
+        render_error(res, StatusCode::NOT_FOUND, "not_found", "relation not found");
+        return;
+    };
+    let operation_id = ids::generate_operation_id();
+    let commit_id = ids::generate_commit_id();
+    let operation = contrix_sdk::Operation::create(
+        contrix_sdk::OperationId::new(operation_id.clone()).unwrap(),
+        contrix_sdk::SpaceId::new(space_id).unwrap(),
+        "relation.delete",
+        json!({ "relation_id": relation_id }),
+    );
+    let operation_digest = match operation.operation_digest() {
+        Ok(d) => d,
+        Err(e) => {
+            render_error(res, StatusCode::INTERNAL_SERVER_ERROR, "digest_error", &e.to_string());
+            return;
+        }
+    };
+    let mut commit = contrix_sdk::Commit::new(
+        contrix_sdk::CommitId::new(commit_id.clone()).unwrap(),
+        &session.actor,
+        contrix_sdk::Did::new(session.actor.clone()).unwrap(),
+        next_author_seq(state, &session.actor),
+    );
+    commit.operations.push(contrix_sdk::Hash::new(operation_digest).unwrap());
+    commit.proofs.push(dev_proof(&session.actor));
+    let expected_head = commit.prev_commit.as_ref().map(ToString::to_string);
+    match state.repo.submit_commit(
+        &session.actor,
+        expected_head.as_deref(),
+        vec![operation.clone()],
+        commit,
+        &DevProofVerifier,
+    ) {
+        Ok(_head_commit) => {
+            project_accepted_operations(state, &session.actor, std::slice::from_ref(&operation));
+            res.render(Json(json!({ "deleted": true, "relation_id": relation_id })));
+        }
+        Err(error) => {
+            render_error(res, StatusCode::CONFLICT, "repo_conflict", &error.to_string());
+        }
+    }
+}
+
+#[handler]
+pub async fn list_relations(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let Some(_session) = auth_or_render(state, req, res) else {
+        return;
+    };
+    let space_id = query_param(req, "space_id").unwrap_or_default();
+    let kind = query_param(req, "kind");
+    let relations = {
+        let proj = state.projection.lock().expect("projection lock");
+        proj.relations_for_space(&space_id, kind.as_deref())
+            .into_iter()
+            .map(|r| RelationResponse {
+                relation_id: r.relation_id.clone(),
+                space_id: r.space_id.clone(),
+                relation_kind: r.relation_kind.clone(),
+                from: r.from_ref.clone(),
+                to: r.to_ref.clone(),
+                fields: r.fields.clone(),
+                deleted: r.deleted,
+                created_at: r.created_at.to_rfc3339(),
+            })
+            .collect::<Vec<_>>()
+    };
+    res.render(Json(json!({ "relations": relations })));
+}
+
+// ── View endpoints ──
+
+#[handler]
+pub async fn create_view(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let Some(_session) = auth_or_render(state, req, res) else {
+        return;
+    };
+    let body = match req.parse_json::<CreateViewRequest>().await {
+        Ok(body) => body,
+        Err(_) => {
+            render_error(res, StatusCode::BAD_REQUEST, "bad_json", "invalid view request");
+            return;
+        }
+    };
+    let view_id = ids::generate_view_id();
+    let entities = {
+        let proj = state.projection.lock().expect("projection lock");
+        proj.entities_for_space(&body.space_id, body.entity_type.as_deref())
+            .into_iter()
+            .map(|e| EntityResponse {
+                entity_id: e.entity_id.clone(),
+                space_id: e.space_id.clone(),
+                entity_type: e.entity_type.clone(),
+                title: e.title.clone(),
+                content: e.content.clone(),
+                fields: e.fields.clone(),
+                deleted: e.deleted,
+                created_at: e.created_at.to_rfc3339(),
+                updated_at: e.updated_at.to_rfc3339(),
+            })
+            .collect::<Vec<_>>()
+    };
+    res.render(Json(ViewResponse {
+        view_id,
+        space_id: body.space_id,
+        kind: body.kind,
+        title: body.title,
+        entities,
+        created_at: now().to_rfc3339(),
+    }));
+}
+
+#[handler]
+pub async fn get_view(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let Some(_session) = auth_or_render(state, req, res) else {
+        return;
+    };
+    let Some(view_id) = req.param::<String>("view_id") else {
+        render_error(res, StatusCode::BAD_REQUEST, "missing_param", "view_id is required");
+        return;
+    };
+    // Views are virtual — return current projection data
+    let space_id = query_param(req, "space_id").unwrap_or_default();
+    let entity_type = query_param(req, "entity_type");
+    let entities = {
+        let proj = state.projection.lock().expect("projection lock");
+        proj.entities_for_space(&space_id, entity_type.as_deref())
+            .into_iter()
+            .map(|e| EntityResponse {
+                entity_id: e.entity_id.clone(),
+                space_id: e.space_id.clone(),
+                entity_type: e.entity_type.clone(),
+                title: e.title.clone(),
+                content: e.content.clone(),
+                fields: e.fields.clone(),
+                deleted: e.deleted,
+                created_at: e.created_at.to_rfc3339(),
+                updated_at: e.updated_at.to_rfc3339(),
+            })
+            .collect::<Vec<_>>()
+    };
+    res.render(Json(ViewResponse {
+        view_id,
+        space_id,
+        kind: "list".to_owned(),
+        title: None,
+        entities,
+        created_at: now().to_rfc3339(),
+    }));
+}
+
+struct DevProofVerifier;
+impl contrix_sdk::CommitProofVerifier for DevProofVerifier {
+    fn verify_commit(&self, commit: &contrix_sdk::Commit) -> contrix_sdk::Result<()> {
+        if commit.proofs.is_empty() {
+            return Err(contrix_sdk::Error::Protocol("commit proofs must contain at least one proof".to_owned()));
+        }
+        Ok(())
+    }
 }
 
 #[handler]
@@ -1481,22 +2446,36 @@ pub async fn index_thread(depot: &mut Depot, req: &mut Request, res: &mut Respon
         return;
     }
     let session = authenticated_session(state, req).ok();
-    let events: Vec<_> = state
-        .messages
-        .lock()
-        .expect("messages lock")
-        .iter()
+    // Use projection state for thread messages
+    let projection = state.projection.lock().expect("projection lock");
+    let events: Vec<_> = projection
+        .messages_for_thread(&thread_id)
+        .into_iter()
         .filter(|message| {
-            (message.thread_id == thread_id || message.space_id == thread_id)
+            message.redacted_at.is_none()
                 && space_id_visible_to(state, &message.space_id, session.as_ref())
         })
-        .map(message_event)
+        .map(|message| {
+            json!({
+                "event_id": message.event_id,
+                "space_id": message.space_id,
+                "sender": message.sender,
+                "thread_id": message.thread_id,
+                "content": message.content,
+                "encrypted": message.encrypted,
+                "created_at": message.created_at,
+            })
+        })
         .collect();
+    let first_space_id = events
+        .first()
+        .and_then(|event| event["space_id"].as_str())
+        .unwrap_or("cx:space:01js0sp0000000000000000000");
     res.render(Json(IndexThreadResponse {
         thread: json!({
             "thread_id": thread_id,
             "title": "Thread",
-            "space_id": events.first().and_then(|event| event["space_id"].as_str()).unwrap_or("cx:space:01js0sp0000000000000000000"),
+            "space_id": first_space_id,
             "reply_count": events.len(),
         }),
         events,
@@ -1521,12 +2500,16 @@ pub async fn index_notifications(depot: &mut Depot, req: &mut Request, res: &mut
         );
         return;
     }
-    let notifications: Vec<_> = state
+    // Use projection state for notifications
+    let projection = state.projection.lock().expect("projection lock");
+    let notifications: Vec<_> = projection
         .messages
-        .lock()
-        .expect("messages lock")
-        .iter()
-        .filter(|message| message.sender != actor && space_has_member(state, &message.space_id, &actor))
+        .values()
+        .filter(|message| {
+            message.sender != actor
+                && message.redacted_at.is_none()
+                && space_has_member(state, &message.space_id, &actor)
+        })
         .map(|message| {
             json!({
                 "notification_id": format!("cx:notification:{}", message.event_id.trim_start_matches("cx:event:")),
@@ -1557,19 +2540,30 @@ pub async fn index_inbox(depot: &mut Depot, req: &mut Request, res: &mut Respons
         return;
     };
     let spaces = state.spaces.lock().expect("spaces lock");
-    let messages = state.messages.lock().expect("messages lock").clone();
     let session = authenticated_session(state, req).ok();
+    // Use projection state for last message
+    let projection = state.projection.lock().expect("projection lock");
     let rooms = spaces
         .search(Default::default())
         .into_iter()
         .filter(|space| space_visible_to(state, space, session.as_ref()))
         .take(limit)
         .map(|space| {
-            let last_message = messages
-                .iter()
-                .rev()
-                .find(|message| message.space_id == space.space_id.as_str())
-                .map(message_event);
+            let last_message = projection
+                .messages_for_space(space.space_id.as_str())
+                .into_iter()
+                .next_back()
+                .filter(|m| m.redacted_at.is_none())
+                .map(|message| {
+                    json!({
+                        "event_id": message.event_id,
+                        "space_id": message.space_id,
+                        "sender": message.sender,
+                        "content": message.content,
+                        "encrypted": message.encrypted,
+                        "created_at": message.created_at,
+                    })
+                });
             json!({
                 "space_id": space.space_id,
                 "name": space.name,
@@ -1645,8 +2639,13 @@ pub async fn index_search(depot: &mut Depot, req: &mut Request, res: &mut Respon
     }
     drop(spaces);
 
-    for message in state.messages.lock().expect("messages lock").iter() {
-        if message.encrypted || !space_id_visible_to(state, &message.space_id, session.as_ref()) {
+    // Use projection state for message search
+    let projection = state.projection.lock().expect("projection lock");
+    for message in projection.messages.values() {
+        if message.encrypted
+            || message.redacted_at.is_some()
+            || !space_id_visible_to(state, &message.space_id, session.as_ref())
+        {
             continue;
         }
         if !body.space_ids.is_empty()
@@ -1657,7 +2656,14 @@ pub async fn index_search(depot: &mut Depot, req: &mut Request, res: &mut Respon
         {
             continue;
         }
-        let entity = message_event(message);
+        let entity = json!({
+            "event_id": message.event_id,
+            "space_id": message.space_id,
+            "sender": message.sender,
+            "content": message.content,
+            "encrypted": message.encrypted,
+            "created_at": message.created_at,
+        });
         if (body.entity_types.is_empty() || body.entity_types.iter().any(|kind| kind == "message"))
             && query_matches(&entity, Some(&body.query))
         {
@@ -1893,7 +2899,7 @@ pub async fn sync_backfill(depot: &mut Depot, req: &mut Request, res: &mut Respo
     let events: Vec<_> = page
         .items
         .into_iter()
-        .filter(|operation| operation_is_visible(&operation, &redacted))
+        .filter(|operation| operation_is_visible(operation, &redacted))
         .map(|operation| {
             let event_id = operation_event_id(&operation);
             json!({
@@ -2223,7 +3229,8 @@ pub async fn submit_commit(depot: &mut Depot, req: &mut Request, res: &mut Respo
 }
 
 #[handler]
-pub async fn authz_check(req: &mut Request, res: &mut Response) {
+pub async fn authz_check(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
     let body = match req.parse_json::<AuthzCheckRequest>().await {
         Ok(body) => body,
         Err(_) => {
@@ -2236,35 +3243,175 @@ pub async fn authz_check(req: &mut Request, res: &mut Response) {
             return;
         }
     };
-    let allowed = body.action.starts_with("space.read")
-        || body.action.starts_with("directory.")
-        || body.action == "repo.read";
+    // Extract space_id from resource
+    // Resource can be: a string "space:<id>" or an object {"kind":"space","space_id":"<id>"}
+    let (resource_str, space_id) = if let Some(s) = body.resource.as_str() {
+        let sid = s.strip_prefix("space:").unwrap_or(s);
+        (s.to_owned(), sid.to_owned())
+    } else if let Some(obj) = body.resource.as_object() {
+        let kind = obj.get("kind").and_then(|v| v.as_str()).unwrap_or("space");
+        let sid = obj
+            .get("space_id")
+            .and_then(|v| v.as_str())
+            .or_else(|| obj.get("id").and_then(|v| v.as_str()))
+            .unwrap_or("");
+        (format!("{}:{}", kind, sid), sid.to_owned())
+    } else {
+        (String::new(), String::new())
+    };
+    // Look up space owner and members
+    let (owner, members) = {
+        let meta = state.space_meta.lock().expect("space meta lock");
+        let spaces = state.spaces.lock().expect("spaces lock");
+        let owner = meta.get(&space_id).map(|m| m.owner.clone());
+        let members = spaces
+            .get(&contrix_sdk::SpaceId::new(space_id.clone()).unwrap_or_else(|_| {
+                contrix_sdk::SpaceId::new("cx:space:invalid").unwrap()
+            }))
+            .map(|s| s.members.iter().map(|m| m.to_string()).collect::<Vec<_>>())
+            .unwrap_or_default();
+        (owner, members)
+    };
+    let result = state.authz.check(
+        &body.actor,
+        &body.action,
+        &resource_str,
+        &space_id,
+        owner.as_deref(),
+        &members,
+    );
     res.render(Json(AuthzCheckResponse {
-        allowed,
-        reason_code: (!allowed).then(|| "capability_denied".to_owned()),
-        grants: if allowed {
-            vec![json!({"actor": body.actor, "action": body.action, "resource": body.resource})]
-        } else {
-            Vec::new()
-        },
+        allowed: result.allowed,
+        reason_code: (!result.allowed).then(|| result.reason.clone()),
+        grants: result
+            .grants
+            .iter()
+            .map(|g| {
+                json!({
+                    "grant_id": g.grant_id,
+                    "subject": g.subject,
+                    "actions": g.actions,
+                    "resource": g.resource
+                })
+            })
+            .collect(),
         obligations: Vec::new(),
     }));
 }
 
 #[handler]
-pub async fn effective_grants(req: &mut Request, res: &mut Response) {
+pub async fn effective_grants(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
     let subject = query_param(req, "subject").unwrap_or_else(|| "did:web:alice.example".to_owned());
-    res.render(Json(EffectiveGrantsResponse {
-        grants: vec![json!({
+    let space_id = query_param(req, "space_id").unwrap_or_else(|| "*".to_owned());
+    let grants = if space_id == "*" {
+        // Return grants across all spaces
+        let meta = state.space_meta.lock().expect("space meta lock");
+        meta.keys()
+            .flat_map(|sid| state.authz.grants_for_subject(&subject, sid))
+            .map(|g| {
+                json!({
+                    "grant_id": g.grant_id,
+                    "subject": g.subject,
+                    "actions": g.actions,
+                    "resources": [{"kind": "space", "space_id": g.space_id}]
+                })
+            })
+            .collect::<Vec<_>>()
+    } else {
+        state
+            .authz
+            .grants_for_subject(&subject, &space_id)
+            .iter()
+            .map(|g| {
+                json!({
+                    "grant_id": g.grant_id,
+                    "subject": g.subject,
+                    "actions": g.actions,
+                    "resources": [{"kind": "space", "space_id": g.space_id}]
+                })
+            })
+            .collect::<Vec<_>>()
+    };
+    // Include default member grants if the user is a member of any space
+    let default_grants = if grants.is_empty() {
+        vec![json!({
             "subject": subject,
             "actions": ["space.read", "directory.search", "repo.read"],
             "resources": [{"kind": "space", "space_id": "*"}]
-        })],
+        })]
+    } else {
+        Vec::new()
+    };
+    let all_grants = [grants, default_grants].concat();
+    res.render(Json(EffectiveGrantsResponse {
+        grants: all_grants,
         state_hash: Some(
             "sha256:0000000000000000000000000000000000000000000000000000000000000000".to_owned(),
         ),
         evaluated_at: now(),
     }));
+}
+
+// ── Grant CRUD ──
+
+#[handler]
+pub async fn create_grant(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let Some(session) = auth_or_render(state, req, res) else {
+        return;
+    };
+    let body = match req.parse_json::<CreateGrantRequest>().await {
+        Ok(body) => body,
+        Err(_) => {
+            render_error(res, StatusCode::BAD_REQUEST, "bad_json", "invalid grant request");
+            return;
+        }
+    };
+    let constraints = body
+        .constraints
+        .into_iter()
+        .map(|v| crate::authz::Constraint {
+            constraint_type: v
+                .get("type")
+                .and_then(|t| t.as_str())
+                .unwrap_or("unknown")
+                .to_owned(),
+            value: v,
+        })
+        .collect();
+    let grant = state.authz.create_grant(
+        body.space_id,
+        session.actor.clone(),
+        body.subject,
+        body.resource,
+        body.actions,
+        constraints,
+    );
+    res.render(Json(json!({
+        "grant_id": grant.grant_id,
+        "subject": grant.subject,
+        "actions": grant.actions,
+        "resource": grant.resource,
+        "created_at": grant.created_at.to_rfc3339()
+    })));
+}
+
+#[handler]
+pub async fn revoke_grant(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let Some(_session) = auth_or_render(state, req, res) else {
+        return;
+    };
+    let Some(grant_id) = req.param::<String>("grant_id") else {
+        render_error(res, StatusCode::BAD_REQUEST, "missing_param", "grant_id is required");
+        return;
+    };
+    if state.authz.revoke_grant(&grant_id) {
+        res.render(Json(json!({ "revoked": true, "grant_id": grant_id })));
+    } else {
+        render_error(res, StatusCode::NOT_FOUND, "not_found", "grant not found");
+    }
 }
 
 #[handler]
@@ -2639,6 +3786,26 @@ pub async fn get_device_messages(depot: &mut Depot, req: &mut Request, res: &mut
     }));
 }
 
+/// Verify federation origin is a valid DID.
+fn verify_federation_origin(origin: &str) -> bool {
+    // Basic DID validation - must start with "did:" and contain method
+    if !origin.starts_with("did:") {
+        return false;
+    }
+    let rest = &origin[4..];
+    // Must have method:name format
+    if let Some(colon_pos) = rest.find(':') {
+        let method = &rest[..colon_pos];
+        let name = &rest[colon_pos + 1..];
+        // Method must be non-empty and contain only lowercase letters
+        !method.is_empty()
+            && method.chars().all(|c| c.is_ascii_lowercase())
+            && !name.is_empty()
+    } else {
+        false
+    }
+}
+
 #[handler]
 pub async fn federation_transaction(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
@@ -2658,6 +3825,16 @@ pub async fn federation_transaction(depot: &mut Depot, req: &mut Request, res: &
             return;
         }
     };
+    // Verify federation origin
+    if !verify_federation_origin(body.origin.as_str()) {
+        render_error(
+            res,
+            StatusCode::UNAUTHORIZED,
+            "invalid_origin",
+            "federation origin must be a valid DID",
+        );
+        return;
+    }
     let accepted = ingest_federation_operations(state, body.origin.as_str(), body.operations);
     res.render(Json(contrix_sdk::FederationTransactionResponse {
         ok: true,
@@ -2685,6 +3862,16 @@ pub async fn federation_push_operations(depot: &mut Depot, req: &mut Request, re
             return;
         }
     };
+    // Verify federation origin
+    if !verify_federation_origin(body.origin.as_str()) {
+        render_error(
+            res,
+            StatusCode::UNAUTHORIZED,
+            "invalid_origin",
+            "federation origin must be a valid DID",
+        );
+        return;
+    }
     let accepted = ingest_federation_operations(state, body.origin.as_str(), body.operations);
     res.render(Json(contrix_sdk::FederationPushOperationsResponse {
         accepted,
@@ -2943,6 +4130,14 @@ pub async fn blob_get(depot: &mut Depot, req: &mut Request, res: &mut Response) 
                 salvo::http::header::HeaderName::from_static("accept-ranges"),
                 "bytes".parse().unwrap(),
             );
+            // Set Content-Disposition: attachment for HTML/JS/SVG to prevent stored XSS
+            let dangerous_types = ["text/html", "application/javascript", "image/svg+xml"];
+            if dangerous_types.contains(&blob.media_type.as_str()) {
+                res.headers_mut().insert(
+                    salvo::http::header::CONTENT_DISPOSITION,
+                    "attachment".parse().unwrap(),
+                );
+            }
             if let Some(content_range) = content_range {
                 res.headers_mut().insert(
                     salvo::http::header::CONTENT_RANGE,
@@ -3262,6 +4457,10 @@ fn project_federation_operation(state: &AppState, origin: &str, operation: &Oper
         "membership" | "space.lifecycle" => project_membership_operation(state, origin, operation),
         _ => {}
     }
+    // Also apply to the deterministic reducer
+    if let Ok(mut proj) = state.projection.lock() {
+        proj.apply(operation, &state.hlc);
+    }
     append_projection_event(
         state,
         projection_event_from_operation(operation, Some(origin)),
@@ -3277,6 +4476,10 @@ fn project_accepted_operations(state: &AppState, repo_id: &str, operations: &[Op
                 project_membership_operation(state, repo_id, operation)
             }
             _ => {}
+        }
+        // Also apply to the deterministic reducer
+        if let Ok(mut proj) = state.projection.lock() {
+            proj.apply(operation, &state.hlc);
         }
         append_projection_event(
             state,

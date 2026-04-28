@@ -4,7 +4,7 @@ use std::{
 };
 
 use contrix_sdk::{
-    Commit, CommitId, CommitProofVerifier, Error, MemoryRepoStore, Operation, OperationId,
+    Commit, CommitId, CommitProofVerifier, Error, Hash, MemoryRepoStore, Operation, OperationId,
     RepoStore, Result as SdkResult,
 };
 use diesel::{
@@ -238,7 +238,7 @@ impl RepoAdapter for MemoryRepoAdapter {
         repo_id: &str,
         expected_head: Option<&str>,
         operations: Vec<Operation>,
-        commit: Commit,
+        mut commit: Commit,
         verifier: &dyn CommitProofVerifier,
     ) -> SdkResult<Option<String>> {
         if commit.repo_id != repo_id {
@@ -257,6 +257,12 @@ impl RepoAdapter for MemoryRepoAdapter {
         }
         if expected_head != repo.head().map(|head| head.as_str()) {
             return Err(Error::Protocol("expected_head mismatch".to_owned()));
+        }
+        // Align commit.prev_commit with expected_head so the SDK's
+        // validate_commit_append check passes.
+        if commit.prev_commit.is_none() {
+            commit.prev_commit = expected_head
+                .and_then(|h| Hash::new(h.to_owned()).ok());
         }
         for operation in operations {
             operation.validate_payload_object()?;

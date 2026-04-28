@@ -6,17 +6,23 @@ use std::{
 use contrix_sdk::{Did, Operation, SpaceId, SpaceSearchEntry, SpaceSearchIndex};
 use serde_json::Value;
 
+use crate::authz::AuthzEngine;
+use crate::config::AppConfig;
 use crate::db::Db;
 use crate::hlc::ServerHlc;
+use crate::reducer::ProjectionState;
 use crate::repo::{MemoryRepoAdapter, PgRepoAdapter, RepoAdapterRef};
 
 type OneTimeKeyStore = Arc<Mutex<BTreeMap<(String, String), Vec<Value>>>>;
 
 #[derive(Clone)]
 pub struct AppState {
+    pub config: AppConfig,
     pub db: Db,
     pub repo: RepoAdapterRef,
     pub hlc: ServerHlc,
+    pub projection: Arc<Mutex<ProjectionState>>,
+    pub authz: AuthzEngine,
     pub spaces: Arc<Mutex<SpaceSearchIndex>>,
     pub space_meta: Arc<Mutex<BTreeMap<String, SpaceMetaRecord>>>,
     pub accounts: Arc<Mutex<BTreeMap<String, AccountRecord>>>,
@@ -111,7 +117,7 @@ pub struct BlobRecord {
 }
 
 impl AppState {
-    pub fn new(db: Db) -> Self {
+    pub fn new(config: AppConfig, db: Db) -> Self {
         let mut spaces = SpaceSearchIndex::new();
         let mut demo = SpaceSearchEntry::new(
             SpaceId::new("cx:space:01js0sp0000000000000000000").expect("valid demo space id"),
@@ -147,12 +153,15 @@ impl AppState {
         );
 
         Self {
+            config,
             repo: db
                 .pool
                 .as_ref()
                 .map(|pool| Arc::new(PgRepoAdapter::new(pool.clone())) as RepoAdapterRef)
                 .unwrap_or_else(|| Arc::new(MemoryRepoAdapter::new())),
             hlc: ServerHlc::new("did:web:serverx.local"),
+            projection: Arc::new(Mutex::new(ProjectionState::new())),
+            authz: AuthzEngine::new(),
             db,
             spaces: Arc::new(Mutex::new(spaces)),
             space_meta: Arc::new(Mutex::new(space_meta)),
