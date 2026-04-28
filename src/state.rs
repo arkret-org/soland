@@ -7,6 +7,7 @@ use contrix_sdk::{Did, Operation, SpaceId, SpaceSearchEntry, SpaceSearchIndex};
 use serde_json::Value;
 
 use crate::db::Db;
+use crate::hlc::ServerHlc;
 use crate::repo::{MemoryRepoAdapter, PgRepoAdapter, RepoAdapterRef};
 
 type OneTimeKeyStore = Arc<Mutex<BTreeMap<(String, String), Vec<Value>>>>;
@@ -15,12 +16,14 @@ type OneTimeKeyStore = Arc<Mutex<BTreeMap<(String, String), Vec<Value>>>>;
 pub struct AppState {
     pub db: Db,
     pub repo: RepoAdapterRef,
+    pub hlc: ServerHlc,
     pub spaces: Arc<Mutex<SpaceSearchIndex>>,
     pub space_meta: Arc<Mutex<BTreeMap<String, SpaceMetaRecord>>>,
     pub accounts: Arc<Mutex<BTreeMap<String, AccountRecord>>>,
     pub contacts: Arc<Mutex<BTreeMap<(String, String), ContactRecord>>>,
     pub sessions: Arc<Mutex<BTreeMap<String, SessionRecord>>>,
     pub messages: Arc<Mutex<Vec<MessageRecord>>>,
+    pub projection_events: Arc<Mutex<Vec<ProjectionEventRecord>>>,
     pub devices: Arc<Mutex<BTreeMap<String, BTreeMap<String, Value>>>>,
     pub device_messages: Arc<Mutex<VecDeque<DeviceMessageRecord>>>,
     pub device_message_txns: Arc<Mutex<BTreeSet<String>>>,
@@ -73,6 +76,18 @@ pub struct MessageRecord {
     pub thread_id: String,
     pub content: Value,
     pub encrypted: bool,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ProjectionEventRecord {
+    pub event_id: String,
+    pub space_id: String,
+    pub event_type: String,
+    pub operation_type: String,
+    pub operation_id: Option<String>,
+    pub sender: Option<String>,
+    pub payload: Value,
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
@@ -137,6 +152,7 @@ impl AppState {
                 .as_ref()
                 .map(|pool| Arc::new(PgRepoAdapter::new(pool.clone())) as RepoAdapterRef)
                 .unwrap_or_else(|| Arc::new(MemoryRepoAdapter::new())),
+            hlc: ServerHlc::new("did:web:serverx.local"),
             db,
             spaces: Arc::new(Mutex::new(spaces)),
             space_meta: Arc::new(Mutex::new(space_meta)),
@@ -144,6 +160,7 @@ impl AppState {
             contacts: Arc::new(Mutex::new(BTreeMap::new())),
             sessions: Arc::new(Mutex::new(BTreeMap::new())),
             messages: Arc::new(Mutex::new(Vec::new())),
+            projection_events: Arc::new(Mutex::new(Vec::new())),
             devices: Arc::new(Mutex::new(BTreeMap::new())),
             device_messages: Arc::new(Mutex::new(VecDeque::new())),
             device_message_txns: Arc::new(Mutex::new(BTreeSet::new())),

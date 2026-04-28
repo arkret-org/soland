@@ -1,6 +1,8 @@
 pub mod config;
 pub mod db;
 pub mod handlers;
+pub mod hlc;
+pub mod ids;
 pub mod repo;
 pub mod schema;
 pub mod state;

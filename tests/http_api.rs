@@ -342,6 +342,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
     let lifecycle_events: Value = TestClient::get(format!(
         "http://server/api/v1/sync/backfill?space_id={space_id}"
     ))
+    .add_header("authorization", format!("Bearer {alice}"), true)
     .send(&app_from_state(state.clone()))
     .await
     .take_json()
@@ -1042,11 +1043,17 @@ async fn repo_submit_rejects_unsigned_commits() {
 #[tokio::test]
 async fn repo_adapter_memory_submit_list_get_and_sync_work() {
     let state = AppState::new(Db { pool: None });
+    let alice = dev_token(state.clone()).await;
     let operation = Operation::create(
         OperationId::new("cx:operation:adapter-01").unwrap(),
         SpaceId::new("cx:space:adapter").unwrap(),
         "message",
-        serde_json::json!({"body": "hello"}),
+        serde_json::json!({
+            "event_id": "cx:event:adapter-01",
+            "sender": "did:web:alice.example",
+            "thread_id": "cx:thread:adapter",
+            "body": "hello"
+        }),
     );
     let operation_digest = Hash::new(operation.operation_digest().unwrap()).unwrap();
 
@@ -1074,6 +1081,33 @@ async fn repo_adapter_memory_submit_list_get_and_sync_work() {
         .unwrap();
     assert_eq!(submit["status"], "accepted");
     assert_eq!(submit["head_commit"], commit_digest);
+
+    let projected_thread: Value =
+        TestClient::get("http://server/api/v1/index/thread?thread_id=cx:thread:adapter")
+            .add_header("authorization", format!("Bearer {alice}"), true)
+            .send(&app_from_state(state.clone()))
+            .await
+            .take_json()
+            .await
+            .unwrap();
+    assert_eq!(
+        projected_thread["events"][0]["event_id"],
+        "cx:event:adapter-01"
+    );
+    assert_eq!(projected_thread["events"][0]["content"]["body"], "hello");
+
+    let projected_sync: Value = TestClient::post("http://server/api/v1/sync")
+        .add_header("authorization", format!("Bearer {alice}"), true)
+        .json(&serde_json::json!({}))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(
+        projected_sync["spaces"]["cx:space:adapter"]["timeline"]["events"][0]["event_id"],
+        "cx:event:adapter-01"
+    );
 
     let duplicate_submit: Value = TestClient::post("http://server/api/v1/repo/submit-commit")
         .json(&serde_json::json!({
@@ -1159,18 +1193,38 @@ async fn repo_adapter_memory_submit_list_get_and_sync_work() {
         .unwrap();
     assert_eq!(sync["operations"].as_array().unwrap().len(), 1);
 
+    let unauthorized_backfill = TestClient::get(
+        "http://server/api/v1/sync/backfill?space_id=cx:space:adapter&limit=1",
+    )
+    .send(&app_from_state(state.clone()))
+    .await;
+    assert_eq!(unauthorized_backfill.status_code.unwrap().as_u16(), 404);
+
     let backfill: Value =
         TestClient::get("http://server/api/v1/sync/backfill?space_id=cx:space:adapter&limit=1")
+            .add_header("authorization", format!("Bearer {alice}"), true)
             .send(&app_from_state(state.clone()))
             .await
             .take_json()
             .await
             .unwrap();
-    assert_eq!(backfill["events"][0]["event_id"], "cx:operation:adapter-01");
+    assert_eq!(backfill["events"][0]["event_id"], "cx:event:adapter-01");
+    assert_eq!(
+        backfill["events"][0]["operation_id"],
+        "cx:operation:adapter-01"
+    );
     assert_eq!(backfill["limited"], false);
+
+    let unauthorized_subscribe = TestClient::get(
+        "http://server/api/v1/sync/subscribe?space_id=cx:space:adapter&limit=1",
+    )
+    .send(&app_from_state(state.clone()))
+    .await;
+    assert_eq!(unauthorized_subscribe.status_code.unwrap().as_u16(), 404);
 
     let subscribe: Value =
         TestClient::get("http://server/api/v1/sync/subscribe?space_id=cx:space:adapter&limit=1")
+            .add_header("authorization", format!("Bearer {alice}"), true)
             .send(&app_from_state(state.clone()))
             .await
             .take_json()
@@ -1180,6 +1234,58 @@ async fn repo_adapter_memory_submit_list_get_and_sync_work() {
         subscribe["frames"][0]["payload"]["operation_id"],
         "cx:operation:adapter-01"
     );
+
+    let redaction = Operation::create(
+        OperationId::new("cx:operation:adapter-redaction").unwrap(),
+        SpaceId::new("cx:space:adapter").unwrap(),
+        "redaction",
+        serde_json::json!({
+            "event_id": "cx:event:redaction-01",
+            "target_event_id": "cx:event:adapter-01"
+        }),
+    );
+    let redaction_digest = Hash::new(redaction.operation_digest().unwrap()).unwrap();
+    let mut redaction_commit = Commit::new(
+        CommitId::new("cx:commit:adapter-redaction").unwrap(),
+        "did:web:alice.example",
+        Did::new("did:web:alice.example").unwrap(),
+        2,
+    );
+    redaction_commit.operations.push(redaction_digest);
+    redaction_commit.proofs.push(dummy_proof());
+    let redaction_submit: Value = TestClient::post("http://server/api/v1/repo/submit-commit")
+        .json(&serde_json::json!({
+            "repo_id": "did:web:alice.example",
+            "expected_head": commit_digest,
+            "operations": [redaction],
+            "commit": redaction_commit
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(redaction_submit["status"], "accepted");
+
+    let redacted_backfill: Value =
+        TestClient::get("http://server/api/v1/sync/backfill?space_id=cx:space:adapter&limit=10")
+            .add_header("authorization", format!("Bearer {alice}"), true)
+            .send(&app_from_state(state.clone()))
+            .await
+            .take_json()
+            .await
+            .unwrap();
+    assert!(redacted_backfill["events"].as_array().unwrap().is_empty());
+
+    let redacted_subscribe: Value =
+        TestClient::get("http://server/api/v1/sync/subscribe?space_id=cx:space:adapter&limit=10")
+            .add_header("authorization", format!("Bearer {alice}"), true)
+            .send(&app_from_state(state.clone()))
+            .await
+            .take_json()
+            .await
+            .unwrap();
+    assert!(redacted_subscribe["frames"].as_array().unwrap().is_empty());
 
     let mut stale_commit = Commit::new(
         CommitId::new("cx:commit:adapter-02").unwrap(),

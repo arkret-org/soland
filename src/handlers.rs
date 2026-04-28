@@ -3,6 +3,11 @@ use contrix_sdk::{
     Commit, CommitId, CommitProofVerifier, DeviceId, Did, ErrorEnvelope, Hash, Operation,
     OperationId, Proof, SpaceId, SpaceSearchEntry,
 };
+use std::collections::HashSet;
+use diesel::{
+    QueryableByName, RunQueryDsl, sql_query,
+    sql_types::{Jsonb, Nullable, Text, Timestamptz},
+};
 use salvo::{
     http::{Method, StatusCode},
     prelude::*,
@@ -11,9 +16,10 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 
 use crate::{
+    ids,
     state::{
         AccountRecord, AppState, BlobRecord, ContactRecord, DeviceMessageRecord, MessageRecord,
-        SessionRecord, SpaceMetaRecord,
+        ProjectionEventRecord, SessionRecord, SpaceMetaRecord,
     },
     wire::{
         AccountResponse, AddSpaceMemberRequest, ApiError, AuthzCheckRequest, AuthzCheckResponse,
@@ -398,7 +404,7 @@ pub async fn create_space(depot: &mut Depot, req: &mut Request, res: &mut Respon
             return;
         }
     }
-    let space_id = format!("cx:space:{}", uuid::Uuid::new_v4().simple());
+    let space_id = ids::generate_space_id();
     let mut entry = SpaceSearchEntry::new(
         SpaceId::new(space_id.clone()).expect("generated valid space id"),
         body.title.trim(),
@@ -723,10 +729,10 @@ pub async fn send_message(depot: &mut Depot, req: &mut Request, res: &mut Respon
         return;
     }
 
-    let event_id = format!("cx:event:{}", uuid::Uuid::new_v4().simple());
+    let event_id = ids::generate_event_id();
     let thread_id = body.thread_id.unwrap_or_else(|| body.space_id.clone());
-    let operation_id = format!("cx:operation:{}", uuid::Uuid::new_v4().simple());
-    let commit_id = format!("cx:commit:{}", uuid::Uuid::new_v4().simple());
+    let operation_id = ids::generate_operation_id();
+    let commit_id = ids::generate_commit_id();
     let payload = json!({
         "event_id": event_id,
         "sender": session.actor.clone(),
@@ -785,6 +791,7 @@ pub async fn send_message(depot: &mut Depot, req: &mut Request, res: &mut Respon
     commit.operations.push(operation_digest);
     commit.proofs.push(dev_proof(&session.actor));
 
+    let projection_event = projection_event_from_operation(&operation, Some(&session.actor));
     let expected_head = commit.prev_commit.as_ref().map(ToString::to_string);
     let head_commit = match state.repo.submit_commit(
         &session.actor,
@@ -804,6 +811,7 @@ pub async fn send_message(depot: &mut Depot, req: &mut Request, res: &mut Respon
             return;
         }
     };
+    append_projection_event(state, projection_event);
 
     state
         .messages
@@ -1739,27 +1747,29 @@ pub async fn sync_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Resp
         );
         return;
     }
+    let session = authenticated_session(state, req).ok();
+    if !space_id_accessible(state, &space_id, session.as_ref()) {
+        render_error(res, StatusCode::NOT_FOUND, "not_found", "not found");
+        return;
+    }
     let limit = query_param(req, "limit")
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(100)
         .min(100);
-    match state
-        .repo
-        .sync_space_operations(&space_id, query_param(req, "cursor").as_deref(), limit)
-    {
-        Ok(page) => {
-            let mut seq = 0usize;
+    let cursor = query_param(req, "cursor");
+    match projected_event_page(state, &space_id, cursor.as_deref(), limit) {
+        Ok(Some(page)) => {
             let frames: Vec<_> = page
                 .items
                 .into_iter()
-                .map(|operation| {
-                    seq += 1;
-                    let cursor = operation.operation_id.to_string();
+                .enumerate()
+                .map(|(index, event)| {
+                    let cursor = event.event_id.clone();
                     json!({
-                        "type": "operation",
-                        "seq": seq,
+                        "type": "event",
+                        "seq": index + 1,
                         "cursor": cursor,
-                        "payload": operation
+                        "payload": projection_event_json(&event)
                     })
                 })
                 .collect();
@@ -1769,10 +1779,43 @@ pub async fn sync_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Resp
                 "has_more": page.has_more
             })));
         }
+        Ok(None) => match state
+            .repo
+            .sync_space_operations(&space_id, cursor.as_deref(), limit)
+        {
+            Ok(page) => {
+                let mut seq = 0usize;
+                let frames: Vec<_> = page
+                    .items
+                    .into_iter()
+                    .map(|operation| {
+                        seq += 1;
+                        let cursor = operation.operation_id.to_string();
+                        json!({
+                            "type": "operation",
+                            "seq": seq,
+                            "cursor": cursor,
+                            "payload": operation
+                        })
+                    })
+                    .collect();
+                res.render(Json(json!({
+                    "frames": frames,
+                    "next_cursor": page.next_cursor.or_else(|| Some(sync_token())),
+                    "has_more": page.has_more
+                })));
+            }
+            Err(error) => render_error(
+                res,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "repo_error",
+                &error.to_string(),
+            ),
+        },
         Err(error) => render_error(
             res,
             StatusCode::INTERNAL_SERVER_ERROR,
-            "repo_error",
+            "projection_error",
             &error.to_string(),
         ),
     }
@@ -1799,11 +1842,38 @@ pub async fn sync_backfill(depot: &mut Depot, req: &mut Request, res: &mut Respo
         );
         return;
     }
+    let session = authenticated_session(state, req).ok();
+    if !space_id_accessible(state, &space_id, session.as_ref()) {
+        render_error(res, StatusCode::NOT_FOUND, "not_found", "not found");
+        return;
+    }
     let limit = query_param(req, "limit")
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(100)
         .min(100);
     let cursor = query_param(req, "cursor");
+    match projected_event_page(state, &space_id, cursor.as_deref(), limit) {
+        Ok(Some(page)) => {
+            let events = page.items.iter().map(projection_event_json).collect();
+            res.render(Json(BackfillResponse {
+                events,
+                prev_cursor: cursor,
+                next_cursor: page.next_cursor.or_else(|| Some(sync_token())),
+                limited: page.has_more,
+            }));
+            return;
+        }
+        Ok(None) => {}
+        Err(error) => {
+            render_error(
+                res,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "projection_error",
+                &error.to_string(),
+            );
+            return;
+        }
+    }
     let page = match state
         .repo
         .sync_space_operations(&space_id, cursor.as_deref(), limit)
@@ -1819,12 +1889,15 @@ pub async fn sync_backfill(depot: &mut Depot, req: &mut Request, res: &mut Respo
             return;
         }
     };
-    let events = page
+    let redacted = redaction_targets_from_operations(&page.items);
+    let events: Vec<_> = page
         .items
         .into_iter()
+        .filter(|operation| operation_is_visible(&operation, &redacted))
         .map(|operation| {
+            let event_id = operation_event_id(&operation);
             json!({
-                "event_id": operation.operation_id,
+                "event_id": event_id,
                 "space_id": operation.space_id,
                 "event_type": operation.object_type,
                 "operation_type": operation.operation_type,
@@ -2120,6 +2193,8 @@ pub async fn submit_commit(depot: &mut Depot, req: &mut Request, res: &mut Respo
     }
 
     let commit_id = body.commit.commit_id.to_string();
+    let operations_for_projection = body.operations.clone();
+    let repo_id = body.repo_id.clone();
     match state.repo.submit_commit(
         &body.repo_id,
         body.expected_head.as_deref(),
@@ -2128,6 +2203,7 @@ pub async fn submit_commit(depot: &mut Depot, req: &mut Request, res: &mut Respo
         &RequireProof,
     ) {
         Ok(head_commit) => {
+            project_accepted_operations(state, &repo_id, &operations_for_projection);
             res.render(Json(SubmitCommitResponse {
                 status: "accepted".to_owned(),
                 commit_id,
@@ -2937,6 +3013,224 @@ fn message_event(message: &MessageRecord) -> serde_json::Value {
     })
 }
 
+#[derive(Clone, Debug)]
+struct ProjectedEventPage {
+    items: Vec<ProjectionEventRecord>,
+    next_cursor: Option<String>,
+    has_more: bool,
+}
+
+#[derive(QueryableByName)]
+struct ProjectionEventRow {
+    #[diesel(sql_type = Text)]
+    event_id: String,
+    #[diesel(sql_type = Text)]
+    space_id: String,
+    #[diesel(sql_type = Text)]
+    event_type: String,
+    #[diesel(sql_type = Text)]
+    operation_type: String,
+    #[diesel(sql_type = Nullable<Text>)]
+    operation_id: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
+    sender: Option<String>,
+    #[diesel(sql_type = Jsonb)]
+    payload: serde_json::Value,
+    #[diesel(sql_type = Timestamptz)]
+    created_at: chrono::DateTime<chrono::Utc>,
+}
+
+fn projection_event_json(event: &ProjectionEventRecord) -> serde_json::Value {
+    json!({
+        "event_id": event.event_id,
+        "space_id": event.space_id,
+        "event_type": event.event_type,
+        "operation_type": event.operation_type,
+        "operation_id": event.operation_id,
+        "sender": event.sender,
+        "payload": event.payload,
+        "created_at": event.created_at,
+    })
+}
+
+fn operation_event_id(operation: &Operation) -> String {
+    operation
+        .payload
+        .get("event_id")
+        .and_then(|value| value.as_str())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| operation.operation_id.to_string())
+}
+
+fn redaction_targets_from_operations(operations: &[Operation]) -> HashSet<String> {
+    operations
+        .iter()
+        .filter(|operation| operation.object_type == "redaction")
+        .filter_map(|operation| {
+            operation
+                .payload
+                .get("target_event_id")
+                .and_then(|value| value.as_str())
+                .or_else(|| operation.payload.get("target").and_then(|value| value.as_str()))
+                .or_else(|| operation.payload.get("redacts").and_then(|value| value.as_str()))
+                .map(ToOwned::to_owned)
+        })
+        .collect()
+}
+
+fn operation_is_visible(operation: &Operation, redacted_events: &HashSet<String>) -> bool {
+    let event_id = operation_event_id(operation);
+    operation.object_type != "redaction" && !redacted_events.contains(&event_id)
+}
+
+fn operation_type_string(operation: &Operation) -> String {
+    serde_json::to_value(&operation.operation_type)
+        .ok()
+        .and_then(|value| value.as_str().map(ToOwned::to_owned))
+        .unwrap_or_else(|| "create".to_owned())
+}
+
+fn projection_event_from_operation(
+    operation: &Operation,
+    sender_fallback: Option<&str>,
+) -> ProjectionEventRecord {
+    let event_id = operation_event_id(operation);
+    ProjectionEventRecord {
+        event_id,
+        space_id: operation.space_id.to_string(),
+        event_type: operation.object_type.clone(),
+        operation_type: operation_type_string(operation),
+        operation_id: Some(operation.operation_id.to_string()),
+        sender: operation
+            .payload
+            .get("sender")
+            .and_then(|value| value.as_str())
+            .or(sender_fallback)
+            .map(ToOwned::to_owned),
+        payload: operation.payload.clone(),
+        created_at: operation.created_at,
+    }
+}
+
+fn redaction_targets_from_events(events: &[ProjectionEventRecord]) -> HashSet<String> {
+    events
+        .iter()
+        .filter(|event| event.event_type == "redaction")
+        .filter_map(|event| {
+            event
+                .payload
+                .get("target_event_id")
+                .and_then(|value| value.as_str())
+                .or_else(|| event.payload.get("target").and_then(|value| value.as_str()))
+                .or_else(|| event.payload.get("redacts").and_then(|value| value.as_str()))
+                .map(ToOwned::to_owned)
+        })
+        .collect()
+}
+
+fn event_is_visible(event: &ProjectionEventRecord, redacted: &HashSet<String>) -> bool {
+    event.event_type != "redaction" && !redacted.contains(&event.event_id)
+}
+
+fn append_projection_event(state: &AppState, event: ProjectionEventRecord) {
+    let mut events = state
+        .projection_events
+        .lock()
+        .expect("projection event lock");
+    if events.iter().any(|known| known.event_id == event.event_id) {
+        return;
+    }
+    events.push(event);
+}
+
+fn projected_event_page(
+    state: &AppState,
+    space_id: &str,
+    cursor: Option<&str>,
+    limit: usize,
+) -> anyhow::Result<Option<ProjectedEventPage>> {
+    let mut events = state
+        .projection_events
+        .lock()
+        .expect("projection event lock")
+        .iter()
+        .filter(|event| event.space_id == space_id)
+        .cloned()
+        .collect::<Vec<_>>();
+    if events.is_empty() {
+        events = load_projected_events_from_pg(state, space_id)?;
+    }
+    if events.is_empty() {
+        return Ok(None);
+    }
+    events.sort_by(|left, right| {
+        left.created_at
+            .cmp(&right.created_at)
+            .then_with(|| left.event_id.cmp(&right.event_id))
+    });
+    let redacted = redaction_targets_from_events(&events);
+    let start = cursor
+        .and_then(|cursor| {
+            events
+                .iter()
+                .position(|event| event.event_id == cursor)
+                .map(|index| index + 1)
+        })
+        .unwrap_or(0);
+    let mut page_items = events
+        .into_iter()
+        .skip(start)
+        .filter(|event| event_is_visible(event, &redacted))
+        .collect::<Vec<_>>();
+    let has_more = page_items.len() > limit;
+    if has_more {
+        page_items.truncate(limit);
+    }
+    let next_cursor = if has_more {
+        page_items.last().map(|event| event.event_id.clone())
+    } else {
+        None
+    };
+    Ok(Some(ProjectedEventPage {
+        items: page_items,
+        next_cursor,
+        has_more,
+    }))
+}
+
+fn load_projected_events_from_pg(
+    state: &AppState,
+    space_id: &str,
+) -> anyhow::Result<Vec<ProjectionEventRecord>> {
+    let Some(pool) = state.db.pool.as_ref() else {
+        return Ok(Vec::new());
+    };
+    let mut conn = pool.get()?;
+    let rows = sql_query(
+        "SELECT event_id, space_id, event_type, 'event' AS operation_type, operation_id, sender, payload, created_at \
+         FROM events WHERE space_id = $1 \
+         UNION ALL \
+         SELECT event_id, space_id, event_type, 'state' AS operation_type, operation_id, sender, payload, created_at \
+         FROM space_state_events WHERE space_id = $1 \
+         ORDER BY created_at ASC, event_id ASC",
+    )
+    .bind::<Text, _>(space_id)
+    .load::<ProjectionEventRow>(&mut conn)?;
+    Ok(rows
+        .into_iter()
+        .map(|row| ProjectionEventRecord {
+            event_id: row.event_id,
+            space_id: row.space_id,
+            event_type: row.event_type,
+            operation_type: row.operation_type,
+            operation_id: row.operation_id,
+            sender: row.sender,
+            payload: row.payload,
+            created_at: row.created_at,
+        })
+        .collect())
+}
+
 fn ingest_federation_operations(
     state: &AppState,
     origin: &str,
@@ -2962,15 +3256,193 @@ fn ingest_federation_operations(
 }
 
 fn project_federation_operation(state: &AppState, origin: &str, operation: &Operation) {
-    ensure_federated_space(state, origin, operation);
+    ensure_projected_space(state, origin, operation);
     match operation.object_type.as_str() {
         "message" => project_federated_message(state, origin, operation),
-        "membership" | "space.lifecycle" => project_federated_membership(state, origin, operation),
+        "membership" | "space.lifecycle" => project_membership_operation(state, origin, operation),
         _ => {}
+    }
+    append_projection_event(
+        state,
+        projection_event_from_operation(operation, Some(origin)),
+    );
+}
+
+fn project_accepted_operations(state: &AppState, repo_id: &str, operations: &[Operation]) {
+    for operation in operations {
+        ensure_projected_space(state, repo_id, operation);
+        match operation.object_type.as_str() {
+            "message" => project_federated_message(state, repo_id, operation),
+            "membership" | "space.lifecycle" => {
+                project_membership_operation(state, repo_id, operation)
+            }
+            _ => {}
+        }
+        append_projection_event(
+            state,
+            projection_event_from_operation(operation, Some(repo_id)),
+        );
+        if let Err(error) = persist_projected_operation(state, repo_id, operation) {
+            tracing::warn!(
+                error = %error,
+                operation_id = %operation.operation_id,
+                object_type = %operation.object_type,
+                "failed to persist accepted operation projection"
+            );
+        }
     }
 }
 
-fn ensure_federated_space(state: &AppState, origin: &str, operation: &Operation) {
+fn persist_projected_operation(
+    state: &AppState,
+    repo_id: &str,
+    operation: &Operation,
+) -> anyhow::Result<()> {
+    let Some(pool) = state.db.pool.as_ref() else {
+        return Ok(());
+    };
+    let mut conn = pool.get()?;
+    match operation.object_type.as_str() {
+        "message" => {
+            let event_id = operation
+                .payload
+                .get("event_id")
+                .and_then(|value| value.as_str())
+                .map(ToOwned::to_owned)
+                .unwrap_or_else(|| {
+                    format!(
+                        "cx:event:{}",
+                        operation.operation_id.as_str().replace(':', "")
+                    )
+                });
+            let sender = operation
+                .payload
+                .get("sender")
+                .and_then(|value| value.as_str())
+                .unwrap_or(repo_id);
+            let thread_id = operation
+                .payload
+                .get("thread_id")
+                .and_then(|value| value.as_str());
+            sql_query(
+                "INSERT INTO events (event_id, space_id, event_type, sender, thread_id, operation_id, payload, created_at) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
+                 ON CONFLICT (event_id) DO NOTHING",
+            )
+            .bind::<Text, _>(&event_id)
+            .bind::<Text, _>(operation.space_id.as_str())
+            .bind::<Text, _>(&operation.object_type)
+            .bind::<Nullable<Text>, _>(Some(sender))
+            .bind::<Nullable<Text>, _>(thread_id)
+            .bind::<Nullable<Text>, _>(Some(operation.operation_id.as_str()))
+            .bind::<Jsonb, _>(&operation.payload)
+            .bind::<Timestamptz, _>(operation.created_at)
+            .execute(&mut conn)?;
+        }
+        "membership" | "space.lifecycle" => {
+            let title = operation
+                .payload
+                .get("space_title")
+                .or_else(|| operation.payload.get("title"))
+                .and_then(|value| value.as_str())
+                .unwrap_or_else(|| operation.space_id.as_str());
+            let summary = operation
+                .payload
+                .get("space_summary")
+                .or_else(|| operation.payload.get("summary"))
+                .and_then(|value| value.as_str());
+            let discoverability = operation
+                .payload
+                .get("discoverability")
+                .and_then(|value| value.as_str())
+                .unwrap_or_else(|| {
+                    if operation
+                        .payload
+                        .get("public")
+                        .and_then(|value| value.as_bool())
+                        .unwrap_or(false)
+                    {
+                        "public"
+                    } else {
+                        "invite_only"
+                    }
+                });
+            sql_query(
+                "INSERT INTO spaces (space_id, title, summary, owner, discoverability, payload, created_at, updated_at) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $7) \
+                 ON CONFLICT (space_id) DO UPDATE SET title = EXCLUDED.title, summary = EXCLUDED.summary, updated_at = EXCLUDED.updated_at",
+            )
+            .bind::<Text, _>(operation.space_id.as_str())
+            .bind::<Text, _>(title)
+            .bind::<Nullable<Text>, _>(summary)
+            .bind::<Nullable<Text>, _>(Some(repo_id))
+            .bind::<Text, _>(discoverability)
+            .bind::<Jsonb, _>(&operation.payload)
+            .bind::<Timestamptz, _>(operation.created_at)
+            .execute(&mut conn)?;
+
+            if let Some(member) = operation
+                .payload
+                .get("member")
+                .and_then(|value| value.as_str())
+            {
+                let membership = operation
+                    .payload
+                    .get("membership")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or_else(|| {
+                        if operation
+                            .payload
+                            .get("action")
+                            .and_then(|value| value.as_str())
+                            .is_some_and(|action| {
+                                matches!(action, "member.remove" | "leave" | "ban")
+                            })
+                        {
+                            "leave"
+                        } else {
+                            "join"
+                        }
+                    });
+                sql_query(
+                    "INSERT INTO space_members (space_id, actor, membership, payload, joined_at, left_at, updated_at) \
+                     VALUES ($1, $2, $3, $4, CASE WHEN $3 = 'join' THEN $5 ELSE NULL END, CASE WHEN $3 <> 'join' THEN $5 ELSE NULL END, $5) \
+                     ON CONFLICT (space_id, actor) DO UPDATE SET membership = EXCLUDED.membership, payload = EXCLUDED.payload, left_at = EXCLUDED.left_at, updated_at = EXCLUDED.updated_at",
+                )
+                .bind::<Text, _>(operation.space_id.as_str())
+                .bind::<Text, _>(member)
+                .bind::<Text, _>(membership)
+                .bind::<Jsonb, _>(&operation.payload)
+                .bind::<Timestamptz, _>(operation.created_at)
+                .execute(&mut conn)?;
+            }
+
+            sql_query(
+                "INSERT INTO space_state_events (event_id, space_id, event_type, state_key, sender, operation_id, payload, created_at) \
+                 VALUES ($1, $2, $3, $4, $5, $1, $6, $7) \
+                 ON CONFLICT (event_id) DO NOTHING",
+            )
+            .bind::<Text, _>(operation.operation_id.as_str())
+            .bind::<Text, _>(operation.space_id.as_str())
+            .bind::<Text, _>(&operation.object_type)
+            .bind::<Text, _>(
+                operation
+                    .payload
+                    .get("member")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or(""),
+            )
+            .bind::<Nullable<Text>, _>(Some(repo_id))
+            .bind::<Jsonb, _>(&operation.payload)
+            .bind::<Timestamptz, _>(operation.created_at)
+            .execute(&mut conn)?;
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn ensure_projected_space(state: &AppState, origin: &str, operation: &Operation) {
     let space_id = operation.space_id.clone();
     let mut spaces = state.spaces.lock().expect("spaces lock");
     if spaces.get(&space_id).is_none() {
@@ -2990,6 +3462,9 @@ fn ensure_federated_space(state: &AppState, origin: &str, operation: &Operation)
             .get("public")
             .and_then(|value| value.as_bool())
             .unwrap_or(false);
+        if let Ok(origin) = Did::new(origin.to_owned()) {
+            entry.members.insert(origin);
+        }
         spaces.upsert(entry);
     }
     drop(spaces);
@@ -3006,10 +3481,28 @@ fn ensure_federated_space(state: &AppState, origin: &str, operation: &Operation)
             created_at: now,
             updated_at: now,
         });
-    project_federated_membership(state, origin, operation);
+    project_membership_operation(state, origin, operation);
 }
 
-fn project_federated_membership(state: &AppState, origin: &str, operation: &Operation) {
+fn project_membership_operation(state: &AppState, origin: &str, operation: &Operation) {
+    let action = operation
+        .payload
+        .get("action")
+        .and_then(|value| value.as_str())
+        .unwrap_or(operation.object_type.as_str());
+    if matches!(action, "delete" | "space.delete") {
+        if let Some(record) = state
+            .space_meta
+            .lock()
+            .expect("space meta lock")
+            .get_mut(operation.space_id.as_str())
+        {
+            record.deleted = true;
+            record.updated_at = operation.created_at;
+        }
+        return;
+    }
+
     let mut member_values = Vec::new();
     if let Some(member) = operation
         .payload
@@ -3051,10 +3544,16 @@ fn project_federated_membership(state: &AppState, origin: &str, operation: &Oper
     };
     for member in member_values {
         if let Ok(member) = Did::new(member) {
-            entry.members.insert(member);
+            if matches!(action, "member.remove" | "leave" | "ban") {
+                entry.members.remove(&member);
+            } else {
+                entry.members.insert(member);
+            }
         }
     }
     spaces.upsert(entry);
+    drop(spaces);
+    touch_space(state, operation.space_id.as_str());
 }
 
 fn project_federated_message(state: &AppState, origin: &str, operation: &Operation) {
@@ -3217,15 +3716,32 @@ fn space_id_visible_to(state: &AppState, space_id: &str, session: Option<&Sessio
     if is_space_deleted(state, space_id) {
         return false;
     }
-    let Ok(space_id) = SpaceId::new(space_id.to_owned()) else {
+    let Ok(sid) = SpaceId::new(space_id.to_owned()) else {
         return false;
     };
     state
         .spaces
         .lock()
         .expect("spaces lock")
-        .get(&space_id)
+        .get(&sid)
         .is_some_and(|space| space_visible_to(state, space, session))
+}
+
+/// Check if a space is accessible for backfill/subscribe (allows deleted spaces for members).
+fn space_id_accessible(state: &AppState, space_id: &str, session: Option<&SessionRecord>) -> bool {
+    let Ok(sid) = SpaceId::new(space_id.to_owned()) else {
+        return false;
+    };
+    let spaces = state.spaces.lock().expect("spaces lock");
+    let Some(space) = spaces.get(&sid) else {
+        return false;
+    };
+    if space.public {
+        return true;
+    }
+    session.is_some_and(|session| {
+        Did::new(session.actor.clone()).is_ok_and(|actor| space.members.contains(&actor))
+    })
 }
 
 struct RequireProof;
@@ -3243,15 +3759,16 @@ fn record_space_lifecycle_operation(
     payload: serde_json::Value,
 ) -> contrix_sdk::Result<Option<String>> {
     let operation = Operation::create(
-        OperationId::new(format!("cx:operation:{}", uuid::Uuid::new_v4().simple()))
+        OperationId::new(ids::generate_operation_id())
             .expect("generated valid operation id"),
         SpaceId::new(space_id.to_owned()).expect("validated space id"),
         "space.lifecycle",
         payload,
     );
+    let projection_event = projection_event_from_operation(&operation, Some(actor));
     let operation_digest = Hash::new(operation.operation_digest()?)?;
     let mut commit = Commit::new(
-        CommitId::new(format!("cx:commit:{}", uuid::Uuid::new_v4().simple()))
+        CommitId::new(ids::generate_commit_id())
             .expect("generated valid commit id"),
         actor.to_owned(),
         Did::new(actor.to_owned()).expect("session actor is valid"),
@@ -3262,13 +3779,15 @@ fn record_space_lifecycle_operation(
     commit.proofs.push(dev_proof(actor));
 
     let expected_head = commit.prev_commit.as_ref().map(ToString::to_string);
-    state.repo.submit_commit(
+    let head = state.repo.submit_commit(
         actor,
         expected_head.as_deref(),
         vec![operation],
         commit,
         &RequireProof,
-    )
+    )?;
+    append_projection_event(state, projection_event);
+    Ok(head)
 }
 
 fn next_author_seq(state: &AppState, repo_id: &str) -> u64 {
@@ -3326,6 +3845,14 @@ fn validate_operation_semantics(operations: &[Operation]) -> Result<(), &'static
             "space.lifecycle" => {
                 if operation.payload.get("action").is_none() {
                     return Err("space lifecycle operation requires action");
+                }
+            }
+            "redaction" => {
+                if operation.payload.get("target_event_id").is_none()
+                    && operation.payload.get("target").is_none()
+                    && operation.payload.get("redacts").is_none()
+                {
+                    return Err("redaction operation requires target_event_id");
                 }
             }
             "entity" | "entity.create" | "entity.update" | "entity.delete" | "relation"
@@ -3749,6 +4276,8 @@ fn sha256_hex(bytes: &[u8]) -> String {
 }
 
 fn render_error(res: &mut Response, status: StatusCode, code: &str, message: &str) {
+    let mut extra = std::collections::BTreeMap::new();
+    extra.insert("request_id".to_owned(), serde_json::Value::String(ids::generate_request_id()));
     res.status_code(status);
     res.render(Json(ApiError {
         ok: false,
@@ -3756,7 +4285,7 @@ fn render_error(res: &mut Response, status: StatusCode, code: &str, message: &st
             errcode: code.to_owned(),
             error: message.to_owned(),
             retry_after_ms: None,
-            extra: Default::default(),
+            extra,
         },
     }));
 }
