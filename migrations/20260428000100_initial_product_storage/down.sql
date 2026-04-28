@@ -1,0 +1,17 @@
+drop table if exists notifications;
+drop table if exists account_data;
+drop table if exists presence;
+drop table if exists moderation_reports;
+drop table if exists push_devices;
+drop table if exists blobs;
+drop table if exists one_time_keys;
+drop table if exists device_keys;
+drop table if exists devices;
+drop table if exists sessions;
+drop table if exists events;
+drop table if exists repo_author_sequences;
+drop table if exists repo_heads;
+drop table if exists repo_commit_operations;
+drop table if exists repo_commits;
+drop table if exists repo_operations;
+drop table if exists spaces;
