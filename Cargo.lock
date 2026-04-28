@@ -3192,7 +3192,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "serverx"
+name = "soland"
 version = "0.1.0"
 dependencies = [
  "anyhow",

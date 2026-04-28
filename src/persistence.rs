@@ -64,8 +64,13 @@ pub trait SpaceMetaStore: Send + Sync {
 pub trait MessageStore: Send + Sync {
     fn get(&self, event_id: &str) -> PersistenceResult<Option<MessageRecord>>;
     fn put(&self, record: &MessageRecord) -> PersistenceResult<()>;
-    fn list_for_space(&self, space_id: &str, limit: usize) -> PersistenceResult<Vec<MessageRecord>>;
-    fn list_for_thread(&self, thread_id: &str, limit: usize) -> PersistenceResult<Vec<MessageRecord>>;
+    fn list_for_space(&self, space_id: &str, limit: usize)
+    -> PersistenceResult<Vec<MessageRecord>>;
+    fn list_for_thread(
+        &self,
+        thread_id: &str,
+        limit: usize,
+    ) -> PersistenceResult<Vec<MessageRecord>>;
     fn delete(&self, event_id: &str) -> PersistenceResult<()>;
 }
 
@@ -234,7 +239,9 @@ impl MemoryContactStore {
 impl ContactStore for MemoryContactStore {
     fn get(&self, requester: &str, target: &str) -> PersistenceResult<Option<ContactRecord>> {
         let data = self.data.lock().expect("lock");
-        Ok(data.get(&(requester.to_owned(), target.to_owned())).cloned())
+        Ok(data
+            .get(&(requester.to_owned(), target.to_owned()))
+            .cloned())
     }
 
     fn put(&self, record: &ContactRecord) -> PersistenceResult<()> {
@@ -324,7 +331,11 @@ impl MessageStore for MemoryMessageStore {
         Ok(())
     }
 
-    fn list_for_space(&self, space_id: &str, limit: usize) -> PersistenceResult<Vec<MessageRecord>> {
+    fn list_for_space(
+        &self,
+        space_id: &str,
+        limit: usize,
+    ) -> PersistenceResult<Vec<MessageRecord>> {
         let data = self.data.lock().expect("lock");
         let messages: Vec<_> = data
             .iter()
@@ -336,7 +347,11 @@ impl MessageStore for MemoryMessageStore {
         Ok(messages)
     }
 
-    fn list_for_thread(&self, thread_id: &str, limit: usize) -> PersistenceResult<Vec<MessageRecord>> {
+    fn list_for_thread(
+        &self,
+        thread_id: &str,
+        limit: usize,
+    ) -> PersistenceResult<Vec<MessageRecord>> {
         let data = self.data.lock().expect("lock");
         let messages: Vec<_> = data
             .iter()

@@ -1,4 +1,4 @@
-//! Hybrid Logical Clock (HLC) wrapper for serverx.
+//! Hybrid Logical Clock (HLC) wrapper for soland.
 //!
 //! Wraps the SDK's `HlcGenerator` to provide a server-wide HLC instance
 //! that can be shared across handlers via `AppState`.
@@ -46,7 +46,7 @@ mod tests {
 
     #[test]
     fn hlc_generates_valid_format() {
-        let hlc = ServerHlc::new("did:web:serverx.local");
+        let hlc = ServerHlc::new("did:web:soland.local");
         let val = hlc.now();
         assert_eq!(val.len(), 30);
         assert!(val.chars().all(|c| c.is_ascii_hexdigit() || c == '-'));
@@ -57,7 +57,7 @@ mod tests {
 
     #[test]
     fn hlc_is_monotonic() {
-        let hlc = ServerHlc::new("did:web:serverx.local");
+        let hlc = ServerHlc::new("did:web:soland.local");
         let v1 = hlc.now();
         let v2 = hlc.now();
         let v3 = hlc.now();
@@ -67,7 +67,7 @@ mod tests {
 
     #[test]
     fn hlc_clone_shares_state() {
-        let hlc1 = ServerHlc::new("did:web:serverx.local");
+        let hlc1 = ServerHlc::new("did:web:soland.local");
         let hlc2 = hlc1.clone();
         let v1 = hlc1.now();
         let v2 = hlc2.now();

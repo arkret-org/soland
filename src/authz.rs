@@ -48,6 +48,14 @@ pub struct AuthzEngine {
     grants: Arc<Mutex<BTreeMap<String, Grant>>>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum GrantDecision {
+    Deny,
+    Quarantine,
+    Allow,
+    RequireReview,
+}
+
 impl AuthzEngine {
     pub fn new() -> Self {
         Self {
@@ -147,18 +155,39 @@ impl AuthzEngine {
             .cloned()
             .collect();
 
-        if !matching_grants.is_empty() {
-            // Check constraints
-            let all_constraints_satisfied = matching_grants.iter().all(|g| {
-                g.constraints
+        let satisfied_grants: Vec<Grant> = matching_grants
+            .into_iter()
+            .filter(|grant| {
+                grant
+                    .constraints
                     .iter()
-                    .all(|c| evaluate_constraint(c, actor, resource))
-            });
-            if all_constraints_satisfied {
-                return AuthzResult {
-                    allowed: true,
-                    reason: "explicit_grant".to_owned(),
-                    grants: matching_grants,
+                    .filter(|constraint| !is_decision_constraint(constraint))
+                    .all(|constraint| evaluate_constraint(constraint, actor, resource))
+            })
+            .collect();
+        if !satisfied_grants.is_empty() {
+            if let Some(decision) = highest_priority_decision(&satisfied_grants) {
+                return match decision {
+                    GrantDecision::Deny => AuthzResult {
+                        allowed: false,
+                        reason: "explicit_deny".to_owned(),
+                        grants: satisfied_grants,
+                    },
+                    GrantDecision::Quarantine => AuthzResult {
+                        allowed: false,
+                        reason: "quarantine".to_owned(),
+                        grants: satisfied_grants,
+                    },
+                    GrantDecision::Allow => AuthzResult {
+                        allowed: true,
+                        reason: "explicit_grant".to_owned(),
+                        grants: satisfied_grants,
+                    },
+                    GrantDecision::RequireReview => AuthzResult {
+                        allowed: false,
+                        reason: "require_review".to_owned(),
+                        grants: satisfied_grants,
+                    },
                 };
             }
         }
@@ -211,6 +240,68 @@ fn resource_matches(pattern: &str, resource: &str) -> bool {
         return resource.starts_with(prefix);
     }
     false
+}
+
+fn highest_priority_decision(grants: &[Grant]) -> Option<GrantDecision> {
+    if grants
+        .iter()
+        .any(|grant| grant_decision(grant) == GrantDecision::Deny)
+    {
+        return Some(GrantDecision::Deny);
+    }
+    if grants
+        .iter()
+        .any(|grant| grant_decision(grant) == GrantDecision::Quarantine)
+    {
+        return Some(GrantDecision::Quarantine);
+    }
+    if grants
+        .iter()
+        .any(|grant| grant_decision(grant) == GrantDecision::Allow)
+    {
+        return Some(GrantDecision::Allow);
+    }
+    if grants
+        .iter()
+        .any(|grant| grant_decision(grant) == GrantDecision::RequireReview)
+    {
+        return Some(GrantDecision::RequireReview);
+    }
+    None
+}
+
+fn grant_decision(grant: &Grant) -> GrantDecision {
+    grant
+        .constraints
+        .iter()
+        .find_map(decision_from_constraint)
+        .unwrap_or(GrantDecision::Allow)
+}
+
+fn is_decision_constraint(constraint: &Constraint) -> bool {
+    decision_from_constraint(constraint).is_some()
+}
+
+fn decision_from_constraint(constraint: &Constraint) -> Option<GrantDecision> {
+    if !matches!(
+        constraint.constraint_type.as_str(),
+        "decision" | "effect" | "policy"
+    ) {
+        return None;
+    }
+    let value = constraint
+        .value
+        .get("decision")
+        .or_else(|| constraint.value.get("effect"))
+        .or_else(|| constraint.value.get("value"))
+        .and_then(|value| value.as_str())?;
+    match value {
+        "deny" => Some(GrantDecision::Deny),
+        "quarantine" => Some(GrantDecision::Quarantine),
+        "allow" => Some(GrantDecision::Allow),
+        "require_review" => Some(GrantDecision::RequireReview),
+        _ => None,
+    }
 }
 
 /// Evaluate a constraint. Returns true if the constraint is satisfied.
@@ -303,6 +394,102 @@ mod tests {
         );
         assert!(result.allowed);
         assert_eq!(result.reason, "explicit_grant");
+    }
+
+    #[test]
+    fn explicit_deny_overrides_allow() {
+        let engine = AuthzEngine::new();
+        engine.create_grant(
+            "cx:space:1".to_owned(),
+            "did:web:alice".to_owned(),
+            "did:web:bob".to_owned(),
+            "*".to_owned(),
+            vec!["send".to_owned()],
+            vec![Constraint {
+                constraint_type: "decision".to_owned(),
+                value: serde_json::json!({"decision": "allow"}),
+            }],
+        );
+        engine.create_grant(
+            "cx:space:1".to_owned(),
+            "did:web:alice".to_owned(),
+            "did:web:bob".to_owned(),
+            "*".to_owned(),
+            vec!["send".to_owned()],
+            vec![Constraint {
+                constraint_type: "decision".to_owned(),
+                value: serde_json::json!({"decision": "deny"}),
+            }],
+        );
+        let result = engine.check(
+            "did:web:bob",
+            "send",
+            "space:cx:space:1",
+            "cx:space:1",
+            Some("did:web:alice"),
+            &[],
+        );
+        assert!(!result.allowed);
+        assert_eq!(result.reason, "explicit_deny");
+    }
+
+    #[test]
+    fn quarantine_overrides_allow_and_allow_overrides_review() {
+        let engine = AuthzEngine::new();
+        engine.create_grant(
+            "cx:space:1".to_owned(),
+            "did:web:alice".to_owned(),
+            "did:web:bob".to_owned(),
+            "*".to_owned(),
+            vec!["send".to_owned()],
+            vec![Constraint {
+                constraint_type: "decision".to_owned(),
+                value: serde_json::json!({"decision": "require_review"}),
+            }],
+        );
+        engine.create_grant(
+            "cx:space:1".to_owned(),
+            "did:web:alice".to_owned(),
+            "did:web:bob".to_owned(),
+            "*".to_owned(),
+            vec!["send".to_owned()],
+            vec![Constraint {
+                constraint_type: "decision".to_owned(),
+                value: serde_json::json!({"decision": "allow"}),
+            }],
+        );
+        let allowed = engine.check(
+            "did:web:bob",
+            "send",
+            "space:cx:space:1",
+            "cx:space:1",
+            Some("did:web:alice"),
+            &[],
+        );
+        assert!(allowed.allowed);
+        assert_eq!(allowed.reason, "explicit_grant");
+
+        engine.create_grant(
+            "cx:space:1".to_owned(),
+            "did:web:alice".to_owned(),
+            "did:web:bob".to_owned(),
+            "*".to_owned(),
+            vec!["send".to_owned()],
+            vec![Constraint {
+                constraint_type: "decision".to_owned(),
+                value: serde_json::json!({"decision": "quarantine"}),
+            }],
+        );
+        let quarantined = engine.check(
+            "did:web:bob",
+            "send",
+            "space:cx:space:1",
+            "cx:space:1",
+            Some("did:web:alice"),
+            &[],
+        );
+        assert!(!quarantined.allowed);
+        assert_eq!(quarantined.reason, "quarantine");
     }
 
     #[test]

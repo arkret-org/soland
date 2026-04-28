@@ -261,8 +261,7 @@ impl RepoAdapter for MemoryRepoAdapter {
         // Align commit.prev_commit with expected_head so the SDK's
         // validate_commit_append check passes.
         if commit.prev_commit.is_none() {
-            commit.prev_commit = expected_head
-                .and_then(|h| Hash::new(h.to_owned()).ok());
+            commit.prev_commit = expected_head.and_then(|h| Hash::new(h.to_owned()).ok());
         }
         for operation in operations {
             operation.validate_payload_object()?;

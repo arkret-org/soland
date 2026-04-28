@@ -1,5 +1,5 @@
 use salvo::prelude::*;
-use serverx::{config::AppConfig, db::Db, service, state::AppState};
+use soland::{config::AppConfig, db::Db, service, state::AppState};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -23,7 +23,7 @@ async fn main() -> anyhow::Result<()> {
         blob_root = %config.blob_root.display(),
         development_mode = config.development_mode,
         storage = state.db.mode(),
-        "starting serverx"
+        "starting soland"
     );
     Server::new(acceptor).serve(service(state)).await;
     Ok(())

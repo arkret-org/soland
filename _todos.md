@@ -1,6 +1,6 @@
-# serverx vs contrix-spec 完成度分析
+# soland vs contrix-spec 完成度分析
 
-> 基于 contrix-spec v1 协议规范对 serverx 参考实现的全面对比审计。
+> 基于 contrix-spec v1 协议规范对 soland 参考实现的全面对比审计。
 > 生成日期: 2026-04-28
 
 ---
@@ -29,10 +29,13 @@
 #### 1. Identity Plane
 
 - [ ] **DID:UUID 方法实现** — spec 定义 `did:uuid` 为默认原生方法 (UUID v8: 44-bit ms 时间戳 + 4-bit hash algo ID + 74-bit inception-key hash fragment)。当前仅存根返回。
-- [ ] **DID Document 持久化与解析** — `identity_documents` 表已存在但未使用。需实现: 创建、存储、签名验证、多节点复制。
-- [ ] **Key Log 追踪** — 从 `inception_key` 到当前控制密钥的完整链路。`identity_log_events` 表空置。
+- [x] **DID Document 状态解析 (内存基础)** — submit DID operation 写入 DID document,resolve/document/receipts 读取同一状态,并做 seq/prev head CAS。
+- [ ] **DID Document PostgreSQL 持久化与多节点复制** — `identity_documents` PG 写入、签名验证、多节点复制仍未实现。
+- [x] **Key Log 追踪 (内存基础)** — submit DID operation 写入 identity log events,identity/log 返回 event_hash/seq/operation。
+- [ ] **Key Log 完整控制链** — 从 `inception_key` 到当前控制密钥的可验证完整链路仍未实现。
 - [ ] **Handle 解析双向模型** — handle 是可验证声明 (verifiable claim) 而非授权主键。当前 handle 仅作为 accounts 表字段,无独立绑定证明。
-- [ ] **密钥类型支持** — spec 要求 8 种密钥类型: inception key, principal signing key, recovery key, device key, session key, agent key, MLS KeyPackage key, backup/restore key。当前仅上传 device key。
+- [x] **密钥类型承载 (基础)** — keys/upload/query 可承载 principal signing、recovery、device、session、agent、MLS KeyPackage、backup/restore 与 OTK/fallback key bundle。
+- [ ] **密钥类型语义验证** — inception key、控制权绑定、key purpose、签名链、轮换/撤销约束仍未实现。
 - [ ] **所有权证明** — 使用签名挑战 (signed fresh challenges) 而非解密历史密文能力。
 - [ ] **渐进式身份披露** — presentation requests、disclosure policies、minimum-disclosure VCs/presentations 均未实现。
 - [ ] **DID 控制证明验证** — 提交操作时需验证 DID 控制权。
@@ -50,16 +53,22 @@
 
 #### 3. Sync & Federation
 
-- [ ] **持久化游标 (Cursor)** — spec 定义结构化 JSON + Base64URL 编码,包含 per-space positions (causal frontier, timeline HLC, state hash)、device positions、expiration。当前 sync 返回临时游标。
+- [x] **结构化 Cursor 编码** — `sync_token`/`next_batch` 返回 `cx:cursor:<base64url(JSON)>`,并在 `X-Contrix-Wait-For` 中校验 schema/version/positions。
+- [ ] **持久化 Cursor 位置** — 持久化 per-space positions (causal frontier, timeline HLC, state hash)、device positions、expiration 与恢复语义。
 - [x] **HLC (Hybrid Logical Clock)** — spec 定义格式: `<12-char hex physical>-<8-char hex logical>-<8-char hex node_id>`。已实现 `hlc.rs`。
-- [ ] **Read-Your-Writes 语态** — 写入返回 `sync_token`; 读取接受 `X-Contrix-Wait-For` header。未实现。
-- [ ] **Sync Profiles** — spec 定义 3 种同步模式: Board mode、Chat mode、Topic mode。当前无模式区分。
+- [x] **Read-Your-Writes 语态** — 写入返回 `sync_token`; 读取接受并校验 `X-Contrix-Wait-For` header。当前单节点投影写后立即可见,不做持久等待队列。
+- [x] **Sync Profiles (基础声明/校验)** — `/sync/describe` 声明 board/chat/topic,`/sync` 校验 profile 参数。
+- [ ] **Sync Profiles 差异化裁剪** — Board/Chat/Topic 的窗口、状态范围、timeline 限制和 cursor 策略仍未差异化。
 - [ ] **首次加入流程** — resolve → discover services → fetch invite → fetch snapshot → download chunks → fetch increments → run reducer → cursor subscription。未实现。
 - [ ] **Snapshot 签名验证** — 客户端必须验证 manifest 签名和 state hash。当前 snapshot-head 仅返回生成数据。
 - [x] **Federation HTTP Message Signatures** — 已实现基本 DID 格式验证 (`verify_federation_origin`)。
-- [ ] **Federation Replay 防护** — 需持久化已接受的 operation IDs 并检测重复。
-- [ ] **Fork 检测** — 冲突提交 (相同 ID 不同 hash) → 隔离 + `duplicate_conflict`。
-- [ ] **Snapshot-Assisted Bootstrap** — `pull-operations` 可返回 `snapshot_bootstrap` 用于快速恢复。
+- [x] **Federation Replay 防护 (内存)** — federation ingest 已检测重复 operation IDs 并返回 replay rejected。
+- [ ] **Federation Replay 防护 (持久化)** — 需把已接受 operation IDs 持久化到 PostgreSQL,覆盖重启和多实例 replay。
+- [x] **Federation Pull Redaction 过滤** — pull-operations 会过滤 redaction 记录和被 redacted 的目标操作。
+- [x] **Fork 检测 (duplicate_conflict)** — 相同 commit ID 不同 hash 通过 repo idempotency conflict 返回 `duplicate_conflict`,并有 HTTP 覆盖。
+- [ ] **Fork 隔离/Quarantine** — 冲突提交隔离、审计和 operator quarantine 流程仍未实现。
+- [x] **Snapshot-Assisted Bootstrap (基础 manifest)** — `pull-operations?snapshot_bootstrap=true` 返回 snapshot_bootstrap manifest/state_hash/chunks/via_services。
+- [ ] **Snapshot-Assisted Bootstrap chunks/signature** — 快照 chunk 下载、manifest 签名、state hash 客户端验证仍未实现。
 - [ ] **主权部署 (Sovereign Deployment)** — 封闭联邦、DID allowlist、enclave 模式、外部 actor 进入流程。
 
 #### 4. Authorization (Capability Model)
@@ -68,7 +77,7 @@
 - [ ] **条件授权 (Conditional Grants)** — subject 可以是条件选择器 + `requires_claims` (如 `org_membership` claim)。
 - [x] **Resource Selector Grammar** — 已实现基本匹配: 精确匹配 + 前缀通配符 (`*`)。
 - [x] **约束评估** — 已实现 temporal, type_restriction, delegation_control 约束类型。
-- [ ] **约束优先级** — deny > quarantine > allow > require_review。
+- [x] **约束优先级** — explicit grant decision 按 deny > quarantine > allow > require_review 确定性裁决。
 - [ ] **声明/证明系统** — 12 种 claim 类型: verified_handle, verified_email_domain, org_membership, org_role, employment_status, guardian_relationship, protected_actor_status, agent_controller, device_trust, mfa_level, risk_level, certification。
 - [ ] **可问责 Actor** — agents, minors, managed accounts, automation accounts 的审批约束 (before_commit, proposal_then_approve, after_commit_review)。
 - [ ] **委托 (Delegation)** — `max_delegation_depth` 控制。每次 re-grant 必须减少深度且不扩大范围。
@@ -81,39 +90,48 @@
 - [x] **View 投影对象** — spec 定义 view 是独立对象。已实现 create/get 端点。
 - [ ] **Schema 注册** — spec 定义 16 种初始对象 schema + 35+ 事件类型。当前无 schema 管理。
 - [ ] **Policy 对象** — `policy_documents` 表存在但未使用。
-- [ ] **Invite 对象** — `space_invites` 表存在但逻辑不完整。
+- [x] **Invite 对象 (基础)** — create_space 生成 pending invite 记录,`/authz/invites` 返回当前 actor 的有效邀请和 invite token。
 - [x] **Read Marker** — 已实现 `set_read_marker` / `get_read_markers` 端点 + reducer。
 - [x] **Notification 派生** — 已通过 projection state 实现,过滤 redacted 消息。
 
 #### 6. Conversation Model (完整)
 
-- [ ] **Channel 实体** — long-lived conversation space (chat, announce, support, activity)。当前无 channel 生命周期。
-- [ ] **Topic 实体** — thread/discussion 可锚定到 space/board/task/run/memory。当前无 topic 管理。
+- [x] **Channel 实体 (基础 Entity 承载)** — `cx.channel` 可通过 Entity CRUD 创建/查询,并纳入 repo/projection。
+- [x] **Topic 实体 (基础 Entity 承载)** — `cx.topic` 可通过 Entity CRUD 创建/查询,并纳入 repo/projection。
+- [ ] **Channel/Topic 专用生命周期** — channel roles、thread anchoring、topic state transitions 与权限策略仍未实现。
 - [x] **Message 修改链** — `cx.message.revise` revision chain。已实现 `revise_message` 端点 + reducer。
 - [x] **Message 撤回** — `cx.message.redact` tombstone 语义。已实现 `redact_message` 端点 + reducer。
 - [x] **Reaction OR-Set 收敛** — `cx.reaction.add/remove` 在 `(message_id, actor, reaction_key)` 上收敛。已实现端点 + reducer。
-- [ ] **@mention 结构化** — 存储为 DID/entity 引用 + `mentions` Relations (非纯文本)。
-- [ ] **Comment 独立对象** — 持久化对象级注释/审阅 (与 timeline messages 分离)。
+- [x] **@mention 结构化 (payload 基础)** — 非加密 message `mentions` 校验 DID 或 entity 引用对象,避免只能解析纯文本。
+- [ ] **@mention Relations 物化** — `mentions` Relations、通知聚合和反向索引仍未实现。
+- [x] **Comment 独立对象 (基础 Entity 承载)** — `cx.comment` 可通过 Entity CRUD 创建/查询,与 timeline messages 分离。
+- [ ] **Comment 审阅工作流** — 对象级锚定、resolve/review、mention/reaction 聚合仍未实现。
 
 #### 7. Confidentiality Plane (E2EE)
 
 - [ ] **MLS RFC 9420 集成** — spec 要求 MLS 而非 Olm/Megolm。当前仅透传 opaque payload。
 - [ ] **可审计 E2EE** — compliance actors 是可见组成员; 访问产生签名审计事件。
-- [ ] **Encrypted Payload Envelope 完整结构** — scheme, version, group_id, epoch, content_type, ciphertext, authentication_tag, aad, key_ref, digests。
+- [x] **Encrypted Payload Envelope (message publish)** — helper publish 与 repo submit 对 encrypted message 校验 scheme/version/group_id/epoch/content_type/ciphertext/authentication_tag/aad/key_ref/digests。
+- [x] **Encrypted Payload Envelope (device/federation surfaces)** — device messages 发送前校验 encrypted envelope,federation ingest 对 operation semantics/encrypted message envelope 做拒收。
+- [x] **Encrypted Payload Envelope (attachments)** — blob upload 支持 `x-contrix-attachment-envelope`,校验 algorithm/key_ref/nonce/ciphertext_digest 并写入 receipt。
+- [ ] **Encrypted Payload Envelope (schema conformance)** — 正式 JSON Schema conformance 与跨端测试向量仍未实现。
 - [ ] **设备配对** — 通过签名授权事件配对。
 - [ ] **设备撤销级联** — 撤销未来写入并触发 MLS 移除。
 - [ ] **设备交叉签名 (Cross-signing)** — 设备身份验证流程。
 - [ ] **密钥备份** — `key_backups` 表存在但逻辑未实现。
-- [ ] **Plaintext-Visible Services** — 非 E2EE 私有 Space 必须显式声明可接收明文的服务。
+- [x] **Plaintext-Visible Services (direct message flow)** — 私有 Space helper 发布非加密明文消息时,必须在 `plaintext_visible_services` 显式声明当前 service DID。
+- [ ] **Plaintext-Visible Services (repo/federation/blob previews)** — repo submit、federation ingest、搜索摘要、缩略图和 blob previews 仍需统一策略检查。
 
 #### 8. Content Types
 
-- [ ] **内容块系统** — spec 定义: text, formatted text, image, video, audio, file, location, code, poll, extension mixins。当前仅有 raw message payload。
-- [ ] **自定义类型** — 使用反向域名命名 (reverse-domain names)。
+- [x] **内容块系统 (基础校验)** — 非加密 message `content.blocks` 校验 text、formatted_text、image/video/audio/file、location、code、poll 基础结构,repo/federation message operation 复用校验。
+- [ ] **内容块扩展/渲染语义** — extension mixins、客户端渲染契约、block-level relations 与迁移仍未实现。
+- [x] **自定义类型 (反向域名校验)** — Entity `entity_type` 接受 `cx.*` 或 `com.example.*` 形式,拒绝非命名空间裸类型。
 
 #### 9. Social Graph
 
-- [ ] **Social Post/Feed/Circle** — 作为标准 Entity 类型。
+- [x] **Social Post (基础 Entity 承载)** — `cx.social.post` 可通过 Entity CRUD 创建/查询。
+- [ ] **Social Feed/Circle** — feed/circle 对象、feed 生成、圈层管理仍未实现。
 - [ ] **Social Relations** — follows, contact, circle_member, blocks_social, reposts, quotes, likes, replies_to。
 - [ ] **Audience Policy** — `cx.social.audience_policy`: public, followers, contacts, circle, organization, space_members, direct, private。
 - [ ] **Snapshot-at-publish** — 发布时冻结 audience。
@@ -122,11 +140,13 @@
 
 #### 10. Memory Plane (AI Agent)
 
-- [ ] **四层记忆** — Working Memory (本地), Episodic Memory (runs, comments, activity), Semantic Memory (facts, decisions, summaries), Task Memory (items, checklists, relations)。
+- [x] **Semantic Memory (基础 Entity 承载)** — `cx.memory.semantic` 可通过 Entity CRUD 创建/查询。
+- [ ] **四层记忆完整模型** — Working/Episodic/Semantic/Task Memory 的生命周期、确认流程和关系仍未完整实现。
 - [ ] **记忆生命周期** — candidate → confirmed → rejected/invalidated/superseded。
 - [ ] **记忆溯源** — source objects, source runs, author, confidence, status。
 - [ ] **向量存储** — 作为派生检索层而非真相源。
-- [ ] **Run 实体** — agent run 创建/更新/完成/失败的完整生命周期。
+- [x] **Run 实体 (基础 Entity 承载)** — `cx.agent.run` 可通过 Entity CRUD 创建/查询。
+- [ ] **Run 完整生命周期** — agent run 更新/完成/失败、状态流、artifact/result/cancel 仍未实现。
 
 #### 11. Agent Protocol Interop
 
@@ -143,22 +163,25 @@
 
 #### 13. Discovery & Directory 完善
 
-- [ ] **6 级可发现性** — public, listed, restricted, unlisted, invite_only, secret。当前仅 public/private 区分。
-- [ ] **精确解析规则** — invite-token resolution, signed-link resolution。
+- [x] **6 级可发现性 (基础过滤)** — create_space 支持 public/listed/restricted/unlisted/invite_only/secret,并区分 search/resolve/sync 可见性。
+- [x] **Invite-token 精确解析** — `resolve-space` 支持仅凭有效 invite token 定位 invite_only Space,无效 token 返回 404。
+- [ ] **Signed-link/restricted 精确解析规则** — signed-link resolution、restricted 证明与 secret 链接签名仍未实现。
 - [ ] **组织管理** — 组织创建/管理/成员 (当前仅有 demo 数据)。
-- [ ] **Presence 与 Typing** — 临时信号,受 Space policy 作用域控制。`presence` 表存在但逻辑简单。
+- [x] **Presence 状态 (基础)** — `/sync` 的 `set_presence` 需要登录并写入当前 actor 状态,`/profile/presence` 返回当前 presence。
+- [ ] **Typing 与 scoped ephemeral signals** — typing、按 Space policy 作用域控制、过期和持久/PG 行为仍未实现。
 
 #### 14. Push Notifications
 
-- [ ] **E2EE Space 推送** — push gateway 仅接收最小元数据。
+- [x] **E2EE Space 推送 (最小元数据)** — push notify 拒绝 title/body/preview/content/plaintext/message 等明文字段,保留 blind wakeup/device metadata。
 - [ ] **推送规则** — `push_rules` 表存在但逻辑未实现。
-- [ ] **加密通知负载** — 推送中不泄露明文。
+- [x] **加密通知负载 (基础防泄露)** — push notification payload 递归过滤常见明文字段。
 
 #### 15. Blob & Media
 
-- [ ] **持久化存储** — blob 字节写入 `SERVERX_BLOB_ROOT` 文件系统。
+- [x] **Blob 字节文件存储** — upload 将 blob 字节写入 `SERVERX_BLOB_ROOT/sha256/<digest>`,download 优先读取文件。
+- [ ] **Blob 元数据持久化** — blob metadata、引用、授权 grant、生命周期仍需 PostgreSQL/object-store 持久化。
 - [ ] **授权下载** — 绑定 actor DID, device, Space, purpose, expiry。
-- [ ] **加密附件** — algorithm, key_ref, nonce, ciphertext_digest。
+- [x] **加密附件 (基础元数据)** — blob upload 校验并保存 algorithm、key_ref、nonce、ciphertext_digest。
 - [ ] **缩略图** — E2EE 缩略图应客户端生成; 服务端需 `plaintext_visible_services`。
 - [x] **Content-Disposition 安全** — HTML/JS/SVG 默认不内联。已实现。
 - [ ] **Blob 生命周期** — GC: 无活跃引用 + grace period 已过 + 无 legal hold。
@@ -167,31 +190,35 @@
 #### 16. Realtime Media (WebRTC)
 
 - [ ] **WebRTC 信令** — 临时通道 + 签名信令消息。
-- [ ] **ICE 配置** — `POST /contrix/v1/ice-config`。
+- [x] **ICE 配置 (基础端点)** — `POST /contrix/v1/ice-config` 返回 service DID、TTL 与 ice_servers 数组。
 - [ ] **TURN/STUN** — 外部服务集成。
 - [ ] **SFU/MCU** — 选择性转发/混合。
 - [ ] **通话成员策略** — 录制/保留策略。
 
 #### 17. Moderation & Compliance
 
-- [ ] **审核队列** — `moderation_actions` 表存在但逻辑未实现。
+- [x] **审核队列 (基础)** — moderation report 自动生成 open moderation action,并路由到服务端 moderation actor。
 - [ ] **申诉 (Appeals)** — 无实现。
 - [ ] **法律保留 (Legal Hold)** — blob 保留逻辑。
-- [ ] **审计日志** — `audit_log` 表存在但未写入。
+- [x] **审计日志 (基础写入)** — account/auth、Space lifecycle、grant、blob get、moderation report 等关键路径写入内存 audit log。
+- [x] **审计日志查询 (基础)** — `/api/v1/audit/events` 支持登录 actor 查询自己的内存审计事件,禁止越权查询其他 actor。
+- [ ] **审计日志持久化/签名链** — `audit_log` PostgreSQL 持久化、分页 cursor、签名审计链仍未实现。
 
 ### P2 — 协议可选/高级功能
 
 #### 18. Portability Plane
 
-- [ ] **导出/导入** — Space 数据可移植性。
+- [x] **Space 导出 (基础)** — `GET /api/v1/spaces/{space_id}/export` 导出 Space operations 与 projection events。
+- [ ] **导入** — Space export import、冲突处理、签名校验和跨服务恢复仍未实现。
 - [ ] **Snapshot + Operation Replay** — 完整状态恢复。
 - [ ] **服务替换** — 从一个 Principal Server 迁移到另一个。
 
 #### 19. Conformance & Encoding
 
-- [ ] **Canonical JSON** — UTF-8, sorted keys, no insignificant whitespace, RFC 3339 UTC timestamps, snake_case。
-- [ ] **ID 格式** — `cx:<kind>:<ulid>` (如 `cx:space:01JS0SP000000000000000000`)。当前使用 UUID。
-- [ ] **Digest 格式** — `sha256:<lowercase_hex_digest>`。
+- [x] **Canonical JSON (基础边界)** — message/repo/federation operation payload 在 HTTP 边界拒绝浮点数,避免非 canonical JSON 进入 operation digest。
+- [ ] **Canonical JSON 完整约束** — sorted keys/no insignificant whitespace、RFC3339 UTC、snake_case、跨语言测试向量仍未完整覆盖。
+- [x] **ID 格式** — `cx:<kind>:<ulid>` 生成器与测试已覆盖主要对象 ID。
+- [x] **Digest 格式** — envelope digests、policy canonical hash、blob hash header 校验 `sha256:<64 lowercase hex>`。
 - [ ] **Default Proof** — Detached JWS bound to payload hash, actor DID, verification method, audience/domain, creation time。
 - [ ] **测试向量** — encoding, state resolution, redaction, capability, sync 的确定性测试向量。
 - [ ] **JSON Schemas** — 4 个正式 schema: cursor, event, grant, encrypted-envelope。
@@ -236,7 +263,7 @@
 
 #### D4. 认证模型过于简化
 
-**问题**: 当前使用 `SHA256(actor:device_id:expires_ms:serverx-dev-session)` 生成 bearer token,无密码/passkey/OIDC。
+**问题**: 当前使用 `SHA256(actor:device_id:expires_ms:soland-dev-session)` 生成 bearer token,无密码/passkey/OIDC。
 
 **影响**: 仅适用于开发环境,无法用于生产。spec 要求 passkeys, OIDC, SSO, device pairing。
 

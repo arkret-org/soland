@@ -1,9 +1,10 @@
 use std::collections::BTreeMap;
 
+use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{DateTime, Utc};
 use contrix_sdk::{Commit, ErrorEnvelope, Operation, ServerDescription, SpaceSearchEntry};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Value, json};
 
 #[derive(Debug, Serialize)]
 pub struct HealthResponse {
@@ -23,6 +24,8 @@ pub struct SyncDescribeResponse {
 #[derive(Debug, Deserialize)]
 pub struct ClientSyncRequest {
     pub since: Option<String>,
+    #[serde(default)]
+    pub profile: Option<String>,
     #[serde(default)]
     pub timeout_ms: Option<u64>,
     #[serde(default)]
@@ -476,6 +479,10 @@ pub struct CreateSpaceRequest {
     #[serde(default)]
     pub public: bool,
     #[serde(default)]
+    pub discoverability: Option<String>,
+    #[serde(default)]
+    pub plaintext_visible_services: Vec<String>,
+    #[serde(default)]
     pub invitees: Vec<String>,
 }
 
@@ -575,11 +582,21 @@ pub struct KeysUploadRequest {
     #[serde(default)]
     pub device_keys: Value,
     #[serde(default)]
+    pub principal_signing_keys: Vec<Value>,
+    #[serde(default)]
+    pub recovery_keys: Vec<Value>,
+    #[serde(default)]
+    pub session_keys: Vec<Value>,
+    #[serde(default)]
+    pub agent_keys: Vec<Value>,
+    #[serde(default)]
     pub one_time_keys: Vec<Value>,
     #[serde(default)]
     pub fallback_keys: Value,
     #[serde(default)]
     pub mls_key_packages: Vec<Value>,
+    #[serde(default)]
+    pub backup_restore_keys: Vec<Value>,
     #[serde(default)]
     pub device_signature: Value,
 }
@@ -645,7 +662,7 @@ pub struct BlobUploadResponse {
 
 pub fn describe(storage: &'static str) -> ServerDescription {
     ServerDescription {
-        service_did: "did:web:serverx.local".parse().expect("valid did"),
+        service_did: "did:web:soland.local".parse().expect("valid did"),
         service_type: "principal_server".to_owned(),
         protocol_version: "1.0".to_owned(),
         supported_profiles: vec!["cx.schema.core.v1".to_owned(), "cx.reducer.v1".to_owned()],
@@ -719,7 +736,20 @@ pub fn describe(storage: &'static str) -> ServerDescription {
 }
 
 pub fn sync_token() -> String {
-    format!("sx:{}", Utc::now().timestamp_millis())
+    let now = Utc::now();
+    let cursor = json!({
+        "schema": "cx.schema.cursor.v1",
+        "version": 1,
+        "profile": "incremental",
+        "issued_at": now,
+        "issued_at_ms": now.timestamp_millis(),
+        "positions": {
+            "spaces": {},
+            "devices": {},
+            "repo": null
+        }
+    });
+    format!("cx:cursor:{}", URL_SAFE_NO_PAD.encode(cursor.to_string()))
 }
 
 pub fn now() -> DateTime<Utc> {

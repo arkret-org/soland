@@ -22,10 +22,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout serverx
+      - name: Checkout soland
         uses: actions/checkout@v4
         with:
-          path: serverx
+          path: soland
 
       - name: Checkout Contrix Rust SDK
         uses: actions/checkout@v4
@@ -62,8 +62,8 @@ jobs:
       - name: Build image
         uses: docker/build-push-action@v6
         with:
-          context: serverx
-          file: serverx/Dockerfile
+          context: soland
+          file: soland/Dockerfile
           build-contexts: |
             contrix-rust-sdk=contrix-rust-sdk
           platforms: linux/amd64,linux/arm64

@@ -94,10 +94,8 @@ impl Handler for RateLimiterMiddleware {
 
         if !self.limiter.check(&key) {
             res.status_code(StatusCode::TOO_MANY_REQUESTS);
-            res.headers_mut().insert(
-                salvo::http::header::RETRY_AFTER,
-                "60".parse().unwrap(),
-            );
+            res.headers_mut()
+                .insert(salvo::http::header::RETRY_AFTER, "60".parse().unwrap());
             res.render(Json(serde_json::json!({
                 "error": "rate_limited",
                 "error_description": "Too many requests. Please try again later.",

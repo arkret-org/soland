@@ -1,6 +1,10 @@
-use salvo::test::{ResponseExt, TestClient};
+use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+use salvo::{
+    http::StatusCode,
+    test::{ResponseExt, TestClient},
+};
 use serde_json::Value;
-use serverx::{config::AppConfig, db::Db, service, state::AppState};
+use soland::{config::AppConfig, db::Db, service, state::AppState};
 
 use chrono::Utc;
 use contrix_sdk::{Commit, CommitId, Did, Hash, Operation, OperationId, Proof, SpaceId};
@@ -9,9 +13,9 @@ fn test_config() -> AppConfig {
     AppConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         public_base_url: "http://server".to_owned(),
-        service_did: "did:web:serverx.local".to_owned(),
+        service_did: "did:web:soland.local".to_owned(),
         database_url: None,
-        blob_root: std::env::temp_dir().join("serverx-test-blobs"),
+        blob_root: std::env::temp_dir().join("soland-test-blobs"),
         cors_allow_origin: None,
         development_mode: true,
     }
@@ -23,6 +27,14 @@ fn app() -> salvo::Service {
 
 fn app_from_state(state: AppState) -> salvo::Service {
     service(state)
+}
+
+fn decode_cursor(token: &str) -> Value {
+    let encoded = token
+        .strip_prefix("cx:cursor:")
+        .expect("structured cursor prefix");
+    let bytes = URL_SAFE_NO_PAD.decode(encoded).expect("base64url cursor");
+    serde_json::from_slice(&bytes).expect("cursor json")
 }
 
 async fn dev_token(state: AppState) -> String {
@@ -38,6 +50,23 @@ async fn dev_token(state: AppState) -> String {
         .await
         .unwrap();
     login["access_token"].as_str().unwrap().to_owned()
+}
+
+fn encrypted_envelope(content_type: &str, ciphertext: &str) -> Value {
+    serde_json::json!({
+        "scheme": "mls-rfc9420",
+        "version": 1,
+        "group_id": "cx:mls:test",
+        "epoch": 1,
+        "content_type": content_type,
+        "ciphertext": ciphertext,
+        "authentication_tag": "opaque-tag",
+        "aad": {"suite": "test"},
+        "key_ref": {"kid": "did:web:alice.example#device"},
+        "digests": {
+            "ciphertext": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+        }
+    })
 }
 
 async fn register_account(state: AppState, did: &str, handle: &str, device_id: &str) -> String {
@@ -168,7 +197,8 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         .json(&serde_json::json!({
             "title": "Workflow Space",
             "summary": "created by lifecycle workflow",
-            "public": false
+            "public": false,
+            "plaintext_visible_services": ["did:web:soland.local"]
         }))
         .send(&app_from_state(state.clone()))
         .await
@@ -187,6 +217,115 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         .unwrap();
     assert!(hidden_space["results"].as_array().unwrap().is_empty());
 
+    let invite_space: Value = TestClient::post("http://server/api/v1/spaces")
+        .add_header("authorization", format!("Bearer {alice}"), true)
+        .json(&serde_json::json!({
+            "title": "Invite Token Space",
+            "discoverability": "invite_only",
+            "invitees": ["did:web:bob.example"]
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    let invite_space_id = invite_space["space_id"].as_str().unwrap().to_owned();
+    let bob_invites: Value = TestClient::get("http://server/api/v1/authz/invites")
+        .add_header("authorization", format!("Bearer {bob}"), true)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(bob_invites["invites"].as_array().unwrap().len(), 1);
+    assert_eq!(bob_invites["invites"][0]["space_id"], invite_space_id);
+    let invite_token = bob_invites["invites"][0]["invite_token"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let invalid_invite_resolve = TestClient::post("http://server/api/v1/directory/resolve-space")
+        .json(&serde_json::json!({"invite_token": "cx:invite-token:invalid"}))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(invalid_invite_resolve.status_code.unwrap().as_u16(), 404);
+    let invite_resolve: Value = TestClient::post("http://server/api/v1/directory/resolve-space")
+        .json(&serde_json::json!({"invite_token": invite_token}))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(invite_resolve["space_preview"]["space_id"], invite_space_id);
+
+    let listed_space: Value = TestClient::post("http://server/api/v1/spaces")
+        .add_header("authorization", format!("Bearer {alice}"), true)
+        .json(&serde_json::json!({
+            "title": "Listed Directory Space",
+            "discoverability": "listed"
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    let listed_space_id = listed_space["space_id"].as_str().unwrap().to_owned();
+    let listed_search: Value = TestClient::post("http://server/api/v1/directory/search-spaces")
+        .json(&serde_json::json!({"query": "Listed Directory Space"}))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(
+        listed_search["results"][0]["space_id"],
+        listed_space_id.as_str()
+    );
+    let anonymous_sync_after_listed: Value = TestClient::post("http://server/api/v1/sync")
+        .json(&serde_json::json!({}))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert!(
+        !anonymous_sync_after_listed["spaces"]
+            .as_object()
+            .unwrap()
+            .contains_key(&listed_space_id)
+    );
+
+    let unlisted_space: Value = TestClient::post("http://server/api/v1/spaces")
+        .add_header("authorization", format!("Bearer {alice}"), true)
+        .json(&serde_json::json!({
+            "title": "Unlisted Directory Space",
+            "discoverability": "unlisted"
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    let unlisted_space_id = unlisted_space["space_id"].as_str().unwrap().to_owned();
+    let unlisted_search: Value = TestClient::post("http://server/api/v1/directory/search-spaces")
+        .json(&serde_json::json!({"query": "Unlisted Directory Space"}))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert!(unlisted_search["results"].as_array().unwrap().is_empty());
+    let unlisted_resolve: Value = TestClient::post("http://server/api/v1/directory/resolve-space")
+        .json(&serde_json::json!({"space_id": unlisted_space_id.clone()}))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(
+        unlisted_resolve["space_preview"]["space_id"],
+        unlisted_space_id
+    );
+
     let anonymous_resolve = TestClient::post("http://server/api/v1/directory/resolve-space")
         .json(&serde_json::json!({"space_id": space_id}))
         .send(&app_from_state(state.clone()))
@@ -202,6 +341,59 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         .await
         .unwrap();
     assert_eq!(owner_resolve["space_preview"]["space_id"], space_id);
+
+    let locked_space: Value = TestClient::post("http://server/api/v1/spaces")
+        .add_header("authorization", format!("Bearer {alice}"), true)
+        .json(&serde_json::json!({
+            "title": "Locked Plaintext Space",
+            "public": false
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    let locked_space_id = locked_space["space_id"].as_str().unwrap();
+    let plaintext_without_service = TestClient::post("http://server/api/v1/messages/send")
+        .add_header("authorization", format!("Bearer {alice}"), true)
+        .json(&serde_json::json!({
+            "space_id": locked_space_id,
+            "content": {"body": "should be denied"},
+            "encrypted": false
+        }))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(plaintext_without_service.status_code.unwrap().as_u16(), 403);
+
+    let invalid_encrypted = TestClient::post("http://server/api/v1/messages/send")
+        .add_header("authorization", format!("Bearer {alice}"), true)
+        .json(&serde_json::json!({
+            "space_id": locked_space_id,
+            "content": {"ciphertext": "opaque"},
+            "encrypted": true
+        }))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(invalid_encrypted.status_code.unwrap().as_u16(), 400);
+
+    let encrypted_message: Value = TestClient::post("http://server/api/v1/messages/send")
+        .add_header("authorization", format!("Bearer {alice}"), true)
+        .json(&serde_json::json!({
+            "space_id": locked_space_id,
+            "content": encrypted_envelope("cx.message.v1", "opaque-ciphertext"),
+            "encrypted": true
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert!(
+        encrypted_message["event_id"]
+            .as_str()
+            .unwrap()
+            .starts_with("cx:event:")
+    );
 
     let bob_private_sync: Value = TestClient::post("http://server/api/v1/sync")
         .add_header("authorization", format!("Bearer {bob}"), true)
@@ -254,6 +446,72 @@ async fn account_contacts_and_space_lifecycle_workflow() {
             .unwrap()
             .starts_with("cx:operation:")
     );
+    let send_cursor = decode_cursor(sent_message["sync_token"].as_str().unwrap());
+    assert_eq!(send_cursor["schema"], "cx.schema.cursor.v1");
+    assert!(send_cursor["positions"]["spaces"].is_object());
+
+    let invalid_block_message = TestClient::post("http://server/api/v1/messages/send")
+        .add_header("authorization", format!("Bearer {alice}"), true)
+        .json(&serde_json::json!({
+            "space_id": space_id,
+            "content": {"blocks": [{"type": "image"}]},
+            "encrypted": false
+        }))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(invalid_block_message.status_code.unwrap().as_u16(), 400);
+
+    let non_canonical_message = TestClient::post("http://server/api/v1/messages/send")
+        .add_header("authorization", format!("Bearer {alice}"), true)
+        .json(&serde_json::json!({
+            "space_id": space_id,
+            "content": {"blocks": [{"type": "location", "latitude": 31.2304, "longitude": 121.4737}]},
+            "encrypted": false
+        }))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(non_canonical_message.status_code.unwrap().as_u16(), 400);
+
+    let invalid_mention_message = TestClient::post("http://server/api/v1/messages/send")
+        .add_header("authorization", format!("Bearer {alice}"), true)
+        .json(&serde_json::json!({
+            "space_id": space_id,
+            "content": {"body": "bad mention", "mentions": [{"type": "actor", "did": "alice"}]},
+            "encrypted": false
+        }))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(invalid_mention_message.status_code.unwrap().as_u16(), 400);
+
+    let block_message: Value = TestClient::post("http://server/api/v1/messages/send")
+        .add_header("authorization", format!("Bearer {alice}"), true)
+        .json(&serde_json::json!({
+            "space_id": space_id,
+            "thread_id": "cx:thread:workflow",
+            "content": {
+                "mentions": [
+                    "did:web:bob.example",
+                    {"type": "entity", "entity_id": "cx:entity:mentioned"}
+                ],
+                "blocks": [
+                    {"type": "text", "text": "structured hello"},
+                    {"type": "location", "latitude": 312304000, "longitude": 1214737000},
+                    {"type": "poll", "question": "ship?", "options": ["yes", "no"]}
+                ]
+            },
+            "encrypted": false
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert!(
+        block_message["event_id"]
+            .as_str()
+            .is_some_and(|event_id| event_id.starts_with("cx:event:")),
+        "block message response: {block_message}"
+    );
 
     let thread: Value =
         TestClient::get("http://server/api/v1/index/thread?thread_id=cx:thread:workflow")
@@ -289,10 +547,13 @@ async fn account_contacts_and_space_lifecycle_workflow() {
             .take_json()
             .await
             .unwrap();
-    assert_eq!(notifications["unread_count"], 1);
-    assert_eq!(
-        notifications["notifications"][0]["event_ref"],
-        sent_message["event_id"]
+    assert_eq!(notifications["unread_count"], 2);
+    assert!(
+        notifications["notifications"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|notification| notification["event_ref"] == sent_message["event_id"])
     );
 
     let sync_with_message: Value = TestClient::post("http://server/api/v1/sync")
@@ -303,10 +564,54 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         .take_json()
         .await
         .unwrap();
+    let next_batch = decode_cursor(sync_with_message["next_batch"].as_str().unwrap());
+    assert_eq!(next_batch["profile"], "incremental");
     assert_eq!(
         sync_with_message["spaces"][&space_id]["timeline"]["events"][0]["event_id"],
         sent_message["event_id"]
     );
+
+    let exported: Value = TestClient::get(format!("http://server/api/v1/spaces/{space_id}/export"))
+        .add_header("authorization", format!("Bearer {alice}"), true)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(exported["schema"], "cx.export.space.v1");
+    assert!(
+        exported["operations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|operation| operation["operation_id"] == sent_message["operation_id"])
+    );
+
+    let waited_sync: Value = TestClient::post("http://server/api/v1/sync")
+        .add_header("authorization", format!("Bearer {alice}"), true)
+        .add_header(
+            "x-contrix-wait-for",
+            sent_message["sync_token"].as_str().unwrap(),
+            true,
+        )
+        .json(&serde_json::json!({}))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(
+        waited_sync["spaces"][&space_id]["timeline"]["events"][0]["event_id"],
+        sent_message["event_id"]
+    );
+
+    let invalid_wait = TestClient::post("http://server/api/v1/sync")
+        .add_header("authorization", format!("Bearer {alice}"), true)
+        .add_header("x-contrix-wait-for", "not-a-sync-token", true)
+        .json(&serde_json::json!({}))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(invalid_wait.status_code.unwrap().as_u16(), 400);
 
     let snapshot: Value = TestClient::get(format!(
         "http://server/api/v1/sync/snapshot-head?space_id={space_id}"
@@ -316,7 +621,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
     .take_json()
     .await
     .unwrap();
-    assert_eq!(snapshot["frontier"]["message_count"], 1);
+    assert_eq!(snapshot["frontier"]["message_count"], 2);
     assert!(
         snapshot["snapshot_ref"]
             .as_str()
@@ -402,6 +707,27 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         .unwrap();
     assert!(!sync["spaces"].as_object().unwrap().contains_key(&space_id));
 
+    let audit_events: Value = TestClient::get("http://server/api/v1/audit/events?limit=20")
+        .add_header("authorization", format!("Bearer {alice}"), true)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert!(
+        audit_events["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|event| event["action"] == "space.create")
+    );
+    let forbidden_audit =
+        TestClient::get("http://server/api/v1/audit/events?actor=did:web:bob.example")
+            .add_header("authorization", format!("Bearer {alice}"), true)
+            .send(&app_from_state(state.clone()))
+            .await;
+    assert_eq!(forbidden_audit.status_code.unwrap().as_u16(), 403);
+
     let logout: Value = TestClient::post("http://server/api/v1/auth/logout")
         .add_header("authorization", format!("Bearer {bob}"), true)
         .send(&app_from_state(state.clone()))
@@ -415,6 +741,25 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(revoked_me.status_code.unwrap().as_u16(), 401);
+
+    let audit_actions: std::collections::BTreeSet<_> = state
+        .audit_log
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|entry| entry["action"].as_str().map(ToOwned::to_owned))
+        .collect();
+    for expected in [
+        "account.register",
+        "auth.dev_login",
+        "space.create",
+        "space.member.add",
+        "space.member.remove",
+        "space.delete",
+        "auth.logout",
+    ] {
+        assert!(audit_actions.contains(expected));
+    }
 }
 
 #[tokio::test]
@@ -460,8 +805,9 @@ async fn postgres_startup_migrations_are_gated_by_database_url() {
 
 #[tokio::test]
 async fn identity_surface_works() {
+    let state = AppState::new(test_config(), Db { pool: None });
     let describe: Value = TestClient::get("http://server/api/v1/identity/describe")
-        .send(&app())
+        .send(&app_from_state(state.clone()))
         .await
         .take_json()
         .await
@@ -470,7 +816,7 @@ async fn identity_surface_works() {
 
     let resolved: Value = TestClient::post("http://server/api/v1/identity/resolve")
         .json(&serde_json::json!({"did": "did:web:alice.example"}))
-        .send(&app())
+        .send(&app_from_state(state.clone()))
         .await
         .take_json()
         .await
@@ -479,7 +825,7 @@ async fn identity_surface_works() {
 
     let document: Value =
         TestClient::get("http://server/api/v1/identity/document?did=did:web:alice.example")
-            .send(&app())
+            .send(&app_from_state(state.clone()))
             .await
             .take_json()
             .await
@@ -487,7 +833,7 @@ async fn identity_surface_works() {
     assert_eq!(document["did_document"]["id"], "did:web:alice.example");
 
     let log: Value = TestClient::get("http://server/api/v1/identity/log?did=did:web:alice.example")
-        .send(&app())
+        .send(&app_from_state(state.clone()))
         .await
         .take_json()
         .await
@@ -498,30 +844,96 @@ async fn identity_surface_works() {
         .json(&serde_json::json!({
             "did": "did:web:alice.example",
             "seq": 1,
-            "patch": {"service": []},
+            "patch": {
+                "did_document": {
+                    "id": "did:web:alice.example",
+                    "verification_method": [{
+                        "id": "did:web:alice.example#key-1",
+                        "type": "JsonWebKey2020",
+                        "controller": "did:web:alice.example",
+                        "publicKeyJwk": {"kty": "OKP", "crv": "Ed25519", "x": "dev"}
+                    }],
+                    "authentication": ["did:web:alice.example#key-1"],
+                    "service": [{"id": "#soland", "type": "ContrixPrincipalServer", "serviceEndpoint": "https://alice.example"}]
+                }
+            },
             "proofs": [{"kid": "did:web:alice.example#key-1", "sig": "dev"}]
         }))
-        .send(&app())
+        .send(&app_from_state(state.clone()))
         .await
         .take_json()
         .await
         .unwrap();
     assert_eq!(submitted["status"], "accepted");
+    assert_eq!(submitted["seq"], 1);
+
+    let resolved_after_submit: Value = TestClient::post("http://server/api/v1/identity/resolve")
+        .json(&serde_json::json!({"did": "did:web:alice.example"}))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(
+        resolved_after_submit["key_log_head"],
+        submitted["head_event_hash"]
+    );
+    assert_eq!(resolved_after_submit["seq"], 1);
+    assert_eq!(
+        resolved_after_submit["did_document"]["authentication"][0],
+        "did:web:alice.example#key-1"
+    );
+
+    let log_after_submit: Value =
+        TestClient::get("http://server/api/v1/identity/log?did=did:web:alice.example")
+            .send(&app_from_state(state.clone()))
+            .await
+            .take_json()
+            .await
+            .unwrap();
+    assert_eq!(log_after_submit["events"].as_array().unwrap().len(), 1);
+    assert_eq!(log_after_submit["events"][0]["seq"], 1);
 
     let receipts: Value =
         TestClient::get("http://server/api/v1/identity/receipts?did=did:web:alice.example")
-            .send(&app())
+            .send(&app_from_state(state.clone()))
             .await
             .take_json()
             .await
             .unwrap();
     assert_eq!(receipts["threshold_met"], true);
+    assert_eq!(
+        receipts["receipts"][0]["head_event_hash"],
+        submitted["head_event_hash"]
+    );
 }
 
 #[tokio::test]
 async fn sync_directory_and_index_share_demo_space() {
+    let sync_describe: Value = TestClient::get("http://server/api/v1/sync/describe")
+        .send(&app())
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    for profile in ["board", "chat", "topic"] {
+        assert!(
+            sync_describe["supported_sync_profiles"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|value| value == profile)
+        );
+    }
+
+    let invalid_profile = TestClient::post("http://server/api/v1/sync")
+        .json(&serde_json::json!({"profile": "invalid"}))
+        .send(&app())
+        .await;
+    assert_eq!(invalid_profile.status_code.unwrap().as_u16(), 400);
+
     let sync: Value = TestClient::post("http://server/api/v1/sync")
-        .json(&serde_json::json!({}))
+        .json(&serde_json::json!({"profile": "chat"}))
         .send(&app())
         .await
         .take_json()
@@ -612,6 +1024,61 @@ async fn directory_product_endpoints_return_demo_projection_shapes() {
 }
 
 #[tokio::test]
+async fn standard_entity_types_and_reverse_domain_custom_types_work() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+    let space_id = "cx:space:01js0sp0000000000000000000";
+
+    let invalid = TestClient::post("http://server/api/v1/entities")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({
+            "space_id": space_id,
+            "entity_type": "todo",
+            "title": "Invalid"
+        }))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(invalid.status_code.unwrap().as_u16(), 400);
+
+    for (entity_type, title) in [
+        ("cx.channel", "Support"),
+        ("cx.topic", "Roadmap"),
+        ("cx.social.post", "Launch post"),
+        ("cx.comment", "Review comment"),
+        ("cx.memory.semantic", "Decision memory"),
+        ("cx.agent.run", "Agent run"),
+        ("com.example.widget", "Custom widget"),
+    ] {
+        let entity: Value = TestClient::post("http://server/api/v1/entities")
+            .add_header("authorization", format!("Bearer {token}"), true)
+            .json(&serde_json::json!({
+                "space_id": space_id,
+                "entity_type": entity_type,
+                "title": title,
+                "content": {"status": "active"},
+                "fields": {"kind": entity_type}
+            }))
+            .send(&app_from_state(state.clone()))
+            .await
+            .take_json()
+            .await
+            .unwrap();
+        assert_eq!(entity["entity_type"], entity_type);
+    }
+
+    let channels: Value = TestClient::get(format!(
+        "http://server/api/v1/entities?space_id={space_id}&entity_type=cx.channel"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    assert_eq!(channels["entities"].as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
 async fn index_product_endpoints_return_demo_projection_shapes() {
     let entity: Value = TestClient::get(
         "http://server/api/v1/index/entity?entity_id=cx:space:01js0sp0000000000000000000",
@@ -687,7 +1154,7 @@ async fn broader_protocol_surface_returns_contract_shapes() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(directory_describe["service_did"], "did:web:serverx.local");
+    assert_eq!(directory_describe["service_did"], "did:web:soland.local");
 
     let resolved: Value = TestClient::post("http://server/api/v1/directory/resolve-space")
         .json(&serde_json::json!({"space_id": "cx:space:01js0sp0000000000000000000"}))
@@ -740,20 +1207,195 @@ async fn broader_protocol_surface_returns_contract_shapes() {
         .await
         .unwrap();
     assert_eq!(authz["allowed"], true);
+
+    let ice: Value = TestClient::post("http://server/contrix/v1/ice-config")
+        .json(&serde_json::json!({}))
+        .send(&app())
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(ice["service_did"], "did:web:soland.local");
+    assert!(ice["ice_servers"].is_array());
+}
+
+#[tokio::test]
+async fn federation_rejects_replayed_operations() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let operation = Operation::create(
+        OperationId::new("cx:operation:federation-replay").unwrap(),
+        SpaceId::new("cx:space:federation").unwrap(),
+        "message",
+        serde_json::json!({
+            "event_id": "cx:event:federation-replay",
+            "sender": "did:web:remote.example",
+            "thread_id": "cx:thread:federation",
+            "body": "from federation"
+        }),
+    );
+
+    let first: Value = TestClient::post("http://server/api/v1/federation/push-operations")
+        .json(&serde_json::json!({
+            "origin": "did:web:remote.example",
+            "destination": "did:web:soland.local",
+            "space_id": "cx:space:federation",
+            "service_binding_ref": "did:web:remote.example#soland",
+            "operations": [operation.clone()]
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(first["accepted"][0], "cx:operation:federation-replay");
+    assert!(first["rejected"].as_array().unwrap().is_empty());
+
+    let pulled: Value = TestClient::get(
+        "http://server/api/v1/federation/pull-operations?space_id=cx:space:federation",
+    )
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    assert_eq!(
+        pulled["operations"][0]["operation_id"],
+        "cx:operation:federation-replay"
+    );
+
+    let bootstrap: Value = TestClient::get(
+        "http://server/api/v1/federation/pull-operations?space_id=cx:space:federation&snapshot_bootstrap=true",
+    )
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    assert_eq!(
+        bootstrap["snapshot_bootstrap"]["manifest"]["space_id"],
+        "cx:space:federation"
+    );
+    assert!(
+        bootstrap["snapshot_bootstrap"]["state_hash"]
+            .as_str()
+            .unwrap()
+            .starts_with("sha256:")
+    );
+
+    let replay: Value = TestClient::post("http://server/api/v1/federation/push-operations")
+        .json(&serde_json::json!({
+            "origin": "did:web:remote.example",
+            "destination": "did:web:soland.local",
+            "space_id": "cx:space:federation",
+            "service_binding_ref": "did:web:remote.example#soland",
+            "operations": [operation]
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert!(replay["accepted"].as_array().unwrap().is_empty());
+    assert_eq!(
+        replay["rejected"][0]["operation_id"],
+        "cx:operation:federation-replay"
+    );
+    assert_eq!(replay["rejected"][0]["reason"], "replay");
+
+    let invalid_operation = Operation::create(
+        OperationId::new("cx:operation:federation-invalid-envelope").unwrap(),
+        SpaceId::new("cx:space:federation").unwrap(),
+        "message",
+        serde_json::json!({
+            "event_id": "cx:event:federation-invalid-envelope",
+            "sender": "did:web:remote.example",
+            "encrypted": true,
+            "content": {"ciphertext": "missing-envelope-fields"}
+        }),
+    );
+    let invalid_push: Value = TestClient::post("http://server/api/v1/federation/push-operations")
+        .json(&serde_json::json!({
+            "origin": "did:web:remote.example",
+            "destination": "did:web:soland.local",
+            "space_id": "cx:space:federation",
+            "service_binding_ref": "did:web:remote.example#soland",
+            "operations": [invalid_operation]
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert!(invalid_push["accepted"].as_array().unwrap().is_empty());
+    assert_eq!(invalid_push["rejected"][0]["reason"], "invalid_semantics");
+
+    let redaction = Operation::create(
+        OperationId::new("cx:operation:federation-redaction").unwrap(),
+        SpaceId::new("cx:space:federation").unwrap(),
+        "redaction",
+        serde_json::json!({
+            "event_id": "cx:event:federation-redaction",
+            "target_event_id": "cx:event:federation-replay"
+        }),
+    );
+    let redaction_push: Value = TestClient::post("http://server/api/v1/federation/push-operations")
+        .json(&serde_json::json!({
+            "origin": "did:web:remote.example",
+            "destination": "did:web:soland.local",
+            "space_id": "cx:space:federation",
+            "service_binding_ref": "did:web:remote.example#soland",
+            "operations": [redaction]
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(
+        redaction_push["accepted"][0],
+        "cx:operation:federation-redaction"
+    );
+
+    let redacted_pull: Value = TestClient::get(
+        "http://server/api/v1/federation/pull-operations?space_id=cx:space:federation",
+    )
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    assert!(redacted_pull["operations"].as_array().unwrap().is_empty());
 }
 
 #[tokio::test]
 async fn push_profile_and_moderation_contracts_work() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
+    let unauth_presence = TestClient::post("http://server/api/v1/sync")
+        .json(&serde_json::json!({"set_presence": "online"}))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(unauth_presence.status_code, Some(StatusCode::UNAUTHORIZED));
+
+    let presence_sync: Value = TestClient::post("http://server/api/v1/sync")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({"set_presence": "unavailable"}))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert!(presence_sync["next_batch"].is_string());
+
     let profile: Value =
         TestClient::get("http://server/api/v1/profile/presence?did=did:web:alice.example")
-            .send(&app())
+            .send(&app_from_state(state.clone()))
             .await
             .take_json()
             .await
             .unwrap();
     assert_eq!(profile["actor"], "did:web:alice.example");
+    assert_eq!(profile["presence"]["status"], "unavailable");
 
     let push: Value = TestClient::post("http://server/api/v1/push/register-device")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -785,6 +1427,19 @@ async fn push_profile_and_moderation_contracts_work() {
         .await
         .unwrap();
     assert_eq!(report["status"], "queued");
+    assert!(
+        state.audit_log.lock().unwrap().iter().any(|entry| {
+            entry["action"] == "moderation.report" && entry["outcome"] == "queued"
+        })
+    );
+    assert!(
+        state
+            .moderation_actions
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|action| action["report_id"] == report["report_id"] && action["status"] == "open")
+    );
 
     let unauthenticated_report = TestClient::post("http://server/api/v1/moderation/report")
         .json(&serde_json::json!({
@@ -808,9 +1463,14 @@ async fn auth_keys_device_messages_and_blobs_work() {
         .json(&serde_json::json!({
             "device_id": "dev_alice",
             "device_keys": {"alg": "mls-rfc9420", "key": "alice-device-key"},
+            "principal_signing_keys": [{"kid": "did:web:alice.example#principal", "key": "principal-key"}],
+            "recovery_keys": [{"kid": "did:web:alice.example#recovery", "key": "recovery-key"}],
+            "session_keys": [{"kid": "did:web:alice.example#session", "key": "session-key"}],
+            "agent_keys": [{"kid": "did:web:alice.example#agent", "key": "agent-key"}],
             "one_time_keys": [{"key_id": "otk1", "key": "one-time"}],
             "fallback_keys": {"signed_curve25519:fallback": {"key": "fallback-key"}},
             "mls_key_packages": [{"package_id": "mls-package-1", "key": "opaque-package"}],
+            "backup_restore_keys": [{"kid": "did:web:alice.example#backup", "key": "backup-key"}],
             "device_signature": {"alg": "none"}
         }))
         .send(&app_from_state(state.clone()))
@@ -848,6 +1508,42 @@ async fn auth_keys_device_messages_and_blobs_work() {
         query["device_keys"]["did:web:alice.example"]["dev_alice"]["mls_key_packages"][0]["package_id"],
         "mls-package-1"
     );
+    assert_eq!(
+        query["device_keys"]["did:web:alice.example"]["dev_alice"]["principal_signing_keys"][0]["key"],
+        "principal-key"
+    );
+    assert_eq!(
+        query["device_keys"]["did:web:alice.example"]["dev_alice"]["recovery_keys"][0]["key"],
+        "recovery-key"
+    );
+    assert_eq!(
+        query["device_keys"]["did:web:alice.example"]["dev_alice"]["session_keys"][0]["key"],
+        "session-key"
+    );
+    assert_eq!(
+        query["device_keys"]["did:web:alice.example"]["dev_alice"]["agent_keys"][0]["key"],
+        "agent-key"
+    );
+    assert_eq!(
+        query["device_keys"]["did:web:alice.example"]["dev_alice"]["backup_restore_keys"][0]["key"],
+        "backup-key"
+    );
+
+    let invalid_device_message = TestClient::put("http://server/api/v1/device_messages/bad-txn")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({
+            "messages": {
+                "did:web:alice.example": {
+                    "dev_alice": {
+                        "type": "cx.mls.welcome",
+                        "content": {"ciphertext": "opaque"}
+                    }
+                }
+            }
+        }))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(invalid_device_message.status_code.unwrap().as_u16(), 400);
 
     let send: Value = TestClient::put("http://server/api/v1/device_messages/txn1")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -856,7 +1552,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
                 "did:web:alice.example": {
                     "dev_alice": {
                         "type": "cx.mls.welcome",
-                        "content": {"ciphertext": "opaque"}
+                        "content": encrypted_envelope("cx.mls.welcome", "opaque")
                     }
                 }
             }
@@ -875,7 +1571,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
                 "did:web:alice.example": {
                     "dev_alice": {
                         "type": "cx.mls.welcome",
-                        "content": {"ciphertext": "opaque"}
+                        "content": encrypted_envelope("cx.mls.welcome", "opaque")
                     }
                 }
             }
@@ -889,15 +1585,48 @@ async fn auth_keys_device_messages_and_blobs_work() {
 
     let bad_blob = TestClient::post("http://server/api/v1/blob/upload")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .add_header("x-contrix-sha256", "sha256:deadbeef", true)
+        .add_header(
+            "x-contrix-sha256",
+            "sha256:deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+            true,
+        )
         .body("encrypted-bytes")
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(bad_blob.status_code.unwrap().as_u16(), 409);
 
+    let bad_attachment = TestClient::post("http://server/api/v1/blob/upload")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .add_header(
+            "x-contrix-attachment-envelope",
+            serde_json::json!({
+                "algorithm": "mls-rfc9420",
+                "nonce": "nonce",
+                "key_ref": {"kid": "did:web:alice.example#device"},
+                "ciphertext_digest": "sha256:bad"
+            })
+            .to_string(),
+            true,
+        )
+        .body("encrypted-bytes")
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(bad_attachment.status_code.unwrap().as_u16(), 400);
+
     let blob: Value = TestClient::post("http://server/api/v1/blob/upload")
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header("content-type", "text/plain", true)
+        .add_header(
+            "x-contrix-attachment-envelope",
+            serde_json::json!({
+                "algorithm": "mls-rfc9420",
+                "nonce": "nonce",
+                "key_ref": {"kid": "did:web:alice.example#device"},
+                "ciphertext_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+            })
+            .to_string(),
+            true,
+        )
         .body("encrypted-bytes")
         .send(&app_from_state(state.clone()))
         .await
@@ -911,6 +1640,15 @@ async fn auth_keys_device_messages_and_blobs_work() {
             .unwrap()
             .starts_with("cx:blob:sha256:")
     );
+    assert_eq!(
+        blob["upload_receipt"]["encrypted_attachment"]["algorithm"],
+        "mls-rfc9420"
+    );
+    let blob_path = test_config()
+        .blob_root
+        .join("sha256")
+        .join(blob["sha256"].as_str().unwrap());
+    assert_eq!(std::fs::read(blob_path).unwrap(), b"encrypted-bytes");
 
     let body = TestClient::get(format!(
         "http://server/api/v1/blob/get?blob_ref={}",
@@ -949,6 +1687,18 @@ async fn auth_keys_device_messages_and_blobs_work() {
         .unwrap();
     assert_eq!(push_registration["ok"], true);
 
+    let plaintext_push = TestClient::post("http://server/api/v1/push/notify")
+        .json(&serde_json::json!({
+            "notification": {
+                "type": "message",
+                "devices": [{"device_id": "dev_alice"}],
+                "preview": "plaintext should not be sent to push gateway"
+            }
+        }))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(plaintext_push.status_code.unwrap().as_u16(), 400);
+
     let notify: Value = TestClient::post("http://server/api/v1/push/notify")
         .json(&serde_json::json!({
             "notification": {
@@ -977,11 +1727,7 @@ async fn server_preserves_e2ee_payloads_as_opaque_data() {
                 "did:web:alice.example": {
                     "dev_alice": {
                         "type": "cx.mls.application",
-                        "content": {
-                            "algorithm": "mls-rfc9420",
-                            "ciphertext": ciphertext,
-                            "sender_key_id": "did:web:alice.example#device"
-                        }
+                        "content": encrypted_envelope("cx.mls.application", ciphertext)
                     }
                 }
             }
@@ -1007,10 +1753,10 @@ async fn policy_check_and_validation_work() {
         .json(&serde_json::json!({
             "request_id": "req1",
             "space_id": "cx:space:01js0sp0000000000000000000",
-            "request_canonical_hash": "sha256:test",
+            "request_canonical_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
             "action": "message.send",
             "actor": "did:web:alice.example",
-            "source": {"service": "serverx"}
+            "source": {"service": "soland"}
         }))
         .send(&app())
         .await
@@ -1093,6 +1839,22 @@ async fn repo_adapter_memory_submit_list_get_and_sync_work() {
         .unwrap();
     assert_eq!(submit["status"], "accepted");
     assert_eq!(submit["head_commit"], commit_digest);
+
+    let mut conflicting_commit = commit.clone();
+    conflicting_commit.author_seq = 2;
+    let conflict: Value = TestClient::post("http://server/api/v1/repo/submit-commit")
+        .json(&serde_json::json!({
+            "repo_id": "did:web:alice.example",
+            "expected_head": null,
+            "operations": [operation.clone()],
+            "commit": conflicting_commit
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(conflict["error"]["errcode"], "duplicate_conflict");
 
     let projected_thread: Value =
         TestClient::get("http://server/api/v1/index/thread?thread_id=cx:thread:adapter")
@@ -1205,11 +1967,10 @@ async fn repo_adapter_memory_submit_list_get_and_sync_work() {
         .unwrap();
     assert_eq!(sync["operations"].as_array().unwrap().len(), 1);
 
-    let unauthorized_backfill = TestClient::get(
-        "http://server/api/v1/sync/backfill?space_id=cx:space:adapter&limit=1",
-    )
-    .send(&app_from_state(state.clone()))
-    .await;
+    let unauthorized_backfill =
+        TestClient::get("http://server/api/v1/sync/backfill?space_id=cx:space:adapter&limit=1")
+            .send(&app_from_state(state.clone()))
+            .await;
     assert_eq!(unauthorized_backfill.status_code.unwrap().as_u16(), 404);
 
     let backfill: Value =
@@ -1227,11 +1988,10 @@ async fn repo_adapter_memory_submit_list_get_and_sync_work() {
     );
     assert_eq!(backfill["limited"], false);
 
-    let unauthorized_subscribe = TestClient::get(
-        "http://server/api/v1/sync/subscribe?space_id=cx:space:adapter&limit=1",
-    )
-    .send(&app_from_state(state.clone()))
-    .await;
+    let unauthorized_subscribe =
+        TestClient::get("http://server/api/v1/sync/subscribe?space_id=cx:space:adapter&limit=1")
+            .send(&app_from_state(state.clone()))
+            .await;
     assert_eq!(unauthorized_subscribe.status_code.unwrap().as_u16(), 404);
 
     let subscribe: Value =
@@ -1298,6 +2058,21 @@ async fn repo_adapter_memory_submit_list_get_and_sync_work() {
             .await
             .unwrap();
     assert!(redacted_subscribe["frames"].as_array().unwrap().is_empty());
+
+    let redacted_sync: Value = TestClient::post("http://server/api/v1/sync")
+        .add_header("authorization", format!("Bearer {alice}"), true)
+        .json(&serde_json::json!({}))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert!(
+        redacted_sync["spaces"]["cx:space:adapter"]["timeline"]["events"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
 
     let mut stale_commit = Commit::new(
         CommitId::new("cx:commit:adapter-02").unwrap(),

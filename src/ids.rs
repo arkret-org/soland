@@ -10,7 +10,11 @@ use ulid::Ulid;
 /// Format: `cx:<kind>:<26-char-crockford-ulid>` (lowercase)
 pub fn generate(kind: &str) -> String {
     // ULID uses Crockford base32; spec requires lowercase
-    format!("cx:{}:{}", kind, Ulid::new().to_string().to_ascii_lowercase())
+    format!(
+        "cx:{}:{}",
+        kind,
+        Ulid::new().to_string().to_ascii_lowercase()
+    )
 }
 
 pub fn generate_space_id() -> String {
@@ -76,9 +80,8 @@ mod tests {
         let ulid_part = &id["cx:space:".len()..];
         assert_eq!(ulid_part.len(), 26);
         // Crockford base32: 0-9, a-h, j-k, m-n, p-t, v-z (no i, l, o, u)
-        assert!(ulid_part
-            .chars()
-            .all(|c| c.is_ascii_digit() || matches!(c, 'a'..='h' | 'j'..='k' | 'm'..='n' | 'p'..='t' | 'v'..='z')));
+        assert!(ulid_part.chars().all(|c| c.is_ascii_digit()
+            || matches!(c, 'a'..='h' | 'j'..='k' | 'm'..='n' | 'p'..='t' | 'v'..='z')));
     }
 
     #[test]

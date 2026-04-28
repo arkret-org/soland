@@ -184,13 +184,14 @@ impl ProjectionState {
         operations: &[Operation],
         hlc: &ServerHlc,
     ) -> Vec<ProjectionEffect> {
-        operations
-            .iter()
-            .map(|op| self.apply(op, hlc))
-            .collect()
+        operations.iter().map(|op| self.apply(op, hlc)).collect()
     }
 
-    fn apply_message(&mut self, operation: &Operation, now: chrono::DateTime<chrono::Utc>) -> ProjectionEffect {
+    fn apply_message(
+        &mut self,
+        operation: &Operation,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> ProjectionEffect {
         let event_id = operation
             .payload
             .get("event_id")
@@ -244,7 +245,11 @@ impl ProjectionState {
         effect
     }
 
-    fn apply_message_revise(&mut self, operation: &Operation, now: chrono::DateTime<chrono::Utc>) -> ProjectionEffect {
+    fn apply_message_revise(
+        &mut self,
+        operation: &Operation,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> ProjectionEffect {
         let original_id = operation
             .payload
             .get("target_event_id")
@@ -305,7 +310,11 @@ impl ProjectionState {
         }
     }
 
-    fn apply_reaction_add(&mut self, operation: &Operation, now: chrono::DateTime<chrono::Utc>) -> ProjectionEffect {
+    fn apply_reaction_add(
+        &mut self,
+        operation: &Operation,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> ProjectionEffect {
         let event_id = operation
             .payload
             .get("event_id")
@@ -394,7 +403,11 @@ impl ProjectionState {
         }
     }
 
-    fn apply_read_marker(&mut self, operation: &Operation, now: chrono::DateTime<chrono::Utc>) -> ProjectionEffect {
+    fn apply_read_marker(
+        &mut self,
+        operation: &Operation,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> ProjectionEffect {
         let actor = operation
             .payload
             .get("actor")
@@ -440,7 +453,11 @@ impl ProjectionState {
         ProjectionEffect::ReadMarkerUpdated(marker)
     }
 
-    fn apply_entity_create(&mut self, operation: &Operation, now: chrono::DateTime<chrono::Utc>) -> ProjectionEffect {
+    fn apply_entity_create(
+        &mut self,
+        operation: &Operation,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> ProjectionEffect {
         let entity_id = operation
             .payload
             .get("entity_id")
@@ -484,7 +501,12 @@ impl ProjectionState {
         effect
     }
 
-    fn apply_entity_update(&mut self, operation: &Operation, now: chrono::DateTime<chrono::Utc>, _hlc: &ServerHlc) -> ProjectionEffect {
+    fn apply_entity_update(
+        &mut self,
+        operation: &Operation,
+        now: chrono::DateTime<chrono::Utc>,
+        _hlc: &ServerHlc,
+    ) -> ProjectionEffect {
         let entity_id = operation
             .payload
             .get("entity_id")
@@ -530,7 +552,11 @@ impl ProjectionState {
         ProjectionEffect::EntityDeleted { entity_id }
     }
 
-    fn apply_relation_create(&mut self, operation: &Operation, now: chrono::DateTime<chrono::Utc>) -> ProjectionEffect {
+    fn apply_relation_create(
+        &mut self,
+        operation: &Operation,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> ProjectionEffect {
         let relation_id = operation
             .payload
             .get("relation_id")
@@ -596,7 +622,11 @@ impl ProjectionState {
         ProjectionEffect::RelationDeleted { relation_id }
     }
 
-    fn apply_membership(&mut self, operation: &Operation, now: chrono::DateTime<chrono::Utc>) -> ProjectionEffect {
+    fn apply_membership(
+        &mut self,
+        operation: &Operation,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> ProjectionEffect {
         let action = operation
             .payload
             .get("action")
@@ -652,7 +682,11 @@ impl ProjectionState {
         }
     }
 
-    fn apply_space_lifecycle(&mut self, operation: &Operation, now: chrono::DateTime<chrono::Utc>) -> ProjectionEffect {
+    fn apply_space_lifecycle(
+        &mut self,
+        operation: &Operation,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> ProjectionEffect {
         let action = operation
             .payload
             .get("action")
@@ -691,10 +725,7 @@ impl ProjectionState {
             }
         }
 
-        ProjectionEffect::SpaceLifecycle {
-            space_id,
-            action,
-        }
+        ProjectionEffect::SpaceLifecycle { space_id, action }
     }
 
     // ── Query helpers ──
@@ -735,7 +766,11 @@ impl ProjectionState {
     }
 
     /// Get entities for a space, optionally filtered by type.
-    pub fn entities_for_space(&self, space_id: &str, entity_type: Option<&str>) -> Vec<&EntityState> {
+    pub fn entities_for_space(
+        &self,
+        space_id: &str,
+        entity_type: Option<&str>,
+    ) -> Vec<&EntityState> {
         self.entities
             .values()
             .filter(|e| {
@@ -751,9 +786,7 @@ impl ProjectionState {
         self.relations
             .values()
             .filter(|r| {
-                r.space_id == space_id
-                    && !r.deleted
-                    && kind.is_none_or(|k| r.relation_kind == k)
+                r.space_id == space_id && !r.deleted && kind.is_none_or(|k| r.relation_kind == k)
             })
             .collect()
     }
@@ -970,7 +1003,10 @@ mod tests {
 
         let msgs = state.messages_for_space("cx:space:test");
         assert_eq!(msgs.len(), 2); // original + revision
-        let revision = msgs.iter().find(|m| m.event_id == "cx:event:msg-1-rev1").unwrap();
+        let revision = msgs
+            .iter()
+            .find(|m| m.event_id == "cx:event:msg-1-rev1")
+            .unwrap();
         assert_eq!(revision.revision_of.as_deref(), Some("cx:event:msg-1"));
     }
 }

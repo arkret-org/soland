@@ -26,7 +26,10 @@ pub struct AppState {
     pub spaces: Arc<Mutex<SpaceSearchIndex>>,
     pub space_meta: Arc<Mutex<BTreeMap<String, SpaceMetaRecord>>>,
     pub accounts: Arc<Mutex<BTreeMap<String, AccountRecord>>>,
+    pub identity_documents: Arc<Mutex<BTreeMap<String, IdentityDocumentRecord>>>,
+    pub identity_log_events: Arc<Mutex<BTreeMap<String, Vec<IdentityLogRecord>>>>,
     pub contacts: Arc<Mutex<BTreeMap<(String, String), ContactRecord>>>,
+    pub space_invites: Arc<Mutex<BTreeMap<String, SpaceInviteRecord>>>,
     pub sessions: Arc<Mutex<BTreeMap<String, SessionRecord>>>,
     pub messages: Arc<Mutex<Vec<MessageRecord>>>,
     pub projection_events: Arc<Mutex<Vec<ProjectionEventRecord>>>,
@@ -37,7 +40,10 @@ pub struct AppState {
     pub one_time_keys: OneTimeKeyStore,
     pub blobs: Arc<Mutex<BTreeMap<String, BlobRecord>>>,
     pub push_devices: Arc<Mutex<Vec<Value>>>,
+    pub presence: Arc<Mutex<BTreeMap<String, PresenceRecord>>>,
     pub moderation_reports: Arc<Mutex<Vec<Value>>>,
+    pub moderation_actions: Arc<Mutex<Vec<Value>>>,
+    pub audit_log: Arc<Mutex<Vec<Value>>>,
     pub federation_operations: Arc<Mutex<Vec<Operation>>>,
 }
 
@@ -58,6 +64,25 @@ pub struct AccountRecord {
 }
 
 #[derive(Clone, Debug)]
+pub struct IdentityDocumentRecord {
+    pub did: String,
+    pub did_document: Value,
+    pub key_log_head: Option<String>,
+    pub seq: u64,
+    pub method_evidence: Value,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Clone, Debug)]
+pub struct IdentityLogRecord {
+    pub event_hash: String,
+    pub did: String,
+    pub seq: u64,
+    pub operation: Value,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Clone, Debug)]
 pub struct ContactRecord {
     pub requester: String,
     pub target: String,
@@ -67,9 +92,23 @@ pub struct ContactRecord {
 }
 
 #[derive(Clone, Debug)]
+pub struct SpaceInviteRecord {
+    pub invite_id: String,
+    pub space_id: String,
+    pub inviter: String,
+    pub invitee: Option<String>,
+    pub invite_token: String,
+    pub status: String,
+    pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Clone, Debug)]
 pub struct SpaceMetaRecord {
     pub owner: String,
     pub deleted: bool,
+    pub discoverability: String,
+    pub plaintext_visible_services: BTreeSet<String>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
@@ -110,10 +149,19 @@ pub struct DeviceMessageRecord {
 #[derive(Clone, Debug)]
 pub struct BlobRecord {
     pub bytes: Vec<u8>,
+    pub storage_path: Option<std::path::PathBuf>,
     pub media_type: String,
     pub filename: Option<String>,
+    pub encryption: Option<Value>,
     pub uploaded_by: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Clone, Debug)]
+pub struct PresenceRecord {
+    pub actor: String,
+    pub status: String,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
 impl AppState {
@@ -123,7 +171,7 @@ impl AppState {
             SpaceId::new("cx:space:01js0sp0000000000000000000").expect("valid demo space id"),
             "Contrix Demo Space",
         );
-        demo.description = Some("Shared demo Space served by serverx".to_owned());
+        demo.description = Some("Shared demo Space served by soland".to_owned());
         demo.public = true;
         demo.members
             .insert(Did::new("did:web:alice.example").expect("valid did"));
@@ -147,6 +195,8 @@ impl AppState {
             SpaceMetaRecord {
                 owner: "did:web:alice.example".to_owned(),
                 deleted: false,
+                discoverability: "public".to_owned(),
+                plaintext_visible_services: BTreeSet::new(),
                 created_at: now,
                 updated_at: now,
             },
@@ -159,14 +209,17 @@ impl AppState {
                 .as_ref()
                 .map(|pool| Arc::new(PgRepoAdapter::new(pool.clone())) as RepoAdapterRef)
                 .unwrap_or_else(|| Arc::new(MemoryRepoAdapter::new())),
-            hlc: ServerHlc::new("did:web:serverx.local"),
+            hlc: ServerHlc::new("did:web:soland.local"),
             projection: Arc::new(Mutex::new(ProjectionState::new())),
             authz: AuthzEngine::new(),
             db,
             spaces: Arc::new(Mutex::new(spaces)),
             space_meta: Arc::new(Mutex::new(space_meta)),
             accounts: Arc::new(Mutex::new(accounts)),
+            identity_documents: Arc::new(Mutex::new(BTreeMap::new())),
+            identity_log_events: Arc::new(Mutex::new(BTreeMap::new())),
             contacts: Arc::new(Mutex::new(BTreeMap::new())),
+            space_invites: Arc::new(Mutex::new(BTreeMap::new())),
             sessions: Arc::new(Mutex::new(BTreeMap::new())),
             messages: Arc::new(Mutex::new(Vec::new())),
             projection_events: Arc::new(Mutex::new(Vec::new())),
@@ -177,7 +230,10 @@ impl AppState {
             one_time_keys: Arc::new(Mutex::new(BTreeMap::new())),
             blobs: Arc::new(Mutex::new(BTreeMap::new())),
             push_devices: Arc::new(Mutex::new(Vec::new())),
+            presence: Arc::new(Mutex::new(BTreeMap::new())),
             moderation_reports: Arc::new(Mutex::new(Vec::new())),
+            moderation_actions: Arc::new(Mutex::new(Vec::new())),
+            audit_log: Arc::new(Mutex::new(Vec::new())),
             federation_operations: Arc::new(Mutex::new(Vec::new())),
         }
     }

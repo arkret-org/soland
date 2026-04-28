@@ -20,13 +20,13 @@ impl AppConfig {
         let public_base_url =
             std::env::var("SERVERX_PUBLIC_BASE_URL").unwrap_or_else(|_| format!("http://{bind}"));
         let service_did = std::env::var("SERVERX_SERVICE_DID")
-            .unwrap_or_else(|_| "did:web:serverx.local".to_owned());
+            .unwrap_or_else(|_| "did:web:soland.local".to_owned());
         let database_url = std::env::var("DATABASE_URL")
             .ok()
             .filter(|value| !value.trim().is_empty());
         let blob_root = std::env::var("SERVERX_BLOB_ROOT")
             .map(PathBuf::from)
-            .unwrap_or_else(|_| std::env::temp_dir().join("serverx-blobs"));
+            .unwrap_or_else(|_| std::env::temp_dir().join("soland-blobs"));
         let cors_allow_origin = std::env::var("SERVERX_CORS_ALLOW_ORIGIN").ok();
         let development_mode = std::env::var("SERVERX_DEVELOPMENT_MODE")
             .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes"))

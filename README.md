@@ -1,4 +1,4 @@
-# serverx
+# soland
 
 Cross-platform Contrix reference server built with Salvo, PostgreSQL, and Diesel.
 
@@ -8,13 +8,13 @@ Cross-platform Contrix reference server built with Salvo, PostgreSQL, and Diesel
 cargo run -- --bind 127.0.0.1:8787
 ```
 
-`DATABASE_URL` is optional for local development. Without it, serverx runs with an in-memory repository and demo Space data while keeping the same HTTP API.
+`DATABASE_URL` is optional for local development. Without it, soland runs with an in-memory repository and demo Space data while keeping the same HTTP API.
 
 ## Configuration
 
 - `--bind` / `SERVERX_BIND`: listen address, default `127.0.0.1:8787`.
 - `SERVERX_PUBLIC_BASE_URL`: advertised base URL.
-- `SERVERX_SERVICE_DID`: service DID, default `did:web:serverx.local`.
+- `SERVERX_SERVICE_DID`: service DID, default `did:web:soland.local`.
 - `DATABASE_URL`: enables PostgreSQL and runs embedded Diesel migrations at startup.
 - `SERVERX_BLOB_ROOT`: filesystem root reserved for blob storage.
 - `SERVERX_CORS_ALLOW_ORIGIN`: configured CORS origin placeholder.
