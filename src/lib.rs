@@ -87,6 +87,19 @@ pub fn router(state: AppState) -> Router {
                 .push(Router::with_path("keys/claim").post(keys_claim))
                 .push(Router::with_path("device_messages/{txn_id}").put(put_device_messages))
                 .push(Router::with_path("device_messages").get(get_device_messages))
+                .push(
+                    Router::with_path("federation/transactions/{txn_id}")
+                        .put(federation_transaction),
+                )
+                .push(
+                    Router::with_path("federation/push-operations")
+                        .post(federation_push_operations),
+                )
+                .push(
+                    Router::with_path("federation/pull-operations").get(federation_pull_operations),
+                )
+                .push(Router::with_path("federation/space-members").get(federation_space_members))
+                .push(Router::with_path("federation/verify-actor").post(federation_verify_actor))
                 .push(Router::with_path("blob/upload").post(blob_upload))
                 .push(Router::with_path("blob/get").get(blob_get).head(blob_get))
                 .push(Router::with_path("moderation/report").post(moderation_report)),

@@ -3,11 +3,13 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use contrix_sdk::{Did, SpaceId, SpaceSearchEntry, SpaceSearchIndex};
+use contrix_sdk::{Did, Operation, SpaceId, SpaceSearchEntry, SpaceSearchIndex};
 use serde_json::Value;
 
 use crate::db::Db;
 use crate::repo::{MemoryRepoAdapter, PgRepoAdapter, RepoAdapterRef};
+
+type OneTimeKeyStore = Arc<Mutex<BTreeMap<(String, String), Vec<Value>>>>;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -23,10 +25,11 @@ pub struct AppState {
     pub device_messages: Arc<Mutex<VecDeque<DeviceMessageRecord>>>,
     pub device_message_txns: Arc<Mutex<BTreeSet<String>>>,
     pub device_keys: Arc<Mutex<BTreeMap<(String, String), Value>>>,
-    pub one_time_keys: Arc<Mutex<BTreeMap<(String, String), Vec<Value>>>>,
+    pub one_time_keys: OneTimeKeyStore,
     pub blobs: Arc<Mutex<BTreeMap<String, BlobRecord>>>,
     pub push_devices: Arc<Mutex<Vec<Value>>>,
     pub moderation_reports: Arc<Mutex<Vec<Value>>>,
+    pub federation_operations: Arc<Mutex<Vec<Operation>>>,
 }
 
 #[derive(Clone, Debug)]
@@ -149,6 +152,7 @@ impl AppState {
             blobs: Arc::new(Mutex::new(BTreeMap::new())),
             push_devices: Arc::new(Mutex::new(Vec::new())),
             moderation_reports: Arc::new(Mutex::new(Vec::new())),
+            federation_operations: Arc::new(Mutex::new(Vec::new())),
         }
     }
 }

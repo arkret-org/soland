@@ -49,7 +49,7 @@ async fn register_account(state: AppState, did: &str, handle: &str, device_id: &
             "device_id": device_id,
             "display_name": handle.trim_start_matches('@')
         }))
-        .send(&app_from_state(state))
+        .send(&app_from_state(state.clone()))
         .await
         .take_json()
         .await
@@ -156,7 +156,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         .json(&serde_json::json!({
             "title": "Workflow Space",
             "summary": "created by lifecycle workflow",
-            "public": true
+            "public": false
         }))
         .send(&app_from_state(state.clone()))
         .await
@@ -165,6 +165,46 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         .unwrap();
     let space_id = created_space["space_id"].as_str().unwrap().to_owned();
     assert_eq!(created_space["owner"], "did:web:alice.example");
+
+    let hidden_space: Value = TestClient::post("http://server/api/v1/directory/search-spaces")
+        .json(&serde_json::json!({"query": "Workflow Space"}))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert!(hidden_space["results"].as_array().unwrap().is_empty());
+
+    let anonymous_resolve = TestClient::post("http://server/api/v1/directory/resolve-space")
+        .json(&serde_json::json!({"space_id": space_id}))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(anonymous_resolve.status_code.unwrap().as_u16(), 404);
+
+    let owner_resolve: Value = TestClient::post("http://server/api/v1/directory/resolve-space")
+        .add_header("authorization", format!("Bearer {alice}"), true)
+        .json(&serde_json::json!({"space_id": space_id}))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(owner_resolve["space_preview"]["space_id"], space_id);
+
+    let bob_private_sync: Value = TestClient::post("http://server/api/v1/sync")
+        .add_header("authorization", format!("Bearer {bob}"), true)
+        .json(&serde_json::json!({}))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert!(
+        !bob_private_sync["spaces"]
+            .as_object()
+            .unwrap()
+            .contains_key(&space_id)
+    );
 
     let with_bob: Value =
         TestClient::post(format!("http://server/api/v1/spaces/{space_id}/members"))
@@ -205,6 +245,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
 
     let thread: Value =
         TestClient::get("http://server/api/v1/index/thread?thread_id=cx:thread:workflow")
+            .add_header("authorization", format!("Bearer {alice}"), true)
             .send(&app_from_state(state.clone()))
             .await
             .take_json()
@@ -213,6 +254,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
     assert_eq!(thread["events"][0]["content"]["body"], "hello workflow");
 
     let message_search: Value = TestClient::post("http://server/api/v1/index/search")
+        .add_header("authorization", format!("Bearer {alice}"), true)
         .json(&serde_json::json!({
             "query": "workflow",
             "space_ids": [space_id],
@@ -242,6 +284,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
     );
 
     let sync_with_message: Value = TestClient::post("http://server/api/v1/sync")
+        .add_header("authorization", format!("Bearer {alice}"), true)
         .json(&serde_json::json!({}))
         .send(&app_from_state(state.clone()))
         .await
@@ -295,6 +338,29 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         .await
         .unwrap();
     assert_eq!(deleted["deleted"], true);
+
+    let lifecycle_events: Value = TestClient::get(format!(
+        "http://server/api/v1/sync/backfill?space_id={space_id}"
+    ))
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    let actions: std::collections::BTreeSet<_> = lifecycle_events["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|event| event["event_type"] == "space.lifecycle")
+        .map(|event| event["payload"]["action"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(
+        actions,
+        ["create", "delete", "member.add", "member.remove"]
+            .into_iter()
+            .map(ToOwned::to_owned)
+            .collect()
+    );
 
     let directory: Value = TestClient::post("http://server/api/v1/directory/search-spaces")
         .json(&serde_json::json!({"query": "Workflow Space"}))
@@ -638,7 +704,7 @@ async fn broader_protocol_surface_returns_contract_shapes() {
         .take_json()
         .await
         .unwrap();
-    assert!(repo["supported_signatures"].as_array().unwrap().len() >= 1);
+    assert!(!repo["supported_signatures"].as_array().unwrap().is_empty());
 
     let operations: Value = TestClient::post("http://server/api/v1/repo/operations")
         .json(&serde_json::json!({"operation_ids": []}))
@@ -693,6 +759,7 @@ async fn push_profile_and_moderation_contracts_work() {
     assert_eq!(push["ok"], true);
 
     let report: Value = TestClient::post("http://server/api/v1/moderation/report")
+        .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "space_id": "cx:space:01js0sp0000000000000000000",
             "target_ref": "cx:event:demo",
@@ -705,6 +772,17 @@ async fn push_profile_and_moderation_contracts_work() {
         .await
         .unwrap();
     assert_eq!(report["status"], "queued");
+
+    let unauthenticated_report = TestClient::post("http://server/api/v1/moderation/report")
+        .json(&serde_json::json!({
+            "space_id": "cx:space:01js0sp0000000000000000000",
+            "target_ref": "cx:event:demo",
+            "reason": "spam",
+            "reporter": "did:web:alice.example"
+        }))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(unauthenticated_report.status_code.unwrap().as_u16(), 401);
 }
 
 #[tokio::test]
@@ -986,8 +1064,8 @@ async fn repo_adapter_memory_submit_list_get_and_sync_work() {
         .json(&serde_json::json!({
             "repo_id": "did:web:alice.example",
             "expected_head": null,
-            "operations": [operation],
-            "commit": commit
+            "operations": [operation.clone()],
+            "commit": commit.clone()
         }))
         .send(&app_from_state(state.clone()))
         .await
@@ -996,6 +1074,21 @@ async fn repo_adapter_memory_submit_list_get_and_sync_work() {
         .unwrap();
     assert_eq!(submit["status"], "accepted");
     assert_eq!(submit["head_commit"], commit_digest);
+
+    let duplicate_submit: Value = TestClient::post("http://server/api/v1/repo/submit-commit")
+        .json(&serde_json::json!({
+            "repo_id": "did:web:alice.example",
+            "expected_head": null,
+            "operations": [operation],
+            "commit": commit
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(duplicate_submit["status"], "accepted");
+    assert_eq!(duplicate_submit["head_commit"], commit_digest);
 
     let describe: Value =
         TestClient::get("http://server/api/v1/repo/describe?repo_id=did:web:alice.example")
@@ -1101,7 +1194,7 @@ async fn repo_adapter_memory_submit_list_get_and_sync_work() {
             "expected_head": null,
             "commit": stale_commit
         }))
-        .send(&app_from_state(state))
+        .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(stale.status_code.unwrap().as_u16(), 409);
 

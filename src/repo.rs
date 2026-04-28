@@ -248,9 +248,13 @@ impl RepoAdapter for MemoryRepoAdapter {
         }
 
         let mut repos = self.repos.lock().expect("repo lock");
-        let repo = repos
-            .entry(repo_id.to_owned())
-            .or_insert_with(MemoryRepoStore::new);
+        let repo = repos.entry(repo_id.to_owned()).or_default();
+        if let Some(existing) = repo.commit(&commit.commit_id) {
+            if existing.commit_digest()? == commit.commit_digest()? {
+                return Ok(repo.head().map(ToString::to_string));
+            }
+            return Err(Error::IdempotencyConflict(commit.commit_id.to_string()));
+        }
         if expected_head != repo.head().map(|head| head.as_str()) {
             return Err(Error::Protocol("expected_head mismatch".to_owned()));
         }
@@ -296,7 +300,7 @@ impl RepoAdapter for PgRepoAdapter {
         let mut conn = self.conn()?;
         let rows = if let Some(after) = after {
             sql_query(
-                "select payload from repo_commits where repo_id = $1 and commit_id > $2 order by commit_id asc limit $3",
+                "SELECT payload FROM repo_commits WHERE repo_id = $1 AND commit_id > $2 ORDER BY commit_id ASC LIMIT $3",
             )
             .bind::<Text, _>(repo_id)
             .bind::<Text, _>(after)
@@ -304,7 +308,7 @@ impl RepoAdapter for PgRepoAdapter {
             .load::<PayloadRow>(&mut conn)
         } else {
             sql_query(
-                "select payload from repo_commits where repo_id = $1 order by commit_id asc limit $2",
+                "SELECT payload FROM repo_commits WHERE repo_id = $1 ORDER BY commit_id ASC LIMIT $2",
             )
             .bind::<Text, _>(repo_id)
             .bind::<BigInt, _>((limit + 1) as i64)
@@ -322,7 +326,7 @@ impl RepoAdapter for PgRepoAdapter {
 
     fn get_commit(&self, commit_id: &CommitId) -> SdkResult<Option<Commit>> {
         let mut conn = self.conn()?;
-        let row = sql_query("select payload from repo_commits where commit_id = $1")
+        let row = sql_query("SELECT payload FROM repo_commits WHERE commit_id = $1")
             .bind::<Text, _>(commit_id.as_str())
             .get_result::<PayloadRow>(&mut conn)
             .optional_row()?;
@@ -338,7 +342,7 @@ impl RepoAdapter for PgRepoAdapter {
         let mut conn = self.conn()?;
         if operation_ids.is_empty() {
             let rows =
-                sql_query("select payload from repo_operations order by operation_id asc limit $1")
+                sql_query("SELECT payload FROM repo_operations ORDER BY operation_id ASC LIMIT $1")
                     .bind::<BigInt, _>(limit as i64)
                     .load::<PayloadRow>(&mut conn)
                     .map_err(|error| Error::Protocol(format!("postgres repo error: {error}")))?;
@@ -356,7 +360,7 @@ impl RepoAdapter for PgRepoAdapter {
                 missing.push(raw_id.clone());
                 continue;
             };
-            match sql_query("select payload from repo_operations where operation_id = $1")
+            match sql_query("SELECT payload FROM repo_operations WHERE operation_id = $1")
                 .bind::<Text, _>(operation_id.as_str())
                 .get_result::<PayloadRow>(&mut conn)
                 .optional_row()?
@@ -372,7 +376,7 @@ impl RepoAdapter for PgRepoAdapter {
         let mut conn = self.conn()?;
         let mut operations = Vec::new();
         for digest in operation_digests {
-            if let Some(row) = sql_query("select payload from repo_operations where digest = $1")
+            if let Some(row) = sql_query("SELECT payload FROM repo_operations WHERE digest = $1")
                 .bind::<Text, _>(digest)
                 .get_result::<PayloadRow>(&mut conn)
                 .optional_row()?
@@ -392,13 +396,13 @@ impl RepoAdapter for PgRepoAdapter {
         let mut conn = self.conn()?;
         let rows = if let Some(after) = after {
             sql_query(
-                "select payload from repo_operations where operation_id > $1 order by operation_id asc limit $2",
+                "SELECT payload FROM repo_operations WHERE operation_id > $1 ORDER BY operation_id ASC LIMIT $2",
             )
             .bind::<Text, _>(after)
             .bind::<BigInt, _>((limit + 1) as i64)
             .load::<PayloadRow>(&mut conn)
         } else {
-            sql_query("select payload from repo_operations order by operation_id asc limit $1")
+            sql_query("SELECT payload FROM repo_operations ORDER BY operation_id ASC LIMIT $1")
                 .bind::<BigInt, _>((limit + 1) as i64)
                 .load::<PayloadRow>(&mut conn)
         }
@@ -421,7 +425,7 @@ impl RepoAdapter for PgRepoAdapter {
         let mut conn = self.conn()?;
         let rows = if let Some(after) = after {
             sql_query(
-                "select payload from repo_operations where space_id = $1 and operation_id > $2 order by operation_id asc limit $3",
+                "SELECT payload FROM repo_operations WHERE space_id = $1 AND operation_id > $2 ORDER BY operation_id ASC LIMIT $3",
             )
             .bind::<Text, _>(space_id)
             .bind::<Text, _>(after)
@@ -429,7 +433,7 @@ impl RepoAdapter for PgRepoAdapter {
             .load::<PayloadRow>(&mut conn)
         } else {
             sql_query(
-                "select payload from repo_operations where space_id = $1 order by operation_id asc limit $2",
+                "SELECT payload FROM repo_operations WHERE space_id = $1 ORDER BY operation_id ASC LIMIT $2",
             )
             .bind::<Text, _>(space_id)
             .bind::<BigInt, _>((limit + 1) as i64)
@@ -459,7 +463,18 @@ impl RepoAdapter for PgRepoAdapter {
             ));
         }
         verifier.verify_commit(&commit)?;
+        let incoming_digest = commit.commit_digest()?;
         let mut conn = self.conn()?;
+        if let Some(existing) = sql_query("SELECT digest FROM repo_commits WHERE commit_id = $1")
+            .bind::<Text, _>(commit.commit_id.as_str())
+            .get_result::<DigestRow>(&mut conn)
+            .optional_row()?
+        {
+            if existing.digest == incoming_digest {
+                return self.head(repo_id);
+            }
+            return Err(Error::IdempotencyConflict(commit.commit_id.to_string()));
+        }
         conn.transaction::<_, diesel::result::Error, _>(|conn| {
             let current_head = select_head(conn, repo_id).map_err(to_diesel_error)?;
             if expected_head != current_head.as_deref() {
@@ -475,8 +490,8 @@ impl RepoAdapter for PgRepoAdapter {
 
             let digest = commit.commit_digest().map_err(to_diesel_error)?;
             sql_query(
-                "insert into repo_heads (repo_id, head_commit, updated_at) values ($1, $2, $3) \
-                 on conflict (repo_id) do update set head_commit = excluded.head_commit, updated_at = excluded.updated_at",
+                "INSERT INTO repo_heads (repo_id, head_commit, updated_at) VALUES ($1, $2, $3) \
+                 ON CONFLICT (repo_id) DO UPDATE SET head_commit = EXCLUDED.head_commit, updated_at = EXCLUDED.updated_at",
             )
             .bind::<Text, _>(repo_id)
             .bind::<Text, _>(&digest)
@@ -484,8 +499,8 @@ impl RepoAdapter for PgRepoAdapter {
             .execute(conn)?;
 
             sql_query(
-                "insert into repo_author_sequences (repo_id, author, author_seq, updated_at) values ($1, $2, $3, $4) \
-                 on conflict (repo_id, author) do update set author_seq = excluded.author_seq, updated_at = excluded.updated_at",
+                "INSERT INTO repo_author_sequences (repo_id, author, author_seq, updated_at) VALUES ($1, $2, $3, $4) \
+                 ON CONFLICT (repo_id, author) DO UPDATE SET author_seq = EXCLUDED.author_seq, updated_at = EXCLUDED.updated_at",
             )
             .bind::<Text, _>(repo_id)
             .bind::<Text, _>(commit.author.as_str())
@@ -544,7 +559,7 @@ impl<T> OptionalRow<T> for Result<T, diesel::result::Error> {
 }
 
 fn select_head(conn: &mut PgConnection, repo_id: &str) -> SdkResult<Option<String>> {
-    let row = sql_query("select head_commit from repo_heads where repo_id = $1")
+    let row = sql_query("SELECT head_commit FROM repo_heads WHERE repo_id = $1")
         .bind::<Text, _>(repo_id)
         .get_result::<HeadRow>(conn)
         .optional_row()?;
@@ -556,7 +571,7 @@ fn insert_operation(
     operation: &Operation,
 ) -> Result<(), diesel::result::Error> {
     let digest = operation.operation_digest().map_err(to_diesel_error)?;
-    if let Some(existing) = sql_query("select digest from repo_operations where operation_id = $1")
+    if let Some(existing) = sql_query("SELECT digest FROM repo_operations WHERE operation_id = $1")
         .bind::<Text, _>(operation.operation_id.as_str())
         .get_result::<DigestRow>(conn)
         .optional()?
@@ -568,7 +583,7 @@ fn insert_operation(
     }
 
     sql_query(
-        "insert into repo_operations (operation_id, space_id, digest, payload, created_at) values ($1, $2, $3, $4, $5)",
+        "INSERT INTO repo_operations (operation_id, space_id, digest, payload, created_at) VALUES ($1, $2, $3, $4, $5)",
     )
     .bind::<Text, _>(operation.operation_id.as_str())
     .bind::<Text, _>(operation.space_id.as_str())
@@ -591,22 +606,21 @@ fn validate_commit_append(
     }
 
     if let Some(row) =
-        sql_query("select author_seq from repo_author_sequences where repo_id = $1 and author = $2")
+        sql_query("SELECT author_seq FROM repo_author_sequences WHERE repo_id = $1 AND author = $2")
             .bind::<Text, _>(&commit.repo_id)
             .bind::<Text, _>(commit.author.as_str())
             .get_result::<SeqRow>(conn)
             .optional()?
+        && commit.author_seq <= row.author_seq as u64
     {
-        if commit.author_seq <= row.author_seq as u64 {
-            return Err(diesel_protocol_error(
-                "commit author_seq must be monotonically increasing",
-            ));
-        }
+        return Err(diesel_protocol_error(
+            "commit author_seq must be monotonically increasing",
+        ));
     }
 
     for operation_digest in &commit.operations {
         let row =
-            sql_query("select count(*)::bigint as count from repo_operations where digest = $1")
+            sql_query("SELECT COUNT(*)::bigint AS count FROM repo_operations WHERE digest = $1")
                 .bind::<Text, _>(operation_digest.as_str())
                 .get_result::<CountRow>(conn)?;
         if row.count == 0 {
@@ -620,7 +634,7 @@ fn validate_commit_append(
 
 fn insert_commit(conn: &mut PgConnection, commit: &Commit) -> Result<(), diesel::result::Error> {
     let digest = commit.commit_digest().map_err(to_diesel_error)?;
-    if let Some(existing) = sql_query("select digest from repo_commits where commit_id = $1")
+    if let Some(existing) = sql_query("SELECT digest FROM repo_commits WHERE commit_id = $1")
         .bind::<Text, _>(commit.commit_id.as_str())
         .get_result::<DigestRow>(conn)
         .optional()?
@@ -632,8 +646,8 @@ fn insert_commit(conn: &mut PgConnection, commit: &Commit) -> Result<(), diesel:
     }
 
     sql_query(
-        "insert into repo_commits (commit_id, repo_id, author, author_seq, prev_commit, digest, payload, created_at) \
-         values ($1, $2, $3, $4, $5, $6, $7, $8)",
+        "INSERT INTO repo_commits (commit_id, repo_id, author, author_seq, prev_commit, digest, payload, created_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
     )
     .bind::<Text, _>(commit.commit_id.as_str())
     .bind::<Text, _>(&commit.repo_id)
@@ -647,8 +661,8 @@ fn insert_commit(conn: &mut PgConnection, commit: &Commit) -> Result<(), diesel:
 
     for (position, operation_digest) in commit.operations.iter().enumerate() {
         sql_query(
-            "insert into repo_commit_operations (commit_id, operation_digest, position) values ($1, $2, $3) \
-             on conflict (commit_id, operation_digest) do nothing",
+            "INSERT INTO repo_commit_operations (commit_id, operation_digest, position) VALUES ($1, $2, $3) \
+             ON CONFLICT (commit_id, operation_digest) DO NOTHING",
         )
         .bind::<Text, _>(commit.commit_id.as_str())
         .bind::<Text, _>(operation_digest.as_str())

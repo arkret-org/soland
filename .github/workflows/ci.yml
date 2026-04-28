@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - master
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    name: Rust (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+          - macos-latest
+
+    steps:
+      - name: Checkout serverx
+        uses: actions/checkout@v4
+        with:
+          path: serverx
+
+      - name: Checkout Contrix Rust SDK
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/contrix-rust-sdk
+          path: contrix-rust-sdk
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: serverx -> target
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+        working-directory: serverx
+
+      - name: Clippy
+        run: cargo clippy --all-targets --locked -- -D warnings
+        working-directory: serverx
+
+      - name: Test
+        run: cargo test --locked
+        working-directory: serverx

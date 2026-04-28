@@ -36,7 +36,7 @@
 - [x] Implement Space member add/invite endpoint with owner/admin checks.
 - [x] Implement Space member remove/kick endpoint with owner/admin checks.
 - [x] Implement Space delete endpoint with owner checks and tombstone filtering.
-- [ ] Add reducer operations for membership changes and Space lifecycle events.
+- [x] Add reducer operations for membership changes and Space lifecycle events.
 
 ### Messaging and Media Workflow
 
@@ -47,8 +47,8 @@
 
 ### Moderation and Policy Workflow
 
-- [ ] Design contract tests for report submission, policy check, capability denial, member kick/ban, deleted target behavior, and moderator visibility.
-- [ ] Implement basic policy order: auth/session, device, capability, policy, reducer.
+- [x] Design contract tests for report submission, policy check, capability denial, member kick/ban, deleted target behavior, and moderator visibility.
+- [x] Implement basic policy order for authenticated write flows: auth/session, device/session binding, capability checks, policy checks, and reducer/projection updates.
 
 ## Database and Storage
 
@@ -83,7 +83,7 @@
 - [x] Implement `POST /api/v1/repo/submit-commit` with operation preloading, commit CAS, proof validation, and author sequence checks.
 - [ ] Update index projections transactionally after accepted commits.
 - [x] Add helper endpoint or client workflow for publishing encrypted message operations through signed commits.
-- [ ] Enforce operation payload validation and known operation family semantics.
+- [x] Enforce operation payload validation and known operation family semantics.
 - [ ] Add reducer-backed state for messages, reactions, redactions, membership, capabilities, read markers, and entities.
 
 ## Sync and Index
@@ -91,7 +91,7 @@
 - [x] Implement `POST /api/v1/sync` from stored projections and per-device queues.
 - [x] Implement `GET /api/v1/sync/describe`.
 - [x] Implement `GET /api/v1/sync/backfill` from repo operation history.
-- [ ] Implement `GET /api/v1/sync/snapshot-head` with signed snapshot manifest.
+- [x] Implement `GET /api/v1/sync/snapshot-head` with signed snapshot manifest.
 - [x] Implement `GET /api/v1/sync/subscribe` via long-poll frames.
 - [x] Implement `GET /api/v1/index/describe`.
 - [x] Implement `GET /api/v1/index/entity`.
@@ -112,7 +112,7 @@
 - [x] Implement `POST /api/v1/directory/search-actors`.
 - [x] Implement `GET /api/v1/directory/search-users`.
 - [x] Implement `POST /api/v1/directory/resolve-handle`.
-- [ ] Enforce discoverability levels and anti-enumeration behavior.
+- [x] Enforce discoverability levels and anti-enumeration behavior.
 
 ## E2EE, Devices, and Keys
 
@@ -139,14 +139,14 @@
 - [x] Implement `GET /api/v1/authz/invites`.
 - [x] Implement `POST /contrix/v1/check`.
 - [x] Implement `POST /api/v1/moderation/report`.
-- [ ] Implement basic policy order: auth/session, device, capability, policy, reducer.
+- [x] Implement basic policy order: auth/session, device, capability, policy, reducer.
 
 ## Tests and Documentation
 
 - [x] Add endpoint contract tests for every implemented path.
 - [ ] Add PostgreSQL integration tests gated by `DATABASE_URL`.
 - [x] Add client/server E2EE message workflow test.
-- [ ] Add repo conflict, idempotency, pagination, and visibility tests.
+- [x] Add repo conflict, idempotency, pagination, and visibility tests.
 - [x] Cover repo commit operation expansion, CAS conflict, idempotent to-device delivery, pagination, backfill, and subscribe smoke paths.
 - [x] Add docs for configuration, database setup, auth model, E2EE limits, and production caveats.
 - [x] Run `cargo fmt`, `cargo test`, server HTTP smoke, and client contract tests before marking complete.

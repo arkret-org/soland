@@ -181,16 +181,16 @@ pub async fn account_register(depot: &mut Depot, req: &mut Request, res: &mut Re
         );
         return;
     }
-    if let Some(device_id) = body.device_id.as_deref() {
-        if validate_device_id(device_id).is_err() {
-            render_error(
-                res,
-                StatusCode::BAD_REQUEST,
-                "invalid_param",
-                "invalid device_id",
-            );
-            return;
-        }
+    if let Some(device_id) = body.device_id.as_deref()
+        && validate_device_id(device_id).is_err()
+    {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            "invalid device_id",
+        );
+        return;
     }
 
     let normalized_handle = normalize_handle(&body.handle);
@@ -424,6 +424,25 @@ pub async fn create_space(depot: &mut Depot, req: &mut Request, res: &mut Respon
             updated_at: now(),
         },
     );
+    if let Err(error) = record_space_lifecycle_operation(
+        state,
+        &session.actor,
+        &space_id,
+        json!({
+            "action": "create",
+            "owner": session.actor.clone(),
+            "members": body.invitees,
+            "public": body.public,
+        }),
+    ) {
+        render_error(
+            res,
+            StatusCode::CONFLICT,
+            "repo_conflict",
+            &error.to_string(),
+        );
+        return;
+    }
 
     res.status_code(StatusCode::CREATED);
     render_space_lifecycle(state, res, &space_id);
@@ -490,10 +509,28 @@ pub async fn add_space_member(depot: &mut Depot, req: &mut Request, res: &mut Re
     };
     entry
         .members
-        .insert(Did::new(body.member).expect("validated did"));
+        .insert(Did::new(body.member.clone()).expect("validated did"));
     spaces.upsert(entry);
     drop(spaces);
     touch_space(state, &space_id);
+    if let Err(error) = record_space_lifecycle_operation(
+        state,
+        &session.actor,
+        &space_id,
+        json!({
+            "action": "member.add",
+            "member": body.member,
+            "membership": "join",
+        }),
+    ) {
+        render_error(
+            res,
+            StatusCode::CONFLICT,
+            "repo_conflict",
+            &error.to_string(),
+        );
+        return;
+    }
     render_space_lifecycle(state, res, &space_id);
 }
 
@@ -566,6 +603,24 @@ pub async fn remove_space_member(depot: &mut Depot, req: &mut Request, res: &mut
     spaces.upsert(entry);
     drop(spaces);
     touch_space(state, &space_id);
+    if let Err(error) = record_space_lifecycle_operation(
+        state,
+        &session.actor,
+        &space_id,
+        json!({
+            "action": "member.remove",
+            "member": member.to_string(),
+            "membership": "leave",
+        }),
+    ) {
+        render_error(
+            res,
+            StatusCode::CONFLICT,
+            "repo_conflict",
+            &error.to_string(),
+        );
+        return;
+    }
     render_space_lifecycle(state, res, &space_id);
 }
 
@@ -601,6 +656,23 @@ pub async fn delete_space(depot: &mut Depot, req: &mut Request, res: &mut Respon
         };
         record.deleted = true;
         record.updated_at = now();
+    }
+    if let Err(error) = record_space_lifecycle_operation(
+        state,
+        &session.actor,
+        &space_id,
+        json!({
+            "action": "delete",
+            "deleted": true,
+        }),
+    ) {
+        render_error(
+            res,
+            StatusCode::CONFLICT,
+            "repo_conflict",
+            &error.to_string(),
+        );
+        return;
     }
     render_space_lifecycle(state, res, &space_id);
 }
@@ -712,13 +784,6 @@ pub async fn send_message(depot: &mut Depot, req: &mut Request, res: &mut Respon
     };
     commit.operations.push(operation_digest);
     commit.proofs.push(dev_proof(&session.actor));
-
-    struct RequireProof;
-    impl CommitProofVerifier for RequireProof {
-        fn verify_commit(&self, commit: &Commit) -> contrix_sdk::Result<()> {
-            commit.validate_for_submit()
-        }
-    }
 
     let expected_head = commit.prev_commit.as_ref().map(ToString::to_string);
     let head_commit = match state.repo.submit_commit(
@@ -926,23 +991,24 @@ pub async fn client_sync(depot: &mut Depot, req: &mut Request, res: &mut Respons
             return;
         }
     };
-    if let Some(presence) = _body.set_presence.as_deref() {
-        if !matches!(presence, "online" | "offline" | "unavailable") {
-            render_error(
-                res,
-                StatusCode::BAD_REQUEST,
-                "invalid_param",
-                "set_presence must be online, offline, or unavailable",
-            );
-            return;
-        }
+    if let Some(presence) = _body.set_presence.as_deref()
+        && !matches!(presence, "online" | "offline" | "unavailable")
+    {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            "set_presence must be online, offline, or unavailable",
+        );
+        return;
     }
 
     let spaces = state.spaces.lock().expect("spaces lock");
     let mut sync_spaces = std::collections::BTreeMap::new();
     let messages = state.messages.lock().expect("messages lock").clone();
+    let session = authenticated_session(state, req).ok();
     for space in spaces.search(Default::default()) {
-        if is_space_deleted(state, space.space_id.as_str()) {
+        if !space_visible_to(state, space, session.as_ref()) {
             continue;
         }
         let timeline_events: Vec<_> = messages
@@ -967,8 +1033,7 @@ pub async fn client_sync(depot: &mut Depot, req: &mut Request, res: &mut Respons
         );
     }
 
-    let to_device = authenticated_session(state, req)
-        .ok()
+    let to_device = session
         .map(|session| {
             let mut queue = state.device_messages.lock().expect("device message lock");
             let mut drained = Vec::new();
@@ -1073,8 +1138,9 @@ pub async fn resolve_space(depot: &mut Depot, req: &mut Request, res: &mut Respo
     }
 
     let spaces = state.spaces.lock().expect("spaces lock");
+    let session = authenticated_session(state, req).ok();
     let space = spaces.search(Default::default()).into_iter().find(|entry| {
-        !is_space_deleted(state, entry.space_id.as_str())
+        space_visible_to(state, entry, session.as_ref())
             && (body
                 .space_id
                 .as_deref()
@@ -1209,14 +1275,14 @@ pub async fn search_actors(depot: &mut Depot, req: &mut Request, res: &mut Respo
     let Some(limit) = checked_limit(res, body.limit) else {
         return;
     };
-    if let Some(organization_id) = body.organization_id.as_deref() {
-        if organization_id != "cx:org:demo" {
-            res.render(Json(DirectoryValueSearchResponse {
-                results: Vec::new(),
-                next_cursor: None,
-            }));
-            return;
-        }
+    if let Some(organization_id) = body.organization_id.as_deref()
+        && organization_id != "cx:org:demo"
+    {
+        res.render(Json(DirectoryValueSearchResponse {
+            results: Vec::new(),
+            next_cursor: None,
+        }));
+        return;
     }
 
     let session = authenticated_session(state, req).ok();
@@ -1321,11 +1387,12 @@ pub async fn index_query(depot: &mut Depot, req: &mut Request, res: &mut Respons
             limit: Some(20),
         });
     let spaces = state.spaces.lock().expect("spaces lock");
+    let session = authenticated_session(state, req).ok();
     let results = spaces
         .search(Default::default())
         .into_iter()
         .filter(|entry| {
-            !is_space_deleted(state, entry.space_id.as_str())
+            space_visible_to(state, entry, session.as_ref())
                 && (body.space_ids.is_empty()
                     || body
                         .space_ids
@@ -1405,12 +1472,16 @@ pub async fn index_thread(depot: &mut Depot, req: &mut Request, res: &mut Respon
         );
         return;
     }
+    let session = authenticated_session(state, req).ok();
     let events: Vec<_> = state
         .messages
         .lock()
         .expect("messages lock")
         .iter()
-        .filter(|message| message.thread_id == thread_id || message.space_id == thread_id)
+        .filter(|message| {
+            (message.thread_id == thread_id || message.space_id == thread_id)
+                && space_id_visible_to(state, &message.space_id, session.as_ref())
+        })
         .map(message_event)
         .collect();
     res.render(Json(IndexThreadResponse {
@@ -1460,7 +1531,6 @@ pub async fn index_notifications(depot: &mut Depot, req: &mut Request, res: &mut
                 "created_at": message.created_at,
             })
         })
-        .into_iter()
         .take(limit)
         .collect();
     let unread_count = notifications.len();
@@ -1480,10 +1550,11 @@ pub async fn index_inbox(depot: &mut Depot, req: &mut Request, res: &mut Respons
     };
     let spaces = state.spaces.lock().expect("spaces lock");
     let messages = state.messages.lock().expect("messages lock").clone();
+    let session = authenticated_session(state, req).ok();
     let rooms = spaces
         .search(Default::default())
         .into_iter()
-        .filter(|space| !is_space_deleted(state, space.space_id.as_str()))
+        .filter(|space| space_visible_to(state, space, session.as_ref()))
         .take(limit)
         .map(|space| {
             let last_message = messages
@@ -1538,8 +1609,9 @@ pub async fn index_search(depot: &mut Depot, req: &mut Request, res: &mut Respon
 
     let mut results = Vec::new();
     let spaces = state.spaces.lock().expect("spaces lock");
+    let session = authenticated_session(state, req).ok();
     for space in spaces.search(Default::default()) {
-        if is_space_deleted(state, space.space_id.as_str()) {
+        if !space_visible_to(state, space, session.as_ref()) {
             continue;
         }
         if !body.space_ids.is_empty()
@@ -1566,7 +1638,7 @@ pub async fn index_search(depot: &mut Depot, req: &mut Request, res: &mut Respon
     drop(spaces);
 
     for message in state.messages.lock().expect("messages lock").iter() {
-        if message.encrypted {
+        if message.encrypted || !space_id_visible_to(state, &message.space_id, session.as_ref()) {
             continue;
         }
         if !body.space_ids.is_empty()
@@ -1616,10 +1688,11 @@ pub async fn index_space_hierarchy(depot: &mut Depot, req: &mut Request, res: &m
         return;
     }
     let spaces = state.spaces.lock().expect("spaces lock");
+    let session = authenticated_session(state, req).ok();
     let space_values: Vec<_> = spaces
         .search(Default::default())
         .into_iter()
-        .filter(|space| !is_space_deleted(state, space.space_id.as_str()))
+        .filter(|space| space_visible_to(state, space, session.as_ref()))
         .map(|space| {
             json!({
                 "space_id": space.space_id,
@@ -2251,16 +2324,16 @@ pub async fn policy_check(req: &mut Request, res: &mut Response) {
         );
         return;
     }
-    if let Some(space_id) = &body.space_id {
-        if validate_space_id(space_id).is_err() {
-            render_error(
-                res,
-                StatusCode::BAD_REQUEST,
-                "invalid_param",
-                "invalid space_id",
-            );
-            return;
-        }
+    if let Some(space_id) = &body.space_id
+        && validate_space_id(space_id).is_err()
+    {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            "invalid space_id",
+        );
+        return;
     }
     let decision = if body.action.contains("delete") || body.action.contains("ban") {
         "require_review"
@@ -2390,10 +2463,10 @@ pub async fn keys_claim(depot: &mut Depot, req: &mut Request, res: &mut Response
     for (actor, devices) in body.one_time_keys {
         let mut device_map = serde_json::Map::new();
         for (device_id, _algorithm) in devices {
-            if let Some(keys) = stored.get_mut(&(actor.clone(), device_id.clone())) {
-                if let Some(key) = keys.pop() {
-                    device_map.insert(device_id, key);
-                }
+            if let Some(keys) = stored.get_mut(&(actor.clone(), device_id.clone()))
+                && let Some(key) = keys.pop()
+            {
+                device_map.insert(device_id, key);
             }
         }
         claimed.insert(actor, json!(device_map));
@@ -2410,9 +2483,7 @@ pub async fn put_device_messages(depot: &mut Depot, req: &mut Request, res: &mut
     let Some(session) = auth_or_render(state, req, res) else {
         return;
     };
-    let txn_id = req
-        .param::<String>("txn_id")
-        .unwrap_or_else(|| sync_token());
+    let txn_id = req.param::<String>("txn_id").unwrap_or_else(sync_token);
     {
         let mut txns = state
             .device_message_txns
@@ -2493,6 +2564,194 @@ pub async fn get_device_messages(depot: &mut Depot, req: &mut Request, res: &mut
 }
 
 #[handler]
+pub async fn federation_transaction(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let _txn_id = req.param::<String>("txn_id").unwrap_or_else(sync_token);
+    let body = match req
+        .parse_json::<contrix_sdk::FederationTransactionRequest>()
+        .await
+    {
+        Ok(body) => body,
+        Err(_) => {
+            render_error(
+                res,
+                StatusCode::BAD_REQUEST,
+                "bad_json",
+                "invalid federation transaction request",
+            );
+            return;
+        }
+    };
+    let accepted = ingest_federation_operations(state, body.origin.as_str(), body.operations);
+    res.render(Json(contrix_sdk::FederationTransactionResponse {
+        ok: true,
+        accepted,
+        rejected: Vec::new(),
+        next_retry_at: None,
+    }));
+}
+
+#[handler]
+pub async fn federation_push_operations(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let body = match req
+        .parse_json::<contrix_sdk::FederationPushOperationsRequest>()
+        .await
+    {
+        Ok(body) => body,
+        Err(_) => {
+            render_error(
+                res,
+                StatusCode::BAD_REQUEST,
+                "bad_json",
+                "invalid federation push operations request",
+            );
+            return;
+        }
+    };
+    let accepted = ingest_federation_operations(state, body.origin.as_str(), body.operations);
+    res.render(Json(contrix_sdk::FederationPushOperationsResponse {
+        accepted,
+        rejected: Vec::new(),
+        quarantine: Vec::new(),
+    }));
+}
+
+#[handler]
+pub async fn federation_pull_operations(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let Some(space_id) = query_param(req, "space_id") else {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "missing_param",
+            "space_id is required",
+        );
+        return;
+    };
+    if validate_space_id(&space_id).is_err() {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            "invalid space_id",
+        );
+        return;
+    }
+    let after_cursor = query_param(req, "after_cursor");
+    let limit = query_param(req, "limit")
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(100)
+        .min(100);
+    let mut seen_cursor = after_cursor.is_none();
+    let mut operations = Vec::new();
+    for operation in state
+        .federation_operations
+        .lock()
+        .expect("federation lock")
+        .iter()
+    {
+        if operation.space_id.as_str() != space_id {
+            continue;
+        }
+        if !seen_cursor {
+            seen_cursor = Some(operation.operation_id.as_str()) == after_cursor.as_deref();
+            continue;
+        }
+        if operations.len() == limit + 1 {
+            break;
+        }
+        operations.push(operation.clone());
+    }
+    let has_more = operations.len() > limit;
+    if has_more {
+        operations.truncate(limit);
+    }
+    let next_cursor = operations
+        .last()
+        .map(|operation| operation.operation_id.to_string())
+        .or_else(|| Some(sync_token()));
+    res.render(Json(contrix_sdk::FederationPullOperationsResponse {
+        operations,
+        snapshot_bootstrap: None,
+        next_cursor,
+        has_more,
+    }));
+}
+
+#[handler]
+pub async fn federation_space_members(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let Some(space_id) = query_param(req, "space_id") else {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "missing_param",
+            "space_id is required",
+        );
+        return;
+    };
+    let Ok(space_id_value) = SpaceId::new(space_id.clone()) else {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            "invalid space_id",
+        );
+        return;
+    };
+    let members = state
+        .spaces
+        .lock()
+        .expect("spaces lock")
+        .get(&space_id_value)
+        .map(|space| {
+            space
+                .members
+                .iter()
+                .map(|principal_id| contrix_sdk::MemberRef {
+                    principal_id: principal_id.clone(),
+                    membership: json!({"membership": "join"}),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    res.render(Json(contrix_sdk::FederationSpaceMembersResponse {
+        members,
+        membership_frontier: sync_token(),
+        next_cursor: None,
+    }));
+}
+
+#[handler]
+pub async fn federation_verify_actor(req: &mut Request, res: &mut Response) {
+    let body = match req
+        .parse_json::<contrix_sdk::FederationVerifyActorRequest>()
+        .await
+    {
+        Ok(body) => body,
+        Err(_) => {
+            render_error(
+                res,
+                StatusCode::BAD_REQUEST,
+                "bad_json",
+                "invalid federation verify actor request",
+            );
+            return;
+        }
+    };
+    res.render(Json(contrix_sdk::FederationVerifyActorResponse {
+        valid: true,
+        actor_id: body.actor_id.clone(),
+        verified_key_id: Some(format!("{}#dev", body.actor_id)),
+        key_log_head: None,
+        did_document_ref: Some(format!("{}#document", body.actor_id)),
+        expires_at: Some(now() + chrono::Duration::minutes(5)),
+        warnings: Vec::new(),
+    }));
+}
+
+#[handler]
 pub async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     let Some(session) = auth_or_render(state, req, res) else {
@@ -2527,16 +2786,16 @@ pub async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Respons
         return;
     }
     let sha256 = sha256_hex(&bytes);
-    if let Some(expected_sha256) = expected_blob_sha256(req) {
-        if expected_sha256 != sha256 {
-            render_error(
-                res,
-                StatusCode::CONFLICT,
-                "hash_mismatch",
-                "provided sha256 does not match blob content",
-            );
-            return;
-        }
+    if let Some(expected_sha256) = expected_blob_sha256(req)
+        && expected_sha256 != sha256
+    {
+        render_error(
+            res,
+            StatusCode::CONFLICT,
+            "hash_mismatch",
+            "provided sha256 does not match blob content",
+        );
+        return;
     }
     let blob_ref = format!("cx:blob:sha256:{sha256}");
     state.blobs.lock().expect("blob lock").insert(
@@ -2678,6 +2937,181 @@ fn message_event(message: &MessageRecord) -> serde_json::Value {
     })
 }
 
+fn ingest_federation_operations(
+    state: &AppState,
+    origin: &str,
+    operations: Vec<Operation>,
+) -> Vec<OperationId> {
+    let mut accepted = Vec::new();
+    for operation in operations {
+        if operation.validate_payload_object().is_err() {
+            continue;
+        }
+        accepted.push(operation.operation_id.clone());
+        project_federation_operation(state, origin, &operation);
+        let mut federation_operations =
+            state.federation_operations.lock().expect("federation lock");
+        if !federation_operations
+            .iter()
+            .any(|known| known.operation_id == operation.operation_id)
+        {
+            federation_operations.push(operation);
+        }
+    }
+    accepted
+}
+
+fn project_federation_operation(state: &AppState, origin: &str, operation: &Operation) {
+    ensure_federated_space(state, origin, operation);
+    match operation.object_type.as_str() {
+        "message" => project_federated_message(state, origin, operation),
+        "membership" | "space.lifecycle" => project_federated_membership(state, origin, operation),
+        _ => {}
+    }
+}
+
+fn ensure_federated_space(state: &AppState, origin: &str, operation: &Operation) {
+    let space_id = operation.space_id.clone();
+    let mut spaces = state.spaces.lock().expect("spaces lock");
+    if spaces.get(&space_id).is_none() {
+        let title = operation
+            .payload
+            .get("space_title")
+            .and_then(|value| value.as_str())
+            .unwrap_or_else(|| space_id.as_str());
+        let mut entry = SpaceSearchEntry::new(space_id.clone(), title);
+        entry.description = operation
+            .payload
+            .get("space_summary")
+            .and_then(|value| value.as_str())
+            .map(ToOwned::to_owned);
+        entry.public = operation
+            .payload
+            .get("public")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false);
+        spaces.upsert(entry);
+    }
+    drop(spaces);
+
+    let now = now();
+    state
+        .space_meta
+        .lock()
+        .expect("space meta lock")
+        .entry(space_id.to_string())
+        .or_insert_with(|| SpaceMetaRecord {
+            owner: origin.to_owned(),
+            deleted: false,
+            created_at: now,
+            updated_at: now,
+        });
+    project_federated_membership(state, origin, operation);
+}
+
+fn project_federated_membership(state: &AppState, origin: &str, operation: &Operation) {
+    let mut member_values = Vec::new();
+    if let Some(member) = operation
+        .payload
+        .get("member")
+        .and_then(|value| value.as_str())
+    {
+        member_values.push(member.to_owned());
+    }
+    if let Some(sender) = operation
+        .payload
+        .get("sender")
+        .and_then(|value| value.as_str())
+    {
+        member_values.push(sender.to_owned());
+    }
+    if let Some(actor) = operation
+        .payload
+        .get("actor")
+        .and_then(|value| value.as_str())
+    {
+        member_values.push(actor.to_owned());
+    }
+    if let Some(members) = operation
+        .payload
+        .get("members")
+        .and_then(|value| value.as_array())
+    {
+        member_values.extend(
+            members
+                .iter()
+                .filter_map(|member| member.as_str().map(ToOwned::to_owned)),
+        );
+    }
+    member_values.push(origin.to_owned());
+
+    let mut spaces = state.spaces.lock().expect("spaces lock");
+    let Some(mut entry) = spaces.get(&operation.space_id).cloned() else {
+        return;
+    };
+    for member in member_values {
+        if let Ok(member) = Did::new(member) {
+            entry.members.insert(member);
+        }
+    }
+    spaces.upsert(entry);
+}
+
+fn project_federated_message(state: &AppState, origin: &str, operation: &Operation) {
+    let event_id = operation
+        .payload
+        .get("event_id")
+        .and_then(|value| value.as_str())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| {
+            format!(
+                "cx:event:{}",
+                operation.operation_id.as_str().replace(':', "")
+            )
+        });
+    let mut messages = state.messages.lock().expect("messages lock");
+    if messages.iter().any(|message| message.event_id == event_id) {
+        return;
+    }
+    let content = operation
+        .payload
+        .get("content")
+        .cloned()
+        .or_else(|| {
+            operation
+                .payload
+                .get("body")
+                .map(|body| json!({"body": body}))
+        })
+        .unwrap_or_else(|| operation.payload.clone());
+    let sender = operation
+        .payload
+        .get("sender")
+        .and_then(|value| value.as_str())
+        .unwrap_or(origin)
+        .to_owned();
+    let thread_id = operation
+        .payload
+        .get("thread_id")
+        .and_then(|value| value.as_str())
+        .unwrap_or(operation.space_id.as_str())
+        .to_owned();
+    let encrypted = operation
+        .payload
+        .get("encrypted")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false);
+    messages.push(MessageRecord {
+        event_id,
+        space_id: operation.space_id.to_string(),
+        sender,
+        thread_id,
+        content,
+        encrypted,
+        created_at: operation.created_at,
+    });
+}
+
 fn render_space_lifecycle(state: &AppState, res: &mut Response, space_id: &str) {
     let Ok(space_id_value) = SpaceId::new(space_id.to_owned()) else {
         render_error(
@@ -2761,6 +3195,80 @@ fn space_has_member(state: &AppState, space_id: &str, actor: &str) -> bool {
         .expect("spaces lock")
         .get(&space_id)
         .is_some_and(|space| space.members.contains(&actor))
+}
+
+fn space_visible_to(
+    state: &AppState,
+    space: &contrix_sdk::SpaceSearchEntry,
+    session: Option<&SessionRecord>,
+) -> bool {
+    if is_space_deleted(state, space.space_id.as_str()) {
+        return false;
+    }
+    if space.public {
+        return true;
+    }
+    session.is_some_and(|session| {
+        Did::new(session.actor.clone()).is_ok_and(|actor| space.members.contains(&actor))
+    })
+}
+
+fn space_id_visible_to(state: &AppState, space_id: &str, session: Option<&SessionRecord>) -> bool {
+    if is_space_deleted(state, space_id) {
+        return false;
+    }
+    let Ok(space_id) = SpaceId::new(space_id.to_owned()) else {
+        return false;
+    };
+    state
+        .spaces
+        .lock()
+        .expect("spaces lock")
+        .get(&space_id)
+        .is_some_and(|space| space_visible_to(state, space, session))
+}
+
+struct RequireProof;
+
+impl CommitProofVerifier for RequireProof {
+    fn verify_commit(&self, commit: &Commit) -> contrix_sdk::Result<()> {
+        commit.validate_for_submit()
+    }
+}
+
+fn record_space_lifecycle_operation(
+    state: &AppState,
+    actor: &str,
+    space_id: &str,
+    payload: serde_json::Value,
+) -> contrix_sdk::Result<Option<String>> {
+    let operation = Operation::create(
+        OperationId::new(format!("cx:operation:{}", uuid::Uuid::new_v4().simple()))
+            .expect("generated valid operation id"),
+        SpaceId::new(space_id.to_owned()).expect("validated space id"),
+        "space.lifecycle",
+        payload,
+    );
+    let operation_digest = Hash::new(operation.operation_digest()?)?;
+    let mut commit = Commit::new(
+        CommitId::new(format!("cx:commit:{}", uuid::Uuid::new_v4().simple()))
+            .expect("generated valid commit id"),
+        actor.to_owned(),
+        Did::new(actor.to_owned()).expect("session actor is valid"),
+        next_author_seq(state, actor),
+    );
+    commit.prev_commit = state.repo.head(actor)?.map(Hash::new).transpose()?;
+    commit.operations.push(operation_digest);
+    commit.proofs.push(dev_proof(actor));
+
+    let expected_head = commit.prev_commit.as_ref().map(ToString::to_string);
+    state.repo.submit_commit(
+        actor,
+        expected_head.as_deref(),
+        vec![operation],
+        commit,
+        &RequireProof,
+    )
 }
 
 fn next_author_seq(state: &AppState, repo_id: &str) -> u64 {
@@ -3016,6 +3524,9 @@ fn handle_for_did(did: &str) -> String {
 #[handler]
 pub async fn moderation_report(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
+    let Some(session) = auth_or_render(state, req, res) else {
+        return;
+    };
     let body = match req.parse_json::<ModerationReportRequest>().await {
         Ok(body) => body,
         Err(_) => {
@@ -3028,6 +3539,33 @@ pub async fn moderation_report(depot: &mut Depot, req: &mut Request, res: &mut R
             return;
         }
     };
+    if validate_space_id(&body.space_id).is_err() || validate_did(&body.reporter).is_err() {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            "invalid space_id or reporter",
+        );
+        return;
+    }
+    if body.reporter != session.actor {
+        render_error(
+            res,
+            StatusCode::FORBIDDEN,
+            "capability_denied",
+            "reporter must match authenticated actor",
+        );
+        return;
+    }
+    if !space_has_member(state, &body.space_id, &session.actor) {
+        render_error(
+            res,
+            StatusCode::FORBIDDEN,
+            "capability_denied",
+            "reporter cannot see the target space",
+        );
+        return;
+    }
     let report_id = format!("cx:report:{}", now().timestamp_millis());
     state
         .moderation_reports
