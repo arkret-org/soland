@@ -10,6 +10,7 @@
 handler、PostgreSQL 落地、运行时策略和服务互操作验证。
 
 - [ ] **[SDK] Canonical operation/event 注册表** — canonical `cx.*` kind、legacy migration adapter、operation envelope 字段、schema-driven semantic validation、内置操作 conformance vectors。
+  - [x] SDK 已完成: operation envelope 使用 `actor_id` / `kind` / `content` / `proofs`, digest 排除 `proofs`, 并保留 `actor` / `type` / `body` legacy alias。
 - [ ] **[SDK] Canonical JSON / digest / proof binding** — canonical bytes、operation/commit digest、proof payload hash、audience/domain/created_at binding、移除生产路径 `alg:none`/`dev-proof` 的共享验证器。
 - [ ] **[SDK] DID identity / key log / service DID primitives** — `did:uuid`、resolver adapter、DID normalized view、key log、registry receipt signature、private DID proof gating、service DID endpoint 校验。
   - [x] SDK 已完成: `did:uuid` 结构化生成与 bit layout validation。
@@ -165,15 +166,15 @@ P0 的完成标准: 可以诚实声明 `principal_server_repo_api` 的核心子�
 - [x] 增加 migration compatibility adapter, 只在明确 migration profile 下接受旧裸名。
   - [x] legacy kind -> canonical projection / reducer adapter。
   - [x] profile-gated legacy acceptance。
-- [ ] 扩展 wire / SDK operation envelope:
-  - [ ] `actor_id`
-  - [ ] `kind`
-  - [ ] `target_ref`
-  - [ ] `causal.deps`
-  - [ ] `causal.hlc`
-  - [ ] `causal.actor_seq`
-  - [ ] `authz_ref`
-  - [ ] `proofs`
+- [x] 扩展 wire / SDK operation envelope:
+  - [x] `actor_id`
+  - [x] `kind`
+  - [x] `target_ref`
+  - [x] `causal.deps`
+  - [x] `causal.hlc`
+  - [x] `causal.actor_seq`
+  - [x] `authz_ref`
+  - [x] `proofs`
 - [x] reducer dispatch 改为 canonical kind。
 - [ ] `validate_operation_semantics` 改为 schema registry 驱动, 未注册事件 fail closed。
 - [x] `supported_operations` 只声明 canonical operation id, 不声明产品私有别名。
