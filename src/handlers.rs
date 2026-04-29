@@ -7447,7 +7447,7 @@ fn record_space_lifecycle_operation(
     let operation = Operation::create(
         OperationId::new(ids::generate_operation_id()).expect("generated valid operation id"),
         SpaceId::new(space_id.to_owned()).expect("validated space id"),
-        kinds::canonical_kind_for_payload("space.lifecycle", &payload)
+        kinds::canonical_kind_for_local_payload("space.lifecycle", &payload)
             .unwrap_or(kinds::CX_SPACE_UPDATE),
         payload,
     );

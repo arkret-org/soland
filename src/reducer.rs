@@ -825,7 +825,7 @@ mod tests {
         let mut state = ProjectionState::new();
         let hlc = ServerHlc::new("test");
         let op = make_operation(
-            "message",
+            crate::kinds::CX_MESSAGE_CREATE,
             "cx:space:test",
             serde_json::json!({
                 "event_id": "cx:event:msg-1",
@@ -849,7 +849,7 @@ mod tests {
 
         state.apply(
             &make_operation(
-                "message",
+                crate::kinds::CX_MESSAGE_CREATE,
                 "cx:space:test",
                 serde_json::json!({
                     "event_id": "cx:event:msg-1",
@@ -862,7 +862,7 @@ mod tests {
         );
         state.apply(
             &make_operation(
-                "redaction",
+                crate::kinds::CX_MESSAGE_REDACT,
                 "cx:space:test",
                 serde_json::json!({
                     "target_event_id": "cx:event:msg-1"
@@ -882,7 +882,7 @@ mod tests {
 
         state.apply(
             &make_operation(
-                "reaction.add",
+                crate::kinds::CX_REACTION_ADD,
                 "cx:space:test",
                 serde_json::json!({
                     "event_id": "cx:event:msg-1",
@@ -896,7 +896,7 @@ mod tests {
 
         state.apply(
             &make_operation(
-                "reaction.remove",
+                crate::kinds::CX_REACTION_REMOVE,
                 "cx:space:test",
                 serde_json::json!({
                     "event_id": "cx:event:msg-1",
@@ -916,7 +916,7 @@ mod tests {
 
         state.apply(
             &make_operation(
-                "entity.create",
+                crate::kinds::CX_ENTITY_CREATE,
                 "cx:space:test",
                 serde_json::json!({
                     "entity_id": "cx:entity:task-1",
@@ -930,7 +930,7 @@ mod tests {
 
         state.apply(
             &make_operation(
-                "entity.delete",
+                crate::kinds::CX_ENTITY_DELETE,
                 "cx:space:test",
                 serde_json::json!({
                     "entity_id": "cx:entity:task-1"
@@ -948,7 +948,7 @@ mod tests {
 
         state.apply(
             &make_operation(
-                "membership",
+                crate::kinds::CX_MEMBERSHIP_JOIN,
                 "cx:space:test",
                 serde_json::json!({
                     "member": "did:web:bob",
@@ -962,7 +962,7 @@ mod tests {
 
         state.apply(
             &make_operation(
-                "membership",
+                crate::kinds::CX_MEMBERSHIP_LEAVE,
                 "cx:space:test",
                 serde_json::json!({
                     "member": "did:web:bob",
@@ -981,7 +981,7 @@ mod tests {
 
         state.apply(
             &make_operation(
-                "message",
+                crate::kinds::CX_MESSAGE_CREATE,
                 "cx:space:test",
                 serde_json::json!({
                     "event_id": "cx:event:msg-1",
@@ -995,7 +995,7 @@ mod tests {
 
         state.apply(
             &make_operation(
-                "message.revise",
+                crate::kinds::CX_MESSAGE_REVISE,
                 "cx:space:test",
                 serde_json::json!({
                     "target_event_id": "cx:event:msg-1",

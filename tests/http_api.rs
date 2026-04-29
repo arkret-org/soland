@@ -5,7 +5,7 @@ use salvo::{
 };
 use serde_json::Value;
 use soland::{
-    config::AppConfig, db::Db, ratelimit::RateLimiterConfig, service,
+    config::AppConfig, db::Db, kinds, ratelimit::RateLimiterConfig, service,
     service_with_rate_limiter_config, state::AppState,
 };
 use std::time::Duration;
@@ -1709,7 +1709,7 @@ async fn federation_rejects_replayed_operations() {
     let operation = Operation::create(
         OperationId::new("cx:operation:federation-replay").unwrap(),
         SpaceId::new("cx:space:federation").unwrap(),
-        "message",
+        kinds::CX_MESSAGE_CREATE,
         serde_json::json!({
             "event_id": "cx:event:federation-replay",
             "sender": "did:web:remote.example",
@@ -1789,7 +1789,7 @@ async fn federation_rejects_replayed_operations() {
     let invalid_operation = Operation::create(
         OperationId::new("cx:operation:federation-invalid-envelope").unwrap(),
         SpaceId::new("cx:space:federation").unwrap(),
-        "message",
+        kinds::CX_MESSAGE_CREATE,
         serde_json::json!({
             "event_id": "cx:event:federation-invalid-envelope",
             "sender": "did:web:remote.example",
@@ -1816,7 +1816,7 @@ async fn federation_rejects_replayed_operations() {
     let redaction = Operation::create(
         OperationId::new("cx:operation:federation-redaction").unwrap(),
         SpaceId::new("cx:space:federation").unwrap(),
-        "redaction",
+        kinds::CX_MESSAGE_REDACT,
         serde_json::json!({
             "event_id": "cx:event:federation-redaction",
             "target_event_id": "cx:event:federation-replay"
@@ -2539,7 +2539,7 @@ async fn plaintext_policy_applies_to_repo_and_federation_message_ingest() {
     let operation = Operation::create(
         OperationId::new("cx:operation:plaintext-policy-repo").unwrap(),
         SpaceId::new(space_id.clone()).unwrap(),
-        "message",
+        kinds::CX_MESSAGE_CREATE,
         serde_json::json!({
             "event_id": "cx:event:plaintext-policy-repo",
             "sender": "did:web:alice.example",
@@ -2579,7 +2579,7 @@ async fn plaintext_policy_applies_to_repo_and_federation_message_ingest() {
     let federation_operation = Operation::create(
         OperationId::new("cx:operation:plaintext-policy-federation").unwrap(),
         SpaceId::new(space_id.clone()).unwrap(),
-        "message",
+        kinds::CX_MESSAGE_CREATE,
         serde_json::json!({
             "event_id": "cx:event:plaintext-policy-federation",
             "sender": "did:web:remote.example",
@@ -2609,11 +2609,41 @@ async fn plaintext_policy_applies_to_repo_and_federation_message_ingest() {
 async fn repo_adapter_memory_submit_list_get_and_sync_work() {
     let state = AppState::new(test_config(), Db { pool: None });
     let alice = dev_token(state.clone()).await;
+    let bare_legacy_operation = Operation::create(
+        OperationId::new("cx:operation:adapter-bare-legacy").unwrap(),
+        SpaceId::new("cx:space:adapter").unwrap(),
+        "message",
+        serde_json::json!({
+            "event_id": "cx:event:adapter-bare-legacy",
+            "sender": "did:web:alice.example",
+            "thread_id": "cx:thread:adapter",
+            "body": "missing migration profile"
+        }),
+    );
+    let mut bare_legacy_commit = Commit::new(
+        CommitId::new("cx:commit:adapter-bare-legacy").unwrap(),
+        "did:web:alice.example",
+        Did::new("did:web:alice.example").unwrap(),
+        1,
+    );
+    bare_legacy_commit.proofs.push(dummy_proof());
+    let bare_legacy = TestClient::post("http://server/api/v1/repo/submit-commit")
+        .json(&serde_json::json!({
+            "repo_id": "did:web:alice.example",
+            "expected_head": null,
+            "operations": [bare_legacy_operation],
+            "commit": bare_legacy_commit
+        }))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(bare_legacy.status_code.unwrap().as_u16(), 400);
+
     let operation = Operation::create(
         OperationId::new("cx:operation:adapter-01").unwrap(),
         SpaceId::new("cx:space:adapter").unwrap(),
         "message",
         serde_json::json!({
+            "migration_profile": kinds::LEGACY_KIND_MIGRATION_PROFILE,
             "event_id": "cx:event:adapter-01",
             "sender": "did:web:alice.example",
             "thread_id": "cx:thread:adapter",
@@ -2820,6 +2850,7 @@ async fn repo_adapter_memory_submit_list_get_and_sync_work() {
         SpaceId::new("cx:space:adapter").unwrap(),
         "redaction",
         serde_json::json!({
+            "migration_profile": kinds::LEGACY_KIND_MIGRATION_PROFILE,
             "event_id": "cx:event:redaction-01",
             "target_event_id": "cx:event:adapter-01"
         }),

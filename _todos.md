@@ -162,9 +162,9 @@ P0 的完成标准: 可以诚实声明 `principal_server_repo_api` 的核心子�
   - [x] `relation.create/update/delete` -> `cx.relation.*`。
   - [x] `membership` -> `cx.member.state` 或 `cx.membership.*` 兼容映射。
   - [x] `read_marker` -> `cx.read.marker`。
-- [ ] 增加 migration compatibility adapter, 只在明确 migration profile 下接受旧裸名。
+- [x] 增加 migration compatibility adapter, 只在明确 migration profile 下接受旧裸名。
   - [x] legacy kind -> canonical projection / reducer adapter。
-  - [ ] profile-gated legacy acceptance。
+  - [x] profile-gated legacy acceptance。
 - [ ] 扩展 wire / SDK operation envelope:
   - [ ] `actor_id`
   - [ ] `kind`
