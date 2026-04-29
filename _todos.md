@@ -26,7 +26,7 @@
 
 - [ ] 定义 `PersistenceStore` 边界:
   - [ ] account/session/contact/space/invite/message/device/blob/push/presence/policy/audit/federation/sync positions。
-  - [ ] 区分 `RepoAdapter` 与业务状态 store。
+  - [x] 区分 `RepoAdapter` 与业务状态 store。
   - [ ] memory store 与 PostgreSQL store 共用行为测试。
   - [ ] handler 不直接读写新增业务状态的 `Arc<Mutex<...>>`。
 - [ ] PostgreSQL migrations:
@@ -36,7 +36,7 @@
   - [ ] down.sql 可回滚。
   - [ ] migration 自动运行有 integration test。
 - [ ] Account/session:
-  - [ ] account register 持久化 DID/handle/display profile。
+  - [x] account register 持久化 DID/handle/display profile。
   - [x] session token hash 存储，不落明文 token。
   - [x] token 绑定 actor/device/expires_at/audience。
   - [x] logout 写 revoked_at。
@@ -47,7 +47,7 @@
   - [ ] discoverability、owner、plaintext_visible_services、deleted 状态落库。
   - [ ] invite token hash、expiry、max_uses、revoked_at。
 - [ ] Device/blob/push/presence:
-  - [ ] device inventory。
+  - [x] device inventory。
   - [ ] device key / one-time key / fallback key persistence。
   - [ ] push devices and push rules persistence。
   - [ ] presence/typing multi-instance fanout。

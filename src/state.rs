@@ -13,6 +13,7 @@ use crate::authz::AuthzEngine;
 use crate::config::AppConfig;
 use crate::db::Db;
 use crate::hlc::ServerHlc;
+use crate::persistence::{MemoryPersistenceStore, PersistenceStore, PgPersistenceStore};
 use crate::reducer::ProjectionState;
 use crate::repo::{MemoryRepoAdapter, PgRepoAdapter, RepoAdapterRef};
 
@@ -23,6 +24,7 @@ pub struct AppState {
     pub config: AppConfig,
     pub db: Db,
     pub repo: RepoAdapterRef,
+    pub persistence: Arc<dyn PersistenceStore>,
     pub hlc: ServerHlc,
     pub projection: Arc<Mutex<ProjectionState>>,
     pub authz: AuthzEngine,
@@ -64,6 +66,18 @@ pub struct SessionRecord {
     pub audience: String,
     pub expires_at: chrono::DateTime<chrono::Utc>,
     pub created_at: chrono::DateTime<chrono::Utc>,
+    pub revoked_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+#[derive(Clone, Debug)]
+pub struct DeviceInventoryRecord {
+    pub actor: String,
+    pub device_id: String,
+    pub display_name: Option<String>,
+    pub verification_state: String,
+    pub payload: Value,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
     pub revoked_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
@@ -284,6 +298,29 @@ impl AppState {
 
         let service_did = config.service_did.clone();
 
+        let persistence: Arc<dyn PersistenceStore> = db
+            .pool
+            .as_ref()
+            .map(|pool| {
+                Arc::new(PgPersistenceStore::new(pool.clone())) as Arc<dyn PersistenceStore>
+            })
+            .unwrap_or_else(|| Arc::new(MemoryPersistenceStore::new()));
+        if let Err(error) = persistence.accounts().put(
+            accounts
+                .get("did:web:alice.example")
+                .expect("demo account exists"),
+        ) {
+            tracing::warn!(%error, "failed to seed demo account into persistence store");
+        }
+        if let Err(error) = persistence.space_meta().put(
+            "cx:space:01js0sp0000000000000000000",
+            space_meta
+                .get("cx:space:01js0sp0000000000000000000")
+                .expect("demo space exists"),
+        ) {
+            tracing::warn!(%error, "failed to seed demo space metadata into persistence store");
+        }
+
         Self {
             config,
             repo: db
@@ -295,6 +332,7 @@ impl AppState {
             projection: Arc::new(Mutex::new(ProjectionState::new())),
             authz: AuthzEngine::new(),
             db,
+            persistence,
             spaces: Arc::new(Mutex::new(spaces)),
             space_meta: Arc::new(Mutex::new(space_meta)),
             schemas: Arc::new(Mutex::new(core_schema_records(now, &service_did))),

@@ -298,6 +298,7 @@ diesel::table! {
         verification_state -> Text,
         payload -> Jsonb,
         revoked_at -> Nullable<Timestamptz>,
+        created_at -> Timestamptz,
         updated_at -> Timestamptz,
     }
 }

@@ -18,10 +18,11 @@ use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
 use crate::{
     ids, kinds,
     state::{
-        AccountRecord, AppState, BlobRecord, ContactRecord, DeviceMessageRecord,
-        IdentityDocumentRecord, IdentityLogRecord, MessageRecord, PolicyDocumentRecord,
-        PresenceRecord, ProjectionEventRecord, PushRuleRecord, SchemaRecord, SessionRecord,
-        SpaceInviteRecord, SpaceMetaRecord, TypingRecord, WebrtcSessionRecord, WebrtcSignalRecord,
+        AccountRecord, AppState, BlobRecord, ContactRecord, DeviceInventoryRecord,
+        DeviceMessageRecord, IdentityDocumentRecord, IdentityLogRecord, MessageRecord,
+        PolicyDocumentRecord, PresenceRecord, ProjectionEventRecord, PushRuleRecord, SchemaRecord,
+        SessionRecord, SpaceInviteRecord, SpaceMetaRecord, TypingRecord, WebrtcSessionRecord,
+        WebrtcSignalRecord,
     },
     wire::{
         AccountResponse, AddReactionRequest, AddSpaceMemberRequest, ApiError, AuthzCheckRequest,
@@ -141,12 +142,19 @@ pub async fn dev_login(depot: &mut Depot, req: &mut Request, res: &mut Response)
         );
         return;
     }
-    if !state
-        .accounts
-        .lock()
-        .expect("accounts lock")
-        .contains_key(&body.actor)
-    {
+    let account = match state.persistence.accounts().get(&body.actor) {
+        Ok(account) => account,
+        Err(error) => {
+            render_error(
+                res,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "persistence_error",
+                &error.to_string(),
+            );
+            return;
+        }
+    };
+    if account.is_none() {
         render_error(
             res,
             StatusCode::NOT_FOUND,
@@ -159,33 +167,62 @@ pub async fn dev_login(depot: &mut Depot, req: &mut Request, res: &mut Response)
     let expires_at = now() + chrono::Duration::hours(12);
     let token = token_for(&body.actor, &body.device_id, expires_at.timestamp_millis());
     let token_hash = session_token_hash(&token, &state.config.service_did);
-    state.sessions.lock().expect("sessions lock").insert(
-        token_hash.clone(),
-        SessionRecord {
-            token_hash,
-            actor: body.actor.clone(),
-            device_id: body.device_id.clone(),
-            audience: state.config.service_did.clone(),
-            expires_at,
-            created_at: now(),
-            revoked_at: None,
-        },
-    );
+    let session = SessionRecord {
+        token_hash,
+        actor: body.actor.clone(),
+        device_id: body.device_id.clone(),
+        audience: state.config.service_did.clone(),
+        expires_at,
+        created_at: now(),
+        revoked_at: None,
+    };
+    if let Err(error) = state.persistence.sessions().put(&session) {
+        render_error(
+            res,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "persistence_error",
+            &error.to_string(),
+        );
+        return;
+    }
+    let seen_at = now();
+    let device_payload = json!({
+        "device_id": body.device_id.clone(),
+        "display_name": body.display_name.clone(),
+        "verification": "unverified",
+        "last_seen_at": seen_at
+    });
+    let device = DeviceInventoryRecord {
+        actor: body.actor.clone(),
+        device_id: body.device_id.clone(),
+        display_name: body.display_name.clone(),
+        verification_state: "unverified".to_owned(),
+        payload: device_payload,
+        created_at: seen_at,
+        updated_at: seen_at,
+        revoked_at: None,
+    };
+    if let Err(error) = state.persistence.devices().put(&device) {
+        render_error(
+            res,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "persistence_error",
+            &error.to_string(),
+        );
+        return;
+    }
+    state
+        .sessions
+        .lock()
+        .expect("sessions lock")
+        .insert(session.token_hash.clone(), session.clone());
     state
         .devices
         .lock()
         .expect("devices lock")
         .entry(body.actor.clone())
         .or_default()
-        .insert(
-            body.device_id.clone(),
-            json!({
-                "device_id": body.device_id.clone(),
-                "display_name": body.display_name.clone(),
-                "verification": "unverified",
-                "last_seen_at": now()
-            }),
-        );
+        .insert(body.device_id.clone(), device_inventory_to_json(&device));
     append_audit_log(
         state,
         Some(&body.actor),
@@ -216,16 +253,35 @@ pub async fn logout(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         return;
     };
     let token_hash = session_token_hash(&token, &state.config.service_did);
-    let revoked_session = {
-        let mut sessions = state.sessions.lock().expect("sessions lock");
-        sessions.get_mut(&token_hash).and_then(|session| {
-            if session.revoked_at.is_some() {
-                None
-            } else {
-                session.revoked_at = Some(now());
-                Some(session.clone())
+    let revoked_session = match state.persistence.sessions().get(&token_hash) {
+        Ok(Some(mut session)) if session.revoked_at.is_none() => {
+            session.revoked_at = Some(now());
+            if let Err(error) = state.persistence.sessions().put(&session) {
+                render_error(
+                    res,
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "persistence_error",
+                    &error.to_string(),
+                );
+                return;
             }
-        })
+            state
+                .sessions
+                .lock()
+                .expect("sessions lock")
+                .insert(token_hash.clone(), session.clone());
+            Some(session)
+        }
+        Ok(_) => None,
+        Err(error) => {
+            render_error(
+                res,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "persistence_error",
+                &error.to_string(),
+            );
+            return;
+        }
     };
     let revoked = revoked_session.is_some();
     if let Some(session) = revoked_session {
@@ -281,11 +337,21 @@ pub async fn account_register(depot: &mut Depot, req: &mut Request, res: &mut Re
     }
 
     let normalized_handle = normalize_handle(&body.handle);
-    let mut accounts = state.accounts.lock().expect("accounts lock");
-    if accounts.contains_key(&body.did)
-        || accounts
-            .values()
-            .any(|account| account.handle == normalized_handle)
+    let accounts = match state.persistence.accounts().list() {
+        Ok(accounts) => accounts,
+        Err(error) => {
+            render_error(
+                res,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "persistence_error",
+                &error.to_string(),
+            );
+            return;
+        }
+    };
+    if accounts
+        .iter()
+        .any(|account| account.did == body.did || account.handle == normalized_handle)
     {
         render_error(
             res,
@@ -301,7 +367,54 @@ pub async fn account_register(depot: &mut Depot, req: &mut Request, res: &mut Re
         display_name: body.display_name,
         created_at: now(),
     };
-    accounts.insert(body.did.clone(), account.clone());
+    if let Err(error) = state.persistence.accounts().put(&account) {
+        render_error(
+            res,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "persistence_error",
+            &error.to_string(),
+        );
+        return;
+    }
+    state
+        .accounts
+        .lock()
+        .expect("accounts lock")
+        .insert(body.did.clone(), account.clone());
+    if let Some(device_id) = body.device_id.as_deref() {
+        let registered_at = now();
+        let device = DeviceInventoryRecord {
+            actor: body.did.clone(),
+            device_id: device_id.to_owned(),
+            display_name: account.display_name.clone(),
+            verification_state: "unverified".to_owned(),
+            payload: json!({
+                "device_id": device_id,
+                "display_name": account.display_name.clone(),
+                "verification": "unverified",
+                "registered_with_account": true,
+            }),
+            created_at: registered_at,
+            updated_at: registered_at,
+            revoked_at: None,
+        };
+        if let Err(error) = state.persistence.devices().put(&device) {
+            render_error(
+                res,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "persistence_error",
+                &error.to_string(),
+            );
+            return;
+        }
+        state
+            .devices
+            .lock()
+            .expect("devices lock")
+            .entry(body.did.clone())
+            .or_default()
+            .insert(device_id.to_owned(), device_inventory_to_json(&device));
+    }
     append_audit_log(
         state,
         Some(&body.did),
@@ -319,10 +432,15 @@ pub async fn account_me(depot: &mut Depot, req: &mut Request, res: &mut Response
     let Some(session) = auth_or_render(state, req, res) else {
         return;
     };
-    let accounts = state.accounts.lock().expect("accounts lock");
-    match accounts.get(&session.actor) {
-        Some(account) => res.render(Json(account_response(account.clone()))),
-        None => render_error(res, StatusCode::NOT_FOUND, "not_found", "not found"),
+    match state.persistence.accounts().get(&session.actor) {
+        Ok(Some(account)) => res.render(Json(account_response(account))),
+        Ok(None) => render_error(res, StatusCode::NOT_FOUND, "not_found", "not found"),
+        Err(error) => render_error(
+            res,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "persistence_error",
+            &error.to_string(),
+        ),
     }
 }
 
@@ -353,12 +471,19 @@ pub async fn contact_request(depot: &mut Depot, req: &mut Request, res: &mut Res
         );
         return;
     }
-    if !state
-        .accounts
-        .lock()
-        .expect("accounts lock")
-        .contains_key(&body.target)
-    {
+    let target_account = match state.persistence.accounts().get(&body.target) {
+        Ok(account) => account,
+        Err(error) => {
+            render_error(
+                res,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "persistence_error",
+                &error.to_string(),
+            );
+            return;
+        }
+    };
+    if target_account.is_none() {
         render_error(res, StatusCode::NOT_FOUND, "not_found", "not found");
         return;
     }
@@ -5387,12 +5512,18 @@ pub async fn profile_presence(depot: &mut Depot, req: &mut Request, res: &mut Re
         render_error(res, StatusCode::BAD_REQUEST, "invalid_param", "invalid did");
         return;
     }
-    let account = state
-        .accounts
-        .lock()
-        .expect("accounts lock")
-        .get(&did)
-        .cloned();
+    let account = match state.persistence.accounts().get(&did) {
+        Ok(account) => account,
+        Err(error) => {
+            render_error(
+                res,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "persistence_error",
+                &error.to_string(),
+            );
+            return;
+        }
+    };
     let presence = state
         .presence
         .lock()
@@ -6068,9 +6199,7 @@ pub async fn keys_upload(depot: &mut Depot, req: &mut Request, res: &mut Respons
         );
         return;
     }
-    state.device_keys.lock().expect("device keys lock").insert(
-        (session.actor.clone(), body.device_id.clone()),
-        json!({
+    let key_payload = json!({
             "device_id": body.device_id.clone(),
             "device_keys": body.device_keys.clone(),
             "principal_signing_keys": body.principal_signing_keys.clone(),
@@ -6082,8 +6211,79 @@ pub async fn keys_upload(depot: &mut Depot, req: &mut Request, res: &mut Respons
             "mls_key_packages": body.mls_key_packages.clone(),
             "backup_restore_keys": body.backup_restore_keys.clone(),
             "updated_at": now()
-        }),
+    });
+    state.device_keys.lock().expect("device keys lock").insert(
+        (session.actor.clone(), body.device_id.clone()),
+        key_payload.clone(),
     );
+    // TODO(P0 durable-state): persist device_keys, one_time_keys, fallback_keys
+    // and MLS key packages in the dedicated Pg tables instead of this memory cache.
+    let current_device = match state
+        .persistence
+        .devices()
+        .get(&session.actor, &body.device_id)
+    {
+        Ok(device) => device,
+        Err(error) => {
+            render_error(
+                res,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "persistence_error",
+                &error.to_string(),
+            );
+            return;
+        }
+    };
+    let updated_at = now();
+    let previous_payload = current_device
+        .as_ref()
+        .map(|device| device.payload.clone())
+        .unwrap_or_else(|| json!({"device_id": body.device_id.clone()}));
+    let device = DeviceInventoryRecord {
+        actor: session.actor.clone(),
+        device_id: body.device_id.clone(),
+        display_name: current_device
+            .as_ref()
+            .and_then(|device| device.display_name.clone()),
+        verification_state: current_device
+            .as_ref()
+            .map(|device| device.verification_state.clone())
+            .unwrap_or_else(|| "unverified".to_owned()),
+        payload: json!({
+            "device_id": body.device_id.clone(),
+            "display_name": current_device
+                .as_ref()
+                .and_then(|device| device.display_name.clone()),
+            "verification": current_device
+                .as_ref()
+                .map(|device| device.verification_state.as_str())
+                .unwrap_or("unverified"),
+            "last_key_upload_at": updated_at,
+            "inventory": previous_payload,
+        }),
+        created_at: current_device
+            .as_ref()
+            .map(|device| device.created_at)
+            .unwrap_or(updated_at),
+        updated_at,
+        revoked_at: None,
+    };
+    if let Err(error) = state.persistence.devices().put(&device) {
+        render_error(
+            res,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "persistence_error",
+            &error.to_string(),
+        );
+        return;
+    }
+    state
+        .devices
+        .lock()
+        .expect("devices lock")
+        .entry(session.actor.clone())
+        .or_default()
+        .insert(body.device_id.clone(), device_inventory_to_json(&device));
     state
         .one_time_keys
         .lock()
@@ -6933,6 +7133,19 @@ fn account_response(account: AccountRecord) -> AccountResponse {
         display_name: account.display_name,
         created_at: account.created_at,
     }
+}
+
+fn device_inventory_to_json(device: &DeviceInventoryRecord) -> serde_json::Value {
+    json!({
+        "actor": device.actor,
+        "device_id": device.device_id,
+        "display_name": device.display_name,
+        "verification": device.verification_state,
+        "payload": device.payload,
+        "created_at": device.created_at,
+        "updated_at": device.updated_at,
+        "revoked_at": device.revoked_at,
+    })
 }
 
 fn contact_response(contact: ContactRecord) -> ContactResponse {
@@ -9406,8 +9619,16 @@ fn demo_actors(state: &AppState) -> Vec<serde_json::Value> {
         "presence": {"status": "online", "updated_at": now()},
     })];
 
-    let accounts = state.accounts.lock().expect("accounts lock");
-    for account in accounts.values() {
+    let accounts = state.persistence.accounts().list().unwrap_or_else(|_| {
+        state
+            .accounts
+            .lock()
+            .expect("accounts lock")
+            .values()
+            .cloned()
+            .collect()
+    });
+    for account in accounts {
         if actors
             .iter()
             .any(|actor| actor["did"].as_str() == Some(account.did.as_str()))
@@ -9423,9 +9644,22 @@ fn demo_actors(state: &AppState) -> Vec<serde_json::Value> {
             "presence": {"status": "offline", "updated_at": now()},
         }));
     }
-    drop(accounts);
 
-    let devices = state.devices.lock().expect("devices lock");
+    let devices = state
+        .persistence
+        .devices()
+        .list()
+        .map(|devices| {
+            let mut grouped: BTreeMap<String, BTreeMap<String, Value>> = BTreeMap::new();
+            for device in devices {
+                grouped
+                    .entry(device.actor.clone())
+                    .or_default()
+                    .insert(device.device_id.clone(), device_inventory_to_json(&device));
+            }
+            grouped
+        })
+        .unwrap_or_else(|_| state.devices.lock().expect("devices lock").clone());
     for (did, actor_devices) in devices.iter() {
         if actors
             .iter()
@@ -10350,11 +10584,16 @@ fn authenticated_session(
     ))?;
     let token_hash = session_token_hash(token, &state.config.service_did);
     let session = state
-        .sessions
-        .lock()
-        .expect("sessions lock")
+        .persistence
+        .sessions()
         .get(&token_hash)
-        .cloned()
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "persistence_error",
+                "session store unavailable",
+            )
+        })?
         .ok_or((
             StatusCode::UNAUTHORIZED,
             "unauthenticated",
