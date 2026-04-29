@@ -1,310 +1,175 @@
-# soland Contrix 协议落地 TODO
+# soland Active TODO
 
 > 更新日期: 2026-04-29
-> 目的: 以 `contrix-spec/zh` 为准, 对齐 `palpo` 这类完整协议服务器的工程成熟度, 将 soland 从 demo/reference server 推进到可声明 profile 的实现。
+> 范围: soland 现在只跟踪 Principal Server / Repo / Sync / Index / Blob / Federation 的服务端落地任务。
 
-## SDK 侧接管/同步项
+## 0. 当前边界
 
-以下任务需要由 `E:\Works\contrix-dev\contrix-rust-sdk` 提供共享模型、
-验证器、conformance vectors 或 client/server helper；soland 侧只保留
-handler、PostgreSQL 落地、运行时策略和服务互操作验证。
+- [x] Identity Registry 服务端任务已迁移到 `E:\Works\contrix-dev\starid\_todos.md`。
+- [x] `cx.profile.identity_registry.v1` 不再作为 soland active TODO 跟踪；soland 只保留当前 `identity/*` 兼容入口用于本地联调。
+- [x] 已完成的 canonical operation、canonical JSON/hash、commit proof binding、service DID 配置、CORS 配置和 sync token binding 不再重复列为待办。
+- [x] 长期扩展 profile 从 active TODO 移除；这些不是当前 soland 服务端收敛路径的直接阻塞项。
 
-- [ ] **[SDK] Canonical operation/event 注册表** — canonical `cx.*` kind、legacy migration adapter、operation envelope 字段、schema-driven semantic validation、内置操作 conformance vectors。
-  - [x] SDK 已完成: operation envelope 使用 `actor_id` / `kind` / `content` / `proofs`, digest 排除 `proofs`, 并保留 `actor` / `type` / `body` legacy alias。
-- [ ] **[SDK] Canonical JSON / digest / proof binding** — canonical bytes、operation/commit digest、proof payload hash、audience/domain/created_at binding、移除生产路径 `alg:none`/`dev-proof` 的共享验证器。
-- [ ] **[SDK] DID identity / key log / service DID primitives** — `did:uuid`、resolver adapter、DID normalized view、key log、registry receipt signature、private DID proof gating、service DID endpoint 校验。
-  - [x] SDK 已完成: `did:uuid` 结构化生成与 bit layout validation。
-  - [x] SDK 已完成: `did:uuid`/`did:web`/`did:key`/`did:keri` resolver adapter trait。
-  - [x] SDK 已完成: append-only key log verification 与从 inception 推导 current keys。
-  - [ ] SDK 待完成: DID normalized service view、registry receipt signature、private DID proof gating。
-  - [x] soland 已完成: service DID endpoint 校验 (`validate_did_document_services`)。
-  - [x] soland 已完成: resolver adapter 注入 `AppState.did_resolver` (CompositeDidResolver with did:uuid/did:web/did:key)。
-  - [x] soland 已完成: `identity_resolve` 优先使用 SDK resolver。
-- [ ] **[SDK] 持久化抽象与测试套件** — repo/state/event/crypto/account/session/blob/audit/federation store traits、migration contract、transactional write conformance、projection rebuild helpers。
-- [ ] **[SDK] Capability at causal frontier** — capability operations 进入 reducer、resource selector grammar、critical constraint fail-closed、delegation/claim/approval validation、policy server decision boundary。
-  - [x] SDK 已完成: grant/delegate/revoke 进入 reducer state，并从 `SpaceState` 计算 active grants。
-  - [x] SDK 已完成: causal frontier 上的 capability decision、revoke/delegate deterministic ordering、denied write negative vector。
-  - [ ] SDK 待完成: 完整 resource selector grammar、critical constraint fail-closed、delegation depth/cycle、claim/approval validation、policy server decision boundary。
-- [ ] **[SDK] Client sync correctness contract** — token binding、persistent positions、initial/incremental sync bucket、deterministic timeline order、limited/backfill gap、wait-for frontier、to-device ack semantics。
-- [ ] **[SDK] Federation security helpers** — HTTP Message Signatures、origin/destination service binding、transaction idempotency、replay persistence contract、fork quarantine model、verify-actor challenge。
-- [ ] **[SDK] Snapshot/bootstrap contract** — reducer snapshot manifest、chunk digest/state hash verification、bootstrap sequence、fallback-to-repo-replay behavior。
-  - [x] SDK 已完成: reducer snapshot manifest/signature model、chunk digest、state hash/Merkle helper、fallback-to-repo-replay。
-  - [ ] SDK 待完成: 完整 bootstrap sequence 与真实服务端 snapshot/sync interop。
-- [ ] **[SDK] API convention helpers** — standard error envelope schema、query auth rejection helpers、rate/quota/tracing metadata types、not-found privacy semantics。
-- [ ] **[SDK] Account/device/blob/push/WebRTC shared models** — session grant binding、device pairing/revocation, blob access grants, push rules, presence/typing/account-data types, ICE credential signature models。
-- [ ] **[SDK] OpenAPI / schema / conformance generation** — JSON Schemas for cursor/event/operation/commit/grant/envelope/sync, OpenAPI 3.1 schema output, profile-specific conformance suites。
-- [ ] **[SDK] Extended profile primitives** — agent runtime, applet bridge, social graph, sovereign deployment, portability/import-export, TSP integration shared types and validation hooks。
-
-## 0. 当前判断
-
-当前实现可以用于本地联调、协议面验证和客户端早期开发, 但还不能声明完整 Contrix v1 兼容。
-
-现状:
+当前可验证基线:
 
 - `cargo test` 已通过: 63 个单元测试 + 25 个 HTTP 合同测试。
-- HTTP 路由面已经较广, 覆盖 account、identity、repo、sync、directory、index、authz、keys、device messages、blob、push、federation、WebRTC、moderation 等入口。
-- 多数业务状态仍在内存 `AppState` 中, PostgreSQL migration 已有但尚未被 handler 全面使用。
-- proof / DID / federation signature 仍以开发占位为主。
-- reducer、authz、sync、snapshot、federation 只具备基础语义, 尚未满足 conformance profile 的 MUST 要求。
+- HTTP API 覆盖 account、repo、sync、directory、index、authz、keys、device messages、blob、push、federation、WebRTC、moderation 等入口。
+- PostgreSQL repo adapter 已存在；大量业务状态仍在内存 `AppState` 中。
+- 仍未满足完整 Contrix v1 profile 的主要原因: 持久化、跨实例一致性、authz causal frontier、sync/federation/snapshot 完整语义。
 
-## 1. 目标 Profile 与完成状态
+## 1. Profile 收敛目标
 
-| Profile | 当前状态 | 阻塞项 |
+| Profile | 当前状态 | 下一步阻塞项 |
 | --- | --- | --- |
-| `cx.profile.principal_server_repo_api.v1` | PARTIAL | 真实签名验证、canonical operation、schema validation、capability-at-frontier、持久化幂等 |
-| `cx.profile.principal_server.v1` | PARTIAL | 持久 cursor、duplicate suppression、service binding、plaintext-visible enforcement 全链路、federation 安全 |
-| `cx.profile.index_node.v1` | PARTIAL | 持久 reducer projection、query schema、auth filtering、stale frontier、wait-for 真实等待 |
-| `cx.profile.identity_registry.v1` | MOVED | 服务端实现已迁移到 `E:\Works\contrix-dev\starid`; soland 仅保留调用/互操作入口 |
-| `cx.profile.blob_node.v1` | PARTIAL | 私有 blob 授权下载、metadata 持久化、quota、retention、thumbnail/preview 策略 |
-| `cx.profile.applet_bridge.v1` | NOT STARTED | applet registration、namespace、transactions、ghost actor、portal space、signature verification |
-| `cx.profile.agent_runtime.v1` | NOT STARTED | agent run lifecycle、tool audit、memory promotion、kill switch |
-| `cx.profile.sovereign_deployment.v1` | NOT STARTED | service allowlist、closed federation、resolver pinning、external collaboration policy |
+| `cx.profile.principal_server_repo_api.v1` | PARTIAL | PostgreSQL store、事务写路径、真实 schema conformance、authz at frontier |
+| `cx.profile.principal_server.v1` | PARTIAL | 持久 sync positions、account/session/device/blob/push 状态持久化、跨实例 fanout |
+| `cx.profile.index_node.v1` | PARTIAL | 持久 projection、query schema、auth filtering、stale frontier |
+| `cx.profile.blob_node.v1` | PARTIAL | blob metadata PG、访问授权、quota、retention |
+| `cx.profile.federation_node.v1` | PARTIAL | HTTP Message Signatures、replay 持久化、fork quarantine |
 
-## 2. 已完成的基础能力
+## 2. P0: Durable Server
 
-这些能力保留为当前基线, 后续任务应在此基础上替换 demo/内存/开发占位实现。
+目标: 重启后不丢业务状态, 多实例写入不会破坏 repo/projection/audit 一致性。
 
-### 2.1 协议入口与基础工程
+### 2.1 Store 抽象与迁移约束
 
-- [x] Salvo HTTP server 启动与 `/health`。
-- [x] `/api/v1/server/describe` 基础服务发现。
-- [x] 标准 error envelope, 包含 `request_id`。
-- [x] 未知路径 / 错误 method 基础处理。
-- [x] `dev-login` 已通过 `development_mode` 门控。
-- [x] Query string auth material 拒绝。
-- [x] IP 级 rate limit, 429 返回 `Retry-After` 与 `retry_after_ms`。
-- [x] 基础 Dockerfile 与运行说明。
+- [ ] 定义 `PersistenceStore` 边界:
+  - [ ] 明确哪些状态继续归 `RepoAdapter`, 哪些状态进入 `PersistenceStore`。
+  - [ ] 为 account/session/contact/space/message/device/blob/push/policy/audit/federation/sync positions 定义 trait 方法。
+  - [ ] Memory store 与 PostgreSQL store 共用同一组行为测试。
+  - [ ] handler 不直接读写新增业务状态的 `Arc<Mutex<...>>`。
+- [ ] PostgreSQL migration 分层:
+  - [ ] 每类业务表有 primary key、updated_at、created_at。
+  - [ ] 所有幂等写入有唯一约束。
+  - [ ] 所有 cursor / pagination 查询有稳定索引。
+  - [ ] migration down.sql 可回滚本次新增表。
+- [ ] 数据库错误映射:
+  - [ ] unique violation -> idempotency conflict 或 duplicate accepted。
+  - [ ] serialization/deadlock -> retryable 503。
+  - [ ] not found / not visible 维持同一 error envelope。
 
-### 2.2 ID、HLC、Repo 基础
+### 2.2 Account / Session
 
-- [x] `cx:<kind>:<ulid>` ID 生成。
-- [x] HLC 文本格式生成。
-- [x] Memory repo adapter。
-- [x] PostgreSQL repo adapter。
-- [x] Commit append CAS。
-- [x] `commit_id` / `operation_id` 基础幂等冲突检测。
-- [x] Repo list/get/sync/submit 基础 endpoint。
+- [ ] `account/register` 持久化:
+  - [ ] DID 唯一。
+  - [ ] handle 唯一且规范化。
+  - [ ] duplicate same payload 幂等返回。
+  - [ ] duplicate different payload 返回 conflict。
+- [ ] `account/me` 从 store 读取, 不依赖内存 demo account。
+- [ ] account lifecycle:
+  - [ ] disabled account 拒绝登录和写入。
+  - [ ] locked account 允许只读查询。
+  - [ ] erased account 的目录/搜索不泄露 profile。
+- [ ] session 持久化:
+  - [ ] token hash 存储, 不落明文 token。
+  - [ ] actor + device_id + expires_at 绑定。
+  - [ ] logout 写 revoked_at。
+  - [ ] expired/revoked session 返回统一 unauthenticated envelope。
 
-### 2.3 Reducer 与投影基础
+### 2.3 Space / Contact / Membership
 
-- [x] `ProjectionState` 基础 reducer。
-- [x] message create / revise / redact。
-- [x] reaction add/remove。
-- [x] read marker。
-- [x] entity create/update/delete。
-- [x] relation create/delete。
-- [x] membership join/leave 基础归约。
-- [x] index thread/search/inbox/notification 读取 reducer projection。
+- [ ] contacts 持久化:
+  - [ ] request 幂等。
+  - [ ] accept/reject CAS。
+  - [ ] accepted contact 参与 actor visibility 查询。
+- [ ] spaces 持久化:
+  - [ ] create/delete/member add/remove 使用事务。
+  - [ ] discoverability、plaintext_visible_services、owner、deleted 状态落库。
+  - [ ] secret/invite_only/restricted 查询不泄露不可见 Space。
+- [ ] invites 持久化:
+  - [ ] token hash 存储。
+  - [ ] expiry / max_uses / revoked_at。
+  - [ ] resolve-space 使用 invite token 时写审计。
 
-### 2.4 协作对象与视图
+### 2.4 Message / Projection / Audit
 
-- [x] Entity CRUD。
-- [x] Relation CRUD。
-- [x] View create/get。
-- [x] list / kanban / table / calendar / timeline 基础投影。
-- [x] `cx.channel`、`cx.topic`、`cx.comment`、`cx.memory.semantic`、`cx.agent.run` 作为 Entity 类型承载。
-- [x] 自定义 Entity type 反向域名前缀校验。
+- [ ] message/reaction/read-marker/state events 落库:
+  - [ ] timeline position 单调生成。
+  - [ ] event_id 幂等。
+  - [ ] redact 后 pull/sync 不返回明文内容。
+- [ ] projection recovery:
+  - [ ] 启动时从 durable events 重建 `ProjectionState`。
+  - [ ] 支持 reducer snapshot 快速加载。
+  - [ ] snapshot frontier 与 repo head 不一致时回退 replay。
+- [ ] audit log 持久化:
+  - [ ] request_id、actor、device_id、space_id、operation_id、outcome 字段齐全。
+  - [ ] cursor pagination。
+  - [ ] high-risk endpoint 必须写 audit。
 
-### 2.5 Authz / Policy 基础
+### 2.5 Transactional Write Path
 
-- [x] `AuthzEngine` 基础 grant create/revoke/check。
-- [x] owner/member 默认规则。
-- [x] explicit deny/quarantine/allow/review 优先级基础实现。
-- [x] `/authz/check`、`/authz/effective-grants`、`/authz/invites`。
-- [x] `/contrix/v1/check` policy check 基础响应。
-- [x] policy documents 内存 CRUD。
+- [ ] repo commit + projection event + audit log 同事务写入。
+- [ ] commit append CAS 失败不写 projection/audit accepted。
+- [ ] projection 更新失败时 repo commit 不可见。
+- [ ] PostgreSQL integration test 覆盖:
+  - [ ] successful transaction。
+  - [ ] expected_head mismatch rollback。
+  - [ ] duplicate commit same body 幂等。
+  - [ ] duplicate commit different body conflict。
 
-### 2.6 Identity / Directory / Discovery 基础
+## 3. P0: Capability At Causal Frontier
 
-- [x] DID document 内存提交与读取。
-- [x] identity log 内存记录。
-- [x] DID operation seq / prev head CAS 基础检查。
-- [x] contacts request/respond/list。
-- [x] Space create/delete/member add/remove。
-- [x] discoverability 六级基础过滤: `public`、`listed`、`restricted`、`unlisted`、`invite_only`、`secret`。
-- [x] invite token 精确解析。
-- [x] directory search/resolve spaces。
-- [x] directory organization/actor/user/handle demo projection。
+目标: 授权由 reducer/frontier 决定, 不由当前内存 grant 快照或 handler 特判决定。
 
-### 2.7 E2EE / Device / Push / Blob / WebRTC 基础
-
-- [x] Encrypted payload envelope 基础校验。
-- [x] Device keys upload/query/claim 基础。
-- [x] To-device message put/get 基础。
-- [x] Push device register/unregister。
-- [x] Push rules 内存 CRUD。
-- [x] E2EE push payload 明文过滤。
-- [x] Blob upload 写入本地文件。
-- [x] Blob hash 校验。
-- [x] Encrypted attachment metadata 校验。
-- [x] 危险 MIME 类型强制 attachment。
-- [x] WebRTC session/signals 内存基础。
-- [x] `/contrix/v1/ice-config` 基础响应。
-
-### 2.8 Federation / Snapshot / Audit 基础
-
-- [x] Federation transaction / push / pull 基础端点。
-- [x] Federation origin DID 格式检查。
-- [x] Federation operation replay 内存检测。
-- [x] Federation redaction pull 过滤。
-- [x] Snapshot head 基础 manifest/state_hash。
-- [x] Space export 基础。
-- [x] Audit log 内存写入与当前 actor 查询。
-- [x] Moderation report 基础队列。
-
-## 3. P0: 协议核心合规
-
-P0 的完成标准: 可以诚实声明 `principal_server_repo_api` 的核心子集, 并为 `principal_server` / `index_node` / `identity_registry` 打开 limited profile。
-
-### 3.1 Canonical Operation / Event 模型
-
-- [x] 将所有 operation kind 统一为 `cx.*` 注册表命名。
-  - [x] `message` -> `cx.message.create`。
-  - [x] `message.revise` -> `cx.message.revise`。
-  - [x] `redaction` -> `cx.message.redact` 或 `cx.redaction`。
-  - [x] `entity.create/update/delete` -> `cx.entity.*`。
-  - [x] `relation.create/update/delete` -> `cx.relation.*`。
-  - [x] `membership` -> `cx.member.state` 或 `cx.membership.*` 兼容映射。
-  - [x] `read_marker` -> `cx.read.marker`。
-- [x] 增加 migration compatibility adapter, 只在明确 migration profile 下接受旧裸名。
-  - [x] legacy kind -> canonical projection / reducer adapter。
-  - [x] profile-gated legacy acceptance。
-- [x] 扩展 wire / SDK operation envelope:
-  - [x] `actor_id`
-  - [x] `kind`
-  - [x] `target_ref`
-  - [x] `causal.deps`
-  - [x] `causal.hlc`
-  - [x] `causal.actor_seq`
-  - [x] `authz_ref`
-  - [x] `proofs`
-- [x] reducer dispatch 改为 canonical kind。
-- [x] `validate_operation_semantics` 改为 schema registry 驱动, 未注册事件 fail closed。
-- [x] `supported_operations` 只声明 canonical operation id, 不声明产品私有别名。
-- [x] 给所有内置操作补 conformance vectors。
-
-### 3.2 Canonical JSON / Hash / Signature
-
-- [x] 实现真正 canonical JSON bytes:
-  - [x] UTF-8 — SDK `canonical_json_bytes`。
-  - [x] object key Unicode code point 升序 — SDK `canonical_json_bytes` + `validate_canonical_json_value` 双重校验。
-  - [x] 无 insignificant whitespace — SDK canonical 输出无空格。
-  - [x] number 边界约束 — `validate_canonical_json_value` 拒绝浮点。
-  - [x] RFC3339 UTC `Z` timestamp — `validate_rfc3339_utc_z` 校验 `*_at` 字段。
-  - [x] snake_case 字段名校验 — 允许 `$` 前缀 (JSON Schema)。
-- [x] Operation digest 使用 canonical bytes — SDK `operation_digest()` 使用 `canonical_sha256`。
-- [x] Commit digest 使用 canonical commit-without-proofs bytes — SDK `commit_digest()` 使用 `canonical_sha256`。
-- [x] Proof payload_hash 必须等于 canonical digest — `ProofVerifier.verify_commit()` 校验 `payload_hash == commit_digest`。
-- [x] Default proof 绑定:
-  - [x] actor DID — `ProofVerifier` 要求 `verification_method` DID root 等于 commit author。
-  - [x] verification method — production proof 必须是带 key fragment 的 DID URL。
-  - [x] payload hash — production proof `payload_hash` 必须匹配 canonical commit digest。
-  - [x] audience / domain — production proof `audience` 与 `domain` 必须绑定 `config.service_did`。
-  - [x] created_at — proof `created_at` 必须与 commit `created_at` 在 5 分钟窗口内。
-- [x] 移除生产路径的 `alg: none` / `dev-proof` — `ProofVerifier` 在 `development_mode=false` 时拒绝 `alg:none` 和 `dev-proof`。
-- [x] 增加 signature binding conformance tests — `canonical_conformance_vectors` 测试模块含 38 个向量。
-
-### 3.3 DID Identity 与 Key Log
-
-- [x] 服务端 identity registry 任务迁移到新项目 `E:\Works\contrix-dev\starid\_todos.md`。
-- [x] soland 保留现有 `identity/*` 兼容入口用于本地联调；后续 profile 声明以 starid 为身份注册表实现来源。
-
-### 3.4 Service DID 与配置一致性
-
-- [x] 全面使用 `SERVERX_SERVICE_DID` / `config.service_did`, 移除硬编码 `did:web:soland.local`。
-- [x] HLC node id 使用配置 service DID。
-- [x] `server/describe`、`identity/describe`、`sync/describe`、`directory/describe`、`index/describe`、blob receipt、snapshot signature 均使用配置 service DID。
-- [x] 增加 service DID 格式与 DID document service endpoint 校验 — `validate_did_document_services` 校验 endpoint 格式与 `did:web` 必须声明 service。
-- [x] Feature discovery 按实际能力声明 limited profiles。
-
-### 3.5 Durable Storage 贯穿业务状态
-
-- [ ] 为 `PersistenceStore` 增加 PostgreSQL 实现。
-- [ ] `AppState` 注入 store trait, 不直接暴露大量 `Arc<Mutex<...>>` 作为生产状态源。
-- [ ] 迁移 account:
-  - [ ] register。
-  - [ ] me。
-  - [ ] disabled / lifecycle。
-  - [ ] handle binding。
-- [ ] 迁移 session:
-  - [ ] token persistence。
-  - [ ] expiry。
-  - [ ] revoked_at。
-  - [ ] device binding。
-- [x] 迁移 identity 到独立服务:
-  - [x] documents — `E:\Works\contrix-dev\starid` 提供内存/PG `identity_documents`。
-  - [x] log events — `E:\Works\contrix-dev\starid` 提供内存/PG `identity_log_events`。
-  - [x] receipts — `E:\Works\contrix-dev\starid` 提供内存/PG `identity_receipts`。
-- [ ] 迁移 contacts。
-- [ ] 迁移 spaces / members / aliases / invites。
-- [ ] 迁移 events / state events / projection events。
-- [ ] 迁移 entities / relations / reactions / read markers。
-- [ ] 迁移 devices / device keys / OTK / fallback keys / device messages。
-- [ ] 迁移 blobs metadata 与 access grants。
-- [ ] 迁移 push devices / push rules。
-- [ ] 迁移 policy documents / capability grants / policy decisions。
-- [ ] 迁移 moderation reports/actions。
-- [ ] 迁移 audit log。
-- [ ] 迁移 federation transactions / memberships / accepted operation ids。
-- [ ] 迁移 sync positions。
-- [ ] 服务启动时从 durable repo/events 重建 projection 或加载 reducer snapshot。
-- [ ] 所有写路径使用数据库事务保证 repo、projection、audit 一致。
-
-### 3.6 Capability At Causal Frontier
-
-- [ ] Grant / delegate / revoke 本身进入 operation stream。
-- [ ] 授权状态由 reducer 顺序收敛, 不再只查当前内存 grant。
-- [ ] 业务 operation 接收时按 causal frontier 验证有效 grant。
-- [ ] 若 frontier 不足, 返回 `stale_frontier` 或 fail closed。
-- [ ] Resource selector grammar 完整实现:
+- [ ] capability operation 进入 operation stream:
+  - [ ] grant。
+  - [ ] delegate。
+  - [ ] revoke。
+  - [ ] approval。
+- [ ] reducer 输出 effective capability state:
+  - [ ] 按 HLC/actor_seq deterministic order。
+  - [ ] revoke 覆盖旧 grant。
+  - [ ] delegation depth 递减。
+  - [ ] cycle detection。
+- [ ] write path frontier check:
+  - [ ] 每个业务 operation 声明 required action/resource。
+  - [ ] frontier 不足返回 `stale_frontier`。
+  - [ ] 未知 resource/action fail closed。
+- [ ] resource selector grammar:
   - [ ] kind。
-  - [ ] id / pattern。
+  - [ ] exact id。
+  - [ ] prefix/pattern。
   - [ ] space scope。
   - [ ] child resource 递归规则。
-- [ ] Constraint schema 完整实现:
+- [ ] constraint schema:
   - [ ] `expires_at` / `not_before`。
   - [ ] fields allow/deny。
-  - [ ] entity / memory type allow。
+  - [ ] entity type allowlist。
   - [ ] visibility。
   - [ ] blob max bytes。
   - [ ] encryption required。
   - [ ] message edit window。
   - [ ] rate limit。
   - [ ] approval required。
-  - [ ] accountability required。
   - [ ] requires claims。
 - [ ] 未知 critical constraint 必须 fail closed。
-- [ ] Delegation:
-  - [ ] max depth 递减。
-  - [ ] 不得扩大 scope/action。
-  - [ ] cycle detection。
-- [ ] Claim / attestation 验证:
-  - [ ] issuer trust。
-  - [ ] subject。
-  - [ ] proof。
-  - [ ] effective time。
-  - [ ] revocation。
-- [ ] Approval / proposal 模式。
-- [ ] owner/member 默认权限改为 bootstrap grant 或明确 local policy, 避免协议层隐式授权。
-- [ ] Policy server 只能 deny/quarantine/review, 不能凭空授予 capability。
+- [ ] owner/member 默认权限改为 bootstrap grant 或显式 local policy。
+- [ ] policy server 只能 deny/quarantine/review, 不能凭空授予 capability。
+- [ ] conformance vectors:
+  - [ ] grant before write accepted。
+  - [ ] write before grant rejected。
+  - [ ] revoke then write rejected。
+  - [ ] delegated scope expansion rejected。
+  - [ ] stale frontier rejected。
 
-### 3.7 Client Sync 正确性
+## 4. P0: Client Sync Correctness
 
-- [x] `next_batch` token 绑定:
-  - [x] principal id — client sync cursor 写入并校验 `principal_id`。
-  - [x] device id — client sync cursor 写入并校验 `device_id`。
-  - [x] service id — client sync cursor 写入并校验 `service_id == config.service_did`。
-  - [x] filter hash — client sync cursor 写入并校验 canonical `filter_hash`。
-  - [x] stream positions — client sync cursor 写入 per-space message timeline positions 与 device position。
-  - [x] expiry — client sync cursor 写入并校验 `expires_at_ms`。
-- [ ] 持久化 sync positions。
-- [x] 实现 `since` 语义, 只返回增量 — `/api/v1/sync` 使用 cursor per-space position 过滤 timeline events。
-- [ ] 初始同步分桶:
+目标: client 可以用 `since` 稳定增量同步, 重启后 cursor 仍有效, backfill gap 语义明确。
+
+- [x] `next_batch` token 绑定 principal/device/service/filter/positions/expiry。
+- [x] `since` 只返回增量。
+- [x] token expiry 返回 `sync_token_expired`。
+- [ ] sync positions 持久化:
+  - [ ] per actor/device stream position。
+  - [ ] per joined space timeline position。
+  - [ ] to-device delivery position。
+  - [ ] cursor 中 position 与数据库 position 双向校验。
+- [ ] initial sync buckets:
   - [ ] join。
   - [ ] invite。
   - [ ] knock。
   - [ ] leave。
-- [ ] 每个 joined Space 返回:
+- [ ] joined Space payload:
   - [ ] timeline。
   - [ ] state。
   - [ ] state_after。
@@ -312,55 +177,72 @@ P0 的完成标准: 可以诚实声明 `principal_server_repo_api` 的核心子�
   - [ ] account_data。
   - [ ] summary。
   - [ ] unread_notifications。
-- [ ] Deterministic timeline order:
+- [ ] deterministic timeline order:
   - [ ] causal_depth。
   - [ ] hlc。
   - [ ] actor_id。
   - [ ] actor_seq。
   - [ ] event_id。
-- [ ] `timeline.limited=true` 与 backfill gap 语义。
+- [ ] `timeline.limited=true`:
+  - [ ] 返回 prev_batch。
+  - [ ] backfill endpoint 可补 gap。
+  - [ ] gap 过大时不伪装成完整 timeline。
 - [ ] lazy member loading。
-- [ ] filter limits 与 invalid filter errors。
-- [ ] `X-Contrix-Wait-For` 实现真实 frontier 等待 / timeout。
-- [ ] To-device delivery 与 next_batch ack 语义明确化。
-- [x] token expiry 返回 `sync_token_expired`。
-- [ ] sync conformance vectors。
+- [ ] filter validation:
+  - [ ] limit 上限。
+  - [ ] invalid filter 返回标准 error。
+  - [ ] filter hash 纳入 cursor。
+- [ ] `X-Contrix-Wait-For`:
+  - [ ] 等待 repo/projection frontier。
+  - [ ] timeout 返回 503 + retry metadata。
+  - [ ] 已满足时响应头写 satisfied frontier。
+- [ ] to-device ack:
+  - [ ] 消息仅在 cursor ack 后标记 delivered。
+  - [ ] 重复 sync 不丢未 ack 消息。
+  - [ ] device revocation 后停止投递。
+- [ ] sync conformance vectors 覆盖 initial、incremental、limited、expired、filter mismatch、to-device ack。
 
-### 3.8 Federation 安全与收敛
+## 5. P0: Federation Security
+
+目标: federation push/pull 可重启防 replay, 请求和 operation 都有可验证来源。
 
 - [ ] HTTP Message Signatures:
-  - [ ] method。
+  - [ ] 签名覆盖 method。
   - [ ] target URI。
   - [ ] authority。
   - [ ] content-digest。
   - [ ] origin service DID。
   - [ ] destination service DID。
   - [ ] created/expires。
-- [ ] 验证 origin/destination 与 DID Document service endpoint 一致。
-- [ ] 验证 destination 等于本服务 DID。
-- [ ] 验证 Space policy / service delegation 覆盖 federation 目的。
-- [ ] 每个 operation 独立验签。
-- [ ] 每个 operation 按 causal frontier 验证 capability。
-- [ ] 持久化 federation transaction 与 accepted operation ids。
-- [ ] 重启与多实例后仍能 replay 防护。
-- [ ] `txn_id` 幂等:
+- [ ] DID service binding:
+  - [ ] origin DID Document service endpoint 必须包含发起服务。
+  - [ ] destination 必须等于本服务 DID。
+  - [ ] service delegation 覆盖目标 Space。
+- [ ] operation verification:
+  - [ ] 每个 operation 独立验签。
+  - [ ] 每个 operation 按 causal frontier 验证 capability。
+  - [ ] plaintext_visible_services 不允许越权转发。
+- [ ] transaction persistence:
+  - [ ] txn_id + origin 唯一。
   - [ ] 相同 body duplicate accepted。
   - [ ] 不同 body duplicate_conflict。
-- [ ] Fork 检测:
+  - [ ] accepted operation ids 持久化。
+  - [ ] 重启后 replay 仍被拦截。
+- [ ] fork quarantine:
   - [ ] commit id conflict。
   - [ ] operation id conflict。
   - [ ] quarantine queue。
   - [ ] operator audit。
-- [ ] Pull operations 授权:
-  - [ ] requester backfill capability。
-  - [ ] history visibility。
-  - [ ] plaintext_visible_services。
-- [ ] `verify-actor` 真实 challenge signature 验证, 不得作为公开 DID oracle。
-- [ ] 联邦失败审计与 rate limit。
+- [ ] pull authorization:
+  - [ ] requester 具备 backfill capability。
+  - [ ] history visibility 检查。
+  - [ ] 不可见资源 not_found 不可区分。
+- [ ] `verify-actor` 改为 challenge signature, 不作为公开 DID oracle。
+- [ ] federation rate limit 与失败审计。
 
-### 3.9 Snapshot 与 Bootstrap
+## 6. P1: Snapshot / Bootstrap
 
-- [ ] Reducer snapshot manifest:
+- [ ] reducer snapshot manifest:
   - [ ] `schema_profile_refs`。
   - [ ] `reducer_profile`。
   - [ ] `covers_frontier`。
@@ -368,13 +250,12 @@ P0 的完成标准: 可以诚实声明 `principal_server_repo_api` 的核心子�
   - [ ] `state_hash`。
   - [ ] `signed_by`。
   - [ ] `generator_signature`。
-- [ ] Snapshot chunk 下载 endpoint。
-- [ ] Chunk SHA-256 校验。
-- [ ] State hash / Merkle root 生成。
-- [ ] 客户端校验失败回退到 repo replay 的测试。
-- [ ] 首次加入流程:
-  - [ ] resolve。
-  - [ ] discover services。
+- [ ] snapshot chunk endpoint。
+- [ ] chunk SHA-256 校验。
+- [ ] state hash / Merkle root 生成。
+- [ ] 客户端校验失败回退 repo replay 的测试。
+- [ ] 首次加入流程文档和合同测试:
+  - [ ] resolve service。
   - [ ] fetch invite/grants。
   - [ ] fetch snapshot manifest。
   - [ ] download chunks。
@@ -382,191 +263,112 @@ P0 的完成标准: 可以诚实声明 `principal_server_repo_api` 的核心子�
   - [ ] run reducer。
   - [ ] enter cursor subscription。
 
-### 3.10 API Conventions / Anti-Abuse
+## 7. P1: Blob / Media
+
+- [ ] blob metadata PostgreSQL 持久化:
+  - [ ] blob_ref。
+  - [ ] owner。
+  - [ ] space_id。
+  - [ ] content_type。
+  - [ ] size。
+  - [ ] sha256。
+  - [ ] encrypted/plaintext 标记。
+  - [ ] created_at。
+- [ ] private blob access grants:
+  - [ ] actor。
+  - [ ] device。
+  - [ ] space。
+  - [ ] purpose。
+  - [ ] expiry。
+- [ ] HEAD/GET 不泄露不可见资源。
+- [ ] Range / Content-Range 完整测试。
+- [ ] quota:
+  - [ ] single upload max bytes。
+  - [ ] account total bytes。
+  - [ ] per space total bytes。
+- [ ] object-store backend adapter。
+- [ ] signed redirect token。
+- [ ] retention:
+  - [ ] GC grace period。
+  - [ ] legal hold。
+  - [ ] unsafe media flag / scanning status。
+
+## 8. P1: Device / E2EE / Push / Presence
+
+- [ ] device pairing challenge。
+- [ ] device authorization event。
+- [ ] device revocation cascade:
+  - [ ] session revoke。
+  - [ ] key query 不返回 revoked device。
+  - [ ] to-device queue 停止投递。
+- [ ] device inventory endpoint。
+- [ ] MLS groundwork:
+  - [ ] KeyPackage publish/fetch/verify。
+  - [ ] Welcome event。
+  - [ ] Commit/Proposal event。
+  - [ ] epoch mismatch recovery。
+  - [ ] removed member fail closed。
+- [ ] push rules priority groups:
+  - [ ] override。
+  - [ ] content。
+  - [ ] room/space。
+  - [ ] sender。
+  - [ ] underride。
+- [ ] push rules PostgreSQL 持久化。
+- [ ] per Space unread/highlight counts。
+- [ ] presence 持久化与多实例 fanout。
+- [ ] typing ephemeral 跨实例广播。
+- [ ] account data:
+  - [ ] tags。
+  - [ ] preferences。
+  - [ ] ignored actors。
+  - [ ] direct spaces。
+
+## 9. P1: Index / Directory / Query
+
+- [ ] query schema:
+  - [ ] structured filters。
+  - [ ] sort。
+  - [ ] pagination cursor。
+  - [ ] relation traversal。
+  - [ ] full-text search for plaintext Space。
+- [ ] authorization filtering per result。
+- [ ] stale frontier reporting。
+- [ ] explain/debug reducer state endpoint。
+- [ ] view update / reconcile。
+- [ ] graph/tree/gantt projection。
+- [ ] organization create/update。
+- [ ] organization membership。
+- [ ] restricted query proof。
+- [ ] signed link resolution。
+- [ ] anti-enumeration tests:
+  - [ ] actor search 不泄露 pairwise/private DID。
+  - [ ] search users 仅限共同 Space / directory policy。
+  - [ ] public/listed/restricted/unlisted/invite_only/secret 全组合测试。
+
+## 10. P1: API Convention / Conformance
 
 - [ ] `not_found` 对不存在与不可见保持不可区分。
-- [x] 受保护 endpoint 禁止 query auth 的测试覆盖 — `protected_endpoints_reject_query_auth_material`。
+- [x] 受保护 endpoint 禁止 query auth 的测试覆盖。
 - [ ] 404 / 405 / 429 / 503 标准 envelope 全覆盖。
-- [ ] Per actor + per IP rate limit。
-- [ ] High-risk endpoint 独立限流:
+- [ ] per actor + per IP rate limit。
+- [ ] high-risk endpoint 独立限流:
   - [ ] login。
-  - [ ] identity submit。
   - [ ] federation。
   - [ ] blob upload。
   - [ ] directory resolve。
-- [ ] Quota:
-  - [ ] blob size。
-  - [ ] account total storage。
-  - [ ] operations per window。
-  - [ ] devices / OTK。
-- [ ] Structured tracing:
+- [ ] structured tracing:
   - [ ] request_id。
   - [ ] actor。
   - [ ] device_id。
   - [ ] space_id。
   - [ ] operation_id。
   - [ ] commit_id。
-- [x] CORS 配置从 placeholder 变为真实策略 — `SERVERX_CORS_ALLOW_ORIGIN` 接入 Salvo CORS middleware, 仅允许显式 origin。
-
-## 4. P1: 重要产品能力与完整协议面
-
-P1 的完成标准: 能支撑真实多用户、多设备、持久化、可恢复的协作场景。
-
-### 4.1 Account / Auth / Device
-
-- [ ] Passkey 登录。
-- [ ] OIDC / SSO 登录。
-- [ ] Session grant 绑定 DID / device。
-- [ ] Refresh token / soft logout。
-- [ ] Account lifecycle:
-  - [ ] disable。
-  - [ ] lock。
-  - [ ] erase。
-  - [ ] session revocation。
-- [ ] Device pairing challenge。
-- [ ] Device authorization event。
-- [ ] Device revocation cascade。
-- [ ] Device inventory。
-- [ ] Dehydrated device / recovery path。
-
-### 4.2 Handle / Claims / Progressive Disclosure
-
-- [ ] Handle 双向验证。
-- [ ] `verified_handle` claim。
-- [ ] `verified_email_domain` claim。
-- [ ] `org_membership` / `org_role` claim。
-- [ ] Presentation request。
-- [ ] Disclosure policy。
-- [ ] Pairwise/private DID 可见性控制。
-- [ ] Claim revocation fail-closed。
-
-### 4.3 MLS E2EE
-
-- [ ] MLS RFC 9420 group state。
-- [ ] KeyPackage publish / fetch / verify。
-- [ ] Welcome event。
-- [ ] Commit / Proposal event。
-- [ ] Epoch mismatch recovery。
-- [ ] Removed member fail-closed。
-- [ ] Encrypted payload schema conformance。
-- [ ] Encrypted attachment schema conformance。
-- [ ] Secret storage。
-- [ ] Key backup。
-- [ ] Cross-signing / device trust。
-- [ ] Local plaintext search for encrypted content guidance。
-
-### 4.4 Blob / Media
-
-- [ ] Blob metadata PostgreSQL 持久化。
-- [ ] Private blob access grants。
-- [ ] Download 授权绑定:
-  - [ ] actor。
-  - [ ] device。
-  - [ ] Space。
-  - [ ] purpose。
-  - [ ] expiry。
-- [ ] HEAD/GET 不泄露不可见资源。
-- [ ] Range / Content-Range 完整测试。
-- [ ] Thumbnail 策略:
-  - [ ] E2EE thumbnail client generated。
-  - [ ] plaintext thumbnail requires plaintext-visible service。
-- [ ] Preview policy。
-- [ ] Object-store backend。
-- [ ] Signed redirect token。
-- [ ] GC grace period。
-- [ ] legal hold。
-- [ ] unsafe media flag / scanning status。
-
-### 4.5 Index / Query / View
-
-- [ ] `query-schema.md` 完整实现。
-- [ ] Structured filters。
-- [ ] Relation query。
-- [ ] Space hierarchy。
-- [ ] Thread query by topic/message anchor。
-- [ ] Notification materialization。
-- [ ] Inbox materialization。
-- [ ] Full-text search for plaintext Space。
-- [ ] Encrypted Space local-only / TEE profile 标识。
-- [ ] Authorization filtering per result。
-- [ ] Stale frontier reporting。
-- [ ] Explain/debug reducer state endpoint。
-- [ ] View update / reconcile。
-- [ ] Graph / tree / gantt projection。
-
-### 4.6 Directory / Organization / Discovery
-
-- [ ] Organization create/update。
-- [ ] Organization membership。
-- [ ] Organization DID governance / service delegation。
-- [ ] Restricted query proof。
-- [ ] Signed link resolution。
-- [ ] Secret link signature。
-- [ ] Anti-enumeration regression tests。
-- [ ] Actor search 不泄露 pairwise/private DID。
-- [ ] Search users 仅限共同 Space / directory policy。
-- [ ] Public/listed/restricted/unlisted/invite_only/secret 全组合测试。
-
-### 4.7 Push / Presence / Typing / Account Data
-
-- [ ] Push rules 按 Matrix-like priority 分组:
-  - [ ] override。
-  - [ ] content。
-  - [ ] room/space。
-  - [ ] sender。
-  - [ ] underride。
-- [ ] Push rules PostgreSQL 持久化。
-- [ ] Per Space unread/highlight counts。
-- [ ] Push gateway integration adapter。
-- [ ] Presence 持久化与多实例 fanout。
-- [ ] Typing ephemeral 跨实例广播。
-- [ ] Account data:
-  - [ ] tags。
-  - [ ] preferences。
-  - [ ] ignored actors。
-  - [ ] direct spaces。
-
-### 4.8 Moderation / Audit / Compliance
-
-- [ ] Moderation action workflow。
-- [ ] Appeals。
-- [ ] Report visibility 仅 moderator 可见。
-- [ ] Policy deny/quarantine/review 与 moderation queue 贯通。
-- [ ] Audit log PostgreSQL 持久化。
-- [ ] Audit cursor pagination。
-- [ ] Audit signature chain。
-- [ ] Break-glass workflow。
-- [ ] Legal hold。
-- [ ] Compliance actor E2EE access audit。
-
-### 4.9 WebRTC / Media Service
-
-- [ ] WebRTC sessions PostgreSQL 持久化。
-- [ ] Multi-device participant。
-- [ ] Expiry cleanup task。
-- [ ] Cross-instance signal fanout。
-- [ ] TURN/STUN provider integration。
-- [ ] ICE credential signature。
-- [ ] Call/media capability check。
-- [ ] Recording / retention policy。
-- [ ] SFU/MCU profile declaration。
-
-### 4.10 Schema Registry / OpenAPI / Conformance
-
-- [ ] 生成正式 JSON Schemas:
-  - [ ] cursor。
-  - [ ] event。
-  - [ ] operation。
-  - [ ] commit。
-  - [ ] grant。
-  - [ ] encrypted-envelope。
-  - [ ] client-sync-response。
-- [ ] 标准 schema registry 覆盖 `schema-registry.md` 全部 core schema。
-- [ ] 服务生成 OpenAPI 3.1。
-- [ ] `/.well-known/contrix/openapi.yaml`。
-- [ ] OpenAPI operationId 等于 canonical `cx.*` operation id。
-- [ ] Conformance suite:
-  - [ ] encoding vectors。
+- [ ] OpenAPI 3.1:
+  - [ ] 服务生成 OpenAPI。
+  - [ ] `/.well-known/contrix/openapi.yaml`。
+  - [ ] operationId 等于 canonical `cx.*` operation id。
+- [ ] conformance suites:
   - [ ] state resolution vectors。
   - [ ] redaction vectors。
   - [ ] capability vectors。
@@ -575,167 +377,13 @@ P1 的完成标准: 能支撑真实多用户、多设备、持久化、可恢复
   - [ ] federation signature vectors。
   - [ ] privacy regression tests。
 
-## 5. P2: 扩展 Profile
+## 11. Definition of Done
 
-P2 的完成标准: 在核心 profile 稳定后扩展到 agent、applet、social、sovereign 等高价值场景。
-
-### 5.1 Agent Runtime
-
-- [ ] Agent principal / delegated actor。
-- [ ] Agent run lifecycle:
-  - [ ] create。
-  - [ ] update。
-  - [ ] complete。
-  - [ ] fail。
-  - [ ] cancel。
-- [ ] Tool execution audit envelope。
-- [ ] Memory candidate / confirmed / rejected / invalidated / superseded。
-- [ ] Memory provenance:
-  - [ ] source objects。
-  - [ ] source runs。
-  - [ ] author。
-  - [ ] confidence。
-  - [ ] status。
-- [ ] Vector index as derived retrieval layer。
-- [ ] Approval constraint for high-risk agent actions。
-- [ ] Kill switch / revocation check。
-- [ ] A2A / ACP / MCP bridge session metadata。
-
-### 5.2 Applet Bridge
-
-- [ ] Signed applet registration。
-- [ ] Namespace declaration。
-- [ ] Namespace conflict detection。
-- [ ] `/api/v1/applet/ping`。
-- [ ] `/api/v1/applet/describe`。
-- [ ] `PUT /api/v1/applet/transactions/{txn_id}`。
-- [ ] Applet transaction idempotency。
-- [ ] Query actor endpoint。
-- [ ] Query space endpoint。
-- [ ] Third-party users / locations。
-- [ ] Ghost actor accountability metadata。
-- [ ] Portal Space mapping。
-- [ ] Per-Space applet capability。
-- [ ] Applet health and lag metrics。
-- [ ] Unauthorized namespace hit must not grant write permission。
-
-### 5.3 Social Graph
-
-- [ ] Feed object。
-- [ ] Circle object。
-- [ ] Follow/contact/circle_member relations。
-- [ ] Block social relation。
-- [ ] Repost / quote / like / reply relations。
-- [ ] Audience policy:
-  - [ ] public。
-  - [ ] followers。
-  - [ ] contacts。
-  - [ ] circle。
-  - [ ] organization。
-  - [ ] space_members。
-  - [ ] direct。
-  - [ ] private。
-- [ ] Snapshot-at-publish。
-- [ ] Circle feed E2EE / visibility tests。
-
-### 5.4 Sovereign Deployment
-
-- [ ] Organization DID controlled service delegation。
-- [ ] Service DID allowlist。
-- [ ] Closed federation default。
-- [ ] Private directory default。
-- [ ] Resolver trust domain pinning。
-- [ ] Controlled collaboration Space。
-- [ ] Restricted / invite-only external join。
-- [ ] External device approval。
-- [ ] MLS epoch rotation after external removal。
-- [ ] External Applet / Agent / transport allowlist。
-- [ ] Data classification labels。
-- [ ] Import/export review metadata。
-- [ ] Offline witness receipts。
-- [ ] Hardware-backed service keys。
-
-### 5.5 Portability / Migration
-
-- [ ] Full Space export:
-  - [ ] raw operations。
-  - [ ] commits。
-  - [ ] snapshots。
-  - [ ] blobs manifest。
-  - [ ] grants。
-  - [ ] audit metadata。
-- [ ] Import validation:
-  - [ ] signatures。
-  - [ ] hashes。
-  - [ ] reducer replay。
-  - [ ] conflict handling。
-- [ ] Service replacement flow。
-- [ ] Principal Server migration guide。
-- [ ] Cross-service recovery tests。
-
-### 5.6 TSP Integration
-
-- [ ] TSP optional trust binding。
-- [ ] Pairwise control messages。
-- [ ] Federation trust policy hook。
-- [ ] Identity registry witness integration。
-
-## 6. 建议执行顺序
-
-### Milestone 1: Canonical Core
-
-- [x] Canonical operation/event kind。
-- [x] Canonical JSON/hash — SDK canonical_bytes + soland validate_canonical_json_value 增强。
-- [x] Real commit proof verification — ProofVerifier 拒绝 alg:none/dev-proof, 校验 payload_hash、actor DID、service audience/domain 与 created_at 绑定。
-- [x] Config service DID。
-- [x] Feature discovery 降级为真实 limited profile。
-
-### Milestone 2: Durable Server
-
-- [ ] PostgreSQL PersistenceStore。
-- [ ] Account/session/identity/space/message/device/blob/policy/audit/federation 状态迁移。
-- [ ] Projection recovery。
-- [ ] Transactional write path。
-
-### Milestone 3: Authz + Reducer Correctness
-
-- [ ] Capability operations enter reducer。
-- [ ] Authorization at causal frontier。
-- [ ] Constraint fail-closed。
-- [ ] Delegation/claim/approval 基础。
-- [ ] State-resolution conformance vectors。
-
-### Milestone 4: Sync + Federation
-
-- [ ] Persistent sync tokens/positions。
-- [ ] Initial/incremental sync correctness。
-- [ ] Backfill gap semantics。
-- [ ] HTTP Message Signatures。
-- [ ] Persistent replay/idempotency/quarantine。
-
-### Milestone 5: Identity + Device + Blob
-
-- [x] `did:uuid` — SDK resolver 已注入 soland。
-- [x] DID key log — SDK verify_did_key_log 可用, soland 签名者授权验证已实现。
-- [ ] Device pairing/revocation。
-- [ ] MLS envelope/profile groundwork。
-- [ ] Blob authorization and metadata durability。
-
-### Milestone 6: Conformance and Profile Declaration
-
-- [ ] OpenAPI generation。
-- [x] Conformance vectors — 38 canonical/digest/proof/service 向量 + 23 operation 向量。
-- [ ] Privacy regression tests。
-- [ ] Profile-specific README / feature matrix。
-- [ ] CI jobs for unit, HTTP, PostgreSQL integration, conformance.
-
-## 7. Definition of Done
-
-一个任务只有同时满足以下条件才应标记为完成:
+任务只有同时满足以下条件才应标记完成:
 
 - [ ] 代码实现完成。
-- [ ] 相关 HTTP / unit / integration 测试覆盖。
-- [ ] 若涉及协议语义, 增加 conformance vector 或明确说明不适用。
+- [ ] 相关 unit / HTTP / PostgreSQL integration 测试覆盖。
+- [ ] 涉及协议语义时增加 conformance vector。
 - [ ] Feature discovery 更新。
-- [ ] README 或实现 profile 文档更新。
+- [ ] README 或 profile 文档更新。
 - [ ] 不依赖开发占位 proof、内存状态或硬编码 service DID, 除非任务明确属于 dev-only surface。
