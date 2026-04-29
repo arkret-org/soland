@@ -15,8 +15,8 @@ use serde_json::Value;
 
 use crate::db::PgPool;
 use crate::state::{
-    AccountRecord, BlobRecord, ContactRecord, DeviceInventoryRecord, MessageRecord, SessionRecord,
-    SpaceMetaRecord,
+    AccountRecord, BlobRecord, ContactRecord, DeviceInventoryRecord, FederationTransactionRecord,
+    MessageRecord, SessionRecord, SpaceMetaRecord,
 };
 
 /// Error type for persistence operations.
@@ -97,6 +97,16 @@ pub trait DeviceInventoryStore: Send + Sync {
     fn list(&self) -> PersistenceResult<Vec<DeviceInventoryRecord>>;
 }
 
+/// Trait for durable federation transaction replay records.
+pub trait FederationTransactionStore: Send + Sync {
+    fn get(
+        &self,
+        origin: &str,
+        txn_id: &str,
+    ) -> PersistenceResult<Option<FederationTransactionRecord>>;
+    fn put(&self, record: &FederationTransactionRecord) -> PersistenceResult<()>;
+}
+
 /// Combined persistence store trait.
 pub trait PersistenceStore: Send + Sync {
     fn accounts(&self) -> &dyn AccountStore;
@@ -106,6 +116,7 @@ pub trait PersistenceStore: Send + Sync {
     fn messages(&self) -> &dyn MessageStore;
     fn blobs(&self) -> &dyn BlobStore;
     fn devices(&self) -> &dyn DeviceInventoryStore;
+    fn federation_transactions(&self) -> &dyn FederationTransactionStore;
 }
 
 /// In-memory implementation of persistence store.
@@ -117,6 +128,7 @@ pub struct MemoryPersistenceStore {
     messages: MemoryMessageStore,
     blobs: MemoryBlobStore,
     devices: MemoryDeviceInventoryStore,
+    federation_transactions: MemoryFederationTransactionStore,
 }
 
 impl MemoryPersistenceStore {
@@ -129,6 +141,7 @@ impl MemoryPersistenceStore {
             messages: MemoryMessageStore::new(),
             blobs: MemoryBlobStore::new(),
             devices: MemoryDeviceInventoryStore::new(),
+            federation_transactions: MemoryFederationTransactionStore::new(),
         }
     }
 }
@@ -166,6 +179,10 @@ impl PersistenceStore for MemoryPersistenceStore {
 
     fn devices(&self) -> &dyn DeviceInventoryStore {
         &self.devices
+    }
+
+    fn federation_transactions(&self) -> &dyn FederationTransactionStore {
+        &self.federation_transactions
     }
 }
 
@@ -476,15 +493,49 @@ impl DeviceInventoryStore for MemoryDeviceInventoryStore {
     }
 }
 
+// In-memory federation transaction replay store
+struct MemoryFederationTransactionStore {
+    data: Arc<Mutex<BTreeMap<(String, String), FederationTransactionRecord>>>,
+}
+
+impl MemoryFederationTransactionStore {
+    fn new() -> Self {
+        Self {
+            data: Arc::new(Mutex::new(BTreeMap::new())),
+        }
+    }
+}
+
+impl FederationTransactionStore for MemoryFederationTransactionStore {
+    fn get(
+        &self,
+        origin: &str,
+        txn_id: &str,
+    ) -> PersistenceResult<Option<FederationTransactionRecord>> {
+        let data = self.data.lock().expect("lock");
+        Ok(data.get(&(origin.to_owned(), txn_id.to_owned())).cloned())
+    }
+
+    fn put(&self, record: &FederationTransactionRecord) -> PersistenceResult<()> {
+        let mut data = self.data.lock().expect("lock");
+        data.insert(
+            (record.origin.clone(), record.txn_id.clone()),
+            record.clone(),
+        );
+        Ok(())
+    }
+}
+
 /// PostgreSQL-backed persistence store for the P0 durable account/session/device path.
 ///
 /// TODO(P0 durable-state): move contacts, spaces, messages, blobs, push, presence,
-/// policy, audit, federation and sync positions from the memory stores below into
+/// policy, audit and sync positions from the memory stores below into
 /// Pg-backed stores with shared behavior tests.
 pub struct PgPersistenceStore {
     accounts: PgAccountStore,
     sessions: PgSessionStore,
     devices: PgDeviceInventoryStore,
+    federation_transactions: PgFederationTransactionStore,
     fallback: MemoryPersistenceStore,
 }
 
@@ -493,7 +544,8 @@ impl PgPersistenceStore {
         Self {
             accounts: PgAccountStore { pool: pool.clone() },
             sessions: PgSessionStore { pool: pool.clone() },
-            devices: PgDeviceInventoryStore { pool },
+            devices: PgDeviceInventoryStore { pool: pool.clone() },
+            federation_transactions: PgFederationTransactionStore { pool },
             fallback: MemoryPersistenceStore::new(),
         }
     }
@@ -526,6 +578,10 @@ impl PersistenceStore for PgPersistenceStore {
 
     fn devices(&self) -> &dyn DeviceInventoryStore {
         &self.devices
+    }
+
+    fn federation_transactions(&self) -> &dyn FederationTransactionStore {
+        &self.federation_transactions
     }
 }
 
@@ -705,6 +761,53 @@ impl DeviceInventoryStore for PgDeviceInventoryStore {
     }
 }
 
+struct PgFederationTransactionStore {
+    pool: PgPool,
+}
+
+impl FederationTransactionStore for PgFederationTransactionStore {
+    fn get(
+        &self,
+        origin: &str,
+        txn_id: &str,
+    ) -> PersistenceResult<Option<FederationTransactionRecord>> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query(
+            "SELECT source_service AS origin, txn_id, destination_service AS destination, \
+             space_id, content_digest, status, payload AS response, received_at, processed_at \
+             FROM federation_transactions WHERE source_service = $1 AND txn_id = $2",
+        )
+        .bind::<Text, _>(origin)
+        .bind::<Text, _>(txn_id)
+        .get_result::<FederationTransactionRow>(&mut conn)
+        .optional()
+        .map(|row| row.map(FederationTransactionRecord::from))
+        .map_err(PersistenceError::from)
+    }
+
+    fn put(&self, record: &FederationTransactionRecord) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query(
+            "INSERT INTO federation_transactions \
+             (txn_id, source_service, destination_service, space_id, status, content_digest, payload, received_at, processed_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
+             ON CONFLICT (source_service, txn_id) DO NOTHING",
+        )
+        .bind::<Text, _>(&record.txn_id)
+        .bind::<Text, _>(&record.origin)
+        .bind::<Text, _>(&record.destination)
+        .bind::<Nullable<Text>, _>(&record.space_id)
+        .bind::<Text, _>(&record.status)
+        .bind::<Text, _>(&record.content_digest)
+        .bind::<Jsonb, _>(&record.response)
+        .bind::<Timestamptz, _>(record.received_at)
+        .bind::<Nullable<Timestamptz>, _>(record.processed_at)
+        .execute(&mut conn)
+        .map(|_| ())
+        .map_err(PersistenceError::from)
+    }
+}
+
 #[derive(QueryableByName)]
 struct AccountRow {
     #[diesel(sql_type = Text)]
@@ -794,6 +897,44 @@ impl From<DeviceRow> for DeviceInventoryRecord {
             created_at: row.created_at,
             updated_at: row.updated_at,
             revoked_at: row.revoked_at,
+        }
+    }
+}
+
+#[derive(QueryableByName)]
+struct FederationTransactionRow {
+    #[diesel(sql_type = Text)]
+    origin: String,
+    #[diesel(sql_type = Text)]
+    txn_id: String,
+    #[diesel(sql_type = Text)]
+    destination: String,
+    #[diesel(sql_type = Nullable<Text>)]
+    space_id: Option<String>,
+    #[diesel(sql_type = Text)]
+    content_digest: String,
+    #[diesel(sql_type = Text)]
+    status: String,
+    #[diesel(sql_type = Jsonb)]
+    response: Value,
+    #[diesel(sql_type = Timestamptz)]
+    received_at: chrono::DateTime<chrono::Utc>,
+    #[diesel(sql_type = Nullable<Timestamptz>)]
+    processed_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+impl From<FederationTransactionRow> for FederationTransactionRecord {
+    fn from(row: FederationTransactionRow) -> Self {
+        Self {
+            origin: row.origin,
+            txn_id: row.txn_id,
+            destination: row.destination,
+            space_id: row.space_id,
+            content_digest: row.content_digest,
+            status: row.status,
+            response: row.response,
+            received_at: row.received_at,
+            processed_at: row.processed_at,
         }
     }
 }
@@ -931,5 +1072,39 @@ mod tests {
         );
         assert_eq!(store.list_for_actor("did:web:test").unwrap().len(), 1);
         assert_eq!(store.list().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn memory_federation_transaction_store_is_origin_scoped() {
+        let store = MemoryFederationTransactionStore::new();
+        let now = Utc::now();
+        let record = FederationTransactionRecord {
+            origin: "did:web:remote.example".to_owned(),
+            txn_id: "txn1".to_owned(),
+            destination: "did:web:soland.local".to_owned(),
+            space_id: Some("cx:space:test".to_owned()),
+            content_digest: "sha256:first".to_owned(),
+            status: "accepted".to_owned(),
+            response: serde_json::json!({"ok": true}),
+            received_at: now,
+            processed_at: Some(now),
+        };
+
+        store.put(&record).unwrap();
+
+        assert_eq!(
+            store
+                .get("did:web:remote.example", "txn1")
+                .unwrap()
+                .unwrap()
+                .content_digest,
+            "sha256:first"
+        );
+        assert!(
+            store
+                .get("did:web:other.example", "txn1")
+                .unwrap()
+                .is_none()
+        );
     }
 }

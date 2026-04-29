@@ -530,12 +530,13 @@ diesel::table! {
 }
 
 diesel::table! {
-    federation_transactions (txn_id) {
+    federation_transactions (source_service, txn_id) {
         txn_id -> Text,
         source_service -> Text,
         destination_service -> Text,
         space_id -> Nullable<Text>,
         status -> Text,
+        content_digest -> Text,
         payload -> Jsonb,
         received_at -> Timestamptz,
         processed_at -> Nullable<Timestamptz>,

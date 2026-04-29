@@ -171,13 +171,13 @@
   - [ ] created/expires。
 - [ ] DID service binding:
   - [ ] origin endpoint declared in DID Document。
-  - [ ] destination matches local service DID。
+  - [x] destination matches local service DID。
   - [ ] service delegation covers target Space。
 - [ ] Transaction persistence:
-  - [ ] `(origin, txn_id)` unique。
-  - [ ] same body duplicate accepted。
-  - [ ] different body duplicate conflict。
-  - [ ] restart-safe replay protection。
+  - [x] `(origin, txn_id)` unique。
+  - [x] same body duplicate accepted。
+  - [x] different body duplicate conflict。
+  - [x] restart-safe replay protection。
 - [ ] Operation verification:
   - [ ] every operation independently verified。
   - [ ] authz checked at causal frontier。
@@ -229,10 +229,10 @@
   - [x] HEAD/Range does not leak size/type/existence。
   - [x] unsafe headers suppressed for invisible resources。
 - [ ] Upload:
-  - [ ] content hash verified。
-  - [ ] MIME/filename sanitized。
-  - [ ] quota by upload/account/space。
-  - [ ] encrypted/plaintext flag and policy validation。
+  - [x] content hash verified。
+  - [x] MIME/filename sanitized。
+  - [x] quota by upload/account/space。
+  - [x] encrypted/plaintext flag and policy validation。
 - [ ] Object store backend。
 - [ ] short-lived signed redirect token。
 - [ ] retention / legal hold / unsafe media status。

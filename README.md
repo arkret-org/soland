@@ -16,6 +16,8 @@ Client sync `next_batch` cursors are structured `cx:cursor:` tokens bound to the
 
 Development bearer sessions are stored server-side by service-bound SHA-256 token hash, not by plaintext token. Logout records `revoked_at` and revoked sessions are rejected on later requests. To-device messages remain deliverable across duplicate syncs until the client presents a cursor with the acknowledged to-device position. Blob downloads require a bearer session plus a `purpose` query parameter; blobs are visible to the uploader or to members of the blob Space when one is bound at upload time.
 
+Federation transaction IDs are recorded per origin with canonical request digests. Replaying the same `(origin, txn_id)` and body returns the stored response, while reusing the transaction ID with different content returns a conflict; PostgreSQL mode persists these replay records. Blob uploads normalize MIME types and filenames, enforce per-upload/account/Space quotas, and reject plaintext blobs in private Spaces unless this service is listed in `plaintext_visible_services`.
+
 ## Configuration
 
 - `--bind` / `SERVERX_BIND`: listen address, default `127.0.0.1:8787`.

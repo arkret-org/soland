@@ -2046,6 +2046,77 @@ async fn federation_rejects_replayed_operations() {
 }
 
 #[tokio::test]
+async fn federation_transactions_are_idempotent_by_origin_and_body() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let operation = Operation::create(
+        OperationId::new("cx:operation:federation-txn-idempotent").unwrap(),
+        SpaceId::new("cx:space:federation-txn").unwrap(),
+        kinds::CX_MESSAGE_CREATE,
+        serde_json::json!({
+            "event_id": "cx:event:federation-txn-idempotent",
+            "sender": "did:web:remote.example",
+            "thread_id": "cx:thread:federation-txn",
+            "body": "transaction body"
+        }),
+    );
+
+    let transaction_body = serde_json::json!({
+        "origin": "did:web:remote.example",
+        "destination": "did:web:soland.local",
+        "service_binding_ref": "did:web:remote.example#soland",
+        "operations": [operation]
+    });
+    let first: Value = TestClient::put("http://server/api/v1/federation/transactions/txn-idem")
+        .json(&transaction_body)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(
+        first["accepted"][0],
+        "cx:operation:federation-txn-idempotent"
+    );
+
+    let duplicate: Value = TestClient::put("http://server/api/v1/federation/transactions/txn-idem")
+        .json(&transaction_body)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(
+        duplicate["accepted"][0],
+        "cx:operation:federation-txn-idempotent"
+    );
+    assert!(duplicate["rejected"].as_array().unwrap().is_empty());
+
+    let conflict = TestClient::put("http://server/api/v1/federation/transactions/txn-idem")
+        .json(&serde_json::json!({
+            "origin": "did:web:remote.example",
+            "destination": "did:web:soland.local",
+            "service_binding_ref": "did:web:remote.example#soland",
+            "operations": [],
+            "receipts": [{"changed": true}]
+        }))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(conflict.status_code.unwrap().as_u16(), 409);
+
+    let wrong_destination =
+        TestClient::put("http://server/api/v1/federation/transactions/txn-wrong-destination")
+            .json(&serde_json::json!({
+                "origin": "did:web:remote.example",
+                "destination": "did:web:other.example",
+                "service_binding_ref": "did:web:remote.example#soland",
+                "operations": []
+            }))
+            .send(&app_from_state(state))
+            .await;
+    assert_eq!(wrong_destination.status_code.unwrap().as_u16(), 403);
+}
+
+#[tokio::test]
 async fn push_profile_and_moderation_contracts_work() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
@@ -2440,9 +2511,41 @@ async fn auth_keys_device_messages_and_blobs_work() {
         .await;
     assert_eq!(bad_attachment.status_code.unwrap().as_u16(), 400);
 
+    let missing_envelope = TestClient::post("http://server/api/v1/blob/upload")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .add_header("x-contrix-blob-encrypted", "true", true)
+        .body("encrypted-bytes")
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(missing_envelope.status_code.unwrap().as_u16(), 400);
+
+    let locked_space: Value = TestClient::post("http://server/api/v1/spaces")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({
+            "title": "Blob Policy Space",
+            "public": false
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    let plaintext_private_blob = TestClient::post("http://server/api/v1/blob/upload")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .add_header(
+            "x-contrix-space-id",
+            locked_space["space_id"].as_str().unwrap(),
+            true,
+        )
+        .body("plaintext-private")
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(plaintext_private_blob.status_code.unwrap().as_u16(), 403);
+
     let blob: Value = TestClient::post("http://server/api/v1/blob/upload")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .add_header("content-type", "text/plain", true)
+        .add_header("content-type", "Text/Plain; charset=utf-8", true)
+        .add_header("x-contrix-filename", "..\\danger<script>.txt", true)
         .add_header(
             "x-contrix-attachment-envelope",
             serde_json::json!({
@@ -2461,6 +2564,8 @@ async fn auth_keys_device_messages_and_blobs_work() {
         .await
         .unwrap();
     assert_eq!(blob["size"], 15);
+    assert_eq!(blob["media_type"], "text/plain");
+    assert_eq!(blob["upload_receipt"]["filename"], "danger_script_.txt");
     assert!(
         blob["blob_ref"]
             .as_str()

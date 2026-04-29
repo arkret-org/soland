@@ -542,18 +542,23 @@ CREATE TABLE IF NOT EXISTS sync_positions (
 );
 
 CREATE TABLE IF NOT EXISTS federation_transactions (
-    txn_id TEXT PRIMARY KEY,
+    txn_id TEXT NOT NULL,
     source_service TEXT NOT NULL,
     destination_service TEXT NOT NULL,
     space_id TEXT,
     status TEXT NOT NULL,
+    content_digest TEXT NOT NULL,
     payload JSONB NOT NULL,
     received_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    processed_at TIMESTAMPTZ
+    processed_at TIMESTAMPTZ,
+    PRIMARY KEY (source_service, txn_id)
 );
 
 CREATE INDEX IF NOT EXISTS federation_transactions_space_received_idx
     ON federation_transactions (space_id, received_at);
+
+CREATE INDEX IF NOT EXISTS federation_transactions_destination_received_idx
+    ON federation_transactions (destination_service, received_at);
 
 CREATE TABLE IF NOT EXISTS federation_memberships (
     space_id TEXT NOT NULL,

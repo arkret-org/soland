@@ -199,6 +199,19 @@ pub struct BlobRecord {
 }
 
 #[derive(Clone, Debug)]
+pub struct FederationTransactionRecord {
+    pub origin: String,
+    pub txn_id: String,
+    pub destination: String,
+    pub space_id: Option<String>,
+    pub content_digest: String,
+    pub status: String,
+    pub response: Value,
+    pub received_at: chrono::DateTime<chrono::Utc>,
+    pub processed_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+#[derive(Clone, Debug)]
 pub struct PresenceRecord {
     pub actor: String,
     pub status: String,

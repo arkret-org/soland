@@ -19,10 +19,10 @@ use crate::{
     ids, kinds,
     state::{
         AccountRecord, AppState, BlobRecord, ContactRecord, DeviceInventoryRecord,
-        DeviceMessageRecord, IdentityDocumentRecord, IdentityLogRecord, MessageRecord,
-        PolicyDocumentRecord, PresenceRecord, ProjectionEventRecord, PushRuleRecord, SchemaRecord,
-        SessionRecord, SpaceInviteRecord, SpaceMetaRecord, TypingRecord, WebrtcSessionRecord,
-        WebrtcSignalRecord,
+        DeviceMessageRecord, FederationTransactionRecord, IdentityDocumentRecord,
+        IdentityLogRecord, MessageRecord, PolicyDocumentRecord, PresenceRecord,
+        ProjectionEventRecord, PushRuleRecord, SchemaRecord, SessionRecord, SpaceInviteRecord,
+        SpaceMetaRecord, TypingRecord, WebrtcSessionRecord, WebrtcSignalRecord,
     },
     wire::{
         AccountResponse, AddReactionRequest, AddSpaceMemberRequest, ApiError, AuthzCheckRequest,
@@ -6556,10 +6556,41 @@ fn verify_federation_origin(origin: &str) -> bool {
     }
 }
 
+fn federation_destination_matches(state: &AppState, destination: &str) -> bool {
+    destination == state.config.service_did
+}
+
+fn is_valid_federation_txn_id(value: &str) -> bool {
+    let value = value.trim();
+    !value.is_empty()
+        && value.len() <= 128
+        && value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | ':' | '$'))
+}
+
+fn federation_request_digest(
+    body: &contrix_sdk::FederationTransactionRequest,
+) -> Result<String, &'static str> {
+    let value =
+        serde_json::to_value(body).map_err(|_| "federation transaction must serialize to JSON")?;
+    contrix_sdk::canonical::canonical_sha256(&value)
+        .map_err(|_| "federation transaction must be canonical JSON")
+}
+
 #[handler]
 pub async fn federation_transaction(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let _txn_id = req.param::<String>("txn_id").unwrap_or_else(sync_token);
+    let txn_id = req.param::<String>("txn_id").unwrap_or_else(sync_token);
+    if !is_valid_federation_txn_id(&txn_id) {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            "invalid federation transaction id",
+        );
+        return;
+    }
     let body = match req
         .parse_json::<contrix_sdk::FederationTransactionRequest>()
         .await
@@ -6575,6 +6606,42 @@ pub async fn federation_transaction(depot: &mut Depot, req: &mut Request, res: &
             return;
         }
     };
+    let content_digest = match federation_request_digest(&body) {
+        Ok(digest) => digest,
+        Err(message) => {
+            render_error(res, StatusCode::BAD_REQUEST, "invalid_param", message);
+            return;
+        }
+    };
+    match state
+        .persistence
+        .federation_transactions()
+        .get(body.origin.as_str(), &txn_id)
+    {
+        Ok(Some(record)) if record.content_digest == content_digest => {
+            res.render(Json(record.response));
+            return;
+        }
+        Ok(Some(_)) => {
+            render_error(
+                res,
+                StatusCode::CONFLICT,
+                "duplicate_conflict",
+                "federation transaction id was reused with different content",
+            );
+            return;
+        }
+        Ok(None) => {}
+        Err(error) => {
+            render_error(
+                res,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "persistence_error",
+                &error.to_string(),
+            );
+            return;
+        }
+    }
     // Verify federation origin
     if !verify_federation_origin(body.origin.as_str()) {
         render_error(
@@ -6585,13 +6652,56 @@ pub async fn federation_transaction(depot: &mut Depot, req: &mut Request, res: &
         );
         return;
     }
+    if !federation_destination_matches(state, body.destination.as_str()) {
+        render_error(
+            res,
+            StatusCode::FORBIDDEN,
+            "invalid_destination",
+            "federation transaction destination does not match this service",
+        );
+        return;
+    }
     let ingest = ingest_federation_operations(state, body.origin.as_str(), body.operations);
-    res.render(Json(contrix_sdk::FederationTransactionResponse {
+    let response = contrix_sdk::FederationTransactionResponse {
         ok: true,
         accepted: ingest.accepted,
         rejected: ingest.rejected,
         next_retry_at: None,
-    }));
+    };
+    let response_value = match serde_json::to_value(&response) {
+        Ok(value) => value,
+        Err(error) => {
+            render_error(
+                res,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "serialization_error",
+                &error.to_string(),
+            );
+            return;
+        }
+    };
+    let now = now();
+    let record = FederationTransactionRecord {
+        origin: body.origin.to_string(),
+        txn_id,
+        destination: body.destination.to_string(),
+        space_id: None,
+        content_digest,
+        status: "accepted".to_owned(),
+        response: response_value,
+        received_at: now,
+        processed_at: Some(now),
+    };
+    if let Err(error) = state.persistence.federation_transactions().put(&record) {
+        render_error(
+            res,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "persistence_error",
+            &error.to_string(),
+        );
+        return;
+    }
+    res.render(Json(response));
 }
 
 #[handler]
@@ -6619,6 +6729,15 @@ pub async fn federation_push_operations(depot: &mut Depot, req: &mut Request, re
             StatusCode::UNAUTHORIZED,
             "invalid_origin",
             "federation origin must be a valid DID",
+        );
+        return;
+    }
+    if !federation_destination_matches(state, body.destination.as_str()) {
+        render_error(
+            res,
+            StatusCode::FORBIDDEN,
+            "invalid_destination",
+            "federation push destination does not match this service",
         );
         return;
     }
@@ -6806,8 +6925,15 @@ pub async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Respons
         .headers()
         .get("content-type")
         .and_then(|value| value.to_str().ok())
-        .unwrap_or("application/octet-stream")
-        .to_owned();
+        .and_then(sanitize_media_type)
+        .unwrap_or_else(|| "application/octet-stream".to_owned());
+    let filename = match sanitized_blob_filename(req) {
+        Ok(filename) => filename,
+        Err(message) => {
+            render_error(res, StatusCode::BAD_REQUEST, "invalid_param", message);
+            return;
+        }
+    };
     let space_id = match req
         .headers()
         .get("x-contrix-space-id")
@@ -6838,12 +6964,21 @@ pub async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Respons
         None => None,
     };
     let size = bytes.len();
-    if size > 10 * 1024 * 1024 {
+    if size > MAX_BLOB_UPLOAD_BYTES {
         render_error(
             res,
             StatusCode::PAYLOAD_TOO_LARGE,
             "payload_too_large",
             "blob exceeds maximum size",
+        );
+        return;
+    }
+    if let Err(message) = enforce_blob_quota(state, &session.actor, space_id.as_deref(), size) {
+        render_error(
+            res,
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "quota_exceeded",
+            message,
         );
         return;
     }
@@ -6854,6 +6989,45 @@ pub async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Respons
             return;
         }
     };
+    let encrypted_flag = match blob_encrypted_flag(req) {
+        Ok(flag) => flag,
+        Err(message) => {
+            render_error(res, StatusCode::BAD_REQUEST, "invalid_param", message);
+            return;
+        }
+    };
+    let encrypted = encryption.is_some() || encrypted_flag.unwrap_or(false);
+    if encrypted_flag == Some(true) && encryption.is_none() {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            "encrypted blob uploads require x-contrix-attachment-envelope",
+        );
+        return;
+    }
+    if encrypted_flag == Some(false) && encryption.is_some() {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            "x-contrix-blob-encrypted=false conflicts with encrypted attachment metadata",
+        );
+        return;
+    }
+    if !encrypted
+        && space_id
+            .as_deref()
+            .is_some_and(|space_id| !space_allows_plaintext_service(state, space_id))
+    {
+        render_error(
+            res,
+            StatusCode::FORBIDDEN,
+            "policy_denied",
+            "private plaintext blob uploads require this service in plaintext_visible_services",
+        );
+        return;
+    }
     let sha256 = sha256_hex(&bytes);
     match expected_blob_sha256(req) {
         Ok(Some(expected_sha256)) if expected_sha256 != sha256 => {
@@ -6898,8 +7072,8 @@ pub async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Respons
             bytes,
             storage_path: Some(storage_path),
             media_type: media_type.clone(),
-            filename: None,
-            space_id,
+            filename: filename.clone(),
+            space_id: space_id.clone(),
             encryption: encryption.clone(),
             uploaded_by: session.actor,
             created_at: now(),
@@ -6914,6 +7088,9 @@ pub async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Respons
             "service_did": state.config.service_did.clone(),
             "created_at": now(),
             "encrypted_attachment": encryption,
+            "encrypted": encrypted,
+            "filename": filename,
+            "space_id": space_id,
         }),
     }));
 }
@@ -10510,6 +10687,119 @@ fn parse_range(req: &Request, total_len: usize) -> Option<Result<(usize, usize),
         return Some(Err("range is outside blob bounds"));
     }
     Some(Ok((start, end)))
+}
+
+const MAX_BLOB_UPLOAD_BYTES: usize = 10 * 1024 * 1024;
+const MAX_BLOB_ACCOUNT_BYTES: usize = 50 * 1024 * 1024;
+const MAX_BLOB_SPACE_BYTES: usize = 100 * 1024 * 1024;
+
+fn sanitize_media_type(raw: &str) -> Option<String> {
+    let media_type = raw.split(';').next()?.trim().to_ascii_lowercase();
+    let (top, sub) = media_type.split_once('/')?;
+    (is_valid_mime_token(top) && is_valid_mime_token(sub)).then_some(media_type)
+}
+
+fn is_valid_mime_token(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 64
+        && value.chars().all(|ch| {
+            ch.is_ascii_alphanumeric()
+                || matches!(ch, '!' | '#' | '$' | '&' | '-' | '^' | '_' | '.' | '+')
+        })
+}
+
+fn sanitized_blob_filename(req: &Request) -> Result<Option<String>, &'static str> {
+    let raw = req
+        .headers()
+        .get("x-contrix-filename")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned)
+        .or_else(|| {
+            req.headers()
+                .get(salvo::http::header::CONTENT_DISPOSITION)
+                .and_then(|value| value.to_str().ok())
+                .and_then(content_disposition_filename)
+        });
+    raw.map(|value| sanitize_blob_filename_value(&value))
+        .transpose()
+}
+
+fn content_disposition_filename(value: &str) -> Option<String> {
+    value.split(';').find_map(|part| {
+        let part = part.trim();
+        part.strip_prefix("filename=")
+            .map(|filename| filename.trim_matches('"').to_owned())
+    })
+}
+
+fn sanitize_blob_filename_value(value: &str) -> Result<String, &'static str> {
+    let basename = value
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .trim_matches('"');
+    let mut sanitized = String::new();
+    for ch in basename.chars() {
+        if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_') {
+            sanitized.push(ch);
+        } else if ch.is_ascii_whitespace() || ch.is_ascii_punctuation() {
+            sanitized.push('_');
+        }
+        if sanitized.len() >= 128 {
+            break;
+        }
+    }
+    let sanitized = sanitized
+        .trim_matches(|ch| matches!(ch, '.' | '_' | '-' | ' '))
+        .to_owned();
+    if sanitized.is_empty() {
+        return Err("filename must contain at least one safe character");
+    }
+    Ok(sanitized)
+}
+
+fn blob_encrypted_flag(req: &Request) -> Result<Option<bool>, &'static str> {
+    let Some(raw) = req
+        .headers()
+        .get("x-contrix-blob-encrypted")
+        .and_then(|value| value.to_str().ok())
+    else {
+        return Ok(None);
+    };
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "true" | "1" | "yes" => Ok(Some(true)),
+        "false" | "0" | "no" => Ok(Some(false)),
+        _ => Err("x-contrix-blob-encrypted must be true or false"),
+    }
+}
+
+fn enforce_blob_quota(
+    state: &AppState,
+    actor: &str,
+    space_id: Option<&str>,
+    size: usize,
+) -> Result<(), &'static str> {
+    let blobs = state.blobs.lock().expect("blob lock");
+    let actor_bytes: usize = blobs
+        .values()
+        .filter(|blob| blob.uploaded_by == actor)
+        .map(|blob| blob.bytes.len())
+        .sum();
+    if actor_bytes.saturating_add(size) > MAX_BLOB_ACCOUNT_BYTES {
+        return Err("account blob quota exceeded");
+    }
+    if let Some(space_id) = space_id {
+        let space_bytes: usize = blobs
+            .values()
+            .filter(|blob| blob.space_id.as_deref() == Some(space_id))
+            .map(|blob| blob.bytes.len())
+            .sum();
+        if space_bytes.saturating_add(size) > MAX_BLOB_SPACE_BYTES {
+            return Err("space blob quota exceeded");
+        }
+    }
+    Ok(())
 }
 
 fn is_valid_blob_purpose(value: &str) -> bool {
