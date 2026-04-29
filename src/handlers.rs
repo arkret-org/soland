@@ -13,7 +13,7 @@ use salvo::{
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use crate::{
     ids, kinds,
@@ -3219,7 +3219,7 @@ pub async fn sync_describe(depot: &mut Depot, res: &mut Response) {
 #[handler]
 pub async fn client_sync(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let _body = match req.parse_json::<ClientSyncRequest>().await {
+    let body = match req.parse_json::<ClientSyncRequest>().await {
         Ok(body) => body,
         Err(_) => {
             render_error(
@@ -3231,7 +3231,38 @@ pub async fn client_sync(depot: &mut Depot, req: &mut Request, res: &mut Respons
             return;
         }
     };
-    if let Some(presence) = _body.set_presence.as_deref()
+    let session = authenticated_session(state, req).ok();
+    let since_cursor = if let Some(since) = body.since.as_deref() {
+        match parse_and_validate_sync_cursor(
+            since,
+            state,
+            session.as_ref(),
+            body.filter.as_ref(),
+            chrono::Utc::now().timestamp_millis(),
+        ) {
+            Ok(cursor) => cursor,
+            Err(SyncCursorError::Expired) => {
+                render_error(
+                    res,
+                    StatusCode::UNAUTHORIZED,
+                    "sync_token_expired",
+                    "sync token has expired",
+                );
+                return;
+            }
+            Err(SyncCursorError::Invalid(message)) => {
+                render_error(res, StatusCode::BAD_REQUEST, "invalid_param", message);
+                return;
+            }
+            Err(SyncCursorError::Mismatch(message)) => {
+                render_error(res, StatusCode::BAD_REQUEST, "sync_token_mismatch", message);
+                return;
+            }
+        }
+    } else {
+        SyncCursor::default()
+    };
+    if let Some(presence) = body.set_presence.as_deref()
         && !matches!(presence, "online" | "offline" | "unavailable")
     {
         render_error(
@@ -3242,7 +3273,7 @@ pub async fn client_sync(depot: &mut Depot, req: &mut Request, res: &mut Respons
         );
         return;
     }
-    if let Some(profile) = _body.profile.as_deref()
+    if let Some(profile) = body.profile.as_deref()
         && !matches!(
             profile,
             "initial" | "incremental" | "board" | "chat" | "topic"
@@ -3257,8 +3288,7 @@ pub async fn client_sync(depot: &mut Depot, req: &mut Request, res: &mut Respons
         return;
     }
 
-    let session = authenticated_session(state, req).ok();
-    if let Some(presence) = _body.set_presence.as_deref() {
+    if let Some(presence) = body.set_presence.as_deref() {
         let Some(session) = session.as_ref() else {
             render_error(
                 res,
@@ -3297,10 +3327,23 @@ pub async fn client_sync(depot: &mut Depot, req: &mut Request, res: &mut Respons
     };
     let projection = state.projection.lock().expect("projection lock");
     let mut sync_spaces = std::collections::BTreeMap::new();
+    let mut positions = BTreeMap::new();
     for (space_id, title, summary, tags, category) in visible_spaces {
+        let since_position = since_cursor
+            .positions
+            .get(&space_id)
+            .copied()
+            .unwrap_or_default();
+        let messages = projection.messages_for_space(&space_id);
+        let space_position = messages
+            .iter()
+            .map(|message| message.created_at.timestamp_micros())
+            .max()
+            .unwrap_or(since_position);
         let timeline_events: Vec<_> = projection
             .messages_for_space(&space_id)
             .into_iter()
+            .filter(|message| message.created_at.timestamp_micros() > since_position)
             .map(|message| {
                 json!({
                     "kind": "message",
@@ -3314,6 +3357,7 @@ pub async fn client_sync(depot: &mut Depot, req: &mut Request, res: &mut Respons
                 })
             })
             .collect();
+        positions.insert(space_id.clone(), space_position);
         sync_spaces.insert(
             space_id.clone(),
             json!({
@@ -3356,12 +3400,171 @@ pub async fn client_sync(depot: &mut Depot, req: &mut Request, res: &mut Respons
         .unwrap_or_default();
 
     res.render(Json(ClientSyncResponse {
-        next_batch: sync_token(),
+        next_batch: sync_token_for_client_sync(
+            state,
+            session.as_ref(),
+            body.filter.as_ref(),
+            positions,
+        ),
         spaces: sync_spaces,
         to_device,
         account_data: Vec::new(),
         device_lists: json!({"changed": [], "left": []}),
     }));
+}
+
+#[derive(Debug, Default)]
+struct SyncCursor {
+    positions: BTreeMap<String, i64>,
+}
+
+#[derive(Debug)]
+enum SyncCursorError {
+    Invalid(&'static str),
+    Mismatch(&'static str),
+    Expired,
+}
+
+fn sync_token_for_client_sync(
+    state: &AppState,
+    session: Option<&SessionRecord>,
+    filter: Option<&serde_json::Value>,
+    spaces_positions: BTreeMap<String, i64>,
+) -> String {
+    let issued_at = chrono::Utc::now();
+    let expires_at = issued_at + chrono::Duration::hours(1);
+    let principal_id = session
+        .map(|session| session.actor.clone())
+        .unwrap_or_else(|| "anonymous".to_owned());
+    let device_id = session
+        .map(|session| session.device_id.clone())
+        .unwrap_or_else(|| "anonymous".to_owned());
+    let device_positions = BTreeMap::from([(device_id.clone(), issued_at.timestamp_micros())]);
+    let cursor = json!({
+        "schema": "cx.schema.cursor.v1",
+        "version": 1,
+        "profile": "incremental",
+        "principal_id": principal_id,
+        "device_id": device_id,
+        "service_id": state.config.service_did.clone(),
+        "filter_hash": sync_filter_hash(filter),
+        "issued_at": issued_at,
+        "issued_at_ms": issued_at.timestamp_millis(),
+        "expires_at": expires_at,
+        "expires_at_ms": expires_at.timestamp_millis(),
+        "positions": {
+            "spaces": spaces_positions,
+            "devices": device_positions,
+            "repo": null
+        }
+    });
+    format!("cx:cursor:{}", URL_SAFE_NO_PAD.encode(cursor.to_string()))
+}
+
+fn parse_and_validate_sync_cursor(
+    token: &str,
+    state: &AppState,
+    session: Option<&SessionRecord>,
+    filter: Option<&serde_json::Value>,
+    now_ms: i64,
+) -> Result<SyncCursor, SyncCursorError> {
+    let value = decode_sync_cursor_value(token)?;
+    if value
+        .get("schema")
+        .and_then(|schema| schema.as_str())
+        .is_none_or(|schema| schema != "cx.schema.cursor.v1")
+        || value
+            .get("version")
+            .and_then(|version| version.as_u64())
+            .is_none_or(|version| version != 1)
+    {
+        return Err(SyncCursorError::Invalid("since must be a v1 sync cursor"));
+    }
+    if value
+        .get("expires_at_ms")
+        .and_then(|expires_at_ms| expires_at_ms.as_i64())
+        .is_some_and(|expires_at_ms| expires_at_ms <= now_ms)
+    {
+        return Err(SyncCursorError::Expired);
+    }
+    let expected_principal = session
+        .map(|session| session.actor.as_str())
+        .unwrap_or("anonymous");
+    let expected_device = session
+        .map(|session| session.device_id.as_str())
+        .unwrap_or("anonymous");
+    if value
+        .get("principal_id")
+        .and_then(|principal| principal.as_str())
+        .is_some_and(|principal| principal != expected_principal)
+    {
+        return Err(SyncCursorError::Mismatch(
+            "sync token principal does not match request actor",
+        ));
+    }
+    if value
+        .get("device_id")
+        .and_then(|device| device.as_str())
+        .is_some_and(|device| device != expected_device)
+    {
+        return Err(SyncCursorError::Mismatch(
+            "sync token device does not match request device",
+        ));
+    }
+    if value
+        .get("service_id")
+        .and_then(|service| service.as_str())
+        .is_some_and(|service| service != state.config.service_did)
+    {
+        return Err(SyncCursorError::Mismatch(
+            "sync token service does not match this service DID",
+        ));
+    }
+    let expected_filter_hash = sync_filter_hash(filter);
+    if value
+        .get("filter_hash")
+        .and_then(|filter_hash| filter_hash.as_str())
+        .is_some_and(|filter_hash| filter_hash != expected_filter_hash)
+    {
+        return Err(SyncCursorError::Mismatch(
+            "sync token filter hash does not match request filter",
+        ));
+    }
+    let positions = value
+        .get("positions")
+        .and_then(|positions| positions.get("spaces"))
+        .and_then(|spaces| spaces.as_object())
+        .ok_or(SyncCursorError::Invalid(
+            "since cursor must contain positions.spaces",
+        ))?
+        .iter()
+        .filter_map(|(space_id, position)| {
+            position
+                .as_i64()
+                .map(|position| (space_id.clone(), position))
+        })
+        .collect();
+    Ok(SyncCursor { positions })
+}
+
+fn decode_sync_cursor_value(token: &str) -> Result<serde_json::Value, SyncCursorError> {
+    let Some(encoded) = token.strip_prefix("cx:cursor:") else {
+        return Err(SyncCursorError::Invalid(
+            "since must use a cx:cursor sync token",
+        ));
+    };
+    let bytes = URL_SAFE_NO_PAD
+        .decode(encoded)
+        .map_err(|_| SyncCursorError::Invalid("since cursor must be valid base64url"))?;
+    serde_json::from_slice(&bytes)
+        .map_err(|_| SyncCursorError::Invalid("since cursor must contain JSON"))
+}
+
+fn sync_filter_hash(filter: Option<&serde_json::Value>) -> String {
+    let empty_filter = json!({});
+    let filter = filter.unwrap_or(&empty_filter);
+    contrix_sdk::canonical::canonical_sha256(filter)
+        .unwrap_or_else(|_| format!("sha256:{}", sha256_hex(filter.to_string().as_bytes())))
 }
 
 #[handler]

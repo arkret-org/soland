@@ -41,7 +41,7 @@ handler、PostgreSQL 落地、运行时策略和服务互操作验证。
 
 现状:
 
-- `cargo test` 已通过: 63 个单元测试 + 24 个 HTTP 合同测试。
+- `cargo test` 已通过: 63 个单元测试 + 25 个 HTTP 合同测试。
 - HTTP 路由面已经较广, 覆盖 account、identity、repo、sync、directory、index、authz、keys、device messages、blob、push、federation、WebRTC、moderation 等入口。
 - 多数业务状态仍在内存 `AppState` 中, PostgreSQL migration 已有但尚未被 handler 全面使用。
 - proof / DID / federation signature 仍以开发占位为主。
@@ -54,7 +54,7 @@ handler、PostgreSQL 落地、运行时策略和服务互操作验证。
 | `cx.profile.principal_server_repo_api.v1` | PARTIAL | 真实签名验证、canonical operation、schema validation、capability-at-frontier、持久化幂等 |
 | `cx.profile.principal_server.v1` | PARTIAL | 持久 cursor、duplicate suppression、service binding、plaintext-visible enforcement 全链路、federation 安全 |
 | `cx.profile.index_node.v1` | PARTIAL | 持久 reducer projection、query schema、auth filtering、stale frontier、wait-for 真实等待 |
-| `cx.profile.identity_registry.v1` | PARTIAL | `did:uuid`、key log 验证、proof 验证、receipt 签名、method adapter |
+| `cx.profile.identity_registry.v1` | MOVED | 服务端实现已迁移到 `E:\Works\contrix-dev\starid`; soland 仅保留调用/互操作入口 |
 | `cx.profile.blob_node.v1` | PARTIAL | 私有 blob 授权下载、metadata 持久化、quota、retention、thumbnail/preview 策略 |
 | `cx.profile.applet_bridge.v1` | NOT STARTED | applet registration、namespace、transactions、ghost actor、portal space、signature verification |
 | `cx.profile.agent_runtime.v1` | NOT STARTED | agent run lifecycle、tool audit、memory promotion、kill switch |
@@ -206,42 +206,8 @@ P0 的完成标准: 可以诚实声明 `principal_server_repo_api` 的核心子�
 
 ### 3.3 DID Identity 与 Key Log
 
-- [ ] 实现 `did:uuid`。
-  - [ ] UUID v8 bit layout。
-  - [ ] 44-bit Unix ms。
-  - [ ] 4-bit hash algorithm id。
-  - [ ] 74-bit inception key hash fragment。
-  - [ ] 大端填充。
-  - [ ] 非法 method id / hash mismatch 拒绝。
-- [x] DID resolver method adapter:
-  - [x] `did:uuid` — SDK `DidUuidResolver` 注入 `AppState.did_resolver`。
-  - [x] `did:web` limited profile — SDK `DidWebResolver` 注入 `AppState.did_resolver`。
-  - [x] `did:key` test/temporary profile — SDK `DidKeyResolver` 注入 `AppState.did_resolver`。
-- [ ] DID Document normalized view:
-  - [ ] raw document hash。
-  - [x] current control keys — `identity_resolve` 通过 SDK resolver 返回 verification_methods。
-  - [x] service bindings — `validate_did_document_services` 校验 service endpoints。
-  - [x] method evidence — `identity_resolve` 返回 `method_evidence` 标明来源 (sdk_resolver / in-memory)。
-- [ ] Key log 验证:
-  - [ ] inception。
-  - [ ] rotate。
-  - [ ] recover。
-  - [ ] deactivate。
-  - [ ] seq 单调。
-  - [ ] append-only。
-  - [ ] 当前 key 可从 inception key 推导。
-- [x] `submit-did-operation` 从”proof 非空”升级为真实 DID control proof 验证:
-  - [x] production 模式拒绝 `alg:none` 和 `dev-proof`。
-  - [x] 签名者授权验证 — 检查 proof 的 verification_method 是否为当前活跃 key。
-  - [x] DID document 在提交后注册到 SDK resolver。
-- [ ] Registry receipt 签名:
-  - [ ] 绑定 DID。
-  - [ ] seq。
-  - [ ] head_event_hash。
-  - [ ] registry service DID。
-  - [ ] audience。
-  - [ ] created_at。
-- [ ] `identity/resolve` 对 private / pairwise DID 增加 proof gating。
+- [x] 服务端 identity registry 任务迁移到新项目 `E:\Works\contrix-dev\starid\_todos.md`。
+- [x] soland 保留现有 `identity/*` 兼容入口用于本地联调；后续 profile 声明以 starid 为身份注册表实现来源。
 
 ### 3.4 Service DID 与配置一致性
 
@@ -265,10 +231,10 @@ P0 的完成标准: 可以诚实声明 `principal_server_repo_api` 的核心子�
   - [ ] expiry。
   - [ ] revoked_at。
   - [ ] device binding。
-- [ ] 迁移 identity:
-  - [ ] documents。
-  - [ ] log events。
-  - [ ] receipts。
+- [x] 迁移 identity 到独立服务:
+  - [x] documents — `E:\Works\contrix-dev\starid` 提供内存/PG `identity_documents`。
+  - [x] log events — `E:\Works\contrix-dev\starid` 提供内存/PG `identity_log_events`。
+  - [x] receipts — `E:\Works\contrix-dev\starid` 提供内存/PG `identity_receipts`。
 - [ ] 迁移 contacts。
 - [ ] 迁移 spaces / members / aliases / invites。
 - [ ] 迁移 events / state events / projection events。
@@ -324,15 +290,15 @@ P0 的完成标准: 可以诚实声明 `principal_server_repo_api` 的核心子�
 
 ### 3.7 Client Sync 正确性
 
-- [ ] `next_batch` token 绑定:
-  - [ ] principal id。
-  - [ ] device id。
-  - [ ] service id。
-  - [ ] filter hash。
-  - [ ] stream positions。
-  - [ ] expiry。
+- [x] `next_batch` token 绑定:
+  - [x] principal id — client sync cursor 写入并校验 `principal_id`。
+  - [x] device id — client sync cursor 写入并校验 `device_id`。
+  - [x] service id — client sync cursor 写入并校验 `service_id == config.service_did`。
+  - [x] filter hash — client sync cursor 写入并校验 canonical `filter_hash`。
+  - [x] stream positions — client sync cursor 写入 per-space message timeline positions 与 device position。
+  - [x] expiry — client sync cursor 写入并校验 `expires_at_ms`。
 - [ ] 持久化 sync positions。
-- [ ] 实现 `since` 语义, 只返回增量。
+- [x] 实现 `since` 语义, 只返回增量 — `/api/v1/sync` 使用 cursor per-space position 过滤 timeline events。
 - [ ] 初始同步分桶:
   - [ ] join。
   - [ ] invite。
@@ -357,7 +323,7 @@ P0 的完成标准: 可以诚实声明 `principal_server_repo_api` 的核心子�
 - [ ] filter limits 与 invalid filter errors。
 - [ ] `X-Contrix-Wait-For` 实现真实 frontier 等待 / timeout。
 - [ ] To-device delivery 与 next_batch ack 语义明确化。
-- [ ] token expiry 返回 `sync_token_expired`。
+- [x] token expiry 返回 `sync_token_expired`。
 - [ ] sync conformance vectors。
 
 ### 3.8 Federation 安全与收敛
@@ -440,7 +406,7 @@ P0 的完成标准: 可以诚实声明 `principal_server_repo_api` 的核心子�
   - [ ] space_id。
   - [ ] operation_id。
   - [ ] commit_id。
-- [ ] CORS 配置从 placeholder 变为真实策略。
+- [x] CORS 配置从 placeholder 变为真实策略 — `SERVERX_CORS_ALLOW_ORIGIN` 接入 Salvo CORS middleware, 仅允许显式 origin。
 
 ## 4. P1: 重要产品能力与完整协议面
 

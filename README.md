@@ -12,6 +12,8 @@ cargo run -- --bind 127.0.0.1:8787
 
 When `SERVERX_DEVELOPMENT_MODE=false`, submitted commits must use production proof material: no `alg: none` or `dev-proof`, proof `payload_hash` must match the canonical commit digest, the verification method must be rooted in the commit author DID, and proof `domain`/`audience` must bind to `SERVERX_SERVICE_DID`.
 
+Client sync `next_batch` cursors are structured `cx:cursor:` tokens bound to the principal, device, service DID, filter hash, stream positions, and expiry. Passing `since` returns incremental timeline events and expired cursors fail with `sync_token_expired`.
+
 ## Configuration
 
 - `--bind` / `SERVERX_BIND`: listen address, default `127.0.0.1:8787`.
@@ -19,7 +21,7 @@ When `SERVERX_DEVELOPMENT_MODE=false`, submitted commits must use production pro
 - `SERVERX_SERVICE_DID`: service DID, default `did:web:soland.local`.
 - `DATABASE_URL`: enables PostgreSQL and runs embedded Diesel migrations at startup.
 - `SERVERX_BLOB_ROOT`: filesystem root reserved for blob storage.
-- `SERVERX_CORS_ALLOW_ORIGIN`: configured CORS origin placeholder.
+- `SERVERX_CORS_ALLOW_ORIGIN`: optional explicit CORS allow-origin for browser clients; credentials, common Contrix headers, and preflight requests are supported only for that origin.
 - `SERVERX_DEVELOPMENT_MODE`: enables development auth bootstrap.
 
 ## API

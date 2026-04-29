@@ -15,6 +15,8 @@ pub mod wire;
 
 use salvo::affix_state;
 use salvo::catcher::Catcher;
+use salvo::cors::{Cors, CorsHandler};
+use salvo::http::Method;
 use salvo::prelude::*;
 
 use crate::{
@@ -43,10 +45,15 @@ pub fn router_with_rate_limiter_config(
     state: AppState,
     rate_limiter_config: RateLimiterConfig,
 ) -> Router {
+    let cors_allow_origin = state.config.cors_allow_origin.clone();
     let rate_limiter = RateLimiter::new(rate_limiter_config);
-    Router::new()
+    let mut router = Router::new()
         .hoop(affix_state::inject(state))
-        .hoop(RateLimiterMiddleware::new(rate_limiter))
+        .hoop(RateLimiterMiddleware::new(rate_limiter));
+    if let Some(origin) = cors_allow_origin {
+        router = router.hoop(cors_handler_for_origin(origin));
+    }
+    router
         .push(Router::with_path("health").get(health))
         .push(
             Router::with_path("api/v1")
@@ -202,8 +209,53 @@ pub fn router_with_rate_limiter_config(
                 )
                 .push(Router::with_path("blob/upload").post(blob_upload))
                 .push(Router::with_path("blob/get").get(blob_get).head(blob_get))
-                .push(Router::with_path("moderation/report").post(moderation_report)),
+                .push(Router::with_path("moderation/report").post(moderation_report))
+                .push(
+                    Router::with_path("{**rest}")
+                        .options(cors_preflight)
+                        .get(api_not_found),
+                ),
         )
         .push(Router::with_path("contrix/v1/check").post(policy_check))
         .push(Router::with_path("contrix/v1/ice-config").post(ice_config))
+}
+
+#[handler]
+async fn cors_preflight(res: &mut Response) {
+    res.status_code(StatusCode::NO_CONTENT);
+}
+
+#[handler]
+async fn api_not_found(res: &mut Response) {
+    res.status_code(StatusCode::NOT_FOUND);
+}
+
+fn cors_handler_for_origin(origin: String) -> CorsHandler {
+    Cors::new()
+        .allow_origin(vec![origin.as_str()])
+        .allow_credentials(true)
+        .allow_methods(vec![
+            Method::GET,
+            Method::POST,
+            Method::PUT,
+            Method::PATCH,
+            Method::DELETE,
+            Method::HEAD,
+            Method::OPTIONS,
+        ])
+        .allow_headers(vec![
+            "authorization",
+            "content-type",
+            "x-contrix-wait-for",
+            "x-contrix-sha256",
+            "range",
+        ])
+        .expose_headers(vec![
+            "retry-after",
+            "x-contrix-wait-for-satisfied",
+            "content-range",
+            "accept-ranges",
+        ])
+        .max_age(3600)
+        .into_handler()
 }

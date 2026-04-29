@@ -831,6 +831,8 @@ pub fn describe(
             "federation.transaction".to_owned(),
             "federation.operations".to_owned(),
             "sync.client_sync".to_owned(),
+            "sync.bound_cursor".to_owned(),
+            "sync.incremental_since".to_owned(),
             "sync.typing".to_owned(),
             "sync.backfill".to_owned(),
             "directory.search_spaces".to_owned(),

@@ -48,6 +48,10 @@ fn decode_cursor(token: &str) -> Value {
     serde_json::from_slice(&bytes).expect("cursor json")
 }
 
+fn encode_cursor(cursor: &Value) -> String {
+    format!("cx:cursor:{}", URL_SAFE_NO_PAD.encode(cursor.to_string()))
+}
+
 async fn dev_token(state: AppState) -> String {
     let login: Value = TestClient::post("http://server/api/v1/auth/dev-login")
         .json(&serde_json::json!({
@@ -160,6 +164,50 @@ async fn health_and_describe_work() {
     assert_eq!(
         describe["limits"]["profile_status"]["conformance"],
         "limited_reference"
+    );
+}
+
+#[tokio::test]
+async fn configured_cors_allows_only_explicit_origin() {
+    let mut config = test_config();
+    config.cors_allow_origin = Some("https://app.example".to_owned());
+    let service = app_from_state(AppState::new(config, Db { pool: None }));
+
+    let allowed = TestClient::options("http://server/api/v1/sync")
+        .add_header("Origin", "https://app.example", true)
+        .add_header("Access-Control-Request-Method", "POST", true)
+        .add_header(
+            "Access-Control-Request-Headers",
+            "authorization, content-type, x-contrix-wait-for",
+            true,
+        )
+        .send(&service)
+        .await;
+    assert_eq!(
+        allowed
+            .headers()
+            .get("access-control-allow-origin")
+            .and_then(|value| value.to_str().ok()),
+        Some("https://app.example")
+    );
+    assert_eq!(
+        allowed
+            .headers()
+            .get("access-control-allow-credentials")
+            .and_then(|value| value.to_str().ok()),
+        Some("true")
+    );
+
+    let denied = TestClient::options("http://server/api/v1/sync")
+        .add_header("Origin", "https://evil.example", true)
+        .add_header("Access-Control-Request-Method", "POST", true)
+        .send(&service)
+        .await;
+    assert!(
+        denied
+            .headers()
+            .get("access-control-allow-origin")
+            .is_none()
     );
 }
 
@@ -738,10 +786,103 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         .unwrap();
     let next_batch = decode_cursor(sync_with_message["next_batch"].as_str().unwrap());
     assert_eq!(next_batch["profile"], "incremental");
+    assert_eq!(next_batch["principal_id"], "did:web:alice.example");
+    assert_eq!(next_batch["device_id"], "dev_alice");
+    assert_eq!(next_batch["service_id"], "did:web:soland.local");
+    assert!(
+        next_batch["filter_hash"]
+            .as_str()
+            .unwrap()
+            .starts_with("sha256:")
+    );
+    assert!(
+        next_batch["expires_at_ms"].as_i64().unwrap()
+            > next_batch["issued_at_ms"].as_i64().unwrap()
+    );
+    assert!(
+        next_batch["positions"]["spaces"][&space_id]
+            .as_i64()
+            .unwrap()
+            > 0
+    );
     assert_eq!(
         sync_with_message["spaces"][&space_id]["timeline"]["events"][0]["event_id"],
         sent_message["event_id"]
     );
+
+    let incremental_noop: Value = TestClient::post("http://server/api/v1/sync")
+        .add_header("authorization", format!("Bearer {alice}"), true)
+        .json(&serde_json::json!({"since": sync_with_message["next_batch"]}))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert!(
+        incremental_noop["spaces"][&space_id]["timeline"]["events"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+
+    tokio::time::sleep(Duration::from_millis(2)).await;
+    let second_message: Value = TestClient::post("http://server/api/v1/messages/send")
+        .add_header("authorization", format!("Bearer {alice}"), true)
+        .json(&serde_json::json!({
+            "space_id": space_id,
+            "thread_id": "cx:thread:workflow",
+            "content": {"body": "second workflow"},
+            "encrypted": false
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    let incremental_after_message: Value = TestClient::post("http://server/api/v1/sync")
+        .add_header("authorization", format!("Bearer {alice}"), true)
+        .json(&serde_json::json!({"since": sync_with_message["next_batch"]}))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    let incremental_events = incremental_after_message["spaces"][&space_id]["timeline"]["events"]
+        .as_array()
+        .unwrap();
+    assert_eq!(incremental_events.len(), 1);
+    assert_eq!(
+        incremental_events[0]["event_id"],
+        second_message["event_id"]
+    );
+
+    let mismatch = TestClient::post("http://server/api/v1/sync")
+        .add_header("authorization", format!("Bearer {bob}"), true)
+        .json(&serde_json::json!({"since": sync_with_message["next_batch"]}))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(mismatch.status_code.unwrap().as_u16(), 400);
+
+    let filter_mismatch = TestClient::post("http://server/api/v1/sync")
+        .add_header("authorization", format!("Bearer {alice}"), true)
+        .json(&serde_json::json!({
+            "since": sync_with_message["next_batch"],
+            "filter": {"spaces": [space_id.clone()]}
+        }))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(filter_mismatch.status_code.unwrap().as_u16(), 400);
+
+    let mut expired_cursor = next_batch.clone();
+    expired_cursor["expires_at_ms"] = serde_json::json!(1);
+    let mut expired = TestClient::post("http://server/api/v1/sync")
+        .add_header("authorization", format!("Bearer {alice}"), true)
+        .json(&serde_json::json!({"since": encode_cursor(&expired_cursor)}))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(expired.status_code.unwrap(), StatusCode::UNAUTHORIZED);
+    let expired_body: Value = expired.take_json().await.unwrap();
+    assert_eq!(expired_body["error"]["errcode"], "sync_token_expired");
 
     let exported: Value = TestClient::get(format!("http://server/api/v1/spaces/{space_id}/export"))
         .add_header("authorization", format!("Bearer {alice}"), true)
@@ -793,7 +934,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
     .take_json()
     .await
     .unwrap();
-    assert_eq!(snapshot["frontier"]["message_count"], 2);
+    assert_eq!(snapshot["frontier"]["message_count"], 3);
     assert!(
         snapshot["snapshot_ref"]
             .as_str()
