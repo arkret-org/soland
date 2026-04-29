@@ -2611,7 +2611,15 @@ fn is_valid_schema_id(value: &str) -> bool {
 fn is_supported_schema_kind(value: &str) -> bool {
     matches!(
         value,
-        "entity" | "event" | "relation" | "view" | "policy" | "envelope" | "cursor" | "grant"
+        "entity"
+            | "event"
+            | "operation"
+            | "relation"
+            | "view"
+            | "policy"
+            | "envelope"
+            | "cursor"
+            | "grant"
     )
 }
 
@@ -4476,7 +4484,7 @@ pub async fn submit_commit(depot: &mut Depot, req: &mut Request, res: &mut Respo
         .repo
         .get_commit(&body.commit.commit_id)
         .is_ok_and(|commit| commit.is_some());
-    if let Err(message) = validate_operation_semantics(&body.operations) {
+    if let Err(message) = validate_operation_semantics(state, &body.operations) {
         render_error(res, StatusCode::BAD_REQUEST, "invalid_param", message);
         return;
     }
@@ -6683,7 +6691,8 @@ fn ingest_federation_operations(
             }));
             continue;
         }
-        if let Err(message) = validate_operation_semantics(std::slice::from_ref(&operation)) {
+        if let Err(message) = validate_operation_semantics(state, std::slice::from_ref(&operation))
+        {
             rejected.push(json!({
                 "operation_id": operation_id,
                 "reason": "invalid_semantics",
@@ -7506,69 +7515,246 @@ fn dev_proof(actor: &str) -> Proof {
     }
 }
 
-fn validate_operation_semantics(operations: &[Operation]) -> Result<(), &'static str> {
+#[derive(Clone, Copy)]
+struct OperationPayloadSchema {
+    schema_id: &'static str,
+    requirements: &'static [PayloadRequirement],
+    validate: Option<fn(&Operation) -> Result<(), &'static str>>,
+}
+
+#[derive(Clone, Copy)]
+enum PayloadRequirement {
+    Required(&'static str, &'static str),
+    AnyOf(&'static [&'static str], &'static str),
+}
+
+const MESSAGE_CREATE_FIELDS: &[&str] = &["body", "content", "event_id"];
+const MESSAGE_TARGET_FIELDS: &[&str] = &["target_event_id", "event_id", "target"];
+const MESSAGE_CONTENT_FIELDS: &[&str] = &["content", "body"];
+const REDACTION_TARGET_FIELDS: &[&str] = &["target_event_id", "target", "redacts"];
+const REACTION_TARGET_FIELDS: &[&str] = &[
+    "event_id",
+    "target_event_id",
+    "message_id",
+    "target_message_id",
+];
+const REACTION_ACTOR_FIELDS: &[&str] = &["actor", "sender"];
+const REACTION_KEY_FIELDS: &[&str] = &["key", "reaction", "reaction_key"];
+const ENTITY_ID_FIELDS: &[&str] = &["entity_id", "id"];
+const ENTITY_TYPE_FIELDS: &[&str] = &["entity_type", "type"];
+const RELATION_ID_FIELDS: &[&str] = &["relation_id", "id"];
+const RELATION_KIND_FIELDS: &[&str] = &["relation_kind", "kind"];
+const RELATION_FROM_FIELDS: &[&str] = &["from", "from_entity_id"];
+const RELATION_TO_FIELDS: &[&str] = &["to", "to_entity_id"];
+const MEMBER_ACTOR_FIELDS: &[&str] = &["member", "actor", "sender"];
+const READ_MARKER_ACTOR_FIELDS: &[&str] = &["actor", "sender"];
+
+const MESSAGE_CREATE_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::AnyOf(
+    MESSAGE_CREATE_FIELDS,
+    "message operation requires body, content, or event_id",
+)];
+const MESSAGE_REVISE_REQUIREMENTS: &[PayloadRequirement] = &[
+    PayloadRequirement::AnyOf(
+        MESSAGE_TARGET_FIELDS,
+        "message revision requires target_event_id",
+    ),
+    PayloadRequirement::AnyOf(
+        MESSAGE_CONTENT_FIELDS,
+        "message revision requires content or body",
+    ),
+];
+const REDACTION_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::AnyOf(
+    REDACTION_TARGET_FIELDS,
+    "redaction operation requires target_event_id",
+)];
+const REACTION_REQUIREMENTS: &[PayloadRequirement] = &[
+    PayloadRequirement::AnyOf(
+        REACTION_TARGET_FIELDS,
+        "reaction operation requires target event",
+    ),
+    PayloadRequirement::AnyOf(REACTION_ACTOR_FIELDS, "reaction operation requires actor"),
+    PayloadRequirement::AnyOf(
+        REACTION_KEY_FIELDS,
+        "reaction operation requires reaction key",
+    ),
+];
+const ENTITY_CREATE_REQUIREMENTS: &[PayloadRequirement] = &[
+    PayloadRequirement::AnyOf(ENTITY_ID_FIELDS, "entity operation requires entity_id"),
+    PayloadRequirement::AnyOf(ENTITY_TYPE_FIELDS, "entity create requires entity_type"),
+];
+const ENTITY_ID_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::AnyOf(
+    ENTITY_ID_FIELDS,
+    "entity operation requires entity_id",
+)];
+const RELATION_CREATE_REQUIREMENTS: &[PayloadRequirement] = &[
+    PayloadRequirement::AnyOf(
+        RELATION_ID_FIELDS,
+        "relation operation requires relation_id",
+    ),
+    PayloadRequirement::AnyOf(
+        RELATION_KIND_FIELDS,
+        "relation create requires relation_kind",
+    ),
+    PayloadRequirement::AnyOf(RELATION_FROM_FIELDS, "relation create requires from"),
+    PayloadRequirement::AnyOf(RELATION_TO_FIELDS, "relation create requires to"),
+];
+const RELATION_ID_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::AnyOf(
+    RELATION_ID_FIELDS,
+    "relation operation requires relation_id",
+)];
+const MEMBERSHIP_REQUIREMENTS: &[PayloadRequirement] = &[
+    PayloadRequirement::AnyOf(MEMBER_ACTOR_FIELDS, "membership operation requires member"),
+    PayloadRequirement::Required(
+        "membership",
+        "membership operation requires member and membership",
+    ),
+];
+const SPACE_LIFECYCLE_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::Required(
+    "action",
+    "space lifecycle operation requires action",
+)];
+const READ_MARKER_REQUIREMENTS: &[PayloadRequirement] = &[
+    PayloadRequirement::AnyOf(
+        READ_MARKER_ACTOR_FIELDS,
+        "read marker operation requires actor",
+    ),
+    PayloadRequirement::Required("event_id", "read marker operation requires event_id"),
+];
+
+fn validate_operation_semantics(
+    state: &AppState,
+    operations: &[Operation],
+) -> Result<(), &'static str> {
+    let schemas = state.schemas.lock().expect("schemas lock");
     for operation in operations {
         operation
             .validate_payload_object()
             .map_err(|_| "operation payload must be a JSON object")?;
         validate_canonical_json_value(&operation.payload)?;
         let Some(kind) = kinds::canonical_kind_for_operation(operation) else {
-            return Err("unknown operation family");
+            return Err("unregistered operation kind");
         };
-        match kind {
-            kinds::CX_MESSAGE_CREATE => {
-                if !(operation.payload.get("body").is_some()
-                    || operation.payload.get("content").is_some()
-                    || operation.payload.get("event_id").is_some())
-                {
-                    return Err("message operation requires body, content, or event_id");
-                }
-                if operation
-                    .payload
-                    .get("encrypted")
-                    .and_then(|value| value.as_bool())
-                    .unwrap_or(false)
-                {
-                    let Some(content) = operation.payload.get("content") else {
-                        return Err("encrypted message operation requires content envelope");
-                    };
-                    validate_encrypted_payload_envelope(content)?;
-                } else if let Some(content) = operation.payload.get("content") {
-                    validate_content_blocks(content)?;
-                    validate_mentions(content)?;
-                }
-            }
-            kind if kinds::is_membership_kind(kind) => {
-                if operation.payload.get("member").is_none()
-                    || operation.payload.get("membership").is_none()
-                {
-                    return Err("membership operation requires member and membership");
-                }
-            }
-            kind if kinds::is_space_lifecycle_kind(kind) => {
-                if operation.payload.get("action").is_none() {
-                    return Err("space lifecycle operation requires action");
-                }
-            }
-            kinds::CX_MESSAGE_REDACT | kinds::CX_REDACTION => {
-                if operation.payload.get("target_event_id").is_none()
-                    && operation.payload.get("target").is_none()
-                    && operation.payload.get("redacts").is_none()
-                {
-                    return Err("redaction operation requires target_event_id");
-                }
-            }
-            kinds::CX_ENTITY_CREATE
-            | kinds::CX_ENTITY_UPDATE
-            | kinds::CX_ENTITY_DELETE
-            | kinds::CX_RELATION_CREATE
-            | kinds::CX_RELATION_UPDATE
-            | kinds::CX_RELATION_DELETE
-            | kinds::CX_REACTION_ADD
-            | kinds::CX_REACTION_REMOVE
-            | kinds::CX_READ_MARKER => {}
-            _ => return Err("unknown operation family"),
+        let Some(schema) = operation_schema_for_kind(kind) else {
+            return Err("unregistered operation kind");
+        };
+        if !schemas
+            .get(schema.schema_id)
+            .is_some_and(|record| record.active && record.kind == "operation")
+        {
+            return Err("operation schema is not registered");
         }
+        validate_operation_schema(operation, schema)?;
+    }
+    Ok(())
+}
+
+fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
+    let schema = match kind {
+        kinds::CX_MESSAGE_CREATE => OperationPayloadSchema {
+            schema_id: "cx.schema.operation.message_create.v1",
+            requirements: MESSAGE_CREATE_REQUIREMENTS,
+            validate: Some(validate_message_operation_payload),
+        },
+        kinds::CX_MESSAGE_REVISE => OperationPayloadSchema {
+            schema_id: "cx.schema.operation.message_revise.v1",
+            requirements: MESSAGE_REVISE_REQUIREMENTS,
+            validate: Some(validate_message_operation_payload),
+        },
+        kinds::CX_MESSAGE_REDACT | kinds::CX_REDACTION => OperationPayloadSchema {
+            schema_id: "cx.schema.operation.redaction.v1",
+            requirements: REDACTION_REQUIREMENTS,
+            validate: None,
+        },
+        kinds::CX_REACTION_ADD | kinds::CX_REACTION_REMOVE => OperationPayloadSchema {
+            schema_id: "cx.schema.operation.reaction.v1",
+            requirements: REACTION_REQUIREMENTS,
+            validate: None,
+        },
+        kinds::CX_ENTITY_CREATE => OperationPayloadSchema {
+            schema_id: "cx.schema.operation.entity_create.v1",
+            requirements: ENTITY_CREATE_REQUIREMENTS,
+            validate: None,
+        },
+        kinds::CX_ENTITY_UPDATE | kinds::CX_ENTITY_DELETE => OperationPayloadSchema {
+            schema_id: "cx.schema.operation.entity_mutation.v1",
+            requirements: ENTITY_ID_REQUIREMENTS,
+            validate: None,
+        },
+        kinds::CX_RELATION_CREATE => OperationPayloadSchema {
+            schema_id: "cx.schema.operation.relation_create.v1",
+            requirements: RELATION_CREATE_REQUIREMENTS,
+            validate: None,
+        },
+        kinds::CX_RELATION_UPDATE | kinds::CX_RELATION_DELETE => OperationPayloadSchema {
+            schema_id: "cx.schema.operation.relation_mutation.v1",
+            requirements: RELATION_ID_REQUIREMENTS,
+            validate: None,
+        },
+        kinds::CX_READ_MARKER => OperationPayloadSchema {
+            schema_id: "cx.schema.operation.read_marker.v1",
+            requirements: READ_MARKER_REQUIREMENTS,
+            validate: None,
+        },
+        kind if kinds::is_membership_kind(kind) => OperationPayloadSchema {
+            schema_id: "cx.schema.operation.membership.v1",
+            requirements: MEMBERSHIP_REQUIREMENTS,
+            validate: None,
+        },
+        kind if kinds::is_space_lifecycle_kind(kind) => OperationPayloadSchema {
+            schema_id: "cx.schema.operation.space_lifecycle.v1",
+            requirements: SPACE_LIFECYCLE_REQUIREMENTS,
+            validate: None,
+        },
+        _ => return None,
+    };
+    Some(schema)
+}
+
+fn validate_operation_schema(
+    operation: &Operation,
+    schema: OperationPayloadSchema,
+) -> Result<(), &'static str> {
+    for requirement in schema.requirements {
+        match requirement {
+            PayloadRequirement::Required(field, message) => {
+                if !payload_field_present(&operation.payload, field) {
+                    return Err(message);
+                }
+            }
+            PayloadRequirement::AnyOf(fields, message) => {
+                if !fields
+                    .iter()
+                    .any(|field| payload_field_present(&operation.payload, field))
+                {
+                    return Err(message);
+                }
+            }
+        }
+    }
+    if let Some(validate) = schema.validate {
+        validate(operation)?;
+    }
+    Ok(())
+}
+
+fn payload_field_present(payload: &serde_json::Value, field: &str) -> bool {
+    payload.get(field).is_some_and(|value| !value.is_null())
+}
+
+fn validate_message_operation_payload(operation: &Operation) -> Result<(), &'static str> {
+    if operation
+        .payload
+        .get("encrypted")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false)
+    {
+        let Some(content) = operation.payload.get("content") else {
+            return Err("encrypted message operation requires content envelope");
+        };
+        validate_encrypted_payload_envelope(content)?;
+    } else if let Some(content) = operation.payload.get("content") {
+        validate_content_blocks(content)?;
+        validate_mentions(content)?;
     }
     Ok(())
 }

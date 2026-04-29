@@ -345,6 +345,61 @@ fn core_schema_records(
         ("cx.schema.event.message.v1", "event", "Message event"),
         ("cx.schema.event.reaction.v1", "event", "Reaction event"),
         ("cx.schema.event.redaction.v1", "event", "Redaction event"),
+        (
+            "cx.schema.operation.message_create.v1",
+            "operation",
+            "Message create operation",
+        ),
+        (
+            "cx.schema.operation.message_revise.v1",
+            "operation",
+            "Message revise operation",
+        ),
+        (
+            "cx.schema.operation.redaction.v1",
+            "operation",
+            "Redaction operation",
+        ),
+        (
+            "cx.schema.operation.reaction.v1",
+            "operation",
+            "Reaction operation",
+        ),
+        (
+            "cx.schema.operation.entity_create.v1",
+            "operation",
+            "Entity create operation",
+        ),
+        (
+            "cx.schema.operation.entity_mutation.v1",
+            "operation",
+            "Entity mutation operation",
+        ),
+        (
+            "cx.schema.operation.relation_create.v1",
+            "operation",
+            "Relation create operation",
+        ),
+        (
+            "cx.schema.operation.relation_mutation.v1",
+            "operation",
+            "Relation mutation operation",
+        ),
+        (
+            "cx.schema.operation.membership.v1",
+            "operation",
+            "Membership operation",
+        ),
+        (
+            "cx.schema.operation.space_lifecycle.v1",
+            "operation",
+            "Space lifecycle operation",
+        ),
+        (
+            "cx.schema.operation.read_marker.v1",
+            "operation",
+            "Read marker operation",
+        ),
         ("cx.schema.cursor.v1", "cursor", "Cursor envelope"),
         ("cx.schema.grant.v1", "grant", "Capability grant"),
         (

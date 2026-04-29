@@ -1279,6 +1279,22 @@ async fn schema_registry_contracts_work() {
                 schema["schema_id"] == "cx.schema.entity.task.v1" && schema["active"] == true
             })
     );
+    let operation_schemas: Value = TestClient::get("http://server/api/v1/schemas?kind=operation")
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert!(
+        operation_schemas["schemas"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|schema| {
+                schema["schema_id"] == "cx.schema.operation.message_create.v1"
+                    && schema["active"] == true
+            })
+    );
 
     let task_schema: Value =
         TestClient::get("http://server/api/v1/schemas/cx.schema.entity.task.v1")
@@ -2734,6 +2750,48 @@ async fn repo_adapter_memory_submit_list_get_and_sync_work() {
         .unwrap();
     assert_eq!(duplicate_submit["status"], "accepted");
     assert_eq!(duplicate_submit["head_commit"], commit_digest);
+
+    let invalid_reaction = Operation::create(
+        OperationId::new("cx:operation:adapter-invalid-reaction").unwrap(),
+        SpaceId::new("cx:space:adapter").unwrap(),
+        kinds::CX_REACTION_ADD,
+        serde_json::json!({
+            "event_id": "cx:event:adapter-01",
+            "actor": "did:web:alice.example"
+        }),
+    );
+    let invalid_reaction_digest = Hash::new(invalid_reaction.operation_digest().unwrap()).unwrap();
+    let mut invalid_reaction_commit = Commit::new(
+        CommitId::new("cx:commit:adapter-invalid-reaction").unwrap(),
+        "did:web:alice.example",
+        Did::new("did:web:alice.example").unwrap(),
+        2,
+    );
+    invalid_reaction_commit
+        .operations
+        .push(invalid_reaction_digest);
+    invalid_reaction_commit.proofs.push(dummy_proof());
+    let invalid_reaction_response: Value =
+        TestClient::post("http://server/api/v1/repo/submit-commit")
+            .json(&serde_json::json!({
+                "repo_id": "did:web:alice.example",
+                "expected_head": commit_digest,
+                "operations": [invalid_reaction],
+                "commit": invalid_reaction_commit
+            }))
+            .send(&app_from_state(state.clone()))
+            .await
+            .take_json()
+            .await
+            .unwrap();
+    assert_eq!(
+        invalid_reaction_response["error"]["errcode"],
+        "invalid_param"
+    );
+    assert_eq!(
+        invalid_reaction_response["error"]["error"],
+        "reaction operation requires reaction key"
+    );
 
     let describe: Value =
         TestClient::get("http://server/api/v1/repo/describe?repo_id=did:web:alice.example")

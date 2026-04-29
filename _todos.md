@@ -176,7 +176,7 @@ P0 的完成标准: 可以诚实声明 `principal_server_repo_api` 的核心子�
   - [x] `authz_ref`
   - [x] `proofs`
 - [x] reducer dispatch 改为 canonical kind。
-- [ ] `validate_operation_semantics` 改为 schema registry 驱动, 未注册事件 fail closed。
+- [x] `validate_operation_semantics` 改为 schema registry 驱动, 未注册事件 fail closed。
 - [x] `supported_operations` 只声明 canonical operation id, 不声明产品私有别名。
 - [ ] 给所有内置操作补 conformance vectors。
 
