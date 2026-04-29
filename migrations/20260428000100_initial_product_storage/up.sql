@@ -288,17 +288,20 @@ CREATE TABLE IF NOT EXISTS repo_author_sequences (
 );
 
 CREATE TABLE IF NOT EXISTS sessions (
-    token TEXT PRIMARY KEY,
+    token_hash TEXT PRIMARY KEY,
     actor TEXT NOT NULL,
     device_id TEXT NOT NULL,
+    audience TEXT NOT NULL,
     payload JSONB NOT NULL,
     expires_at TIMESTAMPTZ NOT NULL,
     revoked_at TIMESTAMPTZ,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS sessions_actor_device_idx
-    ON sessions (actor, device_id);
+    ON sessions (actor, device_id, expires_at)
+    WHERE revoked_at IS NULL;
 
 CREATE TABLE IF NOT EXISTS devices (
     actor TEXT NOT NULL,
@@ -591,13 +594,21 @@ CREATE TABLE IF NOT EXISTS webrtc_sessions (
 CREATE TABLE IF NOT EXISTS audit_log (
     audit_id BIGSERIAL PRIMARY KEY,
     actor TEXT,
+    device_id TEXT,
+    space_id TEXT,
     action TEXT NOT NULL,
     resource TEXT,
     request_id TEXT,
     operation_id TEXT,
+    commit_id TEXT,
+    outcome TEXT NOT NULL DEFAULT 'unknown',
     payload JSONB NOT NULL DEFAULT '{}'::JSONB,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS audit_log_actor_created_idx
     ON audit_log (actor, created_at);
+
+CREATE INDEX IF NOT EXISTS audit_log_space_created_idx
+    ON audit_log (space_id, created_at);

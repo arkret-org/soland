@@ -58,10 +58,13 @@ pub struct AppState {
 
 #[derive(Clone, Debug)]
 pub struct SessionRecord {
-    pub token: String,
+    pub token_hash: String,
     pub actor: String,
     pub device_id: String,
+    pub audience: String,
     pub expires_at: chrono::DateTime<chrono::Utc>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub revoked_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[derive(Clone, Debug)]
@@ -164,6 +167,7 @@ pub struct DeviceMessageRecord {
     pub sender: String,
     pub recipient: String,
     pub device_id: String,
+    pub position: i64,
     pub content: Value,
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
@@ -174,6 +178,7 @@ pub struct BlobRecord {
     pub storage_path: Option<std::path::PathBuf>,
     pub media_type: String,
     pub filename: Option<String>,
+    pub space_id: Option<String>,
     pub encryption: Option<Value>,
     pub uploaded_by: String,
     pub created_at: chrono::DateTime<chrono::Utc>,

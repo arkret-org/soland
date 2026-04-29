@@ -14,6 +14,8 @@ When `SERVERX_DEVELOPMENT_MODE=false`, submitted commits must use production pro
 
 Client sync `next_batch` cursors are structured `cx:cursor:` tokens bound to the principal, device, service DID, filter hash, stream positions, and expiry. Passing `since` returns incremental timeline events and expired cursors fail with `sync_token_expired`.
 
+Development bearer sessions are stored server-side by service-bound SHA-256 token hash, not by plaintext token. Logout records `revoked_at` and revoked sessions are rejected on later requests. To-device messages remain deliverable across duplicate syncs until the client presents a cursor with the acknowledged to-device position. Blob downloads require a bearer session plus a `purpose` query parameter; blobs are visible to the uploader or to members of the blob Space when one is bound at upload time.
+
 ## Configuration
 
 - `--bind` / `SERVERX_BIND`: listen address, default `127.0.0.1:8787`.

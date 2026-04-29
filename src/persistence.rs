@@ -204,7 +204,7 @@ impl SessionStore for MemorySessionStore {
 
     fn put(&self, record: &SessionRecord) -> PersistenceResult<()> {
         let mut data = self.data.lock().expect("lock");
-        data.insert(record.token.clone(), record.clone());
+        data.insert(record.token_hash.clone(), record.clone());
         Ok(())
     }
 
@@ -436,16 +436,22 @@ mod tests {
     fn memory_session_store_expiry() {
         let store = MemorySessionStore::new();
         let expired = SessionRecord {
-            token: "expired".to_owned(),
+            token_hash: "expired".to_owned(),
             actor: "did:web:test".to_owned(),
             device_id: "dev".to_owned(),
+            audience: "did:web:soland.local".to_owned(),
             expires_at: Utc::now() - chrono::Duration::hours(1),
+            created_at: Utc::now() - chrono::Duration::hours(2),
+            revoked_at: None,
         };
         let valid = SessionRecord {
-            token: "valid".to_owned(),
+            token_hash: "valid".to_owned(),
             actor: "did:web:test".to_owned(),
             device_id: "dev".to_owned(),
+            audience: "did:web:soland.local".to_owned(),
             expires_at: Utc::now() + chrono::Duration::hours(1),
+            created_at: Utc::now(),
+            revoked_at: None,
         };
 
         store.put(&expired).unwrap();

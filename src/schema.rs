@@ -277,14 +277,16 @@ diesel::table! {
 }
 
 diesel::table! {
-    sessions (token) {
-        token -> Text,
+    sessions (token_hash) {
+        token_hash -> Text,
         actor -> Text,
         device_id -> Text,
+        audience -> Text,
         payload -> Jsonb,
         expires_at -> Timestamptz,
         revoked_at -> Nullable<Timestamptz>,
         created_at -> Timestamptz,
+        updated_at -> Timestamptz,
     }
 }
 
@@ -586,12 +588,17 @@ diesel::table! {
     audit_log (audit_id) {
         audit_id -> Int8,
         actor -> Nullable<Text>,
+        device_id -> Nullable<Text>,
+        space_id -> Nullable<Text>,
         action -> Text,
         resource -> Nullable<Text>,
         request_id -> Nullable<Text>,
         operation_id -> Nullable<Text>,
+        commit_id -> Nullable<Text>,
+        outcome -> Text,
         payload -> Jsonb,
         created_at -> Timestamptz,
+        updated_at -> Timestamptz,
     }
 }
 

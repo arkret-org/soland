@@ -1036,13 +1036,19 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         .take_json()
         .await
         .unwrap();
+    let space_create_audit = audit_events["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|event| event["action"] == "space.create")
+        .expect("space create audit event");
     assert!(
-        audit_events["events"]
-            .as_array()
+        space_create_audit["request_id"]
+            .as_str()
             .unwrap()
-            .iter()
-            .any(|event| event["action"] == "space.create")
+            .starts_with("cx:req:")
     );
+    assert_eq!(space_create_audit["outcome"], "accepted");
     let forbidden_audit =
         TestClient::get("http://server/api/v1/audit/events?actor=did:web:bob.example")
             .add_header("authorization", format!("Bearer {alice}"), true)
@@ -1058,6 +1064,17 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         .await
         .unwrap();
     assert_eq!(logout["revoked"], true);
+    {
+        let sessions = state.sessions.lock().unwrap();
+        assert!(!sessions.contains_key(&bob));
+        let bob_session = sessions
+            .values()
+            .find(|session| session.actor == "did:web:bob.example")
+            .expect("hashed bob session remains for revocation audit");
+        assert_ne!(bob_session.token_hash, bob);
+        assert_eq!(bob_session.audience, "did:web:soland.local");
+        assert!(bob_session.revoked_at.is_some());
+    }
     let revoked_me = TestClient::get("http://server/api/v1/account/me")
         .add_header("authorization", format!("Bearer {bob}"), true)
         .send(&app_from_state(state.clone()))
@@ -2460,10 +2477,19 @@ async fn auth_keys_device_messages_and_blobs_work() {
         .join(blob["sha256"].as_str().unwrap());
     assert_eq!(std::fs::read(blob_path).unwrap(), b"encrypted-bytes");
 
-    let body = TestClient::get(format!(
-        "http://server/api/v1/blob/get?blob_ref={}",
+    let anonymous_blob = TestClient::get(format!(
+        "http://server/api/v1/blob/get?blob_ref={}&purpose=message_attachment",
         blob["blob_ref"].as_str().unwrap()
     ))
+    .send(&app_from_state(state.clone()))
+    .await;
+    assert_eq!(anonymous_blob.status_code.unwrap().as_u16(), 401);
+
+    let body = TestClient::get(format!(
+        "http://server/api/v1/blob/get?blob_ref={}&purpose=message_attachment",
+        blob["blob_ref"].as_str().unwrap()
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
     .await
     .take_string()
@@ -2472,14 +2498,34 @@ async fn auth_keys_device_messages_and_blobs_work() {
     assert_eq!(body, "encrypted-bytes");
 
     let mut range = TestClient::get(format!(
-        "http://server/api/v1/blob/get?blob_ref={}",
+        "http://server/api/v1/blob/get?blob_ref={}&purpose=message_attachment",
         blob["blob_ref"].as_str().unwrap()
     ))
+    .add_header("authorization", format!("Bearer {token}"), true)
     .add_header("range", "bytes=0-8", true)
     .send(&app_from_state(state.clone()))
     .await;
     assert_eq!(range.status_code.unwrap().as_u16(), 206);
     assert_eq!(range.take_string().await.unwrap(), "encrypted");
+
+    let bob = register_account(
+        state.clone(),
+        "did:web:blob-bob.example",
+        "@blob-bob",
+        "dev_blob_bob",
+    )
+    .await;
+    let invisible_blob = TestClient::get(format!(
+        "http://server/api/v1/blob/get?blob_ref={}&purpose=message_attachment",
+        blob["blob_ref"].as_str().unwrap()
+    ))
+    .add_header("authorization", format!("Bearer {bob}"), true)
+    .add_header("range", "bytes=0-8", true)
+    .send(&app_from_state(state.clone()))
+    .await;
+    assert_eq!(invisible_blob.status_code.unwrap().as_u16(), 404);
+    assert!(invisible_blob.headers().get("content-range").is_none());
+    assert!(invisible_blob.headers().get("accept-ranges").is_none());
 
     let push_registration: Value = TestClient::post("http://server/api/v1/push/register-device")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -2555,6 +2601,60 @@ async fn server_preserves_e2ee_payloads_as_opaque_data() {
     let content = &delivered["events"][0]["content"]["content"];
     assert_eq!(content["ciphertext"], ciphertext);
     assert!(content.get("plaintext").is_none());
+    assert!(delivered["events"][0]["position"].as_i64().unwrap() > 0);
+}
+
+#[tokio::test]
+async fn to_device_messages_survive_duplicate_sync_until_cursor_ack() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+
+    TestClient::put("http://server/api/v1/device_messages/ack-txn")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({
+            "messages": {
+                "did:web:alice.example": {
+                    "dev_alice": {
+                        "type": "cx.mls.application",
+                        "content": encrypted_envelope("cx.mls.application", "ack-ciphertext")
+                    }
+                }
+            }
+        }))
+        .send(&app_from_state(state.clone()))
+        .await;
+
+    let first: Value = TestClient::post("http://server/api/v1/sync")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({}))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(first["to_device"].as_array().unwrap().len(), 1);
+    let first_cursor = decode_cursor(first["next_batch"].as_str().unwrap());
+    assert!(first_cursor["positions"]["to_device"].as_i64().unwrap() > 0);
+
+    let duplicate: Value = TestClient::post("http://server/api/v1/sync")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({}))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(duplicate["to_device"].as_array().unwrap().len(), 1);
+
+    let acked: Value = TestClient::post("http://server/api/v1/sync")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({"since": first["next_batch"]}))
+        .send(&app_from_state(state))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert!(acked["to_device"].as_array().unwrap().is_empty());
 }
 
 #[tokio::test]

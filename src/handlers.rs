@@ -13,7 +13,7 @@ use salvo::{
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
 
 use crate::{
     ids, kinds,
@@ -158,13 +158,17 @@ pub async fn dev_login(depot: &mut Depot, req: &mut Request, res: &mut Response)
 
     let expires_at = now() + chrono::Duration::hours(12);
     let token = token_for(&body.actor, &body.device_id, expires_at.timestamp_millis());
+    let token_hash = session_token_hash(&token, &state.config.service_did);
     state.sessions.lock().expect("sessions lock").insert(
-        token.clone(),
+        token_hash.clone(),
         SessionRecord {
-            token: token.clone(),
+            token_hash,
             actor: body.actor.clone(),
             device_id: body.device_id.clone(),
+            audience: state.config.service_did.clone(),
             expires_at,
+            created_at: now(),
+            revoked_at: None,
         },
     );
     state
@@ -211,14 +215,25 @@ pub async fn logout(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         );
         return;
     };
-    let removed = state.sessions.lock().expect("sessions lock").remove(&token);
-    let revoked = removed.is_some();
-    if let Some(session) = removed {
+    let token_hash = session_token_hash(&token, &state.config.service_did);
+    let revoked_session = {
+        let mut sessions = state.sessions.lock().expect("sessions lock");
+        sessions.get_mut(&token_hash).and_then(|session| {
+            if session.revoked_at.is_some() {
+                None
+            } else {
+                session.revoked_at = Some(now());
+                Some(session.clone())
+            }
+        })
+    };
+    let revoked = revoked_session.is_some();
+    if let Some(session) = revoked_session {
         append_audit_log(
             state,
             Some(&session.actor),
             "auth.logout",
-            json!({"device_id": session.device_id}),
+            json!({"device_id": session.device_id, "revoked_at": session.revoked_at}),
             "accepted",
         );
     }
@@ -1072,6 +1087,8 @@ pub async fn send_message(depot: &mut Depot, req: &mut Request, res: &mut Respon
     }
     append_projection_event(state, projection_event);
 
+    let audit_actor = session.actor.clone();
+    let audit_space_id = body.space_id.clone();
     state
         .messages
         .lock()
@@ -1085,6 +1102,18 @@ pub async fn send_message(depot: &mut Depot, req: &mut Request, res: &mut Respon
             encrypted: body.encrypted,
             created_at: now(),
         });
+    append_audit_log(
+        state,
+        Some(&audit_actor),
+        "message.send",
+        json!({
+            "space_id": audit_space_id,
+            "operation_id": operation_id.clone(),
+            "commit_id": commit_id.clone(),
+            "event_id": event_id.clone()
+        }),
+        "accepted",
+    );
 
     res.status_code(StatusCode::CREATED);
     res.render(Json(SendMessageResponse {
@@ -3375,27 +3404,22 @@ pub async fn client_sync(depot: &mut Depot, req: &mut Request, res: &mut Respons
         );
     }
 
+    let mut to_device_position = since_cursor.to_device_position;
     let to_device = session
         .as_ref()
         .map(|session| {
             let mut queue = state.device_messages.lock().expect("device message lock");
-            let mut drained = Vec::new();
-            queue.retain(|message| {
-                let mine =
-                    message.recipient == session.actor && message.device_id == session.device_id;
-                if mine {
-                    drained.push(json!({
-                        "txn_id": message.txn_id,
-                        "sender": message.sender,
-                        "recipient": message.recipient,
-                        "device_id": message.device_id,
-                        "content": message.content,
-                        "created_at": message.created_at
-                    }));
-                }
-                !mine
-            });
-            drained
+            prune_acked_device_messages(&mut queue, session, since_cursor.to_device_position);
+            let events =
+                device_message_events_after(&queue, session, since_cursor.to_device_position);
+            if let Some(max_position) = events
+                .iter()
+                .filter_map(|event| event.get("position").and_then(|position| position.as_i64()))
+                .max()
+            {
+                to_device_position = max_position;
+            }
+            events
         })
         .unwrap_or_default();
 
@@ -3405,6 +3429,7 @@ pub async fn client_sync(depot: &mut Depot, req: &mut Request, res: &mut Respons
             session.as_ref(),
             body.filter.as_ref(),
             positions,
+            to_device_position,
         ),
         spaces: sync_spaces,
         to_device,
@@ -3416,6 +3441,7 @@ pub async fn client_sync(depot: &mut Depot, req: &mut Request, res: &mut Respons
 #[derive(Debug, Default)]
 struct SyncCursor {
     positions: BTreeMap<String, i64>,
+    to_device_position: i64,
 }
 
 #[derive(Debug)]
@@ -3430,6 +3456,7 @@ fn sync_token_for_client_sync(
     session: Option<&SessionRecord>,
     filter: Option<&serde_json::Value>,
     spaces_positions: BTreeMap<String, i64>,
+    to_device_position: i64,
 ) -> String {
     let issued_at = chrono::Utc::now();
     let expires_at = issued_at + chrono::Duration::hours(1);
@@ -3455,6 +3482,7 @@ fn sync_token_for_client_sync(
         "positions": {
             "spaces": spaces_positions,
             "devices": device_positions,
+            "to_device": to_device_position,
             "repo": null
         }
     });
@@ -3530,9 +3558,11 @@ fn parse_and_validate_sync_cursor(
             "sync token filter hash does not match request filter",
         ));
     }
-    let positions = value
-        .get("positions")
-        .and_then(|positions| positions.get("spaces"))
+    let positions_value = value.get("positions").ok_or(SyncCursorError::Invalid(
+        "since cursor must contain positions",
+    ))?;
+    let positions = positions_value
+        .get("spaces")
         .and_then(|spaces| spaces.as_object())
         .ok_or(SyncCursorError::Invalid(
             "since cursor must contain positions.spaces",
@@ -3544,7 +3574,14 @@ fn parse_and_validate_sync_cursor(
                 .map(|position| (space_id.clone(), position))
         })
         .collect();
-    Ok(SyncCursor { positions })
+    let to_device_position = positions_value
+        .get("to_device")
+        .and_then(|position| position.as_i64())
+        .unwrap_or_default();
+    Ok(SyncCursor {
+        positions,
+        to_device_position,
+    })
 }
 
 fn decode_sync_cursor_value(token: &str) -> Result<serde_json::Value, SyncCursorError> {
@@ -6183,13 +6220,15 @@ pub async fn put_device_messages(depot: &mut Depot, req: &mut Request, res: &mut
     for (recipient, devices) in body.messages {
         let mut delivered_devices = Vec::new();
         for (device_id, content) in devices {
+            let created_at = now();
             queue.push_back(DeviceMessageRecord {
                 txn_id: txn_id.clone(),
                 sender: session.actor.clone(),
                 recipient: recipient.clone(),
                 device_id: device_id.clone(),
+                position: created_at.timestamp_micros(),
                 content,
-                created_at: now(),
+                created_at,
             });
             delivered_devices.push(device_id);
         }
@@ -6208,27 +6247,95 @@ pub async fn get_device_messages(depot: &mut Depot, req: &mut Request, res: &mut
     let Some(session) = auth_or_render(state, req, res) else {
         return;
     };
+    let ack_position = match query_param(req, "ack").or_else(|| query_param(req, "since")) {
+        Some(cursor) => match parse_and_validate_sync_cursor(
+            &cursor,
+            state,
+            Some(&session),
+            None,
+            chrono::Utc::now().timestamp_millis(),
+        ) {
+            Ok(cursor) => cursor.to_device_position,
+            Err(SyncCursorError::Expired) => {
+                render_error(
+                    res,
+                    StatusCode::UNAUTHORIZED,
+                    "sync_token_expired",
+                    "sync token has expired",
+                );
+                return;
+            }
+            Err(SyncCursorError::Invalid(message)) => {
+                render_error(res, StatusCode::BAD_REQUEST, "invalid_param", message);
+                return;
+            }
+            Err(SyncCursorError::Mismatch(message)) => {
+                render_error(res, StatusCode::BAD_REQUEST, "sync_token_mismatch", message);
+                return;
+            }
+        },
+        None => 0,
+    };
     let mut queue = state.device_messages.lock().expect("device message lock");
-    let mut events = Vec::new();
+    prune_acked_device_messages(&mut queue, &session, ack_position);
+    let events = device_message_events_after(&queue, &session, ack_position);
+    let to_device_position = events
+        .iter()
+        .filter_map(|event| event.get("position").and_then(|position| position.as_i64()))
+        .max()
+        .unwrap_or(ack_position);
+    res.render(Json(DeviceMessagesReceiveResponse {
+        events,
+        next_batch: Some(sync_token_for_client_sync(
+            state,
+            Some(&session),
+            None,
+            BTreeMap::new(),
+            to_device_position,
+        )),
+        limited: false,
+    }));
+}
+
+fn prune_acked_device_messages(
+    queue: &mut VecDeque<DeviceMessageRecord>,
+    session: &SessionRecord,
+    ack_position: i64,
+) {
+    if ack_position <= 0 {
+        return;
+    }
     queue.retain(|message| {
-        let mine = message.recipient == session.actor && message.device_id == session.device_id;
-        if mine {
-            events.push(json!({
+        !(message.recipient == session.actor
+            && message.device_id == session.device_id
+            && message.position <= ack_position)
+    });
+}
+
+fn device_message_events_after(
+    queue: &VecDeque<DeviceMessageRecord>,
+    session: &SessionRecord,
+    ack_position: i64,
+) -> Vec<Value> {
+    queue
+        .iter()
+        .filter(|message| {
+            message.recipient == session.actor
+                && message.device_id == session.device_id
+                && message.position > ack_position
+        })
+        .map(|message| {
+            json!({
                 "txn_id": message.txn_id,
                 "sender": message.sender,
                 "recipient": message.recipient,
                 "device_id": message.device_id,
+                "position": message.position,
                 "content": message.content,
                 "created_at": message.created_at
-            }));
-        }
-        !mine
-    });
-    res.render(Json(DeviceMessagesReceiveResponse {
-        events,
-        next_batch: Some(sync_token()),
-        limited: false,
-    }));
+            })
+        })
+        .collect()
 }
 
 /// Verify federation origin is a valid DID.
@@ -6501,6 +6608,35 @@ pub async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Respons
         .and_then(|value| value.to_str().ok())
         .unwrap_or("application/octet-stream")
         .to_owned();
+    let space_id = match req
+        .headers()
+        .get("x-contrix-space-id")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned)
+    {
+        Some(space_id) => {
+            if validate_space_id(&space_id).is_err() {
+                render_error(
+                    res,
+                    StatusCode::BAD_REQUEST,
+                    "invalid_param",
+                    "invalid blob space_id",
+                );
+                return;
+            }
+            if !space_has_member(state, &space_id, &session.actor) {
+                render_error(
+                    res,
+                    StatusCode::FORBIDDEN,
+                    "capability_denied",
+                    "uploader is not a joined member of the blob space",
+                );
+                return;
+            }
+            Some(space_id)
+        }
+        None => None,
+    };
     let size = bytes.len();
     if size > 10 * 1024 * 1024 {
         render_error(
@@ -6563,6 +6699,7 @@ pub async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Respons
             storage_path: Some(storage_path),
             media_type: media_type.clone(),
             filename: None,
+            space_id,
             encryption: encryption.clone(),
             uploaded_by: session.actor,
             created_at: now(),
@@ -6584,6 +6721,9 @@ pub async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Respons
 #[handler]
 pub async fn blob_get(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
+    let Some(session) = auth_or_render(state, req, res) else {
+        return;
+    };
     let Some(blob_ref) = query_param(req, "blob_ref") else {
         render_error(
             res,
@@ -6593,9 +6733,36 @@ pub async fn blob_get(depot: &mut Depot, req: &mut Request, res: &mut Response) 
         );
         return;
     };
+    let Some(purpose) = query_param(req, "purpose") else {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "missing_param",
+            "purpose is required",
+        );
+        return;
+    };
+    if !is_valid_blob_purpose(&purpose) {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            "invalid blob purpose",
+        );
+        return;
+    }
     let blobs = state.blobs.lock().expect("blob lock");
     match blobs.get(&blob_ref) {
         Some(blob) => {
+            if !blob_visible_to_session(
+                state,
+                blob,
+                &session,
+                query_param(req, "space_id").as_deref(),
+            ) {
+                render_error(res, StatusCode::NOT_FOUND, "not_found", "not found");
+                return;
+            }
             let blob_bytes = blob
                 .storage_path
                 .as_ref()
@@ -6652,9 +6819,15 @@ pub async fn blob_get(depot: &mut Depot, req: &mut Request, res: &mut Response) 
             }
             append_audit_log(
                 state,
-                None,
+                Some(&session.actor),
                 "blob.get",
-                json!({"blob_ref": blob_ref.clone(), "status": status.as_u16()}),
+                json!({
+                    "blob_ref": blob_ref.clone(),
+                    "device_id": session.device_id.clone(),
+                    "purpose": purpose,
+                    "space_id": blob.space_id.clone(),
+                    "status": status.as_u16()
+                }),
                 "accepted",
             );
             if req.method() != Method::HEAD {
@@ -10044,9 +10217,30 @@ fn append_audit_log(
     target: serde_json::Value,
     outcome: &str,
 ) {
+    let device_id = target
+        .get("device_id")
+        .and_then(|value| value.as_str())
+        .map(ToOwned::to_owned);
+    let space_id = target
+        .get("space_id")
+        .and_then(|value| value.as_str())
+        .map(ToOwned::to_owned);
+    let operation_id = target
+        .get("operation_id")
+        .and_then(|value| value.as_str())
+        .map(ToOwned::to_owned);
+    let commit_id = target
+        .get("commit_id")
+        .and_then(|value| value.as_str())
+        .map(ToOwned::to_owned);
     state.audit_log.lock().expect("audit log lock").push(json!({
         "audit_id": ids::generate("audit"),
+        "request_id": ids::generate_request_id(),
         "actor": actor,
+        "device_id": device_id,
+        "space_id": space_id,
+        "operation_id": operation_id,
+        "commit_id": commit_id,
         "action": action,
         "target": target,
         "outcome": outcome,
@@ -10082,6 +10276,36 @@ fn parse_range(req: &Request, total_len: usize) -> Option<Result<(usize, usize),
         return Some(Err("range is outside blob bounds"));
     }
     Some(Ok((start, end)))
+}
+
+fn is_valid_blob_purpose(value: &str) -> bool {
+    let value = value.trim();
+    !value.is_empty()
+        && value.len() <= 64
+        && value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | ':'))
+}
+
+fn blob_visible_to_session(
+    state: &AppState,
+    blob: &BlobRecord,
+    session: &SessionRecord,
+    requested_space_id: Option<&str>,
+) -> bool {
+    if blob.uploaded_by == session.actor {
+        return blob.space_id.as_deref().is_none_or(|space_id| {
+            requested_space_id.is_none_or(|requested| requested == space_id)
+        });
+    }
+
+    let Some(space_id) = blob.space_id.as_deref() else {
+        return false;
+    };
+    if requested_space_id.is_some_and(|requested| requested != space_id) {
+        return false;
+    }
+    space_has_member(state, space_id, &session.actor)
 }
 
 fn validate_did(value: &str) -> Result<Did, ()> {
@@ -10124,17 +10348,32 @@ fn authenticated_session(
         "unauthenticated",
         "missing bearer token",
     ))?;
+    let token_hash = session_token_hash(token, &state.config.service_did);
     let session = state
         .sessions
         .lock()
         .expect("sessions lock")
-        .get(token)
+        .get(&token_hash)
         .cloned()
         .ok_or((
             StatusCode::UNAUTHORIZED,
             "unauthenticated",
             "invalid bearer token",
         ))?;
+    if session.audience != state.config.service_did {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            "unauthenticated",
+            "session audience does not match this service",
+        ));
+    }
+    if session.revoked_at.is_some() {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            "unauthenticated",
+            "session revoked",
+        ));
+    }
     if session.expires_at <= now() {
         return Err((StatusCode::UNAUTHORIZED, "auth_expired", "session expired"));
     }
@@ -10149,14 +10388,25 @@ fn bearer_token(req: &Request) -> Option<&str> {
 }
 
 fn token_for(actor: &str, device_id: &str, expires_ms: i64) -> String {
+    let nonce = ids::generate("session");
     let mut hasher = Sha256::new();
     hasher.update(actor.as_bytes());
     hasher.update(b":");
     hasher.update(device_id.as_bytes());
     hasher.update(b":");
     hasher.update(expires_ms.to_string().as_bytes());
+    hasher.update(b":");
+    hasher.update(nonce.as_bytes());
     hasher.update(b":soland-dev-session");
     format!("sx_{}", URL_SAFE_NO_PAD.encode(hasher.finalize()))
+}
+
+fn session_token_hash(token: &str, audience: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(audience.as_bytes());
+    hasher.update(b":");
+    hasher.update(token.as_bytes());
+    format!("sha256:{}", URL_SAFE_NO_PAD.encode(hasher.finalize()))
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
