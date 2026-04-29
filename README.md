@@ -10,6 +10,8 @@ cargo run -- --bind 127.0.0.1:8787
 
 `DATABASE_URL` is optional for local development. Without it, soland runs with an in-memory repository and demo Space data while keeping the same HTTP API.
 
+When `SERVERX_DEVELOPMENT_MODE=false`, submitted commits must use production proof material: no `alg: none` or `dev-proof`, proof `payload_hash` must match the canonical commit digest, the verification method must be rooted in the commit author DID, and proof `domain`/`audience` must bind to `SERVERX_SERVICE_DID`.
+
 ## Configuration
 
 - `--bind` / `SERVERX_BIND`: listen address, default `127.0.0.1:8787`.

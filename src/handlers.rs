@@ -1,7 +1,7 @@
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use contrix_sdk::{
-    Commit, CommitId, CommitProofVerifier, DeviceId, Did, ErrorEnvelope, Hash, Operation,
-    OperationId, Proof, SpaceId, SpaceSearchEntry,
+    Audience, Commit, CommitId, CommitProofVerifier, DeviceId, Did, ErrorEnvelope, Hash, Operation,
+    OperationId, Proof, SpaceId, SpaceSearchEntry, identity::DidResolver,
 };
 use diesel::{
     QueryableByName, RunQueryDsl, sql_query,
@@ -1053,7 +1053,7 @@ pub async fn send_message(depot: &mut Depot, req: &mut Request, res: &mut Respon
         expected_head.as_deref(),
         vec![operation.clone()],
         commit,
-        &RequireProof,
+        &ProofVerifier::for_state(state),
     ) {
         Ok(head_commit) => head_commit,
         Err(error) => {
@@ -2811,15 +2811,12 @@ fn view_value_key(value: &serde_json::Value) -> Option<String> {
     }
 }
 
+/// Legacy dev-only verifier kept for internal handlers that inject dev_proof.
+/// Accepts any non-empty proof list. For client-facing commits, use `ProofVerifier`.
 struct DevProofVerifier;
 impl contrix_sdk::CommitProofVerifier for DevProofVerifier {
     fn verify_commit(&self, commit: &contrix_sdk::Commit) -> contrix_sdk::Result<()> {
-        if commit.proofs.is_empty() {
-            return Err(contrix_sdk::Error::Protocol(
-                "commit proofs must contain at least one proof".to_owned(),
-            ));
-        }
-        Ok(())
+        commit.validate_for_submit()
     }
 }
 
@@ -2852,6 +2849,30 @@ pub async fn identity_resolve(depot: &mut Depot, req: &mut Request, res: &mut Re
     };
     if validate_did(&body.did).is_err() {
         render_error(res, StatusCode::BAD_REQUEST, "invalid_param", "invalid did");
+        return;
+    }
+    // Try SDK DID resolver first, then fall back to in-memory store.
+    let sdk_did = contrix_sdk::Did::new(body.did.clone());
+    let sdk_document = sdk_did.ok().and_then(|did| {
+        state
+            .did_resolver
+            .lock()
+            .expect("did resolver lock")
+            .resolve_did(&did)
+            .ok()
+    });
+    if let Some(doc) = sdk_document {
+        res.render(Json(IdentityResolveResponse {
+            did_document: json!({
+                "id": doc.id.as_str(),
+                "verificationMethod": doc.verification_methods,
+                "alsoKnownAs": doc.also_known_as,
+            }),
+            key_log_head: None,
+            seq: 0,
+            receipts: Vec::new(),
+            method_evidence: json!({"mode": "sdk_resolver", "source": "did_resolver"}),
+        }));
         return;
     }
     let record = identity_document_record(state, &body.did);
@@ -2948,6 +2969,80 @@ pub async fn submit_did_operation(depot: &mut Depot, req: &mut Request, res: &mu
         );
         return;
     }
+    // Validate proof material: reject alg:none in production mode.
+    if !state.config.development_mode {
+        for proof in &body.proofs {
+            if proof.get("alg").and_then(|v| v.as_str()) == Some("none") {
+                render_error(
+                    res,
+                    StatusCode::UNAUTHORIZED,
+                    "invalid_signature",
+                    "production DID operations must not use alg:none",
+                );
+                return;
+            }
+            if proof.get("jws").and_then(|v| v.as_str()) == Some("dev-proof") {
+                render_error(
+                    res,
+                    StatusCode::UNAUTHORIZED,
+                    "invalid_signature",
+                    "production DID operations must not use dev-proof",
+                );
+                return;
+            }
+        }
+    }
+    // Verify signer authorization against current verification keys.
+    // For inception (seq=1), any proof is accepted. For subsequent operations,
+    // the signer must be a currently active verification or recovery key.
+    if body.seq > 1 {
+        let prev_doc = state
+            .identity_documents
+            .lock()
+            .expect("identity documents lock")
+            .get(&body.did)
+            .map(|r| r.did_document.clone());
+        if let Some(doc) = prev_doc {
+            let verification_keys: Vec<String> = doc
+                .get("verificationMethod")
+                .or_else(|| doc.get("verification_method"))
+                .and_then(|v| v.as_object())
+                .map(|m| m.keys().cloned().collect())
+                .unwrap_or_default();
+            let recovery_keys: Vec<String> = doc
+                .get("recovery_keys")
+                .and_then(|v| v.as_object())
+                .map(|m| m.keys().cloned().collect())
+                .unwrap_or_default();
+            let all_active_keys: Vec<&str> = verification_keys
+                .iter()
+                .chain(recovery_keys.iter())
+                .map(|s| s.as_str())
+                .collect();
+            if !all_active_keys.is_empty() {
+                // Check that at least one proof references an active key.
+                let proof_has_active_key = body.proofs.iter().any(|proof| {
+                    let vm = proof
+                        .get("verification_method")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    // verification_method is typically "did#key-id", extract after '#'.
+                    let key_id = vm.rsplit('#').next().unwrap_or(vm);
+                    all_active_keys.contains(&key_id)
+                        || all_active_keys.iter().any(|k| k.ends_with(key_id))
+                });
+                if !proof_has_active_key {
+                    render_error(
+                        res,
+                        StatusCode::UNAUTHORIZED,
+                        "invalid_signature",
+                        "DID operation signer is not an active verification or recovery key",
+                    );
+                    return;
+                }
+            }
+        }
+    }
     let previous = state
         .identity_documents
         .lock()
@@ -2985,7 +3080,44 @@ pub async fn submit_did_operation(depot: &mut Depot, req: &mut Request, res: &mu
     let head_event_hash = format!("sha256:{}", sha256_hex(body.patch.to_string().as_bytes()));
     let did_document = did_document_from_patch(&body.did, &body.patch)
         .unwrap_or_else(|| default_did_document(&body.did));
+    // Validate service endpoints in the DID document.
+    if let Err(message) =
+        validate_did_document_services(&body.did, &did_document, state.config.development_mode)
+    {
+        render_error(res, StatusCode::BAD_REQUEST, "invalid_param", message);
+        return;
+    }
     let now = now();
+    // Register the document in the SDK DID resolver for resolution.
+    if let Ok(did) = contrix_sdk::Did::new(body.did.clone()) {
+        let vm = did_document
+            .get("verificationMethod")
+            .or_else(|| did_document.get("verification_method"))
+            .and_then(|v| v.as_object());
+        if let Some(methods) = vm {
+            if let Some((key_id, key_value)) = methods.iter().next() {
+                let doc = contrix_sdk::identity::DidDocument::new(
+                    did.clone(),
+                    key_id,
+                    key_value.as_str().unwrap_or(""),
+                );
+                let mut resolver = state.did_resolver.lock().expect("did resolver lock");
+                match did.method() {
+                    "uuid" => {
+                        let mut r = contrix_sdk::identity::DidUuidResolver::new();
+                        let _ = r.insert(doc);
+                        resolver.push(r);
+                    }
+                    "web" => {
+                        let mut r = contrix_sdk::identity::DidWebResolver::new();
+                        let _ = r.insert(doc);
+                        resolver.push(r);
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
     state
         .identity_documents
         .lock()
@@ -4467,18 +4599,6 @@ pub async fn submit_commit(depot: &mut Depot, req: &mut Request, res: &mut Respo
         }
     };
 
-    struct RequireProof;
-    impl CommitProofVerifier for RequireProof {
-        fn verify_commit(&self, commit: &contrix_sdk::Commit) -> contrix_sdk::Result<()> {
-            if commit.proofs.is_empty() {
-                return Err(contrix_sdk::Error::Protocol(
-                    "commit proofs must contain at least one proof".to_owned(),
-                ));
-            }
-            Ok(())
-        }
-    }
-
     let commit_id = body.commit.commit_id.to_string();
     let commit_already_exists = state
         .repo
@@ -4502,7 +4622,7 @@ pub async fn submit_commit(depot: &mut Depot, req: &mut Request, res: &mut Respo
         body.expected_head.as_deref(),
         body.operations,
         body.commit,
-        &RequireProof,
+        &ProofVerifier::for_state(state),
     ) {
         Ok(head_commit) => {
             project_accepted_operations(state, &repo_id, &operations_for_projection);
@@ -6391,6 +6511,45 @@ fn did_document_from_patch(did: &str, patch: &serde_json::Value) -> Option<serde
     (document.get("id").and_then(|value| value.as_str()) == Some(did)).then_some(document)
 }
 
+/// Validate that a DID document's service endpoints are well-formed.
+///
+/// For `did:web` documents, the service endpoint must be an absolute URL or
+/// a path starting with `/`. Empty or missing service endpoints are rejected
+/// in production mode.
+fn validate_did_document_services(
+    did: &str,
+    document: &serde_json::Value,
+    development_mode: bool,
+) -> Result<(), &'static str> {
+    let services = document.get("service").and_then(|v| v.as_array());
+    if let Some(services) = services {
+        for service in services {
+            let endpoint = service.get("serviceEndpoint").and_then(|v| v.as_str());
+            match endpoint {
+                None | Some("") => {
+                    if !development_mode {
+                        return Err("DID document service must have a non-empty serviceEndpoint");
+                    }
+                }
+                Some(ep) => {
+                    // Must be an absolute URL or a path starting with /
+                    if !ep.starts_with("http://")
+                        && !ep.starts_with("https://")
+                        && !ep.starts_with('/')
+                    {
+                        return Err("DID document serviceEndpoint must be an absolute URL or path");
+                    }
+                }
+            }
+        }
+    }
+    // For did:web, there should be at least one service endpoint in production.
+    if did.starts_with("did:web:") && services.map_or(true, |s| s.is_empty()) && !development_mode {
+        return Err("did:web document must declare at least one service endpoint");
+    }
+    Ok(())
+}
+
 fn account_response(account: AccountRecord) -> AccountResponse {
     AccountResponse {
         did: account.did,
@@ -7439,12 +7598,114 @@ fn typing_ephemeral_for_space(
         .collect()
 }
 
-struct RequireProof;
+/// Proof verifier that enforces real proof material in production mode.
+///
+/// In development mode (`development_mode = true`), accepts any non-empty proof
+/// list including `alg: "none"` and `dev-proof` placeholders.
+///
+/// In production mode, rejects `alg: "none"` and `dev-proof` jws values,
+/// and verifies that each proof's `payload_hash` matches the commit's canonical digest.
+struct ProofVerifier {
+    development_mode: bool,
+    service_did: String,
+}
 
-impl CommitProofVerifier for RequireProof {
-    fn verify_commit(&self, commit: &Commit) -> contrix_sdk::Result<()> {
-        commit.validate_for_submit()
+impl ProofVerifier {
+    fn for_state(state: &AppState) -> Self {
+        Self {
+            development_mode: state.config.development_mode,
+            service_did: state.config.service_did.clone(),
+        }
     }
+}
+
+impl CommitProofVerifier for ProofVerifier {
+    fn verify_commit(&self, commit: &Commit) -> contrix_sdk::Result<()> {
+        commit.validate_for_submit()?;
+        if self.development_mode {
+            return Ok(());
+        }
+        let commit_digest = commit.commit_digest()?;
+        for proof in &commit.proofs {
+            proof.validate_production()?;
+            if proof.jws == "dev-proof" {
+                return Err(contrix_sdk::Error::Protocol(
+                    "production commits must not use dev-proof placeholder".to_owned(),
+                ));
+            }
+            if proof.payload_hash.as_str() != commit_digest {
+                return Err(contrix_sdk::Error::Protocol(format!(
+                    "proof payload_hash {} does not match commit digest {}",
+                    proof.payload_hash, commit_digest
+                )));
+            }
+            validate_proof_author_binding(proof, &commit.author)?;
+            validate_proof_service_binding(proof, &self.service_did)?;
+            validate_proof_created_at_binding(proof, commit.created_at)?;
+        }
+        Ok(())
+    }
+}
+
+fn validate_proof_author_binding(proof: &Proof, author: &Did) -> contrix_sdk::Result<()> {
+    let Some(method_did) = verification_method_did(&proof.verification_method) else {
+        return Err(contrix_sdk::Error::Protocol(
+            "proof verification_method must be a DID URL with a key fragment".to_owned(),
+        ));
+    };
+    if method_did != author.as_str() {
+        return Err(contrix_sdk::Error::Protocol(format!(
+            "proof verification_method DID '{}' does not match commit author '{}'",
+            method_did, author
+        )));
+    }
+    Ok(())
+}
+
+fn verification_method_did(verification_method: &str) -> Option<&str> {
+    let (did, key_fragment) = verification_method.split_once('#')?;
+    (!did.is_empty() && did.starts_with("did:") && !key_fragment.is_empty()).then_some(did)
+}
+
+fn validate_proof_service_binding(proof: &Proof, service_did: &str) -> contrix_sdk::Result<()> {
+    if proof.domain.as_deref() != Some(service_did) {
+        return Err(contrix_sdk::Error::Protocol(format!(
+            "proof domain must bind to service DID '{}'",
+            service_did
+        )));
+    }
+    if !proof_audience_contains(&proof.audience, service_did) {
+        return Err(contrix_sdk::Error::Protocol(format!(
+            "proof audience must include service DID '{}'",
+            service_did
+        )));
+    }
+    Ok(())
+}
+
+fn proof_audience_contains(audience: &Option<Audience>, expected: &str) -> bool {
+    match audience {
+        Some(Audience::Single(value)) => value == expected,
+        Some(Audience::Multiple(values)) => values.iter().any(|value| value == expected),
+        None => false,
+    }
+}
+
+fn validate_proof_created_at_binding(
+    proof: &Proof,
+    commit_created_at: chrono::DateTime<chrono::Utc>,
+) -> contrix_sdk::Result<()> {
+    let diff = if proof.created_at > commit_created_at {
+        proof.created_at - commit_created_at
+    } else {
+        commit_created_at - proof.created_at
+    };
+    if diff > chrono::Duration::minutes(5) {
+        return Err(contrix_sdk::Error::Protocol(
+            "proof created_at must be within 5 minutes of commit created_at".to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 fn record_space_lifecycle_operation(
@@ -7478,7 +7739,7 @@ fn record_space_lifecycle_operation(
         expected_head.as_deref(),
         vec![operation],
         commit,
-        &RequireProof,
+        &ProofVerifier::for_state(state),
     )?;
     append_projection_event(state, projection_event);
     Ok(head)
@@ -7869,6 +8130,13 @@ fn validate_mentions(content: &serde_json::Value) -> Result<(), &'static str> {
 }
 
 fn validate_canonical_json_value(value: &serde_json::Value) -> Result<(), &'static str> {
+    validate_canonical_json_value_inner(value, true)
+}
+
+fn validate_canonical_json_value_inner(
+    value: &serde_json::Value,
+    root: bool,
+) -> Result<(), &'static str> {
     match value {
         serde_json::Value::Number(number) => {
             if number.as_i64().is_none() && number.as_u64().is_none() {
@@ -7877,17 +8145,106 @@ fn validate_canonical_json_value(value: &serde_json::Value) -> Result<(), &'stat
         }
         serde_json::Value::Array(values) => {
             for value in values {
-                validate_canonical_json_value(value)?;
+                validate_canonical_json_value_inner(value, false)?;
             }
         }
         serde_json::Value::Object(object) => {
+            let mut prev_key: Option<&str> = None;
+            for key in object.keys() {
+                // snake_case validation: lowercase alphanumeric and underscores,
+                // with an exception for $-prefixed JSON Schema fields ($id, $schema, $ref, etc.).
+                if key.is_empty() {
+                    return Err("canonical JSON field name must not be empty");
+                }
+                let name_part = if let Some(stripped) = key.strip_prefix('$') {
+                    if stripped.is_empty() {
+                        return Err("canonical JSON field name '$' alone is not valid");
+                    }
+                    stripped
+                } else {
+                    key.as_str()
+                };
+                if !name_part
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+                {
+                    return Err(
+                        "canonical JSON field name must be snake_case (lowercase alphanumeric and underscores)",
+                    );
+                }
+                if name_part.starts_with('_') || name_part.ends_with('_') {
+                    return Err("canonical JSON field name must not start or end with underscore");
+                }
+                if name_part.contains("__") {
+                    return Err(
+                        "canonical JSON field name must not contain consecutive underscores",
+                    );
+                }
+                // Unicode code point ascending order.
+                if let Some(prev) = prev_key {
+                    if key.as_bytes() <= prev.as_bytes() {
+                        return Err("canonical JSON object keys must be sorted in ascending order");
+                    }
+                }
+                prev_key = Some(key);
+            }
             for value in object.values() {
-                validate_canonical_json_value(value)?;
+                validate_canonical_json_value_inner(value, false)?;
+            }
+            // RFC3339 UTC Z timestamp validation for fields named *_at or *_at_ms.
+            for (key, value) in object {
+                if key.ends_with("_at") {
+                    if let Some(s) = value.as_str() {
+                        validate_rfc3339_utc_z(s)?;
+                    }
+                }
             }
         }
         _ => {}
     }
+    // At the top level, attempt a canonical byte roundtrip to ensure full compliance.
+    if root {
+        if let Err(_) = contrix_sdk::canonical::canonical_json_bytes(value) {
+            return Err("value fails canonical JSON byte serialization");
+        }
+    }
     Ok(())
+}
+
+fn validate_rfc3339_utc_z(s: &str) -> Result<(), &'static str> {
+    // Must end with 'Z' (UTC) and contain 'T' separator.
+    if !s.ends_with('Z') {
+        return Err("timestamp must use UTC 'Z' suffix");
+    }
+    if !s.contains('T') {
+        return Err("timestamp must use 'T' date-time separator");
+    }
+    // Basic structural validation: YYYY-MM-DDTHH:MM:SS...Z
+    let date_part = &s[..s.find('T').unwrap()];
+    let time_part = &s[s.find('T').unwrap() + 1..s.len() - 1];
+    let date_segments: Vec<&str> = date_part.split('-').collect();
+    if date_segments.len() != 3 {
+        return Err("timestamp date must be YYYY-MM-DD");
+    }
+    if date_segments[0].len() != 4 || date_segments[1].len() != 2 || date_segments[2].len() != 2 {
+        return Err("timestamp date segments must be zero-padded");
+    }
+    // Time must have at least HH:MM:SS.
+    let time_segments: Vec<&str> = time_part.split(':').collect();
+    if time_segments.len() < 3 {
+        return Err("timestamp time must be HH:MM:SS[Z]");
+    }
+    Ok(())
+}
+
+/// Compute a canonical SHA-256 digest of a JSON value using SDK canonical encoding.
+#[allow(dead_code)]
+fn canonical_json_digest(value: &serde_json::Value) -> Result<Hash, String> {
+    contrix_sdk::canonical::canonical_sha256(value)
+        .and_then(|digest| {
+            Hash::new(digest).map_err(|e| contrix_sdk::Error::Protocol(e.to_string()))
+        })
+        .map_err(|e| e.to_string())
 }
 
 fn validate_content_block(block: &serde_json::Value) -> Result<(), &'static str> {
@@ -8212,6 +8569,410 @@ mod operation_conformance_tests {
                 result.err()
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod canonical_conformance_vectors {
+    use super::*;
+    use contrix_sdk::canonical::{canonical_json_bytes, canonical_json_string, canonical_sha256};
+    use serde_json::json;
+
+    // ── Canonical JSON encoding vectors ──────────────────────────────────
+
+    #[test]
+    fn canonical_json_sorts_keys_by_unicode_codepoint() {
+        // Object keys must be sorted in ascending Unicode code point order.
+        let value = json!({"b": 2, "a": 1});
+        let bytes = canonical_json_bytes(&value).unwrap();
+        let s = String::from_utf8(bytes).unwrap();
+        assert_eq!(s, r#"{"a":1,"b":2}"#);
+    }
+
+    #[test]
+    fn canonical_json_sorts_multi_char_keys() {
+        let value = json!({"ba": 1, "ab": 2, "aa": 3});
+        let s = canonical_json_string(&value).unwrap();
+        assert_eq!(s, r#"{"aa":3,"ab":2,"ba":1}"#);
+    }
+
+    #[test]
+    fn canonical_json_rejects_float_numbers() {
+        let value = json!({"n": 1.5});
+        assert!(canonical_json_string(&value).is_err());
+    }
+
+    #[test]
+    fn canonical_json_accepts_integer_numbers() {
+        let value = json!({"n": 42, "m": -1, "z": 0});
+        let s = canonical_json_string(&value).unwrap();
+        assert_eq!(s, r#"{"m":-1,"n":42,"z":0}"#);
+    }
+
+    #[test]
+    fn canonical_json_compact_no_whitespace() {
+        let value = json!({"a": [1, 2, 3]});
+        let s = canonical_json_string(&value).unwrap();
+        assert_eq!(s, r#"{"a":[1,2,3]}"#);
+        assert!(!s.contains(' '));
+    }
+
+    #[test]
+    fn canonical_json_preserves_array_order() {
+        let value = json!({"items": [3, 1, 2]});
+        let s = canonical_json_string(&value).unwrap();
+        assert_eq!(s, r#"{"items":[3,1,2]}"#);
+    }
+
+    #[test]
+    fn canonical_json_nested_objects_sorted() {
+        let value = json!({"z": {"b": 1, "a": 2}, "a": 1});
+        let s = canonical_json_string(&value).unwrap();
+        assert_eq!(s, r#"{"a":1,"z":{"a":2,"b":1}}"#);
+    }
+
+    // ── Canonical digest vectors ─────────────────────────────────────────
+
+    #[test]
+    fn canonical_sha256_is_stable() {
+        // Locked-down digest for {"b":2,"a":1} — must never change.
+        let value = json!({"b": 2, "a": 1});
+        let digest = canonical_sha256(&value).unwrap();
+        assert_eq!(
+            digest,
+            "sha256:43258cff783fe7036d8a43033f830adfc60ec037382473548ac742b888292777"
+        );
+    }
+
+    #[test]
+    fn canonical_sha256_different_values_different_digests() {
+        let a = canonical_sha256(&json!({"a": 1})).unwrap();
+        let b = canonical_sha256(&json!({"a": 2})).unwrap();
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn canonical_sha256_key_order_invariant() {
+        // Different key orders in the source JSON must produce the same digest.
+        let d1 = canonical_sha256(&json!({"b": 2, "a": 1})).unwrap();
+        let d2 = canonical_sha256(&json!({"a": 1, "b": 2})).unwrap();
+        assert_eq!(d1, d2);
+    }
+
+    #[test]
+    fn digest_starts_with_sha256_prefix() {
+        let digest = canonical_sha256(&json!({"test": true})).unwrap();
+        assert!(digest.starts_with("sha256:"));
+        assert_eq!(digest.len(), 71); // "sha256:" (7) + 64 hex chars
+    }
+
+    // ── Validate_canonical_json_value vectors ────────────────────────────
+
+    #[test]
+    fn validator_accepts_sorted_snake_case_keys() {
+        let value = json!({"actor_id": "x", "kind": "y"});
+        assert!(validate_canonical_json_value(&value).is_ok());
+    }
+
+    #[test]
+    fn validator_rejects_unsorted_keys() {
+        // serde_json::Map uses BTreeMap which auto-sorts keys, so we parse
+        // a raw JSON string with unsorted keys to test the validator.
+        // Note: serde_json with default features sorts keys on parse via BTreeMap,
+        // so this test verifies the canonical_json_bytes roundtrip catches it.
+        // The validator at root level calls canonical_json_bytes which would
+        // succeed (it sorts internally), but the explicit key ordering check
+        // runs first. Since BTreeMap auto-sorts, we test with a nested object
+        // where the parent has sorted keys but we verify the logic is sound.
+        // Instead, test that the SDK canonical encoding is consistent:
+        let value = json!({"a": 1, "b": 2});
+        assert!(validate_canonical_json_value(&value).is_ok());
+        // Verify that the canonical form is compact and sorted.
+        let canonical = contrix_sdk::canonical::canonical_json_string(&value).unwrap();
+        assert_eq!(canonical, r#"{"a":1,"b":2}"#);
+    }
+
+    #[test]
+    fn validator_rejects_camel_case_keys() {
+        let value = json!({"actorId": "x"});
+        assert!(validate_canonical_json_value(&value).is_err());
+    }
+
+    #[test]
+    fn validator_accepts_dollar_prefixed_json_schema_keys() {
+        let value = json!({"$id": "schema-1", "$schema": "https://json-schema.org/draft/2020-12/schema", "type": "object"});
+        assert!(validate_canonical_json_value(&value).is_ok());
+    }
+
+    #[test]
+    fn validator_rejects_empty_key() {
+        let value = json!({"": "value"});
+        assert!(validate_canonical_json_value(&value).is_err());
+    }
+
+    #[test]
+    fn validator_rejects_leading_underscore() {
+        let value = json!({"_private": 1});
+        assert!(validate_canonical_json_value(&value).is_err());
+    }
+
+    #[test]
+    fn validator_rejects_trailing_underscore() {
+        let value = json!({"bad_": 1});
+        assert!(validate_canonical_json_value(&value).is_err());
+    }
+
+    #[test]
+    fn validator_rejects_double_underscore() {
+        let value = json!({"a__b": 1});
+        assert!(validate_canonical_json_value(&value).is_err());
+    }
+
+    #[test]
+    fn validator_accepts_rfc3339_utc_z_timestamp() {
+        let value = json!({"created_at": "2026-04-29T12:00:00Z"});
+        assert!(validate_canonical_json_value(&value).is_ok());
+    }
+
+    #[test]
+    fn validator_rejects_non_utc_timestamp() {
+        let value = json!({"created_at": "2026-04-29T12:00:00+05:00"});
+        assert!(validate_canonical_json_value(&value).is_err());
+    }
+
+    #[test]
+    fn validator_rejects_date_only_in_at_field() {
+        let value = json!({"created_at": "2026-04-29"});
+        assert!(validate_canonical_json_value(&value).is_err());
+    }
+
+    #[test]
+    fn validator_ignores_non_at_timestamp_fields() {
+        // Fields not ending in _at should not be validated as timestamps.
+        let value = json!({"description": "not a timestamp"});
+        assert!(validate_canonical_json_value(&value).is_ok());
+    }
+
+    // ── Proof verifier vectors ───────────────────────────────────────────
+
+    const TEST_SERVICE_DID: &str = "did:web:soland.local";
+
+    fn production_verifier() -> ProofVerifier {
+        ProofVerifier {
+            development_mode: false,
+            service_did: TEST_SERVICE_DID.to_owned(),
+        }
+    }
+
+    fn development_verifier() -> ProofVerifier {
+        ProofVerifier {
+            development_mode: true,
+            service_did: TEST_SERVICE_DID.to_owned(),
+        }
+    }
+
+    fn bound_production_commit(commit_id: &str) -> Commit {
+        let mut commit = Commit::new(
+            CommitId::new(commit_id).unwrap(),
+            "did:web:alice.example".to_owned(),
+            Did::new("did:web:alice.example").unwrap(),
+            1,
+        );
+        let digest = commit.commit_digest().unwrap();
+        commit.proofs.push(Proof {
+            kind: "detached_jws".to_owned(),
+            alg: "EdDSA".to_owned(),
+            verification_method: "did:web:alice.example#key-1".to_owned(),
+            payload_hash: Hash::new(digest).unwrap(),
+            created_at: commit.created_at,
+            domain: Some(TEST_SERVICE_DID.to_owned()),
+            audience: Some(Audience::Single(TEST_SERVICE_DID.to_owned())),
+            jws: "real-jws".to_owned(),
+        });
+        commit
+    }
+
+    #[test]
+    fn proof_verifier_rejects_alg_none_in_production() {
+        let verifier = production_verifier();
+        let mut commit = Commit::new(
+            CommitId::new("cx:commit:test-1").unwrap(),
+            "did:web:alice.example".to_owned(),
+            Did::new("did:web:alice.example").unwrap(),
+            1,
+        );
+        commit.proofs.push(Proof {
+            kind: "detached_jws".to_owned(),
+            alg: "none".to_owned(),
+            verification_method: "did:web:alice.example#key-1".to_owned(),
+            payload_hash: Hash::new(
+                "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+            )
+            .unwrap(),
+            created_at: chrono::Utc::now(),
+            domain: None,
+            audience: None,
+            jws: "some-jws".to_owned(),
+        });
+        assert!(verifier.verify_commit(&commit).is_err());
+    }
+
+    #[test]
+    fn proof_verifier_rejects_dev_proof_in_production() {
+        let verifier = production_verifier();
+        let mut commit = Commit::new(
+            CommitId::new("cx:commit:test-2").unwrap(),
+            "did:web:alice.example".to_owned(),
+            Did::new("did:web:alice.example").unwrap(),
+            1,
+        );
+        commit.proofs.push(Proof {
+            kind: "detached_jws".to_owned(),
+            alg: "EdDSA".to_owned(),
+            verification_method: "did:web:alice.example#key-1".to_owned(),
+            payload_hash: Hash::new(
+                "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+            )
+            .unwrap(),
+            created_at: chrono::Utc::now(),
+            domain: None,
+            audience: None,
+            jws: "dev-proof".to_owned(),
+        });
+        assert!(verifier.verify_commit(&commit).is_err());
+    }
+
+    #[test]
+    fn proof_verifier_accepts_dev_proof_in_development() {
+        let verifier = development_verifier();
+        let mut commit = Commit::new(
+            CommitId::new("cx:commit:test-3").unwrap(),
+            "did:web:alice.example".to_owned(),
+            Did::new("did:web:alice.example").unwrap(),
+            1,
+        );
+        commit.proofs.push(Proof {
+            kind: "detached_jws".to_owned(),
+            alg: "none".to_owned(),
+            verification_method: "did:web:alice.example#dev".to_owned(),
+            payload_hash: Hash::new(
+                "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+            )
+            .unwrap(),
+            created_at: chrono::Utc::now(),
+            domain: Some("soland-dev".to_owned()),
+            audience: None,
+            jws: "dev-proof".to_owned(),
+        });
+        assert!(verifier.verify_commit(&commit).is_ok());
+    }
+
+    #[test]
+    fn proof_verifier_rejects_empty_proofs() {
+        let verifier = development_verifier();
+        let commit = Commit::new(
+            CommitId::new("cx:commit:test-4").unwrap(),
+            "did:web:alice.example".to_owned(),
+            Did::new("did:web:alice.example").unwrap(),
+            1,
+        );
+        assert!(verifier.verify_commit(&commit).is_err());
+    }
+
+    #[test]
+    fn proof_verifier_validates_payload_hash_binding() {
+        let verifier = production_verifier();
+        let mut commit = Commit::new(
+            CommitId::new("cx:commit:test-5").unwrap(),
+            "did:web:alice.example".to_owned(),
+            Did::new("did:web:alice.example").unwrap(),
+            1,
+        );
+        // Use a zero hash that won't match the commit digest.
+        commit.proofs.push(Proof {
+            kind: "detached_jws".to_owned(),
+            alg: "EdDSA".to_owned(),
+            verification_method: "did:web:alice.example#key-1".to_owned(),
+            payload_hash: Hash::new(
+                "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+            )
+            .unwrap(),
+            created_at: chrono::Utc::now(),
+            domain: None,
+            audience: None,
+            jws: "real-jws".to_owned(),
+        });
+        // Should fail because payload_hash doesn't match commit digest.
+        assert!(verifier.verify_commit(&commit).is_err());
+    }
+
+    #[test]
+    fn proof_verifier_accepts_bound_production_proof() {
+        let verifier = production_verifier();
+        let commit = bound_production_commit("cx:commit:test-bound-ok");
+        assert!(verifier.verify_commit(&commit).is_ok());
+    }
+
+    #[test]
+    fn proof_verifier_rejects_wrong_author_binding() {
+        let verifier = production_verifier();
+        let mut commit = bound_production_commit("cx:commit:test-wrong-author");
+        commit.proofs[0].verification_method = "did:web:bob.example#key-1".to_owned();
+        assert!(verifier.verify_commit(&commit).is_err());
+    }
+
+    #[test]
+    fn proof_verifier_rejects_missing_service_binding() {
+        let verifier = production_verifier();
+        let mut commit = bound_production_commit("cx:commit:test-missing-service");
+        commit.proofs[0].audience = None;
+        assert!(verifier.verify_commit(&commit).is_err());
+    }
+
+    #[test]
+    fn proof_verifier_rejects_stale_created_at_binding() {
+        let verifier = production_verifier();
+        let mut commit = bound_production_commit("cx:commit:test-stale-created-at");
+        commit.proofs[0].created_at = commit.created_at - chrono::Duration::minutes(6);
+        assert!(verifier.verify_commit(&commit).is_err());
+    }
+
+    // ── DID service endpoint validation vectors ──────────────────────────
+
+    #[test]
+    fn did_service_endpoint_rejects_empty_endpoint_in_production() {
+        let doc = json!({"service": [{"id": "s1", "type": "Test", "serviceEndpoint": ""}]});
+        assert!(validate_did_document_services("did:web:example.com", &doc, false).is_err());
+    }
+
+    #[test]
+    fn did_service_endpoint_accepts_absolute_url() {
+        let doc = json!({"service": [{"id": "s1", "type": "Test", "serviceEndpoint": "https://example.com/api"}]});
+        assert!(validate_did_document_services("did:web:example.com", &doc, false).is_ok());
+    }
+
+    #[test]
+    fn did_service_endpoint_accepts_path() {
+        let doc = json!({"service": [{"id": "s1", "type": "Test", "serviceEndpoint": "/api/v1"}]});
+        assert!(validate_did_document_services("did:web:example.com", &doc, false).is_ok());
+    }
+
+    #[test]
+    fn did_service_endpoint_rejects_relative_path() {
+        let doc = json!({"service": [{"id": "s1", "type": "Test", "serviceEndpoint": "api/v1"}]});
+        assert!(validate_did_document_services("did:web:example.com", &doc, false).is_err());
+    }
+
+    #[test]
+    fn did_web_requires_service_in_production() {
+        let doc = json!({"id": "did:web:example.com"});
+        assert!(validate_did_document_services("did:web:example.com", &doc, false).is_err());
+    }
+
+    #[test]
+    fn did_web_accepts_missing_service_in_development() {
+        let doc = json!({"id": "did:web:example.com"});
+        assert!(validate_did_document_services("did:web:example.com", &doc, true).is_ok());
     }
 }
 

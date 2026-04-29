@@ -965,6 +965,26 @@ async fn framework_errors_use_contrix_error_envelope() {
 }
 
 #[tokio::test]
+async fn protected_endpoints_reject_query_auth_material() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+    let mut response = TestClient::get(format!(
+        "http://server/api/v1/account/me?access_token={token}"
+    ))
+    .send(&app_from_state(state))
+    .await;
+
+    assert_eq!(response.status_code.unwrap(), StatusCode::UNAUTHORIZED);
+    let body: Value = response.take_json().await.unwrap();
+    assert_eq!(body["ok"], false);
+    assert_eq!(body["error"]["errcode"], "unauthenticated");
+    assert_eq!(
+        body["error"]["error"],
+        "auth material in query strings is not allowed"
+    );
+}
+
+#[tokio::test]
 async fn postgres_startup_migrations_are_gated_by_database_url() {
     if std::env::var("DATABASE_URL")
         .ok()

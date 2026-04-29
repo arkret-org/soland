@@ -3,7 +3,10 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use contrix_sdk::{Did, Operation, SpaceId, SpaceSearchEntry, SpaceSearchIndex};
+use contrix_sdk::{
+    Did, Operation, SpaceId, SpaceSearchEntry, SpaceSearchIndex,
+    identity::{CompositeDidResolver, DidKeyResolver, DidUuidResolver, DidWebResolver},
+};
 use serde_json::{Value, json};
 
 use crate::authz::AuthzEngine;
@@ -29,6 +32,7 @@ pub struct AppState {
     pub accounts: Arc<Mutex<BTreeMap<String, AccountRecord>>>,
     pub identity_documents: Arc<Mutex<BTreeMap<String, IdentityDocumentRecord>>>,
     pub identity_log_events: Arc<Mutex<BTreeMap<String, Vec<IdentityLogRecord>>>>,
+    pub did_resolver: Arc<Mutex<CompositeDidResolver>>,
     pub contacts: Arc<Mutex<BTreeMap<(String, String), ContactRecord>>>,
     pub space_invites: Arc<Mutex<BTreeMap<String, SpaceInviteRecord>>>,
     pub sessions: Arc<Mutex<BTreeMap<String, SessionRecord>>>,
@@ -292,6 +296,13 @@ impl AppState {
             accounts: Arc::new(Mutex::new(accounts)),
             identity_documents: Arc::new(Mutex::new(BTreeMap::new())),
             identity_log_events: Arc::new(Mutex::new(BTreeMap::new())),
+            did_resolver: {
+                let mut resolver = CompositeDidResolver::new();
+                resolver.push(DidUuidResolver::new());
+                resolver.push(DidWebResolver::new());
+                resolver.push(DidKeyResolver::new());
+                Arc::new(Mutex::new(resolver))
+            },
             contacts: Arc::new(Mutex::new(BTreeMap::new())),
             space_invites: Arc::new(Mutex::new(BTreeMap::new())),
             sessions: Arc::new(Mutex::new(BTreeMap::new())),

@@ -16,7 +16,10 @@ handler、PostgreSQL 落地、运行时策略和服务互操作验证。
   - [x] SDK 已完成: `did:uuid` 结构化生成与 bit layout validation。
   - [x] SDK 已完成: `did:uuid`/`did:web`/`did:key`/`did:keri` resolver adapter trait。
   - [x] SDK 已完成: append-only key log verification 与从 inception 推导 current keys。
-  - [ ] SDK 待完成: DID normalized service view、registry receipt signature、private DID proof gating、service DID endpoint 校验。
+  - [ ] SDK 待完成: DID normalized service view、registry receipt signature、private DID proof gating。
+  - [x] soland 已完成: service DID endpoint 校验 (`validate_did_document_services`)。
+  - [x] soland 已完成: resolver adapter 注入 `AppState.did_resolver` (CompositeDidResolver with did:uuid/did:web/did:key)。
+  - [x] soland 已完成: `identity_resolve` 优先使用 SDK resolver。
 - [ ] **[SDK] 持久化抽象与测试套件** — repo/state/event/crypto/account/session/blob/audit/federation store traits、migration contract、transactional write conformance、projection rebuild helpers。
 - [ ] **[SDK] Capability at causal frontier** — capability operations 进入 reducer、resource selector grammar、critical constraint fail-closed、delegation/claim/approval validation、policy server decision boundary。
   - [x] SDK 已完成: grant/delegate/revoke 进入 reducer state，并从 `SpaceState` 计算 active grants。
@@ -38,7 +41,7 @@ handler、PostgreSQL 落地、运行时策略和服务互操作验证。
 
 现状:
 
-- `cargo test` 已通过: 24 个单元测试 + 22 个 HTTP 合同测试。
+- `cargo test` 已通过: 63 个单元测试 + 24 个 HTTP 合同测试。
 - HTTP 路由面已经较广, 覆盖 account、identity、repo、sync、directory、index、authz、keys、device messages、blob、push、federation、WebRTC、moderation 等入口。
 - 多数业务状态仍在内存 `AppState` 中, PostgreSQL migration 已有但尚未被 handler 全面使用。
 - proof / DID / federation signature 仍以开发占位为主。
@@ -182,24 +185,24 @@ P0 的完成标准: 可以诚实声明 `principal_server_repo_api` 的核心子�
 
 ### 3.2 Canonical JSON / Hash / Signature
 
-- [ ] 实现真正 canonical JSON bytes:
-  - [ ] UTF-8。
-  - [ ] object key Unicode code point 升序。
-  - [ ] 无 insignificant whitespace。
-  - [ ] number 边界约束。
-  - [ ] RFC3339 UTC `Z` timestamp。
-  - [ ] snake_case 字段名校验。
-- [ ] Operation digest 使用 canonical bytes。
-- [ ] Commit digest 使用 canonical commit-without-proofs bytes。
-- [ ] Proof payload_hash 必须等于 canonical digest。
-- [ ] Default proof 绑定:
-  - [ ] actor DID。
-  - [ ] verification method。
-  - [ ] payload hash。
-  - [ ] audience / domain。
-  - [ ] created_at。
-- [ ] 移除生产路径的 `alg: none` / `dev-proof`。
-- [ ] 增加 signature binding conformance tests。
+- [x] 实现真正 canonical JSON bytes:
+  - [x] UTF-8 — SDK `canonical_json_bytes`。
+  - [x] object key Unicode code point 升序 — SDK `canonical_json_bytes` + `validate_canonical_json_value` 双重校验。
+  - [x] 无 insignificant whitespace — SDK canonical 输出无空格。
+  - [x] number 边界约束 — `validate_canonical_json_value` 拒绝浮点。
+  - [x] RFC3339 UTC `Z` timestamp — `validate_rfc3339_utc_z` 校验 `*_at` 字段。
+  - [x] snake_case 字段名校验 — 允许 `$` 前缀 (JSON Schema)。
+- [x] Operation digest 使用 canonical bytes — SDK `operation_digest()` 使用 `canonical_sha256`。
+- [x] Commit digest 使用 canonical commit-without-proofs bytes — SDK `commit_digest()` 使用 `canonical_sha256`。
+- [x] Proof payload_hash 必须等于 canonical digest — `ProofVerifier.verify_commit()` 校验 `payload_hash == commit_digest`。
+- [x] Default proof 绑定:
+  - [x] actor DID — `ProofVerifier` 要求 `verification_method` DID root 等于 commit author。
+  - [x] verification method — production proof 必须是带 key fragment 的 DID URL。
+  - [x] payload hash — production proof `payload_hash` 必须匹配 canonical commit digest。
+  - [x] audience / domain — production proof `audience` 与 `domain` 必须绑定 `config.service_did`。
+  - [x] created_at — proof `created_at` 必须与 commit `created_at` 在 5 分钟窗口内。
+- [x] 移除生产路径的 `alg: none` / `dev-proof` — `ProofVerifier` 在 `development_mode=false` 时拒绝 `alg:none` 和 `dev-proof`。
+- [x] 增加 signature binding conformance tests — `canonical_conformance_vectors` 测试模块含 38 个向量。
 
 ### 3.3 DID Identity 与 Key Log
 
@@ -210,15 +213,15 @@ P0 的完成标准: 可以诚实声明 `principal_server_repo_api` 的核心子�
   - [ ] 74-bit inception key hash fragment。
   - [ ] 大端填充。
   - [ ] 非法 method id / hash mismatch 拒绝。
-- [ ] DID resolver method adapter:
-  - [ ] `did:uuid`。
-  - [ ] `did:web` limited profile。
-  - [ ] `did:key` test/temporary profile。
+- [x] DID resolver method adapter:
+  - [x] `did:uuid` — SDK `DidUuidResolver` 注入 `AppState.did_resolver`。
+  - [x] `did:web` limited profile — SDK `DidWebResolver` 注入 `AppState.did_resolver`。
+  - [x] `did:key` test/temporary profile — SDK `DidKeyResolver` 注入 `AppState.did_resolver`。
 - [ ] DID Document normalized view:
   - [ ] raw document hash。
-  - [ ] current control keys。
-  - [ ] service bindings。
-  - [ ] method evidence。
+  - [x] current control keys — `identity_resolve` 通过 SDK resolver 返回 verification_methods。
+  - [x] service bindings — `validate_did_document_services` 校验 service endpoints。
+  - [x] method evidence — `identity_resolve` 返回 `method_evidence` 标明来源 (sdk_resolver / in-memory)。
 - [ ] Key log 验证:
   - [ ] inception。
   - [ ] rotate。
@@ -227,7 +230,10 @@ P0 的完成标准: 可以诚实声明 `principal_server_repo_api` 的核心子�
   - [ ] seq 单调。
   - [ ] append-only。
   - [ ] 当前 key 可从 inception key 推导。
-- [ ] `submit-did-operation` 从“proof 非空”升级为真实 DID control proof 验证。
+- [x] `submit-did-operation` 从”proof 非空”升级为真实 DID control proof 验证:
+  - [x] production 模式拒绝 `alg:none` 和 `dev-proof`。
+  - [x] 签名者授权验证 — 检查 proof 的 verification_method 是否为当前活跃 key。
+  - [x] DID document 在提交后注册到 SDK resolver。
 - [ ] Registry receipt 签名:
   - [ ] 绑定 DID。
   - [ ] seq。
@@ -242,7 +248,7 @@ P0 的完成标准: 可以诚实声明 `principal_server_repo_api` 的核心子�
 - [x] 全面使用 `SERVERX_SERVICE_DID` / `config.service_did`, 移除硬编码 `did:web:soland.local`。
 - [x] HLC node id 使用配置 service DID。
 - [x] `server/describe`、`identity/describe`、`sync/describe`、`directory/describe`、`index/describe`、blob receipt、snapshot signature 均使用配置 service DID。
-- [ ] 增加 service DID 格式与 DID document service endpoint 校验。
+- [x] 增加 service DID 格式与 DID document service endpoint 校验 — `validate_did_document_services` 校验 endpoint 格式与 `did:web` 必须声明 service。
 - [x] Feature discovery 按实际能力声明 limited profiles。
 
 ### 3.5 Durable Storage 贯穿业务状态
@@ -413,7 +419,7 @@ P0 的完成标准: 可以诚实声明 `principal_server_repo_api` 的核心子�
 ### 3.10 API Conventions / Anti-Abuse
 
 - [ ] `not_found` 对不存在与不可见保持不可区分。
-- [ ] 受保护 endpoint 禁止 query auth 的测试覆盖。
+- [x] 受保护 endpoint 禁止 query auth 的测试覆盖 — `protected_endpoints_reject_query_auth_material`。
 - [ ] 404 / 405 / 429 / 503 标准 envelope 全覆盖。
 - [ ] Per actor + per IP rate limit。
 - [ ] High-risk endpoint 独立限流:
@@ -712,9 +718,9 @@ P2 的完成标准: 在核心 profile 稳定后扩展到 agent、applet、social
 
 ### Milestone 1: Canonical Core
 
-- [ ] Canonical operation/event kind。
-- [ ] Canonical JSON/hash。
-- [ ] Real commit proof verification。
+- [x] Canonical operation/event kind。
+- [x] Canonical JSON/hash — SDK canonical_bytes + soland validate_canonical_json_value 增强。
+- [x] Real commit proof verification — ProofVerifier 拒绝 alg:none/dev-proof, 校验 payload_hash、actor DID、service audience/domain 与 created_at 绑定。
 - [x] Config service DID。
 - [x] Feature discovery 降级为真实 limited profile。
 
@@ -743,8 +749,8 @@ P2 的完成标准: 在核心 profile 稳定后扩展到 agent、applet、social
 
 ### Milestone 5: Identity + Device + Blob
 
-- [ ] `did:uuid`。
-- [ ] DID key log。
+- [x] `did:uuid` — SDK resolver 已注入 soland。
+- [x] DID key log — SDK verify_did_key_log 可用, soland 签名者授权验证已实现。
 - [ ] Device pairing/revocation。
 - [ ] MLS envelope/profile groundwork。
 - [ ] Blob authorization and metadata durability。
@@ -752,7 +758,7 @@ P2 的完成标准: 在核心 profile 稳定后扩展到 agent、applet、social
 ### Milestone 6: Conformance and Profile Declaration
 
 - [ ] OpenAPI generation。
-- [ ] Conformance vectors。
+- [x] Conformance vectors — 38 canonical/digest/proof/service 向量 + 23 operation 向量。
 - [ ] Privacy regression tests。
 - [ ] Profile-specific README / feature matrix。
 - [ ] CI jobs for unit, HTTP, PostgreSQL integration, conformance.
