@@ -16,7 +16,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeSet, HashSet};
 
 use crate::{
-    ids,
+    ids, kinds,
     state::{
         AccountRecord, AppState, BlobRecord, ContactRecord, DeviceMessageRecord,
         IdentityDocumentRecord, IdentityLogRecord, MessageRecord, PolicyDocumentRecord,
@@ -998,7 +998,7 @@ pub async fn send_message(depot: &mut Depot, req: &mut Request, res: &mut Respon
     let operation = Operation::create(
         OperationId::new(operation_id.clone()).expect("generated valid operation id"),
         SpaceId::new(body.space_id.clone()).expect("validated space id"),
-        "message",
+        kinds::CX_MESSAGE_CREATE,
         payload.clone(),
     );
     let operation_digest = match operation.operation_digest().and_then(Hash::new) {
@@ -1153,7 +1153,7 @@ pub async fn revise_message(depot: &mut Depot, req: &mut Request, res: &mut Resp
     let operation = contrix_sdk::Operation::create(
         contrix_sdk::OperationId::new(operation_id.clone()).unwrap(),
         contrix_sdk::SpaceId::new(original.space_id.clone()).unwrap(),
-        "message.revise",
+        kinds::CX_MESSAGE_REVISE,
         payload,
     );
     let operation_digest = match operation.operation_digest() {
@@ -1269,7 +1269,7 @@ pub async fn redact_message(depot: &mut Depot, req: &mut Request, res: &mut Resp
     let operation = contrix_sdk::Operation::create(
         contrix_sdk::OperationId::new(operation_id.clone()).unwrap(),
         contrix_sdk::SpaceId::new(space_id.clone()).unwrap(),
-        "redaction",
+        kinds::CX_MESSAGE_REDACT,
         payload,
     );
     let operation_digest = match operation.operation_digest() {
@@ -1353,7 +1353,7 @@ pub async fn add_reaction(depot: &mut Depot, req: &mut Request, res: &mut Respon
     let operation = contrix_sdk::Operation::create(
         contrix_sdk::OperationId::new(operation_id.clone()).unwrap(),
         contrix_sdk::SpaceId::new(body.space_id.clone()).unwrap(),
-        "reaction.add",
+        kinds::CX_REACTION_ADD,
         payload,
     );
     let operation_digest = match operation.operation_digest() {
@@ -1434,7 +1434,7 @@ pub async fn remove_reaction(depot: &mut Depot, req: &mut Request, res: &mut Res
     let operation = contrix_sdk::Operation::create(
         contrix_sdk::OperationId::new(operation_id.clone()).unwrap(),
         contrix_sdk::SpaceId::new(body.space_id.clone()).unwrap(),
-        "reaction.remove",
+        kinds::CX_REACTION_REMOVE,
         payload,
     );
     let operation_digest = match operation.operation_digest() {
@@ -1519,7 +1519,7 @@ pub async fn set_read_marker(depot: &mut Depot, req: &mut Request, res: &mut Res
     let operation = contrix_sdk::Operation::create(
         contrix_sdk::OperationId::new(operation_id.clone()).unwrap(),
         contrix_sdk::SpaceId::new(body.space_id.clone()).unwrap(),
-        "read_marker",
+        kinds::CX_READ_MARKER,
         payload,
     );
     let operation_digest = match operation.operation_digest() {
@@ -1669,7 +1669,7 @@ pub async fn create_entity(depot: &mut Depot, req: &mut Request, res: &mut Respo
     let operation = contrix_sdk::Operation::create(
         contrix_sdk::OperationId::new(operation_id.clone()).unwrap(),
         contrix_sdk::SpaceId::new(body.space_id.clone()).unwrap(),
-        "entity.create",
+        kinds::CX_ENTITY_CREATE,
         payload,
     );
     let operation_digest = match operation.operation_digest() {
@@ -1857,7 +1857,7 @@ pub async fn update_entity(depot: &mut Depot, req: &mut Request, res: &mut Respo
     let operation = contrix_sdk::Operation::create(
         contrix_sdk::OperationId::new(operation_id.clone()).unwrap(),
         contrix_sdk::SpaceId::new(space_id.clone()).unwrap(),
-        "entity.update",
+        kinds::CX_ENTITY_UPDATE,
         payload,
     );
     let operation_digest = match operation.operation_digest() {
@@ -1956,7 +1956,7 @@ pub async fn delete_entity(depot: &mut Depot, req: &mut Request, res: &mut Respo
     let operation = contrix_sdk::Operation::create(
         contrix_sdk::OperationId::new(operation_id.clone()).unwrap(),
         contrix_sdk::SpaceId::new(space_id).unwrap(),
-        "entity.delete",
+        kinds::CX_ENTITY_DELETE,
         json!({ "entity_id": entity_id }),
     );
     let operation_digest = match operation.operation_digest() {
@@ -2074,7 +2074,7 @@ pub async fn create_relation(depot: &mut Depot, req: &mut Request, res: &mut Res
     let operation = contrix_sdk::Operation::create(
         contrix_sdk::OperationId::new(operation_id.clone()).unwrap(),
         contrix_sdk::SpaceId::new(body.space_id.clone()).unwrap(),
-        "relation.create",
+        kinds::CX_RELATION_CREATE,
         payload,
     );
     let operation_digest = match operation.operation_digest() {
@@ -2177,7 +2177,7 @@ pub async fn delete_relation(depot: &mut Depot, req: &mut Request, res: &mut Res
     let operation = contrix_sdk::Operation::create(
         contrix_sdk::OperationId::new(operation_id.clone()).unwrap(),
         contrix_sdk::SpaceId::new(space_id).unwrap(),
-        "relation.delete",
+        kinds::CX_RELATION_DELETE,
         json!({ "relation_id": relation_id }),
     );
     let operation_digest = match operation.operation_digest() {
@@ -6467,7 +6467,7 @@ fn operation_event_id(operation: &Operation) -> String {
 fn redaction_targets_from_operations(operations: &[Operation]) -> HashSet<String> {
     operations
         .iter()
-        .filter(|operation| operation.object_type == "redaction")
+        .filter(|operation| kinds::operation_is_redaction(operation))
         .filter_map(|operation| {
             operation
                 .payload
@@ -6492,7 +6492,7 @@ fn redaction_targets_from_operations(operations: &[Operation]) -> HashSet<String
 
 fn operation_is_visible(operation: &Operation, redacted_events: &HashSet<String>) -> bool {
     let event_id = operation_event_id(operation);
-    operation.object_type != "redaction" && !redacted_events.contains(&event_id)
+    !kinds::operation_is_redaction(operation) && !redacted_events.contains(&event_id)
 }
 
 fn operation_type_string(operation: &Operation) -> String {
@@ -6510,7 +6510,7 @@ fn projection_event_from_operation(
     ProjectionEventRecord {
         event_id,
         space_id: operation.space_id.to_string(),
-        event_type: operation.object_type.clone(),
+        event_type: kinds::canonical_kind_string(operation),
         operation_type: operation_type_string(operation),
         operation_id: Some(operation.operation_id.to_string()),
         sender: operation
@@ -6527,7 +6527,7 @@ fn projection_event_from_operation(
 fn redaction_targets_from_events(events: &[ProjectionEventRecord]) -> HashSet<String> {
     events
         .iter()
-        .filter(|event| event.event_type == "redaction")
+        .filter(|event| kinds::is_redaction_kind(&event.event_type))
         .filter_map(|event| {
             event
                 .payload
@@ -6546,7 +6546,7 @@ fn redaction_targets_from_events(events: &[ProjectionEventRecord]) -> HashSet<St
 }
 
 fn event_is_visible(event: &ProjectionEventRecord, redacted: &HashSet<String>) -> bool {
-    event.event_type != "redaction" && !redacted.contains(&event.event_id)
+    !kinds::is_redaction_kind(&event.event_type) && !redacted.contains(&event.event_id)
 }
 
 fn append_projection_event(state: &AppState, event: ProjectionEventRecord) {
@@ -6712,10 +6712,12 @@ fn ingest_federation_operations(
 
 fn project_federation_operation(state: &AppState, origin: &str, operation: &Operation) {
     ensure_projected_space(state, origin, operation);
-    match operation.object_type.as_str() {
-        "message" => project_federated_message(state, origin, operation),
-        "membership" | "space.lifecycle" => project_membership_operation(state, origin, operation),
-        _ => {}
+    if kinds::operation_is_message_create(operation) {
+        project_federated_message(state, origin, operation);
+    } else if kinds::operation_is_membership(operation)
+        || kinds::operation_is_space_lifecycle(operation)
+    {
+        project_membership_operation(state, origin, operation);
     }
     // Also apply to the deterministic reducer
     if let Ok(mut proj) = state.projection.lock() {
@@ -6730,12 +6732,12 @@ fn project_federation_operation(state: &AppState, origin: &str, operation: &Oper
 fn project_accepted_operations(state: &AppState, repo_id: &str, operations: &[Operation]) {
     for operation in operations {
         ensure_projected_space(state, repo_id, operation);
-        match operation.object_type.as_str() {
-            "message" => project_federated_message(state, repo_id, operation),
-            "membership" | "space.lifecycle" => {
-                project_membership_operation(state, repo_id, operation)
-            }
-            _ => {}
+        if kinds::operation_is_message_create(operation) {
+            project_federated_message(state, repo_id, operation);
+        } else if kinds::operation_is_membership(operation)
+            || kinds::operation_is_space_lifecycle(operation)
+        {
+            project_membership_operation(state, repo_id, operation);
         }
         // Also apply to the deterministic reducer
         if let Ok(mut proj) = state.projection.lock() {
@@ -6765,72 +6767,73 @@ fn persist_projected_operation(
         return Ok(());
     };
     let mut conn = pool.get()?;
-    match operation.object_type.as_str() {
-        "message" => {
-            let event_id = operation
-                .payload
-                .get("event_id")
-                .and_then(|value| value.as_str())
-                .map(ToOwned::to_owned)
-                .unwrap_or_else(|| {
-                    format!(
-                        "cx:event:{}",
-                        operation.operation_id.as_str().replace(':', "")
-                    )
-                });
-            let sender = operation
-                .payload
-                .get("sender")
-                .and_then(|value| value.as_str())
-                .unwrap_or(repo_id);
-            let thread_id = operation
-                .payload
-                .get("thread_id")
-                .and_then(|value| value.as_str());
-            sql_query(
+    let event_type = kinds::canonical_kind_string(operation);
+    if kinds::operation_is_message_create(operation) {
+        let event_id = operation
+            .payload
+            .get("event_id")
+            .and_then(|value| value.as_str())
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| {
+                format!(
+                    "cx:event:{}",
+                    operation.operation_id.as_str().replace(':', "")
+                )
+            });
+        let sender = operation
+            .payload
+            .get("sender")
+            .and_then(|value| value.as_str())
+            .unwrap_or(repo_id);
+        let thread_id = operation
+            .payload
+            .get("thread_id")
+            .and_then(|value| value.as_str());
+        sql_query(
                 "INSERT INTO events (event_id, space_id, event_type, sender, thread_id, operation_id, payload, created_at) \
                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
                  ON CONFLICT (event_id) DO NOTHING",
             )
             .bind::<Text, _>(&event_id)
             .bind::<Text, _>(operation.space_id.as_str())
-            .bind::<Text, _>(&operation.object_type)
+            .bind::<Text, _>(&event_type)
             .bind::<Nullable<Text>, _>(Some(sender))
             .bind::<Nullable<Text>, _>(thread_id)
             .bind::<Nullable<Text>, _>(Some(operation.operation_id.as_str()))
             .bind::<Jsonb, _>(&operation.payload)
             .bind::<Timestamptz, _>(operation.created_at)
             .execute(&mut conn)?;
-        }
-        "membership" | "space.lifecycle" => {
-            let title = operation
-                .payload
-                .get("space_title")
-                .or_else(|| operation.payload.get("title"))
-                .and_then(|value| value.as_str())
-                .unwrap_or_else(|| operation.space_id.as_str());
-            let summary = operation
-                .payload
-                .get("space_summary")
-                .or_else(|| operation.payload.get("summary"))
-                .and_then(|value| value.as_str());
-            let discoverability = operation
-                .payload
-                .get("discoverability")
-                .and_then(|value| value.as_str())
-                .unwrap_or_else(|| {
-                    if operation
-                        .payload
-                        .get("public")
-                        .and_then(|value| value.as_bool())
-                        .unwrap_or(false)
-                    {
-                        "public"
-                    } else {
-                        "invite_only"
-                    }
-                });
-            sql_query(
+    } else if kinds::operation_is_membership(operation)
+        || kinds::operation_is_space_lifecycle(operation)
+    {
+        let title = operation
+            .payload
+            .get("space_title")
+            .or_else(|| operation.payload.get("title"))
+            .and_then(|value| value.as_str())
+            .unwrap_or_else(|| operation.space_id.as_str());
+        let summary = operation
+            .payload
+            .get("space_summary")
+            .or_else(|| operation.payload.get("summary"))
+            .and_then(|value| value.as_str());
+        let discoverability = operation
+            .payload
+            .get("discoverability")
+            .and_then(|value| value.as_str())
+            .unwrap_or_else(|| {
+                if operation
+                    .payload
+                    .get("public")
+                    .and_then(|value| value.as_bool())
+                    .unwrap_or(false)
+                {
+                    "public"
+                } else {
+                    "invite_only"
+                }
+            });
+        sql_query(
                 "INSERT INTO spaces (space_id, title, summary, owner, discoverability, payload, created_at, updated_at) \
                  VALUES ($1, $2, $3, $4, $5, $6, $7, $7) \
                  ON CONFLICT (space_id) DO UPDATE SET title = EXCLUDED.title, summary = EXCLUDED.summary, updated_at = EXCLUDED.updated_at",
@@ -6844,30 +6847,28 @@ fn persist_projected_operation(
             .bind::<Timestamptz, _>(operation.created_at)
             .execute(&mut conn)?;
 
-            if let Some(member) = operation
+        if let Some(member) = operation
+            .payload
+            .get("member")
+            .and_then(|value| value.as_str())
+        {
+            let membership = operation
                 .payload
-                .get("member")
+                .get("membership")
                 .and_then(|value| value.as_str())
-            {
-                let membership = operation
-                    .payload
-                    .get("membership")
-                    .and_then(|value| value.as_str())
-                    .unwrap_or_else(|| {
-                        if operation
-                            .payload
-                            .get("action")
-                            .and_then(|value| value.as_str())
-                            .is_some_and(|action| {
-                                matches!(action, "member.remove" | "leave" | "ban")
-                            })
-                        {
-                            "leave"
-                        } else {
-                            "join"
-                        }
-                    });
-                sql_query(
+                .unwrap_or_else(|| {
+                    if operation
+                        .payload
+                        .get("action")
+                        .and_then(|value| value.as_str())
+                        .is_some_and(|action| matches!(action, "member.remove" | "leave" | "ban"))
+                    {
+                        "leave"
+                    } else {
+                        "join"
+                    }
+                });
+            sql_query(
                     "INSERT INTO space_members (space_id, actor, membership, payload, joined_at, left_at, updated_at) \
                      VALUES ($1, $2, $3, $4, CASE WHEN $3 = 'join' THEN $5 ELSE NULL END, CASE WHEN $3 <> 'join' THEN $5 ELSE NULL END, $5) \
                      ON CONFLICT (space_id, actor) DO UPDATE SET membership = EXCLUDED.membership, payload = EXCLUDED.payload, left_at = EXCLUDED.left_at, updated_at = EXCLUDED.updated_at",
@@ -6878,16 +6879,16 @@ fn persist_projected_operation(
                 .bind::<Jsonb, _>(&operation.payload)
                 .bind::<Timestamptz, _>(operation.created_at)
                 .execute(&mut conn)?;
-            }
+        }
 
-            sql_query(
+        sql_query(
                 "INSERT INTO space_state_events (event_id, space_id, event_type, state_key, sender, operation_id, payload, created_at) \
                  VALUES ($1, $2, $3, $4, $5, $1, $6, $7) \
                  ON CONFLICT (event_id) DO NOTHING",
             )
             .bind::<Text, _>(operation.operation_id.as_str())
             .bind::<Text, _>(operation.space_id.as_str())
-            .bind::<Text, _>(&operation.object_type)
+            .bind::<Text, _>(&event_type)
             .bind::<Text, _>(
                 operation
                     .payload
@@ -6899,8 +6900,6 @@ fn persist_projected_operation(
             .bind::<Jsonb, _>(&operation.payload)
             .bind::<Timestamptz, _>(operation.created_at)
             .execute(&mut conn)?;
-        }
-        _ => {}
     }
     Ok(())
 }
@@ -7448,7 +7447,8 @@ fn record_space_lifecycle_operation(
     let operation = Operation::create(
         OperationId::new(ids::generate_operation_id()).expect("generated valid operation id"),
         SpaceId::new(space_id.to_owned()).expect("validated space id"),
-        "space.lifecycle",
+        kinds::canonical_kind_for_payload("space.lifecycle", &payload)
+            .unwrap_or(kinds::CX_SPACE_UPDATE),
         payload,
     );
     let projection_event = projection_event_from_operation(&operation, Some(actor));
@@ -7512,8 +7512,11 @@ fn validate_operation_semantics(operations: &[Operation]) -> Result<(), &'static
             .validate_payload_object()
             .map_err(|_| "operation payload must be a JSON object")?;
         validate_canonical_json_value(&operation.payload)?;
-        match operation.object_type.as_str() {
-            "message" => {
+        let Some(kind) = kinds::canonical_kind_for_operation(operation) else {
+            return Err("unknown operation family");
+        };
+        match kind {
+            kinds::CX_MESSAGE_CREATE => {
                 if !(operation.payload.get("body").is_some()
                     || operation.payload.get("content").is_some()
                     || operation.payload.get("event_id").is_some())
@@ -7535,19 +7538,19 @@ fn validate_operation_semantics(operations: &[Operation]) -> Result<(), &'static
                     validate_mentions(content)?;
                 }
             }
-            "membership" => {
+            kind if kinds::is_membership_kind(kind) => {
                 if operation.payload.get("member").is_none()
                     || operation.payload.get("membership").is_none()
                 {
                     return Err("membership operation requires member and membership");
                 }
             }
-            "space.lifecycle" => {
+            kind if kinds::is_space_lifecycle_kind(kind) => {
                 if operation.payload.get("action").is_none() {
                     return Err("space lifecycle operation requires action");
                 }
             }
-            "redaction" => {
+            kinds::CX_MESSAGE_REDACT | kinds::CX_REDACTION => {
                 if operation.payload.get("target_event_id").is_none()
                     && operation.payload.get("target").is_none()
                     && operation.payload.get("redacts").is_none()
@@ -7555,9 +7558,15 @@ fn validate_operation_semantics(operations: &[Operation]) -> Result<(), &'static
                     return Err("redaction operation requires target_event_id");
                 }
             }
-            "entity" | "entity.create" | "entity.update" | "entity.delete" | "relation"
-            | "relation.create" | "relation.update" | "relation.delete" | "reaction"
-            | "reaction.add" | "reaction.remove" | "read_marker" => {}
+            kinds::CX_ENTITY_CREATE
+            | kinds::CX_ENTITY_UPDATE
+            | kinds::CX_ENTITY_DELETE
+            | kinds::CX_RELATION_CREATE
+            | kinds::CX_RELATION_UPDATE
+            | kinds::CX_RELATION_DELETE
+            | kinds::CX_REACTION_ADD
+            | kinds::CX_REACTION_REMOVE
+            | kinds::CX_READ_MARKER => {}
             _ => return Err("unknown operation family"),
         }
     }
@@ -7569,7 +7578,7 @@ fn validate_operation_policy(
     operations: &[Operation],
 ) -> Result<(), &'static str> {
     for operation in operations {
-        if operation.object_type == "message"
+        if kinds::operation_is_message_create(operation)
             && !message_operation_is_encrypted(operation)
             && known_space_denies_plaintext_service(state, operation.space_id.as_str())
         {

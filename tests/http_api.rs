@@ -608,6 +608,19 @@ async fn account_contacts_and_space_lifecycle_workflow() {
     let send_cursor = decode_cursor(sent_message["sync_token"].as_str().unwrap());
     assert_eq!(send_cursor["schema"], "cx.schema.cursor.v1");
     assert!(send_cursor["positions"]["spaces"].is_object());
+    let sent_commit: Value = TestClient::get(format!(
+        "http://server/api/v1/repo/commit?commit_id={}&include_operations=true",
+        sent_message["commit_id"].as_str().unwrap()
+    ))
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    assert_eq!(
+        sent_commit["operations"][0]["object_type"],
+        "cx.message.create"
+    );
 
     let invalid_block_message = TestClient::post("http://server/api/v1/messages/send")
         .add_header("authorization", format!("Bearer {alice}"), true)
@@ -824,19 +837,28 @@ async fn account_contacts_and_space_lifecycle_workflow() {
     .take_json()
     .await
     .unwrap();
-    let actions: std::collections::BTreeSet<_> = lifecycle_events["events"]
+    let event_types: std::collections::BTreeSet<_> = lifecycle_events["events"]
         .as_array()
         .unwrap()
         .iter()
-        .filter(|event| event["event_type"] == "space.lifecycle")
-        .map(|event| event["payload"]["action"].as_str().unwrap().to_owned())
+        .filter(|event| {
+            event["event_type"].as_str().is_some_and(|event_type| {
+                event_type.starts_with("cx.space.") || event_type.starts_with("cx.membership.")
+            })
+        })
+        .map(|event| event["event_type"].as_str().unwrap().to_owned())
         .collect();
     assert_eq!(
-        actions,
-        ["create", "delete", "member.add", "member.remove"]
-            .into_iter()
-            .map(ToOwned::to_owned)
-            .collect()
+        event_types,
+        [
+            "cx.membership.join",
+            "cx.membership.leave",
+            "cx.space.create",
+            "cx.space.destroy"
+        ]
+        .into_iter()
+        .map(ToOwned::to_owned)
+        .collect()
     );
 
     let directory: Value = TestClient::post("http://server/api/v1/directory/search-spaces")
@@ -2767,6 +2789,7 @@ async fn repo_adapter_memory_submit_list_get_and_sync_work() {
             .await
             .unwrap();
     assert_eq!(backfill["events"][0]["event_id"], "cx:event:adapter-01");
+    assert_eq!(backfill["events"][0]["event_type"], "cx.message.create");
     assert_eq!(
         backfill["events"][0]["operation_id"],
         "cx:operation:adapter-01"

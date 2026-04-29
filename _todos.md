@@ -12,11 +12,20 @@ handler、PostgreSQL 落地、运行时策略和服务互操作验证。
 - [ ] **[SDK] Canonical operation/event 注册表** — canonical `cx.*` kind、legacy migration adapter、operation envelope 字段、schema-driven semantic validation、内置操作 conformance vectors。
 - [ ] **[SDK] Canonical JSON / digest / proof binding** — canonical bytes、operation/commit digest、proof payload hash、audience/domain/created_at binding、移除生产路径 `alg:none`/`dev-proof` 的共享验证器。
 - [ ] **[SDK] DID identity / key log / service DID primitives** — `did:uuid`、resolver adapter、DID normalized view、key log、registry receipt signature、private DID proof gating、service DID endpoint 校验。
+  - [x] SDK 已完成: `did:uuid` 结构化生成与 bit layout validation。
+  - [x] SDK 已完成: `did:uuid`/`did:web`/`did:key`/`did:keri` resolver adapter trait。
+  - [x] SDK 已完成: append-only key log verification 与从 inception 推导 current keys。
+  - [ ] SDK 待完成: DID normalized service view、registry receipt signature、private DID proof gating、service DID endpoint 校验。
 - [ ] **[SDK] 持久化抽象与测试套件** — repo/state/event/crypto/account/session/blob/audit/federation store traits、migration contract、transactional write conformance、projection rebuild helpers。
 - [ ] **[SDK] Capability at causal frontier** — capability operations 进入 reducer、resource selector grammar、critical constraint fail-closed、delegation/claim/approval validation、policy server decision boundary。
+  - [x] SDK 已完成: grant/delegate/revoke 进入 reducer state，并从 `SpaceState` 计算 active grants。
+  - [x] SDK 已完成: causal frontier 上的 capability decision、revoke/delegate deterministic ordering、denied write negative vector。
+  - [ ] SDK 待完成: 完整 resource selector grammar、critical constraint fail-closed、delegation depth/cycle、claim/approval validation、policy server decision boundary。
 - [ ] **[SDK] Client sync correctness contract** — token binding、persistent positions、initial/incremental sync bucket、deterministic timeline order、limited/backfill gap、wait-for frontier、to-device ack semantics。
 - [ ] **[SDK] Federation security helpers** — HTTP Message Signatures、origin/destination service binding、transaction idempotency、replay persistence contract、fork quarantine model、verify-actor challenge。
 - [ ] **[SDK] Snapshot/bootstrap contract** — reducer snapshot manifest、chunk digest/state hash verification、bootstrap sequence、fallback-to-repo-replay behavior。
+  - [x] SDK 已完成: reducer snapshot manifest/signature model、chunk digest、state hash/Merkle helper、fallback-to-repo-replay。
+  - [ ] SDK 待完成: 完整 bootstrap sequence 与真实服务端 snapshot/sync interop。
 - [ ] **[SDK] API convention helpers** — standard error envelope schema、query auth rejection helpers、rate/quota/tracing metadata types、not-found privacy semantics。
 - [ ] **[SDK] Account/device/blob/push/WebRTC shared models** — session grant binding、device pairing/revocation, blob access grants, push rules, presence/typing/account-data types, ICE credential signature models。
 - [ ] **[SDK] OpenAPI / schema / conformance generation** — JSON Schemas for cursor/event/operation/commit/grant/envelope/sync, OpenAPI 3.1 schema output, profile-specific conformance suites。
@@ -146,14 +155,16 @@ P0 的完成标准: 可以诚实声明 `principal_server_repo_api` 的核心子�
 ### 3.1 Canonical Operation / Event 模型
 
 - [ ] 将所有 operation kind 统一为 `cx.*` 注册表命名。
-  - [ ] `message` -> `cx.message.create`。
-  - [ ] `message.revise` -> `cx.message.revise`。
-  - [ ] `redaction` -> `cx.message.redact` 或 `cx.redaction`。
-  - [ ] `entity.create/update/delete` -> `cx.entity.*`。
-  - [ ] `relation.create/update/delete` -> `cx.relation.*`。
-  - [ ] `membership` -> `cx.member.state` 或 `cx.membership.*` 兼容映射。
-  - [ ] `read_marker` -> `cx.read.marker`。
+  - [x] `message` -> `cx.message.create`。
+  - [x] `message.revise` -> `cx.message.revise`。
+  - [x] `redaction` -> `cx.message.redact` 或 `cx.redaction`。
+  - [x] `entity.create/update/delete` -> `cx.entity.*`。
+  - [x] `relation.create/update/delete` -> `cx.relation.*`。
+  - [x] `membership` -> `cx.member.state` 或 `cx.membership.*` 兼容映射。
+  - [x] `read_marker` -> `cx.read.marker`。
 - [ ] 增加 migration compatibility adapter, 只在明确 migration profile 下接受旧裸名。
+  - [x] legacy kind -> canonical projection / reducer adapter。
+  - [ ] profile-gated legacy acceptance。
 - [ ] 扩展 wire / SDK operation envelope:
   - [ ] `actor_id`
   - [ ] `kind`
@@ -163,9 +174,9 @@ P0 的完成标准: 可以诚实声明 `principal_server_repo_api` 的核心子�
   - [ ] `causal.actor_seq`
   - [ ] `authz_ref`
   - [ ] `proofs`
-- [ ] reducer dispatch 改为 canonical kind。
+- [x] reducer dispatch 改为 canonical kind。
 - [ ] `validate_operation_semantics` 改为 schema registry 驱动, 未注册事件 fail closed。
-- [ ] `supported_operations` 只声明 canonical operation id, 不声明产品私有别名。
+- [x] `supported_operations` 只声明 canonical operation id, 不声明产品私有别名。
 - [ ] 给所有内置操作补 conformance vectors。
 
 ### 3.2 Canonical JSON / Hash / Signature

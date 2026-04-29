@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use contrix_sdk::Operation;
 use serde_json::Value;
 
-use crate::hlc::ServerHlc;
+use crate::{hlc::ServerHlc, kinds};
 
 /// In-memory projection state produced by the reducer.
 #[derive(Clone, Debug, Default)]
@@ -160,20 +160,25 @@ impl ProjectionState {
     /// Apply a single operation and return the effect.
     pub fn apply(&mut self, operation: &Operation, hlc: &ServerHlc) -> ProjectionEffect {
         let now = operation.created_at;
-        match operation.object_type.as_str() {
-            "message" => self.apply_message(operation, now),
-            "message.revise" => self.apply_message_revise(operation, now),
-            "redaction" => self.apply_redaction(operation),
-            "reaction" | "reaction.add" => self.apply_reaction_add(operation, now),
-            "reaction.remove" => self.apply_reaction_remove(operation),
-            "read_marker" => self.apply_read_marker(operation, now),
-            "entity" | "entity.create" => self.apply_entity_create(operation, now),
-            "entity.update" => self.apply_entity_update(operation, now, hlc),
-            "entity.delete" => self.apply_entity_delete(operation),
-            "relation" | "relation.create" => self.apply_relation_create(operation, now),
-            "relation.delete" => self.apply_relation_delete(operation),
-            "membership" => self.apply_membership(operation, now),
-            "space.lifecycle" => self.apply_space_lifecycle(operation, now),
+        let Some(kind) = kinds::canonical_kind_for_operation(operation) else {
+            return ProjectionEffect::Ignored;
+        };
+        match kind {
+            kinds::CX_MESSAGE_CREATE => self.apply_message(operation, now),
+            kinds::CX_MESSAGE_REVISE => self.apply_message_revise(operation, now),
+            kinds::CX_MESSAGE_REDACT | kinds::CX_REDACTION => self.apply_redaction(operation),
+            kinds::CX_REACTION_ADD => self.apply_reaction_add(operation, now),
+            kinds::CX_REACTION_REMOVE => self.apply_reaction_remove(operation),
+            kinds::CX_READ_MARKER => self.apply_read_marker(operation, now),
+            kinds::CX_ENTITY_CREATE => self.apply_entity_create(operation, now),
+            kinds::CX_ENTITY_UPDATE => self.apply_entity_update(operation, now, hlc),
+            kinds::CX_ENTITY_DELETE => self.apply_entity_delete(operation),
+            kinds::CX_RELATION_CREATE => self.apply_relation_create(operation, now),
+            kinds::CX_RELATION_DELETE => self.apply_relation_delete(operation),
+            kind if kinds::is_membership_kind(kind) => self.apply_membership(operation, now),
+            kind if kinds::is_space_lifecycle_kind(kind) => {
+                self.apply_space_lifecycle(operation, now)
+            }
             _ => ProjectionEffect::Ignored,
         }
     }

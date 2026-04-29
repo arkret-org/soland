@@ -4,6 +4,7 @@ pub mod db;
 pub mod handlers;
 pub mod hlc;
 pub mod ids;
+pub mod kinds;
 pub mod persistence;
 pub mod ratelimit;
 pub mod reducer;
