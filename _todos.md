@@ -155,7 +155,7 @@ P0 的完成标准: 可以诚实声明 `principal_server_repo_api` 的核心子�
 
 ### 3.1 Canonical Operation / Event 模型
 
-- [ ] 将所有 operation kind 统一为 `cx.*` 注册表命名。
+- [x] 将所有 operation kind 统一为 `cx.*` 注册表命名。
   - [x] `message` -> `cx.message.create`。
   - [x] `message.revise` -> `cx.message.revise`。
   - [x] `redaction` -> `cx.message.redact` 或 `cx.redaction`。
@@ -178,7 +178,7 @@ P0 的完成标准: 可以诚实声明 `principal_server_repo_api` 的核心子�
 - [x] reducer dispatch 改为 canonical kind。
 - [x] `validate_operation_semantics` 改为 schema registry 驱动, 未注册事件 fail closed。
 - [x] `supported_operations` 只声明 canonical operation id, 不声明产品私有别名。
-- [ ] 给所有内置操作补 conformance vectors。
+- [x] 给所有内置操作补 conformance vectors。
 
 ### 3.2 Canonical JSON / Hash / Signature
 

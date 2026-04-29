@@ -8014,6 +8014,207 @@ fn validate_encrypted_payload_envelope(content: &serde_json::Value) -> Result<()
     Ok(())
 }
 
+#[cfg(test)]
+mod operation_conformance_tests {
+    use super::*;
+    use crate::{config::AppConfig, db::Db};
+    use serde_json::{Value, json};
+
+    struct OperationVector {
+        name: &'static str,
+        kind: &'static str,
+        payload: Value,
+        valid: bool,
+    }
+
+    fn test_state() -> AppState {
+        AppState::new(
+            AppConfig {
+                bind: "127.0.0.1:0".parse().unwrap(),
+                public_base_url: "http://server".to_owned(),
+                service_did: "did:web:soland.local".to_owned(),
+                database_url: None,
+                blob_root: std::env::temp_dir().join("soland-test-blobs"),
+                cors_allow_origin: None,
+                development_mode: true,
+            },
+            Db { pool: None },
+        )
+    }
+
+    fn operation(index: usize, kind: &str, payload: Value) -> Operation {
+        Operation::create(
+            OperationId::new(format!("cx:operation:vector-{index}")).unwrap(),
+            SpaceId::new("cx:space:vector").unwrap(),
+            kind,
+            payload,
+        )
+    }
+
+    #[test]
+    fn builtin_operation_conformance_vectors_cover_registry() {
+        let state = test_state();
+        let vectors = vec![
+            OperationVector {
+                name: "message create",
+                kind: kinds::CX_MESSAGE_CREATE,
+                payload: json!({"event_id": "cx:event:message-1", "sender": "did:web:alice.example", "content": {"body": "hello"}}),
+                valid: true,
+            },
+            OperationVector {
+                name: "message revise",
+                kind: kinds::CX_MESSAGE_REVISE,
+                payload: json!({"target_event_id": "cx:event:message-1", "content": {"body": "edited"}}),
+                valid: true,
+            },
+            OperationVector {
+                name: "message redact",
+                kind: kinds::CX_MESSAGE_REDACT,
+                payload: json!({"target_event_id": "cx:event:message-1"}),
+                valid: true,
+            },
+            OperationVector {
+                name: "generic redaction",
+                kind: kinds::CX_REDACTION,
+                payload: json!({"redacts": "cx:event:message-1"}),
+                valid: true,
+            },
+            OperationVector {
+                name: "reaction add",
+                kind: kinds::CX_REACTION_ADD,
+                payload: json!({"event_id": "cx:event:message-1", "actor": "did:web:alice.example", "key": "+1"}),
+                valid: true,
+            },
+            OperationVector {
+                name: "reaction remove",
+                kind: kinds::CX_REACTION_REMOVE,
+                payload: json!({"target_event_id": "cx:event:message-1", "sender": "did:web:alice.example", "reaction": "+1"}),
+                valid: true,
+            },
+            OperationVector {
+                name: "entity create",
+                kind: kinds::CX_ENTITY_CREATE,
+                payload: json!({"entity_id": "cx:entity:task-1", "entity_type": "cx.task", "fields": {"title": "Ship"}}),
+                valid: true,
+            },
+            OperationVector {
+                name: "entity update",
+                kind: kinds::CX_ENTITY_UPDATE,
+                payload: json!({"entity_id": "cx:entity:task-1", "fields": {"status": "done"}}),
+                valid: true,
+            },
+            OperationVector {
+                name: "entity delete",
+                kind: kinds::CX_ENTITY_DELETE,
+                payload: json!({"entity_id": "cx:entity:task-1"}),
+                valid: true,
+            },
+            OperationVector {
+                name: "relation create",
+                kind: kinds::CX_RELATION_CREATE,
+                payload: json!({"relation_id": "cx:relation:rel-1", "relation_kind": "blocks", "from": "cx:entity:task-1", "to": "cx:entity:task-2"}),
+                valid: true,
+            },
+            OperationVector {
+                name: "relation update",
+                kind: kinds::CX_RELATION_UPDATE,
+                payload: json!({"relation_id": "cx:relation:rel-1", "fields": {"weight": 1}}),
+                valid: true,
+            },
+            OperationVector {
+                name: "relation delete",
+                kind: kinds::CX_RELATION_DELETE,
+                payload: json!({"relation_id": "cx:relation:rel-1"}),
+                valid: true,
+            },
+            OperationVector {
+                name: "membership join",
+                kind: kinds::CX_MEMBERSHIP_JOIN,
+                payload: json!({"member": "did:web:alice.example", "membership": "join"}),
+                valid: true,
+            },
+            OperationVector {
+                name: "membership leave",
+                kind: kinds::CX_MEMBERSHIP_LEAVE,
+                payload: json!({"member": "did:web:alice.example", "membership": "leave"}),
+                valid: true,
+            },
+            OperationVector {
+                name: "membership kick",
+                kind: kinds::CX_MEMBERSHIP_KICK,
+                payload: json!({"member": "did:web:bob.example", "membership": "kick"}),
+                valid: true,
+            },
+            OperationVector {
+                name: "membership ban",
+                kind: kinds::CX_MEMBERSHIP_BAN,
+                payload: json!({"member": "did:web:bob.example", "membership": "ban"}),
+                valid: true,
+            },
+            OperationVector {
+                name: "membership unban",
+                kind: kinds::CX_MEMBERSHIP_UNBAN,
+                payload: json!({"member": "did:web:bob.example", "membership": "unban"}),
+                valid: true,
+            },
+            OperationVector {
+                name: "membership knock",
+                kind: kinds::CX_MEMBERSHIP_KNOCK,
+                payload: json!({"member": "did:web:bob.example", "membership": "knock"}),
+                valid: true,
+            },
+            OperationVector {
+                name: "read marker",
+                kind: kinds::CX_READ_MARKER,
+                payload: json!({"actor": "did:web:alice.example", "event_id": "cx:event:message-1"}),
+                valid: true,
+            },
+            OperationVector {
+                name: "space create",
+                kind: kinds::CX_SPACE_CREATE,
+                payload: json!({"action": "create", "title": "Launch"}),
+                valid: true,
+            },
+            OperationVector {
+                name: "space update",
+                kind: kinds::CX_SPACE_UPDATE,
+                payload: json!({"action": "update", "title": "Launch 2"}),
+                valid: true,
+            },
+            OperationVector {
+                name: "space destroy",
+                kind: kinds::CX_SPACE_DESTROY,
+                payload: json!({"action": "destroy"}),
+                valid: true,
+            },
+            OperationVector {
+                name: "unknown kind",
+                kind: "cx.unknown.operation",
+                payload: json!({"body": "bad"}),
+                valid: false,
+            },
+            OperationVector {
+                name: "reaction missing key",
+                kind: kinds::CX_REACTION_ADD,
+                payload: json!({"event_id": "cx:event:message-1", "actor": "did:web:alice.example"}),
+                valid: false,
+            },
+        ];
+
+        for (index, vector) in vectors.into_iter().enumerate() {
+            let operation = operation(index, vector.kind, vector.payload);
+            let result = validate_operation_semantics(&state, &[operation]);
+            assert_eq!(
+                result.is_ok(),
+                vector.valid,
+                "operation conformance vector failed: {} ({:?})",
+                vector.name,
+                result.err()
+            );
+        }
+    }
+}
+
 fn has_accepted_contact(state: &AppState, left: &str, right: &str) -> bool {
     state
         .contacts
