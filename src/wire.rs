@@ -11,6 +11,7 @@ pub struct HealthResponse {
     pub ok: bool,
     pub service: &'static str,
     pub storage: &'static str,
+    pub checks: Value,
 }
 
 #[derive(Debug, Serialize)]
@@ -45,6 +46,58 @@ pub struct ClientSyncResponse {
     pub account_data: Vec<Value>,
     #[serde(default)]
     pub device_lists: Value,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SetTypingRequest {
+    pub space_id: String,
+    #[serde(default)]
+    pub scope_id: Option<String>,
+    #[serde(default)]
+    pub typing: bool,
+    #[serde(default)]
+    pub timeout_ms: Option<u64>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SetTypingResponse {
+    pub ok: bool,
+    pub space_id: String,
+    pub actor: String,
+    pub typing: bool,
+    pub expires_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RegisterSchemaRequest {
+    pub schema_id: String,
+    pub kind: String,
+    pub version: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub definition: Value,
+    #[serde(default = "default_true")]
+    pub active: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SchemaResponse {
+    pub schema_id: String,
+    pub kind: String,
+    pub version: String,
+    pub name: Option<String>,
+    pub owner: String,
+    pub definition: Value,
+    pub active: bool,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SchemasResponse {
+    pub schemas: Vec<SchemaResponse>,
+    pub next_cursor: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -356,6 +409,21 @@ pub struct PushNotifyResponse {
     pub rejected: Vec<Value>,
 }
 
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpsertPushRuleRequest {
+    pub rule_id: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub actions: Vec<String>,
+    #[serde(default)]
+    pub conditions: Value,
+}
+
 #[derive(Debug, Serialize)]
 pub struct OkResponse {
     pub ok: bool,
@@ -377,6 +445,42 @@ pub struct ModerationReportResponse {
     pub report_id: String,
     pub status: String,
     pub routed_to: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpsertPolicyDocumentRequest {
+    #[serde(default)]
+    pub policy_id: Option<String>,
+    pub scope: String,
+    pub subject_ref: String,
+    pub policy_type: String,
+    pub effect: String,
+    #[serde(default)]
+    pub actions: Vec<String>,
+    #[serde(default)]
+    pub resource: Value,
+    #[serde(default)]
+    pub obligations: Vec<Value>,
+    #[serde(default = "default_true")]
+    pub active: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PolicyDocumentResponse {
+    pub policy_id: String,
+    pub owner: String,
+    pub scope: String,
+    pub subject_ref: String,
+    pub policy_type: String,
+    pub payload: Value,
+    pub active: bool,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PolicyDocumentsResponse {
+    pub policies: Vec<PolicyDocumentResponse>,
+    pub next_cursor: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -651,6 +755,49 @@ pub struct DeviceMessagesReceiveResponse {
     pub limited: bool,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct CreateWebrtcSessionRequest {
+    pub space_id: String,
+    #[serde(default)]
+    pub participants: Vec<String>,
+    #[serde(default)]
+    pub ttl_ms: Option<u64>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CreateWebrtcSessionResponse {
+    pub session_id: String,
+    pub space_id: String,
+    pub participants: Vec<String>,
+    pub expires_at: DateTime<Utc>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct WebrtcSignalRequest {
+    pub message_type: String,
+    #[serde(default)]
+    pub payload: Value,
+    #[serde(default)]
+    pub proofs: Vec<Value>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct WebrtcSignalResponse {
+    pub ok: bool,
+    pub session_id: String,
+    pub seq: u64,
+    pub next_cursor: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct WebrtcSignalsResponse {
+    pub session_id: String,
+    pub events: Vec<Value>,
+    pub next_cursor: String,
+    pub limited: bool,
+}
+
 #[derive(Debug, Serialize)]
 pub struct BlobUploadResponse {
     pub blob_ref: String,
@@ -660,12 +807,16 @@ pub struct BlobUploadResponse {
     pub upload_receipt: Value,
 }
 
-pub fn describe(storage: &'static str) -> ServerDescription {
+pub fn describe(
+    service_did: &str,
+    storage: &'static str,
+    development_mode: bool,
+) -> ServerDescription {
     ServerDescription {
-        service_did: "did:web:soland.local".parse().expect("valid did"),
+        service_did: service_did.parse().expect("valid service DID"),
         service_type: "principal_server".to_owned(),
         protocol_version: "1.0".to_owned(),
-        supported_profiles: vec!["cx.schema.core.v1".to_owned(), "cx.reducer.v1".to_owned()],
+        supported_profiles: vec!["cx.profile.soland_limited_server.v1".to_owned()],
         supported_features: vec![
             "account.register".to_owned(),
             "account.me".to_owned(),
@@ -674,11 +825,13 @@ pub fn describe(storage: &'static str) -> ServerDescription {
             "contacts.respond".to_owned(),
             "space.lifecycle".to_owned(),
             "messages.send".to_owned(),
+            "schema.registry".to_owned(),
             "repo.submit_commit".to_owned(),
             "repo.read".to_owned(),
             "federation.transaction".to_owned(),
             "federation.operations".to_owned(),
             "sync.client_sync".to_owned(),
+            "sync.typing".to_owned(),
             "sync.backfill".to_owned(),
             "directory.search_spaces".to_owned(),
             "directory.resolve_space".to_owned(),
@@ -686,6 +839,9 @@ pub fn describe(storage: &'static str) -> ServerDescription {
             "authz.check".to_owned(),
             "profile.presence".to_owned(),
             "push.register_device".to_owned(),
+            "push.rules".to_owned(),
+            "webrtc.signaling".to_owned(),
+            "policy.documents".to_owned(),
             "moderation.report".to_owned(),
         ],
         supported_operations: vec![
@@ -701,6 +857,10 @@ pub fn describe(storage: &'static str) -> ServerDescription {
             "cx.spaces.remove_member".to_owned(),
             "cx.spaces.delete".to_owned(),
             "cx.messages.send".to_owned(),
+            "cx.schemas.list".to_owned(),
+            "cx.schemas.get".to_owned(),
+            "cx.schemas.register".to_owned(),
+            "cx.schemas.delete".to_owned(),
             "cx.repo.list_commits".to_owned(),
             "cx.repo.get_operations".to_owned(),
             "cx.repo.sync".to_owned(),
@@ -711,6 +871,7 @@ pub fn describe(storage: &'static str) -> ServerDescription {
             "cx.federation.space_members".to_owned(),
             "cx.federation.verify_actor".to_owned(),
             "cx.sync.client_sync".to_owned(),
+            "cx.sync.typing".to_owned(),
             "cx.sync.backfill".to_owned(),
             "cx.sync.get_snapshot_head".to_owned(),
             "cx.directory.describe".to_owned(),
@@ -723,15 +884,53 @@ pub fn describe(storage: &'static str) -> ServerDescription {
             "cx.authz.get_invites".to_owned(),
             "cx.push.register_device".to_owned(),
             "cx.push.unregister_device".to_owned(),
+            "cx.push.rules".to_owned(),
             "cx.push.notify".to_owned(),
+            "cx.webrtc.create_session".to_owned(),
+            "cx.webrtc.send_signal".to_owned(),
+            "cx.webrtc.get_signals".to_owned(),
+            "cx.webrtc.close_session".to_owned(),
+            "cx.policies.list".to_owned(),
+            "cx.policies.get".to_owned(),
+            "cx.policies.upsert".to_owned(),
+            "cx.policies.delete".to_owned(),
             "cx.policy.check".to_owned(),
             "cx.moderation.report".to_owned(),
         ],
         supported_bindings: vec![serde_json::json!({"kind": "http_json", "base_path": "/api/v1"})],
         supported_reducer_profiles: vec!["cx.reducer.v1".to_owned()],
         supported_schema_profiles: vec!["cx.schema.core.v1".to_owned()],
-        auth_metadata: serde_json::json!({"mode": "development"}),
-        limits: serde_json::json!({"storage": storage, "max_limit": 100}),
+        auth_metadata: serde_json::json!({
+            "mode": if development_mode { "development" } else { "production" },
+            "supported_auth_methods": if development_mode {
+                vec!["dev_bearer_token"]
+            } else {
+                Vec::<&str>::new()
+            },
+        }),
+        limits: serde_json::json!({
+            "storage": storage,
+            "max_limit": 100,
+            "profile_status": {
+                "conformance": "limited_reference",
+                "full_profiles_not_claimed": [
+                    "cx.profile.principal_server.v1",
+                    "cx.profile.principal_server_repo_api.v1",
+                    "cx.profile.index_node.v1",
+                    "cx.profile.identity_registry.v1",
+                    "cx.profile.blob_node.v1"
+                ],
+                "implemented_surfaces": [
+                    "principal_server",
+                    "repo_api",
+                    "sync",
+                    "index",
+                    "identity_registry_local_dev",
+                    "blob_node_local",
+                    "directory_service"
+                ]
+            }
+        }),
     }
 }
 
@@ -838,7 +1037,7 @@ pub struct CreateEntityRequest {
     pub fields: BTreeMap<String, Value>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct EntityResponse {
     pub entity_id: String,
     pub space_id: String,
@@ -899,6 +1098,8 @@ pub struct CreateViewRequest {
     pub kind: String,
     pub title: Option<String>,
     pub entity_type: Option<String>,
+    #[serde(default)]
+    pub options: Value,
 }
 
 #[derive(Debug, Deserialize)]
@@ -918,5 +1119,6 @@ pub struct ViewResponse {
     pub kind: String,
     pub title: Option<String>,
     pub entities: Vec<EntityResponse>,
+    pub projection: Value,
     pub created_at: String,
 }

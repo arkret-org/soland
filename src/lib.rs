@@ -26,8 +26,23 @@ pub fn service(state: AppState) -> Service {
     Service::new(router(state)).catcher(Catcher::default().hoop(error_catcher))
 }
 
+pub fn service_with_rate_limiter_config(
+    state: AppState,
+    rate_limiter_config: RateLimiterConfig,
+) -> Service {
+    Service::new(router_with_rate_limiter_config(state, rate_limiter_config))
+        .catcher(Catcher::default().hoop(error_catcher))
+}
+
 pub fn router(state: AppState) -> Router {
-    let rate_limiter = RateLimiter::new(RateLimiterConfig::default());
+    router_with_rate_limiter_config(state, RateLimiterConfig::default())
+}
+
+pub fn router_with_rate_limiter_config(
+    state: AppState,
+    rate_limiter_config: RateLimiterConfig,
+) -> Router {
+    let rate_limiter = RateLimiter::new(rate_limiter_config);
     Router::new()
         .hoop(affix_state::inject(state))
         .hoop(RateLimiterMiddleware::new(rate_limiter))
@@ -83,6 +98,16 @@ pub fn router(state: AppState) -> Router {
                 .push(Router::with_path("relations/{relation_id}").delete(delete_relation))
                 .push(Router::with_path("views").post(create_view))
                 .push(Router::with_path("views/{view_id}").get(get_view))
+                .push(
+                    Router::with_path("schemas")
+                        .get(list_schemas)
+                        .post(register_schema),
+                )
+                .push(
+                    Router::with_path("schemas/{schema_id}")
+                        .get(get_schema)
+                        .delete(delete_schema),
+                )
                 .push(Router::with_path("identity/describe").get(identity_describe))
                 .push(Router::with_path("identity/resolve").post(identity_resolve))
                 .push(Router::with_path("identity/document").get(identity_document))
@@ -91,6 +116,7 @@ pub fn router(state: AppState) -> Router {
                 .push(Router::with_path("identity/receipts").get(identity_receipts))
                 .push(Router::with_path("sync/describe").get(sync_describe))
                 .push(Router::with_path("sync").post(client_sync))
+                .push(Router::with_path("sync/typing").post(set_typing))
                 .push(Router::with_path("sync/subscribe").get(sync_subscribe))
                 .push(Router::with_path("sync/backfill").get(sync_backfill))
                 .push(Router::with_path("sync/snapshot-head").get(snapshot_head))
@@ -126,9 +152,25 @@ pub fn router(state: AppState) -> Router {
                 .push(Router::with_path("authz/grants/{grant_id}").delete(revoke_grant))
                 .push(Router::with_path("authz/invites").get(invites))
                 .push(Router::with_path("audit/events").get(audit_events))
+                .push(
+                    Router::with_path("policies")
+                        .get(list_policy_documents)
+                        .post(upsert_policy_document),
+                )
+                .push(
+                    Router::with_path("policies/{policy_id}")
+                        .get(get_policy_document)
+                        .delete(delete_policy_document),
+                )
                 .push(Router::with_path("profile/presence").get(profile_presence))
                 .push(Router::with_path("push/register-device").post(push_register))
                 .push(Router::with_path("push/unregister-device").post(push_unregister))
+                .push(
+                    Router::with_path("push/rules")
+                        .get(push_rules)
+                        .post(upsert_push_rule),
+                )
+                .push(Router::with_path("push/rules/{rule_id}").delete(delete_push_rule))
                 .push(Router::with_path("push/notify").post(push_notify))
                 .push(Router::with_path("keys/upload").post(keys_upload))
                 .push(Router::with_path("keys/query").post(keys_query))
@@ -148,6 +190,15 @@ pub fn router(state: AppState) -> Router {
                 )
                 .push(Router::with_path("federation/space-members").get(federation_space_members))
                 .push(Router::with_path("federation/verify-actor").post(federation_verify_actor))
+                .push(Router::with_path("webrtc/sessions").post(create_webrtc_session))
+                .push(
+                    Router::with_path("webrtc/sessions/{session_id}/signals")
+                        .post(put_webrtc_signal)
+                        .get(get_webrtc_signals),
+                )
+                .push(
+                    Router::with_path("webrtc/sessions/{session_id}").delete(delete_webrtc_session),
+                )
                 .push(Router::with_path("blob/upload").post(blob_upload))
                 .push(Router::with_path("blob/get").get(blob_get).head(blob_get))
                 .push(Router::with_path("moderation/report").post(moderation_report)),

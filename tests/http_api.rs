@@ -4,7 +4,11 @@ use salvo::{
     test::{ResponseExt, TestClient},
 };
 use serde_json::Value;
-use soland::{config::AppConfig, db::Db, service, state::AppState};
+use soland::{
+    config::AppConfig, db::Db, ratelimit::RateLimiterConfig, service,
+    service_with_rate_limiter_config, state::AppState,
+};
+use std::time::Duration;
 
 use chrono::Utc;
 use contrix_sdk::{Commit, CommitId, Did, Hash, Operation, OperationId, Proof, SpaceId};
@@ -18,6 +22,13 @@ fn test_config() -> AppConfig {
         blob_root: std::env::temp_dir().join("soland-test-blobs"),
         cors_allow_origin: None,
         development_mode: true,
+    }
+}
+
+fn test_config_with_service_did(service_did: &str) -> AppConfig {
+    AppConfig {
+        service_did: service_did.to_owned(),
+        ..test_config()
     }
 }
 
@@ -107,6 +118,8 @@ async fn health_and_describe_work() {
         .await
         .unwrap();
     assert_eq!(health["ok"], true);
+    assert_eq!(health["checks"]["database"]["ok"], true);
+    assert_eq!(health["checks"]["repo"]["ok"], true);
 
     let describe: Value = TestClient::get("http://server/api/v1/server/describe")
         .send(&app())
@@ -116,6 +129,152 @@ async fn health_and_describe_work() {
         .unwrap();
     assert_eq!(describe["protocol_version"], "1.0");
     assert_eq!(describe["service_type"], "principal_server");
+    assert!(
+        describe["supported_profiles"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|profile| profile == "cx.profile.soland_limited_server.v1")
+    );
+    assert!(
+        !describe["supported_profiles"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|profile| profile == "cx.schema.core.v1" || profile == "cx.reducer.v1")
+    );
+    assert!(
+        describe["supported_schema_profiles"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|profile| profile == "cx.schema.core.v1")
+    );
+    assert!(
+        describe["supported_reducer_profiles"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|profile| profile == "cx.reducer.v1")
+    );
+    assert_eq!(
+        describe["limits"]["profile_status"]["conformance"],
+        "limited_reference"
+    );
+}
+
+#[tokio::test]
+async fn service_did_is_config_driven_across_public_metadata() {
+    let service_did = "did:web:configured.example";
+    let service = app_from_state(AppState::new(
+        test_config_with_service_did(service_did),
+        Db { pool: None },
+    ));
+
+    let server: Value = TestClient::get("http://server/api/v1/server/describe")
+        .send(&service)
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(server["service_did"], service_did);
+
+    let identity: Value = TestClient::get("http://server/api/v1/identity/describe")
+        .send(&service)
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(identity["service_did"], service_did);
+
+    let sync: Value = TestClient::get("http://server/api/v1/sync/describe")
+        .send(&service)
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(sync["service_did"], service_did);
+
+    let directory: Value = TestClient::get("http://server/api/v1/directory/describe")
+        .send(&service)
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(directory["service_did"], service_did);
+
+    let resolved: Value = TestClient::post("http://server/api/v1/directory/resolve-space")
+        .json(&serde_json::json!({"space_id": "cx:space:01js0sp0000000000000000000"}))
+        .send(&service)
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(resolved["via_services"], serde_json::json!([service_did]));
+
+    let index: Value = TestClient::get("http://server/api/v1/index/describe")
+        .send(&service)
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(index["service_did"], service_did);
+
+    let repo: Value = TestClient::get("http://server/api/v1/repo/describe")
+        .send(&service)
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(repo["repo_did"], service_did);
+
+    let ice: Value = TestClient::post("http://server/contrix/v1/ice-config")
+        .json(&serde_json::json!({}))
+        .send(&service)
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(ice["service_did"], service_did);
+}
+
+#[tokio::test]
+async fn rate_limit_errors_use_standard_envelope_with_retry_after() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let limited_service = service_with_rate_limiter_config(
+        state,
+        RateLimiterConfig {
+            max_requests: 1,
+            window: Duration::from_secs(60),
+        },
+    );
+
+    let first = TestClient::get("http://server/health")
+        .send(&limited_service)
+        .await;
+    assert_eq!(first.status_code.unwrap(), StatusCode::OK);
+
+    let mut second = TestClient::get("http://server/health")
+        .send(&limited_service)
+        .await;
+    assert_eq!(second.status_code.unwrap(), StatusCode::TOO_MANY_REQUESTS);
+    let retry_after = second
+        .headers
+        .get("retry-after")
+        .and_then(|value| value.to_str().ok())
+        .unwrap();
+    assert_eq!(retry_after, "60");
+
+    let limited: Value = second.take_json().await.unwrap();
+    assert_eq!(limited["ok"], false);
+    assert_eq!(limited["error"]["errcode"], "rate_limited");
+    assert!(limited["error"]["retry_after_ms"].as_u64().unwrap() > 0);
+    assert!(
+        limited["error"]["request_id"]
+            .as_str()
+            .unwrap()
+            .starts_with("cx:req:")
+    );
 }
 
 #[tokio::test]
@@ -1079,6 +1238,205 @@ async fn standard_entity_types_and_reverse_domain_custom_types_work() {
 }
 
 #[tokio::test]
+async fn schema_registry_contracts_work() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+
+    let builtins: Value = TestClient::get("http://server/api/v1/schemas?kind=entity")
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert!(
+        builtins["schemas"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|schema| {
+                schema["schema_id"] == "cx.schema.entity.task.v1" && schema["active"] == true
+            })
+    );
+
+    let task_schema: Value =
+        TestClient::get("http://server/api/v1/schemas/cx.schema.entity.task.v1")
+            .send(&app_from_state(state.clone()))
+            .await
+            .take_json()
+            .await
+            .unwrap();
+    assert_eq!(task_schema["definition"]["$id"], "cx.schema.entity.task.v1");
+
+    let unauthenticated = TestClient::post("http://server/api/v1/schemas")
+        .json(&serde_json::json!({
+            "schema_id": "com.example.schema.widget.v1",
+            "kind": "entity",
+            "version": "1",
+            "definition": {"$id": "com.example.schema.widget.v1", "type": "object"}
+        }))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(unauthenticated.status_code, Some(StatusCode::UNAUTHORIZED));
+
+    let custom: Value = TestClient::post("http://server/api/v1/schemas")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({
+            "schema_id": "com.example.schema.widget.v1",
+            "kind": "entity",
+            "version": "1",
+            "name": "Widget",
+            "definition": {
+                "$id": "com.example.schema.widget.v1",
+                "type": "object",
+                "properties": {
+                    "status": {"type": "string"}
+                }
+            }
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(custom["schema_id"], "com.example.schema.widget.v1");
+    assert_eq!(custom["owner"], "did:web:alice.example");
+
+    let mismatch = TestClient::post("http://server/api/v1/schemas")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({
+            "schema_id": "com.example.schema.bad.v1",
+            "kind": "entity",
+            "version": "1",
+            "definition": {"$id": "com.example.schema.other.v1", "type": "object"}
+        }))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(mismatch.status_code.unwrap().as_u16(), 400);
+
+    let deleted: Value =
+        TestClient::delete("http://server/api/v1/schemas/com.example.schema.widget.v1")
+            .add_header("authorization", format!("Bearer {token}"), true)
+            .send(&app_from_state(state.clone()))
+            .await
+            .take_json()
+            .await
+            .unwrap();
+    assert_eq!(deleted["ok"], true);
+
+    let missing = TestClient::get("http://server/api/v1/schemas/com.example.schema.widget.v1")
+        .send(&app_from_state(state))
+        .await;
+    assert_eq!(missing.status_code.unwrap().as_u16(), 404);
+}
+
+#[tokio::test]
+async fn view_endpoints_project_common_presentation_shapes() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+    let space_id = "cx:space:01js0sp0000000000000000000";
+
+    for (title, status, due_at, priority) in [
+        ("Draft spec", "todo", "2026-05-01T00:00:00Z", 2),
+        ("Ship reducer", "done", "2026-05-02T00:00:00Z", 1),
+    ] {
+        let entity: Value = TestClient::post("http://server/api/v1/entities")
+            .add_header("authorization", format!("Bearer {token}"), true)
+            .json(&serde_json::json!({
+                "space_id": space_id,
+                "entity_type": "cx.task",
+                "title": title,
+                "content": {"description": title},
+                "fields": {
+                    "status": status,
+                    "due_at": due_at,
+                    "priority": priority
+                }
+            }))
+            .send(&app_from_state(state.clone()))
+            .await
+            .take_json()
+            .await
+            .unwrap();
+        assert_eq!(entity["entity_type"], "cx.task");
+    }
+
+    let kanban: Value = TestClient::post("http://server/api/v1/views")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({
+            "space_id": space_id,
+            "kind": "kanban",
+            "title": "Task board",
+            "entity_type": "cx.task",
+            "options": {"group_by": "status"}
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(kanban["projection"]["kind"], "kanban");
+    assert_eq!(kanban["projection"]["group_by"], "status");
+    assert_eq!(kanban["projection"]["columns"].as_array().unwrap().len(), 2);
+
+    let table: Value = TestClient::post("http://server/api/v1/views")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({
+            "space_id": space_id,
+            "kind": "table",
+            "entity_type": "cx.task"
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(table["projection"]["kind"], "table");
+    assert_eq!(table["projection"]["rows"].as_array().unwrap().len(), 2);
+    assert!(
+        table["projection"]["columns"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|column| column["key"] == "status")
+    );
+
+    let calendar: Value = TestClient::post("http://server/api/v1/views")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({
+            "space_id": space_id,
+            "kind": "calendar",
+            "entity_type": "cx.task",
+            "options": {"date_field": "due_at"}
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(calendar["projection"]["kind"], "calendar");
+    assert_eq!(
+        calendar["projection"]["events"].as_array().unwrap().len(),
+        2
+    );
+    assert_eq!(
+        calendar["projection"]["events"][0]["start"],
+        "2026-05-01T00:00:00Z"
+    );
+
+    let timeline: Value = TestClient::get(format!(
+        "http://server/api/v1/views/virtual-timeline?space_id={space_id}&entity_type=cx.task&kind=timeline"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .send(&app_from_state(state))
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    assert_eq!(timeline["projection"]["kind"], "timeline");
+    assert_eq!(timeline["projection"]["items"].as_array().unwrap().len(), 2);
+}
+
+#[tokio::test]
 async fn index_product_endpoints_return_demo_projection_shapes() {
     let entity: Value = TestClient::get(
         "http://server/api/v1/index/entity?entity_id=cx:space:01js0sp0000000000000000000",
@@ -1217,6 +1575,110 @@ async fn broader_protocol_surface_returns_contract_shapes() {
         .unwrap();
     assert_eq!(ice["service_did"], "did:web:soland.local");
     assert!(ice["ice_servers"].is_array());
+}
+
+#[tokio::test]
+async fn webrtc_signaling_contracts_work() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+
+    let unauthenticated = TestClient::post("http://server/api/v1/webrtc/sessions")
+        .json(&serde_json::json!({
+            "space_id": "cx:space:01js0sp0000000000000000000"
+        }))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(unauthenticated.status_code, Some(StatusCode::UNAUTHORIZED));
+
+    let session: Value = TestClient::post("http://server/api/v1/webrtc/sessions")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({
+            "space_id": "cx:space:01js0sp0000000000000000000",
+            "participants": ["did:web:alice.example"],
+            "ttl_ms": 60000
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    let session_id = session["session_id"].as_str().unwrap().to_owned();
+    assert!(session_id.starts_with("cx:webrtc:"));
+    assert_eq!(session["participants"].as_array().unwrap().len(), 1);
+
+    let unsigned_signal = TestClient::post(format!(
+        "http://server/api/v1/webrtc/sessions/{session_id}/signals"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .json(&serde_json::json!({
+        "message_type": "offer",
+        "payload": {"description_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+    }))
+    .send(&app_from_state(state.clone()))
+    .await;
+    assert_eq!(unsigned_signal.status_code.unwrap().as_u16(), 400);
+
+    let signal: Value = TestClient::post(format!(
+        "http://server/api/v1/webrtc/sessions/{session_id}/signals"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .json(&serde_json::json!({
+        "message_type": "offer",
+        "payload": {
+            "description_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "encrypted_description_ref": "cx:blob:sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "proofs": [{"kid": "did:web:alice.example#device", "sig": "dev"}]
+    }))
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    assert_eq!(signal["seq"], 1);
+    assert_eq!(signal["next_cursor"], "1");
+
+    let events: Value = TestClient::get(format!(
+        "http://server/api/v1/webrtc/sessions/{session_id}/signals?since=0"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    assert_eq!(events["events"].as_array().unwrap().len(), 1);
+    assert_eq!(events["events"][0]["type"], "offer");
+    assert_eq!(events["events"][0]["sender"], "did:web:alice.example");
+
+    let empty_events: Value = TestClient::get(format!(
+        "http://server/api/v1/webrtc/sessions/{session_id}/signals?since=1"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    assert!(empty_events["events"].as_array().unwrap().is_empty());
+
+    let closed: Value =
+        TestClient::delete(format!("http://server/api/v1/webrtc/sessions/{session_id}"))
+            .add_header("authorization", format!("Bearer {token}"), true)
+            .send(&app_from_state(state.clone()))
+            .await
+            .take_json()
+            .await
+            .unwrap();
+    assert_eq!(closed["ok"], true);
+
+    let after_close = TestClient::get(format!(
+        "http://server/api/v1/webrtc/sessions/{session_id}/signals"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .send(&app_from_state(state))
+    .await;
+    assert_eq!(after_close.status_code.unwrap().as_u16(), 404);
 }
 
 #[tokio::test]
@@ -1397,6 +1859,72 @@ async fn push_profile_and_moderation_contracts_work() {
     assert_eq!(profile["actor"], "did:web:alice.example");
     assert_eq!(profile["presence"]["status"], "unavailable");
 
+    let unauth_typing = TestClient::post("http://server/api/v1/sync/typing")
+        .json(&serde_json::json!({
+            "space_id": "cx:space:01js0sp0000000000000000000",
+            "typing": true
+        }))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(unauth_typing.status_code, Some(StatusCode::UNAUTHORIZED));
+
+    let typing: Value = TestClient::post("http://server/api/v1/sync/typing")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({
+            "space_id": "cx:space:01js0sp0000000000000000000",
+            "scope_id": "cx:thread:demo",
+            "typing": true,
+            "timeout_ms": 30000
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(typing["typing"], true);
+    assert!(typing["expires_at"].is_string());
+
+    let sync_with_typing: Value = TestClient::post("http://server/api/v1/sync")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({}))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    let ephemeral = &sync_with_typing["spaces"]["cx:space:01js0sp0000000000000000000"]["ephemeral"];
+    assert_eq!(ephemeral[0]["type"], "cx.typing");
+    assert_eq!(ephemeral[0]["scope_id"], "cx:thread:demo");
+    assert_eq!(ephemeral[0]["actors"][0]["actor"], "did:web:alice.example");
+
+    let typing_stopped: Value = TestClient::post("http://server/api/v1/sync/typing")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({
+            "space_id": "cx:space:01js0sp0000000000000000000",
+            "typing": false
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(typing_stopped["typing"], false);
+
+    let sync_without_typing: Value = TestClient::post("http://server/api/v1/sync")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({}))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert!(
+        sync_without_typing["spaces"]["cx:space:01js0sp0000000000000000000"]["ephemeral"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+
     let push: Value = TestClient::post("http://server/api/v1/push/register-device")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
@@ -1412,6 +1940,89 @@ async fn push_profile_and_moderation_contracts_work() {
         .await
         .unwrap();
     assert_eq!(push["ok"], true);
+
+    let initial_rules: Value = TestClient::get("http://server/api/v1/push/rules")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert!(initial_rules["rules"].as_array().unwrap().is_empty());
+
+    let push_rule: Value = TestClient::post("http://server/api/v1/push/rules")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({
+            "rule_id": "mute-device",
+            "enabled": true,
+            "actions": ["dont_notify"],
+            "conditions": {
+                "device_id": "dev_alice",
+                "type": "blind_wakeup"
+            }
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(push_rule["ok"], true);
+    assert_eq!(push_rule["rule"]["rule_id"], "mute-device");
+
+    let listed_rules: Value = TestClient::get("http://server/api/v1/push/rules")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(listed_rules["rules"].as_array().unwrap().len(), 1);
+
+    let muted_notify: Value = TestClient::post("http://server/api/v1/push/notify")
+        .json(&serde_json::json!({
+            "notification": {
+                "type": "blind_wakeup",
+                "devices": [{"device_id": "dev_alice"}, {"device_id": "dev_missing"}]
+            }
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    let rejected = muted_notify["rejected"].as_array().unwrap();
+    assert_eq!(rejected.len(), 2);
+    assert!(rejected.iter().any(|device| {
+        device["device_id"] == "dev_alice"
+            && device["reason"] == "push_rule"
+            && device["rule_id"] == "mute-device"
+    }));
+    assert!(rejected.iter().any(|device| {
+        device["device_id"] == "dev_missing" && device["reason"] == "unknown_device"
+    }));
+
+    let deleted_rule: Value = TestClient::delete("http://server/api/v1/push/rules/mute-device")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(deleted_rule["ok"], true);
+
+    let unmuted_notify: Value = TestClient::post("http://server/api/v1/push/notify")
+        .json(&serde_json::json!({
+            "notification": {
+                "type": "blind_wakeup",
+                "devices": [{"device_id": "dev_alice"}]
+            }
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert!(unmuted_notify["rejected"].as_array().unwrap().is_empty());
 
     let report: Value = TestClient::post("http://server/api/v1/moderation/report")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -1749,6 +2360,9 @@ async fn server_preserves_e2ee_payloads_as_opaque_data() {
 
 #[tokio::test]
 async fn policy_check_and_validation_work() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+
     let policy: Value = TestClient::post("http://server/contrix/v1/check")
         .json(&serde_json::json!({
             "request_id": "req1",
@@ -1758,12 +2372,97 @@ async fn policy_check_and_validation_work() {
             "actor": "did:web:alice.example",
             "source": {"service": "soland"}
         }))
-        .send(&app())
+        .send(&app_from_state(state.clone()))
         .await
         .take_json()
         .await
         .unwrap();
     assert_eq!(policy["decision"], "allow");
+
+    let unauthenticated_policy = TestClient::post("http://server/api/v1/policies")
+        .json(&serde_json::json!({
+            "scope": "cx:space:01js0sp0000000000000000000",
+            "subject_ref": "did:web:alice.example",
+            "policy_type": "message.send",
+            "effect": "deny"
+        }))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(
+        unauthenticated_policy.status_code,
+        Some(StatusCode::UNAUTHORIZED)
+    );
+
+    let policy_document: Value = TestClient::post("http://server/api/v1/policies")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({
+            "scope": "cx:space:01js0sp0000000000000000000",
+            "subject_ref": "did:web:alice.example",
+            "policy_type": "message.send",
+            "effect": "deny",
+            "actions": ["message.send"],
+            "resource": {"kind": "space", "space_id": "cx:space:01js0sp0000000000000000000"},
+            "obligations": [{"type": "audit", "level": "high"}]
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    let policy_id = policy_document["policy_id"].as_str().unwrap().to_owned();
+    assert_eq!(policy_document["payload"]["effect"], "deny");
+
+    let policies: Value = TestClient::get("http://server/api/v1/policies")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(policies["policies"].as_array().unwrap().len(), 1);
+
+    let denied: Value = TestClient::post("http://server/contrix/v1/check")
+        .json(&serde_json::json!({
+            "request_id": "req2",
+            "space_id": "cx:space:01js0sp0000000000000000000",
+            "request_canonical_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+            "action": "message.send",
+            "actor": "did:web:alice.example",
+            "source": {"service": "soland", "kind": "space"}
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(denied["decision"], "deny");
+    assert_eq!(denied["reason_code"], "policy_denied");
+    assert_eq!(denied["obligations"][0]["type"], "audit");
+
+    let deleted: Value = TestClient::delete(format!("http://server/api/v1/policies/{policy_id}"))
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(deleted["ok"], true);
+
+    let allowed_again: Value = TestClient::post("http://server/contrix/v1/check")
+        .json(&serde_json::json!({
+            "request_id": "req3",
+            "space_id": "cx:space:01js0sp0000000000000000000",
+            "request_canonical_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+            "action": "message.send",
+            "actor": "did:web:alice.example",
+            "source": {"service": "soland"}
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(allowed_again["decision"], "allow");
 
     let invalid = TestClient::post("http://server/api/v1/auth/dev-login")
         .json(&serde_json::json!({
@@ -1796,6 +2495,92 @@ async fn repo_submit_rejects_unsigned_commits() {
         .send(&app())
         .await;
     assert_eq!(response.status_code.unwrap().as_u16(), 409);
+}
+
+#[tokio::test]
+async fn plaintext_policy_applies_to_repo_and_federation_message_ingest() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let alice = dev_token(state.clone()).await;
+    let locked_space: Value = TestClient::post("http://server/api/v1/spaces")
+        .add_header("authorization", format!("Bearer {alice}"), true)
+        .json(&serde_json::json!({
+            "title": "Repo Plaintext Policy Space",
+            "public": false
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    let space_id = locked_space["space_id"].as_str().unwrap().to_owned();
+
+    let operation = Operation::create(
+        OperationId::new("cx:operation:plaintext-policy-repo").unwrap(),
+        SpaceId::new(space_id.clone()).unwrap(),
+        "message",
+        serde_json::json!({
+            "event_id": "cx:event:plaintext-policy-repo",
+            "sender": "did:web:alice.example",
+            "content": {"body": "plaintext should be denied"},
+            "encrypted": false
+        }),
+    );
+    let operation_digest = Hash::new(operation.operation_digest().unwrap()).unwrap();
+    let expected_head = state
+        .repo
+        .head("did:web:alice.example")
+        .unwrap()
+        .expect("space creation records a repo head");
+    let mut commit = Commit::new(
+        CommitId::new("cx:commit:plaintext-policy-repo").unwrap(),
+        "did:web:alice.example",
+        Did::new("did:web:alice.example").unwrap(),
+        2,
+    );
+    commit.prev_commit = Some(Hash::new(expected_head.clone()).unwrap());
+    commit.operations.push(operation_digest);
+    commit.proofs.push(dummy_proof());
+
+    let mut denied_repo = TestClient::post("http://server/api/v1/repo/submit-commit")
+        .json(&serde_json::json!({
+            "repo_id": "did:web:alice.example",
+            "expected_head": expected_head,
+            "operations": [operation],
+            "commit": commit
+        }))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(denied_repo.status_code.unwrap(), StatusCode::FORBIDDEN);
+    let denied_repo_body: Value = denied_repo.take_json().await.unwrap();
+    assert_eq!(denied_repo_body["error"]["errcode"], "policy_denied");
+
+    let federation_operation = Operation::create(
+        OperationId::new("cx:operation:plaintext-policy-federation").unwrap(),
+        SpaceId::new(space_id.clone()).unwrap(),
+        "message",
+        serde_json::json!({
+            "event_id": "cx:event:plaintext-policy-federation",
+            "sender": "did:web:remote.example",
+            "content": {"body": "federated plaintext should be denied"},
+            "encrypted": false
+        }),
+    );
+    let denied_federation: Value =
+        TestClient::post("http://server/api/v1/federation/push-operations")
+            .json(&serde_json::json!({
+                "origin": "did:web:remote.example",
+                "destination": "did:web:soland.local",
+                "space_id": space_id,
+                "service_binding_ref": "did:web:remote.example#soland",
+                "operations": [federation_operation]
+            }))
+            .send(&app_from_state(state))
+            .await
+            .take_json()
+            .await
+            .unwrap();
+    assert!(denied_federation["accepted"].as_array().unwrap().is_empty());
+    assert_eq!(denied_federation["rejected"][0]["reason"], "policy_denied");
 }
 
 #[tokio::test]

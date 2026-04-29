@@ -1,10 +1,13 @@
 //! Simple in-memory rate limiter middleware.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use contrix_sdk::ErrorEnvelope;
 use salvo::prelude::*;
+
+use crate::wire::ApiError;
 
 /// Rate limiter configuration.
 #[derive(Clone, Debug)]
@@ -60,6 +63,20 @@ impl RateLimiter {
         true
     }
 
+    /// Remaining time in the current window for a key.
+    pub fn retry_after(&self, key: &str) -> Duration {
+        let state = self.state.lock().expect("rate limiter lock");
+        let now = Instant::now();
+        state
+            .get(key)
+            .and_then(|(_, window_start)| {
+                self.config
+                    .window
+                    .checked_sub(now.duration_since(*window_start))
+            })
+            .unwrap_or(self.config.window)
+    }
+
     /// Clean up expired entries.
     pub fn cleanup(&self) {
         let mut state = self.state.lock().expect("rate limiter lock");
@@ -93,17 +110,49 @@ impl Handler for RateLimiterMiddleware {
         let key = req.remote_addr().to_string();
 
         if !self.limiter.check(&key) {
+            let retry_after = self.limiter.retry_after(&key);
+            let retry_after_ms = retry_after.as_millis().try_into().unwrap_or(u64::MAX);
+            let retry_after_seconds = retry_after_ms.div_ceil(1000).max(1);
+            let mut extra = BTreeMap::new();
+            extra.insert(
+                "request_id".to_owned(),
+                serde_json::Value::String(crate::ids::generate_request_id()),
+            );
             res.status_code(StatusCode::TOO_MANY_REQUESTS);
             res.headers_mut()
-                .insert(salvo::http::header::RETRY_AFTER, "60".parse().unwrap());
-            res.render(Json(serde_json::json!({
-                "error": "rate_limited",
-                "error_description": "Too many requests. Please try again later.",
-                "request_id": crate::ids::generate_request_id()
-            })));
+                .insert(salvo::http::header::RETRY_AFTER, retry_after_seconds.into());
+            res.render(Json(ApiError {
+                ok: false,
+                error: ErrorEnvelope {
+                    errcode: "rate_limited".to_owned(),
+                    error: "Too many requests. Please try again later.".to_owned(),
+                    retry_after_ms: Some(retry_after_ms),
+                    extra,
+                },
+            }));
             return;
         }
 
         ctrl.call_next(req, depot, res).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn retry_after_reports_active_window_remaining() {
+        let limiter = RateLimiter::new(RateLimiterConfig {
+            max_requests: 1,
+            window: Duration::from_secs(60),
+        });
+
+        assert!(limiter.check("client"));
+        assert!(!limiter.check("client"));
+
+        let retry_after = limiter.retry_after("client");
+        assert!(retry_after > Duration::from_secs(0));
+        assert!(retry_after <= Duration::from_secs(60));
     }
 }

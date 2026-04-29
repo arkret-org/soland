@@ -4,7 +4,7 @@ use std::{
 };
 
 use contrix_sdk::{Did, Operation, SpaceId, SpaceSearchEntry, SpaceSearchIndex};
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::authz::AuthzEngine;
 use crate::config::AppConfig;
@@ -25,6 +25,7 @@ pub struct AppState {
     pub authz: AuthzEngine,
     pub spaces: Arc<Mutex<SpaceSearchIndex>>,
     pub space_meta: Arc<Mutex<BTreeMap<String, SpaceMetaRecord>>>,
+    pub schemas: Arc<Mutex<BTreeMap<String, SchemaRecord>>>,
     pub accounts: Arc<Mutex<BTreeMap<String, AccountRecord>>>,
     pub identity_documents: Arc<Mutex<BTreeMap<String, IdentityDocumentRecord>>>,
     pub identity_log_events: Arc<Mutex<BTreeMap<String, Vec<IdentityLogRecord>>>>,
@@ -40,7 +41,11 @@ pub struct AppState {
     pub one_time_keys: OneTimeKeyStore,
     pub blobs: Arc<Mutex<BTreeMap<String, BlobRecord>>>,
     pub push_devices: Arc<Mutex<Vec<Value>>>,
+    pub push_rules: Arc<Mutex<BTreeMap<(String, String), PushRuleRecord>>>,
     pub presence: Arc<Mutex<BTreeMap<String, PresenceRecord>>>,
+    pub typing: Arc<Mutex<BTreeMap<(String, String), TypingRecord>>>,
+    pub webrtc_sessions: Arc<Mutex<BTreeMap<String, WebrtcSessionRecord>>>,
+    pub policy_documents: Arc<Mutex<BTreeMap<String, PolicyDocumentRecord>>>,
     pub moderation_reports: Arc<Mutex<Vec<Value>>>,
     pub moderation_actions: Arc<Mutex<Vec<Value>>>,
     pub audit_log: Arc<Mutex<Vec<Value>>>,
@@ -114,6 +119,19 @@ pub struct SpaceMetaRecord {
 }
 
 #[derive(Clone, Debug)]
+pub struct SchemaRecord {
+    pub schema_id: String,
+    pub kind: String,
+    pub version: String,
+    pub name: Option<String>,
+    pub owner: String,
+    pub definition: Value,
+    pub active: bool,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Clone, Debug)]
 pub struct MessageRecord {
     pub event_id: String,
     pub space_id: String,
@@ -164,6 +182,59 @@ pub struct PresenceRecord {
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
+#[derive(Clone, Debug)]
+pub struct TypingRecord {
+    pub actor: String,
+    pub space_id: String,
+    pub scope_id: Option<String>,
+    pub expires_at: chrono::DateTime<chrono::Utc>,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Clone, Debug)]
+pub struct PushRuleRecord {
+    pub actor: String,
+    pub rule_id: String,
+    pub enabled: bool,
+    pub actions: Vec<String>,
+    pub conditions: Value,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Clone, Debug)]
+pub struct WebrtcSessionRecord {
+    pub session_id: String,
+    pub space_id: String,
+    pub created_by: String,
+    pub participants: BTreeSet<String>,
+    pub expires_at: chrono::DateTime<chrono::Utc>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub next_seq: u64,
+    pub signals: Vec<WebrtcSignalRecord>,
+}
+
+#[derive(Clone, Debug)]
+pub struct WebrtcSignalRecord {
+    pub seq: u64,
+    pub sender: String,
+    pub message_type: String,
+    pub payload: Value,
+    pub proofs: Vec<Value>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Clone, Debug)]
+pub struct PolicyDocumentRecord {
+    pub policy_id: String,
+    pub owner: String,
+    pub scope: String,
+    pub subject_ref: String,
+    pub policy_type: String,
+    pub payload: Value,
+    pub active: bool,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
 impl AppState {
     pub fn new(config: AppConfig, db: Db) -> Self {
         let mut spaces = SpaceSearchIndex::new();
@@ -202,6 +273,8 @@ impl AppState {
             },
         );
 
+        let service_did = config.service_did.clone();
+
         Self {
             config,
             repo: db
@@ -209,12 +282,13 @@ impl AppState {
                 .as_ref()
                 .map(|pool| Arc::new(PgRepoAdapter::new(pool.clone())) as RepoAdapterRef)
                 .unwrap_or_else(|| Arc::new(MemoryRepoAdapter::new())),
-            hlc: ServerHlc::new("did:web:soland.local"),
+            hlc: ServerHlc::new(&service_did),
             projection: Arc::new(Mutex::new(ProjectionState::new())),
             authz: AuthzEngine::new(),
             db,
             spaces: Arc::new(Mutex::new(spaces)),
             space_meta: Arc::new(Mutex::new(space_meta)),
+            schemas: Arc::new(Mutex::new(core_schema_records(now, &service_did))),
             accounts: Arc::new(Mutex::new(accounts)),
             identity_documents: Arc::new(Mutex::new(BTreeMap::new())),
             identity_log_events: Arc::new(Mutex::new(BTreeMap::new())),
@@ -230,11 +304,75 @@ impl AppState {
             one_time_keys: Arc::new(Mutex::new(BTreeMap::new())),
             blobs: Arc::new(Mutex::new(BTreeMap::new())),
             push_devices: Arc::new(Mutex::new(Vec::new())),
+            push_rules: Arc::new(Mutex::new(BTreeMap::new())),
             presence: Arc::new(Mutex::new(BTreeMap::new())),
+            typing: Arc::new(Mutex::new(BTreeMap::new())),
+            webrtc_sessions: Arc::new(Mutex::new(BTreeMap::new())),
+            policy_documents: Arc::new(Mutex::new(BTreeMap::new())),
             moderation_reports: Arc::new(Mutex::new(Vec::new())),
             moderation_actions: Arc::new(Mutex::new(Vec::new())),
             audit_log: Arc::new(Mutex::new(Vec::new())),
             federation_operations: Arc::new(Mutex::new(Vec::new())),
         }
     }
+}
+
+fn core_schema_records(
+    now: chrono::DateTime<chrono::Utc>,
+    service_did: &str,
+) -> BTreeMap<String, SchemaRecord> {
+    [
+        ("cx.schema.entity.generic.v1", "entity", "Generic entity"),
+        ("cx.schema.entity.task.v1", "entity", "Task entity"),
+        ("cx.schema.entity.channel.v1", "entity", "Channel entity"),
+        ("cx.schema.entity.topic.v1", "entity", "Topic entity"),
+        ("cx.schema.entity.comment.v1", "entity", "Comment entity"),
+        (
+            "cx.schema.entity.social_post.v1",
+            "entity",
+            "Social post entity",
+        ),
+        (
+            "cx.schema.entity.memory_semantic.v1",
+            "entity",
+            "Semantic memory entity",
+        ),
+        (
+            "cx.schema.entity.agent_run.v1",
+            "entity",
+            "Agent run entity",
+        ),
+        ("cx.schema.event.message.v1", "event", "Message event"),
+        ("cx.schema.event.reaction.v1", "event", "Reaction event"),
+        ("cx.schema.event.redaction.v1", "event", "Redaction event"),
+        ("cx.schema.cursor.v1", "cursor", "Cursor envelope"),
+        ("cx.schema.grant.v1", "grant", "Capability grant"),
+        (
+            "cx.schema.encrypted_envelope.v1",
+            "envelope",
+            "Encrypted payload envelope",
+        ),
+    ]
+    .into_iter()
+    .map(|(schema_id, kind, name)| {
+        (
+            schema_id.to_owned(),
+            SchemaRecord {
+                schema_id: schema_id.to_owned(),
+                kind: kind.to_owned(),
+                version: "1".to_owned(),
+                name: Some(name.to_owned()),
+                owner: service_did.to_owned(),
+                definition: json!({
+                    "$id": schema_id,
+                    "type": "object",
+                    "additionalProperties": true
+                }),
+                active: true,
+                created_at: now,
+                updated_at: now,
+            },
+        )
+    })
+    .collect()
 }

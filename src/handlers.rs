@@ -5,29 +5,31 @@ use contrix_sdk::{
 };
 use diesel::{
     QueryableByName, RunQueryDsl, sql_query,
-    sql_types::{Jsonb, Nullable, Text, Timestamptz},
+    sql_types::{Integer, Jsonb, Nullable, Text, Timestamptz},
 };
 use salvo::{
     http::{Method, StatusCode},
     prelude::*,
 };
-use serde_json::json;
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 
 use crate::{
     ids,
     state::{
         AccountRecord, AppState, BlobRecord, ContactRecord, DeviceMessageRecord,
-        IdentityDocumentRecord, IdentityLogRecord, MessageRecord, PresenceRecord,
-        ProjectionEventRecord, SessionRecord, SpaceInviteRecord, SpaceMetaRecord,
+        IdentityDocumentRecord, IdentityLogRecord, MessageRecord, PolicyDocumentRecord,
+        PresenceRecord, ProjectionEventRecord, PushRuleRecord, SchemaRecord, SessionRecord,
+        SpaceInviteRecord, SpaceMetaRecord, TypingRecord, WebrtcSessionRecord, WebrtcSignalRecord,
     },
     wire::{
         AccountResponse, AddReactionRequest, AddSpaceMemberRequest, ApiError, AuthzCheckRequest,
         AuthzCheckResponse, BackfillResponse, ClientSyncRequest, ClientSyncResponse,
         ContactRequestRequest, ContactRespondRequest, ContactResponse, ContactsResponse,
         CreateEntityRequest, CreateGrantRequest, CreateRelationRequest, CreateSpaceRequest,
-        CreateViewRequest, DevLoginRequest, DevLoginResponse, DeviceMessagesReceiveResponse,
+        CreateViewRequest, CreateWebrtcSessionRequest, CreateWebrtcSessionResponse,
+        DevLoginRequest, DevLoginResponse, DeviceMessagesReceiveResponse,
         DeviceMessagesSendRequest, DeviceMessagesSendResponse, DirectoryDescribeResponse,
         DirectoryValueSearchResponse, EffectiveGrantsResponse, EntityResponse,
         GetOperationsRequest, GetOperationsResponse, HealthResponse, IdentityDescribeResponse,
@@ -38,35 +40,71 @@ use crate::{
         KeysClaimRequest, KeysClaimResponse, KeysQueryRequest, KeysQueryResponse,
         KeysUploadRequest, KeysUploadResponse, ListCommitsResponse, LogoutResponse,
         ModerationReportRequest, ModerationReportResponse, OkResponse, PolicyCheckRequest,
-        PolicyCheckResponse, PushNotifyRequest, PushNotifyResponse, PushRegisterRequest,
-        PushRegisterResponse, PushUnregisterRequest, ReactionResponse, ReadMarkerResponse,
-        RedactMessageRequest, RedactMessageResponse, RegisterAccountRequest, RelationResponse,
-        RemoveReactionRequest, RepoDescribeResponse, RepoSyncRequest, RepoSyncResponse,
-        ResolveHandleRequest, ResolveHandleResponse, ResolveOrganizationRequest,
-        ResolveOrganizationResponse, ResolveSpaceRequest, ResolveSpaceResponse,
-        ReviseMessageRequest, ReviseMessageResponse, SearchActorsRequest,
-        SearchOrganizationsRequest, SearchSpacesRequest, SearchSpacesResponse, SendMessageRequest,
-        SendMessageResponse, SetReadMarkerRequest, SnapshotHeadResponse, SpaceLifecycleResponse,
-        SubmitCommitRequest, SubmitCommitResponse, SubmitDidOperationRequest,
-        SubmitDidOperationResponse, SyncDescribeResponse, UpdateEntityRequest, ViewResponse,
-        describe, now, sync_token,
+        PolicyCheckResponse, PolicyDocumentResponse, PolicyDocumentsResponse, PushNotifyRequest,
+        PushNotifyResponse, PushRegisterRequest, PushRegisterResponse, PushUnregisterRequest,
+        ReactionResponse, ReadMarkerResponse, RedactMessageRequest, RedactMessageResponse,
+        RegisterAccountRequest, RegisterSchemaRequest, RelationResponse, RemoveReactionRequest,
+        RepoDescribeResponse, RepoSyncRequest, RepoSyncResponse, ResolveHandleRequest,
+        ResolveHandleResponse, ResolveOrganizationRequest, ResolveOrganizationResponse,
+        ResolveSpaceRequest, ResolveSpaceResponse, ReviseMessageRequest, ReviseMessageResponse,
+        SchemaResponse, SchemasResponse, SearchActorsRequest, SearchOrganizationsRequest,
+        SearchSpacesRequest, SearchSpacesResponse, SendMessageRequest, SendMessageResponse,
+        SetReadMarkerRequest, SetTypingRequest, SetTypingResponse, SnapshotHeadResponse,
+        SpaceLifecycleResponse, SubmitCommitRequest, SubmitCommitResponse,
+        SubmitDidOperationRequest, SubmitDidOperationResponse, SyncDescribeResponse,
+        UpdateEntityRequest, UpsertPolicyDocumentRequest, UpsertPushRuleRequest, ViewResponse,
+        WebrtcSignalRequest, WebrtcSignalResponse, WebrtcSignalsResponse, describe, now,
+        sync_token,
     },
 };
 
 #[handler]
 pub async fn health(depot: &mut Depot, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
+    let database_ok = match state.db.pool.as_ref() {
+        Some(pool) => match pool.get() {
+            Ok(mut conn) => sql_query("SELECT 1 AS ok")
+                .get_result::<HealthCheckRow>(&mut conn)
+                .is_ok_and(|row| row.ok == 1),
+            Err(_) => false,
+        },
+        None => true,
+    };
+    let repo_ok = state.repo.head(&state.config.service_did).is_ok();
+    let ok = database_ok && repo_ok;
+    if !ok {
+        res.status_code(StatusCode::SERVICE_UNAVAILABLE);
+    }
     res.render(Json(HealthResponse {
-        ok: true,
+        ok,
         service: "soland",
         storage: state.db.mode(),
+        checks: json!({
+            "database": {
+                "ok": database_ok,
+                "mode": state.db.mode(),
+            },
+            "repo": {
+                "ok": repo_ok,
+            },
+        }),
     }));
+}
+
+#[derive(QueryableByName)]
+struct HealthCheckRow {
+    #[diesel(sql_type = Integer)]
+    ok: i32,
 }
 
 #[handler]
 pub async fn server_describe(depot: &mut Depot, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
-    res.render(Json(describe(state.db.mode())));
+    res.render(Json(describe(
+        &state.config.service_did,
+        state.db.mode(),
+        state.config.development_mode,
+    )));
 }
 
 #[handler]
@@ -2235,6 +2273,19 @@ pub async fn create_view(depot: &mut Depot, req: &mut Request, res: &mut Respons
         }
     };
     let view_id = ids::generate_view_id();
+    if !is_supported_view_kind(&body.kind) {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            "view kind must be list, kanban, table, calendar, or timeline",
+        );
+        return;
+    }
+    if let Err(message) = validate_canonical_json_value(&body.options) {
+        render_error(res, StatusCode::BAD_REQUEST, "invalid_param", message);
+        return;
+    }
     let entities = {
         let proj = state.projection.lock().expect("projection lock");
         proj.entities_for_space(&body.space_id, body.entity_type.as_deref())
@@ -2252,12 +2303,14 @@ pub async fn create_view(depot: &mut Depot, req: &mut Request, res: &mut Respons
             })
             .collect::<Vec<_>>()
     };
+    let projection = build_view_projection(&body.kind, &entities, &body.options);
     res.render(Json(ViewResponse {
         view_id,
         space_id: body.space_id,
-        kind: body.kind,
+        kind: body.kind.clone(),
         title: body.title,
         entities,
+        projection,
         created_at: now().to_rfc3339(),
     }));
 }
@@ -2280,6 +2333,16 @@ pub async fn get_view(depot: &mut Depot, req: &mut Request, res: &mut Response) 
     // Views are virtual — return current projection data
     let space_id = query_param(req, "space_id").unwrap_or_default();
     let entity_type = query_param(req, "entity_type");
+    let kind = query_param(req, "kind").unwrap_or_else(|| "list".to_owned());
+    if !is_supported_view_kind(&kind) {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            "view kind must be list, kanban, table, calendar, or timeline",
+        );
+        return;
+    }
     let entities = {
         let proj = state.projection.lock().expect("projection lock");
         proj.entities_for_space(&space_id, entity_type.as_deref())
@@ -2297,14 +2360,447 @@ pub async fn get_view(depot: &mut Depot, req: &mut Request, res: &mut Response) 
             })
             .collect::<Vec<_>>()
     };
+    let projection = build_view_projection(&kind, &entities, &json!({}));
     res.render(Json(ViewResponse {
         view_id,
         space_id,
-        kind: "list".to_owned(),
+        kind,
         title: None,
         entities,
+        projection,
         created_at: now().to_rfc3339(),
     }));
+}
+
+#[handler]
+pub async fn list_schemas(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let kind = query_param(req, "kind");
+    let include_inactive = query_flag(req, "include_inactive");
+    let limit = query_param(req, "limit")
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(100)
+        .clamp(1, 200);
+    let mut schemas = state
+        .schemas
+        .lock()
+        .expect("schemas lock")
+        .values()
+        .filter(|schema| include_inactive || schema.active)
+        .filter(|schema| kind.as_deref().map_or(true, |kind| schema.kind == kind))
+        .map(schema_record_to_response)
+        .collect::<Vec<_>>();
+    schemas.sort_by(|left, right| left.schema_id.cmp(&right.schema_id));
+    let has_more = schemas.len() > limit;
+    if has_more {
+        schemas.truncate(limit);
+    }
+    let next_cursor = has_more
+        .then(|| schemas.last().map(|schema| schema.schema_id.clone()))
+        .flatten();
+    res.render(Json(SchemasResponse {
+        schemas,
+        next_cursor,
+    }));
+}
+
+#[handler]
+pub async fn get_schema(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let Some(schema_id) = req.param::<String>("schema_id") else {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "missing_param",
+            "schema_id is required",
+        );
+        return;
+    };
+    let schema = state
+        .schemas
+        .lock()
+        .expect("schemas lock")
+        .get(&schema_id)
+        .filter(|schema| schema.active)
+        .map(schema_record_to_response);
+    match schema {
+        Some(schema) => res.render(Json(schema)),
+        None => render_error(res, StatusCode::NOT_FOUND, "not_found", "schema not found"),
+    }
+}
+
+#[handler]
+pub async fn register_schema(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let Some(session) = auth_or_render(state, req, res) else {
+        return;
+    };
+    let body = match req.parse_json::<RegisterSchemaRequest>().await {
+        Ok(body) => body,
+        Err(_) => {
+            render_error(
+                res,
+                StatusCode::BAD_REQUEST,
+                "bad_json",
+                "invalid schema registration request",
+            );
+            return;
+        }
+    };
+    if !is_valid_schema_id(&body.schema_id) {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            "invalid schema_id",
+        );
+        return;
+    }
+    if !is_supported_schema_kind(&body.kind) {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            "unsupported schema kind",
+        );
+        return;
+    }
+    if body.version.trim().is_empty() || body.version.len() > 64 {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            "invalid schema version",
+        );
+        return;
+    }
+    let definition = if body.definition.is_null() {
+        json!({
+            "$id": body.schema_id.clone(),
+            "type": "object",
+            "additionalProperties": true,
+        })
+    } else {
+        body.definition
+    };
+    if !definition.is_object() {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            "schema definition must be a JSON object",
+        );
+        return;
+    }
+    if definition
+        .get("$id")
+        .and_then(|value| value.as_str())
+        .is_some_and(|id| id != body.schema_id)
+    {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            "schema definition $id must match schema_id",
+        );
+        return;
+    }
+    if let Err(message) = validate_canonical_json_value(&definition) {
+        render_error(res, StatusCode::BAD_REQUEST, "invalid_param", message);
+        return;
+    }
+
+    let mut schemas = state.schemas.lock().expect("schemas lock");
+    if let Some(existing) = schemas.get(&body.schema_id)
+        && existing.owner != session.actor
+    {
+        render_error(
+            res,
+            StatusCode::FORBIDDEN,
+            "capability_denied",
+            "schema is owned by another actor",
+        );
+        return;
+    }
+    let created_at = schemas
+        .get(&body.schema_id)
+        .map(|schema| schema.created_at)
+        .unwrap_or_else(now);
+    let record = SchemaRecord {
+        schema_id: body.schema_id.clone(),
+        kind: body.kind,
+        version: body.version,
+        name: body.name,
+        owner: session.actor,
+        definition,
+        active: body.active,
+        created_at,
+        updated_at: now(),
+    };
+    schemas.insert(body.schema_id, record.clone());
+    res.render(Json(schema_record_to_response(&record)));
+}
+
+#[handler]
+pub async fn delete_schema(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let Some(session) = auth_or_render(state, req, res) else {
+        return;
+    };
+    let Some(schema_id) = req.param::<String>("schema_id") else {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "missing_param",
+            "schema_id is required",
+        );
+        return;
+    };
+    let mut schemas = state.schemas.lock().expect("schemas lock");
+    let Some(schema) = schemas.get(&schema_id) else {
+        render_error(res, StatusCode::NOT_FOUND, "not_found", "schema not found");
+        return;
+    };
+    if schema.owner != session.actor {
+        render_error(
+            res,
+            StatusCode::FORBIDDEN,
+            "capability_denied",
+            "schema is owned by another actor",
+        );
+        return;
+    }
+    schemas.remove(&schema_id);
+    res.render(Json(OkResponse { ok: true }));
+}
+
+fn schema_record_to_response(schema: &SchemaRecord) -> SchemaResponse {
+    SchemaResponse {
+        schema_id: schema.schema_id.clone(),
+        kind: schema.kind.clone(),
+        version: schema.version.clone(),
+        name: schema.name.clone(),
+        owner: schema.owner.clone(),
+        definition: schema.definition.clone(),
+        active: schema.active,
+        created_at: schema.created_at,
+        updated_at: schema.updated_at,
+    }
+}
+
+fn is_valid_schema_id(value: &str) -> bool {
+    let value = value.trim();
+    if value.is_empty() || value.len() > 200 || value.contains("..") {
+        return false;
+    }
+    let segments = value.split('.').collect::<Vec<_>>();
+    let namespaced = value.starts_with("cx.schema.")
+        || (segments.len() >= 4
+            && segments[0].len() >= 2
+            && segments[1].len() >= 2
+            && segments.iter().any(|segment| *segment == "schema"));
+    namespaced
+        && segments.iter().all(|segment| {
+            !segment.is_empty()
+                && segment
+                    .chars()
+                    .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_'))
+        })
+}
+
+fn is_supported_schema_kind(value: &str) -> bool {
+    matches!(
+        value,
+        "entity" | "event" | "relation" | "view" | "policy" | "envelope" | "cursor" | "grant"
+    )
+}
+
+fn is_supported_view_kind(kind: &str) -> bool {
+    matches!(kind, "list" | "kanban" | "table" | "calendar" | "timeline")
+}
+
+fn build_view_projection(
+    kind: &str,
+    entities: &[EntityResponse],
+    options: &serde_json::Value,
+) -> serde_json::Value {
+    match kind {
+        "kanban" => build_kanban_projection(entities, options),
+        "table" => build_table_projection(entities),
+        "calendar" => build_calendar_projection(entities, options),
+        "timeline" => build_timeline_projection(entities, options),
+        _ => json!({
+            "kind": "list",
+            "items": entities,
+            "count": entities.len(),
+        }),
+    }
+}
+
+fn build_kanban_projection(
+    entities: &[EntityResponse],
+    options: &serde_json::Value,
+) -> serde_json::Value {
+    let group_by = options
+        .get("group_by")
+        .and_then(|value| value.as_str())
+        .unwrap_or("status");
+    let mut groups = std::collections::BTreeMap::<String, Vec<&EntityResponse>>::new();
+    for entity in entities {
+        let key = entity_field_value(entity, group_by)
+            .and_then(view_value_key)
+            .unwrap_or_else(|| "uncategorized".to_owned());
+        groups.entry(key).or_default().push(entity);
+    }
+    let columns: Vec<_> = groups
+        .into_iter()
+        .map(|(key, entities)| {
+            json!({
+                "key": key,
+                "title": key,
+                "entities": entities,
+            })
+        })
+        .collect();
+    json!({
+        "kind": "kanban",
+        "group_by": group_by,
+        "columns": columns,
+    })
+}
+
+fn build_table_projection(entities: &[EntityResponse]) -> serde_json::Value {
+    let mut field_columns = std::collections::BTreeSet::new();
+    for entity in entities {
+        field_columns.extend(entity.fields.keys().cloned());
+    }
+    let mut columns = vec![
+        json!({"key": "entity_id", "type": "id"}),
+        json!({"key": "title", "type": "string"}),
+        json!({"key": "entity_type", "type": "string"}),
+    ];
+    columns.extend(
+        field_columns
+            .iter()
+            .map(|field| json!({"key": field, "type": "field"})),
+    );
+    let rows: Vec<_> = entities
+        .iter()
+        .map(|entity| {
+            json!({
+                "entity_id": entity.entity_id,
+                "title": entity.title,
+                "entity_type": entity.entity_type,
+                "fields": entity.fields,
+                "updated_at": entity.updated_at,
+            })
+        })
+        .collect();
+    json!({
+        "kind": "table",
+        "columns": columns,
+        "rows": rows,
+    })
+}
+
+fn build_calendar_projection(
+    entities: &[EntityResponse],
+    options: &serde_json::Value,
+) -> serde_json::Value {
+    let date_field = options
+        .get("date_field")
+        .and_then(|value| value.as_str())
+        .unwrap_or("due_at");
+    let mut events = Vec::new();
+    let mut unscheduled = Vec::new();
+    for entity in entities {
+        if let Some(start) = entity_field_value(entity, date_field).and_then(view_value_key) {
+            events.push(json!({
+                "entity_id": entity.entity_id,
+                "title": entity.title,
+                "start": start,
+                "end": entity_field_value(entity, "end_at").and_then(view_value_key),
+                "entity": entity,
+            }));
+        } else {
+            unscheduled.push(entity);
+        }
+    }
+    events.sort_by_key(|event| {
+        event
+            .get("start")
+            .and_then(|value| value.as_str())
+            .unwrap_or("")
+            .to_owned()
+    });
+    json!({
+        "kind": "calendar",
+        "date_field": date_field,
+        "events": events,
+        "unscheduled": unscheduled,
+    })
+}
+
+fn build_timeline_projection(
+    entities: &[EntityResponse],
+    options: &serde_json::Value,
+) -> serde_json::Value {
+    let date_field = options
+        .get("date_field")
+        .and_then(|value| value.as_str())
+        .unwrap_or("updated_at");
+    let mut items: Vec<_> = entities
+        .iter()
+        .map(|entity| {
+            let timestamp = if date_field == "created_at" {
+                entity.created_at.clone()
+            } else if date_field == "updated_at" {
+                entity.updated_at.clone()
+            } else {
+                entity_field_value(entity, date_field)
+                    .and_then(view_value_key)
+                    .unwrap_or_else(|| entity.updated_at.clone())
+            };
+            json!({
+                "entity_id": entity.entity_id,
+                "timestamp": timestamp,
+                "entity": entity,
+            })
+        })
+        .collect();
+    items.sort_by_key(|item| {
+        item.get("timestamp")
+            .and_then(|value| value.as_str())
+            .unwrap_or("")
+            .to_owned()
+    });
+    json!({
+        "kind": "timeline",
+        "date_field": date_field,
+        "items": items,
+    })
+}
+
+fn entity_field_value<'a>(
+    entity: &'a EntityResponse,
+    field: &str,
+) -> Option<&'a serde_json::Value> {
+    entity.fields.get(field).or_else(|| {
+        entity
+            .content
+            .as_ref()
+            .and_then(|content| content.as_object())
+            .and_then(|content| content.get(field))
+    })
+}
+
+fn view_value_key(value: &serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::String(value) if !value.trim().is_empty() => Some(value.clone()),
+        serde_json::Value::Number(value) => Some(value.to_string()),
+        serde_json::Value::Bool(value) => Some(value.to_string()),
+        _ => None,
+    }
 }
 
 struct DevProofVerifier;
@@ -2320,9 +2816,10 @@ impl contrix_sdk::CommitProofVerifier for DevProofVerifier {
 }
 
 #[handler]
-pub async fn identity_describe(res: &mut Response) {
+pub async fn identity_describe(depot: &mut Depot, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
     res.render(Json(IdentityDescribeResponse {
-        service_did: "did:web:soland.local".to_owned(),
+        service_did: state.config.service_did.clone(),
         registry_mode: "development_local".to_owned(),
         supported_receipts: vec!["local".to_owned()],
         protocol_version: "1.0".to_owned(),
@@ -2520,7 +3017,7 @@ pub async fn submit_did_operation(depot: &mut Depot, req: &mut Request, res: &mu
         status: "accepted".to_owned(),
         head_event_hash,
         seq: body.seq,
-        receipts: vec![json!({"service_did": "did:web:soland.local", "issued_at": now})],
+        receipts: vec![json!({"service_did": state.config.service_did.clone(), "issued_at": now})],
     }));
 }
 
@@ -2550,7 +3047,7 @@ pub async fn identity_receipts(depot: &mut Depot, req: &mut Request, res: &mut R
         receipts: record
             .map(|record| {
                 vec![json!({
-                    "service_did": "did:web:soland.local",
+                    "service_did": state.config.service_did.clone(),
                     "did": record.did,
                     "head_event_hash": record.key_log_head,
                     "seq": record.seq,
@@ -2566,7 +3063,7 @@ pub async fn identity_receipts(depot: &mut Depot, req: &mut Request, res: &mut R
 pub async fn sync_describe(depot: &mut Depot, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     res.render(Json(SyncDescribeResponse {
-        service_did: "did:web:soland.local".to_owned(),
+        service_did: state.config.service_did.clone(),
         supported_sync_profiles: vec![
             "initial".to_owned(),
             "incremental".to_owned(),
@@ -2640,6 +3137,7 @@ pub async fn client_sync(depot: &mut Depot, req: &mut Request, res: &mut Respons
             },
         );
     }
+    prune_expired_typing(state);
     let visible_spaces: Vec<_> = {
         let spaces = state.spaces.lock().expect("spaces lock");
         spaces
@@ -2677,7 +3175,7 @@ pub async fn client_sync(depot: &mut Depot, req: &mut Request, res: &mut Respons
             })
             .collect();
         sync_spaces.insert(
-            space_id,
+            space_id.clone(),
             json!({
                 "summary": {
                     "title": title,
@@ -2687,13 +3185,14 @@ pub async fn client_sync(depot: &mut Depot, req: &mut Request, res: &mut Respons
                 },
                 "timeline": {"events": timeline_events, "limited": false},
                 "state": [],
-                "ephemeral": [],
+                "ephemeral": typing_ephemeral_for_space(state, &space_id, session.as_ref()),
                 "unread": {"notification_count": 0, "highlight_count": 0}
             }),
         );
     }
 
     let to_device = session
+        .as_ref()
         .map(|session| {
             let mut queue = state.device_messages.lock().expect("device message lock");
             let mut drained = Vec::new();
@@ -2726,9 +3225,80 @@ pub async fn client_sync(depot: &mut Depot, req: &mut Request, res: &mut Respons
 }
 
 #[handler]
-pub async fn directory_describe(res: &mut Response) {
+pub async fn set_typing(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let Some(session) = auth_or_render(state, req, res) else {
+        return;
+    };
+    let body = match req.parse_json::<SetTypingRequest>().await {
+        Ok(body) => body,
+        Err(_) => {
+            render_error(
+                res,
+                StatusCode::BAD_REQUEST,
+                "bad_json",
+                "invalid typing request",
+            );
+            return;
+        }
+    };
+    if validate_space_id(&body.space_id).is_err() {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            "invalid space_id",
+        );
+        return;
+    }
+    if !space_has_member(state, &body.space_id, &session.actor) {
+        render_error(
+            res,
+            StatusCode::FORBIDDEN,
+            "capability_denied",
+            "actor is not a joined member of the space",
+        );
+        return;
+    }
+
+    let expires_at = if body.typing {
+        let timeout_ms = body.timeout_ms.unwrap_or(30_000).clamp(1_000, 120_000);
+        let now = chrono::Utc::now();
+        let expires_at = now + chrono::Duration::milliseconds(timeout_ms as i64);
+        state.typing.lock().expect("typing lock").insert(
+            (body.space_id.clone(), session.actor.clone()),
+            TypingRecord {
+                actor: session.actor.clone(),
+                space_id: body.space_id.clone(),
+                scope_id: body.scope_id.clone(),
+                expires_at,
+                updated_at: now,
+            },
+        );
+        Some(expires_at)
+    } else {
+        state
+            .typing
+            .lock()
+            .expect("typing lock")
+            .remove(&(body.space_id.clone(), session.actor.clone()));
+        None
+    };
+
+    res.render(Json(SetTypingResponse {
+        ok: true,
+        space_id: body.space_id,
+        actor: session.actor,
+        typing: body.typing,
+        expires_at,
+    }));
+}
+
+#[handler]
+pub async fn directory_describe(depot: &mut Depot, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
     res.render(Json(DirectoryDescribeResponse {
-        service_did: "did:web:soland.local".to_owned(),
+        service_did: state.config.service_did.clone(),
         resource_types: vec![
             "space".to_owned(),
             "organization".to_owned(),
@@ -2841,7 +3411,7 @@ pub async fn resolve_space(depot: &mut Depot, req: &mut Request, res: &mut Respo
             } else {
                 "invite_or_request".to_owned()
             },
-            via_services: vec!["did:web:soland.local".to_owned()],
+            via_services: vec![state.config.service_did.clone()],
         })),
         None => render_error(res, StatusCode::NOT_FOUND, "not_found", "not found"),
     }
@@ -2866,7 +3436,7 @@ pub async fn search_organizations(depot: &mut Depot, req: &mut Request, res: &mu
         .into_iter()
         .filter(|space| !is_space_deleted(state, space.space_id.as_str()))
         .collect();
-    let organization = demo_organization(&space_entries);
+    let organization = demo_organization(&space_entries, &state.config.service_did);
     let results = if query_matches(&organization, body.query.as_deref()) {
         vec![organization]
     } else {
@@ -2909,7 +3479,7 @@ pub async fn resolve_organization(depot: &mut Depot, req: &mut Request, res: &mu
         .into_iter()
         .filter(|space| !is_space_deleted(state, space.space_id.as_str()))
         .collect();
-    let organization = demo_organization(&space_entries);
+    let organization = demo_organization(&space_entries, &state.config.service_did);
     let matches_id = body
         .organization_id
         .as_deref()
@@ -3040,9 +3610,10 @@ pub async fn resolve_handle(depot: &mut Depot, req: &mut Request, res: &mut Resp
 }
 
 #[handler]
-pub async fn index_describe(res: &mut Response) {
+pub async fn index_describe(depot: &mut Depot, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
     res.render(Json(IndexDescribeResponse {
-        service_did: "did:web:soland.local".to_owned(),
+        service_did: state.config.service_did.clone(),
         reducer_profiles: vec!["cx.reducer.v1".to_owned()],
         schema_profiles: vec!["cx.schema.core.v1".to_owned()],
         query_features: vec![
@@ -3687,13 +4258,14 @@ pub async fn snapshot_head(depot: &mut Depot, req: &mut Request, res: &mut Respo
         space_id,
         state_hash.trim_start_matches("sha256:")
     );
-    let signature_payload = format!("{snapshot_ref}:{state_hash}:did:web:soland.local");
+    let service_did = state.config.service_did.clone();
+    let signature_payload = format!("{snapshot_ref}:{state_hash}:{service_did}");
     res.render(Json(SnapshotHeadResponse {
         snapshot_ref,
         state_hash,
         frontier: json!({"space_id": space_id, "generated_at": now(), "message_count": manifest["message_count"]}),
         signature: json!({
-            "kid": "did:web:soland.local#snapshot-dev",
+            "kid": format!("{service_did}#snapshot-dev"),
             "alg": "sha256-dev",
             "sig": sha256_hex(signature_payload.as_bytes())
         }),
@@ -3703,7 +4275,7 @@ pub async fn snapshot_head(depot: &mut Depot, req: &mut Request, res: &mut Respo
 #[handler]
 pub async fn repo_describe(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let repo_id = query_param(req, "repo_id").unwrap_or_else(|| "did:web:soland.local".to_owned());
+    let repo_id = query_param(req, "repo_id").unwrap_or_else(|| state.config.service_did.clone());
     let head_commit = match state.repo.head(&repo_id) {
         Ok(head) => head,
         Err(error) => {
@@ -3734,7 +4306,7 @@ pub async fn list_commits(depot: &mut Depot, req: &mut Request, res: &mut Respon
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(100)
         .min(100);
-    let repo_id = query_param(req, "repo_id").unwrap_or_else(|| "did:web:soland.local".to_owned());
+    let repo_id = query_param(req, "repo_id").unwrap_or_else(|| state.config.service_did.clone());
     match state
         .repo
         .list_commits(&repo_id, query_param(req, "cursor").as_deref(), limit)
@@ -3847,7 +4419,7 @@ pub async fn repo_sync(depot: &mut Depot, req: &mut Request, res: &mut Response)
         .parse_json::<RepoSyncRequest>()
         .await
         .unwrap_or(RepoSyncRequest {
-            repo_id: "did:web:soland.local".to_owned(),
+            repo_id: state.config.service_did.clone(),
             since: None,
             limit: Some(100),
             filters: None,
@@ -3899,12 +4471,22 @@ pub async fn submit_commit(depot: &mut Depot, req: &mut Request, res: &mut Respo
         }
     }
 
+    let commit_id = body.commit.commit_id.to_string();
+    let commit_already_exists = state
+        .repo
+        .get_commit(&body.commit.commit_id)
+        .is_ok_and(|commit| commit.is_some());
     if let Err(message) = validate_operation_semantics(&body.operations) {
         render_error(res, StatusCode::BAD_REQUEST, "invalid_param", message);
         return;
     }
+    if !commit_already_exists
+        && let Err(message) = validate_operation_policy(state, &body.operations)
+    {
+        render_error(res, StatusCode::FORBIDDEN, "policy_denied", message);
+        return;
+    }
 
-    let commit_id = body.commit.commit_id.to_string();
     let operations_for_projection = body.operations.clone();
     let repo_id = body.repo_id.clone();
     match state.repo.submit_commit(
@@ -4220,6 +4802,216 @@ pub async fn audit_events(depot: &mut Depot, req: &mut Request, res: &mut Respon
 }
 
 #[handler]
+pub async fn list_policy_documents(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let Some(session) = auth_or_render(state, req, res) else {
+        return;
+    };
+    let scope = query_param(req, "scope");
+    let subject_ref = query_param(req, "subject_ref");
+    let include_inactive = query_flag(req, "include_inactive");
+    let policies = state
+        .policy_documents
+        .lock()
+        .expect("policy documents lock")
+        .values()
+        .filter(|policy| policy.owner == session.actor)
+        .filter(|policy| include_inactive || policy.active)
+        .filter(|policy| scope.as_deref().map_or(true, |scope| policy.scope == scope))
+        .filter(|policy| {
+            subject_ref
+                .as_deref()
+                .map_or(true, |subject_ref| policy.subject_ref == subject_ref)
+        })
+        .map(policy_document_to_response)
+        .collect::<Vec<_>>();
+    res.render(Json(PolicyDocumentsResponse {
+        policies,
+        next_cursor: None,
+    }));
+}
+
+#[handler]
+pub async fn get_policy_document(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let Some(session) = auth_or_render(state, req, res) else {
+        return;
+    };
+    let Some(policy_id) = req.param::<String>("policy_id") else {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "missing_param",
+            "policy_id is required",
+        );
+        return;
+    };
+    let policy = state
+        .policy_documents
+        .lock()
+        .expect("policy documents lock")
+        .get(&policy_id)
+        .filter(|policy| policy.owner == session.actor)
+        .map(policy_document_to_response);
+    match policy {
+        Some(policy) => res.render(Json(policy)),
+        None => render_error(res, StatusCode::NOT_FOUND, "not_found", "policy not found"),
+    }
+}
+
+#[handler]
+pub async fn upsert_policy_document(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let Some(session) = auth_or_render(state, req, res) else {
+        return;
+    };
+    let body = match req.parse_json::<UpsertPolicyDocumentRequest>().await {
+        Ok(body) => body,
+        Err(_) => {
+            render_error(
+                res,
+                StatusCode::BAD_REQUEST,
+                "bad_json",
+                "invalid policy document request",
+            );
+            return;
+        }
+    };
+    if !is_valid_policy_scope(&body.scope) {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            "invalid policy scope",
+        );
+        return;
+    }
+    if body.subject_ref != "*" && validate_did(&body.subject_ref).is_err() {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            "invalid policy subject_ref",
+        );
+        return;
+    }
+    if !is_valid_policy_type(&body.policy_type) || !is_supported_policy_effect(&body.effect) {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            "invalid policy type or effect",
+        );
+        return;
+    }
+    if let Err(message) = validate_canonical_json_value(&body.resource) {
+        render_error(res, StatusCode::BAD_REQUEST, "invalid_param", message);
+        return;
+    }
+    for obligation in &body.obligations {
+        if let Err(message) = validate_canonical_json_value(obligation) {
+            render_error(res, StatusCode::BAD_REQUEST, "invalid_param", message);
+            return;
+        }
+    }
+    let actions = if body.actions.is_empty() {
+        vec!["*".to_owned()]
+    } else {
+        body.actions
+    };
+    if actions
+        .iter()
+        .any(|action| action.trim().is_empty() || action.len() > 128)
+    {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            "invalid policy action",
+        );
+        return;
+    }
+    let policy_id = body.policy_id.unwrap_or_else(|| ids::generate("policy"));
+    if !is_valid_generated_or_custom_id(&policy_id, "policy") {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            "invalid policy_id",
+        );
+        return;
+    }
+    let mut policies = state
+        .policy_documents
+        .lock()
+        .expect("policy documents lock");
+    if let Some(existing) = policies.get(&policy_id)
+        && existing.owner != session.actor
+    {
+        render_error(
+            res,
+            StatusCode::FORBIDDEN,
+            "capability_denied",
+            "policy is owned by another actor",
+        );
+        return;
+    }
+    let record = PolicyDocumentRecord {
+        policy_id: policy_id.clone(),
+        owner: session.actor,
+        scope: body.scope,
+        subject_ref: body.subject_ref,
+        policy_type: body.policy_type,
+        payload: json!({
+            "effect": body.effect,
+            "actions": actions,
+            "resource": body.resource,
+            "obligations": body.obligations,
+        }),
+        active: body.active,
+        updated_at: now(),
+    };
+    policies.insert(policy_id, record.clone());
+    res.render(Json(policy_document_to_response(&record)));
+}
+
+#[handler]
+pub async fn delete_policy_document(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let Some(session) = auth_or_render(state, req, res) else {
+        return;
+    };
+    let Some(policy_id) = req.param::<String>("policy_id") else {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "missing_param",
+            "policy_id is required",
+        );
+        return;
+    };
+    let mut policies = state
+        .policy_documents
+        .lock()
+        .expect("policy documents lock");
+    let Some(policy) = policies.get(&policy_id) else {
+        render_error(res, StatusCode::NOT_FOUND, "not_found", "policy not found");
+        return;
+    };
+    if policy.owner != session.actor {
+        render_error(
+            res,
+            StatusCode::FORBIDDEN,
+            "capability_denied",
+            "policy is owned by another actor",
+        );
+        return;
+    }
+    policies.remove(&policy_id);
+    res.render(Json(OkResponse { ok: true }));
+}
+
+#[handler]
 pub async fn profile_presence(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     let did = query_param(req, "did").unwrap_or_else(|| "did:web:alice.example".to_owned());
@@ -4260,9 +5052,9 @@ pub async fn profile_presence(depot: &mut Depot, req: &mut Request, res: &mut Re
 #[handler]
 pub async fn push_register(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
-    if auth_or_render(state, req, res).is_none() {
+    let Some(session) = auth_or_render(state, req, res) else {
         return;
-    }
+    };
     let body = match req.parse_json::<PushRegisterRequest>().await {
         Ok(body) => body,
         Err(_) => {
@@ -4285,11 +5077,15 @@ pub async fn push_register(depot: &mut Depot, req: &mut Request, res: &mut Respo
         return;
     }
     let registration_id = format!("cx:push:{}", body.device_id);
-    state
-        .push_devices
-        .lock()
-        .expect("push lock")
-        .push(json!({"registration_id": registration_id, "device_id": body.device_id, "platform": body.platform}));
+    state.push_devices.lock().expect("push lock").push(json!({
+        "registration_id": registration_id,
+        "actor": session.actor,
+        "device_id": body.device_id,
+        "platform": body.platform,
+        "app_id": body.app_id,
+        "push_gateway": body.push_gateway,
+        "push_key": body.push_key
+    }));
     res.render(Json(PushRegisterResponse {
         ok: true,
         registration_id: Some(registration_id),
@@ -4308,6 +5104,127 @@ pub async fn push_unregister(_depot: &mut Depot, req: &mut Request, res: &mut Re
         );
         return;
     }
+    res.render(Json(OkResponse { ok: true }));
+}
+
+#[handler]
+pub async fn push_rules(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let Some(session) = auth_or_render(state, req, res) else {
+        return;
+    };
+    let rules = state
+        .push_rules
+        .lock()
+        .expect("push rules lock")
+        .values()
+        .filter(|rule| rule.actor == session.actor)
+        .map(push_rule_to_json)
+        .collect::<Vec<_>>();
+    res.render(Json(json!({
+        "rules": rules,
+        "next_cursor": null,
+    })));
+}
+
+#[handler]
+pub async fn upsert_push_rule(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let Some(session) = auth_or_render(state, req, res) else {
+        return;
+    };
+    let body = match req.parse_json::<UpsertPushRuleRequest>().await {
+        Ok(body) => body,
+        Err(_) => {
+            render_error(
+                res,
+                StatusCode::BAD_REQUEST,
+                "bad_json",
+                "invalid push rule request",
+            );
+            return;
+        }
+    };
+    if !is_valid_push_rule_id(&body.rule_id) {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            "invalid push rule id",
+        );
+        return;
+    }
+    if let Err(message) = validate_canonical_json_value(&body.conditions) {
+        render_error(res, StatusCode::BAD_REQUEST, "invalid_param", message);
+        return;
+    }
+    let actions = if body.actions.is_empty() {
+        vec!["notify".to_owned()]
+    } else {
+        let mut actions = Vec::new();
+        for action in body.actions {
+            let action = action.trim().to_owned();
+            if !is_supported_push_action(&action) {
+                render_error(
+                    res,
+                    StatusCode::BAD_REQUEST,
+                    "invalid_param",
+                    "unsupported push rule action",
+                );
+                return;
+            }
+            actions.push(action);
+        }
+        actions
+    };
+    let rule = PushRuleRecord {
+        actor: session.actor.clone(),
+        rule_id: body.rule_id.clone(),
+        enabled: body.enabled,
+        actions,
+        conditions: body.conditions,
+        updated_at: now(),
+    };
+    state
+        .push_rules
+        .lock()
+        .expect("push rules lock")
+        .insert((session.actor, body.rule_id), rule.clone());
+    res.render(Json(json!({
+        "ok": true,
+        "rule": push_rule_to_json(&rule),
+    })));
+}
+
+#[handler]
+pub async fn delete_push_rule(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let Some(session) = auth_or_render(state, req, res) else {
+        return;
+    };
+    let Some(rule_id) = req.param::<String>("rule_id") else {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            "missing push rule id",
+        );
+        return;
+    };
+    if !is_valid_push_rule_id(&rule_id) {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            "invalid push rule id",
+        );
+        return;
+    }
+    state
+        .push_rules
+        .lock()
+        .expect("push rules lock")
+        .remove(&(session.actor, rule_id));
     res.render(Json(OkResponse { ok: true }));
 }
 
@@ -4341,24 +5258,36 @@ pub async fn push_notify(depot: &mut Depot, req: &mut Request, res: &mut Respons
         .and_then(|value| value.as_array())
         .cloned()
         .unwrap_or_default();
-    let registered = state.push_devices.lock().expect("push lock");
-    let rejected = devices
-        .into_iter()
-        .filter(|device| {
-            let device_id = device
-                .get("device_id")
-                .and_then(|value| value.as_str())
-                .unwrap_or_default();
-            !registered
-                .iter()
-                .any(|registered| registered["device_id"].as_str() == Some(device_id))
-        })
-        .collect();
+    let registered = state.push_devices.lock().expect("push lock").clone();
+    let mut rejected = Vec::new();
+    for device in devices {
+        let device_id = device
+            .get("device_id")
+            .and_then(|value| value.as_str())
+            .unwrap_or_default();
+        let Some(registered_device) = registered
+            .iter()
+            .find(|registered| registered["device_id"].as_str() == Some(device_id))
+        else {
+            rejected.push(push_rejection(device, "unknown_device", None));
+            continue;
+        };
+        let actor = registered_device
+            .get("actor")
+            .and_then(|value| value.as_str())
+            .unwrap_or_default();
+        if let Some(rule_id) =
+            push_device_suppressed_by_rule(state, actor, &body.notification, registered_device)
+        {
+            rejected.push(push_rejection(device, "push_rule", Some(rule_id)));
+        }
+    }
     res.render(Json(PushNotifyResponse { rejected }));
 }
 
 #[handler]
-pub async fn policy_check(req: &mut Request, res: &mut Response) {
+pub async fn policy_check(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
     let body = match req.parse_json::<PolicyCheckRequest>().await {
         Ok(body) => body,
         Err(_) => {
@@ -4400,23 +5329,29 @@ pub async fn policy_check(req: &mut Request, res: &mut Response) {
         );
         return;
     }
-    let decision = if body.action.contains("delete") || body.action.contains("ban") {
-        "require_review"
+    let policy_decision = matching_policy_decision(state, &body);
+    let (decision, reason_code, obligations) = if let Some(policy_decision) = policy_decision {
+        (
+            policy_decision.decision,
+            policy_decision.reason_code,
+            policy_decision.obligations,
+        )
+    } else if body.action.contains("delete") || body.action.contains("ban") {
+        (
+            "require_review".to_owned(),
+            "review_required".to_owned(),
+            Vec::new(),
+        )
     } else {
-        "allow"
+        ("allow".to_owned(), "ok".to_owned(), Vec::new())
     };
     res.render(Json(PolicyCheckResponse {
-        decision: decision.to_owned(),
-        reason_code: if decision == "allow" {
-            "ok"
-        } else {
-            "review_required"
-        }
-        .to_owned(),
+        decision,
+        reason_code,
         expires_at: now() + chrono::Duration::minutes(5),
-        obligations: Vec::new(),
+        obligations,
         signature: json!({
-            "kid": "did:web:soland.local#policy-dev",
+            "kid": format!("{}#policy-dev", state.config.service_did),
             "alg": "none",
             "sig": sha256_hex(body.request_canonical_hash.as_bytes())
         }),
@@ -4424,13 +5359,309 @@ pub async fn policy_check(req: &mut Request, res: &mut Response) {
 }
 
 #[handler]
-pub async fn ice_config(res: &mut Response) {
+pub async fn ice_config(depot: &mut Depot, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
     res.render(Json(json!({
-        "service_did": "did:web:soland.local",
+        "service_did": state.config.service_did.clone(),
         "ttl_seconds": 300,
         "ice_servers": [],
         "issued_at": now(),
     })));
+}
+
+#[handler]
+pub async fn create_webrtc_session(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let Some(session) = auth_or_render(state, req, res) else {
+        return;
+    };
+    let body = match req.parse_json::<CreateWebrtcSessionRequest>().await {
+        Ok(body) => body,
+        Err(_) => {
+            render_error(
+                res,
+                StatusCode::BAD_REQUEST,
+                "bad_json",
+                "invalid webrtc session request",
+            );
+            return;
+        }
+    };
+    if validate_space_id(&body.space_id).is_err() {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            "invalid space_id",
+        );
+        return;
+    }
+    if !space_has_member(state, &body.space_id, &session.actor) {
+        render_error(
+            res,
+            StatusCode::FORBIDDEN,
+            "capability_denied",
+            "actor is not a joined member of the space",
+        );
+        return;
+    }
+
+    let mut participants = BTreeSet::new();
+    participants.insert(session.actor.clone());
+    for participant in body.participants {
+        if validate_did(&participant).is_err() {
+            render_error(
+                res,
+                StatusCode::BAD_REQUEST,
+                "invalid_param",
+                "invalid participant did",
+            );
+            return;
+        }
+        if !space_has_member(state, &body.space_id, &participant) {
+            render_error(
+                res,
+                StatusCode::FORBIDDEN,
+                "capability_denied",
+                "participant is not a joined member of the space",
+            );
+            return;
+        }
+        participants.insert(participant);
+    }
+
+    prune_expired_webrtc_sessions(state);
+    let created_at = now();
+    let ttl_ms = body.ttl_ms.unwrap_or(600_000).clamp(60_000, 3_600_000);
+    let expires_at = created_at + chrono::Duration::milliseconds(ttl_ms as i64);
+    let session_id = ids::generate("webrtc");
+    let participant_list = participants.iter().cloned().collect::<Vec<_>>();
+    state.webrtc_sessions.lock().expect("webrtc lock").insert(
+        session_id.clone(),
+        WebrtcSessionRecord {
+            session_id: session_id.clone(),
+            space_id: body.space_id.clone(),
+            created_by: session.actor,
+            participants,
+            expires_at,
+            created_at,
+            next_seq: 1,
+            signals: Vec::new(),
+        },
+    );
+    res.render(Json(CreateWebrtcSessionResponse {
+        session_id,
+        space_id: body.space_id,
+        participants: participant_list,
+        expires_at,
+        created_at,
+    }));
+}
+
+#[handler]
+pub async fn put_webrtc_signal(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let Some(session) = auth_or_render(state, req, res) else {
+        return;
+    };
+    let Some(session_id) = req.param::<String>("session_id") else {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            "missing webrtc session id",
+        );
+        return;
+    };
+    if !is_valid_webrtc_session_id(&session_id) {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            "invalid webrtc session id",
+        );
+        return;
+    }
+    let body = match req.parse_json::<WebrtcSignalRequest>().await {
+        Ok(body) => body,
+        Err(_) => {
+            render_error(
+                res,
+                StatusCode::BAD_REQUEST,
+                "bad_json",
+                "invalid webrtc signal request",
+            );
+            return;
+        }
+    };
+    if !is_supported_webrtc_signal_type(&body.message_type) {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            "unsupported webrtc signal type",
+        );
+        return;
+    }
+    if let Err(message) = validate_canonical_json_value(&body.payload) {
+        render_error(res, StatusCode::BAD_REQUEST, "invalid_param", message);
+        return;
+    }
+    if !webrtc_signal_proof_matches_actor(&body.proofs, &session.actor) {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            "webrtc signal requires a proof bound to the actor",
+        );
+        return;
+    }
+
+    prune_expired_webrtc_sessions(state);
+    let mut sessions = state.webrtc_sessions.lock().expect("webrtc lock");
+    let Some(record) = sessions.get_mut(&session_id) else {
+        render_error(res, StatusCode::NOT_FOUND, "not_found", "session not found");
+        return;
+    };
+    if !record.participants.contains(&session.actor) {
+        render_error(
+            res,
+            StatusCode::FORBIDDEN,
+            "capability_denied",
+            "actor is not a participant of the webrtc session",
+        );
+        return;
+    }
+    let seq = record.next_seq;
+    record.next_seq += 1;
+    record.signals.push(WebrtcSignalRecord {
+        seq,
+        sender: session.actor,
+        message_type: body.message_type,
+        payload: body.payload,
+        proofs: body.proofs,
+        created_at: now(),
+    });
+    res.render(Json(WebrtcSignalResponse {
+        ok: true,
+        session_id,
+        seq,
+        next_cursor: seq.to_string(),
+    }));
+}
+
+#[handler]
+pub async fn get_webrtc_signals(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let Some(session) = auth_or_render(state, req, res) else {
+        return;
+    };
+    let Some(session_id) = req.param::<String>("session_id") else {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            "missing webrtc session id",
+        );
+        return;
+    };
+    if !is_valid_webrtc_session_id(&session_id) {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            "invalid webrtc session id",
+        );
+        return;
+    }
+    let since = query_param(req, "since")
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(0);
+    let limit = query_param(req, "limit")
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(50)
+        .clamp(1, 100);
+
+    prune_expired_webrtc_sessions(state);
+    let sessions = state.webrtc_sessions.lock().expect("webrtc lock");
+    let Some(record) = sessions.get(&session_id) else {
+        render_error(res, StatusCode::NOT_FOUND, "not_found", "session not found");
+        return;
+    };
+    if !record.participants.contains(&session.actor) {
+        render_error(
+            res,
+            StatusCode::FORBIDDEN,
+            "capability_denied",
+            "actor is not a participant of the webrtc session",
+        );
+        return;
+    }
+    let mut events = record
+        .signals
+        .iter()
+        .filter(|signal| signal.seq > since)
+        .map(webrtc_signal_to_json)
+        .collect::<Vec<_>>();
+    let limited = events.len() > limit;
+    if limited {
+        events.truncate(limit);
+    }
+    let next_cursor = events
+        .last()
+        .and_then(|event| event["seq"].as_u64())
+        .unwrap_or(since)
+        .to_string();
+    res.render(Json(WebrtcSignalsResponse {
+        session_id,
+        events,
+        next_cursor,
+        limited,
+    }));
+}
+
+#[handler]
+pub async fn delete_webrtc_session(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let Some(session) = auth_or_render(state, req, res) else {
+        return;
+    };
+    let Some(session_id) = req.param::<String>("session_id") else {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            "missing webrtc session id",
+        );
+        return;
+    };
+    if !is_valid_webrtc_session_id(&session_id) {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            "invalid webrtc session id",
+        );
+        return;
+    }
+
+    prune_expired_webrtc_sessions(state);
+    let mut sessions = state.webrtc_sessions.lock().expect("webrtc lock");
+    let Some(record) = sessions.get(&session_id) else {
+        render_error(res, StatusCode::NOT_FOUND, "not_found", "session not found");
+        return;
+    };
+    if !record.participants.contains(&session.actor) {
+        render_error(
+            res,
+            StatusCode::FORBIDDEN,
+            "capability_denied",
+            "actor is not a participant of the webrtc session",
+        );
+        return;
+    }
+    sessions.remove(&session_id);
+    res.render(Json(OkResponse { ok: true }));
 }
 
 #[handler]
@@ -4809,7 +6040,7 @@ pub async fn federation_pull_operations(depot: &mut Depot, req: &mut Request, re
             "manifest": manifest,
             "state_hash": state_hash,
             "chunks": [],
-            "via_services": ["did:web:soland.local"],
+            "via_services": [state.config.service_did.clone()],
         })
     });
     let mut seen_cursor = after_cursor.is_none();
@@ -5012,7 +6243,7 @@ pub async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Respons
         media_type,
         sha256,
         upload_receipt: json!({
-            "service_did": "did:web:soland.local",
+            "service_did": state.config.service_did.clone(),
             "created_at": now(),
             "encrypted_attachment": encryption,
         }),
@@ -5431,6 +6662,20 @@ fn ingest_federation_operations(
     let mut rejected = Vec::new();
     for operation in operations {
         let operation_id = operation.operation_id.clone();
+        {
+            let federation_operations =
+                state.federation_operations.lock().expect("federation lock");
+            if federation_operations
+                .iter()
+                .any(|known| known.operation_id == operation_id)
+            {
+                rejected.push(json!({
+                    "operation_id": operation_id,
+                    "reason": "replay",
+                }));
+                continue;
+            }
+        }
         if operation.validate_payload_object().is_err() {
             rejected.push(json!({
                 "operation_id": operation_id,
@@ -5446,19 +6691,17 @@ fn ingest_federation_operations(
             }));
             continue;
         }
+        if let Err(message) = validate_operation_policy(state, std::slice::from_ref(&operation)) {
+            rejected.push(json!({
+                "operation_id": operation_id,
+                "reason": "policy_denied",
+                "message": message,
+            }));
+            continue;
+        }
         {
             let mut federation_operations =
                 state.federation_operations.lock().expect("federation lock");
-            if federation_operations
-                .iter()
-                .any(|known| known.operation_id == operation_id)
-            {
-                rejected.push(json!({
-                    "operation_id": operation_id,
-                    "reason": "replay",
-                }));
-                continue;
-            }
             federation_operations.push(operation.clone());
         }
         project_federation_operation(state, origin, &operation);
@@ -6142,6 +7385,52 @@ fn space_allows_plaintext_service(state: &AppState, space_id: &str) -> bool {
         })
 }
 
+fn prune_expired_typing(state: &AppState) {
+    let now = chrono::Utc::now();
+    state
+        .typing
+        .lock()
+        .expect("typing lock")
+        .retain(|_, record| record.expires_at > now);
+}
+
+fn typing_ephemeral_for_space(
+    state: &AppState,
+    space_id: &str,
+    session: Option<&SessionRecord>,
+) -> Vec<serde_json::Value> {
+    if session.is_none() {
+        return Vec::new();
+    }
+    let now = chrono::Utc::now();
+    let mut by_scope = std::collections::BTreeMap::<String, Vec<serde_json::Value>>::new();
+    for record in state.typing.lock().expect("typing lock").values() {
+        if record.space_id != space_id || record.expires_at <= now {
+            continue;
+        }
+        let scope_id = record
+            .scope_id
+            .clone()
+            .unwrap_or_else(|| record.space_id.clone());
+        by_scope.entry(scope_id).or_default().push(json!({
+            "actor": record.actor.clone(),
+            "expires_at": record.expires_at,
+            "updated_at": record.updated_at,
+        }));
+    }
+    by_scope
+        .into_iter()
+        .map(|(scope_id, actors)| {
+            json!({
+                "type": "cx.typing",
+                "space_id": space_id,
+                "scope_id": scope_id,
+                "actors": actors,
+            })
+        })
+        .collect()
+}
+
 struct RequireProof;
 
 impl CommitProofVerifier for RequireProof {
@@ -6273,6 +7562,45 @@ fn validate_operation_semantics(operations: &[Operation]) -> Result<(), &'static
         }
     }
     Ok(())
+}
+
+fn validate_operation_policy(
+    state: &AppState,
+    operations: &[Operation],
+) -> Result<(), &'static str> {
+    for operation in operations {
+        if operation.object_type == "message"
+            && !message_operation_is_encrypted(operation)
+            && known_space_denies_plaintext_service(state, operation.space_id.as_str())
+        {
+            return Err(
+                "private plaintext message operations require this service in plaintext_visible_services",
+            );
+        }
+    }
+    Ok(())
+}
+
+fn message_operation_is_encrypted(operation: &Operation) -> bool {
+    operation
+        .payload
+        .get("encrypted")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false)
+}
+
+fn known_space_denies_plaintext_service(state: &AppState, space_id: &str) -> bool {
+    state
+        .space_meta
+        .lock()
+        .expect("space meta lock")
+        .get(space_id)
+        .is_some_and(|record| {
+            record.discoverability != "public"
+                && !record
+                    .plaintext_visible_services
+                    .contains(&state.config.service_did)
+        })
 }
 
 fn validate_device_message_payload(content: &serde_json::Value) -> Result<(), &'static str> {
@@ -6520,13 +7848,16 @@ fn actor_visible_to(
     })
 }
 
-fn demo_organization(spaces: &[&contrix_sdk::SpaceSearchEntry]) -> serde_json::Value {
+fn demo_organization(
+    spaces: &[&contrix_sdk::SpaceSearchEntry],
+    service_did: &str,
+) -> serde_json::Value {
     json!({
         "organization_id": "cx:org:demo",
         "handle": "@contrix-demo",
         "name": "Contrix Demo Organization",
         "description": "Demo organization projected by soland",
-        "service_did": "did:web:soland.local",
+        "service_did": service_did,
         "space_count": spaces.len(),
         "actor_count": 1,
     })
@@ -6588,7 +7919,10 @@ fn demo_actors(state: &AppState) -> Vec<serde_json::Value> {
 fn find_demo_entity(state: &AppState, entity_id: &str) -> Option<serde_json::Value> {
     if entity_id == "cx:org:demo" {
         let spaces = state.spaces.lock().expect("spaces lock");
-        return Some(demo_organization(&spaces.search(Default::default())));
+        return Some(demo_organization(
+            &spaces.search(Default::default()),
+            &state.config.service_did,
+        ));
     }
     if let Some(actor) = demo_actors(state)
         .into_iter()
@@ -6721,6 +8055,7 @@ pub async fn moderation_report(depot: &mut Depot, req: &mut Request, res: &mut R
         return;
     }
     let report_id = ids::generate_report_id();
+    let moderation_service = format!("{}#moderation", state.config.service_did);
     state
         .moderation_reports
         .lock()
@@ -6736,7 +8071,7 @@ pub async fn moderation_report(depot: &mut Depot, req: &mut Request, res: &mut R
             "space_id": body.space_id,
             "target_ref": body.target_ref,
             "status": "open",
-            "assigned_to": "did:web:soland.local#moderation",
+            "assigned_to": moderation_service.clone(),
             "created_at": now(),
         }));
     append_audit_log(
@@ -6749,7 +8084,7 @@ pub async fn moderation_report(depot: &mut Depot, req: &mut Request, res: &mut R
     res.render(Json(ModerationReportResponse {
         report_id,
         status: "queued".to_owned(),
-        routed_to: vec!["did:web:soland.local#moderation".to_owned()],
+        routed_to: vec![moderation_service],
     }));
 }
 
@@ -6981,6 +8316,365 @@ fn push_notification_leaks_plaintext(value: &serde_json::Value) -> bool {
         serde_json::Value::Array(values) => values.iter().any(push_notification_leaks_plaintext),
         _ => false,
     }
+}
+
+struct MatchedPolicyDecision {
+    decision: String,
+    reason_code: String,
+    obligations: Vec<Value>,
+}
+
+fn policy_document_to_response(policy: &PolicyDocumentRecord) -> PolicyDocumentResponse {
+    PolicyDocumentResponse {
+        policy_id: policy.policy_id.clone(),
+        owner: policy.owner.clone(),
+        scope: policy.scope.clone(),
+        subject_ref: policy.subject_ref.clone(),
+        policy_type: policy.policy_type.clone(),
+        payload: policy.payload.clone(),
+        active: policy.active,
+        updated_at: policy.updated_at,
+    }
+}
+
+fn matching_policy_decision(
+    state: &AppState,
+    request: &PolicyCheckRequest,
+) -> Option<MatchedPolicyDecision> {
+    state
+        .policy_documents
+        .lock()
+        .expect("policy documents lock")
+        .values()
+        .filter(|policy| policy.active)
+        .find(|policy| policy_matches_check(policy, request))
+        .map(|policy| {
+            let decision = policy
+                .payload
+                .get("effect")
+                .and_then(|value| value.as_str())
+                .unwrap_or("allow")
+                .to_owned();
+            let obligations = policy
+                .payload
+                .get("obligations")
+                .and_then(|value| value.as_array())
+                .cloned()
+                .unwrap_or_default();
+            let reason_code = match decision.as_str() {
+                "deny" => "policy_denied",
+                "require_review" => "policy_review_required",
+                "quarantine" => "policy_quarantine",
+                _ => "policy_allowed",
+            }
+            .to_owned();
+            MatchedPolicyDecision {
+                decision,
+                reason_code,
+                obligations,
+            }
+        })
+}
+
+fn policy_matches_check(policy: &PolicyDocumentRecord, request: &PolicyCheckRequest) -> bool {
+    policy_scope_matches(&policy.scope, request.space_id.as_deref())
+        && policy_subject_matches(&policy.subject_ref, &request.actor)
+        && (policy.policy_type == "*" || policy.policy_type == request.action)
+        && policy_actions_match(&policy.payload["actions"], &request.action)
+        && policy_resource_matches(&policy.payload["resource"], request)
+}
+
+fn policy_scope_matches(scope: &str, request_space_id: Option<&str>) -> bool {
+    scope == "*" || request_space_id == Some(scope)
+}
+
+fn policy_subject_matches(subject_ref: &str, actor: &str) -> bool {
+    subject_ref == "*" || subject_ref == actor
+}
+
+fn policy_actions_match(actions: &Value, action: &str) -> bool {
+    actions.as_array().is_none_or(|actions| {
+        actions.iter().any(|expected| {
+            expected.as_str().is_some_and(|expected| {
+                expected == "*"
+                    || expected == action
+                    || expected
+                        .strip_suffix(".*")
+                        .is_some_and(|prefix| action.starts_with(&format!("{prefix}.")))
+            })
+        })
+    })
+}
+
+fn policy_resource_matches(resource: &Value, request: &PolicyCheckRequest) -> bool {
+    let Some(resource) = resource.as_object() else {
+        return true;
+    };
+    if resource.is_empty() {
+        return true;
+    }
+    if let Some(space_id) = resource.get("space_id").and_then(|value| value.as_str())
+        && request.space_id.as_deref() != Some(space_id)
+    {
+        return false;
+    }
+    if let Some(kind) = resource.get("kind").and_then(|value| value.as_str())
+        && request
+            .source
+            .get("kind")
+            .and_then(|value| value.as_str())
+            .is_some_and(|source_kind| source_kind != kind)
+    {
+        return false;
+    }
+    true
+}
+
+fn is_valid_policy_scope(value: &str) -> bool {
+    value == "*" || validate_space_id(value).is_ok()
+}
+
+fn is_valid_policy_type(value: &str) -> bool {
+    let value = value.trim();
+    !value.is_empty()
+        && value.len() <= 128
+        && value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-' | '*'))
+}
+
+fn is_supported_policy_effect(value: &str) -> bool {
+    matches!(value, "allow" | "deny" | "require_review" | "quarantine")
+}
+
+fn is_valid_generated_or_custom_id(value: &str, kind: &str) -> bool {
+    let prefix = format!("cx:{kind}:");
+    value.starts_with(&prefix)
+        && value[prefix.len()..]
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | ':' | '.'))
+}
+
+fn prune_expired_webrtc_sessions(state: &AppState) {
+    let now = now();
+    state
+        .webrtc_sessions
+        .lock()
+        .expect("webrtc lock")
+        .retain(|_, record| record.expires_at > now);
+}
+
+fn is_valid_webrtc_session_id(value: &str) -> bool {
+    let Some(ulid) = value.strip_prefix("cx:webrtc:") else {
+        return false;
+    };
+    ulid.len() == 26
+        && ulid.chars().all(|c| {
+            c.is_ascii_digit()
+                || matches!(c, 'a'..='h' | 'j'..='k' | 'm'..='n' | 'p'..='t' | 'v'..='z')
+        })
+}
+
+fn is_supported_webrtc_signal_type(value: &str) -> bool {
+    matches!(
+        value,
+        "offer"
+            | "answer"
+            | "candidate"
+            | "ice"
+            | "renegotiate"
+            | "hangup"
+            | "cx.webrtc.offer"
+            | "cx.webrtc.answer"
+            | "cx.webrtc.candidate"
+            | "cx.webrtc.ice"
+            | "cx.webrtc.renegotiate"
+            | "cx.webrtc.hangup"
+    )
+}
+
+fn webrtc_signal_proof_matches_actor(proofs: &[Value], actor: &str) -> bool {
+    !proofs.is_empty()
+        && proofs.iter().any(|proof| {
+            let Some(proof) = proof.as_object() else {
+                return false;
+            };
+            let has_signature = proof
+                .get("sig")
+                .and_then(|value| value.as_str())
+                .is_some_and(|sig| !sig.trim().is_empty());
+            let actor_matches = proof
+                .get("actor")
+                .and_then(|value| value.as_str())
+                .is_some_and(|proof_actor| proof_actor == actor)
+                || proof
+                    .get("kid")
+                    .and_then(|value| value.as_str())
+                    .is_some_and(|kid| kid == actor || kid.starts_with(&format!("{actor}#")));
+            has_signature && actor_matches
+        })
+}
+
+fn webrtc_signal_to_json(signal: &WebrtcSignalRecord) -> Value {
+    json!({
+        "seq": signal.seq,
+        "sender": signal.sender,
+        "type": signal.message_type,
+        "payload": signal.payload,
+        "proofs": signal.proofs,
+        "created_at": signal.created_at,
+    })
+}
+
+fn push_rule_to_json(rule: &PushRuleRecord) -> Value {
+    json!({
+        "rule_id": rule.rule_id,
+        "enabled": rule.enabled,
+        "actions": rule.actions,
+        "conditions": rule.conditions,
+        "updated_at": rule.updated_at,
+    })
+}
+
+fn push_device_suppressed_by_rule(
+    state: &AppState,
+    actor: &str,
+    notification: &Value,
+    device: &Value,
+) -> Option<String> {
+    state
+        .push_rules
+        .lock()
+        .expect("push rules lock")
+        .values()
+        .filter(|rule| rule.actor == actor && rule.enabled)
+        .find(|rule| {
+            rule.actions.iter().any(|action| action == "dont_notify")
+                && push_rule_matches(rule, notification, device)
+        })
+        .map(|rule| rule.rule_id.clone())
+}
+
+fn push_rule_matches(rule: &PushRuleRecord, notification: &Value, device: &Value) -> bool {
+    match &rule.conditions {
+        Value::Null => true,
+        Value::Object(conditions) if conditions.is_empty() => true,
+        Value::Object(condition)
+            if condition.contains_key("field") || condition.contains_key("key") =>
+        {
+            push_condition_matches(&Value::Object(condition.clone()), notification, device)
+        }
+        Value::Object(conditions) => conditions
+            .iter()
+            .all(|(field, expected)| push_field_matches(field, expected, notification, device)),
+        Value::Array(conditions) if conditions.is_empty() => true,
+        Value::Array(conditions) => conditions
+            .iter()
+            .all(|condition| push_condition_matches(condition, notification, device)),
+        _ => false,
+    }
+}
+
+fn push_condition_matches(condition: &Value, notification: &Value, device: &Value) -> bool {
+    let Some(condition) = condition.as_object() else {
+        return false;
+    };
+    let Some(field) = condition
+        .get("field")
+        .or_else(|| condition.get("key"))
+        .and_then(|value| value.as_str())
+    else {
+        return false;
+    };
+    if let Some(exists) = condition.get("exists").and_then(|value| value.as_bool()) {
+        return push_value_for_condition(field, notification, device).is_some() == exists;
+    }
+    let expected = condition
+        .get("equals")
+        .or_else(|| condition.get("eq"))
+        .or_else(|| condition.get("value"))
+        .or_else(|| condition.get("one_of"))
+        .unwrap_or(&Value::Bool(true));
+    push_field_matches(field, expected, notification, device)
+}
+
+fn push_field_matches(field: &str, expected: &Value, notification: &Value, device: &Value) -> bool {
+    push_value_for_condition(field, notification, device)
+        .is_some_and(|actual| value_matches_expected(actual, expected))
+}
+
+fn push_value_for_condition<'a>(
+    field: &str,
+    notification: &'a Value,
+    device: &'a Value,
+) -> Option<&'a Value> {
+    if let Some(path) = field.strip_prefix("device.") {
+        return value_at_path(device, path);
+    }
+    if let Some(path) = field.strip_prefix("notification.") {
+        return value_at_path(notification, path);
+    }
+    value_at_path(device, field).or_else(|| value_at_path(notification, field))
+}
+
+fn value_at_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
+    let mut current = value;
+    for segment in path.split('.') {
+        current = current.get(segment)?;
+    }
+    Some(current)
+}
+
+fn value_matches_expected(actual: &Value, expected: &Value) -> bool {
+    match expected {
+        Value::Array(values) => values
+            .iter()
+            .any(|expected| value_matches_expected(actual, expected)),
+        Value::Object(object) => {
+            if let Some(expected) = object
+                .get("equals")
+                .or_else(|| object.get("eq"))
+                .or_else(|| object.get("value"))
+            {
+                return value_matches_expected(actual, expected);
+            }
+            if let Some(one_of) = object.get("one_of").and_then(|value| value.as_array()) {
+                return one_of
+                    .iter()
+                    .any(|expected| value_matches_expected(actual, expected));
+            }
+            actual == expected
+        }
+        Value::String(expected) => actual.as_str() == Some(expected.as_str()),
+        _ => actual == expected,
+    }
+}
+
+fn push_rejection(device: Value, reason: &str, rule_id: Option<String>) -> Value {
+    let mut rejected = match device {
+        Value::Object(object) => Value::Object(object),
+        other => json!({"device": other}),
+    };
+    if let Some(object) = rejected.as_object_mut() {
+        object.insert("reason".to_owned(), Value::String(reason.to_owned()));
+        if let Some(rule_id) = rule_id {
+            object.insert("rule_id".to_owned(), Value::String(rule_id));
+        }
+    }
+    rejected
+}
+
+fn is_valid_push_rule_id(value: &str) -> bool {
+    let value = value.trim();
+    !value.is_empty()
+        && value.len() <= 128
+        && value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | ':' | '$'))
+}
+
+fn is_supported_push_action(action: &str) -> bool {
+    matches!(action, "notify" | "dont_notify" | "highlight" | "sound")
 }
 
 fn append_audit_log(
