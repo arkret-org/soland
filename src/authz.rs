@@ -138,6 +138,7 @@ impl AuthzEngine {
         space_id: &str,
         owner: Option<&str>,
         members: &[String],
+        resource_facets: &[String],
     ) -> AuthzResult {
         // Check explicit grants first
         let matching_grants: Vec<Grant> = self
@@ -162,7 +163,9 @@ impl AuthzEngine {
                     .constraints
                     .iter()
                     .filter(|constraint| !is_decision_constraint(constraint))
-                    .all(|constraint| evaluate_constraint(constraint, actor, resource))
+                    .all(|constraint| {
+                        evaluate_constraint(constraint, actor, resource, resource_facets)
+                    })
             })
             .collect();
         if !satisfied_grants.is_empty() {
@@ -305,7 +308,12 @@ fn decision_from_constraint(constraint: &Constraint) -> Option<GrantDecision> {
 }
 
 /// Evaluate a constraint. Returns true if the constraint is satisfied.
-fn evaluate_constraint(constraint: &Constraint, _actor: &str, _resource: &str) -> bool {
+fn evaluate_constraint(
+    constraint: &Constraint,
+    _actor: &str,
+    _resource: &str,
+    resource_facets: &[String],
+) -> bool {
     match constraint.constraint_type.as_str() {
         "temporal" => {
             // Check if the grant hasn't expired
@@ -324,7 +332,37 @@ fn evaluate_constraint(constraint: &Constraint, _actor: &str, _resource: &str) -
             // Check delegation depth
             true // v1: always pass
         }
+        "allowed_entity_facets" => {
+            let allowed = constraint_facet_names(&constraint.value);
+            !allowed.is_empty()
+                && !resource_facets.is_empty()
+                && resource_facets
+                    .iter()
+                    .any(|facet| allowed.iter().any(|allowed| allowed == facet))
+        }
         _ => true, // Unknown constraints pass
+    }
+}
+
+fn constraint_facet_names(value: &serde_json::Value) -> Vec<String> {
+    let value = value
+        .get("facets")
+        .or_else(|| value.get("allowed_entity_facets"))
+        .or_else(|| value.get("value"))
+        .unwrap_or(value);
+    match value {
+        serde_json::Value::Array(values) => values
+            .iter()
+            .filter_map(|value| value.as_str().map(ToOwned::to_owned))
+            .collect(),
+        serde_json::Value::Object(values) => values.keys().cloned().collect(),
+        serde_json::Value::String(value) => value
+            .split(',')
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+            .collect(),
+        _ => Vec::new(),
     }
 }
 
@@ -342,6 +380,7 @@ mod tests {
             "cx:space:1",
             Some("did:web:alice"),
             &[],
+            &[],
         );
         assert!(result.allowed);
         assert_eq!(result.reason, "owner");
@@ -358,6 +397,7 @@ mod tests {
             "cx:space:1",
             Some("did:web:alice"),
             &members,
+            &[],
         );
         assert!(result.allowed);
         assert_eq!(result.reason, "member");
@@ -369,6 +409,7 @@ mod tests {
             "cx:space:1",
             Some("did:web:alice"),
             &members,
+            &[],
         );
         assert!(!denied.allowed);
     }
@@ -390,6 +431,7 @@ mod tests {
             "space:cx:space:1",
             "cx:space:1",
             Some("did:web:alice"),
+            &[],
             &[],
         );
         assert!(result.allowed);
@@ -428,6 +470,7 @@ mod tests {
             "cx:space:1",
             Some("did:web:alice"),
             &[],
+            &[],
         );
         assert!(!result.allowed);
         assert_eq!(result.reason, "explicit_deny");
@@ -465,6 +508,7 @@ mod tests {
             "cx:space:1",
             Some("did:web:alice"),
             &[],
+            &[],
         );
         assert!(allowed.allowed);
         assert_eq!(allowed.reason, "explicit_grant");
@@ -486,6 +530,7 @@ mod tests {
             "space:cx:space:1",
             "cx:space:1",
             Some("did:web:alice"),
+            &[],
             &[],
         );
         assert!(!quarantined.allowed);
@@ -511,8 +556,46 @@ mod tests {
             "cx:space:1",
             Some("did:web:alice"),
             &[],
+            &[],
         );
         assert!(!result.allowed);
+    }
+
+    #[test]
+    fn allowed_entity_facets_fail_closed_without_matching_reducer_facets() {
+        let engine = AuthzEngine::new();
+        engine.create_grant(
+            "cx:space:1".to_owned(),
+            "did:web:alice".to_owned(),
+            "did:web:bob".to_owned(),
+            "entity:*".to_owned(),
+            vec!["entity.update".to_owned()],
+            vec![Constraint {
+                constraint_type: "allowed_entity_facets".to_owned(),
+                value: serde_json::json!({"facets": ["rankable"]}),
+            }],
+        );
+        let allowed = engine.check(
+            "did:web:bob",
+            "entity.update",
+            "entity:cx:entity:1",
+            "cx:space:1",
+            Some("did:web:alice"),
+            &[],
+            &["rankable".to_owned(), "stateful".to_owned()],
+        );
+        assert!(allowed.allowed);
+
+        let missing_facets = engine.check(
+            "did:web:bob",
+            "entity.update",
+            "entity:cx:entity:1",
+            "cx:space:1",
+            Some("did:web:alice"),
+            &[],
+            &[],
+        );
+        assert!(!missing_facets.allowed);
     }
 
     #[test]
@@ -524,6 +607,7 @@ mod tests {
             "space:cx:space:1",
             "cx:space:1",
             Some("did:web:alice"),
+            &[],
             &[],
         );
         assert!(!result.allowed);

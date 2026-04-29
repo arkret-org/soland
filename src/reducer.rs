@@ -73,6 +73,7 @@ pub struct EntityState {
     pub entity_id: String,
     pub space_id: String,
     pub entity_type: String,
+    pub facets: Vec<String>,
     pub title: Option<String>,
     pub content: Option<Value>,
     pub fields: BTreeMap<String, Value>,
@@ -152,6 +153,24 @@ pub enum ProjectionEffect {
     Ignored,
 }
 
+fn extract_entity_facets(payload: &Value) -> Vec<String> {
+    match payload.get("facets") {
+        Some(Value::Array(values)) => values
+            .iter()
+            .filter_map(|value| value.as_str().map(ToOwned::to_owned))
+            .collect(),
+        Some(Value::Object(values)) => values.keys().cloned().collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn field_path_to_storage_key(field_path: &str) -> String {
+    field_path
+        .strip_prefix("fields.")
+        .unwrap_or(field_path)
+        .to_owned()
+}
+
 impl ProjectionState {
     pub fn new() -> Self {
         Self::default()
@@ -173,8 +192,14 @@ impl ProjectionState {
             kinds::CX_ENTITY_CREATE => self.apply_entity_create(operation, now),
             kinds::CX_ENTITY_UPDATE => self.apply_entity_update(operation, now, hlc),
             kinds::CX_ENTITY_DELETE => self.apply_entity_delete(operation),
+            kinds::CX_FIELD_POSITION_MOVE | kinds::CX_FIELD_POSITION_REORDER => {
+                self.apply_entity_update(operation, now, hlc)
+            }
             kinds::CX_RELATION_CREATE => self.apply_relation_create(operation, now),
             kinds::CX_RELATION_DELETE => self.apply_relation_delete(operation),
+            kinds::CX_CONTAINER_MOVE_ITEM | kinds::CX_CONTAINER_REBALANCE => {
+                self.apply_container_position(operation, now)
+            }
             kind if kinds::is_membership_kind(kind) => self.apply_membership(operation, now),
             kind if kinds::is_space_lifecycle_kind(kind) => {
                 self.apply_space_lifecycle(operation, now)
@@ -482,6 +507,7 @@ impl ProjectionState {
             .get("title")
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned);
+        let facets = extract_entity_facets(&operation.payload);
         let content = operation.payload.get("content").cloned();
         let fields = operation
             .payload
@@ -494,6 +520,7 @@ impl ProjectionState {
             entity_id: entity_id.clone(),
             space_id: operation.space_id.to_string(),
             entity_type,
+            facets,
             title,
             content,
             fields,
@@ -532,6 +559,19 @@ impl ProjectionState {
                 for (k, v) in fields {
                     existing.fields.insert(k.clone(), v.clone());
                 }
+            }
+            if let Some(field_path) = operation.payload.get("group_by").and_then(|v| v.as_str())
+                && let Some(value) = operation.payload.get("to_value")
+            {
+                existing
+                    .fields
+                    .insert(field_path_to_storage_key(field_path), value.clone());
+            }
+            if let Some(rank) = operation.payload.get("rank") {
+                existing.fields.insert("rank".to_owned(), rank.clone());
+            }
+            if operation.payload.get("facets").is_some() {
+                existing.facets = extract_entity_facets(&operation.payload);
             }
             existing.updated_at = now;
             ProjectionEffect::EntityUpdated(existing.clone())
@@ -625,6 +665,68 @@ impl ProjectionState {
             relation.updated_at = operation.created_at;
         }
         ProjectionEffect::RelationDeleted { relation_id }
+    }
+
+    fn apply_container_position(
+        &mut self,
+        operation: &Operation,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> ProjectionEffect {
+        let relation_id = operation
+            .payload
+            .get("relation_id")
+            .or_else(|| {
+                operation
+                    .payload
+                    .get("expected_position")
+                    .and_then(|value| value.get("relation_id"))
+            })
+            .and_then(|v| v.as_str())
+            .unwrap_or(operation.operation_id.as_str())
+            .to_owned();
+        let relation_kind = operation
+            .payload
+            .get("relation_kind")
+            .and_then(|v| v.as_str())
+            .unwrap_or("contains")
+            .to_owned();
+        let entity_id = operation
+            .payload
+            .get("entity_id")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned);
+        let container_id = operation
+            .payload
+            .get("to_container_id")
+            .or_else(|| operation.payload.get("container_id"))
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned);
+        let mut fields = BTreeMap::new();
+        if let Some(rank) = operation.payload.get("rank") {
+            fields.insert("rank".to_owned(), rank.clone());
+        }
+
+        let state = self
+            .relations
+            .entry(relation_id.clone())
+            .or_insert_with(|| RelationState {
+                relation_id: relation_id.clone(),
+                space_id: operation.space_id.to_string(),
+                relation_kind: relation_kind.clone(),
+                from_ref: container_id.clone(),
+                to_ref: entity_id.clone(),
+                fields: BTreeMap::new(),
+                deleted: false,
+                created_at: now,
+                updated_at: now,
+            });
+        state.relation_kind = relation_kind;
+        state.from_ref = container_id;
+        state.to_ref = entity_id;
+        state.fields.extend(fields);
+        state.deleted = false;
+        state.updated_at = now;
+        ProjectionEffect::RelationCreated(state.clone())
     }
 
     fn apply_membership(
@@ -770,11 +872,12 @@ impl ProjectionState {
             .unwrap_or_default()
     }
 
-    /// Get entities for a space, optionally filtered by type.
+    /// Get entities for a space, optionally filtered by type and required facets.
     pub fn entities_for_space(
         &self,
         space_id: &str,
         entity_type: Option<&str>,
+        facets: &[String],
     ) -> Vec<&EntityState> {
         self.entities
             .values()
@@ -782,6 +885,9 @@ impl ProjectionState {
                 e.space_id == space_id
                     && !e.deleted
                     && entity_type.is_none_or(|t| e.entity_type == t)
+                    && facets
+                        .iter()
+                        .all(|facet| e.facets.iter().any(|value| value == facet))
             })
             .collect()
     }
@@ -926,7 +1032,10 @@ mod tests {
             ),
             &hlc,
         );
-        assert_eq!(state.entities_for_space("cx:space:test", None).len(), 1);
+        assert_eq!(
+            state.entities_for_space("cx:space:test", None, &[]).len(),
+            1
+        );
 
         state.apply(
             &make_operation(
@@ -938,7 +1047,136 @@ mod tests {
             ),
             &hlc,
         );
-        assert_eq!(state.entities_for_space("cx:space:test", None).len(), 0);
+        assert_eq!(
+            state.entities_for_space("cx:space:test", None, &[]).len(),
+            0
+        );
+    }
+
+    #[test]
+    fn entity_facets_filter_queries() {
+        let mut state = ProjectionState::new();
+        let hlc = ServerHlc::new("test");
+
+        state.apply(
+            &make_operation(
+                crate::kinds::CX_ENTITY_CREATE,
+                "cx:space:test",
+                serde_json::json!({
+                    "entity_id": "cx:entity:task-1",
+                    "entity_type": "task",
+                    "facets": ["stateful", "rankable", "renderable"],
+                    "title": "Do the thing"
+                }),
+            ),
+            &hlc,
+        );
+
+        assert_eq!(
+            state
+                .entities_for_space(
+                    "cx:space:test",
+                    None,
+                    &["stateful".to_owned(), "rankable".to_owned()]
+                )
+                .len(),
+            1
+        );
+        assert_eq!(
+            state
+                .entities_for_space("cx:space:test", None, &["documentable".to_owned()])
+                .len(),
+            0
+        );
+    }
+
+    #[test]
+    fn canonical_field_position_move_updates_entity_position_fields() {
+        let mut state = ProjectionState::new();
+        let hlc = ServerHlc::new("test");
+
+        state.apply(
+            &make_operation(
+                crate::kinds::CX_ENTITY_CREATE,
+                "cx:space:test",
+                serde_json::json!({
+                    "entity_id": "cx:entity:task-1",
+                    "entity_type": "task",
+                    "fields": {"status": "todo", "rank": "F"}
+                }),
+            ),
+            &hlc,
+        );
+        state.apply(
+            &make_operation(
+                crate::kinds::CX_FIELD_POSITION_MOVE,
+                "cx:space:test",
+                serde_json::json!({
+                    "entity_id": "cx:entity:task-1",
+                    "view_id": "cx:view:board",
+                    "group_by": "fields.status",
+                    "to_value": "done",
+                    "rank": "V"
+                }),
+            ),
+            &hlc,
+        );
+
+        let entity = state.entities.get("cx:entity:task-1").unwrap();
+        assert_eq!(entity.fields["status"], "done");
+        assert_eq!(entity.fields["rank"], "V");
+    }
+
+    #[test]
+    fn legacy_task_move_requires_migration_profile() {
+        let mut state = ProjectionState::new();
+        let hlc = ServerHlc::new("test");
+
+        state.apply(
+            &make_operation(
+                crate::kinds::CX_ENTITY_CREATE,
+                "cx:space:test",
+                serde_json::json!({
+                    "entity_id": "cx:entity:task-1",
+                    "entity_type": "task",
+                    "fields": {"status": "todo"}
+                }),
+            ),
+            &hlc,
+        );
+        state.apply(
+            &make_operation(
+                crate::kinds::CX_LEGACY_TASK_MOVE,
+                "cx:space:test",
+                serde_json::json!({
+                    "entity_id": "cx:entity:task-1",
+                    "group_by": "fields.status",
+                    "to_value": "blocked",
+                    "rank": "M"
+                }),
+            ),
+            &hlc,
+        );
+        assert_eq!(state.entities["cx:entity:task-1"].fields["status"], "todo");
+
+        state.apply(
+            &make_operation(
+                crate::kinds::CX_LEGACY_TASK_MOVE,
+                "cx:space:test",
+                serde_json::json!({
+                    "migration_profile": crate::kinds::LEGACY_KIND_MIGRATION_PROFILE,
+                    "entity_id": "cx:entity:task-1",
+                    "group_by": "fields.status",
+                    "to_value": "blocked",
+                    "rank": "M"
+                }),
+            ),
+            &hlc,
+        );
+        assert_eq!(
+            state.entities["cx:entity:task-1"].fields["status"],
+            "blocked"
+        );
     }
 
     #[test]

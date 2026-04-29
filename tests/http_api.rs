@@ -368,6 +368,17 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         .unwrap();
     assert_eq!(contact_request["status"], "pending");
 
+    let duplicate_contact_request: Value =
+        TestClient::post("http://server/api/v1/contacts/request")
+            .add_header("authorization", format!("Bearer {alice}"), true)
+            .json(&serde_json::json!({"target": "did:web:bob.example"}))
+            .send(&app_from_state(state.clone()))
+            .await
+            .take_json()
+            .await
+            .unwrap();
+    assert_eq!(duplicate_contact_request["status"], "pending");
+
     let accepted: Value = TestClient::post("http://server/api/v1/contacts/respond")
         .add_header("authorization", format!("Bearer {bob}"), true)
         .json(&serde_json::json!({
@@ -380,6 +391,29 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         .await
         .unwrap();
     assert_eq!(accepted["status"], "accepted");
+
+    let accepted_again: Value = TestClient::post("http://server/api/v1/contacts/respond")
+        .add_header("authorization", format!("Bearer {bob}"), true)
+        .json(&serde_json::json!({
+            "requester": "did:web:alice.example",
+            "action": "accept"
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(accepted_again["status"], "accepted");
+
+    let reject_after_accept = TestClient::post("http://server/api/v1/contacts/respond")
+        .add_header("authorization", format!("Bearer {bob}"), true)
+        .json(&serde_json::json!({
+            "requester": "did:web:alice.example",
+            "action": "reject"
+        }))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(reject_after_accept.status_code.unwrap().as_u16(), 409);
 
     let bob_contacts: Value = TestClient::get("http://server/api/v1/contacts")
         .add_header("authorization", format!("Bearer {bob}"), true)
@@ -873,6 +907,30 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         .await;
     assert_eq!(filter_mismatch.status_code.unwrap().as_u16(), 400);
 
+    let renderer_bound_sync: Value = TestClient::post("http://server/api/v1/sync")
+        .add_header("authorization", format!("Bearer {alice}"), true)
+        .json(&serde_json::json!({
+            "renderer": "collection",
+            "facets": ["stateful"],
+            "filter": {"spaces": [space_id.clone()]}
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    let renderer_mismatch = TestClient::post("http://server/api/v1/sync")
+        .add_header("authorization", format!("Bearer {alice}"), true)
+        .json(&serde_json::json!({
+            "since": renderer_bound_sync["next_batch"],
+            "renderer": "queue",
+            "facets": ["stateful"],
+            "filter": {"spaces": [space_id.clone()]}
+        }))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(renderer_mismatch.status_code.unwrap().as_u16(), 400);
+
     let mut expired_cursor = next_batch.clone();
     expired_cursor["expires_at_ms"] = serde_json::json!(1);
     let mut expired = TestClient::post("http://server/api/v1/sync")
@@ -1049,6 +1107,29 @@ async fn account_contacts_and_space_lifecycle_workflow() {
             .starts_with("cx:req:")
     );
     assert_eq!(space_create_audit["outcome"], "accepted");
+    let audit_page_one: Value = TestClient::get("http://server/api/v1/audit/events?limit=1")
+        .add_header("authorization", format!("Bearer {alice}"), true)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    let audit_cursor = audit_page_one["next_cursor"]
+        .as_str()
+        .expect("audit page should expose next cursor");
+    let audit_page_two: Value = TestClient::get(format!(
+        "http://server/api/v1/audit/events?limit=1&cursor={audit_cursor}"
+    ))
+    .add_header("authorization", format!("Bearer {alice}"), true)
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    assert_ne!(
+        audit_page_one["events"][0]["audit_id"],
+        audit_page_two["events"][0]["audit_id"]
+    );
     let forbidden_audit =
         TestClient::get("http://server/api/v1/audit/events?actor=did:web:bob.example")
             .add_header("authorization", format!("Bearer {alice}"), true)
@@ -1551,15 +1632,29 @@ async fn view_endpoints_project_common_presentation_shapes() {
     let token = dev_token(state.clone()).await;
     let space_id = "cx:space:01js0sp0000000000000000000";
 
-    for (title, status, due_at, priority) in [
-        ("Draft spec", "todo", "2026-05-01T00:00:00Z", 2),
-        ("Ship reducer", "done", "2026-05-02T00:00:00Z", 1),
+    let mut entities = Vec::new();
+    for (title, status, due_at, priority, facets) in [
+        (
+            "Draft spec",
+            "todo",
+            "2026-05-01T00:00:00Z",
+            2,
+            serde_json::json!({"rankable": {"rank_field": "priority"}, "stateful": {"field": "status"}}),
+        ),
+        (
+            "Ship reducer",
+            "done",
+            "2026-05-02T00:00:00Z",
+            1,
+            serde_json::json!(["renderable", "stateful"]),
+        ),
     ] {
         let entity: Value = TestClient::post("http://server/api/v1/entities")
             .add_header("authorization", format!("Bearer {token}"), true)
             .json(&serde_json::json!({
                 "space_id": space_id,
                 "entity_type": "cx.task",
+                "facets": facets,
                 "title": title,
                 "content": {"description": title},
                 "fields": {
@@ -1574,6 +1669,7 @@ async fn view_endpoints_project_common_presentation_shapes() {
             .await
             .unwrap();
         assert_eq!(entity["entity_type"], "cx.task");
+        entities.push(entity);
     }
 
     let kanban: Value = TestClient::post("http://server/api/v1/views")
@@ -1638,6 +1734,95 @@ async fn view_endpoints_project_common_presentation_shapes() {
         calendar["projection"]["events"][0]["start"],
         "2026-05-01T00:00:00Z"
     );
+
+    let collection: Value = TestClient::post("http://server/api/v1/views")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({
+            "space_id": space_id,
+            "kind": "collection",
+            "entity_type": "cx.task",
+            "options": {"item_facets": {"stateful": {"field": "status"}}}
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(collection["projection"]["kind"], "collection");
+    assert_eq!(
+        collection["projection"]["item_facets"],
+        serde_json::json!(["stateful"])
+    );
+    assert_eq!(
+        collection["projection"]["items"].as_array().unwrap().len(),
+        2
+    );
+
+    let graph: Value = TestClient::post("http://server/api/v1/views")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({
+            "space_id": space_id,
+            "kind": "graph",
+            "entity_type": "cx.task",
+            "options": {"node_facets": ["rankable"]}
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(graph["projection"]["kind"], "graph");
+    assert_eq!(graph["projection"]["nodes"].as_array().unwrap().len(), 1);
+
+    let facet_grant: Value = TestClient::post("http://server/api/v1/authz/grants")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({
+            "space_id": space_id,
+            "subject": "did:web:bob.example",
+            "resource": "entity:*",
+            "actions": ["entity.update"],
+            "constraints": [{"type": "allowed_entity_facets", "facets": ["rankable"]}]
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(facet_grant["subject"], "did:web:bob.example");
+
+    let rankable_authz: Value = TestClient::post("http://server/api/v1/authz/check")
+        .json(&serde_json::json!({
+            "actor": "did:web:bob.example",
+            "action": "entity.update",
+            "resource": {
+                "kind": "entity",
+                "space_id": space_id,
+                "entity_id": entities[0]["entity_id"]
+            }
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(rankable_authz["allowed"], true);
+
+    let non_rankable_authz: Value = TestClient::post("http://server/api/v1/authz/check")
+        .json(&serde_json::json!({
+            "actor": "did:web:bob.example",
+            "action": "entity.update",
+            "resource": {
+                "kind": "entity",
+                "space_id": space_id,
+                "entity_id": entities[1]["entity_id"]
+            }
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(non_rankable_authz["allowed"], false);
 
     let timeline: Value = TestClient::get(format!(
         "http://server/api/v1/views/virtual-timeline?space_id={space_id}&entity_type=cx.task&kind=timeline"
@@ -3074,6 +3259,12 @@ async fn repo_adapter_memory_submit_list_get_and_sync_work() {
         .await
         .unwrap();
     assert_eq!(conflict["error"]["errcode"], "duplicate_conflict");
+    assert!(state.audit_log.lock().unwrap().iter().any(|entry| {
+        entry["action"] == "repo.submit_commit"
+            && entry["outcome"] == "duplicate_conflict"
+            && entry["target"]["operation_kinds"][0]["input_kind"] == "message"
+            && entry["target"]["operation_kinds"][0]["canonical_kind"] == "cx.message.create"
+    }));
 
     let projected_thread: Value =
         TestClient::get("http://server/api/v1/index/thread?thread_id=cx:thread:adapter")
@@ -3244,6 +3435,11 @@ async fn repo_adapter_memory_submit_list_get_and_sync_work() {
             .unwrap();
     assert_eq!(backfill["events"][0]["event_id"], "cx:event:adapter-01");
     assert_eq!(backfill["events"][0]["event_type"], "cx.message.create");
+    assert_eq!(backfill["events"][0]["input_event_type"], "message");
+    assert_eq!(
+        backfill["events"][0]["canonical_event_type"],
+        "cx.message.create"
+    );
     assert_eq!(
         backfill["events"][0]["operation_id"],
         "cx:operation:adapter-01"

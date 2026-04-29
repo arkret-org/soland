@@ -1,6 +1,6 @@
 # soland Active TODO
 
-> 更新日期: 2026-04-29
+> 更新日期: 2026-04-30
 > 范围: Contrix Principal Server / Repo / Sync / Index / Blob / Federation reference implementation。Identity Registry 服务端职责已迁移到 `starid`。
 
 ## 0. 当前边界
@@ -19,6 +19,32 @@
 | `cx.profile.index_node.v1` | PARTIAL | durable projection、query schema、auth filtering、stale frontier |
 | `cx.profile.blob_node.v1` | PARTIAL | authenticated download、quota、retention、anti-enumeration |
 | `cx.profile.federation_node.v1` | PARTIAL | HTTP Message Signatures、service DID binding、replay/fork persistence |
+
+## P0: Spec Drift - Facet-Based Object Model and View Projection
+
+目标: 对齐 `contrix-spec` 最新对象能力模型，服务端不再把 `entity_type` 当作行为授权来源。
+
+- [x] Entity/index storage:
+  - [x] 持久化实体 `facets`，支持 full entity facet config 与 projection facet-name list 的兼容输入。
+  - [x] reducer/index 查询支持 `facets`，语义为所有指定 facet 均匹配；`entity_types` 保留为兼容标签过滤。
+  - [x] projection payload 返回实体 facets，便于客户端选择 renderer。
+- [x] View/query HTTP contract:
+  - [x] `IndexQueryRequest` 支持 `renderer` 和 `facets`。
+  - [x] collection/conversation/graph/queue view config 支持 `item_facets/message_facets/node_facets`。
+  - [x] cursor/filter hash 绑定 `renderer` 和 `facets`，避免 filter mismatch 被误判为可继续分页。
+- [x] Operation reducer:
+  - [x] 接受 canonical `cx.field_position.move`、`cx.field_position.reorder`、`cx.container.move_item`、`cx.container.rebalance`。
+  - [x] 旧 `cx.task.move/reorder`、`cx.relation.move/rebalance` 仅在 compatibility profile 下映射。
+  - [x] audit 与 conflict 记录保留原始输入 kind 和 canonical kind。
+- [ ] Authz constraints:
+  - [x] grant constraint 支持 `allowed_entity_facets`。
+  - [x] causal frontier 授权时使用 reducer 输出的实体 facets，缺失或未知 critical facet 约束 fail closed。
+  - [ ] policy dry-run 和 audit 输出展示 facet constraint 命中原因。
+- [ ] OpenAPI/conformance:
+  - [ ] 生成 OpenAPI 包含 `FacetName`、`ViewRenderer`、`allowed_entity_facets`。
+  - [ ] `cotest` 覆盖 facet query、renderer cursor binding 和 canonical/legacy operation alias。
+
+并行性: reducer alias、index query、authz constraint、OpenAPI 生成可并行；但持久化 schema 和 SDK 类型需要先冻结。
 
 ## P0: Durable Server State
 
@@ -42,7 +68,7 @@
   - [x] logout 写 revoked_at。
   - [ ] locked/disabled/erased lifecycle 行为。
 - [ ] Space/contact/invite:
-  - [ ] contacts request/accept/reject 幂等和 CAS。
+  - [x] contacts request/accept/reject 幂等和 CAS。
   - [ ] spaces create/delete/member add/remove 事务化。
   - [ ] discoverability、owner、plaintext_visible_services、deleted 状态落库。
   - [ ] invite token hash、expiry、max_uses、revoked_at。
@@ -55,7 +81,7 @@
 - [ ] Audit:
   - [x] request_id、actor、device_id、space_id、operation_id、commit_id、outcome。
   - [ ] high-risk endpoint 必写 audit。
-  - [ ] cursor pagination。
+  - [x] cursor pagination。
 
 并行性: account/session、space/contact、device/push、blob、audit/federation store 可并行；store trait 和 migration conventions 需要先冻结。
 
@@ -337,3 +363,16 @@
 - [ ] Feature discovery and OpenAPI updated。
 - [ ] README/profile docs updated。
 - [ ] Production path does not depend on dev proof, in-memory state or hardcoded service DID unless explicitly marked dev-only。
+
+## 本轮验证记录
+
+- [x] 2026-04-30 spec drift: `cargo fmt --all`。
+- [x] 2026-04-30 spec drift: `cargo check --message-format short`。
+- [x] 2026-04-30 spec drift: `cargo test --lib entity_facets_filter_queries --message-format short`。
+- [x] 2026-04-30 spec drift: `cargo test --lib canonical_field_position_move_updates_entity_position_fields --message-format short`。
+- [x] 2026-04-30 spec drift: `cargo test --lib legacy_task_move_requires_migration_profile --message-format short`。
+- [x] 2026-04-30 follow-up: `cargo fmt --all`。
+- [x] 2026-04-30 follow-up: `cargo check --message-format short`。
+- [x] 2026-04-30 follow-up: `cargo check --tests --message-format short`。
+- [x] 2026-04-30 follow-up: `git diff --check`。
+- [ ] 2026-04-30 follow-up: targeted `cargo test` 未完成；本机测试链接阶段超过 5 分钟并留下 cargo/rustc 进程，已清理后改用 `cargo check --tests` 覆盖编译。

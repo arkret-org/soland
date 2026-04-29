@@ -28,6 +28,10 @@ pub struct ClientSyncRequest {
     #[serde(default)]
     pub profile: Option<String>,
     #[serde(default)]
+    pub renderer: Option<String>,
+    #[serde(default)]
+    pub facets: Vec<String>,
+    #[serde(default)]
     pub timeout_ms: Option<u64>,
     #[serde(default)]
     pub filter: Option<Value>,
@@ -188,6 +192,9 @@ pub struct IndexQueryRequest {
     #[serde(default)]
     pub entity_types: Vec<String>,
     #[serde(default)]
+    pub facets: Vec<String>,
+    pub renderer: Option<String>,
+    #[serde(default)]
     pub limit: Option<usize>,
 }
 
@@ -214,6 +221,9 @@ pub struct IndexSearchRequest {
     pub space_ids: Vec<String>,
     #[serde(default)]
     pub entity_types: Vec<String>,
+    #[serde(default)]
+    pub facets: Vec<String>,
+    pub renderer: Option<String>,
     pub limit: Option<usize>,
 }
 
@@ -1037,6 +1047,8 @@ pub struct GetReadMarkersRequest {
 pub struct CreateEntityRequest {
     pub space_id: String,
     pub entity_type: String,
+    #[serde(default)]
+    pub facets: Value,
     pub title: Option<String>,
     pub content: Option<Value>,
     #[serde(default)]
@@ -1048,6 +1060,7 @@ pub struct EntityResponse {
     pub entity_id: String,
     pub space_id: String,
     pub entity_type: String,
+    pub facets: Vec<String>,
     pub title: Option<String>,
     pub content: Option<Value>,
     pub fields: BTreeMap<String, Value>,
@@ -1060,6 +1073,8 @@ pub struct EntityResponse {
 pub struct UpdateEntityRequest {
     pub title: Option<String>,
     pub content: Option<Value>,
+    #[serde(default)]
+    pub facets: Option<Value>,
     #[serde(default)]
     pub fields: BTreeMap<String, Value>,
 }

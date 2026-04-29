@@ -489,9 +489,11 @@ pub async fn contact_request(depot: &mut Depot, req: &mut Request, res: &mut Res
     }
     let mut contacts = state.contacts.lock().expect("contacts lock");
     let key = (session.actor.clone(), body.target.clone());
-    if contacts.contains_key(&key)
-        || contacts.contains_key(&(body.target.clone(), session.actor.clone()))
-    {
+    if let Some(existing) = contacts.get(&key).cloned() {
+        res.render(Json(contact_response(existing)));
+        return;
+    }
+    if contacts.contains_key(&(body.target.clone(), session.actor.clone())) {
         render_error(
             res,
             StatusCode::CONFLICT,
@@ -546,6 +548,15 @@ pub async fn contact_respond(depot: &mut Depot, req: &mut Request, res: &mut Res
         return;
     };
     if contact.status != "pending" {
+        let requested_status = if body.action == "accept" {
+            "accepted"
+        } else {
+            "rejected"
+        };
+        if contact.status == requested_status {
+            res.render(Json(contact_response(contact.clone())));
+            return;
+        }
         render_error(
             res,
             StatusCode::CONFLICT,
@@ -1804,6 +1815,12 @@ pub async fn create_entity(depot: &mut Depot, req: &mut Request, res: &mut Respo
         render_error(res, StatusCode::BAD_REQUEST, "invalid_param", message);
         return;
     }
+    if !body.facets.is_null()
+        && let Err(message) = validate_canonical_json_value(&body.facets)
+    {
+        render_error(res, StatusCode::BAD_REQUEST, "invalid_param", message);
+        return;
+    }
     for value in body.fields.values() {
         if let Err(message) = validate_canonical_json_value(value) {
             render_error(res, StatusCode::BAD_REQUEST, "invalid_param", message);
@@ -1816,6 +1833,7 @@ pub async fn create_entity(depot: &mut Depot, req: &mut Request, res: &mut Respo
     let payload = json!({
         "entity_id": entity_id,
         "entity_type": body.entity_type,
+        "facets": body.facets,
         "title": body.title,
         "content": body.content,
         "fields": body.fields
@@ -1873,6 +1891,7 @@ pub async fn create_entity(depot: &mut Depot, req: &mut Request, res: &mut Respo
                     entity_id: e.entity_id,
                     space_id: e.space_id,
                     entity_type: e.entity_type,
+                    facets: e.facets,
                     title: e.title,
                     content: e.content,
                     fields: e.fields,
@@ -1925,6 +1944,7 @@ pub async fn get_entity(depot: &mut Depot, req: &mut Request, res: &mut Response
                 entity_id: e.entity_id,
                 space_id: e.space_id,
                 entity_type: e.entity_type,
+                facets: e.facets,
                 title: e.title,
                 content: e.content,
                 fields: e.fields,
@@ -1990,6 +2010,12 @@ pub async fn update_entity(depot: &mut Depot, req: &mut Request, res: &mut Respo
         render_error(res, StatusCode::BAD_REQUEST, "invalid_param", message);
         return;
     }
+    if let Some(facets) = &body.facets
+        && let Err(message) = validate_canonical_json_value(facets)
+    {
+        render_error(res, StatusCode::BAD_REQUEST, "invalid_param", message);
+        return;
+    }
     for value in body.fields.values() {
         if let Err(message) = validate_canonical_json_value(value) {
             render_error(res, StatusCode::BAD_REQUEST, "invalid_param", message);
@@ -2007,6 +2033,9 @@ pub async fn update_entity(depot: &mut Depot, req: &mut Request, res: &mut Respo
     }
     if !body.fields.is_empty() {
         payload["fields"] = json!(body.fields);
+    }
+    if let Some(facets) = &body.facets {
+        payload["facets"] = json!(facets);
     }
     let operation = contrix_sdk::Operation::create(
         contrix_sdk::OperationId::new(operation_id.clone()).unwrap(),
@@ -2055,6 +2084,7 @@ pub async fn update_entity(depot: &mut Depot, req: &mut Request, res: &mut Respo
                     entity_id: e.entity_id,
                     space_id: e.space_id,
                     entity_type: e.entity_type,
+                    facets: e.facets,
                     title: e.title,
                     content: e.content,
                     fields: e.fields,
@@ -2168,20 +2198,25 @@ pub async fn list_entities(depot: &mut Depot, req: &mut Request, res: &mut Respo
     let entity_type = query_param(req, "entity_type");
     let entities = {
         let proj = state.projection.lock().expect("projection lock");
-        proj.entities_for_space(&space_id, entity_type.as_deref())
-            .into_iter()
-            .map(|e| EntityResponse {
-                entity_id: e.entity_id.clone(),
-                space_id: e.space_id.clone(),
-                entity_type: e.entity_type.clone(),
-                title: e.title.clone(),
-                content: e.content.clone(),
-                fields: e.fields.clone(),
-                deleted: e.deleted,
-                created_at: e.created_at.to_rfc3339(),
-                updated_at: e.updated_at.to_rfc3339(),
-            })
-            .collect::<Vec<_>>()
+        proj.entities_for_space(
+            &space_id,
+            entity_type.as_deref(),
+            &query_list(req, "facets"),
+        )
+        .into_iter()
+        .map(|e| EntityResponse {
+            entity_id: e.entity_id.clone(),
+            space_id: e.space_id.clone(),
+            entity_type: e.entity_type.clone(),
+            facets: e.facets.clone(),
+            title: e.title.clone(),
+            content: e.content.clone(),
+            fields: e.fields.clone(),
+            deleted: e.deleted,
+            created_at: e.created_at.to_rfc3339(),
+            updated_at: e.updated_at.to_rfc3339(),
+        })
+        .collect::<Vec<_>>()
     };
     res.render(Json(json!({ "entities": entities })));
 }
@@ -2432,7 +2467,7 @@ pub async fn create_view(depot: &mut Depot, req: &mut Request, res: &mut Respons
             res,
             StatusCode::BAD_REQUEST,
             "invalid_param",
-            "view kind must be list, kanban, table, calendar, or timeline",
+            "view kind must be collection, conversation, graph, queue, list, kanban, table, calendar, or timeline",
         );
         return;
     }
@@ -2440,22 +2475,28 @@ pub async fn create_view(depot: &mut Depot, req: &mut Request, res: &mut Respons
         render_error(res, StatusCode::BAD_REQUEST, "invalid_param", message);
         return;
     }
+    let required_facets = view_required_facets(&body.kind, &body.options);
     let entities = {
         let proj = state.projection.lock().expect("projection lock");
-        proj.entities_for_space(&body.space_id, body.entity_type.as_deref())
-            .into_iter()
-            .map(|e| EntityResponse {
-                entity_id: e.entity_id.clone(),
-                space_id: e.space_id.clone(),
-                entity_type: e.entity_type.clone(),
-                title: e.title.clone(),
-                content: e.content.clone(),
-                fields: e.fields.clone(),
-                deleted: e.deleted,
-                created_at: e.created_at.to_rfc3339(),
-                updated_at: e.updated_at.to_rfc3339(),
-            })
-            .collect::<Vec<_>>()
+        proj.entities_for_space(
+            &body.space_id,
+            body.entity_type.as_deref(),
+            &required_facets,
+        )
+        .into_iter()
+        .map(|e| EntityResponse {
+            entity_id: e.entity_id.clone(),
+            space_id: e.space_id.clone(),
+            entity_type: e.entity_type.clone(),
+            facets: e.facets.clone(),
+            title: e.title.clone(),
+            content: e.content.clone(),
+            fields: e.fields.clone(),
+            deleted: e.deleted,
+            created_at: e.created_at.to_rfc3339(),
+            updated_at: e.updated_at.to_rfc3339(),
+        })
+        .collect::<Vec<_>>()
     };
     let projection = build_view_projection(&body.kind, &entities, &body.options);
     res.render(Json(ViewResponse {
@@ -2493,18 +2534,20 @@ pub async fn get_view(depot: &mut Depot, req: &mut Request, res: &mut Response) 
             res,
             StatusCode::BAD_REQUEST,
             "invalid_param",
-            "view kind must be list, kanban, table, calendar, or timeline",
+            "view kind must be collection, conversation, graph, queue, list, kanban, table, calendar, or timeline",
         );
         return;
     }
+    let required_facets = view_required_facets_from_query(req, &kind);
     let entities = {
         let proj = state.projection.lock().expect("projection lock");
-        proj.entities_for_space(&space_id, entity_type.as_deref())
+        proj.entities_for_space(&space_id, entity_type.as_deref(), &required_facets)
             .into_iter()
             .map(|e| EntityResponse {
                 entity_id: e.entity_id.clone(),
                 space_id: e.space_id.clone(),
                 entity_type: e.entity_type.clone(),
+                facets: e.facets.clone(),
                 title: e.title.clone(),
                 content: e.content.clone(),
                 fields: e.fields.clone(),
@@ -2778,7 +2821,69 @@ fn is_supported_schema_kind(value: &str) -> bool {
 }
 
 fn is_supported_view_kind(kind: &str) -> bool {
-    matches!(kind, "list" | "kanban" | "table" | "calendar" | "timeline")
+    is_supported_view_renderer(kind)
+}
+
+fn is_supported_view_renderer(renderer: &str) -> bool {
+    matches!(
+        renderer,
+        "collection"
+            | "conversation"
+            | "graph"
+            | "queue"
+            | "list"
+            | "kanban"
+            | "table"
+            | "calendar"
+            | "timeline"
+    )
+}
+
+fn facet_names_from_value(value: Option<&serde_json::Value>) -> Vec<String> {
+    match value {
+        Some(serde_json::Value::Array(values)) => values
+            .iter()
+            .filter_map(|value| value.as_str().map(ToOwned::to_owned))
+            .collect(),
+        Some(serde_json::Value::Object(values)) => values.keys().cloned().collect(),
+        Some(serde_json::Value::String(value)) => value
+            .split(',')
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn view_required_facets(kind: &str, options: &serde_json::Value) -> Vec<String> {
+    let preferred_key = match kind {
+        "conversation" => "message_facets",
+        "graph" => "node_facets",
+        "collection" | "queue" => "item_facets",
+        _ => "facets",
+    };
+    let facets = facet_names_from_value(options.get(preferred_key));
+    if facets.is_empty() && preferred_key != "facets" {
+        facet_names_from_value(options.get("facets"))
+    } else {
+        facets
+    }
+}
+
+fn view_required_facets_from_query(req: &Request, kind: &str) -> Vec<String> {
+    let preferred_key = match kind {
+        "conversation" => "message_facets",
+        "graph" => "node_facets",
+        "collection" | "queue" => "item_facets",
+        _ => "facets",
+    };
+    let facets = query_list(req, preferred_key);
+    if facets.is_empty() && preferred_key != "facets" {
+        query_list(req, "facets")
+    } else {
+        facets
+    }
 }
 
 fn build_view_projection(
@@ -2787,6 +2892,10 @@ fn build_view_projection(
     options: &serde_json::Value,
 ) -> serde_json::Value {
     match kind {
+        "collection" => build_collection_projection(entities, options),
+        "conversation" => build_conversation_projection(entities, options),
+        "graph" => build_graph_projection(entities, options),
+        "queue" => build_queue_projection(entities, options),
         "kanban" => build_kanban_projection(entities, options),
         "table" => build_table_projection(entities),
         "calendar" => build_calendar_projection(entities, options),
@@ -2797,6 +2906,69 @@ fn build_view_projection(
             "count": entities.len(),
         }),
     }
+}
+
+fn build_collection_projection(
+    entities: &[EntityResponse],
+    options: &serde_json::Value,
+) -> serde_json::Value {
+    let item_facets = view_required_facets("collection", options);
+    json!({
+        "kind": "collection",
+        "item_facets": item_facets,
+        "items": entities,
+        "count": entities.len(),
+    })
+}
+
+fn build_conversation_projection(
+    entities: &[EntityResponse],
+    options: &serde_json::Value,
+) -> serde_json::Value {
+    let message_facets = view_required_facets("conversation", options);
+    json!({
+        "kind": "conversation",
+        "message_facets": message_facets,
+        "messages": entities,
+        "count": entities.len(),
+    })
+}
+
+fn build_graph_projection(
+    entities: &[EntityResponse],
+    options: &serde_json::Value,
+) -> serde_json::Value {
+    let node_facets = view_required_facets("graph", options);
+    let nodes: Vec<_> = entities
+        .iter()
+        .map(|entity| {
+            json!({
+                "id": entity.entity_id,
+                "title": entity.title,
+                "entity_type": entity.entity_type,
+                "facets": entity.facets,
+            })
+        })
+        .collect();
+    json!({
+        "kind": "graph",
+        "node_facets": node_facets,
+        "nodes": nodes,
+        "edges": [],
+    })
+}
+
+fn build_queue_projection(
+    entities: &[EntityResponse],
+    options: &serde_json::Value,
+) -> serde_json::Value {
+    let item_facets = view_required_facets("queue", options);
+    json!({
+        "kind": "queue",
+        "item_facets": item_facets,
+        "items": entities,
+        "count": entities.len(),
+    })
 }
 
 fn build_kanban_projection(
@@ -3391,7 +3563,10 @@ pub async fn client_sync(depot: &mut Depot, req: &mut Request, res: &mut Respons
             since,
             state,
             session.as_ref(),
+            body.profile.as_deref(),
             body.filter.as_ref(),
+            body.renderer.as_deref(),
+            &body.facets,
             chrono::Utc::now().timestamp_millis(),
         ) {
             Ok(cursor) => cursor,
@@ -3438,6 +3613,17 @@ pub async fn client_sync(depot: &mut Depot, req: &mut Request, res: &mut Respons
             StatusCode::BAD_REQUEST,
             "invalid_param",
             "profile must be initial, incremental, board, chat, or topic",
+        );
+        return;
+    }
+    if let Some(renderer) = body.renderer.as_deref()
+        && !is_supported_view_renderer(renderer)
+    {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            "renderer must be collection, conversation, graph, queue, list, kanban, table, calendar, or timeline",
         );
         return;
     }
@@ -3552,7 +3738,10 @@ pub async fn client_sync(depot: &mut Depot, req: &mut Request, res: &mut Respons
         next_batch: sync_token_for_client_sync(
             state,
             session.as_ref(),
+            body.profile.as_deref(),
             body.filter.as_ref(),
+            body.renderer.as_deref(),
+            &body.facets,
             positions,
             to_device_position,
         ),
@@ -3579,7 +3768,10 @@ enum SyncCursorError {
 fn sync_token_for_client_sync(
     state: &AppState,
     session: Option<&SessionRecord>,
+    profile: Option<&str>,
     filter: Option<&serde_json::Value>,
+    renderer: Option<&str>,
+    facets: &[String],
     spaces_positions: BTreeMap<String, i64>,
     to_device_position: i64,
 ) -> String {
@@ -3592,14 +3784,17 @@ fn sync_token_for_client_sync(
         .map(|session| session.device_id.clone())
         .unwrap_or_else(|| "anonymous".to_owned());
     let device_positions = BTreeMap::from([(device_id.clone(), issued_at.timestamp_micros())]);
+    let profile = profile.unwrap_or("incremental");
     let cursor = json!({
         "schema": "cx.schema.cursor.v1",
         "version": 1,
-        "profile": "incremental",
+        "profile": profile,
         "principal_id": principal_id,
         "device_id": device_id,
         "service_id": state.config.service_did.clone(),
-        "filter_hash": sync_filter_hash(filter),
+        "renderer": renderer,
+        "facets": facets,
+        "filter_hash": sync_filter_hash(profile, filter, renderer, facets),
         "issued_at": issued_at,
         "issued_at_ms": issued_at.timestamp_millis(),
         "expires_at": expires_at,
@@ -3618,7 +3813,10 @@ fn parse_and_validate_sync_cursor(
     token: &str,
     state: &AppState,
     session: Option<&SessionRecord>,
+    profile: Option<&str>,
     filter: Option<&serde_json::Value>,
+    renderer: Option<&str>,
+    facets: &[String],
     now_ms: i64,
 ) -> Result<SyncCursor, SyncCursorError> {
     let value = decode_sync_cursor_value(token)?;
@@ -3673,7 +3871,8 @@ fn parse_and_validate_sync_cursor(
             "sync token service does not match this service DID",
         ));
     }
-    let expected_filter_hash = sync_filter_hash(filter);
+    let expected_filter_hash =
+        sync_filter_hash(profile.unwrap_or("incremental"), filter, renderer, facets);
     if value
         .get("filter_hash")
         .and_then(|filter_hash| filter_hash.as_str())
@@ -3722,11 +3921,69 @@ fn decode_sync_cursor_value(token: &str) -> Result<serde_json::Value, SyncCursor
         .map_err(|_| SyncCursorError::Invalid("since cursor must contain JSON"))
 }
 
-fn sync_filter_hash(filter: Option<&serde_json::Value>) -> String {
+fn sync_filter_hash(
+    profile: &str,
+    filter: Option<&serde_json::Value>,
+    renderer: Option<&str>,
+    facets: &[String],
+) -> String {
     let empty_filter = json!({});
-    let filter = filter.unwrap_or(&empty_filter);
-    contrix_sdk::canonical::canonical_sha256(filter)
-        .unwrap_or_else(|_| format!("sha256:{}", sha256_hex(filter.to_string().as_bytes())))
+    let binding = json!({
+        "profile": profile,
+        "filter": filter.unwrap_or(&empty_filter),
+        "renderer": renderer,
+        "facets": normalized_strings(facets),
+    });
+    contrix_sdk::canonical::canonical_sha256(&binding)
+        .unwrap_or_else(|_| format!("sha256:{}", sha256_hex(binding.to_string().as_bytes())))
+}
+
+fn index_query_cursor(body: &IndexQueryRequest) -> String {
+    let binding = json!({
+        "profile": "index.query",
+        "space_ids": normalized_strings(&body.space_ids),
+        "entity_types": normalized_strings(&body.entity_types),
+        "renderer": &body.renderer,
+        "facets": normalized_strings(&body.facets),
+    });
+    bound_cursor("index.query", binding)
+}
+
+fn index_search_cursor(body: &IndexSearchRequest) -> String {
+    let binding = json!({
+        "profile": "index.search",
+        "query": &body.query,
+        "space_ids": normalized_strings(&body.space_ids),
+        "entity_types": normalized_strings(&body.entity_types),
+        "renderer": &body.renderer,
+        "facets": normalized_strings(&body.facets),
+    });
+    bound_cursor("index.search", binding)
+}
+
+fn bound_cursor(profile: &str, binding: serde_json::Value) -> String {
+    let now = chrono::Utc::now();
+    let filter_hash = contrix_sdk::canonical::canonical_sha256(&binding)
+        .unwrap_or_else(|_| format!("sha256:{}", sha256_hex(binding.to_string().as_bytes())));
+    let cursor = json!({
+        "schema": "cx.schema.cursor.v1",
+        "version": 1,
+        "profile": profile,
+        "filter_hash": filter_hash,
+        "issued_at": now,
+        "issued_at_ms": now.timestamp_millis(),
+        "positions": {
+            "repo": null
+        }
+    });
+    format!("cx:cursor:{}", URL_SAFE_NO_PAD.encode(cursor.to_string()))
+}
+
+fn normalized_strings(values: &[String]) -> Vec<String> {
+    let mut values = values.to_vec();
+    values.sort();
+    values.dedup();
+    values
 }
 
 #[handler]
@@ -4124,6 +4381,8 @@ pub async fn index_describe(depot: &mut Depot, res: &mut Response) {
         query_features: vec![
             "space_preview".to_owned(),
             "entity_type_filter".to_owned(),
+            "facet_filter".to_owned(),
+            "view_renderer".to_owned(),
             "space_filter".to_owned(),
         ],
         frontier: json!({"next_batch": sync_token()}),
@@ -4139,6 +4398,8 @@ pub async fn index_query(depot: &mut Depot, req: &mut Request, res: &mut Respons
         .unwrap_or(IndexQueryRequest {
             space_ids: Vec::new(),
             entity_types: Vec::new(),
+            facets: Vec::new(),
+            renderer: None,
             limit: Some(20),
         });
     let spaces = state.spaces.lock().expect("spaces lock");
@@ -4153,6 +4414,10 @@ pub async fn index_query(depot: &mut Depot, req: &mut Request, res: &mut Respons
                         .space_ids
                         .iter()
                         .any(|id| id == entry.space_id.as_str()))
+                && (body.facets.is_empty()
+                    || body.facets.iter().all(|facet| {
+                        ["container", "replyable", "renderable"].contains(&facet.as_str())
+                    }))
         })
         .take(body.limit.unwrap_or(20))
         .map(|entry| {
@@ -4161,14 +4426,16 @@ pub async fn index_query(depot: &mut Depot, req: &mut Request, res: &mut Respons
                 "space_id": entry.space_id,
                 "title": entry.name,
                 "summary": entry.description,
-                "entity_types": body.entity_types,
+                "entity_types": body.entity_types.clone(),
+                "facets": body.facets.clone(),
+                "renderer": body.renderer.clone(),
             })
         })
         .collect();
     res.render(Json(IndexQueryResponse {
         results,
         next_cursor: None,
-        frontier: json!({"next_batch": sync_token()}),
+        frontier: json!({"next_batch": index_query_cursor(&body)}),
     }));
 }
 
@@ -4410,10 +4677,12 @@ pub async fn index_search(depot: &mut Depot, req: &mut Request, res: &mut Respon
             "kind": "space",
             "entity_id": space.space_id,
             "space_id": space.space_id,
+            "facets": ["container", "replyable", "renderable"],
             "title": space.name,
             "summary": space.description,
         });
         if (body.entity_types.is_empty() || body.entity_types.iter().any(|kind| kind == "space"))
+            && facets_match(&entity, &body.facets)
             && query_matches(&entity, Some(&body.query))
         {
             results.push(entity);
@@ -4442,11 +4711,13 @@ pub async fn index_search(depot: &mut Depot, req: &mut Request, res: &mut Respon
             "event_id": message.event_id,
             "space_id": message.space_id,
             "sender": message.sender,
+            "facets": ["replyable", "renderable", "notifiable"],
             "content": message.content,
             "encrypted": message.encrypted,
             "created_at": message.created_at,
         });
         if (body.entity_types.is_empty() || body.entity_types.iter().any(|kind| kind == "message"))
+            && facets_match(&entity, &body.facets)
             && query_matches(&entity, Some(&body.query))
         {
             results.push(entity);
@@ -4464,7 +4735,7 @@ pub async fn index_search(depot: &mut Depot, req: &mut Request, res: &mut Respon
     res.render(Json(IndexSearchResponse {
         results,
         next_cursor: None,
-        frontier: json!({"next_batch": sync_token()}),
+        frontier: json!({"next_batch": index_search_cursor(&body)}),
     }));
 }
 
@@ -4991,6 +5262,16 @@ pub async fn submit_commit(depot: &mut Depot, req: &mut Request, res: &mut Respo
     ) {
         Ok(head_commit) => {
             project_accepted_operations(state, &repo_id, &operations_for_projection);
+            append_audit_log(
+                state,
+                Some(&repo_id),
+                "repo.submit_commit",
+                json!({
+                    "commit_id": commit_id.clone(),
+                    "operation_kinds": operation_kind_records(&operations_for_projection),
+                }),
+                "accepted",
+            );
             res.render(Json(SubmitCommitResponse {
                 status: "accepted".to_owned(),
                 commit_id,
@@ -5004,6 +5285,17 @@ pub async fn submit_commit(depot: &mut Depot, req: &mut Request, res: &mut Respo
             } else {
                 "duplicate_conflict"
             };
+            append_audit_log(
+                state,
+                Some(&repo_id),
+                "repo.submit_commit",
+                json!({
+                    "commit_id": commit_id,
+                    "operation_kinds": operation_kind_records(&operations_for_projection),
+                    "conflict": code,
+                }),
+                code,
+            );
             render_error(res, StatusCode::CONFLICT, code, &error.to_string());
         }
     }
@@ -5026,19 +5318,61 @@ pub async fn authz_check(depot: &mut Depot, req: &mut Request, res: &mut Respons
     };
     // Extract space_id from resource
     // Resource can be: a string "space:<id>" or an object {"kind":"space","space_id":"<id>"}
-    let (resource_str, space_id) = if let Some(s) = body.resource.as_str() {
+    let (resource_str, space_id, resource_facets) = if let Some(s) = body.resource.as_str() {
         let sid = s.strip_prefix("space:").unwrap_or(s);
-        (s.to_owned(), sid.to_owned())
+        (s.to_owned(), sid.to_owned(), Vec::new())
     } else if let Some(obj) = body.resource.as_object() {
         let kind = obj.get("kind").and_then(|v| v.as_str()).unwrap_or("space");
+        let entity_id = obj
+            .get("entity_id")
+            .or_else(|| (kind == "entity").then(|| obj.get("id")).flatten())
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned);
+        let projected_entity = entity_id.as_deref().and_then(|entity_id| {
+            state
+                .projection
+                .lock()
+                .expect("projection lock")
+                .entities
+                .get(entity_id)
+                .cloned()
+        });
         let sid = obj
             .get("space_id")
             .and_then(|v| v.as_str())
-            .or_else(|| obj.get("id").and_then(|v| v.as_str()))
-            .unwrap_or("");
-        (format!("{}:{}", kind, sid), sid.to_owned())
+            .map(ToOwned::to_owned)
+            .or_else(|| {
+                projected_entity
+                    .as_ref()
+                    .map(|entity| entity.space_id.clone())
+            })
+            .or_else(|| {
+                (kind == "space")
+                    .then(|| {
+                        obj.get("id")
+                            .and_then(|v| v.as_str())
+                            .map(ToOwned::to_owned)
+                    })
+                    .flatten()
+            })
+            .unwrap_or_default();
+        let resource = entity_id
+            .as_ref()
+            .map(|entity_id| format!("entity:{entity_id}"))
+            .unwrap_or_else(|| format!("{kind}:{sid}"));
+        let facets = facet_names_from_value(obj.get("facets"))
+            .into_iter()
+            .chain(
+                projected_entity
+                    .as_ref()
+                    .filter(|_| obj.get("facets").is_none())
+                    .map(|entity| entity.facets.clone())
+                    .unwrap_or_default(),
+            )
+            .collect();
+        (resource, sid, facets)
     } else {
-        (String::new(), String::new())
+        (String::new(), String::new(), Vec::new())
     };
     // Look up space owner and members
     let (owner, members) = {
@@ -5061,6 +5395,7 @@ pub async fn authz_check(depot: &mut Depot, req: &mut Request, res: &mut Respons
         &space_id,
         owner.as_deref(),
         &members,
+        &resource_facets,
     );
     res.render(Json(AuthzCheckResponse {
         allowed: result.allowed,
@@ -5278,19 +5613,43 @@ pub async fn audit_events(depot: &mut Depot, req: &mut Request, res: &mut Respon
     let limit = query_param(req, "limit")
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(100)
-        .min(500);
-    let events = state
+        .clamp(1, 500);
+    let cursor = query_param(req, "cursor");
+    let mut events = state
         .audit_log
         .lock()
         .expect("audit log lock")
         .iter()
         .filter(|event| event["actor"].as_str() == Some(actor.as_str()))
-        .take(limit)
         .cloned()
         .collect::<Vec<_>>();
+    let start = cursor
+        .as_deref()
+        .and_then(|cursor| {
+            events
+                .iter()
+                .position(|event| event["audit_id"].as_str() == Some(cursor))
+                .map(|index| index + 1)
+        })
+        .unwrap_or(0);
+    if start > 0 {
+        events.drain(..start);
+    }
+    let has_more = events.len() > limit;
+    if has_more {
+        events.truncate(limit);
+    }
+    let next_cursor = has_more
+        .then(|| {
+            events
+                .last()
+                .and_then(|event| event["audit_id"].as_str())
+                .map(ToOwned::to_owned)
+        })
+        .flatten();
     res.render(Json(json!({
         "events": events,
-        "next_cursor": null,
+        "next_cursor": next_cursor,
     })));
 }
 
@@ -6453,6 +6812,9 @@ pub async fn get_device_messages(depot: &mut Depot, req: &mut Request, res: &mut
             state,
             Some(&session),
             None,
+            None,
+            None,
+            &[],
             chrono::Utc::now().timestamp_millis(),
         ) {
             Ok(cursor) => cursor.to_device_position,
@@ -6490,6 +6852,9 @@ pub async fn get_device_messages(depot: &mut Depot, req: &mut Request, res: &mut
             state,
             Some(&session),
             None,
+            None,
+            None,
+            &[],
             BTreeMap::new(),
             to_device_position,
         )),
@@ -7380,6 +7745,8 @@ fn projection_event_json(event: &ProjectionEventRecord) -> serde_json::Value {
         "event_id": event.event_id,
         "space_id": event.space_id,
         "event_type": event.event_type,
+        "input_event_type": event.input_event_type,
+        "canonical_event_type": event.canonical_event_type,
         "operation_type": event.operation_type,
         "operation_id": event.operation_id,
         "sender": event.sender,
@@ -7435,15 +7802,32 @@ fn operation_type_string(operation: &Operation) -> String {
         .unwrap_or_else(|| "create".to_owned())
 }
 
+fn operation_kind_records(operations: &[Operation]) -> Vec<serde_json::Value> {
+    operations
+        .iter()
+        .map(|operation| {
+            json!({
+                "operation_id": operation.operation_id.to_string(),
+                "input_kind": &operation.object_type,
+                "canonical_kind": kinds::canonical_kind_for_operation(operation)
+                    .unwrap_or(operation.object_type.as_str()),
+            })
+        })
+        .collect()
+}
+
 fn projection_event_from_operation(
     operation: &Operation,
     sender_fallback: Option<&str>,
 ) -> ProjectionEventRecord {
     let event_id = operation_event_id(operation);
+    let canonical_event_type = kinds::canonical_kind_string(operation);
     ProjectionEventRecord {
         event_id,
         space_id: operation.space_id.to_string(),
-        event_type: kinds::canonical_kind_string(operation),
+        event_type: canonical_event_type.clone(),
+        input_event_type: operation.object_type.clone(),
+        canonical_event_type,
         operation_type: operation_type_string(operation),
         operation_id: Some(operation.operation_id.to_string()),
         sender: operation
@@ -7571,7 +7955,9 @@ fn load_projected_events_from_pg(
         .map(|row| ProjectionEventRecord {
             event_id: row.event_id,
             space_id: row.space_id,
-            event_type: row.event_type,
+            event_type: row.event_type.clone(),
+            input_event_type: row.event_type.clone(),
+            canonical_event_type: row.event_type,
             operation_type: row.operation_type,
             operation_id: row.operation_id,
             sender: row.sender,
@@ -9887,6 +10273,7 @@ fn find_demo_entity(state: &AppState, entity_id: &str) -> Option<serde_json::Val
                 "kind": "space",
                 "entity_id": space.space_id,
                 "space_id": space.space_id,
+                "facets": ["container", "replyable", "renderable"],
                 "title": space.name,
                 "summary": space.description,
                 "category": space.category,
@@ -9903,6 +10290,22 @@ fn query_matches(value: &serde_json::Value, query: Option<&str>) -> bool {
         .to_string()
         .to_ascii_lowercase()
         .contains(&query.to_ascii_lowercase())
+}
+
+fn facets_match(value: &serde_json::Value, required: &[String]) -> bool {
+    if required.is_empty() {
+        return true;
+    }
+    let facets = value
+        .get("facets")
+        .and_then(|value| value.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|value| value.as_str())
+        .collect::<Vec<_>>();
+    required
+        .iter()
+        .all(|required| facets.iter().any(|facet| facet == required))
 }
 
 fn checked_limit(res: &mut Response, limit: Option<usize>) -> Option<usize> {
@@ -10116,6 +10519,19 @@ fn query_param(req: &Request, key: &str) -> Option<String> {
             (name == key).then(|| value.replace('+', " "))
         })
     })
+}
+
+fn query_list(req: &Request, key: &str) -> Vec<String> {
+    query_param(req, key)
+        .map(|value| {
+            value
+                .split(',')
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn query_flag(req: &Request, key: &str) -> bool {

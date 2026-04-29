@@ -168,6 +168,8 @@ pub struct ProjectionEventRecord {
     pub event_id: String,
     pub space_id: String,
     pub event_type: String,
+    pub input_event_type: String,
+    pub canonical_event_type: String,
     pub operation_type: String,
     pub operation_id: Option<String>,
     pub sender: Option<String>,
