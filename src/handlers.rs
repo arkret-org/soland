@@ -286,6 +286,28 @@ pub async fn policies_describe(_depot: &mut Depot, res: &mut Response) {
 }
 
 #[handler]
+pub async fn recovery_contract_stack(_depot: &mut Depot, res: &mut Response) {
+    res.render(Json(json!({
+        "contract": "contrix.rest.recovery_contract_stack.v1",
+        "version": "2026-05-04-scaffold",
+        "device_messages_describe_path": "/api/v1/device_messages/describe",
+        "key_backups_describe_path": "/api/v1/keys/backups/describe",
+        "restore_describe_path": "/api/v1/keys/backups/{backup_id}/restore/describe",
+        "restore_start_path": "/api/v1/keys/backups/{backup_id}/restore/start",
+        "restore_ticket_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}",
+        "restore_ticket_advance_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/advance",
+        "authz_describe_path": "/api/v1/authz/describe",
+        "authz_check_path": "/api/v1/authz/check",
+        "policies_describe_path": "/api/v1/policies/describe",
+        "policies_path": "/api/v1/policies",
+        "todos": [
+            "TODO: replace recovery contract-stack path bundle with a generated artifact assembled from direct describe sources.",
+            "TODO: bind stack entries to authenticated capability negotiation once recovery flows stop being scaffold-only."
+        ]
+    })));
+}
+
+#[handler]
 pub async fn device_messages_describe(_depot: &mut Depot, res: &mut Response) {
     res.render(Json(json!({
         "contract": "contrix.rest.device_messages_describe.v1",
@@ -434,6 +456,14 @@ pub async fn integration_describe(_depot: &mut Depot, res: &mut Response) {
                 todo: "TODO: unify bearer and session-grant registration paths behind one capability-checked flow.".to_owned(),
             },
             IntegrationSurfaceDescriptor {
+                name: "recovery_contract_stack".to_owned(),
+                method: "GET".to_owned(),
+                path: "/api/v1/recovery/contract-stack".to_owned(),
+                contract: "contrix.rest.recovery_contract_stack.v1".to_owned(),
+                stability: "scaffold".to_owned(),
+                todo: "TODO: replace inline recovery contract stack with generated artifacts assembled from direct describe endpoints.".to_owned(),
+            },
+            IntegrationSurfaceDescriptor {
                 name: "device_messages_describe".to_owned(),
                 method: "GET".to_owned(),
                 path: "/api/v1/device_messages/describe".to_owned(),
@@ -543,6 +573,17 @@ pub async fn integration_describe(_depot: &mut Depot, res: &mut Response) {
                     "service": "soland",
                     "path": "/api/v1/push/register-device",
                     "method": "POST"
+                }
+            },
+            "recovery_contract_stack": {
+                "path": "/api/v1/recovery/contract-stack",
+                "response_shape": {
+                    "contract": "contrix.rest.recovery_contract_stack.v1",
+                    "device_messages_describe_path": "/api/v1/device_messages/describe",
+                    "key_backups_describe_path": "/api/v1/keys/backups/describe",
+                    "restore_start_path": "/api/v1/keys/backups/{backup_id}/restore/start",
+                    "authz_describe_path": "/api/v1/authz/describe",
+                    "policies_describe_path": "/api/v1/policies/describe"
                 }
             },
             "device_messages": {

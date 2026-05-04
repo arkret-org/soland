@@ -181,6 +181,7 @@ pub fn router_with_rate_limiter_config(
                 .push(Router::with_path("repo/operations").post(get_operations))
                 .push(Router::with_path("repo/sync").post(repo_sync))
                 .push(Router::with_path("repo/submit-commit").post(submit_commit))
+                .push(Router::with_path("recovery/contract-stack").get(recovery_contract_stack))
                 .push(Router::with_path("authz/describe").get(authz_describe))
                 .push(Router::with_path("authz/check").post(authz_check))
                 .push(Router::with_path("authz/effective-grants").get(effective_grants))
