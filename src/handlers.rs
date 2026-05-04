@@ -39,6 +39,8 @@ use crate::{
         GetOperationsResponse, HealthResponse, IdentityDescribeResponse, IdentityLogResponse,
         IdentityReceiptsResponse, IdentityResolveRequest, IdentityResolveResponse,
         AuthBridgeDescribeResponse, AuthBridgeAuthDescriptor, AuthBridgePushDescriptor,
+        OutboundPushBridgeDescribeResponse, OutboundPushDeliveryDescriptor,
+        OutboundPushGatewayContractDescriptor,
         IndexDescribeResponse, IndexEntityResponse, IndexInboxResponse, IndexNotificationsResponse,
         IndexQueryRequest, IndexQueryResponse, IndexSearchRequest, IndexSearchResponse,
         IndexSpaceHierarchyResponse, IndexThreadResponse, InvitesResponse, KeysClaimRequest,
@@ -139,6 +141,42 @@ pub async fn auth_bridge_describe(_depot: &mut Depot, res: &mut Response) {
             "TODO: replace local session-grant exchange bridge with coauth-backed grant introspection, audience binding, and session-public-key proof verification".to_owned(),
             "TODO: replace push register grant bridge with the same coauth-backed proof/introspection path before production use".to_owned(),
             "TODO: publish formal examples for session-grant exchange and push registration in the principal-server OpenAPI surface".to_owned(),
+        ],
+    }));
+}
+
+#[handler]
+pub async fn outbound_push_bridge_describe(depot: &mut Depot, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    res.render(Json(OutboundPushBridgeDescribeResponse {
+        contract: "contrix.rest.outbound_push_bridge.v1".to_owned(),
+        version: "2026-05-04-scaffold".to_owned(),
+        api_base_path: "/api/v1/push".to_owned(),
+        gateway_contract: OutboundPushGatewayContractDescriptor {
+            bridge_describe_path: "/api/v1/push/bridge/describe".to_owned(),
+            notify_path: "/api/v1/push/notify".to_owned(),
+            accepted_contracts: vec![
+                "cx.push.bridge.describe".to_owned(),
+                "cx.profile.push_gateway.v1".to_owned(),
+            ],
+            fetch_mode: "static_scaffold_only".to_owned(),
+            cache_mode: "TODO(remote-fetch-cache)".to_owned(),
+        },
+        delivery: OutboundPushDeliveryDescriptor {
+            operation_id: "cx.push.notify".to_owned(),
+            origin_service_did_header: "X-Contrix-Origin-Service-Did".to_owned(),
+            destination_service_did_header: "X-Contrix-Destination-Service-Did".to_owned(),
+            request_id_header: "X-Contrix-Request-Id".to_owned(),
+            idempotency_key_header: "Idempotency-Key".to_owned(),
+            payload_mode: format!(
+                "blind_wakeup_from_principal_service_did={}",
+                state.config.service_did
+            ),
+        },
+        todos: vec![
+            "TODO(push-outbound): fetch remote gateway bridge metadata from configured push_gateway origins before first delivery".to_owned(),
+            "TODO(push-outbound): cache gateway contract snapshots and refuse contract drift without explicit refresh".to_owned(),
+            "TODO(push-outbound): bind outbound notify signing/auth policy to the discovered gateway contract instead of static assumptions".to_owned(),
         ],
     }));
 }

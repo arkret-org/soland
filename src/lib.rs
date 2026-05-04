@@ -201,6 +201,10 @@ pub fn router_with_rate_limiter_config(
                 .push(Router::with_path("push/register-device").post(push_register))
                 .push(Router::with_path("push/unregister-device").post(push_unregister))
                 .push(
+                    Router::with_path("push/outbound/bridge/describe")
+                        .get(outbound_push_bridge_describe),
+                )
+                .push(
                     Router::with_path("push/rules")
                         .get(push_rules)
                         .post(upsert_push_rule),

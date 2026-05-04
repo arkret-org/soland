@@ -44,6 +44,36 @@ pub struct AuthBridgePushDescriptor {
     pub register_device_mode: String,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct OutboundPushBridgeDescribeResponse {
+    pub contract: String,
+    pub version: String,
+    pub api_base_path: String,
+    pub gateway_contract: OutboundPushGatewayContractDescriptor,
+    pub delivery: OutboundPushDeliveryDescriptor,
+    #[serde(default)]
+    pub todos: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct OutboundPushGatewayContractDescriptor {
+    pub bridge_describe_path: String,
+    pub notify_path: String,
+    pub accepted_contracts: Vec<String>,
+    pub fetch_mode: String,
+    pub cache_mode: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct OutboundPushDeliveryDescriptor {
+    pub operation_id: String,
+    pub origin_service_did_header: String,
+    pub destination_service_did_header: String,
+    pub request_id_header: String,
+    pub idempotency_key_header: String,
+    pub payload_mode: String,
+}
+
 #[derive(Debug, Serialize)]
 pub struct SyncDescribeResponse {
     pub service_did: String,
