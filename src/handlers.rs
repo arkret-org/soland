@@ -297,6 +297,7 @@ pub async fn recovery_contract_stack(_depot: &mut Depot, res: &mut Response) {
         "restore_state_import_path": "/api/v1/keys/backups/restore-state/import",
         "restore_describe_path": "/api/v1/keys/backups/{backup_id}/restore/describe",
         "restore_start_path": "/api/v1/keys/backups/{backup_id}/restore/start",
+        "restore_ticket_collection_path": "/api/v1/keys/backups/restore-tickets",
         "restore_ticket_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}",
         "restore_ticket_advance_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/advance",
         "restore_approval_status_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/approvals/status",
@@ -305,6 +306,7 @@ pub async fn recovery_contract_stack(_depot: &mut Depot, res: &mut Response) {
         "restore_executor_enqueue_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/enqueue",
         "restore_executor_start_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/start",
         "restore_executor_complete_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/complete",
+        "restore_ticket_collection_path": "/api/v1/keys/backups/restore-tickets",
         "restore_result_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/result",
         "restore_receipt_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/receipt",
         "restore_materialized_device_handoff_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/materialized-device-handoff",
@@ -372,6 +374,7 @@ pub async fn key_backups_describe(_depot: &mut Depot, res: &mut Response) {
         "restore_state_store_mode": "process_memory_manual_snapshot_scaffold",
         "restore_describe_path": "/api/v1/keys/backups/{backup_id}/restore/describe",
         "restore_start_path": "/api/v1/keys/backups/{backup_id}/restore/start",
+        "restore_ticket_collection_path": "/api/v1/keys/backups/restore-tickets",
         "restore_ticket_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}",
         "restore_ticket_advance_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/advance",
         "restore_approval_status_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/approvals/status",
@@ -590,6 +593,14 @@ pub async fn integration_describe(_depot: &mut Depot, res: &mut Response) {
                 contract: "contrix.rest.key_backup_restore_start.v1".to_owned(),
                 stability: "scaffold".to_owned(),
                 todo: "TODO: replace restore-start scaffold with durable restore tickets, approval transitions, and encrypted blob handoff.".to_owned(),
+            },
+            IntegrationSurfaceDescriptor {
+                name: "key_backup_restore_ticket_collection".to_owned(),
+                method: "GET".to_owned(),
+                path: "/api/v1/keys/backups/restore-tickets".to_owned(),
+                contract: "contrix.rest.key_backup_restore_ticket_collection.v1".to_owned(),
+                stability: "scaffold".to_owned(),
+                todo: "TODO: replace restore ticket collection scaffold with durable per-actor recovery indexing and pagination.".to_owned(),
             },
             IntegrationSurfaceDescriptor {
                 name: "key_backup_restore_ticket".to_owned(),
@@ -852,6 +863,11 @@ pub async fn integration_describe(_depot: &mut Depot, res: &mut Response) {
                     "contract": "contrix.rest.key_backup_restore_start.v1",
                     "restore_ticket_id": "restore-ticket-backup-alice-01",
                     "state": "scaffold_started"
+                },
+                "restore_ticket_collection_path": "/api/v1/keys/backups/restore-tickets",
+                "restore_ticket_collection_response_shape": {
+                    "contract": "contrix.rest.key_backup_restore_ticket_collection.v1",
+                    "total_count": 1
                 },
                 "restore_ticket_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}",
                 "restore_ticket_advance_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/advance",
@@ -10161,6 +10177,7 @@ pub async fn post_key_backup_restore_start(
         "restore_executor_enqueue_path": format!("/api/v1/keys/backups/restore-tickets/restore-ticket-{backup_id}/executor/enqueue"),
         "restore_executor_start_path": format!("/api/v1/keys/backups/restore-tickets/restore-ticket-{backup_id}/executor/start"),
         "restore_executor_complete_path": format!("/api/v1/keys/backups/restore-tickets/restore-ticket-{backup_id}/executor/complete"),
+        "restore_ticket_collection_path": "/api/v1/keys/backups/restore-tickets",
         "restore_result_path": format!("/api/v1/keys/backups/restore-tickets/restore-ticket-{backup_id}/result"),
         "restore_receipt_path": format!("/api/v1/keys/backups/restore-tickets/restore-ticket-{backup_id}/receipt"),
         "restore_materialized_device_handoff_path": format!("/api/v1/keys/backups/restore-tickets/restore-ticket-{backup_id}/materialized-device-handoff"),
@@ -10371,6 +10388,49 @@ pub async fn post_key_backup_restore_state_import(
         "restore_state_describe_path": "/api/v1/keys/backups/restore-state/describe",
         "restore_state_export_path": "/api/v1/keys/backups/restore-state/export",
         "todo": "TODO(keys.backups.restore): replace restore-state import scaffold with durable snapshot persistence and trust policy."
+    })));
+}
+
+#[handler]
+pub async fn list_key_backup_restore_tickets(
+    depot: &mut Depot,
+    _req: &mut Request,
+    res: &mut Response,
+) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let Some(session) = auth_or_render(state, _req, res) else {
+        return;
+    };
+    let tickets = state
+        .key_backup_restore_tickets
+        .lock()
+        .expect("key backup restore ticket lock");
+    let items = tickets
+        .iter()
+        .filter_map(|(ticket_id, ticket)| {
+            ticket
+                .get("actor")
+                .and_then(Value::as_str)
+                .is_some_and(|actor| actor == session.actor)
+                .then(|| {
+                    json!({
+                        "ticket_id": ticket_id,
+                        "lifecycle_state": ticket.get("lifecycle_state").cloned().unwrap_or_else(|| json!("unknown")),
+                        "backup_id": ticket.get("backup_id").cloned().unwrap_or_else(|| json!("unknown")),
+                        "bundle_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/bundle"),
+                        "status_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}"),
+                        "approval_status_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/approvals/status"),
+                        "executor_status_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/status"),
+                    })
+                })
+        })
+        .collect::<Vec<_>>();
+    res.render(Json(json!({
+        "contract": "contrix.rest.key_backup_restore_ticket_collection.v1",
+        "version": "2026-05-04-scaffold",
+        "total_count": items.len(),
+        "items": items,
+        "todo": "TODO(keys.backups.restore): replace collection scaffold with durable per-actor listing, pagination, and admin visibility policy."
     })));
 }
 
