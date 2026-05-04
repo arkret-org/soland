@@ -95,6 +95,40 @@ pub struct OutboundPushBridgeExamples {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+pub struct IntegrationDescribeResponse {
+    pub contract: String,
+    pub version: String,
+    pub service: String,
+    pub service_kind: String,
+    pub api_base_path: String,
+    pub describe_path: String,
+    pub dependencies: Vec<IntegrationDependencyDescriptor>,
+    pub surfaces: Vec<IntegrationSurfaceDescriptor>,
+    pub examples: Value,
+    #[serde(default)]
+    pub todos: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct IntegrationDependencyDescriptor {
+    pub service: String,
+    pub purpose: String,
+    pub required_contract: String,
+    pub discovery_path: String,
+    pub mode: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct IntegrationSurfaceDescriptor {
+    pub name: String,
+    pub method: String,
+    pub path: String,
+    pub contract: String,
+    pub stability: String,
+    pub todo: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct OutboundPushBridgeResolveRequest {
     pub push_gateway_url: String,
     #[serde(default)]

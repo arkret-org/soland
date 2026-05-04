@@ -172,6 +172,105 @@ pub async fn auth_bridge_describe(_depot: &mut Depot, res: &mut Response) {
 }
 
 #[handler]
+pub async fn integration_describe(_depot: &mut Depot, res: &mut Response) {
+    res.render(Json(IntegrationDescribeResponse {
+        contract: "contrix.rest.integration_manifest.v1".to_owned(),
+        version: "2026-05-04-scaffold".to_owned(),
+        service: "soland".to_owned(),
+        service_kind: "principal_server".to_owned(),
+        api_base_path: "/api/v1".to_owned(),
+        describe_path: "/api/v1/integration/describe".to_owned(),
+        dependencies: vec![
+            IntegrationDependencyDescriptor {
+                service: "coauth".to_owned(),
+                purpose: "session_grant_bridge".to_owned(),
+                required_contract: "contrix.rest.auth_bridge.v1".to_owned(),
+                discovery_path: "/api/v1/auth/bridge/describe".to_owned(),
+                mode: "remote_service_contract".to_owned(),
+            },
+            IntegrationDependencyDescriptor {
+                service: "floria".to_owned(),
+                purpose: "push_gateway_delivery".to_owned(),
+                required_contract: "cx.push.bridge.describe".to_owned(),
+                discovery_path: "/api/v1/push/bridge/describe".to_owned(),
+                mode: "remote_gateway_contract".to_owned(),
+            },
+        ],
+        surfaces: vec![
+            IntegrationSurfaceDescriptor {
+                name: "auth_bridge".to_owned(),
+                method: "GET".to_owned(),
+                path: "/api/v1/auth/bridge/describe".to_owned(),
+                contract: "contrix.rest.principal_bridge.v1".to_owned(),
+                stability: "scaffold".to_owned(),
+                todo: "TODO: replace local session-grant bridge validation with coauth-backed proof and audience checks.".to_owned(),
+            },
+            IntegrationSurfaceDescriptor {
+                name: "session_grant_exchange".to_owned(),
+                method: "POST".to_owned(),
+                path: "/api/v1/auth/session-grant/exchange".to_owned(),
+                contract: "contrix.rest.principal_session_grant_exchange.v1".to_owned(),
+                stability: "scaffold".to_owned(),
+                todo: "TODO: bind exchanged sessions to proof-bearing grants and durable actor/device policy checks.".to_owned(),
+            },
+            IntegrationSurfaceDescriptor {
+                name: "outbound_push_bridge".to_owned(),
+                method: "GET".to_owned(),
+                path: "/api/v1/push/outbound/bridge/describe".to_owned(),
+                contract: "contrix.rest.outbound_push_bridge.v1".to_owned(),
+                stability: "scaffold".to_owned(),
+                todo: "TODO: persist fetched gateway snapshots and replace in-memory drift cache with durable state.".to_owned(),
+            },
+            IntegrationSurfaceDescriptor {
+                name: "push_register_device".to_owned(),
+                method: "POST".to_owned(),
+                path: "/api/v1/push/register-device".to_owned(),
+                contract: "contrix.rest.principal_push_register.v1".to_owned(),
+                stability: "scaffold".to_owned(),
+                todo: "TODO: unify bearer and session-grant registration paths behind one capability-checked flow.".to_owned(),
+            },
+            IntegrationSurfaceDescriptor {
+                name: "sync".to_owned(),
+                method: "POST".to_owned(),
+                path: "/api/v1/sync".to_owned(),
+                contract: "contrix.rest.sync.v1".to_owned(),
+                stability: "scaffold".to_owned(),
+                todo: "TODO: finish state_after gap-repair, wait-for, and privacy-boundary alignment against the frozen flow-first artifacts.".to_owned(),
+            },
+        ],
+        examples: json!({
+            "compose_flow": {
+                "step_1": {
+                    "service": "coauth",
+                    "path": "/api/v1/auth/oidc/exchange",
+                    "method": "POST"
+                },
+                "step_2": {
+                    "service": "soland",
+                    "path": "/api/v1/auth/session-grant/exchange",
+                    "method": "POST"
+                },
+                "step_3": {
+                    "service": "soland",
+                    "path": "/api/v1/push/outbound/bridge/fetch",
+                    "method": "POST"
+                },
+                "step_4": {
+                    "service": "soland",
+                    "path": "/api/v1/push/register-device",
+                    "method": "POST"
+                }
+            }
+        }),
+        todos: vec![
+            "TODO: swap local session-grant and push bridge scaffolds for production proof/introspection paths.".to_owned(),
+            "TODO: persist outbound push gateway snapshots and use them in notification fan-out.".to_owned(),
+            "TODO: publish the same integration manifest fields in the OpenAPI surface.".to_owned(),
+        ],
+    }));
+}
+
+#[handler]
 pub async fn outbound_push_bridge_describe(depot: &mut Depot, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     res.render(Json(OutboundPushBridgeDescribeResponse {

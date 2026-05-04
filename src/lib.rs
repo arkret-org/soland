@@ -68,6 +68,7 @@ pub fn router_with_rate_limiter_config(
                 .oapi_tag("api")
                 .hoop(wait_for_sync_token)
                 .push(Router::with_path("server/describe").get(server_describe))
+                .push(Router::with_path("integration/describe").get(integration_describe))
                 .push(Router::with_path("auth/bridge/describe").get(auth_bridge_describe))
                 .push(Router::with_path("account/register").post(account_register))
                 .push(Router::with_path("account/me").get(account_me))
