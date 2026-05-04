@@ -296,6 +296,8 @@ pub async fn recovery_contract_stack(_depot: &mut Depot, res: &mut Response) {
         "restore_start_path": "/api/v1/keys/backups/{backup_id}/restore/start",
         "restore_ticket_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}",
         "restore_ticket_advance_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/advance",
+        "restore_approval_status_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/approvals/status",
+        "restore_approval_submit_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/approvals/submit",
         "restore_executor_status_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/status",
         "restore_executor_enqueue_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/enqueue",
         "authz_describe_path": "/api/v1/authz/describe",
@@ -359,6 +361,8 @@ pub async fn key_backups_describe(_depot: &mut Depot, res: &mut Response) {
         "restore_start_path": "/api/v1/keys/backups/{backup_id}/restore/start",
         "restore_ticket_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}",
         "restore_ticket_advance_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/advance",
+        "restore_approval_status_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/approvals/status",
+        "restore_approval_submit_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/approvals/submit",
         "restore_executor_status_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/status",
         "restore_executor_enqueue_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/enqueue",
         "schema": "cx.schema.key_backup.v1",
@@ -532,6 +536,22 @@ pub async fn integration_describe(_depot: &mut Depot, res: &mut Response) {
                 todo: "TODO: replace advance scaffold with guarded transitions, authz/policy evaluation, and executor side effects.".to_owned(),
             },
             IntegrationSurfaceDescriptor {
+                name: "key_backup_restore_approval_status".to_owned(),
+                method: "GET".to_owned(),
+                path: "/api/v1/keys/backups/restore-tickets/{ticket_id}/approvals/status".to_owned(),
+                contract: "contrix.rest.key_backup_restore_approval_status.v1".to_owned(),
+                stability: "scaffold".to_owned(),
+                todo: "TODO: replace approval status scaffold with durable reviewer state bound to real approval actors and audit trails.".to_owned(),
+            },
+            IntegrationSurfaceDescriptor {
+                name: "key_backup_restore_approval_submit".to_owned(),
+                method: "POST".to_owned(),
+                path: "/api/v1/keys/backups/restore-tickets/{ticket_id}/approvals/submit".to_owned(),
+                contract: "contrix.rest.key_backup_restore_approval_submit.v1".to_owned(),
+                stability: "scaffold".to_owned(),
+                todo: "TODO: replace approval submit scaffold with reviewer authorization, quorum checks, and durable approval records.".to_owned(),
+            },
+            IntegrationSurfaceDescriptor {
                 name: "key_backup_restore_executor_status".to_owned(),
                 method: "GET".to_owned(),
                 path: "/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/status".to_owned(),
@@ -702,6 +722,8 @@ pub async fn integration_describe(_depot: &mut Depot, res: &mut Response) {
                 },
                 "restore_ticket_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}",
                 "restore_ticket_advance_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/advance",
+                "restore_approval_status_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/approvals/status",
+                "restore_approval_submit_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/approvals/submit",
                 "restore_executor_status_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/status",
                 "restore_executor_enqueue_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/enqueue",
                 "restore_ticket_response_shape": {
@@ -713,6 +735,17 @@ pub async fn integration_describe(_depot: &mut Depot, res: &mut Response) {
                 "restore_ticket_advance_request": {
                     "transition": "authz_checked",
                     "note": "scaffold transition"
+                },
+                "restore_approval_status_response_shape": {
+                    "contract": "contrix.rest.key_backup_restore_approval_status.v1",
+                    "state": "pending_review",
+                    "required_approvals": 2,
+                    "granted_approvals": []
+                },
+                "restore_approval_submit_request": {
+                    "approver": "did:web:guardian.example",
+                    "decision": "approve",
+                    "note": "approval scaffold"
                 },
                 "restore_executor_status_response_shape": {
                     "contract": "contrix.rest.key_backup_restore_executor_status.v1",
@@ -9703,6 +9736,7 @@ pub async fn get_key_backup_restore_describe(
         "restore_mode": "scaffold",
         "restore_ticket_kind": "key_backup_restore_request",
         "restore_executor_kind": "key_backup_restore_materialize",
+        "restore_approval_kind": "key_backup_restore_approval_workflow",
         "principal_authz_check_path": "/api/v1/authz/check",
         "principal_policy_collection_path": "/api/v1/policies",
         "principal_policy_item_path": "/api/v1/policies/{policy_id}",
@@ -9812,6 +9846,18 @@ pub async fn post_key_backup_restore_start(
     };
     let ticket_id = format!("restore-ticket-{backup_id}");
     let executor_job_id = format!("restore-executor-{backup_id}");
+    let approval = json!({
+        "contract": "contrix.rest.key_backup_restore_approval_status.v1",
+        "version": "2026-05-04-scaffold",
+        "ticket_id": format!("restore-ticket-{backup_id}"),
+        "backup_id": backup_id,
+        "actor": session.actor,
+        "approval_mode": "two_man_rule",
+        "state": "pending_review",
+        "required_approvals": 2,
+        "granted_approvals": [],
+        "todo": "replace approval scaffold with durable quorum-aware reviewer state"
+    });
     let ticket = json!({
         "contract": "contrix.rest.key_backup_restore_ticket.v1",
         "version": "2026-05-04-scaffold",
@@ -9820,6 +9866,8 @@ pub async fn post_key_backup_restore_start(
         "actor": session.actor,
         "restore_mode": "scaffold",
         "lifecycle_state": "authz_pending",
+        "approval_status_path": format!("/api/v1/keys/backups/restore-tickets/restore-ticket-{backup_id}/approvals/status"),
+        "approval_submit_path": format!("/api/v1/keys/backups/restore-tickets/restore-ticket-{backup_id}/approvals/submit"),
         "executor_job_id": executor_job_id,
         "executor_status_path": format!("/api/v1/keys/backups/restore-tickets/restore-ticket-{backup_id}/executor/status"),
         "executor_enqueue_path": format!("/api/v1/keys/backups/restore-tickets/restore-ticket-{backup_id}/executor/enqueue"),
@@ -9861,6 +9909,11 @@ pub async fn post_key_backup_restore_start(
         .expect("key backup restore ticket lock")
         .insert(ticket_id.clone(), ticket);
     state
+        .key_backup_restore_approval_runs
+        .lock()
+        .expect("key backup restore approval lock")
+        .insert(format!("restore-ticket-{backup_id}"), approval);
+    state
         .key_backup_restore_executor_runs
         .lock()
         .expect("key backup restore executor lock")
@@ -9875,6 +9928,8 @@ pub async fn post_key_backup_restore_start(
         "restore_request": payload,
         "restore_ticket_path": format!("/api/v1/keys/backups/restore-tickets/restore-ticket-{backup_id}"),
         "restore_ticket_advance_path": format!("/api/v1/keys/backups/restore-tickets/restore-ticket-{backup_id}/advance"),
+        "restore_approval_status_path": format!("/api/v1/keys/backups/restore-tickets/restore-ticket-{backup_id}/approvals/status"),
+        "restore_approval_submit_path": format!("/api/v1/keys/backups/restore-tickets/restore-ticket-{backup_id}/approvals/submit"),
         "restore_executor_status_path": format!("/api/v1/keys/backups/restore-tickets/restore-ticket-{backup_id}/executor/status"),
         "restore_executor_enqueue_path": format!("/api/v1/keys/backups/restore-tickets/restore-ticket-{backup_id}/executor/enqueue"),
         "principal_authz_check_path": "/api/v1/authz/check",
@@ -10035,9 +10090,151 @@ pub async fn post_key_backup_restore_ticket_advance(
         "transition": transition,
         "state": lifecycle_state,
         "allowed_next_transitions": allowed_next_transitions,
+        "approval_status_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/approvals/status"),
+        "approval_submit_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/approvals/submit"),
         "executor_status_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/status"),
         "executor_enqueue_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/enqueue"),
         "todo": "TODO(keys.backups.restore): replace transition scaffold with guarded state machine + executor side effects"
+    })));
+}
+
+#[handler]
+pub async fn get_key_backup_restore_approval_status(
+    depot: &mut Depot,
+    req: &mut Request,
+    res: &mut Response,
+) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let Some(session) = auth_or_render(state, req, res) else {
+        return;
+    };
+    let ticket_id = req.param::<String>("ticket_id").unwrap_or_default();
+    let Some(approval) = state
+        .key_backup_restore_approval_runs
+        .lock()
+        .expect("key backup restore approval lock")
+        .get(&ticket_id)
+        .cloned()
+    else {
+        render_error(res, StatusCode::NOT_FOUND, "not_found", "restore approval not found");
+        return;
+    };
+    if approval
+        .get("actor")
+        .and_then(Value::as_str)
+        .is_some_and(|actor| actor != session.actor)
+    {
+        render_error(res, StatusCode::NOT_FOUND, "not_found", "restore approval not found");
+        return;
+    }
+    res.render(Json(approval));
+}
+
+#[handler]
+pub async fn post_key_backup_restore_approval_submit(
+    depot: &mut Depot,
+    req: &mut Request,
+    res: &mut Response,
+) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let Some(session) = auth_or_render(state, req, res) else {
+        return;
+    };
+    let ticket_id = req.param::<String>("ticket_id").unwrap_or_default();
+    let body = match req.parse_json::<Value>().await {
+        Ok(body) => body,
+        Err(_) => {
+            render_error(
+                res,
+                StatusCode::BAD_REQUEST,
+                "bad_json",
+                "invalid restore approval submit request",
+            );
+            return;
+        }
+    };
+    let decision = body
+        .get("decision")
+        .and_then(Value::as_str)
+        .unwrap_or("approve");
+    let approver = body
+        .get("approver")
+        .and_then(Value::as_str)
+        .unwrap_or(session.actor.as_str());
+    let mut approvals = state
+        .key_backup_restore_approval_runs
+        .lock()
+        .expect("key backup restore approval lock");
+    let Some(approval) = approvals.get_mut(&ticket_id) else {
+        render_error(res, StatusCode::NOT_FOUND, "not_found", "restore approval not found");
+        return;
+    };
+    if approval
+        .get("actor")
+        .and_then(Value::as_str)
+        .is_some_and(|actor| actor != session.actor)
+    {
+        render_error(res, StatusCode::NOT_FOUND, "not_found", "restore approval not found");
+        return;
+    }
+    let mut new_state = "under_review";
+    let mut granted_count = 0usize;
+    if let Some(object) = approval.as_object_mut() {
+        object
+            .entry("granted_approvals".to_owned())
+            .or_insert_with(|| json!([]));
+        if let Some(granted) = object
+            .get_mut("granted_approvals")
+            .and_then(Value::as_array_mut)
+        {
+            granted.push(json!({
+                "approver": approver,
+                "decision": decision,
+                "note": body.get("note").cloned().unwrap_or_else(|| json!("approval scaffold")),
+                "at": now()
+            }));
+            granted_count = granted.len();
+            if granted.iter().any(|entry| entry.get("decision").and_then(Value::as_str) == Some("reject")) {
+                new_state = "rejected";
+            } else if granted_count >= 2 {
+                new_state = "approved";
+            }
+        }
+        object.insert("state".to_owned(), json!(new_state));
+    }
+    if new_state == "approved" {
+        if let Some(ticket) = state
+            .key_backup_restore_tickets
+            .lock()
+            .expect("key backup restore ticket lock")
+            .get_mut(&ticket_id)
+        {
+            if let Some(object) = ticket.as_object_mut() {
+                object.insert("lifecycle_state".to_owned(), json!("approved"));
+                object.insert("allowed_next_transitions".to_owned(), json!(["materialized"]));
+            }
+        }
+        if let Some(executor) = state
+            .key_backup_restore_executor_runs
+            .lock()
+            .expect("key backup restore executor lock")
+            .get_mut(&ticket_id)
+        {
+            if let Some(object) = executor.as_object_mut() {
+                object.insert("queue_state".to_owned(), json!("ready_for_enqueue"));
+                object.insert("state".to_owned(), json!("approved_waiting_executor"));
+            }
+        }
+    }
+    res.render(Json(json!({
+        "contract": "contrix.rest.key_backup_restore_approval_submit.v1",
+        "ticket_id": ticket_id,
+        "decision": decision,
+        "state": new_state,
+        "granted_approval_count": granted_count,
+        "required_approvals": 2,
+        "executor_enqueue_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/enqueue"),
+        "todo": "TODO(keys.backups.restore): replace approval submit scaffold with reviewer authorization, quorum checks, and durable audit records"
     })));
 }
 
