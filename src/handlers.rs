@@ -314,6 +314,8 @@ pub async fn recovery_contract_stack(_depot: &mut Depot, res: &mut Response) {
         "restore_receipt_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/receipt",
         "restore_materialized_device_handoff_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/materialized-device-handoff",
         "restore_bundle_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/bundle",
+        "restore_activity_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/activity",
+        "recovery_live_snapshot_path": "/api/v1/recovery/live-snapshot",
         "authz_describe_path": "/api/v1/authz/describe",
         "authz_check_path": "/api/v1/authz/check",
         "policies_describe_path": "/api/v1/policies/describe",
@@ -393,6 +395,8 @@ pub async fn key_backups_describe(_depot: &mut Depot, res: &mut Response) {
         "restore_receipt_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/receipt",
         "restore_materialized_device_handoff_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/materialized-device-handoff",
         "restore_bundle_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/bundle",
+        "restore_activity_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/activity",
+        "recovery_live_snapshot_path": "/api/v1/recovery/live-snapshot",
         "schema": "cx.schema.key_backup.v1",
         "put_request_example": {
             "schema": "cx.schema.key_backup.v1",
@@ -559,6 +563,22 @@ pub async fn integration_describe(_depot: &mut Depot, res: &mut Response) {
                 contract: "contrix.rest.key_backups.v1".to_owned(),
                 stability: "scaffold".to_owned(),
                 todo: "TODO: replace in-memory key backup storage with durable encrypted persistence and explicit recovery policy.".to_owned(),
+            },
+            IntegrationSurfaceDescriptor {
+                name: "key_backup_restore_activity".to_owned(),
+                method: "GET".to_owned(),
+                path: "/api/v1/keys/backups/restore-tickets/{ticket_id}/activity".to_owned(),
+                contract: "contrix.rest.key_backup_restore_activity.v1".to_owned(),
+                stability: "scaffold".to_owned(),
+                todo: "TODO: replace restore activity aggregate with durable recovery event-log, audit-feed, and operator annotations.".to_owned(),
+            },
+            IntegrationSurfaceDescriptor {
+                name: "recovery_live_snapshot".to_owned(),
+                method: "GET".to_owned(),
+                path: "/api/v1/recovery/live-snapshot".to_owned(),
+                contract: "contrix.rest.recovery_live_snapshot.v1".to_owned(),
+                stability: "scaffold".to_owned(),
+                todo: "TODO: replace live recovery snapshot scaffold with actor-scoped dashboards, pagination, and privacy boundaries.".to_owned(),
             },
             IntegrationSurfaceDescriptor {
                 name: "key_backup_restore_state_describe".to_owned(),
@@ -790,12 +810,22 @@ pub async fn integration_describe(_depot: &mut Depot, res: &mut Response) {
                     "restore_executor_enqueue_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/enqueue",
                     "restore_executor_start_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/start",
                     "restore_executor_complete_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/complete",
-        "restore_result_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/result",
-        "restore_receipt_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/receipt",
-        "restore_materialized_device_handoff_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/materialized-device-handoff",
-        "restore_bundle_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/bundle",
-        "authz_describe_path": "/api/v1/authz/describe",
+                    "restore_result_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/result",
+                    "restore_receipt_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/receipt",
+                    "restore_materialized_device_handoff_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/materialized-device-handoff",
+                    "restore_bundle_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/bundle",
+                    "restore_activity_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/activity",
+                    "recovery_live_snapshot_path": "/api/v1/recovery/live-snapshot",
+                    "authz_describe_path": "/api/v1/authz/describe",
                     "policies_describe_path": "/api/v1/policies/describe"
+                }
+            },
+            "recovery_live_snapshot": {
+                "path": "/api/v1/recovery/live-snapshot",
+                "response_shape": {
+                    "contract": "contrix.rest.recovery_live_snapshot.v1",
+                    "ticket_collection_path": "/api/v1/keys/backups/restore-tickets",
+                    "activity_path_template": "/api/v1/keys/backups/restore-tickets/{ticket_id}/activity"
                 }
             },
             "device_messages": {
@@ -914,6 +944,8 @@ pub async fn integration_describe(_depot: &mut Depot, res: &mut Response) {
                 "restore_receipt_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/receipt",
                 "restore_materialized_device_handoff_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/materialized-device-handoff",
                 "restore_bundle_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/bundle",
+                "restore_activity_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/activity",
+                "recovery_live_snapshot_path": "/api/v1/recovery/live-snapshot",
                 "restore_ticket_response_shape": {
                     "contract": "contrix.rest.key_backup_restore_ticket.v1",
                     "ticket_id": "restore-ticket-backup-alice-01",
@@ -996,6 +1028,16 @@ pub async fn integration_describe(_depot: &mut Depot, res: &mut Response) {
                         "receipt": {"contract": "contrix.rest.key_backup_restore_receipt.v1"},
                         "handoff": {"contract": "contrix.rest.key_backup_restore_materialized_device_handoff.v1"}
                     }
+                },
+                "restore_activity_response_shape": {
+                    "contract": "contrix.rest.key_backup_restore_activity.v1",
+                    "ticket_id": "restore-ticket-backup-alice-01",
+                    "ticket_state": "completed"
+                },
+                "recovery_live_snapshot_response_shape": {
+                    "contract": "contrix.rest.recovery_live_snapshot.v1",
+                    "total_ticket_count": 1,
+                    "active_ticket_count": 1
                 },
                 "restore_state_describe_response_shape": {
                     "contract": "contrix.rest.key_backup_restore_state_store_describe.v1",
@@ -10463,6 +10505,7 @@ pub async fn list_key_backup_restore_tickets(
                         "lifecycle_state": ticket.get("lifecycle_state").cloned().unwrap_or_else(|| json!("unknown")),
                         "backup_id": ticket.get("backup_id").cloned().unwrap_or_else(|| json!("unknown")),
                         "bundle_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/bundle"),
+                        "activity_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/activity"),
                         "status_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}"),
                         "approval_status_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/approvals/status"),
                         "executor_status_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/status"),
@@ -10525,6 +10568,10 @@ pub async fn get_key_backup_restore_ticket(
         object.insert(
             "bundle_path".to_owned(),
             json!(format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/bundle")),
+        );
+        object.insert(
+            "activity_path".to_owned(),
+            json!(format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/activity")),
         );
     }
     res.render(Json(ticket));
@@ -10722,6 +10769,7 @@ pub async fn post_key_backup_restore_ticket_retry(
         "state": "retry_queued",
         "executor_enqueue_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/enqueue"),
         "bundle_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/bundle"),
+        "activity_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/activity"),
         "todo": "TODO(keys.backups.restore): replace retry scaffold with bounded retry policy, failure classes, and checkpoint selection."
     })));
 }
@@ -11578,6 +11626,7 @@ pub async fn get_key_backup_restore_bundle(
         "result_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/result"),
         "receipt_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/receipt"),
         "materialized_device_handoff_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/materialized-device-handoff"),
+        "activity_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/activity"),
         "sections": {
             "ticket": ticket,
             "approval": approval,
@@ -11587,6 +11636,156 @@ pub async fn get_key_backup_restore_bundle(
             "handoff": handoff,
         },
         "todo": "TODO(keys.backups.restore): replace restore bundle scaffold with durable aggregated recovery view and resumable orchestration state."
+    })));
+}
+
+#[handler]
+pub async fn get_key_backup_restore_activity(
+    depot: &mut Depot,
+    req: &mut Request,
+    res: &mut Response,
+) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let Some(session) = auth_or_render(state, req, res) else {
+        return;
+    };
+    let ticket_id = req.param::<String>("ticket_id").unwrap_or_default();
+    let Some(ticket) = state
+        .key_backup_restore_tickets
+        .lock()
+        .expect("key backup restore ticket lock")
+        .get(&ticket_id)
+        .cloned()
+    else {
+        render_error(res, StatusCode::NOT_FOUND, "not_found", "restore ticket not found");
+        return;
+    };
+    if ticket
+        .get("actor")
+        .and_then(Value::as_str)
+        .is_some_and(|actor| actor != session.actor)
+    {
+        render_error(res, StatusCode::NOT_FOUND, "not_found", "restore ticket not found");
+        return;
+    }
+    let approval = state
+        .key_backup_restore_approval_runs
+        .lock()
+        .expect("key backup restore approval lock")
+        .get(&ticket_id)
+        .cloned()
+        .unwrap_or_else(|| json!({
+            "contract": "contrix.rest.key_backup_restore_approval_status.v1",
+            "state": "missing",
+            "history": []
+        }));
+    let executor = state
+        .key_backup_restore_executor_runs
+        .lock()
+        .expect("key backup restore executor lock")
+        .get(&ticket_id)
+        .cloned()
+        .unwrap_or_else(|| json!({
+            "contract": "contrix.rest.key_backup_restore_executor_status.v1",
+            "state": "missing",
+            "queue_state": "not_queued",
+            "run_history": []
+        }));
+    res.render(Json(json!({
+        "contract": "contrix.rest.key_backup_restore_activity.v1",
+        "version": "2026-05-04-scaffold",
+        "ticket_id": ticket_id,
+        "backup_id": ticket.get("backup_id").cloned().unwrap_or_else(|| json!(null)),
+        "ticket_state": ticket.get("lifecycle_state").cloned().unwrap_or_else(|| json!("unknown")),
+        "transition_history": ticket.get("transition_history").cloned().unwrap_or_else(|| json!([])),
+        "approval_state": approval.get("state").cloned().unwrap_or_else(|| json!("missing")),
+        "approval_history": approval.get("history").cloned().unwrap_or_else(|| json!([])),
+        "executor_state": executor.get("state").cloned().unwrap_or_else(|| json!("missing")),
+        "executor_queue_state": executor.get("queue_state").cloned().unwrap_or_else(|| json!("not_queued")),
+        "executor_run_history": executor.get("run_history").cloned().unwrap_or_else(|| json!([])),
+        "result_summary": executor.get("result_summary").cloned().unwrap_or_else(|| json!(null)),
+        "handoff_state": executor.get("handoff_state").cloned().unwrap_or_else(|| json!("not_submitted")),
+        "materialized_device_handoff": executor.get("materialized_device_handoff").cloned().unwrap_or(Value::Null),
+        "bundle_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/bundle"),
+        "status_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}"),
+        "recovery_live_snapshot_path": "/api/v1/recovery/live-snapshot",
+        "todo": "TODO(keys.backups.restore): replace activity scaffold with durable recovery timeline, audit evidence, and operator annotations."
+    })));
+}
+
+#[handler]
+pub async fn get_recovery_live_snapshot(
+    depot: &mut Depot,
+    req: &mut Request,
+    res: &mut Response,
+) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let Some(session) = auth_or_render(state, req, res) else {
+        return;
+    };
+    let tickets = state
+        .key_backup_restore_tickets
+        .lock()
+        .expect("key backup restore ticket lock");
+    let approvals = state
+        .key_backup_restore_approval_runs
+        .lock()
+        .expect("key backup restore approval lock");
+    let executors = state
+        .key_backup_restore_executor_runs
+        .lock()
+        .expect("key backup restore executor lock");
+    let items = tickets
+        .iter()
+        .filter_map(|(ticket_id, ticket)| {
+            ticket
+                .get("actor")
+                .and_then(Value::as_str)
+                .is_some_and(|actor| actor == session.actor)
+                .then(|| {
+                    json!({
+                        "ticket_id": ticket_id,
+                        "backup_id": ticket.get("backup_id").cloned().unwrap_or_else(|| json!("unknown")),
+                        "lifecycle_state": ticket.get("lifecycle_state").cloned().unwrap_or_else(|| json!("unknown")),
+                        "activity_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/activity"),
+                        "bundle_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/bundle"),
+                        "status_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}")
+                    })
+                })
+        })
+        .collect::<Vec<_>>();
+    let approval_pending_count = approvals
+        .values()
+        .filter(|approval| {
+            approval
+                .get("actor")
+                .and_then(Value::as_str)
+                .is_some_and(|actor| actor == session.actor)
+                && approval.get("state").and_then(Value::as_str) == Some("pending")
+        })
+        .count();
+    let executor_running_count = executors
+        .values()
+        .filter(|executor| {
+            executor
+                .get("actor")
+                .and_then(Value::as_str)
+                .is_some_and(|actor| actor == session.actor)
+                && executor.get("state").and_then(Value::as_str) == Some("running")
+        })
+        .count();
+    res.render(Json(json!({
+        "contract": "contrix.rest.recovery_live_snapshot.v1",
+        "version": "2026-05-04-scaffold",
+        "total_ticket_count": items.len(),
+        "active_ticket_count": items.iter().filter(|item| item.get("lifecycle_state").and_then(Value::as_str) != Some("cancelled")).count(),
+        "approval_pending_count": approval_pending_count,
+        "executor_running_count": executor_running_count,
+        "ticket_collection_path": "/api/v1/keys/backups/restore-tickets",
+        "activity_path_template": "/api/v1/keys/backups/restore-tickets/{ticket_id}/activity",
+        "contract_stack_path": "/api/v1/recovery/contract-stack",
+        "items": items,
+        "todo": "TODO(recovery.live-snapshot): replace process-memory aggregate with durable actor-scoped dashboards, pagination, and privacy controls."
     })));
 }
 
