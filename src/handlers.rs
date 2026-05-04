@@ -295,6 +295,67 @@ pub async fn integration_describe(_depot: &mut Depot, res: &mut Response) {
                     "path": "/api/v1/push/register-device",
                     "method": "POST"
                 }
+            },
+            "device_messages": {
+                "put_request": {
+                    "path": "/api/v1/device_messages/protocol-verification-txn",
+                    "body": {
+                        "messages": {
+                            "did:web:alice.example": {
+                                "dev_alice": {
+                                    "type": "cx.key.verification.request",
+                                    "content": {
+                                        "transaction_id": "verify-sas-01",
+                                        "method": "sas",
+                                        "todo": "replace scaffold verification payload with signed device envelope"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "get_response_shape": {
+                    "events": [
+                        {
+                            "type": "cx.schema.device_message.v1",
+                            "content": {
+                                "type": "cx.key.verification.request",
+                                "content": {
+                                    "transaction_id": "verify-sas-01"
+                                }
+                            }
+                        }
+                    ]
+                }
+            },
+            "key_backups": {
+                "put_request": {
+                    "path": "/api/v1/keys/backups/backup-alice-01",
+                    "body": {
+                        "schema": "cx.schema.key_backup.v1",
+                        "backup_id": "backup-alice-01",
+                        "class": "mls_export",
+                        "encryption": {
+                            "alg": "xchacha20poly1305",
+                            "kdf": "argon2id"
+                        },
+                        "items": [
+                            {
+                                "kind": "mls_group_state",
+                                "ref": "group:default",
+                                "todo": "replace scaffold payload with encrypted export blob"
+                            }
+                        ]
+                    }
+                },
+                "list_response_shape": {
+                    "items": [
+                        {
+                            "backup_id": "backup-alice-01",
+                            "schema": "cx.schema.key_backup.v1"
+                        }
+                    ]
+                }
             }
         }),
         todos: vec![
