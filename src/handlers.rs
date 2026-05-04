@@ -418,7 +418,58 @@ pub async fn integration_describe(_depot: &mut Depot, res: &mut Response) {
                         "allowed_branches": ["synthesis"],
                         "denied_branches": ["discussion"]
                     }
-                ]
+                ],
+                "authz_check_request": {
+                    "path": "/api/v1/authz/check",
+                    "body": {
+                        "actor": "did:web:alice.example",
+                        "action": "flow.move",
+                        "space_id": "cx:space:01JS0SP000000000000000000",
+                        "resources": [
+                            {
+                                "kind": "flow",
+                                "space_id": "cx:space:01JS0SP000000000000000000",
+                                "flow_id": "cx:flow:01JS0FL000000000000000000",
+                                "scope": "exact"
+                            }
+                        ],
+                        "constraints": [
+                            {
+                                "constraint_type": "container_move",
+                                "effect": "deny",
+                                "allowed_from_container_refs": ["cx:list:triage"],
+                                "allowed_to_container_refs": ["cx:list:ready"]
+                            }
+                        ]
+                    }
+                },
+                "policy_upsert_request": {
+                    "path": "/api/v1/policies",
+                    "body": {
+                        "scope": "space",
+                        "subject_ref": "did:web:alice.example",
+                        "policy_type": "flow.move",
+                        "effect": "require_review",
+                        "payload": {
+                            "actions": ["flow.move"],
+                            "resource": {
+                                "kind": "flow",
+                                "space_id": "cx:space:01JS0SP000000000000000000",
+                                "flow_id": "cx:flow:01JS0FL000000000000000000"
+                            },
+                            "constraints": [
+                                {
+                                    "constraint_type": "approval_workflow",
+                                    "effect": "require_review",
+                                    "approval_required": true,
+                                    "approval_mode": "two_man_rule"
+                                }
+                            ]
+                        }
+                    }
+                },
+                "policy_get_path": "/api/v1/policies/{policy_id}",
+                "policy_delete_path": "/api/v1/policies/{policy_id}"
             }
         }),
         todos: vec![
