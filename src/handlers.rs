@@ -356,6 +356,69 @@ pub async fn integration_describe(_depot: &mut Depot, res: &mut Response) {
                         }
                     ]
                 }
+            },
+            "authz_protocol": {
+                "resource_selector_examples": [
+                    {
+                        "kind": "event",
+                        "space_id": "cx:space:01JS0SP000000000000000000",
+                        "event_id": "cx:event:01JS0EV000000000000000000",
+                        "scope": "exact"
+                    },
+                    {
+                        "kind": "notification",
+                        "space_id": "cx:space:01JS0SP000000000000000000",
+                        "actor_id": "did:web:alice.example",
+                        "object_type": "device_verification",
+                        "object_ref": "cx:notify:01JS0NT000000000000000000",
+                        "flow_id": "cx:flow:01JS0FL000000000000000000",
+                        "scope": "exact"
+                    },
+                    {
+                        "kind": "blob",
+                        "space_id": "cx:space:01JS0SP000000000000000000",
+                        "blob_ref": "cx:blob:sha256:0123456789abcdef",
+                        "object_type": "encrypted_backup",
+                        "object_ref": "backup-scaffold-current-device",
+                        "scope": "exact"
+                    }
+                ],
+                "grant_constraint_examples": [
+                    {
+                        "constraint_type": "approval_workflow",
+                        "effect": "require_review",
+                        "approval_required": true,
+                        "approval_mode": "two_man_rule",
+                        "approval_actor_refs": [
+                            "did:web:controller.example",
+                            "did:web:guardian.example"
+                        ],
+                        "approval_relation": "controller"
+                    },
+                    {
+                        "constraint_type": "claim_based",
+                        "effect": "allow",
+                        "object_type_allow": ["key_backup"],
+                        "facet_allow": ["recovery"],
+                        "requires_claims": [
+                            {
+                                "claim_type": "recovery_operator",
+                                "issuer": "did:web:coauth.example",
+                                "organization": "example-org",
+                                "status": "active",
+                                "roles": ["backup_admin"]
+                            }
+                        ]
+                    },
+                    {
+                        "constraint_type": "container_move",
+                        "effect": "deny",
+                        "allowed_from_container_refs": ["cx:list:triage"],
+                        "allowed_to_container_refs": ["cx:list:ready"],
+                        "allowed_branches": ["synthesis"],
+                        "denied_branches": ["discussion"]
+                    }
+                ]
             }
         }),
         todos: vec![
