@@ -16,6 +16,8 @@ Client sync `next_batch` cursors are structured `cx:cursor:` tokens bound to the
 
 Development bearer sessions are stored server-side by service-bound SHA-256 token hash, not by plaintext token. Logout records `revoked_at` and revoked sessions are rejected on later requests. To-device messages remain deliverable across duplicate syncs until the client presents a cursor with the acknowledged to-device position. Blob downloads require a bearer session plus a `purpose` query parameter; blobs are visible to the uploader or to members of the blob Space when one is bound at upload time.
 
+The v1 primary write path is the signed Event Envelope API: `GET /api/v1/events/describe` declares the active event registry, schema/reducer profiles, and limits, and `POST /api/v1/events` accepts one canonical Event Envelope in the minimal profile. The `/api/v1/repo/*` endpoints remain available as a local legacy adapter, not as the only or canonical shared-history path.
+
 Federation transaction IDs are recorded per origin with canonical request digests. Replaying the same `(origin, txn_id)` and body returns the stored response, while reusing the transaction ID with different content returns a conflict; PostgreSQL mode persists these replay records. Blob uploads normalize MIME types and filenames, enforce per-upload/account/Space quotas, and reject plaintext blobs in private Spaces unless this service is listed in `plaintext_visible_services`.
 
 ## Configuration
@@ -54,11 +56,20 @@ Federation transaction IDs are recorded per origin with canonical request digest
 - `POST /api/v1/sync`
 - `GET /api/v1/sync/subscribe`
 - `GET /api/v1/sync/backfill`
+- `GET /api/v1/sync/backfill/gap`
 - `GET /api/v1/sync/snapshot-head`
+- `GET /api/v1/sync/snapshot-chunk`
+- `GET /api/v1/events/describe`
+- `POST /api/v1/events`
+- `GET /api/v1/events/{event_id}`
+- `POST /api/v1/events/batch-get`
+- `GET /api/v1/events`
+- `GET /api/v1/events/frontier`
 - `GET /api/v1/directory/describe`
 - `POST /api/v1/directory/search-spaces`
 - `POST /api/v1/directory/resolve-space`
 - `GET /api/v1/index/describe`
+- `GET /api/v1/index/debug/reducer`
 - `POST /api/v1/index/query`
 - `GET /api/v1/repo/describe`
 - `GET /api/v1/repo/commits`
@@ -69,8 +80,11 @@ Federation transaction IDs are recorded per origin with canonical request digest
 - `POST /api/v1/authz/check`
 - `GET /api/v1/authz/effective-grants`
 - `GET /api/v1/authz/invites`
+- `GET /api/v1/admin/{actors|spaces|devices|capabilities|federation|applets|agents|reports|invite-tokens|audit|policy|media}`
 - `GET /api/v1/profile/presence`
 - `POST /api/v1/push/register-device`
+- `POST /api/v1/devices/pairing-challenge`
+- `POST /api/v1/devices/authorize-pairing`
 - `POST /api/v1/push/unregister-device`
 - `POST /api/v1/keys/upload`
 - `POST /api/v1/keys/query`
@@ -81,7 +95,20 @@ Federation transaction IDs are recorded per origin with canonical request digest
 - `HEAD /api/v1/blob/get`
 - `GET /api/v1/blob/get`
 - `POST /api/v1/moderation/report`
+- `GET /.well-known/mimi-protocol-directory`
+- `GET /api/v1/mimi/provider-directory`
+- `POST /api/v1/mimi/key-material`
+- `MIMI interop note:` the following `/api/v1/mimi/rooms/{room_id}` routes are external MIMI surfaces; their `room_id` is not the removed Contrix core `cx.room.*` wire contract.
+- `PUT /api/v1/mimi/rooms/{room_id}/update`
+- `POST /api/v1/mimi/rooms/{room_id}/notify`
+- `POST /api/v1/mimi/rooms/{room_id}/messages`
+- `GET /api/v1/mimi/rooms/{room_id}/group-info`
+- `POST /api/v1/mimi/consent/request`
+- `POST /api/v1/mimi/consent/update`
+- `POST /api/v1/mimi/identifiers/query`
+- `POST /api/v1/mimi/report-abuse`
+- `POST /api/v1/mimi/proxy-download`
 
-These paths follow `contrix-spec/en/sync/service-http-binding.md`.
+Protocol behavior should be read against the Chinese Contrix specification and generated `artifacts/` contracts. The old English `contrix-spec/en/...` references are not the source of truth for new v1 work.
 
 The current implementation has product-shaped auth/session, identity, repo adapter, device key, to-device, blob, directory, sync, and index surfaces. PostgreSQL migrations and the repo adapter are wired; in-memory mode is kept as the development fallback. Remaining production work is tracked in `_todos.md`, especially reducer-backed projections, full policy ordering, durable device/blob stores, full E2EE client workflow, anti-enumeration, and complete federation/media surfaces.

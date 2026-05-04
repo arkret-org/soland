@@ -39,6 +39,7 @@ pub struct Constraint {
 pub struct AuthzResult {
     pub allowed: bool,
     pub reason: String,
+    pub reason_detail: Option<String>,
     pub grants: Vec<Grant>,
 }
 
@@ -156,43 +157,69 @@ impl AuthzEngine {
             .cloned()
             .collect();
 
-        let satisfied_grants: Vec<Grant> = matching_grants
-            .into_iter()
-            .filter(|grant| {
-                grant
-                    .constraints
-                    .iter()
-                    .filter(|constraint| !is_decision_constraint(constraint))
-                    .all(|constraint| {
+        let mut satisfied_grants: Vec<Grant> = Vec::new();
+        let mut first_constraint_reason: Option<String> = None;
+
+        for grant in matching_grants {
+            let mut failures = Vec::new();
+            let constraints_ok = grant
+                .constraints
+                .iter()
+                .filter(|constraint| !is_decision_constraint(constraint))
+                .all(|constraint| {
+                    if let Some(reason) =
                         evaluate_constraint(constraint, actor, resource, resource_facets)
-                    })
-            })
-            .collect();
+                    {
+                        failures.push(reason);
+                        false
+                    } else {
+                        true
+                    }
+                });
+            if constraints_ok {
+                satisfied_grants.push(grant);
+            } else if first_constraint_reason.is_none() {
+                first_constraint_reason = failures.into_iter().next();
+            }
+        }
         if !satisfied_grants.is_empty() {
             if let Some(decision) = highest_priority_decision(&satisfied_grants) {
                 return match decision {
                     GrantDecision::Deny => AuthzResult {
                         allowed: false,
                         reason: "explicit_deny".to_owned(),
+                        reason_detail: None,
                         grants: satisfied_grants,
                     },
                     GrantDecision::Quarantine => AuthzResult {
                         allowed: false,
                         reason: "quarantine".to_owned(),
+                        reason_detail: None,
                         grants: satisfied_grants,
                     },
                     GrantDecision::Allow => AuthzResult {
                         allowed: true,
                         reason: "explicit_grant".to_owned(),
+                        reason_detail: None,
                         grants: satisfied_grants,
                     },
                     GrantDecision::RequireReview => AuthzResult {
                         allowed: false,
                         reason: "require_review".to_owned(),
+                        reason_detail: None,
                         grants: satisfied_grants,
                     },
                 };
             }
+        }
+
+        if let Some(reason_detail) = first_constraint_reason {
+            return AuthzResult {
+                allowed: false,
+                reason: "constraints_not_satisfied".to_owned(),
+                reason_detail: Some(reason_detail),
+                grants: Vec::new(),
+            };
         }
 
         // Default rules
@@ -200,6 +227,7 @@ impl AuthzEngine {
             return AuthzResult {
                 allowed: true,
                 reason: "owner".to_owned(),
+                reason_detail: None,
                 grants: Vec::new(),
             };
         }
@@ -210,6 +238,7 @@ impl AuthzEngine {
                 return AuthzResult {
                     allowed: true,
                     reason: "member".to_owned(),
+                    reason_detail: None,
                     grants: Vec::new(),
                 };
             }
@@ -218,6 +247,7 @@ impl AuthzEngine {
         AuthzResult {
             allowed: false,
             reason: "capability_denied".to_owned(),
+            reason_detail: None,
             grants: Vec::new(),
         }
     }
@@ -313,34 +343,52 @@ fn evaluate_constraint(
     _actor: &str,
     _resource: &str,
     resource_facets: &[String],
-) -> bool {
+) -> Option<String> {
     match constraint.constraint_type.as_str() {
         "temporal" => {
             // Check if the grant hasn't expired
             if let Some(expires_at) = constraint.value.get("expires_at").and_then(|v| v.as_str())
                 && let Ok(expires) = chrono::DateTime::parse_from_rfc3339(expires_at)
             {
-                return chrono::Utc::now() < expires.with_timezone(&chrono::Utc);
+                return if chrono::Utc::now() < expires.with_timezone(&chrono::Utc) {
+                    None
+                } else {
+                    Some("temporal constraint expired".to_owned())
+                };
             }
-            true
+            None
         }
         "type_restriction" => {
             // Restrict to specific entity types
-            true // v1: always pass
+            None // v1: always pass
         }
         "delegation_control" => {
             // Check delegation depth
-            true // v1: always pass
+            None // v1: always pass
         }
         "allowed_entity_facets" => {
             let allowed = constraint_facet_names(&constraint.value);
-            !allowed.is_empty()
-                && !resource_facets.is_empty()
-                && resource_facets
-                    .iter()
-                    .any(|facet| allowed.iter().any(|allowed| allowed == facet))
+            if allowed.is_empty() {
+                Some("allowed_entity_facets constraint has no allowed facets".to_owned())
+            } else if resource_facets.is_empty() {
+                Some(format!(
+                    "resource facets are missing but allowed_entity_facets requires one of [{}]",
+                    allowed.join(", ")
+                ))
+            } else if resource_facets
+                .iter()
+                .any(|facet| allowed.iter().any(|allowed| allowed == facet))
+            {
+                None
+            } else {
+                Some(format!(
+                    "resource facets [{}] do not match allowed_entity_facets [{}]",
+                    resource_facets.join(", "),
+                    allowed.join(", ")
+                ))
+            }
         }
-        _ => true, // Unknown constraints pass
+        _ => None, // Unknown constraints pass
     }
 }
 
@@ -596,6 +644,13 @@ mod tests {
             &[],
         );
         assert!(!missing_facets.allowed);
+        assert_eq!(missing_facets.reason, "constraints_not_satisfied");
+        assert!(
+            missing_facets
+                .reason_detail
+                .as_ref()
+                .is_some_and(|reason| reason.contains("allowed_entity_facets"))
+        );
     }
 
     #[test]

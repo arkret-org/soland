@@ -5,13 +5,14 @@ use salvo::{
 };
 use serde_json::Value;
 use soland::{
-    config::AppConfig, db::Db, kinds, ratelimit::RateLimiterConfig, service,
+    artifacts, config::AppConfig, db::Db, kinds, ratelimit::RateLimiterConfig, service,
     service_with_rate_limiter_config, state::AppState,
 };
 use std::time::Duration;
 
 use chrono::Utc;
 use contrix_sdk::{Commit, CommitId, Did, Hash, Operation, OperationId, Proof, SpaceId};
+use sha2::{Digest, Sha256};
 
 fn test_config() -> AppConfig {
     AppConfig {
@@ -53,11 +54,20 @@ fn encode_cursor(cursor: &Value) -> String {
 }
 
 async fn dev_token(state: AppState) -> String {
+    dev_token_for_device(state, "did:web:alice.example", "dev_alice", "Alice Desktop").await
+}
+
+async fn dev_token_for_device(
+    state: AppState,
+    actor: &str,
+    device_id: &str,
+    display_name: &str,
+) -> String {
     let login: Value = TestClient::post("http://server/api/v1/auth/dev-login")
         .json(&serde_json::json!({
-            "actor": "did:web:alice.example",
-            "device_id": "dev_alice",
-            "display_name": "Alice Desktop"
+            "actor": actor,
+            "device_id": device_id,
+            "display_name": display_name
         }))
         .send(&app_from_state(state.clone()))
         .await
@@ -82,6 +92,53 @@ fn encrypted_envelope(content_type: &str, ciphertext: &str) -> Value {
             "ciphertext": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
         }
     })
+}
+
+fn sha256_json(value: &Value) -> String {
+    let bytes = serde_json::to_vec(value).expect("json serializes");
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    format!("sha256:{:x}", hasher.finalize())
+}
+
+fn event_canonical_digest(event: &Value) -> String {
+    let mut canonical = event.clone();
+    if let Value::Object(object) = &mut canonical {
+        object.remove("canonical_digest");
+        object.remove("canonical_hash");
+    }
+    sha256_json(&canonical)
+}
+
+fn signed_event_envelope(event_id: &str, actor_seq: u64, prev_refs: Vec<&str>) -> Value {
+    let payload = serde_json::json!({
+        "body": format!("event body {actor_seq}"),
+        "msgtype": "m.text"
+    });
+    let mut event = serde_json::json!({
+        "event_id": event_id,
+        "kind": "cx.message.create",
+        "schema_id": "cx.schema.message.v1",
+        "actor_id": "did:web:alice.example",
+        "actor_seq": actor_seq,
+        "space_id": "cx:space:01js0sp0000000000000000000",
+        "device_id": "dev_alice",
+        "audience": "did:web:soland.local",
+        "domain": "did:web:soland.local",
+        "prev_refs": prev_refs,
+        "auth_refs": [],
+        "payload": payload,
+        "proofs": [{
+            "type": "dev-proof",
+            "verification_method": "did:web:alice.example#dev_alice",
+            "device_id": "dev_alice",
+            "audience": "did:web:soland.local",
+            "domain": "did:web:soland.local",
+            "payload_hash": sha256_json(&payload)
+        }]
+    });
+    event["canonical_digest"] = Value::String(event_canonical_digest(&event));
+    event
 }
 
 async fn register_account(state: AppState, did: &str, handle: &str, device_id: &str) -> String {
@@ -165,6 +222,806 @@ async fn health_and_describe_work() {
         describe["limits"]["profile_status"]["conformance"],
         "limited_reference"
     );
+    assert_eq!(
+        describe["limits"]["registries"]["source"],
+        "contrix-spec/artifacts"
+    );
+    assert_eq!(
+        describe["limits"]["registries"]["versions"]["event_kind"],
+        artifacts::event_kind_registry()["version"]
+    );
+    assert_eq!(
+        describe["limits"]["plaintext_visible_service_capability"]["supported"],
+        true
+    );
+    assert!(
+        describe["supported_profiles"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|profile| profile == "cx.profile.mimi_interop.v1")
+    );
+    assert!(
+        describe["supported_operations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|operation| operation == "cx.mimi.submit_message")
+    );
+    assert!(
+        describe["supported_operations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|operation| operation == "cx.events.submit")
+    );
+}
+
+#[tokio::test]
+async fn events_describe_and_single_event_submit_work() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+
+    let describe: Value = TestClient::get("http://server/api/v1/events/describe")
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(describe["protocol_version"], "1.0");
+    assert_eq!(describe["primary_write_path"], "/api/v1/events");
+    assert_eq!(describe["event_envelope"]["schema"], "cx.schema.event.v1");
+    assert_eq!(
+        describe["registry"]["event_kind_registry_version"],
+        "2026-05-03"
+    );
+    assert_eq!(describe["registry"]["source"], "contrix-spec/artifacts");
+    assert!(
+        describe["registry"]["event_kinds"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|kind| kind == "cx.flow.create")
+    );
+    assert_eq!(describe["schema_profile"], "cx.schema.core.v1");
+    assert_eq!(describe["reducer_profile"], "cx.reducer.v1");
+    assert_eq!(describe["capabilities"]["batch_receipt"], false);
+    assert_eq!(describe["capabilities"]["snapshot"], false);
+    assert_eq!(describe["capabilities"]["witness"], false);
+    assert_eq!(describe["capabilities"]["high_assurance"], false);
+
+    let first = signed_event_envelope("cx:event:events-minimal-01", 1, Vec::new());
+    let submitted: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&first)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(submitted["status"], "accepted");
+    assert_eq!(submitted["event_id"], "cx:event:events-minimal-01");
+    assert_eq!(submitted["canonical_digest"], first["canonical_digest"]);
+
+    let duplicate: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&first)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(duplicate["status"], "duplicate");
+    assert_eq!(duplicate["receipt"]["idempotent"], true);
+
+    let fetched: Value = TestClient::get("http://server/api/v1/events/cx:event:events-minimal-01")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(fetched["event"]["event_id"], "cx:event:events-minimal-01");
+    assert_eq!(
+        fetched["metadata"]["canonical_digest"],
+        first["canonical_digest"]
+    );
+
+    let second = signed_event_envelope(
+        "cx:event:events-minimal-02",
+        2,
+        vec!["cx:event:events-minimal-01"],
+    );
+    let second_submitted: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&second)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(second_submitted["status"], "accepted");
+
+    let mut artifact_kind_event =
+        signed_event_envelope("cx:event:events-artifact-flow-01", 3, Vec::new());
+    artifact_kind_event["kind"] = Value::String("cx.flow.create".to_owned());
+    artifact_kind_event["schema_id"] = Value::String("cx.schema.flow.v1".to_owned());
+    artifact_kind_event["canonical_digest"] =
+        Value::String(event_canonical_digest(&artifact_kind_event));
+    let artifact_kind_submitted: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&artifact_kind_event)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(artifact_kind_submitted["status"], "accepted");
+
+    let mut unknown_schema =
+        signed_event_envelope("cx:event:events-unknown-schema-01", 4, Vec::new());
+    unknown_schema["schema_id"] = Value::String("cx.schema.not_registered.v1".to_owned());
+    unknown_schema["canonical_digest"] = Value::String(event_canonical_digest(&unknown_schema));
+    let mut unknown_schema_response = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&unknown_schema)
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(
+        unknown_schema_response.status_code.unwrap(),
+        StatusCode::BAD_REQUEST
+    );
+    let unknown_schema_body: Value = unknown_schema_response.take_json().await.unwrap();
+    assert_eq!(unknown_schema_body["error"]["errcode"], "unknown_schema");
+
+    let mut legacy_schema =
+        signed_event_envelope("cx:event:events-legacy-schema-01", 5, Vec::new());
+    legacy_schema["schema_id"] = Value::String("cx.schema.room.v1".to_owned());
+    legacy_schema["canonical_digest"] = Value::String(event_canonical_digest(&legacy_schema));
+    let mut legacy_schema_response = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&legacy_schema)
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(
+        legacy_schema_response.status_code.unwrap(),
+        StatusCode::BAD_REQUEST
+    );
+    let legacy_schema_body: Value = legacy_schema_response.take_json().await.unwrap();
+    assert_eq!(
+        legacy_schema_body["error"]["errcode"],
+        "legacy_contract_removed"
+    );
+
+    let mut legacy_kind = signed_event_envelope("cx:event:events-legacy-kind-01", 6, Vec::new());
+    legacy_kind["kind"] = Value::String("cx.room.message".to_owned());
+    legacy_kind["canonical_digest"] = Value::String(event_canonical_digest(&legacy_kind));
+    let mut legacy_kind_response = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&legacy_kind)
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(
+        legacy_kind_response.status_code.unwrap(),
+        StatusCode::BAD_REQUEST
+    );
+    let legacy_kind_body: Value = legacy_kind_response.take_json().await.unwrap();
+    assert_eq!(legacy_kind_body["error"]["errcode"], "legacy_contract_removed");
+
+    let mut legacy_field =
+        signed_event_envelope("cx:event:events-legacy-field-01", 7, Vec::new());
+    legacy_field["payload"]["room_id"] = Value::String("!legacy:example.com".to_owned());
+    let legacy_field_payload_hash = sha256_json(&legacy_field["payload"]);
+    legacy_field["proofs"][0]["payload_hash"] = Value::String(legacy_field_payload_hash);
+    legacy_field["canonical_digest"] = Value::String(event_canonical_digest(&legacy_field));
+    let mut legacy_field_response = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&legacy_field)
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(
+        legacy_field_response.status_code.unwrap(),
+        StatusCode::BAD_REQUEST
+    );
+    let legacy_field_body: Value = legacy_field_response.take_json().await.unwrap();
+    assert_eq!(
+        legacy_field_body["error"]["errcode"],
+        "legacy_contract_removed"
+    );
+
+    let mut legacy_typed_id =
+        signed_event_envelope("cx:event:events-legacy-typed-id-01", 8, Vec::new());
+    legacy_typed_id["payload"]["flow_id"] = Value::String("cx:card:legacy-card".to_owned());
+    let legacy_typed_id_payload_hash = sha256_json(&legacy_typed_id["payload"]);
+    legacy_typed_id["proofs"][0]["payload_hash"] = Value::String(legacy_typed_id_payload_hash);
+    legacy_typed_id["canonical_digest"] = Value::String(event_canonical_digest(&legacy_typed_id));
+    let mut legacy_typed_id_response = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&legacy_typed_id)
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(
+        legacy_typed_id_response.status_code.unwrap(),
+        StatusCode::BAD_REQUEST
+    );
+    let legacy_typed_id_body: Value = legacy_typed_id_response.take_json().await.unwrap();
+    assert_eq!(
+        legacy_typed_id_body["error"]["errcode"],
+        "legacy_contract_removed"
+    );
+
+    let batch: Value = TestClient::post("http://server/api/v1/events/batch-get")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({
+            "event_ids": ["cx:event:events-minimal-01", "cx:event:missing"]
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(batch["events"].as_array().unwrap().len(), 1);
+    assert_eq!(batch["missing"], serde_json::json!(["cx:event:missing"]));
+
+    let listed: Value =
+        TestClient::get("http://server/api/v1/events?actor_id=did:web:alice.example&limit=10")
+            .add_header("authorization", format!("Bearer {token}"), true)
+            .send(&app_from_state(state.clone()))
+            .await
+            .take_json()
+            .await
+            .unwrap();
+    assert_eq!(listed["events"].as_array().unwrap().len(), 3);
+    assert_eq!(listed["frontier"]["actors"]["did:web:alice.example"], 3);
+
+    let frontier: Value =
+        TestClient::get("http://server/api/v1/events/frontier?actor_id=did:web:alice.example")
+            .add_header("authorization", format!("Bearer {token}"), true)
+            .send(&app_from_state(state.clone()))
+            .await
+            .take_json()
+            .await
+            .unwrap();
+    assert_eq!(frontier["actor_frontier"]["did:web:alice.example"], 3);
+
+    let mut conflicting = signed_event_envelope("cx:event:events-minimal-01", 4, Vec::new());
+    conflicting["payload"]["body"] = Value::String("different canonical body".to_owned());
+    let payload_hash = sha256_json(&conflicting["payload"]);
+    conflicting["proofs"][0]["payload_hash"] = Value::String(payload_hash);
+    conflicting["canonical_digest"] = Value::String(event_canonical_digest(&conflicting));
+    let mut conflict = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&conflicting)
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(conflict.status_code.unwrap(), StatusCode::CONFLICT);
+    let conflict_body: Value = conflict.take_json().await.unwrap();
+    assert_eq!(conflict_body["error"]["errcode"], "duplicate_conflict");
+}
+
+#[tokio::test]
+async fn contrix_openapi_spec_contains_facet_projection_contracts() {
+    let mut response = TestClient::get("http://server/.well-known/contrix/openapi.yaml")
+        .send(&app())
+        .await;
+    assert_eq!(response.status_code.unwrap().as_u16(), 200);
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("");
+    assert!(content_type.contains("application/yaml"));
+    let body = response.take_string().await.unwrap();
+    assert!(body.contains("openapi: 3.1.0"));
+    assert!(body.contains("FacetName"));
+    assert!(body.contains("ViewRenderer"));
+    assert!(body.contains("allowed_entity_facets"));
+    assert!(body.contains("x-operation-aliases"));
+    assert!(body.contains("x-contrix-artifacts"));
+    let expected_operation_ids = [
+        "cx.system.health",
+        "cx.account.register",
+        "cx.account.me",
+        "cx.auth.logout",
+        "cx.contacts.request",
+        "cx.contacts.respond",
+        "cx.contacts.list",
+        "cx.spaces.create",
+        "cx.spaces.delete",
+        "cx.server.describe",
+        "cx.spaces.add_member",
+        "cx.spaces.remove_member",
+        "cx.messages.send",
+        "cx.events.describe",
+        "cx.events.submit",
+        "cx.events.get",
+        "cx.events.batch_get",
+        "cx.events.list",
+        "cx.events.frontier",
+        "cx.repo.describe",
+        "cx.repo.list_commits",
+        "cx.repo.get_operations",
+        "cx.repo.sync",
+        "cx.index.query",
+        "cx.authz.get_effective_grants",
+        "cx.authz.get_invites",
+        "cx.repo.submit_commit",
+        "cx.federation.transaction",
+        "cx.federation.push_operations",
+        "cx.federation.pull_operations",
+        "cx.federation.space_members",
+        "cx.federation.verify_actor",
+        "cx.sync.client_sync",
+        "cx.sync.typing",
+        "cx.sync.backfill",
+        "cx.sync.backfill_gap",
+        "cx.sync.get_snapshot_head",
+        "cx.sync.get_snapshot_chunk",
+        "cx.directory.describe",
+        "cx.directory.search_spaces",
+        "cx.directory.resolve_space",
+        "cx.index.describe",
+        "cx.index.debug_reducer",
+        "cx.admin.actors",
+        "cx.admin.spaces",
+        "cx.admin.devices",
+        "cx.admin.capabilities",
+        "cx.admin.federation",
+        "cx.admin.applets",
+        "cx.admin.agents",
+        "cx.admin.reports",
+        "cx.admin.invite_tokens",
+        "cx.admin.audit",
+        "cx.admin.policy",
+        "cx.admin.media",
+        "cx.authz.check",
+        "cx.policies.list",
+        "cx.policies.get",
+        "cx.policies.upsert",
+        "cx.policies.delete",
+        "cx.push.register_device",
+        "cx.devices.pairing_challenge",
+        "cx.devices.authorize_pairing",
+        "cx.push.unregister_device",
+        "cx.push.rules",
+        "cx.push.notify",
+        "cx.webrtc.create_session",
+        "cx.webrtc.send_signal",
+        "cx.webrtc.close_session",
+        "cx.policy.check",
+        "cx.moderation.report",
+        "cx.mimi.provider_directory",
+        "cx.mimi.key_material",
+        "cx.mimi.room_update",
+        "cx.mimi.notify",
+        "cx.mimi.submit_message",
+        "cx.mimi.group_info",
+        "cx.mimi.request_consent",
+        "cx.mimi.update_consent",
+        "cx.mimi.identifier_query",
+        "cx.mimi.report_abuse",
+        "cx.mimi.proxy_download",
+    ];
+    for operation_id in expected_operation_ids {
+        assert!(
+            body.contains(&format!("operationId: {operation_id}")),
+            "missing {operation_id} in generated openapi"
+        );
+    }
+}
+
+#[tokio::test]
+async fn index_query_supports_facet_projection_binding() {
+    let query: Value = TestClient::post("http://server/api/v1/index/query")
+        .json(&serde_json::json!({
+            "space_ids": ["cx:space:01js0sp0000000000000000000"],
+            "facets": ["container", "replyable"],
+            "renderer": "collection",
+            "limit": 20
+        }))
+        .send(&app())
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    let unsupported: Value = TestClient::post("http://server/api/v1/index/query")
+        .json(&serde_json::json!({
+            "space_ids": ["cx:space:01js0sp0000000000000000000"],
+            "facets": ["not_supported"],
+            "limit": 20
+        }))
+        .send(&app())
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert!(query["results"].as_array().unwrap().len() >= 1);
+    for result in query["results"].as_array().unwrap() {
+        assert_eq!(result["renderer"], "collection");
+        assert_eq!(
+            result["facets"],
+            serde_json::json!(["container", "replyable"])
+        );
+    }
+
+    assert!(unsupported["results"].as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn index_reducer_debug_reports_projection_frontier() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+    let space_id = "cx:space:01js0sp0000000000000000000";
+
+    let sent: Value = TestClient::post("http://server/api/v1/messages/send")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({
+            "space_id": space_id,
+            "thread_id": "cx:thread:debug-reducer",
+            "content": {"body": "debug reducer"},
+            "encrypted": false
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+
+    let debug: Value = TestClient::get(format!(
+        "http://server/api/v1/index/debug/reducer?space_id={space_id}&limit=5"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    assert_eq!(debug["reducer_profile"], "cx.reducer.v1");
+    assert_eq!(
+        debug["schema_profiles"],
+        serde_json::json!(["cx.schema.core.v1"])
+    );
+    assert_eq!(debug["space_id"], space_id);
+    assert_eq!(debug["frontier"]["message_count"], 1);
+    assert_eq!(debug["frontier"]["projection_event_count"], 1);
+    assert_eq!(debug["frontier"]["latest_event_id"], sent["event_id"]);
+    assert_eq!(debug["recent_events"][0]["event_id"], sent["event_id"]);
+    assert_eq!(
+        debug["production_gap"],
+        "durable_reducer_replay_and_conflict_records"
+    );
+
+    let invalid = TestClient::get("http://server/api/v1/index/debug/reducer?space_id=bad")
+        .send(&app_from_state(state))
+        .await;
+    assert_eq!(invalid.status_code.unwrap().as_u16(), 400);
+}
+
+#[tokio::test]
+async fn index_query_supports_structured_filters_sort_and_cursor() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+
+    for title in ["Zulu Query Space", "Alpha Query Space"] {
+        let created: Value = TestClient::post("http://server/api/v1/spaces")
+            .add_header("authorization", format!("Bearer {token}"), true)
+            .json(&serde_json::json!({
+                "title": title,
+                "summary": "index query pagination fixture",
+                "public": true
+            }))
+            .send(&app_from_state(state.clone()))
+            .await
+            .take_json()
+            .await
+            .unwrap();
+        assert!(created["space_id"].as_str().is_some());
+    }
+
+    let first_page: Value = TestClient::post("http://server/api/v1/index/query")
+        .json(&serde_json::json!({
+            "filters": {"text": "Query Space"},
+            "sort": [{"field": "title", "direction": "asc"}],
+            "limit": 1
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(first_page["results"].as_array().unwrap().len(), 1);
+    assert_eq!(first_page["results"][0]["title"], "Alpha Query Space");
+    assert_eq!(first_page["frontier"]["limited"], true);
+    let cursor = first_page["next_cursor"].as_str().unwrap().to_owned();
+
+    let second_page: Value = TestClient::post("http://server/api/v1/index/query")
+        .json(&serde_json::json!({
+            "filters": {"text": "Query Space"},
+            "sort": [{"field": "title", "direction": "asc"}],
+            "cursor": cursor,
+            "limit": 1
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(second_page["results"].as_array().unwrap().len(), 1);
+    assert_eq!(second_page["results"][0]["title"], "Zulu Query Space");
+    assert!(second_page["next_cursor"].is_null());
+
+    let mismatch = TestClient::post("http://server/api/v1/index/query")
+        .json(&serde_json::json!({
+            "filters": {"text": "Alpha"},
+            "sort": [{"field": "title", "direction": "asc"}],
+            "cursor": first_page["next_cursor"],
+            "limit": 1
+        }))
+        .send(&app_from_state(state))
+        .await;
+    assert_eq!(mismatch.status_code.unwrap().as_u16(), 400);
+}
+
+#[tokio::test]
+async fn sync_cursor_rejects_facets_and_renderer_changes() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+
+    let first: Value = TestClient::post("http://server/api/v1/sync")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({
+            "renderer": "collection",
+            "facets": ["stateful"],
+            "filter": {"spaces": ["cx:space:01js0sp0000000000000000000"]},
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert!(first["next_batch"].as_str().is_some());
+
+    let renderer_changed = TestClient::post("http://server/api/v1/sync")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({
+            "since": first["next_batch"],
+            "renderer": "queue",
+            "facets": ["stateful"],
+            "filter": {"spaces": ["cx:space:01js0sp0000000000000000000"]},
+        }))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(renderer_changed.status_code.unwrap().as_u16(), 400);
+
+    let facets_changed = TestClient::post("http://server/api/v1/sync")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({
+            "since": first["next_batch"],
+            "renderer": "collection",
+            "facets": ["replyable"],
+            "filter": {"spaces": ["cx:space:01js0sp0000000000000000000"]},
+        }))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(facets_changed.status_code.unwrap().as_u16(), 400);
+}
+
+#[tokio::test]
+async fn sync_backfill_exposes_prev_batch_and_limited_timeline_pages() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+    let space_id = "cx:space:01js0sp0000000000000000000";
+
+    for body in ["first backfill page", "second backfill page"] {
+        let sent: Value = TestClient::post("http://server/api/v1/messages/send")
+            .add_header("authorization", format!("Bearer {token}"), true)
+            .json(&serde_json::json!({
+                "space_id": space_id,
+                "thread_id": "cx:thread:backfill-pages",
+                "content": {"body": body},
+                "encrypted": false
+            }))
+            .send(&app_from_state(state.clone()))
+            .await
+            .take_json()
+            .await
+            .unwrap();
+        assert!(sent["operation_id"].as_str().is_some());
+    }
+
+    let first_page: Value = TestClient::get(format!(
+        "http://server/api/v1/sync/backfill?space_id={space_id}&limit=1"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    assert_eq!(first_page["events"].as_array().unwrap().len(), 1);
+    assert_eq!(first_page["limited"], true);
+    assert!(first_page["prev_batch"].is_null());
+    let next_cursor = first_page["next_cursor"].as_str().unwrap();
+
+    let second_page: Value = TestClient::get(format!(
+        "http://server/api/v1/sync/backfill?space_id={space_id}&limit=1&cursor={next_cursor}"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    assert_eq!(second_page["prev_batch"], next_cursor);
+    assert_eq!(second_page["events"].as_array().unwrap().len(), 1);
+    let to_cursor = second_page["events"][0]["event_id"].as_str().unwrap();
+    let gap: Value = TestClient::get(format!(
+        "http://server/api/v1/sync/backfill/gap?space_id={space_id}&from_cursor={next_cursor}&to_cursor={to_cursor}&limit=10"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    assert_eq!(gap["from_cursor"], next_cursor);
+    assert_eq!(gap["to_cursor"], to_cursor);
+    assert_eq!(gap["prev_batch"], next_cursor);
+    assert_eq!(gap["gap_complete"], true);
+    assert_eq!(gap["events"].as_array().unwrap().len(), 1);
+    assert_eq!(gap["production_gap"], "durable_sync_position_validation");
+
+    let mut invalid_cursor = TestClient::get(format!(
+        "http://server/api/v1/sync/backfill?space_id={space_id}&cursor=cx:event:not-found"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .send(&app_from_state(state.clone()))
+    .await;
+    assert_eq!(invalid_cursor.status_code.unwrap().as_u16(), 400);
+    let invalid_cursor_body: Value = invalid_cursor.take_json().await.unwrap();
+    assert_eq!(invalid_cursor_body["error"]["errcode"], "invalid_cursor");
+}
+
+#[tokio::test]
+async fn mimi_provider_facade_contracts_work() {
+    let service = app();
+
+    let well_known: Value = TestClient::get("http://server/.well-known/mimi-protocol-directory")
+        .send(&service)
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(well_known["service_type"], "mimi_provider_facade");
+    assert_eq!(
+        well_known["mimi"]["protocol_draft"],
+        "draft-ietf-mimi-protocol-06"
+    );
+    assert!(
+        well_known["supported_profiles"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|profile| profile == "cx.profile.mimi_interop.v1")
+    );
+
+    let directory: Value = TestClient::get("http://server/api/v1/mimi/provider-directory")
+        .send(&service)
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(
+        directory["mimi"]["content_draft"],
+        "draft-ietf-mimi-content-08"
+    );
+    assert!(
+        directory["mimi"]["features"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|feature| feature == "submit_message")
+    );
+
+    let unsupported = TestClient::post("http://server/api/v1/mimi/key-material")
+        .json(&serde_json::json!({"protocol_draft": "draft-ietf-mimi-protocol-99"}))
+        .send(&service)
+        .await;
+    assert_eq!(unsupported.status_code.unwrap().as_u16(), 400);
+
+    let key_material: Value = TestClient::post("http://server/api/v1/mimi/key-material")
+        .json(&serde_json::json!({
+            "target_identifier": "mimi://soland.local/users/alice",
+            "protocol_draft": "draft-ietf-mimi-protocol-06"
+        }))
+        .send(&service)
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(key_material["ok"], true);
+    assert_eq!(
+        key_material["receipt"]["operation_id"],
+        "cx.mimi.key_material"
+    );
+
+    let group_info: Value = TestClient::get("http://server/api/v1/mimi/rooms/01JSMIMI/group-info")
+        .send(&service)
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(group_info["room_id"], "01JSMIMI");
+    assert_eq!(
+        group_info["group_info"]["canonical_truth"],
+        "contrix_signed_event_reducer"
+    );
+
+    let identifier: Value = TestClient::post("http://server/api/v1/mimi/identifiers/query")
+        .json(&serde_json::json!({
+            "query": "mimi://remote.example/alice",
+            "privacy_mode": "private_contact_discovery"
+        }))
+        .send(&service)
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(identifier["reachable"], true);
+    assert_eq!(identifier["mapped_did"], "did:web:alice.example");
+    assert_eq!(
+        identifier["receipt"]["extra"]["contact_graph_exposed"],
+        false
+    );
+
+    let mapped: Value = TestClient::post("http://server/api/v1/mimi/rooms/01JSMIMI/messages")
+        .json(&serde_json::json!({
+            "source_format": "text/markdown;variant=GFM-MIMI",
+            "body": "hello from MIMI"
+        }))
+        .send(&service)
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(mapped["ok"], true);
+    assert_eq!(mapped["receipt"]["operation_id"], "cx.mimi.submit_message");
+    assert_eq!(
+        mapped["receipt"]["extra"]["target_format"],
+        "cx.message.create"
+    );
+
+    let proxy: Value = TestClient::post("http://server/api/v1/mimi/proxy-download")
+        .json(&serde_json::json!({
+            "blob_ref": "cx:blob:sha256:e2e",
+            "asset_privacy_policy": "provider_proxy"
+        }))
+        .send(&service)
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(proxy["ok"], true);
+    assert!(
+        proxy["proxy_url"]
+            .as_str()
+            .unwrap()
+            .contains("/mimi/proxy-download")
+    );
+    assert_eq!(
+        proxy["receipt"]["extra"]["direct_object_store_url_returned"],
+        false
+    );
+
+    let report = TestClient::post("http://server/api/v1/mimi/report-abuse")
+        .json(&serde_json::json!({
+            "mimi_room_uri": "mimi://soland.local/rooms/01JSMIMI",
+            "target_event_hash": "sha256:target",
+            "frank": {"scheme": "dev-frank"}
+        }))
+        .send(&service)
+        .await;
+    assert_eq!(report.status_code.unwrap().as_u16(), 202);
 }
 
 #[tokio::test]
@@ -242,6 +1099,14 @@ async fn service_did_is_config_driven_across_public_metadata() {
         .await
         .unwrap();
     assert_eq!(sync["service_did"], service_did);
+
+    let events: Value = TestClient::get("http://server/api/v1/events/describe")
+        .send(&service)
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(events["service_did"], service_did);
 
     let directory: Value = TestClient::get("http://server/api/v1/directory/describe")
         .send(&service)
@@ -843,6 +1708,18 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         sync_with_message["spaces"][&space_id]["timeline"]["events"][0]["event_id"],
         sent_message["event_id"]
     );
+    assert_eq!(
+        sync_with_message["spaces"][&space_id]["timeline"]["events"][0]["flow_id"],
+        space_id.replace("cx:space:", "cx:flow:")
+    );
+    assert_eq!(
+        sync_with_message["spaces"][&space_id]["timeline"]["events"][0]["branch"]["branch_id"],
+        "cx:thread:workflow"
+    );
+    assert_eq!(
+        sync_with_message["spaces"][&space_id]["summary"]["flow"]["schema"],
+        "cx.schema.flow.v1"
+    );
 
     let incremental_noop: Value = TestClient::post("http://server/api/v1/sync")
         .add_header("authorization", format!("Bearer {alice}"), true)
@@ -907,6 +1784,39 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         .await;
     assert_eq!(filter_mismatch.status_code.unwrap().as_u16(), 400);
 
+    let mut legacy_filter = TestClient::post("http://server/api/v1/sync")
+        .add_header("authorization", format!("Bearer {alice}"), true)
+        .json(&serde_json::json!({
+            "filter": {"room_id": "cx:room:legacy-room"}
+        }))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(legacy_filter.status_code.unwrap().as_u16(), 400);
+    let legacy_filter_body: Value = legacy_filter.take_json().await.unwrap();
+    assert_eq!(legacy_filter_body["error"]["errcode"], "invalid_param");
+
+    let mut legacy_card_filter = TestClient::post("http://server/api/v1/sync")
+        .add_header("authorization", format!("Bearer {alice}"), true)
+        .json(&serde_json::json!({
+            "filter": {"card_id": "cx:card:legacy-card"}
+        }))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(legacy_card_filter.status_code.unwrap().as_u16(), 400);
+    let legacy_card_filter_body: Value = legacy_card_filter.take_json().await.unwrap();
+    assert_eq!(legacy_card_filter_body["error"]["errcode"], "invalid_param");
+
+    let mut legacy_subject_filter = TestClient::post("http://server/api/v1/sync")
+        .add_header("authorization", format!("Bearer {alice}"), true)
+        .json(&serde_json::json!({
+            "filter": {"subject_id": "cx:subject:legacy-subject"}
+        }))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(legacy_subject_filter.status_code.unwrap().as_u16(), 400);
+    let legacy_subject_filter_body: Value = legacy_subject_filter.take_json().await.unwrap();
+    assert_eq!(legacy_subject_filter_body["error"]["errcode"], "invalid_param");
+
     let renderer_bound_sync: Value = TestClient::post("http://server/api/v1/sync")
         .add_header("authorization", format!("Bearer {alice}"), true)
         .json(&serde_json::json!({
@@ -938,7 +1848,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         .json(&serde_json::json!({"since": encode_cursor(&expired_cursor)}))
         .send(&app_from_state(state.clone()))
         .await;
-    assert_eq!(expired.status_code.unwrap(), StatusCode::UNAUTHORIZED);
+    assert_eq!(expired.status_code.unwrap(), StatusCode::GONE);
     let expired_body: Value = expired.take_json().await.unwrap();
     assert_eq!(expired_body["error"]["errcode"], "sync_token_expired");
 
@@ -1000,6 +1910,22 @@ async fn account_contacts_and_space_lifecycle_workflow() {
             .starts_with("cx:snapshot:")
     );
     assert!(!snapshot["signature"]["sig"].as_str().unwrap().is_empty());
+    assert_eq!(snapshot["manifest"]["reducer_profile"], "cx.reducer.v1");
+    assert_eq!(snapshot["chunks"][0]["chunk_id"], "0");
+    assert_eq!(snapshot["chunks"][0]["digest"], snapshot["state_hash"]);
+
+    let snapshot_chunk: Value = TestClient::get(format!(
+        "http://server/api/v1/sync/snapshot-chunk?snapshot_ref={}&chunk_id=0",
+        snapshot["snapshot_ref"].as_str().unwrap()
+    ))
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    assert_eq!(snapshot_chunk["digest"], snapshot["state_hash"]);
+    assert_eq!(snapshot_chunk["verified"], true);
+    assert!(!snapshot_chunk["bytes_base64"].as_str().unwrap().is_empty());
 
     let kicked: Value = TestClient::delete(format!(
         "http://server/api/v1/spaces/{space_id}/members/did:web:bob.example"
@@ -1287,7 +2213,7 @@ async fn identity_surface_works() {
             "patch": {
                 "did_document": {
                     "id": "did:web:alice.example",
-                    "verification_method": [{
+                    "verificationMethod": [{
                         "id": "did:web:alice.example#key-1",
                         "type": "JsonWebKey2020",
                         "controller": "did:web:alice.example",
@@ -1480,11 +2406,21 @@ async fn standard_entity_types_and_reverse_domain_custom_types_work() {
         .await;
     assert_eq!(invalid.status_code.unwrap().as_u16(), 400);
 
+    let unsupported_standard = TestClient::post("http://server/api/v1/entities")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({
+            "space_id": space_id,
+            "entity_type": "cx.unsupported.object",
+            "title": "Unsupported"
+        }))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(unsupported_standard.status_code.unwrap().as_u16(), 400);
+
     for (entity_type, title) in [
+        ("cx.task", "Task"),
         ("cx.channel", "Support"),
         ("cx.topic", "Roadmap"),
-        ("cx.social.post", "Launch post"),
-        ("cx.comment", "Review comment"),
         ("cx.memory.semantic", "Decision memory"),
         ("cx.agent.run", "Agent run"),
         ("com.example.widget", "Custom widget"),
@@ -1537,6 +2473,19 @@ async fn schema_registry_contracts_work() {
             .any(|schema| {
                 schema["schema_id"] == "cx.schema.entity.task.v1" && schema["active"] == true
             })
+    );
+    let flow_schemas: Value = TestClient::get("http://server/api/v1/schemas?kind=flow")
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert!(
+        flow_schemas["schemas"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|schema| schema["schema_id"] == "cx.schema.flow.v1" && schema["active"] == true)
     );
     let operation_schemas: Value = TestClient::get("http://server/api/v1/schemas?kind=operation")
         .send(&app_from_state(state.clone()))
@@ -1823,6 +2772,15 @@ async fn view_endpoints_project_common_presentation_shapes() {
         .await
         .unwrap();
     assert_eq!(non_rankable_authz["allowed"], false);
+    assert_eq!(
+        non_rankable_authz["reason_code"].as_str().unwrap(),
+        "constraints_not_satisfied"
+    );
+    assert!(
+        non_rankable_authz["reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("allowed_entity_facets"))
+    );
 
     let timeline: Value = TestClient::get(format!(
         "http://server/api/v1/views/virtual-timeline?space_id={space_id}&entity_type=cx.task&kind=timeline"
@@ -1874,7 +2832,8 @@ async fn index_product_endpoints_return_demo_projection_shapes() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(inbox["rooms"].as_array().unwrap().len(), 1);
+    assert_eq!(inbox["flows"].as_array().unwrap().len(), 1);
+    assert_eq!(inbox["flows"][0]["flow"]["schema"], "cx.schema.flow.v1");
 
     let search: Value = TestClient::post("http://server/api/v1/index/search")
         .json(&serde_json::json!({"query": "demo", "entity_types": ["space"], "limit": 5}))
@@ -1976,6 +2935,144 @@ async fn broader_protocol_surface_returns_contract_shapes() {
         .unwrap();
     assert_eq!(ice["service_did"], "did:web:soland.local");
     assert!(ice["ice_servers"].is_array());
+}
+
+#[tokio::test]
+async fn admin_collection_surfaces_return_sodmin_shapes() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+
+    let unauthenticated = TestClient::get("http://server/api/v1/admin/actors")
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(unauthenticated.status_code, Some(StatusCode::UNAUTHORIZED));
+
+    let collections = [
+        ("actors", "actors"),
+        ("spaces", "spaces"),
+        ("devices", "devices"),
+        ("capabilities", "capabilities"),
+        ("federation", "federation"),
+        ("applets", "applets"),
+        ("agents", "agents"),
+        ("reports", "reports"),
+        ("invite-tokens", "invite_tokens"),
+        ("audit", "audit"),
+        ("policy", "policy"),
+        ("media", "media"),
+    ];
+    for (resource, field) in collections {
+        let body: Value = TestClient::get(format!("http://server/api/v1/admin/{resource}?limit=5"))
+            .add_header("authorization", format!("Bearer {token}"), true)
+            .send(&app_from_state(state.clone()))
+            .await
+            .take_json()
+            .await
+            .unwrap();
+        assert_eq!(body["resource"], resource);
+        assert!(body["items"].is_array(), "admin {resource} missing items");
+        assert!(
+            body[field].is_array(),
+            "admin {resource} missing typed field"
+        );
+        assert_eq!(
+            body["production_gap"],
+            "admin_authorization_and_durable_pagination"
+        );
+    }
+
+    let actors: Value = TestClient::get("http://server/api/v1/admin/actors")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert!(
+        actors["actors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|actor| { actor["did"] == "did:web:alice.example" && actor["kind"] == "actor" })
+    );
+
+    let devices: Value = TestClient::get("http://server/api/v1/admin/devices")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert!(devices["devices"].as_array().unwrap().iter().any(|device| {
+        device["actor"] == "did:web:alice.example" && device["device_id"] == "dev_alice"
+    }));
+
+    let unknown = TestClient::get("http://server/api/v1/admin/not-real")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .send(&app_from_state(state))
+        .await;
+    assert_eq!(unknown.status_code, Some(StatusCode::NOT_FOUND));
+}
+
+#[tokio::test]
+async fn device_pairing_challenge_and_authorization_surface_work() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+
+    let unauthenticated = TestClient::post("http://server/api/v1/devices/pairing-challenge")
+        .json(&serde_json::json!({"device_id": "dev_phone"}))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(unauthenticated.status_code, Some(StatusCode::UNAUTHORIZED));
+
+    let challenge: Value = TestClient::post("http://server/api/v1/devices/pairing-challenge")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({"device_id": "dev_phone"}))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert!(
+        challenge["challenge_id"]
+            .as_str()
+            .unwrap()
+            .starts_with("cx:device_pairing:")
+    );
+    assert_eq!(challenge["device_id"], "dev_phone");
+    assert_eq!(
+        challenge["production_gap"],
+        "device_pairing_proof_verification"
+    );
+
+    let authorized: Value = TestClient::post("http://server/api/v1/devices/authorize-pairing")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({
+            "challenge_id": challenge["challenge_id"],
+            "device_id": "dev_phone",
+            "display_name": "Paired Phone",
+            "proof": {"alg": "dev-none"}
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(authorized["status"], "authorized");
+    assert_eq!(authorized["device"]["device_id"], "dev_phone");
+    assert_eq!(
+        authorized["authorization_event"]["event_type"],
+        "cx.device.pairing.authorized"
+    );
+    assert_eq!(
+        authorized["production_gap"],
+        "authorization_event_not_yet_in_operation_stream"
+    );
+    assert!(state.audit_log.lock().unwrap().iter().any(|event| {
+        event["action"] == "device.authorize_pairing"
+            && event["outcome"] == "accepted"
+            && event["target"]["target_device_id"] == "dev_phone"
+    }));
 }
 
 #[tokio::test]
@@ -2192,6 +3289,41 @@ async fn federation_rejects_replayed_operations() {
     assert!(invalid_push["accepted"].as_array().unwrap().is_empty());
     assert_eq!(invalid_push["rejected"][0]["reason"], "invalid_semantics");
 
+    let legacy_push_operation = Operation::create(
+        OperationId::new("cx:operation:federation-legacy-contract").unwrap(),
+        SpaceId::new("cx:space:federation").unwrap(),
+        kinds::CX_MESSAGE_CREATE,
+        serde_json::json!({
+            "event_id": "cx:event:federation-legacy-contract",
+            "sender": "did:web:remote.example",
+            "room_id": "!legacy:example.com",
+            "body": "legacy contract field"
+        }),
+    );
+    let legacy_push: Value = TestClient::post("http://server/api/v1/federation/push-operations")
+        .json(&serde_json::json!({
+            "origin": "did:web:remote.example",
+            "destination": "did:web:soland.local",
+            "space_id": "cx:space:federation",
+            "service_binding_ref": "did:web:remote.example#soland",
+            "operations": [legacy_push_operation]
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert!(legacy_push["accepted"].as_array().unwrap().is_empty());
+    assert_eq!(
+        legacy_push["rejected"][0]["operation_id"],
+        "cx:operation:federation-legacy-contract"
+    );
+    assert_eq!(legacy_push["rejected"][0]["reason"], "invalid_semantics");
+    assert_eq!(
+        legacy_push["rejected"][0]["message"],
+        "removed legacy subject/room/card contract is forbidden on the active v1 wire"
+    );
+
     let redaction = Operation::create(
         OperationId::new("cx:operation:federation-redaction").unwrap(),
         SpaceId::new("cx:space:federation").unwrap(),
@@ -2296,9 +3428,47 @@ async fn federation_transactions_are_idempotent_by_origin_and_body() {
                 "service_binding_ref": "did:web:remote.example#soland",
                 "operations": []
             }))
-            .send(&app_from_state(state))
+            .send(&app_from_state(state.clone()))
             .await;
     assert_eq!(wrong_destination.status_code.unwrap().as_u16(), 403);
+
+    let legacy_transaction_operation = Operation::create(
+        OperationId::new("cx:operation:federation-txn-legacy-contract").unwrap(),
+        SpaceId::new("cx:space:federation-txn").unwrap(),
+        kinds::CX_MESSAGE_CREATE,
+        serde_json::json!({
+            "event_id": "cx:event:federation-txn-legacy-contract",
+            "sender": "did:web:remote.example",
+            "flow_id": "cx:card:legacy-card",
+            "body": "legacy typed id"
+        }),
+    );
+    let legacy_transaction: Value =
+        TestClient::put("http://server/api/v1/federation/transactions/txn-legacy-contract")
+            .json(&serde_json::json!({
+                "origin": "did:web:remote.example",
+                "destination": "did:web:soland.local",
+                "service_binding_ref": "did:web:remote.example#soland",
+                "operations": [legacy_transaction_operation]
+            }))
+            .send(&app_from_state(state.clone()))
+            .await
+            .take_json()
+            .await
+            .unwrap();
+    assert!(legacy_transaction["accepted"].as_array().unwrap().is_empty());
+    assert_eq!(
+        legacy_transaction["rejected"][0]["operation_id"],
+        "cx:operation:federation-txn-legacy-contract"
+    );
+    assert_eq!(
+        legacy_transaction["rejected"][0]["reason"],
+        "invalid_semantics"
+    );
+    assert_eq!(
+        legacy_transaction["rejected"][0]["message"],
+        "removed legacy subject/room/card contract is forbidden on the active v1 wire"
+    );
 }
 
 #[tokio::test]
@@ -2845,6 +4015,42 @@ async fn auth_keys_device_messages_and_blobs_work() {
         .await;
     assert_eq!(plaintext_push.status_code.unwrap().as_u16(), 400);
 
+    let mut legacy_field_push = TestClient::post("http://server/api/v1/push/notify")
+        .json(&serde_json::json!({
+            "notification": {
+                "type": "blind_wakeup",
+                "devices": [{"device_id": "dev_alice"}],
+                "room_id": "!legacy:example.com"
+            }
+        }))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(legacy_field_push.status_code.unwrap().as_u16(), 400);
+    let legacy_field_push_body: Value = legacy_field_push.take_json().await.unwrap();
+    assert_eq!(legacy_field_push_body["error"]["errcode"], "invalid_param");
+    assert_eq!(
+        legacy_field_push_body["error"]["message"],
+        "removed legacy subject/room/card contract is forbidden on the active v1 wire"
+    );
+
+    let mut legacy_typed_id_push = TestClient::post("http://server/api/v1/push/notify")
+        .json(&serde_json::json!({
+            "notification": {
+                "type": "blind_wakeup",
+                "devices": [{"device_id": "dev_alice"}],
+                "flow_id": "cx:card:legacy-card"
+            }
+        }))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(legacy_typed_id_push.status_code.unwrap().as_u16(), 400);
+    let legacy_typed_id_push_body: Value = legacy_typed_id_push.take_json().await.unwrap();
+    assert_eq!(legacy_typed_id_push_body["error"]["errcode"], "invalid_param");
+    assert_eq!(
+        legacy_typed_id_push_body["error"]["message"],
+        "removed legacy subject/room/card contract is forbidden on the active v1 wire"
+    );
+
     let notify: Value = TestClient::post("http://server/api/v1/push/notify")
         .json(&serde_json::json!({
             "notification": {
@@ -2858,6 +4064,169 @@ async fn auth_keys_device_messages_and_blobs_work() {
         .await
         .unwrap();
     assert_eq!(notify["rejected"].as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn keys_query_hides_revoked_device() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let desktop = dev_token_for_device(
+        state.clone(),
+        "did:web:alice.example",
+        "dev_alice",
+        "Alice Desktop",
+    )
+    .await;
+    let mobile = dev_token_for_device(
+        state.clone(),
+        "did:web:alice.example",
+        "dev_phone",
+        "Alice Phone",
+    )
+    .await;
+
+    let _desktop_keys: Value = TestClient::post("http://server/api/v1/keys/upload")
+        .add_header("authorization", format!("Bearer {desktop}"), true)
+        .json(&serde_json::json!({
+            "device_id": "dev_alice",
+            "device_keys": {"alg": "mls-rfc9420", "key": "desktop-device-key"},
+            "principal_signing_keys": [{"kid": "did:web:alice.example#principal", "key": "principal-key"}],
+            "recovery_keys": [{"kid": "did:web:alice.example#recovery", "key": "recovery-key"}],
+            "session_keys": [{"kid": "did:web:alice.example#session", "key": "session-key"}],
+            "agent_keys": [{"kid": "did:web:alice.example#agent", "key": "agent-key"}],
+            "one_time_keys": [{"key_id": "desktop-otk", "key": "one-time"}],
+            "fallback_keys": {"signed_curve25519:desktop": {"key": "fallback-desktop"}},
+            "mls_key_packages": [{"package_id": "desktop-package", "key": "opaque-package"}],
+            "backup_restore_keys": [{"kid": "did:web:alice.example#backup", "key": "backup-key"}],
+            "device_signature": {"alg": "none"}
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+
+    let _phone_keys: Value = TestClient::post("http://server/api/v1/keys/upload")
+        .add_header("authorization", format!("Bearer {mobile}"), true)
+        .json(&serde_json::json!({
+            "device_id": "dev_phone",
+            "device_keys": {"alg": "mls-rfc9420", "key": "phone-device-key"},
+            "principal_signing_keys": [{"kid": "did:web:alice.example#principal", "key": "principal-key"}],
+            "recovery_keys": [{"kid": "did:web:alice.example#recovery", "key": "recovery-key"}],
+            "session_keys": [{"kid": "did:web:alice.example#session", "key": "session-key"}],
+            "agent_keys": [{"kid": "did:web:alice.example#agent", "key": "agent-key"}],
+            "one_time_keys": [{"key_id": "phone-otk", "key": "one-time"}],
+            "fallback_keys": {"signed_curve25519:phone": {"key": "fallback-phone"}},
+            "mls_key_packages": [{"package_id": "phone-package", "key": "opaque-package"}],
+            "backup_restore_keys": [{"kid": "did:web:alice.example#backup", "key": "backup-key"}],
+            "device_signature": {"alg": "none"}
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+
+    let pre_revoke_query: Value = TestClient::post("http://server/api/v1/keys/query")
+        .add_header("authorization", format!("Bearer {desktop}"), true)
+        .json(&serde_json::json!({
+            "device_keys": {"did:web:alice.example": ["dev_alice", "dev_phone"]}
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(
+        pre_revoke_query["device_keys"]["did:web:alice.example"]["dev_alice"]["device_keys"]["key"],
+        "desktop-device-key"
+    );
+    assert_eq!(
+        pre_revoke_query["device_keys"]["did:web:alice.example"]["dev_phone"]["device_keys"]["key"],
+        "phone-device-key"
+    );
+
+    let logout: Value = TestClient::post("http://server/api/v1/auth/logout")
+        .add_header("authorization", format!("Bearer {mobile}"), true)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(logout["revoked"], true);
+
+    let post_revoke_query: Value = TestClient::post("http://server/api/v1/keys/query")
+        .add_header("authorization", format!("Bearer {desktop}"), true)
+        .json(&serde_json::json!({
+            "device_keys": {"did:web:alice.example": ["dev_alice", "dev_phone"]}
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert!(post_revoke_query["device_keys"]["did:web:alice.example"]["dev_phone"].is_null());
+    assert_eq!(
+        post_revoke_query["device_keys"]["did:web:alice.example"]["dev_alice"]["device_keys"]["key"],
+        "desktop-device-key"
+    );
+}
+
+#[tokio::test]
+async fn revoked_device_blocks_encrypted_writes() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let device_token = dev_token_for_device(
+        state.clone(),
+        "did:web:alice.example",
+        "dev_mobile",
+        "Alice Mobile",
+    )
+    .await;
+    let stale_session = dev_token_for_device(
+        state.clone(),
+        "did:web:alice.example",
+        "dev_mobile",
+        "Alice Mobile",
+    )
+    .await;
+
+    let logout: Value = TestClient::post("http://server/api/v1/auth/logout")
+        .add_header("authorization", format!("Bearer {device_token}"), true)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(logout["revoked"], true);
+
+    let blocked_send = TestClient::post("http://server/api/v1/messages/send")
+        .add_header("authorization", format!("Bearer {stale_session}"), true)
+        .json(&serde_json::json!({
+            "space_id": "cx:space:01js0sp0000000000000000000",
+            "content": encrypted_envelope("cx.message.v1", "blocked-ciphertext"),
+            "encrypted": true
+        }))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(blocked_send.status_code.unwrap().as_u16(), 401);
+
+    let blocked_upload = TestClient::post("http://server/api/v1/keys/upload")
+        .add_header("authorization", format!("Bearer {stale_session}"), true)
+        .json(&serde_json::json!({
+            "device_id": "dev_mobile",
+            "device_keys": {"alg": "mls-rfc9420", "key": "new-key"},
+            "principal_signing_keys": [],
+            "recovery_keys": [],
+            "session_keys": [],
+            "agent_keys": [],
+            "one_time_keys": [],
+            "fallback_keys": {},
+            "mls_key_packages": [],
+            "backup_restore_keys": [],
+            "device_signature": {"alg": "none"}
+        }))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(blocked_upload.status_code.unwrap().as_u16(), 401);
 }
 
 #[tokio::test]
@@ -2948,6 +4317,62 @@ async fn to_device_messages_survive_duplicate_sync_until_cursor_ack() {
 }
 
 #[tokio::test]
+async fn device_messages_evicted_after_session_logout() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+
+    TestClient::put("http://server/api/v1/device_messages/logout-txn")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({
+            "messages": {
+                "did:web:alice.example": {
+                    "dev_alice": {
+                        "type": "cx.mls.welcome",
+                        "content": encrypted_envelope("cx.mls.welcome", "logout-ciphertext")
+                    }
+                }
+            }
+        }))
+        .send(&app_from_state(state.clone()))
+        .await;
+
+    let pre_logout: Value = TestClient::get("http://server/api/v1/device_messages")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(pre_logout["events"].as_array().unwrap().len(), 1);
+
+    let logout: Value = TestClient::post("http://server/api/v1/auth/logout")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(logout["ok"], true);
+    assert_eq!(logout["revoked"], true);
+
+    let revoked_session_messages = TestClient::get("http://server/api/v1/device_messages")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(revoked_session_messages.status_code.unwrap().as_u16(), 401);
+
+    let new_token = dev_token(state.clone()).await;
+    let post_logout: Value = TestClient::get("http://server/api/v1/device_messages")
+        .add_header("authorization", format!("Bearer {new_token}"), true)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert!(post_logout["events"].as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn policy_check_and_validation_work() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
@@ -3026,6 +4451,7 @@ async fn policy_check_and_validation_work() {
         .unwrap();
     assert_eq!(denied["decision"], "deny");
     assert_eq!(denied["reason_code"], "policy_denied");
+    assert_eq!(denied["policy_id"], policy_id);
     assert_eq!(denied["obligations"][0]["type"], "audit");
 
     let deleted: Value = TestClient::delete(format!("http://server/api/v1/policies/{policy_id}"))
@@ -3142,6 +4568,14 @@ async fn plaintext_policy_applies_to_repo_and_federation_message_ingest() {
     assert_eq!(denied_repo.status_code.unwrap(), StatusCode::FORBIDDEN);
     let denied_repo_body: Value = denied_repo.take_json().await.unwrap();
     assert_eq!(denied_repo_body["error"]["errcode"], "policy_denied");
+    {
+        let audits = state.audit_log.lock().expect("audit log lock");
+        assert!(audits.iter().any(|event| {
+            event["action"] == "repo.submit_commit"
+                && event["outcome"] == "policy_denied"
+                && event["target"]["reason"] == "policy_denied"
+        }));
+    }
 
     let federation_operation = Operation::create(
         OperationId::new("cx:operation:plaintext-policy-federation").unwrap(),
@@ -3573,6 +5007,213 @@ async fn repo_adapter_memory_submit_list_get_and_sync_work() {
         .send(&app_from_state(state))
         .await;
     assert_eq!(invalid.status_code.unwrap().as_u16(), 400);
+}
+
+#[tokio::test]
+async fn repo_submit_commit_cas_conflict_and_idempotent_duplicate() {
+    let state = AppState::new(test_config(), Db { pool: None });
+
+    let first_operation = Operation::create(
+        OperationId::new("cx:operation:cas-idem").unwrap(),
+        SpaceId::new("cx:space:01js0sp0000000000000000000").unwrap(),
+        kinds::CX_MESSAGE_CREATE,
+        serde_json::json!({
+            "event_id": "cx:event:cas-idem",
+            "sender": "did:web:alice.example",
+            "body": "idempotent payload",
+            "encrypted": false
+        }),
+    );
+    let first_operation_digest = Hash::new(first_operation.operation_digest().unwrap()).unwrap();
+
+    let mut first_commit = Commit::new(
+        CommitId::new("cx:commit:cas-idem").unwrap(),
+        "did:web:alice.example",
+        Did::new("did:web:alice.example").unwrap(),
+        1,
+    );
+    first_commit.operations.push(first_operation_digest);
+    first_commit.proofs.push(dummy_proof());
+
+    let first_submit: Value = TestClient::post("http://server/api/v1/repo/submit-commit")
+        .json(&serde_json::json!({
+            "repo_id": "did:web:alice.example",
+            "expected_head": null,
+            "operations": [first_operation],
+            "commit": first_commit.clone()
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(first_submit["status"], "accepted");
+    let first_head = first_submit["head_commit"].as_str().unwrap().to_owned();
+
+    let duplicate_submit: Value = TestClient::post("http://server/api/v1/repo/submit-commit")
+        .json(&serde_json::json!({
+            "repo_id": "did:web:alice.example",
+            "expected_head": null,
+            "operations": [first_operation],
+            "commit": first_commit
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(duplicate_submit["status"], "accepted");
+    assert_eq!(
+        duplicate_submit["head_commit"].as_str().unwrap(),
+        first_head
+    );
+
+    let conflicting_operation = Operation::create(
+        OperationId::new("cx:operation:cas-idem").unwrap(),
+        SpaceId::new("cx:space:01js0sp0000000000000000000").unwrap(),
+        kinds::CX_MESSAGE_CREATE,
+        serde_json::json!({
+            "event_id": "cx:event:cas-idem",
+            "sender": "did:web:alice.example",
+            "body": "different payload",
+            "encrypted": false
+        }),
+    );
+    let conflicting_operation_digest =
+        Hash::new(conflicting_operation.operation_digest().unwrap()).unwrap();
+    let mut conflicting_commit = Commit::new(
+        CommitId::new("cx:commit:cas-idem-conflict").unwrap(),
+        "did:web:alice.example",
+        Did::new("did:web:alice.example").unwrap(),
+        2,
+    );
+    conflicting_commit
+        .operations
+        .push(conflicting_operation_digest);
+    conflicting_commit.proofs.push(dummy_proof());
+
+    let conflicting_submit: Value = TestClient::post("http://server/api/v1/repo/submit-commit")
+        .json(&serde_json::json!({
+            "repo_id": "did:web:alice.example",
+            "expected_head": first_head,
+            "operations": [conflicting_operation],
+            "commit": conflicting_commit
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(conflicting_submit["error"]["errcode"], "quarantine");
+
+    let mut stale_commit = Commit::new(
+        CommitId::new("cx:commit:stale-head").unwrap(),
+        "did:web:alice.example",
+        Did::new("did:web:alice.example").unwrap(),
+        2,
+    );
+    stale_commit.proofs.push(dummy_proof());
+    let mut stale = TestClient::post("http://server/api/v1/repo/submit-commit")
+        .json(&serde_json::json!({
+            "repo_id": "did:web:alice.example",
+            "expected_head": "cx:commit:not-real",
+            "commit": stale_commit
+        }))
+        .send(&app_from_state(state))
+        .await;
+    assert_eq!(stale.status_code.unwrap().as_u16(), 409);
+    let stale_body: Value = stale.take_json().await.unwrap();
+    assert_eq!(stale_body["error"]["errcode"], "cas_conflict");
+}
+
+#[tokio::test]
+async fn repo_submit_commit_operation_id_different_digest_quarantine() {
+    let state = AppState::new(test_config(), Db { pool: None });
+
+    let operation = Operation::create(
+        OperationId::new("cx:operation:quarantine-op").unwrap(),
+        SpaceId::new("cx:space:01js0sp0000000000000000000").unwrap(),
+        kinds::CX_MESSAGE_CREATE,
+        serde_json::json!({
+            "event_id": "cx:event:quarantine-op",
+            "sender": "did:web:alice.example",
+            "body": "first payload",
+            "encrypted": false
+        }),
+    );
+    let operation_digest = Hash::new(operation.operation_digest().unwrap()).unwrap();
+
+    let mut first_commit = Commit::new(
+        CommitId::new("cx:commit:quarantine-op").unwrap(),
+        "did:web:alice.example",
+        Did::new("did:web:alice.example").unwrap(),
+        1,
+    );
+    first_commit.operations.push(operation_digest);
+    first_commit.proofs.push(dummy_proof());
+
+    let first_submit: Value = TestClient::post("http://server/api/v1/repo/submit-commit")
+        .json(&serde_json::json!({
+            "repo_id": "did:web:alice.example",
+            "expected_head": null,
+            "operations": [operation],
+            "commit": first_commit.clone()
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(first_submit["status"], "accepted");
+    let head_commit = first_submit["head_commit"].as_str().unwrap().to_owned();
+
+    let duplicate_operation = Operation::create(
+        OperationId::new("cx:operation:quarantine-op").unwrap(),
+        SpaceId::new("cx:space:01js0sp0000000000000000000").unwrap(),
+        kinds::CX_MESSAGE_CREATE,
+        serde_json::json!({
+            "event_id": "cx:event:quarantine-op",
+            "sender": "did:web:alice.example",
+            "body": "different payload",
+            "encrypted": false
+        }),
+    );
+    let duplicate_operation_digest =
+        Hash::new(duplicate_operation.operation_digest().unwrap()).unwrap();
+    let mut duplicate_commit = Commit::new(
+        CommitId::new("cx:commit:quarantine-op-different").unwrap(),
+        "did:web:alice.example",
+        Did::new("did:web:alice.example").unwrap(),
+        2,
+    );
+    duplicate_commit.operations.push(duplicate_operation_digest);
+    duplicate_commit.proofs.push(dummy_proof());
+
+    let duplicate_submit: Value = TestClient::post("http://server/api/v1/repo/submit-commit")
+        .json(&serde_json::json!({
+            "repo_id": "did:web:alice.example",
+            "expected_head": head_commit,
+            "operations": [duplicate_operation],
+            "commit": duplicate_commit
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(duplicate_submit["error"]["errcode"], "quarantine");
+    assert!(
+        duplicate_submit["error"]["error"]
+            .as_str()
+            .unwrap()
+            .contains("conflicting bytes for idempotent object")
+    );
+
+    assert!(state.audit_log.lock().unwrap().iter().any(|event| {
+        event["action"] == "repo.submit_commit"
+            && event["outcome"] == "quarantine"
+            && event["target"]["commit_id"] == "cx:commit:quarantine-op-different"
+    }));
 }
 
 fn dummy_proof() -> Proof {

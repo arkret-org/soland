@@ -9,6 +9,7 @@ use contrix_sdk::{
 };
 use serde_json::{Value, json};
 
+use crate::artifacts;
 use crate::authz::AuthzEngine;
 use crate::config::AppConfig;
 use crate::db::Db;
@@ -39,6 +40,7 @@ pub struct AppState {
     pub space_invites: Arc<Mutex<BTreeMap<String, SpaceInviteRecord>>>,
     pub sessions: Arc<Mutex<BTreeMap<String, SessionRecord>>>,
     pub messages: Arc<Mutex<Vec<MessageRecord>>>,
+    pub events: Arc<Mutex<BTreeMap<String, CanonicalEventRecord>>>,
     pub projection_events: Arc<Mutex<Vec<ProjectionEventRecord>>>,
     pub devices: Arc<Mutex<BTreeMap<String, BTreeMap<String, Value>>>>,
     pub device_messages: Arc<Mutex<VecDeque<DeviceMessageRecord>>>,
@@ -161,6 +163,20 @@ pub struct MessageRecord {
     pub content: Value,
     pub encrypted: bool,
     pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Clone, Debug)]
+pub struct CanonicalEventRecord {
+    pub event_id: String,
+    pub actor_id: String,
+    pub actor_seq: u64,
+    pub space_id: Option<String>,
+    pub kind: String,
+    pub schema_id: String,
+    pub canonical_digest: String,
+    pub canonical_bytes: Vec<u8>,
+    pub envelope: Value,
+    pub received_at: chrono::DateTime<chrono::Utc>,
 }
 
 #[derive(Clone, Debug)]
@@ -365,6 +381,7 @@ impl AppState {
             space_invites: Arc::new(Mutex::new(BTreeMap::new())),
             sessions: Arc::new(Mutex::new(BTreeMap::new())),
             messages: Arc::new(Mutex::new(Vec::new())),
+            events: Arc::new(Mutex::new(BTreeMap::new())),
             projection_events: Arc::new(Mutex::new(Vec::new())),
             devices: Arc::new(Mutex::new(BTreeMap::new())),
             device_messages: Arc::new(Mutex::new(VecDeque::new())),
@@ -390,17 +407,41 @@ fn core_schema_records(
     now: chrono::DateTime<chrono::Utc>,
     service_did: &str,
 ) -> BTreeMap<String, SchemaRecord> {
-    [
+    let mut records = artifacts::schema_entries()
+        .iter()
+        .map(|entry| {
+            let kind = schema_kind_from_id(&entry.schema_id);
+            (
+                entry.schema_id.clone(),
+                SchemaRecord {
+                    schema_id: entry.schema_id.clone(),
+                    kind,
+                    version: schema_version_from_id(&entry.schema_id),
+                    name: Some(schema_name_from_id(&entry.schema_id)),
+                    owner: service_did.to_owned(),
+                    definition: json!({
+                        "$id": entry.schema_id.clone(),
+                        "$schema": "https://json-schema.org/draft/2020-12/schema",
+                        "type": "object",
+                        "additionalProperties": true,
+                        "x-contrix-artifact": {
+                            "source": "contrix-spec/artifacts",
+                            "file": entry.file.clone()
+                        }
+                    }),
+                    active: true,
+                    created_at: now,
+                    updated_at: now,
+                },
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+
+    for (schema_id, kind, name) in [
         ("cx.schema.entity.generic.v1", "entity", "Generic entity"),
         ("cx.schema.entity.task.v1", "entity", "Task entity"),
         ("cx.schema.entity.channel.v1", "entity", "Channel entity"),
         ("cx.schema.entity.topic.v1", "entity", "Topic entity"),
-        ("cx.schema.entity.comment.v1", "entity", "Comment entity"),
-        (
-            "cx.schema.entity.social_post.v1",
-            "entity",
-            "Social post entity",
-        ),
         (
             "cx.schema.entity.memory_semantic.v1",
             "entity",
@@ -476,12 +517,10 @@ fn core_schema_records(
             "envelope",
             "Encrypted payload envelope",
         ),
-    ]
-    .into_iter()
-    .map(|(schema_id, kind, name)| {
-        (
-            schema_id.to_owned(),
-            SchemaRecord {
+    ] {
+        records
+            .entry(schema_id.to_owned())
+            .or_insert_with(|| SchemaRecord {
                 schema_id: schema_id.to_owned(),
                 kind: kind.to_owned(),
                 version: "1".to_owned(),
@@ -490,13 +529,38 @@ fn core_schema_records(
                 definition: json!({
                     "$id": schema_id,
                     "type": "object",
-                    "additionalProperties": true
+                    "additionalProperties": true,
+                    "x-contrix-compatibility": "soland-local-schema-alias"
                 }),
                 active: true,
                 created_at: now,
                 updated_at: now,
-            },
-        )
-    })
-    .collect()
+            });
+    }
+
+    records
+}
+
+fn schema_kind_from_id(schema_id: &str) -> String {
+    schema_id
+        .strip_prefix("cx.schema.")
+        .and_then(|rest| rest.strip_suffix(".v1").or(Some(rest)))
+        .and_then(|rest| rest.split(['.', '_']).next())
+        .filter(|kind| !kind.is_empty())
+        .unwrap_or("schema")
+        .to_owned()
+}
+
+fn schema_version_from_id(schema_id: &str) -> String {
+    schema_id
+        .rsplit_once(".v")
+        .map(|(_, version)| version.to_owned())
+        .unwrap_or_else(|| "1".to_owned())
+}
+
+fn schema_name_from_id(schema_id: &str) -> String {
+    schema_id
+        .strip_prefix("cx.schema.")
+        .unwrap_or(schema_id)
+        .replace(['.', '_'], " ")
 }
