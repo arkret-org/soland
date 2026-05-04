@@ -249,6 +249,18 @@ pub fn router_with_rate_limiter_config(
                         .get(key_backups_describe),
                 )
                 .push(
+                    Router::with_path("keys/backups/restore-state/describe")
+                        .get(get_key_backup_restore_state_describe),
+                )
+                .push(
+                    Router::with_path("keys/backups/restore-state/export")
+                        .get(get_key_backup_restore_state_export),
+                )
+                .push(
+                    Router::with_path("keys/backups/restore-state/import")
+                        .post(post_key_backup_restore_state_import),
+                )
+                .push(
                     Router::with_path("keys/backups/{backup_id}/restore/describe")
                         .get(get_key_backup_restore_describe),
                 )
@@ -910,6 +922,27 @@ const CONTRACT_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &[
         "push",
         "cx.push.outbound_bridge_cache_import",
         "import outbound push bridge cache snapshots",
+    ),
+    (
+        "/api/v1/keys/backups/restore-state/describe",
+        PathItemType::Get,
+        "keys",
+        "cx.keys.backups.restore_state_describe",
+        "describe restore-state snapshot store scaffold",
+    ),
+    (
+        "/api/v1/keys/backups/restore-state/export",
+        PathItemType::Get,
+        "keys",
+        "cx.keys.backups.restore_state_export",
+        "export restore-state snapshots",
+    ),
+    (
+        "/api/v1/keys/backups/restore-state/import",
+        PathItemType::Post,
+        "keys",
+        "cx.keys.backups.restore_state_import",
+        "import restore-state snapshots",
     ),
     (
         "/api/v1/keys/backups/{backup_id}",

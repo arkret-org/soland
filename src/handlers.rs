@@ -292,6 +292,9 @@ pub async fn recovery_contract_stack(_depot: &mut Depot, res: &mut Response) {
         "version": "2026-05-04-scaffold",
         "device_messages_describe_path": "/api/v1/device_messages/describe",
         "key_backups_describe_path": "/api/v1/keys/backups/describe",
+        "restore_state_describe_path": "/api/v1/keys/backups/restore-state/describe",
+        "restore_state_export_path": "/api/v1/keys/backups/restore-state/export",
+        "restore_state_import_path": "/api/v1/keys/backups/restore-state/import",
         "restore_describe_path": "/api/v1/keys/backups/{backup_id}/restore/describe",
         "restore_start_path": "/api/v1/keys/backups/{backup_id}/restore/start",
         "restore_ticket_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}",
@@ -357,6 +360,10 @@ pub async fn key_backups_describe(_depot: &mut Depot, res: &mut Response) {
         "version": "2026-05-04-scaffold",
         "collection_path": "/api/v1/keys/backups",
         "item_path": "/api/v1/keys/backups/{backup_id}",
+        "restore_state_describe_path": "/api/v1/keys/backups/restore-state/describe",
+        "restore_state_export_path": "/api/v1/keys/backups/restore-state/export",
+        "restore_state_import_path": "/api/v1/keys/backups/restore-state/import",
+        "restore_state_store_mode": "process_memory_manual_snapshot_scaffold",
         "restore_describe_path": "/api/v1/keys/backups/{backup_id}/restore/describe",
         "restore_start_path": "/api/v1/keys/backups/{backup_id}/restore/start",
         "restore_ticket_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}",
@@ -382,9 +389,38 @@ pub async fn key_backups_describe(_depot: &mut Depot, res: &mut Response) {
                 }
             ]
         },
+        "restore_state_import_request_example": {
+            "merge_mode": "replace_owned",
+            "records": {
+                "tickets": {
+                    "restore-ticket-backup-alice-01": {
+                        "contract": "contrix.rest.key_backup_restore_ticket.v1",
+                        "backup_id": "backup-alice-01",
+                        "actor": "did:web:alice.example",
+                        "lifecycle_state": "approval_pending",
+                        "todo": "replace scaffold snapshot import with durable restore-state persistence"
+                    }
+                },
+                "approvals": {
+                    "restore-ticket-backup-alice-01": {
+                        "contract": "contrix.rest.key_backup_restore_approval_status.v1",
+                        "actor": "did:web:alice.example",
+                        "state": "pending_review"
+                    }
+                },
+                "executors": {
+                    "restore-ticket-backup-alice-01": {
+                        "contract": "contrix.rest.key_backup_restore_executor_status.v1",
+                        "actor": "did:web:alice.example",
+                        "queue_state": "not_queued"
+                    }
+                }
+            }
+        },
         "todos": [
             "TODO: bind key-backups describe examples to durable encrypted backup storage semantics.",
-            "TODO: add explicit rotate/export/import examples once backup revision semantics stabilize."
+            "TODO: add explicit rotate/export/import examples once backup revision semantics stabilize.",
+            "TODO: replace process-memory restore-state export/import with durable snapshot store semantics."
         ]
     })));
 }
@@ -504,6 +540,30 @@ pub async fn integration_describe(_depot: &mut Depot, res: &mut Response) {
                 todo: "TODO: replace in-memory key backup storage with durable encrypted persistence and explicit recovery policy.".to_owned(),
             },
             IntegrationSurfaceDescriptor {
+                name: "key_backup_restore_state_describe".to_owned(),
+                method: "GET".to_owned(),
+                path: "/api/v1/keys/backups/restore-state/describe".to_owned(),
+                contract: "contrix.rest.key_backup_restore_state_store_describe.v1".to_owned(),
+                stability: "scaffold".to_owned(),
+                todo: "TODO: replace process-memory restore-state describe/export/import scaffold with durable snapshot-store semantics.".to_owned(),
+            },
+            IntegrationSurfaceDescriptor {
+                name: "key_backup_restore_state_export".to_owned(),
+                method: "GET".to_owned(),
+                path: "/api/v1/keys/backups/restore-state/export".to_owned(),
+                contract: "contrix.rest.key_backup_restore_state_store_export.v1".to_owned(),
+                stability: "scaffold".to_owned(),
+                todo: "TODO: export restore-state snapshots from a durable store instead of only actor-filtered process memory.".to_owned(),
+            },
+            IntegrationSurfaceDescriptor {
+                name: "key_backup_restore_state_import".to_owned(),
+                method: "POST".to_owned(),
+                path: "/api/v1/keys/backups/restore-state/import".to_owned(),
+                contract: "contrix.rest.key_backup_restore_state_store_import.v1".to_owned(),
+                stability: "scaffold".to_owned(),
+                todo: "TODO: validate imported restore-state snapshots against trust, freshness, and actor ownership policy.".to_owned(),
+            },
+            IntegrationSurfaceDescriptor {
                 name: "key_backup_restore_describe".to_owned(),
                 method: "GET".to_owned(),
                 path: "/api/v1/keys/backups/{backup_id}/restore/describe".to_owned(),
@@ -621,6 +681,9 @@ pub async fn integration_describe(_depot: &mut Depot, res: &mut Response) {
                     "contract": "contrix.rest.recovery_contract_stack.v1",
                     "device_messages_describe_path": "/api/v1/device_messages/describe",
                     "key_backups_describe_path": "/api/v1/keys/backups/describe",
+                    "restore_state_describe_path": "/api/v1/keys/backups/restore-state/describe",
+                    "restore_state_export_path": "/api/v1/keys/backups/restore-state/export",
+                    "restore_state_import_path": "/api/v1/keys/backups/restore-state/import",
                     "restore_start_path": "/api/v1/keys/backups/{backup_id}/restore/start",
                     "restore_executor_status_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/status",
                     "restore_executor_enqueue_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/enqueue",
@@ -671,6 +734,10 @@ pub async fn integration_describe(_depot: &mut Depot, res: &mut Response) {
                     "contract": "contrix.rest.key_backups_describe.v1",
                     "schema": "cx.schema.key_backup.v1"
                 },
+                "restore_state_describe_path": "/api/v1/keys/backups/restore-state/describe",
+                "restore_state_export_path": "/api/v1/keys/backups/restore-state/export",
+                "restore_state_import_path": "/api/v1/keys/backups/restore-state/import",
+                "restore_state_store_mode": "process_memory_manual_snapshot_scaffold",
                 "put_request": {
                     "path": "/api/v1/keys/backups/backup-alice-01",
                     "body": {
@@ -757,6 +824,42 @@ pub async fn integration_describe(_depot: &mut Depot, res: &mut Response) {
                     "execution_mode": "scaffold_materialize",
                     "requested_by": "did:web:alice.example",
                     "note": "queue restore materialization scaffold"
+                },
+                "restore_state_describe_response_shape": {
+                    "contract": "contrix.rest.key_backup_restore_state_store_describe.v1",
+                    "snapshot_store_mode": "process_memory_manual_snapshot_scaffold",
+                    "merge_modes": ["replace_owned", "merge_owned"]
+                },
+                "restore_state_export_response_shape": {
+                    "contract": "contrix.rest.key_backup_restore_state_store_export.v1",
+                    "snapshot_store_mode": "process_memory_manual_snapshot_scaffold",
+                    "ticket_count": 1,
+                    "approval_count": 1,
+                    "executor_count": 1
+                },
+                "restore_state_import_request": {
+                    "merge_mode": "replace_owned",
+                    "records": {
+                        "tickets": {
+                            "restore-ticket-backup-alice-01": {
+                                "contract": "contrix.rest.key_backup_restore_ticket.v1",
+                                "backup_id": "backup-alice-01",
+                                "lifecycle_state": "approval_pending"
+                            }
+                        },
+                        "approvals": {
+                            "restore-ticket-backup-alice-01": {
+                                "contract": "contrix.rest.key_backup_restore_approval_status.v1",
+                                "state": "pending_review"
+                            }
+                        },
+                        "executors": {
+                            "restore-ticket-backup-alice-01": {
+                                "contract": "contrix.rest.key_backup_restore_executor_status.v1",
+                                "queue_state": "not_queued"
+                            }
+                        }
+                    }
                 }
             },
             "authz_protocol": {
@@ -9737,6 +9840,10 @@ pub async fn get_key_backup_restore_describe(
         "restore_ticket_kind": "key_backup_restore_request",
         "restore_executor_kind": "key_backup_restore_materialize",
         "restore_approval_kind": "key_backup_restore_approval_workflow",
+        "restore_state_describe_path": "/api/v1/keys/backups/restore-state/describe",
+        "restore_state_export_path": "/api/v1/keys/backups/restore-state/export",
+        "restore_state_import_path": "/api/v1/keys/backups/restore-state/import",
+        "restore_state_store_mode": "process_memory_manual_snapshot_scaffold",
         "principal_authz_check_path": "/api/v1/authz/check",
         "principal_policy_collection_path": "/api/v1/policies",
         "principal_policy_item_path": "/api/v1/policies/{policy_id}",
@@ -9928,6 +10035,9 @@ pub async fn post_key_backup_restore_start(
         "restore_request": payload,
         "restore_ticket_path": format!("/api/v1/keys/backups/restore-tickets/restore-ticket-{backup_id}"),
         "restore_ticket_advance_path": format!("/api/v1/keys/backups/restore-tickets/restore-ticket-{backup_id}/advance"),
+        "restore_state_describe_path": "/api/v1/keys/backups/restore-state/describe",
+        "restore_state_export_path": "/api/v1/keys/backups/restore-state/export",
+        "restore_state_import_path": "/api/v1/keys/backups/restore-state/import",
         "restore_approval_status_path": format!("/api/v1/keys/backups/restore-tickets/restore-ticket-{backup_id}/approvals/status"),
         "restore_approval_submit_path": format!("/api/v1/keys/backups/restore-tickets/restore-ticket-{backup_id}/approvals/submit"),
         "restore_executor_status_path": format!("/api/v1/keys/backups/restore-tickets/restore-ticket-{backup_id}/executor/status"),
@@ -9941,6 +10051,203 @@ pub async fn post_key_backup_restore_start(
             "TODO(keys.backups.restore): persist approval state and restore progress instead of returning scaffold_started.",
             "TODO(keys.backups.restore): hand decrypted backup material into actual device/account recovery flows."
         ]
+    })));
+}
+
+#[handler]
+pub async fn get_key_backup_restore_state_describe(
+    depot: &mut Depot,
+    req: &mut Request,
+    res: &mut Response,
+) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let Some(_session) = auth_or_render(state, req, res) else {
+        return;
+    };
+    res.render(Json(json!({
+        "contract": "contrix.rest.key_backup_restore_state_store_describe.v1",
+        "version": "2026-05-04-scaffold",
+        "snapshot_store_mode": "process_memory_manual_snapshot_scaffold",
+        "describe_path": "/api/v1/keys/backups/restore-state/describe",
+        "export_path": "/api/v1/keys/backups/restore-state/export",
+        "import_path": "/api/v1/keys/backups/restore-state/import",
+        "restore_ticket_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}",
+        "restore_approval_status_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/approvals/status",
+        "restore_executor_status_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/status",
+        "merge_modes": ["replace_owned", "merge_owned"],
+        "example_export_response": {
+            "contract": "contrix.rest.key_backup_restore_state_store_export.v1",
+            "snapshot_store_mode": "process_memory_manual_snapshot_scaffold",
+            "ticket_count": 1,
+            "approval_count": 1,
+            "executor_count": 1
+        },
+        "example_import_request": {
+            "merge_mode": "replace_owned",
+            "records": {
+                "tickets": {
+                    "restore-ticket-backup-alice-01": {
+                        "contract": "contrix.rest.key_backup_restore_ticket.v1",
+                        "backup_id": "backup-alice-01",
+                        "lifecycle_state": "approval_pending"
+                    }
+                },
+                "approvals": {
+                    "restore-ticket-backup-alice-01": {
+                        "contract": "contrix.rest.key_backup_restore_approval_status.v1",
+                        "state": "pending_review"
+                    }
+                },
+                "executors": {
+                    "restore-ticket-backup-alice-01": {
+                        "contract": "contrix.rest.key_backup_restore_executor_status.v1",
+                        "queue_state": "not_queued"
+                    }
+                }
+            }
+        },
+        "todos": [
+            "TODO(keys.backups.restore): replace process-memory restore-state export/import with a durable snapshot store.",
+            "TODO(keys.backups.restore): validate imported snapshots against actor ownership, trust, and freshness policy.",
+            "TODO(keys.backups.restore): feed restore-state snapshots into actual worker/bootstrap flows instead of only debug-grade scaffolds."
+        ]
+    })));
+}
+
+#[handler]
+pub async fn get_key_backup_restore_state_export(
+    depot: &mut Depot,
+    req: &mut Request,
+    res: &mut Response,
+) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let Some(session) = auth_or_render(state, req, res) else {
+        return;
+    };
+    let tickets = actor_restore_state_records(
+        &state
+            .key_backup_restore_tickets
+            .lock()
+            .expect("key backup restore ticket lock"),
+        &session.actor,
+    );
+    let approvals = actor_restore_state_records(
+        &state
+            .key_backup_restore_approval_runs
+            .lock()
+            .expect("key backup restore approval lock"),
+        &session.actor,
+    );
+    let executors = actor_restore_state_records(
+        &state
+            .key_backup_restore_executor_runs
+            .lock()
+            .expect("key backup restore executor lock"),
+        &session.actor,
+    );
+    res.render(Json(json!({
+        "contract": "contrix.rest.key_backup_restore_state_store_export.v1",
+        "version": "2026-05-04-scaffold",
+        "snapshot_version": "2026-05-04-scaffold",
+        "snapshot_store_mode": "process_memory_manual_snapshot_scaffold",
+        "actor": session.actor,
+        "ticket_count": tickets.len(),
+        "approval_count": approvals.len(),
+        "executor_count": executors.len(),
+        "records": {
+            "tickets": tickets,
+            "approvals": approvals,
+            "executors": executors
+        },
+        "exported_at": now(),
+        "todo": "TODO(keys.backups.restore): export restore-state snapshots from a durable store with freshness and integrity metadata."
+    })));
+}
+
+#[handler]
+pub async fn post_key_backup_restore_state_import(
+    depot: &mut Depot,
+    req: &mut Request,
+    res: &mut Response,
+) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let Some(session) = auth_or_render(state, req, res) else {
+        return;
+    };
+    let body = match req.parse_json::<Value>().await {
+        Ok(body) => body,
+        Err(_) => {
+            render_error(
+                res,
+                StatusCode::BAD_REQUEST,
+                "bad_json",
+                "invalid restore-state import request",
+            );
+            return;
+        }
+    };
+    let merge_mode = body
+        .get("merge_mode")
+        .and_then(Value::as_str)
+        .unwrap_or("replace_owned")
+        .to_owned();
+    let records = body
+        .get("records")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let tickets = imported_restore_state_records(records.get("tickets"), &session.actor);
+    let approvals = imported_restore_state_records(records.get("approvals"), &session.actor);
+    let executors = imported_restore_state_records(records.get("executors"), &session.actor);
+
+    {
+        let mut store = state
+            .key_backup_restore_tickets
+            .lock()
+            .expect("key backup restore ticket lock");
+        if merge_mode == "replace_owned" {
+            store.retain(|_, record| !restore_record_owned_by_actor(record, &session.actor));
+        }
+        for (key, value) in tickets.clone() {
+            store.insert(key, value);
+        }
+    }
+    {
+        let mut store = state
+            .key_backup_restore_approval_runs
+            .lock()
+            .expect("key backup restore approval lock");
+        if merge_mode == "replace_owned" {
+            store.retain(|_, record| !restore_record_owned_by_actor(record, &session.actor));
+        }
+        for (key, value) in approvals.clone() {
+            store.insert(key, value);
+        }
+    }
+    {
+        let mut store = state
+            .key_backup_restore_executor_runs
+            .lock()
+            .expect("key backup restore executor lock");
+        if merge_mode == "replace_owned" {
+            store.retain(|_, record| !restore_record_owned_by_actor(record, &session.actor));
+        }
+        for (key, value) in executors.clone() {
+            store.insert(key, value);
+        }
+    }
+
+    res.render(Json(json!({
+        "contract": "contrix.rest.key_backup_restore_state_store_import.v1",
+        "version": "2026-05-04-scaffold",
+        "snapshot_store_mode": "process_memory_manual_snapshot_scaffold",
+        "actor": session.actor,
+        "merge_mode": merge_mode,
+        "imported_ticket_count": tickets.len(),
+        "imported_approval_count": approvals.len(),
+        "imported_executor_count": executors.len(),
+        "restore_state_describe_path": "/api/v1/keys/backups/restore-state/describe",
+        "restore_state_export_path": "/api/v1/keys/backups/restore-state/export",
+        "todo": "TODO(keys.backups.restore): replace restore-state import scaffold with durable snapshot persistence and trust policy."
     })));
 }
 
@@ -10340,6 +10647,51 @@ pub async fn post_key_backup_restore_executor_enqueue(
         "status_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/status"),
         "todo": "TODO(keys.backups.restore): replace enqueue scaffold with durable queue dispatch and restore worker side effects"
     })));
+}
+
+fn restore_record_owned_by_actor(record: &Value, actor: &str) -> bool {
+    record
+        .get("actor")
+        .and_then(Value::as_str)
+        .is_some_and(|value| value == actor)
+}
+
+fn actor_restore_state_records(
+    records: &BTreeMap<String, Value>,
+    actor: &str,
+) -> serde_json::Map<String, Value> {
+    records
+        .iter()
+        .filter_map(|(key, value)| {
+            restore_record_owned_by_actor(value, actor).then(|| (key.clone(), value.clone()))
+        })
+        .collect()
+}
+
+fn imported_restore_state_records(
+    section: Option<&Value>,
+    actor: &str,
+) -> serde_json::Map<String, Value> {
+    section
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(key, value)| {
+            let value = if let Some(object) = value.as_object() {
+                let mut object = object.clone();
+                object.insert("actor".to_owned(), json!(actor));
+                Value::Object(object)
+            } else {
+                json!({
+                    "actor": actor,
+                    "scaffold_payload": value,
+                    "todo": "replace loose restore-state import payloads with validated typed snapshot records"
+                })
+            };
+            (key, value)
+        })
+        .collect()
 }
 
 #[handler]
