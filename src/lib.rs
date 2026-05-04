@@ -261,6 +261,15 @@ pub fn router_with_rate_limiter_config(
                         .post(post_key_backup_restore_state_import),
                 )
                 .push(
+                    Router::with_path("keys/backups/restore-state/durability")
+                        .get(get_key_backup_restore_state_durability),
+                )
+                .push(
+                    Router::with_path("keys/backups/restore-state/checkpoints")
+                        .get(list_key_backup_restore_state_checkpoints)
+                        .post(post_key_backup_restore_state_checkpoint),
+                )
+                .push(
                     Router::with_path("keys/backups/{backup_id}/restore/describe")
                         .get(get_key_backup_restore_describe),
                 )
@@ -335,6 +344,14 @@ pub fn router_with_rate_limiter_config(
                 .push(
                     Router::with_path("keys/backups/restore-tickets/{ticket_id}/activity")
                         .get(get_key_backup_restore_activity),
+                )
+                .push(
+                    Router::with_path("keys/backups/restore-tickets/{ticket_id}/timeline")
+                        .get(get_key_backup_restore_timeline),
+                )
+                .push(
+                    Router::with_path("keys/backups/restore-tickets/{ticket_id}/audit-feed")
+                        .get(get_key_backup_restore_audit_feed),
                 )
                 .push(Router::with_path("recovery/live-snapshot").get(get_recovery_live_snapshot))
                 .push(
@@ -990,6 +1007,27 @@ const CONTRACT_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &[
         "import restore-state snapshots",
     ),
     (
+        "/api/v1/keys/backups/restore-state/durability",
+        PathItemType::Get,
+        "keys",
+        "cx.keys.backups.restore_state_durability",
+        "describe restore-state durability scaffold",
+    ),
+    (
+        "/api/v1/keys/backups/restore-state/checkpoints",
+        PathItemType::Get,
+        "keys",
+        "cx.keys.backups.restore_state_checkpoint_collection",
+        "list restore-state checkpoint scaffolds",
+    ),
+    (
+        "/api/v1/keys/backups/restore-state/checkpoints",
+        PathItemType::Post,
+        "keys",
+        "cx.keys.backups.restore_state_checkpoint_create",
+        "create restore-state checkpoint scaffold",
+    ),
+    (
         "/api/v1/keys/backups/restore-tickets",
         PathItemType::Get,
         "keys",
@@ -1065,6 +1103,20 @@ const CONTRACT_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &[
         "keys",
         "cx.keys.backups.restore_activity",
         "get restore activity scaffold",
+    ),
+    (
+        "/api/v1/keys/backups/restore-tickets/{ticket_id}/timeline",
+        PathItemType::Get,
+        "keys",
+        "cx.keys.backups.restore_timeline",
+        "get restore timeline scaffold",
+    ),
+    (
+        "/api/v1/keys/backups/restore-tickets/{ticket_id}/audit-feed",
+        PathItemType::Get,
+        "keys",
+        "cx.keys.backups.restore_audit_feed",
+        "get restore audit feed scaffold",
     ),
     (
         "/api/v1/recovery/live-snapshot",
