@@ -57,6 +57,7 @@ pub struct OutboundPushBridgeDescribeResponse {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct OutboundPushGatewayContractDescriptor {
+    pub resolve_path: String,
     pub bridge_describe_path: String,
     pub notify_path: String,
     pub accepted_contracts: Vec<String>,
@@ -72,6 +73,36 @@ pub struct OutboundPushDeliveryDescriptor {
     pub request_id_header: String,
     pub idempotency_key_header: String,
     pub payload_mode: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct OutboundPushBridgeResolveRequest {
+    pub push_gateway_url: String,
+    #[serde(default)]
+    pub refresh: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct OutboundPushBridgeResolveResponse {
+    pub push_gateway_url: String,
+    pub service_base_url: String,
+    pub bridge_describe_url: String,
+    pub fetch_state: String,
+    pub cache_state: String,
+    pub fetched_contract: OutboundPushResolvedContract,
+    #[serde(default)]
+    pub todos: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct OutboundPushResolvedContract {
+    pub contract: String,
+    pub expected_notify_path: String,
+    pub expected_operation_id: String,
+    pub expected_origin_service_did_header: String,
+    pub expected_destination_service_did_header: String,
+    pub expected_request_id_header: String,
+    pub expected_idempotency_key_header: String,
 }
 
 #[derive(Debug, Serialize)]

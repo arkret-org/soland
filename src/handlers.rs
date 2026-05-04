@@ -40,7 +40,8 @@ use crate::{
         IdentityReceiptsResponse, IdentityResolveRequest, IdentityResolveResponse,
         AuthBridgeDescribeResponse, AuthBridgeAuthDescriptor, AuthBridgePushDescriptor,
         OutboundPushBridgeDescribeResponse, OutboundPushDeliveryDescriptor,
-        OutboundPushGatewayContractDescriptor,
+        OutboundPushBridgeResolveRequest, OutboundPushBridgeResolveResponse,
+        OutboundPushGatewayContractDescriptor, OutboundPushResolvedContract,
         IndexDescribeResponse, IndexEntityResponse, IndexInboxResponse, IndexNotificationsResponse,
         IndexQueryRequest, IndexQueryResponse, IndexSearchRequest, IndexSearchResponse,
         IndexSpaceHierarchyResponse, IndexThreadResponse, InvitesResponse, KeysClaimRequest,
@@ -153,6 +154,7 @@ pub async fn outbound_push_bridge_describe(depot: &mut Depot, res: &mut Response
         version: "2026-05-04-scaffold".to_owned(),
         api_base_path: "/api/v1/push".to_owned(),
         gateway_contract: OutboundPushGatewayContractDescriptor {
+            resolve_path: "/api/v1/push/outbound/bridge/resolve".to_owned(),
             bridge_describe_path: "/api/v1/push/bridge/describe".to_owned(),
             notify_path: "/api/v1/push/notify".to_owned(),
             accepted_contracts: vec![
@@ -177,6 +179,71 @@ pub async fn outbound_push_bridge_describe(depot: &mut Depot, res: &mut Response
             "TODO(push-outbound): fetch remote gateway bridge metadata from configured push_gateway origins before first delivery".to_owned(),
             "TODO(push-outbound): cache gateway contract snapshots and refuse contract drift without explicit refresh".to_owned(),
             "TODO(push-outbound): bind outbound notify signing/auth policy to the discovered gateway contract instead of static assumptions".to_owned(),
+        ],
+    }));
+}
+
+#[handler]
+pub async fn outbound_push_bridge_resolve(req: &mut Request, res: &mut Response) {
+    let body = match req.parse_json::<OutboundPushBridgeResolveRequest>().await {
+        Ok(body) => body,
+        Err(_) => {
+            render_error(
+                res,
+                StatusCode::BAD_REQUEST,
+                "bad_json",
+                "invalid outbound push bridge resolve request",
+            );
+            return;
+        }
+    };
+
+    let push_gateway_url = body.push_gateway_url.trim().to_owned();
+    if push_gateway_url.is_empty() {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            "push_gateway_url is required",
+        );
+        return;
+    }
+
+    let Some(service_base_url) = derive_push_gateway_service_base_url(&push_gateway_url) else {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            "push_gateway_url must be an absolute push gateway URL",
+        );
+        return;
+    };
+    let bridge_describe_url = join_api_v1_url(&service_base_url, "/api/v1/push/bridge/describe");
+
+    res.render(Json(OutboundPushBridgeResolveResponse {
+        push_gateway_url,
+        service_base_url,
+        bridge_describe_url,
+        fetch_state: if body.refresh {
+            "refresh_requested_scaffold_only".to_owned()
+        } else {
+            "resolved_without_remote_fetch".to_owned()
+        },
+        cache_state: "not_persisted".to_owned(),
+        fetched_contract: OutboundPushResolvedContract {
+            contract: "cx.push.bridge.describe".to_owned(),
+            expected_notify_path: "/api/v1/push/notify".to_owned(),
+            expected_operation_id: "cx.push.notify".to_owned(),
+            expected_origin_service_did_header: "X-Contrix-Origin-Service-Did".to_owned(),
+            expected_destination_service_did_header: "X-Contrix-Destination-Service-Did"
+                .to_owned(),
+            expected_request_id_header: "X-Contrix-Request-Id".to_owned(),
+            expected_idempotency_key_header: "Idempotency-Key".to_owned(),
+        },
+        todos: vec![
+            "TODO(push-outbound): perform live fetch of the remote bridge_describe_url before first delivery".to_owned(),
+            "TODO(push-outbound): persist contract snapshots and freshness metadata instead of returning static cache_state".to_owned(),
+            "TODO(push-outbound): bind outbound delivery policy to fetched auth_modes/privacy descriptors instead of fixed expectations".to_owned(),
         ],
     }));
 }
@@ -14925,4 +14992,39 @@ fn render_error(res: &mut Response, status: StatusCode, code: &str, message: &st
             extra,
         },
     }));
+}
+
+fn derive_push_gateway_service_base_url(push_gateway_url: &str) -> Option<String> {
+    let mut value = push_gateway_url.trim().trim_end_matches('/').to_owned();
+    if value.is_empty() || !value.contains("://") {
+        return None;
+    }
+
+    for suffix in [
+        "/api/v1/push/bridge/describe",
+        "/contrix/push/v1/bridge/describe",
+        "/api/v1/push/notify",
+        "/contrix/push/v1/notify",
+        "/api/v1/push",
+        "/contrix/push/v1",
+    ] {
+        if let Some(prefix) = value.strip_suffix(suffix) {
+            value = prefix.trim_end_matches('/').to_owned();
+            break;
+        }
+    }
+
+    if value.is_empty() { None } else { Some(value) }
+}
+
+fn join_api_v1_url(base: &str, path: &str) -> String {
+    let base = base.trim_end_matches('/');
+    let path = path.trim_start_matches('/');
+    let path = path.strip_prefix("api/v1/").unwrap_or(path);
+
+    if base.ends_with("/api/v1") {
+        format!("{base}/{path}")
+    } else {
+        format!("{base}/api/v1/{path}")
+    }
 }
