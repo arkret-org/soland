@@ -246,6 +246,10 @@ pub fn router_with_rate_limiter_config(
                         .get(get_key_backup_restore_describe),
                 )
                 .push(
+                    Router::with_path("keys/backups/{backup_id}/restore/start")
+                        .post(post_key_backup_restore_start),
+                )
+                .push(
                     Router::with_path("keys/backups/{backup_id}")
                         .put(put_key_backup)
                         .get(get_key_backup)

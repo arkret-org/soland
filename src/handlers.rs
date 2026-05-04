@@ -273,6 +273,14 @@ pub async fn integration_describe(_depot: &mut Depot, res: &mut Response) {
                 todo: "TODO: replace restore-describe scaffold with a real restore ticket / approval / mutation executor chain.".to_owned(),
             },
             IntegrationSurfaceDescriptor {
+                name: "key_backup_restore_start".to_owned(),
+                method: "POST".to_owned(),
+                path: "/api/v1/keys/backups/{backup_id}/restore/start".to_owned(),
+                contract: "contrix.rest.key_backup_restore_start.v1".to_owned(),
+                stability: "scaffold".to_owned(),
+                todo: "TODO: replace restore-start scaffold with durable restore tickets, approval transitions, and encrypted blob handoff.".to_owned(),
+            },
+            IntegrationSurfaceDescriptor {
                 name: "sync".to_owned(),
                 method: "POST".to_owned(),
                 path: "/api/v1/sync".to_owned(),
@@ -371,6 +379,18 @@ pub async fn integration_describe(_depot: &mut Depot, res: &mut Response) {
                     "principal_authz_check_path": "/api/v1/authz/check",
                     "principal_policy_collection_path": "/api/v1/policies",
                     "restore_mode": "scaffold"
+                },
+                "restore_start_path": "/api/v1/keys/backups/{backup_id}/restore/start",
+                "restore_start_request": {
+                    "backup_id": "backup-alice-01",
+                    "actor": "did:web:alice.example",
+                    "device_id": "dev_alice",
+                    "verification_event_kind": "cx.key.verification.done"
+                },
+                "restore_start_response_shape": {
+                    "contract": "contrix.rest.key_backup_restore_start.v1",
+                    "restore_ticket_id": "restore-ticket-backup-alice-01",
+                    "state": "scaffold_started"
                 }
             },
             "authz_protocol": {
@@ -9410,6 +9430,66 @@ pub async fn get_key_backup_restore_describe(
             "TODO(keys.backups.restore): bind restore describe to real approval and claim evaluation state.",
             "TODO(keys.backups.restore): replace scaffold restore request with a durable restore ticket and decrypted blob handoff.",
             "TODO(keys.backups.restore): connect device verification completion to restore eligibility instead of static examples."
+        ]
+    })));
+}
+
+#[handler]
+pub async fn post_key_backup_restore_start(
+    depot: &mut Depot,
+    req: &mut Request,
+    res: &mut Response,
+) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let Some(session) = auth_or_render(state, req, res) else {
+        return;
+    };
+    let backup_id = req.param::<String>("backup_id").unwrap_or_default();
+    if backup_id.trim().is_empty() {
+        render_error(res, StatusCode::BAD_REQUEST, "invalid_param", "backup_id is required");
+        return;
+    }
+    let store = state.key_backups.lock().expect("key backup lock");
+    let Some(backup) = store.get(&backup_id).cloned() else {
+        render_error(res, StatusCode::NOT_FOUND, "not_found", "key backup not found");
+        return;
+    };
+    if backup
+        .get("actor_id")
+        .and_then(Value::as_str)
+        .is_some_and(|actor_id| actor_id != session.actor)
+    {
+        render_error(res, StatusCode::NOT_FOUND, "not_found", "key backup not found");
+        return;
+    }
+    let payload = match req.parse_json::<Value>().await {
+        Ok(body) => body,
+        Err(_) => {
+            render_error(
+                res,
+                StatusCode::BAD_REQUEST,
+                "bad_json",
+                "invalid key backup restore request",
+            );
+            return;
+        }
+    };
+    res.render(Json(json!({
+        "contract": "contrix.rest.key_backup_restore_start.v1",
+        "version": "2026-05-04-scaffold",
+        "backup_id": backup_id,
+        "restore_ticket_id": format!("restore-ticket-{backup_id}"),
+        "state": "scaffold_started",
+        "restore_mode": "scaffold",
+        "restore_request": payload,
+        "principal_authz_check_path": "/api/v1/authz/check",
+        "principal_policy_collection_path": "/api/v1/policies",
+        "principal_policy_item_path": "/api/v1/policies/{policy_id}",
+        "next_action": "TODO: run authz check, approval policy lookup, and encrypted blob restore executor",
+        "todos": [
+            "TODO(keys.backups.restore): create durable restore tickets instead of formatting a synthetic id.",
+            "TODO(keys.backups.restore): persist approval state and restore progress instead of returning scaffold_started.",
+            "TODO(keys.backups.restore): hand decrypted backup material into actual device/account recovery flows."
         ]
     })));
 }
