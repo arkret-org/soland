@@ -241,6 +241,13 @@ pub fn router_with_rate_limiter_config(
                 .push(Router::with_path("keys/upload").post(keys_upload))
                 .push(Router::with_path("keys/query").post(keys_query))
                 .push(Router::with_path("keys/claim").post(keys_claim))
+                .push(
+                    Router::with_path("keys/backups/{backup_id}")
+                        .put(put_key_backup)
+                        .get(get_key_backup)
+                        .delete(delete_key_backup),
+                )
+                .push(Router::with_path("keys/backups").get(list_key_backups))
                 .push(Router::with_path("device_messages/{txn_id}").put(put_device_messages))
                 .push(Router::with_path("device_messages").get(get_device_messages))
                 .push(
@@ -863,6 +870,34 @@ const CONTRACT_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &[
         "push",
         "cx.push.outbound_bridge_cache_import",
         "import outbound push bridge cache snapshots",
+    ),
+    (
+        "/api/v1/keys/backups/{backup_id}",
+        PathItemType::Put,
+        "keys",
+        "cx.keys.backups.put",
+        "store encrypted key backup",
+    ),
+    (
+        "/api/v1/keys/backups/{backup_id}",
+        PathItemType::Get,
+        "keys",
+        "cx.keys.backups.get",
+        "get encrypted key backup",
+    ),
+    (
+        "/api/v1/keys/backups/{backup_id}",
+        PathItemType::Delete,
+        "keys",
+        "cx.keys.backups.delete",
+        "delete encrypted key backup",
+    ),
+    (
+        "/api/v1/keys/backups",
+        PathItemType::Get,
+        "keys",
+        "cx.keys.backups.list",
+        "list encrypted key backups",
     ),
     (
         "/api/v1/devices/pairing-challenge",

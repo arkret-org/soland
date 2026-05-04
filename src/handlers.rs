@@ -54,7 +54,8 @@ use crate::{
         IndexQueryRequest, IndexQueryResponse, IndexSearchRequest, IndexSearchResponse,
         IndexSpaceHierarchyResponse, IndexThreadResponse, InvitesResponse, KeysClaimRequest,
         KeysClaimResponse, KeysQueryRequest, KeysQueryResponse, KeysUploadRequest,
-        KeysUploadResponse, ListCommitsResponse, LogoutResponse, ModerationReportRequest,
+        KeysUploadResponse, KeysBackupsDeleteResponse, KeysBackupsListResponse,
+        KeysBackupsPutResponse, ListCommitsResponse, LogoutResponse, ModerationReportRequest,
         ModerationReportResponse, OkResponse, PolicyCheckRequest, PolicyCheckResponse,
         PolicyDocumentResponse, PolicyDocumentsResponse, PushNotifyRequest, PushNotifyResponse,
         PushRegisterRequest, PushRegisterResponse, PushUnregisterRequest, ReactionResponse,
@@ -246,6 +247,22 @@ pub async fn integration_describe(_depot: &mut Depot, res: &mut Response) {
                 contract: "contrix.rest.principal_push_register.v1".to_owned(),
                 stability: "scaffold".to_owned(),
                 todo: "TODO: unify bearer and session-grant registration paths behind one capability-checked flow.".to_owned(),
+            },
+            IntegrationSurfaceDescriptor {
+                name: "device_messages".to_owned(),
+                method: "PUT/GET".to_owned(),
+                path: "/api/v1/device_messages".to_owned(),
+                contract: "contrix.rest.device_messages.v1".to_owned(),
+                stability: "scaffold".to_owned(),
+                todo: "TODO: align device_messages transport and validation fully with cx.schema.device_message.v1 and verification event taxonomy.".to_owned(),
+            },
+            IntegrationSurfaceDescriptor {
+                name: "key_backups".to_owned(),
+                method: "PUT/GET/DELETE".to_owned(),
+                path: "/api/v1/keys/backups".to_owned(),
+                contract: "contrix.rest.key_backups.v1".to_owned(),
+                stability: "scaffold".to_owned(),
+                todo: "TODO: replace in-memory key backup storage with durable encrypted persistence and explicit recovery policy.".to_owned(),
             },
             IntegrationSurfaceDescriptor {
                 name: "sync".to_owned(),
@@ -8950,6 +8967,157 @@ pub async fn keys_claim(depot: &mut Depot, req: &mut Request, res: &mut Response
     res.render(Json(KeysClaimResponse {
         one_time_keys: json!(claimed),
         failures: json!({}),
+    }));
+}
+
+#[handler]
+pub async fn put_key_backup(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let Some(session) = auth_or_render(state, req, res) else {
+        return;
+    };
+    let backup_id = req.param::<String>("backup_id").unwrap_or_default();
+    if backup_id.trim().is_empty() {
+        render_error(res, StatusCode::BAD_REQUEST, "invalid_param", "backup_id is required");
+        return;
+    }
+    let mut backup = match req.parse_json::<Value>().await {
+        Ok(body) => body,
+        Err(_) => {
+            render_error(res, StatusCode::BAD_REQUEST, "bad_json", "invalid key backup payload");
+            return;
+        }
+    };
+    let Some(object) = backup.as_object_mut() else {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            "key backup payload must be a JSON object",
+        );
+        return;
+    };
+    object.entry("backup_id".to_owned()).or_insert_with(|| json!(backup_id.clone()));
+    object
+        .entry("actor_id".to_owned())
+        .or_insert_with(|| json!(session.actor.clone()));
+    object
+        .entry("updated_at".to_owned())
+        .or_insert_with(|| json!(now()));
+    state
+        .key_backups
+        .lock()
+        .expect("key backup lock")
+        .insert(backup_id.clone(), backup.clone());
+    res.render(Json(KeysBackupsPutResponse {
+        ok: true,
+        backup,
+        state: "stored_in_memory_scaffold".to_owned(),
+        todos: vec![
+            "TODO(keys.backups): validate payload fully against cx.schema.key_backup.v1".to_owned(),
+            "TODO(keys.backups): encrypt and persist backups outside process memory".to_owned(),
+        ],
+    }));
+}
+
+#[handler]
+pub async fn list_key_backups(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let Some(session) = auth_or_render(state, req, res) else {
+        return;
+    };
+    let backups = state
+        .key_backups
+        .lock()
+        .expect("key backup lock")
+        .values()
+        .filter(|backup| {
+            backup
+                .get("actor_id")
+                .and_then(Value::as_str)
+                .is_none_or(|actor_id| actor_id == session.actor)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    let next_cursor = query_param(req, "cursor").map(|_| "TODO:key-backups-pagination".to_owned());
+    res.render(Json(KeysBackupsListResponse {
+        backups,
+        next_cursor,
+        state: "listed_from_in_memory_scaffold".to_owned(),
+        todos: vec![
+            "TODO(keys.backups): add stable pagination and retention-aware filtering".to_owned(),
+            "TODO(keys.backups): split metadata listing from ciphertext fetch if privacy policy requires it".to_owned(),
+        ],
+    }));
+}
+
+#[handler]
+pub async fn get_key_backup(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let Some(session) = auth_or_render(state, req, res) else {
+        return;
+    };
+    let backup_id = req.param::<String>("backup_id").unwrap_or_default();
+    let Some(backup) = state
+        .key_backups
+        .lock()
+        .expect("key backup lock")
+        .get(&backup_id)
+        .cloned()
+    else {
+        render_error(res, StatusCode::NOT_FOUND, "not_found", "key backup not found");
+        return;
+    };
+    if backup
+        .get("actor_id")
+        .and_then(Value::as_str)
+        .is_some_and(|actor_id| actor_id != session.actor)
+    {
+        render_error(res, StatusCode::NOT_FOUND, "not_found", "key backup not found");
+        return;
+    }
+    res.render(Json(KeysBackupsPutResponse {
+        ok: true,
+        backup,
+        state: "fetched_from_in_memory_scaffold".to_owned(),
+        todos: vec![
+            "TODO(keys.backups): add actor/device/recovery policy checks beyond same-actor gating".to_owned(),
+            "TODO(keys.backups): support metadata-only reads and encrypted blob indirection if backups grow large".to_owned(),
+        ],
+    }));
+}
+
+#[handler]
+pub async fn delete_key_backup(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let Some(session) = auth_or_render(state, req, res) else {
+        return;
+    };
+    let backup_id = req.param::<String>("backup_id").unwrap_or_default();
+    let mut store = state.key_backups.lock().expect("key backup lock");
+    let deleted = if let Some(existing) = store.get(&backup_id) {
+        let actor_allowed = existing
+            .get("actor_id")
+            .and_then(Value::as_str)
+            .is_none_or(|actor_id| actor_id == session.actor);
+        actor_allowed && store.remove(&backup_id).is_some()
+    } else {
+        false
+    };
+    drop(store);
+    res.render(Json(KeysBackupsDeleteResponse {
+        ok: true,
+        backup_id,
+        deleted,
+        state: if deleted {
+            "deleted_from_in_memory_scaffold".to_owned()
+        } else {
+            "delete_noop_or_hidden_scaffold".to_owned()
+        },
+        todos: vec![
+            "TODO(keys.backups): add tombstones/audit context and retention-aware delete policy".to_owned(),
+            "TODO(keys.backups): bind delete authorization to recovery/claim/approval rules once authz surface lands".to_owned(),
+        ],
     }));
 }
 

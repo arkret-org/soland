@@ -1074,6 +1074,34 @@ pub struct KeysClaimResponse {
     pub failures: Value,
 }
 
+#[derive(Debug, Serialize)]
+pub struct KeysBackupsPutResponse {
+    pub ok: bool,
+    pub backup: Value,
+    pub state: String,
+    #[serde(default)]
+    pub todos: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct KeysBackupsListResponse {
+    pub backups: Vec<Value>,
+    pub next_cursor: Option<String>,
+    pub state: String,
+    #[serde(default)]
+    pub todos: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct KeysBackupsDeleteResponse {
+    pub ok: bool,
+    pub backup_id: String,
+    pub deleted: bool,
+    pub state: String,
+    #[serde(default)]
+    pub todos: Vec<String>,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct DeviceMessagesSendRequest {
     pub messages: std::collections::BTreeMap<String, std::collections::BTreeMap<String, Value>>,
