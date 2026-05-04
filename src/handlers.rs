@@ -320,6 +320,7 @@ pub async fn recovery_contract_stack(_depot: &mut Depot, res: &mut Response) {
         "restore_timeline_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/timeline",
         "restore_audit_feed_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/audit-feed",
         "recovery_live_snapshot_path": "/api/v1/recovery/live-snapshot",
+        "recovery_stack_bundle_path": "/api/v1/recovery/stack-bundle",
         "authz_describe_path": "/api/v1/authz/describe",
         "authz_check_path": "/api/v1/authz/check",
         "policies_describe_path": "/api/v1/policies/describe",
@@ -405,6 +406,7 @@ pub async fn key_backups_describe(_depot: &mut Depot, res: &mut Response) {
         "restore_timeline_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/timeline",
         "restore_audit_feed_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/audit-feed",
         "recovery_live_snapshot_path": "/api/v1/recovery/live-snapshot",
+        "recovery_stack_bundle_path": "/api/v1/recovery/stack-bundle",
         "schema": "cx.schema.key_backup.v1",
         "put_request_example": {
             "schema": "cx.schema.key_backup.v1",
@@ -603,6 +605,14 @@ pub async fn integration_describe(_depot: &mut Depot, res: &mut Response) {
                 contract: "contrix.rest.recovery_live_snapshot.v1".to_owned(),
                 stability: "scaffold".to_owned(),
                 todo: "TODO: replace live recovery snapshot scaffold with actor-scoped dashboards, pagination, and privacy boundaries.".to_owned(),
+            },
+            IntegrationSurfaceDescriptor {
+                name: "recovery_stack_bundle".to_owned(),
+                method: "GET".to_owned(),
+                path: "/api/v1/recovery/stack-bundle".to_owned(),
+                contract: "contrix.rest.recovery_stack_bundle.v1".to_owned(),
+                stability: "scaffold".to_owned(),
+                todo: "TODO: replace recovery stack bundle scaffold with generated aggregate artifacts and cached principal recovery topology.".to_owned(),
             },
             IntegrationSurfaceDescriptor {
                 name: "key_backup_restore_state_describe".to_owned(),
@@ -870,6 +880,14 @@ pub async fn integration_describe(_depot: &mut Depot, res: &mut Response) {
                     "activity_path_template": "/api/v1/keys/backups/restore-tickets/{ticket_id}/activity"
                 }
             },
+            "recovery_stack_bundle": {
+                "path": "/api/v1/recovery/stack-bundle",
+                "response_shape": {
+                    "contract": "contrix.rest.recovery_stack_bundle.v1",
+                    "contract_stack_path": "/api/v1/recovery/contract-stack",
+                    "live_snapshot_path": "/api/v1/recovery/live-snapshot"
+                }
+            },
             "device_messages": {
                 "describe_path": "/api/v1/device_messages/describe",
                 "describe_response_shape": {
@@ -992,6 +1010,7 @@ pub async fn integration_describe(_depot: &mut Depot, res: &mut Response) {
                 "restore_timeline_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/timeline",
                 "restore_audit_feed_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/audit-feed",
                 "recovery_live_snapshot_path": "/api/v1/recovery/live-snapshot",
+                "recovery_stack_bundle_path": "/api/v1/recovery/stack-bundle",
                 "restore_ticket_response_shape": {
                     "contract": "contrix.rest.key_backup_restore_ticket.v1",
                     "ticket_id": "restore-ticket-backup-alice-01",
@@ -11974,7 +11993,65 @@ pub async fn get_recovery_live_snapshot(
         "activity_path_template": "/api/v1/keys/backups/restore-tickets/{ticket_id}/activity",
         "contract_stack_path": "/api/v1/recovery/contract-stack",
         "items": items,
+        "stack_bundle_path": "/api/v1/recovery/stack-bundle",
         "todo": "TODO(recovery.live-snapshot): replace process-memory aggregate with durable actor-scoped dashboards, pagination, and privacy controls."
+    })));
+}
+
+#[handler]
+pub async fn get_recovery_stack_bundle(
+    depot: &mut Depot,
+    req: &mut Request,
+    res: &mut Response,
+) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let Some(session) = auth_or_render(state, req, res) else {
+        return;
+    };
+    let tickets = state
+        .key_backup_restore_tickets
+        .lock()
+        .expect("key backup restore ticket lock");
+    let owned_ticket_count = tickets
+        .values()
+        .filter(|ticket| {
+            ticket
+                .get("actor")
+                .and_then(Value::as_str)
+                .is_some_and(|actor| actor == session.actor)
+        })
+        .count();
+    res.render(Json(json!({
+        "contract": "contrix.rest.recovery_stack_bundle.v1",
+        "version": "2026-05-04-scaffold",
+        "contract_stack_path": "/api/v1/recovery/contract-stack",
+        "live_snapshot_path": "/api/v1/recovery/live-snapshot",
+        "restore_state_durability_path": "/api/v1/keys/backups/restore-state/durability",
+        "restore_state_checkpoint_collection_path": "/api/v1/keys/backups/restore-state/checkpoints",
+        "restore_ticket_collection_path": "/api/v1/keys/backups/restore-tickets",
+        "activity_path_template": "/api/v1/keys/backups/restore-tickets/{ticket_id}/activity",
+        "timeline_path_template": "/api/v1/keys/backups/restore-tickets/{ticket_id}/timeline",
+        "audit_feed_path_template": "/api/v1/keys/backups/restore-tickets/{ticket_id}/audit-feed",
+        "owned_ticket_count": owned_ticket_count,
+        "stack_sections": {
+            "recovery_contract_stack": {
+                "contract": "contrix.rest.recovery_contract_stack.v1",
+                "path": "/api/v1/recovery/contract-stack"
+            },
+            "recovery_live_snapshot": {
+                "contract": "contrix.rest.recovery_live_snapshot.v1",
+                "path": "/api/v1/recovery/live-snapshot"
+            },
+            "restore_state_durability": {
+                "contract": "contrix.rest.key_backup_restore_state_durability.v1",
+                "path": "/api/v1/keys/backups/restore-state/durability"
+            },
+            "restore_state_checkpoints": {
+                "contract": "contrix.rest.key_backup_restore_state_checkpoint_collection.v1",
+                "path": "/api/v1/keys/backups/restore-state/checkpoints"
+            }
+        },
+        "todo": "TODO(recovery.stack-bundle): replace bundle scaffold with generated aggregate recovery topology and cache-aware live bundle assembly."
     })));
 }
 
