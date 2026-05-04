@@ -6,12 +6,42 @@ use contrix_sdk::{Commit, ErrorEnvelope, Operation, ServerDescription, SpaceSear
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use crate::artifacts;
+
 #[derive(Debug, Serialize)]
 pub struct HealthResponse {
     pub ok: bool,
     pub service: &'static str,
     pub storage: &'static str,
     pub checks: Value,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AuthBridgeDescribeResponse {
+    pub contract: String,
+    pub version: String,
+    pub api_base_path: String,
+    pub auth: AuthBridgeAuthDescriptor,
+    pub push: AuthBridgePushDescriptor,
+    #[serde(default)]
+    pub todos: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AuthBridgeAuthDescriptor {
+    pub dev_login_path: String,
+    pub session_grant_exchange_path: String,
+    pub bearer_auth_scheme: String,
+    pub principal_did_body_field: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AuthBridgePushDescriptor {
+    pub register_device_path: String,
+    pub unregister_device_path: String,
+    pub session_grant_header: String,
+    pub principal_did_body_field: String,
+    pub register_device_mode: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -195,6 +225,11 @@ pub struct IndexQueryRequest {
     pub facets: Vec<String>,
     pub renderer: Option<String>,
     #[serde(default)]
+    pub filters: Value,
+    #[serde(default)]
+    pub sort: Vec<Value>,
+    pub cursor: Option<String>,
+    #[serde(default)]
     pub limit: Option<usize>,
 }
 
@@ -258,7 +293,7 @@ pub struct IndexNotificationsResponse {
 
 #[derive(Debug, Serialize)]
 pub struct IndexInboxResponse {
-    pub rooms: Vec<Value>,
+    pub flows: Vec<Value>,
     pub next_cursor: Option<String>,
     pub frontier: Value,
 }
@@ -275,14 +310,74 @@ pub struct IndexSpaceHierarchyResponse {
 pub struct BackfillResponse {
     pub events: Vec<Value>,
     pub prev_cursor: Option<String>,
+    pub prev_batch: Option<String>,
     pub next_cursor: Option<String>,
     pub limited: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct EventDescribeResponse {
+    pub service_did: String,
+    pub protocol_version: String,
+    pub primary_write_path: String,
+    pub event_envelope: Value,
+    pub supported_profiles: Vec<String>,
+    pub registry: Value,
+    pub schema_profile: String,
+    pub reducer_profile: String,
+    pub limits: Value,
+    pub capabilities: Value,
+}
+
+#[derive(Debug, Serialize)]
+pub struct EventSubmitResponse {
+    pub status: String,
+    pub event_id: String,
+    pub canonical_digest: String,
+    pub sync_token: String,
+    pub received_at: DateTime<Utc>,
+    pub receipt: Value,
+}
+
+#[derive(Debug, Serialize)]
+pub struct EventReadResponse {
+    pub event: Value,
+    pub metadata: Value,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct EventBatchGetRequest {
+    #[serde(default)]
+    pub event_ids: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct EventBatchGetResponse {
+    pub events: Vec<EventReadResponse>,
+    pub missing: Vec<String>,
+    pub unauthorized: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct EventsPageResponse {
+    pub events: Vec<EventReadResponse>,
+    pub next_cursor: Option<String>,
+    pub frontier: Value,
+}
+
+#[derive(Debug, Serialize)]
+pub struct EventsFrontierResponse {
+    pub actor_frontier: BTreeMap<String, u64>,
+    pub space_frontier: BTreeMap<String, Value>,
+    pub frontier: Value,
 }
 
 #[derive(Debug, Serialize)]
 pub struct SnapshotHeadResponse {
     pub snapshot_ref: String,
     pub state_hash: String,
+    pub manifest: Value,
+    pub chunks: Vec<Value>,
     pub frontier: Value,
     pub signature: Value,
 }
@@ -368,6 +463,7 @@ pub struct AuthzCheckRequest {
 pub struct AuthzCheckResponse {
     pub allowed: bool,
     pub reason_code: Option<String>,
+    pub reason: Option<String>,
     pub grants: Vec<Value>,
     pub obligations: Vec<Value>,
 }
@@ -387,12 +483,17 @@ pub struct InvitesResponse {
 
 #[derive(Debug, Deserialize)]
 pub struct PushRegisterRequest {
+    pub operation_id: Option<String>,
+    pub principal_did: Option<String>,
     pub device_id: String,
     pub push_gateway: String,
     pub push_key: String,
     pub platform: Option<String>,
     pub app_id: Option<String>,
     pub display_name: Option<String>,
+    pub idempotency_key: Option<String>,
+    pub request_id: Option<String>,
+    pub proof: Option<Value>,
 }
 
 #[derive(Debug, Serialize)]
@@ -400,6 +501,9 @@ pub struct PushRegisterResponse {
     pub ok: bool,
     pub registration_id: Option<String>,
     pub expires_at: Option<DateTime<Utc>>,
+    pub accepted_gateway: Option<String>,
+    pub request_id: Option<String>,
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -512,6 +616,7 @@ pub struct PolicyCheckRequest {
 pub struct PolicyCheckResponse {
     pub decision: String,
     pub reason_code: String,
+    pub policy_id: Option<String>,
     pub expires_at: DateTime<Utc>,
     pub obligations: Vec<Value>,
     pub signature: Value,
@@ -526,6 +631,14 @@ pub struct ApiError {
 #[derive(Debug, Deserialize)]
 pub struct DevLoginRequest {
     pub actor: String,
+    pub device_id: String,
+    pub display_name: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SessionGrantExchangeRequest {
+    pub grant_jwt: String,
+    pub principal_did: String,
     pub device_id: String,
     pub display_name: Option<String>,
 }
@@ -826,7 +939,10 @@ pub fn describe(
         service_did: service_did.parse().expect("valid service DID"),
         service_type: "principal_server".to_owned(),
         protocol_version: "1.0".to_owned(),
-        supported_profiles: vec!["cx.profile.soland_limited_server.v1".to_owned()],
+        supported_profiles: vec![
+            "cx.profile.soland_limited_server.v1".to_owned(),
+            "cx.profile.mimi_interop.v1".to_owned(),
+        ],
         supported_features: vec![
             "account.register".to_owned(),
             "account.me".to_owned(),
@@ -836,6 +952,9 @@ pub fn describe(
             "space.lifecycle".to_owned(),
             "messages.send".to_owned(),
             "schema.registry".to_owned(),
+            "events.describe".to_owned(),
+            "events.submit".to_owned(),
+            "events.read".to_owned(),
             "repo.submit_commit".to_owned(),
             "repo.read".to_owned(),
             "federation.transaction".to_owned(),
@@ -859,6 +978,14 @@ pub fn describe(
             "federation.transaction_idempotency".to_owned(),
             "policy.documents".to_owned(),
             "moderation.report".to_owned(),
+            "mimi.provider_facade".to_owned(),
+            "mimi.discovery".to_owned(),
+            "mimi.key_material_receipt".to_owned(),
+            "mimi.room_projection".to_owned(),
+            "mimi.identifier_privacy".to_owned(),
+            "mimi.proxy_download_policy".to_owned(),
+            "registry.artifacts".to_owned(),
+            "plaintext_visible_services".to_owned(),
         ],
         supported_operations: vec![
             "cx.repo.describe".to_owned(),
@@ -877,6 +1004,12 @@ pub fn describe(
             "cx.schemas.get".to_owned(),
             "cx.schemas.register".to_owned(),
             "cx.schemas.delete".to_owned(),
+            "cx.events.describe".to_owned(),
+            "cx.events.submit".to_owned(),
+            "cx.events.get".to_owned(),
+            "cx.events.batch_get".to_owned(),
+            "cx.events.list".to_owned(),
+            "cx.events.frontier".to_owned(),
             "cx.repo.list_commits".to_owned(),
             "cx.repo.get_operations".to_owned(),
             "cx.repo.sync".to_owned(),
@@ -912,6 +1045,17 @@ pub fn describe(
             "cx.policies.delete".to_owned(),
             "cx.policy.check".to_owned(),
             "cx.moderation.report".to_owned(),
+            "cx.mimi.provider_directory".to_owned(),
+            "cx.mimi.key_material".to_owned(),
+            "cx.mimi.room_update".to_owned(),
+            "cx.mimi.notify".to_owned(),
+            "cx.mimi.submit_message".to_owned(),
+            "cx.mimi.group_info".to_owned(),
+            "cx.mimi.request_consent".to_owned(),
+            "cx.mimi.update_consent".to_owned(),
+            "cx.mimi.identifier_query".to_owned(),
+            "cx.mimi.report_abuse".to_owned(),
+            "cx.mimi.proxy_download".to_owned(),
         ],
         supported_bindings: vec![serde_json::json!({"kind": "http_json", "base_path": "/api/v1"})],
         supported_reducer_profiles: vec!["cx.reducer.v1".to_owned()],
@@ -927,6 +1071,32 @@ pub fn describe(
         limits: serde_json::json!({
             "storage": storage,
             "max_limit": 100,
+            "registries": artifacts::registry_summary(),
+            "plaintext_visible_service_capability": {
+                "supported": true,
+                "service_did": service_did,
+                "enforced_on": [
+                    "repo.submit_commit",
+                    "federation.push_operations",
+                    "federation.transaction",
+                    "blob.upload"
+                ]
+            },
+            "scalability_constraints": {
+                "source": "contrix-spec/zh/conformance/scalability-constraints.md",
+                "max_event_bytes": 65536,
+                "max_events_batch_submit": 1,
+                "max_federation_transaction_events": 500,
+                "max_page_items": 100,
+                "max_prev_refs": 32,
+                "max_auth_refs": 64,
+                "max_relation_expansion_depth": 32,
+                "max_delegation_depth": 4,
+                "max_grants_per_decision": 1024,
+                "max_grant_constraints": 64,
+                "max_resource_selector_depth": 16,
+                "max_to_device_page": 1000
+            },
             "profile_status": {
                 "conformance": "limited_reference",
                 "full_profiles_not_claimed": [
@@ -938,13 +1108,34 @@ pub fn describe(
                 ],
                 "implemented_surfaces": [
                     "principal_server",
+                    "events_api_minimal",
                     "repo_api",
                     "sync",
                     "index",
                     "identity_registry_local_dev",
                     "blob_node_local",
-                    "directory_service"
-                ]
+                    "directory_service",
+                    "mimi_provider_facade"
+                ],
+                "mimi_interop": {
+                    "status": "provider_facade_first_round",
+                    "drafts": {
+                        "protocol": "draft-ietf-mimi-protocol-06",
+                        "content": "draft-ietf-mimi-content-08",
+                        "room_policy": "draft-ietf-mimi-room-policy-03",
+                        "identifiers": "draft-kohbrok-mimi-identifiers-01"
+                    },
+                    "not_replaced": [
+                        "contrix_signed_event_reducer",
+                        "space_id",
+                        "did",
+                        "hlc",
+                        "capability",
+                        "auth_refs",
+                        "mls_state"
+                    ],
+                    "principal_conformance": "not_claimed"
+                }
             }
         }),
     }

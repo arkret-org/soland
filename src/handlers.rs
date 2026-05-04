@@ -9,6 +9,7 @@ use diesel::{
 };
 use salvo::{
     http::{Method, StatusCode},
+    oapi::OpenApi,
     prelude::*,
 };
 use serde_json::{Value, json};
@@ -16,13 +17,13 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
 
 use crate::{
-    ids, kinds,
+    artifacts, ids, kinds,
     state::{
-        AccountRecord, AppState, BlobRecord, ContactRecord, DeviceInventoryRecord,
-        DeviceMessageRecord, FederationTransactionRecord, IdentityDocumentRecord,
-        IdentityLogRecord, MessageRecord, PolicyDocumentRecord, PresenceRecord,
-        ProjectionEventRecord, PushRuleRecord, SchemaRecord, SessionRecord, SpaceInviteRecord,
-        SpaceMetaRecord, TypingRecord, WebrtcSessionRecord, WebrtcSignalRecord,
+        AccountRecord, AppState, BlobRecord, CanonicalEventRecord, ContactRecord,
+        DeviceInventoryRecord, DeviceMessageRecord, FederationTransactionRecord,
+        IdentityDocumentRecord, IdentityLogRecord, MessageRecord, PolicyDocumentRecord,
+        PresenceRecord, ProjectionEventRecord, PushRuleRecord, SchemaRecord, SessionRecord,
+        SpaceInviteRecord, SpaceMetaRecord, TypingRecord, WebrtcSessionRecord, WebrtcSignalRecord,
     },
     wire::{
         AccountResponse, AddReactionRequest, AddSpaceMemberRequest, ApiError, AuthzCheckRequest,
@@ -33,31 +34,37 @@ use crate::{
         DevLoginRequest, DevLoginResponse, DeviceMessagesReceiveResponse,
         DeviceMessagesSendRequest, DeviceMessagesSendResponse, DirectoryDescribeResponse,
         DirectoryValueSearchResponse, EffectiveGrantsResponse, EntityResponse,
-        GetOperationsRequest, GetOperationsResponse, HealthResponse, IdentityDescribeResponse,
-        IdentityLogResponse, IdentityReceiptsResponse, IdentityResolveRequest,
-        IdentityResolveResponse, IndexDescribeResponse, IndexEntityResponse, IndexInboxResponse,
-        IndexNotificationsResponse, IndexQueryRequest, IndexQueryResponse, IndexSearchRequest,
-        IndexSearchResponse, IndexSpaceHierarchyResponse, IndexThreadResponse, InvitesResponse,
-        KeysClaimRequest, KeysClaimResponse, KeysQueryRequest, KeysQueryResponse,
-        KeysUploadRequest, KeysUploadResponse, ListCommitsResponse, LogoutResponse,
-        ModerationReportRequest, ModerationReportResponse, OkResponse, PolicyCheckRequest,
-        PolicyCheckResponse, PolicyDocumentResponse, PolicyDocumentsResponse, PushNotifyRequest,
-        PushNotifyResponse, PushRegisterRequest, PushRegisterResponse, PushUnregisterRequest,
-        ReactionResponse, ReadMarkerResponse, RedactMessageRequest, RedactMessageResponse,
-        RegisterAccountRequest, RegisterSchemaRequest, RelationResponse, RemoveReactionRequest,
-        RepoDescribeResponse, RepoSyncRequest, RepoSyncResponse, ResolveHandleRequest,
-        ResolveHandleResponse, ResolveOrganizationRequest, ResolveOrganizationResponse,
-        ResolveSpaceRequest, ResolveSpaceResponse, ReviseMessageRequest, ReviseMessageResponse,
-        SchemaResponse, SchemasResponse, SearchActorsRequest, SearchOrganizationsRequest,
-        SearchSpacesRequest, SearchSpacesResponse, SendMessageRequest, SendMessageResponse,
-        SetReadMarkerRequest, SetTypingRequest, SetTypingResponse, SnapshotHeadResponse,
-        SpaceLifecycleResponse, SubmitCommitRequest, SubmitCommitResponse,
-        SubmitDidOperationRequest, SubmitDidOperationResponse, SyncDescribeResponse,
-        UpdateEntityRequest, UpsertPolicyDocumentRequest, UpsertPushRuleRequest, ViewResponse,
-        WebrtcSignalRequest, WebrtcSignalResponse, WebrtcSignalsResponse, describe, now,
-        sync_token,
+        EventBatchGetRequest, EventBatchGetResponse, EventDescribeResponse, EventReadResponse,
+        EventSubmitResponse, EventsFrontierResponse, EventsPageResponse, GetOperationsRequest,
+        GetOperationsResponse, HealthResponse, IdentityDescribeResponse, IdentityLogResponse,
+        IdentityReceiptsResponse, IdentityResolveRequest, IdentityResolveResponse,
+        AuthBridgeDescribeResponse, AuthBridgeAuthDescriptor, AuthBridgePushDescriptor,
+        IndexDescribeResponse, IndexEntityResponse, IndexInboxResponse, IndexNotificationsResponse,
+        IndexQueryRequest, IndexQueryResponse, IndexSearchRequest, IndexSearchResponse,
+        IndexSpaceHierarchyResponse, IndexThreadResponse, InvitesResponse, KeysClaimRequest,
+        KeysClaimResponse, KeysQueryRequest, KeysQueryResponse, KeysUploadRequest,
+        KeysUploadResponse, ListCommitsResponse, LogoutResponse, ModerationReportRequest,
+        ModerationReportResponse, OkResponse, PolicyCheckRequest, PolicyCheckResponse,
+        PolicyDocumentResponse, PolicyDocumentsResponse, PushNotifyRequest, PushNotifyResponse,
+        PushRegisterRequest, PushRegisterResponse, PushUnregisterRequest, ReactionResponse,
+        ReadMarkerResponse, RedactMessageRequest, RedactMessageResponse, RegisterAccountRequest,
+        RegisterSchemaRequest, RelationResponse, RemoveReactionRequest, RepoDescribeResponse,
+        RepoSyncRequest, RepoSyncResponse, ResolveHandleRequest, ResolveHandleResponse,
+        ResolveOrganizationRequest, ResolveOrganizationResponse, ResolveSpaceRequest,
+        ResolveSpaceResponse, ReviseMessageRequest, ReviseMessageResponse, SchemaResponse,
+        SchemasResponse, SearchActorsRequest, SearchOrganizationsRequest, SearchSpacesRequest,
+        SearchSpacesResponse, SendMessageRequest, SendMessageResponse, SetReadMarkerRequest,
+        SessionGrantExchangeRequest, SetTypingRequest, SetTypingResponse, SnapshotHeadResponse,
+        SpaceLifecycleResponse,
+        SubmitCommitRequest, SubmitCommitResponse, SubmitDidOperationRequest,
+        SubmitDidOperationResponse, SyncDescribeResponse, UpdateEntityRequest,
+        UpsertPolicyDocumentRequest, UpsertPushRuleRequest, ViewResponse, WebrtcSignalRequest,
+        WebrtcSignalResponse, WebrtcSignalsResponse, describe, now, sync_token,
     },
 };
+
+#[derive(Clone)]
+pub struct ContrixOpenApiDoc(pub OpenApi);
 
 #[handler]
 pub async fn health(depot: &mut Depot, res: &mut Response) {
@@ -106,6 +113,34 @@ pub async fn server_describe(depot: &mut Depot, res: &mut Response) {
         state.db.mode(),
         state.config.development_mode,
     )));
+}
+
+#[handler]
+pub async fn auth_bridge_describe(_depot: &mut Depot, res: &mut Response) {
+    res.render(Json(AuthBridgeDescribeResponse {
+        contract: "contrix.rest.principal_bridge.v1".to_owned(),
+        version: "2026-05-04-scaffold".to_owned(),
+        api_base_path: "/api/v1".to_owned(),
+        auth: AuthBridgeAuthDescriptor {
+            dev_login_path: "/api/v1/auth/dev-login".to_owned(),
+            session_grant_exchange_path: "/api/v1/auth/session-grant/exchange".to_owned(),
+            bearer_auth_scheme: "Authorization: Bearer <access_token>".to_owned(),
+            principal_did_body_field: "principal_did".to_owned(),
+        },
+        push: AuthBridgePushDescriptor {
+            register_device_path: "/api/v1/push/register-device".to_owned(),
+            unregister_device_path: "/api/v1/push/unregister-device".to_owned(),
+            session_grant_header: "X-Contrix-Session-Grant".to_owned(),
+            principal_did_body_field: "principal_did".to_owned(),
+            register_device_mode:
+                "bearer_session_or_session_grant_bridge_with_principal_did".to_owned(),
+        },
+        todos: vec![
+            "TODO: replace local session-grant exchange bridge with coauth-backed grant introspection, audience binding, and session-public-key proof verification".to_owned(),
+            "TODO: replace push register grant bridge with the same coauth-backed proof/introspection path before production use".to_owned(),
+            "TODO: publish formal examples for session-grant exchange and push registration in the principal-server OpenAPI surface".to_owned(),
+        ],
+    }));
 }
 
 #[handler]
@@ -241,6 +276,146 @@ pub async fn dev_login(depot: &mut Depot, req: &mut Request, res: &mut Response)
 }
 
 #[handler]
+pub async fn exchange_session_grant(
+    depot: &mut Depot,
+    req: &mut Request,
+    res: &mut Response,
+) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let body = match req.parse_json::<SessionGrantExchangeRequest>().await {
+        Ok(body) => body,
+        Err(_) => {
+            render_error(
+                res,
+                StatusCode::BAD_REQUEST,
+                "bad_json",
+                "invalid session grant exchange request",
+            );
+            return;
+        }
+    };
+    if body.grant_jwt.trim().is_empty()
+        || validate_did(&body.principal_did).is_err()
+        || validate_device_id(&body.device_id).is_err()
+    {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            "grant_jwt, principal_did, and device_id are required",
+        );
+        return;
+    }
+    let account = match state.persistence.accounts().get(&body.principal_did) {
+        Ok(account) => account,
+        Err(error) => {
+            render_error(
+                res,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "persistence_error",
+                &error.to_string(),
+            );
+            return;
+        }
+    };
+    if account.is_none() {
+        render_error(
+            res,
+            StatusCode::NOT_FOUND,
+            "not_found",
+            "account is not registered",
+        );
+        return;
+    }
+
+    // TODO(session-grant-exchange): replace this local bridge with real coauth
+    // session-grant introspection, audience checks, and session-public-key
+    // proof verification before minting a principal-server bearer session.
+    let expires_at = now() + chrono::Duration::hours(12);
+    let token = token_for(
+        &body.principal_did,
+        &body.device_id,
+        expires_at.timestamp_millis(),
+    );
+    let token_hash = session_token_hash(&token, &state.config.service_did);
+    let session = SessionRecord {
+        token_hash,
+        actor: body.principal_did.clone(),
+        device_id: body.device_id.clone(),
+        audience: state.config.service_did.clone(),
+        expires_at,
+        created_at: now(),
+        revoked_at: None,
+    };
+    if let Err(error) = state.persistence.sessions().put(&session) {
+        render_error(
+            res,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "persistence_error",
+            &error.to_string(),
+        );
+        return;
+    }
+    let seen_at = now();
+    let device_payload = json!({
+        "device_id": body.device_id.clone(),
+        "display_name": body.display_name.clone(),
+        "verification": "unverified",
+        "last_seen_at": seen_at,
+        "session_grant_bridge": true,
+    });
+    let device = DeviceInventoryRecord {
+        actor: body.principal_did.clone(),
+        device_id: body.device_id.clone(),
+        display_name: body.display_name.clone(),
+        verification_state: "unverified".to_owned(),
+        payload: device_payload,
+        created_at: seen_at,
+        updated_at: seen_at,
+        revoked_at: None,
+    };
+    if let Err(error) = state.persistence.devices().put(&device) {
+        render_error(
+            res,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "persistence_error",
+            &error.to_string(),
+        );
+        return;
+    }
+    state
+        .sessions
+        .lock()
+        .expect("sessions lock")
+        .insert(session.token_hash.clone(), session.clone());
+    state
+        .devices
+        .lock()
+        .expect("devices lock")
+        .entry(body.principal_did.clone())
+        .or_default()
+        .insert(body.device_id.clone(), device_inventory_to_json(&device));
+    append_audit_log(
+        state,
+        Some(&body.principal_did),
+        "auth.session_grant_exchange",
+        json!({
+            "device_id": body.device_id.clone(),
+            "grant_bridge": true,
+        }),
+        "accepted",
+    );
+
+    res.render(Json(DevLoginResponse {
+        access_token: token,
+        token_type: "Bearer".to_owned(),
+        actor: body.principal_did,
+        device_id: body.device_id,
+        expires_at,
+    }));
+}
+
+#[handler]
 pub async fn logout(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     let Some(token) = bearer_token(req).map(str::to_owned) else {
@@ -285,6 +460,15 @@ pub async fn logout(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     };
     let revoked = revoked_session.is_some();
     if let Some(session) = revoked_session {
+        if let Err(error) = revoke_device_record(state, &session.actor, &session.device_id) {
+            render_error(
+                res,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "persistence_error",
+                &error,
+            );
+            return;
+        }
         append_audit_log(
             state,
             Some(&session.actor),
@@ -292,6 +476,10 @@ pub async fn logout(depot: &mut Depot, req: &mut Request, res: &mut Response) {
             json!({"device_id": session.device_id, "revoked_at": session.revoked_at}),
             "accepted",
         );
+        let mut queue = state.device_messages.lock().expect("device message lock");
+        queue.retain(|message| {
+            !(message.recipient == session.actor && message.device_id == session.device_id)
+        });
     }
     res.render(Json(LogoutResponse { ok: true, revoked }));
 }
@@ -1103,6 +1291,15 @@ pub async fn send_message(depot: &mut Depot, req: &mut Request, res: &mut Respon
         );
         return;
     }
+    if body.encrypted && is_device_revoked(state, &session.actor, &session.device_id) {
+        render_error(
+            res,
+            StatusCode::UNAUTHORIZED,
+            "unauthenticated",
+            "device revoked",
+        );
+        return;
+    }
     if let Err(message) = validate_canonical_json_value(&body.content) {
         render_error(res, StatusCode::BAD_REQUEST, "invalid_param", message);
         return;
@@ -1152,8 +1349,19 @@ pub async fn send_message(depot: &mut Depot, req: &mut Request, res: &mut Respon
         kinds::CX_MESSAGE_CREATE,
         payload.clone(),
     );
-    let operation_digest = match operation.operation_digest().and_then(Hash::new) {
-        Ok(digest) => digest,
+    let operation_digest = match operation.operation_digest() {
+        Ok(digest) => match Hash::new(digest) {
+            Ok(digest) => digest,
+            Err(error) => {
+                render_error(
+                    res,
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "repo_error",
+                    &error.to_string(),
+                );
+                return;
+            }
+        },
         Err(error) => {
             render_error(
                 res,
@@ -1805,7 +2013,7 @@ pub async fn create_entity(depot: &mut Depot, req: &mut Request, res: &mut Respo
             res,
             StatusCode::BAD_REQUEST,
             "invalid_param",
-            "entity_type must be cx.* or a reverse-domain name",
+            "entity_type must be a supported cx.* object type or a reverse-domain custom type",
         );
         return;
     }
@@ -3329,12 +3537,7 @@ pub async fn submit_did_operation(depot: &mut Depot, req: &mut Request, res: &mu
             .get(&body.did)
             .map(|r| r.did_document.clone());
         if let Some(doc) = prev_doc {
-            let verification_keys: Vec<String> = doc
-                .get("verificationMethod")
-                .or_else(|| doc.get("verification_method"))
-                .and_then(|v| v.as_object())
-                .map(|m| m.keys().cloned().collect())
-                .unwrap_or_default();
+            let verification_keys = did_document_verification_method_ids(&doc);
             let recovery_keys: Vec<String> = doc
                 .get("recovery_keys")
                 .and_then(|v| v.as_object())
@@ -3416,31 +3619,21 @@ pub async fn submit_did_operation(depot: &mut Depot, req: &mut Request, res: &mu
     let now = now();
     // Register the document in the SDK DID resolver for resolution.
     if let Ok(did) = contrix_sdk::Did::new(body.did.clone()) {
-        let vm = did_document
-            .get("verificationMethod")
-            .or_else(|| did_document.get("verification_method"))
-            .and_then(|v| v.as_object());
-        if let Some(methods) = vm {
-            if let Some((key_id, key_value)) = methods.iter().next() {
-                let doc = contrix_sdk::identity::DidDocument::new(
-                    did.clone(),
-                    key_id,
-                    key_value.as_str().unwrap_or(""),
-                );
-                let mut resolver = state.did_resolver.lock().expect("did resolver lock");
-                match did.method() {
-                    "uuid" => {
-                        let mut r = contrix_sdk::identity::DidUuidResolver::new();
-                        let _ = r.insert(doc);
-                        resolver.push(r);
-                    }
-                    "web" => {
-                        let mut r = contrix_sdk::identity::DidWebResolver::new();
-                        let _ = r.insert(doc);
-                        resolver.push(r);
-                    }
-                    _ => {}
+        if let Some((key_id, public_key)) = did_document_first_verification_method(&did_document) {
+            let doc = contrix_sdk::identity::DidDocument::new(did.clone(), key_id, public_key);
+            let mut resolver = state.did_resolver.lock().expect("did resolver lock");
+            match did.method() {
+                "uuid" => {
+                    let mut r = contrix_sdk::identity::DidUuidResolver::new();
+                    let _ = r.insert(doc);
+                    resolver.push(r);
                 }
+                "web" => {
+                    let mut r = contrix_sdk::identity::DidWebResolver::new();
+                    let _ = r.insert(doc);
+                    resolver.push(r);
+                }
+                _ => {}
             }
         }
     }
@@ -3542,6 +3735,450 @@ pub async fn sync_describe(depot: &mut Depot, res: &mut Response) {
     }));
 }
 
+const MAX_EVENT_BYTES: usize = 64 * 1024;
+const MAX_EVENT_PREV_REFS: usize = 32;
+const MAX_EVENT_AUTH_REFS: usize = 64;
+const MAX_EVENT_BATCH_GET: usize = 100;
+
+#[handler]
+pub async fn events_describe(depot: &mut Depot, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let event_kinds = artifacts::active_durable_event_kinds()
+        .iter()
+        .cloned()
+        .collect::<Vec<_>>();
+    res.render(Json(EventDescribeResponse {
+        service_did: state.config.service_did.clone(),
+        protocol_version: "1.0".to_owned(),
+        primary_write_path: "/api/v1/events".to_owned(),
+        event_envelope: json!({
+            "schema": "cx.schema.event.v1",
+            "required_fields": [
+                "event_id",
+                "kind",
+                "schema_id",
+                "actor_id",
+                "actor_seq",
+                "canonical_digest",
+                "proofs"
+            ],
+            "hashing": {
+                "canonical_digest": "sha256 over the Event Envelope JSON with canonical_digest removed",
+                "proof_payload_hash": "sha256 over payload/body/content JSON"
+            },
+            "causality": {
+                "actor_seq": "strictly increasing per actor",
+                "prev_refs": "must reference accepted events",
+                "auth_refs": "must reference accepted authorization events"
+            }
+        }),
+        supported_profiles: vec![
+            "cx.profile.event_envelope_minimal.v1".to_owned(),
+            "cx.profile.events_http_json.v1".to_owned(),
+        ],
+        registry: json!({
+            "source": "contrix-spec/artifacts",
+            "event_kind_registry_version": artifacts::event_kind_registry()["version"].clone(),
+            "schema_registry_version": artifacts::schema_registry()["version"].clone(),
+            "operation_registry_version": artifacts::operation_registry()["version"].clone(),
+            "id_kind_registry_version": artifacts::id_kind_registry()["version"].clone(),
+            "event_kinds": event_kinds,
+            "schema_ids": artifacts::schema_ids().into_iter().collect::<Vec<_>>(),
+            "operation_count": artifacts::operation_ids().len(),
+            "id_kind_count": artifacts::id_kind_forms().len(),
+            "id_profile": "cx.id.typed-prefix.v1"
+        }),
+        schema_profile: "cx.schema.core.v1".to_owned(),
+        reducer_profile: "cx.reducer.v1".to_owned(),
+        limits: json!({
+            "max_event_bytes": MAX_EVENT_BYTES,
+            "max_batch_size": 1,
+            "max_batch_get": MAX_EVENT_BATCH_GET,
+            "max_prev_refs": MAX_EVENT_PREV_REFS,
+            "max_auth_refs": MAX_EVENT_AUTH_REFS,
+            "max_list_limit": 100
+        }),
+        capabilities: json!({
+            "single_event_submit": true,
+            "batch_submit": false,
+            "batch_receipt": false,
+            "read_by_event_id": true,
+            "batch_get": true,
+            "list_by_actor_or_space": true,
+            "frontier": true,
+            "snapshot": false,
+            "witness": false,
+            "high_assurance": false
+        }),
+    }));
+}
+
+#[handler]
+pub async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let Some(session) = auth_or_render(state, req, res) else {
+        return;
+    };
+    let envelope = match req.parse_json::<Value>().await {
+        Ok(body) => body,
+        Err(_) => {
+            render_error(
+                res,
+                StatusCode::BAD_REQUEST,
+                "bad_json",
+                "invalid event envelope",
+            );
+            return;
+        }
+    };
+    if envelope.as_array().is_some()
+        || envelope
+            .get("events")
+            .and_then(Value::as_array)
+            .is_some_and(|events| !events.is_empty())
+    {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "batch_not_supported",
+            "POST /api/v1/events accepts one Event Envelope in the active profile",
+        );
+        return;
+    }
+    let Ok(raw_bytes) = serde_json::to_vec(&envelope) else {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "bad_json",
+            "event envelope cannot be encoded",
+        );
+        return;
+    };
+    if raw_bytes.len() > MAX_EVENT_BYTES {
+        render_error(
+            res,
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "event_too_large",
+            "event envelope exceeds max_event_bytes",
+        );
+        return;
+    }
+
+    let parsed = match validate_event_envelope(state, &session, &envelope) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            render_error(res, error.status, error.code, error.message);
+            return;
+        }
+    };
+
+    let received_at = now();
+    let mut events = state.events.lock().expect("events lock");
+    if let Some(existing) = events.get(&parsed.event_id) {
+        if existing.canonical_bytes == parsed.canonical_bytes {
+            let response = event_submit_response(
+                state,
+                "duplicate",
+                existing.event_id.clone(),
+                existing.canonical_digest.clone(),
+                existing.received_at,
+                true,
+            );
+            res.render(Json(response));
+            return;
+        }
+        drop(events);
+        append_audit_log(
+            state,
+            Some(&session.actor),
+            "events.submit",
+            json!({
+                "event_id": parsed.event_id,
+                "reason": "duplicate_conflict",
+                "canonical_digest": parsed.canonical_digest
+            }),
+            "duplicate_conflict",
+        );
+        render_error(
+            res,
+            StatusCode::CONFLICT,
+            "duplicate_conflict",
+            "event_id already exists with different canonical bytes",
+        );
+        return;
+    }
+    if let Some(max_seq) = events
+        .values()
+        .filter(|record| record.actor_id == parsed.actor_id)
+        .map(|record| record.actor_seq)
+        .max()
+        && parsed.actor_seq <= max_seq
+    {
+        render_error(
+            res,
+            StatusCode::CONFLICT,
+            "actor_seq_conflict",
+            "actor_seq must be strictly increasing for the actor",
+        );
+        return;
+    }
+    for prev_ref in &parsed.prev_refs {
+        if !events.contains_key(prev_ref) {
+            render_error(
+                res,
+                StatusCode::CONFLICT,
+                "missing_dependency",
+                "prev_refs must reference accepted events",
+            );
+            return;
+        }
+    }
+    for auth_ref in &parsed.auth_refs {
+        if !events.contains_key(auth_ref) {
+            render_error(
+                res,
+                StatusCode::CONFLICT,
+                "missing_auth_ref",
+                "auth_refs must reference accepted authorization events",
+            );
+            return;
+        }
+    }
+
+    events.insert(
+        parsed.event_id.clone(),
+        CanonicalEventRecord {
+            event_id: parsed.event_id.clone(),
+            actor_id: parsed.actor_id.clone(),
+            actor_seq: parsed.actor_seq,
+            space_id: parsed.space_id.clone(),
+            kind: parsed.kind.clone(),
+            schema_id: parsed.schema_id.clone(),
+            canonical_digest: parsed.canonical_digest.clone(),
+            canonical_bytes: parsed.canonical_bytes.clone(),
+            envelope,
+            received_at,
+        },
+    );
+    drop(events);
+    append_audit_log(
+        state,
+        Some(&session.actor),
+        "events.submit",
+        json!({
+            "event_id": parsed.event_id.clone(),
+            "space_id": parsed.space_id.clone(),
+            "kind": parsed.kind.clone(),
+            "canonical_digest": parsed.canonical_digest.clone()
+        }),
+        "accepted",
+    );
+    res.render(Json(event_submit_response(
+        state,
+        "accepted",
+        parsed.event_id,
+        parsed.canonical_digest,
+        received_at,
+        false,
+    )));
+}
+
+#[handler]
+pub async fn get_event(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let Some(session) = auth_or_render(state, req, res) else {
+        return;
+    };
+    let Some(event_id) = req.param::<String>("event_id") else {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "missing_param",
+            "event_id is required",
+        );
+        return;
+    };
+    let events = state.events.lock().expect("events lock");
+    let Some(record) = events.get(&event_id) else {
+        render_error(res, StatusCode::NOT_FOUND, "not_found", "event not found");
+        return;
+    };
+    if !event_visible_to_session(state, record, &session) {
+        render_error(res, StatusCode::NOT_FOUND, "not_found", "event not found");
+        return;
+    }
+    res.render(Json(event_read_response(record)));
+}
+
+#[handler]
+pub async fn batch_get_events(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let Some(session) = auth_or_render(state, req, res) else {
+        return;
+    };
+    let body = match req.parse_json::<EventBatchGetRequest>().await {
+        Ok(body) => body,
+        Err(_) => {
+            render_error(
+                res,
+                StatusCode::BAD_REQUEST,
+                "bad_json",
+                "invalid batch-get request",
+            );
+            return;
+        }
+    };
+    if body.event_ids.len() > MAX_EVENT_BATCH_GET {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "limit_exceeded",
+            "too many event_ids requested",
+        );
+        return;
+    }
+    let events = state.events.lock().expect("events lock");
+    let mut found = Vec::new();
+    let mut missing = Vec::new();
+    for event_id in body.event_ids {
+        match events.get(&event_id) {
+            Some(record) if event_visible_to_session(state, record, &session) => {
+                found.push(event_read_response(record));
+            }
+            _ => missing.push(event_id),
+        }
+    }
+    res.render(Json(EventBatchGetResponse {
+        events: found,
+        missing,
+        unauthorized: Vec::new(),
+    }));
+}
+
+#[handler]
+pub async fn list_events(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let Some(session) = auth_or_render(state, req, res) else {
+        return;
+    };
+    let actor_id = query_param(req, "actor_id");
+    let space_id = query_param(req, "space_id");
+    if let Some(actor_id) = actor_id.as_deref()
+        && validate_did(actor_id).is_err()
+    {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            "invalid actor_id",
+        );
+        return;
+    }
+    if let Some(space_id) = space_id.as_deref()
+        && validate_space_id(space_id).is_err()
+    {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            "invalid space_id",
+        );
+        return;
+    }
+    let cursor = query_param(req, "cursor");
+    let limit = query_param(req, "limit")
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(50)
+        .clamp(1, 100);
+    let events = state.events.lock().expect("events lock");
+    let mut records = events
+        .values()
+        .filter(|record| {
+            actor_id
+                .as_deref()
+                .is_none_or(|actor| actor == record.actor_id)
+        })
+        .filter(|record| space_id.as_deref() == record.space_id.as_deref() || space_id.is_none())
+        .filter(|record| event_visible_to_session(state, record, &session))
+        .cloned()
+        .collect::<Vec<_>>();
+    records.sort_by(|left, right| {
+        left.received_at
+            .cmp(&right.received_at)
+            .then_with(|| left.event_id.cmp(&right.event_id))
+    });
+    let start = cursor
+        .as_deref()
+        .and_then(|cursor| records.iter().position(|record| record.event_id == cursor))
+        .map(|index| index + 1)
+        .unwrap_or(0);
+    let mut page = records
+        .into_iter()
+        .skip(start)
+        .take(limit + 1)
+        .collect::<Vec<_>>();
+    let has_more = page.len() > limit;
+    if has_more {
+        page.truncate(limit);
+    }
+    let next_cursor = has_more
+        .then(|| page.last().map(|record| record.event_id.clone()))
+        .flatten();
+    let frontier = events_frontier_json(&page);
+    let events = page.iter().map(event_read_response).collect();
+    res.render(Json(EventsPageResponse {
+        events,
+        next_cursor,
+        frontier,
+    }));
+}
+
+#[handler]
+pub async fn events_frontier(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let Some(session) = auth_or_render(state, req, res) else {
+        return;
+    };
+    let actor_id = query_param(req, "actor_id");
+    let space_id = query_param(req, "space_id");
+    let events = state.events.lock().expect("events lock");
+    let mut actor_frontier: BTreeMap<String, u64> = BTreeMap::new();
+    let mut space_frontier: BTreeMap<String, Value> = BTreeMap::new();
+    for record in events.values() {
+        if actor_id
+            .as_deref()
+            .is_some_and(|actor| actor != record.actor_id)
+        {
+            continue;
+        }
+        if space_id.as_deref() != record.space_id.as_deref() && space_id.is_some() {
+            continue;
+        }
+        if !event_visible_to_session(state, record, &session) {
+            continue;
+        }
+        actor_frontier
+            .entry(record.actor_id.clone())
+            .and_modify(|seq| *seq = (*seq).max(record.actor_seq))
+            .or_insert(record.actor_seq);
+        if let Some(space_id) = record.space_id.as_deref() {
+            space_frontier.insert(
+                space_id.to_owned(),
+                json!({
+                    "event_id": record.event_id.clone(),
+                    "actor_seq": record.actor_seq,
+                    "canonical_digest": record.canonical_digest.clone()
+                }),
+            );
+        }
+    }
+    res.render(Json(EventsFrontierResponse {
+        actor_frontier,
+        space_frontier,
+        frontier: json!({"storage": state.db.mode(), "generated_at": now()}),
+    }));
+}
+
 #[handler]
 pub async fn client_sync(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
@@ -3557,6 +4194,12 @@ pub async fn client_sync(depot: &mut Depot, req: &mut Request, res: &mut Respons
             return;
         }
     };
+    if let Some(filter) = body.filter.as_ref()
+        && let Err(message) = validate_no_removed_legacy_contracts(filter)
+    {
+        render_error(res, StatusCode::BAD_REQUEST, "invalid_param", message);
+        return;
+    }
     let session = authenticated_session(state, req).ok();
     let since_cursor = if let Some(since) = body.since.as_deref() {
         match parse_and_validate_sync_cursor(
@@ -3573,7 +4216,7 @@ pub async fn client_sync(depot: &mut Depot, req: &mut Request, res: &mut Respons
             Err(SyncCursorError::Expired) => {
                 render_error(
                     res,
-                    StatusCode::UNAUTHORIZED,
+                    StatusCode::GONE,
                     "sync_token_expired",
                     "sync token has expired",
                 );
@@ -3669,6 +4312,13 @@ pub async fn client_sync(depot: &mut Depot, req: &mut Request, res: &mut Respons
     let mut sync_spaces = std::collections::BTreeMap::new();
     let mut positions = BTreeMap::new();
     for (space_id, title, summary, tags, category) in visible_spaces {
+        let flow = flow_projection_for_space(state, &space_id, &title, summary.as_deref());
+        let flow_state_after = flow.clone();
+        let flow_list_item = flow.clone();
+        let title_text = title.clone();
+        let summary_text = summary.clone();
+        let tags_value = tags.clone();
+        let category_value = category.clone();
         let since_position = since_cursor
             .positions
             .get(&space_id)
@@ -3684,31 +4334,23 @@ pub async fn client_sync(depot: &mut Depot, req: &mut Request, res: &mut Respons
             .messages_for_space(&space_id)
             .into_iter()
             .filter(|message| message.created_at.timestamp_micros() > since_position)
-            .map(|message| {
-                json!({
-                    "kind": "message",
-                    "event_id": message.event_id,
-                    "space_id": message.space_id,
-                    "thread_id": message.thread_id,
-                    "sender": message.sender,
-                    "content": message.content,
-                    "encrypted": message.encrypted,
-                    "created_at": message.created_at,
-                })
-            })
+            .map(sync_timeline_message_json)
             .collect();
         positions.insert(space_id.clone(), space_position);
         sync_spaces.insert(
             space_id.clone(),
             json!({
                 "summary": {
-                    "title": title,
-                    "summary": summary,
-                    "tags": tags,
-                    "category": category,
+                    "flow": flow,
+                    "title": title_text,
+                    "summary": summary_text,
+                    "tags": tags_value,
+                    "category": category_value,
                 },
+                "flows": [flow_list_item],
                 "timeline": {"events": timeline_events, "limited": false},
                 "state": [],
+                "state_after": {"events": [flow_state_after]},
                 "ephemeral": typing_ephemeral_for_space(state, &space_id, session.as_ref()),
                 "unread": {"notification_count": 0, "highlight_count": 0}
             }),
@@ -3939,14 +4581,31 @@ fn sync_filter_hash(
 }
 
 fn index_query_cursor(body: &IndexQueryRequest) -> String {
+    index_query_page_cursor(body, 0)
+}
+
+fn index_query_page_cursor(body: &IndexQueryRequest, index_offset: usize) -> String {
+    bound_cursor_with_positions(
+        "index.query",
+        index_query_binding(body),
+        json!({
+            "repo": null,
+            "index_offset": index_offset,
+        }),
+    )
+}
+
+fn index_query_binding(body: &IndexQueryRequest) -> serde_json::Value {
     let binding = json!({
         "profile": "index.query",
         "space_ids": normalized_strings(&body.space_ids),
         "entity_types": normalized_strings(&body.entity_types),
         "renderer": &body.renderer,
         "facets": normalized_strings(&body.facets),
+        "filters": &body.filters,
+        "sort": &body.sort,
     });
-    bound_cursor("index.query", binding)
+    binding
 }
 
 fn index_search_cursor(body: &IndexSearchRequest) -> String {
@@ -3962,6 +4621,14 @@ fn index_search_cursor(body: &IndexSearchRequest) -> String {
 }
 
 fn bound_cursor(profile: &str, binding: serde_json::Value) -> String {
+    bound_cursor_with_positions(profile, binding, json!({"repo": null}))
+}
+
+fn bound_cursor_with_positions(
+    profile: &str,
+    binding: serde_json::Value,
+    positions: serde_json::Value,
+) -> String {
     let now = chrono::Utc::now();
     let filter_hash = contrix_sdk::canonical::canonical_sha256(&binding)
         .unwrap_or_else(|_| format!("sha256:{}", sha256_hex(binding.to_string().as_bytes())));
@@ -3972,9 +4639,7 @@ fn bound_cursor(profile: &str, binding: serde_json::Value) -> String {
         "filter_hash": filter_hash,
         "issued_at": now,
         "issued_at_ms": now.timestamp_millis(),
-        "positions": {
-            "repo": null
-        }
+        "positions": positions
     });
     format!("cx:cursor:{}", URL_SAFE_NO_PAD.encode(cursor.to_string()))
 }
@@ -3984,6 +4649,115 @@ fn normalized_strings(values: &[String]) -> Vec<String> {
     values.sort();
     values.dedup();
     values
+}
+
+fn index_query_strings(body: &IndexQueryRequest, key: &str, legacy: &[String]) -> Vec<String> {
+    let mut values = legacy.to_vec();
+    if let Some(filter_value) = body.filters.get(key) {
+        match filter_value {
+            Value::Array(items) => values.extend(
+                items
+                    .iter()
+                    .filter_map(|item| item.as_str().map(ToOwned::to_owned)),
+            ),
+            Value::String(value) => values.push(value.to_owned()),
+            _ => {}
+        }
+    }
+    normalized_strings(&values)
+}
+
+fn index_query_text_filter(body: &IndexQueryRequest) -> Option<String> {
+    body.filters
+        .get("text")
+        .or_else(|| body.filters.get("query"))
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn index_query_sort_spec(body: &IndexQueryRequest) -> Option<(String, bool)> {
+    let spec = body.sort.first()?;
+    let (field, descending) = match spec {
+        Value::String(field) => (field.as_str(), false),
+        Value::Object(object) => {
+            let field = object
+                .get("field")
+                .and_then(|value| value.as_str())
+                .unwrap_or("title");
+            let descending = object
+                .get("direction")
+                .or_else(|| object.get("order"))
+                .and_then(|value| value.as_str())
+                .is_some_and(|direction| direction.eq_ignore_ascii_case("desc"));
+            (field, descending)
+        }
+        _ => return None,
+    };
+    Some((field.to_owned(), descending))
+}
+
+fn apply_index_query_sort(results: &mut [serde_json::Value], body: &IndexQueryRequest) {
+    let Some((field, descending)) = index_query_sort_spec(body) else {
+        results.sort_by(|left, right| {
+            index_query_sort_key(left, "title").cmp(&index_query_sort_key(right, "title"))
+        });
+        return;
+    };
+    results.sort_by(|left, right| {
+        index_query_sort_key(left, &field).cmp(&index_query_sort_key(right, &field))
+    });
+    if descending {
+        results.reverse();
+    }
+}
+
+fn index_query_sort_key(value: &serde_json::Value, field: &str) -> String {
+    value
+        .get(field)
+        .or_else(|| match field {
+            "id" => value.get("space_id"),
+            "name" => value.get("title"),
+            _ => None,
+        })
+        .and_then(|value| value.as_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+}
+
+fn parse_index_query_cursor_offset(
+    body: &IndexQueryRequest,
+) -> Result<usize, (&'static str, &'static str)> {
+    let Some(cursor) = body.cursor.as_deref() else {
+        return Ok(0);
+    };
+    let Some(encoded) = cursor.strip_prefix("cx:cursor:") else {
+        return Err(("invalid_cursor", "cursor must use a cx:cursor token"));
+    };
+    let bytes = URL_SAFE_NO_PAD
+        .decode(encoded.as_bytes())
+        .map_err(|_| ("invalid_cursor", "cursor must be valid base64url"))?;
+    let value: serde_json::Value = serde_json::from_slice(&bytes)
+        .map_err(|_| ("invalid_cursor", "cursor must contain JSON"))?;
+    if value.get("schema").and_then(|value| value.as_str()) != Some("cx.schema.cursor.v1")
+        || value.get("profile").and_then(|value| value.as_str()) != Some("index.query")
+    {
+        return Err(("invalid_cursor", "cursor profile mismatch"));
+    }
+    let binding = index_query_binding(body);
+    let expected_filter_hash = contrix_sdk::canonical::canonical_sha256(&binding)
+        .unwrap_or_else(|_| format!("sha256:{}", sha256_hex(binding.to_string().as_bytes())));
+    if value.get("filter_hash").and_then(|value| value.as_str())
+        != Some(expected_filter_hash.as_str())
+    {
+        return Err(("filter_mismatch", "cursor filter mismatch"));
+    }
+    Ok(value
+        .get("positions")
+        .and_then(|positions| positions.get("index_offset"))
+        .and_then(|offset| offset.as_u64())
+        .unwrap_or(0) as usize)
 }
 
 #[handler]
@@ -4384,9 +5158,137 @@ pub async fn index_describe(depot: &mut Depot, res: &mut Response) {
             "facet_filter".to_owned(),
             "view_renderer".to_owned(),
             "space_filter".to_owned(),
+            "structured_filters".to_owned(),
+            "sort".to_owned(),
+            "pagination_cursor".to_owned(),
         ],
         frontier: json!({"next_batch": sync_token()}),
     }));
+}
+
+#[handler]
+pub async fn index_reducer_debug(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let requested_space_id = query_param(req, "space_id");
+    let session = authenticated_session(state, req).ok();
+    let Some(limit) = query_limit(req, res) else {
+        return;
+    };
+    let visible_space_ids = match requested_space_id.as_ref() {
+        Some(space_id) => {
+            if validate_space_id(space_id).is_err() {
+                render_error(
+                    res,
+                    StatusCode::BAD_REQUEST,
+                    "invalid_param",
+                    "invalid space_id",
+                );
+                return;
+            }
+            if !space_id_accessible(state, space_id, session.as_ref()) {
+                render_error(res, StatusCode::NOT_FOUND, "not_found", "not found");
+                return;
+            }
+            [space_id.clone()].into_iter().collect::<BTreeSet<_>>()
+        }
+        None => state
+            .spaces
+            .lock()
+            .expect("spaces lock")
+            .search(Default::default())
+            .into_iter()
+            .filter(|space| space_visible_to(state, space, session.as_ref()))
+            .map(|space| space.space_id.as_str().to_owned())
+            .collect::<BTreeSet<_>>(),
+    };
+    let visible_space_count = visible_space_ids.len();
+
+    let (message_count, entity_count, relation_count, membership_count, space_state_count) = {
+        let projection = state.projection.lock().expect("projection lock");
+        let message_count = projection
+            .messages
+            .values()
+            .filter(|message| {
+                visible_space_ids.contains(&message.space_id) && message.redacted_at.is_none()
+            })
+            .count();
+        let entity_count = projection
+            .entities
+            .values()
+            .filter(|entity| visible_space_ids.contains(&entity.space_id) && !entity.deleted)
+            .count();
+        let relation_count = projection
+            .relations
+            .values()
+            .filter(|relation| visible_space_ids.contains(&relation.space_id) && !relation.deleted)
+            .count();
+        let membership_count = projection
+            .memberships
+            .iter()
+            .filter(|(space_id, _)| visible_space_ids.contains(*space_id))
+            .map(|(_, members)| members.len())
+            .sum::<usize>();
+        let space_state_count = projection
+            .space_states
+            .values()
+            .filter(|space| visible_space_ids.contains(&space.space_id) && !space.deleted)
+            .count();
+        (
+            message_count,
+            entity_count,
+            relation_count,
+            membership_count,
+            space_state_count,
+        )
+    };
+
+    let mut events = state
+        .projection_events
+        .lock()
+        .expect("projection event lock")
+        .iter()
+        .filter(|event| visible_space_ids.contains(&event.space_id))
+        .cloned()
+        .collect::<Vec<_>>();
+    events.sort_by(|left, right| {
+        left.created_at
+            .cmp(&right.created_at)
+            .then_with(|| left.event_id.cmp(&right.event_id))
+    });
+    let projection_event_count = events.len();
+    let latest_event_id = events.last().map(|event| event.event_id.clone());
+    let latest_event_at = events.last().map(|event| event.created_at);
+    let recent_events = events
+        .iter()
+        .rev()
+        .take(limit)
+        .map(projection_event_json)
+        .collect::<Vec<_>>();
+
+    // TODO(P1 reducer-debug): replace this in-memory snapshot with durable
+    // replay checkpoints, reducer conflict records, and signed frontier proofs.
+    res.render(Json(json!({
+        "reducer_profile": "cx.reducer.v1",
+        "schema_profiles": ["cx.schema.core.v1"],
+        "space_id": requested_space_id,
+        "spaces": visible_space_ids.into_iter().collect::<Vec<_>>(),
+        "frontier": {
+            "projection_event_count": projection_event_count,
+            "message_count": message_count,
+            "entity_count": entity_count,
+            "relation_count": relation_count,
+            "membership_count": membership_count,
+            "space_state_count": space_state_count,
+            "visible_space_count": visible_space_count,
+            "latest_event_id": latest_event_id.clone(),
+            "latest_event_at": latest_event_at,
+            "next_batch": latest_event_id.unwrap_or_else(sync_token),
+            "generated_at": now(),
+        },
+        "recent_events": recent_events,
+        "conflicts": [],
+        "production_gap": "durable_reducer_replay_and_conflict_records",
+    })));
 }
 
 #[handler]
@@ -4400,42 +5302,90 @@ pub async fn index_query(depot: &mut Depot, req: &mut Request, res: &mut Respons
             entity_types: Vec::new(),
             facets: Vec::new(),
             renderer: None,
+            filters: Value::Null,
+            sort: Vec::new(),
+            cursor: None,
             limit: Some(20),
         });
+    let Some(limit) = checked_limit(res, body.limit) else {
+        return;
+    };
+    let start = match parse_index_query_cursor_offset(&body) {
+        Ok(start) => start,
+        Err((code, message)) => {
+            render_error(res, StatusCode::BAD_REQUEST, code, message);
+            return;
+        }
+    };
+    let space_ids = index_query_strings(&body, "space_ids", &body.space_ids);
+    let entity_types = index_query_strings(&body, "entity_types", &body.entity_types);
+    let facets = index_query_strings(&body, "facets", &body.facets);
+    let text_filter = index_query_text_filter(&body);
+    let entity_type_matches = entity_types.is_empty()
+        || entity_types.iter().any(|entity_type| {
+            matches!(
+                entity_type.as_str(),
+                "space" | "cx.space" | "space_preview" | "cx.space.preview"
+            )
+        });
+    let facets_supported = facets
+        .iter()
+        .all(|facet| ["container", "replyable", "renderable"].contains(&facet.as_str()));
     let spaces = state.spaces.lock().expect("spaces lock");
     let session = authenticated_session(state, req).ok();
-    let results = spaces
+    let mut results = spaces
         .search(Default::default())
         .into_iter()
         .filter(|entry| {
             space_visible_to(state, entry, session.as_ref())
-                && (body.space_ids.is_empty()
-                    || body
-                        .space_ids
-                        .iter()
-                        .any(|id| id == entry.space_id.as_str()))
-                && (body.facets.is_empty()
-                    || body.facets.iter().all(|facet| {
-                        ["container", "replyable", "renderable"].contains(&facet.as_str())
-                    }))
+                && entity_type_matches
+                && facets_supported
+                && (space_ids.is_empty()
+                    || space_ids.iter().any(|id| id == entry.space_id.as_str()))
         })
-        .take(body.limit.unwrap_or(20))
         .map(|entry| {
+            let flow = flow_projection_for_space(
+                state,
+                entry.space_id.as_str(),
+                &entry.name,
+                entry.description.as_deref(),
+            );
+            let flow_id = flow["flow_id"].clone();
             json!({
                 "kind": "space_preview",
+                "flow": flow,
+                "flow_id": flow_id,
                 "space_id": entry.space_id,
                 "title": entry.name,
                 "summary": entry.description,
-                "entity_types": body.entity_types.clone(),
-                "facets": body.facets.clone(),
+                "entity_types": entity_types.clone(),
+                "facets": facets.clone(),
                 "renderer": body.renderer.clone(),
             })
         })
-        .collect();
+        .filter(|entry| query_matches(entry, text_filter.as_deref()))
+        .collect::<Vec<_>>();
+    drop(spaces);
+    apply_index_query_sort(&mut results, &body);
+    let total = results.len();
+    let page_results = results
+        .into_iter()
+        .skip(start)
+        .take(limit)
+        .collect::<Vec<_>>();
+    let next_offset = start + page_results.len();
+    let next_cursor = (next_offset < total).then(|| index_query_page_cursor(&body, next_offset));
+    let limited = next_cursor.is_some();
     res.render(Json(IndexQueryResponse {
-        results,
-        next_cursor: None,
-        frontier: json!({"next_batch": index_query_cursor(&body)}),
+        results: page_results,
+        next_cursor: next_cursor.clone(),
+        frontier: json!({
+            "next_batch": index_query_cursor(&body),
+            "next_cursor": next_cursor,
+            "offset": start,
+            "total": total,
+            "limited": limited,
+        }),
     }));
 }
 
@@ -4475,22 +5425,24 @@ pub async fn index_entity(depot: &mut Depot, req: &mut Request, res: &mut Respon
 #[handler]
 pub async fn index_thread(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let thread_id = query_param(req, "thread_id").or_else(|| query_param(req, "id"));
-    let Some(thread_id) = thread_id else {
+    let branch_id = query_param(req, "branch_id")
+        .or_else(|| query_param(req, "thread_id"))
+        .or_else(|| query_param(req, "id"));
+    let Some(branch_id) = branch_id else {
         render_error(
             res,
             StatusCode::BAD_REQUEST,
             "missing_param",
-            "thread_id is required",
+            "branch_id is required",
         );
         return;
     };
-    if thread_id.trim().is_empty() {
+    if branch_id.trim().is_empty() {
         render_error(
             res,
             StatusCode::BAD_REQUEST,
             "invalid_param",
-            "thread_id must not be empty",
+            "branch_id must not be empty",
         );
         return;
     }
@@ -4498,32 +5450,28 @@ pub async fn index_thread(depot: &mut Depot, req: &mut Request, res: &mut Respon
     // Use projection state for thread messages
     let projection = state.projection.lock().expect("projection lock");
     let events: Vec<_> = projection
-        .messages_for_thread(&thread_id)
+        .messages_for_thread(&branch_id)
         .into_iter()
         .filter(|message| {
             message.redacted_at.is_none()
                 && space_id_visible_to(state, &message.space_id, session.as_ref())
         })
-        .map(|message| {
-            json!({
-                "event_id": message.event_id,
-                "space_id": message.space_id,
-                "sender": message.sender,
-                "thread_id": message.thread_id,
-                "content": message.content,
-                "encrypted": message.encrypted,
-                "created_at": message.created_at,
-            })
-        })
+        .map(sync_timeline_message_json)
         .collect();
     let first_space_id = events
         .first()
         .and_then(|event| event["space_id"].as_str())
         .unwrap_or("cx:space:01js0sp0000000000000000000");
+    let flow_id = query_param(req, "flow_id")
+        .filter(|flow_id| !flow_id.trim().is_empty())
+        .unwrap_or_else(|| flow_id_from_space_id(first_space_id));
     res.render(Json(IndexThreadResponse {
         thread: json!({
-            "thread_id": thread_id,
-            "title": "Thread",
+            "thread_id": branch_id,
+            "branch_id": branch_id,
+            "flow_id": flow_id,
+            "branch": default_discussion_branch(&flow_id, &branch_id),
+            "title": "Discussion Branch",
             "space_id": first_space_id,
             "reply_count": events.len(),
         }),
@@ -4592,31 +5540,36 @@ pub async fn index_inbox(depot: &mut Depot, req: &mut Request, res: &mut Respons
     let session = authenticated_session(state, req).ok();
     // Use projection state for last message
     let projection = state.projection.lock().expect("projection lock");
-    let rooms = spaces
+    let flows = spaces
         .search(Default::default())
         .into_iter()
         .filter(|space| space_visible_to(state, space, session.as_ref()))
         .take(limit)
         .map(|space| {
+            let flow = flow_projection_for_space(
+                state,
+                space.space_id.as_str(),
+                &space.name,
+                space.description.as_deref(),
+            );
+            let flow_id = flow["flow_id"].clone();
+            let flow_id_text = flow_id.as_str().unwrap_or_default().to_owned();
             let last_message = projection
                 .messages_for_space(space.space_id.as_str())
                 .into_iter()
                 .next_back()
                 .filter(|m| m.redacted_at.is_none())
-                .map(|message| {
-                    json!({
-                        "event_id": message.event_id,
-                        "space_id": message.space_id,
-                        "sender": message.sender,
-                        "content": message.content,
-                        "encrypted": message.encrypted,
-                        "created_at": message.created_at,
-                    })
-                });
+                .map(sync_timeline_message_json);
             json!({
+                "flow": flow,
+                "flow_id": flow_id,
                 "space_id": space.space_id,
-                "name": space.name,
+                "title": space.name,
                 "summary": space.description,
+                "branch": default_discussion_branch(
+                    &flow_id_text,
+                    space.space_id.as_str(),
+                ),
                 "unread": {"notification_count": 0, "highlight_count": 0},
                 "last_activity_at": now(),
                 "last_message": last_message,
@@ -4624,7 +5577,7 @@ pub async fn index_inbox(depot: &mut Depot, req: &mut Request, res: &mut Respons
         })
         .collect();
     res.render(Json(IndexInboxResponse {
-        rooms,
+        flows,
         next_cursor: None,
         frontier: json!({"next_batch": sync_token()}),
     }));
@@ -4673,8 +5626,17 @@ pub async fn index_search(depot: &mut Depot, req: &mut Request, res: &mut Respon
         {
             continue;
         }
+        let flow = flow_projection_for_space(
+            state,
+            space.space_id.as_str(),
+            &space.name,
+            space.description.as_deref(),
+        );
+        let flow_id = flow_id_from_space_id(space.space_id.as_str());
         let entity = json!({
             "kind": "space",
+            "flow": flow,
+            "flow_id": flow_id,
             "entity_id": space.space_id,
             "space_id": space.space_id,
             "facets": ["container", "replyable", "renderable"],
@@ -4707,9 +5669,14 @@ pub async fn index_search(depot: &mut Depot, req: &mut Request, res: &mut Respon
         {
             continue;
         }
+        let flow_id = flow_id_from_space_id(&message.space_id);
+        let branch = default_discussion_branch(&flow_id, &message.thread_id);
         let entity = json!({
             "event_id": message.event_id,
+            "message_id": message_id_from_event_id(&message.event_id),
+            "flow_id": flow_id,
             "space_id": message.space_id,
+            "branch": branch,
             "sender": message.sender,
             "facets": ["replyable", "renderable", "notifiable"],
             "content": message.content,
@@ -4849,12 +5816,16 @@ pub async fn sync_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Resp
                     .into_iter()
                     .map(|operation| {
                         seq += 1;
-                        let cursor = operation.operation_id.to_string();
+                        let projected = projection_event_from_operation(&operation, None);
+                        let cursor = projected
+                            .operation_id
+                            .clone()
+                            .unwrap_or_else(|| projected.event_id.clone());
                         json!({
-                            "type": "operation",
+                            "type": "event",
                             "seq": seq,
                             "cursor": cursor,
-                            "payload": operation
+                            "payload": projection_event_json(&projected)
                         })
                     })
                     .collect();
@@ -4871,12 +5842,23 @@ pub async fn sync_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Resp
                 &error.to_string(),
             ),
         },
-        Err(error) => render_error(
-            res,
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "projection_error",
-            &error.to_string(),
-        ),
+        Err(error) => {
+            if error.to_string().contains("invalid_cursor") {
+                render_error(
+                    res,
+                    StatusCode::BAD_REQUEST,
+                    "invalid_cursor",
+                    "cursor not found",
+                );
+                return;
+            }
+            render_error(
+                res,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "projection_error",
+                &error.to_string(),
+            );
+        }
     }
 }
 
@@ -4916,7 +5898,8 @@ pub async fn sync_backfill(depot: &mut Depot, req: &mut Request, res: &mut Respo
             let events = page.items.iter().map(projection_event_json).collect();
             res.render(Json(BackfillResponse {
                 events,
-                prev_cursor: cursor,
+                prev_cursor: cursor.clone(),
+                prev_batch: cursor,
                 next_cursor: page.next_cursor.or_else(|| Some(sync_token())),
                 limited: page.has_more,
             }));
@@ -4924,6 +5907,15 @@ pub async fn sync_backfill(depot: &mut Depot, req: &mut Request, res: &mut Respo
         }
         Ok(None) => {}
         Err(error) => {
+            if error.to_string().contains("invalid_cursor") {
+                render_error(
+                    res,
+                    StatusCode::BAD_REQUEST,
+                    "invalid_cursor",
+                    "cursor not found",
+                );
+                return;
+            }
             render_error(
                 res,
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -4953,24 +5945,112 @@ pub async fn sync_backfill(depot: &mut Depot, req: &mut Request, res: &mut Respo
         .items
         .into_iter()
         .filter(|operation| operation_is_visible(operation, &redacted))
-        .map(|operation| {
-            let event_id = operation_event_id(&operation);
-            json!({
-                "event_id": event_id,
-                "space_id": operation.space_id,
-                "event_type": operation.object_type,
-                "operation_type": operation.operation_type,
-                "payload": operation.payload,
-                "created_at": operation.created_at
-            })
-        })
+        .map(|operation| projection_event_json(&projection_event_from_operation(&operation, None)))
         .collect();
     res.render(Json(BackfillResponse {
         events,
-        prev_cursor: cursor,
+        prev_cursor: cursor.clone(),
+        prev_batch: cursor,
         next_cursor: page.next_cursor.or_else(|| Some(sync_token())),
         limited: page.has_more,
     }));
+}
+
+#[handler]
+pub async fn sync_gap_backfill(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let Some(space_id) = query_param(req, "space_id") else {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "missing_param",
+            "space_id is required",
+        );
+        return;
+    };
+    if validate_space_id(&space_id).is_err() {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            "invalid space_id",
+        );
+        return;
+    }
+    let session = authenticated_session(state, req).ok();
+    if !space_id_accessible(state, &space_id, session.as_ref()) {
+        render_error(res, StatusCode::NOT_FOUND, "not_found", "not found");
+        return;
+    }
+    let limit = query_param(req, "limit")
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(100)
+        .clamp(1, 500);
+    let from_cursor = query_param(req, "from_cursor")
+        .or_else(|| query_param(req, "from"))
+        .or_else(|| query_param(req, "prev_batch"))
+        .or_else(|| query_param(req, "cursor"));
+    let to_cursor = query_param(req, "to_cursor")
+        .or_else(|| query_param(req, "to"))
+        .or_else(|| query_param(req, "next_batch"));
+
+    // TODO(P0 sync): map durable cx:cursor space positions to reducer event
+    // cursors. This first contract accepts the event/operation cursors returned
+    // by sync/backfill and sync/subscribe.
+    if from_cursor
+        .as_deref()
+        .is_some_and(|cursor| cursor.starts_with("cx:cursor:"))
+        || to_cursor
+            .as_deref()
+            .is_some_and(|cursor| cursor.starts_with("cx:cursor:"))
+    {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            "gap backfill currently expects event cursors, not sync tokens",
+        );
+        return;
+    }
+
+    let (events, next_cursor, limited) =
+        match backfill_gap_events(state, &space_id, from_cursor.as_deref(), limit) {
+            Ok(result) => result,
+            Err(error) => {
+                if error.to_string().contains("invalid_cursor") {
+                    render_error(
+                        res,
+                        StatusCode::BAD_REQUEST,
+                        "invalid_cursor",
+                        "cursor not found",
+                    );
+                    return;
+                }
+                render_error(
+                    res,
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "backfill_error",
+                    &error.to_string(),
+                );
+                return;
+            }
+        };
+    let (events, gap_complete) = truncate_gap_events(events, to_cursor.as_deref());
+    let next_cursor = if gap_complete {
+        to_cursor.clone()
+    } else {
+        next_cursor
+    };
+    res.render(Json(json!({
+        "events": events,
+        "from_cursor": from_cursor.clone(),
+        "to_cursor": to_cursor.clone(),
+        "prev_batch": from_cursor.clone(),
+        "next_cursor": next_cursor,
+        "limited": limited && !gap_complete,
+        "gap_complete": gap_complete || !limited,
+        "production_gap": "durable_sync_position_validation",
+    })));
 }
 
 #[handler]
@@ -5008,44 +6088,206 @@ pub async fn snapshot_head(depot: &mut Depot, req: &mut Request, res: &mut Respo
         return;
     };
     let spaces = state.spaces.lock().expect("spaces lock");
-    let Some(space) = spaces.get(&space_id_value) else {
+    if spaces.get(&space_id_value).is_none() {
+        render_error(res, StatusCode::NOT_FOUND, "not_found", "not found");
+        return;
+    }
+    drop(spaces);
+    let Some(bundle) = snapshot_bundle_for_space(state, &space_id) else {
         render_error(res, StatusCode::NOT_FOUND, "not_found", "not found");
         return;
     };
-    let messages: Vec<_> = state
-        .messages
-        .lock()
-        .expect("messages lock")
-        .iter()
-        .filter(|message| message.space_id == space_id)
-        .map(message_event)
-        .collect();
-    let manifest = json!({
-        "space_id": space_id,
-        "title": space.name,
-        "members": space.members.iter().map(ToString::to_string).collect::<Vec<_>>(),
-        "message_count": messages.len(),
-        "messages": messages,
-        "generated_at": now(),
-    });
-    let state_hash = format!("sha256:{}", sha256_hex(manifest.to_string().as_bytes()));
-    let snapshot_ref = format!(
-        "cx:snapshot:{}:{}",
-        space_id,
-        state_hash.trim_start_matches("sha256:")
-    );
     let service_did = state.config.service_did.clone();
-    let signature_payload = format!("{snapshot_ref}:{state_hash}:{service_did}");
+    let signature_payload = format!(
+        "{}:{}:{}",
+        bundle.snapshot_ref, bundle.state_hash, service_did
+    );
     res.render(Json(SnapshotHeadResponse {
-        snapshot_ref,
-        state_hash,
-        frontier: json!({"space_id": space_id, "generated_at": now(), "message_count": manifest["message_count"]}),
+        snapshot_ref: bundle.snapshot_ref,
+        state_hash: bundle.state_hash,
+        manifest: bundle.manifest,
+        chunks: vec![bundle.chunk_descriptor],
+        frontier: bundle.frontier,
         signature: json!({
             "kid": format!("{service_did}#snapshot-dev"),
             "alg": "sha256-dev",
             "sig": sha256_hex(signature_payload.as_bytes())
         }),
     }));
+}
+
+#[handler]
+pub async fn snapshot_chunk(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let Some(snapshot_ref) = query_param(req, "snapshot_ref") else {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "missing_param",
+            "snapshot_ref is required",
+        );
+        return;
+    };
+    let chunk_id = query_param(req, "chunk_id").unwrap_or_else(|| "0".to_owned());
+    if chunk_id != "0" {
+        render_error(
+            res,
+            StatusCode::NOT_FOUND,
+            "not_found",
+            "snapshot chunk not found",
+        );
+        return;
+    }
+    let Some((space_id, expected_hash)) = parse_snapshot_ref(&snapshot_ref) else {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            "invalid snapshot_ref",
+        );
+        return;
+    };
+    if is_space_deleted(state, &space_id) {
+        render_error(res, StatusCode::NOT_FOUND, "not_found", "not found");
+        return;
+    }
+    let Some(bundle) = snapshot_bundle_for_space(state, &space_id) else {
+        render_error(res, StatusCode::NOT_FOUND, "not_found", "not found");
+        return;
+    };
+    if bundle.snapshot_ref != snapshot_ref || bundle.state_hash != expected_hash {
+        render_error(
+            res,
+            StatusCode::CONFLICT,
+            "snapshot_stale",
+            "snapshot_ref no longer matches the current snapshot frontier",
+        );
+        return;
+    }
+
+    // TODO(P1 snapshot): replace the single JSON chunk with deterministic
+    // multi-chunk Merkle output and signed generator proofs.
+    res.render(Json(json!({
+        "snapshot_ref": snapshot_ref,
+        "chunk_id": chunk_id,
+        "media_type": "application/json",
+        "encoding": "base64url",
+        "digest": bundle.state_hash,
+        "verified": format!("sha256:{}", sha256_hex(&bundle.chunk_bytes)) == bundle.state_hash,
+        "bytes_base64": URL_SAFE_NO_PAD.encode(&bundle.chunk_bytes),
+    })));
+}
+
+struct SnapshotBundle {
+    snapshot_ref: String,
+    state_hash: String,
+    manifest: Value,
+    chunk_descriptor: Value,
+    frontier: Value,
+    chunk_bytes: Vec<u8>,
+}
+
+fn snapshot_bundle_for_space(state: &AppState, space_id: &str) -> Option<SnapshotBundle> {
+    let space_id_value = SpaceId::new(space_id.to_owned()).ok()?;
+    let (title, members, category, tags) = {
+        let spaces = state.spaces.lock().expect("spaces lock");
+        let space = spaces.get(&space_id_value)?;
+        (
+            space.name.clone(),
+            space
+                .members
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>(),
+            space.category.clone(),
+            space.tags.iter().cloned().collect::<Vec<_>>(),
+        )
+    };
+    let meta = state
+        .space_meta
+        .lock()
+        .expect("space meta lock")
+        .get(space_id)
+        .cloned();
+    let messages = state
+        .messages
+        .lock()
+        .expect("messages lock")
+        .iter()
+        .filter(|message| message.space_id == space_id)
+        .cloned()
+        .collect::<Vec<_>>();
+    let generated_at = messages
+        .iter()
+        .map(|message| message.created_at)
+        .max()
+        .or_else(|| meta.as_ref().map(|meta| meta.updated_at))
+        .unwrap_or_else(now);
+    let message_events = messages.iter().map(message_event).collect::<Vec<_>>();
+    let state_document = json!({
+        "type": "cx.snapshot.space_state.v1",
+        "schema_profiles": ["cx.schema.core.v1"],
+        "reducer_profile": "cx.reducer.v1",
+        "space_id": space_id,
+        "title": title,
+        "category": category,
+        "tags": tags,
+        "members": members,
+        "message_count": message_events.len(),
+        "messages": message_events,
+        "generated_at": generated_at,
+    });
+    let chunk_bytes = serde_json::to_vec(&state_document).ok()?;
+    let state_hash = format!("sha256:{}", sha256_hex(&chunk_bytes));
+    let chunk_descriptor = json!({
+        "chunk_id": "0",
+        "media_type": "application/json",
+        "digest": state_hash,
+        "size": chunk_bytes.len(),
+    });
+    let snapshot_ref = format!(
+        "cx:snapshot:{}:{}",
+        space_id,
+        state_hash.trim_start_matches("sha256:")
+    );
+    let frontier = json!({
+        "space_id": space_id,
+        "generated_at": generated_at,
+        "message_count": state_document["message_count"],
+        "state_hash": state_hash,
+    });
+    let manifest = json!({
+        "snapshot_ref": snapshot_ref,
+        "schema_profiles": ["cx.schema.core.v1"],
+        "reducer_profile": "cx.reducer.v1",
+        "covers_frontier": frontier,
+        "chunk_digests": [state_hash],
+        "chunks": [chunk_descriptor],
+        "state_hash": state_hash,
+        "signed_by": state.config.service_did,
+        "generator": {
+            "name": "soland-dev-snapshot",
+            "version": env!("CARGO_PKG_VERSION")
+        },
+        "generated_at": generated_at,
+    });
+    Some(SnapshotBundle {
+        snapshot_ref,
+        state_hash,
+        manifest,
+        chunk_descriptor,
+        frontier,
+        chunk_bytes,
+    })
+}
+
+fn parse_snapshot_ref(snapshot_ref: &str) -> Option<(String, String)> {
+    let rest = snapshot_ref.strip_prefix("cx:snapshot:")?;
+    let (space_id, digest) = rest.rsplit_once(':')?;
+    if validate_space_id(space_id).is_err() || !is_valid_sha256_hex(digest) {
+        return None;
+    }
+    Some((space_id.to_owned(), format!("sha256:{digest}")))
 }
 
 #[handler]
@@ -5247,6 +6489,18 @@ pub async fn submit_commit(depot: &mut Depot, req: &mut Request, res: &mut Respo
     if !commit_already_exists
         && let Err(message) = validate_operation_policy(state, &body.operations)
     {
+        append_audit_log(
+            state,
+            Some(&body.repo_id),
+            "repo.submit_commit",
+            json!({
+                "commit_id": commit_id.clone(),
+                "operation_kinds": operation_kind_records(&body.operations),
+                "reason": "policy_denied",
+                "message": message,
+            }),
+            "policy_denied",
+        );
         render_error(res, StatusCode::FORBIDDEN, "policy_denied", message);
         return;
     }
@@ -5280,8 +6534,13 @@ pub async fn submit_commit(depot: &mut Depot, req: &mut Request, res: &mut Respo
             }));
         }
         Err(error) => {
-            let code = if error.to_string().contains("expected_head mismatch") {
+            let message = error.to_string();
+            let code = if message.contains("expected_head mismatch") {
                 "cas_conflict"
+            } else if message.contains("operation idempotency conflict")
+                || message.contains("conflicting bytes for idempotent object cx:operation:")
+            {
+                "quarantine"
             } else {
                 "duplicate_conflict"
             };
@@ -5296,7 +6555,7 @@ pub async fn submit_commit(depot: &mut Depot, req: &mut Request, res: &mut Respo
                 }),
                 code,
             );
-            render_error(res, StatusCode::CONFLICT, code, &error.to_string());
+            render_error(res, StatusCode::CONFLICT, code, &message);
         }
     }
 }
@@ -5400,6 +6659,11 @@ pub async fn authz_check(depot: &mut Depot, req: &mut Request, res: &mut Respons
     res.render(Json(AuthzCheckResponse {
         allowed: result.allowed,
         reason_code: (!result.allowed).then(|| result.reason.clone()),
+        reason: if result.allowed {
+            None
+        } else {
+            result.reason_detail.clone()
+        },
         grants: result
             .grants
             .iter()
@@ -5651,6 +6915,120 @@ pub async fn audit_events(depot: &mut Depot, req: &mut Request, res: &mut Respon
         "events": events,
         "next_cursor": next_cursor,
     })));
+}
+
+#[handler]
+pub async fn admin_collection(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let Some(session) = auth_or_render(state, req, res) else {
+        return;
+    };
+    if !state.config.development_mode {
+        render_error(
+            res,
+            StatusCode::FORBIDDEN,
+            "capability_denied",
+            "admin collection API requires explicit admin capability",
+        );
+        return;
+    }
+    let Some(resource) = req.param::<String>("resource") else {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "missing_param",
+            "admin resource is required",
+        );
+        return;
+    };
+    let limit = query_param(req, "limit")
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(100)
+        .clamp(1, 500);
+    let cursor = query_param(req, "cursor");
+
+    let (field, mut items) = match resource.as_str() {
+        "actors" => ("actors", admin_actor_items(state)),
+        "spaces" => ("spaces", admin_space_items(state)),
+        "devices" => ("devices", admin_device_items(state)),
+        "capabilities" => ("capabilities", admin_capability_items(state)),
+        "federation" => ("federation", admin_federation_items(state)),
+        "applets" => ("applets", Vec::new()),
+        "agents" => ("agents", Vec::new()),
+        "reports" => (
+            "reports",
+            state
+                .moderation_reports
+                .lock()
+                .expect("reports lock")
+                .clone(),
+        ),
+        "invite-tokens" => ("invite_tokens", admin_invite_items(state)),
+        "audit" => (
+            "audit",
+            state.audit_log.lock().expect("audit log lock").clone(),
+        ),
+        "policy" => ("policy", admin_policy_items(state)),
+        "media" => ("media", admin_media_items(state)),
+        _ => {
+            render_error(
+                res,
+                StatusCode::NOT_FOUND,
+                "not_found",
+                "admin resource not found",
+            );
+            return;
+        }
+    };
+    items.sort_by(|left, right| left.to_string().cmp(&right.to_string()));
+    let start = match cursor.as_deref() {
+        Some(raw) => match raw.parse::<usize>() {
+            Ok(offset) => offset,
+            Err(_) => {
+                render_error(
+                    res,
+                    StatusCode::BAD_REQUEST,
+                    "invalid_param",
+                    "invalid cursor",
+                );
+                return;
+            }
+        },
+        None => 0,
+    };
+    let total = items.len();
+    let mut page = items.into_iter().skip(start).collect::<Vec<_>>();
+    let has_more = page.len() > limit;
+    if has_more {
+        page.truncate(limit);
+    }
+    let next_cursor = has_more.then(|| (start + limit).to_string());
+
+    // TODO(P1 admin): replace this dev-only snapshot API with capability-scoped
+    // admin actions, durable pagination, redaction policy, and high-risk audit.
+    append_audit_log(
+        state,
+        Some(&session.actor),
+        "admin.collection",
+        json!({
+            "resource": resource.clone(),
+            "device_id": session.device_id,
+            "count": page.len(),
+        }),
+        "accepted",
+    );
+
+    let mut body = serde_json::Map::new();
+    body.insert("resource".to_owned(), json!(resource));
+    body.insert("items".to_owned(), json!(page.clone()));
+    body.insert(field.to_owned(), json!(page));
+    body.insert("total".to_owned(), json!(total));
+    body.insert("next_cursor".to_owned(), json!(next_cursor));
+    body.insert(
+        "production_gap".to_owned(),
+        json!("admin_authorization_and_durable_pagination"),
+    );
+    res.render(Json(Value::Object(body)));
 }
 
 #[handler]
@@ -5910,9 +7288,14 @@ pub async fn profile_presence(depot: &mut Depot, req: &mut Request, res: &mut Re
 #[handler]
 pub async fn push_register(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let Some(session) = auth_or_render(state, req, res) else {
+    let auth_result = authenticated_session(state, req);
+    let has_session_grant_header = req.headers().contains_key("x-contrix-session-grant");
+    if let Err((status, code, message)) = auth_result.as_ref()
+        && !has_session_grant_header
+    {
+        render_error(res, *status, code, message);
         return;
-    };
+    }
     let body = match req.parse_json::<PushRegisterRequest>().await {
         Ok(body) => body,
         Err(_) => {
@@ -5925,6 +7308,27 @@ pub async fn push_register(depot: &mut Depot, req: &mut Request, res: &mut Respo
             return;
         }
     };
+    let (session, auth_warning) = match auth_result {
+        Ok(session) => (session, None),
+        Err((status, code, message)) => match push_register_session_grant_bridge(state, req, &body)
+        {
+            Ok(Some(session)) => (
+                session,
+                Some(
+                    "TODO: replace local session-grant bridge with coauth introspection and audience/session proof verification"
+                        .to_owned(),
+                ),
+            ),
+            Ok(None) => {
+                render_error(res, status, code, message);
+                return;
+            }
+            Err((status, code, message)) => {
+                render_error(res, status, code, message);
+                return;
+            }
+        },
+    };
     if validate_device_id(&body.device_id).is_err() {
         render_error(
             res,
@@ -5935,19 +7339,42 @@ pub async fn push_register(depot: &mut Depot, req: &mut Request, res: &mut Respo
         return;
     }
     let registration_id = format!("cx:push:{}", body.device_id);
+    let principal_did = body.principal_did.clone();
+    let device_id = body.device_id.clone();
+    let platform = body.platform.clone();
+    let app_id = body.app_id.clone();
+    let push_gateway = body.push_gateway.clone();
+    let push_key = body.push_key.clone();
+    let request_id = body.request_id.clone();
+    let operation_id = body.operation_id.clone();
+    let idempotency_key = body.idempotency_key.clone();
+    let proof_present = body.proof.is_some();
+    let mut warnings = Vec::new();
+    if let Some(auth_warning) = auth_warning {
+        warnings.push(auth_warning);
+    }
     state.push_devices.lock().expect("push lock").push(json!({
         "registration_id": registration_id,
         "actor": session.actor,
-        "device_id": body.device_id,
-        "platform": body.platform,
-        "app_id": body.app_id,
-        "push_gateway": body.push_gateway,
-        "push_key": body.push_key
+        "principal_did": principal_did,
+        "device_id": device_id,
+        "platform": platform,
+        "app_id": app_id,
+        "push_gateway": push_gateway,
+        "push_key": push_key,
+        "request_id": request_id,
+        "operation_id": operation_id,
+        "idempotency_key": idempotency_key,
+        "proof_present": proof_present,
+        "auth_mode": if warnings.is_empty() { "bearer" } else { "session_grant_bridge" }
     }));
     res.render(Json(PushRegisterResponse {
         ok: true,
         registration_id: Some(registration_id),
         expires_at: None,
+        accepted_gateway: Some(body.push_gateway),
+        request_id: body.request_id,
+        warnings,
     }));
 }
 
@@ -6101,6 +7528,10 @@ pub async fn push_notify(depot: &mut Depot, req: &mut Request, res: &mut Respons
             return;
         }
     };
+    if let Err(message) = validate_no_removed_legacy_contracts(&body.notification) {
+        render_error(res, StatusCode::BAD_REQUEST, "invalid_param", message);
+        return;
+    }
     if push_notification_leaks_plaintext(&body.notification) {
         render_error(
             res,
@@ -6188,24 +7619,28 @@ pub async fn policy_check(depot: &mut Depot, req: &mut Request, res: &mut Respon
         return;
     }
     let policy_decision = matching_policy_decision(state, &body);
-    let (decision, reason_code, obligations) = if let Some(policy_decision) = policy_decision {
-        (
-            policy_decision.decision,
-            policy_decision.reason_code,
-            policy_decision.obligations,
-        )
-    } else if body.action.contains("delete") || body.action.contains("ban") {
-        (
-            "require_review".to_owned(),
-            "review_required".to_owned(),
-            Vec::new(),
-        )
-    } else {
-        ("allow".to_owned(), "ok".to_owned(), Vec::new())
-    };
+    let (decision, reason_code, policy_id, obligations) =
+        if let Some(policy_decision) = policy_decision {
+            (
+                policy_decision.decision,
+                policy_decision.reason_code,
+                Some(policy_decision.policy_id),
+                policy_decision.obligations,
+            )
+        } else if body.action.contains("delete") || body.action.contains("ban") {
+            (
+                "require_review".to_owned(),
+                "review_required".to_owned(),
+                None,
+                Vec::new(),
+            )
+        } else {
+            ("allow".to_owned(), "ok".to_owned(), None, Vec::new())
+        };
     res.render(Json(PolicyCheckResponse {
         decision,
         reason_code,
+        policy_id,
         expires_at: now() + chrono::Duration::minutes(5),
         obligations,
         signature: json!({
@@ -6523,11 +7958,202 @@ pub async fn delete_webrtc_session(depot: &mut Depot, req: &mut Request, res: &m
 }
 
 #[handler]
+pub async fn device_pairing_challenge(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let Some(session) = auth_or_render(state, req, res) else {
+        return;
+    };
+    let body = match req.parse_json::<Value>().await {
+        Ok(body) => body,
+        Err(_) => {
+            render_error(
+                res,
+                StatusCode::BAD_REQUEST,
+                "bad_json",
+                "invalid pairing request",
+            );
+            return;
+        }
+    };
+    let Some(device_id) = body.get("device_id").and_then(|value| value.as_str()) else {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "missing_param",
+            "device_id is required",
+        );
+        return;
+    };
+    if validate_device_id(device_id).is_err() {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            "invalid device_id",
+        );
+        return;
+    }
+    let challenge_id = ids::generate("device_pairing");
+    let expires_at = now() + chrono::Duration::minutes(5);
+    let nonce = ids::generate("nonce");
+    let canonical = json!({
+        "challenge_id": challenge_id,
+        "actor": session.actor.clone(),
+        "authorizing_device_id": session.device_id.clone(),
+        "device_id": device_id,
+        "nonce": nonce,
+        "expires_at": expires_at,
+    });
+    append_audit_log(
+        state,
+        Some(&session.actor),
+        "device.pairing_challenge",
+        json!({
+            "device_id": session.device_id,
+            "target_device_id": device_id,
+            "challenge_id": challenge_id,
+        }),
+        "accepted",
+    );
+    res.render(Json(json!({
+        "challenge_id": challenge_id,
+        "actor": session.actor,
+        "authorizing_device_id": session.device_id,
+        "device_id": device_id,
+        "expires_at": expires_at,
+        "methods": ["same_account_session", "out_of_band_code"],
+        "challenge": {
+            "type": "sha256-dev",
+            "nonce": nonce,
+            "canonical": canonical,
+            "digest": format!("sha256:{}", sha256_hex(canonical.to_string().as_bytes())),
+        },
+        "production_gap": "device_pairing_proof_verification",
+    })));
+}
+
+#[handler]
+pub async fn device_authorize_pairing(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let Some(session) = auth_or_render(state, req, res) else {
+        return;
+    };
+    let body = match req.parse_json::<Value>().await {
+        Ok(body) => body,
+        Err(_) => {
+            render_error(
+                res,
+                StatusCode::BAD_REQUEST,
+                "bad_json",
+                "invalid pairing authorization request",
+            );
+            return;
+        }
+    };
+    let Some(device_id) = body.get("device_id").and_then(|value| value.as_str()) else {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "missing_param",
+            "device_id is required",
+        );
+        return;
+    };
+    if validate_device_id(device_id).is_err() {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            "invalid device_id",
+        );
+        return;
+    }
+    let challenge_id = body
+        .get("challenge_id")
+        .and_then(|value| value.as_str())
+        .unwrap_or("dev-unbound-challenge");
+    let created_at = now();
+    let device = DeviceInventoryRecord {
+        actor: session.actor.clone(),
+        device_id: device_id.to_owned(),
+        display_name: body
+            .get("display_name")
+            .and_then(|value| value.as_str())
+            .map(ToOwned::to_owned),
+        verification_state: "verified".to_owned(),
+        payload: json!({
+            "pairing": {
+                "challenge_id": challenge_id,
+                "authorized_by_device_id": session.device_id,
+                "authorized_at": created_at,
+                "proof": body.get("proof").cloned().unwrap_or_else(|| json!({"alg": "dev-none"})),
+            }
+        }),
+        created_at,
+        updated_at: created_at,
+        revoked_at: None,
+    };
+    if let Err(error) = state.persistence.devices().put(&device) {
+        render_error(
+            res,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "persistence_error",
+            &error.to_string(),
+        );
+        return;
+    }
+    let device_json = device_inventory_to_json(&device);
+    state
+        .devices
+        .lock()
+        .expect("devices lock")
+        .entry(session.actor.clone())
+        .or_default()
+        .insert(device_id.to_owned(), device_json.clone());
+    let authorization_event = json!({
+        "event_id": ids::generate_event_id(),
+        "event_type": "cx.device.pairing.authorized",
+        "actor": session.actor.clone(),
+        "device_id": device_id,
+        "authorized_by_device_id": session.device_id.clone(),
+        "challenge_id": challenge_id,
+        "created_at": created_at,
+    });
+    append_audit_log(
+        state,
+        Some(&session.actor),
+        "device.authorize_pairing",
+        json!({
+            "device_id": session.device_id,
+            "target_device_id": device_id,
+            "challenge_id": challenge_id,
+            "authorization_event": authorization_event,
+        }),
+        "accepted",
+    );
+    res.render(Json(json!({
+        "status": "authorized",
+        "device": device_json,
+        "authorization_event": authorization_event,
+        "production_gap": "authorization_event_not_yet_in_operation_stream",
+    })));
+}
+
+#[handler]
 pub async fn keys_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     let Some(session) = auth_or_render(state, req, res) else {
         return;
     };
+    if is_device_revoked(state, &session.actor, &session.device_id) {
+        render_error(
+            res,
+            StatusCode::UNAUTHORIZED,
+            "unauthenticated",
+            "device revoked",
+        );
+        return;
+    }
     let body = match req.parse_json::<KeysUploadRequest>().await {
         Ok(body) => body,
         Err(_) => {
@@ -6672,6 +8298,9 @@ pub async fn keys_query(depot: &mut Depot, req: &mut Request, res: &mut Response
     for (actor, devices) in body.device_keys {
         let mut actor_keys = serde_json::Map::new();
         for device_id in devices {
+            if is_device_revoked(state, &actor, &device_id) {
+                continue;
+            }
             if let Some(key) = keys.get(&(actor.clone(), device_id.clone())) {
                 actor_keys.insert(device_id, key.clone());
             }
@@ -6998,6 +8627,15 @@ pub async fn federation_transaction(depot: &mut Depot, req: &mut Request, res: &
         }
         Ok(None) => {}
         Err(error) => {
+            if error.to_string().contains("invalid_cursor") {
+                render_error(
+                    res,
+                    StatusCode::BAD_REQUEST,
+                    "invalid_cursor",
+                    "cursor not found",
+                );
+                return;
+            }
             render_error(
                 res,
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -7615,10 +9253,64 @@ fn identity_document_record(state: &AppState, did: &str) -> IdentityDocumentReco
 fn default_did_document(did: &str) -> serde_json::Value {
     json!({
         "id": did,
-        "verification_method": [],
+        "verificationMethod": [],
         "authentication": [],
         "service": [{"id": "soland", "type": "ContrixPrincipalServer", "serviceEndpoint": "/api/v1"}]
     })
+}
+
+fn did_document_verification_methods(document: &serde_json::Value) -> Option<&serde_json::Value> {
+    document
+        .get("verificationMethod")
+        .or_else(|| document.get("verification_method"))
+}
+
+fn did_document_verification_method_ids(document: &serde_json::Value) -> Vec<String> {
+    match did_document_verification_methods(document) {
+        Some(serde_json::Value::Object(methods)) => methods.keys().cloned().collect(),
+        Some(serde_json::Value::Array(methods)) => methods
+            .iter()
+            .filter_map(|method| match method {
+                serde_json::Value::String(id) => Some(id.clone()),
+                serde_json::Value::Object(object) => object
+                    .get("id")
+                    .and_then(|value| value.as_str())
+                    .map(ToOwned::to_owned),
+                _ => None,
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn did_document_first_verification_method(
+    document: &serde_json::Value,
+) -> Option<(String, String)> {
+    match did_document_verification_methods(document)? {
+        serde_json::Value::Object(methods) => methods.iter().next().map(|(key_id, key_value)| {
+            let public_key = key_value
+                .as_str()
+                .map(ToOwned::to_owned)
+                .unwrap_or_else(|| key_value.to_string());
+            (key_id.clone(), public_key)
+        }),
+        serde_json::Value::Array(methods) => methods.iter().find_map(|method| {
+            let object = method.as_object()?;
+            let key_id = object.get("id")?.as_str()?.to_owned();
+            let public_key = object
+                .get("publicKeyMultibase")
+                .or_else(|| object.get("publicKeyJwk"))
+                .map(|value| {
+                    value
+                        .as_str()
+                        .map(ToOwned::to_owned)
+                        .unwrap_or_else(|| value.to_string())
+                })
+                .unwrap_or_default();
+            Some((key_id, public_key))
+        }),
+        _ => None,
+    }
 }
 
 fn did_document_from_patch(did: &str, patch: &serde_json::Value) -> Option<serde_json::Value> {
@@ -7741,8 +9433,11 @@ struct ProjectionEventRow {
 }
 
 fn projection_event_json(event: &ProjectionEventRecord) -> serde_json::Value {
-    json!({
+    let flow_id = flow_id_for_projection_event(event);
+    let branch = discussion_branch_for_projection_event(event, flow_id.as_deref());
+    let mut value = json!({
         "event_id": event.event_id,
+        "message_id": message_id_from_event_id(&event.event_id),
         "space_id": event.space_id,
         "event_type": event.event_type,
         "input_event_type": event.input_event_type,
@@ -7752,7 +9447,16 @@ fn projection_event_json(event: &ProjectionEventRecord) -> serde_json::Value {
         "sender": event.sender,
         "payload": event.payload,
         "created_at": event.created_at,
-    })
+    });
+    if let Some(object) = value.as_object_mut() {
+        if let Some(flow_id) = flow_id {
+            object.insert("flow_id".to_owned(), json!(flow_id));
+        }
+        if let Some(branch) = branch {
+            object.insert("branch".to_owned(), branch);
+        }
+    }
+    value
 }
 
 fn operation_event_id(operation: &Operation) -> String {
@@ -7800,6 +9504,147 @@ fn operation_type_string(operation: &Operation) -> String {
         .ok()
         .and_then(|value| value.as_str().map(ToOwned::to_owned))
         .unwrap_or_else(|| "create".to_owned())
+}
+
+fn retag_typed_id(value: &str, from_prefix: &str, to_prefix: &str) -> Option<String> {
+    value
+        .strip_prefix(from_prefix)
+        .map(|suffix| format!("{to_prefix}{suffix}"))
+}
+
+fn derived_flow_id(seed: &str) -> String {
+    let digest = sha256_hex(seed.as_bytes());
+    format!("cx:flow:{}", &digest[..26])
+}
+
+fn flow_id_from_space_id(space_id: &str) -> String {
+    retag_typed_id(space_id, "cx:space:", "cx:flow:").unwrap_or_else(|| derived_flow_id(space_id))
+}
+
+fn flow_id_from_entity_id(entity_id: &str) -> String {
+    retag_typed_id(entity_id, "cx:entity:", "cx:flow:")
+        .unwrap_or_else(|| derived_flow_id(entity_id))
+}
+
+fn message_id_from_event_id(event_id: &str) -> String {
+    retag_typed_id(event_id, "cx:event:", "cx:message:")
+        .unwrap_or_else(|| format!("cx:message:{event_id}"))
+}
+
+fn default_discussion_branch(flow_id: &str, branch_id: &str) -> serde_json::Value {
+    json!({
+        "branch_id": branch_id,
+        "branch_kind": "discussion",
+        "flow_id": flow_id,
+        "enabled": true,
+        "history_visibility": "joined",
+        "visibility": "joined",
+    })
+}
+
+fn flow_id_for_projection_event(event: &ProjectionEventRecord) -> Option<String> {
+    event
+        .payload
+        .get("flow_id")
+        .and_then(|value| value.as_str())
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            event
+                .payload
+                .get("entity_id")
+                .and_then(|value| value.as_str())
+                .map(flow_id_from_entity_id)
+        })
+        .or_else(|| Some(flow_id_from_space_id(&event.space_id)))
+}
+
+fn discussion_branch_for_projection_event(
+    event: &ProjectionEventRecord,
+    flow_id: Option<&str>,
+) -> Option<serde_json::Value> {
+    let flow_id = flow_id?;
+    let branch_id = event
+        .payload
+        .get("thread_id")
+        .and_then(|value| value.as_str())
+        .unwrap_or(event.space_id.as_str());
+    Some(default_discussion_branch(flow_id, branch_id))
+}
+
+fn flow_history_visibility_for_space(state: &AppState, space_id: &str) -> &'static str {
+    if space_discoverability(state, space_id) == "public" {
+        "shared"
+    } else {
+        "joined"
+    }
+}
+
+fn flow_projection_for_space(
+    state: &AppState,
+    space_id: &str,
+    title: &str,
+    summary: Option<&str>,
+) -> serde_json::Value {
+    let meta = state.space_meta.lock().expect("space meta lock");
+    let meta = meta.get(space_id);
+    let owner = meta
+        .map(|meta| meta.owner.clone())
+        .unwrap_or_else(|| state.config.service_did.clone());
+    let created_at = meta.map(|meta| meta.created_at).unwrap_or_else(now);
+    let updated_at = meta.map(|meta| meta.updated_at).unwrap_or(created_at);
+    let deleted = meta.is_some_and(|meta| meta.deleted);
+    json!({
+        "id": flow_id_from_space_id(space_id),
+        "flow_id": flow_id_from_space_id(space_id),
+        "type": "flow",
+        "schema": "cx.schema.flow.v1",
+        "space_id": space_id,
+        "kind": "room",
+        "title": title,
+        "description": summary,
+        "state": if deleted { "archived" } else { "active" },
+        "primary_branch": "discussion",
+        "branches": {
+            "synthesis": {
+                "enabled": false,
+                "fields": {}
+            },
+            "discussion": {
+                "enabled": true,
+                "room_kind": "discussion",
+                "history_visibility": flow_history_visibility_for_space(state, space_id),
+                "encryption_profile": if space_allows_plaintext_service(state, space_id) { "none" } else { "mls_rfc9420" },
+                "fields": {}
+            }
+        },
+        "created_by": owner,
+        "created_at": created_at,
+        "updated_by": owner,
+        "updated_at": updated_at
+    })
+}
+
+fn sync_timeline_message_json(message: &crate::reducer::MessageState) -> serde_json::Value {
+    let flow_id = if message.thread_id.starts_with("cx:flow:") {
+        message.thread_id.clone()
+    } else {
+        flow_id_from_space_id(&message.space_id)
+    };
+    let branch_id = message.thread_id.clone();
+    json!({
+        "kind": "cx.message.create",
+        "event_id": message.event_id,
+        "message_id": message_id_from_event_id(&message.event_id),
+        "flow_id": flow_id,
+        "space_id": message.space_id,
+        "branch": default_discussion_branch(&flow_id, &branch_id),
+        "thread_id": message.thread_id,
+        "sender": message.sender,
+        "content": message.content,
+        "encrypted": message.encrypted,
+        "decryption_state": if message.encrypted { "opaque" } else { "cleartext" },
+        "created_at": message.created_at,
+    })
 }
 
 fn operation_kind_records(operations: &[Operation]) -> Vec<serde_json::Value> {
@@ -7903,14 +9748,15 @@ fn projected_event_page(
             .then_with(|| left.event_id.cmp(&right.event_id))
     });
     let redacted = redaction_targets_from_events(&events);
-    let start = cursor
-        .and_then(|cursor| {
-            events
-                .iter()
-                .position(|event| event.event_id == cursor)
-                .map(|index| index + 1)
-        })
-        .unwrap_or(0);
+    let start = if let Some(cursor) = cursor {
+        events
+            .iter()
+            .position(|event| event.event_id == cursor)
+            .map(|index| index + 1)
+            .ok_or_else(|| anyhow::anyhow!("invalid_cursor: cursor not found"))?
+    } else {
+        0
+    };
     let mut page_items = events
         .into_iter()
         .skip(start)
@@ -7930,6 +9776,48 @@ fn projected_event_page(
         next_cursor,
         has_more,
     }))
+}
+
+fn backfill_gap_events(
+    state: &AppState,
+    space_id: &str,
+    from_cursor: Option<&str>,
+    limit: usize,
+) -> anyhow::Result<(Vec<Value>, Option<String>, bool)> {
+    if let Some(page) = projected_event_page(state, space_id, from_cursor, limit)? {
+        let events = page
+            .items
+            .iter()
+            .map(projection_event_json)
+            .collect::<Vec<_>>();
+        return Ok((events, page.next_cursor, page.has_more));
+    }
+
+    let page = state
+        .repo
+        .sync_space_operations(space_id, from_cursor, limit)?;
+    let redacted = redaction_targets_from_operations(&page.items);
+    let events = page
+        .items
+        .into_iter()
+        .filter(|operation| operation_is_visible(operation, &redacted))
+        .map(|operation| projection_event_json(&projection_event_from_operation(&operation, None)))
+        .collect::<Vec<_>>();
+    Ok((events, page.next_cursor, page.has_more))
+}
+
+fn truncate_gap_events(mut events: Vec<Value>, to_cursor: Option<&str>) -> (Vec<Value>, bool) {
+    let Some(to_cursor) = to_cursor else {
+        return (events, false);
+    };
+    let Some(index) = events
+        .iter()
+        .position(|event| event["event_id"].as_str() == Some(to_cursor))
+    else {
+        return (events, false);
+    };
+    events.truncate(index + 1);
+    (events, true)
 }
 
 fn load_projected_events_from_pg(
@@ -8503,7 +10391,8 @@ fn is_valid_handle(handle: &str) -> bool {
 
 fn is_valid_entity_type(value: &str) -> bool {
     if let Some(rest) = value.strip_prefix("cx.") {
-        return !rest.is_empty()
+        return is_supported_cx_entity_type(value)
+            && !rest.is_empty()
             && rest.bytes().all(|byte| {
                 byte.is_ascii_lowercase()
                     || byte.is_ascii_digit()
@@ -8520,6 +10409,18 @@ fn is_valid_entity_type(value: &str) -> bool {
                     .bytes()
                     .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
         })
+}
+
+fn is_supported_cx_entity_type(value: &str) -> bool {
+    matches!(
+        value,
+        "cx.generic"
+            | "cx.task"
+            | "cx.channel"
+            | "cx.topic"
+            | "cx.memory.semantic"
+            | "cx.agent.run"
+    )
 }
 
 fn is_valid_discoverability(value: &str) -> bool {
@@ -9034,6 +10935,50 @@ const READ_MARKER_REQUIREMENTS: &[PayloadRequirement] = &[
     PayloadRequirement::Required("event_id", "read marker operation requires event_id"),
 ];
 
+const REMOVED_LEGACY_TYPED_ID_PREFIXES: &[&str] = &["cx:subject:", "cx:room:", "cx:card:"];
+const REMOVED_LEGACY_SCHEMA_IDS: &[&str] = &[
+    "cx.schema.subject.v1",
+    "cx.schema.room.v1",
+    "cx.schema.card.v1",
+];
+const REMOVED_LEGACY_EVENT_PREFIXES: &[&str] = &["cx.subject.", "cx.room.", "cx.card."];
+const ACTIVE_WIRE_LEGACY_CONTRACT_ERROR: &str =
+    "removed legacy subject/room/card contract is forbidden on the active v1 wire";
+
+fn is_removed_legacy_contract_string(value: &str) -> bool {
+    REMOVED_LEGACY_TYPED_ID_PREFIXES
+        .iter()
+        .any(|prefix| value.starts_with(prefix))
+        || REMOVED_LEGACY_SCHEMA_IDS
+            .iter()
+            .any(|schema_id| value == *schema_id)
+        || REMOVED_LEGACY_EVENT_PREFIXES
+            .iter()
+            .any(|prefix| value.starts_with(prefix))
+}
+
+fn value_contains_removed_legacy_contract(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::String(value) => is_removed_legacy_contract_string(value),
+        serde_json::Value::Array(values) => {
+            values.iter().any(value_contains_removed_legacy_contract)
+        }
+        serde_json::Value::Object(object) => object.iter().any(|(key, value)| {
+            matches!(key.as_str(), "room_id" | "card_id" | "subject_id")
+                || value_contains_removed_legacy_contract(value)
+        }),
+        _ => false,
+    }
+}
+
+fn validate_no_removed_legacy_contracts(value: &serde_json::Value) -> Result<(), &'static str> {
+    if value_contains_removed_legacy_contract(value) {
+        Err(ACTIVE_WIRE_LEGACY_CONTRACT_ERROR)
+    } else {
+        Ok(())
+    }
+}
+
 fn validate_operation_semantics(
     state: &AppState,
     operations: &[Operation],
@@ -9043,6 +10988,15 @@ fn validate_operation_semantics(
         operation
             .validate_payload_object()
             .map_err(|_| "operation payload must be a JSON object")?;
+        if is_removed_legacy_contract_string(operation.object_type.as_str())
+            || operation
+                .object_id
+                .as_deref()
+                .is_some_and(is_removed_legacy_contract_string)
+        {
+            return Err(ACTIVE_WIRE_LEGACY_CONTRACT_ERROR);
+        }
+        validate_no_removed_legacy_contracts(&operation.payload)?;
         validate_canonical_json_value(&operation.payload)?;
         let Some(kind) = kinds::canonical_kind_for_operation(operation) else {
             return Err("unregistered operation kind");
@@ -9086,7 +11040,7 @@ fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
         kinds::CX_ENTITY_CREATE => OperationPayloadSchema {
             schema_id: "cx.schema.operation.entity_create.v1",
             requirements: ENTITY_CREATE_REQUIREMENTS,
-            validate: None,
+            validate: Some(validate_entity_create_operation_payload),
         },
         kinds::CX_ENTITY_UPDATE | kinds::CX_ENTITY_DELETE => OperationPayloadSchema {
             schema_id: "cx.schema.operation.entity_mutation.v1",
@@ -9118,6 +11072,28 @@ fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
             requirements: SPACE_LIFECYCLE_REQUIREMENTS,
             validate: None,
         },
+        kind if matches!(
+            kind,
+            kinds::CX_FIELD_POSITION_MOVE | kinds::CX_FIELD_POSITION_REORDER
+        ) =>
+        {
+            OperationPayloadSchema {
+                schema_id: "cx.schema.operation.entity_mutation.v1",
+                requirements: ENTITY_ID_REQUIREMENTS,
+                validate: None,
+            }
+        }
+        kind if matches!(
+            kind,
+            kinds::CX_CONTAINER_MOVE_ITEM | kinds::CX_CONTAINER_REBALANCE
+        ) =>
+        {
+            OperationPayloadSchema {
+                schema_id: "cx.schema.operation.relation_mutation.v1",
+                requirements: RELATION_ID_REQUIREMENTS,
+                validate: None,
+            }
+        }
         _ => return None,
     };
     Some(schema)
@@ -9170,6 +11146,22 @@ fn validate_message_operation_payload(operation: &Operation) -> Result<(), &'sta
         validate_mentions(content)?;
     }
     Ok(())
+}
+
+fn validate_entity_create_operation_payload(operation: &Operation) -> Result<(), &'static str> {
+    let Some(entity_type) = operation
+        .payload
+        .get("entity_type")
+        .or_else(|| operation.payload.get("type"))
+        .and_then(Value::as_str)
+    else {
+        return Err("entity create requires string entity_type");
+    };
+    if is_valid_entity_type(entity_type) {
+        Ok(())
+    } else {
+        Err("entity_type must be a supported cx.* object type or a reverse-domain custom type")
+    }
 }
 
 fn validate_operation_policy(
@@ -9607,6 +11599,12 @@ mod operation_conformance_tests {
                 valid: true,
             },
             OperationVector {
+                name: "unsupported standard entity create",
+                kind: kinds::CX_ENTITY_CREATE,
+                payload: json!({"entity_id": "cx:entity:unsupported-1", "entity_type": "cx.unsupported.object"}),
+                valid: false,
+            },
+            OperationVector {
                 name: "entity update",
                 kind: kinds::CX_ENTITY_UPDATE,
                 payload: json!({"entity_id": "cx:entity:task-1", "fields": {"status": "done"}}),
@@ -9634,6 +11632,40 @@ mod operation_conformance_tests {
                 name: "relation delete",
                 kind: kinds::CX_RELATION_DELETE,
                 payload: json!({"relation_id": "cx:relation:rel-1"}),
+                valid: true,
+            },
+            OperationVector {
+                name: "legacy task move with migration profile",
+                kind: "task.move",
+                payload: json!({
+                    "migration_profile": kinds::LEGACY_KIND_MIGRATION_PROFILE,
+                    "entity_id": "cx:entity:task-1",
+                    "group_by": "fields.status",
+                    "to_value": "done",
+                    "rank": "B"
+                }),
+                valid: true,
+            },
+            OperationVector {
+                name: "legacy task move without migration profile",
+                kind: "task.move",
+                payload: json!({
+                    "entity_id": "cx:entity:task-1",
+                    "group_by": "fields.status",
+                    "to_value": "done",
+                    "rank": "B"
+                }),
+                valid: false,
+            },
+            OperationVector {
+                name: "legacy relation move with migration profile",
+                kind: "relation.move",
+                payload: json!({
+                    "migration_profile": kinds::LEGACY_KIND_MIGRATION_PROFILE,
+                    "relation_id": "cx:relation:rel-1",
+                    "from": "cx:entity:task-1",
+                    "to": "cx:entity:task-2"
+                }),
                 valid: true,
             },
             OperationVector {
@@ -10246,6 +12278,184 @@ fn demo_actors(state: &AppState) -> Vec<serde_json::Value> {
     actors
 }
 
+fn admin_actor_items(state: &AppState) -> Vec<serde_json::Value> {
+    demo_actors(state)
+        .into_iter()
+        .map(|mut actor| {
+            if let Some(object) = actor.as_object_mut() {
+                object.insert("kind".to_owned(), json!("actor"));
+            }
+            actor
+        })
+        .collect()
+}
+
+fn admin_space_items(state: &AppState) -> Vec<serde_json::Value> {
+    let meta = state.space_meta.lock().expect("space meta lock").clone();
+    let spaces = state.spaces.lock().expect("spaces lock");
+    spaces
+        .search(Default::default())
+        .into_iter()
+        .map(|space| {
+            let space_id = space.space_id.as_str().to_owned();
+            let space_meta = meta.get(&space_id);
+            let flow = flow_projection_for_space(
+                state,
+                &space_id,
+                &space.name,
+                space.description.as_deref(),
+            );
+            json!({
+                "kind": "space",
+                "flow": flow,
+                "flow_id": flow_id_from_space_id(&space_id),
+                "space_id": space_id,
+                "title": space.name,
+                "summary": space.description,
+                "category": space.category,
+                "tags": space.tags,
+                "public": space.public,
+                "members": space.members.iter().map(ToString::to_string).collect::<Vec<_>>(),
+                "owner": space_meta.map(|meta| meta.owner.clone()),
+                "discoverability": space_meta.map(|meta| meta.discoverability.clone()),
+                "plaintext_visible_services": space_meta
+                    .map(|meta| meta.plaintext_visible_services.iter().cloned().collect::<Vec<_>>())
+                    .unwrap_or_default(),
+                "deleted": space_meta.is_some_and(|meta| meta.deleted),
+                "created_at": space_meta.map(|meta| meta.created_at),
+                "updated_at": space_meta.map(|meta| meta.updated_at),
+            })
+        })
+        .collect()
+}
+
+fn admin_device_items(state: &AppState) -> Vec<serde_json::Value> {
+    state
+        .persistence
+        .devices()
+        .list()
+        .map(|devices| {
+            devices
+                .into_iter()
+                .map(|device| {
+                    let mut value = device_inventory_to_json(&device);
+                    if let Some(object) = value.as_object_mut() {
+                        object.insert("kind".to_owned(), json!("device"));
+                    }
+                    value
+                })
+                .collect()
+        })
+        .unwrap_or_else(|_| {
+            state
+                .devices
+                .lock()
+                .expect("devices lock")
+                .iter()
+                .flat_map(|(actor, devices)| {
+                    devices.iter().map(move |(device_id, device)| {
+                        json!({
+                            "kind": "device",
+                            "actor": actor,
+                            "device_id": device_id,
+                            "payload": device,
+                        })
+                    })
+                })
+                .collect()
+        })
+}
+
+fn admin_capability_items(state: &AppState) -> Vec<serde_json::Value> {
+    let spaces = state.spaces.lock().expect("spaces lock");
+    spaces
+        .search(Default::default())
+        .into_iter()
+        .flat_map(|space| state.authz.grants_in_space(space.space_id.as_str()))
+        .map(|grant| json!(grant))
+        .collect()
+}
+
+fn admin_federation_items(state: &AppState) -> Vec<serde_json::Value> {
+    state
+        .federation_operations
+        .lock()
+        .expect("federation lock")
+        .iter()
+        .map(|operation| {
+            let projected = projection_event_from_operation(operation, None);
+            json!({
+                "kind": "federation_operation",
+                "operation_id": operation.operation_id,
+                "space_id": operation.space_id,
+                "operation_type": operation.operation_type,
+                "canonical_kind": kinds::canonical_kind_string(operation),
+                "flow_id": flow_id_for_projection_event(&projected),
+                "branch": discussion_branch_for_projection_event(
+                    &projected,
+                    flow_id_for_projection_event(&projected).as_deref(),
+                ),
+                "digest": operation.operation_digest().ok(),
+                "created_at": operation.created_at,
+            })
+        })
+        .collect()
+}
+
+fn admin_invite_items(state: &AppState) -> Vec<serde_json::Value> {
+    state
+        .space_invites
+        .lock()
+        .expect("invites lock")
+        .values()
+        .map(|invite| {
+            json!({
+                "kind": "invite_token",
+                "invite_id": invite.invite_id,
+                "space_id": invite.space_id,
+                "inviter": invite.inviter,
+                "invitee": invite.invitee,
+                "token_hash": format!("sha256:{}", sha256_hex(invite.invite_token.as_bytes())),
+                "status": invite.status,
+                "expires_at": invite.expires_at,
+                "created_at": invite.created_at,
+            })
+        })
+        .collect()
+}
+
+fn admin_policy_items(state: &AppState) -> Vec<serde_json::Value> {
+    state
+        .policy_documents
+        .lock()
+        .expect("policy documents lock")
+        .values()
+        .map(|policy| json!(policy_document_to_response(policy)))
+        .collect()
+}
+
+fn admin_media_items(state: &AppState) -> Vec<serde_json::Value> {
+    state
+        .blobs
+        .lock()
+        .expect("blob lock")
+        .iter()
+        .map(|(blob_ref, blob)| {
+            json!({
+                "kind": "media",
+                "blob_ref": blob_ref,
+                "media_type": blob.media_type,
+                "filename": blob.filename,
+                "space_id": blob.space_id,
+                "encrypted": blob.encryption.is_some(),
+                "uploaded_by": blob.uploaded_by,
+                "size": blob.bytes.len(),
+                "created_at": blob.created_at,
+            })
+        })
+        .collect()
+}
+
 fn find_demo_entity(state: &AppState, entity_id: &str) -> Option<serde_json::Value> {
     if entity_id == "cx:org:demo" {
         let spaces = state.spaces.lock().expect("spaces lock");
@@ -10269,8 +12479,16 @@ fn find_demo_entity(state: &AppState, entity_id: &str) -> Option<serde_json::Val
                 && !is_space_deleted(state, space.space_id.as_str())
         })
         .map(|space| {
+            let flow = flow_projection_for_space(
+                state,
+                space.space_id.as_str(),
+                &space.name,
+                space.description.as_deref(),
+            );
             json!({
                 "kind": "space",
+                "flow": flow,
+                "flow_id": flow_id_from_space_id(space.space_id.as_str()),
                 "entity_id": space.space_id,
                 "space_id": space.space_id,
                 "facets": ["container", "replyable", "renderable"],
@@ -10354,6 +12572,630 @@ fn handle_for_did(did: &str) -> String {
         .next()
         .map(|tail| format!("@{}", tail.replace('.', "-")))
         .unwrap_or_else(|| "@user".to_owned())
+}
+
+#[handler]
+pub async fn contrix_openapi_yaml(depot: &mut Depot, res: &mut Response) {
+    let doc = depot
+        .obtain::<ContrixOpenApiDoc>()
+        .expect("openapi doc injected");
+    let spec = doc.0.to_yaml().unwrap_or_else(|error| {
+        tracing::error!(%error, "failed to render openapi yaml");
+        "{}\n".to_owned()
+    });
+    res.headers_mut().insert(
+        salvo::http::header::CONTENT_TYPE,
+        "application/yaml; charset=utf-8".parse().unwrap(),
+    );
+    res.headers_mut().insert(
+        salvo::http::header::CONTENT_LENGTH,
+        spec.len().to_string().parse().unwrap(),
+    );
+    res.write_body(spec.as_bytes().to_vec()).ok();
+}
+
+#[handler]
+pub async fn mimi_protocol_directory(depot: &mut Depot, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    res.render(Json(mimi_provider_directory_value(state)));
+}
+
+#[handler]
+pub async fn mimi_provider_directory(depot: &mut Depot, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    res.render(Json(mimi_provider_directory_value(state)));
+}
+
+#[handler]
+pub async fn mimi_key_material(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let body = match mimi_body(req, res).await {
+        Some(body) => body,
+        None => return,
+    };
+    if let Some(message) = unsupported_mimi_draft(&body) {
+        render_error(res, StatusCode::BAD_REQUEST, "unsupported_draft", message);
+        return;
+    }
+    let target = body
+        .get("target_identifier")
+        .or_else(|| body.get("target_did"))
+        .and_then(|value| value.as_str())
+        .unwrap_or("unknown");
+    res.render(Json(json!({
+        "ok": true,
+        "key_packages": [],
+        "failures": {},
+        "receipt": mimi_receipt(state, "cx.mimi.key_material", &body, json!({
+            "target": target,
+            "keypackage_claim_lifecycle": "single_use_required",
+            "production_gap": "full_mls_keypackage_claim_not_implemented"
+        }))
+    })));
+}
+
+#[handler]
+pub async fn mimi_room_update(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let room_id = req.param::<String>("room_id").unwrap_or_default();
+    let body = match mimi_body(req, res).await {
+        Some(body) => body,
+        None => return,
+    };
+    if let Some(message) = unsupported_mimi_draft(&body) {
+        render_error(res, StatusCode::BAD_REQUEST, "unsupported_draft", message);
+        return;
+    }
+    if !valid_mimi_room_id(&room_id) {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            "invalid MIMI room id",
+        );
+        return;
+    }
+    res.render(Json(json!({
+        "ok": true,
+        "room_id": room_id,
+        "receipt": mimi_receipt(state, "cx.mimi.room_update", &body, json!({
+            "mimi_room_uri": mimi_room_uri(state, &room_id),
+            "truth_source": "contrix_signed_event_reducer",
+            "status": "projected"
+        }))
+    })));
+}
+
+#[handler]
+pub async fn mimi_room_notify(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let room_id = req.param::<String>("room_id").unwrap_or_default();
+    let body = match mimi_body(req, res).await {
+        Some(body) => body,
+        None => return,
+    };
+    if let Some(message) = unsupported_mimi_draft(&body) {
+        render_error(res, StatusCode::BAD_REQUEST, "unsupported_draft", message);
+        return;
+    }
+    if !valid_mimi_room_id(&room_id) {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            "invalid MIMI room id",
+        );
+        return;
+    }
+    res.status_code(StatusCode::ACCEPTED);
+    res.render(Json(json!({
+        "ok": true,
+        "accepted": [room_id],
+        "receipt": mimi_receipt(state, "cx.mimi.notify", &body, json!({
+            "delivery": "queued",
+            "mimi_room_uri": mimi_room_uri(state, &room_id)
+        }))
+    })));
+}
+
+#[handler]
+pub async fn mimi_room_message(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let room_id = req.param::<String>("room_id").unwrap_or_default();
+    let body = match mimi_body(req, res).await {
+        Some(body) => body,
+        None => return,
+    };
+    if let Some(message) = unsupported_mimi_draft(&body) {
+        render_error(res, StatusCode::BAD_REQUEST, "unsupported_draft", message);
+        return;
+    }
+    if !valid_mimi_room_id(&room_id) {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            "invalid MIMI room id",
+        );
+        return;
+    }
+    let source_format = body
+        .get("source_format")
+        .or_else(|| body.get("content_type"))
+        .and_then(|value| value.as_str())
+        .unwrap_or("application/mimi-content");
+    if !valid_mimi_content_type(source_format) {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            "unsupported MIMI content type",
+        );
+        return;
+    }
+    let operation_id = ids::generate_operation_id();
+    let event_id = ids::generate_event_id();
+    let mimi_message_id = body
+        .get("mimi_message_id")
+        .and_then(|value| value.as_str())
+        .map(str::to_owned)
+        .unwrap_or_else(|| {
+            format!(
+                "mimi-msg-{}",
+                operation_id.trim_start_matches("cx:operation:")
+            )
+        });
+    let original_hash = body
+        .get("original_envelope_hash")
+        .and_then(|value| value.as_str())
+        .map(str::to_owned)
+        .unwrap_or_else(|| format!("sha256:{}", sha256_hex(body.to_string().as_bytes())));
+    let receipt = mimi_receipt(
+        state,
+        "cx.mimi.submit_message",
+        &body,
+        json!({
+            "kind": "cx.mimi.mapping_receipt",
+            "profile": "cx.profile.mimi_interop.v1",
+            "mimi_room_uri": mimi_room_uri(state, &room_id),
+            "source_format": source_format,
+            "target_format": "cx.message.create",
+            "original_envelope_hash": original_hash,
+            "mapped_operation_id": operation_id,
+            "contrix_event_id": event_id,
+            "mimi_message_id": mimi_message_id,
+            "truth_source": "contrix_signed_event_reducer"
+        }),
+    );
+    append_audit_log(
+        state,
+        None,
+        "mimi.submit_message",
+        json!({
+            "room_id": room_id,
+            "operation_id": operation_id,
+            "event_id": event_id,
+            "source_format": source_format
+        }),
+        "mapped",
+    );
+    res.render(Json(json!({
+        "ok": true,
+        "mimi_message_id": mimi_message_id,
+        "mapped_operation_id": operation_id,
+        "contrix_event_id": event_id,
+        "receipt": receipt
+    })));
+}
+
+#[handler]
+pub async fn mimi_group_info(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let room_id = req.param::<String>("room_id").unwrap_or_default();
+    if !valid_mimi_room_id(&room_id) {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            "invalid MIMI room id",
+        );
+        return;
+    }
+    let projection = mimi_room_projection(state, &room_id);
+    res.render(Json(json!({
+        "room_id": room_id,
+        "mimi_room_uri": projection["mimi_room_uri"].clone(),
+        "group_info": projection,
+        "participants": mimi_demo_participants(state),
+        "receipt": mimi_receipt(state, "cx.mimi.group_info", &json!({"room_id": room_id}), json!({
+            "truth_source": "contrix_signed_event_reducer",
+            "projection_only": true
+        }))
+    })));
+}
+
+#[handler]
+pub async fn mimi_consent_request(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let body = match mimi_body(req, res).await {
+        Some(body) => body,
+        None => return,
+    };
+    if let Some(message) = unsupported_mimi_draft(&body) {
+        render_error(res, StatusCode::BAD_REQUEST, "unsupported_draft", message);
+        return;
+    }
+    let consent_id = ids::generate("mimi_consent");
+    res.status_code(StatusCode::ACCEPTED);
+    res.render(Json(json!({
+        "ok": true,
+        "consent_id": consent_id,
+        "state": "requested",
+        "receipt": mimi_receipt(state, "cx.mimi.request_consent", &body, json!({
+            "consent_grants_space_capability": false,
+            "privacy_state": "holder_private"
+        }))
+    })));
+}
+
+#[handler]
+pub async fn mimi_consent_update(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let body = match mimi_body(req, res).await {
+        Some(body) => body,
+        None => return,
+    };
+    if let Some(message) = unsupported_mimi_draft(&body) {
+        render_error(res, StatusCode::BAD_REQUEST, "unsupported_draft", message);
+        return;
+    }
+    let consent_id = body
+        .get("consent_id")
+        .and_then(|value| value.as_str())
+        .map(str::to_owned)
+        .unwrap_or_else(|| ids::generate("mimi_consent"));
+    let state_value = body
+        .get("state")
+        .and_then(|value| value.as_str())
+        .unwrap_or("accepted");
+    res.render(Json(json!({
+        "ok": true,
+        "consent_id": consent_id,
+        "state": state_value,
+        "receipt": mimi_receipt(state, "cx.mimi.update_consent", &body, json!({
+            "consent_grants_space_capability": false,
+            "membership_still_required": true
+        }))
+    })));
+}
+
+#[handler]
+pub async fn mimi_identifiers_query(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let body = match mimi_body(req, res).await {
+        Some(body) => body,
+        None => return,
+    };
+    if let Some(message) = unsupported_mimi_draft(&body) {
+        render_error(res, StatusCode::BAD_REQUEST, "unsupported_draft", message);
+        return;
+    }
+    let query = body
+        .get("query")
+        .or_else(|| body.get("target_identifier"))
+        .and_then(|value| value.as_str())
+        .unwrap_or_default()
+        .to_owned();
+    if query.is_empty() || !(query.starts_with("mimi://") || query.starts_with("did:")) {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            "identifier query must be a MIMI URI or DID",
+        );
+        return;
+    }
+    let mapped_did = query
+        .contains("alice")
+        .then(|| "did:web:alice.example".to_owned());
+    res.render(Json(json!({
+        "query": query,
+        "reachable": mapped_did.is_some(),
+        "mapped_did": mapped_did,
+        "provider_id": mimi_provider_id(state),
+        "proofs": [{
+            "type": "time_bound_reachability",
+            "privacy_mode": "private_contact_discovery",
+            "expires_at": now() + chrono::Duration::minutes(5)
+        }],
+        "receipt": mimi_receipt(state, "cx.mimi.identifier_query", &body, json!({
+            "contact_graph_exposed": false,
+            "connection_identifier_separated": true
+        }))
+    })));
+}
+
+#[handler]
+pub async fn mimi_report_abuse(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let body = match mimi_body(req, res).await {
+        Some(body) => body,
+        None => return,
+    };
+    if let Some(message) = unsupported_mimi_draft(&body) {
+        render_error(res, StatusCode::BAD_REQUEST, "unsupported_draft", message);
+        return;
+    }
+    let report_id = ids::generate_report_id();
+    state
+        .moderation_reports
+        .lock()
+        .expect("moderation lock")
+        .push(json!({
+            "report_id": report_id,
+            "kind": "mimi_abuse_report",
+            "mimi_room_uri": body.get("mimi_room_uri").cloned(),
+            "provider_id": body.get("provider_id").cloned(),
+            "target_event_hash": body.get("target_event_hash").cloned(),
+            "frank": body.get("frank").cloned(),
+            "created_at": now()
+        }));
+    res.status_code(StatusCode::ACCEPTED);
+    res.render(Json(json!({
+        "ok": true,
+        "report_id": report_id,
+        "status": "queued",
+        "receipt": mimi_receipt(state, "cx.mimi.report_abuse", &body, json!({
+            "e2ee_evidence_plaintext_required": false,
+            "routed_to": [format!("{}#moderation", state.config.service_did)]
+        }))
+    })));
+}
+
+#[handler]
+pub async fn mimi_proxy_download(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let body = match mimi_body(req, res).await {
+        Some(body) => body,
+        None => return,
+    };
+    if let Some(message) = unsupported_mimi_draft(&body) {
+        render_error(res, StatusCode::BAD_REQUEST, "unsupported_draft", message);
+        return;
+    }
+    let Some(blob_ref) = body.get("blob_ref").and_then(|value| value.as_str()) else {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "missing_param",
+            "blob_ref is required",
+        );
+        return;
+    };
+    let asset_policy = body
+        .get("asset_privacy_policy")
+        .and_then(|value| value.as_str())
+        .unwrap_or("provider_proxy");
+    let blob = state
+        .blobs
+        .lock()
+        .expect("blob lock")
+        .get(blob_ref)
+        .cloned();
+    let proxy_required = matches!(asset_policy, "provider_proxy" | "ohttp_relay");
+    res.render(Json(json!({
+        "ok": true,
+        "blob_ref": blob_ref,
+        "media_type": blob.as_ref().map(|blob| blob.media_type.clone()),
+        "size": blob.as_ref().map(|blob| blob.bytes.len()),
+        "proxy_url": if proxy_required {
+            Some(format!("{}/proxy-download?blob_ref={}", mimi_base_url(state), blob_ref))
+        } else {
+            None
+        },
+        "receipt": mimi_receipt(state, "cx.mimi.proxy_download", &body, json!({
+            "asset_privacy_policy": asset_policy,
+            "direct_object_store_url_returned": false,
+            "client_must_verify_content_hash": true
+        }))
+    })));
+}
+
+async fn mimi_body(req: &mut Request, res: &mut Response) -> Option<Value> {
+    match req.parse_json::<Value>().await {
+        Ok(body) => Some(body),
+        Err(_) => {
+            render_error(
+                res,
+                StatusCode::BAD_REQUEST,
+                "bad_json",
+                "invalid MIMI request",
+            );
+            None
+        }
+    }
+}
+
+fn mimi_provider_directory_value(state: &AppState) -> Value {
+    json!({
+        "schema": "cx.schema.mimi_interop.v1",
+        "service_did": state.config.service_did.clone(),
+        "service_type": "mimi_provider_facade",
+        "supported_profiles": ["cx.profile.mimi_interop.v1"],
+        "mimi": {
+            "protocol_draft": "draft-ietf-mimi-protocol-06",
+            "content_draft": "draft-ietf-mimi-content-08",
+            "room_policy_draft": "draft-ietf-mimi-room-policy-03",
+            "identifier_draft": "draft-kohbrok-mimi-identifiers-01",
+            "base_url": mimi_base_url(state),
+            "provider_id": mimi_provider_id(state),
+            "features": [
+                "key_material",
+                "room_update",
+                "notify",
+                "submit_message",
+                "group_info",
+                "consent",
+                "identifier_query",
+                "report_abuse",
+                "proxy_download"
+            ],
+            "mls_cipher_suites": ["MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519"],
+            "content_profiles": [
+                "application/mimi-content",
+                "text/plain;charset=utf-8",
+                "text/markdown;variant=GFM-MIMI",
+                "application/vnd.contrix.content+json"
+            ],
+            "room_policy_components": [
+                "roles",
+                "membership",
+                "history_visibility",
+                "join_rule",
+                "message_expiration",
+                "asset_privacy"
+            ]
+        },
+        "proof": {
+            "type": "dev_service_digest",
+            "kid": format!("{}#mimi-provider", state.config.service_did),
+            "alg": "sha256-dev",
+            "sig": sha256_hex(format!("{}:cx.profile.mimi_interop.v1", state.config.service_did).as_bytes())
+        }
+    })
+}
+
+fn mimi_base_url(state: &AppState) -> String {
+    format!(
+        "{}/api/v1/mimi",
+        state.config.public_base_url.trim_end_matches('/')
+    )
+}
+
+fn mimi_provider_id(state: &AppState) -> String {
+    state
+        .config
+        .service_did
+        .strip_prefix("did:web:")
+        .map(|domain| format!("mimi://{}", domain.replace(':', "/")))
+        .unwrap_or_else(|| format!("mimi://{}", state.config.service_did.replace(':', ".")))
+}
+
+fn mimi_room_uri(state: &AppState, room_id: &str) -> String {
+    format!("{}/rooms/{room_id}", mimi_provider_id(state))
+}
+
+fn mimi_receipt(state: &AppState, operation_id: &str, body: &Value, extra: Value) -> Value {
+    json!({
+        "profile": "cx.profile.mimi_interop.v1",
+        "operation_id": operation_id,
+        "service_did": state.config.service_did,
+        "provider_id": mimi_provider_id(state),
+        "request_hash": format!("sha256:{}", sha256_hex(body.to_string().as_bytes())),
+        "accepted_at": now(),
+        "drafts": {
+            "protocol": "draft-ietf-mimi-protocol-06",
+            "content": "draft-ietf-mimi-content-08",
+            "room_policy": "draft-ietf-mimi-room-policy-03",
+            "identifiers": "draft-kohbrok-mimi-identifiers-01"
+        },
+        "extra": extra
+    })
+}
+
+fn mimi_room_projection(state: &AppState, room_id: &str) -> Value {
+    let space_id = "cx:space:01js0sp0000000000000000000";
+    json!({
+        "kind": "cx.mimi.room_binding",
+        "profile": "cx.profile.mimi_interop.v1",
+        "mimi_room_uri": mimi_room_uri(state, room_id),
+        "binding_scope": {
+            "space_id": space_id,
+            "channel_id": Value::Null
+        },
+        "hub_provider": state.config.service_did.clone(),
+        "local_provider_role": "hub",
+        "mls_group_id": format!("mls:{}", room_id),
+        "policy_root": format!("sha256:{}", sha256_hex(format!("{space_id}:{room_id}:policy").as_bytes())),
+        "status": "accepted",
+        "canonical_truth": "contrix_signed_event_reducer"
+    })
+}
+
+fn mimi_demo_participants(state: &AppState) -> Vec<Value> {
+    let space_id = SpaceId::new("cx:space:01js0sp0000000000000000000".to_owned())
+        .expect("demo space id is valid");
+    state
+        .spaces
+        .lock()
+        .expect("spaces lock")
+        .get(&space_id)
+        .map(|space| {
+            space
+                .members
+                .iter()
+                .map(|did| {
+                    json!({
+                        "mimi_identifier": format!("{}/users/{}", mimi_provider_id(state), did.to_string().replace(':', ".")),
+                        "did": did.to_string(),
+                        "role": "member"
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn unsupported_mimi_draft(body: &Value) -> Option<&'static str> {
+    for (field, expected, message) in [
+        (
+            "protocol_draft",
+            "draft-ietf-mimi-protocol-06",
+            "unsupported MIMI protocol draft",
+        ),
+        (
+            "content_draft",
+            "draft-ietf-mimi-content-08",
+            "unsupported MIMI content draft",
+        ),
+        (
+            "room_policy_draft",
+            "draft-ietf-mimi-room-policy-03",
+            "unsupported MIMI room policy draft",
+        ),
+        (
+            "identifier_draft",
+            "draft-kohbrok-mimi-identifiers-01",
+            "unsupported MIMI identifier draft",
+        ),
+    ] {
+        let value = body
+            .get(field)
+            .or_else(|| body.get("mimi").and_then(|mimi| mimi.get(field)))
+            .and_then(|value| value.as_str());
+        if value.is_some_and(|value| value != expected) {
+            return Some(message);
+        }
+    }
+    None
+}
+
+fn valid_mimi_room_id(room_id: &str) -> bool {
+    !room_id.is_empty()
+        && room_id.len() <= 256
+        && room_id
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | ':' | '~'))
+}
+
+fn valid_mimi_content_type(value: &str) -> bool {
+    matches!(
+        value,
+        "application/mimi-content"
+            | "text/plain;charset=utf-8"
+            | "text/markdown;variant=GFM-MIMI"
+            | "application/vnd.contrix.content+json"
+    )
 }
 
 #[handler]
@@ -10681,6 +13523,7 @@ fn push_notification_leaks_plaintext(value: &serde_json::Value) -> bool {
 struct MatchedPolicyDecision {
     decision: String,
     reason_code: String,
+    policy_id: String,
     obligations: Vec<Value>,
 }
 
@@ -10731,6 +13574,7 @@ fn matching_policy_decision(
             MatchedPolicyDecision {
                 decision,
                 reason_code,
+                policy_id: policy.policy_id.clone(),
                 obligations,
             }
         })
@@ -11248,6 +14092,537 @@ fn blob_visible_to_session(
     space_has_member(state, space_id, &session.actor)
 }
 
+#[derive(Debug)]
+struct ValidatedEventEnvelope {
+    event_id: String,
+    actor_id: String,
+    actor_seq: u64,
+    space_id: Option<String>,
+    kind: String,
+    schema_id: String,
+    prev_refs: Vec<String>,
+    auth_refs: Vec<String>,
+    canonical_digest: String,
+    canonical_bytes: Vec<u8>,
+}
+
+#[derive(Debug)]
+struct EventValidationError {
+    status: StatusCode,
+    code: &'static str,
+    message: &'static str,
+}
+
+fn event_validation_error(
+    status: StatusCode,
+    code: &'static str,
+    message: &'static str,
+) -> EventValidationError {
+    EventValidationError {
+        status,
+        code,
+        message,
+    }
+}
+
+fn validate_event_envelope(
+    state: &AppState,
+    session: &SessionRecord,
+    envelope: &Value,
+) -> Result<ValidatedEventEnvelope, EventValidationError> {
+    let object = envelope.as_object().ok_or_else(|| {
+        event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_event_envelope",
+            "Event Envelope must be a JSON object",
+        )
+    })?;
+    validate_no_removed_legacy_contracts(envelope).map_err(|_| {
+        event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "legacy_contract_removed",
+            "removed legacy subject/room/card contract is forbidden on the active v1 wire",
+        )
+    })?;
+    validate_event_critical_features(object)?;
+
+    let event_id = event_string_field(object, &["event_id"]).ok_or_else(|| {
+        event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "missing_param",
+            "event_id is required",
+        )
+    })?;
+    if !is_valid_event_id(&event_id) {
+        return Err(event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            "event_id must use the cx:event: typed prefix",
+        ));
+    }
+
+    let kind = event_string_field(object, &["kind", "type"]).ok_or_else(|| {
+        event_validation_error(StatusCode::BAD_REQUEST, "missing_param", "kind is required")
+    })?;
+    if !artifacts::active_durable_event_kinds().contains(&kind) {
+        return Err(event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "unknown_event_kind",
+            "event kind is not in the active registry",
+        ));
+    }
+
+    let schema_id = event_string_field(object, &["schema_id", "schema"]).ok_or_else(|| {
+        event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "missing_param",
+            "schema_id is required",
+        )
+    })?;
+    if !schema_id.starts_with("cx.schema.") {
+        return Err(event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            "schema_id must use the cx.schema.* profile",
+        ));
+    }
+    if !event_schema_is_active(state, &schema_id) {
+        return Err(event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "unknown_schema",
+            "schema_id is not in the active schema registry",
+        ));
+    }
+
+    let actor_id = event_string_field(object, &["actor_id", "sender"]).ok_or_else(|| {
+        event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "missing_param",
+            "actor_id is required",
+        )
+    })?;
+    if validate_did(&actor_id).is_err() {
+        return Err(event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            "actor_id must be a DID",
+        ));
+    }
+    if actor_id != session.actor {
+        return Err(event_validation_error(
+            StatusCode::FORBIDDEN,
+            "actor_session_mismatch",
+            "event actor_id must match the bearer session actor",
+        ));
+    }
+
+    let actor_seq = object
+        .get("actor_seq")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| {
+            event_validation_error(
+                StatusCode::BAD_REQUEST,
+                "missing_param",
+                "actor_seq is required",
+            )
+        })?;
+    if actor_seq == 0 {
+        return Err(event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            "actor_seq must be greater than zero",
+        ));
+    }
+
+    let space_id = event_string_field(object, &["space_id"]);
+    if let Some(space_id) = space_id.as_deref() {
+        if validate_space_id(space_id).is_err() {
+            return Err(event_validation_error(
+                StatusCode::BAD_REQUEST,
+                "invalid_param",
+                "space_id must use the cx:space: typed prefix",
+            ));
+        }
+        if !space_has_member(state, space_id, &session.actor) {
+            return Err(event_validation_error(
+                StatusCode::FORBIDDEN,
+                "policy_denied",
+                "actor is not a member of the event Space",
+            ));
+        }
+    }
+
+    if let Some(device_id) = event_string_field(object, &["device_id"])
+        && device_id != session.device_id
+    {
+        return Err(event_validation_error(
+            StatusCode::FORBIDDEN,
+            "device_session_mismatch",
+            "event device_id must match the bearer session device",
+        ));
+    }
+    validate_event_audience_fields(object, state, session)?;
+
+    let prev_refs = event_ref_list(object, "prev_refs", MAX_EVENT_PREV_REFS)?;
+    let auth_refs = event_ref_list(object, "auth_refs", MAX_EVENT_AUTH_REFS)?;
+    let canonical_source = event_canonical_source(envelope);
+    let canonical_bytes = serde_json::to_vec(&canonical_source).map_err(|_| {
+        event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_event_envelope",
+            "event envelope cannot be canonicalized",
+        )
+    })?;
+    let canonical_digest = event_digest(&canonical_bytes);
+    let provided_digest = event_string_field(object, &["canonical_digest", "canonical_hash"])
+        .ok_or_else(|| {
+            event_validation_error(
+                StatusCode::BAD_REQUEST,
+                "missing_param",
+                "canonical_digest is required",
+            )
+        })?;
+    if provided_digest != canonical_digest {
+        return Err(event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "canonical_digest_mismatch",
+            "canonical_digest does not match the Event Envelope canonical bytes",
+        ));
+    }
+    validate_event_proofs(object, state, session, &actor_id, envelope)?;
+
+    Ok(ValidatedEventEnvelope {
+        event_id,
+        actor_id,
+        actor_seq,
+        space_id,
+        kind,
+        schema_id,
+        prev_refs,
+        auth_refs,
+        canonical_digest,
+        canonical_bytes,
+    })
+}
+
+fn validate_event_critical_features(
+    object: &serde_json::Map<String, Value>,
+) -> Result<(), EventValidationError> {
+    let supported = [
+        "cx.event_envelope.v1",
+        "cx.event_envelope_minimal.v1",
+        "cx.proof.payload_hash.v1",
+    ];
+    for key in ["crit", "critical", "critical_features"] {
+        let Some(value) = object.get(key) else {
+            continue;
+        };
+        let features = match value {
+            Value::Array(values) => values
+                .iter()
+                .map(|value| value.as_str().map(ToOwned::to_owned))
+                .collect::<Option<Vec<_>>>(),
+            Value::String(value) => Some(vec![value.clone()]),
+            _ => None,
+        }
+        .ok_or_else(|| {
+            event_validation_error(
+                StatusCode::BAD_REQUEST,
+                "invalid_param",
+                "critical features must be strings",
+            )
+        })?;
+        for feature in features {
+            if !supported.contains(&feature.as_str()) {
+                return Err(event_validation_error(
+                    StatusCode::BAD_REQUEST,
+                    "unsupported_critical_feature",
+                    "unknown critical Event feature is not supported",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn event_schema_is_active(state: &AppState, schema_id: &str) -> bool {
+    state
+        .schemas
+        .lock()
+        .expect("schemas lock")
+        .get(schema_id)
+        .is_some_and(|schema| schema.active)
+}
+
+fn validate_event_audience_fields(
+    object: &serde_json::Map<String, Value>,
+    state: &AppState,
+    session: &SessionRecord,
+) -> Result<(), EventValidationError> {
+    if let Some(audience) = event_string_field(object, &["audience"])
+        && audience != state.config.service_did
+    {
+        return Err(event_validation_error(
+            StatusCode::FORBIDDEN,
+            "audience_mismatch",
+            "event audience must bind to this service DID",
+        ));
+    }
+    if let Some(domain) = event_string_field(object, &["domain"])
+        && domain != state.config.service_did
+    {
+        return Err(event_validation_error(
+            StatusCode::FORBIDDEN,
+            "domain_mismatch",
+            "event domain must bind to this service DID",
+        ));
+    }
+    if let Some(device_id) = event_string_field(object, &["device_id"])
+        && device_id != session.device_id
+    {
+        return Err(event_validation_error(
+            StatusCode::FORBIDDEN,
+            "device_session_mismatch",
+            "event device_id must match the bearer session device",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_event_proofs(
+    object: &serde_json::Map<String, Value>,
+    state: &AppState,
+    session: &SessionRecord,
+    actor_id: &str,
+    envelope: &Value,
+) -> Result<(), EventValidationError> {
+    let proofs = object
+        .get("proofs")
+        .or_else(|| object.get("signatures"))
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            event_validation_error(
+                StatusCode::BAD_REQUEST,
+                "missing_param",
+                "proofs are required",
+            )
+        })?;
+    if proofs.is_empty() {
+        return Err(event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "missing_param",
+            "proofs must contain at least one proof",
+        ));
+    }
+    let payload_digest = event_payload_digest(envelope);
+    for proof in proofs {
+        let Some(proof_object) = proof.as_object() else {
+            return Err(event_validation_error(
+                StatusCode::BAD_REQUEST,
+                "invalid_proof",
+                "event proofs must be JSON objects",
+            ));
+        };
+        let payload_hash =
+            event_string_field(proof_object, &["payload_hash"]).ok_or_else(|| {
+                event_validation_error(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_proof",
+                    "proof payload_hash is required",
+                )
+            })?;
+        if payload_hash != payload_digest {
+            return Err(event_validation_error(
+                StatusCode::BAD_REQUEST,
+                "proof_payload_hash_mismatch",
+                "proof payload_hash does not match the event payload",
+            ));
+        }
+        validate_event_audience_fields(proof_object, state, session)?;
+        if let Some(device_id) = event_string_field(proof_object, &["device_id"])
+            && device_id != session.device_id
+        {
+            return Err(event_validation_error(
+                StatusCode::FORBIDDEN,
+                "device_session_mismatch",
+                "proof device_id must match the bearer session device",
+            ));
+        }
+        for key in ["verification_method", "kid", "signer"] {
+            let Some(value) = event_string_field(proof_object, &[key]) else {
+                continue;
+            };
+            if value != actor_id && !value.starts_with(&format!("{actor_id}#")) {
+                return Err(event_validation_error(
+                    StatusCode::FORBIDDEN,
+                    "invalid_proof",
+                    "proof verification method must be rooted in actor_id",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn event_string_field(object: &serde_json::Map<String, Value>, keys: &[&str]) -> Option<String> {
+    keys.iter()
+        .find_map(|key| object.get(*key).and_then(Value::as_str))
+        .map(ToOwned::to_owned)
+}
+
+fn event_ref_list(
+    object: &serde_json::Map<String, Value>,
+    key: &str,
+    max_len: usize,
+) -> Result<Vec<String>, EventValidationError> {
+    let Some(value) = object.get(key) else {
+        return Ok(Vec::new());
+    };
+    let Some(values) = value.as_array() else {
+        return Err(event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            "event reference lists must be arrays",
+        ));
+    };
+    if values.len() > max_len {
+        return Err(event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "limit_exceeded",
+            "event reference list exceeds the active profile limit",
+        ));
+    }
+    values
+        .iter()
+        .map(|value| {
+            let Some(event_id) = value.as_str() else {
+                return Err(event_validation_error(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_param",
+                    "event references must be strings",
+                ));
+            };
+            if !is_valid_event_id(event_id) {
+                return Err(event_validation_error(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_param",
+                    "event references must use the cx:event: typed prefix",
+                ));
+            }
+            Ok(event_id.to_owned())
+        })
+        .collect()
+}
+
+fn event_canonical_source(envelope: &Value) -> Value {
+    let mut value = envelope.clone();
+    if let Value::Object(object) = &mut value {
+        object.remove("canonical_digest");
+        object.remove("canonical_hash");
+    }
+    value
+}
+
+fn event_payload_digest(envelope: &Value) -> String {
+    let payload = envelope
+        .get("payload")
+        .or_else(|| envelope.get("body"))
+        .or_else(|| envelope.get("content"))
+        .cloned()
+        .unwrap_or(Value::Null);
+    let bytes = serde_json::to_vec(&payload).expect("payload value serializes");
+    event_digest(&bytes)
+}
+
+fn event_digest(bytes: &[u8]) -> String {
+    format!("sha256:{}", sha256_hex(bytes))
+}
+
+fn is_valid_event_id(value: &str) -> bool {
+    let Some(rest) = value.strip_prefix("cx:event:") else {
+        return false;
+    };
+    !rest.is_empty()
+        && value.len() <= 160
+        && rest
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | ':'))
+}
+
+fn event_submit_response(
+    state: &AppState,
+    status: &str,
+    event_id: String,
+    canonical_digest: String,
+    received_at: chrono::DateTime<chrono::Utc>,
+    idempotent: bool,
+) -> EventSubmitResponse {
+    EventSubmitResponse {
+        status: status.to_owned(),
+        event_id: event_id.clone(),
+        canonical_digest: canonical_digest.clone(),
+        sync_token: sync_token(),
+        received_at,
+        receipt: json!({
+            "service_did": state.config.service_did.clone(),
+            "profile": "cx.profile.event_envelope_minimal.v1",
+            "event_id": event_id,
+            "canonical_digest": canonical_digest,
+            "received_at": received_at,
+            "idempotent": idempotent
+        }),
+    }
+}
+
+fn event_read_response(record: &CanonicalEventRecord) -> EventReadResponse {
+    EventReadResponse {
+        event: record.envelope.clone(),
+        metadata: json!({
+            "event_id": record.event_id.clone(),
+            "actor_id": record.actor_id.clone(),
+            "actor_seq": record.actor_seq,
+            "space_id": record.space_id.clone(),
+            "kind": record.kind.clone(),
+            "schema_id": record.schema_id.clone(),
+            "canonical_digest": record.canonical_digest.clone(),
+            "received_at": record.received_at
+        }),
+    }
+}
+
+fn events_frontier_json(records: &[CanonicalEventRecord]) -> Value {
+    let mut actors: BTreeMap<String, u64> = BTreeMap::new();
+    let mut spaces: BTreeMap<String, String> = BTreeMap::new();
+    for record in records {
+        actors
+            .entry(record.actor_id.clone())
+            .and_modify(|seq| *seq = (*seq).max(record.actor_seq))
+            .or_insert(record.actor_seq);
+        if let Some(space_id) = record.space_id.as_deref() {
+            spaces.insert(space_id.to_owned(), record.event_id.clone());
+        }
+    }
+    json!({
+        "actors": actors,
+        "spaces": spaces,
+        "event_count": records.len()
+    })
+}
+
+fn event_visible_to_session(
+    state: &AppState,
+    record: &CanonicalEventRecord,
+    session: &SessionRecord,
+) -> bool {
+    if record.actor_id == session.actor {
+        return true;
+    }
+    record
+        .space_id
+        .as_deref()
+        .is_some_and(|space_id| space_has_member(state, space_id, &session.actor))
+}
+
 fn validate_did(value: &str) -> Result<Did, ()> {
     Did::new(value.to_owned()).map_err(|_| ())
 }
@@ -11268,6 +14643,135 @@ fn auth_or_render(state: &AppState, req: &Request, res: &mut Response) -> Option
             None
         }
     }
+}
+
+fn push_register_session_grant_bridge(
+    state: &AppState,
+    req: &Request,
+    body: &PushRegisterRequest,
+) -> Result<Option<SessionRecord>, (StatusCode, &'static str, &'static str)> {
+    let Some(grant) = req.headers().get("x-contrix-session-grant") else {
+        return Ok(None);
+    };
+    let grant = grant
+        .to_str()
+        .map_err(|_| (StatusCode::BAD_REQUEST, "invalid_header", "X-Contrix-Session-Grant must be ASCII"))?;
+    if grant.trim().is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "invalid_header",
+            "X-Contrix-Session-Grant must not be empty",
+        ));
+    }
+    let Some(principal_did) = body.principal_did.as_deref().map(str::trim).filter(|value| !value.is_empty()) else {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            "principal_did is required when using X-Contrix-Session-Grant",
+        ));
+    };
+    if !principal_did.starts_with("did:") {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            "principal_did must use the did: prefix when using X-Contrix-Session-Grant",
+        ));
+    }
+
+    // TODO(session-grant-bridge): replace this bridge with coauth
+    // introspection, audience checks, and session public-key proof
+    // validation before treating the grant as authenticated identity.
+    Ok(Some(SessionRecord {
+        token_hash: format!("grant-bridge:{}", sha256_hex(grant.as_bytes())),
+        actor: principal_did.to_owned(),
+        device_id: body.device_id.clone(),
+        audience: state.config.service_did.clone(),
+        expires_at: now() + chrono::Duration::minutes(5),
+        created_at: now(),
+        revoked_at: None,
+    }))
+}
+
+fn is_device_revoked(state: &AppState, actor: &str, device_id: &str) -> bool {
+    if let Some(actor_devices) = state.devices.lock().expect("devices lock").get(actor) {
+        if let Some(device) = actor_devices.get(device_id) {
+            return !device.get("revoked_at").is_none_or(Value::is_null);
+        }
+    }
+    match state.persistence.devices().get(actor, device_id) {
+        Ok(Some(record)) => record.revoked_at.is_some(),
+        Ok(None) => match state.persistence.devices().list_for_actor(actor) {
+            Ok(devices) => !devices.iter().any(|record| record.device_id == device_id),
+            Err(_) => true,
+        },
+        Err(_) => true,
+    }
+}
+
+fn revoke_device_record(state: &AppState, actor: &str, device_id: &str) -> Result<(), String> {
+    let revoked_at = now();
+    let mut record = match state.persistence.devices().get(actor, device_id) {
+        Ok(record) => record,
+        Err(error) => {
+            return Err(error.to_string());
+        }
+    }
+    .or_else(|| {
+        state
+            .devices
+            .lock()
+            .expect("devices lock")
+            .get(actor)
+            .and_then(|devices| {
+                devices.get(device_id).and_then(|json| {
+                    Some(DeviceInventoryRecord {
+                        actor: actor.to_owned(),
+                        device_id: device_id.to_owned(),
+                        display_name: json
+                            .get("display_name")
+                            .and_then(Value::as_str)
+                            .map(ToString::to_string),
+                        verification_state: json
+                            .get("verification")
+                            .and_then(Value::as_str)
+                            .unwrap_or("unverified")
+                            .to_owned(),
+                        payload: json
+                            .get("payload")
+                            .cloned()
+                            .unwrap_or_else(|| json!({"device_id": device_id})),
+                        created_at: revoked_at,
+                        updated_at: revoked_at,
+                        revoked_at: Some(revoked_at),
+                    })
+                })
+            })
+    })
+    .unwrap_or_else(|| DeviceInventoryRecord {
+        actor: actor.to_owned(),
+        device_id: device_id.to_owned(),
+        display_name: None,
+        verification_state: "unverified".to_owned(),
+        payload: json!({"device_id": device_id}),
+        created_at: revoked_at,
+        updated_at: revoked_at,
+        revoked_at: Some(revoked_at),
+    });
+    record.revoked_at = Some(revoked_at);
+    record.updated_at = revoked_at;
+    state
+        .persistence
+        .devices()
+        .put(&record)
+        .map_err(|error| error.to_string())?;
+    state
+        .devices
+        .lock()
+        .expect("devices lock")
+        .entry(actor.to_owned())
+        .or_default()
+        .insert(device_id.to_owned(), device_inventory_to_json(&record));
+    Ok(())
 }
 
 fn authenticated_session(
@@ -11317,6 +14821,13 @@ fn authenticated_session(
             StatusCode::UNAUTHORIZED,
             "unauthenticated",
             "session revoked",
+        ));
+    }
+    if is_device_revoked(state, &session.actor, &session.device_id) {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            "unauthenticated",
+            "device revoked",
         ));
     }
     if session.expires_at <= now() {
