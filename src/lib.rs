@@ -301,6 +301,18 @@ pub fn router_with_rate_limiter_config(
                         .post(post_key_backup_restore_executor_complete),
                 )
                 .push(
+                    Router::with_path("keys/backups/restore-tickets/{ticket_id}/result")
+                        .get(get_key_backup_restore_result),
+                )
+                .push(
+                    Router::with_path("keys/backups/restore-tickets/{ticket_id}/receipt")
+                        .get(get_key_backup_restore_receipt),
+                )
+                .push(
+                    Router::with_path("keys/backups/restore-tickets/{ticket_id}/materialized-device-handoff")
+                        .post(post_key_backup_restore_materialized_device_handoff),
+                )
+                .push(
                     Router::with_path("keys/backups/{backup_id}")
                         .put(put_key_backup)
                         .get(get_key_backup)
@@ -965,6 +977,27 @@ const CONTRACT_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &[
         "keys",
         "cx.keys.backups.restore_executor_complete",
         "complete restore executor scaffold",
+    ),
+    (
+        "/api/v1/keys/backups/restore-tickets/{ticket_id}/result",
+        PathItemType::Get,
+        "keys",
+        "cx.keys.backups.restore_result",
+        "get restore result scaffold",
+    ),
+    (
+        "/api/v1/keys/backups/restore-tickets/{ticket_id}/receipt",
+        PathItemType::Get,
+        "keys",
+        "cx.keys.backups.restore_receipt",
+        "get restore receipt scaffold",
+    ),
+    (
+        "/api/v1/keys/backups/restore-tickets/{ticket_id}/materialized-device-handoff",
+        PathItemType::Post,
+        "keys",
+        "cx.keys.backups.restore_materialized_device_handoff",
+        "submit materialized device handoff scaffold",
     ),
     (
         "/api/v1/keys/backups/{backup_id}",

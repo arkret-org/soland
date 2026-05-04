@@ -305,6 +305,9 @@ pub async fn recovery_contract_stack(_depot: &mut Depot, res: &mut Response) {
         "restore_executor_enqueue_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/enqueue",
         "restore_executor_start_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/start",
         "restore_executor_complete_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/complete",
+        "restore_result_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/result",
+        "restore_receipt_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/receipt",
+        "restore_materialized_device_handoff_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/materialized-device-handoff",
         "authz_describe_path": "/api/v1/authz/describe",
         "authz_check_path": "/api/v1/authz/check",
         "policies_describe_path": "/api/v1/policies/describe",
@@ -376,6 +379,9 @@ pub async fn key_backups_describe(_depot: &mut Depot, res: &mut Response) {
         "restore_executor_enqueue_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/enqueue",
         "restore_executor_start_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/start",
         "restore_executor_complete_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/complete",
+        "restore_result_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/result",
+        "restore_receipt_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/receipt",
+        "restore_materialized_device_handoff_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/materialized-device-handoff",
         "schema": "cx.schema.key_backup.v1",
         "put_request_example": {
             "schema": "cx.schema.key_backup.v1",
@@ -648,6 +654,30 @@ pub async fn integration_describe(_depot: &mut Depot, res: &mut Response) {
                 todo: "TODO: replace executor complete scaffold with durable materialization result persistence and compensating failure flow.".to_owned(),
             },
             IntegrationSurfaceDescriptor {
+                name: "key_backup_restore_result".to_owned(),
+                method: "GET".to_owned(),
+                path: "/api/v1/keys/backups/restore-tickets/{ticket_id}/result".to_owned(),
+                contract: "contrix.rest.key_backup_restore_result.v1".to_owned(),
+                stability: "scaffold".to_owned(),
+                todo: "TODO: replace derived restore result scaffold with durable result state and failure taxonomy.".to_owned(),
+            },
+            IntegrationSurfaceDescriptor {
+                name: "key_backup_restore_receipt".to_owned(),
+                method: "GET".to_owned(),
+                path: "/api/v1/keys/backups/restore-tickets/{ticket_id}/receipt".to_owned(),
+                contract: "contrix.rest.key_backup_restore_receipt.v1".to_owned(),
+                stability: "scaffold".to_owned(),
+                todo: "TODO: replace synthetic restore receipt scaffold with durable evidence and audit receipts.".to_owned(),
+            },
+            IntegrationSurfaceDescriptor {
+                name: "key_backup_restore_materialized_device_handoff".to_owned(),
+                method: "POST".to_owned(),
+                path: "/api/v1/keys/backups/restore-tickets/{ticket_id}/materialized-device-handoff".to_owned(),
+                contract: "contrix.rest.key_backup_restore_materialized_device_handoff.v1".to_owned(),
+                stability: "scaffold".to_owned(),
+                todo: "TODO: replace device handoff scaffold with durable secure transport and recipient proof semantics.".to_owned(),
+            },
+            IntegrationSurfaceDescriptor {
                 name: "authz_describe".to_owned(),
                 method: "GET".to_owned(),
                 path: "/api/v1/authz/describe".to_owned(),
@@ -709,6 +739,9 @@ pub async fn integration_describe(_depot: &mut Depot, res: &mut Response) {
                     "restore_executor_enqueue_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/enqueue",
                     "restore_executor_start_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/start",
                     "restore_executor_complete_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/complete",
+                    "restore_result_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/result",
+                    "restore_receipt_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/receipt",
+                    "restore_materialized_device_handoff_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/materialized-device-handoff",
                     "authz_describe_path": "/api/v1/authz/describe",
                     "policies_describe_path": "/api/v1/policies/describe"
                 }
@@ -817,6 +850,9 @@ pub async fn integration_describe(_depot: &mut Depot, res: &mut Response) {
                 "restore_executor_enqueue_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/enqueue",
                 "restore_executor_start_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/start",
                 "restore_executor_complete_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/complete",
+                "restore_result_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/result",
+                "restore_receipt_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/receipt",
+                "restore_materialized_device_handoff_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/materialized-device-handoff",
                 "restore_ticket_response_shape": {
                     "contract": "contrix.rest.key_backup_restore_ticket.v1",
                     "ticket_id": "restore-ticket-backup-alice-01",
@@ -858,6 +894,23 @@ pub async fn integration_describe(_depot: &mut Depot, res: &mut Response) {
                     "result": "success",
                     "materialized_device_id": "dev_alice_restored",
                     "note": "complete restore worker scaffold"
+                },
+                "restore_result_response_shape": {
+                    "contract": "contrix.rest.key_backup_restore_result.v1",
+                    "result": "success",
+                    "ticket_state": "materialized",
+                    "materialized_device_id": "dev_alice_restored"
+                },
+                "restore_receipt_response_shape": {
+                    "contract": "contrix.rest.key_backup_restore_receipt.v1",
+                    "receipt_id": "restore-receipt-restore-ticket-backup-alice-01",
+                    "evidence_mode": "scaffold_inline_receipt"
+                },
+                "restore_materialized_device_handoff_request": {
+                    "target_device_id": "dev_alice_restored",
+                    "delivery_channel": "device_messages",
+                    "receipt_ack_mode": "scaffold_manual_ack",
+                    "note": "handoff restore result scaffold"
                 },
                 "restore_state_describe_response_shape": {
                     "contract": "contrix.rest.key_backup_restore_state_store_describe.v1",
@@ -9880,6 +9933,9 @@ pub async fn get_key_backup_restore_describe(
         "restore_state_store_mode": "process_memory_manual_snapshot_scaffold",
         "restore_executor_start_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/start",
         "restore_executor_complete_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/complete",
+        "restore_result_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/result",
+        "restore_receipt_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/receipt",
+        "restore_materialized_device_handoff_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/materialized-device-handoff",
         "principal_authz_check_path": "/api/v1/authz/check",
         "principal_policy_collection_path": "/api/v1/policies",
         "principal_policy_item_path": "/api/v1/policies/{policy_id}",
@@ -10080,6 +10136,9 @@ pub async fn post_key_backup_restore_start(
         "restore_executor_enqueue_path": format!("/api/v1/keys/backups/restore-tickets/restore-ticket-{backup_id}/executor/enqueue"),
         "restore_executor_start_path": format!("/api/v1/keys/backups/restore-tickets/restore-ticket-{backup_id}/executor/start"),
         "restore_executor_complete_path": format!("/api/v1/keys/backups/restore-tickets/restore-ticket-{backup_id}/executor/complete"),
+        "restore_result_path": format!("/api/v1/keys/backups/restore-tickets/restore-ticket-{backup_id}/result"),
+        "restore_receipt_path": format!("/api/v1/keys/backups/restore-tickets/restore-ticket-{backup_id}/receipt"),
+        "restore_materialized_device_handoff_path": format!("/api/v1/keys/backups/restore-tickets/restore-ticket-{backup_id}/materialized-device-handoff"),
         "principal_authz_check_path": "/api/v1/authz/check",
         "principal_policy_collection_path": "/api/v1/policies",
         "principal_policy_item_path": "/api/v1/policies/{policy_id}",
@@ -10838,16 +10897,28 @@ pub async fn post_key_backup_restore_executor_complete(
         render_error(res, StatusCode::NOT_FOUND, "not_found", "restore executor not found");
         return;
     }
-    if let Some(object) = executor.as_object_mut() {
-        object.insert("state".to_owned(), json!(executor_state));
-        object.insert("queue_state".to_owned(), json!("completed"));
-        object.insert("completed_at".to_owned(), json!(now()));
-        object.insert("completion".to_owned(), body.clone());
-        object
-            .entry("run_history".to_owned())
-            .or_insert_with(|| json!([]));
-        if let Some(history) = object.get_mut("run_history").and_then(Value::as_array_mut) {
-            history.push(json!({
+        if let Some(object) = executor.as_object_mut() {
+            object.insert("state".to_owned(), json!(executor_state));
+            object.insert("queue_state".to_owned(), json!("completed"));
+            object.insert("completed_at".to_owned(), json!(now()));
+            object.insert("completion".to_owned(), body.clone());
+            object.insert(
+                "receipt_id".to_owned(),
+                json!(format!("restore-receipt-{ticket_id}")),
+            );
+            object.insert(
+                "result_summary".to_owned(),
+                json!({
+                    "result": result,
+                    "materialized_device_id": body.get("materialized_device_id").cloned().unwrap_or_else(|| json!("TODO_DEVICE_ID")),
+                    "completed_by": session.actor,
+                }),
+            );
+            object
+                .entry("run_history".to_owned())
+                .or_insert_with(|| json!([]));
+            if let Some(history) = object.get_mut("run_history").and_then(Value::as_array_mut) {
+                history.push(json!({
                 "event": "completed",
                 "at": now(),
                 "result": result,
@@ -10886,7 +10957,192 @@ pub async fn post_key_backup_restore_executor_complete(
         "state": executor_state,
         "ticket_state": ticket_state,
         "status_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/status"),
+        "result_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/result"),
+        "receipt_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/receipt"),
+        "materialized_device_handoff_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/materialized-device-handoff"),
         "todo": "TODO(keys.backups.restore): replace executor-complete scaffold with durable materialization result persistence, retry policy, and failure compensation"
+    })));
+}
+
+#[handler]
+pub async fn get_key_backup_restore_result(
+    depot: &mut Depot,
+    req: &mut Request,
+    res: &mut Response,
+) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let Some(session) = auth_or_render(state, req, res) else {
+        return;
+    };
+    let ticket_id = req.param::<String>("ticket_id").unwrap_or_default();
+    let Some(executor) = state
+        .key_backup_restore_executor_runs
+        .lock()
+        .expect("key backup restore executor lock")
+        .get(&ticket_id)
+        .cloned()
+    else {
+        render_error(res, StatusCode::NOT_FOUND, "not_found", "restore executor not found");
+        return;
+    };
+    if executor
+        .get("actor")
+        .and_then(Value::as_str)
+        .is_some_and(|actor| actor != session.actor)
+    {
+        render_error(res, StatusCode::NOT_FOUND, "not_found", "restore executor not found");
+        return;
+    }
+    let Some(ticket) = state
+        .key_backup_restore_tickets
+        .lock()
+        .expect("key backup restore ticket lock")
+        .get(&ticket_id)
+        .cloned()
+    else {
+        render_error(res, StatusCode::NOT_FOUND, "not_found", "restore ticket not found");
+        return;
+    };
+    res.render(Json(json!({
+        "contract": "contrix.rest.key_backup_restore_result.v1",
+        "version": "2026-05-04-scaffold",
+        "ticket_id": ticket_id,
+        "executor_state": executor.get("state").cloned().unwrap_or_else(|| json!("unknown")),
+        "ticket_state": ticket.get("lifecycle_state").cloned().unwrap_or_else(|| json!("unknown")),
+        "result": executor.pointer("/result_summary/result").cloned().unwrap_or_else(|| json!("pending")),
+        "materialized_device_id": executor.pointer("/result_summary/materialized_device_id").cloned().unwrap_or_else(|| json!("TODO_DEVICE_ID")),
+        "receipt_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/receipt"),
+        "materialized_device_handoff_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/materialized-device-handoff"),
+        "todo": "TODO(keys.backups.restore): replace derived restore result with durable result object, error taxonomy, and blob/device materialization metadata."
+    })));
+}
+
+#[handler]
+pub async fn get_key_backup_restore_receipt(
+    depot: &mut Depot,
+    req: &mut Request,
+    res: &mut Response,
+) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let Some(session) = auth_or_render(state, req, res) else {
+        return;
+    };
+    let ticket_id = req.param::<String>("ticket_id").unwrap_or_default();
+    let Some(executor) = state
+        .key_backup_restore_executor_runs
+        .lock()
+        .expect("key backup restore executor lock")
+        .get(&ticket_id)
+        .cloned()
+    else {
+        render_error(res, StatusCode::NOT_FOUND, "not_found", "restore executor not found");
+        return;
+    };
+    if executor
+        .get("actor")
+        .and_then(Value::as_str)
+        .is_some_and(|actor| actor != session.actor)
+    {
+        render_error(res, StatusCode::NOT_FOUND, "not_found", "restore executor not found");
+        return;
+    }
+    res.render(Json(json!({
+        "contract": "contrix.rest.key_backup_restore_receipt.v1",
+        "version": "2026-05-04-scaffold",
+        "ticket_id": ticket_id,
+        "receipt_id": executor.get("receipt_id").cloned().unwrap_or_else(|| json!(format!("restore-receipt-{ticket_id}"))),
+        "evidence_mode": "scaffold_inline_receipt",
+        "issued_at": executor.get("completed_at").cloned().unwrap_or_else(|| json!(now())),
+        "materialized_device_id": executor.pointer("/result_summary/materialized_device_id").cloned().unwrap_or_else(|| json!("TODO_DEVICE_ID")),
+        "completed_by": executor.pointer("/result_summary/completed_by").cloned().unwrap_or_else(|| json!(session.actor)),
+        "todo": "TODO(keys.backups.restore): replace synthetic restore receipts with durable evidence bundles and audit linkage."
+    })));
+}
+
+#[handler]
+pub async fn post_key_backup_restore_materialized_device_handoff(
+    depot: &mut Depot,
+    req: &mut Request,
+    res: &mut Response,
+) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let Some(session) = auth_or_render(state, req, res) else {
+        return;
+    };
+    let ticket_id = req.param::<String>("ticket_id").unwrap_or_default();
+    let body = match req.parse_json::<Value>().await {
+        Ok(body) => body,
+        Err(_) => {
+            render_error(
+                res,
+                StatusCode::BAD_REQUEST,
+                "bad_json",
+                "invalid restore materialized-device handoff request",
+            );
+            return;
+        }
+    };
+    let mut executors = state
+        .key_backup_restore_executor_runs
+        .lock()
+        .expect("key backup restore executor lock");
+    let Some(executor) = executors.get_mut(&ticket_id) else {
+        render_error(res, StatusCode::NOT_FOUND, "not_found", "restore executor not found");
+        return;
+    };
+    if executor
+        .get("actor")
+        .and_then(Value::as_str)
+        .is_some_and(|actor| actor != session.actor)
+    {
+        render_error(res, StatusCode::NOT_FOUND, "not_found", "restore executor not found");
+        return;
+    }
+    if executor.get("state").and_then(Value::as_str) != Some("completed") {
+        render_error(
+            res,
+            StatusCode::CONFLICT,
+            "invalid_state",
+            "restore executor must be completed before materialized device handoff",
+        );
+        return;
+    }
+    if let Some(object) = executor.as_object_mut() {
+        object.insert("materialized_device_handoff".to_owned(), body.clone());
+        object.insert("handoff_state".to_owned(), json!("submitted"));
+        object.insert("handoff_submitted_at".to_owned(), json!(now()));
+        object
+            .entry("run_history".to_owned())
+            .or_insert_with(|| json!([]));
+        if let Some(history) = object.get_mut("run_history").and_then(Value::as_array_mut) {
+            history.push(json!({
+                "event": "materialized_device_handoff_submitted",
+                "at": now(),
+                "target_device_id": body.get("target_device_id").cloned().unwrap_or_else(|| json!("TODO_DEVICE_ID")),
+            }));
+        }
+    }
+    if let Some(ticket) = state
+        .key_backup_restore_tickets
+        .lock()
+        .expect("key backup restore ticket lock")
+        .get_mut(&ticket_id)
+    {
+        if let Some(object) = ticket.as_object_mut() {
+            object.insert("lifecycle_state".to_owned(), json!("handoff_submitted"));
+            object.insert("allowed_next_transitions".to_owned(), json!([]));
+        }
+    }
+    res.render(Json(json!({
+        "contract": "contrix.rest.key_backup_restore_materialized_device_handoff.v1",
+        "version": "2026-05-04-scaffold",
+        "ticket_id": ticket_id,
+        "handoff_state": "submitted",
+        "target_device_id": body.get("target_device_id").cloned().unwrap_or_else(|| json!("TODO_DEVICE_ID")),
+        "delivery_channel": body.get("delivery_channel").cloned().unwrap_or_else(|| json!("device_messages")),
+        "receipt_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/receipt"),
+        "result_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/result"),
+        "todo": "TODO(keys.backups.restore): replace materialized-device handoff scaffold with secure transport, recipient proof, and delivery acknowledgement semantics."
     })));
 }
 
