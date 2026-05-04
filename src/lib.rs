@@ -218,6 +218,14 @@ pub fn router_with_rate_limiter_config(
                         .get(outbound_push_bridge_cache_status),
                 )
                 .push(
+                    Router::with_path("push/outbound/bridge/cache/export")
+                        .get(outbound_push_bridge_cache_export),
+                )
+                .push(
+                    Router::with_path("push/outbound/bridge/cache/import")
+                        .post(outbound_push_bridge_cache_import),
+                )
+                .push(
                     Router::with_path("push/outbound/bridge/cache/invalidate")
                         .post(outbound_push_bridge_cache_invalidate),
                 )
@@ -841,6 +849,20 @@ const CONTRACT_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &[
         "push",
         "cx.push.register_device",
         "register push device",
+    ),
+    (
+        "/api/v1/push/outbound/bridge/cache/export",
+        PathItemType::Get,
+        "push",
+        "cx.push.outbound_bridge_cache_export",
+        "export outbound push bridge cache snapshots",
+    ),
+    (
+        "/api/v1/push/outbound/bridge/cache/import",
+        PathItemType::Post,
+        "push",
+        "cx.push.outbound_bridge_cache_import",
+        "import outbound push bridge cache snapshots",
     ),
     (
         "/api/v1/devices/pairing-challenge",

@@ -70,11 +70,14 @@ pub struct OutboundPushGatewayContractDescriptor {
     pub fetch_path: String,
     pub cache_status_path: String,
     pub cache_invalidate_path: String,
+    pub cache_export_path: String,
+    pub cache_import_path: String,
     pub bridge_describe_path: String,
     pub notify_path: String,
     pub accepted_contracts: Vec<String>,
     pub fetch_mode: String,
     pub cache_mode: String,
+    pub snapshot_store_mode: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -92,6 +95,8 @@ pub struct OutboundPushBridgeExamples {
     pub resolve_request: Value,
     pub fetch_request: Value,
     pub notify_headers: Value,
+    pub cache_import_request: Value,
+    pub cache_export_response: Value,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -146,6 +151,46 @@ pub struct OutboundPushBridgeFetchRequest {
 pub struct OutboundPushBridgeCacheInvalidateRequest {
     #[serde(default)]
     pub push_gateway_url: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct OutboundPushBridgeCacheSnapshot {
+    pub push_gateway_url: String,
+    pub service_base_url: String,
+    pub bridge_describe_url: String,
+    pub fetch_state: String,
+    pub cache_state: String,
+    pub contract_digest: String,
+    pub fetched_at: DateTime<Utc>,
+    pub remote_contract: Value,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct OutboundPushBridgeCacheExportResponse {
+    #[serde(default)]
+    pub entries: Vec<OutboundPushBridgeCacheSnapshot>,
+    pub snapshot_store_kind: String,
+    #[serde(default)]
+    pub todos: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct OutboundPushBridgeCacheImportRequest {
+    #[serde(default)]
+    pub entries: Vec<OutboundPushBridgeCacheSnapshot>,
+    #[serde(default)]
+    pub replace_existing: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct OutboundPushBridgeCacheImportResponse {
+    pub imported_count: usize,
+    pub skipped_count: usize,
+    pub total_entries: usize,
+    pub snapshot_store_kind: String,
+    pub cache_state: String,
+    #[serde(default)]
+    pub todos: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

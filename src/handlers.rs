@@ -43,6 +43,8 @@ use crate::{
         AuthBridgePushDescriptor,
         OutboundPushBridgeDescribeResponse, OutboundPushDeliveryDescriptor,
         OutboundPushBridgeCacheEntry, OutboundPushBridgeCacheStatusResponse,
+        OutboundPushBridgeCacheExportResponse, OutboundPushBridgeCacheImportRequest,
+        OutboundPushBridgeCacheImportResponse, OutboundPushBridgeCacheSnapshot,
         OutboundPushBridgeCacheInvalidateRequest, OutboundPushBridgeCacheInvalidateResponse,
         OutboundPushBridgeFetchRequest, OutboundPushBridgeFetchResponse,
         OutboundPushBridgeResolveRequest, OutboundPushBridgeResolveResponse,
@@ -222,6 +224,22 @@ pub async fn integration_describe(_depot: &mut Depot, res: &mut Response) {
                 todo: "TODO: persist fetched gateway snapshots and replace in-memory drift cache with durable state.".to_owned(),
             },
             IntegrationSurfaceDescriptor {
+                name: "outbound_push_cache_export".to_owned(),
+                method: "GET".to_owned(),
+                path: "/api/v1/push/outbound/bridge/cache/export".to_owned(),
+                contract: "contrix.rest.outbound_push_bridge_cache_export.v1".to_owned(),
+                stability: "scaffold".to_owned(),
+                todo: "TODO: back this export with durable snapshot storage instead of process memory only.".to_owned(),
+            },
+            IntegrationSurfaceDescriptor {
+                name: "outbound_push_cache_import".to_owned(),
+                method: "POST".to_owned(),
+                path: "/api/v1/push/outbound/bridge/cache/import".to_owned(),
+                contract: "contrix.rest.outbound_push_bridge_cache_import.v1".to_owned(),
+                stability: "scaffold".to_owned(),
+                todo: "TODO: validate imported snapshots against explicit trust and freshness policy before production use.".to_owned(),
+            },
+            IntegrationSurfaceDescriptor {
                 name: "push_register_device".to_owned(),
                 method: "POST".to_owned(),
                 path: "/api/v1/push/register-device".to_owned(),
@@ -282,6 +300,8 @@ pub async fn outbound_push_bridge_describe(depot: &mut Depot, res: &mut Response
             fetch_path: "/api/v1/push/outbound/bridge/fetch".to_owned(),
             cache_status_path: "/api/v1/push/outbound/bridge/cache/status".to_owned(),
             cache_invalidate_path: "/api/v1/push/outbound/bridge/cache/invalidate".to_owned(),
+            cache_export_path: "/api/v1/push/outbound/bridge/cache/export".to_owned(),
+            cache_import_path: "/api/v1/push/outbound/bridge/cache/import".to_owned(),
             bridge_describe_path: "/api/v1/push/bridge/describe".to_owned(),
             notify_path: "/api/v1/push/notify".to_owned(),
             accepted_contracts: vec![
@@ -290,6 +310,7 @@ pub async fn outbound_push_bridge_describe(depot: &mut Depot, res: &mut Response
             ],
             fetch_mode: "live_http_fetch_with_scaffold_fallback".to_owned(),
             cache_mode: "in_memory_snapshot_cache".to_owned(),
+            snapshot_store_mode: "export_import_scaffold_over_process_memory".to_owned(),
         },
         delivery: OutboundPushDeliveryDescriptor {
             operation_id: "cx.push.notify".to_owned(),
@@ -317,10 +338,44 @@ pub async fn outbound_push_bridge_describe(depot: &mut Depot, res: &mut Response
                 "X-Contrix-Request-Id": "req_01js0000000000000000000000",
                 "Idempotency-Key": "notify-01js0000000000000000000000"
             }),
+            cache_import_request: json!({
+                "replace_existing": true,
+                "entries": [{
+                    "push_gateway_url": "https://floria.example/api/v1/push/notify",
+                    "service_base_url": "https://floria.example",
+                    "bridge_describe_url": "https://floria.example/api/v1/push/bridge/describe",
+                    "fetch_state": "seed_import",
+                    "cache_state": "imported_snapshot_scaffold",
+                    "contract_digest": "sha256:TODO",
+                    "fetched_at": now(),
+                    "remote_contract": {
+                        "contract": "cx.push.bridge.describe",
+                        "delivery": {
+                            "notify_path": "/api/v1/push/notify",
+                            "operation_id": "cx.push.notify"
+                        }
+                    }
+                }]
+            }),
+            cache_export_response: json!({
+                "entries": [{
+                    "push_gateway_url": "https://floria.example/api/v1/push/notify",
+                    "service_base_url": "https://floria.example",
+                    "bridge_describe_url": "https://floria.example/api/v1/push/bridge/describe",
+                    "fetch_state": "cache_hit",
+                    "cache_state": "imported_snapshot_scaffold",
+                    "contract_digest": "sha256:TODO",
+                    "remote_contract": {
+                        "contract": "cx.push.bridge.describe"
+                    }
+                }],
+                "snapshot_store_kind": "process_memory_export_import_scaffold"
+            }),
         },
         todos: vec![
             "TODO(push-outbound): fetch remote gateway bridge metadata from configured push_gateway origins before first delivery".to_owned(),
             "TODO(push-outbound): cache gateway contract snapshots and refuse contract drift without explicit refresh".to_owned(),
+            "TODO(push-outbound): replace export/import scaffold with durable snapshot persistence and explicit trust policy".to_owned(),
             "TODO(push-outbound): bind outbound notify signing/auth policy to the discovered gateway contract instead of static assumptions".to_owned(),
         ],
     }));
@@ -568,6 +623,85 @@ pub async fn outbound_push_bridge_cache_status(depot: &mut Depot, res: &mut Resp
         .map(outbound_push_bridge_cache_entry)
         .collect();
     res.render(Json(OutboundPushBridgeCacheStatusResponse { entries }));
+}
+
+#[handler]
+pub async fn outbound_push_bridge_cache_export(depot: &mut Depot, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let entries = state
+        .outbound_push_bridge_cache
+        .lock()
+        .expect("outbound push bridge cache lock")
+        .values()
+        .cloned()
+        .map(outbound_push_bridge_cache_snapshot)
+        .collect();
+    res.render(Json(OutboundPushBridgeCacheExportResponse {
+        entries,
+        snapshot_store_kind: "process_memory_export_import_scaffold".to_owned(),
+        todos: vec![
+            "TODO(push-outbound): persist exported snapshots in a durable store instead of requiring clients to carry them around.".to_owned(),
+            "TODO(push-outbound): attach trust/freshness metadata before treating imported snapshots as production-grade gateway state.".to_owned(),
+        ],
+    }));
+}
+
+#[handler]
+pub async fn outbound_push_bridge_cache_import(
+    depot: &mut Depot,
+    req: &mut Request,
+    res: &mut Response,
+) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let body = match req.parse_json::<OutboundPushBridgeCacheImportRequest>().await {
+        Ok(body) => body,
+        Err(_) => {
+            render_error(
+                res,
+                StatusCode::BAD_REQUEST,
+                "bad_json",
+                "invalid outbound push bridge cache import request",
+            );
+            return;
+        }
+    };
+    let replace_existing = body.replace_existing;
+    let mut cache = state
+        .outbound_push_bridge_cache
+        .lock()
+        .expect("outbound push bridge cache lock");
+    let mut imported_count = 0usize;
+    let mut skipped_count = 0usize;
+    for snapshot in body.entries {
+        if !replace_existing && cache.contains_key(&snapshot.bridge_describe_url) {
+            skipped_count += 1;
+            continue;
+        }
+        cache.insert(
+            snapshot.bridge_describe_url.clone(),
+            outbound_push_bridge_cache_record(snapshot),
+        );
+        imported_count += 1;
+    }
+    let total_entries = cache.len();
+    drop(cache);
+    res.render(Json(OutboundPushBridgeCacheImportResponse {
+        imported_count,
+        skipped_count,
+        total_entries,
+        snapshot_store_kind: "process_memory_export_import_scaffold".to_owned(),
+        cache_state: if total_entries == 0 {
+            "empty".to_owned()
+        } else if replace_existing {
+            "imported_replace_existing_scaffold".to_owned()
+        } else {
+            "imported_merge_preserve_existing_scaffold".to_owned()
+        },
+        todos: vec![
+            "TODO(push-outbound): validate imported snapshots against service DID trust, contract version, and freshness before production use.".to_owned(),
+            "TODO(push-outbound): replace process-memory import with a durable snapshot store and explicit drift-resolution policy.".to_owned(),
+        ],
+    }));
 }
 
 #[handler]
@@ -15468,6 +15602,36 @@ fn outbound_push_bridge_cache_entry(
         contract_digest: record.contract_digest,
         fetched_at: record.fetched_at,
         fetched_contract: outbound_push_resolved_contract_from_remote(&record.remote_contract),
+    }
+}
+
+fn outbound_push_bridge_cache_snapshot(
+    record: OutboundPushBridgeCacheRecord,
+) -> OutboundPushBridgeCacheSnapshot {
+    OutboundPushBridgeCacheSnapshot {
+        push_gateway_url: record.push_gateway_url,
+        service_base_url: record.service_base_url,
+        bridge_describe_url: record.bridge_describe_url,
+        fetch_state: record.fetch_state,
+        cache_state: record.cache_state,
+        contract_digest: record.contract_digest,
+        fetched_at: record.fetched_at,
+        remote_contract: record.remote_contract,
+    }
+}
+
+fn outbound_push_bridge_cache_record(
+    snapshot: OutboundPushBridgeCacheSnapshot,
+) -> OutboundPushBridgeCacheRecord {
+    OutboundPushBridgeCacheRecord {
+        push_gateway_url: snapshot.push_gateway_url,
+        service_base_url: snapshot.service_base_url,
+        bridge_describe_url: snapshot.bridge_describe_url,
+        fetch_state: snapshot.fetch_state,
+        cache_state: snapshot.cache_state,
+        contract_digest: snapshot.contract_digest,
+        fetched_at: snapshot.fetched_at,
+        remote_contract: snapshot.remote_contract,
     }
 }
 
