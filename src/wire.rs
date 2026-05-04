@@ -58,6 +58,8 @@ pub struct OutboundPushBridgeDescribeResponse {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct OutboundPushGatewayContractDescriptor {
     pub resolve_path: String,
+    pub fetch_path: String,
+    pub cache_status_path: String,
     pub bridge_describe_path: String,
     pub notify_path: String,
     pub accepted_contracts: Vec<String>,
@@ -83,6 +85,13 @@ pub struct OutboundPushBridgeResolveRequest {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+pub struct OutboundPushBridgeFetchRequest {
+    pub push_gateway_url: String,
+    #[serde(default)]
+    pub force_refresh: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct OutboundPushBridgeResolveResponse {
     pub push_gateway_url: String,
     pub service_base_url: String,
@@ -103,6 +112,39 @@ pub struct OutboundPushResolvedContract {
     pub expected_destination_service_did_header: String,
     pub expected_request_id_header: String,
     pub expected_idempotency_key_header: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct OutboundPushBridgeFetchResponse {
+    pub push_gateway_url: String,
+    pub service_base_url: String,
+    pub bridge_describe_url: String,
+    pub fetch_state: String,
+    pub cache_state: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fetched_at: Option<DateTime<Utc>>,
+    pub fetched_contract: OutboundPushResolvedContract,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_contract: Option<Value>,
+    #[serde(default)]
+    pub todos: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct OutboundPushBridgeCacheStatusResponse {
+    #[serde(default)]
+    pub entries: Vec<OutboundPushBridgeCacheEntry>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct OutboundPushBridgeCacheEntry {
+    pub push_gateway_url: String,
+    pub service_base_url: String,
+    pub bridge_describe_url: String,
+    pub fetch_state: String,
+    pub cache_state: String,
+    pub fetched_at: DateTime<Utc>,
+    pub fetched_contract: OutboundPushResolvedContract,
 }
 
 #[derive(Debug, Serialize)]

@@ -50,6 +50,7 @@ pub struct AppState {
     pub blobs: Arc<Mutex<BTreeMap<String, BlobRecord>>>,
     pub push_devices: Arc<Mutex<Vec<Value>>>,
     pub push_rules: Arc<Mutex<BTreeMap<(String, String), PushRuleRecord>>>,
+    pub outbound_push_bridge_cache: Arc<Mutex<BTreeMap<String, OutboundPushBridgeCacheRecord>>>,
     pub presence: Arc<Mutex<BTreeMap<String, PresenceRecord>>>,
     pub typing: Arc<Mutex<BTreeMap<(String, String), TypingRecord>>>,
     pub webrtc_sessions: Arc<Mutex<BTreeMap<String, WebrtcSessionRecord>>>,
@@ -256,6 +257,17 @@ pub struct PushRuleRecord {
 }
 
 #[derive(Clone, Debug)]
+pub struct OutboundPushBridgeCacheRecord {
+    pub push_gateway_url: String,
+    pub service_base_url: String,
+    pub bridge_describe_url: String,
+    pub fetch_state: String,
+    pub cache_state: String,
+    pub fetched_at: chrono::DateTime<chrono::Utc>,
+    pub remote_contract: Value,
+}
+
+#[derive(Clone, Debug)]
 pub struct WebrtcSessionRecord {
     pub session_id: String,
     pub space_id: String,
@@ -391,6 +403,7 @@ impl AppState {
             blobs: Arc::new(Mutex::new(BTreeMap::new())),
             push_devices: Arc::new(Mutex::new(Vec::new())),
             push_rules: Arc::new(Mutex::new(BTreeMap::new())),
+            outbound_push_bridge_cache: Arc::new(Mutex::new(BTreeMap::new())),
             presence: Arc::new(Mutex::new(BTreeMap::new())),
             typing: Arc::new(Mutex::new(BTreeMap::new())),
             webrtc_sessions: Arc::new(Mutex::new(BTreeMap::new())),

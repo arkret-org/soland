@@ -21,9 +21,10 @@ use crate::{
     state::{
         AccountRecord, AppState, BlobRecord, CanonicalEventRecord, ContactRecord,
         DeviceInventoryRecord, DeviceMessageRecord, FederationTransactionRecord,
-        IdentityDocumentRecord, IdentityLogRecord, MessageRecord, PolicyDocumentRecord,
-        PresenceRecord, ProjectionEventRecord, PushRuleRecord, SchemaRecord, SessionRecord,
-        SpaceInviteRecord, SpaceMetaRecord, TypingRecord, WebrtcSessionRecord, WebrtcSignalRecord,
+        IdentityDocumentRecord, IdentityLogRecord, MessageRecord, OutboundPushBridgeCacheRecord,
+        PolicyDocumentRecord, PresenceRecord, ProjectionEventRecord, PushRuleRecord,
+        SchemaRecord, SessionRecord, SpaceInviteRecord, SpaceMetaRecord, TypingRecord,
+        WebrtcSessionRecord, WebrtcSignalRecord,
     },
     wire::{
         AccountResponse, AddReactionRequest, AddSpaceMemberRequest, ApiError, AuthzCheckRequest,
@@ -40,6 +41,8 @@ use crate::{
         IdentityReceiptsResponse, IdentityResolveRequest, IdentityResolveResponse,
         AuthBridgeDescribeResponse, AuthBridgeAuthDescriptor, AuthBridgePushDescriptor,
         OutboundPushBridgeDescribeResponse, OutboundPushDeliveryDescriptor,
+        OutboundPushBridgeCacheEntry, OutboundPushBridgeCacheStatusResponse,
+        OutboundPushBridgeFetchRequest, OutboundPushBridgeFetchResponse,
         OutboundPushBridgeResolveRequest, OutboundPushBridgeResolveResponse,
         OutboundPushGatewayContractDescriptor, OutboundPushResolvedContract,
         IndexDescribeResponse, IndexEntityResponse, IndexInboxResponse, IndexNotificationsResponse,
@@ -155,14 +158,16 @@ pub async fn outbound_push_bridge_describe(depot: &mut Depot, res: &mut Response
         api_base_path: "/api/v1/push".to_owned(),
         gateway_contract: OutboundPushGatewayContractDescriptor {
             resolve_path: "/api/v1/push/outbound/bridge/resolve".to_owned(),
+            fetch_path: "/api/v1/push/outbound/bridge/fetch".to_owned(),
+            cache_status_path: "/api/v1/push/outbound/bridge/cache/status".to_owned(),
             bridge_describe_path: "/api/v1/push/bridge/describe".to_owned(),
             notify_path: "/api/v1/push/notify".to_owned(),
             accepted_contracts: vec![
                 "cx.push.bridge.describe".to_owned(),
                 "cx.profile.push_gateway.v1".to_owned(),
             ],
-            fetch_mode: "static_scaffold_only".to_owned(),
-            cache_mode: "TODO(remote-fetch-cache)".to_owned(),
+            fetch_mode: "live_http_fetch_with_scaffold_fallback".to_owned(),
+            cache_mode: "in_memory_snapshot_cache".to_owned(),
         },
         delivery: OutboundPushDeliveryDescriptor {
             operation_id: "cx.push.notify".to_owned(),
@@ -184,7 +189,12 @@ pub async fn outbound_push_bridge_describe(depot: &mut Depot, res: &mut Response
 }
 
 #[handler]
-pub async fn outbound_push_bridge_resolve(req: &mut Request, res: &mut Response) {
+pub async fn outbound_push_bridge_resolve(
+    depot: &mut Depot,
+    req: &mut Request,
+    res: &mut Response,
+) {
+    let state = depot.obtain::<AppState>().expect("state injected");
     let body = match req.parse_json::<OutboundPushBridgeResolveRequest>().await {
         Ok(body) => body,
         Err(_) => {
@@ -219,33 +229,185 @@ pub async fn outbound_push_bridge_resolve(req: &mut Request, res: &mut Response)
         return;
     };
     let bridge_describe_url = join_api_v1_url(&service_base_url, "/api/v1/push/bridge/describe");
+    let cached = state
+        .outbound_push_bridge_cache
+        .lock()
+        .expect("outbound push bridge cache lock")
+        .get(&bridge_describe_url)
+        .cloned();
+    let fetched_contract = cached
+        .as_ref()
+        .map(|record| outbound_push_resolved_contract_from_remote(&record.remote_contract))
+        .unwrap_or_else(default_outbound_push_resolved_contract);
 
     res.render(Json(OutboundPushBridgeResolveResponse {
         push_gateway_url,
         service_base_url,
         bridge_describe_url,
-        fetch_state: if body.refresh {
+        fetch_state: if let Some(record) = &cached {
+            if body.refresh {
+                format!("refresh_requested_cached_snapshot_present:{}", record.fetch_state)
+            } else {
+                "resolved_with_cached_snapshot".to_owned()
+            }
+        } else if body.refresh {
             "refresh_requested_scaffold_only".to_owned()
         } else {
             "resolved_without_remote_fetch".to_owned()
         },
-        cache_state: "not_persisted".to_owned(),
-        fetched_contract: OutboundPushResolvedContract {
-            contract: "cx.push.bridge.describe".to_owned(),
-            expected_notify_path: "/api/v1/push/notify".to_owned(),
-            expected_operation_id: "cx.push.notify".to_owned(),
-            expected_origin_service_did_header: "X-Contrix-Origin-Service-Did".to_owned(),
-            expected_destination_service_did_header: "X-Contrix-Destination-Service-Did"
-                .to_owned(),
-            expected_request_id_header: "X-Contrix-Request-Id".to_owned(),
-            expected_idempotency_key_header: "Idempotency-Key".to_owned(),
-        },
+        cache_state: cached
+            .as_ref()
+            .map(|record| record.cache_state.clone())
+            .unwrap_or_else(|| "not_persisted".to_owned()),
+        fetched_contract,
         todos: vec![
             "TODO(push-outbound): perform live fetch of the remote bridge_describe_url before first delivery".to_owned(),
             "TODO(push-outbound): persist contract snapshots and freshness metadata instead of returning static cache_state".to_owned(),
             "TODO(push-outbound): bind outbound delivery policy to fetched auth_modes/privacy descriptors instead of fixed expectations".to_owned(),
         ],
     }));
+}
+
+#[handler]
+pub async fn outbound_push_bridge_fetch(
+    depot: &mut Depot,
+    req: &mut Request,
+    res: &mut Response,
+) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let body = match req.parse_json::<OutboundPushBridgeFetchRequest>().await {
+        Ok(body) => body,
+        Err(_) => {
+            render_error(
+                res,
+                StatusCode::BAD_REQUEST,
+                "bad_json",
+                "invalid outbound push bridge fetch request",
+            );
+            return;
+        }
+    };
+
+    let push_gateway_url = body.push_gateway_url.trim().to_owned();
+    if push_gateway_url.is_empty() {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            "push_gateway_url is required",
+        );
+        return;
+    }
+    let Some(service_base_url) = derive_push_gateway_service_base_url(&push_gateway_url) else {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            "push_gateway_url must be an absolute push gateway URL",
+        );
+        return;
+    };
+    let bridge_describe_url = join_api_v1_url(&service_base_url, "/api/v1/push/bridge/describe");
+    let existing_cache = state
+        .outbound_push_bridge_cache
+        .lock()
+        .expect("outbound push bridge cache lock")
+        .get(&bridge_describe_url)
+        .cloned();
+
+    if !body.force_refresh {
+        if let Some(record) = existing_cache.clone() {
+            res.render(Json(outbound_push_bridge_fetch_response_from_cache(record)));
+            return;
+        }
+    }
+
+    let response = reqwest::Client::new()
+        .get(&bridge_describe_url)
+        .header("accept", "application/json")
+        .send()
+        .await;
+    match response {
+        Ok(response) if response.status().is_success() => match response.json::<Value>().await {
+            Ok(remote_contract) => {
+                let fetched_at = now();
+                let record = OutboundPushBridgeCacheRecord {
+                    push_gateway_url: push_gateway_url.clone(),
+                    service_base_url: service_base_url.clone(),
+                    bridge_describe_url: bridge_describe_url.clone(),
+                    fetch_state: "live_remote_fetch_ok".to_owned(),
+                    cache_state: "memory_cached".to_owned(),
+                    fetched_at,
+                    remote_contract: remote_contract.clone(),
+                };
+                state
+                    .outbound_push_bridge_cache
+                    .lock()
+                    .expect("outbound push bridge cache lock")
+                    .insert(bridge_describe_url.clone(), record.clone());
+                res.render(Json(OutboundPushBridgeFetchResponse {
+                    push_gateway_url,
+                    service_base_url,
+                    bridge_describe_url,
+                    fetch_state: record.fetch_state.clone(),
+                    cache_state: record.cache_state.clone(),
+                    fetched_at: Some(record.fetched_at),
+                    fetched_contract: outbound_push_resolved_contract_from_remote(
+                        &record.remote_contract,
+                    ),
+                    remote_contract: Some(remote_contract),
+                    todos: vec![
+                        "TODO(push-outbound): validate fetched auth/privacy modes before enabling signed delivery".to_owned(),
+                        "TODO(push-outbound): persist cache entries outside process memory and attach freshness/etag metadata".to_owned(),
+                    ],
+                }));
+            }
+            Err(error) => {
+                render_outbound_push_bridge_fetch_fallback(
+                    existing_cache,
+                    push_gateway_url,
+                    service_base_url,
+                    bridge_describe_url,
+                    format!("live_remote_fetch_bad_json:{error}"),
+                    res,
+                );
+            }
+        },
+        Ok(response) => {
+            render_outbound_push_bridge_fetch_fallback(
+                existing_cache,
+                push_gateway_url,
+                service_base_url,
+                bridge_describe_url,
+                format!("live_remote_fetch_http_error:{}", response.status()),
+                res,
+            );
+        }
+        Err(error) => {
+            render_outbound_push_bridge_fetch_fallback(
+                existing_cache,
+                push_gateway_url,
+                service_base_url,
+                bridge_describe_url,
+                format!("live_remote_fetch_transport_error:{error}"),
+                res,
+            );
+        }
+    }
+}
+
+#[handler]
+pub async fn outbound_push_bridge_cache_status(depot: &mut Depot, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let entries = state
+        .outbound_push_bridge_cache
+        .lock()
+        .expect("outbound push bridge cache lock")
+        .values()
+        .cloned()
+        .map(outbound_push_bridge_cache_entry)
+        .collect();
+    res.render(Json(OutboundPushBridgeCacheStatusResponse { entries }));
 }
 
 #[handler]
@@ -15027,4 +15189,126 @@ fn join_api_v1_url(base: &str, path: &str) -> String {
     } else {
         format!("{base}/api/v1/{path}")
     }
+}
+
+fn default_outbound_push_resolved_contract() -> OutboundPushResolvedContract {
+    OutboundPushResolvedContract {
+        contract: "cx.push.bridge.describe".to_owned(),
+        expected_notify_path: "/api/v1/push/notify".to_owned(),
+        expected_operation_id: "cx.push.notify".to_owned(),
+        expected_origin_service_did_header: "X-Contrix-Origin-Service-Did".to_owned(),
+        expected_destination_service_did_header: "X-Contrix-Destination-Service-Did".to_owned(),
+        expected_request_id_header: "X-Contrix-Request-Id".to_owned(),
+        expected_idempotency_key_header: "Idempotency-Key".to_owned(),
+    }
+}
+
+fn outbound_push_resolved_contract_from_remote(
+    remote_contract: &Value,
+) -> OutboundPushResolvedContract {
+    let fallback = default_outbound_push_resolved_contract();
+    OutboundPushResolvedContract {
+        contract: remote_contract
+            .get("contract")
+            .and_then(Value::as_str)
+            .unwrap_or(&fallback.contract)
+            .to_owned(),
+        expected_notify_path: remote_contract
+            .pointer("/delivery/notify_path")
+            .or_else(|| remote_contract.get("notify_path"))
+            .and_then(Value::as_str)
+            .unwrap_or(&fallback.expected_notify_path)
+            .to_owned(),
+        expected_operation_id: remote_contract
+            .pointer("/delivery/operation_id")
+            .or_else(|| remote_contract.pointer("/delivery/event_type"))
+            .and_then(Value::as_str)
+            .unwrap_or(&fallback.expected_operation_id)
+            .to_owned(),
+        expected_origin_service_did_header: remote_contract
+            .pointer("/delivery/origin_service_did_header")
+            .and_then(Value::as_str)
+            .unwrap_or(&fallback.expected_origin_service_did_header)
+            .to_owned(),
+        expected_destination_service_did_header: remote_contract
+            .pointer("/delivery/destination_service_did_header")
+            .and_then(Value::as_str)
+            .unwrap_or(&fallback.expected_destination_service_did_header)
+            .to_owned(),
+        expected_request_id_header: remote_contract
+            .pointer("/delivery/request_id_header")
+            .and_then(Value::as_str)
+            .unwrap_or(&fallback.expected_request_id_header)
+            .to_owned(),
+        expected_idempotency_key_header: remote_contract
+            .pointer("/delivery/idempotency_key_header")
+            .and_then(Value::as_str)
+            .unwrap_or(&fallback.expected_idempotency_key_header)
+            .to_owned(),
+    }
+}
+
+fn outbound_push_bridge_cache_entry(
+    record: OutboundPushBridgeCacheRecord,
+) -> OutboundPushBridgeCacheEntry {
+    OutboundPushBridgeCacheEntry {
+        push_gateway_url: record.push_gateway_url,
+        service_base_url: record.service_base_url,
+        bridge_describe_url: record.bridge_describe_url,
+        fetch_state: record.fetch_state,
+        cache_state: record.cache_state,
+        fetched_at: record.fetched_at,
+        fetched_contract: outbound_push_resolved_contract_from_remote(&record.remote_contract),
+    }
+}
+
+fn outbound_push_bridge_fetch_response_from_cache(
+    record: OutboundPushBridgeCacheRecord,
+) -> OutboundPushBridgeFetchResponse {
+    let fetched_contract = outbound_push_resolved_contract_from_remote(&record.remote_contract);
+    OutboundPushBridgeFetchResponse {
+        push_gateway_url: record.push_gateway_url,
+        service_base_url: record.service_base_url,
+        bridge_describe_url: record.bridge_describe_url,
+        fetch_state: "cache_hit".to_owned(),
+        cache_state: record.cache_state,
+        fetched_at: Some(record.fetched_at),
+        fetched_contract,
+        remote_contract: Some(record.remote_contract),
+        todos: vec![
+            "TODO(push-outbound): persist cache entries outside process memory and attach freshness/etag metadata".to_owned(),
+            "TODO(push-outbound): add explicit cache invalidation policy instead of only force_refresh".to_owned(),
+        ],
+    }
+}
+
+fn render_outbound_push_bridge_fetch_fallback(
+    existing_cache: Option<OutboundPushBridgeCacheRecord>,
+    push_gateway_url: String,
+    service_base_url: String,
+    bridge_describe_url: String,
+    fetch_state: String,
+    res: &mut Response,
+) {
+    if let Some(record) = existing_cache {
+        let mut response = outbound_push_bridge_fetch_response_from_cache(record);
+        response.fetch_state = format!("{fetch_state}:stale_cache_returned");
+        res.render(Json(response));
+        return;
+    }
+
+    res.render(Json(OutboundPushBridgeFetchResponse {
+        push_gateway_url,
+        service_base_url,
+        bridge_describe_url,
+        fetch_state,
+        cache_state: "not_cached".to_owned(),
+        fetched_at: None,
+        fetched_contract: default_outbound_push_resolved_contract(),
+        remote_contract: None,
+        todos: vec![
+            "TODO(push-outbound): retry remote bridge fetch and persist the first successful contract snapshot".to_owned(),
+            "TODO(push-outbound): fail closed on contract drift once a persisted snapshot exists".to_owned(),
+        ],
+    }));
 }

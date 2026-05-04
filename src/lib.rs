@@ -209,6 +209,14 @@ pub fn router_with_rate_limiter_config(
                         .post(outbound_push_bridge_resolve),
                 )
                 .push(
+                    Router::with_path("push/outbound/bridge/fetch")
+                        .post(outbound_push_bridge_fetch),
+                )
+                .push(
+                    Router::with_path("push/outbound/bridge/cache/status")
+                        .get(outbound_push_bridge_cache_status),
+                )
+                .push(
                     Router::with_path("push/rules")
                         .get(push_rules)
                         .post(upsert_push_rule),
