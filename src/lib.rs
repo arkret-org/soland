@@ -293,6 +293,14 @@ pub fn router_with_rate_limiter_config(
                         .post(post_key_backup_restore_executor_enqueue),
                 )
                 .push(
+                    Router::with_path("keys/backups/restore-tickets/{ticket_id}/executor/start")
+                        .post(post_key_backup_restore_executor_start),
+                )
+                .push(
+                    Router::with_path("keys/backups/restore-tickets/{ticket_id}/executor/complete")
+                        .post(post_key_backup_restore_executor_complete),
+                )
+                .push(
                     Router::with_path("keys/backups/{backup_id}")
                         .put(put_key_backup)
                         .get(get_key_backup)
@@ -943,6 +951,20 @@ const CONTRACT_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &[
         "keys",
         "cx.keys.backups.restore_state_import",
         "import restore-state snapshots",
+    ),
+    (
+        "/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/start",
+        PathItemType::Post,
+        "keys",
+        "cx.keys.backups.restore_executor_start",
+        "start restore executor scaffold",
+    ),
+    (
+        "/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/complete",
+        PathItemType::Post,
+        "keys",
+        "cx.keys.backups.restore_executor_complete",
+        "complete restore executor scaffold",
     ),
     (
         "/api/v1/keys/backups/{backup_id}",
