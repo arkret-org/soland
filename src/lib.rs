@@ -281,6 +281,18 @@ pub fn router_with_rate_limiter_config(
                         .post(post_key_backup_restore_ticket_advance),
                 )
                 .push(
+                    Router::with_path("keys/backups/restore-tickets/{ticket_id}/resume")
+                        .post(post_key_backup_restore_ticket_resume),
+                )
+                .push(
+                    Router::with_path("keys/backups/restore-tickets/{ticket_id}/cancel")
+                        .post(post_key_backup_restore_ticket_cancel),
+                )
+                .push(
+                    Router::with_path("keys/backups/restore-tickets/{ticket_id}/retry")
+                        .post(post_key_backup_restore_ticket_retry),
+                )
+                .push(
                     Router::with_path("keys/backups/restore-tickets/{ticket_id}/approvals/status")
                         .get(get_key_backup_restore_approval_status),
                 )
@@ -978,6 +990,27 @@ const CONTRACT_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &[
         "keys",
         "cx.keys.backups.restore_ticket_collection",
         "list restore ticket scaffold collection",
+    ),
+    (
+        "/api/v1/keys/backups/restore-tickets/{ticket_id}/resume",
+        PathItemType::Post,
+        "keys",
+        "cx.keys.backups.restore_ticket_resume",
+        "resume restore ticket scaffold",
+    ),
+    (
+        "/api/v1/keys/backups/restore-tickets/{ticket_id}/cancel",
+        PathItemType::Post,
+        "keys",
+        "cx.keys.backups.restore_ticket_cancel",
+        "cancel restore ticket scaffold",
+    ),
+    (
+        "/api/v1/keys/backups/restore-tickets/{ticket_id}/retry",
+        PathItemType::Post,
+        "keys",
+        "cx.keys.backups.restore_ticket_retry",
+        "retry restore ticket scaffold",
     ),
     (
         "/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/start",

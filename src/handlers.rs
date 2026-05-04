@@ -300,6 +300,9 @@ pub async fn recovery_contract_stack(_depot: &mut Depot, res: &mut Response) {
         "restore_ticket_collection_path": "/api/v1/keys/backups/restore-tickets",
         "restore_ticket_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}",
         "restore_ticket_advance_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/advance",
+        "restore_ticket_resume_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/resume",
+        "restore_ticket_cancel_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/cancel",
+        "restore_ticket_retry_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/retry",
         "restore_approval_status_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/approvals/status",
         "restore_approval_submit_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/approvals/submit",
         "restore_executor_status_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/status",
@@ -377,6 +380,9 @@ pub async fn key_backups_describe(_depot: &mut Depot, res: &mut Response) {
         "restore_ticket_collection_path": "/api/v1/keys/backups/restore-tickets",
         "restore_ticket_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}",
         "restore_ticket_advance_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/advance",
+        "restore_ticket_resume_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/resume",
+        "restore_ticket_cancel_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/cancel",
+        "restore_ticket_retry_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/retry",
         "restore_approval_status_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/approvals/status",
         "restore_approval_submit_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/approvals/submit",
         "restore_executor_status_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/status",
@@ -617,6 +623,30 @@ pub async fn integration_describe(_depot: &mut Depot, res: &mut Response) {
                 contract: "contrix.rest.key_backup_restore_ticket_advance.v1".to_owned(),
                 stability: "scaffold".to_owned(),
                 todo: "TODO: replace advance scaffold with guarded transitions, authz/policy evaluation, and executor side effects.".to_owned(),
+            },
+            IntegrationSurfaceDescriptor {
+                name: "key_backup_restore_ticket_resume".to_owned(),
+                method: "POST".to_owned(),
+                path: "/api/v1/keys/backups/restore-tickets/{ticket_id}/resume".to_owned(),
+                contract: "contrix.rest.key_backup_restore_ticket_resume.v1".to_owned(),
+                stability: "scaffold".to_owned(),
+                todo: "TODO: replace resume scaffold with durable re-entry semantics and worker wakeup policy.".to_owned(),
+            },
+            IntegrationSurfaceDescriptor {
+                name: "key_backup_restore_ticket_cancel".to_owned(),
+                method: "POST".to_owned(),
+                path: "/api/v1/keys/backups/restore-tickets/{ticket_id}/cancel".to_owned(),
+                contract: "contrix.rest.key_backup_restore_ticket_cancel.v1".to_owned(),
+                stability: "scaffold".to_owned(),
+                todo: "TODO: replace cancel scaffold with durable compensation and evidence retention semantics.".to_owned(),
+            },
+            IntegrationSurfaceDescriptor {
+                name: "key_backup_restore_ticket_retry".to_owned(),
+                method: "POST".to_owned(),
+                path: "/api/v1/keys/backups/restore-tickets/{ticket_id}/retry".to_owned(),
+                contract: "contrix.rest.key_backup_restore_ticket_retry.v1".to_owned(),
+                stability: "scaffold".to_owned(),
+                todo: "TODO: replace retry scaffold with bounded retry budgets and backoff policy.".to_owned(),
             },
             IntegrationSurfaceDescriptor {
                 name: "key_backup_restore_approval_status".to_owned(),
@@ -871,6 +901,9 @@ pub async fn integration_describe(_depot: &mut Depot, res: &mut Response) {
                 },
                 "restore_ticket_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}",
                 "restore_ticket_advance_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/advance",
+                "restore_ticket_resume_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/resume",
+                "restore_ticket_cancel_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/cancel",
+                "restore_ticket_retry_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/retry",
                 "restore_approval_status_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/approvals/status",
                 "restore_approval_submit_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/approvals/submit",
                 "restore_executor_status_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/status",
@@ -890,6 +923,18 @@ pub async fn integration_describe(_depot: &mut Depot, res: &mut Response) {
                 "restore_ticket_advance_request": {
                     "transition": "authz_checked",
                     "note": "scaffold transition"
+                },
+                "restore_ticket_resume_request": {
+                    "resume_mode": "resume_from_current_state",
+                    "note": "resume restore scaffold"
+                },
+                "restore_ticket_cancel_request": {
+                    "reason": "operator_cancelled",
+                    "note": "cancel restore scaffold"
+                },
+                "restore_ticket_retry_request": {
+                    "retry_mode": "reuse_backup_material",
+                    "note": "retry restore scaffold"
                 },
                 "restore_approval_status_response_shape": {
                     "contract": "contrix.rest.key_backup_restore_approval_status.v1",
@@ -10463,7 +10508,222 @@ pub async fn get_key_backup_restore_ticket(
         render_error(res, StatusCode::NOT_FOUND, "not_found", "restore ticket not found");
         return;
     }
+    let mut ticket = ticket;
+    if let Some(object) = ticket.as_object_mut() {
+        object.insert(
+            "resume_path".to_owned(),
+            json!(format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/resume")),
+        );
+        object.insert(
+            "cancel_path".to_owned(),
+            json!(format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/cancel")),
+        );
+        object.insert(
+            "retry_path".to_owned(),
+            json!(format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/retry")),
+        );
+        object.insert(
+            "bundle_path".to_owned(),
+            json!(format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/bundle")),
+        );
+    }
     res.render(Json(ticket));
+}
+
+#[handler]
+pub async fn post_key_backup_restore_ticket_resume(
+    depot: &mut Depot,
+    req: &mut Request,
+    res: &mut Response,
+) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let Some(session) = auth_or_render(state, req, res) else {
+        return;
+    };
+    let ticket_id = req.param::<String>("ticket_id").unwrap_or_default();
+    let body = req.parse_json::<Value>().await.unwrap_or_else(|_| json!({}));
+    let mut tickets = state
+        .key_backup_restore_tickets
+        .lock()
+        .expect("key backup restore ticket lock");
+    let Some(ticket) = tickets.get_mut(&ticket_id) else {
+        render_error(res, StatusCode::NOT_FOUND, "not_found", "restore ticket not found");
+        return;
+    };
+    if ticket
+        .get("actor")
+        .and_then(Value::as_str)
+        .is_some_and(|actor| actor != session.actor)
+    {
+        render_error(res, StatusCode::NOT_FOUND, "not_found", "restore ticket not found");
+        return;
+    }
+    if let Some(object) = ticket.as_object_mut() {
+        object.insert("lifecycle_state".to_owned(), json!("resumed"));
+        object.insert(
+            "allowed_next_transitions".to_owned(),
+            json!(["authz_checked", "executor_enqueued", "cancelled"]),
+        );
+        if let Some(history) = object
+            .entry("transition_history".to_owned())
+            .or_insert_with(|| json!([]))
+            .as_array_mut()
+        {
+            history.push(json!({
+                "transition": "resumed",
+                "at": now(),
+                "resume_mode": body.get("resume_mode").cloned().unwrap_or_else(|| json!("resume_from_current_state")),
+            }));
+        }
+    }
+    res.render(Json(json!({
+        "contract": "contrix.rest.key_backup_restore_ticket_resume.v1",
+        "ticket_id": ticket_id,
+        "state": "resumed",
+        "executor_enqueue_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/enqueue"),
+        "bundle_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/bundle"),
+        "todo": "TODO(keys.backups.restore): replace resume scaffold with durable recovery wakeup and checkpoint replay semantics."
+    })));
+}
+
+#[handler]
+pub async fn post_key_backup_restore_ticket_cancel(
+    depot: &mut Depot,
+    req: &mut Request,
+    res: &mut Response,
+) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let Some(session) = auth_or_render(state, req, res) else {
+        return;
+    };
+    let ticket_id = req.param::<String>("ticket_id").unwrap_or_default();
+    let body = req.parse_json::<Value>().await.unwrap_or_else(|_| json!({}));
+    let mut tickets = state
+        .key_backup_restore_tickets
+        .lock()
+        .expect("key backup restore ticket lock");
+    let Some(ticket) = tickets.get_mut(&ticket_id) else {
+        render_error(res, StatusCode::NOT_FOUND, "not_found", "restore ticket not found");
+        return;
+    };
+    if ticket
+        .get("actor")
+        .and_then(Value::as_str)
+        .is_some_and(|actor| actor != session.actor)
+    {
+        render_error(res, StatusCode::NOT_FOUND, "not_found", "restore ticket not found");
+        return;
+    }
+    if let Some(object) = ticket.as_object_mut() {
+        object.insert("lifecycle_state".to_owned(), json!("cancelled"));
+        object.insert("allowed_next_transitions".to_owned(), json!([]));
+        if let Some(history) = object
+            .entry("transition_history".to_owned())
+            .or_insert_with(|| json!([]))
+            .as_array_mut()
+        {
+            history.push(json!({
+                "transition": "cancelled",
+                "at": now(),
+                "reason": body.get("reason").cloned().unwrap_or_else(|| json!("operator_cancelled")),
+            }));
+        }
+    }
+    if let Some(approval) = state
+        .key_backup_restore_approval_runs
+        .lock()
+        .expect("key backup restore approval lock")
+        .get_mut(&ticket_id)
+        .and_then(Value::as_object_mut)
+    {
+        approval.insert("state".to_owned(), json!("cancelled"));
+    }
+    if let Some(executor) = state
+        .key_backup_restore_executor_runs
+        .lock()
+        .expect("key backup restore executor lock")
+        .get_mut(&ticket_id)
+        .and_then(Value::as_object_mut)
+    {
+        executor.insert("state".to_owned(), json!("cancelled"));
+        executor.insert("queue_state".to_owned(), json!("cancelled"));
+    }
+    res.render(Json(json!({
+        "contract": "contrix.rest.key_backup_restore_ticket_cancel.v1",
+        "ticket_id": ticket_id,
+        "state": "cancelled",
+        "bundle_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/bundle"),
+        "todo": "TODO(keys.backups.restore): replace cancel scaffold with durable cancellation evidence and cleanup semantics."
+    })));
+}
+
+#[handler]
+pub async fn post_key_backup_restore_ticket_retry(
+    depot: &mut Depot,
+    req: &mut Request,
+    res: &mut Response,
+) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let Some(session) = auth_or_render(state, req, res) else {
+        return;
+    };
+    let ticket_id = req.param::<String>("ticket_id").unwrap_or_default();
+    let body = req.parse_json::<Value>().await.unwrap_or_else(|_| json!({}));
+    let mut tickets = state
+        .key_backup_restore_tickets
+        .lock()
+        .expect("key backup restore ticket lock");
+    let Some(ticket) = tickets.get_mut(&ticket_id) else {
+        render_error(res, StatusCode::NOT_FOUND, "not_found", "restore ticket not found");
+        return;
+    };
+    if ticket
+        .get("actor")
+        .and_then(Value::as_str)
+        .is_some_and(|actor| actor != session.actor)
+    {
+        render_error(res, StatusCode::NOT_FOUND, "not_found", "restore ticket not found");
+        return;
+    }
+    if let Some(object) = ticket.as_object_mut() {
+        object.insert("lifecycle_state".to_owned(), json!("retry_queued"));
+        object.insert(
+            "allowed_next_transitions".to_owned(),
+            json!(["executor_enqueued", "cancelled"]),
+        );
+        if let Some(history) = object
+            .entry("transition_history".to_owned())
+            .or_insert_with(|| json!([]))
+            .as_array_mut()
+        {
+            history.push(json!({
+                "transition": "retry_queued",
+                "at": now(),
+                "retry_mode": body.get("retry_mode").cloned().unwrap_or_else(|| json!("reuse_backup_material")),
+            }));
+        }
+    }
+    if let Some(executor) = state
+        .key_backup_restore_executor_runs
+        .lock()
+        .expect("key backup restore executor lock")
+        .get_mut(&ticket_id)
+        .and_then(Value::as_object_mut)
+    {
+        executor.insert("state".to_owned(), json!("idle"));
+        executor.insert("queue_state".to_owned(), json!("not_queued"));
+        executor.remove("materialized_device_handoff");
+        executor.remove("handoff_state");
+        executor.remove("handoff_submitted_at");
+    }
+    res.render(Json(json!({
+        "contract": "contrix.rest.key_backup_restore_ticket_retry.v1",
+        "ticket_id": ticket_id,
+        "state": "retry_queued",
+        "executor_enqueue_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/enqueue"),
+        "bundle_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/bundle"),
+        "todo": "TODO(keys.backups.restore): replace retry scaffold with bounded retry policy, failure classes, and checkpoint selection."
+    })));
 }
 
 #[handler]
@@ -10580,6 +10840,10 @@ pub async fn post_key_backup_restore_ticket_advance(
         "transition": transition,
         "state": lifecycle_state,
         "allowed_next_transitions": allowed_next_transitions,
+        "resume_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/resume"),
+        "cancel_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/cancel"),
+        "retry_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/retry"),
+        "bundle_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/bundle"),
         "approval_status_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/approvals/status"),
         "approval_submit_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/approvals/submit"),
         "executor_status_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/status"),
