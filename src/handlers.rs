@@ -308,6 +308,7 @@ pub async fn recovery_contract_stack(_depot: &mut Depot, res: &mut Response) {
         "restore_result_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/result",
         "restore_receipt_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/receipt",
         "restore_materialized_device_handoff_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/materialized-device-handoff",
+        "restore_bundle_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/bundle",
         "authz_describe_path": "/api/v1/authz/describe",
         "authz_check_path": "/api/v1/authz/check",
         "policies_describe_path": "/api/v1/policies/describe",
@@ -382,6 +383,7 @@ pub async fn key_backups_describe(_depot: &mut Depot, res: &mut Response) {
         "restore_result_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/result",
         "restore_receipt_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/receipt",
         "restore_materialized_device_handoff_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/materialized-device-handoff",
+        "restore_bundle_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/bundle",
         "schema": "cx.schema.key_backup.v1",
         "put_request_example": {
             "schema": "cx.schema.key_backup.v1",
@@ -678,6 +680,14 @@ pub async fn integration_describe(_depot: &mut Depot, res: &mut Response) {
                 todo: "TODO: replace device handoff scaffold with durable secure transport and recipient proof semantics.".to_owned(),
             },
             IntegrationSurfaceDescriptor {
+                name: "key_backup_restore_bundle".to_owned(),
+                method: "GET".to_owned(),
+                path: "/api/v1/keys/backups/restore-tickets/{ticket_id}/bundle".to_owned(),
+                contract: "contrix.rest.key_backup_restore_bundle.v1".to_owned(),
+                stability: "scaffold".to_owned(),
+                todo: "TODO: replace restore bundle scaffold with durable aggregated orchestration state and resumable recovery view.".to_owned(),
+            },
+            IntegrationSurfaceDescriptor {
                 name: "authz_describe".to_owned(),
                 method: "GET".to_owned(),
                 path: "/api/v1/authz/describe".to_owned(),
@@ -739,10 +749,11 @@ pub async fn integration_describe(_depot: &mut Depot, res: &mut Response) {
                     "restore_executor_enqueue_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/enqueue",
                     "restore_executor_start_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/start",
                     "restore_executor_complete_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/complete",
-                    "restore_result_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/result",
-                    "restore_receipt_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/receipt",
-                    "restore_materialized_device_handoff_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/materialized-device-handoff",
-                    "authz_describe_path": "/api/v1/authz/describe",
+        "restore_result_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/result",
+        "restore_receipt_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/receipt",
+        "restore_materialized_device_handoff_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/materialized-device-handoff",
+        "restore_bundle_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/bundle",
+        "authz_describe_path": "/api/v1/authz/describe",
                     "policies_describe_path": "/api/v1/policies/describe"
                 }
             },
@@ -853,6 +864,7 @@ pub async fn integration_describe(_depot: &mut Depot, res: &mut Response) {
                 "restore_result_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/result",
                 "restore_receipt_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/receipt",
                 "restore_materialized_device_handoff_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/materialized-device-handoff",
+                "restore_bundle_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/bundle",
                 "restore_ticket_response_shape": {
                     "contract": "contrix.rest.key_backup_restore_ticket.v1",
                     "ticket_id": "restore-ticket-backup-alice-01",
@@ -911,6 +923,18 @@ pub async fn integration_describe(_depot: &mut Depot, res: &mut Response) {
                     "delivery_channel": "device_messages",
                     "receipt_ack_mode": "scaffold_manual_ack",
                     "note": "handoff restore result scaffold"
+                },
+                "restore_bundle_response_shape": {
+                    "contract": "contrix.rest.key_backup_restore_bundle.v1",
+                    "bundle_state": "handoff_submitted",
+                    "sections": {
+                        "ticket": {"contract": "contrix.rest.key_backup_restore_ticket.v1"},
+                        "approval": {"contract": "contrix.rest.key_backup_restore_approval_status.v1"},
+                        "executor": {"contract": "contrix.rest.key_backup_restore_executor_status.v1"},
+                        "result": {"contract": "contrix.rest.key_backup_restore_result.v1"},
+                        "receipt": {"contract": "contrix.rest.key_backup_restore_receipt.v1"},
+                        "handoff": {"contract": "contrix.rest.key_backup_restore_materialized_device_handoff.v1"}
+                    }
                 },
                 "restore_state_describe_response_shape": {
                     "contract": "contrix.rest.key_backup_restore_state_store_describe.v1",
@@ -9936,6 +9960,7 @@ pub async fn get_key_backup_restore_describe(
         "restore_result_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/result",
         "restore_receipt_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/receipt",
         "restore_materialized_device_handoff_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/materialized-device-handoff",
+        "restore_bundle_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/bundle",
         "principal_authz_check_path": "/api/v1/authz/check",
         "principal_policy_collection_path": "/api/v1/policies",
         "principal_policy_item_path": "/api/v1/policies/{policy_id}",
@@ -10139,6 +10164,7 @@ pub async fn post_key_backup_restore_start(
         "restore_result_path": format!("/api/v1/keys/backups/restore-tickets/restore-ticket-{backup_id}/result"),
         "restore_receipt_path": format!("/api/v1/keys/backups/restore-tickets/restore-ticket-{backup_id}/receipt"),
         "restore_materialized_device_handoff_path": format!("/api/v1/keys/backups/restore-tickets/restore-ticket-{backup_id}/materialized-device-handoff"),
+        "restore_bundle_path": format!("/api/v1/keys/backups/restore-tickets/restore-ticket-{backup_id}/bundle"),
         "principal_authz_check_path": "/api/v1/authz/check",
         "principal_policy_collection_path": "/api/v1/policies",
         "principal_policy_item_path": "/api/v1/policies/{policy_id}",
@@ -10960,6 +10986,7 @@ pub async fn post_key_backup_restore_executor_complete(
         "result_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/result"),
         "receipt_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/receipt"),
         "materialized_device_handoff_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/materialized-device-handoff"),
+        "bundle_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/bundle"),
         "todo": "TODO(keys.backups.restore): replace executor-complete scaffold with durable materialization result persistence, retry policy, and failure compensation"
     })));
 }
@@ -11142,7 +11169,100 @@ pub async fn post_key_backup_restore_materialized_device_handoff(
         "delivery_channel": body.get("delivery_channel").cloned().unwrap_or_else(|| json!("device_messages")),
         "receipt_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/receipt"),
         "result_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/result"),
+        "bundle_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/bundle"),
         "todo": "TODO(keys.backups.restore): replace materialized-device handoff scaffold with secure transport, recipient proof, and delivery acknowledgement semantics."
+    })));
+}
+
+#[handler]
+pub async fn get_key_backup_restore_bundle(
+    depot: &mut Depot,
+    req: &mut Request,
+    res: &mut Response,
+) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let Some(session) = auth_or_render(state, req, res) else {
+        return;
+    };
+    let ticket_id = req.param::<String>("ticket_id").unwrap_or_default();
+    let Some(ticket) = state
+        .key_backup_restore_tickets
+        .lock()
+        .expect("key backup restore ticket lock")
+        .get(&ticket_id)
+        .cloned()
+    else {
+        render_error(res, StatusCode::NOT_FOUND, "not_found", "restore ticket not found");
+        return;
+    };
+    if ticket
+        .get("actor")
+        .and_then(Value::as_str)
+        .is_some_and(|actor| actor != session.actor)
+    {
+        render_error(res, StatusCode::NOT_FOUND, "not_found", "restore ticket not found");
+        return;
+    }
+    let approval = state
+        .key_backup_restore_approval_runs
+        .lock()
+        .expect("key backup restore approval lock")
+        .get(&ticket_id)
+        .cloned()
+        .unwrap_or_else(|| json!({
+            "contract": "contrix.rest.key_backup_restore_approval_status.v1",
+            "state": "missing",
+            "todo": "approval scaffold missing for restore bundle"
+        }));
+    let executor = state
+        .key_backup_restore_executor_runs
+        .lock()
+        .expect("key backup restore executor lock")
+        .get(&ticket_id)
+        .cloned()
+        .unwrap_or_else(|| json!({
+            "contract": "contrix.rest.key_backup_restore_executor_status.v1",
+            "state": "missing",
+            "todo": "executor scaffold missing for restore bundle"
+        }));
+    let result = json!({
+        "contract": "contrix.rest.key_backup_restore_result.v1",
+        "result": executor.pointer("/result_summary/result").cloned().unwrap_or_else(|| json!("pending")),
+        "materialized_device_id": executor.pointer("/result_summary/materialized_device_id").cloned().unwrap_or_else(|| json!("TODO_DEVICE_ID")),
+        "ticket_state": ticket.get("lifecycle_state").cloned().unwrap_or_else(|| json!("unknown")),
+    });
+    let receipt = json!({
+        "contract": "contrix.rest.key_backup_restore_receipt.v1",
+        "receipt_id": executor.get("receipt_id").cloned().unwrap_or_else(|| json!(format!("restore-receipt-{ticket_id}"))),
+        "issued_at": executor.get("completed_at").cloned().unwrap_or_else(|| json!(now())),
+        "completed_by": executor.pointer("/result_summary/completed_by").cloned().unwrap_or_else(|| json!(session.actor.clone())),
+    });
+    let handoff = json!({
+        "contract": "contrix.rest.key_backup_restore_materialized_device_handoff.v1",
+        "state": executor.get("handoff_state").cloned().unwrap_or_else(|| json!("not_submitted")),
+        "submitted_at": executor.get("handoff_submitted_at").cloned().unwrap_or(Value::Null),
+        "payload": executor.get("materialized_device_handoff").cloned().unwrap_or(Value::Null),
+    });
+    res.render(Json(json!({
+        "contract": "contrix.rest.key_backup_restore_bundle.v1",
+        "version": "2026-05-04-scaffold",
+        "ticket_id": ticket_id,
+        "bundle_state": ticket.get("lifecycle_state").cloned().unwrap_or_else(|| json!("unknown")),
+        "ticket_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}"),
+        "approval_status_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/approvals/status"),
+        "executor_status_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/status"),
+        "result_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/result"),
+        "receipt_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/receipt"),
+        "materialized_device_handoff_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/materialized-device-handoff"),
+        "sections": {
+            "ticket": ticket,
+            "approval": approval,
+            "executor": executor,
+            "result": result,
+            "receipt": receipt,
+            "handoff": handoff,
+        },
+        "todo": "TODO(keys.backups.restore): replace restore bundle scaffold with durable aggregated recovery view and resumable orchestration state."
     })));
 }
 

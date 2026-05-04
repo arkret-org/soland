@@ -313,6 +313,10 @@ pub fn router_with_rate_limiter_config(
                         .post(post_key_backup_restore_materialized_device_handoff),
                 )
                 .push(
+                    Router::with_path("keys/backups/restore-tickets/{ticket_id}/bundle")
+                        .get(get_key_backup_restore_bundle),
+                )
+                .push(
                     Router::with_path("keys/backups/{backup_id}")
                         .put(put_key_backup)
                         .get(get_key_backup)
@@ -998,6 +1002,13 @@ const CONTRACT_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &[
         "keys",
         "cx.keys.backups.restore_materialized_device_handoff",
         "submit materialized device handoff scaffold",
+    ),
+    (
+        "/api/v1/keys/backups/restore-tickets/{ticket_id}/bundle",
+        PathItemType::Get,
+        "keys",
+        "cx.keys.backups.restore_bundle",
+        "get restore bundle scaffold",
     ),
     (
         "/api/v1/keys/backups/{backup_id}",
