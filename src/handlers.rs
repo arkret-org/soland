@@ -296,6 +296,8 @@ pub async fn recovery_contract_stack(_depot: &mut Depot, res: &mut Response) {
         "restore_start_path": "/api/v1/keys/backups/{backup_id}/restore/start",
         "restore_ticket_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}",
         "restore_ticket_advance_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/advance",
+        "restore_executor_status_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/status",
+        "restore_executor_enqueue_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/enqueue",
         "authz_describe_path": "/api/v1/authz/describe",
         "authz_check_path": "/api/v1/authz/check",
         "policies_describe_path": "/api/v1/policies/describe",
@@ -357,6 +359,8 @@ pub async fn key_backups_describe(_depot: &mut Depot, res: &mut Response) {
         "restore_start_path": "/api/v1/keys/backups/{backup_id}/restore/start",
         "restore_ticket_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}",
         "restore_ticket_advance_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/advance",
+        "restore_executor_status_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/status",
+        "restore_executor_enqueue_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/enqueue",
         "schema": "cx.schema.key_backup.v1",
         "put_request_example": {
             "schema": "cx.schema.key_backup.v1",
@@ -528,6 +532,22 @@ pub async fn integration_describe(_depot: &mut Depot, res: &mut Response) {
                 todo: "TODO: replace advance scaffold with guarded transitions, authz/policy evaluation, and executor side effects.".to_owned(),
             },
             IntegrationSurfaceDescriptor {
+                name: "key_backup_restore_executor_status".to_owned(),
+                method: "GET".to_owned(),
+                path: "/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/status".to_owned(),
+                contract: "contrix.rest.key_backup_restore_executor_status.v1".to_owned(),
+                stability: "scaffold".to_owned(),
+                todo: "TODO: replace executor status scaffold with durable queue/run state bound to a real restore materialization worker.".to_owned(),
+            },
+            IntegrationSurfaceDescriptor {
+                name: "key_backup_restore_executor_enqueue".to_owned(),
+                method: "POST".to_owned(),
+                path: "/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/enqueue".to_owned(),
+                contract: "contrix.rest.key_backup_restore_executor_enqueue.v1".to_owned(),
+                stability: "scaffold".to_owned(),
+                todo: "TODO: replace executor enqueue scaffold with guarded dispatch into a durable restore worker queue.".to_owned(),
+            },
+            IntegrationSurfaceDescriptor {
                 name: "authz_describe".to_owned(),
                 method: "GET".to_owned(),
                 path: "/api/v1/authz/describe".to_owned(),
@@ -582,6 +602,8 @@ pub async fn integration_describe(_depot: &mut Depot, res: &mut Response) {
                     "device_messages_describe_path": "/api/v1/device_messages/describe",
                     "key_backups_describe_path": "/api/v1/keys/backups/describe",
                     "restore_start_path": "/api/v1/keys/backups/{backup_id}/restore/start",
+                    "restore_executor_status_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/status",
+                    "restore_executor_enqueue_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/enqueue",
                     "authz_describe_path": "/api/v1/authz/describe",
                     "policies_describe_path": "/api/v1/policies/describe"
                 }
@@ -680,6 +702,8 @@ pub async fn integration_describe(_depot: &mut Depot, res: &mut Response) {
                 },
                 "restore_ticket_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}",
                 "restore_ticket_advance_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/advance",
+                "restore_executor_status_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/status",
+                "restore_executor_enqueue_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/enqueue",
                 "restore_ticket_response_shape": {
                     "contract": "contrix.rest.key_backup_restore_ticket.v1",
                     "ticket_id": "restore-ticket-backup-alice-01",
@@ -689,6 +713,17 @@ pub async fn integration_describe(_depot: &mut Depot, res: &mut Response) {
                 "restore_ticket_advance_request": {
                     "transition": "authz_checked",
                     "note": "scaffold transition"
+                },
+                "restore_executor_status_response_shape": {
+                    "contract": "contrix.rest.key_backup_restore_executor_status.v1",
+                    "job_id": "restore-executor-backup-alice-01",
+                    "state": "idle",
+                    "queue_state": "not_queued"
+                },
+                "restore_executor_enqueue_request": {
+                    "execution_mode": "scaffold_materialize",
+                    "requested_by": "did:web:alice.example",
+                    "note": "queue restore materialization scaffold"
                 }
             },
             "authz_protocol": {
@@ -9667,6 +9702,7 @@ pub async fn get_key_backup_restore_describe(
         "backup_schema": backup.get("schema").cloned().unwrap_or_else(|| json!("cx.schema.key_backup.v1")),
         "restore_mode": "scaffold",
         "restore_ticket_kind": "key_backup_restore_request",
+        "restore_executor_kind": "key_backup_restore_materialize",
         "principal_authz_check_path": "/api/v1/authz/check",
         "principal_policy_collection_path": "/api/v1/policies",
         "principal_policy_item_path": "/api/v1/policies/{policy_id}",
@@ -9775,6 +9811,7 @@ pub async fn post_key_backup_restore_start(
         }
     };
     let ticket_id = format!("restore-ticket-{backup_id}");
+    let executor_job_id = format!("restore-executor-{backup_id}");
     let ticket = json!({
         "contract": "contrix.rest.key_backup_restore_ticket.v1",
         "version": "2026-05-04-scaffold",
@@ -9783,6 +9820,9 @@ pub async fn post_key_backup_restore_start(
         "actor": session.actor,
         "restore_mode": "scaffold",
         "lifecycle_state": "authz_pending",
+        "executor_job_id": executor_job_id,
+        "executor_status_path": format!("/api/v1/keys/backups/restore-tickets/restore-ticket-{backup_id}/executor/status"),
+        "executor_enqueue_path": format!("/api/v1/keys/backups/restore-tickets/restore-ticket-{backup_id}/executor/enqueue"),
         "allowed_next_transitions": [
             "authz_checked",
             "policy_checked",
@@ -9797,11 +9837,34 @@ pub async fn post_key_backup_restore_start(
         ],
         "request": payload.clone()
     });
+    let executor = json!({
+        "contract": "contrix.rest.key_backup_restore_executor_status.v1",
+        "version": "2026-05-04-scaffold",
+        "job_id": executor_job_id,
+        "ticket_id": format!("restore-ticket-{backup_id}"),
+        "backup_id": backup_id,
+        "actor": session.actor,
+        "state": "idle",
+        "queue_state": "not_queued",
+        "execution_mode": "scaffold_materialize",
+        "run_history": [
+            {
+                "event": "initialized",
+                "at": now()
+            }
+        ],
+        "todo": "replace executor scaffold with a durable queued restore worker"
+    });
     state
         .key_backup_restore_tickets
         .lock()
         .expect("key backup restore ticket lock")
         .insert(ticket_id.clone(), ticket);
+    state
+        .key_backup_restore_executor_runs
+        .lock()
+        .expect("key backup restore executor lock")
+        .insert(format!("restore-ticket-{backup_id}"), executor);
     res.render(Json(json!({
         "contract": "contrix.rest.key_backup_restore_start.v1",
         "version": "2026-05-04-scaffold",
@@ -9812,6 +9875,8 @@ pub async fn post_key_backup_restore_start(
         "restore_request": payload,
         "restore_ticket_path": format!("/api/v1/keys/backups/restore-tickets/restore-ticket-{backup_id}"),
         "restore_ticket_advance_path": format!("/api/v1/keys/backups/restore-tickets/restore-ticket-{backup_id}/advance"),
+        "restore_executor_status_path": format!("/api/v1/keys/backups/restore-tickets/restore-ticket-{backup_id}/executor/status"),
+        "restore_executor_enqueue_path": format!("/api/v1/keys/backups/restore-tickets/restore-ticket-{backup_id}/executor/enqueue"),
         "principal_authz_check_path": "/api/v1/authz/check",
         "principal_policy_collection_path": "/api/v1/policies",
         "principal_policy_item_path": "/api/v1/policies/{policy_id}",
@@ -9938,13 +10003,145 @@ pub async fn post_key_backup_restore_ticket_advance(
             }));
         }
     }
+    if let Some(executor) = state
+        .key_backup_restore_executor_runs
+        .lock()
+        .expect("key backup restore executor lock")
+        .get_mut(&ticket_id)
+    {
+        if let Some(object) = executor.as_object_mut() {
+            let queue_state = match transition.as_str() {
+                "approved" => "ready_for_enqueue",
+                "materialized" => "materialization_requested",
+                _ => "blocked_on_policy",
+            };
+            object.insert("state".to_owned(), json!(lifecycle_state));
+            object.insert("queue_state".to_owned(), json!(queue_state));
+            object
+                .entry("run_history".to_owned())
+                .or_insert_with(|| json!([]));
+            if let Some(history) = object.get_mut("run_history").and_then(Value::as_array_mut) {
+                history.push(json!({
+                    "event": "ticket_transition_observed",
+                    "transition": transition,
+                    "at": now()
+                }));
+            }
+        }
+    }
     res.render(Json(json!({
         "contract": "contrix.rest.key_backup_restore_ticket_advance.v1",
         "ticket_id": ticket_id,
         "transition": transition,
         "state": lifecycle_state,
         "allowed_next_transitions": allowed_next_transitions,
+        "executor_status_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/status"),
+        "executor_enqueue_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/enqueue"),
         "todo": "TODO(keys.backups.restore): replace transition scaffold with guarded state machine + executor side effects"
+    })));
+}
+
+#[handler]
+pub async fn get_key_backup_restore_executor_status(
+    depot: &mut Depot,
+    req: &mut Request,
+    res: &mut Response,
+) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let Some(session) = auth_or_render(state, req, res) else {
+        return;
+    };
+    let ticket_id = req.param::<String>("ticket_id").unwrap_or_default();
+    let Some(executor) = state
+        .key_backup_restore_executor_runs
+        .lock()
+        .expect("key backup restore executor lock")
+        .get(&ticket_id)
+        .cloned()
+    else {
+        render_error(res, StatusCode::NOT_FOUND, "not_found", "restore executor not found");
+        return;
+    };
+    if executor
+        .get("actor")
+        .and_then(Value::as_str)
+        .is_some_and(|actor| actor != session.actor)
+    {
+        render_error(res, StatusCode::NOT_FOUND, "not_found", "restore executor not found");
+        return;
+    }
+    res.render(Json(executor));
+}
+
+#[handler]
+pub async fn post_key_backup_restore_executor_enqueue(
+    depot: &mut Depot,
+    req: &mut Request,
+    res: &mut Response,
+) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let Some(session) = auth_or_render(state, req, res) else {
+        return;
+    };
+    let ticket_id = req.param::<String>("ticket_id").unwrap_or_default();
+    let body = match req.parse_json::<Value>().await {
+        Ok(body) => body,
+        Err(_) => {
+            render_error(
+                res,
+                StatusCode::BAD_REQUEST,
+                "bad_json",
+                "invalid restore executor enqueue request",
+            );
+            return;
+        }
+    };
+    let mut executors = state
+        .key_backup_restore_executor_runs
+        .lock()
+        .expect("key backup restore executor lock");
+    let Some(executor) = executors.get_mut(&ticket_id) else {
+        render_error(res, StatusCode::NOT_FOUND, "not_found", "restore executor not found");
+        return;
+    };
+    if executor
+        .get("actor")
+        .and_then(Value::as_str)
+        .is_some_and(|actor| actor != session.actor)
+    {
+        render_error(res, StatusCode::NOT_FOUND, "not_found", "restore executor not found");
+        return;
+    }
+    let execution_mode = body
+        .get("execution_mode")
+        .and_then(Value::as_str)
+        .unwrap_or("scaffold_materialize");
+    if let Some(object) = executor.as_object_mut() {
+        object.insert("state".to_owned(), json!("queued"));
+        object.insert("queue_state".to_owned(), json!("queued"));
+        object.insert("execution_mode".to_owned(), json!(execution_mode));
+        object.insert("queued_at".to_owned(), json!(now()));
+        object.insert("request".to_owned(), body.clone());
+        object
+            .entry("run_history".to_owned())
+            .or_insert_with(|| json!([]));
+        if let Some(history) = object.get_mut("run_history").and_then(Value::as_array_mut) {
+            history.push(json!({
+                "event": "queued",
+                "at": now(),
+                "execution_mode": execution_mode,
+                "requested_by": body.get("requested_by").cloned().unwrap_or_else(|| json!(session.actor)),
+            }));
+        }
+    }
+    res.render(Json(json!({
+        "contract": "contrix.rest.key_backup_restore_executor_enqueue.v1",
+        "ticket_id": ticket_id,
+        "state": "queued",
+        "queue_state": "queued",
+        "execution_mode": execution_mode,
+        "status_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/status"),
+        "todo": "TODO(keys.backups.restore): replace enqueue scaffold with durable queue dispatch and restore worker side effects"
     })));
 }
 

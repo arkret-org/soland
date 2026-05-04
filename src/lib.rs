@@ -265,6 +265,14 @@ pub fn router_with_rate_limiter_config(
                         .post(post_key_backup_restore_ticket_advance),
                 )
                 .push(
+                    Router::with_path("keys/backups/restore-tickets/{ticket_id}/executor/status")
+                        .get(get_key_backup_restore_executor_status),
+                )
+                .push(
+                    Router::with_path("keys/backups/restore-tickets/{ticket_id}/executor/enqueue")
+                        .post(post_key_backup_restore_executor_enqueue),
+                )
+                .push(
                     Router::with_path("keys/backups/{backup_id}")
                         .put(put_key_backup)
                         .get(get_key_backup)
