@@ -181,6 +181,7 @@ pub fn router_with_rate_limiter_config(
                 .push(Router::with_path("repo/operations").post(get_operations))
                 .push(Router::with_path("repo/sync").post(repo_sync))
                 .push(Router::with_path("repo/submit-commit").post(submit_commit))
+                .push(Router::with_path("authz/describe").get(authz_describe))
                 .push(Router::with_path("authz/check").post(authz_check))
                 .push(Router::with_path("authz/effective-grants").get(effective_grants))
                 .push(Router::with_path("authz/grants").post(create_grant))
@@ -193,6 +194,7 @@ pub fn router_with_rate_limiter_config(
                         .get(list_policy_documents)
                         .post(upsert_policy_document),
                 )
+                .push(Router::with_path("policies/describe").get(policies_describe))
                 .push(
                     Router::with_path("policies/{policy_id}")
                         .get(get_policy_document)

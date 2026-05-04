@@ -175,6 +175,117 @@ pub async fn auth_bridge_describe(_depot: &mut Depot, res: &mut Response) {
 }
 
 #[handler]
+pub async fn authz_describe(_depot: &mut Depot, res: &mut Response) {
+    res.render(Json(json!({
+        "contract": "contrix.rest.authz_describe.v1",
+        "version": "2026-05-04-scaffold",
+        "check_path": "/api/v1/authz/check",
+        "effective_grants_path": "/api/v1/authz/effective-grants",
+        "grants_path": "/api/v1/authz/grants",
+        "grant_item_path": "/api/v1/authz/grants/{grant_id}",
+        "policy_describe_path": "/api/v1/policies/describe",
+        "resource_selector_examples": [
+            {
+                "kind": "event",
+                "space_id": "cx:space:01JS0SP000000000000000000",
+                "event_id": "cx:event:01JS0EV000000000000000000",
+                "scope": "exact"
+            },
+            {
+                "kind": "blob",
+                "space_id": "cx:space:01JS0SP000000000000000000",
+                "blob_ref": "cx:blob:sha256:0123456789abcdef",
+                "object_type": "encrypted_backup",
+                "object_ref": "backup-scaffold-current-device",
+                "scope": "exact"
+            }
+        ],
+        "grant_constraint_examples": [
+            {
+                "constraint_type": "approval_workflow",
+                "effect": "require_review",
+                "approval_required": true,
+                "approval_mode": "two_man_rule"
+            },
+            {
+                "constraint_type": "claim_based",
+                "effect": "allow",
+                "object_type_allow": ["key_backup"],
+                "facet_allow": ["recovery"]
+            }
+        ],
+        "check_request_example": {
+            "actor": "did:web:alice.example",
+            "action": "keys.backups.restore",
+            "space_id": "cx:space:01JS0SP000000000000000000",
+            "resources": [
+                {
+                    "kind": "blob",
+                    "space_id": "cx:space:01JS0SP000000000000000000",
+                    "blob_ref": "cx:blob:sha256:0123456789abcdef",
+                    "object_type": "encrypted_backup",
+                    "object_ref": "backup-scaffold-current-device",
+                    "scope": "exact"
+                }
+            ],
+            "constraints": [
+                {
+                    "constraint_type": "claim_based",
+                    "effect": "allow",
+                    "object_type_allow": ["key_backup"],
+                    "facet_allow": ["recovery"]
+                }
+            ]
+        },
+        "todos": [
+            "TODO: bind authz describe examples to durable grant/policy schema evolution instead of inline handler JSON.",
+            "TODO: add formal response schema examples for effective-grants and grant mutation workflows."
+        ]
+    })));
+}
+
+#[handler]
+pub async fn policies_describe(_depot: &mut Depot, res: &mut Response) {
+    res.render(Json(json!({
+        "contract": "contrix.rest.policies_describe.v1",
+        "version": "2026-05-04-scaffold",
+        "collection_path": "/api/v1/policies",
+        "item_path": "/api/v1/policies/{policy_id}",
+        "authz_describe_path": "/api/v1/authz/describe",
+        "upsert_request_example": {
+            "scope": "space",
+            "subject_ref": "did:web:alice.example",
+            "policy_type": "keys.backups.restore",
+            "effect": "require_review",
+            "payload": {
+                "actions": ["keys.backups.restore"],
+                "resource": {
+                    "kind": "blob",
+                    "space_id": "cx:space:01JS0SP000000000000000000",
+                    "blob_ref": "cx:blob:sha256:0123456789abcdef",
+                    "object_type": "encrypted_backup",
+                    "object_ref": "backup-scaffold-current-device"
+                },
+                "constraints": [
+                    {
+                        "constraint_type": "approval_workflow",
+                        "effect": "require_review",
+                        "approval_required": true,
+                        "approval_mode": "two_man_rule"
+                    }
+                ]
+            }
+        },
+        "get_path_example": "/api/v1/policies/policy-backup-restore-01",
+        "delete_path_example": "/api/v1/policies/policy-backup-restore-01",
+        "todos": [
+            "TODO: bind policy describe examples to live policy validation and revision semantics.",
+            "TODO: add explicit query/filter examples once policy list pagination is stabilized."
+        ]
+    })));
+}
+
+#[handler]
 pub async fn integration_describe(_depot: &mut Depot, res: &mut Response) {
     res.render(Json(IntegrationDescribeResponse {
         contract: "contrix.rest.integration_manifest.v1".to_owned(),
@@ -297,6 +408,22 @@ pub async fn integration_describe(_depot: &mut Depot, res: &mut Response) {
                 todo: "TODO: replace advance scaffold with guarded transitions, authz/policy evaluation, and executor side effects.".to_owned(),
             },
             IntegrationSurfaceDescriptor {
+                name: "authz_describe".to_owned(),
+                method: "GET".to_owned(),
+                path: "/api/v1/authz/describe".to_owned(),
+                contract: "contrix.rest.authz_describe.v1".to_owned(),
+                stability: "scaffold".to_owned(),
+                todo: "TODO: replace inline authz describe examples with generated contract artifacts shared with SDKs and admin tooling.".to_owned(),
+            },
+            IntegrationSurfaceDescriptor {
+                name: "policies_describe".to_owned(),
+                method: "GET".to_owned(),
+                path: "/api/v1/policies/describe".to_owned(),
+                contract: "contrix.rest.policies_describe.v1".to_owned(),
+                stability: "scaffold".to_owned(),
+                todo: "TODO: publish policy collection/query/update semantics as generated artifacts instead of inline scaffold JSON.".to_owned(),
+            },
+            IntegrationSurfaceDescriptor {
                 name: "sync".to_owned(),
                 method: "POST".to_owned(),
                 path: "/api/v1/sync".to_owned(),
@@ -392,7 +519,9 @@ pub async fn integration_describe(_depot: &mut Depot, res: &mut Response) {
                 "restore_describe_response_shape": {
                     "contract": "contrix.rest.key_backup_restore_describe.v1",
                     "backup_id": "backup-alice-01",
+                    "principal_authz_describe_path": "/api/v1/authz/describe",
                     "principal_authz_check_path": "/api/v1/authz/check",
+                    "principal_policy_describe_path": "/api/v1/policies/describe",
                     "principal_policy_collection_path": "/api/v1/policies",
                     "restore_mode": "scaffold"
                 },
@@ -422,6 +551,8 @@ pub async fn integration_describe(_depot: &mut Depot, res: &mut Response) {
                 }
             },
             "authz_protocol": {
+                "authz_describe_path": "/api/v1/authz/describe",
+                "policies_describe_path": "/api/v1/policies/describe",
                 "resource_selector_examples": [
                     {
                         "kind": "event",
