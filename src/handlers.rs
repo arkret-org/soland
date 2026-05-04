@@ -42,6 +42,7 @@ use crate::{
         AuthBridgeDescribeResponse, AuthBridgeAuthDescriptor, AuthBridgePushDescriptor,
         OutboundPushBridgeDescribeResponse, OutboundPushDeliveryDescriptor,
         OutboundPushBridgeCacheEntry, OutboundPushBridgeCacheStatusResponse,
+        OutboundPushBridgeCacheInvalidateRequest, OutboundPushBridgeCacheInvalidateResponse,
         OutboundPushBridgeFetchRequest, OutboundPushBridgeFetchResponse,
         OutboundPushBridgeResolveRequest, OutboundPushBridgeResolveResponse,
         OutboundPushGatewayContractDescriptor, OutboundPushResolvedContract,
@@ -160,6 +161,7 @@ pub async fn outbound_push_bridge_describe(depot: &mut Depot, res: &mut Response
             resolve_path: "/api/v1/push/outbound/bridge/resolve".to_owned(),
             fetch_path: "/api/v1/push/outbound/bridge/fetch".to_owned(),
             cache_status_path: "/api/v1/push/outbound/bridge/cache/status".to_owned(),
+            cache_invalidate_path: "/api/v1/push/outbound/bridge/cache/invalidate".to_owned(),
             bridge_describe_path: "/api/v1/push/bridge/describe".to_owned(),
             notify_path: "/api/v1/push/notify".to_owned(),
             accepted_contracts: vec![
@@ -259,6 +261,10 @@ pub async fn outbound_push_bridge_resolve(
             .as_ref()
             .map(|record| record.cache_state.clone())
             .unwrap_or_else(|| "not_persisted".to_owned()),
+        contract_digest: cached
+            .as_ref()
+            .map(|record| record.contract_digest.clone())
+            .unwrap_or_else(|| "scaffold-static".to_owned()),
         fetched_contract,
         todos: vec![
             "TODO(push-outbound): perform live fetch of the remote bridge_describe_url before first delivery".to_owned(),
@@ -330,6 +336,22 @@ pub async fn outbound_push_bridge_fetch(
     match response {
         Ok(response) if response.status().is_success() => match response.json::<Value>().await {
             Ok(remote_contract) => {
+                let contract_digest = sha256_hex(
+                    &serde_json::to_vec(&remote_contract).unwrap_or_else(|_| b"{}".to_vec()),
+                );
+                if let Some(existing) = existing_cache.clone() {
+                    if existing.contract_digest != contract_digest && !body.force_refresh {
+                        render_outbound_push_bridge_fetch_fallback(
+                            Some(existing),
+                            push_gateway_url,
+                            service_base_url,
+                            bridge_describe_url,
+                            "contract_drift_detected_force_refresh_required".to_owned(),
+                            res,
+                        );
+                        return;
+                    }
+                }
                 let fetched_at = now();
                 let record = OutboundPushBridgeCacheRecord {
                     push_gateway_url: push_gateway_url.clone(),
@@ -337,6 +359,7 @@ pub async fn outbound_push_bridge_fetch(
                     bridge_describe_url: bridge_describe_url.clone(),
                     fetch_state: "live_remote_fetch_ok".to_owned(),
                     cache_state: "memory_cached".to_owned(),
+                    contract_digest: contract_digest.clone(),
                     fetched_at,
                     remote_contract: remote_contract.clone(),
                 };
@@ -351,6 +374,7 @@ pub async fn outbound_push_bridge_fetch(
                     bridge_describe_url,
                     fetch_state: record.fetch_state.clone(),
                     cache_state: record.cache_state.clone(),
+                    contract_digest,
                     fetched_at: Some(record.fetched_at),
                     fetched_contract: outbound_push_resolved_contract_from_remote(
                         &record.remote_contract,
@@ -408,6 +432,54 @@ pub async fn outbound_push_bridge_cache_status(depot: &mut Depot, res: &mut Resp
         .map(outbound_push_bridge_cache_entry)
         .collect();
     res.render(Json(OutboundPushBridgeCacheStatusResponse { entries }));
+}
+
+#[handler]
+pub async fn outbound_push_bridge_cache_invalidate(
+    depot: &mut Depot,
+    req: &mut Request,
+    res: &mut Response,
+) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let body = req
+        .parse_json::<OutboundPushBridgeCacheInvalidateRequest>()
+        .await
+        .unwrap_or(OutboundPushBridgeCacheInvalidateRequest {
+            push_gateway_url: None,
+        });
+    let mut cache = state
+        .outbound_push_bridge_cache
+        .lock()
+        .expect("outbound push bridge cache lock");
+    let removed_count = if let Some(push_gateway_url) = body
+        .push_gateway_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        if let Some(service_base_url) = derive_push_gateway_service_base_url(push_gateway_url) {
+            let bridge_describe_url =
+                join_api_v1_url(&service_base_url, "/api/v1/push/bridge/describe");
+            usize::from(cache.remove(&bridge_describe_url).is_some())
+        } else {
+            0
+        }
+    } else {
+        let removed = cache.len();
+        cache.clear();
+        removed
+    };
+    let remaining_entries = cache.len();
+    drop(cache);
+    res.render(Json(OutboundPushBridgeCacheInvalidateResponse {
+        removed_count,
+        remaining_entries,
+        cache_state: if remaining_entries == 0 {
+            "empty".to_owned()
+        } else {
+            "partially_retained".to_owned()
+        },
+    }));
 }
 
 #[handler]
@@ -15257,6 +15329,7 @@ fn outbound_push_bridge_cache_entry(
         bridge_describe_url: record.bridge_describe_url,
         fetch_state: record.fetch_state,
         cache_state: record.cache_state,
+        contract_digest: record.contract_digest,
         fetched_at: record.fetched_at,
         fetched_contract: outbound_push_resolved_contract_from_remote(&record.remote_contract),
     }
@@ -15272,6 +15345,7 @@ fn outbound_push_bridge_fetch_response_from_cache(
         bridge_describe_url: record.bridge_describe_url,
         fetch_state: "cache_hit".to_owned(),
         cache_state: record.cache_state,
+        contract_digest: record.contract_digest,
         fetched_at: Some(record.fetched_at),
         fetched_contract,
         remote_contract: Some(record.remote_contract),
@@ -15303,6 +15377,7 @@ fn render_outbound_push_bridge_fetch_fallback(
         bridge_describe_url,
         fetch_state,
         cache_state: "not_cached".to_owned(),
+        contract_digest: "scaffold-static".to_owned(),
         fetched_at: None,
         fetched_contract: default_outbound_push_resolved_contract(),
         remote_contract: None,

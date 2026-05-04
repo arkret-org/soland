@@ -263,6 +263,7 @@ pub struct OutboundPushBridgeCacheRecord {
     pub bridge_describe_url: String,
     pub fetch_state: String,
     pub cache_state: String,
+    pub contract_digest: String,
     pub fetched_at: chrono::DateTime<chrono::Utc>,
     pub remote_contract: Value,
 }

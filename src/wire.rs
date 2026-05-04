@@ -60,6 +60,7 @@ pub struct OutboundPushGatewayContractDescriptor {
     pub resolve_path: String,
     pub fetch_path: String,
     pub cache_status_path: String,
+    pub cache_invalidate_path: String,
     pub bridge_describe_path: String,
     pub notify_path: String,
     pub accepted_contracts: Vec<String>,
@@ -92,12 +93,19 @@ pub struct OutboundPushBridgeFetchRequest {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+pub struct OutboundPushBridgeCacheInvalidateRequest {
+    #[serde(default)]
+    pub push_gateway_url: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct OutboundPushBridgeResolveResponse {
     pub push_gateway_url: String,
     pub service_base_url: String,
     pub bridge_describe_url: String,
     pub fetch_state: String,
     pub cache_state: String,
+    pub contract_digest: String,
     pub fetched_contract: OutboundPushResolvedContract,
     #[serde(default)]
     pub todos: Vec<String>,
@@ -121,6 +129,7 @@ pub struct OutboundPushBridgeFetchResponse {
     pub bridge_describe_url: String,
     pub fetch_state: String,
     pub cache_state: String,
+    pub contract_digest: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fetched_at: Option<DateTime<Utc>>,
     pub fetched_contract: OutboundPushResolvedContract,
@@ -143,8 +152,16 @@ pub struct OutboundPushBridgeCacheEntry {
     pub bridge_describe_url: String,
     pub fetch_state: String,
     pub cache_state: String,
+    pub contract_digest: String,
     pub fetched_at: DateTime<Utc>,
     pub fetched_contract: OutboundPushResolvedContract,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct OutboundPushBridgeCacheInvalidateResponse {
+    pub removed_count: usize,
+    pub remaining_entries: usize,
+    pub cache_state: String,
 }
 
 #[derive(Debug, Serialize)]
