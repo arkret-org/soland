@@ -286,6 +286,80 @@ pub async fn policies_describe(_depot: &mut Depot, res: &mut Response) {
 }
 
 #[handler]
+pub async fn device_messages_describe(_depot: &mut Depot, res: &mut Response) {
+    res.render(Json(json!({
+        "contract": "contrix.rest.device_messages_describe.v1",
+        "version": "2026-05-04-scaffold",
+        "collection_path": "/api/v1/device_messages",
+        "txn_put_path": "/api/v1/device_messages/{txn_id}",
+        "schema": "cx.schema.device_message.v1",
+        "verification_event_kinds": [
+            "cx.key.verification.request",
+            "cx.key.verification.ready",
+            "cx.key.verification.start",
+            "cx.key.verification.accept",
+            "cx.key.verification.key",
+            "cx.key.verification.mac",
+            "cx.key.verification.done",
+            "cx.key.verification.cancel"
+        ],
+        "put_request_example": {
+            "messages": {
+                "did:web:alice.example": {
+                    "dev_alice": {
+                        "type": "cx.key.verification.request",
+                        "content": {
+                            "transaction_id": "verify-sas-01",
+                            "method": "sas",
+                            "todo": "replace scaffold verification payload with signed device envelope"
+                        }
+                    }
+                }
+            }
+        },
+        "todos": [
+            "TODO: bind device-messages describe examples to generated schema artifacts instead of inline handler JSON.",
+            "TODO: add explicit receive/delete acknowledgement examples when device-message lifecycle semantics stabilize."
+        ]
+    })));
+}
+
+#[handler]
+pub async fn key_backups_describe(_depot: &mut Depot, res: &mut Response) {
+    res.render(Json(json!({
+        "contract": "contrix.rest.key_backups_describe.v1",
+        "version": "2026-05-04-scaffold",
+        "collection_path": "/api/v1/keys/backups",
+        "item_path": "/api/v1/keys/backups/{backup_id}",
+        "restore_describe_path": "/api/v1/keys/backups/{backup_id}/restore/describe",
+        "restore_start_path": "/api/v1/keys/backups/{backup_id}/restore/start",
+        "restore_ticket_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}",
+        "restore_ticket_advance_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/advance",
+        "schema": "cx.schema.key_backup.v1",
+        "put_request_example": {
+            "schema": "cx.schema.key_backup.v1",
+            "backup_id": "backup-alice-01",
+            "class": "mls_export",
+            "encryption": {
+                "alg": "xchacha20poly1305",
+                "kdf": "argon2id"
+            },
+            "items": [
+                {
+                    "kind": "mls_group_state",
+                    "ref": "group:default",
+                    "todo": "replace scaffold payload with encrypted export blob"
+                }
+            ]
+        },
+        "todos": [
+            "TODO: bind key-backups describe examples to durable encrypted backup storage semantics.",
+            "TODO: add explicit rotate/export/import examples once backup revision semantics stabilize."
+        ]
+    })));
+}
+
+#[handler]
 pub async fn integration_describe(_depot: &mut Depot, res: &mut Response) {
     res.render(Json(IntegrationDescribeResponse {
         contract: "contrix.rest.integration_manifest.v1".to_owned(),
@@ -360,12 +434,28 @@ pub async fn integration_describe(_depot: &mut Depot, res: &mut Response) {
                 todo: "TODO: unify bearer and session-grant registration paths behind one capability-checked flow.".to_owned(),
             },
             IntegrationSurfaceDescriptor {
+                name: "device_messages_describe".to_owned(),
+                method: "GET".to_owned(),
+                path: "/api/v1/device_messages/describe".to_owned(),
+                contract: "contrix.rest.device_messages_describe.v1".to_owned(),
+                stability: "scaffold".to_owned(),
+                todo: "TODO: replace inline device-message describe examples with generated protocol artifacts.".to_owned(),
+            },
+            IntegrationSurfaceDescriptor {
                 name: "device_messages".to_owned(),
                 method: "PUT/GET".to_owned(),
                 path: "/api/v1/device_messages".to_owned(),
                 contract: "contrix.rest.device_messages.v1".to_owned(),
                 stability: "scaffold".to_owned(),
                 todo: "TODO: align device_messages transport and validation fully with cx.schema.device_message.v1 and verification event taxonomy.".to_owned(),
+            },
+            IntegrationSurfaceDescriptor {
+                name: "key_backups_describe".to_owned(),
+                method: "GET".to_owned(),
+                path: "/api/v1/keys/backups/describe".to_owned(),
+                contract: "contrix.rest.key_backups_describe.v1".to_owned(),
+                stability: "scaffold".to_owned(),
+                todo: "TODO: replace inline key-backups describe examples with generated protocol artifacts.".to_owned(),
             },
             IntegrationSurfaceDescriptor {
                 name: "key_backups".to_owned(),
@@ -456,6 +546,11 @@ pub async fn integration_describe(_depot: &mut Depot, res: &mut Response) {
                 }
             },
             "device_messages": {
+                "describe_path": "/api/v1/device_messages/describe",
+                "describe_response_shape": {
+                    "contract": "contrix.rest.device_messages_describe.v1",
+                    "schema": "cx.schema.device_message.v1"
+                },
                 "put_request": {
                     "path": "/api/v1/device_messages/protocol-verification-txn",
                     "body": {
@@ -488,6 +583,11 @@ pub async fn integration_describe(_depot: &mut Depot, res: &mut Response) {
                 }
             },
             "key_backups": {
+                "describe_path": "/api/v1/keys/backups/describe",
+                "describe_response_shape": {
+                    "contract": "contrix.rest.key_backups_describe.v1",
+                    "schema": "cx.schema.key_backup.v1"
+                },
                 "put_request": {
                     "path": "/api/v1/keys/backups/backup-alice-01",
                     "body": {

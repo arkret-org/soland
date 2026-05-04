@@ -244,6 +244,10 @@ pub fn router_with_rate_limiter_config(
                 .push(Router::with_path("keys/query").post(keys_query))
                 .push(Router::with_path("keys/claim").post(keys_claim))
                 .push(
+                    Router::with_path("keys/backups/describe")
+                        .get(key_backups_describe),
+                )
+                .push(
                     Router::with_path("keys/backups/{backup_id}/restore/describe")
                         .get(get_key_backup_restore_describe),
                 )
@@ -266,6 +270,7 @@ pub fn router_with_rate_limiter_config(
                         .delete(delete_key_backup),
                 )
                 .push(Router::with_path("keys/backups").get(list_key_backups))
+                .push(Router::with_path("device_messages/describe").get(device_messages_describe))
                 .push(Router::with_path("device_messages/{txn_id}").put(put_device_messages))
                 .push(Router::with_path("device_messages").get(get_device_messages))
                 .push(
