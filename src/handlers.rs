@@ -39,13 +39,15 @@ use crate::{
         EventSubmitResponse, EventsFrontierResponse, EventsPageResponse, GetOperationsRequest,
         GetOperationsResponse, HealthResponse, IdentityDescribeResponse, IdentityLogResponse,
         IdentityReceiptsResponse, IdentityResolveRequest, IdentityResolveResponse,
-        AuthBridgeDescribeResponse, AuthBridgeAuthDescriptor, AuthBridgePushDescriptor,
+        AuthBridgeDescribeResponse, AuthBridgeAuthDescriptor, AuthBridgeExamples,
+        AuthBridgePushDescriptor,
         OutboundPushBridgeDescribeResponse, OutboundPushDeliveryDescriptor,
         OutboundPushBridgeCacheEntry, OutboundPushBridgeCacheStatusResponse,
         OutboundPushBridgeCacheInvalidateRequest, OutboundPushBridgeCacheInvalidateResponse,
         OutboundPushBridgeFetchRequest, OutboundPushBridgeFetchResponse,
         OutboundPushBridgeResolveRequest, OutboundPushBridgeResolveResponse,
-        OutboundPushGatewayContractDescriptor, OutboundPushResolvedContract,
+        OutboundPushBridgeExamples, OutboundPushGatewayContractDescriptor,
+        OutboundPushResolvedContract,
         IndexDescribeResponse, IndexEntityResponse, IndexInboxResponse, IndexNotificationsResponse,
         IndexQueryRequest, IndexQueryResponse, IndexSearchRequest, IndexSearchResponse,
         IndexSpaceHierarchyResponse, IndexThreadResponse, InvitesResponse, KeysClaimRequest,
@@ -142,6 +144,25 @@ pub async fn auth_bridge_describe(_depot: &mut Depot, res: &mut Response) {
             register_device_mode:
                 "bearer_session_or_session_grant_bridge_with_principal_did".to_owned(),
         },
+        examples: AuthBridgeExamples {
+            session_grant_exchange_request: json!({
+                "session_grant": "TODO_SESSION_GRANT_JWT",
+                "principal_did": "did:web:alice.example",
+                "device_id": "device-web"
+            }),
+            register_device_request: json!({
+                "principal_did": "did:web:alice.example",
+                "device_id": "device-web",
+                "push_gateway": "https://floria.example/api/v1/push/notify",
+                "push_key": "webpush:TODO",
+                "platform": "web"
+            }),
+            unregister_device_request: json!({
+                "principal_did": "did:web:alice.example",
+                "device_id": "device-web",
+                "registration_id": "TODO_REGISTRATION_ID"
+            }),
+        },
         todos: vec![
             "TODO: replace local session-grant exchange bridge with coauth-backed grant introspection, audience binding, and session-public-key proof verification".to_owned(),
             "TODO: replace push register grant bridge with the same coauth-backed proof/introspection path before production use".to_owned(),
@@ -181,6 +202,22 @@ pub async fn outbound_push_bridge_describe(depot: &mut Depot, res: &mut Response
                 "blind_wakeup_from_principal_service_did={}",
                 state.config.service_did
             ),
+        },
+        examples: OutboundPushBridgeExamples {
+            resolve_request: json!({
+                "push_gateway_url": "https://floria.example/api/v1/push/notify",
+                "refresh": false
+            }),
+            fetch_request: json!({
+                "push_gateway_url": "https://floria.example/api/v1/push/notify",
+                "force_refresh": true
+            }),
+            notify_headers: json!({
+                "X-Contrix-Origin-Service-Did": state.config.service_did,
+                "X-Contrix-Destination-Service-Did": "did:web:floria.example",
+                "X-Contrix-Request-Id": "req_01js0000000000000000000000",
+                "Idempotency-Key": "notify-01js0000000000000000000000"
+            }),
         },
         todos: vec![
             "TODO(push-outbound): fetch remote gateway bridge metadata from configured push_gateway origins before first delivery".to_owned(),

@@ -23,6 +23,7 @@ pub struct AuthBridgeDescribeResponse {
     pub api_base_path: String,
     pub auth: AuthBridgeAuthDescriptor,
     pub push: AuthBridgePushDescriptor,
+    pub examples: AuthBridgeExamples,
     #[serde(default)]
     pub todos: Vec<String>,
 }
@@ -45,12 +46,20 @@ pub struct AuthBridgePushDescriptor {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+pub struct AuthBridgeExamples {
+    pub session_grant_exchange_request: Value,
+    pub register_device_request: Value,
+    pub unregister_device_request: Value,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct OutboundPushBridgeDescribeResponse {
     pub contract: String,
     pub version: String,
     pub api_base_path: String,
     pub gateway_contract: OutboundPushGatewayContractDescriptor,
     pub delivery: OutboundPushDeliveryDescriptor,
+    pub examples: OutboundPushBridgeExamples,
     #[serde(default)]
     pub todos: Vec<String>,
 }
@@ -76,6 +85,13 @@ pub struct OutboundPushDeliveryDescriptor {
     pub request_id_header: String,
     pub idempotency_key_header: String,
     pub payload_mode: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct OutboundPushBridgeExamples {
+    pub resolve_request: Value,
+    pub fetch_request: Value,
+    pub notify_headers: Value,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
