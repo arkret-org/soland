@@ -607,6 +607,22 @@ pub async fn integration_describe(_depot: &mut Depot, res: &mut Response) {
                 todo: "TODO: replace live recovery snapshot scaffold with actor-scoped dashboards, pagination, and privacy boundaries.".to_owned(),
             },
             IntegrationSurfaceDescriptor {
+                name: "recovery_discovery".to_owned(),
+                method: "GET".to_owned(),
+                path: "/api/v1/recovery/discovery".to_owned(),
+                contract: "contrix.rest.recovery_discovery.v1".to_owned(),
+                stability: "scaffold".to_owned(),
+                todo: "TODO: replace recovery discovery scaffold with signed service discovery and DID-bound audience metadata.".to_owned(),
+            },
+            IntegrationSurfaceDescriptor {
+                name: "recovery_readiness".to_owned(),
+                method: "GET".to_owned(),
+                path: "/api/v1/recovery/readiness".to_owned(),
+                contract: "contrix.rest.recovery_readiness.v1".to_owned(),
+                stability: "scaffold".to_owned(),
+                todo: "TODO: replace recovery readiness scaffold with real storage/authz/policy/crypto health checks.".to_owned(),
+            },
+            IntegrationSurfaceDescriptor {
                 name: "recovery_stack_bundle".to_owned(),
                 method: "GET".to_owned(),
                 path: "/api/v1/recovery/stack-bundle".to_owned(),
@@ -11994,7 +12010,106 @@ pub async fn get_recovery_live_snapshot(
         "contract_stack_path": "/api/v1/recovery/contract-stack",
         "items": items,
         "stack_bundle_path": "/api/v1/recovery/stack-bundle",
+        "discovery_path": "/api/v1/recovery/discovery",
+        "readiness_path": "/api/v1/recovery/readiness",
         "todo": "TODO(recovery.live-snapshot): replace process-memory aggregate with durable actor-scoped dashboards, pagination, and privacy controls."
+    })));
+}
+
+#[handler]
+pub async fn get_recovery_discovery(
+    depot: &mut Depot,
+    req: &mut Request,
+    res: &mut Response,
+) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let Some(session) = auth_or_render(state, req, res) else {
+        return;
+    };
+    res.render(Json(json!({
+        "contract": "contrix.rest.recovery_discovery.v1",
+        "version": "2026-05-04-scaffold",
+        "actor": session.actor,
+        "recovery_contract_stack_path": "/api/v1/recovery/contract-stack",
+        "recovery_stack_bundle_path": "/api/v1/recovery/stack-bundle",
+        "recovery_live_snapshot_path": "/api/v1/recovery/live-snapshot",
+        "recovery_readiness_path": "/api/v1/recovery/readiness",
+        "device_messages_describe_path": "/api/v1/device_messages/describe",
+        "key_backups_describe_path": "/api/v1/keys/backups/describe",
+        "restore_state_durability_path": "/api/v1/keys/backups/restore-state/durability",
+        "restore_state_checkpoint_collection_path": "/api/v1/keys/backups/restore-state/checkpoints",
+        "restore_ticket_collection_path": "/api/v1/keys/backups/restore-tickets",
+        "restore_activity_path_template": "/api/v1/keys/backups/restore-tickets/{ticket_id}/activity",
+        "restore_timeline_path_template": "/api/v1/keys/backups/restore-tickets/{ticket_id}/timeline",
+        "restore_audit_feed_path_template": "/api/v1/keys/backups/restore-tickets/{ticket_id}/audit-feed",
+        "authz_describe_path": "/api/v1/authz/describe",
+        "policies_describe_path": "/api/v1/policies/describe",
+        "todo": "TODO(recovery.discovery): replace static path directory with signed principal service discovery, DID-bound audience metadata, and generated OpenAPI links."
+    })));
+}
+
+#[handler]
+pub async fn get_recovery_readiness(
+    depot: &mut Depot,
+    req: &mut Request,
+    res: &mut Response,
+) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let Some(session) = auth_or_render(state, req, res) else {
+        return;
+    };
+    let ticket_count = state
+        .key_backup_restore_tickets
+        .lock()
+        .expect("key backup restore ticket lock")
+        .values()
+        .filter(|ticket| {
+            ticket
+                .get("actor")
+                .and_then(Value::as_str)
+                .is_some_and(|actor| actor == session.actor)
+        })
+        .count();
+    res.render(Json(json!({
+        "contract": "contrix.rest.recovery_readiness.v1",
+        "version": "2026-05-04-scaffold",
+        "actor": session.actor,
+        "readiness_state": "scaffold_ready",
+        "owned_ticket_count": ticket_count,
+        "discovery_path": "/api/v1/recovery/discovery",
+        "stack_bundle_path": "/api/v1/recovery/stack-bundle",
+        "live_snapshot_path": "/api/v1/recovery/live-snapshot",
+        "surface_checks": [
+            {
+                "surface": "device_messages",
+                "path": "/api/v1/device_messages/describe",
+                "state": "scaffold_present"
+            },
+            {
+                "surface": "key_backups",
+                "path": "/api/v1/keys/backups/describe",
+                "state": "scaffold_present"
+            },
+            {
+                "surface": "restore_state",
+                "path": "/api/v1/keys/backups/restore-state/durability",
+                "state": "scaffold_present"
+            },
+            {
+                "surface": "restore_tickets",
+                "path": "/api/v1/keys/backups/restore-tickets",
+                "state": "scaffold_present"
+            },
+            {
+                "surface": "authz_policies",
+                "path": "/api/v1/authz/describe",
+                "state": "scaffold_present"
+            }
+        ],
+        "blocking_gaps": [
+            "TODO(recovery.readiness): replace scaffold_present with real storage/authz/policy/crypto checks.",
+            "TODO(recovery.readiness): expose signed service-DID proof and upstream compatibility version."
+        ]
     })));
 }
 
@@ -12026,6 +12141,8 @@ pub async fn get_recovery_stack_bundle(
         "version": "2026-05-04-scaffold",
         "contract_stack_path": "/api/v1/recovery/contract-stack",
         "live_snapshot_path": "/api/v1/recovery/live-snapshot",
+        "discovery_path": "/api/v1/recovery/discovery",
+        "readiness_path": "/api/v1/recovery/readiness",
         "restore_state_durability_path": "/api/v1/keys/backups/restore-state/durability",
         "restore_state_checkpoint_collection_path": "/api/v1/keys/backups/restore-state/checkpoints",
         "restore_ticket_collection_path": "/api/v1/keys/backups/restore-tickets",
@@ -12041,6 +12158,14 @@ pub async fn get_recovery_stack_bundle(
             "recovery_live_snapshot": {
                 "contract": "contrix.rest.recovery_live_snapshot.v1",
                 "path": "/api/v1/recovery/live-snapshot"
+            },
+            "recovery_discovery": {
+                "contract": "contrix.rest.recovery_discovery.v1",
+                "path": "/api/v1/recovery/discovery"
+            },
+            "recovery_readiness": {
+                "contract": "contrix.rest.recovery_readiness.v1",
+                "path": "/api/v1/recovery/readiness"
             },
             "restore_state_durability": {
                 "contract": "contrix.rest.key_backup_restore_state_durability.v1",

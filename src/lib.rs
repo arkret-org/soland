@@ -353,6 +353,8 @@ pub fn router_with_rate_limiter_config(
                     Router::with_path("keys/backups/restore-tickets/{ticket_id}/audit-feed")
                         .get(get_key_backup_restore_audit_feed),
                 )
+                .push(Router::with_path("recovery/discovery").get(get_recovery_discovery))
+                .push(Router::with_path("recovery/readiness").get(get_recovery_readiness))
                 .push(Router::with_path("recovery/live-snapshot").get(get_recovery_live_snapshot))
                 .push(Router::with_path("recovery/stack-bundle").get(get_recovery_stack_bundle))
                 .push(
@@ -1118,6 +1120,20 @@ const CONTRACT_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &[
         "keys",
         "cx.keys.backups.restore_audit_feed",
         "get restore audit feed scaffold",
+    ),
+    (
+        "/api/v1/recovery/discovery",
+        PathItemType::Get,
+        "recovery",
+        "cx.recovery.discovery",
+        "get recovery discovery scaffold",
+    ),
+    (
+        "/api/v1/recovery/readiness",
+        PathItemType::Get,
+        "recovery",
+        "cx.recovery.readiness",
+        "get recovery readiness scaffold",
     ),
     (
         "/api/v1/recovery/live-snapshot",
