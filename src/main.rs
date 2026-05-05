@@ -1,5 +1,5 @@
 use salvo::prelude::*;
-use soland::{config::AppConfig, db::Db, service, state::AppState};
+use soland::{artifacts, config::AppConfig, db::Db, service, state::AppState};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -7,6 +7,10 @@ async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
+
+    // Fail fast at startup if a bundled Contrix artifact is malformed instead
+    // of crashing the first request that touches the offending OnceLock.
+    artifacts::validate_embedded_artifacts()?;
 
     let config = AppConfig::from_env_and_args()?;
     if let Some(database_url) = &config.database_url {

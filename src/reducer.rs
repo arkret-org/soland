@@ -29,6 +29,10 @@ pub struct ProjectionState {
     pub relations: BTreeMap<String, RelationState>,
     /// Memberships keyed by (space_id, member_did). LWW.
     pub memberships: BTreeMap<String, BTreeMap<String, MembershipState>>,
+    /// Banned members keyed by space_id. Set per spec event-auth-state-resolution.
+    pub banned_members: BTreeMap<String, BTreeSet<String>>,
+    /// Knocking members keyed by space_id. Cleared when the actor joins or leaves.
+    pub knocking_members: BTreeMap<String, BTreeSet<String>>,
     /// Space lifecycle state keyed by space_id.
     pub space_states: BTreeMap<String, SpaceState>,
     /// Redacted event IDs (tombstones).
@@ -138,6 +142,7 @@ pub enum ProjectionEffect {
         entity_id: String,
     },
     RelationCreated(RelationState),
+    RelationUpdated(RelationState),
     RelationDeleted {
         relation_id: String,
     },
@@ -196,11 +201,12 @@ impl ProjectionState {
                 self.apply_entity_update(operation, now, hlc)
             }
             kinds::CX_RELATION_CREATE => self.apply_relation_create(operation, now),
+            kinds::CX_RELATION_UPDATE => self.apply_relation_update(operation, now, hlc),
             kinds::CX_RELATION_DELETE => self.apply_relation_delete(operation),
             kinds::CX_CONTAINER_MOVE_ITEM | kinds::CX_CONTAINER_REBALANCE => {
                 self.apply_container_position(operation, now)
             }
-            kind if kinds::is_membership_kind(kind) => self.apply_membership(operation, now),
+            kind if kinds::is_membership_kind(kind) => self.apply_membership(operation, now, kind),
             kind if kinds::is_space_lifecycle_kind(kind) => {
                 self.apply_space_lifecycle(operation, now)
             }
@@ -651,6 +657,63 @@ impl ProjectionState {
         effect
     }
 
+    fn apply_relation_update(
+        &mut self,
+        operation: &Operation,
+        now: chrono::DateTime<chrono::Utc>,
+        _hlc: &ServerHlc,
+    ) -> ProjectionEffect {
+        let relation_id = operation
+            .payload
+            .get("relation_id")
+            .or_else(|| operation.payload.get("id"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_owned();
+        if relation_id.is_empty() {
+            return ProjectionEffect::Ignored;
+        }
+        // Patch-merge on the existing relation. If the relation does not yet
+        // exist locally (out-of-order replication), drop the update — a
+        // subsequent gap-fill will replay create + update in order.
+        let Some(relation) = self.relations.get_mut(&relation_id) else {
+            return ProjectionEffect::Ignored;
+        };
+        if let Some(kind) = operation
+            .payload
+            .get("relation_kind")
+            .or_else(|| operation.payload.get("kind"))
+            .and_then(|v| v.as_str())
+        {
+            relation.relation_kind = kind.to_owned();
+        }
+        if let Some(value) = operation
+            .payload
+            .get("from")
+            .or_else(|| operation.payload.get("from_entity_id"))
+        {
+            relation.from_ref = value.as_str().map(ToOwned::to_owned);
+        }
+        if let Some(value) = operation
+            .payload
+            .get("to")
+            .or_else(|| operation.payload.get("to_entity_id"))
+        {
+            relation.to_ref = value.as_str().map(ToOwned::to_owned);
+        }
+        if let Some(fields) = operation.payload.get("fields").and_then(|v| v.as_object()) {
+            for (k, v) in fields.iter() {
+                if v.is_null() {
+                    relation.fields.remove(k);
+                } else {
+                    relation.fields.insert(k.clone(), v.clone());
+                }
+            }
+        }
+        relation.updated_at = now;
+        ProjectionEffect::RelationUpdated(relation.clone())
+    }
+
     fn apply_relation_delete(&mut self, operation: &Operation) -> ProjectionEffect {
         let relation_id = operation
             .payload
@@ -733,14 +796,20 @@ impl ProjectionState {
         &mut self,
         operation: &Operation,
         now: chrono::DateTime<chrono::Utc>,
+        kind: &'static str,
     ) -> ProjectionEffect {
-        let action = operation
-            .payload
-            .get("action")
-            .or_else(|| operation.payload.get("membership"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("join")
-            .to_owned();
+        // Trust the canonical kind we matched on rather than re-deriving from
+        // payload — kick/leave/ban/unban/knock are distinct events and must
+        // not be collapsed by ad-hoc payload sniffing.
+        let action = match kind {
+            kinds::CX_MEMBERSHIP_JOIN => "join",
+            kinds::CX_MEMBERSHIP_LEAVE => "leave",
+            kinds::CX_MEMBERSHIP_KICK => "kick",
+            kinds::CX_MEMBERSHIP_BAN => "ban",
+            kinds::CX_MEMBERSHIP_UNBAN => "unban",
+            kinds::CX_MEMBERSHIP_KNOCK => "knock",
+            _ => return ProjectionEffect::Ignored,
+        };
         let member = operation
             .payload
             .get("member")
@@ -761,13 +830,35 @@ impl ProjectionState {
             return ProjectionEffect::Ignored;
         }
 
-        match action.as_str() {
-            "member.remove" | "leave" | "ban" => {
+        match kind {
+            kinds::CX_MEMBERSHIP_LEAVE
+            | kinds::CX_MEMBERSHIP_KICK
+            | kinds::CX_MEMBERSHIP_BAN => {
                 if let Some(space_members) = self.memberships.get_mut(&space_id) {
                     space_members.remove(&member);
                 }
+                if kind == kinds::CX_MEMBERSHIP_BAN {
+                    self.banned_members
+                        .entry(space_id.clone())
+                        .or_default()
+                        .insert(member.clone());
+                }
             }
-            _ => {
+            kinds::CX_MEMBERSHIP_UNBAN => {
+                // Lift the ban marker but do NOT auto-rejoin. A subsequent
+                // join event is required to add membership back.
+                if let Some(banned) = self.banned_members.get_mut(&space_id) {
+                    banned.remove(&member);
+                }
+            }
+            kinds::CX_MEMBERSHIP_KNOCK => {
+                // Knock records intent to join; it does not add membership.
+                self.knocking_members
+                    .entry(space_id.clone())
+                    .or_default()
+                    .insert(member.clone());
+            }
+            kinds::CX_MEMBERSHIP_JOIN => {
                 let membership = MembershipState {
                     member: member.clone(),
                     space_id: space_id.clone(),
@@ -779,13 +870,17 @@ impl ProjectionState {
                     .entry(space_id.clone())
                     .or_default()
                     .insert(member.clone(), membership);
+                if let Some(knocking) = self.knocking_members.get_mut(&space_id) {
+                    knocking.remove(&member);
+                }
             }
+            _ => return ProjectionEffect::Ignored,
         }
 
         ProjectionEffect::MembershipChanged {
             space_id,
             member,
-            action,
+            action: action.to_owned(),
         }
     }
 

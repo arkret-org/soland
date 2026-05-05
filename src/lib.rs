@@ -1,3 +1,8 @@
+// Several handler scaffolds (recovery / key-backup restore / push outbound)
+// build large `serde_json::json!` literals that exceed the default macro
+// recursion limit. Bump it for the whole crate.
+#![recursion_limit = "512"]
+
 pub mod artifacts;
 pub mod authz;
 pub mod config;

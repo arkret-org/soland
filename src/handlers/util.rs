@@ -1,0 +1,243 @@
+//! Shared mechanical helpers used across every handler module.
+//!
+//! Anything in here MUST be:
+//! - free of `AppState` access (no locks, no persistence reads),
+//! - free of business logic (no decision-making about events / authz / sync),
+//! - and reusable across at least two domains.
+//!
+//! Domain-specific helpers (`auth_or_render`, `append_audit_log`,
+//! `space_has_member`, the blob/MIME helpers, the proof verifiers, etc.) stay
+//! in their owning module so they can carry their own invariants. They will
+//! land here only if they outgrow that scope.
+
+use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+use contrix_sdk::{DeviceId, Did, ErrorEnvelope, SpaceId};
+use salvo::{
+    http::{StatusCode, header},
+    prelude::*,
+};
+use sha2::{Digest, Sha256};
+
+use crate::{ids, wire::ApiError};
+
+// ── HTTP helpers ────────────────────────────────────────────────────────────
+
+/// Render a Contrix-shaped error envelope and stamp the response status.
+///
+/// Always attaches an opaque `request_id` to `error.extra` so logs and
+/// client-facing diagnostics line up.
+pub fn render_error(res: &mut Response, status: StatusCode, code: &str, message: &str) {
+    let mut extra = std::collections::BTreeMap::new();
+    extra.insert(
+        "request_id".to_owned(),
+        serde_json::Value::String(ids::generate_request_id()),
+    );
+    res.status_code(status);
+    res.render(Json(ApiError {
+        ok: false,
+        error: ErrorEnvelope {
+            errcode: code.to_owned(),
+            error: message.to_owned(),
+            retry_after_ms: None,
+            extra,
+        },
+    }));
+}
+
+/// Pull a single query-string value, decoding `+` to space.
+pub fn query_param(req: &Request, key: &str) -> Option<String> {
+    req.uri().query().and_then(|query| {
+        query.split('&').find_map(|pair| {
+            let (name, value) = pair.split_once('=').unwrap_or((pair, ""));
+            (name == key).then(|| value.replace('+', " "))
+        })
+    })
+}
+
+/// Pull a comma-separated query value as a `Vec<String>`, dropping empties.
+pub fn query_list(req: &Request, key: &str) -> Vec<String> {
+    query_param(req, key)
+        .map(|value| {
+            value
+                .split(',')
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Treat the query value `1 / true / yes` as a boolean true; anything else is false.
+pub fn query_flag(req: &Request, key: &str) -> bool {
+    query_param(req, key)
+        .as_deref()
+        .is_some_and(|value| matches!(value, "1" | "true" | "yes"))
+}
+
+/// Extract the `Bearer ...` token from the `Authorization` header.
+pub fn bearer_token(req: &Request) -> Option<&str> {
+    req.headers()
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+}
+
+// ── Crypto helpers ──────────────────────────────────────────────────────────
+
+/// Hex-encoded SHA-256 of `bytes` (lowercase, 64 chars).
+pub fn sha256_hex(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    format!("{:x}", hasher.finalize())
+}
+
+// ── Token / digest validators ───────────────────────────────────────────────
+
+/// Validate a `sx:<unix_millis>` or `cx:cursor:<base64url>` token.
+///
+/// `cx:cursor:` tokens are a base64url-encoded JSON object that must declare
+/// `schema = cx.schema.cursor.v1`, `version = 1`, a positive `issued_at_ms`,
+/// and a `positions` object.
+pub fn is_valid_sync_token(token: &str) -> bool {
+    if let Some(millis) = token.strip_prefix("sx:") {
+        return millis.parse::<i64>().is_ok_and(|value| value > 0);
+    }
+    let Some(encoded) = token.strip_prefix("cx:cursor:") else {
+        return false;
+    };
+    let Ok(bytes) = URL_SAFE_NO_PAD.decode(encoded) else {
+        return false;
+    };
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+        return false;
+    };
+    value
+        .get("schema")
+        .and_then(|schema| schema.as_str())
+        .is_some_and(|schema| schema == "cx.schema.cursor.v1")
+        && value
+            .get("version")
+            .and_then(|version| version.as_u64())
+            .is_some_and(|version| version == 1)
+        && value
+            .get("issued_at_ms")
+            .and_then(|millis| millis.as_i64())
+            .is_some_and(|millis| millis > 0)
+        && value
+            .get("positions")
+            .is_some_and(|positions| positions.is_object())
+}
+
+/// `sha256:<64 lowercase hex>` shape.
+pub fn is_valid_sha256_digest(value: &str) -> bool {
+    value
+        .strip_prefix("sha256:")
+        .is_some_and(is_valid_sha256_hex)
+}
+
+/// 64 lowercase hex characters.
+pub fn is_valid_sha256_hex(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .chars()
+            .all(|c| c.is_ascii_digit() || matches!(c, 'a'..='f'))
+}
+
+// ── Identifier / handle validators ──────────────────────────────────────────
+
+/// Wrap `Did::new` and discard the SDK error, since callers always answer with
+/// `bad_request / invalid_param` regardless of the underlying reason.
+pub fn validate_did(value: &str) -> Result<Did, ()> {
+    Did::new(value.to_owned()).map_err(|_| ())
+}
+
+pub fn validate_device_id(value: &str) -> Result<DeviceId, ()> {
+    DeviceId::new(value.to_owned()).map_err(|_| ())
+}
+
+pub fn validate_space_id(value: &str) -> Result<SpaceId, ()> {
+    SpaceId::new(value.to_owned()).map_err(|_| ())
+}
+
+/// `@`-prefixed, lowercase, alphanumeric + `-_.` only.
+pub fn is_valid_handle(handle: &str) -> bool {
+    let normalized = normalize_handle(handle);
+    normalized.len() > 1
+        && normalized
+            .trim_start_matches('@')
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+}
+
+/// Lowercase + ensure leading `@`.
+pub fn normalize_handle(handle: &str) -> String {
+    let trimmed = handle.trim().to_ascii_lowercase();
+    if trimmed.starts_with('@') {
+        trimmed
+    } else {
+        format!("@{trimmed}")
+    }
+}
+
+/// Best-effort `@<tail>` derived from the last DID label, with `.` → `-`.
+pub fn handle_for_did(did: &str) -> String {
+    did.rsplit(':')
+        .next()
+        .map(|tail| format!("@{}", tail.replace('.', "-")))
+        .unwrap_or_else(|| "@user".to_owned())
+}
+
+// ── Entity-type / discoverability validators ────────────────────────────────
+
+/// Either a built-in `cx.<known>` type or a 3+ label reverse-domain custom type.
+pub fn is_valid_entity_type(value: &str) -> bool {
+    if let Some(rest) = value.strip_prefix("cx.") {
+        return is_supported_cx_entity_type(value)
+            && !rest.is_empty()
+            && rest.bytes().all(|byte| {
+                byte.is_ascii_lowercase()
+                    || byte.is_ascii_digit()
+                    || byte == b'.'
+                    || byte == b'_'
+                    || byte == b'-'
+            });
+    }
+    let labels: Vec<_> = value.split('.').collect();
+    labels.len() >= 3
+        && labels.iter().all(|label| {
+            !label.is_empty()
+                && label
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        })
+}
+
+/// Allow-list of `cx.*` entity types this server understands.
+pub fn is_supported_cx_entity_type(value: &str) -> bool {
+    matches!(
+        value,
+        "cx.generic"
+            | "cx.task"
+            | "cx.channel"
+            | "cx.topic"
+            | "cx.memory.semantic"
+            | "cx.agent.run"
+    )
+}
+
+/// Allow-list of space-discoverability values.
+pub fn is_valid_discoverability(value: &str) -> bool {
+    matches!(
+        value,
+        "public" | "listed" | "restricted" | "unlisted" | "invite_only" | "secret"
+    )
+}
+
+// ── Misc JSON helpers ───────────────────────────────────────────────────────
+
+/// `serde_json::Number`s come back as either i64 or u64 depending on sign /
+/// magnitude. Either is integer-shaped for our purposes.
+pub fn is_json_integer(value: &serde_json::Value) -> bool {
+    value.as_i64().is_some() || value.as_u64().is_some()
+}

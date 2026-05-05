@@ -5,6 +5,21 @@ use std::{
 
 use serde_json::{Value, json};
 
+/// Error raised when an embedded Contrix artifact fails to parse.
+///
+/// The artifacts (event-kind / schema / operation / id-kind registries) are
+/// `include_str!`'d at build time, so a parse failure represents a build-vs-spec
+/// mismatch — not a runtime input. Callers should surface this through their
+/// startup path (see [`validate_embedded_artifacts`]) rather than allowing the
+/// first HTTP request to panic on lazy initialisation.
+#[derive(Debug, thiserror::Error)]
+#[error("invalid embedded Contrix {label}: {source}")]
+pub struct ArtifactError {
+    pub label: &'static str,
+    #[source]
+    pub source: serde_json::Error,
+}
+
 pub const EVENT_KIND_REGISTRY_JSON: &str =
     include_str!("../../contrix-spec/artifacts/registry/event-kind-registry.json");
 pub const SCHEMA_REGISTRY_JSON: &str =
@@ -144,8 +159,29 @@ pub fn registry_summary() -> Value {
 
 fn parse_artifact(source: &str, label: &str) -> Value {
     serde_json::from_str(source).unwrap_or_else(|error| {
+        // Should be unreachable for release builds because
+        // `validate_embedded_artifacts` runs in main.rs at startup. Lazy
+        // callers may still hit this if validation was skipped — fail loudly.
         panic!("invalid embedded Contrix {label}: {error}");
     })
+}
+
+/// Validate every embedded Contrix artifact at startup.
+///
+/// Call from `main` before binding the listener so that a malformed bundled
+/// artifact surfaces as a typed [`ArtifactError`] rather than crashing the
+/// process on the first HTTP request that happens to touch the offending
+/// `OnceLock`.
+pub fn validate_embedded_artifacts() -> Result<(), ArtifactError> {
+    for (json, label) in [
+        (EVENT_KIND_REGISTRY_JSON, "event-kind registry"),
+        (SCHEMA_REGISTRY_JSON, "schema registry"),
+        (OPERATION_REGISTRY_JSON, "operation registry"),
+        (ID_KIND_REGISTRY_JSON, "id-kind registry"),
+    ] {
+        serde_json::from_str::<Value>(json).map_err(|source| ArtifactError { label, source })?;
+    }
+    Ok(())
 }
 
 fn registry_version(registry: &Value) -> String {

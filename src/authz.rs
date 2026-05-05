@@ -275,6 +275,14 @@ fn resource_matches(pattern: &str, resource: &str) -> bool {
     false
 }
 
+/// Pick the resulting decision over a set of satisfied grants.
+///
+/// Per Contrix v1 (spec optimization round, _todos B3/B5): the three non-allow
+/// decisions — `deny`, `quarantine`, `require_review` — are each *any-hit-wins*
+/// in that priority order. `allow` is only the diagnostic fallback when no
+/// non-allow decision was raised, so it ranks lowest. This avoids the previous
+/// quirk where an `allow` constraint could mask a co-resident `require_review`
+/// constraint.
 fn highest_priority_decision(grants: &[Grant]) -> Option<GrantDecision> {
     if grants
         .iter()
@@ -290,15 +298,15 @@ fn highest_priority_decision(grants: &[Grant]) -> Option<GrantDecision> {
     }
     if grants
         .iter()
-        .any(|grant| grant_decision(grant) == GrantDecision::Allow)
-    {
-        return Some(GrantDecision::Allow);
-    }
-    if grants
-        .iter()
         .any(|grant| grant_decision(grant) == GrantDecision::RequireReview)
     {
         return Some(GrantDecision::RequireReview);
+    }
+    if grants
+        .iter()
+        .any(|grant| grant_decision(grant) == GrantDecision::Allow)
+    {
+        return Some(GrantDecision::Allow);
     }
     None
 }
@@ -525,7 +533,9 @@ mod tests {
     }
 
     #[test]
-    fn quarantine_overrides_allow_and_allow_overrides_review() {
+    fn require_review_and_quarantine_outrank_allow() {
+        // Per spec B5: deny / quarantine / require_review are each
+        // any-hit-wins; allow is the diagnostic fallback only.
         let engine = AuthzEngine::new();
         engine.create_grant(
             "cx:space:1".to_owned(),
@@ -549,7 +559,7 @@ mod tests {
                 value: serde_json::json!({"decision": "allow"}),
             }],
         );
-        let allowed = engine.check(
+        let reviewed = engine.check(
             "did:web:bob",
             "send",
             "space:cx:space:1",
@@ -558,8 +568,8 @@ mod tests {
             &[],
             &[],
         );
-        assert!(allowed.allowed);
-        assert_eq!(allowed.reason, "explicit_grant");
+        assert!(!reviewed.allowed, "require_review must outrank allow");
+        assert_eq!(reviewed.reason, "require_review");
 
         engine.create_grant(
             "cx:space:1".to_owned(),
