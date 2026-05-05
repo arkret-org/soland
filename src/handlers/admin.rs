@@ -1,0 +1,317 @@
+//! Dev-only admin collection surfaces.
+//!
+//! Surfaces:
+//! - `GET /api/v1/admin/{resource}` — paginated dev snapshot of one of the
+//!   builtin admin collections (`actors`, `spaces`, `devices`, `capabilities`,
+//!   `federation`, `applets`, `agents`, `reports`, `invite-tokens`, `audit`,
+//!   `policy`, `media`).
+//!
+//! Production-grade replacement is tracked under `_todos.md` Q9 — capability-
+//! scoped admin actions, durable pagination, redaction policy, high-risk audit.
+
+use salvo::{http::StatusCode, prelude::*};
+use serde_json::{Value, json};
+
+use crate::{
+    kinds,
+    state::AppState,
+};
+
+use super::{
+    append_audit_log, auth_or_render, demo_actors, device_inventory_to_json,
+    discussion_branch_for_projection_event, flow_id_for_projection_event,
+    flow_id_from_space_id, flow_projection_for_space, policy_document_to_response,
+    projection_event_from_operation, query_param, render_error, sha256_hex,
+};
+
+#[handler]
+pub async fn admin_collection(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let Some(session) = auth_or_render(state, req, res) else {
+        return;
+    };
+    if !state.config.development_mode {
+        render_error(
+            res,
+            StatusCode::FORBIDDEN,
+            "capability_denied",
+            "admin collection API requires explicit admin capability",
+        );
+        return;
+    }
+    let Some(resource) = req.param::<String>("resource") else {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "missing_param",
+            "admin resource is required",
+        );
+        return;
+    };
+    let limit = query_param(req, "limit")
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(100)
+        .clamp(1, 500);
+    let cursor = query_param(req, "cursor");
+
+    let (field, mut items) = match resource.as_str() {
+        "actors" => ("actors", admin_actor_items(state)),
+        "spaces" => ("spaces", admin_space_items(state)),
+        "devices" => ("devices", admin_device_items(state)),
+        "capabilities" => ("capabilities", admin_capability_items(state)),
+        "federation" => ("federation", admin_federation_items(state)),
+        "applets" => ("applets", Vec::new()),
+        "agents" => ("agents", Vec::new()),
+        "reports" => (
+            "reports",
+            state
+                .moderation_reports
+                .lock()
+                .expect("reports lock")
+                .clone(),
+        ),
+        "invite-tokens" => ("invite_tokens", admin_invite_items(state)),
+        "audit" => (
+            "audit",
+            state.audit_log.lock().expect("audit log lock").clone(),
+        ),
+        "policy" => ("policy", admin_policy_items(state)),
+        "media" => ("media", admin_media_items(state)),
+        _ => {
+            render_error(
+                res,
+                StatusCode::NOT_FOUND,
+                "not_found",
+                "admin resource not found",
+            );
+            return;
+        }
+    };
+    items.sort_by(|left, right| left.to_string().cmp(&right.to_string()));
+    let start = match cursor.as_deref() {
+        Some(raw) => match raw.parse::<usize>() {
+            Ok(offset) => offset,
+            Err(_) => {
+                render_error(
+                    res,
+                    StatusCode::BAD_REQUEST,
+                    "invalid_param",
+                    "invalid cursor",
+                );
+                return;
+            }
+        },
+        None => 0,
+    };
+    let total = items.len();
+    let mut page = items.into_iter().skip(start).collect::<Vec<_>>();
+    let has_more = page.len() > limit;
+    if has_more {
+        page.truncate(limit);
+    }
+    let next_cursor = has_more.then(|| (start + limit).to_string());
+
+    // TODO(P1 admin): replace this dev-only snapshot API with capability-scoped
+    // admin actions, durable pagination, redaction policy, and high-risk audit.
+    append_audit_log(
+        state,
+        Some(&session.actor),
+        "admin.collection",
+        json!({
+            "resource": resource.clone(),
+            "device_id": session.device_id,
+            "count": page.len(),
+        }),
+        "accepted",
+    );
+
+    let mut body = serde_json::Map::new();
+    body.insert("resource".to_owned(), json!(resource));
+    body.insert("items".to_owned(), json!(page.clone()));
+    body.insert(field.to_owned(), json!(page));
+    body.insert("total".to_owned(), json!(total));
+    body.insert("next_cursor".to_owned(), json!(next_cursor));
+    body.insert(
+        "production_gap".to_owned(),
+        json!("admin_authorization_and_durable_pagination"),
+    );
+    res.render(Json(Value::Object(body)));
+}
+
+fn admin_actor_items(state: &AppState) -> Vec<Value> {
+    demo_actors(state)
+        .into_iter()
+        .map(|mut actor| {
+            if let Some(object) = actor.as_object_mut() {
+                object.insert("kind".to_owned(), json!("actor"));
+            }
+            actor
+        })
+        .collect()
+}
+
+fn admin_space_items(state: &AppState) -> Vec<Value> {
+    let meta = state.space_meta.lock().expect("space meta lock").clone();
+    let spaces = state.spaces.lock().expect("spaces lock");
+    spaces
+        .search(Default::default())
+        .into_iter()
+        .map(|space| {
+            let space_id = space.space_id.as_str().to_owned();
+            let space_meta = meta.get(&space_id);
+            let flow = flow_projection_for_space(
+                state,
+                &space_id,
+                &space.name,
+                space.description.as_deref(),
+            );
+            json!({
+                "kind": "space",
+                "flow": flow,
+                "flow_id": flow_id_from_space_id(&space_id),
+                "space_id": space_id,
+                "title": space.name,
+                "summary": space.description,
+                "category": space.category,
+                "tags": space.tags,
+                "public": space.public,
+                "members": space.members.iter().map(ToString::to_string).collect::<Vec<_>>(),
+                "owner": space_meta.map(|meta| meta.owner.clone()),
+                "discoverability": space_meta.map(|meta| meta.discoverability.clone()),
+                "plaintext_visible_services": space_meta
+                    .map(|meta| meta.plaintext_visible_services.iter().cloned().collect::<Vec<_>>())
+                    .unwrap_or_default(),
+                "deleted": space_meta.is_some_and(|meta| meta.deleted),
+                "created_at": space_meta.map(|meta| meta.created_at),
+                "updated_at": space_meta.map(|meta| meta.updated_at),
+            })
+        })
+        .collect()
+}
+
+fn admin_device_items(state: &AppState) -> Vec<Value> {
+    state
+        .persistence
+        .devices()
+        .list()
+        .map(|devices| {
+            devices
+                .into_iter()
+                .map(|device| {
+                    let mut value = device_inventory_to_json(&device);
+                    if let Some(object) = value.as_object_mut() {
+                        object.insert("kind".to_owned(), json!("device"));
+                    }
+                    value
+                })
+                .collect()
+        })
+        .unwrap_or_else(|_| {
+            state
+                .devices
+                .lock()
+                .expect("devices lock")
+                .iter()
+                .flat_map(|(actor, devices)| {
+                    devices.iter().map(move |(device_id, device)| {
+                        json!({
+                            "kind": "device",
+                            "actor": actor,
+                            "device_id": device_id,
+                            "payload": device,
+                        })
+                    })
+                })
+                .collect()
+        })
+}
+
+fn admin_capability_items(state: &AppState) -> Vec<Value> {
+    let spaces = state.spaces.lock().expect("spaces lock");
+    spaces
+        .search(Default::default())
+        .into_iter()
+        .flat_map(|space| state.authz.grants_in_space(space.space_id.as_str()))
+        .map(|grant| json!(grant))
+        .collect()
+}
+
+fn admin_federation_items(state: &AppState) -> Vec<Value> {
+    state
+        .federation_operations
+        .lock()
+        .expect("federation lock")
+        .iter()
+        .map(|operation| {
+            let projected = projection_event_from_operation(operation, None);
+            json!({
+                "kind": "federation_operation",
+                "operation_id": operation.operation_id,
+                "space_id": operation.space_id,
+                "operation_type": operation.operation_type,
+                "canonical_kind": kinds::canonical_kind_string(operation),
+                "flow_id": flow_id_for_projection_event(&projected),
+                "branch": discussion_branch_for_projection_event(
+                    &projected,
+                    flow_id_for_projection_event(&projected).as_deref(),
+                ),
+                "digest": operation.operation_digest().ok(),
+                "created_at": operation.created_at,
+            })
+        })
+        .collect()
+}
+
+fn admin_invite_items(state: &AppState) -> Vec<Value> {
+    state
+        .space_invites
+        .lock()
+        .expect("invites lock")
+        .values()
+        .map(|invite| {
+            json!({
+                "kind": "invite_token",
+                "invite_id": invite.invite_id,
+                "space_id": invite.space_id,
+                "inviter": invite.inviter,
+                "invitee": invite.invitee,
+                "token_hash": format!("sha256:{}", sha256_hex(invite.invite_token.as_bytes())),
+                "status": invite.status,
+                "expires_at": invite.expires_at,
+                "created_at": invite.created_at,
+            })
+        })
+        .collect()
+}
+
+fn admin_policy_items(state: &AppState) -> Vec<Value> {
+    state
+        .policy_documents
+        .lock()
+        .expect("policy documents lock")
+        .values()
+        .map(|policy| json!(policy_document_to_response(policy)))
+        .collect()
+}
+
+fn admin_media_items(state: &AppState) -> Vec<Value> {
+    state
+        .blobs
+        .lock()
+        .expect("blob lock")
+        .iter()
+        .map(|(blob_ref, blob)| {
+            json!({
+                "kind": "media",
+                "blob_ref": blob_ref,
+                "media_type": blob.media_type,
+                "filename": blob.filename,
+                "space_id": blob.space_id,
+                "encrypted": blob.encryption.is_some(),
+                "uploaded_by": blob.uploaded_by,
+                "size": blob.bytes.len(),
+                "created_at": blob.created_at,
+            })
+        })
+        .collect()
+}

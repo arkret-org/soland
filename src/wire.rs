@@ -1381,6 +1381,10 @@ pub fn describe(
                 }
             }
         }),
+        frontier: Vec::new(),
+        snapshot_frontier: Vec::new(),
+        reducer_profile: Some("cx.reducer.v1".to_owned()),
+        last_materialized_at: None,
     }
 }
 
