@@ -1,4 +1,4 @@
-// Several handler scaffolds (recovery / key-backup restore / push outbound)
+// Several routing scaffolds (recovery / key-backup restore / push outbound)
 // build large `serde_json::json!` literals that exceed the default macro
 // recursion limit. Bump it for the whole crate.
 #![recursion_limit = "512"]
@@ -8,7 +8,6 @@ pub mod authz;
 pub mod config;
 pub mod db;
 pub mod error;
-pub mod handlers;
 pub mod hlc;
 pub mod ids;
 pub mod kinds;
@@ -16,10 +15,16 @@ pub mod persistence;
 pub mod ratelimit;
 pub mod reducer;
 pub mod repo;
+pub mod result;
+pub mod routing;
 pub mod schema;
 pub mod state;
 pub mod wire;
 
+pub use error::AppError;
+pub use result::{AppResult, EmptyResponse, EmptyResult, JsonResult, empty_ok, json_ok};
+
+use contrix_sdk::salvo_adapter::register_contrix_oapi_components;
 use salvo::affix_state;
 use salvo::catcher::Catcher;
 use salvo::cors::{Cors, CorsHandler};
@@ -33,7 +38,7 @@ use serde_json::json;
 use std::sync::OnceLock;
 
 use crate::{
-    handlers::*,
+    routing::*,
     ratelimit::{RateLimiter, RateLimiterConfig, RateLimiterMiddleware},
     state::AppState,
 };
@@ -457,12 +462,16 @@ fn contrix_openapi_doc(router: &Router) -> OpenApi {
             }),
         )
         .merge_router(router);
-    register_contract_components(&mut doc);
-    register_contract_operations(&mut doc);
+    // Pre-register every Contrix protocol schema published by the SDK so the
+    // generated document carries real types in `components.schemas` rather than
+    // free-form blobs. Soland-specific schemas are layered on top.
+    register_contrix_oapi_components(&mut doc.components);
+    register_soland_specific_schemas(&mut doc);
+    register_soland_extension_operations(&mut doc);
     doc
 }
 
-fn register_contract_components(doc: &mut OpenApi) {
+fn register_soland_specific_schemas(doc: &mut OpenApi) {
     let string_schema = Object::with_type(BasicType::String);
     doc.components.schemas.insert(
         "FacetName",
@@ -524,10 +533,14 @@ fn schema_object(object: Object) -> RefOr<Schema> {
     RefOr::Type(Schema::object(object))
 }
 
-fn register_contract_operations(doc: &mut OpenApi) {
-    // TODO(openapi): migrate handlers to Salvo `#[endpoint]` extractors and
-    // ToSchema response types, then remove this compatibility contract table.
-    for (path, method, tag, operation_id, summary) in CONTRACT_OPERATIONS {
+fn register_soland_extension_operations(doc: &mut OpenApi) {
+    // Stable, spec-aligned operation IDs for the soland-specific surface. The
+    // base Contrix surface (server.describe, repo.*, identity.*, …) already
+    // has its components registered via `register_contrix_oapi_components`;
+    // this table covers operations that soland exposes on top of the canonical
+    // protocol — auth/account/admin/policy/etc. — until each `#[endpoint]`
+    // grows its own typed extractors and operation_id annotation.
+    for (path, method, tag, operation_id, summary) in SOLAND_EXTENSION_OPERATIONS {
         add_contract_operation(doc, path, *method, tag, operation_id, summary);
     }
 }
@@ -548,7 +561,7 @@ fn add_contract_operation(
     doc.paths.insert(path, PathItem::new(method, operation));
 }
 
-const CONTRACT_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &[
+const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &[
     (
         "/health",
         PathItemType::Get,

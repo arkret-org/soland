@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 
 use crate::artifacts;
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct HealthResponse {
     pub ok: bool,
     pub service: &'static str,
@@ -16,7 +16,7 @@ pub struct HealthResponse {
     pub checks: Value,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct AuthBridgeDescribeResponse {
     pub contract: String,
     pub version: String,
@@ -28,7 +28,7 @@ pub struct AuthBridgeDescribeResponse {
     pub todos: Vec<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct AuthBridgeAuthDescriptor {
     pub dev_login_path: String,
     pub session_grant_exchange_path: String,
@@ -36,7 +36,7 @@ pub struct AuthBridgeAuthDescriptor {
     pub principal_did_body_field: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct AuthBridgePushDescriptor {
     pub register_device_path: String,
     pub unregister_device_path: String,
@@ -45,14 +45,14 @@ pub struct AuthBridgePushDescriptor {
     pub register_device_mode: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct AuthBridgeExamples {
     pub session_grant_exchange_request: Value,
     pub register_device_request: Value,
     pub unregister_device_request: Value,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct OutboundPushBridgeDescribeResponse {
     pub contract: String,
     pub version: String,
@@ -64,7 +64,7 @@ pub struct OutboundPushBridgeDescribeResponse {
     pub todos: Vec<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct OutboundPushGatewayContractDescriptor {
     pub resolve_path: String,
     pub fetch_path: String,
@@ -80,7 +80,7 @@ pub struct OutboundPushGatewayContractDescriptor {
     pub snapshot_store_mode: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct OutboundPushDeliveryDescriptor {
     pub operation_id: String,
     pub origin_service_did_header: String,
@@ -90,7 +90,7 @@ pub struct OutboundPushDeliveryDescriptor {
     pub payload_mode: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct OutboundPushBridgeExamples {
     pub resolve_request: Value,
     pub fetch_request: Value,
@@ -99,7 +99,7 @@ pub struct OutboundPushBridgeExamples {
     pub cache_export_response: Value,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct IntegrationDescribeResponse {
     pub contract: String,
     pub version: String,
@@ -114,7 +114,7 @@ pub struct IntegrationDescribeResponse {
     pub todos: Vec<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct IntegrationDependencyDescriptor {
     pub service: String,
     pub purpose: String,
@@ -123,7 +123,7 @@ pub struct IntegrationDependencyDescriptor {
     pub mode: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct IntegrationSurfaceDescriptor {
     pub name: String,
     pub method: String,
@@ -133,27 +133,27 @@ pub struct IntegrationSurfaceDescriptor {
     pub todo: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct OutboundPushBridgeResolveRequest {
     pub push_gateway_url: String,
     #[serde(default)]
     pub refresh: bool,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct OutboundPushBridgeFetchRequest {
     pub push_gateway_url: String,
     #[serde(default)]
     pub force_refresh: bool,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct OutboundPushBridgeCacheInvalidateRequest {
     #[serde(default)]
     pub push_gateway_url: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct OutboundPushBridgeCacheSnapshot {
     pub push_gateway_url: String,
     pub service_base_url: String,
@@ -165,7 +165,7 @@ pub struct OutboundPushBridgeCacheSnapshot {
     pub remote_contract: Value,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct OutboundPushBridgeCacheExportResponse {
     #[serde(default)]
     pub entries: Vec<OutboundPushBridgeCacheSnapshot>,
@@ -174,7 +174,7 @@ pub struct OutboundPushBridgeCacheExportResponse {
     pub todos: Vec<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct OutboundPushBridgeCacheImportRequest {
     #[serde(default)]
     pub entries: Vec<OutboundPushBridgeCacheSnapshot>,
@@ -182,7 +182,7 @@ pub struct OutboundPushBridgeCacheImportRequest {
     pub replace_existing: bool,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct OutboundPushBridgeCacheImportResponse {
     pub imported_count: usize,
     pub skipped_count: usize,
@@ -193,7 +193,7 @@ pub struct OutboundPushBridgeCacheImportResponse {
     pub todos: Vec<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct OutboundPushBridgeResolveResponse {
     pub push_gateway_url: String,
     pub service_base_url: String,
@@ -206,7 +206,7 @@ pub struct OutboundPushBridgeResolveResponse {
     pub todos: Vec<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct OutboundPushResolvedContract {
     pub contract: String,
     pub expected_notify_path: String,
@@ -217,7 +217,7 @@ pub struct OutboundPushResolvedContract {
     pub expected_idempotency_key_header: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct OutboundPushBridgeFetchResponse {
     pub push_gateway_url: String,
     pub service_base_url: String,
@@ -234,13 +234,13 @@ pub struct OutboundPushBridgeFetchResponse {
     pub todos: Vec<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct OutboundPushBridgeCacheStatusResponse {
     #[serde(default)]
     pub entries: Vec<OutboundPushBridgeCacheEntry>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct OutboundPushBridgeCacheEntry {
     pub push_gateway_url: String,
     pub service_base_url: String,
@@ -252,14 +252,14 @@ pub struct OutboundPushBridgeCacheEntry {
     pub fetched_contract: OutboundPushResolvedContract,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct OutboundPushBridgeCacheInvalidateResponse {
     pub removed_count: usize,
     pub remaining_entries: usize,
     pub cache_state: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct SyncDescribeResponse {
     pub service_did: String,
     pub supported_sync_profiles: Vec<String>,
@@ -267,7 +267,7 @@ pub struct SyncDescribeResponse {
     pub frontier: Value,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct ClientSyncRequest {
     pub since: Option<String>,
     #[serde(default)]
@@ -284,7 +284,7 @@ pub struct ClientSyncRequest {
     pub set_presence: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct ClientSyncResponse {
     pub next_batch: String,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -297,7 +297,7 @@ pub struct ClientSyncResponse {
     pub device_lists: Value,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct SetTypingRequest {
     pub space_id: String,
     #[serde(default)]
@@ -308,7 +308,7 @@ pub struct SetTypingRequest {
     pub timeout_ms: Option<u64>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct SetTypingResponse {
     pub ok: bool,
     pub space_id: String,
@@ -317,7 +317,7 @@ pub struct SetTypingResponse {
     pub expires_at: Option<DateTime<Utc>>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct RegisterSchemaRequest {
     pub schema_id: String,
     pub kind: String,
@@ -330,7 +330,7 @@ pub struct RegisterSchemaRequest {
     pub active: bool,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct SchemaResponse {
     pub schema_id: String,
     pub kind: String,
@@ -343,19 +343,19 @@ pub struct SchemaResponse {
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct SchemasResponse {
     pub schemas: Vec<SchemaResponse>,
     pub next_cursor: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct SearchSpacesRequest {
     pub query: Option<String>,
     pub limit: Option<usize>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct DirectoryDescribeResponse {
     pub service_did: String,
     pub resource_types: Vec<String>,
@@ -363,7 +363,7 @@ pub struct DirectoryDescribeResponse {
     pub restricted_query_proof: bool,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct ResolveSpaceRequest {
     pub space_id: Option<String>,
     pub alias: Option<String>,
@@ -373,7 +373,7 @@ pub struct ResolveSpaceRequest {
     pub requester: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct ResolveSpaceResponse {
     pub space_preview: SpaceSearchEntry,
     pub stripped_state: Vec<Value>,
@@ -381,56 +381,56 @@ pub struct ResolveSpaceResponse {
     pub via_services: Vec<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct SearchSpacesResponse {
     pub results: Vec<SpaceSearchEntry>,
     pub next_cursor: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct SearchOrganizationsRequest {
     pub query: Option<String>,
     pub limit: Option<usize>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct ResolveOrganizationRequest {
     pub organization_id: Option<String>,
     pub handle: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct SearchActorsRequest {
     pub query: Option<String>,
     pub organization_id: Option<String>,
     pub limit: Option<usize>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct ResolveHandleRequest {
     pub handle: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct DirectoryValueSearchResponse {
     pub results: Vec<Value>,
     pub next_cursor: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct ResolveOrganizationResponse {
     pub organization: Value,
     pub spaces: Vec<Value>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct ResolveHandleResponse {
     pub handle: String,
     pub did: String,
     pub actor: Value,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct IndexQueryRequest {
     #[serde(default)]
     pub space_ids: Vec<String>,
@@ -448,14 +448,14 @@ pub struct IndexQueryRequest {
     pub limit: Option<usize>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct IndexQueryResponse {
     pub results: Vec<Value>,
     pub next_cursor: Option<String>,
     pub frontier: Value,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct IndexDescribeResponse {
     pub service_did: String,
     pub reducer_profiles: Vec<String>,
@@ -464,7 +464,7 @@ pub struct IndexDescribeResponse {
     pub frontier: Value,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct IndexSearchRequest {
     pub query: String,
     #[serde(default)]
@@ -477,20 +477,20 @@ pub struct IndexSearchRequest {
     pub limit: Option<usize>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct IndexSearchResponse {
     pub results: Vec<Value>,
     pub next_cursor: Option<String>,
     pub frontier: Value,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct IndexEntityResponse {
     pub entity: Value,
     pub frontier: Value,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct IndexThreadResponse {
     pub thread: Value,
     pub events: Vec<Value>,
@@ -498,7 +498,7 @@ pub struct IndexThreadResponse {
     pub frontier: Value,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct IndexNotificationsResponse {
     pub notifications: Vec<Value>,
     pub next_cursor: Option<String>,
@@ -506,14 +506,14 @@ pub struct IndexNotificationsResponse {
     pub frontier: Value,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct IndexInboxResponse {
     pub flows: Vec<Value>,
     pub next_cursor: Option<String>,
     pub frontier: Value,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct IndexSpaceHierarchyResponse {
     pub root_space_id: String,
     pub spaces: Vec<Value>,
@@ -521,7 +521,7 @@ pub struct IndexSpaceHierarchyResponse {
     pub frontier: Value,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct BackfillResponse {
     pub events: Vec<Value>,
     pub prev_cursor: Option<String>,
@@ -530,7 +530,7 @@ pub struct BackfillResponse {
     pub limited: bool,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct EventDescribeResponse {
     pub service_did: String,
     pub protocol_version: String,
@@ -544,7 +544,7 @@ pub struct EventDescribeResponse {
     pub capabilities: Value,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct EventSubmitResponse {
     pub status: String,
     pub event_id: String,
@@ -554,40 +554,40 @@ pub struct EventSubmitResponse {
     pub receipt: Value,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct EventReadResponse {
     pub event: Value,
     pub metadata: Value,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct EventBatchGetRequest {
     #[serde(default)]
     pub event_ids: Vec<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct EventBatchGetResponse {
     pub events: Vec<EventReadResponse>,
     pub missing: Vec<String>,
     pub unauthorized: Vec<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct EventsPageResponse {
     pub events: Vec<EventReadResponse>,
     pub next_cursor: Option<String>,
     pub frontier: Value,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct EventsFrontierResponse {
     pub actor_frontier: BTreeMap<String, u64>,
     pub space_frontier: BTreeMap<String, Value>,
     pub frontier: Value,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct SnapshotHeadResponse {
     pub snapshot_ref: String,
     pub state_hash: String,
@@ -597,7 +597,7 @@ pub struct SnapshotHeadResponse {
     pub signature: Value,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct RepoDescribeResponse {
     pub repo_did: String,
     pub head_commit: Option<String>,
@@ -605,14 +605,14 @@ pub struct RepoDescribeResponse {
     pub limits: Value,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct ListCommitsResponse {
     pub commits: Vec<Commit>,
     pub next_cursor: Option<String>,
     pub has_more: bool,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct GetOperationsRequest {
     #[serde(default)]
     pub operation_ids: Vec<String>,
@@ -624,14 +624,14 @@ fn default_include_payload() -> bool {
     true
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct GetOperationsResponse {
     pub operations: Vec<Operation>,
     pub missing: Vec<String>,
     pub unauthorized: Vec<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct RepoSyncRequest {
     pub repo_id: String,
     pub since: Option<String>,
@@ -640,14 +640,14 @@ pub struct RepoSyncRequest {
     pub filters: Option<Value>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct RepoSyncResponse {
     pub operations: Vec<Operation>,
     pub next_cursor: Option<String>,
     pub has_more: bool,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct SubmitCommitRequest {
     pub repo_id: String,
     pub commit: Commit,
@@ -657,7 +657,7 @@ pub struct SubmitCommitRequest {
     pub idempotency_key: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct SubmitCommitResponse {
     pub status: String,
     pub commit_id: String,
@@ -665,7 +665,7 @@ pub struct SubmitCommitResponse {
     pub sync_token: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct AuthzCheckRequest {
     pub actor: String,
     pub action: String,
@@ -674,7 +674,7 @@ pub struct AuthzCheckRequest {
     pub context: Option<Value>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct AuthzCheckResponse {
     pub allowed: bool,
     pub reason_code: Option<String>,
@@ -683,20 +683,20 @@ pub struct AuthzCheckResponse {
     pub obligations: Vec<Value>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct EffectiveGrantsResponse {
     pub grants: Vec<Value>,
     pub state_hash: Option<String>,
     pub evaluated_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct InvitesResponse {
     pub invites: Vec<Value>,
     pub next_cursor: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct PushRegisterRequest {
     pub operation_id: Option<String>,
     pub principal_did: Option<String>,
@@ -711,7 +711,7 @@ pub struct PushRegisterRequest {
     pub proof: Option<Value>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct PushRegisterResponse {
     pub ok: bool,
     pub registration_id: Option<String>,
@@ -721,19 +721,19 @@ pub struct PushRegisterResponse {
     pub warnings: Vec<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct PushUnregisterRequest {
     pub device_id: String,
     pub push_key: Option<String>,
     pub app_id: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct PushNotifyRequest {
     pub notification: Value,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct PushNotifyResponse {
     pub rejected: Vec<Value>,
 }
@@ -742,7 +742,7 @@ fn default_true() -> bool {
     true
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct UpsertPushRuleRequest {
     pub rule_id: String,
     #[serde(default = "default_true")]
@@ -753,12 +753,12 @@ pub struct UpsertPushRuleRequest {
     pub conditions: Value,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct OkResponse {
     pub ok: bool,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct ModerationReportRequest {
     pub space_id: String,
     pub target_ref: String,
@@ -769,14 +769,14 @@ pub struct ModerationReportRequest {
     pub evidence_refs: Vec<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct ModerationReportResponse {
     pub report_id: String,
     pub status: String,
     pub routed_to: Vec<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct UpsertPolicyDocumentRequest {
     #[serde(default)]
     pub policy_id: Option<String>,
@@ -794,7 +794,7 @@ pub struct UpsertPolicyDocumentRequest {
     pub active: bool,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct PolicyDocumentResponse {
     pub policy_id: String,
     pub owner: String,
@@ -806,13 +806,13 @@ pub struct PolicyDocumentResponse {
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct PolicyDocumentsResponse {
     pub policies: Vec<PolicyDocumentResponse>,
     pub next_cursor: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct PolicyCheckRequest {
     pub request_id: String,
     #[serde(default)]
@@ -827,7 +827,7 @@ pub struct PolicyCheckRequest {
     pub auth_context: Option<Value>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct PolicyCheckResponse {
     pub decision: String,
     pub reason_code: String,
@@ -837,20 +837,20 @@ pub struct PolicyCheckResponse {
     pub signature: Value,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct ApiError {
     pub ok: bool,
     pub error: ErrorEnvelope,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct DevLoginRequest {
     pub actor: String,
     pub device_id: String,
     pub display_name: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct SessionGrantExchangeRequest {
     pub grant_jwt: String,
     pub principal_did: String,
@@ -858,7 +858,7 @@ pub struct SessionGrantExchangeRequest {
     pub display_name: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct DevLoginResponse {
     pub access_token: String,
     pub token_type: String,
@@ -867,13 +867,13 @@ pub struct DevLoginResponse {
     pub expires_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct LogoutResponse {
     pub ok: bool,
     pub revoked: bool,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct RegisterAccountRequest {
     pub did: String,
     pub handle: String,
@@ -881,7 +881,7 @@ pub struct RegisterAccountRequest {
     pub device_id: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct AccountResponse {
     pub did: String,
     pub handle: String,
@@ -889,18 +889,18 @@ pub struct AccountResponse {
     pub created_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct ContactRequestRequest {
     pub target: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct ContactRespondRequest {
     pub requester: String,
     pub action: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct ContactResponse {
     pub requester: String,
     pub target: String,
@@ -909,12 +909,12 @@ pub struct ContactResponse {
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct ContactsResponse {
     pub contacts: Vec<ContactResponse>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct CreateSpaceRequest {
     pub title: String,
     pub summary: Option<String>,
@@ -928,12 +928,12 @@ pub struct CreateSpaceRequest {
     pub invitees: Vec<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct AddSpaceMemberRequest {
     pub member: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct SpaceLifecycleResponse {
     pub ok: bool,
     pub space_id: String,
@@ -942,7 +942,7 @@ pub struct SpaceLifecycleResponse {
     pub deleted: bool,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct SendMessageRequest {
     pub space_id: String,
     #[serde(default)]
@@ -952,7 +952,7 @@ pub struct SendMessageRequest {
     pub encrypted: bool,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct SendMessageResponse {
     pub event_id: String,
     pub operation_id: String,
@@ -961,7 +961,7 @@ pub struct SendMessageResponse {
     pub sync_token: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct IdentityDescribeResponse {
     pub service_did: String,
     pub registry_mode: String,
@@ -970,14 +970,14 @@ pub struct IdentityDescribeResponse {
     pub profiles: Vec<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct IdentityResolveRequest {
     pub did: String,
     #[serde(default)]
     pub include: Vec<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct SubmitDidOperationRequest {
     pub did: String,
     pub seq: u64,
@@ -988,7 +988,7 @@ pub struct SubmitDidOperationRequest {
     pub proofs: Vec<Value>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct SubmitDidOperationResponse {
     pub status: String,
     pub head_event_hash: String,
@@ -996,20 +996,20 @@ pub struct SubmitDidOperationResponse {
     pub receipts: Vec<Value>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct IdentityLogResponse {
     pub events: Vec<Value>,
     pub next_cursor: Option<String>,
     pub has_more: bool,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct IdentityReceiptsResponse {
     pub receipts: Vec<Value>,
     pub threshold_met: bool,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct IdentityResolveResponse {
     pub did_document: Value,
     pub key_log_head: Option<String>,
@@ -1018,7 +1018,7 @@ pub struct IdentityResolveResponse {
     pub method_evidence: Value,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct KeysUploadRequest {
     pub device_id: String,
     #[serde(default)]
@@ -1043,38 +1043,38 @@ pub struct KeysUploadRequest {
     pub device_signature: Value,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct KeysUploadResponse {
     pub one_time_key_counts: Value,
     pub fallback_keys: Value,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct KeysQueryRequest {
     pub device_keys: std::collections::BTreeMap<String, Vec<String>>,
     #[serde(default)]
     pub timeout_ms: Option<u64>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct KeysQueryResponse {
     pub device_keys: Value,
     pub failures: Value,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct KeysClaimRequest {
     pub one_time_keys:
         std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct KeysClaimResponse {
     pub one_time_keys: Value,
     pub failures: Value,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct KeysBackupsPutResponse {
     pub ok: bool,
     pub backup: Value,
@@ -1083,7 +1083,7 @@ pub struct KeysBackupsPutResponse {
     pub todos: Vec<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct KeysBackupsListResponse {
     pub backups: Vec<Value>,
     pub next_cursor: Option<String>,
@@ -1092,7 +1092,7 @@ pub struct KeysBackupsListResponse {
     pub todos: Vec<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct KeysBackupsDeleteResponse {
     pub ok: bool,
     pub backup_id: String,
@@ -1102,26 +1102,26 @@ pub struct KeysBackupsDeleteResponse {
     pub todos: Vec<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct DeviceMessagesSendRequest {
     pub messages: std::collections::BTreeMap<String, std::collections::BTreeMap<String, Value>>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct DeviceMessagesSendResponse {
     pub ok: bool,
     pub delivered: Value,
     pub unknown_devices: Value,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct DeviceMessagesReceiveResponse {
     pub events: Vec<Value>,
     pub next_batch: Option<String>,
     pub limited: bool,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct CreateWebrtcSessionRequest {
     pub space_id: String,
     #[serde(default)]
@@ -1130,7 +1130,7 @@ pub struct CreateWebrtcSessionRequest {
     pub ttl_ms: Option<u64>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct CreateWebrtcSessionResponse {
     pub session_id: String,
     pub space_id: String,
@@ -1139,7 +1139,7 @@ pub struct CreateWebrtcSessionResponse {
     pub created_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct WebrtcSignalRequest {
     pub message_type: String,
     #[serde(default)]
@@ -1148,7 +1148,7 @@ pub struct WebrtcSignalRequest {
     pub proofs: Vec<Value>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct WebrtcSignalResponse {
     pub ok: bool,
     pub session_id: String,
@@ -1156,7 +1156,7 @@ pub struct WebrtcSignalResponse {
     pub next_cursor: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct WebrtcSignalsResponse {
     pub session_id: String,
     pub events: Vec<Value>,
@@ -1164,7 +1164,7 @@ pub struct WebrtcSignalsResponse {
     pub limited: bool,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct BlobUploadResponse {
     pub blob_ref: String,
     pub size: usize,
@@ -1411,13 +1411,13 @@ pub fn now() -> DateTime<Utc> {
 
 // ── Conversation Model DTOs ──
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct ReviseMessageRequest {
     pub event_id: String,
     pub content: Value,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct ReviseMessageResponse {
     pub event_id: String,
     pub revision_of: String,
@@ -1425,25 +1425,25 @@ pub struct ReviseMessageResponse {
     pub commit_id: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct RedactMessageRequest {
     pub event_id: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct RedactMessageResponse {
     pub redacted: bool,
     pub event_id: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct AddReactionRequest {
     pub event_id: String,
     pub key: String,
     pub space_id: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct ReactionResponse {
     pub event_id: String,
     pub actor: String,
@@ -1451,21 +1451,21 @@ pub struct ReactionResponse {
     pub active: bool,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct RemoveReactionRequest {
     pub event_id: String,
     pub key: String,
     pub space_id: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct SetReadMarkerRequest {
     pub space_id: String,
     pub event_id: String,
     pub scope_id: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct ReadMarkerResponse {
     pub space_id: String,
     pub actor: String,
@@ -1474,14 +1474,14 @@ pub struct ReadMarkerResponse {
     pub read_at: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct GetReadMarkersRequest {
     pub space_id: String,
 }
 
 // ── Entity/Relation/View DTOs ──
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct CreateEntityRequest {
     pub space_id: String,
     pub entity_type: String,
@@ -1493,7 +1493,7 @@ pub struct CreateEntityRequest {
     pub fields: BTreeMap<String, Value>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct EntityResponse {
     pub entity_id: String,
     pub space_id: String,
@@ -1507,7 +1507,7 @@ pub struct EntityResponse {
     pub updated_at: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct UpdateEntityRequest {
     pub title: Option<String>,
     pub content: Option<Value>,
@@ -1517,13 +1517,13 @@ pub struct UpdateEntityRequest {
     pub fields: BTreeMap<String, Value>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct ListEntitiesRequest {
     pub space_id: String,
     pub entity_type: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct CreateRelationRequest {
     pub space_id: String,
     pub relation_kind: String,
@@ -1533,7 +1533,7 @@ pub struct CreateRelationRequest {
     pub fields: BTreeMap<String, Value>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct RelationResponse {
     pub relation_id: String,
     pub space_id: String,
@@ -1545,13 +1545,13 @@ pub struct RelationResponse {
     pub created_at: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct ListRelationsRequest {
     pub space_id: String,
     pub relation_kind: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct CreateViewRequest {
     pub space_id: String,
     pub kind: String,
@@ -1561,7 +1561,7 @@ pub struct CreateViewRequest {
     pub options: Value,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct CreateGrantRequest {
     pub space_id: String,
     pub subject: String,
@@ -1571,7 +1571,7 @@ pub struct CreateGrantRequest {
     pub constraints: Vec<serde_json::Value>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct ViewResponse {
     pub view_id: String,
     pub space_id: String,

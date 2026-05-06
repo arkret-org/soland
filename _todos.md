@@ -1,236 +1,254 @@
-# soland — Principal Server Audit & TODO
+# soland — Open Tasks
 
-> Audit baseline: 2026-05-04 (last refreshed 2026-05-05). Reference implementation of `contrix-spec` v1 (Salvo + Diesel/PostgreSQL + in-memory fallback).
+> Audit baseline: 2026-05-04. Reference implementation of `contrix-spec` v1
+> (Salvo + Diesel/PostgreSQL + in-memory fallback). Completed work lives in
+> `git log`; this file lists only **outstanding** tasks.
 >
-> 已完成的 round-by-round 细节见 git log；本文件只列**未完成**的工作。
+> Last refresh: 2026-05-06.
 
 ---
 
-## 已完成基线（snapshot — 2026-05-05）
+## P0 · Foundation gate (serial)
 
-| 项目 | 落地点 | 原 ID |
-| --- | --- | --- |
-| `cx.relation.update` patch-merge + `ProjectionEffect::RelationUpdated`；死分支修复 | `src/reducer.rs`、`src/kinds.rs` | A1a |
-| `cx.membership.{kick,ban,unban,knock}` 不再坍缩成 join/leave；新增 `banned_members` / `knocking_members` 集合 | `src/reducer.rs`、`src/state.rs` | A1b |
-| `ids::state_key_segment_encode` + `ids::state_key_compose` (percent-encode `%` 与 `\|`)，含碰撞测试 | `src/ids.rs` | A20 |
-| Authz 决策优先级改为 deny → quarantine → require_review → allow | `src/authz.rs::highest_priority_decision` | B5 |
-| `validate_embedded_artifacts() -> Result<(), ArtifactError>` 启动期 typed error | `src/artifacts.rs`、`src/main.rs` | Q4 |
-| `#![recursion_limit = "512"]` 治标 bump（彻底解药仍是 F1 缩短 scaffold JSON） | `src/lib.rs` | F7 |
-| F1 handlers 拆分（partial）：`handlers.rs` 19138 行 → `handlers/{mod,util,mimi,recovery,webrtc,moderation,federation,auth,space,message,account,schema,relation,reaction,read_marker,entity,view,key_backup_restore}.rs`，`mod.rs` rounds 2-4 终点 **11679 行 (-39%)**；72 / 72 lib unit tests 通过；route table 不变 | `src/handlers/*.rs` | F1 (rounds 2-4) |
-| F1 handlers 拆分 round 5：从 11679 → **8925 行 (-23.5% 又 / -53.4% 累计)**。新增 6 个子模块：`identity.rs` (518)、`admin.rs` (317) + 8 builders、`profile.rs` (59)、`policy.rs` (458) + 5 fn + obligation/scope/effect 校验、`directory.rs` (579) + 9 demo/visibility helpers、`events.rs` (1015) + 22 validator helpers。共 23 个子模块共 ~10.7K 行；72 / 72 lib unit tests 通过 | `src/handlers/*.rs` | F1 (round 5) |
+> Any of F2/F5/F6 left undone causes downstream rework or blocks CI.
 
-### F1 后续 round 拆分模式
-
-1. `use super::{name, ...}` 拉父模块私有 helper（Rust 子模块可见父私有项）。
-2. `use crate::{ids, state::AppState, wire::...}` 拉 crate 项。
-3. `mod.rs` 顶部 `pub mod <domain>; pub use <domain>::{handler1, ...};` 保持 `lib.rs::handlers::*` glob 路由不变。
-4. `cargo check` 后按编译警告剪掉 `mod.rs` 不再使用的 `use`。
-5. 倒序删被搬走的代码块避免行号偏移；或像 round-4 那样所有子模块写完后一次 `sed` 删整段。
-6. `git mv src/handlers.rs src/handlers/mod.rs` 已用过，blame 历史保留。
-
-终点：`mod.rs` 仅 routes + `pub use` re-exports + `error_catcher` + `wait_for_sync_token` middleware（≤ 200 行）。
-
----
-
-## P0 · Foundation gate（继续串行）
-
-> 这一组是**串行 gate**：F1-cont/F2/F3 任一不做，后面的并行扩展都会反复冲突或返工。
-
-| # | 任务 | 涉及文件 | 阻塞下游 |
+| # | Task | Files | Blocks |
 | --- | --- | --- | --- |
-| **F1-cont** ✅ | mod.rs **拆分完成**：从原 19138 行降到 **1118 行 (-94%)** —— 但其中 **648 行是两个 `#[cfg(test)] mod` 测试块**（operation_conformance_tests 243 行 + canonical_conformance_vectors 405 行），release 编译被 `#[cfg(test)]` 摘掉，实际 release-shape 仅 ~470 行（路由 + 31 个 `pub mod` + 31 个 `pub use` re-export 块 + `error_catcher` + `wait_for_sync_token` middleware + 5 个零散小 helper：`ContrixOpenApiDoc`、`snapshot_bundle_for_space`、`parse_snapshot_ref`、`device_inventory_to_json`、`message_event`、`generate_invite_token`、`contrix_openapi_yaml` 这一个 handler）。round 10 完成：`projection.rs`（840 行 — 17 fn projection writers + federation ingest + sync_timeline_message_json + ProjectedEventPage / FederationIngestResult struct）；`operations.rs`（717 行 — OperationPayloadSchema + PayloadRequirement + 23 个 validate_* schema/policy/canonical-json/encrypted-envelope/content-block/mention validators）；`space.rs` 扩容（554 → **840 行**，并入 16 fn space-query helpers：is_space_deleted / space_has_member / space_visible_to / space_search_visible_to / space_resolvable_to / space_id_visible_to / space_id_accessible / space_allows_plaintext_service / space_discoverability / invite_token_matches_space / invite_token_space_id / space_search_discoverability / prune_expired_typing / typing_ephemeral_for_space / record_space_lifecycle_operation / next_author_seq）。剩余优化（cosmetic，非 P0）：把 `SnapshotBundle / snapshot_bundle_for_space / parse_snapshot_ref` 移进 sync.rs；`device_inventory_to_json / generate_invite_token / message_event` 散件并入 auth/space/projection；`contrix_openapi_yaml` 单 handler 给 describe.rs；test mods 拆到独立测试文件。这些都不影响 `mod.rs` release-shape ≤ 200 行的目标 —— 已基本达成。 | `src/handlers/*.rs` | P1/P2 全部 |
-| **F2** | `MemoryPersistenceStore` 的 `contacts / space_meta / messages / blobs` fallback 升级 PgStore；为 `push_devices / push_rules / presence / policy_documents / moderation_reports / audit_log / webrtc_sessions / key_backups / recovery_tickets / restore_state_snapshots / outbound_push_cache` 新增 trait + Pg + memory 实现，迁移当前 `state.rs` 锁里那一坨长期态。`persistence.rs:531` TODO(P0 durable-state) 即此项。 | `src/persistence.rs`、`src/state.rs`、`migrations/*` | P1 federation/MIMI/recovery/key-backup |
-| **F3** ✅ | `src/error.rs` 已落地：`ErrorCode` enum 含 42 个变体（spec error-code-registry.json v2026-05-03），与 `contrix_core::error::KNOWN_ERROR_CODES` 双向 round-trip（`variant_count_matches_registry` + `wire_codes_round_trip` 测试锁住 spec B-08）；`as_str() / http_status() / from_wire() / render(res, message)` 四件套；`http_status_lookup_never_misses` + 13 项 `http_status_spot_checks` 测试。新模块共 4 个 tests 全部通过（共 72 → 76）。剩余增量工作（incremental，非 P0）：把现有 ~100 个 `render_error(res, StatusCode::X, "code_str", "msg")` 调用站点逐步迁移为 `ErrorCode::Foo.render(res, "msg")`。完成后即可 `#[deny(...)]` 拒绝硬编码字符串 code。 | `src/error.rs`（新）+ 各 handler module 的 render_error 调用迁移 | P1 authz/federation/events |
-| **F4** | `lib.rs` 里的 `register_contract_operations` + 静态 `CONTRACT_OPERATIONS` 表（spec B-07）替换为由 `artifacts/openapi/contrix-service-api.openapi.yaml` + `contract-catalog.json` 生成的 OpenAPI；删除 `// TODO(openapi)` 兼容层。 | `src/lib.rs:518-1327` | OpenAPI 一致性 |
-| **F5** | **Integration test hang**：`account_contacts_and_space_lifecycle_workflow` 与 `admin_collection_surfaces_return_sodmin_shapes` 单线程下都无限挂起（reducer stash 后依然挂；与 Round-1 改动无关，是 build break 之前就存在的隐疾）。建议 `RUSTFLAGS="--cfg tokio_unstable" RUST_LOG=trace` + tokio-console 抓阻塞栈，或临时摘 ratelimit / `wait_for_sync_token` middleware 做差分。 | `tests/http_api.rs`、`src/ratelimit.rs`、`src/handlers/mod.rs::wait_for_sync_token` | 解锁 CI |
-| **F6** | **Integration test failure**：`auth_keys_device_messages_and_blobs_work` 失败复现 + 修；同样不是 Round-1 改动。 | `src/handlers/{keys,device_messages,blob}.rs`（F1-cont 之后） | 解锁 CI |
+| **F2** | Upgrade `MemoryPersistenceStore` fallbacks for `contacts / space_meta / messages / blobs` to PgStore. Add trait + Pg + memory implementations for `push_devices / push_rules / presence / policy_documents / moderation_reports / audit_log / webrtc_sessions / key_backups / recovery_tickets / restore_state_snapshots / outbound_push_cache` and migrate the long-lived state currently held in `state.rs` mutexes. (`persistence.rs:531` `TODO(P0 durable-state)`.) | `src/persistence.rs`, `src/state.rs`, `migrations/*` | P1 federation/MIMI/recovery/key-backup |
+| **F5** | **Integration-test hangs** — `account_contacts_and_space_lifecycle_workflow` and `admin_collection_surfaces_return_sodmin_shapes` (and ~8 more) hang under cargo test, even with `--test-threads=1`. Reproduce with `RUSTFLAGS="--cfg tokio_unstable" RUST_LOG=trace` + `tokio-console` or strip ratelimit / `wait_for_sync_token` middleware in a diff. | `tests/http_api.rs`, `src/ratelimit.rs`, `src/routing/mod.rs::wait_for_sync_token` | unblocks CI |
+| **F6** | **Integration-test failure** — `auth_keys_device_messages_and_blobs_work` panics on `legacy_field_push_body["error"]["message"]` (gets `Null`); pre-existing on baseline. Reproduce + fix push-notify error envelope shape. | `src/routing/{keys,device_messages,blob,push}.rs` | unblocks CI |
 
 ---
 
-## P1 · 并行域扩展（F1-cont/F2/F3 之后可并行）
+## P1 · Domain expansion (parallelizable after F2)
 
-下面 6 个 stream 彼此独立，可以分给 6 路并行实现。
+### Stream A · Reducer kind handler coverage (21% → 80%+)
 
-### Stream A · Reducer kind handler 扩面（21% → 80%+）
+> Each sub-task is an independent PR. Projection state classified by spec
+> `evaluation_class` (stateless / grant_local / space_state).
 
-> 每个 sub-task 独立 PR；唯一依赖是 F1-cont 已拆出对应 ingest 函数。projection state 全部按 spec `evaluation_class` 区分（stateless / grant_local / space_state）。
-
-| # | 任务 | 文件 |
+| # | Task | Files |
 | --- | --- | --- |
-| A2 | 加 `cx.space.{join_rule, history_visibility, discovery, policy, policy_components, schema, plaintext_visible_services, history_sharing_policy, asset_privacy_policy, moderation_policy, media_service, tombstone, archive, freeze, upgrade, organization, child, parent, inheritance_policy}` 投影 → 新 `SpaceMetaState`，reducer fan-out。覆盖 spec B-15 / B-16 / B-21（`kind=enclave` ⇒ `federation_policy=closed` 默认；`kind=board\|list` ⇒ `boundary_profile=container`）。 | `src/reducer.rs`、`src/state.rs::ProjectionState` |
-| A3 | `cx.schema.{define,update}` + `cx.morph.{create,update,archive,restore}` 投影 → `SchemaRegistryState` / `MorphState`（互相独立 PR）。 | `src/reducer.rs` |
-| A4 | `cx.view.{create,update,reconcile}` 投影 → `ViewState`（spec M-34：renderer enum per-kind 必须 schema if/then 强制）。 | `src/reducer.rs`、`src/wire.rs` |
-| A5 | `cx.flow.{create,update,archive,restore,convert,move,reorder,branch.*}` 投影 → `FlowState`，含 fractional indexing。同时落地 spec B-19：`Message.branch` 改 `^[a-z][a-z0-9_]{0,63}$`。 | `src/reducer.rs`、`src/wire.rs` |
-| A6 | `cx.capability.{grant,delegate,revoke,derived}` 投影 → `CapabilityState`（喂下游 `effective_grants`）。 | `src/reducer.rs` |
-| A7 | `cx.policy.{set,rule,action}` 投影 → `PolicyState`（与 Stream-D 联动）。 | `src/reducer.rs` |
-| A8 | `cx.invite.{create,cancel,accept,third_party,claim,revoke}` 投影 → `InviteState`（spec M-10：补 invite/notification 的 auth_refs）。 | `src/reducer.rs` |
-| A9 | `cx.account.{status,blocklist}` + `cx.account_data.set` 投影（spec B-17：补 account.status / moderation.report / moderation.frank 进 state-event 名册）。 | `src/reducer.rs` |
-| A10 | `cx.moderation.{report,frank}` 投影；联动 Stream-E 的 moderation pipeline。 | `src/reducer.rs` |
-| A11 | `cx.audit.{accessed, ryw_receipt}` 投影 → `AuditReceiptState`；同时在 catalog 里**注册 `cx.audit.ryw_receipt` event kind**（spec B-13）。 | `src/reducer.rs`、`contrix-spec/artifacts/registry/contract-catalog.json` |
-| A12 | `cx.identity.{disclosure_policy,disclosure_receipt,presentation_request,presentation_response}` + `cx.did.proof` + `cx.session.grant` 投影。 | `src/reducer.rs` |
-| A13 | `cx.device.{authorized,revoked,list_update}` 投影 → 与 Stream-F 的 device inventory 写穿。 | `src/reducer.rs` |
-| A14 | `cx.key.verification.*`（8 个子 kind）投影 → `KeyVerificationState`，含 SAS/QR 一次性消费、设备签名绑定、replay 阻挡（spec M-23）。 | `src/reducer.rs` |
-| A15 | `cx.mls.{proposal,genesis,commit,commit_failed,welcome,keypackage,epoch}` 投影 → `MlsGroupState`；处理 spec M-22 的 history-key 撤销/销毁顺序。 | `src/reducer.rs` |
-| A16 | `cx.space_key.{share,withheld,share_audit}` 投影 → `SpaceKeyState`。 | `src/reducer.rs` |
-| A17 | `cx.member.state` + `cx.profile.{update,space_override}` 投影。 | `src/reducer.rs` |
-| A18 | `cx.mimi.room_binding`、`cx.sovereign.did_policy`、`cx.organization.{discovery,moderation_policy}` 投影。 | `src/reducer.rs` |
-| A19 | spec B-09：`redact` reducer 必须保留 `actor_seq`（当前 `cleared` 把 attachments/mentions/relations 扁平化是错的；`hashes` 应清掉而非保留）。 | `src/reducer.rs` |
+| A2 | `cx.space.{join_rule, history_visibility, discovery, policy, policy_components, schema, plaintext_visible_services, history_sharing_policy, asset_privacy_policy, moderation_policy, media_service, tombstone, archive, freeze, upgrade, organization, child, parent, inheritance_policy}` projections → new `SpaceMetaState`, reducer fan-out. Covers spec B-15 / B-16 / B-21 (`kind=enclave` ⇒ `federation_policy=closed` default; `kind=board\|list` ⇒ `boundary_profile=container`). | `src/reducer.rs`, `src/state.rs::ProjectionState` |
+| A3 | `cx.schema.{define,update}` + `cx.morph.{create,update,archive,restore}` projections → `SchemaRegistryState` / `MorphState` (independent PRs). | `src/reducer.rs` |
+| A4 | `cx.view.{create,update,reconcile}` projection → `ViewState` (spec M-34: per-kind renderer enum schema-enforced). | `src/reducer.rs`, `src/wire.rs` |
+| A5 | `cx.flow.{create,update,archive,restore,convert,move,reorder,branch.*}` projection → `FlowState` with fractional indexing. Apply spec B-19: `Message.branch` regex `^[a-z][a-z0-9_]{0,63}$`. | `src/reducer.rs`, `src/wire.rs` |
+| A6 | `cx.capability.{grant,delegate,revoke,derived}` projection → `CapabilityState` (feeds `effective_grants`). | `src/reducer.rs` |
+| A7 | `cx.policy.{set,rule,action}` projection → `PolicyState` (linked with Stream-D). | `src/reducer.rs` |
+| A8 | `cx.invite.{create,cancel,accept,third_party,claim,revoke}` projection → `InviteState` (spec M-10: invite/notification `auth_refs`). | `src/reducer.rs` |
+| A9 | `cx.account.{status,blocklist}` + `cx.account_data.set` projections (spec B-17: include `account.status / moderation.report / moderation.frank` in the state-event roster). | `src/reducer.rs` |
+| A10 | `cx.moderation.{report,frank}` projection; coordinate with Stream-E moderation pipeline. | `src/reducer.rs` |
+| A11 | `cx.audit.{accessed, ryw_receipt}` projection → `AuditReceiptState`; **register `cx.audit.ryw_receipt`** in the catalog (spec B-13). | `src/reducer.rs`, `contrix-spec/artifacts/registry/contract-catalog.json` |
+| A12 | `cx.identity.{disclosure_policy,disclosure_receipt,presentation_request,presentation_response}` + `cx.did.proof` + `cx.session.grant` projections. | `src/reducer.rs` |
+| A13 | `cx.device.{authorized,revoked,list_update}` projection → wire through to Stream-F device inventory. | `src/reducer.rs` |
+| A14 | `cx.key.verification.*` (8 sub-kinds) projection → `KeyVerificationState` with SAS/QR single-use, device-signature binding, replay rejection (spec M-23). | `src/reducer.rs` |
+| A15 | `cx.mls.{proposal,genesis,commit,commit_failed,welcome,keypackage,epoch}` projection → `MlsGroupState`; honor spec M-22 history-key revocation/destruction order. | `src/reducer.rs` |
+| A16 | `cx.space_key.{share,withheld,share_audit}` projection → `SpaceKeyState`. | `src/reducer.rs` |
+| A17 | `cx.member.state` + `cx.profile.{update,space_override}` projections. | `src/reducer.rs` |
+| A18 | `cx.mimi.room_binding`, `cx.sovereign.did_policy`, `cx.organization.{discovery,moderation_policy}` projections. | `src/reducer.rs` |
+| A19 | spec B-09: `redact` reducer must preserve `actor_seq` (currently `cleared` flattens attachments/mentions/relations; `hashes` must be cleared, not retained). | `src/reducer.rs` |
 
-### Stream B · Authz / Capability / Policy 引擎补全
+### Stream B · Authz / capability / policy
 
-> B1 先做（schema 字段对齐），B2..B12 之后并行。
+> B1 first (schema alignment), B2..B12 parallel afterward.
 
-| # | 任务 | 文件 |
+| # | Task | Files |
 | --- | --- | --- |
-| B1 | 对齐 grant 信封 shape（spec B-02）+ 统一 constraint schema（spec B-04 + B-05），补 `recurrence / max_duration / sensitive_fields / allowed_view_kinds / approval_threshold / condition.kind`；删除 `condition.when` 字符串 DSL。 | `src/authz.rs`、`src/wire.rs`、spec mirror |
-| B2 | 实现 11 种缺失 constraint：`field_access / scope_limitation / delegation_control / rate_limiting / approval_workflow / claim_based / accountability / encryption_requirement / container_move / visibility_control / resource_limit / edit_window / device_session`（每种 1 个 sub-PR）。 | `src/authz.rs::evaluate_constraint` |
-| B3 | 实现 10 种 `condition.kind`：`object_is_owned_by_actor / actor_is_assignee / ...`；当前全部 fail-open。 | `src/authz.rs` |
-| B4 | grant-constraint 加 `evaluation_class: enum("stateless","grant_local","space_state","external")` 字段并据此分桶缓存（contrix-spec _todos B4/B5 同步）。 | `src/authz.rs`、spec schema |
-| B6 | 把 reducer 里的 `cx.capability.*`（A6）/`cx.invite.*`（A8）投影喂进 `effective_grants()` —— 当前只回直接 grant，没有传递/委托/撤销链。 | `src/authz.rs`、`src/handlers/authz.rs`（F1-cont 后） |
-| B7 | invite ↔ grant 联动：accept invite 自动生成 grant；revoke invite 自动撤销悬挂的 grant；和 audit 关联。 | `src/handlers/{authz,invite}.rs` |
-| B8 | capability lattice（auth_weight 11 档）—— 当前是平面布尔。spec M-09 要求显式 causal_depth tie-break（v1.x 也可，留 todo）。 | `src/authz.rs` |
-| B9 | policy_check + grant 评估合并：现 `policy_check` 与 `authz_check` 互不知晓，决策不一致；联调成单一 evaluator。 | `src/handlers/{authz,policy}.rs` |
-| B10 | obligation 真正执行：当前只是 echo JSON。绑定到 reducer / 写路径 / quarantine 写穿。 | `src/handlers/policy.rs` |
-| B11 | revocation 不再仅 `grant.revoked` 单 bool —— 加批量/scope/time-window/CRL 撤销；联动 federation 撤销 fan-out（spec M-18）。 | `src/authz.rs` |
-| B12 | policy decision 缓存 TTL 由 `evaluation_class` 决定，而非硬编码 5 分钟。 | `src/authz.rs`、`src/state.rs` |
+| B1 | Align grant envelope shape (spec B-02) and unify constraint schema (spec B-04 + B-05); add `recurrence / max_duration / sensitive_fields / allowed_view_kinds / approval_threshold / condition.kind`; remove the `condition.when` string DSL. | `src/authz.rs`, `src/wire.rs`, spec mirror |
+| B2 | Implement 11 missing constraints (each one PR): `field_access / scope_limitation / delegation_control / rate_limiting / approval_workflow / claim_based / accountability / encryption_requirement / container_move / visibility_control / resource_limit / edit_window / device_session`. | `src/authz.rs::evaluate_constraint` |
+| B3 | Implement 10 `condition.kind` cases: `object_is_owned_by_actor / actor_is_assignee / ...`. Currently fail-open. | `src/authz.rs` |
+| B4 | Add `evaluation_class: enum("stateless","grant_local","space_state","external")` to grant constraints and bucket caches accordingly (mirror in spec). | `src/authz.rs`, spec schema |
+| B6 | Feed reducer `cx.capability.*` (A6) / `cx.invite.*` (A8) projections into `effective_grants()`. Currently only direct grants — no delegation/revocation chains. | `src/authz.rs`, `src/routing/authz.rs` |
+| B7 | Invite ↔ grant linkage: accept-invite issues a grant; revoke-invite revokes the dangling grant; audit linked. | `src/routing/{authz,invite}.rs` |
+| B8 | Capability lattice (auth_weight 11 levels) — currently flat boolean. Spec M-09 requires explicit causal_depth tie-break (v1.x or later). | `src/authz.rs` |
+| B9 | Merge `policy_check` and `authz_check` — currently independent and inconsistent. | `src/routing/{authz,policy}.rs` |
+| B10 | Execute obligations — currently echoed as JSON. Bind to reducer / write path / quarantine. | `src/routing/policy.rs` |
+| B11 | Revocation beyond a single `grant.revoked` bool — add bulk/scope/time-window/CRL revocation; federation revocation fan-out (spec M-18). | `src/authz.rs` |
+| B12 | Policy decision cache TTL by `evaluation_class` instead of hardcoded 5 min. | `src/authz.rs`, `src/state.rs` |
 
-### Stream C · Federation 与 MIMI 上桥
+### Stream C · Federation & MIMI bridges
 
-> 内部 sub-task 全独立。生产落地需 F2 持久化。
+> Independent sub-tasks; production rollout depends on F2.
 
-| # | 任务 | 文件 |
+| # | Task | Files |
 | --- | --- | --- |
-| C1 | spec B-06：federation signature transcript 全量切到 RFC 9421（`@method / @target-uri / @authority / content-digest / created / expires`）；移除 legacy 字段名。 | `src/handlers/federation.rs` |
-| C2 | `federation_push_operations` 把 ingest 结果写穿到 `federation_operations` 持久表（不再丢锁）；实现 idempotency key（spec M-20）。 | 同上、`persistence.rs` |
-| C3 | `federation_pull_operations` 改读持久表 + cursor，重启后可恢复；当前 in-memory snapshot 重启清零。 | 同上 |
-| C4 | `federation_space_members` 替换 hardcoded `"join"` placeholder，改读 reducer membership state（依赖 A2）。 | 同上 |
-| C5 | `federation_verify_actor` 真正校验签名 / DID document / key set；返回 `validation_class` enum 而非 bool（spec M-19）。 | 同上 |
-| C6 | revocation fan-out TTL + 重试策略（spec M-18）。 | 同上 |
-| C7 | MIMI `room_update / notify / room_message` 真正落进 `cx.*` event ingest，而非仅写 audit log；移除 demo "alice" 映射。 | `src/handlers/mimi.rs` |
-| C8 | MIMI `consent_request / consent_update` 走 Stream-D 的 consent state machine + 持久化。 | 同上 |
-| C9 | MIMI `key_material` 真正生成/取 KeyPackage（联动 A15）；移除 `full_mls_keypackage_claim_not_implemented` 字样。 | 同上 |
-| C10 | MIMI `identifiers_query` 走真正的 directory（Stream E），删 hardcoded alice。 | 同上 |
-| C11 | MIMI `report_abuse` / `proxy_download` 走 F2 的持久 moderation/blob 表。 | 同上 |
-| C12 | MIMI provider/protocol directory 由 config 驱动，不再静态返回。 | 同上 |
+| C1 | spec B-06: federation signature transcript fully on RFC 9421 (`@method / @target-uri / @authority / content-digest / created / expires`); drop legacy field names. | `src/routing/federation.rs` |
+| C2 | `federation_push_operations` writes through to a persistent `federation_operations` table; idempotency key (spec M-20). | same + `persistence.rs` |
+| C3 | `federation_pull_operations` reads from the persistent table with a cursor; survives restart (currently in-memory snapshot is wiped). | same |
+| C4 | `federation_space_members` replaces hardcoded `"join"` placeholder with reducer membership state (depends on A2). | same |
+| C5 | `federation_verify_actor` actually validates signatures / DID document / key set; returns `validation_class` enum, not a bool (spec M-19). | same |
+| C6 | Revocation fan-out TTL + retry policy (spec M-18). | same |
+| C7 | MIMI `room_update / notify / room_message` ingest into `cx.*` events instead of the audit log; remove demo "alice" mapping. | `src/routing/mimi.rs` |
+| C8 | MIMI `consent_request / consent_update` via Stream-D consent state machine + persistence. | same |
+| C9 | MIMI `key_material` actually issues / fetches a KeyPackage (links to A15); remove the `full_mls_keypackage_claim_not_implemented` literal. | same |
+| C10 | MIMI `identifiers_query` via the real directory (Stream E); drop hardcoded alice. | same |
+| C11 | MIMI `report_abuse` / `proxy_download` route through F2 persistent moderation/blob tables. | same |
+| C12 | MIMI provider/protocol directory comes from config, not a static literal. | same |
 
-### Stream D · Recovery / Key Backup / Restore-state（46+ scaffold endpoint 落地）
+### Stream D · Recovery / key-backup / restore-state
 
-> 当前这块全是 stub —— `recovery/{discovery,readiness,live-snapshot,stack-bundle}` + `keys/backups/restore-state/*` + `keys/backups/restore-tickets/{ticket_id}/*`（执行器、审批、活动、时间线、receipt、bundle、audit-feed、materialized-device-handoff）。所有 handler 返回 `scaffold_*` 字段并带 TODO。
+> The 46+ scaffold endpoints (`recovery/{discovery,readiness,live-snapshot,stack-bundle}`,
+> `keys/backups/restore-state/*`, `keys/backups/restore-tickets/{ticket_id}/*`) all
+> return `scaffold_*` placeholder fields with TODOs.
 >
-> D1 是数据模型 gate；D2..D11 之后可并行。
+> D1 is the data-model gate; D2..D11 parallel afterward.
 
-| # | 任务 | 文件 |
+| # | Task | Files |
 | --- | --- | --- |
-| D1 | 设计并落地 `RecoveryTicket` / `RestoreCheckpoint` / `RestoreApproval` / `RestoreExecutorRun` / `RestoreReceipt` 数据模型 + Pg/memory store + state machine（pending → approved → enqueued → running → materialized → completed/failed/canceled）。 | `persistence.rs`、新 `src/recovery.rs`、`migrations/*` |
-| D2 | `keys/backups` PUT/GET/DELETE/LIST 由进程内存换成 D1 的 store；schema 校验补全（cx.schema.key_backup.v1，spec B-11）。 | `src/handlers/key_backup.rs` |
-| D3 | restore ticket lifecycle handlers：`describe / start / advance / resume / cancel / retry`（每个 1 PR）。 | `src/handlers/key_backup_restore.rs` |
-| D4 | restore approval：`approvals/status / approvals/submit` —— 真正 reviewer 授权 + quorum + 审计。 | 同上 |
-| D5 | restore executor：`executor/{status,enqueue,start,complete}` —— 持久 worker lease/heartbeat + 失败补偿。 | 同上 |
-| D6 | restore artifact endpoints：`result / receipt / bundle / activity / timeline / audit-feed / materialized-device-handoff` —— 不再合成 dummy ID。 | 同上 |
-| D7 | restore-state snapshot 持久化：`describe / export / import / durability / checkpoints` 走 D1 store + 信任/新鲜度策略。 | 同上 |
-| D8 | `recovery/discovery` 用真实 service discovery + DID-bound audience 元数据。 | `src/handlers/recovery.rs` |
-| D9 | `recovery/readiness` 跑真实 storage / authz / policy / crypto 健康检查。 | 同上 |
-| D10 | `recovery/live-snapshot` 改 actor-scoped 仪表盘 + 分页 + 隐私边界。 | 同上 |
-| D11 | `recovery/stack-bundle` 由 `recovery/contract-stack` 的真实生成产物组装；移除 inline path 列表。 | 同上 |
-| D12 | spec M-28：did:plc `degraded_mirror_only` 7 天硬限制加宽限/延期机制。 | `src/handlers/identity.rs` |
+| D1 | Design and land `RecoveryTicket` / `RestoreCheckpoint` / `RestoreApproval` / `RestoreExecutorRun` / `RestoreReceipt` data models + Pg/memory store + state machine (`pending → approved → enqueued → running → materialized → completed/failed/canceled`). | `persistence.rs`, new `src/recovery.rs`, `migrations/*` |
+| D2 | `keys/backups` PUT/GET/DELETE/LIST move from in-process memory to D1's store; full schema validation (`cx.schema.key_backup.v1`, spec B-11). | `src/routing/key_backup.rs` |
+| D3 | Restore-ticket lifecycle handlers: `describe / start / advance / resume / cancel / retry` (one PR each). | `src/routing/key_backup_restore.rs` |
+| D4 | Restore approvals: `approvals/status / approvals/submit` — real reviewer authorization + quorum + audit. | same |
+| D5 | Restore executor: `executor/{status,enqueue,start,complete}` — persistent worker lease/heartbeat + failure compensation. | same |
+| D6 | Restore artifact endpoints: `result / receipt / bundle / activity / timeline / audit-feed / materialized-device-handoff` — drop synthetic dummy IDs. | same |
+| D7 | Restore-state snapshots: `describe / export / import / durability / checkpoints` via D1 store + trust/freshness policy. | same |
+| D8 | `recovery/discovery` real service discovery + DID-bound audience metadata. | `src/routing/recovery.rs` |
+| D9 | `recovery/readiness` real storage / authz / policy / crypto health checks. | same |
+| D10 | `recovery/live-snapshot` actor-scoped dashboard + pagination + privacy boundary. | same |
+| D11 | `recovery/stack-bundle` assembled from real `recovery/contract-stack` output; remove inline path list. | same |
+| D12 | spec M-28: `did:plc degraded_mirror_only` 7-day hard limit needs grace/extension. | `src/routing/identity.rs` |
 
-### Stream E · Directory / Search / Moderation 真实数据
+### Stream E · Directory / search / moderation
 
-> 当前 `search_organizations / search_actors / search_users / resolve_handle / resolve_organization` 全部是 demo_actors 内嵌固定数据；`search_spaces` 没有 cursor。
+> `search_organizations / search_actors / search_users / resolve_handle / resolve_organization`
+> are all backed by the inline `demo_actors` fixture. `search_spaces` lacks a cursor.
 
-| # | 任务 | 文件 |
+| # | Task | Files |
 | --- | --- | --- |
-| E1 | F2 的 PgStore 加 `actors`、`organizations`、`handles` 表 + index，directory handler 读真表。 | `migrations/*`、`persistence.rs` |
-| E2 | `search_spaces` 加 cursor + 排名 + 隐私可见性过滤（不再 hardcoded `public_only=false`）。 | `src/handlers/directory.rs` |
-| E3 | 反枚举：rate-limit / 同意 / 模糊匹配（spec 安全章节，防 directory 遍历）。 | 同上 |
-| E4 | moderation pipeline：`moderation_report` 写 D1/F2 持久表 + 异步审核工作流 + reducer A10 联动。 | `src/handlers/moderation.rs` |
-| E5 | `moderation/report` 加 SLA / 状态查询（reporter-visible state）。 | 同上 |
+| E1 | F2 PgStore adds `actors`, `organizations`, `handles` tables + indexes; directory handlers read them. | `migrations/*`, `persistence.rs` |
+| E2 | `search_spaces` cursor + ranking + privacy/visibility filters (drop hardcoded `public_only=false`). | `src/routing/directory.rs` |
+| E3 | Anti-enumeration: rate limits / consent / fuzzy matching (spec security chapter). | same |
+| E4 | Moderation pipeline: `moderation_report` writes through D1/F2 + async review workflow + reducer A10 link. | `src/routing/moderation.rs` |
+| E5 | `moderation/report` SLA / status query (reporter-visible). | same |
 
-### Stream F · Push / Device / Crypto / Privacy
+### Stream F · Push / device / crypto / privacy
 
-| # | 任务 | 文件 |
+| # | Task | Files |
 | --- | --- | --- |
-| F-1 | spec B-14：DID 不能进 push payload / TURN username / push `sender` 字段 —— 全路径换 Space-scoped pairwise pseudonym 或 ephemeral token；加 conformance MUST_NOT 测试。 | `src/handlers/{push,webrtc,push_outbound}.rs` |
-| F-2 | `keys/upload / query / claim` 走 PgStore 持久化（当前 `mod.rs` TODO(P0 durable-state)）；revocation propagation 与 reducer A13 联动。 | `src/handlers/keys.rs`、`persistence.rs` |
-| F-3 | spec B-10：KeyPackage shape 统一到 `principal_id/device_id/keypackage_id/device_signature/expires_at`。 | 同上 |
-| F-4 | spec B-11：`secret_storage` 与 `key_backup` 合并到单一 `cx.schema.key_backup.v1` + `domain` enum；HKDF info per domain。 | `src/handlers/key_backup.rs`、wire schema |
-| F-5 | spec B-12：MLS GroupContext extension `cx_app_state_ref` 分配私用 codepoint（0xF000–0xFFFF），写进扩展注册表。 | spec artifact + `src/wire.rs` |
-| F-6 | spec B-22：encrypted attachment `key_ref` shape 切到 object 形式 `{algorithm, group_state_ref}`；不再字符串 `"mls_epoch:42"`。 | `src/handlers/blob.rs`、`src/wire.rs` |
-| F-7 | spec B-23：blob metadata 加 `space_id` 关联 + 下载/GC 时校验。 | `src/handlers/blob.rs`、`migrations/*` |
-| F-8 | push outbound bridge：替换 process-memory cache（一堆 TODO(push-outbound)）为持久 snapshot store，加 etag/freshness、首次 fetch 持久化、契约漂移 fail-closed。 | `src/handlers/push_outbound.rs` |
-| F-9 | `auth/session-grant/exchange` 与 `push/register-device` 的 session-grant bridge（TODO(session-grant)）替换为 coauth-backed introspection + audience 绑定 + session-public-key proof verification。 | `src/handlers/{auth,push}.rs` |
-| F-10 | WebRTC sessions / signals 持久化（F2 后）；ICE config 不再返回空数组。 | `src/handlers/webrtc.rs` |
-| F-11 | profile/presence 走 F2 的 presence store；presence/typing 区分 ephemeral vs durable 通道。 | `src/handlers/profile.rs` |
+| F-1 | spec B-14: DIDs must not appear in push payload / TURN username / push `sender`. Replace with Space-scoped pairwise pseudonym or ephemeral token; add MUST_NOT conformance tests. | `src/routing/{push,webrtc,push_outbound}.rs` |
+| F-2 | `keys/upload / query / claim` via PgStore (`mod.rs` `TODO(P0 durable-state)`); revocation propagation linked with reducer A13. | `src/routing/keys.rs`, `persistence.rs` |
+| F-3 | spec B-10: KeyPackage shape unified to `principal_id/device_id/keypackage_id/device_signature/expires_at`. | same |
+| F-4 | spec B-11: merge `secret_storage` and `key_backup` into `cx.schema.key_backup.v1` + `domain` enum; HKDF info per domain. | `src/routing/key_backup.rs`, wire schema |
+| F-5 | spec B-12: MLS GroupContext extension `cx_app_state_ref` allocated a private codepoint (0xF000–0xFFFF) and registered. | spec artifact + `src/wire.rs` |
+| F-6 | spec B-22: encrypted attachment `key_ref` switched to object form `{algorithm, group_state_ref}`; drop string `"mls_epoch:42"`. | `src/routing/blob.rs`, `src/wire.rs` |
+| F-7 | spec B-23: blob metadata adds `space_id` association + download/GC checks. | `src/routing/blob.rs`, `migrations/*` |
+| F-8 | Push outbound bridge: replace process-memory cache (`TODO(push-outbound)` cluster) with a persistent snapshot store; etag/freshness, first-fetch persistence, fail-closed on contract drift. | `src/routing/push_outbound.rs` |
+| F-9 | `auth/session-grant/exchange` and `push/register-device` `TODO(session-grant)` bridge: replace with coauth-backed introspection + audience binding + session-public-key proof verification. | `src/routing/{auth,push}.rs` |
+| F-10 | WebRTC sessions / signals persistence (after F2); ICE config no longer returns an empty array. | `src/routing/webrtc.rs` |
+| F-11 | profile/presence via the F2 presence store; presence/typing distinguish ephemeral vs durable channels. | `src/routing/profile.rs` |
 
 ---
 
-## P2 · Sync / State-resolution / 一致性
+## P2 · Sync / state-resolution / consistency
 
-> 依赖 P1-Stream-A；可与 P1-Stream-B/C/D 并行。
+> Depends on P1-Stream-A; can run in parallel with P1-Stream-B/C/D.
 
-| # | 任务 | 文件 |
+| # | Task | Files |
 | --- | --- | --- |
-| S1 | `client_sync` 把 `cx:cursor:` 与 reducer event 序列真正映射（TODO(P0 sync)）。 | `src/handlers/sync.rs` |
-| S2 | `snapshot-chunk` 由单 JSON chunk 切成确定性多 chunk（TODO(P1 snapshot)）。 | 同上 |
-| S3 | spec B-03：history_visibility (`invited` / `restricted`) 三处分歧统一到 reducer 单一解释。 | `src/reducer.rs`、`src/handlers/sync.rs` |
-| S4 | spec M-15：所有 sync/directory 响应里 ID 前缀确保 `cx:space:` 而非 `space:`。 | grep + fix |
-| S5 | spec M-16：sync subscription 里 `$ME` / `*` 通配语义形式化 + 校验。 | `src/handlers/sync.rs` |
-| S6 | spec M-09 / M-10 配套：补 4 个 state-resolution conformance vector（与 spec 协同）。 | tests + spec |
-| S7 | `index/debug/reducer` 内存 snapshot 换成持久投影（TODO(P1 reducer-debug)）。 | `src/handlers/index.rs` |
+| S1 | `client_sync` actually maps `cx:cursor:` to reducer event sequence (`TODO(P0 sync)`). | `src/routing/sync.rs` |
+| S2 | `snapshot-chunk` splits into deterministic multi-chunk (`TODO(P1 snapshot)`). | same |
+| S3 | spec B-03: history_visibility (`invited` / `restricted`) — three divergences unified through the reducer. | `src/reducer.rs`, `src/routing/sync.rs` |
+| S4 | spec M-15: every sync/directory response uses the `cx:space:` prefix (not `space:`). | grep + fix |
+| S5 | spec M-16: formalize and validate `$ME` / `*` wildcard semantics in sync subscription. | `src/routing/sync.rs` |
+| S6 | spec M-09 / M-10 follow-up: 4 state-resolution conformance vectors (with spec). | tests + spec |
+| S7 | `index/debug/reducer` in-memory snapshot replaced with persistent projection (`TODO(P1 reducer-debug)`). | `src/routing/index.rs` |
 
 ---
 
-## P3 · 代码质量 / 可观测性 / 安全审计（贯穿全程，可与上面并行）
+## P3 · Code quality / observability / security audit
 
-| # | 任务 | 文件 |
+| # | Task | Files |
 | --- | --- | --- |
-| Q1 | 所有 handler 切到 Salvo `#[endpoint]` extractor + `ToSchema` response type，删除 `register_contract_operations` compat 表（`lib.rs:519` TODO(openapi)）。 | `src/handlers/*`、`src/lib.rs` |
-| Q2 | spec M-01：彻底移除 `event_type`，仅保留 `event_kind`；删 dead error `aad_ambiguous_kind`。 | `src/wire.rs`、handlers、tests |
-| Q3 | spec M-02..M-07：字段命名漂移统一（`principal_id/subject/holder_did`、`session_key_pub/session_public_key`、`Proof.kind`、`read_marker.id` pattern 等）。 | wire + handlers |
-| Q5 | tracing：每个 handler 入口 `instrument(span)`，带 actor/space/event_kind；当前几乎无可观测信号。 | `src/handlers/*` |
-| Q6 | rate-limit 由 `ratelimit.rs` 单进程 → 共享 store（Pg/Redis）；当前重启即清。 | `src/ratelimit.rs` |
-| Q7 | tests 拆分：现 `tests/http_api.rs` 一个文件 5233 行 / 42 test。按 Stream A..F 切到 `tests/{auth,reducer,authz,federation,mimi,recovery,...}.rs`，共享 `setup` 抽到 `tests/common/mod.rs`。 | `tests/*` |
-| Q8 | 端到端契约测试：用 spec `artifacts/fixtures/*` 跑 `submit → reduce → query` round-trip，作为 conformance gate。 | `tests/conformance.rs`（新） |
-| Q9 | dev_login / `admin/{resource}` 等 dev-only path 加 `#[cfg(not(feature = "production"))]` 或运行时 hard guard，避免误开 prod（TODO(P1 admin)）。 | `src/handlers/admin.rs` |
-| Q10 | 安全审计：`SERVERX_DEVELOPMENT_MODE=false` 路径上的所有"接受" branch 全部走真实 proof 校验 —— 写一组负向 conformance test。 | `tests/security.rs`（新） |
-| Q11 | CI：跑 `cargo clippy -- -D warnings` + `cargo fmt --check` + `python ../contrix-spec/tools/artifact_pipeline.py check`（漂移闸门）。 | `.github/workflows/*` |
+| Q1 | Migrate every `#[endpoint]` handler to typed `JsonBody<T>` / `QueryParam<T>` extractors and `ToSchema` response types so per-route OpenAPI carries real request/response refs. Once every route is typed, drop the `SOLAND_EXTENSION_OPERATIONS` compatibility table in `src/lib.rs`. | `src/routing/*`, `src/lib.rs` |
+| Q2 | spec M-01: remove `event_type` entirely; keep only `event_kind`. Drop the dead `aad_ambiguous_kind` error. | `src/wire.rs`, handlers, tests |
+| Q3 | spec M-02..M-07: unify field-name drift (`principal_id/subject/holder_did`, `session_key_pub/session_public_key`, `Proof.kind`, `read_marker.id` pattern, …). | wire + handlers |
+| Q5 | tracing: every handler entry `instrument(span)` carrying actor/space/event_kind. Currently almost no observable signal. | `src/routing/*` |
+| Q6 | Rate-limit single-process → shared store (Pg/Redis); restart no longer wipes counters. | `src/ratelimit.rs` |
+| Q7 | Tests split: `tests/http_api.rs` is one 5233-line / 42-test file. Carve into `tests/{auth,reducer,authz,federation,mimi,recovery,...}.rs` with shared `setup` in `tests/common/mod.rs`. | `tests/*` |
+| Q8 | End-to-end conformance: run spec `artifacts/fixtures/*` through `submit → reduce → query` round-trip as the conformance gate. | `tests/conformance.rs` (new) |
+| Q9 | `dev_login` / `admin/{resource}` and other dev-only paths gated behind a runtime hard guard (matching the SDK's "production" feature) instead of just `state.config.development_mode`. | `src/routing/{auth,admin}.rs` |
+| Q10 | Security audit: every `accept` branch on the `SERVERX_DEVELOPMENT_MODE=false` path goes through real proof verification; back this with negative conformance tests. | `tests/security.rs` (new) |
+| Q11 | CI: add `cargo clippy -- -D warnings` (already done), `cargo fmt --check` (already done), and `python ../contrix-spec/tools/artifact_pipeline.py check` (drift gate) — currently not wired. | `.github/workflows/*` |
 
 ---
 
-## 当前状态摘要
+## P4 · Robustness, security & operations
 
-- **代码规模**：`src/` ~28K 行（其中 `handlers/mod.rs` 11679 + 子模块 ~8K），`tests/http_api.rs` 5.2K 行（42 tests）。
-- **路由**：~180 个 HTTP 路由全部挂上 router；其中相当一部分是 scaffold/echo（recovery、key-backup restore、push outbound bridge、MIMI、directory 等）。
-- **持久化**：PgStore 仅覆盖 `accounts / sessions / devices / federation_transactions` 四张表；`contacts / space_meta / messages / blobs / push / presence / policy / audit / moderation / webrtc / key_backups / recovery_*` 全部走 MemoryStore fallback —— 进程重启即丢。
-- **Reducer**：130 个注册 event kind 中只完整投影了 28 个（21%）。MLS、key.verification、schema/morph、view、flow、capability、policy、identity disclosure、audit、invite、agent、applet、call 全无 projection。
-- **Authz**：14 种 constraint 实现 3 种；10 种 condition.kind 实现 0 种；invite ↔ grant ↔ policy 三者未联动；obligation 当 inert JSON 透传。
-- **Handlers 拆分**：F1 partial 完成，`mod.rs` 11679 行 (-39%)；仍需继续按 P0-F1-cont 清单拆到 ≤ 200 行。
-- **Spec 同步**：`contrix-spec/_report.md` 列出 23 BLOCKING + 30+ MAJOR；其中 ~14 个 BLOCKING 直接落到服务器实现（B-02/03/05/06/07/09/10/11/12/13/14/17/18/22/23）。
-- **CI**：lib unit tests 72/72 pass；3 个 integration test 阻塞（F5 ×2 hang + F6 ×1 fail）。
+> Audit findings from a project-wide review on 2026-05-06. Items that landed
+> in the same pass are recorded in git; only the open work is below.
+
+### Security
+
+| # | Task | Files |
+| --- | --- | --- |
+| Sec-2 | `dev_login` and `admin/{resource}` already `render_error(NOT_FOUND/FORBIDDEN)` when `development_mode=false`, but the route is still mounted. Either compile them out behind a `dev` Cargo feature or refuse to start the server with `development_mode=true` while `--bind 0.0.0.0:*`. Linked with Q9. | `src/routing/{admin,auth}.rs`, `src/lib.rs`, `Cargo.toml` |
+| Sec-3 | The CORS handler trusts a single env-supplied `SERVERX_CORS_ALLOW_ORIGIN`. Validate that the origin is a well-formed URL and is not `*` when `allow_credentials=true` (currently the default). | `src/lib.rs::cors_handler_for_origin`, `src/config.rs` |
+| Sec-6 | `src/main.rs` round-trips `DATABASE_URL` through `unsafe { std::env::set_var(...) }`. Drop the round-trip; pass the URL through `AppState` / `Db::connect(&url)` instead. | `src/main.rs`, `src/db.rs` |
+| Sec-7 | Negative conformance test: every `dev-proof`/`alg=none` accept path returns 403 when `development_mode=false`. Pairs with Q10. | `tests/security.rs` (new) |
+
+### Configuration & defaults
+
+| # | Task | Files |
+| --- | --- | --- |
+| Cfg-1 | Surface common knobs that today are not configurable: `SERVERX_REQUEST_BODY_LIMIT`, `SERVERX_BLOB_MAX_BYTES`, `SERVERX_RATE_LIMITER_*`, `SERVERX_TRACING_FORMAT` (json vs pretty), `SERVERX_OTEL_ENDPOINT`. (`RUST_LOG` already routes through `EnvFilter`.) | `src/config.rs`, `src/main.rs`, `src/ratelimit.rs` |
+| Cfg-2 | `AppConfig` currently has no `Display`/`Debug` redaction — service DID + base URL log fine but DB URL would leak credentials if added. Add a `redact_database_url()` helper before logging. | `src/config.rs`, `src/main.rs` |
+| Cfg-3 | Validate `SERVERX_BLOB_ROOT` at startup — the directory must exist, be writable, and not be the system temp on production. Today a missing directory only fails on the first upload. | `src/config.rs` or `src/main.rs` |
+
+### Deployment & operations
+
+| # | Task | Files |
+| --- | --- | --- |
+| Dep-2 | `Dockerfile` doesn't yet declare `HEALTHCHECK`; the example block lives in `DEPLOYMENT.md` only. Add an inline directive that defers to `/health`. | `Dockerfile` |
+| Dep-4 | `Dockerfile` runs as UID 10001 but doesn't `chown` the blob-root; document the bind-mount permission requirement OR mkdir + chown in the entrypoint. | `Dockerfile` |
+| Dep-5 | A `docker-compose.yml` for local development (postgres + soland + adminer) so contributors don't need to set up DB by hand. | `docker-compose.yml` (new) |
+| Dep-6 | `/metrics` Prometheus endpoint — Stream-Q5 covers tracing spans, but a separate counter/histogram surface is table stakes. | new module + `src/lib.rs` |
 
 ---
 
-## 并行调度建议
+## Quick status (2026-05-06)
 
-| 时间线 | 可并行 stream |
+- **Code**: `src/` ~28K LOC; `tests/http_api.rs` 5.2K LOC / 42 tests.
+- **Routes**: ~180 HTTP routes wired; many remain scaffold/echo (recovery,
+  key-backup restore, push outbound bridge, MIMI, directory).
+- **Persistence**: PgStore covers `accounts / sessions / devices /
+  federation_transactions`; everything else falls back to MemoryStore — process
+  restart wipes state.
+- **Reducer**: 28 of 130 registered event kinds are projected (~21%). MLS,
+  key-verification, schema/morph, view, flow, capability, policy,
+  identity-disclosure, audit, invite, agent, applet, call: no projection.
+- **Authz**: 3 / 14 constraints implemented; 0 / 10 `condition.kind` cases;
+  invite ↔ grant ↔ policy not linked; obligations are inert.
+- **OpenAPI**: components seeded from contrix-sdk's `register_contrix_oapi_components`;
+  routes discovered via `merge_router(&router)`. Per-handler typed extractors
+  pending (Q1).
+- **Spec drift**: `contrix-spec/_report.md` lists 23 BLOCKING + 30+ MAJOR; ~14
+  BLOCKING land in the server (B-02/03/05/06/07/09/10/11/12/13/14/17/18/22/23).
+- **CI**: 76/76 lib unit tests pass; 31 integration tests pass; 1 pre-existing
+  failure (F6) + ~10 pre-existing hangs (F5) block green CI.
+
+---
+
+## Parallel-schedule guidance
+
+| Sprint | Streams that can run in parallel |
 | --- | --- |
-| **Sprint 1 (foundation gate)** | F1-cont → F3 → F4（顺序）；F2 schema 设计可与 F1-cont 并行；F5 / F6 单独 track |
-| **Sprint 2 (并行扩面)** | A · B · C · D · E · F 六路并行（不同工程师）；P2 部分 sub-task（S3 / S4 / S5）也可并 |
-| **Sprint 3 (一致性 + Q)** | A19 + S1 / S2 / S6 / S7 + Q1..Q11 并行 |
+| **Sprint 1 (foundation gate)** | F2 / F5 / F6 in parallel; P4 robustness items (Sec / Cfg / Dep / Pkg / CI) can mostly run on their own track |
+| **Sprint 2 (domain expansion)** | A · B · C · D · E · F (six streams); some P2 sub-tasks (S3 / S4 / S5) ride along |
+| **Sprint 3 (consistency + Q)** | A19 + S1 / S2 / S6 / S7 + Q1..Q11 |
 
-**冲突点**（必须 serialize）：
+**Hard ordering constraints:**
 
-- Stream A 的 reducer 改动与 Stream B 的 effective-grants reducer 喂入 → A 先合，B 跟上
-- Stream C 的 `federation_space_members` → 必须等 A2（`SpaceMetaState`）和 reducer membership 投影
-- Stream D-1 的 `RecoveryTicket` model → D2..D11 全依赖
-- Stream F-2 的 PgStore key store → A13/A14/A15 reducer 写穿点依赖
-- Q1（OpenAPI 切 `#[endpoint]`） → 必须在 F1-cont 之后；Q1 与 P1 各 stream 不冲突，但要注意 PR rebase 频率
+- Stream A reducer changes feed Stream B's effective-grants → A merges first, B follows.
+- Stream C's `federation_space_members` requires A2 (`SpaceMetaState`) and reducer membership projection.
+- Stream D-1 (`RecoveryTicket` model) gates D2..D11.
+- Stream F-2 (PgStore key store) gates A13/A14/A15 reducer write-throughs.
+- Q1 (typed `#[endpoint]` extractors) is independent of P1; coordinate rebase frequency.
 
 ---
 
-## 不在本轮范围（v1.x 留底）
+## Out of scope (v1.x backlog)
 
-- `auth_weight` 11 档刻度重构成 `(governance_layer, authority_kind)` lattice（B8 仅做最小占位）
-- spec M-38 / M-39 / M-40：applet 命名空间、agent endpoint 生命周期、MIMI room_binding 生命周期
-- 多 region / 跨服务部署（当前 soland 是单进程 reference）
-- 完整 IANA codepoint 申请（B-12 仅分配私用区段）
+- Reshape `auth_weight` 11-level scale into a `(governance_layer, authority_kind)` lattice (B8 is just a placeholder).
+- spec M-38 / M-39 / M-40: applet namespace, agent endpoint lifecycle, MIMI room_binding lifecycle.
+- Multi-region / cross-service deployment (soland is a single-process reference).
+- Full IANA codepoint application (B-12 only assigns the private-use block).
