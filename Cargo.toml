@@ -2,17 +2,26 @@
 name = "soland"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.85"
+description = "Reference Contrix v1 principal server implementation built on Salvo, Diesel, and PostgreSQL."
+license = "Apache-2.0"
+repository = "https://github.com/contrix/soland"
+homepage = "https://github.com/contrix/soland"
+readme = "README.md"
+keywords = ["contrix", "decentralized", "did", "salvo", "server"]
+categories = ["network-programming", "web-programming::http-server"]
+authors = ["Contrix contributors"]
 
 [dependencies]
 anyhow = "1.0.100"
 chrono = { version = "0.4.42", features = ["serde"] }
-contrix-sdk = { package = "contrix", path = "../contrix-rust-sdk/crates/sdk", features = ["full-surface", "device-runtime"] }
+contrix-sdk = { package = "contrix", path = "../contrix-rust-sdk/crates/sdk", features = ["full-surface", "device-runtime", "salvo"] }
 diesel = { version = "2.3.8", features = ["postgres", "r2d2", "serde_json", "chrono", "pq-src"] }
 diesel_migrations = { version = "2.3.0", features = ["postgres"] }
 dotenvy = "0.15.7"
 base64 = "0.22.1"
-salvo = { version = "0.92.2", features = ["affix-state", "cors", "oapi"] }
-salvo-oapi = { version = "0.92.2", features = ["yaml"] }
+salvo = { version = "0.93.0", features = ["affix-state", "cors", "oapi"] }
+salvo-oapi = { version = "0.93.0", features = ["yaml"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
 sha2 = "0.10.9"

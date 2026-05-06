@@ -1,5 +1,6 @@
 use salvo::prelude::*;
 use soland::{artifacts, config::AppConfig, db::Db, service, state::AppState};
+use tokio::signal;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -14,6 +15,11 @@ async fn main() -> anyhow::Result<()> {
 
     let config = AppConfig::from_env_and_args()?;
     if let Some(database_url) = &config.database_url {
+        // SAFETY: invoked once, before any worker thread starts touching the
+        // env, so there is no concurrent reader. Diesel's `Pool::builder`
+        // reads `DATABASE_URL` internally; pushing the parsed value back into
+        // the env keeps that path working when the URL came from `--bind`-
+        // style arg parsing.
         unsafe {
             std::env::set_var("DATABASE_URL", database_url);
         }
@@ -29,6 +35,52 @@ async fn main() -> anyhow::Result<()> {
         storage = state.db.mode(),
         "starting soland"
     );
-    Server::new(acceptor).serve(service(state)).await;
+
+    let server = Server::new(acceptor);
+    let handle = server.handle();
+    tokio::spawn(async move {
+        shutdown_signal().await;
+        // `None` means wait until all in-flight requests finish before
+        // closing the listener.
+        handle.stop_graceful(None);
+    });
+    server.serve(service(state)).await;
+    tracing::info!("soland stopped");
     Ok(())
+}
+
+/// Resolves once an OS shutdown signal arrives. On Unix this is `SIGINT`
+/// (Ctrl-C) or `SIGTERM` (`docker stop`, Kubernetes pod termination, systemd
+/// `stop`); on Windows it is the Ctrl-C signal that `cmd.exe`, PowerShell,
+/// and the service control manager translate to a console close.
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        if let Err(error) = signal::ctrl_c().await {
+            tracing::error!(%error, "failed to install Ctrl-C handler");
+        }
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        match signal::unix::signal(signal::unix::SignalKind::terminate()) {
+            Ok(mut stream) => {
+                stream.recv().await;
+            }
+            Err(error) => {
+                tracing::error!(%error, "failed to install SIGTERM handler");
+            }
+        }
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {
+            tracing::info!("received SIGINT, shutting down");
+        }
+        _ = terminate => {
+            tracing::info!("received SIGTERM, shutting down");
+        }
+    }
 }

@@ -12,7 +12,7 @@
 //! 3. carries the canonical HTTP status binding so handlers can stop
 //!    hand-picking it (a frequent source of B-08 drift), and
 //! 4. exposes a [`ErrorCode::render`] convenience that funnels through the
-//!    existing `crate::handlers::util::render_error` so call-site rewrites
+//!    existing `crate::routing::util::render_error` so call-site rewrites
 //!    are mechanical (`render_error(res, StatusCode::CONFLICT, "cas_conflict",
 //!    "...")` → `ErrorCode::CasConflict.render(res, "...")`).
 //!
@@ -22,9 +22,11 @@
 //! round-trip test below.
 
 use contrix_sdk::error as core_error;
+use salvo::async_trait;
+use salvo::oapi::{self, Components, EndpointOutRegister, Operation, ToSchema};
 use salvo::{http::StatusCode, prelude::*};
 
-use crate::handlers::util::render_error;
+use crate::routing::util::render_error;
 
 /// Every canonical Contrix error code, in registry order.
 ///
@@ -307,5 +309,137 @@ mod tests {
             ErrorCode::UnsupportedFeature.http_status(),
             StatusCode::NOT_IMPLEMENTED
         );
+    }
+}
+
+// ── AppError + typed-endpoint integration ────────────────────────────────
+//
+// `AppError` is the typed error returned by `#[endpoint]` handlers. It carries
+// a canonical [`ErrorCode`] (registry-locked, see spec B-08), a human-readable
+// message, and an optional HTTP status override. Both `Writer` and
+// `EndpointOutRegister` are implemented so the same value drives both runtime
+// rendering and OpenAPI doc generation.
+//
+// Migration template (palpo-style): see `_oapi.md` for the per-handler shape.
+
+/// Typed error returned by `#[endpoint]` handlers.
+#[derive(Debug, Clone)]
+pub struct AppError {
+    pub code: ErrorCode,
+    pub message: String,
+    /// When set, overrides the registry-derived HTTP status. Most call sites
+    /// should leave this `None` and let the registry decide; lifecycle paths
+    /// (`401` on missing token vs `403` on capability denial) sometimes need
+    /// the override.
+    pub status: Option<StatusCode>,
+}
+
+impl AppError {
+    pub fn new(code: ErrorCode, message: impl Into<String>) -> Self {
+        Self {
+            code,
+            message: message.into(),
+            status: None,
+        }
+    }
+
+    pub fn with_status(mut self, status: StatusCode) -> Self {
+        self.status = Some(status);
+        self
+    }
+
+    /// Resolve the HTTP status to use when rendering this error: explicit
+    /// override first, then the registry binding.
+    pub fn http_status(&self) -> StatusCode {
+        self.status.unwrap_or_else(|| self.code.http_status())
+    }
+
+    // ── Convenience constructors for the most-used codes. The full
+    // `ErrorCode` set is always available via `AppError::new(code, msg)`.
+
+    pub fn bad_json(message: impl Into<String>) -> Self {
+        Self::new(ErrorCode::BadJson, message)
+    }
+    pub fn missing_param(message: impl Into<String>) -> Self {
+        Self::new(ErrorCode::MissingParam, message)
+    }
+    pub fn invalid_param(message: impl Into<String>) -> Self {
+        Self::new(ErrorCode::InvalidParam, message)
+    }
+    pub fn unauthenticated(message: impl Into<String>) -> Self {
+        Self::new(ErrorCode::Unauthenticated, message)
+    }
+    pub fn capability_denied(message: impl Into<String>) -> Self {
+        Self::new(ErrorCode::CapabilityDenied, message)
+    }
+    pub fn not_found(message: impl Into<String>) -> Self {
+        Self::new(ErrorCode::NotFound, message)
+    }
+    pub fn conflict(message: impl Into<String>) -> Self {
+        Self::new(ErrorCode::Conflict, message)
+    }
+    pub fn internal(message: impl Into<String>) -> Self {
+        Self::new(ErrorCode::InternalError, message)
+    }
+    pub fn unsupported_feature(message: impl Into<String>) -> Self {
+        Self::new(ErrorCode::UnsupportedFeature, message)
+    }
+}
+
+impl std::fmt::Display for AppError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.code.as_str(), self.message)
+    }
+}
+
+impl std::error::Error for AppError {}
+
+impl From<ErrorCode> for AppError {
+    fn from(code: ErrorCode) -> Self {
+        Self::new(code, "")
+    }
+}
+
+#[async_trait]
+impl Writer for AppError {
+    async fn write(self, _req: &mut Request, _depot: &mut Depot, res: &mut Response) {
+        let status = self.http_status();
+        render_error(res, status, self.code.as_str(), &self.message);
+    }
+}
+
+impl EndpointOutRegister for AppError {
+    fn register(components: &mut Components, operation: &mut Operation) {
+        // Reuse `contrix_sdk::ErrorEnvelope` (already `ToSchema` under the
+        // SDK's `salvo` feature) as the response body schema for every error
+        // status.  The wire representation is `{ errcode, error, retry_after_ms?, ... }`.
+        let envelope_schema =
+            <contrix_sdk::ErrorEnvelope as ToSchema>::to_schema(components);
+        let response = |description: &'static str| {
+            oapi::Response::new(description)
+                .add_content("application/json", oapi::Content::new(envelope_schema.clone()))
+        };
+
+        operation
+            .responses
+            .insert("400", response("Bad request"));
+        operation
+            .responses
+            .insert("401", response("Unauthenticated"));
+        operation
+            .responses
+            .insert("403", response("Capability denied"));
+        operation
+            .responses
+            .insert("404", response("Not found"));
+        operation
+            .responses
+            .insert("409", response("Conflict"));
+        operation
+            .responses
+            .insert("429", response("Rate limited"));
+        operation
+            .responses
+            .insert("500", response("Internal server error"));
     }
 }

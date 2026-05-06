@@ -1,0 +1,109 @@
+//! Verifies that the typed `#[endpoint]` handlers in
+//! `src/routing/describe.rs` actually contribute their request/response
+//! schemas to the generated OpenAPI document. The original
+//! `contrix_openapi_spec_contains_facet_projection_contracts` test only
+//! asserts on operationId presence; this one asserts the typed schema
+//! references that prove the conversion is real (not just metadata).
+
+use salvo::test::{ResponseExt, TestClient};
+use soland::{config::AppConfig, db::Db, service, state::AppState};
+
+fn test_config() -> AppConfig {
+    AppConfig {
+        bind: "127.0.0.1:0".parse().unwrap(),
+        public_base_url: "http://server".to_owned(),
+        service_did: "did:web:soland.local".to_owned(),
+        database_url: None,
+        blob_root: std::env::temp_dir().join("soland-openapi-typed-blobs"),
+        cors_allow_origin: None,
+        development_mode: true,
+    }
+}
+
+#[tokio::test]
+async fn typed_describe_handlers_publish_response_schemas() {
+    let app = service(AppState::new(test_config(), Db { pool: None }));
+    let mut response = TestClient::get("http://server/.well-known/contrix/openapi.yaml")
+        .send(&app)
+        .await;
+    let body = response.take_string().await.unwrap();
+
+    // The new typed describe endpoints must:
+    // 1. publish their wire response types as components,
+    assert!(
+        body.contains("AuthBridgeDescribeResponse"),
+        "AuthBridgeDescribeResponse missing — auth_bridge_describe didn't publish its schema"
+    );
+    assert!(
+        body.contains("IntegrationDescribeResponse"),
+        "IntegrationDescribeResponse missing — integration_describe didn't publish its schema"
+    );
+    assert!(
+        body.contains("HealthResponse"),
+        "HealthResponse missing — health didn't publish its schema"
+    );
+
+    // 2. publish AppError's standard error envelope on every typed handler,
+    assert!(
+        body.contains("ErrorEnvelope"),
+        "ErrorEnvelope missing — AppError EndpointOutRegister didn't fire"
+    );
+
+    // 3. carry the new operation_ids that didn't exist in the legacy table,
+    for typed_only in [
+        "cx.auth.bridge.describe",
+        "cx.authz.describe",
+        "cx.policies.describe",
+        "cx.device_messages.describe",
+        "cx.keys.backups.describe",
+        "cx.integration.describe",
+    ] {
+        assert!(
+            body.contains(&format!("operationId: {typed_only}")),
+            "missing typed-only operationId {typed_only}"
+        );
+    }
+
+    // Phase C/D-converted endpoints must publish their request body types so
+    // the OpenAPI spec carries the typed schemas (not synthetic placeholders).
+    for typed_request_body in [
+        "DevLoginRequest",
+        "SessionGrantExchangeRequest",
+        "RegisterAccountRequest",
+        "ContactRequestRequest",
+        "ContactRespondRequest",
+        "SendMessageRequest",
+        "ReviseMessageRequest",
+        "RedactMessageRequest",
+        "AddReactionRequest",
+        "RemoveReactionRequest",
+        "SetReadMarkerRequest",
+        "CreateSpaceRequest",
+        "AddSpaceMemberRequest",
+    ] {
+        assert!(
+            body.contains(typed_request_body),
+            "missing request body schema {typed_request_body}"
+        );
+    }
+
+    // Phase C/D-converted endpoints must publish typed response shapes too.
+    for typed_response in [
+        "DevLoginResponse",
+        "LogoutResponse",
+        "AccountResponse",
+        "ContactResponse",
+        "ContactsResponse",
+        "SendMessageResponse",
+        "ReviseMessageResponse",
+        "RedactMessageResponse",
+        "ReactionResponse",
+        "ReadMarkerResponse",
+        "SpaceLifecycleResponse",
+    ] {
+        assert!(
+            body.contains(typed_response),
+            "missing response schema {typed_response}"
+        );
+    }
+}

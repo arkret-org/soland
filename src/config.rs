@@ -28,9 +28,12 @@ impl AppConfig {
             .map(PathBuf::from)
             .unwrap_or_else(|_| std::env::temp_dir().join("soland-blobs"));
         let cors_allow_origin = std::env::var("SERVERX_CORS_ALLOW_ORIGIN").ok();
+        // Default to a production-safe posture (no `dev_login`, no relaxed DID
+        // validation, no admin snapshot endpoints). Local development must opt
+        // in explicitly via `SERVERX_DEVELOPMENT_MODE=true`.
         let development_mode = std::env::var("SERVERX_DEVELOPMENT_MODE")
             .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes"))
-            .unwrap_or(true);
+            .unwrap_or(false);
 
         Ok(Self {
             bind,

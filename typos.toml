@@ -1,0 +1,50 @@
+# Project-specific dictionary for `crate-ci/typos`. Tighten over time.
+
+[default]
+# Skip generated artifacts and lockfiles.
+extend-ignore-re = [
+  # Common base64/hex blobs and digests in tests/fixtures.
+  "(?s)\"sha256:[0-9a-f]{64}\"",
+  "(?s)\"cx:[a-z]+:[A-Za-z0-9_]{8,}\"",
+]
+
+[default.extend-words]
+# Contrix protocol jargon and external project names typos cannot autocorrect.
+mimi = "mimi"
+Mimi = "Mimi"
+MIMI = "MIMI"
+coauth = "coauth"
+serverx = "serverx"
+SERVERX = "SERVERX"
+keypackage = "keypackage"
+KeyPackage = "KeyPackage"
+oapi = "oapi"
+sodmin = "sodmin"
+soland = "soland"
+contrix = "contrix"
+Contrix = "Contrix"
+salvo = "salvo"
+Salvo = "Salvo"
+diesel = "diesel"
+ulid = "ulid"
+ULID = "ULID"
+plc = "plc"
+HKDF = "HKDF"
+hkdf = "hkdf"
+unban = "unban"
+revoker = "revoker"
+quorum = "quorum"
+unsign = "unsign"
+unsigned = "unsigned"
+ack = "ack"
+acked = "acked"
+Frank = "Frank"
+frank = "frank"
+
+[files]
+extend-exclude = [
+  "Cargo.lock",
+  "target/**",
+  "*.lock",
+  "tests/fixtures/**",
+]
