@@ -7,6 +7,7 @@ pub mod artifacts;
 pub mod authz;
 pub mod config;
 pub mod db;
+pub mod error;
 pub mod handlers;
 pub mod hlc;
 pub mod ids;

@@ -7,28 +7,30 @@
 //! - `DELETE /api/v1/spaces/{space_id}` — owner soft-deletes the space
 //! - `GET    /api/v1/spaces/{space_id}/export` — full event log + projection dump
 //!
-//! Visibility / membership query helpers (`space_has_member`, `space_visible_to`,
-//! `space_id_accessible`, …) intentionally stay in `mod.rs` for now because they
-//! are used by every other domain (federation, message, blob, directory, …).
-//! They will move here once the directory layer is also extracted.
+//! Plus the visibility / membership / typing query helpers and the
+//! `record_space_lifecycle_operation` writer (round 10): every other domain
+//! (federation, message, blob, directory, mimi, …) calls into this layer to
+//! resolve "is this actor allowed to see / write to this Space?". These were
+//! the last-but-one chunk to leave `mod.rs`; `next_author_seq` rides along
+//! because the lifecycle writer needs it.
 
 use chrono::Duration;
-use contrix_sdk::{Did, SpaceId, SpaceSearchEntry};
+use contrix_sdk::{Commit, CommitId, Did, Hash, Operation, OperationId, SpaceId, SpaceSearchEntry};
 use salvo::{http::StatusCode, prelude::*};
 use serde_json::json;
 
 use crate::{
-    ids,
-    state::{AppState, SpaceInviteRecord, SpaceMetaRecord},
+    ids, kinds,
+    state::{AppState, SessionRecord, SpaceInviteRecord, SpaceMetaRecord},
     wire::{
         AddSpaceMemberRequest, CreateSpaceRequest, SpaceLifecycleResponse,
     },
 };
 
 use super::{
-    append_audit_log, auth_or_render, generate_invite_token, is_valid_discoverability, now,
-    record_space_lifecycle_operation, render_error, space_id_accessible, validate_did,
-    validate_space_id,
+    ProofVerifier, append_audit_log, append_projection_event, auth_or_render, dev_proof,
+    generate_invite_token, is_valid_discoverability, now, projection_event_from_operation,
+    render_error, validate_did, validate_space_id,
 };
 
 #[handler]
@@ -551,4 +553,288 @@ pub fn touch_space(state: &AppState, space_id: &str) {
     {
         record.updated_at = now();
     }
+}
+
+// ── Visibility + membership + typing query helpers ─────────────────────────
+
+pub fn is_space_deleted(state: &AppState, space_id: &str) -> bool {
+    state
+        .space_meta
+        .lock()
+        .expect("space meta lock")
+        .get(space_id)
+        .is_some_and(|record| record.deleted)
+}
+
+pub fn space_discoverability(state: &AppState, space_id: &str) -> String {
+    state
+        .space_meta
+        .lock()
+        .expect("space meta lock")
+        .get(space_id)
+        .map(|record| record.discoverability.clone())
+        .unwrap_or_else(|| "invite_only".to_owned())
+}
+
+pub fn space_has_member(state: &AppState, space_id: &str, actor: &str) -> bool {
+    if is_space_deleted(state, space_id) {
+        return false;
+    }
+    let Ok(space_id) = SpaceId::new(space_id.to_owned()) else {
+        return false;
+    };
+    let Ok(actor) = Did::new(actor.to_owned()) else {
+        return false;
+    };
+    state
+        .spaces
+        .lock()
+        .expect("spaces lock")
+        .get(&space_id)
+        .is_some_and(|space| space.members.contains(&actor))
+}
+
+pub fn space_visible_to(
+    state: &AppState,
+    space: &contrix_sdk::SpaceSearchEntry,
+    session: Option<&SessionRecord>,
+) -> bool {
+    if is_space_deleted(state, space.space_id.as_str()) {
+        return false;
+    }
+    if space_discoverability(state, space.space_id.as_str()) == "public" {
+        return true;
+    }
+    session.is_some_and(|session| {
+        Did::new(session.actor.clone()).is_ok_and(|actor| space.members.contains(&actor))
+    })
+}
+
+pub fn space_search_visible_to(
+    state: &AppState,
+    space: &contrix_sdk::SpaceSearchEntry,
+    session: Option<&SessionRecord>,
+) -> bool {
+    if is_space_deleted(state, space.space_id.as_str()) {
+        return false;
+    }
+    if session.is_some_and(|session| {
+        Did::new(session.actor.clone()).is_ok_and(|actor| space.members.contains(&actor))
+    }) {
+        return true;
+    }
+    matches!(
+        space_discoverability(state, space.space_id.as_str()).as_str(),
+        "public" | "listed" | "restricted"
+    )
+}
+
+pub fn space_resolvable_to(
+    state: &AppState,
+    space: &contrix_sdk::SpaceSearchEntry,
+    session: Option<&SessionRecord>,
+    invite_token: Option<&str>,
+    signed_link: Option<&str>,
+) -> bool {
+    if is_space_deleted(state, space.space_id.as_str()) {
+        return false;
+    }
+    if session.is_some_and(|session| {
+        Did::new(session.actor.clone()).is_ok_and(|actor| space.members.contains(&actor))
+    }) {
+        return true;
+    }
+    match space_discoverability(state, space.space_id.as_str()).as_str() {
+        "public" | "listed" | "restricted" | "unlisted" => true,
+        "invite_only" => invite_token
+            .is_some_and(|token| invite_token_matches_space(state, space.space_id.as_str(), token)),
+        "secret" => signed_link.is_some_and(|link| !link.trim().is_empty()),
+        _ => false,
+    }
+}
+
+pub fn invite_token_matches_space(state: &AppState, space_id: &str, token: &str) -> bool {
+    invite_token_space_id(state, token)
+        .is_some_and(|resolved_space_id| resolved_space_id == space_id)
+}
+
+pub fn invite_token_space_id(state: &AppState, token: &str) -> Option<String> {
+    let token = token.trim();
+    if token.is_empty() {
+        return None;
+    }
+    let now = now();
+    state
+        .space_invites
+        .lock()
+        .expect("space invites lock")
+        .values()
+        .find(|invite| {
+            invite.status == "pending"
+                && invite.invite_token == token
+                && invite.expires_at.is_none_or(|expires_at| expires_at > now)
+        })
+        .map(|invite| invite.space_id.clone())
+}
+
+pub fn space_search_discoverability(state: &AppState, space_id: &str) -> bool {
+    matches!(
+        space_discoverability(state, space_id).as_str(),
+        "public" | "listed" | "restricted"
+    )
+}
+
+pub fn space_id_visible_to(state: &AppState, space_id: &str, session: Option<&SessionRecord>) -> bool {
+    if is_space_deleted(state, space_id) {
+        return false;
+    }
+    let Ok(sid) = SpaceId::new(space_id.to_owned()) else {
+        return false;
+    };
+    state
+        .spaces
+        .lock()
+        .expect("spaces lock")
+        .get(&sid)
+        .is_some_and(|space| space_visible_to(state, space, session))
+}
+
+/// Check if a space is accessible for backfill/subscribe (allows deleted spaces for members).
+pub fn space_id_accessible(state: &AppState, space_id: &str, session: Option<&SessionRecord>) -> bool {
+    let Ok(sid) = SpaceId::new(space_id.to_owned()) else {
+        return false;
+    };
+    let spaces = state.spaces.lock().expect("spaces lock");
+    let Some(space) = spaces.get(&sid) else {
+        return false;
+    };
+    if space_discoverability(state, space.space_id.as_str()) == "public" {
+        return true;
+    }
+    session.is_some_and(|session| {
+        Did::new(session.actor.clone()).is_ok_and(|actor| space.members.contains(&actor))
+    })
+}
+
+pub fn space_allows_plaintext_service(state: &AppState, space_id: &str) -> bool {
+    let Ok(sid) = SpaceId::new(space_id.to_owned()) else {
+        return false;
+    };
+    {
+        let spaces = state.spaces.lock().expect("spaces lock");
+        if spaces
+            .get(&sid)
+            .is_some_and(|space| space_discoverability(state, space.space_id.as_str()) == "public")
+        {
+            return true;
+        }
+    }
+    state
+        .space_meta
+        .lock()
+        .expect("space meta lock")
+        .get(space_id)
+        .is_some_and(|record| {
+            record
+                .plaintext_visible_services
+                .contains(&state.config.service_did)
+        })
+}
+
+pub fn prune_expired_typing(state: &AppState) {
+    let now = chrono::Utc::now();
+    state
+        .typing
+        .lock()
+        .expect("typing lock")
+        .retain(|_, record| record.expires_at > now);
+}
+
+pub fn typing_ephemeral_for_space(
+    state: &AppState,
+    space_id: &str,
+    session: Option<&SessionRecord>,
+) -> Vec<serde_json::Value> {
+    if session.is_none() {
+        return Vec::new();
+    }
+    let now = chrono::Utc::now();
+    let mut by_scope = std::collections::BTreeMap::<String, Vec<serde_json::Value>>::new();
+    for record in state.typing.lock().expect("typing lock").values() {
+        if record.space_id != space_id || record.expires_at <= now {
+            continue;
+        }
+        let scope_id = record
+            .scope_id
+            .clone()
+            .unwrap_or_else(|| record.space_id.clone());
+        by_scope.entry(scope_id).or_default().push(json!({
+            "actor": record.actor.clone(),
+            "expires_at": record.expires_at,
+            "updated_at": record.updated_at,
+        }));
+    }
+    by_scope
+        .into_iter()
+        .map(|(scope_id, actors)| {
+            json!({
+                "type": "cx.typing",
+                "space_id": space_id,
+                "scope_id": scope_id,
+                "actors": actors,
+            })
+        })
+        .collect()
+}
+
+pub fn record_space_lifecycle_operation(
+    state: &AppState,
+    actor: &str,
+    space_id: &str,
+    payload: serde_json::Value,
+) -> contrix_sdk::Result<Option<String>> {
+    let operation = Operation::create(
+        OperationId::new(ids::generate_operation_id()).expect("generated valid operation id"),
+        SpaceId::new(space_id.to_owned()).expect("validated space id"),
+        kinds::canonical_kind_for_local_payload("space.lifecycle", &payload)
+            .unwrap_or(kinds::CX_SPACE_UPDATE),
+        payload,
+    );
+    let projection_event = projection_event_from_operation(&operation, Some(actor));
+    let operation_digest = Hash::new(operation.operation_digest()?)?;
+    let mut commit = Commit::new(
+        CommitId::new(ids::generate_commit_id()).expect("generated valid commit id"),
+        actor.to_owned(),
+        Did::new(actor.to_owned()).expect("session actor is valid"),
+        next_author_seq(state, actor),
+    );
+    commit.prev_commit = state.repo.head(actor)?.map(Hash::new).transpose()?;
+    commit.operations.push(operation_digest);
+    commit.proofs.push(dev_proof(actor));
+
+    let expected_head = commit.prev_commit.as_ref().map(ToString::to_string);
+    let head = state.repo.submit_commit(
+        actor,
+        expected_head.as_deref(),
+        vec![operation],
+        commit,
+        &ProofVerifier::for_state(state),
+    )?;
+    append_projection_event(state, projection_event);
+    Ok(head)
+}
+
+pub fn next_author_seq(state: &AppState, repo_id: &str) -> u64 {
+    state
+        .repo
+        .list_commits(repo_id, None, 100)
+        .map(|page| {
+            page.items
+                .iter()
+                .map(|commit| commit.author_seq)
+                .max()
+                .unwrap_or(0)
+                + 1
+        })
+        .unwrap_or(1)
 }
