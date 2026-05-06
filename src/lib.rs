@@ -128,6 +128,9 @@ pub fn router_with_rate_limiter_config(
                 .push(Router::with_path("views").post(create_view))
                 .push(Router::with_path("views/{view_id}").get(get_view))
                 .push(
+                    Router::with_path("views/{view_id}/projection").post(view_projection),
+                )
+                .push(
                     Router::with_path("schemas")
                         .get(list_schemas)
                         .post(register_schema),

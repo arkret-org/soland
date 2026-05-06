@@ -3,20 +3,27 @@
 //! calendar / timeline).
 //!
 //! Surfaces:
-//! - `POST /api/v1/views`            — create a view object (the response also
-//!   carries the materialised projection so a one-shot client can render
-//!   immediately)
-//! - `GET  /api/v1/views/{view_id}`  — re-materialise the projection from the
-//!   current entity state (views are not persisted; `view_id` is purely a
-//!   round-trip handle)
+//! - `POST /api/v1/views`                          — create a view object (the
+//!   response also carries the materialised projection so a one-shot client
+//!   can render immediately)
+//! - `GET  /api/v1/views/{view_id}`                — re-materialise the
+//!   projection from the current entity state (views are not persisted;
+//!   `view_id` is purely a round-trip handle)
+//! - `POST /api/v1/views/{view_id}/projection`     — T20: typed
+//!   `CollectionProjectionResponse` per `models/views.md` §6.3, paired with
+//!   the SDK `Client::collection_projection` method.
 //!
 //! Per spec M-34, the renderer enum is currently flat-validated here; once the
 //! per-kind `if/then` schema rules land (Stream-A in `_todos.md`), the
 //! validator will move into the schema layer and this file will only need
 //! `is_supported_view_kind` for the create-handler enum hint.
 
+use contrix_sdk::{
+    CollectionProjectionDiscussion, CollectionProjectionGroup, CollectionProjectionItem,
+    CollectionProjectionPosition, CollectionProjectionResponse, ViewId, ViewKind, ViewRenderer,
+};
 use salvo::{http::StatusCode, prelude::*};
-use serde_json::json;
+use serde_json::{Value, json};
 
 use crate::{
     ids,
@@ -151,6 +158,210 @@ pub async fn get_view(depot: &mut Depot, req: &mut Request, res: &mut Response) 
         projection,
         created_at: now().to_rfc3339(),
     }));
+}
+
+// ── T20: Canonical collection projection (typed) ────────────────────────────
+//
+// `POST /api/v1/views/{view_id}/projection` returns a typed
+// `CollectionProjectionResponse` matching `models/views.md` §6.3.
+// Pairs with the SDK `Client::collection_projection(view_id, wait_for)` method
+// added in contrix-rust-sdk@9d02761 — yougen's kanban view binds to this
+// endpoint via that SDK call.
+//
+// Request body MAY be empty `{}`; future revisions accept filter overlays.
+// Headers: `X-Contrix-Wait-For` propagates as a sync_token consistency hint
+// (currently advisory only — projection is rebuilt fresh from in-memory
+// entities every call so frontier alignment is implicit).
+//
+// Mapping rules (current scaffold; tightens once Stream-A reducers land):
+//   * groups[] is keyed off the `group_by` option (default `status`).
+//     Each group's `group_id` is the canonical bucket key, `title` is the
+//     human-readable form, `rank` is omitted (no inter-group rank yet).
+//   * items[].object is the materialised entity JSON.
+//   * items[].position is None until cx.flow.move position-edge bookkeeping
+//     lands (Stream-A; tracked under T20).
+//   * items[].discussion is None until per-flow branch projection lands.
+//
+// `frontier` is reported as the current sync_token if the AppState exposes
+// one, else empty.
+
+#[handler]
+pub async fn view_projection(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let Some(_session) = auth_or_render(state, req, res) else {
+        return;
+    };
+    let Some(view_id_str) = req.param::<String>("view_id") else {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "missing_param",
+            "view_id is required",
+        );
+        return;
+    };
+    let view_id = match ViewId::new(view_id_str.clone()) {
+        Ok(v) => v,
+        Err(_) => {
+            render_error(
+                res,
+                StatusCode::BAD_REQUEST,
+                "invalid_param",
+                "view_id must be a cx:view: identifier",
+            );
+            return;
+        }
+    };
+
+    // Optional body — empty {} is fine. Filter overlays (space_id /
+    // entity_type / group_by) MAY be supplied here; query params remain
+    // supported for backward compat with create_view.
+    let body: Value = req.parse_json::<Value>().await.unwrap_or_else(|_| json!({}));
+    let space_id = body
+        .get("space_id")
+        .and_then(|v| v.as_str())
+        .map(ToOwned::to_owned)
+        .or_else(|| query_param(req, "space_id"))
+        .unwrap_or_default();
+    let entity_type = body
+        .get("entity_type")
+        .and_then(|v| v.as_str())
+        .map(ToOwned::to_owned)
+        .or_else(|| query_param(req, "entity_type"));
+    let group_by = body
+        .get("group_by")
+        .and_then(|v| v.as_str())
+        .map(ToOwned::to_owned)
+        .or_else(|| query_param(req, "group_by"))
+        .unwrap_or_else(|| "status".to_owned());
+
+    let entities = {
+        let proj = state.projection.lock().expect("projection lock");
+        proj.entities_for_space(&space_id, entity_type.as_deref(), &Vec::new())
+            .into_iter()
+            .map(|e| EntityResponse {
+                entity_id: e.entity_id.clone(),
+                space_id: e.space_id.clone(),
+                entity_type: e.entity_type.clone(),
+                facets: e.facets.clone(),
+                title: e.title.clone(),
+                content: e.content.clone(),
+                fields: e.fields.clone(),
+                deleted: e.deleted,
+                created_at: e.created_at.to_rfc3339(),
+                updated_at: e.updated_at.to_rfc3339(),
+            })
+            .collect::<Vec<_>>()
+    };
+
+    let response = build_typed_collection_projection(view_id, &entities, &group_by);
+    res.render(Json(response));
+}
+
+/// Build the canonical [`CollectionProjectionResponse`] from a flat entity
+/// vector. Entities are bucketed by `group_by` (default `status`); within
+/// each group items are ordered by entity `created_at` ascending as a
+/// stable placeholder until per-flow rank bookkeeping lands.
+fn build_typed_collection_projection(
+    view_id: ViewId,
+    entities: &[EntityResponse],
+    group_by: &str,
+) -> CollectionProjectionResponse {
+    let mut buckets: std::collections::BTreeMap<String, Vec<&EntityResponse>> =
+        std::collections::BTreeMap::new();
+    for entity in entities {
+        let key = entity_field_value(entity, group_by)
+            .and_then(view_value_key)
+            .unwrap_or_else(|| "uncategorized".to_owned());
+        buckets.entry(key).or_default().push(entity);
+    }
+
+    let groups: Vec<CollectionProjectionGroup> = buckets
+        .into_iter()
+        .map(|(group_id, mut entries)| {
+            // Deterministic in-group order: created_at asc, then entity_id
+            // for stable tie-break.
+            entries.sort_by(|a, b| {
+                a.created_at
+                    .cmp(&b.created_at)
+                    .then_with(|| a.entity_id.cmp(&b.entity_id))
+            });
+            let items = entries
+                .into_iter()
+                .map(|entity| {
+                    let object = serde_json::to_value(entity).unwrap_or_else(|_| json!({}));
+                    // Placeholder discussion metadata: assume not enabled until
+                    // per-flow branch projection lands. yougen's
+                    // card-vs-room-visibility renderer will treat this as a
+                    // synthesis-only Flow.
+                    let discussion = entity_discussion_facet(entity);
+                    CollectionProjectionItem {
+                        object,
+                        position: None,
+                        discussion,
+                    }
+                })
+                .collect();
+            // Title falls back to the bucket key when no friendlier mapping
+            // is available; downstream UIs can pretty-print known status
+            // tokens (todo / in_progress / review / done).
+            let title = pretty_group_title(&group_id);
+            CollectionProjectionGroup {
+                group_id,
+                title,
+                rank: None,
+                items,
+                hidden_count: None,
+            }
+        })
+        .collect();
+
+    CollectionProjectionResponse {
+        kind: ViewKind::Collection,
+        renderer: ViewRenderer::Board,
+        view_id,
+        // Empty until AppState exposes a current sync_token — clients can
+        // still detect "fresh" responses via the optional Wait-For header.
+        frontier: Vec::new(),
+        groups,
+    }
+}
+
+fn entity_discussion_facet(entity: &EntityResponse) -> Option<CollectionProjectionDiscussion> {
+    if entity
+        .facets
+        .iter()
+        .any(|f| f == "discussion" || f == "room")
+    {
+        Some(CollectionProjectionDiscussion {
+            enabled: true,
+            visibility: "readable".to_owned(),
+            lazy_link: false,
+        })
+    } else {
+        None
+    }
+}
+
+fn pretty_group_title(key: &str) -> String {
+    match key {
+        "todo" => "To do".to_owned(),
+        "in_progress" => "In progress".to_owned(),
+        "review" => "Review".to_owned(),
+        "done" => "Done".to_owned(),
+        "uncategorized" => "Uncategorized".to_owned(),
+        _ => key.to_owned(),
+    }
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+fn _typed_collection_projection_compile_check() {
+    // Compile-time guard that the typed types are wired through —
+    // exercises every typed field at least once.
+    let _ = CollectionProjectionPosition {
+        relation_id: String::new(),
+        rank: String::new(),
+    };
 }
 
 // ── Renderer enum + facet derivation ────────────────────────────────────────

@@ -119,7 +119,7 @@ pub use repo::{
 pub use schema::{delete_schema, get_schema, list_schemas, register_schema};
 pub use view::{
     create_view, facet_names_from_value, get_view, is_supported_view_kind,
-    is_supported_view_renderer,
+    is_supported_view_renderer, view_projection,
 };
 pub use key_backup_restore::{
     delete_key_backup, get_key_backup, get_key_backup_restore_activity,
