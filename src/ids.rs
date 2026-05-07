@@ -69,17 +69,14 @@ pub fn generate_request_id() -> String {
     generate("req")
 }
 
-/// Percent-encode reserved characters in a **state subject** segment.
+/// Percent-encode reserved characters in a **cell subject** segment.
 ///
-/// Per Contrix v1 (spec encoding §9.5; previously called "composite
-/// state_key"), composite **state subjects** are joined with `|`. Raw
-/// DIDs and identifiers may contain `|` themselves, which would collide
-/// with the separator. We encode `%`, `|`, and ASCII control characters
-/// using percent-escape (`%XX`) so that segments roundtrip uniquely.
-///
-/// Spec Phase 1 (2026-05-07) removed the envelope `state_key` field; this
-/// helper is now reducer-internal subject encoding, not a wire-format
-/// builder.
+/// Per Contrix v1 (spec encoding §9.5), composite cell subjects are joined
+/// with `|`. Raw DIDs and identifiers may contain `|` themselves, which
+/// would collide with the separator. We encode `%`, `|`, and ASCII control
+/// characters using percent-escape (`%XX`) so that segments roundtrip
+/// uniquely. This helper is reducer-internal subject encoding, not a
+/// wire-format builder.
 pub fn subject_segment_encode(segment: &str) -> String {
     let mut out = String::with_capacity(segment.len());
     for byte in segment.bytes() {

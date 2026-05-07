@@ -207,13 +207,11 @@ impl ProjectionState {
 
     /// Apply a single operation and return the effect.
     ///
-    /// **T1-1 (2026-05-07)**: dispatch goes through
-    /// [`registry::ReducerRegistry`]. The registry owns one
-    /// [`registry::ReducerKind`] trait object per canonical kind id;
-    /// subject derivation (spec Phase 1 `state_subject_field` rules)
-    /// runs before `project()`. The legacy match-on-kind body that
-    /// lived here is gone — every kind is registered in
-    /// [`crate::reducer::kinds`].
+    /// Dispatch goes through [`registry::ReducerRegistry`]. The registry
+    /// owns one [`registry::ReducerKind`] trait object per canonical
+    /// kind id; subject derivation (per the spec event-kind-registry's
+    /// `cell_subject` declaration) runs before `project()`. Every kind
+    /// is registered in [`crate::reducer::kinds`].
     pub fn apply(&mut self, operation: &Operation, hlc: &ServerHlc) -> ProjectionEffect {
         registry().project(operation, self, hlc)
     }

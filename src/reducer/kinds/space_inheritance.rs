@@ -7,7 +7,7 @@ use crate::reducer::ProjectionEffect;
 use crate::reducer::ProjectionState;
 use crate::reducer::registry::{
     ComponentDescriptor, Criticality, ReducerKind, ReducerKindError, StateCardinality,
-    assert_no_legacy_state_key, optional_payload_string,
+    optional_payload_string,
 };
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -34,7 +34,6 @@ impl ReducerKind for SpaceInheritancePolicy {
         &self,
         operation: &Operation,
     ) -> Result<Option<String>, ReducerKindError> {
-        assert_no_legacy_state_key(operation, "cx.space.inheritance_policy")?;
         let subject = optional_payload_string(operation, "parent_space_id").ok_or(
             ReducerKindError::MissingSubjectField {
                 kind: "cx.space.inheritance_policy",

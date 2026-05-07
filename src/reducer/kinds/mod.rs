@@ -15,8 +15,7 @@
 // ─────────────────────────────────────────────────────────────────────
 
 /// Declare a singleton-cardinality state-event kind whose `project`
-/// body delegates to a `ProjectionState` method. Subject derivation
-/// asserts no legacy `state_key` field is present.
+/// body delegates to a `ProjectionState` method.
 macro_rules! singleton_state_kind {
     (
         $struct:ident,
@@ -44,9 +43,8 @@ macro_rules! singleton_state_kind {
             }
             fn subject_for_event(
                 &self,
-                operation: &contrix_sdk::Operation,
+                _operation: &contrix_sdk::Operation,
             ) -> Result<Option<String>, $crate::reducer::registry::ReducerKindError> {
-                $crate::reducer::registry::assert_no_legacy_state_key(operation, $kind)?;
                 Ok(None)
             }
             fn project(
@@ -124,7 +122,6 @@ macro_rules! legacy_membership_kind {
                 &self,
                 operation: &contrix_sdk::Operation,
             ) -> Result<Option<String>, $crate::reducer::registry::ReducerKindError> {
-                $crate::reducer::registry::assert_no_legacy_state_key(operation, $kind)?;
                 let subject = $crate::reducer::registry::optional_payload_string(operation, "member")
                     .or_else(|| $crate::reducer::registry::optional_payload_string(operation, "actor_id"))
                     .or_else(|| $crate::reducer::registry::optional_payload_string(operation, "principal_id"))
@@ -146,8 +143,8 @@ macro_rules! legacy_membership_kind {
     };
 }
 
-/// Declare a `cx.consent.*` kind (per_subject by `consent_id`).
-/// Grant + revoke share `component_type` per spec slot-aliasing.
+/// Declare a `cx.consent.*` kind (per-subject by `consent_id`).
+/// Grant + revoke share the same cell family per spec or-set semantics.
 macro_rules! consent_kind {
     ($struct:ident, kind = $kind:expr) => {
         #[derive(Clone, Copy, Debug, Default)]
@@ -170,7 +167,6 @@ macro_rules! consent_kind {
                 &self,
                 operation: &contrix_sdk::Operation,
             ) -> Result<Option<String>, $crate::reducer::registry::ReducerKindError> {
-                $crate::reducer::registry::assert_no_legacy_state_key(operation, $kind)?;
                 let subject = $crate::reducer::registry::optional_payload_string(operation, "consent_id")
                     .ok_or($crate::reducer::registry::ReducerKindError::MissingSubjectField {
                         kind: $kind,
@@ -206,7 +202,6 @@ pub mod reactions;
 pub mod read_marker;
 pub mod relation;
 pub mod space_facets;
-pub mod space_host;
 pub mod space_inheritance;
 pub mod space_lifecycle;
 
@@ -220,7 +215,6 @@ pub use reactions::*;
 pub use read_marker::*;
 pub use relation::*;
 pub use space_facets::*;
-pub use space_host::*;
 pub use space_inheritance::*;
 pub use space_lifecycle::*;
 
@@ -252,19 +246,6 @@ mod tests {
         );
         let subject = kind.subject_for_event(&good).unwrap();
         assert_eq!(subject.as_deref(), Some("cx:space:01parent00000000000000000"));
-    }
-
-    #[test]
-    fn legacy_state_key_field_is_rejected() {
-        let kind = SpaceMediaService;
-        let bad = make_op(
-            "cx.space.media_service",
-            serde_json::json!({"state_key": "should-not-exist"}),
-        );
-        assert!(matches!(
-            kind.subject_for_event(&bad),
-            Err(ReducerKindError::LegacyStateKey { .. })
-        ));
     }
 
     #[test]

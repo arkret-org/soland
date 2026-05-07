@@ -1,5 +1,5 @@
-//! Spec Phase 1 typed `cx.member.state` kind (per_subject by
-//! `payload.actor_id`). Stub: project body lands in T1-3.
+//! Typed `cx.member.state` kind (per-subject by `payload.actor_id`).
+//! Stub: project body lands in T1-3.
 
 use contrix_sdk::Operation;
 
@@ -8,7 +8,7 @@ use crate::reducer::ProjectionEffect;
 use crate::reducer::ProjectionState;
 use crate::reducer::registry::{
     ComponentDescriptor, Criticality, ReducerKind, ReducerKindError, StateCardinality,
-    assert_no_legacy_state_key, optional_payload_string,
+    optional_payload_string,
 };
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -35,7 +35,6 @@ impl ReducerKind for MemberState {
         &self,
         operation: &Operation,
     ) -> Result<Option<String>, ReducerKindError> {
-        assert_no_legacy_state_key(operation, "cx.member.state")?;
         let subject = optional_payload_string(operation, "actor_id")
             .or_else(|| optional_payload_string(operation, "principal_id"))
             .ok_or(ReducerKindError::MissingSubjectField {

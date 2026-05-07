@@ -1,8 +1,8 @@
-//! Spec Phase 1 per-facet space policy / lifecycle stubs.
+//! Per-facet space policy / lifecycle stubs.
 //!
 //! All singleton-cardinality. Each kind's `project` body is a no-op
 //! pending T1-3, but cardinality + component metadata + subject
-//! derivation (no legacy `state_key`) is fully wired.
+//! derivation are fully wired.
 
 use crate::reducer::ProjectionEffect;
 use crate::reducer::registry::Criticality;

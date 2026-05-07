@@ -612,14 +612,10 @@ pub fn persist_projected_operation(
                 .execute(&mut conn)?;
         }
 
-        // NOTE: the legacy DB column is still named `state_key`; spec Phase 1
-        // renamed the protocol concept to `subject` (`(space_id, kind, subject)`
-        // is the canonical state slot key). Renaming the column requires a
-        // Diesel migration plus `src/schema.rs` regeneration — tracked as
-        // follow-up Tier-0 work; the value stored here is the spec-correct
-        // subject derived from typed payload fields.
+        // The DB column matches the canonical projection-cell key
+        // model: `(space_id, event_type, subject)` identifies the cell.
         sql_query(
-                "INSERT INTO space_state_events (event_id, space_id, event_type, state_key, sender, operation_id, payload, created_at) \
+                "INSERT INTO space_state_events (event_id, space_id, event_type, subject, sender, operation_id, payload, created_at) \
                  VALUES ($1, $2, $3, $4, $5, $1, $6, $7) \
                  ON CONFLICT (event_id) DO NOTHING",
             )

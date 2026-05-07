@@ -147,7 +147,5 @@ pub fn dev_proof(actor: &str) -> Proof {
         domain: Some("soland-dev".to_owned()),
         audience: None,
         jws: "dev-proof".to_owned(),
-        host_did: None,
-        endorsed_at: None,
     }
 }

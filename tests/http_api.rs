@@ -5282,7 +5282,5 @@ fn dummy_proof() -> Proof {
         domain: None,
         audience: None,
         jws: "dev-proof".to_owned(),
-        host_did: None,
-        endorsed_at: None,
     }
 }

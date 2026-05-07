@@ -1,24 +1,27 @@
-//! ReducerKind trait + canonical kind registry (T1-1).
+//! ReducerKind trait + canonical kind registry.
 //!
-//! Spec Phase 1 (2026-05-07) requires the reducer to derive every state
-//! slot key from `(space_id, kind, subject?)`, where `subject` is read from
-//! a typed payload field per the schema registry's `state_subject_field`.
-//! There is **no** envelope `state_key` field anywhere on the wire.
+//! This is **soland's reducer-internal projection layer**. It drives the
+//! local `ProjectionState` from durable Event Envelopes; its
+//! `(space_id, kind, subject?)` model is a reducer-internal projection
+//! key, not a wire concept. Subject is derived from typed payload fields
+//! per the spec event-kind-registry's `cell_subject`. The full
+//! Move/Anchor/Lattice runtime (per-cell Lattice join over Anchor
+//! frontier) is tracked separately as Tier 2.6 / root C10.B; until that
+//! lands, this reducer remains the active projection driver.
 //!
-//! `T1-1` design: each canonical Contrix event kind is represented as a
+//! Design: each canonical Contrix event kind is represented as a
 //! `Box<dyn ReducerKind>` registered in `ReducerRegistry`. The dispatcher
 //! looks up the trait object by `&'static str` kind id and delegates
-//! `subject_for_event` (slot key derivation) and `project` (state mutation)
-//! to it. Component metadata (`component_type` / `component_version` /
-//! `criticality`) is exposed via [`ReducerKind::component`] so unknown
-//! kinds are handled by their declared criticality.
+//! `subject_for_event` (per-subject projection key derivation) and `project`
+//! (state mutation) to it. Component metadata (`component_type` /
+//! `component_version` / `criticality`) is exposed via
+//! [`ReducerKind::component`] so unknown kinds are handled by their
+//! declared criticality.
 //!
-//! T1-2 (2026-05-07) split the per-kind impls into
-//! `src/reducer/kinds/<domain>.rs` files. Each domain file pulls in the
-//! shared `singleton_state_kind!` / `non_state_kind!` /
+//! Per-kind impls live in `src/reducer/kinds/<domain>.rs`. Each domain
+//! file pulls in the shared `singleton_state_kind!` / `non_state_kind!` /
 //! `legacy_membership_kind!` / `consent_kind!` macros from
-//! `kinds/mod.rs`. Behaviour is identical to the pre-split
-//! `kinds_impl.rs`.
+//! `kinds/mod.rs`.
 
 use std::collections::BTreeMap;
 
@@ -28,18 +31,19 @@ use crate::hlc::ServerHlc;
 use crate::kinds;
 use crate::reducer::{ProjectionEffect, ProjectionState};
 
-/// State slot cardinality declared by a `ReducerKind` (matches the
-/// `state_cardinality` field in the contrix-spec event-kind-registry).
+/// Cell-cardinality declared by a `ReducerKind` (corresponds to the
+/// contrix-spec event-kind-registry's `cell_subject` shape).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StateCardinality {
-    /// One slot per `(space_id, kind)`. Subject is empty.
+    /// One projection slot per `(space_id, kind)`. Subject is empty.
     Singleton,
-    /// One slot per `(space_id, kind, subject)`; subject is derived from
-    /// the typed payload field declared in the schema registry's
-    /// `state_subject_field`.
+    /// One projection slot per `(space_id, kind, subject)`; subject is
+    /// derived from the typed payload field declared in the spec
+    /// registry's `cell_subject`.
     PerSubject,
-    /// Not a state event — no slot, no subject. The `project` method is
-    /// still called to update non-state projection (e.g. message timeline).
+    /// Not a state-bearing event — no slot, no subject. The `project`
+    /// method is still called to update non-state projection
+    /// (e.g. message timeline).
     None,
 }
 
@@ -56,12 +60,11 @@ pub enum Criticality {
     Ignore,
 }
 
-/// Stable identification of the logical state machine this `ReducerKind`
-/// drives. Multiple kinds operating on the same logical state slot
-/// (paired kinds with `component_slot_alias_of` declared in the spec
-/// registry — e.g. `cx.capability.grant` + `cx.capability.revoke`) MUST
-/// share `component_type` so the reducer treats them as supersedes on
-/// one slot.
+/// Stable identification of the logical cell this `ReducerKind` drives.
+/// Multiple kinds operating on the same cell (paired kinds, e.g.
+/// `cx.capability.grant` + `cx.capability.revoke`) MUST share
+/// `component_type` so the reducer treats them as supersedes on the
+/// same cell.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ComponentDescriptor {
     /// Stable URI in the `cx.component.<facet-path>.v<n>` namespace.
@@ -76,16 +79,11 @@ pub struct ComponentDescriptor {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ReducerKindError {
     /// The event payload is missing a required typed field used to derive
-    /// the state slot subject (e.g. `payload.actor_id` on
-    /// `cx.member.state`).
+    /// the cell subject (e.g. `payload.actor_id` on `cx.member.state`).
     MissingSubjectField {
         kind: &'static str,
         field: &'static str,
     },
-    /// The event payload still carries a top-level `state_key` field —
-    /// spec Phase 1 (2026-05-07) removed envelope `state_key`; writers
-    /// MUST emit typed payload subject fields instead.
-    LegacyStateKey { kind: &'static str },
 }
 
 impl std::fmt::Display for ReducerKindError {
@@ -94,11 +92,6 @@ impl std::fmt::Display for ReducerKindError {
             ReducerKindError::MissingSubjectField { kind, field } => {
                 write!(f, "{kind} requires payload.{field}")
             }
-            ReducerKindError::LegacyStateKey { kind } => write!(
-                f,
-                "{kind}: legacy state_key field on event payload — spec Phase 1 \
-                 requires typed subject fields"
-            ),
         }
     }
 }
@@ -115,23 +108,22 @@ pub trait ReducerKind: Send + Sync {
     fn kind(&self) -> &'static str;
 
     /// State cardinality for this kind. Used by the dispatcher to decide
-    /// whether to derive a subject before keying the state slot.
+    /// whether to derive a subject before keying the projection slot.
     fn cardinality(&self) -> StateCardinality;
 
     /// Component metadata for forward-compat handling.
     fn component(&self) -> ComponentDescriptor;
 
-    /// Derive the state slot subject for an event. Returns:
+    /// Derive the cell subject for an event. Returns:
     ///
     /// - `Ok(None)` for `StateCardinality::Singleton` and
     ///   `StateCardinality::None` (no per-event subject).
     /// - `Ok(Some(subject))` for `StateCardinality::PerSubject` — the
     ///   value derived from the typed payload field.
-    /// - `Err(_)` if the typed payload field is missing or the event
-    ///   carries a legacy `state_key` field.
+    /// - `Err(_)` if the typed payload field is missing.
     ///
     /// Default impl returns `Ok(None)` — singleton / non-state kinds get
-    /// it for free; per_subject kinds MUST override.
+    /// it for free; per-subject kinds MUST override.
     fn subject_for_event(
         &self,
         _operation: &Operation,
@@ -158,9 +150,9 @@ pub struct ReducerRegistry {
 
 impl ReducerRegistry {
     /// Build a registry pre-populated with every kind soland's reducer
-    /// currently projects, plus stubs for the spec Phase 1-5 kinds whose
-    /// subject derivation is wired up but whose `project` method is a
-    /// no-op pending T1-3.
+    /// currently projects, plus stubs for spec kinds whose subject
+    /// derivation is wired up but whose `project` method is a no-op
+    /// pending T1-3.
     pub fn new() -> Self {
         use crate::reducer::kinds::*;
         let mut registry = Self { kinds: BTreeMap::new() };
@@ -193,8 +185,8 @@ impl ReducerRegistry {
         registry.register(SpaceUpdate);
         registry.register(SpaceDestroy);
 
-        // ── Spec Phase 1-5 stubs (T1-3 will land project() bodies) ───
-        // Per-facet space policy state events (Phase 1 split).
+        // ── Per-facet space policy state events (T1-3 will land
+        //    project() bodies; subject derivation already wired). ────────
         registry.register(SpacePolicy);
         registry.register(SpaceJoinRule);
         registry.register(SpaceHistoryVisibility);
@@ -211,15 +203,12 @@ impl ReducerRegistry {
         registry.register(SpaceArchive);
         registry.register(SpaceFreeze);
         registry.register(SpaceTombstone);
-        // Phase 4 hub-writer.
-        registry.register(SpaceHost);
-        registry.register(SpaceHostTransfer);
-        // Phase 5 consent.
+        // Holder-private consent (cell or-set, see consent-model.md).
         registry.register(ConsentGrant);
         registry.register(ConsentRevoke);
-        // Member state (Phase 1 still uses cx.member.state typed kind;
-        // legacy cx.membership.* kinds above are the active reducer path
-        // until T1-3 swaps them for cx.member.state).
+        // Member state: cx.member.state typed kind (active);
+        // legacy cx.membership.* kinds above remain the projection path
+        // until T1-3 swaps them for cx.member.state.
         registry.register(MemberState);
 
         registry
@@ -312,18 +301,6 @@ pub(crate) fn optional_payload_string(
         .map(ToOwned::to_owned)
 }
 
-/// Helper: assert no legacy `state_key` field is present on the payload
-/// (spec Phase 1 removed it). Returns `Err(LegacyStateKey)` if it is.
-pub(crate) fn assert_no_legacy_state_key(
-    operation: &Operation,
-    kind: &'static str,
-) -> Result<(), ReducerKindError> {
-    if operation.payload.get("state_key").is_some() {
-        return Err(ReducerKindError::LegacyStateKey { kind });
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -343,26 +320,27 @@ mod tests {
     }
 
     #[test]
-    fn registry_includes_phase_1_5_kinds() {
+    fn registry_includes_post_phase_1_5_kinds() {
         let registry = ReducerRegistry::new();
-        // Phase 1 per-facet split.
+        // Per-facet space split.
         assert!(registry.lookup("cx.space.policy").is_some());
         assert!(registry.lookup("cx.space.media_service").is_some());
         assert!(registry.lookup("cx.space.inheritance_policy").is_some());
         assert!(registry.lookup("cx.space.archive").is_some());
         assert!(registry.lookup("cx.space.tombstone").is_some());
-        // Phase 4 hub-writer.
-        assert!(registry.lookup("cx.space.host").is_some());
-        assert!(registry.lookup("cx.space.host.transfer").is_some());
-        // Phase 5 consent.
+        // Holder-private consent (cell or-set).
         assert!(registry.lookup("cx.consent.grant").is_some());
         assert!(registry.lookup("cx.consent.revoke").is_some());
+        // Move/Anchor/Lattice rebase removed cx.space.host / cx.space.host.transfer
+        // (anchorer cell now governs Anchor signing); they MUST NOT be registered.
+        assert!(registry.lookup("cx.space.host").is_none());
+        assert!(registry.lookup("cx.space.host.transfer").is_none());
     }
 
     #[test]
     fn registry_rejects_legacy_aggregate_kinds() {
         let registry = ReducerRegistry::new();
-        // Spec Phase 1 hard-removed these; soland MUST NOT register them.
+        // Spec hard-removed these aggregate kinds; soland MUST NOT register them.
         assert!(registry.lookup("cx.space.policy.set").is_none());
         assert!(registry.lookup("cx.space.lifecycle.set").is_none());
     }

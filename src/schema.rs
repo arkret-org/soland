@@ -123,7 +123,7 @@ diesel::table! {
         event_id -> Text,
         space_id -> Text,
         event_type -> Text,
-        state_key -> Text,
+        subject -> Text,
         sender -> Nullable<Text>,
         operation_id -> Nullable<Text>,
         payload -> Jsonb,
