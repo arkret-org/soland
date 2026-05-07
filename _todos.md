@@ -298,7 +298,7 @@ pub async fn send_message(
 | # | Task | Files | Notes |
 | --- | --- | --- | --- |
 | **T6-P-1** | `keys/upload / query / claim` via PgStore (Tier-0 wiring); revocation propagation linked with reducer T1-3 `cx.device.*`. | `src/routing/keys.rs`, `persistence.rs` | F-2 |
-| **T6-P-2** | Push outbound bridge — replace process-memory cache with persistent snapshot store; etag/freshness, first-fetch persistence, fail-closed on contract drift. | `src/routing/push_outbound.rs` | F-8 |
+| **T6-P-2** ✅ snapshot store | ~~replace process-memory cache with persistent snapshot store~~ Done — `PgPushBridgeCacheStore` + migration `20260507000100_push_bridge_cache` landed; `OutboundPushBridgeCacheRecord` round-trips through Pg. Remaining: etag/freshness fields require extending the in-memory record first, then surfacing on the SQL row; fail-closed on contract drift still TODO in `push_outbound.rs`. | `src/routing/push_outbound.rs`, `src/persistence.rs` | F-8 |
 | **T6-P-3** | `auth/session-grant/exchange` and `push/register-device` `TODO(session-grant)` bridge — coauth-backed introspection + audience binding + session-public-key proof verification. | `src/routing/{auth,push}.rs` | F-9 |
 | **T6-P-4** | WebRTC sessions / signals persistence (after Tier 0); ICE config no longer returns an empty array. | `src/routing/webrtc.rs` | F-10 |
 | **T6-P-5** | Profile/presence via Tier-0 presence store; presence/typing distinguish ephemeral vs durable channels. | `src/routing/profile.rs` | F-11 |

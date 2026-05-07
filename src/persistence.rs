@@ -1768,6 +1768,7 @@ pub struct PgPersistenceStore {
     sessions: PgSessionStore,
     devices: PgDeviceInventoryStore,
     federation_transactions: PgFederationTransactionStore,
+    push_bridge_cache: PgPushBridgeCacheStore,
     fallback: MemoryPersistenceStore,
 }
 
@@ -1777,7 +1778,8 @@ impl PgPersistenceStore {
             accounts: PgAccountStore { pool: pool.clone() },
             sessions: PgSessionStore { pool: pool.clone() },
             devices: PgDeviceInventoryStore { pool: pool.clone() },
-            federation_transactions: PgFederationTransactionStore { pool },
+            federation_transactions: PgFederationTransactionStore { pool: pool.clone() },
+            push_bridge_cache: PgPushBridgeCacheStore { pool },
             fallback: MemoryPersistenceStore::new(),
         }
     }
@@ -1845,7 +1847,7 @@ impl PersistenceStore for PgPersistenceStore {
     }
 
     fn push_bridge_cache(&self) -> &dyn PushBridgeCacheStore {
-        self.fallback.push_bridge_cache()
+        &self.push_bridge_cache
     }
 
     fn webrtc(&self) -> &dyn WebrtcSessionStore {
@@ -2127,6 +2129,106 @@ impl FederationTransactionStore for PgFederationTransactionStore {
     }
 }
 
+struct PgPushBridgeCacheStore {
+    pool: PgPool,
+}
+
+impl PushBridgeCacheStore for PgPushBridgeCacheStore {
+    fn get(
+        &self,
+        bridge_describe_url: &str,
+    ) -> PersistenceResult<Option<OutboundPushBridgeCacheRecord>> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query(
+            "SELECT push_gateway_url, service_base_url, bridge_describe_url, fetch_state, \
+             cache_state, contract_digest, fetched_at, remote_contract \
+             FROM push_bridge_cache WHERE cache_key = $1",
+        )
+        .bind::<Text, _>(bridge_describe_url)
+        .get_result::<PushBridgeCacheRow>(&mut conn)
+        .optional()
+        .map(|row| row.map(OutboundPushBridgeCacheRecord::from))
+        .map_err(PersistenceError::from)
+    }
+
+    fn put(
+        &self,
+        bridge_describe_url: &str,
+        record: OutboundPushBridgeCacheRecord,
+    ) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query(
+            "INSERT INTO push_bridge_cache \
+             (cache_key, push_gateway_url, service_base_url, bridge_describe_url, fetch_state, \
+              cache_state, contract_digest, fetched_at, remote_contract, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW()) \
+             ON CONFLICT (cache_key) DO UPDATE SET \
+                push_gateway_url = EXCLUDED.push_gateway_url, \
+                service_base_url = EXCLUDED.service_base_url, \
+                bridge_describe_url = EXCLUDED.bridge_describe_url, \
+                fetch_state = EXCLUDED.fetch_state, \
+                cache_state = EXCLUDED.cache_state, \
+                contract_digest = EXCLUDED.contract_digest, \
+                fetched_at = EXCLUDED.fetched_at, \
+                remote_contract = EXCLUDED.remote_contract, \
+                updated_at = NOW()",
+        )
+        .bind::<Text, _>(bridge_describe_url)
+        .bind::<Text, _>(&record.push_gateway_url)
+        .bind::<Text, _>(&record.service_base_url)
+        .bind::<Text, _>(&record.bridge_describe_url)
+        .bind::<Text, _>(&record.fetch_state)
+        .bind::<Text, _>(&record.cache_state)
+        .bind::<Text, _>(&record.contract_digest)
+        .bind::<Timestamptz, _>(record.fetched_at)
+        .bind::<Jsonb, _>(&record.remote_contract)
+        .execute(&mut conn)
+        .map(|_| ())
+        .map_err(PersistenceError::from)
+    }
+
+    fn delete(&self, bridge_describe_url: &str) -> PersistenceResult<bool> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query("DELETE FROM push_bridge_cache WHERE cache_key = $1")
+            .bind::<Text, _>(bridge_describe_url)
+            .execute(&mut conn)
+            .map(|affected| affected > 0)
+            .map_err(PersistenceError::from)
+    }
+
+    fn clear(&self) -> PersistenceResult<usize> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query("DELETE FROM push_bridge_cache")
+            .execute(&mut conn)
+            .map_err(PersistenceError::from)
+    }
+
+    fn snapshot_all(&self) -> PersistenceResult<Vec<OutboundPushBridgeCacheRecord>> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query(
+            "SELECT push_gateway_url, service_base_url, bridge_describe_url, fetch_state, \
+             cache_state, contract_digest, fetched_at, remote_contract \
+             FROM push_bridge_cache ORDER BY cache_key",
+        )
+        .load::<PushBridgeCacheRow>(&mut conn)
+        .map(|rows| rows.into_iter().map(OutboundPushBridgeCacheRecord::from).collect())
+        .map_err(PersistenceError::from)
+    }
+
+    fn len(&self) -> PersistenceResult<usize> {
+        let mut conn = pg_conn(&self.pool)?;
+        #[derive(QueryableByName)]
+        struct CountRow {
+            #[diesel(sql_type = diesel::sql_types::BigInt)]
+            count: i64,
+        }
+        sql_query("SELECT COUNT(*) AS count FROM push_bridge_cache")
+            .get_result::<CountRow>(&mut conn)
+            .map(|row| row.count as usize)
+            .map_err(PersistenceError::from)
+    }
+}
+
 #[derive(QueryableByName)]
 struct AccountRow {
     #[diesel(sql_type = Text)]
@@ -2254,6 +2356,41 @@ impl From<FederationTransactionRow> for FederationTransactionRecord {
             response: row.response,
             received_at: row.received_at,
             processed_at: row.processed_at,
+        }
+    }
+}
+
+#[derive(QueryableByName)]
+struct PushBridgeCacheRow {
+    #[diesel(sql_type = Text)]
+    push_gateway_url: String,
+    #[diesel(sql_type = Text)]
+    service_base_url: String,
+    #[diesel(sql_type = Text)]
+    bridge_describe_url: String,
+    #[diesel(sql_type = Text)]
+    fetch_state: String,
+    #[diesel(sql_type = Text)]
+    cache_state: String,
+    #[diesel(sql_type = Text)]
+    contract_digest: String,
+    #[diesel(sql_type = Timestamptz)]
+    fetched_at: chrono::DateTime<chrono::Utc>,
+    #[diesel(sql_type = Jsonb)]
+    remote_contract: Value,
+}
+
+impl From<PushBridgeCacheRow> for OutboundPushBridgeCacheRecord {
+    fn from(row: PushBridgeCacheRow) -> Self {
+        Self {
+            push_gateway_url: row.push_gateway_url,
+            service_base_url: row.service_base_url,
+            bridge_describe_url: row.bridge_describe_url,
+            fetch_state: row.fetch_state,
+            cache_state: row.cache_state,
+            contract_digest: row.contract_digest,
+            fetched_at: row.fetched_at,
+            remote_contract: row.remote_contract,
         }
     }
 }
@@ -2425,5 +2562,52 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    #[test]
+    fn memory_push_bridge_cache_store_crud() {
+        let store = MemoryPushBridgeCacheStore::new();
+        let now = Utc::now();
+        let url = "https://floria.example/api/v1/push/bridge/describe";
+        let record = OutboundPushBridgeCacheRecord {
+            push_gateway_url: "https://floria.example".to_owned(),
+            service_base_url: "https://floria.example/api/v1/push".to_owned(),
+            bridge_describe_url: url.to_owned(),
+            fetch_state: "fresh".to_owned(),
+            cache_state: "valid".to_owned(),
+            contract_digest: "sha256:abc".to_owned(),
+            fetched_at: now,
+            remote_contract: serde_json::json!({
+                "contract": "contrix.push.bridge",
+                "version": "v1.0",
+                "provider_capabilities_version": "2026-05-07",
+            }),
+        };
+
+        store.put(url, record.clone()).unwrap();
+        assert_eq!(store.len().unwrap(), 1);
+        assert!(!store.is_empty().unwrap());
+
+        let fetched = store.get(url).unwrap().unwrap();
+        assert_eq!(fetched.contract_digest, "sha256:abc");
+        assert_eq!(fetched.fetch_state, "fresh");
+
+        let updated = OutboundPushBridgeCacheRecord {
+            contract_digest: "sha256:def".to_owned(),
+            cache_state: "stale".to_owned(),
+            ..record
+        };
+        store.put(url, updated).unwrap();
+        let after = store.get(url).unwrap().unwrap();
+        assert_eq!(after.contract_digest, "sha256:def");
+        assert_eq!(after.cache_state, "stale");
+        assert_eq!(store.len().unwrap(), 1);
+
+        let snapshot = store.snapshot_all().unwrap();
+        assert_eq!(snapshot.len(), 1);
+
+        assert!(store.delete(url).unwrap());
+        assert!(!store.delete(url).unwrap());
+        assert!(store.is_empty().unwrap());
     }
 }
