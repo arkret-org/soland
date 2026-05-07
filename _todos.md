@@ -59,6 +59,9 @@
 | **T1-2** | Migrate the 28 already-projected kinds to the registry — one file per kind module. Existing tests stay green. | `src/reducer/kinds/*` | T1-1 first |
 | **T1-3** | Land each remaining kind (A2..A19 in the old plan) as a single `kinds/<kind>.rs` PR. Kinds: `cx.space.*` (19 sub-kinds), `cx.schema.*`, `cx.morph.*`, `cx.view.*`, `cx.flow.*`, `cx.capability.*`, `cx.policy.*`, `cx.invite.*`, `cx.account.*`, `cx.account_data.*`, `cx.moderation.*`, `cx.audit.*`, `cx.identity.*`, `cx.did.proof`, `cx.session.grant`, `cx.device.*`, `cx.key.verification.*` (8), `cx.mls.*` (7), `cx.space_key.*` (3), `cx.member.state`, `cx.profile.*`, `cx.mimi.room_binding`, `cx.sovereign.did_policy`, `cx.organization.*`. | `src/reducer/kinds/*` | T1-1 + T1-2 first |
 | **T1-4** | spec B-09 — `redact` reducer must preserve `actor_seq`. Currently `cleared` flattens attachments/mentions/relations; `hashes` must be cleared, not retained. | `src/reducer/kinds/redact.rs` | |
+| **T1-5** ⚠ | **Reducer state slot key model** must follow spec Phase 1: `(space_id, kind)` for singleton, `(space_id, kind, value-of-state_subject_field)` for per_subject. Subject derivation reads schema registry's `state_subject_field` (or `state_subject_components` for composite). T1-1 trait design MUST use this model — do **not** implement the legacy `state_key` model first and migrate later. | `src/reducer/registry.rs`, `src/reducer/kinds/*` | spec Phase 1 §4.3; root C10.B gate |
+| **T1-6** | **Component metadata propagation**: each reducer kind declares its `component_type` / `component_version` / `criticality` (matches contract-catalog). Unknown component → handle by criticality (`required` fail closed / `optional` warn-skip / `ignore` silently drop) instead of generic schema_violation. | `src/reducer/registry.rs`, `src/wire.rs` | spec Phase 2 §4.4 |
+| **T1-7** | Add new event kinds to T1-3 plan: `cx.space.host`, `cx.space.host.transfer`, `cx.consent.grant`, `cx.consent.revoke`, plus the 17 per-facet `cx.space.<facet>` kinds (replacing old `cx.space.policy.set` / `cx.space.lifecycle.set` placeholders). Total kind count target now ~129 (was ~110). | `src/reducer/kinds/*` | T1-1 + T1-2 first |
 
 ---
 
@@ -79,6 +82,24 @@
 | **T2-8** | spec B-14 — DIDs MUST NOT appear in push payload / TURN username / push `sender`. Replace with Space-scoped pairwise pseudonym or ephemeral token; add MUST_NOT conformance tests. | `src/routing/{push,webrtc,push_outbound}.rs` | F-1 (old plan) |
 | **T2-9** | spec B-23 — blob metadata adds `space_id` association + download/GC checks. | `src/routing/blob.rs`, `migrations/*` | F-7 (old plan) |
 | **T2-10** | spec B-12 — MLS GroupContext extension `cx_app_state_ref` allocated a private codepoint (0xF000–0xFFFF) and registered. | `contrix-spec/spec/v1/artifacts/`, `src/wire.rs` | F-5 (old plan) |
+
+### Tier 2.5 · Spec Phase 1-5 wire-breaking rework ⚠
+
+> Source: `contrix-spec` 2026-05-07 finished Phase 1-5. See root [`../_todos.md` C10.B](../_todos.md) and [`../contrix-spec/_state_todos.md`](../contrix-spec/_state_todos.md).
+>
+> Gate: contrix-rust-sdk W1-W13 first (typed model). Once SDK exposes the new envelope / proof / kinds, soland consumes them rather than parsing raw JSON.
+
+| # | Task | Files | Notes |
+| --- | --- | --- | --- |
+| **T2-11** ⚠ | Remove envelope-level `state_key` from all wire surfaces. Rename `state_key_segment_encode` / `state_key_compose` in `src/ids.rs` to `subject_segment_encode` / `subject_compose`; clarify these are reducer-side composite-subject helpers, not wire fields. Update `src/routing/projection.rs`, `src/routing/directory.rs`, `src/schema.rs` references. | `src/ids.rs` (14 hits), `src/routing/projection.rs`, `src/routing/directory.rs`, `src/schema.rs`, all tests | spec Phase 1 |
+| **T2-12** ⚠ | Strip aggregate kinds `cx.space.policy.set` / `cx.space.lifecycle.set` from any handler / fixture / test that mentions them; replace with the 17 per-facet kinds. Quick search showed 0 hits in current source — confirm and lock in via lint. | `src/`, `tests/` | spec Phase 1 |
+| **T2-13** ⚠ | Wire schema: add `Space.space_writer_model: enum(hub, peer_mesh)` create-locked field + `Space.space_host: did` (required when hub). Reducer materialises both from `cx.space.create.payload.object` and the latest accepted `cx.space.host`. Reject `space_host` on peer_mesh Spaces. | `src/wire.rs`, `src/reducer/kinds/space_create.rs`, T1-3 stream | spec Phase 4 |
+| **T2-14** ⚠ | Add `proof.kind="host_endorsement"` proof type. Validate (a) proof.host_did equals current accepted Space Host (or new_host after `cx.space.host.transfer.activation_frontier`); (b) hub Space durable state event MUST carry exactly one `host_endorsement` proof or `proof_missing` reject; (c) `host_endorsement` on a peer_mesh Space MUST `schema_violation` reject. | `src/wire.rs`, new `src/host_endorsement.rs`, all reducer kinds | spec Phase 4 §3.3 |
+| **T2-15** | Genesis host bootstrap: `cx.space.create` itself does not require `host_endorsement`. The first `cx.space.host` event after create MUST be endorsed by the genesis host declared in `cx.space.create.payload.object.space_host`. host_did transfer MUST go through `cx.space.host.transfer`, not via plain `cx.space.host` updates. | `src/reducer/kinds/space_create.rs`, `src/reducer/kinds/space_host.rs` | spec Phase 4 §3.3 |
+| **T2-16** | `cx.consent.grant` / `cx.consent.revoke` reducer kinds. State slot keyed by `payload.consent_id`; revoke supersedes grant on same slot. Persist in holder's principal control Space; reject on shared collaboration Space (consent is holder-private). | `src/reducer/kinds/consent_grant.rs`, `src/reducer/kinds/consent_revoke.rs`, T1-3 stream | spec Phase 5 |
+| **T2-17** ⚠ | Consent gate on invite handler: `/api/v1/invites/*` and `cx.invite.create` reducer query holder consent (`(peer=requester, scope="invite" OR scope="any")`) before delivering. If not granted, route to quarantine inbox or reject as `consent_required` based on `cx.space.policy_components.preauth.require_consent`. | `src/routing/invites.rs`, `src/reducer/kinds/invite_create.rs` | spec Phase 5 §6.1 |
+| **T2-18** ⚠ | `cx.mls.commit.application_state_ref` validation tightening. Verify the commit's `policy_root_components` covers all `cx.profile.mls_state_binding.full.v1` declared `policy_root_required_components`; missing required component → reject. Same for `membership_frontier_required_components` and `capability_root_required_components`. | `src/mls.rs`, `src/reducer/kinds/mls_commit.rs` | spec Phase 3 |
+| **T2-19** | `pending_mls_binding` state on E2EE Space sync output. `/sync` and `/events/*` annotate state events that are accepted but not yet covered by an `application_state_ref`. Field: `state_binding_status: "covered" \| "pending_mls_binding"` on the sync envelope. | `src/sync.rs`, `src/routing/events.rs` | spec Phase 3 §2.5.1 |
 
 ---
 
@@ -271,13 +292,17 @@ pub async fn send_message(
 | **T6-F-4** | `federation_space_members` from reducer membership state (depends on T1-3 `cx.space.*`). | same | C4 |
 | **T6-F-5** | `federation_verify_actor` validates signatures / DID document / key set; returns `validation_class` enum (spec M-19). | same | C5 |
 | **T6-F-6** | Revocation fan-out TTL + retry policy (spec M-18). | same | C6 |
+| **T6-F-7** ⚠ | **Hub fanout vs peer mesh dual federation**. Detect target Space's `space_writer_model`: hub Space goes through `actor PrincipalServer A → host PrincipalServer B → host_endorsement → fanout` (this server is host or follower); peer_mesh Space keeps existing peer-mesh + RFC 9421 transcript. Cross-deployment hub Space requires actor-side server to forward unsigned-by-host event to host endpoint, host signs endorsement, fans out. | `src/routing/federation.rs`, new `src/routing/federation_hub.rs` | spec Phase 4 §2.4; root C10.B |
+| **T6-F-8** ⚠ | **Host endorsement issuance service** (when this soland is the Space Host). Validate incoming actor-signed event (capability + auth_refs + policy), append `host_endorsement` proof signed with this server's service DID, write through to local store, fanout to followers. Concurrency: prevent host fork by serializing per-Space-slot acceptance. | new `src/host_endorser.rs`, `src/routing/federation_hub.rs` | spec Phase 4 §3.3; T2-14 |
+| **T6-F-9** ⚠ | **Host transfer ceremony** (smooth dual-sign / emergency governance-quorum). `cx.space.host.transfer.activation_frontier` switches endorsement key. Reducer rejects post-frontier events endorsed by old host. Emergency mode requires `payload.governance_quorum_proof.signers` to be majority of `Space.owning_organizations`. | `src/reducer/kinds/space_host_transfer.rs`, `src/host_endorser.rs` | spec Phase 4 §13; T2-14 |
+| **T6-F-10** ⚠ | **§9.5 host fault diagnostic**. Hub Space concurrent-fork on the same state slot → quarantine entire slot, emit host fault report (event refs / HLC / detecting service DID). Trigger emergency transfer candidate condition after `Space.space_host.activation_timeout_ms` of host inactivity or unresolved host fault. | `src/reducer/registry.rs`, `src/host_endorser.rs` | spec Phase 4 §9.5 |
 
 ### MIMI
 
 | # | Task | Files | Notes |
 | --- | --- | --- | --- |
 | **T6-M-1** | MIMI `room_update / notify / room_message` ingest into `cx.*` events instead of audit log; remove demo "alice" mapping. | `src/routing/mimi.rs` | C7 |
-| **T6-M-2** | MIMI `consent_request / consent_update` via Tier-3 consent state machine + persistence. | same | C8 |
+| **T6-M-2** | MIMI `consent_request / consent_update` via Tier-3 consent state machine + persistence. Maps to `cx.consent.grant` / `cx.consent.revoke` (spec Phase 5); preserve `consent_id` as inter-protocol correlation. See T2-16. | same | C8; spec Phase 5 §7 |
 | **T6-M-3** | MIMI `key_material` issues / fetches a real KeyPackage (links to T1-3 `cx.mls.*`). | same | C9 |
 | **T6-M-4** | MIMI `identifiers_query` via Tier-6-D directory; drop hardcoded alice. | same | C10 |
 | **T6-M-5** | MIMI `report_abuse` / `proxy_download` route through Tier-0 moderation/blob stores. | same | C11 |
