@@ -71,7 +71,7 @@
 | --- | --- | --- | --- |
 | **T2-1** | spec M-01 — remove `event_type` entirely; keep only `event_kind`. Drop the dead `aad_ambiguous_kind` error. Drop the duplicate `event_type / input_event_type / canonical_event_type` triple on `ProjectionEventRecord`. | `src/wire.rs`, `src/state.rs::ProjectionEventRecord`, `src/reducer.rs`, all handlers, all tests | spec M-01 |
 | **T2-2** | spec M-02..M-07 — unify `principal_id / subject / holder_did`, `session_key_pub / session_public_key`, `Proof.kind`, `read_marker.id` pattern. One name per concept; delete the others. | `src/wire.rs`, handlers | spec M-02..M-07 |
-| **T2-3** | spec M-15 — every sync/directory response uses the `cx:space:` prefix (not `space:`). Single grep + fix. | grep + fix | |
+| **T2-3** ✅ | ~~every sync/directory response uses the `cx:space:` prefix~~ Done — all sync/directory responses already emit `cx:space:` (verified by grep). Removed the dead legacy-`space:` strip workaround in `src/routing/authz.rs:47-49` so the `authz.check` request resource string is forwarded verbatim per spec M-15. | grep + fix | |
 | **T2-4** | Grant envelope shape and constraint schema aligned to v1.0 `grant-constraint.schema.json` — 8 family (`temporal / field_access / type_restriction / scope_limitation / delegation_control / quota / claim_based / confidentiality`) + `subtype`. Drop the legacy 14-name model and the `condition.when` string DSL. | `src/authz.rs`, `src/wire.rs`, spec mirror | B1 (old plan) |
 | **T2-5** | spec B-10 — KeyPackage shape unified to `principal_id/device_id/keypackage_id/device_signature/expires_at`. | `src/routing/keys.rs`, wire | F-3 (old plan) |
 | **T2-6** | spec B-11 — merge `secret_storage` and `key_backup` into `cx.schema.key_backup.v1` + `domain` enum; HKDF info per domain. | `src/routing/key_backup.rs`, wire | F-4 (old plan) |
@@ -347,7 +347,7 @@ pub async fn send_message(
 | # | Task | Files | Notes |
 | --- | --- | --- | --- |
 | **B1** | **Integration-test hangs** — `account_contacts_and_space_lifecycle_workflow` and `admin_collection_surfaces_return_sodmin_shapes` (and ~8 more) hang under cargo test, even with `--test-threads=1`. Reproduce with `RUSTFLAGS="--cfg tokio_unstable" RUST_LOG=trace` + `tokio-console` or strip ratelimit / `wait_for_sync_token` middleware in a diff. | `tests/http_api.rs`, `src/ratelimit.rs`, `src/routing/mod.rs::wait_for_sync_token` | F5 (old plan) |
-| **B2** | **Integration-test failure** — `auth_keys_device_messages_and_blobs_work` panics on `legacy_field_push_body["error"]["message"]` (gets `Null`); pre-existing on baseline. | `src/routing/{keys,device_messages,blob,push}.rs` | F6 (old plan) |
+| **B2** ✅ | ~~`auth_keys_device_messages_and_blobs_work` panics on `legacy_field_push_body["error"]["message"]`~~ Fixed — assertion was reading the wrong key. `render_error` produces `error.error` (string) per `src/routing/util.rs:38-40`; both occurrences in `tests/http_api.rs:4084,4102` now read `["error"]["error"]`. | `tests/http_api.rs` | F6 (old plan) |
 
 ---
 

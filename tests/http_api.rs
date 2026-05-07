@@ -4081,7 +4081,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
     let legacy_field_push_body: Value = legacy_field_push.take_json().await.unwrap();
     assert_eq!(legacy_field_push_body["error"]["errcode"], "invalid_param");
     assert_eq!(
-        legacy_field_push_body["error"]["message"],
+        legacy_field_push_body["error"]["error"],
         "removed legacy subject/room/card contract is forbidden on the active v1 wire"
     );
 
@@ -4099,7 +4099,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
     let legacy_typed_id_push_body: Value = legacy_typed_id_push.take_json().await.unwrap();
     assert_eq!(legacy_typed_id_push_body["error"]["errcode"], "invalid_param");
     assert_eq!(
-        legacy_typed_id_push_body["error"]["message"],
+        legacy_typed_id_push_body["error"]["error"],
         "removed legacy subject/room/card contract is forbidden on the active v1 wire"
     );
 

@@ -44,10 +44,13 @@ pub async fn authz_check(depot: &mut Depot, req: &mut Request, res: &mut Respons
         }
     };
     // Extract space_id from resource
-    // Resource can be: a string "space:<id>" or an object {"kind":"space","space_id":"<id>"}
+    // Resource MUST be either a typed `cx:*:<ulid>` string (per spec M-15) or
+    // an object {"kind":"<kind>","space_id":"<id>"}. The legacy bare
+    // `space:<id>` form is no longer accepted; downstream code receives the
+    // resource string verbatim and treats the matching `space_id` as the same
+    // typed id.
     let (resource_str, space_id, resource_facets) = if let Some(s) = body.resource.as_str() {
-        let sid = s.strip_prefix("space:").unwrap_or(s);
-        (s.to_owned(), sid.to_owned(), Vec::new())
+        (s.to_owned(), s.to_owned(), Vec::new())
     } else if let Some(obj) = body.resource.as_object() {
         let kind = obj.get("kind").and_then(|v| v.as_str()).unwrap_or("space");
         let entity_id = obj
