@@ -103,9 +103,14 @@ pub async fn authz_check(depot: &mut Depot, req: &mut Request, res: &mut Respons
     };
     // Look up space owner and members
     let (owner, members) = {
-        let meta = state.space_meta.lock().expect("space meta lock");
+        let owner = state
+            .persistence
+            .space_meta()
+            .get(&space_id)
+            .ok()
+            .flatten()
+            .map(|m| m.owner);
         let spaces = state.spaces.lock().expect("spaces lock");
-        let owner = meta.get(&space_id).map(|m| m.owner.clone());
         let members = spaces
             .get(
                 &contrix_sdk::SpaceId::new(space_id.clone())
@@ -155,9 +160,13 @@ pub async fn effective_grants(depot: &mut Depot, req: &mut Request, res: &mut Re
     let space_id = query_param(req, "space_id").unwrap_or_else(|| "*".to_owned());
     let grants = if space_id == "*" {
         // Return grants across all spaces
-        let meta = state.space_meta.lock().expect("space meta lock");
-        meta.keys()
-            .flat_map(|sid| state.authz.grants_for_subject(&subject, sid))
+        state
+            .persistence
+            .space_meta()
+            .list()
+            .unwrap_or_default()
+            .into_iter()
+            .flat_map(|(sid, _)| state.authz.grants_for_subject(&subject, &sid))
             .map(|g| {
                 json!({
                     "grant_id": g.grant_id,
@@ -295,10 +304,11 @@ pub async fn invites(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     };
     let now = now();
     let invite_list = state
-        .space_invites
-        .lock()
-        .expect("space invites lock")
-        .values()
+        .persistence
+        .space_invites()
+        .snapshot_all()
+        .unwrap_or_default()
+        .into_iter()
         .filter(|invite| {
             invite.status == "pending"
                 && invite

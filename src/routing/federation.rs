@@ -231,14 +231,11 @@ pub async fn federation_pull_operations(depot: &mut Depot, req: &mut Request, re
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(100)
         .min(100);
-    let space_operations: Vec<_> = state
-        .federation_operations
-        .lock()
-        .expect("federation lock")
-        .iter()
-        .filter(|operation| operation.space_id.as_str() == space_id)
-        .cloned()
-        .collect();
+    let space_operations = state
+        .persistence
+        .federation_operations()
+        .list_for_space(&space_id)
+        .unwrap_or_default();
     let redacted = redaction_targets_from_operations(&space_operations);
     let snapshot_bootstrap = query_flag(req, "snapshot_bootstrap").then(|| {
         let manifest = json!({

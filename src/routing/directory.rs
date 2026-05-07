@@ -360,10 +360,11 @@ pub async fn resolve_handle(depot: &mut Depot, req: &mut Request, res: &mut Resp
 
 pub fn has_accepted_contact(state: &AppState, left: &str, right: &str) -> bool {
     state
-        .contacts
-        .lock()
-        .expect("contacts lock")
-        .values()
+        .persistence
+        .contacts()
+        .list_for_actor(left)
+        .unwrap_or_default()
+        .iter()
         .any(|contact| {
             contact.status == "accepted"
                 && ((contact.requester == left && contact.target == right)
@@ -412,15 +413,7 @@ pub fn demo_actors(state: &AppState) -> Vec<Value> {
         "presence": {"status": "online", "updated_at": now()},
     })];
 
-    let accounts = state.persistence.accounts().list().unwrap_or_else(|_| {
-        state
-            .accounts
-            .lock()
-            .expect("accounts lock")
-            .values()
-            .cloned()
-            .collect()
-    });
+    let accounts = state.persistence.accounts().list().unwrap_or_default();
     for account in accounts {
         if actors
             .iter()
@@ -452,7 +445,7 @@ pub fn demo_actors(state: &AppState) -> Vec<Value> {
             }
             grouped
         })
-        .unwrap_or_else(|_| state.devices.lock().expect("devices lock").clone());
+        .unwrap_or_default();
     for (did, actor_devices) in devices.iter() {
         if actors
             .iter()

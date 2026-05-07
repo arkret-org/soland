@@ -1,8 +1,8 @@
 //! Moderation report handler.
 //!
-//! Surface: `POST /api/v1/moderation/report`. Backed by in-memory
-//! `state.moderation_reports` + `state.moderation_actions`. Stream-E in
-//! `_todos.md` covers the durable persistence + async workflow.
+//! Surface: `POST /api/v1/moderation/report`. Backed by
+//! `state.persistence.moderation()`. Tier 6-D in `_todos.md` covers the async
+//! review workflow + reducer linkage.
 
 use salvo::{http::StatusCode, prelude::*};
 use serde_json::json;
@@ -65,24 +65,26 @@ pub async fn moderation_report(depot: &mut Depot, req: &mut Request, res: &mut R
     }
     let report_id = ids::generate_report_id();
     let moderation_service = format!("{}#moderation", state.config.service_did);
-    state
-        .moderation_reports
-        .lock()
-        .expect("moderation lock")
-        .push(json!({"report_id": report_id, "space_id": body.space_id, "target_ref": body.target_ref, "reason": body.reason, "reporter": body.reporter}));
-    state
-        .moderation_actions
-        .lock()
-        .expect("moderation action lock")
-        .push(json!({
-            "action_id": ids::generate("moderation_action"),
-            "report_id": report_id,
-            "space_id": body.space_id,
-            "target_ref": body.target_ref,
-            "status": "open",
-            "assigned_to": moderation_service.clone(),
-            "created_at": now(),
-        }));
+    if let Err(error) = state.persistence.moderation().append_report(json!({
+        "report_id": report_id,
+        "space_id": body.space_id,
+        "target_ref": body.target_ref,
+        "reason": body.reason,
+        "reporter": body.reporter,
+    })) {
+        tracing::error!(%error, "failed to append moderation report");
+    }
+    if let Err(error) = state.persistence.moderation().append_action(json!({
+        "action_id": ids::generate("moderation_action"),
+        "report_id": report_id,
+        "space_id": body.space_id,
+        "target_ref": body.target_ref,
+        "status": "open",
+        "assigned_to": moderation_service.clone(),
+        "created_at": now(),
+    })) {
+        tracing::error!(%error, "failed to append moderation action");
+    }
     append_audit_log(
         state,
         Some(&session.actor),

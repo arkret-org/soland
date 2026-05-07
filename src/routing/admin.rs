@@ -9,6 +9,8 @@
 //! Production-grade replacement is tracked under `_todos.md` Q9 — capability-
 //! scoped admin actions, durable pagination, redaction policy, high-risk audit.
 
+use std::collections::BTreeMap;
+
 use salvo::{http::StatusCode, prelude::*};
 use serde_json::{Value, json};
 
@@ -65,15 +67,15 @@ pub async fn admin_collection(depot: &mut Depot, req: &mut Request, res: &mut Re
         "reports" => (
             "reports",
             state
-                .moderation_reports
-                .lock()
-                .expect("reports lock")
-                .clone(),
+                .persistence
+                .moderation()
+                .list_reports()
+                .unwrap_or_default(),
         ),
         "invite-tokens" => ("invite_tokens", admin_invite_items(state)),
         "audit" => (
             "audit",
-            state.audit_log.lock().expect("audit log lock").clone(),
+            state.persistence.audit().snapshot_all().unwrap_or_default(),
         ),
         "policy" => ("policy", admin_policy_items(state)),
         "media" => ("media", admin_media_items(state)),
@@ -151,7 +153,13 @@ fn admin_actor_items(state: &AppState) -> Vec<Value> {
 }
 
 fn admin_space_items(state: &AppState) -> Vec<Value> {
-    let meta = state.space_meta.lock().expect("space meta lock").clone();
+    let meta: BTreeMap<String, _> = state
+        .persistence
+        .space_meta()
+        .list()
+        .unwrap_or_default()
+        .into_iter()
+        .collect();
     let spaces = state.spaces.lock().expect("spaces lock");
     spaces
         .search(Default::default())
@@ -207,10 +215,7 @@ fn admin_device_items(state: &AppState) -> Vec<Value> {
                 .collect()
         })
         .unwrap_or_else(|_| {
-            state
-                .devices
-                .lock()
-                .expect("devices lock")
+            BTreeMap::<String, BTreeMap<String, Value>>::new()
                 .iter()
                 .flat_map(|(actor, devices)| {
                     devices.iter().map(move |(device_id, device)| {
@@ -238,18 +243,19 @@ fn admin_capability_items(state: &AppState) -> Vec<Value> {
 
 fn admin_federation_items(state: &AppState) -> Vec<Value> {
     state
-        .federation_operations
-        .lock()
-        .expect("federation lock")
-        .iter()
+        .persistence
+        .federation_operations()
+        .snapshot_all()
+        .unwrap_or_default()
+        .into_iter()
         .map(|operation| {
-            let projected = projection_event_from_operation(operation, None);
+            let projected = projection_event_from_operation(&operation, None);
             json!({
                 "kind": "federation_operation",
                 "operation_id": operation.operation_id,
                 "space_id": operation.space_id,
                 "operation_type": operation.operation_type,
-                "canonical_kind": kinds::canonical_kind_string(operation),
+                "canonical_kind": kinds::canonical_kind_string(&operation),
                 "flow_id": flow_id_for_projection_event(&projected),
                 "branch": discussion_branch_for_projection_event(
                     &projected,
@@ -264,10 +270,11 @@ fn admin_federation_items(state: &AppState) -> Vec<Value> {
 
 fn admin_invite_items(state: &AppState) -> Vec<Value> {
     state
-        .space_invites
-        .lock()
-        .expect("invites lock")
-        .values()
+        .persistence
+        .space_invites()
+        .snapshot_all()
+        .unwrap_or_default()
+        .iter()
         .map(|invite| {
             json!({
                 "kind": "invite_token",
@@ -286,24 +293,25 @@ fn admin_invite_items(state: &AppState) -> Vec<Value> {
 
 fn admin_policy_items(state: &AppState) -> Vec<Value> {
     state
-        .policy_documents
-        .lock()
-        .expect("policy documents lock")
-        .values()
+        .persistence
+        .policy_documents()
+        .snapshot_all()
+        .unwrap_or_default()
+        .iter()
         .map(|policy| json!(policy_document_to_response(policy)))
         .collect()
 }
 
 fn admin_media_items(state: &AppState) -> Vec<Value> {
     state
-        .blobs
-        .lock()
-        .expect("blob lock")
+        .persistence
+        .blobs()
+        .snapshot_all()
+        .unwrap_or_default()
         .iter()
-        .map(|(blob_ref, blob)| {
+        .map(|blob| {
             json!({
                 "kind": "media",
-                "blob_ref": blob_ref,
                 "media_type": blob.media_type,
                 "filename": blob.filename,
                 "space_id": blob.space_id,

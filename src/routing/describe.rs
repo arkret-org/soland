@@ -118,9 +118,13 @@ pub async fn auth_bridge_describe() -> JsonResult<AuthBridgeDescribeResponse> {
         },
         examples: AuthBridgeExamples {
             session_grant_exchange_request: json!({
-                "session_grant": "TODO_SESSION_GRANT_JWT",
+                "grant_jwt": "TODO_SESSION_GRANT_JWT",
                 "principal_did": "did:web:alice.example",
-                "device_id": "device-web"
+                "device_id": "device-web",
+                "introspection_proof": {
+                    "challenge": "TODO_SOLAND_CHALLENGE",
+                    "proof_jwt": "TODO_SESSION_KEY_PROOF_JWT"
+                }
             }),
             register_device_request: json!({
                 "principal_did": "did:web:alice.example",
@@ -136,7 +140,7 @@ pub async fn auth_bridge_describe() -> JsonResult<AuthBridgeDescribeResponse> {
             }),
         },
         todos: vec![
-            "TODO: replace local session-grant exchange bridge with coauth-backed grant introspection, audience binding, and session-public-key proof verification".to_owned(),
+            "TODO: require coauth-backed session-grant introspection in every non-development deployment and publish the client proof profile".to_owned(),
             "TODO: replace push register grant bridge with the same coauth-backed proof/introspection path before production use".to_owned(),
             "TODO: publish formal examples for session-grant exchange and push registration in the principal-server OpenAPI surface".to_owned(),
         ],
@@ -175,13 +179,15 @@ pub async fn authz_describe() -> JsonResult<Value> {
         ],
         "grant_constraint_examples": [
             {
-                "constraint_type": "approval_workflow",
+                "constraint_type": "claim_based",
+                "subtype": "approval",
                 "effect": "require_review",
                 "approval_required": true,
                 "approval_mode": "two_man_rule"
             },
             {
                 "constraint_type": "claim_based",
+                "subtype": "claim",
                 "effect": "allow",
                 "object_type_allow": ["key_backup"],
                 "facet_allow": ["recovery"]
@@ -204,6 +210,7 @@ pub async fn authz_describe() -> JsonResult<Value> {
             "constraints": [
                 {
                     "constraint_type": "claim_based",
+                    "subtype": "claim",
                     "effect": "allow",
                     "object_type_allow": ["key_backup"],
                     "facet_allow": ["recovery"]
@@ -245,7 +252,8 @@ pub async fn policies_describe() -> JsonResult<Value> {
                 },
                 "constraints": [
                     {
-                        "constraint_type": "approval_workflow",
+                        "constraint_type": "claim_based",
+                        "subtype": "approval",
                         "effect": "require_review",
                         "approval_required": true,
                         "approval_mode": "two_man_rule"

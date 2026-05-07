@@ -8,8 +8,8 @@
 //! - `POST /api/v1/identity/did-operation`— submit a DID-operation (rotate/recover)
 //! - `GET  /api/v1/identity/receipts`     — issuer receipts for the local key log
 //!
-//! All long-term state lives behind locks in [`AppState`] (`identity_documents`,
-//! `identity_log_events`, `did_resolver`). Production must move this onto a
+//! All long-term state lives behind `state.persistence.identity()`; the
+//! `did_resolver` is still an in-process resolver chain. Production must move it onto a
 //! durable store (see todo F2) — currently in-memory.
 
 use contrix_sdk::identity::DidResolver;
@@ -25,19 +25,53 @@ use crate::{
     },
 };
 
-use super::{
-    append_audit_log, now, query_param, render_error, sha256_hex, validate_did,
-};
+use super::{append_audit_log, now, query_param, render_error, sha256_hex, validate_did};
 
 #[endpoint]
 pub async fn identity_describe(depot: &mut Depot, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
+    let allow_methods = state.config.did_resolver_allow_methods.clone();
+    let starid_enabled = state.config.starid_webvh_resolver_url.is_some();
+    let mut profiles = vec!["cx.identity.local-dev.v1".to_owned()];
+    if starid_enabled {
+        profiles.push("cx.identity.starid.webvh.optional.v1".to_owned());
+    }
     res.render(Json(IdentityDescribeResponse {
         service_did: state.config.service_did.clone(),
         registry_mode: "development_local".to_owned(),
         supported_receipts: vec!["local".to_owned()],
         protocol_version: "1.0".to_owned(),
-        profiles: vec!["cx.identity.local-dev.v1".to_owned()],
+        profiles,
+        resolver_policy: json!({
+            "allow_methods": allow_methods,
+            "default_methods": ["did:web", "did:key", "did:uuid"],
+            "cache_ttl_seconds": 300,
+            "required_profile_fail_mode": if state.config.development_mode {
+                "development_local_fallback"
+            } else {
+                "fail_closed"
+            },
+            "trust_roots": [],
+        }),
+        // TODO(starid-webvh): replace this descriptor with a live StarID
+        // resolver client and trust-root health once the optional profile is
+        // promoted beyond API discovery.
+        starid_profile: json!({
+            "method": "did:webvh",
+            "profile": "cx.identity.starid.webvh.optional.v1",
+            "enabled": starid_enabled,
+            "resolver_url": state.config.starid_webvh_resolver_url.clone(),
+            "role": "optional_high_trust_profile",
+            "migration": {
+                "portable": "todo",
+                "watcher_mirror": "todo"
+            }
+        }),
+        todos: vec![
+            "verify did:webvh key-log continuity with starid before enabling required profiles"
+                .to_owned(),
+            "publish resolver trust roots and freshness receipts".to_owned(),
+        ],
     }));
 }
 
@@ -125,11 +159,9 @@ pub async fn identity_log(depot: &mut Depot, req: &mut Request, res: &mut Respon
         return;
     }
     let events = state
-        .identity_log_events
-        .lock()
-        .expect("identity log lock")
-        .get(&did)
-        .cloned()
+        .persistence
+        .identity()
+        .list_log_events(&did)
         .unwrap_or_default()
         .into_iter()
         .map(|event| {
@@ -201,11 +233,12 @@ pub async fn submit_did_operation(depot: &mut Depot, req: &mut Request, res: &mu
     }
     if body.seq > 1 {
         let prev_doc = state
-            .identity_documents
-            .lock()
-            .expect("identity documents lock")
-            .get(&body.did)
-            .map(|r| r.did_document.clone());
+            .persistence
+            .identity()
+            .get_document(&body.did)
+            .ok()
+            .flatten()
+            .map(|r| r.did_document);
         if let Some(doc) = prev_doc {
             let verification_keys = did_document_verification_method_ids(&doc);
             let recovery_keys: Vec<String> = doc
@@ -241,11 +274,11 @@ pub async fn submit_did_operation(depot: &mut Depot, req: &mut Request, res: &mu
         }
     }
     let previous = state
-        .identity_documents
-        .lock()
-        .expect("identity documents lock")
-        .get(&body.did)
-        .cloned();
+        .persistence
+        .identity()
+        .get_document(&body.did)
+        .ok()
+        .flatten();
     if let Some(previous) = &previous {
         if body.seq != previous.seq + 1 {
             render_error(
@@ -303,34 +336,33 @@ pub async fn submit_did_operation(depot: &mut Depot, req: &mut Request, res: &mu
             }
         }
     }
-    state
-        .identity_documents
-        .lock()
-        .expect("identity documents lock")
-        .insert(
-            body.did.clone(),
-            IdentityDocumentRecord {
-                did: body.did.clone(),
-                did_document,
-                key_log_head: Some(head_event_hash.clone()),
-                seq: body.seq,
-                method_evidence: json!({"mode": "development_local", "source": "did_operation"}),
-                updated_at: now,
-            },
-        );
-    state
-        .identity_log_events
-        .lock()
-        .expect("identity log lock")
-        .entry(body.did.clone())
-        .or_default()
-        .push(IdentityLogRecord {
+    if let Err(error) = state
+        .persistence
+        .identity()
+        .put_document(IdentityDocumentRecord {
+            did: body.did.clone(),
+            did_document,
+            key_log_head: Some(head_event_hash.clone()),
+            seq: body.seq,
+            method_evidence: json!({"mode": "development_local", "source": "did_operation"}),
+            updated_at: now,
+        })
+    {
+        tracing::error!(%error, "failed to persist identity document");
+    }
+    if let Err(error) = state
+        .persistence
+        .identity()
+        .append_log_event(IdentityLogRecord {
             event_hash: head_event_hash.clone(),
             did: body.did.clone(),
             seq: body.seq,
             operation: body.patch,
             created_at: now,
-        });
+        })
+    {
+        tracing::error!(%error, "failed to append identity log event");
+    }
     append_audit_log(
         state,
         Some(&body.did),
@@ -363,11 +395,11 @@ pub async fn identity_receipts(depot: &mut Depot, req: &mut Request, res: &mut R
         return;
     }
     let record = state
-        .identity_documents
-        .lock()
-        .expect("identity documents lock")
-        .get(&did)
-        .cloned();
+        .persistence
+        .identity()
+        .get_document(&did)
+        .ok()
+        .flatten();
     res.render(Json(IdentityReceiptsResponse {
         receipts: record
             .map(|record| {
@@ -401,11 +433,11 @@ fn render_identity_document(state: &AppState, res: &mut Response, did: String) {
 
 fn identity_document_record(state: &AppState, did: &str) -> IdentityDocumentRecord {
     state
-        .identity_documents
-        .lock()
-        .expect("identity documents lock")
-        .get(did)
-        .cloned()
+        .persistence
+        .identity()
+        .get_document(did)
+        .ok()
+        .flatten()
         .unwrap_or_else(|| IdentityDocumentRecord {
             did: did.to_owned(),
             did_document: default_did_document(did),

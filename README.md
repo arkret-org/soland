@@ -1,7 +1,7 @@
 # soland
 
 Reference Contrix v1 principal server, built with Salvo, Diesel, and
-PostgreSQL. The HTTP surface mirrors `contrix-spec/artifacts/openapi/contrix-service-api.openapi.yaml`;
+PostgreSQL. The HTTP surface mirrors `contrix-spec/spec/v1/artifacts/openapi/contrix-service-api.openapi.yaml`;
 in-memory mode keeps the same API for fast local iteration.
 
 > See [DEPLOYMENT.md](DEPLOYMENT.md) for production guidance, [SECURITY.md](SECURITY.md)

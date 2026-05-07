@@ -296,12 +296,12 @@ pub async fn index_reducer_debug(depot: &mut Depot, req: &mut Request, res: &mut
     };
 
     let mut events = state
-        .projection_events
-        .lock()
-        .expect("projection event lock")
-        .iter()
+        .persistence
+        .projection_events()
+        .snapshot_all()
+        .unwrap_or_default()
+        .into_iter()
         .filter(|event| visible_space_ids.contains(&event.space_id))
-        .cloned()
         .collect::<Vec<_>>();
     events.sort_by(|left, right| {
         left.created_at

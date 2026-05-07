@@ -96,14 +96,14 @@ pub fn flow_projection_for_space(
     title: &str,
     summary: Option<&str>,
 ) -> serde_json::Value {
-    let meta = state.space_meta.lock().expect("space meta lock");
-    let meta = meta.get(space_id);
+    let meta = state.persistence.space_meta().get(space_id).ok().flatten();
     let owner = meta
+        .as_ref()
         .map(|meta| meta.owner.clone())
         .unwrap_or_else(|| state.config.service_did.clone());
-    let created_at = meta.map(|meta| meta.created_at).unwrap_or_else(now);
-    let updated_at = meta.map(|meta| meta.updated_at).unwrap_or(created_at);
-    let deleted = meta.is_some_and(|meta| meta.deleted);
+    let created_at = meta.as_ref().map(|meta| meta.created_at).unwrap_or_else(now);
+    let updated_at = meta.as_ref().map(|meta| meta.updated_at).unwrap_or(created_at);
+    let deleted = meta.as_ref().is_some_and(|meta| meta.deleted);
     json!({
         "id": flow_id_from_space_id(space_id),
         "flow_id": flow_id_from_space_id(space_id),

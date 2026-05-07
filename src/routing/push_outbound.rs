@@ -173,11 +173,11 @@ pub async fn outbound_push_bridge_resolve(
     };
     let bridge_describe_url = join_api_v1_url(&service_base_url, "/api/v1/push/bridge/describe");
     let cached = state
-        .outbound_push_bridge_cache
-        .lock()
-        .expect("outbound push bridge cache lock")
+        .persistence
+        .push_bridge_cache()
         .get(&bridge_describe_url)
-        .cloned();
+        .ok()
+        .flatten();
     let fetched_contract = cached
         .as_ref()
         .map(|record| outbound_push_resolved_contract_from_remote(&record.remote_contract))
@@ -256,11 +256,11 @@ pub async fn outbound_push_bridge_fetch(
     };
     let bridge_describe_url = join_api_v1_url(&service_base_url, "/api/v1/push/bridge/describe");
     let existing_cache = state
-        .outbound_push_bridge_cache
-        .lock()
-        .expect("outbound push bridge cache lock")
+        .persistence
+        .push_bridge_cache()
         .get(&bridge_describe_url)
-        .cloned();
+        .ok()
+        .flatten();
 
     if !body.force_refresh {
         if let Some(record) = existing_cache.clone() {
@@ -304,11 +304,13 @@ pub async fn outbound_push_bridge_fetch(
                     fetched_at,
                     remote_contract: remote_contract.clone(),
                 };
-                state
-                    .outbound_push_bridge_cache
-                    .lock()
-                    .expect("outbound push bridge cache lock")
-                    .insert(bridge_describe_url.clone(), record.clone());
+                if let Err(error) = state
+                    .persistence
+                    .push_bridge_cache()
+                    .put(&bridge_describe_url, record.clone())
+                {
+                    tracing::error!(%error, "failed to persist push bridge cache entry");
+                }
                 res.render(Json(OutboundPushBridgeFetchResponse {
                     push_gateway_url,
                     service_base_url,
@@ -365,11 +367,11 @@ pub async fn outbound_push_bridge_fetch(
 pub async fn outbound_push_bridge_cache_status(depot: &mut Depot, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     let entries = state
-        .outbound_push_bridge_cache
-        .lock()
-        .expect("outbound push bridge cache lock")
-        .values()
-        .cloned()
+        .persistence
+        .push_bridge_cache()
+        .snapshot_all()
+        .unwrap_or_default()
+        .into_iter()
         .map(outbound_push_bridge_cache_entry)
         .collect();
     res.render(Json(OutboundPushBridgeCacheStatusResponse { entries }));
@@ -379,11 +381,11 @@ pub async fn outbound_push_bridge_cache_status(depot: &mut Depot, res: &mut Resp
 pub async fn outbound_push_bridge_cache_export(depot: &mut Depot, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     let entries = state
-        .outbound_push_bridge_cache
-        .lock()
-        .expect("outbound push bridge cache lock")
-        .values()
-        .cloned()
+        .persistence
+        .push_bridge_cache()
+        .snapshot_all()
+        .unwrap_or_default()
+        .into_iter()
         .map(outbound_push_bridge_cache_snapshot)
         .collect();
     res.render(Json(OutboundPushBridgeCacheExportResponse {
@@ -416,25 +418,27 @@ pub async fn outbound_push_bridge_cache_import(
         }
     };
     let replace_existing = body.replace_existing;
-    let mut cache = state
-        .outbound_push_bridge_cache
-        .lock()
-        .expect("outbound push bridge cache lock");
+    let cache = state.persistence.push_bridge_cache();
     let mut imported_count = 0usize;
     let mut skipped_count = 0usize;
     for snapshot in body.entries {
-        if !replace_existing && cache.contains_key(&snapshot.bridge_describe_url) {
+        let exists = cache
+            .get(&snapshot.bridge_describe_url)
+            .ok()
+            .flatten()
+            .is_some();
+        if !replace_existing && exists {
             skipped_count += 1;
             continue;
         }
-        cache.insert(
-            snapshot.bridge_describe_url.clone(),
-            outbound_push_bridge_cache_record(snapshot),
-        );
+        let url = snapshot.bridge_describe_url.clone();
+        if let Err(error) = cache.put(&url, outbound_push_bridge_cache_record(snapshot)) {
+            tracing::error!(%error, "failed to persist imported push bridge cache entry");
+            continue;
+        }
         imported_count += 1;
     }
-    let total_entries = cache.len();
-    drop(cache);
+    let total_entries = cache.len().unwrap_or(0);
     res.render(Json(OutboundPushBridgeCacheImportResponse {
         imported_count,
         skipped_count,
@@ -467,10 +471,7 @@ pub async fn outbound_push_bridge_cache_invalidate(
         .unwrap_or(OutboundPushBridgeCacheInvalidateRequest {
             push_gateway_url: None,
         });
-    let mut cache = state
-        .outbound_push_bridge_cache
-        .lock()
-        .expect("outbound push bridge cache lock");
+    let cache = state.persistence.push_bridge_cache();
     let removed_count = if let Some(push_gateway_url) = body
         .push_gateway_url
         .as_deref()
@@ -480,17 +481,14 @@ pub async fn outbound_push_bridge_cache_invalidate(
         if let Some(service_base_url) = derive_push_gateway_service_base_url(push_gateway_url) {
             let bridge_describe_url =
                 join_api_v1_url(&service_base_url, "/api/v1/push/bridge/describe");
-            usize::from(cache.remove(&bridge_describe_url).is_some())
+            usize::from(cache.delete(&bridge_describe_url).unwrap_or(false))
         } else {
             0
         }
     } else {
-        let removed = cache.len();
-        cache.clear();
-        removed
+        cache.clear().unwrap_or(0)
     };
-    let remaining_entries = cache.len();
-    drop(cache);
+    let remaining_entries = cache.len().unwrap_or(0);
     res.render(Json(OutboundPushBridgeCacheInvalidateResponse {
         removed_count,
         remaining_entries,

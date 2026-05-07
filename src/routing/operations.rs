@@ -188,7 +188,7 @@ pub fn validate_operation_semantics(
     state: &AppState,
     operations: &[Operation],
 ) -> Result<(), &'static str> {
-    let schemas = state.schemas.lock().expect("schemas lock");
+    let schemas = state.persistence.schemas();
     for operation in operations {
         operation
             .validate_payload_object()
@@ -209,10 +209,12 @@ pub fn validate_operation_semantics(
         let Some(schema) = operation_schema_for_kind(kind) else {
             return Err("unregistered operation kind");
         };
-        if !schemas
+        let registered = schemas
             .get(schema.schema_id)
-            .is_some_and(|record| record.active && record.kind == "operation")
-        {
+            .ok()
+            .flatten()
+            .is_some_and(|record| record.active && record.kind == "operation");
+        if !registered {
             return Err("operation schema is not registered");
         }
         validate_operation_schema(operation, schema)?;
@@ -396,10 +398,11 @@ pub fn message_operation_is_encrypted(operation: &Operation) -> bool {
 
 pub fn known_space_denies_plaintext_service(state: &AppState, space_id: &str) -> bool {
     state
-        .space_meta
-        .lock()
-        .expect("space meta lock")
+        .persistence
+        .space_meta()
         .get(space_id)
+        .ok()
+        .flatten()
         .is_some_and(|record| {
             record.discoverability != "public"
                 && !record

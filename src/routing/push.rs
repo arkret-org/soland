@@ -10,9 +10,10 @@
 //!
 //! `push_register_session_grant_bridge` is the local stand-in that accepts an
 //! `X-Contrix-Session-Grant` header for clients that haven't yet picked up a
-//! bearer session. It's still TODO-marked: F-9 in `_todos.md` requires real
-//! coauth introspection + audience binding before production. Spec B-14
-//! (no DID in push payload / TURN username) is tracked as F-1 in the same.
+//! bearer session. When coauth introspection is configured, the bridge uses
+//! the same audience/scope/proof validation as `auth/session-grant/exchange`.
+//! Spec B-14 (no DID in push payload / TURN username) is tracked as F-1 in
+//! the same.
 //!
 //! Push-rule matching uses the helpers at the bottom: `push_rule_matches`
 //! / `push_condition_matches` / `push_field_matches` / `value_at_path` /
@@ -29,11 +30,13 @@ use crate::{
     state::{AppState, PushRuleRecord, SessionRecord},
     wire::{
         OkResponse, PushNotifyRequest, PushNotifyResponse, PushRegisterRequest,
-        PushRegisterResponse, PushUnregisterRequest, UpsertPushRuleRequest,
+        PushRegisterResponse, PushUnregisterRequest, SessionGrantIntrospectionProof,
+        UpsertPushRuleRequest,
     },
 };
 
 use super::{
+    auth::{SessionGrantValidationInput, validate_session_grant_binding},
     auth_or_render, authenticated_session, now, render_error, sha256_hex,
     validate_canonical_json_value, validate_device_id, validate_no_removed_legacy_contracts,
 };
@@ -63,12 +66,12 @@ pub async fn push_register(depot: &mut Depot, req: &mut Request, res: &mut Respo
     };
     let (session, auth_warning) = match auth_result {
         Ok(session) => (session, None),
-        Err((status, code, message)) => match push_register_session_grant_bridge(state, req, &body)
+        Err((status, code, message)) => match push_register_session_grant_bridge(state, req, &body).await
         {
             Ok(Some(session)) => (
                 session,
                 Some(
-                    "TODO: replace local session-grant bridge with coauth introspection and audience/session proof verification"
+                    "session grant bridge accepted; configure coauth introspection in production"
                         .to_owned(),
                 ),
             ),
@@ -106,7 +109,7 @@ pub async fn push_register(depot: &mut Depot, req: &mut Request, res: &mut Respo
     if let Some(auth_warning) = auth_warning {
         warnings.push(auth_warning);
     }
-    state.push_devices.lock().expect("push lock").push(json!({
+    if let Err(error) = state.persistence.push_devices().register(json!({
         "registration_id": registration_id,
         "actor": session.actor,
         "principal_did": principal_did,
@@ -119,8 +122,10 @@ pub async fn push_register(depot: &mut Depot, req: &mut Request, res: &mut Respo
         "operation_id": operation_id,
         "idempotency_key": idempotency_key,
         "proof_present": proof_present,
-        "auth_mode": if warnings.is_empty() { "bearer" } else { "session_grant_bridge" }
-    }));
+        "auth_mode": if warnings.is_empty() { "bearer" } else { "session_grant_bridge" },
+    })) {
+        tracing::error!(%error, "failed to persist push device registration");
+    }
     res.render(Json(PushRegisterResponse {
         ok: true,
         registration_id: Some(registration_id),
@@ -152,11 +157,11 @@ pub async fn push_rules(depot: &mut Depot, req: &mut Request, res: &mut Response
         return;
     };
     let rules = state
-        .push_rules
-        .lock()
-        .expect("push rules lock")
-        .values()
-        .filter(|rule| rule.actor == session.actor)
+        .persistence
+        .push_rules()
+        .list_for_actor(&session.actor)
+        .unwrap_or_default()
+        .iter()
         .map(push_rule_to_json)
         .collect::<Vec<_>>();
     res.render(Json(json!({
@@ -223,11 +228,16 @@ pub async fn upsert_push_rule(depot: &mut Depot, req: &mut Request, res: &mut Re
         conditions: body.conditions,
         updated_at: now(),
     };
-    state
-        .push_rules
-        .lock()
-        .expect("push rules lock")
-        .insert((session.actor, body.rule_id), rule.clone());
+    if let Err(error) = state.persistence.push_rules().put(rule.clone()) {
+        tracing::error!(%error, "failed to persist push rule");
+        render_error(
+            res,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "persistence_error",
+            "push rules store unavailable",
+        );
+        return;
+    }
     res.render(Json(json!({
         "ok": true,
         "rule": push_rule_to_json(&rule),
@@ -258,11 +268,10 @@ pub async fn delete_push_rule(depot: &mut Depot, req: &mut Request, res: &mut Re
         );
         return;
     }
-    state
-        .push_rules
-        .lock()
-        .expect("push rules lock")
-        .remove(&(session.actor, rule_id));
+    let _ = state
+        .persistence
+        .push_rules()
+        .delete(&session.actor, &rule_id);
     res.render(Json(OkResponse { ok: true }));
 }
 
@@ -300,7 +309,11 @@ pub async fn push_notify(depot: &mut Depot, req: &mut Request, res: &mut Respons
         .and_then(|value| value.as_array())
         .cloned()
         .unwrap_or_default();
-    let registered = state.push_devices.lock().expect("push lock").clone();
+    let registered = state
+        .persistence
+        .push_devices()
+        .snapshot_all()
+        .unwrap_or_default();
     let mut rejected = Vec::new();
     for device in devices {
         let device_id = device
@@ -327,7 +340,7 @@ pub async fn push_notify(depot: &mut Depot, req: &mut Request, res: &mut Respons
     res.render(Json(PushNotifyResponse { rejected }));
 }
 
-fn push_register_session_grant_bridge(
+async fn push_register_session_grant_bridge(
     state: &AppState,
     req: &Request,
     body: &PushRegisterRequest,
@@ -335,9 +348,13 @@ fn push_register_session_grant_bridge(
     let Some(grant) = req.headers().get("x-contrix-session-grant") else {
         return Ok(None);
     };
-    let grant = grant
-        .to_str()
-        .map_err(|_| (StatusCode::BAD_REQUEST, "invalid_header", "X-Contrix-Session-Grant must be ASCII"))?;
+    let grant = grant.to_str().map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            "invalid_header",
+            "X-Contrix-Session-Grant must be ASCII",
+        )
+    })?;
     if grant.trim().is_empty() {
         return Err((
             StatusCode::BAD_REQUEST,
@@ -345,7 +362,12 @@ fn push_register_session_grant_bridge(
             "X-Contrix-Session-Grant must not be empty",
         ));
     }
-    let Some(principal_did) = body.principal_did.as_deref().map(str::trim).filter(|value| !value.is_empty()) else {
+    let Some(principal_did) = body
+        .principal_did
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
         return Err((
             StatusCode::BAD_REQUEST,
             "invalid_param",
@@ -359,19 +381,80 @@ fn push_register_session_grant_bridge(
             "principal_did must use the did: prefix when using X-Contrix-Session-Grant",
         ));
     }
+    let challenge = optional_ascii_header(
+        req,
+        "x-contrix-session-grant-challenge",
+        "X-Contrix-Session-Grant-Challenge",
+    )?;
+    let proof_jwt = optional_ascii_header(
+        req,
+        "x-contrix-session-grant-proof",
+        "X-Contrix-Session-Grant-Proof",
+    )?;
+    let proof = match (challenge, proof_jwt) {
+        (Some(challenge), Some(proof_jwt)) => Some(SessionGrantIntrospectionProof {
+            challenge: challenge.to_owned(),
+            proof_jwt: proof_jwt.to_owned(),
+        }),
+        (None, None) => None,
+        _ => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "invalid_header",
+                "session grant challenge and proof headers must be supplied together",
+            ));
+        }
+    };
+    let validated = validate_session_grant_binding(
+        state,
+        SessionGrantValidationInput {
+            grant_jwt: grant,
+            principal_did,
+            device_id: body.device_id.as_str(),
+            proof: proof.as_ref(),
+        },
+    )
+    .await
+    .map_err(|error| {
+        (
+            error.http_status(),
+            error.code.as_str(),
+            "session grant bridge rejected by coauth introspection",
+        )
+    })?;
+    let expires_at = validated
+        .as_ref()
+        .map(|grant| grant.expires_at)
+        .unwrap_or_else(|| now() + chrono::Duration::minutes(5));
 
-    // TODO(session-grant-bridge): replace this bridge with coauth
-    // introspection, audience checks, and session public-key proof
-    // validation before treating the grant as authenticated identity.
     Ok(Some(SessionRecord {
         token_hash: format!("grant-bridge:{}", sha256_hex(grant.as_bytes())),
         actor: principal_did.to_owned(),
         device_id: body.device_id.clone(),
         audience: state.config.service_did.clone(),
-        expires_at: now() + chrono::Duration::minutes(5),
+        expires_at,
         created_at: now(),
         revoked_at: None,
     }))
+}
+
+fn optional_ascii_header<'a>(
+    req: &'a Request,
+    name: &'static str,
+    display_name: &'static str,
+) -> Result<Option<&'a str>, (StatusCode, &'static str, &'static str)> {
+    req.headers()
+        .get(name)
+        .map(|value| {
+            value.to_str().map_err(|_| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    "invalid_header",
+                    display_name,
+                )
+            })
+        })
+        .transpose()
 }
 
 fn push_notification_leaks_plaintext(value: &serde_json::Value) -> bool {
@@ -406,16 +489,17 @@ fn push_device_suppressed_by_rule(
     device: &Value,
 ) -> Option<String> {
     state
-        .push_rules
-        .lock()
-        .expect("push rules lock")
-        .values()
-        .filter(|rule| rule.actor == actor && rule.enabled)
+        .persistence
+        .push_rules()
+        .list_for_actor(actor)
+        .ok()?
+        .into_iter()
+        .filter(|rule| rule.enabled)
         .find(|rule| {
             rule.actions.iter().any(|action| action == "dont_notify")
                 && push_rule_matches(rule, notification, device)
         })
-        .map(|rule| rule.rule_id.clone())
+        .map(|rule| rule.rule_id)
 }
 
 fn push_rule_matches(rule: &PushRuleRecord, notification: &Value, device: &Value) -> bool {

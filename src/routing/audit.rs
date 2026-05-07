@@ -5,8 +5,7 @@
 //! - `append_audit_log` — internal helper used everywhere a side-effect needs
 //!   to be recorded (auth, space lifecycle, message send, federation, etc.).
 //!
-//! Both back onto the in-memory `state.audit_log` lock today; F2 in
-//! `_todos.md` covers durable persistence.
+//! Both back onto `state.persistence.audit()` (see Tier 0 in `_todos.md`).
 
 use salvo::{http::StatusCode, prelude::*};
 use serde_json::{Value, json};
@@ -36,14 +35,19 @@ pub async fn audit_events(depot: &mut Depot, req: &mut Request, res: &mut Respon
         .unwrap_or(100)
         .clamp(1, 500);
     let cursor = query_param(req, "cursor");
-    let mut events = state
-        .audit_log
-        .lock()
-        .expect("audit log lock")
-        .iter()
-        .filter(|event| event["actor"].as_str() == Some(actor.as_str()))
-        .cloned()
-        .collect::<Vec<_>>();
+    let mut events = match state.persistence.audit().list_for_actor(&actor) {
+        Ok(events) => events,
+        Err(error) => {
+            tracing::error!(%error, "failed to read audit log");
+            render_error(
+                res,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "persistence_error",
+                "audit store unavailable",
+            );
+            return;
+        }
+    };
     let start = cursor
         .as_deref()
         .and_then(|cursor| {
@@ -97,7 +101,7 @@ pub fn append_audit_log(
         .get("commit_id")
         .and_then(|value| value.as_str())
         .map(ToOwned::to_owned);
-    state.audit_log.lock().expect("audit log lock").push(json!({
+    let entry = json!({
         "audit_id": ids::generate("audit"),
         "request_id": ids::generate_request_id(),
         "actor": actor,
@@ -109,5 +113,8 @@ pub fn append_audit_log(
         "target": target,
         "outcome": outcome,
         "created_at": now(),
-    }));
+    });
+    if let Err(error) = state.persistence.audit().append(entry) {
+        tracing::error!(%error, "failed to append audit log entry");
+    }
 }

@@ -17,6 +17,10 @@ fn test_config() -> AppConfig {
         blob_root: std::env::temp_dir().join("soland-openapi-typed-blobs"),
         cors_allow_origin: None,
         development_mode: true,
+        session_grant_introspection_url: None,
+        session_grant_introspection_bearer: None,
+        did_resolver_allow_methods: vec!["web".to_owned(), "key".to_owned(), "uuid".to_owned()],
+        starid_webvh_resolver_url: None,
     }
 }
 

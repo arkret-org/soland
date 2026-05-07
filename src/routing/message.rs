@@ -152,19 +152,17 @@ pub async fn send_message(
 
     let audit_actor = session.actor.clone();
     let audit_space_id = body.space_id.clone();
-    state
-        .messages
-        .lock()
-        .expect("messages lock")
-        .push(MessageRecord {
-            event_id: event_id.clone(),
-            space_id: body.space_id,
-            sender: session.actor,
-            thread_id,
-            content: payload["content"].clone(),
-            encrypted: body.encrypted,
-            created_at: now(),
-        });
+    if let Err(error) = state.persistence.messages().put(&MessageRecord {
+        event_id: event_id.clone(),
+        space_id: body.space_id,
+        sender: session.actor,
+        thread_id,
+        content: payload["content"].clone(),
+        encrypted: body.encrypted,
+        created_at: now(),
+    }) {
+        tracing::error!(%error, "failed to persist message");
+    }
     append_audit_log(
         state,
         Some(&audit_actor),
@@ -203,12 +201,10 @@ pub async fn revise_message(
     let session = aa.authenticated_session(state, req)?;
     let body = body.into_inner();
     let original = state
-        .messages
-        .lock()
-        .expect("messages lock")
-        .iter()
-        .find(|m| m.event_id == body.event_id)
-        .cloned()
+        .persistence
+        .messages()
+        .get(&body.event_id)
+        .map_err(|error| AppError::internal(error.to_string()))?
         .ok_or_else(|| AppError::not_found("original message not found"))?;
     if original.sender != session.actor {
         return Err(AppError::capability_denied(
@@ -262,17 +258,16 @@ pub async fn revise_message(
             AppError::new(ErrorCode::Conflict, error.to_string()).with_status(StatusCode::CONFLICT)
         })?;
     project_accepted_operations(state, &session.actor, std::slice::from_ref(&operation));
-    {
-        let mut messages = state.messages.lock().expect("messages lock");
-        messages.push(MessageRecord {
-            event_id: new_event_id.clone(),
-            space_id: original.space_id.clone(),
-            sender: session.actor.clone(),
-            thread_id: original.thread_id.clone(),
-            content: body.content,
-            encrypted: original.encrypted,
-            created_at: now(),
-        });
+    if let Err(error) = state.persistence.messages().put(&MessageRecord {
+        event_id: new_event_id.clone(),
+        space_id: original.space_id.clone(),
+        sender: session.actor.clone(),
+        thread_id: original.thread_id.clone(),
+        content: body.content,
+        encrypted: original.encrypted,
+        created_at: now(),
+    }) {
+        tracing::error!(%error, "failed to persist message");
     }
     json_ok(ReviseMessageResponse {
         event_id: new_event_id,
@@ -297,12 +292,11 @@ pub async fn redact_message(
     let session = aa.authenticated_session(state, req)?;
     let body = body.into_inner();
     let space_id = state
-        .messages
-        .lock()
-        .expect("messages lock")
-        .iter()
-        .find(|m| m.event_id == body.event_id)
-        .map(|m| m.space_id.clone())
+        .persistence
+        .messages()
+        .get(&body.event_id)
+        .map_err(|error| AppError::internal(error.to_string()))?
+        .map(|m| m.space_id)
         .ok_or_else(|| AppError::not_found("message not found"))?;
     let operation_id = ids::generate_operation_id();
     let commit_id = ids::generate_commit_id();

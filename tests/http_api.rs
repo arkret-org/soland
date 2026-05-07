@@ -23,6 +23,10 @@ fn test_config() -> AppConfig {
         blob_root: std::env::temp_dir().join("soland-test-blobs"),
         cors_allow_origin: None,
         development_mode: true,
+        session_grant_introspection_url: None,
+        session_grant_introspection_bearer: None,
+        did_resolver_allow_methods: vec!["web".to_owned(), "key".to_owned(), "uuid".to_owned()],
+        starid_webvh_resolver_url: None,
     }
 }
 
@@ -224,7 +228,7 @@ async fn health_and_describe_work() {
     );
     assert_eq!(
         describe["limits"]["registries"]["source"],
-        "contrix-spec/artifacts"
+        "contrix-spec/spec/v1/artifacts"
     );
     assert_eq!(
         describe["limits"]["registries"]["versions"]["event_kind"],
@@ -275,7 +279,10 @@ async fn events_describe_and_single_event_submit_work() {
         describe["registry"]["event_kind_registry_version"],
         "2026-05-03"
     );
-    assert_eq!(describe["registry"]["source"], "contrix-spec/artifacts");
+    assert_eq!(
+        describe["registry"]["source"],
+        "contrix-spec/spec/v1/artifacts"
+    );
     assert!(
         describe["registry"]["event_kinds"]
             .as_array()
@@ -2072,10 +2079,10 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         .unwrap();
     assert_eq!(logout["revoked"], true);
     {
-        let sessions = state.sessions.lock().unwrap();
-        assert!(!sessions.contains_key(&bob));
+        let sessions = state.persistence.sessions().snapshot_all().unwrap();
+        assert!(!sessions.iter().any(|session| session.token_hash == bob));
         let bob_session = sessions
-            .values()
+            .iter()
             .find(|session| session.actor == "did:web:bob.example")
             .expect("hashed bob session remains for revocation audit");
         assert_ne!(bob_session.token_hash, bob);
@@ -2089,8 +2096,9 @@ async fn account_contacts_and_space_lifecycle_workflow() {
     assert_eq!(revoked_me.status_code.unwrap().as_u16(), 401);
 
     let audit_actions: std::collections::BTreeSet<_> = state
-        .audit_log
-        .lock()
+        .persistence
+        .audit()
+        .snapshot_all()
         .unwrap()
         .iter()
         .filter_map(|entry| entry["action"].as_str().map(ToOwned::to_owned))
@@ -2179,6 +2187,11 @@ async fn identity_surface_works() {
         .await
         .unwrap();
     assert_eq!(describe["protocol_version"], "1.0");
+    assert_eq!(
+        describe["resolver_policy"]["allow_methods"],
+        serde_json::json!(["web", "key", "uuid"])
+    );
+    assert_eq!(describe["starid_profile"]["enabled"], false);
 
     let resolved: Value = TestClient::post("http://server/api/v1/identity/resolve")
         .json(&serde_json::json!({"did": "did:web:alice.example"}))
@@ -2271,6 +2284,38 @@ async fn identity_surface_works() {
     assert_eq!(
         receipts["receipts"][0]["head_event_hash"],
         submitted["head_event_hash"]
+    );
+}
+
+#[tokio::test]
+async fn identity_describe_exposes_optional_starid_profile() {
+    let mut config = test_config();
+    config.starid_webvh_resolver_url = Some("http://starid.local".to_owned());
+    config.did_resolver_allow_methods = vec![
+        "web".to_owned(),
+        "key".to_owned(),
+        "uuid".to_owned(),
+        "webvh".to_owned(),
+    ];
+    let describe: Value = TestClient::get("http://server/api/v1/identity/describe")
+        .send(&app_from_state(AppState::new(config, Db { pool: None })))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+
+    assert_eq!(describe["starid_profile"]["enabled"], true);
+    assert_eq!(describe["starid_profile"]["method"], "did:webvh");
+    assert_eq!(
+        describe["starid_profile"]["resolver_url"],
+        "http://starid.local"
+    );
+    assert!(
+        describe["profiles"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|profile| profile.as_str() == Some("cx.identity.starid.webvh.optional.v1"))
     );
 }
 
@@ -3068,7 +3113,7 @@ async fn device_pairing_challenge_and_authorization_surface_work() {
         authorized["production_gap"],
         "authorization_event_not_yet_in_operation_stream"
     );
-    assert!(state.audit_log.lock().unwrap().iter().any(|event| {
+    assert!(state.persistence.audit().snapshot_all().unwrap().iter().any(|event| {
         event["action"] == "device.authorize_pairing"
             && event["outcome"] == "accepted"
             && event["target"]["target_device_id"] == "dev_phone"
@@ -3681,14 +3726,21 @@ async fn push_profile_and_moderation_contracts_work() {
         .unwrap();
     assert_eq!(report["status"], "queued");
     assert!(
-        state.audit_log.lock().unwrap().iter().any(|entry| {
-            entry["action"] == "moderation.report" && entry["outcome"] == "queued"
-        })
+        state
+            .persistence
+            .audit()
+            .snapshot_all()
+            .unwrap()
+            .iter()
+            .any(|entry| {
+                entry["action"] == "moderation.report" && entry["outcome"] == "queued"
+            })
     );
     assert!(
         state
-            .moderation_actions
-            .lock()
+            .persistence
+            .moderation()
+            .list_actions()
             .unwrap()
             .iter()
             .any(|action| action["report_id"] == report["report_id"] && action["status"] == "open")
@@ -4569,7 +4621,7 @@ async fn plaintext_policy_applies_to_repo_and_federation_message_ingest() {
     let denied_repo_body: Value = denied_repo.take_json().await.unwrap();
     assert_eq!(denied_repo_body["error"]["errcode"], "policy_denied");
     {
-        let audits = state.audit_log.lock().expect("audit log lock");
+        let audits = state.persistence.audit().snapshot_all().unwrap();
         assert!(audits.iter().any(|event| {
             event["action"] == "repo.submit_commit"
                 && event["outcome"] == "policy_denied"
@@ -4693,7 +4745,7 @@ async fn repo_adapter_memory_submit_list_get_and_sync_work() {
         .await
         .unwrap();
     assert_eq!(conflict["error"]["errcode"], "duplicate_conflict");
-    assert!(state.audit_log.lock().unwrap().iter().any(|entry| {
+    assert!(state.persistence.audit().snapshot_all().unwrap().iter().any(|entry| {
         entry["action"] == "repo.submit_commit"
             && entry["outcome"] == "duplicate_conflict"
             && entry["target"]["operation_kinds"][0]["input_kind"] == "message"
@@ -5209,7 +5261,7 @@ async fn repo_submit_commit_operation_id_different_digest_quarantine() {
             .contains("conflicting bytes for idempotent object")
     );
 
-    assert!(state.audit_log.lock().unwrap().iter().any(|event| {
+    assert!(state.persistence.audit().snapshot_all().unwrap().iter().any(|event| {
         event["action"] == "repo.submit_commit"
             && event["outcome"] == "quarantine"
             && event["target"]["commit_id"] == "cx:commit:quarantine-op-different"

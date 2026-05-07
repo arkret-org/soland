@@ -190,19 +190,26 @@ pub async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Respons
         );
         return;
     }
-    state.blobs.lock().expect("blob lock").insert(
-        blob_ref.clone(),
-        BlobRecord {
-            bytes,
-            storage_path: Some(storage_path),
-            media_type: media_type.clone(),
-            filename: filename.clone(),
-            space_id: space_id.clone(),
-            encryption: encryption.clone(),
-            uploaded_by: session.actor,
-            created_at: now(),
-        },
-    );
+    let record = BlobRecord {
+        bytes,
+        storage_path: Some(storage_path),
+        media_type: media_type.clone(),
+        filename: filename.clone(),
+        space_id: space_id.clone(),
+        encryption: encryption.clone(),
+        uploaded_by: session.actor,
+        created_at: now(),
+    };
+    if let Err(error) = state.persistence.blobs().put(&blob_ref, &record) {
+        tracing::error!(%error, "failed to persist blob");
+        render_error(
+            res,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "blob_store_error",
+            &error.to_string(),
+        );
+        return;
+    }
     res.render(Json(crate::wire::BlobUploadResponse {
         blob_ref,
         size,
@@ -252,8 +259,8 @@ pub async fn blob_get(depot: &mut Depot, req: &mut Request, res: &mut Response) 
         );
         return;
     }
-    let blobs = state.blobs.lock().expect("blob lock");
-    match blobs.get(&blob_ref) {
+    let blob = state.persistence.blobs().get(&blob_ref).ok().flatten();
+    match blob.as_ref() {
         Some(blob) => {
             if !blob_visible_to_session(
                 state,
@@ -535,9 +542,13 @@ fn enforce_blob_quota(
     space_id: Option<&str>,
     size: usize,
 ) -> Result<(), &'static str> {
-    let blobs = state.blobs.lock().expect("blob lock");
+    let blobs = state
+        .persistence
+        .blobs()
+        .snapshot_all()
+        .map_err(|_| "blob store unavailable")?;
     let actor_bytes: usize = blobs
-        .values()
+        .iter()
         .filter(|blob| blob.uploaded_by == actor)
         .map(|blob| blob.bytes.len())
         .sum();
@@ -546,7 +557,7 @@ fn enforce_blob_quota(
     }
     if let Some(space_id) = space_id {
         let space_bytes: usize = blobs
-            .values()
+            .iter()
             .filter(|blob| blob.space_id.as_deref() == Some(space_id))
             .map(|blob| blob.bytes.len())
             .sum();

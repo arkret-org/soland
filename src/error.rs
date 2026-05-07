@@ -30,7 +30,7 @@ use crate::routing::util::render_error;
 
 /// Every canonical Contrix error code, in registry order.
 ///
-/// Order matches `contrix-spec/artifacts/registry/error-code-registry.json`
+/// Order matches `contrix-spec/spec/v1/artifacts/registry/error-code-registry.json`
 /// (and `contrix_core::error::KNOWN_ERROR_CODES`). Adding a code requires
 /// touching this enum **and** the registry; the round-trip test in this
 /// module fails until both line up.

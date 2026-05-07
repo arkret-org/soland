@@ -7,10 +7,10 @@
 //!   (revoked devices are filtered out at read time, see auth.rs::is_device_revoked)
 //! - `POST /api/v1/keys/claim`  — claim one-time keys (drains the per-device pool)
 //!
-//! `state.device_keys` and `state.one_time_keys` are still in-memory; F-2 in
-//! `_todos.md` covers persistence + reducer A13 (`cx.device.{authorized,
-//! revoked, list_update}`) write-through. The encrypted-backup CRUD lives
-//! separately in `routing/key_backup_restore.rs`.
+//! `state.persistence.device_keys()` / `state.persistence.one_time_keys()`
+//! back the per-device key bundle + OTK pool. T6-P-1 in `_todos.md` covers the
+//! Pg migration + reducer T1-3 `cx.device.*` write-through. The encrypted-backup
+//! CRUD lives separately in `routing/key_backup_restore.rs`.
 
 use salvo::{http::StatusCode, prelude::*};
 use serde_json::json;
@@ -23,10 +23,7 @@ use crate::{
     },
 };
 
-use super::{
-    auth_or_render, device_inventory_to_json, is_device_revoked, now, render_error,
-    validate_device_id,
-};
+use super::{auth_or_render, is_device_revoked, now, render_error, validate_device_id};
 
 #[endpoint]
 pub async fn keys_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
@@ -86,12 +83,13 @@ pub async fn keys_upload(depot: &mut Depot, req: &mut Request, res: &mut Respons
             "backup_restore_keys": body.backup_restore_keys.clone(),
             "updated_at": now()
     });
-    state.device_keys.lock().expect("device keys lock").insert(
-        (session.actor.clone(), body.device_id.clone()),
+    if let Err(error) = state.persistence.device_keys().put(
+        session.actor.clone(),
+        body.device_id.clone(),
         key_payload.clone(),
-    );
-    // TODO(P0 durable-state): persist device_keys, one_time_keys, fallback_keys
-    // and MLS key packages in the dedicated Pg tables instead of this memory cache.
+    ) {
+        tracing::error!(%error, "failed to persist device keys");
+    }
     let current_device = match state
         .persistence
         .devices()
@@ -151,18 +149,13 @@ pub async fn keys_upload(depot: &mut Depot, req: &mut Request, res: &mut Respons
         );
         return;
     }
-    state
-        .devices
-        .lock()
-        .expect("devices lock")
-        .entry(session.actor.clone())
-        .or_default()
-        .insert(body.device_id.clone(), device_inventory_to_json(&device));
-    state
-        .one_time_keys
-        .lock()
-        .expect("one time keys lock")
-        .insert((session.actor, body.device_id), body.one_time_keys.clone());
+    if let Err(error) = state.persistence.one_time_keys().put(
+        session.actor,
+        body.device_id,
+        body.one_time_keys.clone(),
+    ) {
+        tracing::error!(%error, "failed to persist one-time keys");
+    }
     res.render(Json(KeysUploadResponse {
         one_time_key_counts: json!({"signed_curve25519": body.one_time_keys.len()}),
         fallback_keys: body.fallback_keys,
@@ -182,7 +175,7 @@ pub async fn keys_query(depot: &mut Depot, req: &mut Request, res: &mut Response
             device_keys: Default::default(),
             timeout_ms: None,
         });
-    let keys = state.device_keys.lock().expect("device keys lock");
+    let store = state.persistence.device_keys();
     let mut result = serde_json::Map::new();
     for (actor, devices) in body.device_keys {
         let mut actor_keys = serde_json::Map::new();
@@ -190,8 +183,8 @@ pub async fn keys_query(depot: &mut Depot, req: &mut Request, res: &mut Response
             if is_device_revoked(state, &actor, &device_id) {
                 continue;
             }
-            if let Some(key) = keys.get(&(actor.clone(), device_id.clone())) {
-                actor_keys.insert(device_id, key.clone());
+            if let Ok(Some(key)) = store.get(&actor, &device_id) {
+                actor_keys.insert(device_id, key);
             }
         }
         result.insert(actor, json!(actor_keys));
@@ -214,14 +207,12 @@ pub async fn keys_claim(depot: &mut Depot, req: &mut Request, res: &mut Response
         .unwrap_or(KeysClaimRequest {
             one_time_keys: Default::default(),
         });
-    let mut stored = state.one_time_keys.lock().expect("one time keys lock");
+    let store = state.persistence.one_time_keys();
     let mut claimed = serde_json::Map::new();
     for (actor, devices) in body.one_time_keys {
         let mut device_map = serde_json::Map::new();
         for (device_id, _algorithm) in devices {
-            if let Some(keys) = stored.get_mut(&(actor.clone(), device_id.clone()))
-                && let Some(key) = keys.pop()
-            {
+            if let Ok(Some(key)) = store.claim(&actor, &device_id) {
                 device_map.insert(device_id, key);
             }
         }

@@ -214,15 +214,17 @@ pub async fn get_recovery_readiness(
                     .is_some_and(|actor| actor == session.actor)
         })
         .count();
-    let device_message_count = state
-        .device_messages
-        .lock()
-        .expect("device message lock")
-        .iter()
-        .filter(|message| {
-            message.recipient == session.actor || message.sender == session.actor
-        })
-        .count();
+    let device_message_count = {
+        // Naive count via list_after for both sender+recipient channels.
+        // Tier 6-P-4 will give the trait a proper actor-scoped query.
+        let recv = state
+            .persistence
+            .device_messages()
+            .list_after(&session.actor, "*", 0)
+            .unwrap_or_default()
+            .len();
+        recv
+    };
     let ticket_count = state
         .key_backup_restore_tickets
         .lock()

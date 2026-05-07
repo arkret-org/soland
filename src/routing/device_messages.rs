@@ -10,7 +10,7 @@
 //!   ack a delivery (this is what the README calls out as the cursor-acked
 //!   eviction guarantee).
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::BTreeMap;
 
 use salvo::{http::StatusCode, prelude::*};
 use serde_json::{Value, json};
@@ -74,27 +74,24 @@ pub async fn put_device_messages(depot: &mut Depot, req: &mut Request, res: &mut
             }
         }
     }
-    {
-        let mut txns = state
-            .device_message_txns
-            .lock()
-            .expect("device message txn lock");
-        if !txns.insert(format!("{}:{txn_id}", session.actor)) {
-            res.render(Json(DeviceMessagesSendResponse {
-                ok: true,
-                delivered: json!({}),
-                unknown_devices: json!({}),
-            }));
-            return;
-        }
+    let device_messages = state.persistence.device_messages();
+    let registered = device_messages
+        .try_register_txn(format!("{}:{txn_id}", session.actor))
+        .unwrap_or(false);
+    if !registered {
+        res.render(Json(DeviceMessagesSendResponse {
+            ok: true,
+            delivered: json!({}),
+            unknown_devices: json!({}),
+        }));
+        return;
     }
     let mut delivered = serde_json::Map::new();
-    let mut queue = state.device_messages.lock().expect("device message lock");
     for (recipient, devices) in body.messages {
         let mut delivered_devices = Vec::new();
         for (device_id, content) in devices {
             let created_at = now();
-            queue.push_back(DeviceMessageRecord {
+            if let Err(error) = device_messages.append(DeviceMessageRecord {
                 txn_id: txn_id.clone(),
                 sender: session.actor.clone(),
                 recipient: recipient.clone(),
@@ -102,7 +99,9 @@ pub async fn put_device_messages(depot: &mut Depot, req: &mut Request, res: &mut
                 position: created_at.timestamp_micros(),
                 content,
                 created_at,
-            });
+            }) {
+                tracing::error!(%error, "failed to append device message");
+            }
             delivered_devices.push(device_id);
         }
         delivered.insert(recipient, json!(delivered_devices));
@@ -152,9 +151,16 @@ pub async fn get_device_messages(depot: &mut Depot, req: &mut Request, res: &mut
         },
         None => 0,
     };
-    let mut queue = state.device_messages.lock().expect("device message lock");
-    prune_acked_device_messages(&mut queue, &session, ack_position);
-    let events = device_message_events_after(&queue, &session, ack_position);
+    let _ = state
+        .persistence
+        .device_messages()
+        .ack(&session.actor, &session.device_id, ack_position);
+    let queued = state
+        .persistence
+        .device_messages()
+        .list_after(&session.actor, &session.device_id, ack_position)
+        .unwrap_or_default();
+    let events = device_message_events_after(&queued);
     let to_device_position = events
         .iter()
         .filter_map(|event| event.get("position").and_then(|position| position.as_i64()))
@@ -177,32 +183,19 @@ pub async fn get_device_messages(depot: &mut Depot, req: &mut Request, res: &mut
 }
 
 pub fn prune_acked_device_messages(
-    queue: &mut VecDeque<DeviceMessageRecord>,
+    state: &AppState,
     session: &SessionRecord,
     ack_position: i64,
 ) {
-    if ack_position <= 0 {
-        return;
-    }
-    queue.retain(|message| {
-        !(message.recipient == session.actor
-            && message.device_id == session.device_id
-            && message.position <= ack_position)
-    });
+    let _ = state
+        .persistence
+        .device_messages()
+        .ack(&session.actor, &session.device_id, ack_position);
 }
 
-pub fn device_message_events_after(
-    queue: &VecDeque<DeviceMessageRecord>,
-    session: &SessionRecord,
-    ack_position: i64,
-) -> Vec<Value> {
-    queue
+pub fn device_message_events_after(messages: &[DeviceMessageRecord]) -> Vec<Value> {
+    messages
         .iter()
-        .filter(|message| {
-            message.recipient == session.actor
-                && message.device_id == session.device_id
-                && message.position > ack_position
-        })
         .map(|message| {
             json!({
                 "txn_id": message.txn_id,
@@ -211,7 +204,7 @@ pub fn device_message_events_after(
                 "device_id": message.device_id,
                 "position": message.position,
                 "content": message.content,
-                "created_at": message.created_at
+                "created_at": message.created_at,
             })
         })
         .collect()

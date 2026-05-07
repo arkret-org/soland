@@ -79,7 +79,7 @@ pub async fn events_describe(depot: &mut Depot, res: &mut Response) {
             "cx.profile.events_http_json.v1".to_owned(),
         ],
         registry: json!({
-            "source": "contrix-spec/artifacts",
+            "source": "contrix-spec/spec/v1/artifacts",
             "event_kind_registry_version": artifacts::event_kind_registry()["version"].clone(),
             "schema_registry_version": artifacts::schema_registry()["version"].clone(),
             "operation_registry_version": artifacts::operation_registry()["version"].clone(),
@@ -175,8 +175,8 @@ pub async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Respon
     };
 
     let received_at = now();
-    let mut events = state.events.lock().expect("events lock");
-    if let Some(existing) = events.get(&parsed.event_id) {
+    let store = state.persistence.events();
+    if let Ok(Some(existing)) = store.get(&parsed.event_id) {
         if existing.canonical_bytes == parsed.canonical_bytes {
             let response = event_submit_response(
                 state,
@@ -189,7 +189,6 @@ pub async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Respon
             res.render(Json(response));
             return;
         }
-        drop(events);
         append_audit_log(
             state,
             Some(&session.actor),
@@ -209,11 +208,7 @@ pub async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Respon
         );
         return;
     }
-    if let Some(max_seq) = events
-        .values()
-        .filter(|record| record.actor_id == parsed.actor_id)
-        .map(|record| record.actor_seq)
-        .max()
+    if let Ok(Some(max_seq)) = store.max_actor_seq(&parsed.actor_id)
         && parsed.actor_seq <= max_seq
     {
         render_error(
@@ -225,7 +220,7 @@ pub async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Respon
         return;
     }
     for prev_ref in &parsed.prev_refs {
-        if !events.contains_key(prev_ref) {
+        if !store.contains(prev_ref).unwrap_or(false) {
             render_error(
                 res,
                 StatusCode::CONFLICT,
@@ -236,7 +231,7 @@ pub async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Respon
         }
     }
     for auth_ref in &parsed.auth_refs {
-        if !events.contains_key(auth_ref) {
+        if !store.contains(auth_ref).unwrap_or(false) {
             render_error(
                 res,
                 StatusCode::CONFLICT,
@@ -247,22 +242,27 @@ pub async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Respon
         }
     }
 
-    events.insert(
-        parsed.event_id.clone(),
-        CanonicalEventRecord {
-            event_id: parsed.event_id.clone(),
-            actor_id: parsed.actor_id.clone(),
-            actor_seq: parsed.actor_seq,
-            space_id: parsed.space_id.clone(),
-            kind: parsed.kind.clone(),
-            schema_id: parsed.schema_id.clone(),
-            canonical_digest: parsed.canonical_digest.clone(),
-            canonical_bytes: parsed.canonical_bytes.clone(),
-            envelope,
-            received_at,
-        },
-    );
-    drop(events);
+    if let Err(error) = store.put(CanonicalEventRecord {
+        event_id: parsed.event_id.clone(),
+        actor_id: parsed.actor_id.clone(),
+        actor_seq: parsed.actor_seq,
+        space_id: parsed.space_id.clone(),
+        kind: parsed.kind.clone(),
+        schema_id: parsed.schema_id.clone(),
+        canonical_digest: parsed.canonical_digest.clone(),
+        canonical_bytes: parsed.canonical_bytes.clone(),
+        envelope,
+        received_at,
+    }) {
+        tracing::error!(%error, "failed to persist canonical event");
+        render_error(
+            res,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "persistence_error",
+            "events store unavailable",
+        );
+        return;
+    }
     append_audit_log(
         state,
         Some(&session.actor),
@@ -300,16 +300,15 @@ pub async fn get_event(depot: &mut Depot, req: &mut Request, res: &mut Response)
         );
         return;
     };
-    let events = state.events.lock().expect("events lock");
-    let Some(record) = events.get(&event_id) else {
+    let Some(record) = state.persistence.events().get(&event_id).ok().flatten() else {
         render_error(res, StatusCode::NOT_FOUND, "not_found", "event not found");
         return;
     };
-    if !event_visible_to_session(state, record, &session) {
+    if !event_visible_to_session(state, &record, &session) {
         render_error(res, StatusCode::NOT_FOUND, "not_found", "event not found");
         return;
     }
-    res.render(Json(event_read_response(record)));
+    res.render(Json(event_read_response(&record)));
 }
 
 #[endpoint]
@@ -339,13 +338,13 @@ pub async fn batch_get_events(depot: &mut Depot, req: &mut Request, res: &mut Re
         );
         return;
     }
-    let events = state.events.lock().expect("events lock");
+    let store = state.persistence.events();
     let mut found = Vec::new();
     let mut missing = Vec::new();
     for event_id in body.event_ids {
-        match events.get(&event_id) {
-            Some(record) if event_visible_to_session(state, record, &session) => {
-                found.push(event_read_response(record));
+        match store.get(&event_id).ok().flatten() {
+            Some(record) if event_visible_to_session(state, &record, &session) => {
+                found.push(event_read_response(&record));
             }
             _ => missing.push(event_id),
         }
@@ -392,9 +391,12 @@ pub async fn list_events(depot: &mut Depot, req: &mut Request, res: &mut Respons
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(50)
         .clamp(1, 100);
-    let events = state.events.lock().expect("events lock");
-    let mut records = events
-        .values()
+    let mut records = state
+        .persistence
+        .events()
+        .snapshot_all()
+        .unwrap_or_default()
+        .into_iter()
         .filter(|record| {
             actor_id
                 .as_deref()
@@ -402,7 +404,6 @@ pub async fn list_events(depot: &mut Depot, req: &mut Request, res: &mut Respons
         })
         .filter(|record| space_id.as_deref() == record.space_id.as_deref() || space_id.is_none())
         .filter(|record| event_visible_to_session(state, record, &session))
-        .cloned()
         .collect::<Vec<_>>();
     records.sort_by(|left, right| {
         left.received_at
@@ -443,10 +444,14 @@ pub async fn events_frontier(depot: &mut Depot, req: &mut Request, res: &mut Res
     };
     let actor_id = query_param(req, "actor_id");
     let space_id = query_param(req, "space_id");
-    let events = state.events.lock().expect("events lock");
+    let events = state
+        .persistence
+        .events()
+        .snapshot_all()
+        .unwrap_or_default();
     let mut actor_frontier: BTreeMap<String, u64> = BTreeMap::new();
     let mut space_frontier: BTreeMap<String, Value> = BTreeMap::new();
-    for record in events.values() {
+    for record in &events {
         if actor_id
             .as_deref()
             .is_some_and(|actor| actor != record.actor_id)
@@ -738,10 +743,11 @@ fn validate_event_critical_features(
 
 fn event_schema_is_active(state: &AppState, schema_id: &str) -> bool {
     state
-        .schemas
-        .lock()
-        .expect("schemas lock")
+        .persistence
+        .schemas()
         .get(schema_id)
+        .ok()
+        .flatten()
         .is_some_and(|schema| schema.active)
 }
 

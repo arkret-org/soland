@@ -92,17 +92,17 @@ pub async fn create_space(
         .insert(Did::new(session.actor.clone()).expect("session did is valid"));
 
     state.spaces.lock().expect("spaces lock").upsert(entry);
-    state.space_meta.lock().expect("space meta lock").insert(
-        space_id.clone(),
-        SpaceMetaRecord {
-            owner: session.actor.clone(),
-            deleted: false,
-            discoverability: discoverability.clone(),
-            plaintext_visible_services: plaintext_visible_services.iter().cloned().collect(),
-            created_at: now(),
-            updated_at: now(),
-        },
-    );
+    let meta = SpaceMetaRecord {
+        owner: session.actor.clone(),
+        deleted: false,
+        discoverability: discoverability.clone(),
+        plaintext_visible_services: plaintext_visible_services.iter().cloned().collect(),
+        created_at: now(),
+        updated_at: now(),
+    };
+    if let Err(error) = state.persistence.space_meta().put(&space_id, &meta) {
+        tracing::error!(%error, "failed to persist space meta");
+    }
     let invite_records: Vec<_> = invitees
         .iter()
         .map(|invitee| {
@@ -120,10 +120,9 @@ pub async fn create_space(
             }
         })
         .collect();
-    if !invite_records.is_empty() {
-        let mut invite_store = state.space_invites.lock().expect("space invites lock");
-        for invite in &invite_records {
-            invite_store.insert(invite.invite_id.clone(), invite.clone());
+    for invite in &invite_records {
+        if let Err(error) = state.persistence.space_invites().put(invite.clone()) {
+            tracing::error!(%error, "failed to persist space invite");
         }
     }
     record_space_lifecycle_operation(
@@ -300,12 +299,16 @@ pub async fn delete_space(
         ));
     }
     {
-        let mut meta = state.space_meta.lock().expect("space meta lock");
-        let record = meta
-            .get_mut(&space_id)
+        let store = state.persistence.space_meta();
+        let mut record = store
+            .get(&space_id)
+            .map_err(|error| AppError::internal(error.to_string()))?
             .ok_or_else(|| AppError::not_found("not found"))?;
         record.deleted = true;
         record.updated_at = now();
+        store
+            .put(&space_id, &record)
+            .map_err(|error| AppError::internal(error.to_string()))?;
     }
     record_space_lifecycle_operation(
         state,
@@ -357,10 +360,11 @@ pub async fn export_space(
             AppError::new(ErrorCode::Conflict, error.to_string()).with_status(StatusCode::CONFLICT)
         })?;
     let events = state
-        .projection_events
-        .lock()
-        .expect("projection events lock")
-        .iter()
+        .persistence
+        .projection_events()
+        .snapshot_all()
+        .unwrap_or_default()
+        .into_iter()
         .filter(|event| event.space_id == space_id)
         .map(|event| {
             json!({
@@ -395,9 +399,11 @@ pub fn space_lifecycle_response(
     let space_id_value = SpaceId::new(space_id.to_owned())
         .map_err(|_| AppError::invalid_param("invalid space_id"))?;
     let spaces = state.spaces.lock().expect("spaces lock");
-    let meta = state.space_meta.lock().expect("space meta lock");
-    let record = meta
+    let record = state
+        .persistence
+        .space_meta()
         .get(space_id)
+        .map_err(|error| AppError::internal(error.to_string()))?
         .ok_or_else(|| AppError::not_found("not found"))?;
     let members = spaces
         .get(&space_id_value)
@@ -414,21 +420,21 @@ pub fn space_lifecycle_response(
 
 pub fn space_owner_matches(state: &AppState, space_id: &str, actor: &str) -> bool {
     state
-        .space_meta
-        .lock()
-        .expect("space meta lock")
+        .persistence
+        .space_meta()
         .get(space_id)
+        .ok()
+        .flatten()
         .is_some_and(|record| !record.deleted && record.owner == actor)
 }
 
 pub fn touch_space(state: &AppState, space_id: &str) {
-    if let Some(record) = state
-        .space_meta
-        .lock()
-        .expect("space meta lock")
-        .get_mut(space_id)
-    {
+    let store = state.persistence.space_meta();
+    if let Ok(Some(mut record)) = store.get(space_id) {
         record.updated_at = now();
+        if let Err(error) = store.put(space_id, &record) {
+            tracing::warn!(%error, "failed to touch space meta");
+        }
     }
 }
 
@@ -436,20 +442,22 @@ pub fn touch_space(state: &AppState, space_id: &str) {
 
 pub fn is_space_deleted(state: &AppState, space_id: &str) -> bool {
     state
-        .space_meta
-        .lock()
-        .expect("space meta lock")
+        .persistence
+        .space_meta()
         .get(space_id)
+        .ok()
+        .flatten()
         .is_some_and(|record| record.deleted)
 }
 
 pub fn space_discoverability(state: &AppState, space_id: &str) -> String {
     state
-        .space_meta
-        .lock()
-        .expect("space meta lock")
+        .persistence
+        .space_meta()
         .get(space_id)
-        .map(|record| record.discoverability.clone())
+        .ok()
+        .flatten()
+        .map(|record| record.discoverability)
         .unwrap_or_else(|| "invite_only".to_owned())
 }
 
@@ -542,16 +550,17 @@ pub fn invite_token_space_id(state: &AppState, token: &str) -> Option<String> {
     }
     let now = now();
     state
-        .space_invites
-        .lock()
-        .expect("space invites lock")
-        .values()
+        .persistence
+        .space_invites()
+        .snapshot_all()
+        .unwrap_or_default()
+        .into_iter()
         .find(|invite| {
             invite.status == "pending"
                 && invite.invite_token == token
                 && invite.expires_at.is_none_or(|expires_at| expires_at > now)
         })
-        .map(|invite| invite.space_id.clone())
+        .map(|invite| invite.space_id)
 }
 
 pub fn space_search_discoverability(state: &AppState, space_id: &str) -> bool {
@@ -607,10 +616,11 @@ pub fn space_allows_plaintext_service(state: &AppState, space_id: &str) -> bool 
         }
     }
     state
-        .space_meta
-        .lock()
-        .expect("space meta lock")
+        .persistence
+        .space_meta()
         .get(space_id)
+        .ok()
+        .flatten()
         .is_some_and(|record| {
             record
                 .plaintext_visible_services
@@ -619,12 +629,9 @@ pub fn space_allows_plaintext_service(state: &AppState, space_id: &str) -> bool 
 }
 
 pub fn prune_expired_typing(state: &AppState) {
-    let now = chrono::Utc::now();
-    state
-        .typing
-        .lock()
-        .expect("typing lock")
-        .retain(|_, record| record.expires_at > now);
+    if let Err(error) = state.persistence.typing().prune_expired() {
+        tracing::warn!(%error, "failed to prune expired typing entries");
+    }
 }
 
 pub fn typing_ephemeral_for_space(
@@ -635,12 +642,13 @@ pub fn typing_ephemeral_for_space(
     if session.is_none() {
         return Vec::new();
     }
-    let now = chrono::Utc::now();
     let mut by_scope = std::collections::BTreeMap::<String, Vec<serde_json::Value>>::new();
-    for record in state.typing.lock().expect("typing lock").values() {
-        if record.space_id != space_id || record.expires_at <= now {
-            continue;
-        }
+    let typing_records = state
+        .persistence
+        .typing()
+        .list_for_space(space_id)
+        .unwrap_or_default();
+    for record in &typing_records {
         let scope_id = record
             .scope_id
             .clone()

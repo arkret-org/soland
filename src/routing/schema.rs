@@ -6,8 +6,8 @@
 //! - `GET    /api/v1/schemas/{schema_id}`   — fetch one active schema
 //! - `DELETE /api/v1/schemas/{schema_id}`   — owner-only delete
 //!
-//! Scope is the in-memory `state.schemas` map; persistent storage + the
-//! reducer-side `SchemaRegistryState` are tracked in Stream-A3 of `_todos.md`.
+//! Scope is `state.persistence.schemas()`; the reducer-side
+//! `SchemaRegistryState` is tracked in T1-3 of `_todos.md`.
 
 use salvo::{http::StatusCode, prelude::*};
 use serde_json::json;
@@ -33,13 +33,14 @@ pub async fn list_schemas(depot: &mut Depot, req: &mut Request, res: &mut Respon
         .unwrap_or(100)
         .clamp(1, 200);
     let mut schemas = state
-        .schemas
-        .lock()
-        .expect("schemas lock")
-        .values()
+        .persistence
+        .schemas()
+        .snapshot_all()
+        .unwrap_or_default()
+        .into_iter()
         .filter(|schema| include_inactive || schema.active)
-        .filter(|schema| kind.as_deref().map_or(true, |kind| schema.kind == kind))
-        .map(schema_record_to_response)
+        .filter(|schema| kind.as_deref().is_none_or(|kind| schema.kind == kind))
+        .map(|schema| schema_record_to_response(&schema))
         .collect::<Vec<_>>();
     schemas.sort_by(|left, right| left.schema_id.cmp(&right.schema_id));
     let has_more = schemas.len() > limit;
@@ -68,12 +69,13 @@ pub async fn get_schema(depot: &mut Depot, req: &mut Request, res: &mut Response
         return;
     };
     let schema = state
-        .schemas
-        .lock()
-        .expect("schemas lock")
+        .persistence
+        .schemas()
         .get(&schema_id)
+        .ok()
+        .flatten()
         .filter(|schema| schema.active)
-        .map(schema_record_to_response);
+        .map(|schema| schema_record_to_response(&schema));
     match schema {
         Some(schema) => res.render(Json(schema)),
         None => render_error(res, StatusCode::NOT_FOUND, "not_found", "schema not found"),
@@ -161,8 +163,9 @@ pub async fn register_schema(depot: &mut Depot, req: &mut Request, res: &mut Res
         return;
     }
 
-    let mut schemas = state.schemas.lock().expect("schemas lock");
-    if let Some(existing) = schemas.get(&body.schema_id)
+    let store = state.persistence.schemas();
+    let existing = store.get(&body.schema_id).ok().flatten();
+    if let Some(existing) = existing.as_ref()
         && existing.owner != session.actor
     {
         render_error(
@@ -173,10 +176,7 @@ pub async fn register_schema(depot: &mut Depot, req: &mut Request, res: &mut Res
         );
         return;
     }
-    let created_at = schemas
-        .get(&body.schema_id)
-        .map(|schema| schema.created_at)
-        .unwrap_or_else(now);
+    let created_at = existing.map(|schema| schema.created_at).unwrap_or_else(now);
     let record = SchemaRecord {
         schema_id: body.schema_id.clone(),
         kind: body.kind,
@@ -188,7 +188,16 @@ pub async fn register_schema(depot: &mut Depot, req: &mut Request, res: &mut Res
         created_at,
         updated_at: now(),
     };
-    schemas.insert(body.schema_id, record.clone());
+    if let Err(error) = store.put(record.clone()) {
+        tracing::error!(%error, "failed to persist schema");
+        render_error(
+            res,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "persistence_error",
+            "schema store unavailable",
+        );
+        return;
+    }
     res.render(Json(schema_record_to_response(&record)));
 }
 
@@ -207,8 +216,8 @@ pub async fn delete_schema(depot: &mut Depot, req: &mut Request, res: &mut Respo
         );
         return;
     };
-    let mut schemas = state.schemas.lock().expect("schemas lock");
-    let Some(schema) = schemas.get(&schema_id) else {
+    let store = state.persistence.schemas();
+    let Ok(Some(schema)) = store.get(&schema_id) else {
         render_error(res, StatusCode::NOT_FOUND, "not_found", "schema not found");
         return;
     };
@@ -221,7 +230,7 @@ pub async fn delete_schema(depot: &mut Depot, req: &mut Request, res: &mut Respo
         );
         return;
     }
-    schemas.remove(&schema_id);
+    let _ = store.delete(&schema_id);
     res.render(Json(OkResponse { ok: true }));
 }
 

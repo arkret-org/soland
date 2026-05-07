@@ -146,7 +146,7 @@ pub fn registry_versions() -> Value {
 
 pub fn registry_summary() -> Value {
     json!({
-        "source": "contrix-spec/artifacts",
+        "source": "contrix-spec/spec/v1/artifacts",
         "versions": registry_versions(),
         "counts": {
             "active_durable_event_kinds": active_durable_event_kinds().len(),

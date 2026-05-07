@@ -169,14 +169,13 @@ pub async fn client_sync(depot: &mut Depot, req: &mut Request, res: &mut Respons
             );
             return;
         };
-        state.presence.lock().expect("presence lock").insert(
-            session.actor.clone(),
-            PresenceRecord {
-                actor: session.actor.clone(),
-                status: presence.to_owned(),
-                updated_at: chrono::Utc::now(),
-            },
-        );
+        if let Err(error) = state.persistence.presence().put(PresenceRecord {
+            actor: session.actor.clone(),
+            status: presence.to_owned(),
+            updated_at: chrono::Utc::now(),
+        }) {
+            tracing::error!(%error, "failed to persist presence");
+        }
     }
     prune_expired_typing(state);
     let visible_spaces: Vec<_> = {
@@ -249,10 +248,17 @@ pub async fn client_sync(depot: &mut Depot, req: &mut Request, res: &mut Respons
     let to_device = session
         .as_ref()
         .map(|session| {
-            let mut queue = state.device_messages.lock().expect("device message lock");
-            prune_acked_device_messages(&mut queue, session, since_cursor.to_device_position);
-            let events =
-                device_message_events_after(&queue, session, since_cursor.to_device_position);
+            prune_acked_device_messages(state, session, since_cursor.to_device_position);
+            let queued = state
+                .persistence
+                .device_messages()
+                .list_after(
+                    &session.actor,
+                    &session.device_id,
+                    since_cursor.to_device_position,
+                )
+                .unwrap_or_default();
+            let events = device_message_events_after(&queued);
             if let Some(max_position) = events
                 .iter()
                 .filter_map(|event| event.get("position").and_then(|position| position.as_i64()))
@@ -540,23 +546,21 @@ pub async fn set_typing(depot: &mut Depot, req: &mut Request, res: &mut Response
         let timeout_ms = body.timeout_ms.unwrap_or(30_000).clamp(1_000, 120_000);
         let now = chrono::Utc::now();
         let expires_at = now + chrono::Duration::milliseconds(timeout_ms as i64);
-        state.typing.lock().expect("typing lock").insert(
-            (body.space_id.clone(), session.actor.clone()),
-            TypingRecord {
-                actor: session.actor.clone(),
-                space_id: body.space_id.clone(),
-                scope_id: body.scope_id.clone(),
-                expires_at,
-                updated_at: now,
-            },
-        );
+        if let Err(error) = state.persistence.typing().put(TypingRecord {
+            actor: session.actor.clone(),
+            space_id: body.space_id.clone(),
+            scope_id: body.scope_id.clone(),
+            expires_at,
+            updated_at: now,
+        }) {
+            tracing::error!(%error, "failed to persist typing");
+        }
         Some(expires_at)
     } else {
-        state
-            .typing
-            .lock()
-            .expect("typing lock")
-            .remove(&(body.space_id.clone(), session.actor.clone()));
+        let _ = state
+            .persistence
+            .typing()
+            .remove(&session.actor, &body.space_id);
         None
     };
 

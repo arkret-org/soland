@@ -229,14 +229,17 @@ pub fn event_is_visible(event: &ProjectionEventRecord, redacted: &HashSet<String
 }
 
 pub fn append_projection_event(state: &AppState, event: ProjectionEventRecord) {
-    let mut events = state
-        .projection_events
-        .lock()
-        .expect("projection event lock");
-    if events.iter().any(|known| known.event_id == event.event_id) {
+    let store = state.persistence.projection_events();
+    let exists = store
+        .snapshot_all()
+        .map(|known| known.iter().any(|record| record.event_id == event.event_id))
+        .unwrap_or(false);
+    if exists {
         return;
     }
-    events.push(event);
+    if let Err(error) = store.append(event) {
+        tracing::warn!(%error, "failed to persist projection event");
+    }
 }
 
 pub fn projected_event_page(
@@ -246,12 +249,12 @@ pub fn projected_event_page(
     limit: usize,
 ) -> anyhow::Result<Option<ProjectedEventPage>> {
     let mut events = state
-        .projection_events
-        .lock()
-        .expect("projection event lock")
-        .iter()
+        .persistence
+        .projection_events()
+        .snapshot_all()
+        .unwrap_or_default()
+        .into_iter()
         .filter(|event| event.space_id == space_id)
-        .cloned()
         .collect::<Vec<_>>();
     if events.is_empty() {
         events = load_projected_events_from_pg(state, space_id)?;
@@ -386,19 +389,17 @@ pub fn ingest_federation_operations(
     let mut rejected = Vec::new();
     for operation in operations {
         let operation_id = operation.operation_id.clone();
+        if state
+            .persistence
+            .federation_operations()
+            .contains(operation_id.as_str())
+            .unwrap_or(false)
         {
-            let federation_operations =
-                state.federation_operations.lock().expect("federation lock");
-            if federation_operations
-                .iter()
-                .any(|known| known.operation_id == operation_id)
-            {
-                rejected.push(json!({
-                    "operation_id": operation_id,
-                    "reason": "replay",
-                }));
-                continue;
-            }
+            rejected.push(json!({
+                "operation_id": operation_id,
+                "reason": "replay",
+            }));
+            continue;
         }
         if operation.validate_payload_object().is_err() {
             rejected.push(json!({
@@ -424,10 +425,18 @@ pub fn ingest_federation_operations(
             }));
             continue;
         }
+        if let Err(error) = state
+            .persistence
+            .federation_operations()
+            .append(operation.clone())
         {
-            let mut federation_operations =
-                state.federation_operations.lock().expect("federation lock");
-            federation_operations.push(operation.clone());
+            tracing::error!(%error, "failed to persist federation operation");
+            rejected.push(json!({
+                "operation_id": operation_id,
+                "reason": "persistence_error",
+                "message": error.to_string(),
+            }));
+            continue;
         }
         project_federation_operation(state, origin, &operation);
         accepted.push(operation_id);
@@ -669,12 +678,9 @@ pub fn ensure_projected_space(state: &AppState, origin: &str, operation: &Operat
     drop(spaces);
 
     let now = now();
-    state
-        .space_meta
-        .lock()
-        .expect("space meta lock")
-        .entry(space_id.to_string())
-        .or_insert_with(|| SpaceMetaRecord {
+    let store = state.persistence.space_meta();
+    if matches!(store.get(space_id.as_str()), Ok(None)) {
+        let record = SpaceMetaRecord {
             owner: origin.to_owned(),
             deleted: false,
             discoverability: operation
@@ -708,7 +714,11 @@ pub fn ensure_projected_space(state: &AppState, origin: &str, operation: &Operat
                 .unwrap_or_default(),
             created_at: now,
             updated_at: now,
-        });
+        };
+        if let Err(error) = store.put(space_id.as_str(), &record) {
+            tracing::warn!(%error, "failed to persist projected space meta");
+        }
+    }
     project_membership_operation(state, origin, operation);
 }
 
@@ -719,14 +729,13 @@ pub fn project_membership_operation(state: &AppState, origin: &str, operation: &
         .and_then(|value| value.as_str())
         .unwrap_or(operation.object_type.as_str());
     if matches!(action, "delete" | "space.delete") {
-        if let Some(record) = state
-            .space_meta
-            .lock()
-            .expect("space meta lock")
-            .get_mut(operation.space_id.as_str())
-        {
+        let store = state.persistence.space_meta();
+        if let Ok(Some(mut record)) = store.get(operation.space_id.as_str()) {
             record.deleted = true;
             record.updated_at = operation.created_at;
+            if let Err(error) = store.put(operation.space_id.as_str(), &record) {
+                tracing::warn!(%error, "failed to mark projected space deleted");
+            }
         }
         return;
     }
@@ -796,8 +805,8 @@ pub fn project_federated_message(state: &AppState, origin: &str, operation: &Ope
                 operation.operation_id.as_str().replace(':', "")
             )
         });
-    let mut messages = state.messages.lock().expect("messages lock");
-    if messages.iter().any(|message| message.event_id == event_id) {
+    let store = state.persistence.messages();
+    if matches!(store.get(&event_id), Ok(Some(_))) {
         return;
     }
     let content = operation
@@ -828,7 +837,7 @@ pub fn project_federated_message(state: &AppState, origin: &str, operation: &Ope
         .get("encrypted")
         .and_then(|value| value.as_bool())
         .unwrap_or(false);
-    messages.push(MessageRecord {
+    if let Err(error) = store.put(&MessageRecord {
         event_id,
         space_id: operation.space_id.to_string(),
         sender,
@@ -836,5 +845,7 @@ pub fn project_federated_message(state: &AppState, origin: &str, operation: &Ope
         content,
         encrypted,
         created_at: operation.created_at,
-    });
+    }) {
+        tracing::warn!(%error, "failed to persist projected message");
+    }
 }

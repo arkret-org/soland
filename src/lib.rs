@@ -458,7 +458,7 @@ fn contrix_openapi_doc(router: &Router) -> OpenApi {
             "x-contrix-artifacts",
             json!({
                 "registries": crate::artifacts::registry_summary(),
-                "openapi_source": "contrix-spec/artifacts/openapi/contrix-service-api.openapi.yaml"
+                "openapi_source": "contrix-spec/spec/v1/artifacts/openapi/contrix-service-api.openapi.yaml"
             }),
         )
         .merge_router(router);

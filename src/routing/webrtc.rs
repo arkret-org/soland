@@ -6,8 +6,8 @@
 //! - `PUT/GET /api/v1/webrtc/sessions/{session_id}/signals`
 //! - `DELETE /api/v1/webrtc/sessions/{session_id}` close
 //!
-//! All sessions live in `state.webrtc_sessions` (in-memory). Stream-F in
-//! `_todos.md` covers persistence, TURN policy, and B-14 (no DID in TURN
+//! Sessions are persisted through `state.persistence.webrtc()`. Tier 6-P-4
+//! covers the durable Pg backing + TURN policy + spec B-14 (no DID in TURN
 //! username / push payload).
 
 use std::collections::BTreeSet;
@@ -108,19 +108,26 @@ pub async fn create_webrtc_session(depot: &mut Depot, req: &mut Request, res: &m
     let expires_at = created_at + Duration::milliseconds(ttl_ms as i64);
     let session_id = ids::generate("webrtc");
     let participant_list = participants.iter().cloned().collect::<Vec<_>>();
-    state.webrtc_sessions.lock().expect("webrtc lock").insert(
-        session_id.clone(),
-        WebrtcSessionRecord {
-            session_id: session_id.clone(),
-            space_id: body.space_id.clone(),
-            created_by: session.actor,
-            participants,
-            expires_at,
-            created_at,
-            next_seq: 1,
-            signals: Vec::new(),
-        },
-    );
+    let record = WebrtcSessionRecord {
+        session_id: session_id.clone(),
+        space_id: body.space_id.clone(),
+        created_by: session.actor,
+        participants,
+        expires_at,
+        created_at,
+        next_seq: 1,
+        signals: Vec::new(),
+    };
+    if let Err(error) = state.persistence.webrtc().put(record) {
+        tracing::error!(%error, "failed to persist webrtc session");
+        render_error(
+            res,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "persistence_error",
+            "webrtc session store unavailable",
+        );
+        return;
+    }
     res.render(Json(CreateWebrtcSessionResponse {
         session_id,
         space_id: body.space_id,
@@ -190,36 +197,51 @@ pub async fn put_webrtc_signal(depot: &mut Depot, req: &mut Request, res: &mut R
     }
 
     prune_expired_webrtc_sessions(state);
-    let mut sessions = state.webrtc_sessions.lock().expect("webrtc lock");
-    let Some(record) = sessions.get_mut(&session_id) else {
-        render_error(res, StatusCode::NOT_FOUND, "not_found", "session not found");
-        return;
-    };
-    if !record.participants.contains(&session.actor) {
-        render_error(
-            res,
-            StatusCode::FORBIDDEN,
-            "capability_denied",
-            "actor is not a participant of the webrtc session",
-        );
-        return;
-    }
-    let seq = record.next_seq;
-    record.next_seq += 1;
-    record.signals.push(WebrtcSignalRecord {
+    let actor = session.actor.clone();
+    let message_type = body.message_type;
+    let payload = body.payload;
+    let proofs = body.proofs;
+    let created_at = now();
+    let builder = Box::new(move |seq: u64| WebrtcSignalRecord {
         seq,
-        sender: session.actor,
-        message_type: body.message_type,
-        payload: body.payload,
-        proofs: body.proofs,
-        created_at: now(),
+        sender: actor,
+        message_type,
+        payload,
+        proofs,
+        created_at,
     });
-    res.render(Json(WebrtcSignalResponse {
-        ok: true,
-        session_id,
-        seq,
-        next_cursor: seq.to_string(),
-    }));
+    match state
+        .persistence
+        .webrtc()
+        .append_signal(&session_id, &session.actor, builder)
+    {
+        Ok(appended) => res.render(Json(WebrtcSignalResponse {
+            ok: true,
+            session_id: session_id.clone(),
+            seq: appended.seq,
+            next_cursor: appended.seq.to_string(),
+        })),
+        Err(crate::persistence::PersistenceError::NotFound(_)) => {
+            render_error(res, StatusCode::NOT_FOUND, "not_found", "session not found");
+        }
+        Err(crate::persistence::PersistenceError::Conflict(_)) => {
+            render_error(
+                res,
+                StatusCode::FORBIDDEN,
+                "capability_denied",
+                "actor is not a participant of the webrtc session",
+            );
+        }
+        Err(error) => {
+            tracing::error!(%error, "failed to append webrtc signal");
+            render_error(
+                res,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "persistence_error",
+                "webrtc signal store unavailable",
+            );
+        }
+    }
 }
 
 #[endpoint]
@@ -255,8 +277,7 @@ pub async fn get_webrtc_signals(depot: &mut Depot, req: &mut Request, res: &mut 
         .clamp(1, 100);
 
     prune_expired_webrtc_sessions(state);
-    let sessions = state.webrtc_sessions.lock().expect("webrtc lock");
-    let Some(record) = sessions.get(&session_id) else {
+    let Some(record) = state.persistence.webrtc().get(&session_id).ok().flatten() else {
         render_error(res, StatusCode::NOT_FOUND, "not_found", "session not found");
         return;
     };
@@ -318,8 +339,7 @@ pub async fn delete_webrtc_session(depot: &mut Depot, req: &mut Request, res: &m
     }
 
     prune_expired_webrtc_sessions(state);
-    let mut sessions = state.webrtc_sessions.lock().expect("webrtc lock");
-    let Some(record) = sessions.get(&session_id) else {
+    let Some(record) = state.persistence.webrtc().get(&session_id).ok().flatten() else {
         render_error(res, StatusCode::NOT_FOUND, "not_found", "session not found");
         return;
     };
@@ -332,17 +352,14 @@ pub async fn delete_webrtc_session(depot: &mut Depot, req: &mut Request, res: &m
         );
         return;
     }
-    sessions.remove(&session_id);
+    let _ = state.persistence.webrtc().delete(&session_id);
     res.render(Json(OkResponse { ok: true }));
 }
 
 fn prune_expired_webrtc_sessions(state: &AppState) {
-    let now = now();
-    state
-        .webrtc_sessions
-        .lock()
-        .expect("webrtc lock")
-        .retain(|_, record| record.expires_at > now);
+    if let Err(error) = state.persistence.webrtc().prune_expired() {
+        tracing::warn!(%error, "failed to prune expired webrtc sessions");
+    }
 }
 
 fn is_valid_webrtc_session_id(value: &str) -> bool {

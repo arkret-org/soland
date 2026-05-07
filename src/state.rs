@@ -1,10 +1,10 @@
 use std::{
-    collections::{BTreeMap, BTreeSet, VecDeque},
+    collections::{BTreeMap, BTreeSet},
     sync::{Arc, Mutex},
 };
 
 use contrix_sdk::{
-    Did, Operation, SpaceId, SpaceSearchEntry, SpaceSearchIndex,
+    Did, SpaceId, SpaceSearchEntry, SpaceSearchIndex,
     identity::{CompositeDidResolver, DidKeyResolver, DidUuidResolver, DidWebResolver},
 };
 use serde_json::{Value, json};
@@ -18,8 +18,14 @@ use crate::persistence::{MemoryPersistenceStore, PersistenceStore, PgPersistence
 use crate::reducer::ProjectionState;
 use crate::repo::{MemoryRepoAdapter, PgRepoAdapter, RepoAdapterRef};
 
-type OneTimeKeyStore = Arc<Mutex<BTreeMap<(String, String), Vec<Value>>>>;
-
+/// Single-process service state. Every long-lived data surface lives behind
+/// `persistence` (a `dyn PersistenceStore`); the few remaining fields are
+/// either non-record state (config, db pool, hlc, authz engine), runtime
+/// facets that don't fit the trait shape (in-memory `SpaceSearchIndex`,
+/// `CompositeDidResolver`, `ProjectionState`), or the temporarily-retained
+/// key-backup-restore scaffold maps (T0-2c — `routing/key_backup_restore.rs`
+/// uses `BTreeMap` semantics like `iter / retain / get_mut` against these
+/// maps, and the trait migration is tracked separately).
 #[derive(Clone)]
 pub struct AppState {
     pub config: AppConfig,
@@ -30,39 +36,14 @@ pub struct AppState {
     pub projection: Arc<Mutex<ProjectionState>>,
     pub authz: AuthzEngine,
     pub spaces: Arc<Mutex<SpaceSearchIndex>>,
-    pub space_meta: Arc<Mutex<BTreeMap<String, SpaceMetaRecord>>>,
-    pub schemas: Arc<Mutex<BTreeMap<String, SchemaRecord>>>,
-    pub accounts: Arc<Mutex<BTreeMap<String, AccountRecord>>>,
-    pub identity_documents: Arc<Mutex<BTreeMap<String, IdentityDocumentRecord>>>,
-    pub identity_log_events: Arc<Mutex<BTreeMap<String, Vec<IdentityLogRecord>>>>,
     pub did_resolver: Arc<Mutex<CompositeDidResolver>>,
-    pub contacts: Arc<Mutex<BTreeMap<(String, String), ContactRecord>>>,
-    pub space_invites: Arc<Mutex<BTreeMap<String, SpaceInviteRecord>>>,
-    pub sessions: Arc<Mutex<BTreeMap<String, SessionRecord>>>,
-    pub messages: Arc<Mutex<Vec<MessageRecord>>>,
-    pub events: Arc<Mutex<BTreeMap<String, CanonicalEventRecord>>>,
-    pub projection_events: Arc<Mutex<Vec<ProjectionEventRecord>>>,
-    pub devices: Arc<Mutex<BTreeMap<String, BTreeMap<String, Value>>>>,
-    pub device_messages: Arc<Mutex<VecDeque<DeviceMessageRecord>>>,
-    pub device_message_txns: Arc<Mutex<BTreeSet<String>>>,
-    pub device_keys: Arc<Mutex<BTreeMap<(String, String), Value>>>,
-    pub one_time_keys: OneTimeKeyStore,
+    // T0-2c follow-up: migrate the four key-backup scaffold maps below into
+    // `state.persistence.key_backups()` once the routing layer's iter/retain/
+    // get_mut patterns are rewritten in terms of the trait.
     pub key_backups: Arc<Mutex<BTreeMap<String, Value>>>,
     pub key_backup_restore_tickets: Arc<Mutex<BTreeMap<String, Value>>>,
     pub key_backup_restore_executor_runs: Arc<Mutex<BTreeMap<String, Value>>>,
     pub key_backup_restore_approval_runs: Arc<Mutex<BTreeMap<String, Value>>>,
-    pub blobs: Arc<Mutex<BTreeMap<String, BlobRecord>>>,
-    pub push_devices: Arc<Mutex<Vec<Value>>>,
-    pub push_rules: Arc<Mutex<BTreeMap<(String, String), PushRuleRecord>>>,
-    pub outbound_push_bridge_cache: Arc<Mutex<BTreeMap<String, OutboundPushBridgeCacheRecord>>>,
-    pub presence: Arc<Mutex<BTreeMap<String, PresenceRecord>>>,
-    pub typing: Arc<Mutex<BTreeMap<(String, String), TypingRecord>>>,
-    pub webrtc_sessions: Arc<Mutex<BTreeMap<String, WebrtcSessionRecord>>>,
-    pub policy_documents: Arc<Mutex<BTreeMap<String, PolicyDocumentRecord>>>,
-    pub moderation_reports: Arc<Mutex<Vec<Value>>>,
-    pub moderation_actions: Arc<Mutex<Vec<Value>>>,
-    pub audit_log: Arc<Mutex<Vec<Value>>>,
-    pub federation_operations: Arc<Mutex<Vec<Operation>>>,
 }
 
 #[derive(Clone, Debug)]
@@ -321,28 +302,6 @@ impl AppState {
         demo.category = Some("collaboration".to_owned());
         spaces.upsert(demo);
         let now = chrono::Utc::now();
-        let mut accounts = BTreeMap::new();
-        accounts.insert(
-            "did:web:alice.example".to_owned(),
-            AccountRecord {
-                did: "did:web:alice.example".to_owned(),
-                handle: "@alice".to_owned(),
-                display_name: Some("Alice Example".to_owned()),
-                created_at: now,
-            },
-        );
-        let mut space_meta = BTreeMap::new();
-        space_meta.insert(
-            "cx:space:01js0sp0000000000000000000".to_owned(),
-            SpaceMetaRecord {
-                owner: "did:web:alice.example".to_owned(),
-                deleted: false,
-                discoverability: "public".to_owned(),
-                plaintext_visible_services: BTreeSet::new(),
-                created_at: now,
-                updated_at: now,
-            },
-        );
 
         let service_did = config.service_did.clone();
 
@@ -353,20 +312,36 @@ impl AppState {
                 Arc::new(PgPersistenceStore::new(pool.clone())) as Arc<dyn PersistenceStore>
             })
             .unwrap_or_else(|| Arc::new(MemoryPersistenceStore::new()));
-        if let Err(error) = persistence.accounts().put(
-            accounts
-                .get("did:web:alice.example")
-                .expect("demo account exists"),
-        ) {
+
+        let demo_account = AccountRecord {
+            did: "did:web:alice.example".to_owned(),
+            handle: "@alice".to_owned(),
+            display_name: Some("Alice Example".to_owned()),
+            created_at: now,
+        };
+        if let Err(error) = persistence.accounts().put(&demo_account) {
             tracing::warn!(%error, "failed to seed demo account into persistence store");
         }
-        if let Err(error) = persistence.space_meta().put(
-            "cx:space:01js0sp0000000000000000000",
-            space_meta
-                .get("cx:space:01js0sp0000000000000000000")
-                .expect("demo space exists"),
-        ) {
+
+        let demo_space_meta = SpaceMetaRecord {
+            owner: "did:web:alice.example".to_owned(),
+            deleted: false,
+            discoverability: "public".to_owned(),
+            plaintext_visible_services: BTreeSet::new(),
+            created_at: now,
+            updated_at: now,
+        };
+        if let Err(error) = persistence
+            .space_meta()
+            .put("cx:space:01js0sp0000000000000000000", &demo_space_meta)
+        {
             tracing::warn!(%error, "failed to seed demo space metadata into persistence store");
+        }
+
+        for record in core_schema_records(now, &service_did).into_values() {
+            if let Err(error) = persistence.schemas().put(record) {
+                tracing::warn!(%error, "failed to seed core schema into persistence store");
+            }
         }
 
         Self {
@@ -382,11 +357,6 @@ impl AppState {
             db,
             persistence,
             spaces: Arc::new(Mutex::new(spaces)),
-            space_meta: Arc::new(Mutex::new(space_meta)),
-            schemas: Arc::new(Mutex::new(core_schema_records(now, &service_did))),
-            accounts: Arc::new(Mutex::new(accounts)),
-            identity_documents: Arc::new(Mutex::new(BTreeMap::new())),
-            identity_log_events: Arc::new(Mutex::new(BTreeMap::new())),
             did_resolver: {
                 let mut resolver = CompositeDidResolver::new();
                 resolver.push(DidUuidResolver::new());
@@ -394,33 +364,10 @@ impl AppState {
                 resolver.push(DidKeyResolver::new());
                 Arc::new(Mutex::new(resolver))
             },
-            contacts: Arc::new(Mutex::new(BTreeMap::new())),
-            space_invites: Arc::new(Mutex::new(BTreeMap::new())),
-            sessions: Arc::new(Mutex::new(BTreeMap::new())),
-            messages: Arc::new(Mutex::new(Vec::new())),
-            events: Arc::new(Mutex::new(BTreeMap::new())),
-            projection_events: Arc::new(Mutex::new(Vec::new())),
-            devices: Arc::new(Mutex::new(BTreeMap::new())),
-            device_messages: Arc::new(Mutex::new(VecDeque::new())),
-            device_message_txns: Arc::new(Mutex::new(BTreeSet::new())),
-            device_keys: Arc::new(Mutex::new(BTreeMap::new())),
-            one_time_keys: Arc::new(Mutex::new(BTreeMap::new())),
             key_backups: Arc::new(Mutex::new(BTreeMap::new())),
             key_backup_restore_tickets: Arc::new(Mutex::new(BTreeMap::new())),
             key_backup_restore_executor_runs: Arc::new(Mutex::new(BTreeMap::new())),
             key_backup_restore_approval_runs: Arc::new(Mutex::new(BTreeMap::new())),
-            blobs: Arc::new(Mutex::new(BTreeMap::new())),
-            push_devices: Arc::new(Mutex::new(Vec::new())),
-            push_rules: Arc::new(Mutex::new(BTreeMap::new())),
-            outbound_push_bridge_cache: Arc::new(Mutex::new(BTreeMap::new())),
-            presence: Arc::new(Mutex::new(BTreeMap::new())),
-            typing: Arc::new(Mutex::new(BTreeMap::new())),
-            webrtc_sessions: Arc::new(Mutex::new(BTreeMap::new())),
-            policy_documents: Arc::new(Mutex::new(BTreeMap::new())),
-            moderation_reports: Arc::new(Mutex::new(Vec::new())),
-            moderation_actions: Arc::new(Mutex::new(Vec::new())),
-            audit_log: Arc::new(Mutex::new(Vec::new())),
-            federation_operations: Arc::new(Mutex::new(Vec::new())),
         }
     }
 }
@@ -447,7 +394,7 @@ fn core_schema_records(
                         "type": "object",
                         "additionalProperties": true,
                         "x-contrix-artifact": {
-                            "source": "contrix-spec/artifacts",
+                            "source": "contrix-spec/spec/v1/artifacts",
                             "file": entry.file.clone()
                         }
                     }),

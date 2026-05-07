@@ -347,19 +347,17 @@ pub async fn mimi_report_abuse(depot: &mut Depot, req: &mut Request, res: &mut R
         return;
     }
     let report_id = ids::generate_report_id();
-    state
-        .moderation_reports
-        .lock()
-        .expect("moderation lock")
-        .push(json!({
-            "report_id": report_id,
-            "kind": "mimi_abuse_report",
-            "mimi_room_uri": body.get("mimi_room_uri").cloned(),
-            "provider_id": body.get("provider_id").cloned(),
-            "target_event_hash": body.get("target_event_hash").cloned(),
-            "frank": body.get("frank").cloned(),
-            "created_at": now()
-        }));
+    if let Err(error) = state.persistence.moderation().append_report(json!({
+        "report_id": report_id,
+        "kind": "mimi_abuse_report",
+        "mimi_room_uri": body.get("mimi_room_uri").cloned(),
+        "provider_id": body.get("provider_id").cloned(),
+        "target_event_hash": body.get("target_event_hash").cloned(),
+        "frank": body.get("frank").cloned(),
+        "created_at": now(),
+    })) {
+        tracing::error!(%error, "failed to persist mimi abuse report");
+    }
     res.status_code(StatusCode::ACCEPTED);
     res.render(Json(json!({
         "ok": true,
@@ -396,12 +394,7 @@ pub async fn mimi_proxy_download(depot: &mut Depot, req: &mut Request, res: &mut
         .get("asset_privacy_policy")
         .and_then(|value| value.as_str())
         .unwrap_or("provider_proxy");
-    let blob = state
-        .blobs
-        .lock()
-        .expect("blob lock")
-        .get(blob_ref)
-        .cloned();
+    let blob = state.persistence.blobs().get(blob_ref).ok().flatten();
     let proxy_required = matches!(asset_policy, "provider_proxy" | "ohttp_relay");
     res.render(Json(json!({
         "ok": true,

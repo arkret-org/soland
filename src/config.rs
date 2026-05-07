@@ -9,6 +9,10 @@ pub struct AppConfig {
     pub blob_root: PathBuf,
     pub cors_allow_origin: Option<String>,
     pub development_mode: bool,
+    pub session_grant_introspection_url: Option<String>,
+    pub session_grant_introspection_bearer: Option<String>,
+    pub did_resolver_allow_methods: Vec<String>,
+    pub starid_webvh_resolver_url: Option<String>,
 }
 
 impl AppConfig {
@@ -34,6 +38,13 @@ impl AppConfig {
         let development_mode = std::env::var("SERVERX_DEVELOPMENT_MODE")
             .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes"))
             .unwrap_or(false);
+        let session_grant_introspection_url =
+            env_non_empty("SERVERX_SESSION_GRANT_INTROSPECTION_URL");
+        let session_grant_introspection_bearer =
+            env_non_empty("SERVERX_SESSION_GRANT_INTROSPECTION_BEARER");
+        let did_resolver_allow_methods = env_csv("SERVERX_DID_RESOLVER_ALLOW_METHODS")
+            .unwrap_or_else(|| vec!["web".to_owned(), "key".to_owned(), "uuid".to_owned()]);
+        let starid_webvh_resolver_url = env_non_empty("SERVERX_STARID_WEBVH_RESOLVER_URL");
 
         Ok(Self {
             bind,
@@ -43,8 +54,33 @@ impl AppConfig {
             blob_root,
             cors_allow_origin,
             development_mode,
+            session_grant_introspection_url,
+            session_grant_introspection_bearer,
+            did_resolver_allow_methods,
+            starid_webvh_resolver_url,
         })
     }
+}
+
+fn env_csv(name: &str) -> Option<Vec<String>> {
+    let values: Vec<String> = std::env::var(name)
+        .ok()?
+        .split(',')
+        .map(|value| value.trim().trim_start_matches("did:").to_ascii_lowercase())
+        .filter(|value| !value.is_empty())
+        .collect();
+    if values.is_empty() {
+        None
+    } else {
+        Some(values)
+    }
+}
+
+fn env_non_empty(name: &str) -> Option<String> {
+    std::env::var(name)
+        .ok()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
 }
 
 fn arg_value(name: &str) -> Option<String> {

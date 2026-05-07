@@ -24,7 +24,7 @@ use crate::{
 };
 
 use super::{
-    AuthArgs, append_audit_log, device_inventory_to_json, is_valid_handle, normalize_handle, now,
+    AuthArgs, append_audit_log, is_valid_handle, normalize_handle, now,
     validate_device_id, validate_did,
 };
 
@@ -79,11 +79,6 @@ pub async fn account_register(
         .accounts()
         .put(&account)
         .map_err(|error| AppError::internal(error.to_string()))?;
-    state
-        .accounts
-        .lock()
-        .expect("accounts lock")
-        .insert(body.did.clone(), account.clone());
     if let Some(device_id) = body.device_id.as_deref() {
         let registered_at = now();
         let device = DeviceInventoryRecord {
@@ -106,13 +101,6 @@ pub async fn account_register(
             .devices()
             .put(&device)
             .map_err(|error| AppError::internal(error.to_string()))?;
-        state
-            .devices
-            .lock()
-            .expect("devices lock")
-            .entry(body.did.clone())
-            .or_default()
-            .insert(device_id.to_owned(), device_inventory_to_json(&device));
     }
     append_audit_log(
         state,
@@ -175,12 +163,18 @@ pub async fn contact_request(
     if target_account.is_none() {
         return Err(AppError::not_found("not found"));
     }
-    let mut contacts = state.contacts.lock().expect("contacts lock");
-    let key = (session.actor.clone(), body.target.clone());
-    if let Some(existing) = contacts.get(&key).cloned() {
+    let store = state.persistence.contacts();
+    if let Some(existing) = store
+        .get(&session.actor, &body.target)
+        .map_err(|error| AppError::internal(error.to_string()))?
+    {
         return json_ok(contact_response(existing));
     }
-    if contacts.contains_key(&(body.target.clone(), session.actor.clone())) {
+    if store
+        .get(&body.target, &session.actor)
+        .map_err(|error| AppError::internal(error.to_string()))?
+        .is_some()
+    {
         return Err(AppError::new(
             crate::error::ErrorCode::DuplicateConflict,
             "contact relationship already exists",
@@ -193,7 +187,9 @@ pub async fn contact_request(
         created_at: now(),
         updated_at: now(),
     };
-    contacts.insert(key, contact.clone());
+    store
+        .put(&contact)
+        .map_err(|error| AppError::internal(error.to_string()))?;
     res.status_code(StatusCode::CREATED);
     json_ok(contact_response(contact))
 }
@@ -215,9 +211,11 @@ pub async fn contact_respond(
     if !matches!(body.action.as_str(), "accept" | "reject") {
         return Err(AppError::invalid_param("action must be accept or reject"));
     }
-    let mut contacts = state.contacts.lock().expect("contacts lock");
-    let key = (body.requester, session.actor);
-    let Some(contact) = contacts.get_mut(&key) else {
+    let store = state.persistence.contacts();
+    let Some(mut contact) = store
+        .get(&body.requester, &session.actor)
+        .map_err(|error| AppError::internal(error.to_string()))?
+    else {
         return Err(AppError::not_found("not found"));
     };
     if contact.status != "pending" {
@@ -227,7 +225,7 @@ pub async fn contact_respond(
             "rejected"
         };
         if contact.status == requested_status {
-            return json_ok(contact_response(contact.clone()));
+            return json_ok(contact_response(contact));
         }
         return Err(AppError::new(
             crate::error::ErrorCode::DuplicateConflict,
@@ -240,7 +238,10 @@ pub async fn contact_respond(
         "rejected".to_owned()
     };
     contact.updated_at = now();
-    json_ok(contact_response(contact.clone()))
+    store
+        .put(&contact)
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    json_ok(contact_response(contact))
 }
 
 #[endpoint(
@@ -255,11 +256,12 @@ pub async fn list_contacts(
 ) -> JsonResult<ContactsResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req)?;
-    let contacts = state.contacts.lock().expect("contacts lock");
-    let result = contacts
-        .values()
-        .filter(|contact| contact.requester == session.actor || contact.target == session.actor)
-        .cloned()
+    let result = state
+        .persistence
+        .contacts()
+        .list_for_actor(&session.actor)
+        .map_err(|error| AppError::internal(error.to_string()))?
+        .into_iter()
         .map(contact_response)
         .collect();
     json_ok(ContactsResponse { contacts: result })

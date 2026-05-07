@@ -41,19 +41,19 @@ pub async fn list_policy_documents(depot: &mut Depot, req: &mut Request, res: &m
     let subject_ref = query_param(req, "subject_ref");
     let include_inactive = query_flag(req, "include_inactive");
     let policies = state
-        .policy_documents
-        .lock()
-        .expect("policy documents lock")
-        .values()
-        .filter(|policy| policy.owner == session.actor)
+        .persistence
+        .policy_documents()
+        .list_for_owner(&session.actor)
+        .unwrap_or_default()
+        .into_iter()
         .filter(|policy| include_inactive || policy.active)
-        .filter(|policy| scope.as_deref().map_or(true, |scope| policy.scope == scope))
+        .filter(|policy| scope.as_deref().is_none_or(|scope| policy.scope == scope))
         .filter(|policy| {
             subject_ref
                 .as_deref()
-                .map_or(true, |subject_ref| policy.subject_ref == subject_ref)
+                .is_none_or(|subject_ref| policy.subject_ref == subject_ref)
         })
-        .map(policy_document_to_response)
+        .map(|policy| policy_document_to_response(&policy))
         .collect::<Vec<_>>();
     res.render(Json(PolicyDocumentsResponse {
         policies,
@@ -77,12 +77,13 @@ pub async fn get_policy_document(depot: &mut Depot, req: &mut Request, res: &mut
         return;
     };
     let policy = state
-        .policy_documents
-        .lock()
-        .expect("policy documents lock")
+        .persistence
+        .policy_documents()
         .get(&policy_id)
+        .ok()
+        .flatten()
         .filter(|policy| policy.owner == session.actor)
-        .map(policy_document_to_response);
+        .map(|policy| policy_document_to_response(&policy));
     match policy {
         Some(policy) => res.render(Json(policy)),
         None => render_error(res, StatusCode::NOT_FOUND, "not_found", "policy not found"),
@@ -171,20 +172,17 @@ pub async fn upsert_policy_document(depot: &mut Depot, req: &mut Request, res: &
         );
         return;
     }
-    let mut policies = state
-        .policy_documents
-        .lock()
-        .expect("policy documents lock");
-    if let Some(existing) = policies.get(&policy_id)
-        && existing.owner != session.actor
-    {
-        render_error(
-            res,
-            StatusCode::FORBIDDEN,
-            "capability_denied",
-            "policy is owned by another actor",
-        );
-        return;
+    let store = state.persistence.policy_documents();
+    if let Ok(Some(existing)) = store.get(&policy_id) {
+        if existing.owner != session.actor {
+            render_error(
+                res,
+                StatusCode::FORBIDDEN,
+                "capability_denied",
+                "policy is owned by another actor",
+            );
+            return;
+        }
     }
     let record = PolicyDocumentRecord {
         policy_id: policy_id.clone(),
@@ -201,7 +199,16 @@ pub async fn upsert_policy_document(depot: &mut Depot, req: &mut Request, res: &
         active: body.active,
         updated_at: now(),
     };
-    policies.insert(policy_id, record.clone());
+    if let Err(error) = store.put(record.clone()) {
+        tracing::error!(%error, "failed to persist policy document");
+        render_error(
+            res,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "persistence_error",
+            "policy store unavailable",
+        );
+        return;
+    }
     res.render(Json(policy_document_to_response(&record)));
 }
 
@@ -220,11 +227,8 @@ pub async fn delete_policy_document(depot: &mut Depot, req: &mut Request, res: &
         );
         return;
     };
-    let mut policies = state
-        .policy_documents
-        .lock()
-        .expect("policy documents lock");
-    let Some(policy) = policies.get(&policy_id) else {
+    let store = state.persistence.policy_documents();
+    let Ok(Some(policy)) = store.get(&policy_id) else {
         render_error(res, StatusCode::NOT_FOUND, "not_found", "policy not found");
         return;
     };
@@ -237,7 +241,7 @@ pub async fn delete_policy_document(depot: &mut Depot, req: &mut Request, res: &
         );
         return;
     }
-    policies.remove(&policy_id);
+    let _ = store.delete(&policy_id);
     res.render(Json(OkResponse { ok: true }));
 }
 
@@ -343,12 +347,11 @@ fn matching_policy_decision(
     request: &PolicyCheckRequest,
 ) -> Option<MatchedPolicyDecision> {
     state
-        .policy_documents
-        .lock()
-        .expect("policy documents lock")
-        .values()
-        .filter(|policy| policy.active)
-        .find(|policy| policy_matches_check(policy, request))
+        .persistence
+        .policy_documents()
+        .find_active(&|policy| policy_matches_check(policy, request))
+        .ok()
+        .flatten()
         .map(|policy| {
             let decision = policy
                 .payload

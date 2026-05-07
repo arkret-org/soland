@@ -238,20 +238,12 @@ fn snapshot_bundle_for_space(state: &AppState, space_id: &str) -> Option<Snapsho
             space.tags.iter().cloned().collect::<Vec<_>>(),
         )
     };
-    let meta = state
-        .space_meta
-        .lock()
-        .expect("space meta lock")
-        .get(space_id)
-        .cloned();
+    let meta = state.persistence.space_meta().get(space_id).ok().flatten();
     let messages = state
-        .messages
-        .lock()
-        .expect("messages lock")
-        .iter()
-        .filter(|message| message.space_id == space_id)
-        .cloned()
-        .collect::<Vec<_>>();
+        .persistence
+        .messages()
+        .list_for_space(space_id, 1024)
+        .unwrap_or_default();
     let generated_at = messages
         .iter()
         .map(|message| message.created_at)
@@ -385,6 +377,14 @@ mod operation_conformance_tests {
                 blob_root: std::env::temp_dir().join("soland-test-blobs"),
                 cors_allow_origin: None,
                 development_mode: true,
+                session_grant_introspection_url: None,
+                session_grant_introspection_bearer: None,
+                did_resolver_allow_methods: vec![
+                    "web".to_owned(),
+                    "key".to_owned(),
+                    "uuid".to_owned(),
+                ],
+                starid_webvh_resolver_url: None,
             },
             Db { pool: None },
         )
@@ -1117,4 +1117,3 @@ fn generate_invite_token(invite_id: &str, space_id: &str, invitee: &str) -> Stri
         sha256_hex(format!("{invite_id}:{space_id}:{invitee}").as_bytes())
     )
 }
-

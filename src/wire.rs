@@ -856,6 +856,14 @@ pub struct SessionGrantExchangeRequest {
     pub principal_did: String,
     pub device_id: String,
     pub display_name: Option<String>,
+    #[serde(default)]
+    pub introspection_proof: Option<SessionGrantIntrospectionProof>,
+}
+
+#[derive(Debug, Deserialize, serde::Serialize, salvo::oapi::ToSchema)]
+pub struct SessionGrantIntrospectionProof {
+    pub challenge: String,
+    pub proof_jwt: String,
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
@@ -968,6 +976,9 @@ pub struct IdentityDescribeResponse {
     pub supported_receipts: Vec<String>,
     pub protocol_version: String,
     pub profiles: Vec<String>,
+    pub resolver_policy: Value,
+    pub starid_profile: Value,
+    pub todos: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
@@ -1326,7 +1337,7 @@ pub fn describe(
                 ]
             },
             "scalability_constraints": {
-                "source": "contrix-spec/zh/conformance/scalability-constraints.md",
+                "source": "contrix-spec/spec/v1/zh/conformance/scalability-constraints.md",
                 "max_event_bytes": 65536,
                 "max_events_batch_submit": 1,
                 "max_federation_transaction_events": 500,

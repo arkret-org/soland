@@ -138,13 +138,6 @@ pub async fn device_authorize_pairing(
         .put(&device)
         .map_err(|error| AppError::internal(error.to_string()))?;
     let device_json = device_inventory_to_json(&device);
-    state
-        .devices
-        .lock()
-        .expect("devices lock")
-        .entry(session.actor.clone())
-        .or_default()
-        .insert(device_id.to_owned(), device_json.clone());
     let authorization_event = json!({
         "event_id": ids::generate_event_id(),
         "event_type": "cx.device.pairing.authorized",

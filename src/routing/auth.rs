@@ -17,26 +17,30 @@
 //! - `session_token_hash` / `token_for` — token derivation primitives
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use chrono::Duration;
+use chrono::{DateTime, Duration, Utc};
 use salvo::oapi::extract::JsonBody;
 use salvo::{http::StatusCode, prelude::*};
-use serde_json::{Value, json};
+use serde::{Deserialize, Serialize};
+use serde_json::json;
 use sha2::{Digest, Sha256};
 
 use crate::{
     JsonResult,
-    error::AppError,
+    error::{AppError, ErrorCode},
     ids, json_ok,
     state::{AppState, DeviceInventoryRecord, SessionRecord},
     wire::{
         DevLoginRequest, DevLoginResponse, LogoutResponse, SessionGrantExchangeRequest,
+        SessionGrantIntrospectionProof,
     },
 };
 
 use super::{
-    append_audit_log, bearer_token, device_inventory_to_json, now, render_error,
+    append_audit_log, bearer_token, now, render_error,
     validate_device_id, validate_did,
 };
+
+const PRINCIPAL_SESSION_BIND_SCOPE: &str = "urn:contrix:principal-server:session.bind";
 
 #[endpoint(
     operation_id = "cx.auth.dev_login",
@@ -105,18 +109,6 @@ pub async fn dev_login(
         .devices()
         .put(&device)
         .map_err(|error| AppError::internal(error.to_string()))?;
-    state
-        .sessions
-        .lock()
-        .expect("sessions lock")
-        .insert(session.token_hash.clone(), session.clone());
-    state
-        .devices
-        .lock()
-        .expect("devices lock")
-        .entry(body.actor.clone())
-        .or_default()
-        .insert(body.device_id.clone(), device_inventory_to_json(&device));
     append_audit_log(
         state,
         Some(&body.actor),
@@ -162,10 +154,20 @@ pub async fn exchange_session_grant(
         return Err(AppError::not_found("account is not registered"));
     }
 
-    // TODO(session-grant-exchange): replace this local bridge with real coauth
-    // session-grant introspection, audience checks, and session-public-key
-    // proof verification before minting a principal-server bearer session.
-    let expires_at = now() + Duration::hours(12);
+    let grant = validate_session_grant_binding(
+        state,
+        SessionGrantValidationInput {
+            grant_jwt: body.grant_jwt.as_str(),
+            principal_did: body.principal_did.as_str(),
+            device_id: body.device_id.as_str(),
+            proof: body.introspection_proof.as_ref(),
+        },
+    )
+    .await?;
+    let expires_at = grant
+        .as_ref()
+        .map(|grant| grant.expires_at)
+        .unwrap_or_else(|| now() + Duration::hours(12));
     let token = token_for(
         &body.principal_did,
         &body.device_id,
@@ -209,18 +211,6 @@ pub async fn exchange_session_grant(
         .devices()
         .put(&device)
         .map_err(|error| AppError::internal(error.to_string()))?;
-    state
-        .sessions
-        .lock()
-        .expect("sessions lock")
-        .insert(session.token_hash.clone(), session.clone());
-    state
-        .devices
-        .lock()
-        .expect("devices lock")
-        .entry(body.principal_did.clone())
-        .or_default()
-        .insert(body.device_id.clone(), device_inventory_to_json(&device));
     append_audit_log(
         state,
         Some(&body.principal_did),
@@ -228,6 +218,8 @@ pub async fn exchange_session_grant(
         json!({
             "device_id": body.device_id.clone(),
             "grant_bridge": true,
+            "coauth_introspection": grant.is_some(),
+            "one_time_use_consumed": grant.as_ref().map(|grant| grant.one_time_use_consumed).unwrap_or(false),
         }),
         "accepted",
     );
@@ -239,6 +231,142 @@ pub async fn exchange_session_grant(
         device_id: body.device_id,
         expires_at,
     })
+}
+
+#[derive(Debug, Serialize)]
+struct SessionGrantIntrospectionRequest<'a> {
+    grant_jwt: &'a str,
+    audience: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    proof: Option<&'a SessionGrantIntrospectionProof>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SessionGrantIntrospectionResponse {
+    active: bool,
+    status: String,
+    #[allow(dead_code)]
+    proof_required: bool,
+    one_time_use_consumed: bool,
+    grant: Option<SessionGrantIntrospectionGrant>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SessionGrantIntrospectionGrant {
+    subject: String,
+    device_id: Option<String>,
+    audience: String,
+    scopes: Vec<String>,
+    expires_at: DateTime<Utc>,
+}
+
+#[derive(Debug)]
+pub(crate) struct SessionGrantValidationInput<'a> {
+    pub grant_jwt: &'a str,
+    pub principal_did: &'a str,
+    pub device_id: &'a str,
+    pub proof: Option<&'a SessionGrantIntrospectionProof>,
+}
+
+#[derive(Debug)]
+pub(crate) struct ValidatedSessionGrant {
+    pub expires_at: DateTime<Utc>,
+    pub one_time_use_consumed: bool,
+}
+
+pub(crate) async fn validate_session_grant_binding(
+    state: &AppState,
+    input: SessionGrantValidationInput<'_>,
+) -> Result<Option<ValidatedSessionGrant>, AppError> {
+    let Some(introspection_url) = state.config.session_grant_introspection_url.as_deref() else {
+        if state.config.development_mode {
+            return Ok(None);
+        }
+        return Err(AppError::unsupported_feature(
+            "session grant exchange requires SERVERX_SESSION_GRANT_INTROSPECTION_URL outside development mode",
+        ));
+    };
+    let bearer = state
+        .config
+        .session_grant_introspection_bearer
+        .as_deref()
+        .ok_or_else(|| {
+            AppError::unsupported_feature(
+                "session grant exchange requires SERVERX_SESSION_GRANT_INTROSPECTION_BEARER",
+            )
+        })?;
+    let request = SessionGrantIntrospectionRequest {
+        grant_jwt: input.grant_jwt,
+        audience: state.config.service_did.as_str(),
+        proof: input.proof,
+    };
+    let response = reqwest::Client::new()
+        .post(introspection_url)
+        .bearer_auth(bearer)
+        .json(&request)
+        .send()
+        .await
+        .map_err(|error| {
+            AppError::new(
+                ErrorCode::TemporarilyUnavailable,
+                format!("session grant introspection request failed: {error}"),
+            )
+        })?;
+    if !response.status().is_success() {
+        return Err(AppError::capability_denied(format!(
+            "session grant introspection was rejected by coauth: {}",
+            response.status()
+        )));
+    }
+    let response = response.json::<SessionGrantIntrospectionResponse>().await.map_err(|error| {
+        AppError::new(
+            ErrorCode::TemporarilyUnavailable,
+            format!("invalid session grant introspection response: {error}"),
+        )
+    })?;
+    if !response.active || response.status != "active" {
+        return Err(AppError::capability_denied(format!(
+            "session grant is not active: {}",
+            response.status
+        )));
+    }
+    let grant = response.grant.ok_or_else(|| {
+        AppError::capability_denied("session grant introspection omitted grant metadata")
+    })?;
+    if grant.audience != state.config.service_did {
+        return Err(AppError::capability_denied(
+            "session grant audience does not match this principal server",
+        ));
+    }
+    if grant.subject != input.principal_did {
+        return Err(AppError::capability_denied(
+            "session grant subject does not match principal_did",
+        ));
+    }
+    if let Some(device_id) = grant.device_id.as_deref()
+        && device_id != input.device_id
+    {
+        return Err(AppError::capability_denied(
+            "session grant device does not match device_id",
+        ));
+    }
+    if !grant
+        .scopes
+        .iter()
+        .any(|scope| scope == PRINCIPAL_SESSION_BIND_SCOPE)
+    {
+        return Err(AppError::capability_denied(
+            "session grant is missing principal-server session.bind scope",
+        ));
+    }
+    if grant.expires_at <= now() {
+        return Err(AppError::unauthenticated("session grant has expired"));
+    }
+
+    Ok(Some(ValidatedSessionGrant {
+        expires_at: grant.expires_at,
+        one_time_use_consumed: response.one_time_use_consumed,
+    }))
 }
 
 #[endpoint(
@@ -270,11 +398,6 @@ pub async fn logout(
                 .sessions()
                 .put(&session)
                 .map_err(|error| AppError::internal(error.to_string()))?;
-            state
-                .sessions
-                .lock()
-                .expect("sessions lock")
-                .insert(token_hash.clone(), session.clone());
             Some(session)
         }
         _ => None,
@@ -290,10 +413,10 @@ pub async fn logout(
             json!({"device_id": session.device_id, "revoked_at": session.revoked_at}),
             "accepted",
         );
-        let mut queue = state.device_messages.lock().expect("device message lock");
-        queue.retain(|message| {
-            !(message.recipient == session.actor && message.device_id == session.device_id)
-        });
+        let _ = state
+            .persistence
+            .device_messages()
+            .purge(&session.actor, &session.device_id);
     }
     json_ok(LogoutResponse { ok: true, revoked })
 }
@@ -381,7 +504,7 @@ pub fn authenticated_session(
     Ok(session)
 }
 
-/// Persist + cache that the device is revoked. Used by `logout` and by the
+/// Persist that the device is revoked. Used by `logout` and by the
 /// device-management handlers in mod.rs.
 pub fn revoke_device_record(
     state: &AppState,
@@ -389,53 +512,21 @@ pub fn revoke_device_record(
     device_id: &str,
 ) -> Result<(), String> {
     let revoked_at = now();
-    let mut record = match state.persistence.devices().get(actor, device_id) {
-        Ok(record) => record,
-        Err(error) => {
-            return Err(error.to_string());
-        }
-    }
-    .or_else(|| {
-        state
-            .devices
-            .lock()
-            .expect("devices lock")
-            .get(actor)
-            .and_then(|devices| {
-                devices.get(device_id).and_then(|json| {
-                    Some(DeviceInventoryRecord {
-                        actor: actor.to_owned(),
-                        device_id: device_id.to_owned(),
-                        display_name: json
-                            .get("display_name")
-                            .and_then(Value::as_str)
-                            .map(ToString::to_string),
-                        verification_state: json
-                            .get("verification")
-                            .and_then(Value::as_str)
-                            .unwrap_or("unverified")
-                            .to_owned(),
-                        payload: json
-                            .get("payload")
-                            .cloned()
-                            .unwrap_or_else(|| json!({"device_id": device_id})),
-                        created_at: revoked_at,
-                        updated_at: revoked_at,
-                        revoked_at: Some(revoked_at),
-                    })
-                })
-            })
-    })
-    .unwrap_or_else(|| DeviceInventoryRecord {
-        actor: actor.to_owned(),
-        device_id: device_id.to_owned(),
-        display_name: None,
-        verification_state: "unverified".to_owned(),
-        payload: json!({"device_id": device_id}),
-        created_at: revoked_at,
-        updated_at: revoked_at,
-        revoked_at: Some(revoked_at),
-    });
+    let mut record = state
+        .persistence
+        .devices()
+        .get(actor, device_id)
+        .map_err(|error| error.to_string())?
+        .unwrap_or_else(|| DeviceInventoryRecord {
+            actor: actor.to_owned(),
+            device_id: device_id.to_owned(),
+            display_name: None,
+            verification_state: "unverified".to_owned(),
+            payload: json!({"device_id": device_id}),
+            created_at: revoked_at,
+            updated_at: revoked_at,
+            revoked_at: Some(revoked_at),
+        });
     record.revoked_at = Some(revoked_at);
     record.updated_at = revoked_at;
     state
@@ -443,24 +534,12 @@ pub fn revoke_device_record(
         .devices()
         .put(&record)
         .map_err(|error| error.to_string())?;
-    state
-        .devices
-        .lock()
-        .expect("devices lock")
-        .entry(actor.to_owned())
-        .or_default()
-        .insert(device_id.to_owned(), device_inventory_to_json(&record));
     Ok(())
 }
 
-/// Returns true if the in-memory or persistent device record has a
-/// `revoked_at` timestamp, or if the device cannot be located at all.
+/// Returns true if the persistent device record has a `revoked_at` timestamp,
+/// or if the device cannot be located at all.
 pub fn is_device_revoked(state: &AppState, actor: &str, device_id: &str) -> bool {
-    if let Some(actor_devices) = state.devices.lock().expect("devices lock").get(actor) {
-        if let Some(device) = actor_devices.get(device_id) {
-            return !device.get("revoked_at").is_none_or(Value::is_null);
-        }
-    }
     match state.persistence.devices().get(actor, device_id) {
         Ok(Some(record)) => record.revoked_at.is_some(),
         Ok(None) => match state.persistence.devices().list_for_actor(actor) {

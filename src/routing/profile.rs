@@ -34,12 +34,7 @@ pub async fn profile_presence(depot: &mut Depot, req: &mut Request, res: &mut Re
             return;
         }
     };
-    let presence = state
-        .presence
-        .lock()
-        .expect("presence lock")
-        .get(&did)
-        .cloned();
+    let presence = state.persistence.presence().get(&did).ok().flatten();
     let presence_json = presence
         .map(|record| {
             json!({
