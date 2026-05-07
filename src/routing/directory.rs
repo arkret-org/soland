@@ -141,7 +141,10 @@ pub async fn resolve_space(depot: &mut Depot, req: &mut Request, res: &mut Respo
             space_preview: space.clone(),
             stripped_state: vec![json!({
                 "type": "cx.space.discovery",
-                "state_key": "",
+                // Spec Phase 1 (2026-05-07) removed the envelope `state_key`
+                // field; `cx.space.discovery` is a singleton state slot keyed
+                // by `(space_id, kind)` only — no subject field on the wire.
+                "subject": "",
                 "content": {
                     "discoverability": space_discoverability(state, space.space_id.as_str()),
                     "directory_visibility": {

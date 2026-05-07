@@ -88,11 +88,13 @@
 > Source: `contrix-spec` 2026-05-07 finished Phase 1-5. See root [`../_todos.md` C10.B](../_todos.md) and [`../contrix-spec/_state_todos.md`](../contrix-spec/_state_todos.md).
 >
 > Gate: contrix-rust-sdk W1-W13 first (typed model). Once SDK exposes the new envelope / proof / kinds, soland consumes them rather than parsing raw JSON.
+>
+> **2026-05-07 进度**：SDK W1-W11 主体完成；soland T2-11/T2-12 已落地；Proof 字段补齐使 soland 在 SDK upgrade 后保持编译。`cargo test --lib` 78/78 通过。剩余 T2-13~T2-19 在 T1 reducer registry trait 设计就位后并行展开。
 
 | # | Task | Files | Notes |
 | --- | --- | --- | --- |
-| **T2-11** ⚠ | Remove envelope-level `state_key` from all wire surfaces. Rename `state_key_segment_encode` / `state_key_compose` in `src/ids.rs` to `subject_segment_encode` / `subject_compose`; clarify these are reducer-side composite-subject helpers, not wire fields. Update `src/routing/projection.rs`, `src/routing/directory.rs`, `src/schema.rs` references. | `src/ids.rs` (14 hits), `src/routing/projection.rs`, `src/routing/directory.rs`, `src/schema.rs`, all tests | spec Phase 1 |
-| **T2-12** ⚠ | Strip aggregate kinds `cx.space.policy.set` / `cx.space.lifecycle.set` from any handler / fixture / test that mentions them; replace with the 17 per-facet kinds. Quick search showed 0 hits in current source — confirm and lock in via lint. | `src/`, `tests/` | spec Phase 1 |
+| **T2-11** ⚠ | `[x]` Renamed `state_key_segment_encode` / `state_key_compose` → `subject_segment_encode` / `subject_compose` in `src/ids.rs`; deprecated aliases retained for transition; updated tests + docstrings. Also patched 8 `Proof { ... }` literal sites in `src/` to add `host_did: None, endorsed_at: None` (SDK W6 addition). 0 external callers of old names. | `src/ids.rs`, `src/routing/proof.rs` | spec Phase 1 / 4 |
+| **T2-12** ⚠ | `[x]` Confirmed 0 hits of `cx.space.policy.set` / `cx.space.lifecycle.set` in `src/` and `tests/` — soland never implemented the aggregate kinds, so no removal work needed. Lock-in done by spec lint at registry level. | `src/`, `tests/` | spec Phase 1 |
 | **T2-13** ⚠ | Wire schema: add `Space.space_writer_model: enum(hub, peer_mesh)` create-locked field + `Space.space_host: did` (required when hub). Reducer materialises both from `cx.space.create.payload.object` and the latest accepted `cx.space.host`. Reject `space_host` on peer_mesh Spaces. | `src/wire.rs`, `src/reducer/kinds/space_create.rs`, T1-3 stream | spec Phase 4 |
 | **T2-14** ⚠ | Add `proof.kind="host_endorsement"` proof type. Validate (a) proof.host_did equals current accepted Space Host (or new_host after `cx.space.host.transfer.activation_frontier`); (b) hub Space durable state event MUST carry exactly one `host_endorsement` proof or `proof_missing` reject; (c) `host_endorsement` on a peer_mesh Space MUST `schema_violation` reject. | `src/wire.rs`, new `src/host_endorsement.rs`, all reducer kinds | spec Phase 4 §3.3 |
 | **T2-15** | Genesis host bootstrap: `cx.space.create` itself does not require `host_endorsement`. The first `cx.space.host` event after create MUST be endorsed by the genesis host declared in `cx.space.create.payload.object.space_host`. host_did transfer MUST go through `cx.space.host.transfer`, not via plain `cx.space.host` updates. | `src/reducer/kinds/space_create.rs`, `src/reducer/kinds/space_host.rs` | spec Phase 4 §3.3 |
@@ -375,6 +377,23 @@ pub async fn send_message(
 | **B2** ✅ | ~~`auth_keys_device_messages_and_blobs_work` panics on `legacy_field_push_body["error"]["message"]`~~ Fixed — assertion was reading the wrong key. `render_error` produces `error.error` (string) per `src/routing/util.rs:38-40`; both occurrences in `tests/http_api.rs:4084,4102` now read `["error"]["error"]`. | `tests/http_api.rs` | F6 (old plan) |
 
 ---
+
+## Spec Phase 1-5 rollout changelog
+
+- **2026-05-07** — SDK 完成"彻底移除旧 state_key 模型"清理（移除 deprecated alias + 重命名 ResolvedStateEvent.state_key→subject / state_key_for_event→subject_for_event / state_map_key→state_slot_key）后，本仓同步收尾：
+  - 移除 `src/ids.rs` 中 `state_key_segment_encode` / `state_key_compose` 两个 deprecated alias + 对应 test；canonical 名是 `subject_segment_encode` / `subject_compose`
+  - `src/routing/directory.rs` stripped_state JSON 输出从 `"state_key": ""` 改为 `"subject": ""`（singleton 状态槽显式标注，非 wire envelope 字段）
+  - `src/routing/projection.rs` SQL 列名 `state_key` 暂保留 + comment 标注（DB 列名重命名是 Tier-0 follow-up 迁移工作；存储的值已经是 spec-correct subject）
+  - `cargo test --lib` 仍 77 通过（少 1 是因为移除了 `deprecated_state_key_aliases_still_resolve` 测试）
+- **2026-05-07** — SDK W1-W11 升级到位（contrix-rust-sdk 端 state-res / Proof / Space / consent / space_host typed model 全部落地，workspace 530+ tests 通过）后，本仓首轮跟进：
+  - T2-11 `ids.rs` rename + 8 处 `Proof { ... }` 补齐 `host_did: None, endorsed_at: None` 字段；deprecated alias 已在第二轮清理移除
+  - T2-12 旧聚合 kind 确认零命中（soland reducer 尚未实现 `cx.space.policy.set` / `cx.space.lifecycle.set`，无清理工作量）
+  - `cargo check --lib` + `cargo test --lib` 全绿（78 tests）
+  - 剩余 T2-13~T2-19（writer_model 字段、host_endorsement 验证、host transfer reducer、`cx.consent.*` reducer、invite gate、MLS application_state_ref 紧化）等待 T1-1 ReducerKind trait 设计就位后并行展开；T1-1 必须按新主键模型 `(space_id, kind, subject?)` 一次到位（spec 强制约束）
+
+## DB schema follow-up
+
+- **`space_state_events.state_key` 列重命名**（Tier-0 migration）：spec Phase 1 改名后，DB 列仍叫 `state_key` 是历史遗留。需要 Diesel migration 加一个 column rename + `src/schema.rs` 重新生成；预计 1 个 PR 范围内可独立完成，不阻塞其它工作。
 
 ## Quick status (2026-05-07)
 

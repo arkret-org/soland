@@ -69,13 +69,18 @@ pub fn generate_request_id() -> String {
     generate("req")
 }
 
-/// Percent-encode reserved characters in a state-key segment.
+/// Percent-encode reserved characters in a **state subject** segment.
 ///
-/// Per Contrix v1 (spec B-18), composite state keys are joined with `|`. Raw
-/// DIDs and identifiers may contain `|` themselves, which would collide with
-/// the separator. We encode `%`, `|`, and ASCII control characters using
-/// percent-escape (`%XX`) so that segments roundtrip uniquely.
-pub fn state_key_segment_encode(segment: &str) -> String {
+/// Per Contrix v1 (spec encoding §9.5; previously called "composite
+/// state_key"), composite **state subjects** are joined with `|`. Raw
+/// DIDs and identifiers may contain `|` themselves, which would collide
+/// with the separator. We encode `%`, `|`, and ASCII control characters
+/// using percent-escape (`%XX`) so that segments roundtrip uniquely.
+///
+/// Spec Phase 1 (2026-05-07) removed the envelope `state_key` field; this
+/// helper is now reducer-internal subject encoding, not a wire-format
+/// builder.
+pub fn subject_segment_encode(segment: &str) -> String {
     let mut out = String::with_capacity(segment.len());
     for byte in segment.bytes() {
         match byte {
@@ -93,21 +98,24 @@ pub fn state_key_segment_encode(segment: &str) -> String {
     out
 }
 
-/// Compose a canonical state key from segments.
+/// Compose a canonical composite **state subject** from segments.
 ///
-/// Each segment is percent-encoded for `%` and `|`, then joined with `|`. An
-/// empty input yields an empty key.
-pub fn state_key_compose<I, S>(segments: I) -> String
+/// Each segment is percent-encoded for `%` and `|`, then joined with `|`.
+/// An empty input yields an empty key. The result is a reducer-internal
+/// slot key; the wire-canonical form is
+/// `base64url(sha256(canonical_json([segments])))` per spec encoding §9.5.
+pub fn subject_compose<I, S>(segments: I) -> String
 where
     I: IntoIterator<Item = S>,
     S: AsRef<str>,
 {
     let parts: Vec<String> = segments
         .into_iter()
-        .map(|s| state_key_segment_encode(s.as_ref()))
+        .map(|s| subject_segment_encode(s.as_ref()))
         .collect();
     parts.join("|")
 }
+
 
 #[cfg(test)]
 mod tests {
@@ -159,25 +167,26 @@ mod tests {
     }
 
     #[test]
-    fn state_key_segment_escapes_separator_and_percent() {
-        assert_eq!(state_key_segment_encode("did:web:alice"), "did:web:alice");
-        assert_eq!(state_key_segment_encode("a|b"), "a%7Cb");
-        assert_eq!(state_key_segment_encode("100%"), "100%25");
-        assert_eq!(state_key_segment_encode("a%7Cb"), "a%257Cb");
+    fn subject_segment_escapes_separator_and_percent() {
+        assert_eq!(subject_segment_encode("did:web:alice"), "did:web:alice");
+        assert_eq!(subject_segment_encode("a|b"), "a%7Cb");
+        assert_eq!(subject_segment_encode("100%"), "100%25");
+        assert_eq!(subject_segment_encode("a%7Cb"), "a%257Cb");
     }
 
     #[test]
-    fn state_key_compose_avoids_collision() {
-        let direct = state_key_compose(["a|b", "c"]);
-        let split = state_key_compose(["a", "b", "c"]);
+    fn subject_compose_avoids_collision() {
+        let direct = subject_compose(["a|b", "c"]);
+        let split = subject_compose(["a", "b", "c"]);
         assert_ne!(direct, split, "encoding must prevent separator collision");
         assert_eq!(direct, "a%7Cb|c");
         assert_eq!(split, "a|b|c");
     }
 
     #[test]
-    fn state_key_compose_empty_segments_preserved() {
-        assert_eq!(state_key_compose::<_, &str>([]), "");
-        assert_eq!(state_key_compose(["", "x"]), "|x");
+    fn subject_compose_empty_segments_preserved() {
+        assert_eq!(subject_compose::<_, &str>([]), "");
+        assert_eq!(subject_compose(["", "x"]), "|x");
     }
+
 }

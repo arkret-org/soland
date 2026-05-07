@@ -822,6 +822,8 @@ mod canonical_conformance_vectors {
             domain: Some(TEST_SERVICE_DID.to_owned()),
             audience: Some(Audience::Single(TEST_SERVICE_DID.to_owned())),
             jws: "real-jws".to_owned(),
+            host_did: None,
+            endorsed_at: None,
         });
         commit
     }
@@ -847,6 +849,8 @@ mod canonical_conformance_vectors {
             domain: None,
             audience: None,
             jws: "some-jws".to_owned(),
+            host_did: None,
+            endorsed_at: None,
         });
         assert!(verifier.verify_commit(&commit).is_err());
     }
@@ -872,6 +876,8 @@ mod canonical_conformance_vectors {
             domain: None,
             audience: None,
             jws: "dev-proof".to_owned(),
+            host_did: None,
+            endorsed_at: None,
         });
         assert!(verifier.verify_commit(&commit).is_err());
     }
@@ -897,6 +903,8 @@ mod canonical_conformance_vectors {
             domain: Some("soland-dev".to_owned()),
             audience: None,
             jws: "dev-proof".to_owned(),
+            host_did: None,
+            endorsed_at: None,
         });
         assert!(verifier.verify_commit(&commit).is_ok());
     }
@@ -935,6 +943,8 @@ mod canonical_conformance_vectors {
             domain: None,
             audience: None,
             jws: "real-jws".to_owned(),
+            host_did: None,
+            endorsed_at: None,
         });
         // Should fail because payload_hash doesn't match commit digest.
         assert!(verifier.verify_commit(&commit).is_err());

@@ -6,13 +6,37 @@
 //! - Set fields: OR-Set (add-wins with tombstones)
 //! - Messages: append-only, revisions form chains
 //! - Ordered lists: fractional indexing
+//!
+//! # T1-1 architecture (2026-05-07)
+//!
+//! Each canonical Contrix event kind is a `Box<dyn ReducerKind>`
+//! registered in [`registry::ReducerRegistry`]. Subject derivation
+//! follows spec Phase 1's `(space_id, kind, subject?)` model — see
+//! [`registry::ReducerKind::subject_for_event`]. The legacy
+//! match-on-kind dispatcher in [`ProjectionState::apply`] remains as a
+//! thin wrapper that delegates to the registry; its body is one
+//! lookup + one trait call.
+
+pub mod kinds_impl;
+pub mod registry;
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::OnceLock;
 
 use contrix_sdk::Operation;
 use serde_json::Value;
 
 use crate::{hlc::ServerHlc, kinds};
+
+use self::registry::ReducerRegistry;
+
+/// Canonical reducer registry; built once at first access and reused for
+/// the lifetime of the process. T1-1 wires this through
+/// [`ProjectionState::apply`].
+fn registry() -> &'static ReducerRegistry {
+    static REGISTRY: OnceLock<ReducerRegistry> = OnceLock::new();
+    REGISTRY.get_or_init(ReducerRegistry::new)
+}
 
 /// In-memory projection state produced by the reducer.
 #[derive(Clone, Debug, Default)]
@@ -182,36 +206,16 @@ impl ProjectionState {
     }
 
     /// Apply a single operation and return the effect.
+    ///
+    /// **T1-1 (2026-05-07)**: dispatch goes through
+    /// [`registry::ReducerRegistry`]. The registry owns one
+    /// [`registry::ReducerKind`] trait object per canonical kind id;
+    /// subject derivation (spec Phase 1 `state_subject_field` rules)
+    /// runs before `project()`. The legacy match-on-kind body that
+    /// lived here is gone — every kind is registered in
+    /// [`crate::reducer::kinds_impl`].
     pub fn apply(&mut self, operation: &Operation, hlc: &ServerHlc) -> ProjectionEffect {
-        let now = operation.created_at;
-        let Some(kind) = kinds::canonical_kind_for_operation(operation) else {
-            return ProjectionEffect::Ignored;
-        };
-        match kind {
-            kinds::CX_MESSAGE_CREATE => self.apply_message(operation, now),
-            kinds::CX_MESSAGE_REVISE => self.apply_message_revise(operation, now),
-            kinds::CX_MESSAGE_REDACT | kinds::CX_REDACTION => self.apply_redaction(operation),
-            kinds::CX_REACTION_ADD => self.apply_reaction_add(operation, now),
-            kinds::CX_REACTION_REMOVE => self.apply_reaction_remove(operation),
-            kinds::CX_READ_MARKER => self.apply_read_marker(operation, now),
-            kinds::CX_ENTITY_CREATE => self.apply_entity_create(operation, now),
-            kinds::CX_ENTITY_UPDATE => self.apply_entity_update(operation, now, hlc),
-            kinds::CX_ENTITY_DELETE => self.apply_entity_delete(operation),
-            kinds::CX_FIELD_POSITION_MOVE | kinds::CX_FIELD_POSITION_REORDER => {
-                self.apply_entity_update(operation, now, hlc)
-            }
-            kinds::CX_RELATION_CREATE => self.apply_relation_create(operation, now),
-            kinds::CX_RELATION_UPDATE => self.apply_relation_update(operation, now, hlc),
-            kinds::CX_RELATION_DELETE => self.apply_relation_delete(operation),
-            kinds::CX_CONTAINER_MOVE_ITEM | kinds::CX_CONTAINER_REBALANCE => {
-                self.apply_container_position(operation, now)
-            }
-            kind if kinds::is_membership_kind(kind) => self.apply_membership(operation, now, kind),
-            kind if kinds::is_space_lifecycle_kind(kind) => {
-                self.apply_space_lifecycle(operation, now)
-            }
-            _ => ProjectionEffect::Ignored,
-        }
+        registry().project(operation, self, hlc)
     }
 
     /// Apply a batch of operations.
