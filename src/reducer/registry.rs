@@ -13,10 +13,12 @@
 //! `criticality`) is exposed via [`ReducerKind::component`] so unknown
 //! kinds are handled by their declared criticality.
 //!
-//! T1-2 will split the per-kind impls into `src/reducer/kinds/<kind>.rs`
-//! files; this module currently keeps them as small adapters delegating
-//! to the existing `ProjectionState::apply_*` handlers (zero-LOC behaviour
-//! change for migration).
+//! T1-2 (2026-05-07) split the per-kind impls into
+//! `src/reducer/kinds/<domain>.rs` files. Each domain file pulls in the
+//! shared `singleton_state_kind!` / `non_state_kind!` /
+//! `legacy_membership_kind!` / `consent_kind!` macros from
+//! `kinds/mod.rs`. Behaviour is identical to the pre-split
+//! `kinds_impl.rs`.
 
 use std::collections::BTreeMap;
 
@@ -160,7 +162,7 @@ impl ReducerRegistry {
     /// subject derivation is wired up but whose `project` method is a
     /// no-op pending T1-3.
     pub fn new() -> Self {
-        use crate::reducer::kinds_impl::*;
+        use crate::reducer::kinds::*;
         let mut registry = Self { kinds: BTreeMap::new() };
 
         // ── Active projecting kinds (T1-1 migration) ─────────────────

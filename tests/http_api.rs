@@ -1969,19 +1969,19 @@ async fn account_contacts_and_space_lifecycle_workflow() {
     .take_json()
     .await
     .unwrap();
-    let event_types: std::collections::BTreeSet<_> = lifecycle_events["events"]
+    let event_kinds: std::collections::BTreeSet<_> = lifecycle_events["events"]
         .as_array()
         .unwrap()
         .iter()
         .filter(|event| {
-            event["event_type"].as_str().is_some_and(|event_type| {
-                event_type.starts_with("cx.space.") || event_type.starts_with("cx.membership.")
+            event["event_kind"].as_str().is_some_and(|event_kind| {
+                event_kind.starts_with("cx.space.") || event_kind.starts_with("cx.membership.")
             })
         })
-        .map(|event| event["event_type"].as_str().unwrap().to_owned())
+        .map(|event| event["event_kind"].as_str().unwrap().to_owned())
         .collect();
     assert_eq!(
-        event_types,
+        event_kinds,
         [
             "cx.membership.join",
             "cx.membership.leave",
@@ -3106,7 +3106,7 @@ async fn device_pairing_challenge_and_authorization_surface_work() {
     assert_eq!(authorized["status"], "authorized");
     assert_eq!(authorized["device"]["device_id"], "dev_phone");
     assert_eq!(
-        authorized["authorization_event"]["event_type"],
+        authorized["authorization_event"]["event_kind"],
         "cx.device.pairing.authorized"
     );
     assert_eq!(
@@ -4920,12 +4920,13 @@ async fn repo_adapter_memory_submit_list_get_and_sync_work() {
             .await
             .unwrap();
     assert_eq!(backfill["events"][0]["event_id"], "cx:event:adapter-01");
-    assert_eq!(backfill["events"][0]["event_type"], "cx.message.create");
-    assert_eq!(backfill["events"][0]["input_event_type"], "message");
-    assert_eq!(
-        backfill["events"][0]["canonical_event_type"],
-        "cx.message.create"
-    );
+    assert_eq!(backfill["events"][0]["event_kind"], "cx.message.create");
+    // Spec M-01 collapsed `event_type / input_event_type /
+    // canonical_event_type` into `event_kind`; the legacy duplicates are
+    // gone from the wire.
+    assert!(backfill["events"][0].get("event_type").is_none());
+    assert!(backfill["events"][0].get("input_event_type").is_none());
+    assert!(backfill["events"][0].get("canonical_event_type").is_none());
     assert_eq!(
         backfill["events"][0]["operation_id"],
         "cx:operation:adapter-01"
@@ -5281,7 +5282,7 @@ fn dummy_proof() -> Proof {
         domain: None,
         audience: None,
         jws: "dev-proof".to_owned(),
-    },
-    host_did: None,
-    endorsed_at: None,
+        host_did: None,
+        endorsed_at: None,
+    }
 }

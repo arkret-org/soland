@@ -140,7 +140,7 @@ pub async fn device_authorize_pairing(
     let device_json = device_inventory_to_json(&device);
     let authorization_event = json!({
         "event_id": ids::generate_event_id(),
-        "event_type": "cx.device.pairing.authorized",
+        "event_kind": "cx.device.pairing.authorized",
         "actor": session.actor.clone(),
         "device_id": device_id,
         "authorized_by_device_id": session.device_id.clone(),

@@ -53,8 +53,12 @@ struct ProjectionEventRow {
     event_id: String,
     #[diesel(sql_type = Text)]
     space_id: String,
+    /// DB column is still `event_type` (M-01 schema rename is a separate
+    /// migration tracked in `_todos.md` "DB schema follow-up"); SQL
+    /// queries alias it as `event_kind` so the in-memory struct uses the
+    /// canonical name.
     #[diesel(sql_type = Text)]
-    event_type: String,
+    event_kind: String,
     #[diesel(sql_type = Text)]
     operation_type: String,
     #[diesel(sql_type = Nullable<Text>)]
@@ -74,9 +78,7 @@ pub fn projection_event_json(event: &ProjectionEventRecord) -> serde_json::Value
         "event_id": event.event_id,
         "message_id": message_id_from_event_id(&event.event_id),
         "space_id": event.space_id,
-        "event_type": event.event_type,
-        "input_event_type": event.input_event_type,
-        "canonical_event_type": event.canonical_event_type,
+        "event_kind": event.event_kind,
         "operation_type": event.operation_type,
         "operation_id": event.operation_id,
         "sender": event.sender,
@@ -183,13 +185,10 @@ pub fn projection_event_from_operation(
     sender_fallback: Option<&str>,
 ) -> ProjectionEventRecord {
     let event_id = operation_event_id(operation);
-    let canonical_event_type = kinds::canonical_kind_string(operation);
     ProjectionEventRecord {
         event_id,
         space_id: operation.space_id.to_string(),
-        event_type: canonical_event_type.clone(),
-        input_event_type: operation.object_type.clone(),
-        canonical_event_type,
+        event_kind: kinds::canonical_kind_string(operation),
         operation_type: operation_type_string(operation),
         operation_id: Some(operation.operation_id.to_string()),
         sender: operation
@@ -206,7 +205,7 @@ pub fn projection_event_from_operation(
 pub fn redaction_targets_from_events(events: &[ProjectionEventRecord]) -> HashSet<String> {
     events
         .iter()
-        .filter(|event| kinds::is_redaction_kind(&event.event_type))
+        .filter(|event| kinds::is_redaction_kind(&event.event_kind))
         .filter_map(|event| {
             event
                 .payload
@@ -225,7 +224,7 @@ pub fn redaction_targets_from_events(events: &[ProjectionEventRecord]) -> HashSe
 }
 
 pub fn event_is_visible(event: &ProjectionEventRecord, redacted: &HashSet<String>) -> bool {
-    !kinds::is_redaction_kind(&event.event_type) && !redacted.contains(&event.event_id)
+    !kinds::is_redaction_kind(&event.event_kind) && !redacted.contains(&event.event_id)
 }
 
 pub fn append_projection_event(state: &AppState, event: ProjectionEventRecord) {
@@ -349,10 +348,10 @@ pub fn load_projected_events_from_pg(
     };
     let mut conn = pool.get()?;
     let rows = sql_query(
-        "SELECT event_id, space_id, event_type, 'event' AS operation_type, operation_id, sender, payload, created_at \
+        "SELECT event_id, space_id, event_type AS event_kind, 'event' AS operation_type, operation_id, sender, payload, created_at \
          FROM events WHERE space_id = $1 \
          UNION ALL \
-         SELECT event_id, space_id, event_type, 'state' AS operation_type, operation_id, sender, payload, created_at \
+         SELECT event_id, space_id, event_type AS event_kind, 'state' AS operation_type, operation_id, sender, payload, created_at \
          FROM space_state_events WHERE space_id = $1 \
          ORDER BY created_at ASC, event_id ASC",
     )
@@ -363,9 +362,7 @@ pub fn load_projected_events_from_pg(
         .map(|row| ProjectionEventRecord {
             event_id: row.event_id,
             space_id: row.space_id,
-            event_type: row.event_type.clone(),
-            input_event_type: row.event_type.clone(),
-            canonical_event_type: row.event_type,
+            event_kind: row.event_kind,
             operation_type: row.operation_type,
             operation_id: row.operation_id,
             sender: row.sender,

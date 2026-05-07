@@ -169,9 +169,10 @@ pub struct CanonicalEventRecord {
 pub struct ProjectionEventRecord {
     pub event_id: String,
     pub space_id: String,
-    pub event_type: String,
-    pub input_event_type: String,
-    pub canonical_event_type: String,
+    /// Canonical Contrix event kind (e.g. `cx.message.create`). Spec
+    /// M-01 collapsed the legacy `event_type / input_event_type /
+    /// canonical_event_type` triple into this single field.
+    pub event_kind: String,
     pub operation_type: String,
     pub operation_id: Option<String>,
     pub sender: Option<String>,

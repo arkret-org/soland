@@ -565,7 +565,6 @@ fn outbound_push_resolved_contract_from_remote(
             .to_owned(),
         expected_operation_id: remote_contract
             .pointer("/delivery/operation_id")
-            .or_else(|| remote_contract.pointer("/delivery/event_type"))
             .and_then(Value::as_str)
             .unwrap_or(&fallback.expected_operation_id)
             .to_owned(),

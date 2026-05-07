@@ -17,7 +17,7 @@
 //! thin wrapper that delegates to the registry; its body is one
 //! lookup + one trait call.
 
-pub mod kinds_impl;
+pub mod kinds;
 pub mod registry;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -26,7 +26,7 @@ use std::sync::OnceLock;
 use contrix_sdk::Operation;
 use serde_json::Value;
 
-use crate::{hlc::ServerHlc, kinds};
+use crate::hlc::ServerHlc;
 
 use self::registry::ReducerRegistry;
 
@@ -213,7 +213,7 @@ impl ProjectionState {
     /// subject derivation (spec Phase 1 `state_subject_field` rules)
     /// runs before `project()`. The legacy match-on-kind body that
     /// lived here is gone — every kind is registered in
-    /// [`crate::reducer::kinds_impl`].
+    /// [`crate::reducer::kinds`].
     pub fn apply(&mut self, operation: &Operation, hlc: &ServerHlc) -> ProjectionEffect {
         registry().project(operation, self, hlc)
     }
@@ -806,12 +806,12 @@ impl ProjectionState {
         // payload — kick/leave/ban/unban/knock are distinct events and must
         // not be collapsed by ad-hoc payload sniffing.
         let action = match kind {
-            kinds::CX_MEMBERSHIP_JOIN => "join",
-            kinds::CX_MEMBERSHIP_LEAVE => "leave",
-            kinds::CX_MEMBERSHIP_KICK => "kick",
-            kinds::CX_MEMBERSHIP_BAN => "ban",
-            kinds::CX_MEMBERSHIP_UNBAN => "unban",
-            kinds::CX_MEMBERSHIP_KNOCK => "knock",
+            crate::kinds::CX_MEMBERSHIP_JOIN => "join",
+            crate::kinds::CX_MEMBERSHIP_LEAVE => "leave",
+            crate::kinds::CX_MEMBERSHIP_KICK => "kick",
+            crate::kinds::CX_MEMBERSHIP_BAN => "ban",
+            crate::kinds::CX_MEMBERSHIP_UNBAN => "unban",
+            crate::kinds::CX_MEMBERSHIP_KNOCK => "knock",
             _ => return ProjectionEffect::Ignored,
         };
         let member = operation
@@ -835,34 +835,34 @@ impl ProjectionState {
         }
 
         match kind {
-            kinds::CX_MEMBERSHIP_LEAVE
-            | kinds::CX_MEMBERSHIP_KICK
-            | kinds::CX_MEMBERSHIP_BAN => {
+            crate::kinds::CX_MEMBERSHIP_LEAVE
+            | crate::kinds::CX_MEMBERSHIP_KICK
+            | crate::kinds::CX_MEMBERSHIP_BAN => {
                 if let Some(space_members) = self.memberships.get_mut(&space_id) {
                     space_members.remove(&member);
                 }
-                if kind == kinds::CX_MEMBERSHIP_BAN {
+                if kind == crate::kinds::CX_MEMBERSHIP_BAN {
                     self.banned_members
                         .entry(space_id.clone())
                         .or_default()
                         .insert(member.clone());
                 }
             }
-            kinds::CX_MEMBERSHIP_UNBAN => {
+            crate::kinds::CX_MEMBERSHIP_UNBAN => {
                 // Lift the ban marker but do NOT auto-rejoin. A subsequent
                 // join event is required to add membership back.
                 if let Some(banned) = self.banned_members.get_mut(&space_id) {
                     banned.remove(&member);
                 }
             }
-            kinds::CX_MEMBERSHIP_KNOCK => {
+            crate::kinds::CX_MEMBERSHIP_KNOCK => {
                 // Knock records intent to join; it does not add membership.
                 self.knocking_members
                     .entry(space_id.clone())
                     .or_default()
                     .insert(member.clone());
             }
-            kinds::CX_MEMBERSHIP_JOIN => {
+            crate::kinds::CX_MEMBERSHIP_JOIN => {
                 let membership = MembershipState {
                     member: member.clone(),
                     space_id: space_id.clone(),

@@ -369,7 +369,7 @@ pub async fn export_space(
         .map(|event| {
             json!({
                 "event_id": event.event_id,
-                "event_type": event.event_type,
+                "event_kind": event.event_kind,
                 "operation_type": event.operation_type,
                 "operation_id": event.operation_id,
                 "sender": event.sender,
