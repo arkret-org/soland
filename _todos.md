@@ -36,8 +36,8 @@
 > `key_backup_restore_*` scaffold maps (T0-2c). 76/76 lib tests pass;
 > integration tests build clean.
 
-| # | Task | Files | Notes |
-| --- | --- | --- | --- |
+| # | Status | Task | Files | Notes |
+| --- | --- | --- | --- | --- |
 | **T0-1** ✅ phases 1+2 | ~~Expand `PersistenceStore` to cover every sub-store currently held as a mutex on `AppState`.~~ Done — 20 sub-stores in trait, all with Memory backend. | `src/persistence.rs`, `src/state.rs` | shipped 2026-05-07 |
 | **T0-2** ✅ phases 1+2 | ~~Drop the per-state-surface mutex fields from `AppState` and route every handler through `state.persistence.<store>()`.~~ Done for everything except the four `key_backup_restore_*` scaffold maps; tracked separately as T0-2c. | `src/state.rs`, `src/routing/*`, `tests/http_api.rs` | shipped 2026-05-07 |
 | **T0-2c** | Migrate `routing/key_backup_restore.rs` (~2K LOC, ~50 call sites) to use `state.persistence.key_backups()`. Today the file relies on raw `BTreeMap` semantics (`iter / retain / get_mut / values`) against the four mutex maps; the trait already exposes `put_ticket / get_ticket / put_executor_run / get_executor_run / put_approval_run / get_approval_run` plus snapshot helpers. The rewrite is mostly mechanical but cannot be batch-substituted because each call site needs slightly different shaping. After this lands, drop `key_backups / key_backup_restore_tickets / key_backup_restore_executor_runs / key_backup_restore_approval_runs` from `AppState` to reach the final 9-field shape. | `src/routing/key_backup_restore.rs`, `src/state.rs`, `src/persistence.rs` (may need `snapshot_tickets / snapshot_executor_runs / snapshot_approval_runs / delete_ticket / delete_executor_run / delete_approval_run` helpers) | follows phase-1 / phase-2 pattern |
@@ -83,63 +83,32 @@
 | **T2-9** | spec B-23 — blob metadata adds `space_id` association + download/GC checks. | `src/routing/blob.rs`, `migrations/*` | F-7 (old plan) |
 | **T2-10** | spec B-12 — MLS GroupContext extension `cx_app_state_ref` allocated a private codepoint (0xF000–0xFFFF) and registered. | `contrix-spec/spec/v1/artifacts/`, `src/wire.rs` | F-5 (old plan) |
 
-### Tier 2.5 · Spec Phase 1-5 wire-breaking rework ⚠ — **整体作废 (2026-05-08)**
-
-> ⚠ **Supersession 通知 (2026-05-08)**：`contrix-spec` 已用 **Move / Anchor / Lattice** 三原语替换旧 state slot / hub-writer / host endorsement 模型（见 [`../contrix-spec/_state_todos.md`](../contrix-spec/_state_todos.md) 与根 [`../_todos.md` C10.B](../_todos.md)）。本节中：
->
-> - **T2-11 / T2-12（state_key 重命名 / 旧聚合 kind 零命中确认）** — 仍有效；
-> - **T2-13（space_writer_model 字段）** — **整体作废**；
-> - **T2-14（host_endorsement proof）** — **整体作废**；
-> - **T2-15（genesis host bootstrap）** — **整体作废**；
-> - **T2-16（cx.consent.* reducer）** — 仍要做但改写为 consent cell or-set Move（不再是 reducer state slot）；
-> - **T2-17（invite consent gate）** — 仍要做但改为查询 consent cell join 值（不再是 reducer slot supersede 模型）；
-> - **T2-18（MLS application_state_ref）** — 改写为 `covered_frontier` cell precondition；
-> - **T2-19（pending_mls_binding）** — 改为 `covered_frontier_cell` 当前 join 值与 sync state 标注。
->
-> **新工作请见 Tier 2.6 · Move / Anchor / Lattice runtime（下方）。**
-
-> 历史 Source: `contrix-spec` 2026-05-07 finished Phase 1-5。
->
-> **2026-05-07 进度（已作废大部分）**：SDK W1-W11 主体完成；soland T2-11/T2-12 已落地；Proof 字段补齐使 soland 在 SDK upgrade 后保持编译。`cargo test --lib` 78/78 通过。
-
-| # | Task | Files | Notes |
-| --- | --- | --- | --- |
-| **T2-11** ⚠ | `[x]` Renamed `state_key_segment_encode` / `state_key_compose` → `subject_segment_encode` / `subject_compose` in `src/ids.rs`; deprecated aliases retained for transition; updated tests + docstrings. Also patched 8 `Proof { ... }` literal sites in `src/` to add `host_did: None, endorsed_at: None` (SDK W6 addition). 0 external callers of old names. | `src/ids.rs`, `src/routing/proof.rs` | spec Phase 1 / 4 |
-| **T2-12** ⚠ | `[x]` Confirmed 0 hits of `cx.space.policy.set` / `cx.space.lifecycle.set` in `src/` and `tests/` — soland never implemented the aggregate kinds, so no removal work needed. Lock-in done by spec lint at registry level. | `src/`, `tests/` | spec Phase 1 |
-| **T2-13** ⚠ | Wire schema: add `Space.space_writer_model: enum(hub, peer_mesh)` create-locked field + `Space.space_host: did` (required when hub). Reducer materialises both from `cx.space.create.payload.object` and the latest accepted `cx.space.host`. Reject `space_host` on peer_mesh Spaces. | `src/wire.rs`, `src/reducer/kinds/space_create.rs`, T1-3 stream | spec Phase 4 |
-| **T2-14** ⚠ | Add `proof.kind="host_endorsement"` proof type. Validate (a) proof.host_did equals current accepted Space Host (or new_host after `cx.space.host.transfer.activation_frontier`); (b) hub Space durable state event MUST carry exactly one `host_endorsement` proof or `proof_missing` reject; (c) `host_endorsement` on a peer_mesh Space MUST `schema_violation` reject. | `src/wire.rs`, new `src/host_endorsement.rs`, all reducer kinds | spec Phase 4 §3.3 |
-| **T2-15** | Genesis host bootstrap: `cx.space.create` itself does not require `host_endorsement`. The first `cx.space.host` event after create MUST be endorsed by the genesis host declared in `cx.space.create.payload.object.space_host`. host_did transfer MUST go through `cx.space.host.transfer`, not via plain `cx.space.host` updates. | `src/reducer/kinds/space_create.rs`, `src/reducer/kinds/space_host.rs` | spec Phase 4 §3.3 |
-| **T2-16** | `cx.consent.grant` / `cx.consent.revoke` reducer kinds. State slot keyed by `payload.consent_id`; revoke supersedes grant on same slot. Persist in holder's principal control Space; reject on shared collaboration Space (consent is holder-private). | `src/reducer/kinds/consent_grant.rs`, `src/reducer/kinds/consent_revoke.rs`, T1-3 stream | spec Phase 5 |
-| **T2-17** ⚠ | Consent gate on invite handler: `/api/v1/invites/*` and `cx.invite.create` reducer query holder consent (`(peer=requester, scope="invite" OR scope="any")`) before delivering. If not granted, route to quarantine inbox or reject as `consent_required` based on `cx.space.policy_components.preauth.require_consent`. | `src/routing/invites.rs`, `src/reducer/kinds/invite_create.rs` | spec Phase 5 §6.1 |
-| **T2-18** ⚠ | `cx.mls.commit.application_state_ref` validation tightening. Verify the commit's `policy_root_components` covers all `cx.profile.mls_state_binding.full.v1` declared `policy_root_required_components`; missing required component → reject. Same for `membership_frontier_required_components` and `capability_root_required_components`. | `src/mls.rs`, `src/reducer/kinds/mls_commit.rs` | spec Phase 3 |
-| **T2-19** | `pending_mls_binding` state on E2EE Space sync output. `/sync` and `/events/*` annotate state events that are accepted but not yet covered by an `application_state_ref`. Field: `state_binding_status: "covered" \| "pending_mls_binding"` on the sync envelope. | `src/sync.rs`, `src/routing/events.rs` | spec Phase 3 §2.5.1 |
-
----
-
 ### Tier 2.6 · Move / Anchor / Lattice runtime ⚠ 🔒
 
 > 起源：`contrix-spec` 2026-05-08 用 Move/Anchor/Lattice 三原语替换旧 state slot 模型。详见根 [`../_todos.md` C10.B](../_todos.md)。
 >
-> Gate: contrix-rust-sdk M0-M12 先就位（typed Move/Anchor/Lattice + apply_anchor 算法）。本仓在 SDK ready 后开始重写 reducer / federation / MLS / consent runtime。
+> Gate: contrix-rust-sdk M0-M12 已就位 (2026-05-08, SDK 0.2.0)，typed Move/Anchor/Lattice + apply_anchor 算法 + store traits 全可用。
+>
+> **2026-05-08 进度**：MAL-0 (旧产物清理，C11 已完成) + MAL-2 (`POST /api/v1/moves` 提交入口) + MAL-4 (`POST /api/v1/anchors` apply_anchor end-to-end) 已落地。AppState 持有 SDK `MemoryMoveStore` / `MemoryAnchorStore` / `MemoryCellStore` / `MemoryCellRegistry`（生产环境可换成 Pg 后端，trait 不变）。剩余 MAL-1 (LatticeKind trait 替代 ReducerKind, 47 stub 重写) / MAL-3 (anchorer 签发 worker) / MAL-5..MAL-15 是后续工作。
 
 | # | Task | Files | Notes |
 | --- | --- | --- | --- |
-| **MAL-0** ⚠ | 旧产物清理：删除 `src/host_endorser.rs`（如已落地）、`src/routing/federation_hub.rs`、reducer kinds 中 `space_host.rs` / `space_host_transfer.rs` stub。回退 ids.rs / wire.rs 中 host_did / endorsed_at / space_writer_model 引用。同步 SDK W6/W7/W8 删除。 | `src/`、`tests/` | 根 C11 |
-| **MAL-1** ⚠ | `LatticeKind` trait 替代 `ReducerKind`（按 cell_family 而非 event_kind 注册）。47 个旧 stub 移除或重写为 cell_family 实例（messages / reactions / membership / capability / consent / mls_epoch / covered_frontier / anchorer / 等）。 | `src/reducer/` 整体重命名 → `src/lattice/` 或保留 reducer 名但语义改 | T1 trait 替换 |
-| **MAL-2** ⚠ | Move 提交入口 `POST /api/v1/moves` | 新 `src/routing/moves.rs` | canonical bytes / sig / refs 校验；持久化为 pending Move |
-| **MAL-3** ⚠ | Anchorer 签发 worker | 新 `src/anchorer.rs` | 节点是 anchorer 时按 deterministic_order 收 pending Move → verify_move(M, pre_state) → 收纳进 Anchor.frontier → 计算 state_root → 单签 / multi / threshold → 发布 Anchor |
-| **MAL-4** ⚠ | Anchor 接收 / 验证 / apply `POST /api/v1/anchors` | 新 `src/routing/anchors.rs` + `src/state_root.rs` | predecessor_refs 已知 / frontier 单调 / anchorer_sig 校验 / batch verify Move / atomic apply / state_root 重算 / 失败 Anchor 不让 frontier Move 变 effective |
-| **MAL-5** ⚠ | per-cell Lattice runtime | 新 `src/lattice/` | 6 个 Lattice 实现（或调用 SDK lattice crate）；effective state 物化为 `(cell_id, value | bottom_diagnostics)` 表 |
-| **MAL-6** | `bottom_escalation_after_ms` 后台 scanner | `src/anchorer.rs` 或独立 worker | 超时 bottom emit notification；不自动选 winner |
-| **MAL-7** | `cx.consent.grant` / `revoke` 改写为 consent cell Move | `src/reducer/kinds/consent_*` 改写或重命名 | grant=add tag, revoke=remove tag 在 `cx:cell:cx.component.consent.v1:<consent_id>`（or-set） |
-| **MAL-8** | invite handler 改 consent gate 为 consent cell join 值查询 | `src/routing/invites.rs` | 不存在 / revoked → quarantine inbox 或 `consent_required` reject |
-| **MAL-9** ⚠ | MLS commit 走 Move 路径 | `src/mls.rs`、新 `src/lattice/covered_frontier.rs` | commit 是 Move：preconditions 含 `mls_epoch_cell.head_eq(prev_epoch)` + `covered_frontier_cell.contains(governance_frontier)`；缺 covered_frontier 不阻塞 governance Move |
-| **MAL-10** | Move 状态在 sync wire 上的暴露 | `src/sync.rs`、`src/routing/events.rs` | pending_anchor / effective / failed_precondition / failed_bottom / rejected_anchor / anchorer_paused（取代 T2-19 `state_binding_status`） |
-| **MAL-11** | Anchor compaction 流程 | `src/anchorer.rs` | signed compaction Anchor：frontier = effective_anchor_view，state_root 等价；保留 bottom diagnostics + 签名验证链 |
-| **MAL-12** ⚠ | federation 改造（去除 hub / peer_mesh 分叉路径） | `src/routing/federation*.rs` | 统一 Move 广播 + Anchor 拉取/推送；多 leaf 通过 effective_anchor_view 收敛 |
-| **MAL-13** | Snapshot / GC 规则更新 | `src/persistence.rs`、`src/routing/repo.rs` | 未被任何 Anchor frontier 覆盖且未被 active pending / recovery Move 引用 → MAY GC；已 Anchor Move MUST 保留审计 stub |
-| **MAL-14** | `redact` reducer 改写 | `src/reducer/kinds/messages.rs` 或新 `src/lattice/redaction.rs` | redaction effect 写 redaction cell（与目标 message cell 同 subject 的并行 cell）；ordered-log entry id 不删除，projection 隐藏 |
-| **MAL-15** | sodmin admin 接口暴露 anchor / lattice 字段 | `src/routing/admin.rs` 或 spaces.rs | `/api/admin/v1/spaces/{id}` 暴露 `anchor_profile` / 当前 anchorer cell value / `cell_lattices` / 最新 Anchor leaves / `anchorer_paused` 状态 |
+| **MAL-0** ⚠ | `[x]` | 旧产物清理：删除 `src/host_endorser.rs`（如已落地）、`src/routing/federation_hub.rs`、reducer kinds 中 `space_host.rs` / `space_host_transfer.rs` stub。回退 ids.rs / wire.rs 中 host_did / endorsed_at / space_writer_model 引用。同步 SDK W6/W7/W8 删除。 | `src/`、`tests/` | 根 C11 |
+| **MAL-1** ⚠ | `[ ]` | `LatticeKind` trait 替代 `ReducerKind`（按 cell_family 而非 event_kind 注册）。47 个旧 stub 移除或重写为 cell_family 实例（messages / reactions / membership / capability / consent / mls_epoch / covered_frontier / anchorer / 等）。 | `src/reducer/` 整体重命名 → `src/lattice/` 或保留 reducer 名但语义改 | T1 trait 替换 |
+| **MAL-2** ⚠ | `[x]` | Move 提交入口 `POST /api/v1/moves` | `src/routing/move_anchor.rs` | 已落地 (2026-05-08)：`submit_move` 接收 typed `Move`，调 SDK `verify_move` 走 5 步流水线（structural + sig payload_hash + capability placeholder + preconditions + effect-shape via cell registry），通过则 `MoveStore::put_pending`；返回 `{move_id, state: pending\|rejected, reason?}`。JWS 校验当前 placeholder（accept any）— 收紧到 production-mode signature verifier 是 T7-9 的范围。 |
+| **MAL-3** ⚠ | `[ ]` | Anchorer 签发 worker | 新 `src/anchorer.rs` | 节点是 anchorer 时按 deterministic_order 收 pending Move → verify_move(M, pre_state) → 收纳进 Anchor.frontier → 计算 state_root → 单签 / multi / threshold → 发布 Anchor |
+| **MAL-4** ⚠ | `[x]` | Anchor 接收 / 验证 / apply `POST /api/v1/anchors` | `src/routing/move_anchor.rs` | 已落地 (2026-05-08)：`submit_anchor` 调 SDK `apply_anchor` 走 8 步算法（structural → predecessor_refs 已知 → frontier 单调 → joined pre_state → deterministic_order 批 verify_move → atomic effect append → recompute state_root + 比对 → persist Anchor + mark Moves anchored）。state_root 不匹配自动 rollback。返回 `{anchor_id, accepted_move_ids[], rejected_moves[{move_id,reason}], post_state_root}`。`AnchorReject` 映射 → wire error_code (`schema_violation` / `internal_error`) + 409 Conflict。 |
+| **MAL-5** ⚠ | `[ ]` | per-cell Lattice runtime | 新 `src/lattice/` | 6 个 Lattice 实现（或调用 SDK lattice crate）；effective state 物化为 `(cell_id, value | bottom_diagnostics)` 表 |
+| **MAL-6** | `[ ]` | `bottom_escalation_after_ms` 后台 scanner | `src/anchorer.rs` 或独立 worker | 超时 bottom emit notification；不自动选 winner |
+| **MAL-7** | `[ ]` | `cx.consent.grant` / `revoke` 改写为 consent cell Move | `src/reducer/kinds/consent_*` 改写或重命名 | grant=add tag, revoke=remove tag 在 `cx:cell:cx.component.consent.v1:<consent_id>`（or-set） |
+| **MAL-8** | `[ ]` | invite handler 改 consent gate 为 consent cell join 值查询 | `src/routing/invites.rs` | 不存在 / revoked → quarantine inbox 或 `consent_required` reject |
+| **MAL-9** ⚠ | `[ ]` | MLS commit 走 Move 路径 | `src/mls.rs`、新 `src/lattice/covered_frontier.rs` | commit 是 Move：preconditions 含 `mls_epoch_cell.head_eq(prev_epoch)` + `covered_frontier_cell.contains(governance_frontier)`；缺 covered_frontier 不阻塞 governance Move |
+| **MAL-10** | `[ ]` | Move 状态在 sync wire 上的暴露 | `src/sync.rs`、`src/routing/events.rs` | pending_anchor / effective / failed_precondition / failed_bottom / rejected_anchor / anchorer_paused（取代 T2-19 `state_binding_status`） |
+| **MAL-11** | `[ ]` | Anchor compaction 流程 | `src/anchorer.rs` | signed compaction Anchor：frontier = effective_anchor_view，state_root 等价；保留 bottom diagnostics + 签名验证链 |
+| **MAL-12** ⚠ | `[ ]` | federation 改造（去除 hub / peer_mesh 分叉路径） | `src/routing/federation*.rs` | 统一 Move 广播 + Anchor 拉取/推送；多 leaf 通过 effective_anchor_view 收敛 |
+| **MAL-13** | `[ ]` | Snapshot / GC 规则更新 | `src/persistence.rs`、`src/routing/repo.rs` | 未被任何 Anchor frontier 覆盖且未被 active pending / recovery Move 引用 → MAY GC；已 Anchor Move MUST 保留审计 stub |
+| **MAL-14** | `[ ]` | `redact` reducer 改写 | `src/reducer/kinds/messages.rs` 或新 `src/lattice/redaction.rs` | redaction effect 写 redaction cell（与目标 message cell 同 subject 的并行 cell）；ordered-log entry id 不删除，projection 隐藏 |
+| **MAL-15** | `[ ]` | sodmin admin 接口暴露 anchor / lattice 字段 | `src/routing/admin.rs` 或 spaces.rs | `/api/admin/v1/spaces/{id}` 暴露 `anchor_profile` / 当前 anchorer cell value / `cell_lattices` / 最新 Anchor leaves / `anchorer_paused` 状态 |
 
 ---
 
@@ -445,9 +414,10 @@ pub async fn send_message(
 
 - **`space_state_events.state_key` 列重命名**（Tier-0 migration）：spec Phase 1 改名后，DB 列仍叫 `state_key` 是历史遗留。需要 Diesel migration 加一个 column rename + `src/schema.rs` 重新生成；预计 1 个 PR 范围内可独立完成，不阻塞其它工作。
 
-## Quick status (2026-05-07)
+## Quick status (2026-05-08)
 
 - **Code**: `src/` ~28K LOC; `tests/http_api.rs` 5.2K LOC / 42 tests.
+- **C10.B 进展**: MAL-0/2/4 已落地 (2026-05-08)。soland 接 SDK 0.2.0；`AppState` 持四 Memory store + CellRegistry；`POST /api/v1/moves` + `POST /api/v1/anchors` 走 SDK 流水线。86 lib tests + 3 new (move_anchor) 通过。
 - **Routes**: ~180 HTTP routes wired; many remain scaffold/echo (recovery,
   key-backup restore, push outbound bridge, MIMI, directory).
 - **Persistence**: PgStore covers `accounts / sessions / devices /

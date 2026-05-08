@@ -103,6 +103,8 @@ pub fn router_with_rate_limiter_config(
                 .push(Router::with_path("messages/send").post(send_message))
                 .push(Router::with_path("messages/revise").post(revise_message))
                 .push(Router::with_path("messages/redact").post(redact_message))
+                .push(Router::with_path("moves").post(submit_move))
+                .push(Router::with_path("anchors").post(submit_anchor))
                 .push(
                     Router::with_path("reactions")
                         .post(add_reaction)

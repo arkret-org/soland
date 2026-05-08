@@ -37,6 +37,14 @@ pub struct AppState {
     pub authz: AuthzEngine,
     pub spaces: Arc<Mutex<SpaceSearchIndex>>,
     pub did_resolver: Arc<Mutex<CompositeDidResolver>>,
+    /// Move/Anchor/Lattice runtime stores (C10.B MAL-2..MAL-5).
+    /// In-memory backends from the SDK; production deployments will
+    /// swap these for Pg-backed implementations behind the same trait
+    /// surface (`MoveStore` / `AnchorStore` / `CellStore` / `CellRegistry`).
+    pub move_store: Arc<contrix_sdk::state_res::MemoryMoveStore>,
+    pub anchor_store: Arc<contrix_sdk::state_res::MemoryAnchorStore>,
+    pub cell_store: Arc<contrix_sdk::state_res::MemoryCellStore>,
+    pub cell_registry: Arc<contrix_sdk::state_res::MemoryCellRegistry>,
     // T0-2c follow-up: migrate the four key-backup scaffold maps below into
     // `state.persistence.key_backups()` once the routing layer's iter/retain/
     // get_mut patterns are rewritten in terms of the trait.
@@ -365,6 +373,10 @@ impl AppState {
                 resolver.push(DidKeyResolver::new());
                 Arc::new(Mutex::new(resolver))
             },
+            move_store: Arc::new(contrix_sdk::state_res::MemoryMoveStore::default()),
+            anchor_store: Arc::new(contrix_sdk::state_res::MemoryAnchorStore::default()),
+            cell_store: Arc::new(contrix_sdk::state_res::MemoryCellStore::default()),
+            cell_registry: Arc::new(contrix_sdk::state_res::MemoryCellRegistry::new()),
             key_backups: Arc::new(Mutex::new(BTreeMap::new())),
             key_backup_restore_tickets: Arc::new(Mutex::new(BTreeMap::new())),
             key_backup_restore_executor_runs: Arc::new(Mutex::new(BTreeMap::new())),
