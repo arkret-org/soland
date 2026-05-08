@@ -35,7 +35,7 @@ use crate::{
 };
 
 use super::{
-    default_discussion_branch, discussion_branch_for_projection_event, flow_id_for_projection_event,
+    default_discussion_track, discussion_track_for_projection_event, flow_id_for_projection_event,
     flow_id_from_space_id, is_valid_discoverability, message_id_from_event_id, now, touch_space,
     validate_operation_policy, validate_operation_semantics,
 };
@@ -73,7 +73,7 @@ struct ProjectionEventRow {
 
 pub fn projection_event_json(event: &ProjectionEventRecord) -> serde_json::Value {
     let flow_id = flow_id_for_projection_event(event);
-    let branch = discussion_branch_for_projection_event(event, flow_id.as_deref());
+    let track = discussion_track_for_projection_event(event, flow_id.as_deref());
     let mut value = json!({
         "event_id": event.event_id,
         "message_id": message_id_from_event_id(&event.event_id),
@@ -89,8 +89,8 @@ pub fn projection_event_json(event: &ProjectionEventRecord) -> serde_json::Value
         if let Some(flow_id) = flow_id {
             object.insert("flow_id".to_owned(), json!(flow_id));
         }
-        if let Some(branch) = branch {
-            object.insert("branch".to_owned(), branch);
+        if let Some(track) = track {
+            object.insert("track".to_owned(), track);
         }
     }
     value
@@ -149,14 +149,14 @@ pub fn sync_timeline_message_json(message: &crate::reducer::MessageState) -> ser
     } else {
         flow_id_from_space_id(&message.space_id)
     };
-    let branch_id = message.thread_id.clone();
+    let track_id = message.thread_id.clone();
     json!({
         "kind": "cx.message.create",
         "event_id": message.event_id,
         "message_id": message_id_from_event_id(&message.event_id),
         "flow_id": flow_id,
         "space_id": message.space_id,
-        "branch": default_discussion_branch(&flow_id, &branch_id),
+        "track": default_discussion_track(&flow_id, &track_id),
         "thread_id": message.thread_id,
         "sender": message.sender,
         "content": message.content,

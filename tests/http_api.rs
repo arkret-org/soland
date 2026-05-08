@@ -277,7 +277,7 @@ async fn events_describe_and_single_event_submit_work() {
     assert_eq!(describe["event_envelope"]["schema"], "cx.schema.event.v1");
     assert_eq!(
         describe["registry"]["event_kind_registry_version"],
-        "2026-05-03"
+        "2026-05-08"
     );
     assert_eq!(
         describe["registry"]["source"],
@@ -543,7 +543,8 @@ async fn contrix_openapi_spec_contains_facet_projection_contracts() {
         "cx.events.submit",
         "cx.events.get",
         "cx.events.batch_get",
-        "cx.events.list",
+        "cx.events.query",
+        "cx.events.subscribe",
         "cx.events.frontier",
         "cx.repo.describe",
         "cx.repo.list_commits",
@@ -558,9 +559,8 @@ async fn contrix_openapi_spec_contains_facet_projection_contracts() {
         "cx.federation.pull_operations",
         "cx.federation.space_members",
         "cx.federation.verify_actor",
-        "cx.sync.client_sync",
+        "cx.sync.account",
         "cx.sync.typing",
-        "cx.sync.backfill",
         "cx.sync.backfill_gap",
         "cx.sync.get_snapshot_head",
         "cx.sync.get_snapshot_chunk",
@@ -837,7 +837,7 @@ async fn sync_backfill_exposes_prev_batch_and_limited_timeline_pages() {
     }
 
     let first_page: Value = TestClient::get(format!(
-        "http://server/api/v1/sync/backfill?space_id={space_id}&limit=1"
+        "http://server/api/v1/events?space_id={space_id}&limit=1"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -851,7 +851,7 @@ async fn sync_backfill_exposes_prev_batch_and_limited_timeline_pages() {
     let next_cursor = first_page["next_cursor"].as_str().unwrap();
 
     let second_page: Value = TestClient::get(format!(
-        "http://server/api/v1/sync/backfill?space_id={space_id}&limit=1&cursor={next_cursor}"
+        "http://server/api/v1/events?space_id={space_id}&limit=1&cursor={next_cursor}"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -879,7 +879,7 @@ async fn sync_backfill_exposes_prev_batch_and_limited_timeline_pages() {
     assert_eq!(gap["production_gap"], "durable_sync_position_validation");
 
     let mut invalid_cursor = TestClient::get(format!(
-        "http://server/api/v1/sync/backfill?space_id={space_id}&cursor=cx:event:not-found"
+        "http://server/api/v1/events?space_id={space_id}&cursor=cx:event:not-found"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -1961,7 +1961,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
     assert_eq!(deleted["deleted"], true);
 
     let lifecycle_events: Value = TestClient::get(format!(
-        "http://server/api/v1/sync/backfill?space_id={space_id}"
+        "http://server/api/v1/events?space_id={space_id}"
     ))
     .add_header("authorization", format!("Bearer {alice}"), true)
     .send(&app_from_state(state.clone()))
@@ -2932,7 +2932,7 @@ async fn broader_protocol_surface_returns_contract_shapes() {
     );
 
     let backfill: Value = TestClient::get(
-        "http://server/api/v1/sync/backfill?space_id=cx:space:01js0sp0000000000000000000",
+        "http://server/api/v1/events?space_id=cx:space:01js0sp0000000000000000000",
     )
     .send(&app())
     .await
@@ -4906,13 +4906,13 @@ async fn repo_adapter_memory_submit_list_get_and_sync_work() {
     assert_eq!(sync["operations"].as_array().unwrap().len(), 1);
 
     let unauthorized_backfill =
-        TestClient::get("http://server/api/v1/sync/backfill?space_id=cx:space:adapter&limit=1")
+        TestClient::get("http://server/api/v1/events?space_id=cx:space:adapter&limit=1")
             .send(&app_from_state(state.clone()))
             .await;
     assert_eq!(unauthorized_backfill.status_code.unwrap().as_u16(), 404);
 
     let backfill: Value =
-        TestClient::get("http://server/api/v1/sync/backfill?space_id=cx:space:adapter&limit=1")
+        TestClient::get("http://server/api/v1/events?space_id=cx:space:adapter&limit=1")
             .add_header("authorization", format!("Bearer {alice}"), true)
             .send(&app_from_state(state.clone()))
             .await
@@ -4934,13 +4934,13 @@ async fn repo_adapter_memory_submit_list_get_and_sync_work() {
     assert_eq!(backfill["limited"], false);
 
     let unauthorized_subscribe =
-        TestClient::get("http://server/api/v1/sync/subscribe?space_id=cx:space:adapter&limit=1")
+        TestClient::get("http://server/api/v1/events/subscribe?space_id=cx:space:adapter&limit=1")
             .send(&app_from_state(state.clone()))
             .await;
     assert_eq!(unauthorized_subscribe.status_code.unwrap().as_u16(), 404);
 
     let subscribe: Value =
-        TestClient::get("http://server/api/v1/sync/subscribe?space_id=cx:space:adapter&limit=1")
+        TestClient::get("http://server/api/v1/events/subscribe?space_id=cx:space:adapter&limit=1")
             .add_header("authorization", format!("Bearer {alice}"), true)
             .send(&app_from_state(state.clone()))
             .await
@@ -4986,7 +4986,7 @@ async fn repo_adapter_memory_submit_list_get_and_sync_work() {
     assert_eq!(redaction_submit["status"], "accepted");
 
     let redacted_backfill: Value =
-        TestClient::get("http://server/api/v1/sync/backfill?space_id=cx:space:adapter&limit=10")
+        TestClient::get("http://server/api/v1/events?space_id=cx:space:adapter&limit=10")
             .add_header("authorization", format!("Bearer {alice}"), true)
             .send(&app_from_state(state.clone()))
             .await
@@ -4996,7 +4996,7 @@ async fn repo_adapter_memory_submit_list_get_and_sync_work() {
     assert!(redacted_backfill["events"].as_array().unwrap().is_empty());
 
     let redacted_subscribe: Value =
-        TestClient::get("http://server/api/v1/sync/subscribe?space_id=cx:space:adapter&limit=10")
+        TestClient::get("http://server/api/v1/events/subscribe?space_id=cx:space:adapter&limit=10")
             .add_header("authorization", format!("Bearer {alice}"), true)
             .send(&app_from_state(state.clone()))
             .await

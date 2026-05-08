@@ -1,8 +1,8 @@
-//! Flow ID derivation + discussion-branch projection helpers.
+//! Flow ID derivation + discussion-track projection helpers.
 //!
 //! Flow IDs are derived from Space / Entity IDs via `cx:space:` → `cx:flow:`
 //! / `cx:entity:` → `cx:flow:` re-tagging (sha256 fallback for unrecognised
-//! prefixes). The discussion-branch projection wraps the same flow_id with a
+//! prefixes). The discussion-track projection wraps the same flow_id with a
 //! default `discussion` shape that the index handlers use to render flow-aware
 //! responses.
 //!
@@ -42,10 +42,10 @@ pub fn message_id_from_event_id(event_id: &str) -> String {
         .unwrap_or_else(|| format!("cx:message:{event_id}"))
 }
 
-pub fn default_discussion_branch(flow_id: &str, branch_id: &str) -> serde_json::Value {
+pub fn default_discussion_track(flow_id: &str, track_id: &str) -> serde_json::Value {
     json!({
-        "branch_id": branch_id,
-        "branch_kind": "discussion",
+        "track_id": track_id,
+        "track_kind": "discussion",
         "flow_id": flow_id,
         "enabled": true,
         "history_visibility": "joined",
@@ -69,17 +69,17 @@ pub fn flow_id_for_projection_event(event: &ProjectionEventRecord) -> Option<Str
         .or_else(|| Some(flow_id_from_space_id(&event.space_id)))
 }
 
-pub fn discussion_branch_for_projection_event(
+pub fn discussion_track_for_projection_event(
     event: &ProjectionEventRecord,
     flow_id: Option<&str>,
 ) -> Option<serde_json::Value> {
     let flow_id = flow_id?;
-    let branch_id = event
+    let track_id = event
         .payload
         .get("thread_id")
         .and_then(|value| value.as_str())
         .unwrap_or(event.space_id.as_str());
-    Some(default_discussion_branch(flow_id, branch_id))
+    Some(default_discussion_track(flow_id, track_id))
 }
 
 pub fn flow_history_visibility_for_space(state: &AppState, space_id: &str) -> &'static str {
@@ -114,8 +114,8 @@ pub fn flow_projection_for_space(
         "title": title,
         "description": summary,
         "state": if deleted { "archived" } else { "active" },
-        "primary_branch": "discussion",
-        "branches": {
+        "primary_track": "discussion",
+        "tracks": {
             "synthesis": {
                 "enabled": false,
                 "fields": {}

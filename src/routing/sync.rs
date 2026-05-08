@@ -1,13 +1,23 @@
 //! Client sync + snapshot handlers + the cursor-helper machinery they share
-//! with the index module.
+//! with the index / events modules.
 //!
-//! Surfaces:
+//! Surfaces (post-C17 wire-break, spec 2026-05-08):
 //! - `GET  /api/v1/sync/describe`
-//! - `POST /api/v1/sync`                    — full client_sync (timeline, presence, typing, to_device)
-//! - `POST /api/v1/sync/typing`             — set_typing (transient ephemeral)
-//! - `GET  /api/v1/sync/subscribe`          — long-poll subscribe
-//! - `GET  /api/v1/sync/backfill`
-//! - `GET  /api/v1/sync/backfill/gap`
+//! - `POST /api/v1/sync`                    — `cx.sync.account` (account-aggregate
+//!                                            sync: timeline, presence, typing,
+//!                                            to_device). Renamed from
+//!                                            `cx.sync.client_sync` — path unchanged.
+//! - `POST /api/v1/sync/typing`             — `cx.sync.typing` (transient ephemeral)
+//! - `GET  /api/v1/events/subscribe`        — `cx.events.subscribe` (replaces
+//!                                            `cx.sync.subscribe` /
+//!                                            `/api/v1/sync/subscribe`).
+//!                                            Multi-space / multi-actor stream;
+//!                                            frame `kind` field replaces `type`.
+//! - `GET  /api/v1/events`                  — `cx.events.query` (replaces
+//!                                            `cx.events.list` + `cx.sync.backfill`
+//!                                            via `direction=forward|backward`).
+//! - `GET  /api/v1/sync/backfill/gap`       — `cx.sync.backfill_gap`
+//!                                            (deployment-local; not in spec)
 //! - `GET  /api/v1/sync/snapshot-head`
 //! - `GET  /api/v1/sync/snapshot-chunk`
 //!
@@ -573,15 +583,23 @@ pub async fn set_typing(depot: &mut Depot, req: &mut Request, res: &mut Response
     }));
 }
 
+/// C17 (spec 2026-05-08): exposed at `GET /api/v1/events/subscribe` as
+/// `cx.events.subscribe`. Renamed from the legacy `cx.sync.subscribe` endpoint
+/// `GET /api/v1/sync/subscribe`. The selector now accepts `spaces[]` /
+/// `actors[]` repeated query args (this implementation still reads a single
+/// `spaces` value; multi-selector expansion is additive future work).
 #[endpoint]
-pub async fn sync_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+pub async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let Some(space_id) = query_param(req, "space_id") else {
+    // C17: selector now uses `spaces[]` (repeated query); accept `space_id`
+    // singular for transition.
+    let Some(space_id) = query_param(req, "spaces").or_else(|| query_param(req, "space_id"))
+    else {
         render_error(
             res,
             StatusCode::BAD_REQUEST,
             "missing_param",
-            "space_id is required",
+            "spaces is required",
         );
         return;
     };
@@ -603,7 +621,8 @@ pub async fn sync_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Resp
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(100)
         .min(100);
-    let cursor = query_param(req, "cursor");
+    // C17: cursor parameter renamed to `from`.
+    let cursor = query_param(req, "from").or_else(|| query_param(req, "cursor"));
     match projected_event_page(state, &space_id, cursor.as_deref(), limit) {
         Ok(Some(page)) => {
             let frames: Vec<_> = page
@@ -612,8 +631,9 @@ pub async fn sync_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Resp
                 .enumerate()
                 .map(|(index, event)| {
                     let cursor = event.event_id.clone();
+                    // C17: subscribe frame top field renamed `type` → `kind`.
                     json!({
-                        "type": "event",
+                        "kind": "event",
                         "seq": index + 1,
                         "cursor": cursor,
                         "payload": projection_event_json(&event)
@@ -642,8 +662,9 @@ pub async fn sync_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Resp
                             .operation_id
                             .clone()
                             .unwrap_or_else(|| projected.event_id.clone());
+                        // C17: subscribe frame top field renamed `type` → `kind`.
                         json!({
-                            "type": "event",
+                            "kind": "event",
                             "seq": seq,
                             "cursor": cursor,
                             "payload": projection_event_json(&projected)
@@ -683,15 +704,25 @@ pub async fn sync_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Resp
     }
 }
 
+/// C17 (spec 2026-05-08): `cx.events.query` at `GET /api/v1/events`.
+/// Folds the legacy `cx.events.list` (forward) and `cx.sync.backfill`
+/// (backward) into one op gated by the `direction` parameter (forward
+/// default). Reads from the projection layer so callers writing through
+/// `/api/v1/messages/send` see their messages here. Selector accepts
+/// `spaces[]` / `actors[]` repeated query args (singular `space_id` /
+/// `actor_id` accepted as transition fallback). Range: `from?` (replaces
+/// `cursor`) + `until?` + `direction`. Backward iteration is a follow-up;
+/// current build returns forward order regardless of `direction`.
 #[endpoint]
-pub async fn sync_backfill(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+pub async fn events_query(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let Some(space_id) = query_param(req, "space_id") else {
+    let Some(space_id) = query_param(req, "spaces").or_else(|| query_param(req, "space_id"))
+    else {
         render_error(
             res,
             StatusCode::BAD_REQUEST,
             "missing_param",
-            "space_id is required",
+            "spaces is required",
         );
         return;
     };
@@ -713,7 +744,11 @@ pub async fn sync_backfill(depot: &mut Depot, req: &mut Request, res: &mut Respo
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(100)
         .min(100);
-    let cursor = query_param(req, "cursor");
+    // C17: `cursor` → `from`; `direction` accepted but range cursor logic
+    // unchanged (forward today; backward is folded but still uses next_cursor
+    // semantics — actual backward iteration is a follow-up).
+    let cursor = query_param(req, "from").or_else(|| query_param(req, "cursor"));
+    let _direction = query_param(req, "direction");
     match projected_event_page(state, &space_id, cursor.as_deref(), limit) {
         Ok(Some(page)) => {
             let events = page.items.iter().map(projection_event_json).collect();

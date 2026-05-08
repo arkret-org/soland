@@ -70,7 +70,7 @@ pub use index::{
 };
 pub use keys::{keys_claim, keys_query, keys_upload};
 pub use flow::{
-    default_discussion_branch, derived_flow_id, discussion_branch_for_projection_event,
+    default_discussion_track, derived_flow_id, discussion_track_for_projection_event,
     flow_history_visibility_for_space, flow_id_for_projection_event, flow_id_from_entity_id,
     flow_id_from_space_id, flow_projection_for_space, message_id_from_event_id, retag_typed_id,
 };
@@ -95,9 +95,9 @@ pub use push_outbound::{
 };
 pub use sync::{
     SyncCursor, SyncCursorError, bound_cursor, bound_cursor_with_positions, client_sync,
-    decode_sync_cursor_value, normalized_strings, parse_and_validate_sync_cursor,
-    set_typing, snapshot_chunk, snapshot_head, sync_backfill, sync_describe, sync_filter_hash,
-    sync_gap_backfill, sync_subscribe, sync_token_for_client_sync,
+    decode_sync_cursor_value, events_query, events_subscribe, normalized_strings,
+    parse_and_validate_sync_cursor, set_typing, snapshot_chunk, snapshot_head, sync_describe,
+    sync_filter_hash, sync_gap_backfill, sync_token_for_client_sync,
 };
 pub use describe::{
     auth_bridge_describe, authz_describe, device_messages_describe, health, integration_describe,
@@ -111,7 +111,7 @@ pub use directory::{
 };
 pub use entity::{create_entity, delete_entity, get_entity, list_entities, update_entity};
 pub use events::{
-    batch_get_events, events_describe, events_frontier, get_event, list_events, submit_event,
+    batch_get_events, events_describe, events_frontier, get_event, submit_event,
 };
 pub use reaction::{add_reaction, remove_reaction};
 pub use read_marker::{get_read_markers, set_read_marker};

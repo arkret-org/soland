@@ -21,7 +21,7 @@ use crate::{
 
 use super::{
     append_audit_log, auth_or_render, demo_actors, device_inventory_to_json,
-    discussion_branch_for_projection_event, flow_id_for_projection_event,
+    discussion_track_for_projection_event, flow_id_for_projection_event,
     flow_id_from_space_id, flow_projection_for_space, policy_document_to_response,
     projection_event_from_operation, query_param, render_error, sha256_hex,
 };
@@ -257,7 +257,7 @@ fn admin_federation_items(state: &AppState) -> Vec<Value> {
                 "operation_type": operation.operation_type,
                 "canonical_kind": kinds::canonical_kind_string(&operation),
                 "flow_id": flow_id_for_projection_event(&projected),
-                "branch": discussion_branch_for_projection_event(
+                "track": discussion_track_for_projection_event(
                     &projected,
                     flow_id_for_projection_event(&projected).as_deref(),
                 ),

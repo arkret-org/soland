@@ -40,7 +40,7 @@ use crate::{
 
 use super::{
     authenticated_session, bound_cursor, bound_cursor_with_positions, checked_limit,
-    default_discussion_branch, demo_actors, facets_match, find_demo_entity,
+    default_discussion_track, demo_actors, facets_match, find_demo_entity,
     flow_id_from_space_id, flow_projection_for_space, message_id_from_event_id,
     normalized_strings, now, projection_event_json, query_limit, query_matches, query_param,
     render_error, sha256_hex, space_has_member, space_id_accessible, space_id_visible_to,
@@ -478,24 +478,24 @@ pub async fn index_entity(depot: &mut Depot, req: &mut Request, res: &mut Respon
 #[endpoint]
 pub async fn index_thread(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let branch_id = query_param(req, "branch_id")
+    let track_id = query_param(req, "track_id")
         .or_else(|| query_param(req, "thread_id"))
         .or_else(|| query_param(req, "id"));
-    let Some(branch_id) = branch_id else {
+    let Some(track_id) = track_id else {
         render_error(
             res,
             StatusCode::BAD_REQUEST,
             "missing_param",
-            "branch_id is required",
+            "track_id is required",
         );
         return;
     };
-    if branch_id.trim().is_empty() {
+    if track_id.trim().is_empty() {
         render_error(
             res,
             StatusCode::BAD_REQUEST,
             "invalid_param",
-            "branch_id must not be empty",
+            "track_id must not be empty",
         );
         return;
     }
@@ -503,7 +503,7 @@ pub async fn index_thread(depot: &mut Depot, req: &mut Request, res: &mut Respon
     // Use projection state for thread messages
     let projection = state.projection.lock().expect("projection lock");
     let events: Vec<_> = projection
-        .messages_for_thread(&branch_id)
+        .messages_for_thread(&track_id)
         .into_iter()
         .filter(|message| {
             message.redacted_at.is_none()
@@ -520,11 +520,11 @@ pub async fn index_thread(depot: &mut Depot, req: &mut Request, res: &mut Respon
         .unwrap_or_else(|| flow_id_from_space_id(first_space_id));
     res.render(Json(IndexThreadResponse {
         thread: json!({
-            "thread_id": branch_id,
-            "branch_id": branch_id,
+            "thread_id": track_id,
+            "track_id": track_id,
             "flow_id": flow_id,
-            "branch": default_discussion_branch(&flow_id, &branch_id),
-            "title": "Discussion Branch",
+            "track": default_discussion_track(&flow_id, &track_id),
+            "title": "Discussion Track",
             "space_id": first_space_id,
             "reply_count": events.len(),
         }),
@@ -619,7 +619,7 @@ pub async fn index_inbox(depot: &mut Depot, req: &mut Request, res: &mut Respons
                 "space_id": space.space_id,
                 "title": space.name,
                 "summary": space.description,
-                "branch": default_discussion_branch(
+                "track": default_discussion_track(
                     &flow_id_text,
                     space.space_id.as_str(),
                 ),
@@ -723,13 +723,13 @@ pub async fn index_search(depot: &mut Depot, req: &mut Request, res: &mut Respon
             continue;
         }
         let flow_id = flow_id_from_space_id(&message.space_id);
-        let branch = default_discussion_branch(&flow_id, &message.thread_id);
+        let track = default_discussion_track(&flow_id, &message.thread_id);
         let entity = json!({
             "event_id": message.event_id,
             "message_id": message_id_from_event_id(&message.event_id),
             "flow_id": flow_id,
             "space_id": message.space_id,
-            "branch": branch,
+            "track": track,
             "sender": message.sender,
             "facets": ["replyable", "renderable", "notifiable"],
             "content": message.content,

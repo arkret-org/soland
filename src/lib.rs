@@ -153,19 +153,22 @@ pub fn router_with_rate_limiter_config(
                 .push(Router::with_path("identity/log").get(identity_log))
                 .push(Router::with_path("identity/submit-did-operation").post(submit_did_operation))
                 .push(Router::with_path("identity/receipts").get(identity_receipts))
+                // C17 (spec 2026-05-08): cx.sync.client_sync → cx.sync.account
+                // (path unchanged); cx.sync.subscribe → cx.events.subscribe at
+                // /events/subscribe; cx.events.list + cx.sync.backfill folded
+                // into cx.events.query at GET /events.
                 .push(Router::with_path("sync/describe").get(sync_describe))
                 .push(Router::with_path("sync").post(client_sync))
                 .push(Router::with_path("sync/typing").post(set_typing))
-                .push(Router::with_path("sync/subscribe").get(sync_subscribe))
-                .push(Router::with_path("sync/backfill").get(sync_backfill))
                 .push(Router::with_path("sync/backfill/gap").get(sync_gap_backfill))
                 .push(Router::with_path("sync/snapshot-head").get(snapshot_head))
                 .push(Router::with_path("sync/snapshot-chunk").get(snapshot_chunk))
                 .push(Router::with_path("events/describe").get(events_describe))
+                .push(Router::with_path("events/subscribe").get(events_subscribe))
                 .push(
                     Router::with_path("events")
                         .post(submit_event)
-                        .get(list_events),
+                        .get(events_query),
                 )
                 .push(Router::with_path("events/batch-get").post(batch_get_events))
                 .push(Router::with_path("events/frontier").get(events_frontier))
@@ -451,9 +454,11 @@ fn contrix_openapi_doc(router: &Router) -> OpenApi {
             "x-operation-aliases",
             json!({
                 "events.submit": "cx.events.submit",
+                "events.query": "cx.events.query",
+                "events.subscribe": "cx.events.subscribe",
                 "index.query": "cx.index.query",
                 "repo.submit_commit": "cx.repo.submit_commit",
-                "sync.backfill": "cx.sync.backfill",
+                "sync.account": "cx.sync.account",
             }),
         )
         .add_extension(
@@ -694,8 +699,15 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "/api/v1/events",
         PathItemType::Get,
         "events",
-        "cx.events.list",
-        "list Event Envelopes",
+        "cx.events.query",
+        "query Event Envelopes (forward / backward)",
+    ),
+    (
+        "/api/v1/events/subscribe",
+        PathItemType::Get,
+        "events",
+        "cx.events.subscribe",
+        "subscribe to Event stream",
     ),
     (
         "/api/v1/events/frontier",
@@ -799,8 +811,8 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "/api/v1/sync",
         PathItemType::Post,
         "sync",
-        "cx.sync.client_sync",
-        "client sync",
+        "cx.sync.account",
+        "account-aggregate sync",
     ),
     (
         "/api/v1/sync/typing",
@@ -810,18 +822,11 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "set typing state",
     ),
     (
-        "/api/v1/sync/backfill",
-        PathItemType::Get,
-        "sync",
-        "cx.sync.backfill",
-        "sync backfill",
-    ),
-    (
         "/api/v1/sync/backfill/gap",
         PathItemType::Get,
         "sync",
         "cx.sync.backfill_gap",
-        "sync gap backfill",
+        "sync gap backfill (deployment-local)",
     ),
     (
         "/api/v1/sync/snapshot-head",

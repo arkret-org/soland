@@ -356,14 +356,23 @@ pub async fn batch_get_events(depot: &mut Depot, req: &mut Request, res: &mut Re
     }));
 }
 
+/// Internal durable-Event-store reader, kept for actor-scoped audit reads
+/// that bypass the projection layer. Not wired to a public route after C17 —
+/// the canonical `cx.events.query` path at `GET /api/v1/events` goes to the
+/// projection-aware handler in `routing/sync.rs::events_query` so message
+/// timeline reads keep working through `/api/v1/messages/send` →
+/// `events_query` round-trips.
+#[allow(dead_code)]
 #[endpoint]
-pub async fn list_events(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+async fn _legacy_list_events(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     let Some(session) = auth_or_render(state, req, res) else {
         return;
     };
-    let actor_id = query_param(req, "actor_id");
-    let space_id = query_param(req, "space_id");
+    // C17 selector: `actors` + `spaces` repeated query args; legacy singular
+    // names accepted during transition.
+    let actor_id = query_param(req, "actors").or_else(|| query_param(req, "actor_id"));
+    let space_id = query_param(req, "spaces").or_else(|| query_param(req, "space_id"));
     if let Some(actor_id) = actor_id.as_deref()
         && validate_did(actor_id).is_err()
     {
@@ -386,7 +395,10 @@ pub async fn list_events(depot: &mut Depot, req: &mut Request, res: &mut Respons
         );
         return;
     }
-    let cursor = query_param(req, "cursor");
+    // C17 cursor parameter: `from` replaces legacy `cursor`.
+    let cursor = query_param(req, "from").or_else(|| query_param(req, "cursor"));
+    let _direction = query_param(req, "direction"); // forward (default) | backward — backward iteration is follow-up.
+    let _until = query_param(req, "until"); // upper-bound cursor — follow-up.
     let limit = query_param(req, "limit")
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(50)
