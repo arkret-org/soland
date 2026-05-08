@@ -80,6 +80,15 @@ singleton_state_kind!(
 );
 
 singleton_state_kind!(
+    SpaceReadReceiptPolicy,
+    kind = "cx.space.read_receipt_policy",
+    component = "cx.component.space.read_receipt_policy.v1",
+    version = 1,
+    criticality = Criticality::Required,
+    delegate = |_op, _state, _hlc| ProjectionEffect::Ignored,
+);
+
+singleton_state_kind!(
     SpaceModerationPolicy,
     kind = "cx.space.moderation_policy",
     component = "cx.component.space.moderation_policy.v1",

@@ -195,6 +195,7 @@ impl ReducerRegistry {
         registry.register(SpacePolicyComponents);
         registry.register(SpaceHistorySharingPolicy);
         registry.register(SpaceAssetPrivacyPolicy);
+        registry.register(SpaceReadReceiptPolicy);
         registry.register(SpaceModerationPolicy);
         registry.register(SpacePlaintextVisibleServices);
         registry.register(SpaceMediaService);
@@ -328,6 +329,8 @@ mod tests {
         assert!(registry.lookup("cx.space.inheritance_policy").is_some());
         assert!(registry.lookup("cx.space.archive").is_some());
         assert!(registry.lookup("cx.space.tombstone").is_some());
+        // Read receipt disclosure policy (spec discovery/read-receipts.md §2.5).
+        assert!(registry.lookup("cx.space.read_receipt_policy").is_some());
         // Holder-private consent (cell or-set).
         assert!(registry.lookup("cx.consent.grant").is_some());
         assert!(registry.lookup("cx.consent.revoke").is_some());
