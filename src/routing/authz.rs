@@ -117,7 +117,7 @@ pub async fn authz_check(depot: &mut Depot, req: &mut Request, res: &mut Respons
         let members = spaces
             .get(
                 &contrix_sdk::SpaceId::new(space_id.clone())
-                    .unwrap_or_else(|_| contrix_sdk::SpaceId::new("cx:space:invalid").unwrap()),
+                    .unwrap_or_else(|_| contrix_sdk::SpaceId::new("cx:space:01904100-0000-7000-8000-ec4565bea379").unwrap()),
             )
             .map(|s| s.members.iter().map(|m| m.to_string()).collect::<Vec<_>>())
             .unwrap_or_default();

@@ -51,7 +51,7 @@ const MAX_LIST_LIMIT: usize = 1000;
 /// cell subject doesn't carry a recognisable space id. The MemoryCellRegistry
 /// resolves families uniformly across spaces; the scope only affects the
 /// per-Space lookup hook (currently inert for the in-memory backend).
-const SENTINEL_SPACE_SCOPE: &str = "cx:space:00000000-0000-0000-0000-000000000000";
+const SENTINEL_SPACE_SCOPE: &str = "cx:space:00000000-0000-7000-8000-000000000000";
 
 /// Response body for `GET /api/v1/admin/cells/{cell_id}`.
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]

@@ -459,7 +459,41 @@ pub fn router_with_rate_limiter_config(
                 ),
         )
         .push(Router::with_path("contrix/v1/check").post(policy_check))
-        .push(Router::with_path("contrix/v1/ice-config").post(ice_config));
+        .push(Router::with_path("contrix/v1/ice-config").post(ice_config))
+        // Stream H' admin surface (sodmin admin UI). Mounted at
+        // `/api/admin/v1/...` (NOT `/api/v1/admin/...`) per the sodmin
+        // client paths in `sodmin/src/api/anchor_admin.rs`. Anchorer cell
+        // get/reconfigure, Bottom diagnostics (per-space + global),
+        // Anchor DAG snapshot + compaction trigger.
+        .push(
+            Router::with_path("api/admin/v1")
+                .oapi_tag("admin")
+                .push(
+                    Router::with_path("spaces/{space_id}/anchorer")
+                        .get(admin_get_anchorer),
+                )
+                .push(
+                    Router::with_path("spaces/{space_id}/anchorer/reconfigure")
+                        .post(admin_reconfigure_anchorer),
+                )
+                .push(
+                    Router::with_path("spaces/{space_id}/bottom")
+                        .get(admin_list_space_bottom),
+                )
+                .push(Router::with_path("bottom").get(admin_list_bottom_global))
+                .push(
+                    Router::with_path("spaces/{space_id}/bottom/{cell_id}/repair")
+                        .post(admin_repair_bottom),
+                )
+                .push(
+                    Router::with_path("spaces/{space_id}/anchor-dag")
+                        .get(admin_get_anchor_dag),
+                )
+                .push(
+                    Router::with_path("spaces/{space_id}/anchor-dag/compact")
+                        .post(admin_compact_anchor_dag),
+                ),
+        );
     let doc = cached_contrix_openapi_doc(&router);
     router
         .unshift(

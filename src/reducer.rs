@@ -1317,7 +1317,7 @@ mod tests {
 
     fn make_operation(object_type: &str, space_id: &str, payload: Value) -> Operation {
         Operation::create(
-            contrix_sdk::OperationId::new(format!("cx:operation:test-{}", uuid::Uuid::new_v4()))
+            contrix_sdk::OperationId::new(format!("cx:operation:{}", uuid::Uuid::now_v7()))
                 .unwrap(),
             contrix_sdk::SpaceId::new(space_id).unwrap(),
             object_type,
@@ -1331,9 +1331,9 @@ mod tests {
         let hlc = ServerHlc::new("test");
         let op = make_operation(
             crate::kinds::CX_MESSAGE_CREATE,
-            "cx:space:test",
+            "cx:space:01904100-0000-7000-8000-cfc039892036",
             serde_json::json!({
-                "event_id": "cx:event:msg-1",
+                "event_id": "cx:event:01904100-0000-7000-8000-caaa6a15bce1",
                 "sender": "did:web:alice",
                 "thread_id": "cx:thread:1",
                 "content": {"body": "hello"}
@@ -1342,9 +1342,9 @@ mod tests {
         let effect = state.apply(&op, &hlc);
         assert!(matches!(effect, ProjectionEffect::MessageCreated(_)));
 
-        let msgs = state.messages_for_space("cx:space:test");
+        let msgs = state.messages_for_space("cx:space:01904100-0000-7000-8000-cfc039892036");
         assert_eq!(msgs.len(), 1);
-        assert_eq!(msgs[0].event_id, "cx:event:msg-1");
+        assert_eq!(msgs[0].event_id, "cx:event:01904100-0000-7000-8000-caaa6a15bce1");
     }
 
     #[test]
@@ -1355,9 +1355,9 @@ mod tests {
         state.apply(
             &make_operation(
                 crate::kinds::CX_MESSAGE_CREATE,
-                "cx:space:test",
+                "cx:space:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
-                    "event_id": "cx:event:msg-1",
+                    "event_id": "cx:event:01904100-0000-7000-8000-caaa6a15bce1",
                     "sender": "did:web:alice",
                     "thread_id": "cx:thread:1",
                     "content": {"body": "hello"}
@@ -1368,16 +1368,16 @@ mod tests {
         state.apply(
             &make_operation(
                 crate::kinds::CX_MESSAGE_REDACT,
-                "cx:space:test",
+                "cx:space:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
-                    "target_event_id": "cx:event:msg-1"
+                    "target_event_id": "cx:event:01904100-0000-7000-8000-caaa6a15bce1"
                 }),
             ),
             &hlc,
         );
 
-        assert!(state.messages_for_space("cx:space:test").is_empty());
-        assert!(state.redactions.contains("cx:event:msg-1"));
+        assert!(state.messages_for_space("cx:space:01904100-0000-7000-8000-cfc039892036").is_empty());
+        assert!(state.redactions.contains("cx:event:01904100-0000-7000-8000-caaa6a15bce1"));
     }
 
     #[test]
@@ -1388,30 +1388,30 @@ mod tests {
         state.apply(
             &make_operation(
                 crate::kinds::CX_REACTION_ADD,
-                "cx:space:test",
+                "cx:space:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
-                    "event_id": "cx:event:msg-1",
+                    "event_id": "cx:event:01904100-0000-7000-8000-caaa6a15bce1",
                     "actor": "did:web:alice",
                     "key": "👍"
                 }),
             ),
             &hlc,
         );
-        assert_eq!(state.reactions_for_event("cx:event:msg-1").len(), 1);
+        assert_eq!(state.reactions_for_event("cx:event:01904100-0000-7000-8000-caaa6a15bce1").len(), 1);
 
         state.apply(
             &make_operation(
                 crate::kinds::CX_REACTION_REMOVE,
-                "cx:space:test",
+                "cx:space:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
-                    "event_id": "cx:event:msg-1",
+                    "event_id": "cx:event:01904100-0000-7000-8000-caaa6a15bce1",
                     "actor": "did:web:alice",
                     "key": "👍"
                 }),
             ),
             &hlc,
         );
-        assert_eq!(state.reactions_for_event("cx:event:msg-1").len(), 0);
+        assert_eq!(state.reactions_for_event("cx:event:01904100-0000-7000-8000-caaa6a15bce1").len(), 0);
     }
 
     #[test]
@@ -1422,9 +1422,9 @@ mod tests {
         state.apply(
             &make_operation(
                 crate::kinds::CX_ENTITY_CREATE,
-                "cx:space:test",
+                "cx:space:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
-                    "entity_id": "cx:entity:task-1",
+                    "entity_id": "cx:entity:01904100-0000-7000-8000-ca33616973bb",
                     "entity_type": "task",
                     "title": "Do the thing"
                 }),
@@ -1432,22 +1432,22 @@ mod tests {
             &hlc,
         );
         assert_eq!(
-            state.entities_for_space("cx:space:test", None, &[]).len(),
+            state.entities_for_space("cx:space:01904100-0000-7000-8000-cfc039892036", None, &[]).len(),
             1
         );
 
         state.apply(
             &make_operation(
                 crate::kinds::CX_ENTITY_DELETE,
-                "cx:space:test",
+                "cx:space:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
-                    "entity_id": "cx:entity:task-1"
+                    "entity_id": "cx:entity:01904100-0000-7000-8000-ca33616973bb"
                 }),
             ),
             &hlc,
         );
         assert_eq!(
-            state.entities_for_space("cx:space:test", None, &[]).len(),
+            state.entities_for_space("cx:space:01904100-0000-7000-8000-cfc039892036", None, &[]).len(),
             0
         );
     }
@@ -1460,9 +1460,9 @@ mod tests {
         state.apply(
             &make_operation(
                 crate::kinds::CX_ENTITY_CREATE,
-                "cx:space:test",
+                "cx:space:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
-                    "entity_id": "cx:entity:task-1",
+                    "entity_id": "cx:entity:01904100-0000-7000-8000-ca33616973bb",
                     "entity_type": "task",
                     "facets": ["stateful", "rankable", "renderable"],
                     "title": "Do the thing"
@@ -1474,7 +1474,7 @@ mod tests {
         assert_eq!(
             state
                 .entities_for_space(
-                    "cx:space:test",
+                    "cx:space:01904100-0000-7000-8000-cfc039892036",
                     None,
                     &["stateful".to_owned(), "rankable".to_owned()]
                 )
@@ -1483,7 +1483,7 @@ mod tests {
         );
         assert_eq!(
             state
-                .entities_for_space("cx:space:test", None, &["documentable".to_owned()])
+                .entities_for_space("cx:space:01904100-0000-7000-8000-cfc039892036", None, &["documentable".to_owned()])
                 .len(),
             0
         );
@@ -1497,9 +1497,9 @@ mod tests {
         state.apply(
             &make_operation(
                 crate::kinds::CX_ENTITY_CREATE,
-                "cx:space:test",
+                "cx:space:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
-                    "entity_id": "cx:entity:task-1",
+                    "entity_id": "cx:entity:01904100-0000-7000-8000-ca33616973bb",
                     "entity_type": "task",
                     "fields": {"status": "todo", "rank": "F"}
                 }),
@@ -1509,10 +1509,10 @@ mod tests {
         state.apply(
             &make_operation(
                 crate::kinds::CX_FIELD_POSITION_MOVE,
-                "cx:space:test",
+                "cx:space:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
-                    "entity_id": "cx:entity:task-1",
-                    "view_id": "cx:view:board",
+                    "entity_id": "cx:entity:01904100-0000-7000-8000-ca33616973bb",
+                    "view_id": "cx:view:01904100-0000-7000-8000-3bbd26004285",
                     "group_by": "fields.status",
                     "to_value": "done",
                     "rank": "V"
@@ -1521,7 +1521,7 @@ mod tests {
             &hlc,
         );
 
-        let entity = state.entities.get("cx:entity:task-1").unwrap();
+        let entity = state.entities.get("cx:entity:01904100-0000-7000-8000-ca33616973bb").unwrap();
         assert_eq!(entity.fields["status"], "done");
         assert_eq!(entity.fields["rank"], "V");
     }
@@ -1534,9 +1534,9 @@ mod tests {
         state.apply(
             &make_operation(
                 crate::kinds::CX_ENTITY_CREATE,
-                "cx:space:test",
+                "cx:space:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
-                    "entity_id": "cx:entity:task-1",
+                    "entity_id": "cx:entity:01904100-0000-7000-8000-ca33616973bb",
                     "entity_type": "task",
                     "fields": {"status": "todo"}
                 }),
@@ -1546,9 +1546,9 @@ mod tests {
         state.apply(
             &make_operation(
                 crate::kinds::CX_LEGACY_TASK_MOVE,
-                "cx:space:test",
+                "cx:space:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
-                    "entity_id": "cx:entity:task-1",
+                    "entity_id": "cx:entity:01904100-0000-7000-8000-ca33616973bb",
                     "group_by": "fields.status",
                     "to_value": "blocked",
                     "rank": "M"
@@ -1556,15 +1556,15 @@ mod tests {
             ),
             &hlc,
         );
-        assert_eq!(state.entities["cx:entity:task-1"].fields["status"], "todo");
+        assert_eq!(state.entities["cx:entity:01904100-0000-7000-8000-ca33616973bb"].fields["status"], "todo");
 
         state.apply(
             &make_operation(
                 crate::kinds::CX_LEGACY_TASK_MOVE,
-                "cx:space:test",
+                "cx:space:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
                     "migration_profile": crate::kinds::LEGACY_KIND_MIGRATION_PROFILE,
-                    "entity_id": "cx:entity:task-1",
+                    "entity_id": "cx:entity:01904100-0000-7000-8000-ca33616973bb",
                     "group_by": "fields.status",
                     "to_value": "blocked",
                     "rank": "M"
@@ -1573,7 +1573,7 @@ mod tests {
             &hlc,
         );
         assert_eq!(
-            state.entities["cx:entity:task-1"].fields["status"],
+            state.entities["cx:entity:01904100-0000-7000-8000-ca33616973bb"].fields["status"],
             "blocked"
         );
     }
@@ -1586,7 +1586,7 @@ mod tests {
         state.apply(
             &make_operation(
                 crate::kinds::CX_MEMBERSHIP_JOIN,
-                "cx:space:test",
+                "cx:space:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
                     "member": "did:web:bob",
                     "action": "join",
@@ -1595,12 +1595,12 @@ mod tests {
             ),
             &hlc,
         );
-        assert_eq!(state.members_of_space("cx:space:test").len(), 1);
+        assert_eq!(state.members_of_space("cx:space:01904100-0000-7000-8000-cfc039892036").len(), 1);
 
         state.apply(
             &make_operation(
                 crate::kinds::CX_MEMBERSHIP_LEAVE,
-                "cx:space:test",
+                "cx:space:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
                     "member": "did:web:bob",
                     "action": "leave"
@@ -1608,7 +1608,7 @@ mod tests {
             ),
             &hlc,
         );
-        assert_eq!(state.members_of_space("cx:space:test").len(), 0);
+        assert_eq!(state.members_of_space("cx:space:01904100-0000-7000-8000-cfc039892036").len(), 0);
     }
 
     #[test]
@@ -1619,9 +1619,9 @@ mod tests {
         state.apply(
             &make_operation(
                 crate::kinds::CX_MESSAGE_CREATE,
-                "cx:space:test",
+                "cx:space:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
-                    "event_id": "cx:event:msg-1",
+                    "event_id": "cx:event:01904100-0000-7000-8000-caaa6a15bce1",
                     "sender": "did:web:alice",
                     "thread_id": "cx:thread:1",
                     "content": {"body": "original"}
@@ -1633,23 +1633,23 @@ mod tests {
         state.apply(
             &make_operation(
                 crate::kinds::CX_MESSAGE_REVISE,
-                "cx:space:test",
+                "cx:space:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
-                    "target_event_id": "cx:event:msg-1",
-                    "new_event_id": "cx:event:msg-1-rev1",
+                    "target_event_id": "cx:event:01904100-0000-7000-8000-caaa6a15bce1",
+                    "new_event_id": "cx:event:01904100-0000-7000-8000-c4daaba541fc",
                     "content": {"body": "revised"}
                 }),
             ),
             &hlc,
         );
 
-        let msgs = state.messages_for_space("cx:space:test");
+        let msgs = state.messages_for_space("cx:space:01904100-0000-7000-8000-cfc039892036");
         assert_eq!(msgs.len(), 2); // original + revision
         let revision = msgs
             .iter()
-            .find(|m| m.event_id == "cx:event:msg-1-rev1")
+            .find(|m| m.event_id == "cx:event:01904100-0000-7000-8000-c4daaba541fc")
             .unwrap();
-        assert_eq!(revision.revision_of.as_deref(), Some("cx:event:msg-1"));
+        assert_eq!(revision.revision_of.as_deref(), Some("cx:event:01904100-0000-7000-8000-caaa6a15bce1"));
     }
 
     // ── C10.B (2026-05-09 八轮) cells map tests ──
@@ -1658,7 +1658,7 @@ mod tests {
     fn cell_value_returns_none_for_unwritten_cell() {
         let state = ProjectionState::new();
         let cell_id = contrix_sdk::CellRef::new(
-            "cx:cell:cx.component.space.read_receipt_policy.v1:cx:space:test".to_owned(),
+            "cx:cell:cx.component.space.read_receipt_policy.v1:cx:space:01904100-0000-7000-8000-cfc039892036".to_owned(),
         )
         .unwrap();
         assert!(state.cell(&cell_id).is_none());
@@ -1670,7 +1670,7 @@ mod tests {
         use contrix_sdk::lattice::CellState;
         let mut state = ProjectionState::new();
         let cell_id = contrix_sdk::CellRef::new(
-            "cx:cell:cx.component.space.policy.v1:cx:space:test".to_owned(),
+            "cx:cell:cx.component.space.policy.v1:cx:space:01904100-0000-7000-8000-cfc039892036".to_owned(),
         )
         .unwrap();
         // Manually insert a Bottom state — represents concurrent conflict.
@@ -1704,7 +1704,7 @@ mod tests {
         state.apply(
             &make_operation(
                 crate::kinds::CX_MEMBERSHIP_JOIN,
-                "cx:space:test",
+                "cx:space:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
                     "member": "did:web:alice",
                     "role": "admin"
@@ -1715,7 +1715,7 @@ mod tests {
 
         // Structured cache populated with state="join" + role="admin".
         let m = state
-            .member("cx:space:test", "did:web:alice")
+            .member("cx:space:01904100-0000-7000-8000-cfc039892036", "did:web:alice")
             .expect("member entry should exist after join");
         assert_eq!(m.state, "join");
         assert_eq!(m.role, "admin");
@@ -1727,7 +1727,7 @@ mod tests {
         );
 
         // members_of_space (legacy semantics: only `state="join"`) sees Alice.
-        assert_eq!(state.members_of_space("cx:space:test").len(), 1);
+        assert_eq!(state.members_of_space("cx:space:01904100-0000-7000-8000-cfc039892036").len(), 1);
     }
 
     #[test]
@@ -1743,7 +1743,7 @@ mod tests {
             state.apply(
                 &make_operation(
                     kind,
-                    "cx:space:test",
+                    "cx:space:01904100-0000-7000-8000-cfc039892036",
                     serde_json::json!({"member": "did:web:bob", "role": "member"}),
                 ),
                 &hlc,
@@ -1752,15 +1752,15 @@ mod tests {
 
         // After ban, Bob is in `members_in_state("ban")` and NOT in
         // `members_of_space()` (which filters by `state="join"`).
-        assert_eq!(state.members_in_state("cx:space:test", "ban").len(), 1);
-        assert_eq!(state.members_of_space("cx:space:test").len(), 0);
+        assert_eq!(state.members_in_state("cx:space:01904100-0000-7000-8000-cfc039892036", "ban").len(), 1);
+        assert_eq!(state.members_of_space("cx:space:01904100-0000-7000-8000-cfc039892036").len(), 0);
         assert_eq!(state.member_fsm_state("did:web:bob").as_deref(), Some("ban"));
 
         // Unban → invited (per FSM ban→invited transition).
         state.apply(
             &make_operation(
                 crate::kinds::CX_MEMBERSHIP_UNBAN,
-                "cx:space:test",
+                "cx:space:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({"member": "did:web:bob"}),
             ),
             &hlc,
@@ -1769,8 +1769,8 @@ mod tests {
             state.member_fsm_state("did:web:bob").as_deref(),
             Some("invited")
         );
-        assert_eq!(state.members_in_state("cx:space:test", "ban").len(), 0);
-        assert_eq!(state.members_in_state("cx:space:test", "invited").len(), 1);
+        assert_eq!(state.members_in_state("cx:space:01904100-0000-7000-8000-cfc039892036", "ban").len(), 0);
+        assert_eq!(state.members_in_state("cx:space:01904100-0000-7000-8000-cfc039892036", "invited").len(), 1);
     }
 
     // ── C10.B (2026-05-09 十三轮) space_states 双层 tests ──
@@ -1782,7 +1782,7 @@ mod tests {
         state.apply(
             &make_operation(
                 crate::kinds::CX_SPACE_CREATE,
-                "cx:space:test",
+                "cx:space:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
                     "action": "create",
                     "owner": "did:web:alice",
@@ -1795,7 +1795,7 @@ mod tests {
         // Structured cache populated.
         let space = state
             .space_states
-            .get("cx:space:test")
+            .get("cx:space:01904100-0000-7000-8000-cfc039892036")
             .expect("space_states entry should exist after create");
         assert_eq!(space.owner.as_deref(), Some("did:web:alice"));
         assert_eq!(space.title.as_deref(), Some("Test Space"));
@@ -1803,7 +1803,7 @@ mod tests {
 
         // Ordered-log cell has one entry.
         let log = state
-            .space_create_log("cx:space:test")
+            .space_create_log("cx:space:01904100-0000-7000-8000-cfc039892036")
             .expect("create cell should be a Value(Array)");
         assert_eq!(log.len(), 1);
         assert_eq!(
@@ -1819,7 +1819,7 @@ mod tests {
         state.apply(
             &make_operation(
                 crate::kinds::CX_SPACE_UPDATE,
-                "cx:space:test",
+                "cx:space:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
                     "action": "update",
                     "owner": "did:web:alice",
@@ -1830,7 +1830,7 @@ mod tests {
         );
 
         let value = state
-            .space_organization_cell_value("cx:space:test")
+            .space_organization_cell_value("cx:space:01904100-0000-7000-8000-cfc039892036")
             .expect("organization cell should resolve to Value");
         assert_eq!(
             value.get("title").and_then(Value::as_str),
@@ -1852,27 +1852,27 @@ mod tests {
         state.apply(
             &make_operation(
                 crate::kinds::CX_SPACE_CREATE,
-                "cx:space:test",
+                "cx:space:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({"action": "create", "owner": "did:web:alice"}),
             ),
             &hlc,
         );
-        assert!(!state.space_is_destroyed("cx:space:test"));
+        assert!(!state.space_is_destroyed("cx:space:01904100-0000-7000-8000-cfc039892036"));
 
         // ...then destroy.
         state.apply(
             &make_operation(
                 crate::kinds::CX_SPACE_DESTROY,
-                "cx:space:test",
+                "cx:space:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({"action": "destroy"}),
             ),
             &hlc,
         );
 
         // Cell-keyed query returns true.
-        assert!(state.space_is_destroyed("cx:space:test"));
+        assert!(state.space_is_destroyed("cx:space:01904100-0000-7000-8000-cfc039892036"));
         // Structured cache mirror agrees.
-        let space = state.space_states.get("cx:space:test").unwrap();
+        let space = state.space_states.get("cx:space:01904100-0000-7000-8000-cfc039892036").unwrap();
         assert!(space.deleted);
     }
 
@@ -1884,13 +1884,13 @@ mod tests {
             state.apply(
                 &make_operation(
                     crate::kinds::CX_SPACE_CREATE,
-                    "cx:space:test",
+                    "cx:space:01904100-0000-7000-8000-cfc039892036",
                     serde_json::json!({"action": "create", "owner": owner}),
                 ),
                 &hlc,
             );
         }
-        let log = state.space_create_log("cx:space:test").unwrap();
+        let log = state.space_create_log("cx:space:01904100-0000-7000-8000-cfc039892036").unwrap();
         assert_eq!(log.len(), 2, "ordered-log should accumulate entries");
     }
 
@@ -1898,10 +1898,10 @@ mod tests {
     fn space_organization_cell_returns_none_for_uncreated_space() {
         let state = ProjectionState::new();
         assert!(state
-            .space_organization_cell_value("cx:space:never_created")
+            .space_organization_cell_value("cx:space:01904100-0000-7000-8000-0f863ed7d6d2")
             .is_none());
-        assert!(state.space_create_log("cx:space:never_created").is_none());
-        assert!(!state.space_is_destroyed("cx:space:never_created"));
+        assert!(state.space_create_log("cx:space:01904100-0000-7000-8000-0f863ed7d6d2").is_none());
+        assert!(!state.space_is_destroyed("cx:space:01904100-0000-7000-8000-0f863ed7d6d2"));
     }
 
     #[test]
@@ -1911,12 +1911,12 @@ mod tests {
         state.apply(
             &make_operation(
                 crate::kinds::CX_MEMBERSHIP_KNOCK,
-                "cx:space:test",
+                "cx:space:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({"member": "did:web:carol"}),
             ),
             &hlc,
         );
-        let knockers = state.members_in_state("cx:space:test", "knock");
+        let knockers = state.members_in_state("cx:space:01904100-0000-7000-8000-cfc039892036", "knock");
         assert_eq!(knockers.len(), 1);
         assert_eq!(knockers[0].member, "did:web:carol");
         assert_eq!(state.member_fsm_state("did:web:carol").as_deref(), Some("knock"));
@@ -1927,7 +1927,7 @@ mod tests {
         use contrix_sdk::lattice::CellState;
         let mut state = ProjectionState::new();
         let cell_id = contrix_sdk::CellRef::new(
-            "cx:cell:cx.component.space.read_receipt_policy.v1:cx:space:test".to_owned(),
+            "cx:cell:cx.component.space.read_receipt_policy.v1:cx:space:01904100-0000-7000-8000-cfc039892036".to_owned(),
         )
         .unwrap();
         state.cells.insert(
@@ -1939,7 +1939,7 @@ mod tests {
             })),
         );
         let value = state
-            .read_receipt_policy_cell_value("cx:space:test")
+            .read_receipt_policy_cell_value("cx:space:01904100-0000-7000-8000-cfc039892036")
             .expect("policy cell should resolve");
         assert_eq!(value.get("disclosure").and_then(Value::as_str), Some("required"));
         assert_eq!(value.get("visibility").and_then(Value::as_str), Some("members"));

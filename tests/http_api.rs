@@ -301,7 +301,7 @@ async fn events_describe_and_single_event_submit_work() {
     assert_eq!(describe["capabilities"]["witness"], false);
     assert_eq!(describe["capabilities"]["high_assurance"], false);
 
-    let first = signed_event_envelope("cx:event:events-minimal-01", 1, Vec::new());
+    let first = signed_event_envelope("cx:event:01904100-0000-7000-8000-f15c8ea06c11", 1, Vec::new());
     let submitted: Value = TestClient::post("http://server/api/v1/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&first)
@@ -311,7 +311,7 @@ async fn events_describe_and_single_event_submit_work() {
         .await
         .unwrap();
     assert_eq!(submitted["status"], "accepted");
-    assert_eq!(submitted["event_id"], "cx:event:events-minimal-01");
+    assert_eq!(submitted["event_id"], "cx:event:01904100-0000-7000-8000-f15c8ea06c11");
     assert_eq!(submitted["canonical_digest"], first["canonical_digest"]);
 
     let duplicate: Value = TestClient::post("http://server/api/v1/events")
@@ -325,23 +325,23 @@ async fn events_describe_and_single_event_submit_work() {
     assert_eq!(duplicate["status"], "duplicate");
     assert_eq!(duplicate["receipt"]["idempotent"], true);
 
-    let fetched: Value = TestClient::get("http://server/api/v1/events/cx:event:events-minimal-01")
+    let fetched: Value = TestClient::get("http://server/api/v1/events/cx:event:01904100-0000-7000-8000-f15c8ea06c11")
         .add_header("authorization", format!("Bearer {token}"), true)
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
         .await
         .unwrap();
-    assert_eq!(fetched["event"]["event_id"], "cx:event:events-minimal-01");
+    assert_eq!(fetched["event"]["event_id"], "cx:event:01904100-0000-7000-8000-f15c8ea06c11");
     assert_eq!(
         fetched["metadata"]["canonical_digest"],
         first["canonical_digest"]
     );
 
     let second = signed_event_envelope(
-        "cx:event:events-minimal-02",
+        "cx:event:01904100-0000-7000-8000-63f16896f0b0",
         2,
-        vec!["cx:event:events-minimal-01"],
+        vec!["cx:event:01904100-0000-7000-8000-f15c8ea06c11"],
     );
     let second_submitted: Value = TestClient::post("http://server/api/v1/events")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -354,7 +354,7 @@ async fn events_describe_and_single_event_submit_work() {
     assert_eq!(second_submitted["status"], "accepted");
 
     let mut artifact_kind_event =
-        signed_event_envelope("cx:event:events-artifact-flow-01", 3, Vec::new());
+        signed_event_envelope("cx:event:01904100-0000-7000-8000-df827a7269a3", 3, Vec::new());
     artifact_kind_event["kind"] = Value::String("cx.flow.create".to_owned());
     artifact_kind_event["schema_id"] = Value::String("cx.schema.flow.v1".to_owned());
     artifact_kind_event["canonical_digest"] =
@@ -370,7 +370,7 @@ async fn events_describe_and_single_event_submit_work() {
     assert_eq!(artifact_kind_submitted["status"], "accepted");
 
     let mut unknown_schema =
-        signed_event_envelope("cx:event:events-unknown-schema-01", 4, Vec::new());
+        signed_event_envelope("cx:event:01904100-0000-7000-8000-80be9d943c27", 4, Vec::new());
     unknown_schema["schema_id"] = Value::String("cx.schema.not_registered.v1".to_owned());
     unknown_schema["canonical_digest"] = Value::String(event_canonical_digest(&unknown_schema));
     let mut unknown_schema_response = TestClient::post("http://server/api/v1/events")
@@ -386,7 +386,7 @@ async fn events_describe_and_single_event_submit_work() {
     assert_eq!(unknown_schema_body["error"]["errcode"], "unknown_schema");
 
     let mut legacy_schema =
-        signed_event_envelope("cx:event:events-legacy-schema-01", 5, Vec::new());
+        signed_event_envelope("cx:event:01904100-0000-7000-8000-90ddb6d74138", 5, Vec::new());
     legacy_schema["schema_id"] = Value::String("cx.schema.room.v1".to_owned());
     legacy_schema["canonical_digest"] = Value::String(event_canonical_digest(&legacy_schema));
     let mut legacy_schema_response = TestClient::post("http://server/api/v1/events")
@@ -404,7 +404,7 @@ async fn events_describe_and_single_event_submit_work() {
         "legacy_contract_removed"
     );
 
-    let mut legacy_kind = signed_event_envelope("cx:event:events-legacy-kind-01", 6, Vec::new());
+    let mut legacy_kind = signed_event_envelope("cx:event:01904100-0000-7000-8000-0d77e6a44b05", 6, Vec::new());
     legacy_kind["kind"] = Value::String("cx.room.message".to_owned());
     legacy_kind["canonical_digest"] = Value::String(event_canonical_digest(&legacy_kind));
     let mut legacy_kind_response = TestClient::post("http://server/api/v1/events")
@@ -420,7 +420,7 @@ async fn events_describe_and_single_event_submit_work() {
     assert_eq!(legacy_kind_body["error"]["errcode"], "legacy_contract_removed");
 
     let mut legacy_field =
-        signed_event_envelope("cx:event:events-legacy-field-01", 7, Vec::new());
+        signed_event_envelope("cx:event:01904100-0000-7000-8000-bba6bd8c8c00", 7, Vec::new());
     legacy_field["payload"]["room_id"] = Value::String("!legacy:example.com".to_owned());
     let legacy_field_payload_hash = sha256_json(&legacy_field["payload"]);
     legacy_field["proofs"][0]["payload_hash"] = Value::String(legacy_field_payload_hash);
@@ -441,7 +441,7 @@ async fn events_describe_and_single_event_submit_work() {
     );
 
     let mut legacy_typed_id =
-        signed_event_envelope("cx:event:events-legacy-typed-id-01", 8, Vec::new());
+        signed_event_envelope("cx:event:01904100-0000-7000-8000-206613515f76", 8, Vec::new());
     legacy_typed_id["payload"]["flow_id"] = Value::String("cx:card:legacy-card".to_owned());
     let legacy_typed_id_payload_hash = sha256_json(&legacy_typed_id["payload"]);
     legacy_typed_id["proofs"][0]["payload_hash"] = Value::String(legacy_typed_id_payload_hash);
@@ -464,7 +464,7 @@ async fn events_describe_and_single_event_submit_work() {
     let batch: Value = TestClient::post("http://server/api/v1/events/batch-get")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
-            "event_ids": ["cx:event:events-minimal-01", "cx:event:missing"]
+            "event_ids": ["cx:event:01904100-0000-7000-8000-f15c8ea06c11", "cx:event:01904100-0000-7000-8000-30f4e405b35e"]
         }))
         .send(&app_from_state(state.clone()))
         .await
@@ -472,7 +472,7 @@ async fn events_describe_and_single_event_submit_work() {
         .await
         .unwrap();
     assert_eq!(batch["events"].as_array().unwrap().len(), 1);
-    assert_eq!(batch["missing"], serde_json::json!(["cx:event:missing"]));
+    assert_eq!(batch["missing"], serde_json::json!(["cx:event:01904100-0000-7000-8000-30f4e405b35e"]));
 
     let listed: Value =
         TestClient::get("http://server/api/v1/events?actor_id=did:web:alice.example&limit=10")
@@ -495,7 +495,7 @@ async fn events_describe_and_single_event_submit_work() {
             .unwrap();
     assert_eq!(frontier["actor_frontier"]["did:web:alice.example"], 3);
 
-    let mut conflicting = signed_event_envelope("cx:event:events-minimal-01", 4, Vec::new());
+    let mut conflicting = signed_event_envelope("cx:event:01904100-0000-7000-8000-f15c8ea06c11", 4, Vec::new());
     conflicting["payload"]["body"] = Value::String("different canonical body".to_owned());
     let payload_hash = sha256_json(&conflicting["payload"]);
     conflicting["proofs"][0]["payload_hash"] = Value::String(payload_hash);
@@ -883,7 +883,7 @@ async fn sync_backfill_exposes_prev_batch_and_limited_timeline_pages() {
     assert_eq!(gap["production_gap"], "durable_sync_position_validation");
 
     let mut invalid_cursor = TestClient::get(format!(
-        "http://server/api/v1/events?space_id={space_id}&cursor=cx:event:not-found"
+        "http://server/api/v1/events?space_id={space_id}&cursor=cx:event:01904100-0000-7000-8000-b8ab57920a67"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -1621,7 +1621,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
             "content": {
                 "mentions": [
                     "did:web:bob.example",
-                    {"type": "entity", "entity_id": "cx:entity:mentioned"}
+                    {"type": "entity", "entity_id": "cx:entity:01904100-0000-7000-8000-170d4f3bfc7b"}
                 ],
                 "blocks": [
                     {"kind": "text", "text": "structured hello"},
@@ -3232,11 +3232,11 @@ async fn webrtc_signaling_contracts_work() {
 async fn federation_rejects_replayed_operations() {
     let state = AppState::new(test_config(), Db { pool: None });
     let operation = Operation::create(
-        OperationId::new("cx:operation:federation-replay").unwrap(),
-        SpaceId::new("cx:space:federation").unwrap(),
+        OperationId::new("cx:operation:01904100-0000-7000-8000-4b147e97831e").unwrap(),
+        SpaceId::new("cx:space:01904100-0000-7000-8000-20d6cfd24be6").unwrap(),
         kinds::CX_MESSAGE_CREATE,
         serde_json::json!({
-            "event_id": "cx:event:federation-replay",
+            "event_id": "cx:event:01904100-0000-7000-8000-19d11d370b0e",
             "sender": "did:web:remote.example",
             "thread_id": "cx:thread:federation",
             "body": "from federation"
@@ -3247,7 +3247,7 @@ async fn federation_rejects_replayed_operations() {
         .json(&serde_json::json!({
             "origin": "did:web:remote.example",
             "destination": "did:web:soland.local",
-            "space_id": "cx:space:federation",
+            "space_id": "cx:space:01904100-0000-7000-8000-20d6cfd24be6",
             "service_binding_ref": "did:web:remote.example#soland",
             "operations": [operation.clone()]
         }))
@@ -3256,11 +3256,11 @@ async fn federation_rejects_replayed_operations() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(first["accepted"][0], "cx:operation:federation-replay");
+    assert_eq!(first["accepted"][0], "cx:operation:01904100-0000-7000-8000-4b147e97831e");
     assert!(first["rejected"].as_array().unwrap().is_empty());
 
     let pulled: Value = TestClient::get(
-        "http://server/api/v1/federation/pull-operations?space_id=cx:space:federation",
+        "http://server/api/v1/federation/pull-operations?space_id=cx:space:01904100-0000-7000-8000-20d6cfd24be6",
     )
     .send(&app_from_state(state.clone()))
     .await
@@ -3269,11 +3269,11 @@ async fn federation_rejects_replayed_operations() {
     .unwrap();
     assert_eq!(
         pulled["operations"][0]["operation_id"],
-        "cx:operation:federation-replay"
+        "cx:operation:01904100-0000-7000-8000-4b147e97831e"
     );
 
     let bootstrap: Value = TestClient::get(
-        "http://server/api/v1/federation/pull-operations?space_id=cx:space:federation&snapshot_bootstrap=true",
+        "http://server/api/v1/federation/pull-operations?space_id=cx:space:01904100-0000-7000-8000-20d6cfd24be6&snapshot_bootstrap=true",
     )
     .send(&app_from_state(state.clone()))
     .await
@@ -3282,7 +3282,7 @@ async fn federation_rejects_replayed_operations() {
     .unwrap();
     assert_eq!(
         bootstrap["snapshot_bootstrap"]["manifest"]["space_id"],
-        "cx:space:federation"
+        "cx:space:01904100-0000-7000-8000-20d6cfd24be6"
     );
     assert!(
         bootstrap["snapshot_bootstrap"]["state_hash"]
@@ -3295,7 +3295,7 @@ async fn federation_rejects_replayed_operations() {
         .json(&serde_json::json!({
             "origin": "did:web:remote.example",
             "destination": "did:web:soland.local",
-            "space_id": "cx:space:federation",
+            "space_id": "cx:space:01904100-0000-7000-8000-20d6cfd24be6",
             "service_binding_ref": "did:web:remote.example#soland",
             "operations": [operation]
         }))
@@ -3307,16 +3307,16 @@ async fn federation_rejects_replayed_operations() {
     assert!(replay["accepted"].as_array().unwrap().is_empty());
     assert_eq!(
         replay["rejected"][0]["operation_id"],
-        "cx:operation:federation-replay"
+        "cx:operation:01904100-0000-7000-8000-4b147e97831e"
     );
     assert_eq!(replay["rejected"][0]["reason"], "replay");
 
     let invalid_operation = Operation::create(
-        OperationId::new("cx:operation:federation-invalid-envelope").unwrap(),
-        SpaceId::new("cx:space:federation").unwrap(),
+        OperationId::new("cx:operation:01904100-0000-7000-8000-1cac81a395b6pe").unwrap(),
+        SpaceId::new("cx:space:01904100-0000-7000-8000-20d6cfd24be6").unwrap(),
         kinds::CX_MESSAGE_CREATE,
         serde_json::json!({
-            "event_id": "cx:event:federation-invalid-envelope",
+            "event_id": "cx:event:01904100-0000-7000-8000-97aea7e40a20",
             "sender": "did:web:remote.example",
             "encrypted": true,
             "content": {"ciphertext": "missing-envelope-fields"}
@@ -3326,7 +3326,7 @@ async fn federation_rejects_replayed_operations() {
         .json(&serde_json::json!({
             "origin": "did:web:remote.example",
             "destination": "did:web:soland.local",
-            "space_id": "cx:space:federation",
+            "space_id": "cx:space:01904100-0000-7000-8000-20d6cfd24be6",
             "service_binding_ref": "did:web:remote.example#soland",
             "operations": [invalid_operation]
         }))
@@ -3339,11 +3339,11 @@ async fn federation_rejects_replayed_operations() {
     assert_eq!(invalid_push["rejected"][0]["reason"], "invalid_semantics");
 
     let legacy_push_operation = Operation::create(
-        OperationId::new("cx:operation:federation-legacy-contract").unwrap(),
-        SpaceId::new("cx:space:federation").unwrap(),
+        OperationId::new("cx:operation:01904100-0000-7000-8000-94aa4d18b027").unwrap(),
+        SpaceId::new("cx:space:01904100-0000-7000-8000-20d6cfd24be6").unwrap(),
         kinds::CX_MESSAGE_CREATE,
         serde_json::json!({
-            "event_id": "cx:event:federation-legacy-contract",
+            "event_id": "cx:event:01904100-0000-7000-8000-73cff2049160",
             "sender": "did:web:remote.example",
             "room_id": "!legacy:example.com",
             "body": "legacy contract field"
@@ -3353,7 +3353,7 @@ async fn federation_rejects_replayed_operations() {
         .json(&serde_json::json!({
             "origin": "did:web:remote.example",
             "destination": "did:web:soland.local",
-            "space_id": "cx:space:federation",
+            "space_id": "cx:space:01904100-0000-7000-8000-20d6cfd24be6",
             "service_binding_ref": "did:web:remote.example#soland",
             "operations": [legacy_push_operation]
         }))
@@ -3365,7 +3365,7 @@ async fn federation_rejects_replayed_operations() {
     assert!(legacy_push["accepted"].as_array().unwrap().is_empty());
     assert_eq!(
         legacy_push["rejected"][0]["operation_id"],
-        "cx:operation:federation-legacy-contract"
+        "cx:operation:01904100-0000-7000-8000-94aa4d18b027"
     );
     assert_eq!(legacy_push["rejected"][0]["reason"], "invalid_semantics");
     assert_eq!(
@@ -3374,19 +3374,19 @@ async fn federation_rejects_replayed_operations() {
     );
 
     let redaction = Operation::create(
-        OperationId::new("cx:operation:federation-redaction").unwrap(),
-        SpaceId::new("cx:space:federation").unwrap(),
+        OperationId::new("cx:operation:01904100-0000-7000-8000-fd0b34f35181").unwrap(),
+        SpaceId::new("cx:space:01904100-0000-7000-8000-20d6cfd24be6").unwrap(),
         kinds::CX_MESSAGE_REDACT,
         serde_json::json!({
-            "event_id": "cx:event:federation-redaction",
-            "target_event_id": "cx:event:federation-replay"
+            "event_id": "cx:event:01904100-0000-7000-8000-9494a7271728",
+            "target_event_id": "cx:event:01904100-0000-7000-8000-19d11d370b0e"
         }),
     );
     let redaction_push: Value = TestClient::post("http://server/api/v1/federation/push-operations")
         .json(&serde_json::json!({
             "origin": "did:web:remote.example",
             "destination": "did:web:soland.local",
-            "space_id": "cx:space:federation",
+            "space_id": "cx:space:01904100-0000-7000-8000-20d6cfd24be6",
             "service_binding_ref": "did:web:remote.example#soland",
             "operations": [redaction]
         }))
@@ -3397,11 +3397,11 @@ async fn federation_rejects_replayed_operations() {
         .unwrap();
     assert_eq!(
         redaction_push["accepted"][0],
-        "cx:operation:federation-redaction"
+        "cx:operation:01904100-0000-7000-8000-fd0b34f35181"
     );
 
     let redacted_pull: Value = TestClient::get(
-        "http://server/api/v1/federation/pull-operations?space_id=cx:space:federation",
+        "http://server/api/v1/federation/pull-operations?space_id=cx:space:01904100-0000-7000-8000-20d6cfd24be6",
     )
     .send(&app_from_state(state.clone()))
     .await
@@ -3415,11 +3415,11 @@ async fn federation_rejects_replayed_operations() {
 async fn federation_transactions_are_idempotent_by_origin_and_body() {
     let state = AppState::new(test_config(), Db { pool: None });
     let operation = Operation::create(
-        OperationId::new("cx:operation:federation-txn-idempotent").unwrap(),
-        SpaceId::new("cx:space:federation-txn").unwrap(),
+        OperationId::new("cx:operation:01904100-0000-7000-8000-91a2f2e7a3b4").unwrap(),
+        SpaceId::new("cx:space:01904100-0000-7000-8000-788d17d38a52").unwrap(),
         kinds::CX_MESSAGE_CREATE,
         serde_json::json!({
-            "event_id": "cx:event:federation-txn-idempotent",
+            "event_id": "cx:event:01904100-0000-7000-8000-f10d061a12a7",
             "sender": "did:web:remote.example",
             "thread_id": "cx:thread:federation-txn",
             "body": "transaction body"
@@ -3441,7 +3441,7 @@ async fn federation_transactions_are_idempotent_by_origin_and_body() {
         .unwrap();
     assert_eq!(
         first["accepted"][0],
-        "cx:operation:federation-txn-idempotent"
+        "cx:operation:01904100-0000-7000-8000-91a2f2e7a3b4"
     );
 
     let duplicate: Value = TestClient::put("http://server/api/v1/federation/transactions/txn-idem")
@@ -3453,7 +3453,7 @@ async fn federation_transactions_are_idempotent_by_origin_and_body() {
         .unwrap();
     assert_eq!(
         duplicate["accepted"][0],
-        "cx:operation:federation-txn-idempotent"
+        "cx:operation:01904100-0000-7000-8000-91a2f2e7a3b4"
     );
     assert!(duplicate["rejected"].as_array().unwrap().is_empty());
 
@@ -3482,11 +3482,11 @@ async fn federation_transactions_are_idempotent_by_origin_and_body() {
     assert_eq!(wrong_destination.status_code.unwrap().as_u16(), 403);
 
     let legacy_transaction_operation = Operation::create(
-        OperationId::new("cx:operation:federation-txn-legacy-contract").unwrap(),
-        SpaceId::new("cx:space:federation-txn").unwrap(),
+        OperationId::new("cx:operation:01904100-0000-7000-8000-e4214375a21c").unwrap(),
+        SpaceId::new("cx:space:01904100-0000-7000-8000-788d17d38a52").unwrap(),
         kinds::CX_MESSAGE_CREATE,
         serde_json::json!({
-            "event_id": "cx:event:federation-txn-legacy-contract",
+            "event_id": "cx:event:01904100-0000-7000-8000-38e7dab19280",
             "sender": "did:web:remote.example",
             "flow_id": "cx:card:legacy-card",
             "body": "legacy typed id"
@@ -3508,7 +3508,7 @@ async fn federation_transactions_are_idempotent_by_origin_and_body() {
     assert!(legacy_transaction["accepted"].as_array().unwrap().is_empty());
     assert_eq!(
         legacy_transaction["rejected"][0]["operation_id"],
-        "cx:operation:federation-txn-legacy-contract"
+        "cx:operation:01904100-0000-7000-8000-e4214375a21c"
     );
     assert_eq!(
         legacy_transaction["rejected"][0]["reason"],
@@ -3719,7 +3719,7 @@ async fn push_profile_and_moderation_contracts_work() {
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "space_id": "cx:space:0196419b-0000-7000-8000-000000000000",
-            "target_ref": "cx:event:demo",
+            "target_ref": "cx:event:01904100-0000-7000-8000-4a4116cba4e8",
             "reason": "spam",
             "reporter": "did:web:alice.example"
         }))
@@ -3753,7 +3753,7 @@ async fn push_profile_and_moderation_contracts_work() {
     let unauthenticated_report = TestClient::post("http://server/api/v1/moderation/report")
         .json(&serde_json::json!({
             "space_id": "cx:space:0196419b-0000-7000-8000-000000000000",
-            "target_ref": "cx:event:demo",
+            "target_ref": "cx:event:01904100-0000-7000-8000-4a4116cba4e8",
             "reason": "spam",
             "reporter": "did:web:alice.example"
         }))
@@ -4586,11 +4586,11 @@ async fn plaintext_policy_applies_to_repo_and_federation_message_ingest() {
     let space_id = locked_space["space_id"].as_str().unwrap().to_owned();
 
     let operation = Operation::create(
-        OperationId::new("cx:operation:plaintext-policy-repo").unwrap(),
+        OperationId::new("cx:operation:01904100-0000-7000-8000-1af1d5b68700").unwrap(),
         SpaceId::new(space_id.clone()).unwrap(),
         kinds::CX_MESSAGE_CREATE,
         serde_json::json!({
-            "event_id": "cx:event:plaintext-policy-repo",
+            "event_id": "cx:event:01904100-0000-7000-8000-6fa8a665b47e",
             "sender": "did:web:alice.example",
             "content": {"body": "plaintext should be denied"},
             "encrypted": false
@@ -4603,7 +4603,7 @@ async fn plaintext_policy_applies_to_repo_and_federation_message_ingest() {
         .unwrap()
         .expect("space creation records a repo head");
     let mut commit = Commit::new(
-        CommitId::new("cx:commit:plaintext-policy-repo").unwrap(),
+        CommitId::new("cx:commit:01904100-0000-7000-8000-4a08399d5516").unwrap(),
         "did:web:alice.example",
         Did::new("did:web:alice.example").unwrap(),
         2,
@@ -4634,11 +4634,11 @@ async fn plaintext_policy_applies_to_repo_and_federation_message_ingest() {
     }
 
     let federation_operation = Operation::create(
-        OperationId::new("cx:operation:plaintext-policy-federation").unwrap(),
+        OperationId::new("cx:operation:01904100-0000-7000-8000-b565a2b993c0").unwrap(),
         SpaceId::new(space_id.clone()).unwrap(),
         kinds::CX_MESSAGE_CREATE,
         serde_json::json!({
-            "event_id": "cx:event:plaintext-policy-federation",
+            "event_id": "cx:event:01904100-0000-7000-8000-20e543cca299",
             "sender": "did:web:remote.example",
             "content": {"body": "federated plaintext should be denied"},
             "encrypted": false
@@ -4667,18 +4667,18 @@ async fn repo_adapter_memory_submit_list_get_and_sync_work() {
     let state = AppState::new(test_config(), Db { pool: None });
     let alice = dev_token(state.clone()).await;
     let bare_legacy_operation = Operation::create(
-        OperationId::new("cx:operation:adapter-bare-legacy").unwrap(),
-        SpaceId::new("cx:space:adapter").unwrap(),
+        OperationId::new("cx:operation:01904100-0000-7000-8000-9189cc06f68f").unwrap(),
+        SpaceId::new("cx:space:01904100-0000-7000-8000-743871bb0e87").unwrap(),
         "message",
         serde_json::json!({
-            "event_id": "cx:event:adapter-bare-legacy",
+            "event_id": "cx:event:01904100-0000-7000-8000-587f7a4b3d94",
             "sender": "did:web:alice.example",
             "thread_id": "cx:thread:adapter",
             "body": "missing migration profile"
         }),
     );
     let mut bare_legacy_commit = Commit::new(
-        CommitId::new("cx:commit:adapter-bare-legacy").unwrap(),
+        CommitId::new("cx:commit:01904100-0000-7000-8000-6143d958d2e7").unwrap(),
         "did:web:alice.example",
         Did::new("did:web:alice.example").unwrap(),
         1,
@@ -4696,12 +4696,12 @@ async fn repo_adapter_memory_submit_list_get_and_sync_work() {
     assert_eq!(bare_legacy.status_code.unwrap().as_u16(), 400);
 
     let operation = Operation::create(
-        OperationId::new("cx:operation:adapter-01").unwrap(),
-        SpaceId::new("cx:space:adapter").unwrap(),
+        OperationId::new("cx:operation:01904100-0000-7000-8000-a888ba9a5f08").unwrap(),
+        SpaceId::new("cx:space:01904100-0000-7000-8000-743871bb0e87").unwrap(),
         "message",
         serde_json::json!({
             "migration_profile": kinds::LEGACY_KIND_MIGRATION_PROFILE,
-            "event_id": "cx:event:adapter-01",
+            "event_id": "cx:event:01904100-0000-7000-8000-28fd99f5698a",
             "sender": "did:web:alice.example",
             "thread_id": "cx:thread:adapter",
             "body": "hello"
@@ -4710,7 +4710,7 @@ async fn repo_adapter_memory_submit_list_get_and_sync_work() {
     let operation_digest = Hash::new(operation.operation_digest().unwrap()).unwrap();
 
     let mut commit = Commit::new(
-        CommitId::new("cx:commit:adapter-01").unwrap(),
+        CommitId::new("cx:commit:01904100-0000-7000-8000-6f78e063a63f").unwrap(),
         "did:web:alice.example",
         Did::new("did:web:alice.example").unwrap(),
         1,
@@ -4766,7 +4766,7 @@ async fn repo_adapter_memory_submit_list_get_and_sync_work() {
             .unwrap();
     assert_eq!(
         projected_thread["events"][0]["event_id"],
-        "cx:event:adapter-01"
+        "cx:event:01904100-0000-7000-8000-28fd99f5698a"
     );
     assert_eq!(projected_thread["events"][0]["content"]["body"], "hello");
 
@@ -4779,8 +4779,8 @@ async fn repo_adapter_memory_submit_list_get_and_sync_work() {
         .await
         .unwrap();
     assert_eq!(
-        projected_sync["spaces"]["cx:space:adapter"]["timeline"]["events"][0]["event_id"],
-        "cx:event:adapter-01"
+        projected_sync["spaces"]["cx:space:01904100-0000-7000-8000-743871bb0e87"]["timeline"]["events"][0]["event_id"],
+        "cx:event:01904100-0000-7000-8000-28fd99f5698a"
     );
 
     let duplicate_submit: Value = TestClient::post("http://server/api/v1/repo/submit-commit")
@@ -4799,17 +4799,17 @@ async fn repo_adapter_memory_submit_list_get_and_sync_work() {
     assert_eq!(duplicate_submit["head_commit"], commit_digest);
 
     let invalid_reaction = Operation::create(
-        OperationId::new("cx:operation:adapter-invalid-reaction").unwrap(),
-        SpaceId::new("cx:space:adapter").unwrap(),
+        OperationId::new("cx:operation:01904100-0000-7000-8000-68cfb393b370").unwrap(),
+        SpaceId::new("cx:space:01904100-0000-7000-8000-743871bb0e87").unwrap(),
         kinds::CX_REACTION_ADD,
         serde_json::json!({
-            "event_id": "cx:event:adapter-01",
+            "event_id": "cx:event:01904100-0000-7000-8000-28fd99f5698a",
             "actor": "did:web:alice.example"
         }),
     );
     let invalid_reaction_digest = Hash::new(invalid_reaction.operation_digest().unwrap()).unwrap();
     let mut invalid_reaction_commit = Commit::new(
-        CommitId::new("cx:commit:adapter-invalid-reaction").unwrap(),
+        CommitId::new("cx:commit:01904100-0000-7000-8000-8492c575b3b3").unwrap(),
         "did:web:alice.example",
         Did::new("did:web:alice.example").unwrap(),
         2,
@@ -4868,17 +4868,17 @@ async fn repo_adapter_memory_submit_list_get_and_sync_work() {
     assert_eq!(commits["commits"].as_array().unwrap().len(), 1);
 
     let commit: Value =
-        TestClient::get("http://server/api/v1/repo/commit?commit_id=cx:commit:adapter-01")
+        TestClient::get("http://server/api/v1/repo/commit?commit_id=cx:commit:01904100-0000-7000-8000-6f78e063a63f")
             .send(&app_from_state(state.clone()))
             .await
             .take_json()
             .await
             .unwrap();
-    assert_eq!(commit["commit"]["commit_id"], "cx:commit:adapter-01");
+    assert_eq!(commit["commit"]["commit_id"], "cx:commit:01904100-0000-7000-8000-6f78e063a63f");
     assert!(commit["operations"].as_array().unwrap().is_empty());
 
     let expanded_commit: Value = TestClient::get(
-        "http://server/api/v1/repo/commit?commit_id=cx:commit:adapter-01&include_operations=true",
+        "http://server/api/v1/repo/commit?commit_id=cx:commit:01904100-0000-7000-8000-6f78e063a63f&include_operations=true",
     )
     .send(&app_from_state(state.clone()))
     .await
@@ -4887,11 +4887,11 @@ async fn repo_adapter_memory_submit_list_get_and_sync_work() {
     .unwrap();
     assert_eq!(
         expanded_commit["operations"][0]["operation_id"],
-        "cx:operation:adapter-01"
+        "cx:operation:01904100-0000-7000-8000-a888ba9a5f08"
     );
 
     let operations: Value = TestClient::post("http://server/api/v1/repo/operations")
-        .json(&serde_json::json!({"operation_ids": ["cx:operation:adapter-01"]}))
+        .json(&serde_json::json!({"operation_ids": ["cx:operation:01904100-0000-7000-8000-a888ba9a5f08"]}))
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
@@ -4910,20 +4910,20 @@ async fn repo_adapter_memory_submit_list_get_and_sync_work() {
     assert_eq!(sync["operations"].as_array().unwrap().len(), 1);
 
     let unauthorized_backfill =
-        TestClient::get("http://server/api/v1/events?space_id=cx:space:adapter&limit=1")
+        TestClient::get("http://server/api/v1/events?space_id=cx:space:01904100-0000-7000-8000-743871bb0e87&limit=1")
             .send(&app_from_state(state.clone()))
             .await;
     assert_eq!(unauthorized_backfill.status_code.unwrap().as_u16(), 404);
 
     let backfill: Value =
-        TestClient::get("http://server/api/v1/events?space_id=cx:space:adapter&limit=1")
+        TestClient::get("http://server/api/v1/events?space_id=cx:space:01904100-0000-7000-8000-743871bb0e87&limit=1")
             .add_header("authorization", format!("Bearer {alice}"), true)
             .send(&app_from_state(state.clone()))
             .await
             .take_json()
             .await
             .unwrap();
-    assert_eq!(backfill["events"][0]["event_id"], "cx:event:adapter-01");
+    assert_eq!(backfill["events"][0]["event_id"], "cx:event:01904100-0000-7000-8000-28fd99f5698a");
     assert_eq!(backfill["events"][0]["event_kind"], "cx.message.create");
     // Spec M-01 collapsed `event_type / input_event_type /
     // canonical_event_type` into `event_kind`; the legacy duplicates are
@@ -4933,18 +4933,18 @@ async fn repo_adapter_memory_submit_list_get_and_sync_work() {
     assert!(backfill["events"][0].get("canonical_event_type").is_none());
     assert_eq!(
         backfill["events"][0]["operation_id"],
-        "cx:operation:adapter-01"
+        "cx:operation:01904100-0000-7000-8000-a888ba9a5f08"
     );
     assert_eq!(backfill["limited"], false);
 
     let unauthorized_subscribe =
-        TestClient::get("http://server/api/v1/events/subscribe?space_id=cx:space:adapter&limit=1")
+        TestClient::get("http://server/api/v1/events/subscribe?space_id=cx:space:01904100-0000-7000-8000-743871bb0e87&limit=1")
             .send(&app_from_state(state.clone()))
             .await;
     assert_eq!(unauthorized_subscribe.status_code.unwrap().as_u16(), 404);
 
     let subscribe: Value =
-        TestClient::get("http://server/api/v1/events/subscribe?space_id=cx:space:adapter&limit=1")
+        TestClient::get("http://server/api/v1/events/subscribe?space_id=cx:space:01904100-0000-7000-8000-743871bb0e87&limit=1")
             .add_header("authorization", format!("Bearer {alice}"), true)
             .send(&app_from_state(state.clone()))
             .await
@@ -4953,22 +4953,22 @@ async fn repo_adapter_memory_submit_list_get_and_sync_work() {
             .unwrap();
     assert_eq!(
         subscribe["frames"][0]["payload"]["operation_id"],
-        "cx:operation:adapter-01"
+        "cx:operation:01904100-0000-7000-8000-a888ba9a5f08"
     );
 
     let redaction = Operation::create(
-        OperationId::new("cx:operation:adapter-redaction").unwrap(),
-        SpaceId::new("cx:space:adapter").unwrap(),
+        OperationId::new("cx:operation:01904100-0000-7000-8000-996dbfcff223").unwrap(),
+        SpaceId::new("cx:space:01904100-0000-7000-8000-743871bb0e87").unwrap(),
         "redaction",
         serde_json::json!({
             "migration_profile": kinds::LEGACY_KIND_MIGRATION_PROFILE,
-            "event_id": "cx:event:redaction-01",
-            "target_event_id": "cx:event:adapter-01"
+            "event_id": "cx:event:01904100-0000-7000-8000-a1a72934992d",
+            "target_event_id": "cx:event:01904100-0000-7000-8000-28fd99f5698a"
         }),
     );
     let redaction_digest = Hash::new(redaction.operation_digest().unwrap()).unwrap();
     let mut redaction_commit = Commit::new(
-        CommitId::new("cx:commit:adapter-redaction").unwrap(),
+        CommitId::new("cx:commit:01904100-0000-7000-8000-e9bc44779acc").unwrap(),
         "did:web:alice.example",
         Did::new("did:web:alice.example").unwrap(),
         2,
@@ -4990,7 +4990,7 @@ async fn repo_adapter_memory_submit_list_get_and_sync_work() {
     assert_eq!(redaction_submit["status"], "accepted");
 
     let redacted_backfill: Value =
-        TestClient::get("http://server/api/v1/events?space_id=cx:space:adapter&limit=10")
+        TestClient::get("http://server/api/v1/events?space_id=cx:space:01904100-0000-7000-8000-743871bb0e87&limit=10")
             .add_header("authorization", format!("Bearer {alice}"), true)
             .send(&app_from_state(state.clone()))
             .await
@@ -5000,7 +5000,7 @@ async fn repo_adapter_memory_submit_list_get_and_sync_work() {
     assert!(redacted_backfill["events"].as_array().unwrap().is_empty());
 
     let redacted_subscribe: Value =
-        TestClient::get("http://server/api/v1/events/subscribe?space_id=cx:space:adapter&limit=10")
+        TestClient::get("http://server/api/v1/events/subscribe?space_id=cx:space:01904100-0000-7000-8000-743871bb0e87&limit=10")
             .add_header("authorization", format!("Bearer {alice}"), true)
             .send(&app_from_state(state.clone()))
             .await
@@ -5018,14 +5018,14 @@ async fn repo_adapter_memory_submit_list_get_and_sync_work() {
         .await
         .unwrap();
     assert!(
-        redacted_sync["spaces"]["cx:space:adapter"]["timeline"]["events"]
+        redacted_sync["spaces"]["cx:space:01904100-0000-7000-8000-743871bb0e87"]["timeline"]["events"]
             .as_array()
             .unwrap()
             .is_empty()
     );
 
     let mut stale_commit = Commit::new(
-        CommitId::new("cx:commit:adapter-02").unwrap(),
+        CommitId::new("cx:commit:01904100-0000-7000-8000-ac601680afcf").unwrap(),
         "did:web:alice.example",
         Did::new("did:web:alice.example").unwrap(),
         2,
@@ -5042,13 +5042,13 @@ async fn repo_adapter_memory_submit_list_get_and_sync_work() {
     assert_eq!(stale.status_code.unwrap().as_u16(), 409);
 
     let bad_operation = Operation::create(
-        OperationId::new("cx:operation:adapter-bad").unwrap(),
-        SpaceId::new("cx:space:adapter").unwrap(),
+        OperationId::new("cx:operation:01904100-0000-7000-8000-7fe7fcbbf658-bad").unwrap(),
+        SpaceId::new("cx:space:01904100-0000-7000-8000-743871bb0e87").unwrap(),
         "unknown.family",
         serde_json::json!({"body": "bad"}),
     );
     let mut bad_commit = Commit::new(
-        CommitId::new("cx:commit:adapter-bad").unwrap(),
+        CommitId::new("cx:commit:01904100-0000-7000-8000-4a82e26a6487").unwrap(),
         "did:web:alice.example",
         Did::new("did:web:alice.example").unwrap(),
         2,
@@ -5071,11 +5071,11 @@ async fn repo_submit_commit_cas_conflict_and_idempotent_duplicate() {
     let state = AppState::new(test_config(), Db { pool: None });
 
     let first_operation = Operation::create(
-        OperationId::new("cx:operation:cas-idem").unwrap(),
+        OperationId::new("cx:operation:01904100-0000-7000-8000-d1f98f6fb367").unwrap(),
         SpaceId::new("cx:space:0196419b-0000-7000-8000-000000000000").unwrap(),
         kinds::CX_MESSAGE_CREATE,
         serde_json::json!({
-            "event_id": "cx:event:cas-idem",
+            "event_id": "cx:event:01904100-0000-7000-8000-df1c7fd33e41",
             "sender": "did:web:alice.example",
             "body": "idempotent payload",
             "encrypted": false
@@ -5084,7 +5084,7 @@ async fn repo_submit_commit_cas_conflict_and_idempotent_duplicate() {
     let first_operation_digest = Hash::new(first_operation.operation_digest().unwrap()).unwrap();
 
     let mut first_commit = Commit::new(
-        CommitId::new("cx:commit:cas-idem").unwrap(),
+        CommitId::new("cx:commit:01904100-0000-7000-8000-dcad0eb0a675").unwrap(),
         "did:web:alice.example",
         Did::new("did:web:alice.example").unwrap(),
         1,
@@ -5126,11 +5126,11 @@ async fn repo_submit_commit_cas_conflict_and_idempotent_duplicate() {
     );
 
     let conflicting_operation = Operation::create(
-        OperationId::new("cx:operation:cas-idem").unwrap(),
+        OperationId::new("cx:operation:01904100-0000-7000-8000-d1f98f6fb367").unwrap(),
         SpaceId::new("cx:space:0196419b-0000-7000-8000-000000000000").unwrap(),
         kinds::CX_MESSAGE_CREATE,
         serde_json::json!({
-            "event_id": "cx:event:cas-idem",
+            "event_id": "cx:event:01904100-0000-7000-8000-df1c7fd33e41",
             "sender": "did:web:alice.example",
             "body": "different payload",
             "encrypted": false
@@ -5139,7 +5139,7 @@ async fn repo_submit_commit_cas_conflict_and_idempotent_duplicate() {
     let conflicting_operation_digest =
         Hash::new(conflicting_operation.operation_digest().unwrap()).unwrap();
     let mut conflicting_commit = Commit::new(
-        CommitId::new("cx:commit:cas-idem-conflict").unwrap(),
+        CommitId::new("cx:commit:01904100-0000-7000-8000-cc28f1d0d5d4").unwrap(),
         "did:web:alice.example",
         Did::new("did:web:alice.example").unwrap(),
         2,
@@ -5164,7 +5164,7 @@ async fn repo_submit_commit_cas_conflict_and_idempotent_duplicate() {
     assert_eq!(conflicting_submit["error"]["errcode"], "quarantine");
 
     let mut stale_commit = Commit::new(
-        CommitId::new("cx:commit:stale-head").unwrap(),
+        CommitId::new("cx:commit:01904100-0000-7000-8000-6a4b81ef7588").unwrap(),
         "did:web:alice.example",
         Did::new("did:web:alice.example").unwrap(),
         2,
@@ -5173,7 +5173,7 @@ async fn repo_submit_commit_cas_conflict_and_idempotent_duplicate() {
     let mut stale = TestClient::post("http://server/api/v1/repo/submit-commit")
         .json(&serde_json::json!({
             "repo_id": "did:web:alice.example",
-            "expected_head": "cx:commit:not-real",
+            "expected_head": "cx:commit:01904100-0000-7000-8000-fb6de0eed655",
             "commit": stale_commit
         }))
         .send(&app_from_state(state))
@@ -5188,11 +5188,11 @@ async fn repo_submit_commit_operation_id_different_digest_quarantine() {
     let state = AppState::new(test_config(), Db { pool: None });
 
     let operation = Operation::create(
-        OperationId::new("cx:operation:quarantine-op").unwrap(),
+        OperationId::new("cx:operation:01904100-0000-7000-8000-e966cfd59e5a").unwrap(),
         SpaceId::new("cx:space:0196419b-0000-7000-8000-000000000000").unwrap(),
         kinds::CX_MESSAGE_CREATE,
         serde_json::json!({
-            "event_id": "cx:event:quarantine-op",
+            "event_id": "cx:event:01904100-0000-7000-8000-184d6a958479",
             "sender": "did:web:alice.example",
             "body": "first payload",
             "encrypted": false
@@ -5201,7 +5201,7 @@ async fn repo_submit_commit_operation_id_different_digest_quarantine() {
     let operation_digest = Hash::new(operation.operation_digest().unwrap()).unwrap();
 
     let mut first_commit = Commit::new(
-        CommitId::new("cx:commit:quarantine-op").unwrap(),
+        CommitId::new("cx:commit:01904100-0000-7000-8000-f0cc67b83006").unwrap(),
         "did:web:alice.example",
         Did::new("did:web:alice.example").unwrap(),
         1,
@@ -5225,11 +5225,11 @@ async fn repo_submit_commit_operation_id_different_digest_quarantine() {
     let head_commit = first_submit["head_commit"].as_str().unwrap().to_owned();
 
     let duplicate_operation = Operation::create(
-        OperationId::new("cx:operation:quarantine-op").unwrap(),
+        OperationId::new("cx:operation:01904100-0000-7000-8000-e966cfd59e5a").unwrap(),
         SpaceId::new("cx:space:0196419b-0000-7000-8000-000000000000").unwrap(),
         kinds::CX_MESSAGE_CREATE,
         serde_json::json!({
-            "event_id": "cx:event:quarantine-op",
+            "event_id": "cx:event:01904100-0000-7000-8000-184d6a958479",
             "sender": "did:web:alice.example",
             "body": "different payload",
             "encrypted": false
@@ -5238,7 +5238,7 @@ async fn repo_submit_commit_operation_id_different_digest_quarantine() {
     let duplicate_operation_digest =
         Hash::new(duplicate_operation.operation_digest().unwrap()).unwrap();
     let mut duplicate_commit = Commit::new(
-        CommitId::new("cx:commit:quarantine-op-different").unwrap(),
+        CommitId::new("cx:commit:01904100-0000-7000-8000-3d28d704b977").unwrap(),
         "did:web:alice.example",
         Did::new("did:web:alice.example").unwrap(),
         2,
@@ -5269,7 +5269,7 @@ async fn repo_submit_commit_operation_id_different_digest_quarantine() {
     assert!(state.persistence.audit().snapshot_all().unwrap().iter().any(|event| {
         event["action"] == "repo.submit_commit"
             && event["outcome"] == "quarantine"
-            && event["target"]["commit_id"] == "cx:commit:quarantine-op-different"
+            && event["target"]["commit_id"] == "cx:commit:01904100-0000-7000-8000-3d28d704b977"
     }));
 }
 

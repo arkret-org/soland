@@ -18,6 +18,7 @@ pub mod account;
 pub mod admin;
 pub mod admin_cells;
 pub mod admin_control;
+pub mod anchor_admin;
 pub mod audit;
 pub mod auth;
 pub mod authz;
@@ -151,6 +152,11 @@ pub use account::{
 pub use admin::admin_collection;
 pub use admin_cells::{admin_get_cell, admin_list_cells};
 pub use admin_control::{admin_emit_resync_required, admin_emit_unauthorized};
+pub use anchor_admin::{
+    admin_compact_anchor_dag, admin_get_anchor_dag, admin_get_anchorer,
+    admin_list_bottom_global, admin_list_space_bottom, admin_reconfigure_anchorer,
+    admin_repair_bottom,
+};
 pub use space::{
     add_space_member, create_space, delete_space, export_space, invite_token_matches_space,
     invite_token_space_id, is_space_deleted, next_author_seq, prune_expired_typing,
@@ -404,9 +410,13 @@ mod operation_conformance_tests {
     }
 
     fn operation(index: usize, kind: &str, payload: Value) -> Operation {
+        // Build a deterministic UUIDv7 from the index (last 12 hex pad as hex of the index).
+        let payload_part = format!("{:012x}", index);
+        let op_id = format!("cx:operation:01904100-0000-7000-8000-{payload_part}");
+        let space_id = "cx:space:01904100-0000-7000-8000-000000000001".to_owned();
         Operation::create(
-            OperationId::new(format!("cx:operation:vector-{index}")).unwrap(),
-            SpaceId::new("cx:space:vector").unwrap(),
+            OperationId::new(op_id).unwrap(),
+            SpaceId::new(space_id).unwrap(),
             kind,
             payload,
         )
@@ -419,79 +429,79 @@ mod operation_conformance_tests {
             OperationVector {
                 name: "message create",
                 kind: kinds::CX_MESSAGE_CREATE,
-                payload: json!({"event_id": "cx:event:message-1", "sender": "did:web:alice.example", "content": {"body": "hello"}}),
+                payload: json!({"event_id": "cx:event:01904100-0000-7000-8000-79a90338768b", "sender": "did:web:alice.example", "content": {"body": "hello"}}),
                 valid: true,
             },
             OperationVector {
                 name: "message revise",
                 kind: kinds::CX_MESSAGE_REVISE,
-                payload: json!({"target_event_id": "cx:event:message-1", "content": {"body": "edited"}}),
+                payload: json!({"target_event_id": "cx:event:01904100-0000-7000-8000-79a90338768b", "content": {"body": "edited"}}),
                 valid: true,
             },
             OperationVector {
                 name: "message redact",
                 kind: kinds::CX_MESSAGE_REDACT,
-                payload: json!({"target_event_id": "cx:event:message-1"}),
+                payload: json!({"target_event_id": "cx:event:01904100-0000-7000-8000-79a90338768b"}),
                 valid: true,
             },
             OperationVector {
                 name: "generic redaction",
                 kind: kinds::CX_REDACTION,
-                payload: json!({"redacts": "cx:event:message-1"}),
+                payload: json!({"redacts": "cx:event:01904100-0000-7000-8000-79a90338768b"}),
                 valid: true,
             },
             OperationVector {
                 name: "reaction add",
                 kind: kinds::CX_REACTION_ADD,
-                payload: json!({"event_id": "cx:event:message-1", "actor": "did:web:alice.example", "key": "+1"}),
+                payload: json!({"event_id": "cx:event:01904100-0000-7000-8000-79a90338768b", "actor": "did:web:alice.example", "key": "+1"}),
                 valid: true,
             },
             OperationVector {
                 name: "reaction remove",
                 kind: kinds::CX_REACTION_REMOVE,
-                payload: json!({"target_event_id": "cx:event:message-1", "sender": "did:web:alice.example", "reaction": "+1"}),
+                payload: json!({"target_event_id": "cx:event:01904100-0000-7000-8000-79a90338768b", "sender": "did:web:alice.example", "reaction": "+1"}),
                 valid: true,
             },
             OperationVector {
                 name: "entity create",
                 kind: kinds::CX_ENTITY_CREATE,
-                payload: json!({"entity_id": "cx:entity:task-1", "entity_type": "cx.task", "fields": {"title": "Ship"}}),
+                payload: json!({"entity_id": "cx:entity:01904100-0000-7000-8000-ca33616973bb", "entity_type": "cx.task", "fields": {"title": "Ship"}}),
                 valid: true,
             },
             OperationVector {
                 name: "unsupported standard entity create",
                 kind: kinds::CX_ENTITY_CREATE,
-                payload: json!({"entity_id": "cx:entity:unsupported-1", "entity_type": "cx.unsupported.object"}),
+                payload: json!({"entity_id": "cx:entity:01904100-0000-7000-8000-7236ab93539a", "entity_type": "cx.unsupported.object"}),
                 valid: false,
             },
             OperationVector {
                 name: "entity update",
                 kind: kinds::CX_ENTITY_UPDATE,
-                payload: json!({"entity_id": "cx:entity:task-1", "fields": {"status": "done"}}),
+                payload: json!({"entity_id": "cx:entity:01904100-0000-7000-8000-ca33616973bb", "fields": {"status": "done"}}),
                 valid: true,
             },
             OperationVector {
                 name: "entity delete",
                 kind: kinds::CX_ENTITY_DELETE,
-                payload: json!({"entity_id": "cx:entity:task-1"}),
+                payload: json!({"entity_id": "cx:entity:01904100-0000-7000-8000-ca33616973bb"}),
                 valid: true,
             },
             OperationVector {
                 name: "relation create",
                 kind: kinds::CX_RELATION_CREATE,
-                payload: json!({"relation_id": "cx:relation:rel-1", "relation_kind": "blocks", "from": "cx:entity:task-1", "to": "cx:entity:task-2"}),
+                payload: json!({"relation_id": "cx:relation:01904100-0000-7000-8000-71604d58ec0b", "relation_kind": "blocks", "from": "cx:entity:01904100-0000-7000-8000-ca33616973bb", "to": "cx:entity:01904100-0000-7000-8000-7191ddd787e5"}),
                 valid: true,
             },
             OperationVector {
                 name: "relation update",
                 kind: kinds::CX_RELATION_UPDATE,
-                payload: json!({"relation_id": "cx:relation:rel-1", "fields": {"weight": 1}}),
+                payload: json!({"relation_id": "cx:relation:01904100-0000-7000-8000-71604d58ec0b", "fields": {"weight": 1}}),
                 valid: true,
             },
             OperationVector {
                 name: "relation delete",
                 kind: kinds::CX_RELATION_DELETE,
-                payload: json!({"relation_id": "cx:relation:rel-1"}),
+                payload: json!({"relation_id": "cx:relation:01904100-0000-7000-8000-71604d58ec0b"}),
                 valid: true,
             },
             OperationVector {
@@ -499,7 +509,7 @@ mod operation_conformance_tests {
                 kind: "task.move",
                 payload: json!({
                     "migration_profile": kinds::LEGACY_KIND_MIGRATION_PROFILE,
-                    "entity_id": "cx:entity:task-1",
+                    "entity_id": "cx:entity:01904100-0000-7000-8000-ca33616973bb",
                     "group_by": "fields.status",
                     "to_value": "done",
                     "rank": "B"
@@ -510,7 +520,7 @@ mod operation_conformance_tests {
                 name: "legacy task move without migration profile",
                 kind: "task.move",
                 payload: json!({
-                    "entity_id": "cx:entity:task-1",
+                    "entity_id": "cx:entity:01904100-0000-7000-8000-ca33616973bb",
                     "group_by": "fields.status",
                     "to_value": "done",
                     "rank": "B"
@@ -522,9 +532,9 @@ mod operation_conformance_tests {
                 kind: "relation.move",
                 payload: json!({
                     "migration_profile": kinds::LEGACY_KIND_MIGRATION_PROFILE,
-                    "relation_id": "cx:relation:rel-1",
-                    "from": "cx:entity:task-1",
-                    "to": "cx:entity:task-2"
+                    "relation_id": "cx:relation:01904100-0000-7000-8000-71604d58ec0b",
+                    "from": "cx:entity:01904100-0000-7000-8000-ca33616973bb",
+                    "to": "cx:entity:01904100-0000-7000-8000-7191ddd787e5"
                 }),
                 valid: true,
             },
@@ -567,7 +577,7 @@ mod operation_conformance_tests {
             OperationVector {
                 name: "read marker",
                 kind: kinds::CX_READ_MARKER,
-                payload: json!({"actor": "did:web:alice.example", "event_id": "cx:event:message-1"}),
+                payload: json!({"actor": "did:web:alice.example", "event_id": "cx:event:01904100-0000-7000-8000-79a90338768b"}),
                 valid: true,
             },
             OperationVector {
@@ -597,7 +607,7 @@ mod operation_conformance_tests {
             OperationVector {
                 name: "reaction missing key",
                 kind: kinds::CX_REACTION_ADD,
-                payload: json!({"event_id": "cx:event:message-1", "actor": "did:web:alice.example"}),
+                payload: json!({"event_id": "cx:event:01904100-0000-7000-8000-79a90338768b", "actor": "did:web:alice.example"}),
                 valid: false,
             },
         ];
@@ -843,7 +853,7 @@ mod canonical_conformance_vectors {
     fn proof_verifier_rejects_alg_none_in_production() {
         let verifier = production_verifier();
         let mut commit = Commit::new(
-            CommitId::new("cx:commit:test-1").unwrap(),
+            CommitId::new("cx:commit:01904100-0000-7000-8000-3cacafe9f747").unwrap(),
             "did:web:alice.example".to_owned(),
             Did::new("did:web:alice.example").unwrap(),
             1,
@@ -868,7 +878,7 @@ mod canonical_conformance_vectors {
     fn proof_verifier_rejects_dev_proof_in_production() {
         let verifier = production_verifier();
         let mut commit = Commit::new(
-            CommitId::new("cx:commit:test-2").unwrap(),
+            CommitId::new("cx:commit:01904100-0000-7000-8000-c9957daeacb6").unwrap(),
             "did:web:alice.example".to_owned(),
             Did::new("did:web:alice.example").unwrap(),
             1,
@@ -893,7 +903,7 @@ mod canonical_conformance_vectors {
     fn proof_verifier_accepts_dev_proof_in_development() {
         let verifier = development_verifier();
         let mut commit = Commit::new(
-            CommitId::new("cx:commit:test-3").unwrap(),
+            CommitId::new("cx:commit:01904100-0000-7000-8000-4d054756a73c").unwrap(),
             "did:web:alice.example".to_owned(),
             Did::new("did:web:alice.example").unwrap(),
             1,
@@ -918,7 +928,7 @@ mod canonical_conformance_vectors {
     fn proof_verifier_rejects_empty_proofs() {
         let verifier = development_verifier();
         let commit = Commit::new(
-            CommitId::new("cx:commit:test-4").unwrap(),
+            CommitId::new("cx:commit:01904100-0000-7000-8000-b7383eb02ead").unwrap(),
             "did:web:alice.example".to_owned(),
             Did::new("did:web:alice.example").unwrap(),
             1,
@@ -930,7 +940,7 @@ mod canonical_conformance_vectors {
     fn proof_verifier_validates_payload_hash_binding() {
         let verifier = production_verifier();
         let mut commit = Commit::new(
-            CommitId::new("cx:commit:test-5").unwrap(),
+            CommitId::new("cx:commit:01904100-0000-7000-8000-e7d9e824ff3e").unwrap(),
             "did:web:alice.example".to_owned(),
             Did::new("did:web:alice.example").unwrap(),
             1,
@@ -956,14 +966,14 @@ mod canonical_conformance_vectors {
     #[test]
     fn proof_verifier_accepts_bound_production_proof() {
         let verifier = production_verifier();
-        let commit = bound_production_commit("cx:commit:test-bound-ok");
+        let commit = bound_production_commit("cx:commit:01904100-0000-7000-8000-07ad306cbbfc");
         assert!(verifier.verify_commit(&commit).is_ok());
     }
 
     #[test]
     fn proof_verifier_rejects_wrong_author_binding() {
         let verifier = production_verifier();
-        let mut commit = bound_production_commit("cx:commit:test-wrong-author");
+        let mut commit = bound_production_commit("cx:commit:01904100-0000-7000-8000-a98b09e8a7ff");
         commit.proofs[0].verification_method = "did:web:bob.example#key-1".to_owned();
         assert!(verifier.verify_commit(&commit).is_err());
     }
@@ -971,7 +981,7 @@ mod canonical_conformance_vectors {
     #[test]
     fn proof_verifier_rejects_missing_service_binding() {
         let verifier = production_verifier();
-        let mut commit = bound_production_commit("cx:commit:test-missing-service");
+        let mut commit = bound_production_commit("cx:commit:01904100-0000-7000-8000-a7e3ee676552");
         commit.proofs[0].audience = None;
         assert!(verifier.verify_commit(&commit).is_err());
     }
@@ -979,7 +989,7 @@ mod canonical_conformance_vectors {
     #[test]
     fn proof_verifier_rejects_stale_created_at_binding() {
         let verifier = production_verifier();
-        let mut commit = bound_production_commit("cx:commit:test-stale-created-at");
+        let mut commit = bound_production_commit("cx:commit:01904100-0000-7000-8000-437db881b060");
         commit.proofs[0].created_at = commit.created_at - chrono::Duration::minutes(6);
         assert!(verifier.verify_commit(&commit).is_err());
     }

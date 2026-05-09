@@ -2538,7 +2538,7 @@ mod tests {
             origin: "did:web:remote.example".to_owned(),
             txn_id: "txn1".to_owned(),
             destination: "did:web:soland.local".to_owned(),
-            space_id: Some("cx:space:test".to_owned()),
+            space_id: Some("cx:space:01904100-0000-7000-8000-cfc039892036".to_owned()),
             content_digest: "sha256:first".to_owned(),
             status: "accepted".to_owned(),
             response: serde_json::json!({"ok": true}),
