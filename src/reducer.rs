@@ -7,36 +7,34 @@
 //! - Messages: append-only, revisions form chains
 //! - Ordered lists: fractional indexing
 //!
-//! # T1-1 architecture (2026-05-07)
+//! # Architecture (2026-05-09 六轮 aggressive batch)
 //!
-//! Each canonical Contrix event kind is a `Box<dyn ReducerKind>`
-//! registered in [`registry::ReducerRegistry`]. Subject derivation
-//! follows spec Phase 1's `(space_id, kind, subject?)` model — see
-//! [`registry::ReducerKind::subject_for_event`]. The legacy
-//! match-on-kind dispatcher in [`ProjectionState::apply`] remains as a
-//! thin wrapper that delegates to the registry; its body is one
-//! lookup + one trait call.
+//! [`ProjectionState::apply`] is a direct match-on-canonical-kind
+//! dispatcher to inline projection helpers. The legacy per-event-kind
+//! `ReducerKind` trait + 47-stub `ReducerRegistry` + macro-generated
+//! `src/reducer/kinds/` tree was deleted: it added zero value over a
+//! direct match (every stub was a thin delegate).
+//!
+//! The Move/Anchor receive pipeline (`POST /api/v1/moves` /
+//! `POST /api/v1/anchors`) routes through [`registry::LatticeKind`] /
+//! [`registry::LatticeRegistry`]. Concrete impls live in
+//! [`lattice_kinds`]; [`lattice_kinds::build_sdk_cell_registry`] feeds
+//! the SDK's `verify_move` / `apply_anchor` pipeline. This is the
+//! protocol-canonical path; [`ProjectionState`]'s structured fields
+//! (`messages`, `reactions`, `read_markers`, etc.) are an in-memory
+//! convenience cache populated from the durable Event-Envelope ingestion
+//! path that pre-dates the Move/Anchor model. As Anchor projection lands,
+//! the structured fields migrate to a single `cells` map.
 
-pub mod kinds;
+pub mod lattice_kinds;
 pub mod registry;
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::OnceLock;
 
 use contrix_sdk::Operation;
 use serde_json::Value;
 
 use crate::hlc::ServerHlc;
-
-use self::registry::ReducerRegistry;
-
-/// Canonical reducer registry; built once at first access and reused for
-/// the lifetime of the process. T1-1 wires this through
-/// [`ProjectionState::apply`].
-fn registry() -> &'static ReducerRegistry {
-    static REGISTRY: OnceLock<ReducerRegistry> = OnceLock::new();
-    REGISTRY.get_or_init(ReducerRegistry::new)
-}
 
 /// In-memory projection state produced by the reducer.
 #[derive(Clone, Debug, Default)]
@@ -221,13 +219,57 @@ impl ProjectionState {
 
     /// Apply a single operation and return the effect.
     ///
-    /// Dispatch goes through [`registry::ReducerRegistry`]. The registry
-    /// owns one [`registry::ReducerKind`] trait object per canonical
-    /// kind id; subject derivation (per the spec event-kind-registry's
-    /// `cell_subject` declaration) runs before `project()`. Every kind
-    /// is registered in [`crate::reducer::kinds`].
-    pub fn apply(&mut self, operation: &Operation, hlc: &ServerHlc) -> ProjectionEffect {
-        registry().project(operation, self, hlc)
+    /// Direct match-on-canonical-kind dispatch to per-domain helpers. As
+    /// of 2026-05-09 六轮 aggressive batch this replaced the per-kind
+    /// `ReducerKind` trait + `ReducerRegistry` apparatus, which added
+    /// zero value over inline match dispatch (every per-kind stub was a
+    /// thin delegate to a `ProjectionState::apply_*` helper).
+    pub fn apply(&mut self, operation: &Operation, _hlc: &ServerHlc) -> ProjectionEffect {
+        use crate::kinds::*;
+        let now = operation.created_at;
+        match crate::kinds::canonical_kind_for_operation(operation) {
+            Some(CX_MESSAGE_CREATE) => self.apply_message(operation, now),
+            Some(CX_MESSAGE_REVISE) => self.apply_message_revise(operation, now),
+            Some(CX_MESSAGE_REDACT) | Some(CX_REDACTION) => self.apply_redaction(operation),
+            Some(CX_REACTION_ADD) => self.apply_reaction_add(operation, now),
+            Some(CX_REACTION_REMOVE) => self.apply_reaction_remove(operation),
+            Some(CX_READ_MARKER) => self.apply_read_marker(operation, now),
+            Some(CX_ENTITY_CREATE) => self.apply_entity_create(operation, now),
+            Some(CX_ENTITY_UPDATE) => self.apply_entity_update(operation, now, _hlc),
+            Some(CX_ENTITY_DELETE) => self.apply_entity_delete(operation),
+            Some(CX_FIELD_POSITION_MOVE) | Some(CX_FIELD_POSITION_REORDER) => {
+                self.apply_entity_update(operation, now, _hlc)
+            }
+            Some(CX_LEGACY_TASK_MOVE) => {
+                if operation
+                    .payload
+                    .get("migration_profile")
+                    .and_then(Value::as_str)
+                    == Some(LEGACY_KIND_MIGRATION_PROFILE)
+                {
+                    self.apply_entity_update(operation, now, _hlc)
+                } else {
+                    ProjectionEffect::Ignored
+                }
+            }
+            Some(CX_RELATION_CREATE) => self.apply_relation_create(operation, now),
+            Some(CX_RELATION_UPDATE) => self.apply_relation_update(operation, now, _hlc),
+            Some(CX_RELATION_DELETE) => self.apply_relation_delete(operation),
+            Some(CX_CONTAINER_MOVE_ITEM) | Some(CX_CONTAINER_REBALANCE) => {
+                self.apply_container_position(operation, now)
+            }
+            Some(kind) if is_membership_kind(kind) => self.apply_membership(operation, now, kind),
+            Some(CX_SPACE_CREATE) | Some(CX_SPACE_UPDATE) | Some(CX_SPACE_DESTROY) => {
+                self.apply_space_lifecycle(operation, now)
+            }
+            // All cell-state events (cx.space.policy / cx.space.read_receipt_policy /
+            // cx.consent.* / cx.member.state / cx.space.* facets) are routed via
+            // the Move/Anchor pipeline through `LatticeKind` impls in
+            // `lattice_kinds.rs`; the structured ProjectionState fields don't
+            // mirror them. `routing/projection.rs::project_read_receipt_policy`
+            // handles the read-receipt cache fast path explicitly.
+            _ => ProjectionEffect::Ignored,
+        }
     }
 
     /// Apply a batch of operations.

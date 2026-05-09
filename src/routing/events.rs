@@ -381,16 +381,11 @@ pub async fn events_query_durable_scope_impl(
     let Some(session) = auth_or_render(state, req, res) else {
         return;
     };
-    // C17 selector: `actors[]` ∪ `spaces[]` repeated query args. Legacy
-    // singular `actor_id` / `space_id` continue to work during transition.
-    let mut actors = super::query_param_all(req, "actors");
-    if actors.is_empty() {
-        actors = query_param(req, "actor_id").into_iter().collect();
-    }
-    let mut spaces = super::query_param_all(req, "spaces");
-    if spaces.is_empty() {
-        spaces = query_param(req, "space_id").into_iter().collect();
-    }
+    // C17 selector: `actors[]` ∪ `spaces[]` repeated query args. Aggressive
+    // cleanup (2026-05-09): legacy singular `actor_id` / `space_id` removed —
+    // clients MUST emit the repeated-arg form per spec.
+    let actors = super::query_param_all(req, "actors");
+    let spaces = super::query_param_all(req, "spaces");
     for actor in &actors {
         if validate_did(actor).is_err() {
             render_error(
@@ -413,8 +408,8 @@ pub async fn events_query_durable_scope_impl(
             return;
         }
     }
-    // C17 cursor parameter: `from` replaces legacy `cursor`.
-    let cursor = query_param(req, "from").or_else(|| query_param(req, "cursor"));
+    // C17 cursor parameter: `from` replaces legacy `cursor`. Legacy name removed.
+    let cursor = query_param(req, "from");
     // C17 direction: forward (default) | backward — backward returns events
     // older than `from` in reverse time order.
     let direction = query_param(req, "direction").unwrap_or_else(|| "forward".to_owned());

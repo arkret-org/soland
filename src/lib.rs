@@ -3,6 +3,7 @@
 // recursion limit. Bump it for the whole crate.
 #![recursion_limit = "512"]
 
+pub mod anchorer;
 pub mod artifacts;
 pub mod authz;
 pub mod config;
@@ -213,6 +214,9 @@ pub fn router_with_rate_limiter_config(
                 .push(Router::with_path("authz/grants/{grant_id}").delete(revoke_grant))
                 .push(Router::with_path("authz/invites").get(invites))
                 .push(Router::with_path("admin/{resource}").get(admin_collection))
+                // C10.B MAL-3 (2026-05-09 七轮): admin endpoint that
+                // triggers one anchorer signing pass for a Space.
+                .push(Router::with_path("admin/anchors/sign").post(admin_sign_anchor))
                 .push(Router::with_path("audit/events").get(audit_events))
                 .push(
                     Router::with_path("policies")

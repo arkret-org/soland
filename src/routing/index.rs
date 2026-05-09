@@ -514,7 +514,7 @@ pub async fn index_thread(depot: &mut Depot, req: &mut Request, res: &mut Respon
     let first_space_id = events
         .first()
         .and_then(|event| event["space_id"].as_str())
-        .unwrap_or("cx:space:01js0sp0000000000000000000");
+        .unwrap_or("cx:space:0196419b-0000-7000-8000-000000000000");
     let flow_id = query_param(req, "flow_id")
         .filter(|flow_id| !flow_id.trim().is_empty())
         .unwrap_or_else(|| flow_id_from_space_id(first_space_id));
@@ -764,7 +764,7 @@ pub async fn index_space_hierarchy(depot: &mut Depot, req: &mut Request, res: &m
     let state = depot.obtain::<AppState>().expect("state injected");
     let root_space_id = query_param(req, "root_space_id")
         .or_else(|| query_param(req, "space_id"))
-        .unwrap_or_else(|| "cx:space:01js0sp0000000000000000000".to_owned());
+        .unwrap_or_else(|| "cx:space:0196419b-0000-7000-8000-000000000000".to_owned());
     if SpaceId::new(root_space_id.clone()).is_err() {
         render_error(
             res,

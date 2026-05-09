@@ -1,49 +1,39 @@
-//! ReducerKind trait + canonical kind registry.
+//! C10.B per-cell-family `LatticeKind` registry.
 //!
-//! This is **soland's reducer-internal projection layer**. It drives the
-//! local `ProjectionState` from durable Event Envelopes; its
-//! `(space_id, kind, subject?)` model is a reducer-internal projection
-//! key, not a wire concept. Subject is derived from typed payload fields
-//! per the spec event-kind-registry's `cell_subject`. The full
-//! Move/Anchor/Lattice runtime (per-cell Lattice join over Anchor
-//! frontier) is tracked separately as Tier 2.6 / root C10.B; until that
-//! lands, this reducer remains the active projection driver.
+//! This module owns the **only** projection-routing trait in soland after
+//! the 2026-05-09 六轮 aggressive batch. The legacy per-event-kind
+//! `ReducerKind` trait + 47-stub `ReducerRegistry` + macro-generated kinds
+//! tree (`src/reducer/kinds/`) was deleted; `ProjectionState::apply()` now
+//! does direct match-on-canonical-kind dispatch to inline projection
+//! helpers, and the new model lookups (subject derivation, lattice
+//! resolution, bottom policy) all run through [`LatticeKind`] /
+//! [`LatticeRegistry`] in this module.
 //!
-//! Design: each canonical Contrix event kind is represented as a
-//! `Box<dyn ReducerKind>` registered in `ReducerRegistry`. The dispatcher
-//! looks up the trait object by `&'static str` kind id and delegates
-//! `subject_for_event` (per-subject projection key derivation) and `project`
-//! (state mutation) to it. Component metadata (`component_type` /
-//! `component_version` / `criticality`) is exposed via
-//! [`ReducerKind::component`] so unknown kinds are handled by their
-//! declared criticality.
+//! Concrete `LatticeKind` impls live in [`super::lattice_kinds`]; the
+//! [`super::lattice_kinds::default_lattice_registry`] factory pre-registers
+//! every spec-declared cell family. The Move/Anchor receive pipeline
+//! (`POST /api/v1/moves` / `POST /api/v1/anchors`) consults
+//! [`super::lattice_kinds::build_sdk_cell_registry`] (an
+//! `SDK MemoryCellRegistry`) to drive `verify_move` and `apply_anchor`
+//! per-cell-family lattice resolution.
 //!
-//! Per-kind impls live in `src/reducer/kinds/<domain>.rs`. Each domain
-//! file pulls in the shared `singleton_state_kind!` / `non_state_kind!` /
-//! `legacy_membership_kind!` / `consent_kind!` macros from
-//! `kinds/mod.rs`.
+//! Common metadata types ([`StateCardinality`], [`Criticality`],
+//! [`ComponentDescriptor`]) are kept here because both registries (legacy
+//! durable Event projection and new Move/Anchor pipeline) report them.
 
 use std::collections::BTreeMap;
 
-use contrix_sdk::Operation;
-
-use crate::hlc::ServerHlc;
-use crate::kinds;
-use crate::reducer::{ProjectionEffect, ProjectionState};
-
-/// Cell-cardinality declared by a `ReducerKind` (corresponds to the
-/// contrix-spec event-kind-registry's `cell_subject` shape).
+/// Cell-cardinality declared by a [`LatticeKind`] — corresponds to the
+/// contrix-spec event-kind-registry's `cell_subject` shape.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StateCardinality {
-    /// One projection slot per `(space_id, kind)`. Subject is empty.
+    /// One projection slot per `(space_id, cell_family)`. Subject empty.
     Singleton,
-    /// One projection slot per `(space_id, kind, subject)`; subject is
-    /// derived from the typed payload field declared in the spec
+    /// One projection slot per `(space_id, cell_family, subject)`; subject
+    /// is derived from the typed effect-payload field declared in the spec
     /// registry's `cell_subject`.
     PerSubject,
-    /// Not a state-bearing event — no slot, no subject. The `project`
-    /// method is still called to update non-state projection
-    /// (e.g. message timeline).
+    /// Not a state-bearing event — no slot, no subject.
     None,
 }
 
@@ -60,10 +50,10 @@ pub enum Criticality {
     Ignore,
 }
 
-/// Stable identification of the logical cell this `ReducerKind` drives.
+/// Stable identification of the logical cell this [`LatticeKind`] drives.
 /// Multiple kinds operating on the same cell (paired kinds, e.g.
 /// `cx.capability.grant` + `cx.capability.revoke`) MUST share
-/// `component_type` so the reducer treats them as supersedes on the
+/// `component_type` so the receiver treats them as supersedes on the
 /// same cell.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ComponentDescriptor {
@@ -75,276 +65,211 @@ pub struct ComponentDescriptor {
     pub criticality: Criticality,
 }
 
-/// Errors a [`ReducerKind`] can raise during subject derivation.
+/// Bottom-handling policy for a cell family.
+///
+/// - `Reject`: when the Lattice's `join` returns a structured `Bottom`,
+///   the receiver MUST quarantine the resolved cell and emit
+///   `bottom_diagnostics` events. Lattice queries on this cell return
+///   `bottom` rather than choosing a winner. This is the v1 default for
+///   safety-critical cells (capability, consent, anchorer).
+/// - `Expose`: callers are expected to render the multi-value set
+///   directly (e.g. UI shows "two concurrent edits, please reconcile"
+///   rather than blocking). Suitable for advisory cells (Flow titles,
+///   user profile fields).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BottomPolicy {
+    Reject,
+    Expose,
+}
+
+impl BottomPolicy {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Reject => "reject",
+            Self::Expose => "expose",
+        }
+    }
+}
+
+/// Errors a [`LatticeKind`] can raise during subject derivation.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum ReducerKindError {
-    /// The event payload is missing a required typed field used to derive
-    /// the cell subject (e.g. `payload.actor_id` on `cx.member.state`).
+pub enum LatticeKindError {
+    /// The Move's effects[] is missing the typed field used to derive the
+    /// cell subject (e.g. `payload.flow_id` for a flow-position cell).
     MissingSubjectField {
-        kind: &'static str,
+        cell_family: &'static str,
         field: &'static str,
+    },
+    /// The cell_family declared by a Move effect doesn't match this
+    /// `LatticeKind`. The dispatcher MUST route to a different impl.
+    UnknownCellFamily {
+        observed: String,
+        declared: &'static str,
     },
 }
 
-impl std::fmt::Display for ReducerKindError {
+impl std::fmt::Display for LatticeKindError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ReducerKindError::MissingSubjectField { kind, field } => {
-                write!(f, "{kind} requires payload.{field}")
+            Self::MissingSubjectField { cell_family, field } => {
+                write!(f, "{cell_family} requires effect field `{field}` for cell subject")
+            }
+            Self::UnknownCellFamily { observed, declared } => {
+                write!(
+                    f,
+                    "cell_family `{observed}` is not handled by this LatticeKind ({declared})"
+                )
             }
         }
     }
 }
 
-impl std::error::Error for ReducerKindError {}
+impl std::error::Error for LatticeKindError {}
 
-/// One canonical Contrix event kind implementation.
+/// One canonical Contrix cell-family implementation.
 ///
-/// Implementations are stateless trait objects held in
-/// [`ReducerRegistry`]; the dispatcher passes `&mut ProjectionState`
-/// when a kind needs to mutate projection.
-pub trait ReducerKind: Send + Sync {
-    /// Stable canonical kind id (e.g. `cx.message.create`).
-    fn kind(&self) -> &'static str;
+/// Each `LatticeKind` owns one `cell_family` (e.g.
+/// `cx.component.consent.v1`), declares the lattice algebra that resolves
+/// it (one of the six spec-normative lattices), and exposes subject-
+/// derivation + post-resolution validation hooks. Move/Anchor receive
+/// pipeline iterates anchored Moves, groups effects by `(cell_family,
+/// cell_subject)`, and dispatches to the matching `LatticeKind` for
+/// per-cell `Lattice::join`.
+pub trait LatticeKind: Send + Sync {
+    /// Stable cell-family id (e.g. `cx.component.consent.v1`). Move
+    /// effects route to this `LatticeKind` when the effect's `cell` ref
+    /// has this family path.
+    fn cell_family(&self) -> &'static str;
 
-    /// State cardinality for this kind. Used by the dispatcher to decide
-    /// whether to derive a subject before keying the projection slot.
-    fn cardinality(&self) -> StateCardinality;
+    /// Which of the six normative lattices drives this family. The SDK's
+    /// `contrix-lattice` crate provides the runtime impl (`OrSet`,
+    /// `CasRegister`, `Counter`, `Fsm`, `MvRegister`, `OrderedLog`).
+    fn lattice(&self) -> contrix_sdk::lattice::LatticeKind;
+
+    /// `reject` → quarantine on Bottom (default, safety-critical cells);
+    /// `expose` → render multi-value directly (advisory cells).
+    fn bottom_policy(&self) -> BottomPolicy {
+        BottomPolicy::Reject
+    }
 
     /// Component metadata for forward-compat handling.
     fn component(&self) -> ComponentDescriptor;
 
-    /// Derive the cell subject for an event. Returns:
-    ///
-    /// - `Ok(None)` for `StateCardinality::Singleton` and
-    ///   `StateCardinality::None` (no per-event subject).
-    /// - `Ok(Some(subject))` for `StateCardinality::PerSubject` — the
-    ///   value derived from the typed payload field.
-    /// - `Err(_)` if the typed payload field is missing.
-    ///
-    /// Default impl returns `Ok(None)` — singleton / non-state kinds get
-    /// it for free; per-subject kinds MUST override.
-    fn subject_for_event(
+    /// Derive the cell subject from a Move effect's typed fields. Returns:
+    /// - `Ok(None)` if the cell family is a singleton (one cell per
+    ///   space, e.g. `cx.component.space.policy.v1`) — the subject is
+    ///   empty per spec convention.
+    /// - `Ok(Some(subject))` for per-subject cells; subject is the typed
+    ///   field value (or composite hash for multi-component subjects).
+    /// - `Err(_)` if the required typed field is missing on the effect.
+    fn subject_for_effect(
         &self,
-        _operation: &Operation,
-    ) -> Result<Option<String>, ReducerKindError> {
+        _effect_payload: &serde_json::Value,
+    ) -> Result<Option<String>, LatticeKindError> {
         Ok(None)
     }
-
-    /// Apply the operation to projection state. The dispatcher ensures
-    /// `subject_for_event` succeeded before this is called.
-    fn project(
-        &self,
-        operation: &Operation,
-        state: &mut ProjectionState,
-        hlc: &ServerHlc,
-    ) -> ProjectionEffect;
 }
 
-/// Canonical-kind registry. Holds one `Box<dyn ReducerKind>` per
-/// registered `&'static str` kind id; lookup is `O(log n)` over the
-/// `BTreeMap`.
-pub struct ReducerRegistry {
-    kinds: BTreeMap<&'static str, Box<dyn ReducerKind>>,
+/// Canonical-cell-family registry. Holds one `Box<dyn LatticeKind>` per
+/// registered `cell_family` string; lookup is `O(log n)` over a `BTreeMap`.
+///
+/// The Move/Anchor receive path iterates Anchor frontier Moves, routes
+/// each effect to the matching `LatticeKind`, and applies `Lattice::join`
+/// over the per-cell anchored ops list.
+#[derive(Default)]
+pub struct LatticeRegistry {
+    families: BTreeMap<&'static str, Box<dyn LatticeKind>>,
 }
 
-impl ReducerRegistry {
-    /// Build a registry pre-populated with every kind soland's reducer
-    /// currently projects, plus stubs for spec kinds whose subject
-    /// derivation is wired up but whose `project` method is a no-op
-    /// pending T1-3.
+impl LatticeRegistry {
     pub fn new() -> Self {
-        use crate::reducer::kinds::*;
-        let mut registry = Self { kinds: BTreeMap::new() };
-
-        // ── Active projecting kinds (T1-1 migration) ─────────────────
-        registry.register(MessageCreate);
-        registry.register(MessageRevise);
-        registry.register(MessageRedact); // shared slot via redacts target
-        registry.register(Redaction); // generic cx.redaction
-        registry.register(ReactionAdd);
-        registry.register(ReactionRemove);
-        registry.register(ReadMarker);
-        registry.register(EntityCreate);
-        registry.register(EntityUpdate);
-        registry.register(EntityDelete);
-        registry.register(FieldPositionMove);
-        registry.register(FieldPositionReorder);
-        registry.register(RelationCreate);
-        registry.register(RelationUpdate);
-        registry.register(RelationDelete);
-        registry.register(ContainerMoveItem);
-        registry.register(ContainerRebalance);
-        registry.register(MembershipJoin);
-        registry.register(MembershipLeave);
-        registry.register(MembershipKick);
-        registry.register(MembershipBan);
-        registry.register(MembershipUnban);
-        registry.register(MembershipKnock);
-        registry.register(SpaceCreate);
-        registry.register(SpaceUpdate);
-        registry.register(SpaceDestroy);
-
-        // ── Per-facet space policy state events (T1-3 will land
-        //    project() bodies; subject derivation already wired). ────────
-        registry.register(SpacePolicy);
-        registry.register(SpaceJoinRule);
-        registry.register(SpaceHistoryVisibility);
-        registry.register(SpaceDiscovery);
-        registry.register(SpacePolicyServer);
-        registry.register(SpacePolicyComponents);
-        registry.register(SpaceHistorySharingPolicy);
-        registry.register(SpaceAssetPrivacyPolicy);
-        registry.register(SpaceReadReceiptPolicy);
-        registry.register(SpaceModerationPolicy);
-        registry.register(SpacePlaintextVisibleServices);
-        registry.register(SpaceMediaService);
-        registry.register(SpaceSchema);
-        registry.register(SpaceInheritancePolicy);
-        registry.register(SpaceArchive);
-        registry.register(SpaceFreeze);
-        registry.register(SpaceTombstone);
-        // Holder-private consent (cell or-set, see consent-model.md).
-        registry.register(ConsentGrant);
-        registry.register(ConsentRevoke);
-        // Member state: cx.member.state typed kind (active);
-        // legacy cx.membership.* kinds above remain the projection path
-        // until T1-3 swaps them for cx.member.state.
-        registry.register(MemberState);
-
-        registry
+        Self::default()
     }
 
-    fn register(&mut self, kind: impl ReducerKind + 'static) {
-        let id = kind.kind();
-        if self.kinds.contains_key(id) {
-            panic!("duplicate ReducerKind registration: {id}");
-        }
-        self.kinds.insert(id, Box::new(kind));
+    /// Register a cell-family impl. Subsequent inserts on the same family
+    /// id replace the existing impl (last-write-wins).
+    pub fn register<K>(&mut self, kind: K)
+    where
+        K: LatticeKind + 'static,
+    {
+        self.families.insert(kind.cell_family(), Box::new(kind));
     }
 
-    /// Look up a kind by its canonical id.
-    pub fn lookup(&self, kind: &str) -> Option<&dyn ReducerKind> {
-        self.kinds.get(kind).map(|boxed| boxed.as_ref())
+    /// Look up the impl for a cell_family, returning `None` for unknown
+    /// families (caller decides Required / Optional / Ignore handling per
+    /// the family's `Criticality` declaration).
+    pub fn lookup(&self, cell_family: &str) -> Option<&dyn LatticeKind> {
+        self.families.get(cell_family).map(|boxed| boxed.as_ref())
     }
 
-    /// Number of registered kinds.
+    /// Number of registered families. Used by tests to confirm migration
+    /// progress against the spec's cell-family target.
     pub fn len(&self) -> usize {
-        self.kinds.len()
+        self.families.len()
     }
 
-    /// True when the registry has no kinds (only meaningful for tests).
     pub fn is_empty(&self) -> bool {
-        self.kinds.is_empty()
+        self.families.is_empty()
     }
-
-    /// Iterate registered `&'static str` kind ids in canonical sort order.
-    pub fn kinds(&self) -> impl Iterator<Item = &'static str> + '_ {
-        self.kinds.keys().copied()
-    }
-
-    /// Dispatch an operation through the registry: derive subject, then
-    /// call `project()`. Returns `Ignored` for kinds that fall outside
-    /// the registry (matches the legacy `ProjectionState::apply` fallback).
-    pub fn project(
-        &self,
-        operation: &Operation,
-        state: &mut ProjectionState,
-        hlc: &ServerHlc,
-    ) -> ProjectionEffect {
-        let Some(kind) = kinds::canonical_kind_for_operation(operation) else {
-            return ProjectionEffect::Ignored;
-        };
-        let Some(reducer) = self.lookup(kind) else {
-            return ProjectionEffect::Ignored;
-        };
-        // Subject derivation runs before project so a missing required
-        // payload field surfaces as an explicit error rather than a silent
-        // miss-keyed slot. For T1-1 the result is currently advisory —
-        // T1-3 will wire it into the actual slot keying for state events.
-        if let Err(err) = reducer.subject_for_event(operation) {
-            tracing::warn!(
-                kind = kind,
-                operation_id = operation.operation_id.as_str(),
-                error = %err,
-                "reducer subject derivation failed",
-            );
-            return ProjectionEffect::Ignored;
-        }
-        reducer.project(operation, state, hlc)
-    }
-}
-
-impl Default for ReducerRegistry {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl std::fmt::Debug for ReducerRegistry {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ReducerRegistry").field("kind_count", &self.kinds.len()).finish()
-    }
-}
-
-/// Helper: read an optional string field from `payload`, returning
-/// `Some(_)` only if the field is present and a non-empty string. Used by
-/// per_subject kinds to derive subject from typed payload fields.
-pub(crate) fn optional_payload_string(
-    operation: &Operation,
-    field: &str,
-) -> Option<String> {
-    operation
-        .payload
-        .get(field)
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty())
-        .map(ToOwned::to_owned)
 }
 
 #[cfg(test)]
-mod tests {
+mod lattice_kind_scaffold_tests {
     use super::*;
 
+    /// Smoke test: a tiny `LatticeKind` impl plugs into the registry and
+    /// is reachable by `cell_family` lookup. Confirms the trait shape is
+    /// consistent with the SDK's `contrix-lattice` `LatticeKind` enum.
     #[test]
-    fn registry_has_unique_kinds() {
-        let registry = ReducerRegistry::new();
-        // Sanity: every registered kind has a non-empty id and a stable
-        // ComponentDescriptor; no two share the same kind id (panics in
-        // `register` would have caught duplicates already).
-        let mut seen = std::collections::HashSet::new();
-        for kind_id in registry.kinds() {
-            assert!(!kind_id.is_empty(), "empty kind id");
-            assert!(seen.insert(kind_id), "duplicate kind id: {kind_id}");
+    fn registry_register_and_lookup_works() {
+        struct ConsentCell;
+        impl LatticeKind for ConsentCell {
+            fn cell_family(&self) -> &'static str {
+                "cx.component.consent.v1"
+            }
+            fn lattice(&self) -> contrix_sdk::lattice::LatticeKind {
+                contrix_sdk::lattice::LatticeKind::OrSet
+            }
+            fn bottom_policy(&self) -> BottomPolicy {
+                BottomPolicy::Reject
+            }
+            fn component(&self) -> ComponentDescriptor {
+                ComponentDescriptor {
+                    component_type: "cx.component.consent.v1",
+                    component_version: 1,
+                    criticality: Criticality::Required,
+                }
+            }
         }
-        assert!(registry.len() > 20, "expected ≥ 20 registered kinds");
+        let mut registry = LatticeRegistry::new();
+        assert!(registry.is_empty());
+        registry.register(ConsentCell);
+        assert_eq!(registry.len(), 1);
+        let found = registry.lookup("cx.component.consent.v1").unwrap();
+        assert_eq!(found.lattice(), contrix_sdk::lattice::LatticeKind::OrSet);
+        assert_eq!(found.bottom_policy(), BottomPolicy::Reject);
+        assert_eq!(found.bottom_policy().as_str(), "reject");
+        assert!(registry.lookup("cx.component.unknown.v1").is_none());
     }
 
+    /// LatticeKindError formats both variants the way log lines + JSON
+    /// envelopes downstream consumers expect.
     #[test]
-    fn registry_includes_post_phase_1_5_kinds() {
-        let registry = ReducerRegistry::new();
-        // Per-facet space split.
-        assert!(registry.lookup("cx.space.policy").is_some());
-        assert!(registry.lookup("cx.space.media_service").is_some());
-        assert!(registry.lookup("cx.space.inheritance_policy").is_some());
-        assert!(registry.lookup("cx.space.archive").is_some());
-        assert!(registry.lookup("cx.space.tombstone").is_some());
-        // Read receipt disclosure policy (spec discovery/read-receipts.md §2.5).
-        assert!(registry.lookup("cx.space.read_receipt_policy").is_some());
-        // Holder-private consent (cell or-set).
-        assert!(registry.lookup("cx.consent.grant").is_some());
-        assert!(registry.lookup("cx.consent.revoke").is_some());
-        // Move/Anchor/Lattice rebase removed cx.space.host / cx.space.host.transfer
-        // (anchorer cell now governs Anchor signing); they MUST NOT be registered.
-        assert!(registry.lookup("cx.space.host").is_none());
-        assert!(registry.lookup("cx.space.host.transfer").is_none());
-    }
+    fn lattice_kind_error_display_is_stable() {
+        let err = LatticeKindError::MissingSubjectField {
+            cell_family: "cx.component.flow.position.v1",
+            field: "flow_id",
+        };
+        let msg = format!("{err}");
+        assert!(msg.contains("cx.component.flow.position.v1"));
+        assert!(msg.contains("flow_id"));
 
-    #[test]
-    fn registry_rejects_legacy_aggregate_kinds() {
-        let registry = ReducerRegistry::new();
-        // Spec hard-removed these aggregate kinds; soland MUST NOT register them.
-        assert!(registry.lookup("cx.space.policy.set").is_none());
-        assert!(registry.lookup("cx.space.lifecycle.set").is_none());
+        let err = LatticeKindError::UnknownCellFamily {
+            observed: "cx.component.unrecognised.v9".to_owned(),
+            declared: "cx.component.consent.v1",
+        };
+        let msg = format!("{err}");
+        assert!(msg.contains("cx.component.unrecognised.v9"));
+        assert!(msg.contains("cx.component.consent.v1"));
     }
 }

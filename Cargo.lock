@@ -1066,6 +1066,7 @@ dependencies = [
  "pq-sys",
  "r2d2",
  "serde_json",
+ "uuid",
 ]
 
 [[package]]
@@ -3960,7 +3961,6 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
- "ulid",
  "uuid",
 ]
 

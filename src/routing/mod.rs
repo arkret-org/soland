@@ -173,7 +173,7 @@ pub use mimi::{
     mimi_report_abuse, mimi_room_message, mimi_room_notify, mimi_room_update,
 };
 pub use moderation::moderation_report;
-pub use move_anchor::{submit_anchor, submit_move};
+pub use move_anchor::{admin_sign_anchor, submit_anchor, submit_move};
 pub use operations::{
     OperationPayloadSchema, PayloadRequirement, canonical_json_digest,
     is_removed_legacy_contract_string, known_space_denies_plaintext_service,

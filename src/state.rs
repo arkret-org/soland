@@ -300,7 +300,7 @@ impl AppState {
     pub fn new(config: AppConfig, db: Db) -> Self {
         let mut spaces = SpaceSearchIndex::new();
         let mut demo = SpaceSearchEntry::new(
-            SpaceId::new("cx:space:01js0sp0000000000000000000").expect("valid demo space id"),
+            SpaceId::new("cx:space:0196419b-0000-7000-8000-000000000000").expect("valid demo space id"),
             "Contrix Demo Space",
         );
         demo.description = Some("Shared demo Space served by soland".to_owned());
@@ -342,7 +342,7 @@ impl AppState {
         };
         if let Err(error) = persistence
             .space_meta()
-            .put("cx:space:01js0sp0000000000000000000", &demo_space_meta)
+            .put("cx:space:0196419b-0000-7000-8000-000000000000", &demo_space_meta)
         {
             tracing::warn!(%error, "failed to seed demo space metadata into persistence store");
         }
@@ -376,7 +376,12 @@ impl AppState {
             move_store: Arc::new(contrix_sdk::state_res::MemoryMoveStore::default()),
             anchor_store: Arc::new(contrix_sdk::state_res::MemoryAnchorStore::default()),
             cell_store: Arc::new(contrix_sdk::state_res::MemoryCellStore::default()),
-            cell_registry: Arc::new(contrix_sdk::state_res::MemoryCellRegistry::new()),
+            // C10.B (2026-05-09 五轮 激进模式): bulk-register all 35
+            // soland LatticeKind impls into the SDK cell registry so the
+            // Move/Anchor receive pipeline resolves every spec-declared
+            // cell family. Replaces the SDK's built-in defaults (which
+            // covered only ~10 generic families).
+            cell_registry: Arc::new(crate::reducer::lattice_kinds::build_sdk_cell_registry()),
             key_backups: Arc::new(Mutex::new(BTreeMap::new())),
             key_backup_restore_tickets: Arc::new(Mutex::new(BTreeMap::new())),
             key_backup_restore_executor_runs: Arc::new(Mutex::new(BTreeMap::new())),

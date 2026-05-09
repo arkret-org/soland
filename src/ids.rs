@@ -1,20 +1,20 @@
 //! Contrix v1 protocol-compliant ID generation.
 //!
-//! All IDs follow the format `cx:<kind>:<ulid>` where ULID is Crockford base32
-//! encoded (26 characters, no i/l/o/u).
+//! All typed object IDs follow the format `cx:<kind>:<uuid>` where `<uuid>`
+//! is RFC 9562 UUID version 7 (48-bit Unix-millisecond timestamp + 4-bit
+//! version=7 + 12-bit rand_a + 2-bit variant=10 + 62-bit rand_b), serialized
+//! as the canonical 36-character lowercase hex form
+//! `xxxxxxxx-xxxx-7xxx-Nxxx-xxxxxxxxxxxx` where N ∈ {8,9,a,b}.
+//!
+//! See `contrix-spec/spec/v1/zh/conformance/encoding.md` §4.
 
-use ulid::Ulid;
+use uuid::Uuid;
 
-/// Generate a new ID with the given kind prefix.
+/// Generate a new typed wire ID with the given kind prefix.
 ///
-/// Format: `cx:<kind>:<26-char-crockford-ulid>` (lowercase)
+/// Format: `cx:<kind>:<uuid-v7-36-char-lowercase-hex>`
 pub fn generate(kind: &str) -> String {
-    // ULID uses Crockford base32; spec requires lowercase
-    format!(
-        "cx:{}:{}",
-        kind,
-        Ulid::new().to_string().to_ascii_lowercase()
-    )
+    format!("cx:{}:{}", kind, Uuid::now_v7())
 }
 
 pub fn generate_space_id() -> String {
@@ -69,6 +69,49 @@ pub fn generate_request_id() -> String {
     generate("req")
 }
 
+/// Convert a wire-form `cx:<kind>:<uuid>` typed ID to its raw `Uuid` for
+/// PostgreSQL `uuid` column storage. Returns `None` if the input is not a
+/// well-formed typed ID with a parseable UUID segment. The kind segment is
+/// not validated here; callers that care MUST check it separately (the kind
+/// is canonical bytes of the wire value, see encoding.md §4).
+pub fn parse_typed_uuid(typed: &str, expected_kind: &str) -> Option<Uuid> {
+    let prefix = format!("cx:{}:", expected_kind);
+    let rest = typed.strip_prefix(&prefix)?;
+    Uuid::parse_str(rest).ok()
+}
+
+/// Kind-agnostic helper: parse the trailing UUID part of any
+/// `cx:<kind>:<uuid>` typed ID. Returns `None` if the string has no
+/// `cx:<kind>:` prefix or the trailing segment is not a valid UUID.
+/// Use this at persistence boundaries where the column is `UUID` but the
+/// in-memory value carries the typed wire form.
+pub fn typed_uuid_part(typed: &str) -> Option<Uuid> {
+    let mut iter = typed.splitn(3, ':');
+    let scheme = iter.next()?;
+    if scheme != "cx" {
+        return None;
+    }
+    let _kind = iter.next()?;
+    let uuid_str = iter.next()?;
+    Uuid::parse_str(uuid_str).ok()
+}
+
+/// Same as `typed_uuid_part`, but panics with a descriptive message on
+/// malformed input. Use only at persistence boundaries that have already
+/// been validated upstream (e.g. SDK `*Id::new` validators); production
+/// code that handles untrusted input MUST use `typed_uuid_part` and
+/// propagate the `None` case as a typed error.
+pub fn typed_uuid_part_or_panic(typed: &str) -> Uuid {
+    typed_uuid_part(typed).unwrap_or_else(|| {
+        panic!("malformed typed wire ID at persistence boundary: {typed:?}")
+    })
+}
+
+/// Format a raw `Uuid` back to a typed wire ID `cx:<kind>:<uuid>`.
+pub fn format_typed_uuid(kind: &str, uuid: &Uuid) -> String {
+    format!("cx:{}:{}", kind, uuid)
+}
+
 /// Percent-encode reserved characters in a **cell subject** segment.
 ///
 /// Per Contrix v1 (spec encoding §9.5), composite cell subjects are joined
@@ -119,14 +162,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn id_format_is_cx_kind_ulid() {
+    fn id_format_is_cx_kind_uuid() {
         let id = generate_space_id();
         assert!(id.starts_with("cx:space:"));
-        let ulid_part = &id["cx:space:".len()..];
-        assert_eq!(ulid_part.len(), 26);
-        // Crockford base32: 0-9, a-h, j-k, m-n, p-t, v-z (no i, l, o, u)
-        assert!(ulid_part.chars().all(|c| c.is_ascii_digit()
-            || matches!(c, 'a'..='h' | 'j'..='k' | 'm'..='n' | 'p'..='t' | 'v'..='z')));
+        let uuid_part = &id["cx:space:".len()..];
+        // 36-char canonical UUID form: 8-4-4-4-12 hex with dashes
+        assert_eq!(uuid_part.len(), 36);
+        let parsed = Uuid::parse_str(uuid_part).expect("uuid parse");
+        // version 7
+        assert_eq!(parsed.get_version_num(), 7);
     }
 
     #[test]
@@ -159,8 +203,22 @@ mod tests {
         // Small delay to ensure different timestamp
         std::thread::sleep(std::time::Duration::from_millis(2));
         let id2 = generate_space_id();
-        // ULIDs generated later should sort after earlier ones
+        // UUIDv7 is monotonic by ms timestamp; later IDs sort lexicographically after.
         assert!(id2 > id1);
+    }
+
+    #[test]
+    fn parse_typed_uuid_roundtrip() {
+        let id = generate_event_id();
+        let raw = parse_typed_uuid(&id, "event").expect("parse");
+        let back = format_typed_uuid("event", &raw);
+        assert_eq!(id, back);
+    }
+
+    #[test]
+    fn parse_typed_uuid_rejects_wrong_kind() {
+        let id = generate_event_id();
+        assert!(parse_typed_uuid(&id, "space").is_none());
     }
 
     #[test]

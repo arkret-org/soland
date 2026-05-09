@@ -363,14 +363,16 @@ fn prune_expired_webrtc_sessions(state: &AppState) {
 }
 
 fn is_valid_webrtc_session_id(value: &str) -> bool {
-    let Some(ulid) = value.strip_prefix("cx:webrtc:") else {
+    // v1 wire ID: `cx:<kind>:<uuidv7-36-char-lowercase-hex>`
+    // (RFC 9562 v7, version=7, variant ∈ {8,9,a,b}). See
+    // contrix-spec/spec/v1/zh/conformance/encoding.md §4.
+    let Some(rest) = value.strip_prefix("cx:webrtc:") else {
         return false;
     };
-    ulid.len() == 26
-        && ulid.chars().all(|c| {
-            c.is_ascii_digit()
-                || matches!(c, 'a'..='h' | 'j'..='k' | 'm'..='n' | 'p'..='t' | 'v'..='z')
-        })
+    let Ok(parsed) = uuid::Uuid::parse_str(rest) else {
+        return false;
+    };
+    parsed.get_version_num() == 7
 }
 
 fn is_supported_webrtc_signal_type(value: &str) -> bool {

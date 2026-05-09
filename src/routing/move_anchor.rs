@@ -21,7 +21,7 @@
 //! it requires the production DID resolver to be online.
 
 use contrix_sdk::{
-    Anchor, Move,
+    Anchor, Move, SpaceId,
     state_res::{apply_anchor, verify_move},
 };
 use salvo::http::StatusCode;
@@ -37,6 +37,18 @@ use crate::{
 };
 
 use super::AuthArgs;
+
+/// Public re-export of the shape-only verifier so the anchorer worker
+/// (`crate::anchorer`) can pass it to `apply_anchor` without duplicating
+/// the JWS shape rules.
+pub fn shape_only_jws_verifier_for_anchorer(
+    canonical_bytes: &[u8],
+    jws: &str,
+    verification_method: &str,
+    issuer: &str,
+) -> Result<(), String> {
+    verify_jws_shape(canonical_bytes, jws, verification_method, issuer)
+}
 
 /// JWS shape verifier used by `verify_move` / `apply_anchor`. Rejects:
 ///   - empty / sentinel signature segments
@@ -248,6 +260,101 @@ pub async fn submit_anchor(
         rejected_moves: rejected,
         post_state_root: effect.post_state_root.as_str().to_owned(),
     })
+}
+
+/// Request body for `POST /api/v1/admin/anchors/sign`.
+#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
+pub struct SignAnchorRequest {
+    /// Space whose pending Moves should be batch-anchored.
+    pub space_id: String,
+    /// Maximum number of pending Moves to consume in this pass.
+    /// Default 100 if absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_moves: Option<usize>,
+}
+
+/// Response body — mirrors `SubmitAnchorResponse` but reports `None` when
+/// there were no pending Moves to anchor.
+#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
+pub struct SignAnchorResponse {
+    /// `true` if an Anchor was published; `false` if nothing was pending.
+    pub published: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anchor_id: Option<String>,
+    #[serde(default)]
+    pub accepted_move_ids: Vec<String>,
+    #[serde(default)]
+    pub rejected_moves: Vec<RejectedMoveEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub post_state_root: Option<String>,
+}
+
+/// C10.B MAL-3 (2026-05-09 七轮): admin endpoint that triggers one
+/// signing pass by the in-process anchorer worker. Useful for tests and
+/// for ops to manually flush pending Moves into an Anchor without a
+/// background ticker. Production deploys will eventually wire a
+/// periodic ticker to call the same worker function.
+#[endpoint(
+    operation_id = "cx.admin.anchors.sign",
+    tags("admin", "anchors"),
+    summary = "Trigger one anchorer signing pass for a Space",
+)]
+pub async fn admin_sign_anchor(
+    aa: AuthArgs,
+    depot: &mut Depot,
+    req: &mut Request,
+    body: JsonBody<SignAnchorRequest>,
+) -> JsonResult<SignAnchorResponse> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let _session = aa.authenticated_session(state, req)?;
+    let SignAnchorRequest { space_id, max_moves } = body.into_inner();
+    let space = SpaceId::new(space_id.clone()).map_err(|e| {
+        AppError::new(ErrorCode::SchemaViolation, format!("invalid space_id: {e}"))
+            .with_status(StatusCode::BAD_REQUEST)
+    })?;
+    let limit = max_moves.unwrap_or(100).min(1000);
+
+    match crate::anchorer::run_one_signing_pass(state, &space, limit) {
+        Ok(Some(outcome)) => {
+            let rejected = outcome
+                .rejected_moves
+                .into_iter()
+                .map(|(id, reason)| RejectedMoveEntry {
+                    move_id: id.as_str().to_owned(),
+                    reason,
+                })
+                .collect();
+            json_ok(SignAnchorResponse {
+                published: true,
+                anchor_id: Some(outcome.anchor_id.as_str().to_owned()),
+                accepted_move_ids: outcome
+                    .accepted_move_ids
+                    .into_iter()
+                    .map(|m| m.as_str().to_owned())
+                    .collect(),
+                rejected_moves: rejected,
+                post_state_root: Some(outcome.post_state_root.as_str().to_owned()),
+            })
+        }
+        Ok(None) => json_ok(SignAnchorResponse {
+            published: false,
+            anchor_id: None,
+            accepted_move_ids: vec![],
+            rejected_moves: vec![],
+            post_state_root: None,
+        }),
+        Err(crate::anchorer::AnchorerError::NotAuthorized(_)) => {
+            Err(AppError::new(
+                ErrorCode::PolicyViolation,
+                "not authorized to sign anchors for this space".to_owned(),
+            )
+            .with_status(StatusCode::FORBIDDEN))
+        }
+        Err(e) => Err(
+            AppError::new(ErrorCode::InternalError, e.to_string())
+                .with_status(StatusCode::CONFLICT),
+        ),
+    }
 }
 
 /// Trait extension to give `MemoryMoveStore` an `&self` `put_pending`

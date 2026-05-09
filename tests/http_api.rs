@@ -125,7 +125,7 @@ fn signed_event_envelope(event_id: &str, actor_seq: u64, prev_refs: Vec<&str>) -
         "schema_id": "cx.schema.message.v1",
         "actor_id": "did:web:alice.example",
         "actor_seq": actor_seq,
-        "space_id": "cx:space:01js0sp0000000000000000000",
+        "space_id": "cx:space:0196419b-0000-7000-8000-000000000000",
         "device_id": "dev_alice",
         "audience": "did:web:soland.local",
         "domain": "did:web:soland.local",
@@ -621,7 +621,7 @@ async fn contrix_openapi_spec_contains_facet_projection_contracts() {
 async fn index_query_supports_facet_projection_binding() {
     let query: Value = TestClient::post("http://server/api/v1/index/query")
         .json(&serde_json::json!({
-            "space_ids": ["cx:space:01js0sp0000000000000000000"],
+            "space_ids": ["cx:space:0196419b-0000-7000-8000-000000000000"],
             "facets": ["container", "replyable"],
             "renderer": "collection",
             "limit": 20
@@ -633,7 +633,7 @@ async fn index_query_supports_facet_projection_binding() {
         .unwrap();
     let unsupported: Value = TestClient::post("http://server/api/v1/index/query")
         .json(&serde_json::json!({
-            "space_ids": ["cx:space:01js0sp0000000000000000000"],
+            "space_ids": ["cx:space:0196419b-0000-7000-8000-000000000000"],
             "facets": ["not_supported"],
             "limit": 20
         }))
@@ -658,7 +658,7 @@ async fn index_query_supports_facet_projection_binding() {
 async fn index_reducer_debug_reports_projection_frontier() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
-    let space_id = "cx:space:01js0sp0000000000000000000";
+    let space_id = "cx:space:0196419b-0000-7000-8000-000000000000";
 
     let sent: Value = TestClient::post("http://server/api/v1/messages/send")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -779,7 +779,7 @@ async fn sync_cursor_rejects_facets_and_renderer_changes() {
         .json(&serde_json::json!({
             "renderer": "collection",
             "facets": ["stateful"],
-            "filter": {"spaces": ["cx:space:01js0sp0000000000000000000"]},
+            "filter": {"spaces": ["cx:space:0196419b-0000-7000-8000-000000000000"]},
         }))
         .send(&app_from_state(state.clone()))
         .await
@@ -794,7 +794,7 @@ async fn sync_cursor_rejects_facets_and_renderer_changes() {
             "since": first["next_batch"],
             "renderer": "queue",
             "facets": ["stateful"],
-            "filter": {"spaces": ["cx:space:01js0sp0000000000000000000"]},
+            "filter": {"spaces": ["cx:space:0196419b-0000-7000-8000-000000000000"]},
         }))
         .send(&app_from_state(state.clone()))
         .await;
@@ -806,7 +806,7 @@ async fn sync_cursor_rejects_facets_and_renderer_changes() {
             "since": first["next_batch"],
             "renderer": "collection",
             "facets": ["replyable"],
-            "filter": {"spaces": ["cx:space:01js0sp0000000000000000000"]},
+            "filter": {"spaces": ["cx:space:0196419b-0000-7000-8000-000000000000"]},
         }))
         .send(&app_from_state(state.clone()))
         .await;
@@ -817,7 +817,7 @@ async fn sync_cursor_rejects_facets_and_renderer_changes() {
 async fn sync_backfill_exposes_prev_batch_and_limited_timeline_pages() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
-    let space_id = "cx:space:01js0sp0000000000000000000";
+    let space_id = "cx:space:0196419b-0000-7000-8000-000000000000";
 
     for body in ["first backfill page", "second backfill page"] {
         let sent: Value = TestClient::post("http://server/api/v1/messages/send")
@@ -1124,7 +1124,7 @@ async fn service_did_is_config_driven_across_public_metadata() {
     assert_eq!(directory["service_did"], service_did);
 
     let resolved: Value = TestClient::post("http://server/api/v1/directory/resolve-space")
-        .json(&serde_json::json!({"space_id": "cx:space:01js0sp0000000000000000000"}))
+        .json(&serde_json::json!({"space_id": "cx:space:0196419b-0000-7000-8000-000000000000"}))
         .send(&service)
         .await
         .take_json()
@@ -2354,7 +2354,7 @@ async fn sync_directory_and_index_share_demo_space() {
         sync["spaces"]
             .as_object()
             .unwrap()
-            .contains_key("cx:space:01js0sp0000000000000000000")
+            .contains_key("cx:space:0196419b-0000-7000-8000-000000000000")
     );
 
     let directory: Value = TestClient::post("http://server/api/v1/directory/search-spaces")
@@ -2367,7 +2367,7 @@ async fn sync_directory_and_index_share_demo_space() {
     assert_eq!(directory["results"].as_array().unwrap().len(), 1);
 
     let index: Value = TestClient::post("http://server/api/v1/index/query")
-        .json(&serde_json::json!({"space_ids": ["cx:space:01js0sp0000000000000000000"]}))
+        .json(&serde_json::json!({"space_ids": ["cx:space:0196419b-0000-7000-8000-000000000000"]}))
         .send(&app())
         .await
         .take_json()
@@ -2438,7 +2438,7 @@ async fn directory_product_endpoints_return_demo_projection_shapes() {
 async fn standard_entity_types_and_reverse_domain_custom_types_work() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
-    let space_id = "cx:space:01js0sp0000000000000000000";
+    let space_id = "cx:space:0196419b-0000-7000-8000-000000000000";
 
     let invalid = TestClient::post("http://server/api/v1/entities")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -2624,7 +2624,7 @@ async fn schema_registry_contracts_work() {
 async fn view_endpoints_project_common_presentation_shapes() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
-    let space_id = "cx:space:01js0sp0000000000000000000";
+    let space_id = "cx:space:0196419b-0000-7000-8000-000000000000";
 
     let mut entities = Vec::new();
     for (title, status, due_at, priority, facets) in [
@@ -2843,7 +2843,7 @@ async fn view_endpoints_project_common_presentation_shapes() {
 #[tokio::test]
 async fn index_product_endpoints_return_demo_projection_shapes() {
     let entity: Value = TestClient::get(
-        "http://server/api/v1/index/entity?entity_id=cx:space:01js0sp0000000000000000000",
+        "http://server/api/v1/index/entity?entity_id=cx:space:0196419b-0000-7000-8000-000000000000",
     )
     .send(&app())
     .await
@@ -2890,7 +2890,7 @@ async fn index_product_endpoints_return_demo_projection_shapes() {
     assert_eq!(search["results"].as_array().unwrap().len(), 1);
 
     let hierarchy: Value = TestClient::get(
-        "http://server/api/v1/index/space-hierarchy?root_space_id=cx:space:01js0sp0000000000000000000",
+        "http://server/api/v1/index/space-hierarchy?root_space_id=cx:space:0196419b-0000-7000-8000-000000000000",
     )
     .send(&app())
     .await
@@ -2899,7 +2899,7 @@ async fn index_product_endpoints_return_demo_projection_shapes() {
     .unwrap();
     assert_eq!(
         hierarchy["root_space_id"],
-        "cx:space:01js0sp0000000000000000000"
+        "cx:space:0196419b-0000-7000-8000-000000000000"
     );
 
     let invalid = TestClient::post("http://server/api/v1/index/search")
@@ -2920,7 +2920,7 @@ async fn broader_protocol_surface_returns_contract_shapes() {
     assert_eq!(directory_describe["service_did"], "did:web:soland.local");
 
     let resolved: Value = TestClient::post("http://server/api/v1/directory/resolve-space")
-        .json(&serde_json::json!({"space_id": "cx:space:01js0sp0000000000000000000"}))
+        .json(&serde_json::json!({"space_id": "cx:space:0196419b-0000-7000-8000-000000000000"}))
         .send(&app())
         .await
         .take_json()
@@ -2928,11 +2928,11 @@ async fn broader_protocol_surface_returns_contract_shapes() {
         .unwrap();
     assert_eq!(
         resolved["space_preview"]["space_id"],
-        "cx:space:01js0sp0000000000000000000"
+        "cx:space:0196419b-0000-7000-8000-000000000000"
     );
 
     let backfill: Value = TestClient::get(
-        "http://server/api/v1/events?space_id=cx:space:01js0sp0000000000000000000",
+        "http://server/api/v1/events?space_id=cx:space:0196419b-0000-7000-8000-000000000000",
     )
     .send(&app())
     .await
@@ -2962,7 +2962,7 @@ async fn broader_protocol_surface_returns_contract_shapes() {
         .json(&serde_json::json!({
             "actor": "did:web:alice.example",
             "action": "space.read",
-            "resource": {"kind": "space", "space_id": "cx:space:01js0sp0000000000000000000"}
+            "resource": {"kind": "space", "space_id": "cx:space:0196419b-0000-7000-8000-000000000000"}
         }))
         .send(&app())
         .await
@@ -3127,7 +3127,7 @@ async fn webrtc_signaling_contracts_work() {
 
     let unauthenticated = TestClient::post("http://server/api/v1/webrtc/sessions")
         .json(&serde_json::json!({
-            "space_id": "cx:space:01js0sp0000000000000000000"
+            "space_id": "cx:space:0196419b-0000-7000-8000-000000000000"
         }))
         .send(&app_from_state(state.clone()))
         .await;
@@ -3136,7 +3136,7 @@ async fn webrtc_signaling_contracts_work() {
     let session: Value = TestClient::post("http://server/api/v1/webrtc/sessions")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
-            "space_id": "cx:space:01js0sp0000000000000000000",
+            "space_id": "cx:space:0196419b-0000-7000-8000-000000000000",
             "participants": ["did:web:alice.example"],
             "ttl_ms": 60000
         }))
@@ -3548,7 +3548,7 @@ async fn push_profile_and_moderation_contracts_work() {
 
     let unauth_typing = TestClient::post("http://server/api/v1/sync/typing")
         .json(&serde_json::json!({
-            "space_id": "cx:space:01js0sp0000000000000000000",
+            "space_id": "cx:space:0196419b-0000-7000-8000-000000000000",
             "typing": true
         }))
         .send(&app_from_state(state.clone()))
@@ -3558,7 +3558,7 @@ async fn push_profile_and_moderation_contracts_work() {
     let typing: Value = TestClient::post("http://server/api/v1/sync/typing")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
-            "space_id": "cx:space:01js0sp0000000000000000000",
+            "space_id": "cx:space:0196419b-0000-7000-8000-000000000000",
             "scope_id": "cx:thread:demo",
             "typing": true,
             "timeout_ms": 30000
@@ -3579,7 +3579,7 @@ async fn push_profile_and_moderation_contracts_work() {
         .take_json()
         .await
         .unwrap();
-    let ephemeral = &sync_with_typing["spaces"]["cx:space:01js0sp0000000000000000000"]["ephemeral"];
+    let ephemeral = &sync_with_typing["spaces"]["cx:space:0196419b-0000-7000-8000-000000000000"]["ephemeral"];
     assert_eq!(ephemeral[0]["type"], "cx.typing");
     assert_eq!(ephemeral[0]["scope_id"], "cx:thread:demo");
     assert_eq!(ephemeral[0]["actors"][0]["actor"], "did:web:alice.example");
@@ -3587,7 +3587,7 @@ async fn push_profile_and_moderation_contracts_work() {
     let typing_stopped: Value = TestClient::post("http://server/api/v1/sync/typing")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
-            "space_id": "cx:space:01js0sp0000000000000000000",
+            "space_id": "cx:space:0196419b-0000-7000-8000-000000000000",
             "typing": false
         }))
         .send(&app_from_state(state.clone()))
@@ -3606,7 +3606,7 @@ async fn push_profile_and_moderation_contracts_work() {
         .await
         .unwrap();
     assert!(
-        sync_without_typing["spaces"]["cx:space:01js0sp0000000000000000000"]["ephemeral"]
+        sync_without_typing["spaces"]["cx:space:0196419b-0000-7000-8000-000000000000"]["ephemeral"]
             .as_array()
             .unwrap()
             .is_empty()
@@ -3714,7 +3714,7 @@ async fn push_profile_and_moderation_contracts_work() {
     let report: Value = TestClient::post("http://server/api/v1/moderation/report")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
-            "space_id": "cx:space:01js0sp0000000000000000000",
+            "space_id": "cx:space:0196419b-0000-7000-8000-000000000000",
             "target_ref": "cx:event:demo",
             "reason": "spam",
             "reporter": "did:web:alice.example"
@@ -3748,7 +3748,7 @@ async fn push_profile_and_moderation_contracts_work() {
 
     let unauthenticated_report = TestClient::post("http://server/api/v1/moderation/report")
         .json(&serde_json::json!({
-            "space_id": "cx:space:01js0sp0000000000000000000",
+            "space_id": "cx:space:0196419b-0000-7000-8000-000000000000",
             "target_ref": "cx:event:demo",
             "reason": "spam",
             "reporter": "did:web:alice.example"
@@ -4253,7 +4253,7 @@ async fn revoked_device_blocks_encrypted_writes() {
     let blocked_send = TestClient::post("http://server/api/v1/messages/send")
         .add_header("authorization", format!("Bearer {stale_session}"), true)
         .json(&serde_json::json!({
-            "space_id": "cx:space:01js0sp0000000000000000000",
+            "space_id": "cx:space:0196419b-0000-7000-8000-000000000000",
             "content": encrypted_envelope("cx.message.v1", "blocked-ciphertext"),
             "encrypted": true
         }))
@@ -4432,7 +4432,7 @@ async fn policy_check_and_validation_work() {
     let policy: Value = TestClient::post("http://server/contrix/v1/check")
         .json(&serde_json::json!({
             "request_id": "req1",
-            "space_id": "cx:space:01js0sp0000000000000000000",
+            "space_id": "cx:space:0196419b-0000-7000-8000-000000000000",
             "request_canonical_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
             "action": "message.send",
             "actor": "did:web:alice.example",
@@ -4447,7 +4447,7 @@ async fn policy_check_and_validation_work() {
 
     let unauthenticated_policy = TestClient::post("http://server/api/v1/policies")
         .json(&serde_json::json!({
-            "scope": "cx:space:01js0sp0000000000000000000",
+            "scope": "cx:space:0196419b-0000-7000-8000-000000000000",
             "subject_ref": "did:web:alice.example",
             "policy_type": "message.send",
             "effect": "deny"
@@ -4462,12 +4462,12 @@ async fn policy_check_and_validation_work() {
     let policy_document: Value = TestClient::post("http://server/api/v1/policies")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
-            "scope": "cx:space:01js0sp0000000000000000000",
+            "scope": "cx:space:0196419b-0000-7000-8000-000000000000",
             "subject_ref": "did:web:alice.example",
             "policy_type": "message.send",
             "effect": "deny",
             "actions": ["message.send"],
-            "resource": {"kind": "space", "space_id": "cx:space:01js0sp0000000000000000000"},
+            "resource": {"kind": "space", "space_id": "cx:space:0196419b-0000-7000-8000-000000000000"},
             "obligations": [{"type": "audit", "level": "high"}]
         }))
         .send(&app_from_state(state.clone()))
@@ -4490,7 +4490,7 @@ async fn policy_check_and_validation_work() {
     let denied: Value = TestClient::post("http://server/contrix/v1/check")
         .json(&serde_json::json!({
             "request_id": "req2",
-            "space_id": "cx:space:01js0sp0000000000000000000",
+            "space_id": "cx:space:0196419b-0000-7000-8000-000000000000",
             "request_canonical_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
             "action": "message.send",
             "actor": "did:web:alice.example",
@@ -4518,7 +4518,7 @@ async fn policy_check_and_validation_work() {
     let allowed_again: Value = TestClient::post("http://server/contrix/v1/check")
         .json(&serde_json::json!({
             "request_id": "req3",
-            "space_id": "cx:space:01js0sp0000000000000000000",
+            "space_id": "cx:space:0196419b-0000-7000-8000-000000000000",
             "request_canonical_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
             "action": "message.send",
             "actor": "did:web:alice.example",
@@ -5068,7 +5068,7 @@ async fn repo_submit_commit_cas_conflict_and_idempotent_duplicate() {
 
     let first_operation = Operation::create(
         OperationId::new("cx:operation:cas-idem").unwrap(),
-        SpaceId::new("cx:space:01js0sp0000000000000000000").unwrap(),
+        SpaceId::new("cx:space:0196419b-0000-7000-8000-000000000000").unwrap(),
         kinds::CX_MESSAGE_CREATE,
         serde_json::json!({
             "event_id": "cx:event:cas-idem",
@@ -5123,7 +5123,7 @@ async fn repo_submit_commit_cas_conflict_and_idempotent_duplicate() {
 
     let conflicting_operation = Operation::create(
         OperationId::new("cx:operation:cas-idem").unwrap(),
-        SpaceId::new("cx:space:01js0sp0000000000000000000").unwrap(),
+        SpaceId::new("cx:space:0196419b-0000-7000-8000-000000000000").unwrap(),
         kinds::CX_MESSAGE_CREATE,
         serde_json::json!({
             "event_id": "cx:event:cas-idem",
@@ -5185,7 +5185,7 @@ async fn repo_submit_commit_operation_id_different_digest_quarantine() {
 
     let operation = Operation::create(
         OperationId::new("cx:operation:quarantine-op").unwrap(),
-        SpaceId::new("cx:space:01js0sp0000000000000000000").unwrap(),
+        SpaceId::new("cx:space:0196419b-0000-7000-8000-000000000000").unwrap(),
         kinds::CX_MESSAGE_CREATE,
         serde_json::json!({
             "event_id": "cx:event:quarantine-op",
@@ -5222,7 +5222,7 @@ async fn repo_submit_commit_operation_id_different_digest_quarantine() {
 
     let duplicate_operation = Operation::create(
         OperationId::new("cx:operation:quarantine-op").unwrap(),
-        SpaceId::new("cx:space:01js0sp0000000000000000000").unwrap(),
+        SpaceId::new("cx:space:0196419b-0000-7000-8000-000000000000").unwrap(),
         kinds::CX_MESSAGE_CREATE,
         serde_json::json!({
             "event_id": "cx:event:quarantine-op",

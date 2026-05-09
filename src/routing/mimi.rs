@@ -517,7 +517,7 @@ fn mimi_receipt(state: &AppState, operation_id: &str, body: &Value, extra: Value
 }
 
 fn mimi_room_projection(state: &AppState, room_id: &str) -> Value {
-    let space_id = "cx:space:01js0sp0000000000000000000";
+    let space_id = "cx:space:0196419b-0000-7000-8000-000000000000";
     json!({
         "kind": "cx.mimi.room_binding",
         "profile": "cx.profile.mimi_interop.v1",
@@ -536,7 +536,7 @@ fn mimi_room_projection(state: &AppState, room_id: &str) -> Value {
 }
 
 fn mimi_demo_participants(state: &AppState) -> Vec<Value> {
-    let space_id = SpaceId::new("cx:space:01js0sp0000000000000000000".to_owned())
+    let space_id = SpaceId::new("cx:space:0196419b-0000-7000-8000-000000000000".to_owned())
         .expect("demo space id is valid");
     state
         .spaces

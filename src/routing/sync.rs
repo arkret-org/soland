@@ -584,21 +584,15 @@ pub async fn set_typing(depot: &mut Depot, req: &mut Request, res: &mut Response
 }
 
 /// C17 (spec 2026-05-08): exposed at `GET /api/v1/events/subscribe` as
-/// `cx.events.subscribe`. Renamed from the legacy `cx.sync.subscribe` endpoint
-/// `GET /api/v1/sync/subscribe`. The selector now accepts `spaces[]` /
-/// `actors[]` repeated query args (this implementation still reads a single
-/// `spaces` value; multi-selector expansion is additive future work).
+/// `cx.events.subscribe`. The selector accepts `spaces[]` repeated query args.
+/// Aggressive cleanup (2026-05-09): legacy singular `space_id` transition
+/// fallback removed; clients MUST emit `spaces=` per spec.
 #[endpoint]
 pub async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
-    // C17: selector now uses `spaces[]` (repeated query); accept `space_id`
-    // singular for transition.
-    // C17 selector: `spaces=` repeated args (multi-value); fallback to
-    // legacy singular `space_id` during transition.
-    let mut spaces = super::query_param_all(req, "spaces");
-    if spaces.is_empty() {
-        spaces = query_param(req, "space_id").into_iter().collect();
-    }
+    // C17 selector: `spaces=` repeated args (multi-value). Singular
+    // `space_id` is rejected as a removed legacy contract.
+    let spaces = super::query_param_all(req, "spaces");
     if spaces.is_empty() {
         render_error(
             res,
@@ -634,8 +628,8 @@ pub async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Re
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(100)
         .min(100);
-    // C17: cursor parameter renamed to `from`.
-    let cursor = query_param(req, "from").or_else(|| query_param(req, "cursor"));
+    // C17: cursor parameter renamed to `from`. Legacy `cursor` param removed.
+    let cursor = query_param(req, "from");
     // C17: `include_history` defaults to true (the legacy /sync/subscribe
     // returned recent history then long-polled; in unary mode this is the
     // safe default). When false, only the `frontier`+`catchup_complete`+
@@ -650,7 +644,6 @@ pub async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Re
     let mut seq: u64 = 0;
     let mut last_cursor: Option<String> = None;
     let mut any_has_more = false;
-    let mut multi_space_invalid_cursor = false;
 
     if include_history {
         for space_id in &accessible_spaces {
@@ -718,7 +711,6 @@ pub async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Re
                 },
                 Err(error) => {
                     if error.to_string().contains("invalid_cursor") {
-                        multi_space_invalid_cursor = true;
                         // Surface immediately for single-space; for multi, fail
                         // the whole request because cursor is stream-wide.
                         render_error(
@@ -741,7 +733,6 @@ pub async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Re
                 }
             }
         }
-        let _ = multi_space_invalid_cursor; // tracked for future telemetry
     }
 
     // C17 control frame: catchup_complete signals end of historical buffer.
@@ -775,11 +766,10 @@ pub async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Re
 /// `/api/v1/messages/send` see their messages here.
 ///
 /// Selector: `spaces[]` ∪ `actors[]` repeated query args (multi-value).
-/// Singular `space_id` / `actor_id` accepted as transition fallback.
-/// Multi-space queries call `projected_event_page` per space and merge
-/// sorted by HLC; the result paginates as a single stream. `actors[]`
-/// is currently ignored (projection layer is space-keyed; actor-scoped
-/// reads remain on the durable Event store via `_legacy_list_events`).
+/// Aggressive cleanup (2026-05-09): legacy singular `space_id` / `actor_id`
+/// transition fallback removed. Multi-space queries call `projected_event_page`
+/// per space and merge sorted by HLC; the result paginates as a single stream.
+/// `actors[]`-only queries dispatch to the durable Event-store reader.
 ///
 /// Range: `from?` (replaces legacy `cursor`) + `until?` + `direction`.
 /// `direction=backward` reverses the merged stream so callers can paginate
@@ -787,16 +777,10 @@ pub async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Re
 #[endpoint]
 pub async fn events_query(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
-    // C17 selector: collect all `spaces=` and `actors=` repeated args +
-    // transition fallback for singular `space_id` / `actor_id`.
-    let mut spaces = super::query_param_all(req, "spaces");
-    if spaces.is_empty() {
-        spaces = query_param(req, "space_id").into_iter().collect();
-    }
-    let mut actors = super::query_param_all(req, "actors");
-    if actors.is_empty() {
-        actors = query_param(req, "actor_id").into_iter().collect();
-    }
+    // C17 selector: collect all `spaces=` and `actors=` repeated args.
+    // Singular `space_id` / `actor_id` are rejected as removed legacy contracts.
+    let spaces = super::query_param_all(req, "spaces");
+    let actors = super::query_param_all(req, "actors");
     if spaces.is_empty() && actors.is_empty() {
         render_error(
             res,
@@ -850,8 +834,9 @@ pub async fn events_query(depot: &mut Depot, req: &mut Request, res: &mut Respon
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(100)
         .min(100);
-    // C17: `cursor` → `from`; `direction = forward | backward`.
-    let cursor = query_param(req, "from").or_else(|| query_param(req, "cursor"));
+    // C17: `cursor` → `from`; `direction = forward | backward`. Legacy
+    // `cursor` param removed (aggressive cleanup 2026-05-09).
+    let cursor = query_param(req, "from");
     let direction = query_param(req, "direction").unwrap_or_else(|| "forward".to_owned());
     if direction != "forward" && direction != "backward" {
         render_error(
