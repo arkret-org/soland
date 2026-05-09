@@ -111,7 +111,8 @@ pub use directory::{
 };
 pub use entity::{create_entity, delete_entity, get_entity, list_entities, update_entity};
 pub use events::{
-    batch_get_events, events_describe, events_frontier, get_event, submit_event,
+    batch_get_events, effective_read_receipt_policy_for_space, events_describe, events_frontier,
+    events_query_durable_scope, events_query_durable_scope_impl, get_event, submit_event,
 };
 pub use reaction::{add_reaction, remove_reaction};
 pub use read_marker::{get_read_markers, set_read_marker};
@@ -200,7 +201,8 @@ pub use util::{
     bearer_token, handle_for_did, is_json_integer, is_supported_cx_entity_type,
     is_valid_discoverability, is_valid_entity_type, is_valid_handle, is_valid_sha256_digest,
     is_valid_sha256_hex, is_valid_sync_token, normalize_handle, query_flag, query_list,
-    query_param, render_error, sha256_hex, validate_device_id, validate_did, validate_space_id,
+    query_param, query_param_all, render_error, sha256_hex, validate_device_id, validate_did,
+    validate_space_id,
 };
 pub use webrtc::{
     create_webrtc_session, delete_webrtc_session, get_webrtc_signals, ice_config,

@@ -56,6 +56,9 @@ pub enum ErrorCode {
     CausalConflict,
     DependencyMissing,
     DiscussionTrackDisabled,
+    /// C14 / read-receipts §2.5: Sync Service drops `cx.receipt.read` when
+    /// the effective Space `disclosure="disabled"` policy is in force.
+    PolicyViolation,
     EpochMismatch,
     DuplicateConflict,
     RankExhausted,
@@ -105,6 +108,7 @@ impl ErrorCode {
         Self::CausalConflict,
         Self::DependencyMissing,
         Self::DiscussionTrackDisabled,
+        Self::PolicyViolation,
         Self::EpochMismatch,
         Self::DuplicateConflict,
         Self::RankExhausted,
@@ -155,6 +159,7 @@ impl ErrorCode {
             Self::CausalConflict => core_error::ERROR_CODE_CAUSAL_CONFLICT,
             Self::DependencyMissing => core_error::ERROR_CODE_DEPENDENCY_MISSING,
             Self::DiscussionTrackDisabled => core_error::ERROR_CODE_DISCUSSION_TRACK_DISABLED,
+            Self::PolicyViolation => core_error::ERROR_CODE_POLICY_VIOLATION,
             Self::EpochMismatch => core_error::ERROR_CODE_EPOCH_MISMATCH,
             Self::DuplicateConflict => core_error::ERROR_CODE_DUPLICATE_CONFLICT,
             Self::RankExhausted => core_error::ERROR_CODE_RANK_EXHAUSTED,

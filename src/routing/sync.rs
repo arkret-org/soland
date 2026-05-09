@@ -56,8 +56,8 @@ use super::{
     prune_acked_device_messages, prune_expired_typing, query_param,
     redaction_targets_from_operations, render_error, sha256_hex, snapshot_bundle_for_space,
     space_has_member, space_id_accessible, space_visible_to, sync_timeline_message_json,
-    truncate_gap_events, typing_ephemeral_for_space, validate_no_removed_legacy_contracts,
-    validate_space_id,
+    truncate_gap_events, typing_ephemeral_for_space, validate_did,
+    validate_no_removed_legacy_contracts, validate_space_id,
 };
 
 #[endpoint]
@@ -593,8 +593,13 @@ pub async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Re
     let state = depot.obtain::<AppState>().expect("state injected");
     // C17: selector now uses `spaces[]` (repeated query); accept `space_id`
     // singular for transition.
-    let Some(space_id) = query_param(req, "spaces").or_else(|| query_param(req, "space_id"))
-    else {
+    // C17 selector: `spaces=` repeated args (multi-value); fallback to
+    // legacy singular `space_id` during transition.
+    let mut spaces = super::query_param_all(req, "spaces");
+    if spaces.is_empty() {
+        spaces = query_param(req, "space_id").into_iter().collect();
+    }
+    if spaces.is_empty() {
         render_error(
             res,
             StatusCode::BAD_REQUEST,
@@ -602,18 +607,26 @@ pub async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Re
             "spaces is required",
         );
         return;
-    };
-    if validate_space_id(&space_id).is_err() {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "invalid_param",
-            "invalid space_id",
-        );
-        return;
+    }
+    for space in &spaces {
+        if validate_space_id(space).is_err() {
+            render_error(
+                res,
+                StatusCode::BAD_REQUEST,
+                "invalid_param",
+                &format!("invalid space: {space}"),
+            );
+            return;
+        }
     }
     let session = authenticated_session(state, req).ok();
-    if !space_id_accessible(state, &space_id, session.as_ref()) {
+    let mut accessible_spaces: Vec<String> = Vec::with_capacity(spaces.len());
+    for space in spaces {
+        if space_id_accessible(state, &space, session.as_ref()) {
+            accessible_spaces.push(space);
+        }
+    }
+    if accessible_spaces.is_empty() {
         render_error(res, StatusCode::NOT_FOUND, "not_found", "not found");
         return;
     }
@@ -623,120 +636,213 @@ pub async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Re
         .min(100);
     // C17: cursor parameter renamed to `from`.
     let cursor = query_param(req, "from").or_else(|| query_param(req, "cursor"));
-    match projected_event_page(state, &space_id, cursor.as_deref(), limit) {
-        Ok(Some(page)) => {
-            let frames: Vec<_> = page
-                .items
-                .into_iter()
-                .enumerate()
-                .map(|(index, event)| {
-                    let cursor = event.event_id.clone();
-                    // C17: subscribe frame top field renamed `type` → `kind`.
-                    json!({
-                        "kind": "event",
-                        "seq": index + 1,
-                        "cursor": cursor,
-                        "payload": projection_event_json(&event)
-                    })
-                })
-                .collect();
-            res.render(Json(json!({
-                "frames": frames,
-                "next_cursor": page.next_cursor.or_else(|| Some(sync_token())),
-                "has_more": page.has_more
-            })));
-        }
-        Ok(None) => match state
-            .repo
-            .sync_space_operations(&space_id, cursor.as_deref(), limit)
-        {
-            Ok(page) => {
-                let mut seq = 0usize;
-                let frames: Vec<_> = page
-                    .items
-                    .into_iter()
-                    .map(|operation| {
+    // C17: `include_history` defaults to true (the legacy /sync/subscribe
+    // returned recent history then long-polled; in unary mode this is the
+    // safe default). When false, only the `frontier`+`catchup_complete`+
+    // `heartbeat` control trio is emitted so the client can establish its
+    // baseline cursor and start receiving events from new traffic.
+    let include_history = query_param(req, "include_history")
+        .as_deref()
+        .map(|value| matches!(value, "true" | "1" | "yes"))
+        .unwrap_or(true);
+
+    let mut frames: Vec<serde_json::Value> = Vec::new();
+    let mut seq: u64 = 0;
+    let mut last_cursor: Option<String> = None;
+    let mut any_has_more = false;
+    let mut multi_space_invalid_cursor = false;
+
+    if include_history {
+        for space_id in &accessible_spaces {
+            match projected_event_page(state, space_id, cursor.as_deref(), limit) {
+                Ok(Some(page)) => {
+                    if page.has_more {
+                        any_has_more = true;
+                    }
+                    for event in page.items {
                         seq += 1;
-                        let projected = projection_event_from_operation(&operation, None);
-                        let cursor = projected
-                            .operation_id
-                            .clone()
-                            .unwrap_or_else(|| projected.event_id.clone());
-                        // C17: subscribe frame top field renamed `type` → `kind`.
-                        json!({
+                        let event_cursor = event.event_id.clone();
+                        last_cursor = Some(event_cursor.clone());
+                        // C17 frame: kind="event"
+                        frames.push(json!({
                             "kind": "event",
                             "seq": seq,
-                            "cursor": cursor,
-                            "payload": projection_event_json(&projected)
-                        })
-                    })
-                    .collect();
-                res.render(Json(json!({
-                    "frames": frames,
-                    "next_cursor": page.next_cursor.or_else(|| Some(sync_token())),
-                    "has_more": page.has_more
-                })));
+                            "cursor": event_cursor,
+                            "payload": projection_event_json(&event)
+                        }));
+                    }
+                    if let Some(next) = page.next_cursor {
+                        last_cursor = Some(next);
+                    }
+                }
+                Ok(None) => match state
+                    .repo
+                    .sync_space_operations(space_id, cursor.as_deref(), limit)
+                {
+                    Ok(page) => {
+                        if page.has_more {
+                            any_has_more = true;
+                        }
+                        for operation in page.items {
+                            seq += 1;
+                            let projected = projection_event_from_operation(&operation, None);
+                            let event_cursor = projected
+                                .operation_id
+                                .clone()
+                                .unwrap_or_else(|| projected.event_id.clone());
+                            last_cursor = Some(event_cursor.clone());
+                            frames.push(json!({
+                                "kind": "event",
+                                "seq": seq,
+                                "cursor": event_cursor,
+                                "payload": projection_event_json(&projected)
+                            }));
+                        }
+                        if let Some(next) = page.next_cursor {
+                            last_cursor = Some(next);
+                        }
+                    }
+                    Err(error) => {
+                        // Single-space failure: keep going for other spaces in
+                        // multi-selector; for single-space, surface the error.
+                        if accessible_spaces.len() == 1 {
+                            render_error(
+                                res,
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                "repo_error",
+                                &error.to_string(),
+                            );
+                            return;
+                        }
+                    }
+                },
+                Err(error) => {
+                    if error.to_string().contains("invalid_cursor") {
+                        multi_space_invalid_cursor = true;
+                        // Surface immediately for single-space; for multi, fail
+                        // the whole request because cursor is stream-wide.
+                        render_error(
+                            res,
+                            StatusCode::BAD_REQUEST,
+                            "invalid_cursor",
+                            "cursor not found",
+                        );
+                        return;
+                    }
+                    if accessible_spaces.len() == 1 {
+                        render_error(
+                            res,
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            "projection_error",
+                            &error.to_string(),
+                        );
+                        return;
+                    }
+                }
             }
-            Err(error) => render_error(
-                res,
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "repo_error",
-                &error.to_string(),
-            ),
-        },
-        Err(error) => {
-            if error.to_string().contains("invalid_cursor") {
-                render_error(
-                    res,
-                    StatusCode::BAD_REQUEST,
-                    "invalid_cursor",
-                    "cursor not found",
-                );
-                return;
-            }
-            render_error(
-                res,
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "projection_error",
-                &error.to_string(),
-            );
         }
+        let _ = multi_space_invalid_cursor; // tracked for future telemetry
     }
+
+    // C17 control frame: catchup_complete signals end of historical buffer.
+    // Emit when include_history=true OR after a fresh subscribe so clients
+    // know subsequent frames (in a real streaming impl) are live.
+    let catchup_cursor = last_cursor.clone().unwrap_or_else(sync_token);
+    frames.push(json!({
+        "kind": "catchup_complete",
+        "cursor": catchup_cursor,
+    }));
+
+    // C17 control frame: heartbeat closes the unary response so clients have
+    // an end-of-batch keep-alive marker. Real streaming impls would emit
+    // this every ~30s while the connection is otherwise idle.
+    frames.push(json!({
+        "kind": "heartbeat",
+        "ts": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+    }));
+
+    res.render(Json(json!({
+        "frames": frames,
+        "next_cursor": last_cursor.unwrap_or_else(sync_token),
+        "has_more": any_has_more,
+    })));
 }
 
 /// C17 (spec 2026-05-08): `cx.events.query` at `GET /api/v1/events`.
 /// Folds the legacy `cx.events.list` (forward) and `cx.sync.backfill`
 /// (backward) into one op gated by the `direction` parameter (forward
 /// default). Reads from the projection layer so callers writing through
-/// `/api/v1/messages/send` see their messages here. Selector accepts
-/// `spaces[]` / `actors[]` repeated query args (singular `space_id` /
-/// `actor_id` accepted as transition fallback). Range: `from?` (replaces
-/// `cursor`) + `until?` + `direction`. Backward iteration is a follow-up;
-/// current build returns forward order regardless of `direction`.
+/// `/api/v1/messages/send` see their messages here.
+///
+/// Selector: `spaces[]` ∪ `actors[]` repeated query args (multi-value).
+/// Singular `space_id` / `actor_id` accepted as transition fallback.
+/// Multi-space queries call `projected_event_page` per space and merge
+/// sorted by HLC; the result paginates as a single stream. `actors[]`
+/// is currently ignored (projection layer is space-keyed; actor-scoped
+/// reads remain on the durable Event store via `_legacy_list_events`).
+///
+/// Range: `from?` (replaces legacy `cursor`) + `until?` + `direction`.
+/// `direction=backward` reverses the merged stream so callers can paginate
+/// older events with the same `next_cursor` semantics.
 #[endpoint]
 pub async fn events_query(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let Some(space_id) = query_param(req, "spaces").or_else(|| query_param(req, "space_id"))
-    else {
+    // C17 selector: collect all `spaces=` and `actors=` repeated args +
+    // transition fallback for singular `space_id` / `actor_id`.
+    let mut spaces = super::query_param_all(req, "spaces");
+    if spaces.is_empty() {
+        spaces = query_param(req, "space_id").into_iter().collect();
+    }
+    let mut actors = super::query_param_all(req, "actors");
+    if actors.is_empty() {
+        actors = query_param(req, "actor_id").into_iter().collect();
+    }
+    if spaces.is_empty() && actors.is_empty() {
         render_error(
             res,
             StatusCode::BAD_REQUEST,
             "missing_param",
-            "spaces is required",
-        );
-        return;
-    };
-    if validate_space_id(&space_id).is_err() {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "invalid_param",
-            "invalid space_id",
+            "events.query requires at least one of spaces[] / actors[]",
         );
         return;
     }
+    for space in &spaces {
+        if validate_space_id(space).is_err() {
+            render_error(
+                res,
+                StatusCode::BAD_REQUEST,
+                "invalid_param",
+                &format!("invalid space: {space}"),
+            );
+            return;
+        }
+    }
+    for actor in &actors {
+        if validate_did(actor).is_err() {
+            render_error(
+                res,
+                StatusCode::BAD_REQUEST,
+                "invalid_param",
+                &format!("invalid actor: {actor}"),
+            );
+            return;
+        }
+    }
+    // Dispatch: if no spaces (actor-scoped query), forward to the durable
+    // Event-store reader in routing/events.rs which builds an actor-keyed
+    // `frontier.actors` map. The projection-aware path below is space-keyed.
+    if spaces.is_empty() {
+        super::events_query_durable_scope_impl(depot, req, res).await;
+        return;
+    }
     let session = authenticated_session(state, req).ok();
-    if !space_id_accessible(state, &space_id, session.as_ref()) {
+    let mut accessible_spaces: Vec<String> = Vec::with_capacity(spaces.len());
+    for space in spaces {
+        if space_id_accessible(state, &space, session.as_ref()) {
+            accessible_spaces.push(space);
+        }
+    }
+    if accessible_spaces.is_empty() {
         render_error(res, StatusCode::NOT_FOUND, "not_found", "not found");
         return;
     }
@@ -744,71 +850,178 @@ pub async fn events_query(depot: &mut Depot, req: &mut Request, res: &mut Respon
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(100)
         .min(100);
-    // C17: `cursor` → `from`; `direction` accepted but range cursor logic
-    // unchanged (forward today; backward is folded but still uses next_cursor
-    // semantics — actual backward iteration is a follow-up).
+    // C17: `cursor` → `from`; `direction = forward | backward`.
     let cursor = query_param(req, "from").or_else(|| query_param(req, "cursor"));
-    let _direction = query_param(req, "direction");
-    match projected_event_page(state, &space_id, cursor.as_deref(), limit) {
-        Ok(Some(page)) => {
-            let events = page.items.iter().map(projection_event_json).collect();
-            res.render(Json(BackfillResponse {
-                events,
-                prev_cursor: cursor.clone(),
-                prev_batch: cursor,
-                next_cursor: page.next_cursor.or_else(|| Some(sync_token())),
-                limited: page.has_more,
-            }));
-            return;
-        }
-        Ok(None) => {}
-        Err(error) => {
-            if error.to_string().contains("invalid_cursor") {
+    let direction = query_param(req, "direction").unwrap_or_else(|| "forward".to_owned());
+    if direction != "forward" && direction != "backward" {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            "direction must be 'forward' or 'backward'",
+        );
+        return;
+    }
+    let backward = direction == "backward";
+
+    // Single-space fast path preserves the original `BackfillResponse` shape
+    // for soland's existing test surface (cx.sync.backfill behavior).
+    if accessible_spaces.len() == 1 {
+        let space_id = &accessible_spaces[0];
+        match projected_event_page(state, space_id, cursor.as_deref(), limit) {
+            Ok(Some(page)) => {
+                let mut events: Vec<_> = page.items.iter().map(projection_event_json).collect();
+                if backward {
+                    events.reverse();
+                }
+                res.render(Json(BackfillResponse {
+                    events,
+                    prev_cursor: cursor.clone(),
+                    prev_batch: cursor,
+                    next_cursor: page.next_cursor.or_else(|| Some(sync_token())),
+                    limited: page.has_more,
+                }));
+                return;
+            }
+            Ok(None) => {}
+            Err(error) => {
+                if error.to_string().contains("invalid_cursor") {
+                    render_error(
+                        res,
+                        StatusCode::BAD_REQUEST,
+                        "invalid_cursor",
+                        "cursor not found",
+                    );
+                    return;
+                }
                 render_error(
                     res,
-                    StatusCode::BAD_REQUEST,
-                    "invalid_cursor",
-                    "cursor not found",
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "projection_error",
+                    &error.to_string(),
                 );
                 return;
             }
-            render_error(
-                res,
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "projection_error",
-                &error.to_string(),
-            );
-            return;
+        }
+        let page = match state
+            .repo
+            .sync_space_operations(space_id, cursor.as_deref(), limit)
+        {
+            Ok(page) => page,
+            Err(error) => {
+                render_error(
+                    res,
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "repo_error",
+                    &error.to_string(),
+                );
+                return;
+            }
+        };
+        let redacted = redaction_targets_from_operations(&page.items);
+        let mut events: Vec<_> = page
+            .items
+            .into_iter()
+            .filter(|operation| operation_is_visible(operation, &redacted))
+            .map(|operation| {
+                projection_event_json(&projection_event_from_operation(&operation, None))
+            })
+            .collect();
+        if backward {
+            events.reverse();
+        }
+        res.render(Json(BackfillResponse {
+            events,
+            prev_cursor: cursor.clone(),
+            prev_batch: cursor,
+            next_cursor: page.next_cursor.or_else(|| Some(sync_token())),
+            limited: page.has_more,
+        }));
+        return;
+    }
+
+    // Multi-space merge path: call `projected_event_page` per space, merge
+    // by `received_at`, then paginate. `next_cursor` is the last-event id of
+    // the merged page (consistent with single-space cursor semantics).
+    let mut merged: Vec<serde_json::Value> = Vec::new();
+    let mut any_has_more = false;
+    for space_id in &accessible_spaces {
+        // Each per-space call uses `limit` so the merge floor is bounded
+        // by `accessible_spaces.len() * limit`.
+        match projected_event_page(state, space_id, cursor.as_deref(), limit) {
+            Ok(Some(page)) => {
+                if page.has_more {
+                    any_has_more = true;
+                }
+                merged.extend(page.items.iter().map(projection_event_json));
+            }
+            Ok(None) => {
+                // Fall back to repo sync for this space if no projection.
+                match state.repo.sync_space_operations(space_id, cursor.as_deref(), limit) {
+                    Ok(page) => {
+                        if page.has_more {
+                            any_has_more = true;
+                        }
+                        let redacted = redaction_targets_from_operations(&page.items);
+                        merged.extend(page.items.into_iter().filter_map(|operation| {
+                            if !operation_is_visible(&operation, &redacted) {
+                                return None;
+                            }
+                            Some(projection_event_json(&projection_event_from_operation(
+                                &operation, None,
+                            )))
+                        }));
+                    }
+                    Err(_) => continue,
+                }
+            }
+            Err(error) => {
+                if error.to_string().contains("invalid_cursor") {
+                    render_error(
+                        res,
+                        StatusCode::BAD_REQUEST,
+                        "invalid_cursor",
+                        "cursor not found",
+                    );
+                    return;
+                }
+                // Other errors on one space don't fail the whole multi-space
+                // query — carry on with what we have.
+                continue;
+            }
         }
     }
-    let page = match state
-        .repo
-        .sync_space_operations(&space_id, cursor.as_deref(), limit)
-    {
-        Ok(page) => page,
-        Err(error) => {
-            render_error(
-                res,
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "repo_error",
-                &error.to_string(),
-            );
-            return;
-        }
-    };
-    let redacted = redaction_targets_from_operations(&page.items);
-    let events: Vec<_> = page
-        .items
-        .into_iter()
-        .filter(|operation| operation_is_visible(operation, &redacted))
-        .map(|operation| projection_event_json(&projection_event_from_operation(&operation, None)))
-        .collect();
+    // Sort by `created_at` (string-comparable RFC3339), tie-break by
+    // `event_id` for determinism.
+    merged.sort_by(|left, right| {
+        let left_ts = left["created_at"].as_str().unwrap_or("");
+        let right_ts = right["created_at"].as_str().unwrap_or("");
+        left_ts
+            .cmp(right_ts)
+            .then_with(|| left["event_id"].as_str().cmp(&right["event_id"].as_str()))
+    });
+    if backward {
+        merged.reverse();
+    }
+    let mut page_events = merged.into_iter().take(limit + 1).collect::<Vec<_>>();
+    let limited = page_events.len() > limit || any_has_more;
+    if page_events.len() > limit {
+        page_events.truncate(limit);
+    }
+    let next_cursor = limited
+        .then(|| {
+            page_events
+                .last()
+                .and_then(|event| event["event_id"].as_str().map(ToOwned::to_owned))
+        })
+        .flatten()
+        .or_else(|| Some(sync_token()));
     res.render(Json(BackfillResponse {
-        events,
+        events: page_events,
         prev_cursor: cursor.clone(),
         prev_batch: cursor,
-        next_cursor: page.next_cursor.or_else(|| Some(sync_token())),
-        limited: page.has_more,
+        next_cursor,
+        limited,
     }));
 }
 

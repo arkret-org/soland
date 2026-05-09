@@ -68,6 +68,27 @@ pub fn query_list(req: &Request, key: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// Pull **every** occurrence of `key` from the query string as repeated args
+/// (e.g. `?spaces=A&spaces=B&spaces=C`) — required for spec C17
+/// `cx.events.query` / `cx.events.subscribe` selectors which accept
+/// `spaces[]` ∪ `actors[]`. `+` decoded to space; empty values dropped.
+pub fn query_param_all(req: &Request, key: &str) -> Vec<String> {
+    let Some(query) = req.uri().query() else {
+        return Vec::new();
+    };
+    query
+        .split('&')
+        .filter_map(|pair| {
+            let (name, value) = pair.split_once('=').unwrap_or((pair, ""));
+            if name == key && !value.is_empty() {
+                Some(value.replace('+', " "))
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
 /// Treat the query value `1 / true / yes` as a boolean true; anything else is false.
 pub fn query_flag(req: &Request, key: &str) -> bool {
     query_param(req, key)

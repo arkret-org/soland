@@ -362,47 +362,80 @@ pub async fn batch_get_events(depot: &mut Depot, req: &mut Request, res: &mut Re
 /// projection-aware handler in `routing/sync.rs::events_query` so message
 /// timeline reads keep working through `/api/v1/messages/send` →
 /// `events_query` round-trips.
-#[allow(dead_code)]
-#[endpoint]
-async fn _legacy_list_events(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+///
+/// Supports the spec C17 multi-value selector `spaces[]` ∪ `actors[]` (via
+/// repeated query args) **and** real backward iteration (`direction=backward`
+/// returns events older than `from` cursor in reverse time order, with
+/// `prev_cursor` driving further pages).
+/// Plain async helper version of [`events_query_durable_scope`] so other
+/// handlers (e.g. the projection-aware `routing::sync::events_query`) can
+/// dispatch to the durable-store reader when the C17 selector contains only
+/// `actors[]` (no `spaces[]`). Both the `#[endpoint]` wrapper and the
+/// sync-side dispatcher call this impl.
+pub async fn events_query_durable_scope_impl(
+    depot: &mut Depot,
+    req: &mut Request,
+    res: &mut Response,
+) {
     let state = depot.obtain::<AppState>().expect("state injected");
     let Some(session) = auth_or_render(state, req, res) else {
         return;
     };
-    // C17 selector: `actors` + `spaces` repeated query args; legacy singular
-    // names accepted during transition.
-    let actor_id = query_param(req, "actors").or_else(|| query_param(req, "actor_id"));
-    let space_id = query_param(req, "spaces").or_else(|| query_param(req, "space_id"));
-    if let Some(actor_id) = actor_id.as_deref()
-        && validate_did(actor_id).is_err()
-    {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "invalid_param",
-            "invalid actor_id",
-        );
-        return;
+    // C17 selector: `actors[]` ∪ `spaces[]` repeated query args. Legacy
+    // singular `actor_id` / `space_id` continue to work during transition.
+    let mut actors = super::query_param_all(req, "actors");
+    if actors.is_empty() {
+        actors = query_param(req, "actor_id").into_iter().collect();
     }
-    if let Some(space_id) = space_id.as_deref()
-        && validate_space_id(space_id).is_err()
-    {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "invalid_param",
-            "invalid space_id",
-        );
-        return;
+    let mut spaces = super::query_param_all(req, "spaces");
+    if spaces.is_empty() {
+        spaces = query_param(req, "space_id").into_iter().collect();
+    }
+    for actor in &actors {
+        if validate_did(actor).is_err() {
+            render_error(
+                res,
+                StatusCode::BAD_REQUEST,
+                "invalid_param",
+                &format!("invalid actor: {actor}"),
+            );
+            return;
+        }
+    }
+    for space in &spaces {
+        if validate_space_id(space).is_err() {
+            render_error(
+                res,
+                StatusCode::BAD_REQUEST,
+                "invalid_param",
+                &format!("invalid space: {space}"),
+            );
+            return;
+        }
     }
     // C17 cursor parameter: `from` replaces legacy `cursor`.
     let cursor = query_param(req, "from").or_else(|| query_param(req, "cursor"));
-    let _direction = query_param(req, "direction"); // forward (default) | backward — backward iteration is follow-up.
-    let _until = query_param(req, "until"); // upper-bound cursor — follow-up.
+    // C17 direction: forward (default) | backward — backward returns events
+    // older than `from` in reverse time order.
+    let direction = query_param(req, "direction").unwrap_or_else(|| "forward".to_owned());
+    if direction != "forward" && direction != "backward" {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            "direction must be 'forward' or 'backward'",
+        );
+        return;
+    }
+    let _until = query_param(req, "until"); // upper-bound cursor — TODO follow-up.
     let limit = query_param(req, "limit")
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(50)
         .clamp(1, 100);
+    let actors_set: std::collections::BTreeSet<&str> =
+        actors.iter().map(String::as_str).collect();
+    let spaces_set: std::collections::BTreeSet<&str> =
+        spaces.iter().map(String::as_str).collect();
     let mut records = state
         .persistence
         .events()
@@ -410,11 +443,19 @@ async fn _legacy_list_events(depot: &mut Depot, req: &mut Request, res: &mut Res
         .unwrap_or_default()
         .into_iter()
         .filter(|record| {
-            actor_id
+            // Spec selector semantics: union — match actor OR space membership.
+            // Empty selector means "all reachable" (handler will still gate
+            // through `event_visible_to_session`).
+            if actors_set.is_empty() && spaces_set.is_empty() {
+                return true;
+            }
+            let actor_match = actors_set.contains(record.actor_id.as_str());
+            let space_match = record
+                .space_id
                 .as_deref()
-                .is_none_or(|actor| actor == record.actor_id)
+                .is_some_and(|s| spaces_set.contains(s));
+            actor_match || space_match
         })
-        .filter(|record| space_id.as_deref() == record.space_id.as_deref() || space_id.is_none())
         .filter(|record| event_visible_to_session(state, record, &session))
         .collect::<Vec<_>>();
     records.sort_by(|left, right| {
@@ -422,6 +463,9 @@ async fn _legacy_list_events(depot: &mut Depot, req: &mut Request, res: &mut Res
             .cmp(&right.received_at)
             .then_with(|| left.event_id.cmp(&right.event_id))
     });
+    if direction == "backward" {
+        records.reverse();
+    }
     let start = cursor
         .as_deref()
         .and_then(|cursor| records.iter().position(|record| record.event_id == cursor))
@@ -446,6 +490,19 @@ async fn _legacy_list_events(depot: &mut Depot, req: &mut Request, res: &mut Res
         next_cursor,
         frontier,
     }));
+}
+
+/// Salvo `#[endpoint]` wrapper around [`events_query_durable_scope_impl`] so
+/// the actor-scoped durable-store reader can be wired to a route directly
+/// (currently used only as a fallback dispatched from `routing::sync::events_query`
+/// when the C17 selector has no `spaces[]`).
+#[endpoint]
+pub async fn events_query_durable_scope(
+    depot: &mut Depot,
+    req: &mut Request,
+    res: &mut Response,
+) {
+    events_query_durable_scope_impl(depot, req, res).await
 }
 
 #[endpoint]
@@ -1030,4 +1087,60 @@ fn event_visible_to_session(
         .space_id
         .as_deref()
         .is_some_and(|space_id| space_has_member(state, space_id, &session.actor))
+}
+
+/// C14 / read-receipts §2.5: scan the durable Event store for the most
+/// recent `cx.space.read_receipt_policy` event in `space_id` and return
+/// `(disclosure, visibility, scope_overrides_allowed)` from its payload.
+/// Returns `None` when no policy event has been written for this Space —
+/// caller treats that as the spec default `Optional` / `Members` /
+/// `scope_overrides_allowed=true`.
+///
+/// Used by future ephemeral `cx.receipt.read` fanout handlers to enforce
+/// the policy: when `disclosure="disabled"`, drop the receipt and return
+/// HTTP 403 with errcode `policy_violation`. When `visibility="private"`,
+/// fanout only to the original sender of the referenced event.
+///
+/// **Note**: this is a linear scan of the durable event store. For the
+/// production fanout path it should be projected into `AppState` once the
+/// reducer kind delegates from `Ignored` to a real projection.
+pub fn effective_read_receipt_policy_for_space(
+    state: &AppState,
+    space_id: &str,
+) -> Option<(String, String, bool)> {
+    let records = state.persistence.events().snapshot_all().ok()?;
+    let mut latest: Option<&CanonicalEventRecord> = None;
+    for record in &records {
+        // CanonicalEventRecord uses `kind` (not event_kind) for the
+        // canonical Contrix event kind string.
+        if record.kind != "cx.space.read_receipt_policy" {
+            continue;
+        }
+        if record.space_id.as_deref() != Some(space_id) {
+            continue;
+        }
+        match latest {
+            Some(prev) if prev.received_at >= record.received_at => {}
+            _ => latest = Some(record),
+        }
+    }
+    let record = latest?;
+    // The policy state lives on the envelope payload; CanonicalEventRecord
+    // stores the full envelope, so we drill down to `envelope.payload`.
+    let payload = record.envelope.get("payload").and_then(Value::as_object)?;
+    let disclosure = payload
+        .get("disclosure")
+        .and_then(Value::as_str)
+        .unwrap_or("optional")
+        .to_owned();
+    let visibility = payload
+        .get("visibility")
+        .and_then(Value::as_str)
+        .unwrap_or("members")
+        .to_owned();
+    let scope_overrides_allowed = payload
+        .get("scope_overrides_allowed")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    Some((disclosure, visibility, scope_overrides_allowed))
 }
