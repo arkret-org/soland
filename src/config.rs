@@ -67,6 +67,49 @@ pub struct AppConfig {
     ///
     /// Behavior when `use_keystore=false`: identical to round 22.
     pub use_keystore: bool,
+    /// MAL-12 (round 25) — federation routing policy. The on-the-wire
+    /// shape is identical for both variants (Move broadcast push / Anchor
+    /// pull-push under `/api/v1/federation/{push-operations,anchors,...}`);
+    /// the policy only changes which set of peer endpoints we talk to.
+    ///
+    /// - [`FederationPolicy::Mesh`] — broadcast each accepted Move to every
+    ///   known peer (gossip-like). Anchors are replicated via pull-push
+    ///   when peer pressure spikes. Default.
+    /// - [`FederationPolicy::Hub`] — push only to a single configured
+    ///   upstream hub; rely on the hub for outbound dissemination.
+    pub federation_policy: FederationPolicy,
+    /// MAL-12 (round 25) — peer DIDs the federation outbound layer
+    /// considers as broadcast targets (mesh) or hub upstream (hub). Empty
+    /// disables federation outbound.
+    pub federation_peers: Vec<String>,
+}
+
+/// MAL-12 (round 25) — federation routing policy. Selected at config-load
+/// time via `SERVERX_FEDERATION_POLICY` env var (`mesh` | `hub`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FederationPolicy {
+    /// Default — broadcast every accepted Move to every peer in
+    /// [`AppConfig::federation_peers`].
+    Mesh,
+    /// Push to a single upstream hub. The first entry in
+    /// [`AppConfig::federation_peers`] is the hub.
+    Hub,
+}
+
+impl FederationPolicy {
+    pub fn from_env_value(value: &str) -> Self {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "hub" => Self::Hub,
+            _ => Self::Mesh,
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Mesh => "mesh",
+            Self::Hub => "hub",
+        }
+    }
 }
 
 /// Round 22 — provenance tag for the AnchorerWorker's signing key. Surfaced
@@ -143,6 +186,20 @@ impl AppConfig {
         let use_keystore = std::env::var("SERVERX_USE_KEYSTORE")
             .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes"))
             .unwrap_or(false);
+        let federation_policy = std::env::var("SERVERX_FEDERATION_POLICY")
+            .ok()
+            .map(|value| FederationPolicy::from_env_value(&value))
+            .unwrap_or(FederationPolicy::Mesh);
+        let federation_peers = std::env::var("SERVERX_FEDERATION_PEERS")
+            .ok()
+            .map(|value| {
+                value
+                    .split(',')
+                    .map(|v| v.trim().to_owned())
+                    .filter(|v| !v.is_empty())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
 
         Ok(Self {
             bind,
@@ -161,6 +218,8 @@ impl AppConfig {
             lattice_first,
             anchorer_signing_key_seed,
             use_keystore,
+            federation_policy,
+            federation_peers,
         })
     }
 }

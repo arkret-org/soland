@@ -115,7 +115,7 @@ pub fn verify_jws_ed25519(
 ///   - did:key: the multibase-encoded key is in the DID itself; resolve
 ///     returns a doc whose verification_methods entry points at the same
 ///     multibase string.
-fn resolve_ed25519_pubkey(state: &AppState, verification_method: &str) -> Result<VerifyingKey, String> {
+pub fn resolve_ed25519_pubkey(state: &AppState, verification_method: &str) -> Result<VerifyingKey, String> {
     let (did_str, fragment) = verification_method
         .split_once('#')
         .map(|(d, f)| (d.to_owned(), Some(f.to_owned())))

@@ -6,6 +6,13 @@
 //! - `GET /api/v1/federation/pull-operations`
 //! - `GET /api/v1/federation/space-members`
 //! - `POST /api/v1/federation/verify-actor`
+//! - **MAL-12 round 25**: `GET /api/v1/federation/anchors?space_id=...`
+//!   (peer-pull: list locally-held Anchors for a Space) +
+//!   `POST /api/v1/federation/anchors` (peer-push: accept Anchor envelopes
+//!   for replication). The wire path is identical for both
+//!   [`crate::config::FederationPolicy::Mesh`] and
+//!   [`crate::config::FederationPolicy::Hub`]; only the outbound routing
+//!   decision (broadcast vs hub-only) differs.
 //!
 //! Stream-C in `_todos.md` covers the production gaps: RFC 9421 transcript
 //! (B-06), idempotency (M-20), validation_class instead of bool (M-19),
@@ -13,8 +20,10 @@
 //! `state.federation_operations`.
 
 use chrono::Duration;
-use contrix_sdk::SpaceId;
+use contrix_sdk::{Anchor, SpaceId};
+use contrix_sdk::state_res::AnchorStore;
 use salvo::{http::StatusCode, prelude::*};
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::{
@@ -390,4 +399,251 @@ fn federation_request_digest(
         serde_json::to_value(body).map_err(|_| "federation transaction must serialize to JSON")?;
     contrix_sdk::canonical::canonical_sha256(&value)
         .map_err(|_| "federation transaction must be canonical JSON")
+}
+
+// ── MAL-12 round 25 — Anchor pull/push (federation/anchors) ──────────────
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct FederationAnchorsResponse {
+    pub anchors: Vec<Anchor>,
+    /// Echo of [`crate::config::FederationPolicy::as_str`] so the calling
+    /// peer can reason about whether to fan out to other nodes.
+    pub policy: String,
+    pub next_cursor: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct FederationAnchorsPushRequest {
+    pub origin: String,
+    pub anchors: Vec<Anchor>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct FederationAnchorsPushResponse {
+    pub accepted: Vec<String>,
+    pub rejected: Vec<serde_json::Value>,
+}
+
+#[endpoint]
+pub async fn federation_anchors_pull(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let Some(space_id) = query_param(req, "space_id") else {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "missing_param",
+            "space_id is required",
+        );
+        return;
+    };
+    if validate_space_id(&space_id).is_err() {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            "invalid space_id",
+        );
+        return;
+    }
+    let Ok(space) = SpaceId::new(space_id) else {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            "invalid space_id",
+        );
+        return;
+    };
+    let leaves = state
+        .anchor_store
+        .list_leaves(&space)
+        .unwrap_or_default();
+    let mut anchors: Vec<Anchor> = Vec::with_capacity(leaves.len());
+    for leaf in &leaves {
+        if let Ok(Some(a)) = state.anchor_store.get(leaf) {
+            anchors.push(a);
+        }
+    }
+    res.render(Json(FederationAnchorsResponse {
+        anchors,
+        policy: state.config.federation_policy.as_str().to_owned(),
+        next_cursor: None,
+    }));
+}
+
+#[endpoint]
+pub async fn federation_anchors_push(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let body = match req.parse_json::<FederationAnchorsPushRequest>().await {
+        Ok(body) => body,
+        Err(_) => {
+            render_error(
+                res,
+                StatusCode::BAD_REQUEST,
+                "bad_json",
+                "invalid federation anchors push request",
+            );
+            return;
+        }
+    };
+    if !verify_federation_origin(&body.origin) {
+        render_error(
+            res,
+            StatusCode::UNAUTHORIZED,
+            "invalid_origin",
+            "federation origin must be a valid DID",
+        );
+        return;
+    }
+    let mut accepted: Vec<String> = Vec::new();
+    let mut rejected: Vec<serde_json::Value> = Vec::new();
+    for anchor in body.anchors {
+        let id_str = anchor.id.to_string();
+        // Only accept Anchors whose declared id matches the canonical hash
+        // — otherwise a peer could overwrite our DAG with junk.
+        match anchor.derive_id() {
+            Ok(derived) if derived == anchor.id => {}
+            _ => {
+                rejected.push(json!({"id": id_str, "reason": "id_mismatch"}));
+                continue;
+            }
+        }
+        if let Err(error) = state.anchor_store.put(&anchor) {
+            rejected.push(json!({"id": id_str, "reason": "persistence_error", "message": error.to_string()}));
+            continue;
+        }
+        accepted.push(id_str);
+    }
+    res.render(Json(FederationAnchorsPushResponse { accepted, rejected }));
+}
+
+/// MAL-12 round 25 — outbound Move broadcast helper. Each accepted Move
+/// goes to:
+/// - [`FederationPolicy::Mesh`]: every peer in `state.config.federation_peers`.
+/// - [`FederationPolicy::Hub`]: only the first peer (`federation_peers[0]`).
+///
+/// Returns the list of peer URLs the broadcast targeted; the actual HTTP
+/// dispatch is fire-and-forget (best-effort) and runs on a background
+/// tokio task so the inbound write path never blocks on a slow peer.
+pub fn broadcast_move_to_peers(state: &AppState, move_id: &str) -> Vec<String> {
+    use crate::config::FederationPolicy;
+    let peers: Vec<String> = match state.config.federation_policy {
+        FederationPolicy::Mesh => state.config.federation_peers.clone(),
+        FederationPolicy::Hub => state
+            .config
+            .federation_peers
+            .first()
+            .cloned()
+            .into_iter()
+            .collect(),
+    };
+    for peer in &peers {
+        let peer = peer.clone();
+        let move_id_owned = move_id.to_owned();
+        tokio::spawn(async move {
+            // Best-effort fan-out. Real outbound transcript signing /
+            // retry-with-jitter lives behind this entry point in a
+            // follow-up; for now we just log so ops can see the
+            // broadcast list.
+            tracing::debug!(%peer, move_id = %move_id_owned, "federation broadcast move");
+        });
+    }
+    peers
+}
+
+/// Symmetric helper for Anchor replication. The hub policy still pushes
+/// to a single upstream so the broadcast list is `[hub]`; mesh fans out
+/// to every peer.
+pub fn broadcast_anchor_to_peers(state: &AppState, anchor_id: &str) -> Vec<String> {
+    use crate::config::FederationPolicy;
+    let peers: Vec<String> = match state.config.federation_policy {
+        FederationPolicy::Mesh => state.config.federation_peers.clone(),
+        FederationPolicy::Hub => state
+            .config
+            .federation_peers
+            .first()
+            .cloned()
+            .into_iter()
+            .collect(),
+    };
+    for peer in &peers {
+        let peer = peer.clone();
+        let anchor_id_owned = anchor_id.to_owned();
+        tokio::spawn(async move {
+            tracing::debug!(%peer, anchor_id = %anchor_id_owned, "federation broadcast anchor");
+        });
+    }
+    peers
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::FederationPolicy;
+    use crate::state::AppState;
+    use crate::config::AppConfig;
+    use crate::db::Db;
+    use std::net::SocketAddr;
+    use std::str::FromStr;
+
+    fn config_with_policy(policy: FederationPolicy, peers: Vec<String>) -> AppConfig {
+        AppConfig {
+            bind: SocketAddr::from_str("127.0.0.1:0").unwrap(),
+            public_base_url: "http://test".to_owned(),
+            service_did: "did:web:test.local".to_owned(),
+            database_url: None,
+            blob_root: std::env::temp_dir(),
+            cors_allow_origin: None,
+            development_mode: true,
+            session_grant_introspection_url: None,
+            session_grant_introspection_bearer: None,
+            did_resolver_allow_methods: vec!["web".to_owned()],
+            starid_webvh_resolver_url: None,
+            jws_replay_window_seconds: 0,
+            jws_replay_window_per_family: AppConfig::default_replay_overrides(),
+            lattice_first: true,
+            anchorer_signing_key_seed: None,
+            use_keystore: false,
+            federation_policy: policy,
+            federation_peers: peers,
+        }
+    }
+
+    #[tokio::test]
+    async fn mesh_policy_broadcasts_to_every_peer() {
+        let cfg = config_with_policy(
+            FederationPolicy::Mesh,
+            vec![
+                "https://peer-a.example".to_owned(),
+                "https://peer-b.example".to_owned(),
+                "https://peer-c.example".to_owned(),
+            ],
+        );
+        let state = AppState::new(cfg, Db { pool: None });
+        let targets = broadcast_move_to_peers(&state, "cx:move:sha256:01");
+        assert_eq!(targets.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn hub_policy_broadcasts_to_hub_only() {
+        let cfg = config_with_policy(
+            FederationPolicy::Hub,
+            vec![
+                "https://hub.example".to_owned(),
+                "https://peer-b.example".to_owned(),
+                "https://peer-c.example".to_owned(),
+            ],
+        );
+        let state = AppState::new(cfg, Db { pool: None });
+        let targets = broadcast_move_to_peers(&state, "cx:move:sha256:02");
+        assert_eq!(targets, vec!["https://hub.example".to_owned()]);
+    }
+
+    #[tokio::test]
+    async fn empty_peers_list_is_a_no_op() {
+        let cfg = config_with_policy(FederationPolicy::Mesh, Vec::new());
+        let state = AppState::new(cfg, Db { pool: None });
+        let targets = broadcast_anchor_to_peers(&state, "cx:anchor:sha256:01");
+        assert!(targets.is_empty());
+    }
 }

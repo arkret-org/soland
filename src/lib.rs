@@ -9,10 +9,12 @@ pub mod authz;
 pub mod config;
 pub mod db;
 pub mod error;
+pub mod gc;
 pub mod hlc;
 pub mod ids;
 pub mod jws_verify;
 pub mod kinds;
+pub mod multisig_watchdog;
 pub mod persistence;
 pub mod ratelimit;
 pub mod reducer;
@@ -437,6 +439,15 @@ pub fn router_with_rate_limiter_config(
                 )
                 .push(Router::with_path("federation/space-members").get(federation_space_members))
                 .push(Router::with_path("federation/verify-actor").post(federation_verify_actor))
+                // MAL-12 round 25 — Anchor pull/push (peer-mesh
+                // replication). Wire path is identical regardless of
+                // policy; outbound routing decisions live in
+                // `broadcast_*_to_peers`.
+                .push(
+                    Router::with_path("federation/anchors")
+                        .get(federation_anchors_pull)
+                        .post(federation_anchors_push),
+                )
                 .push(Router::with_path("webrtc/sessions").post(create_webrtc_session))
                 .push(
                     Router::with_path("webrtc/sessions/{session_id}/signals")
@@ -516,6 +527,13 @@ pub fn router_with_rate_limiter_config(
                 .push(
                     Router::with_path("spaces/{space_id}/multisig/{anchor_id}/partial")
                         .post(admin_submit_multisig_partial),
+                )
+                // Round 25 — MAL-13 GC scanner. Lists Moves that are
+                // GC-eligible (not referenced by any current Anchor frontier
+                // and not pending). Read-only; no actual deletion yet.
+                .push(
+                    Router::with_path("spaces/{space_id}/gc-candidates")
+                        .get(admin_list_gc_candidates),
                 ),
         );
     let doc = cached_contrix_openapi_doc(&router);

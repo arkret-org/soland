@@ -361,11 +361,30 @@ diesel::table! {
 
 diesel::table! {
     key_backups (backup_id) {
-        backup_id -> Uuid,
-        actor -> Text,
-        version -> Text,
+        backup_id -> Text,
+        account_id -> Nullable<Text>,
+        device_id -> Nullable<Text>,
+        scheme -> Nullable<Text>,
+        version -> Int4,
+        key_material_encrypted -> Nullable<Bytea>,
         payload -> Jsonb,
         created_at -> Timestamptz,
+        last_accessed_at -> Nullable<Timestamptz>,
+    }
+}
+
+diesel::table! {
+    restore_tickets (ticket_id) {
+        ticket_id -> Text,
+        account_id -> Nullable<Text>,
+        status -> Text,
+        payload -> Jsonb,
+        executor_state -> Nullable<Jsonb>,
+        approval_state -> Nullable<Jsonb>,
+        started_at -> Nullable<Timestamptz>,
+        completed_at -> Nullable<Timestamptz>,
+        created_at -> Timestamptz,
+        updated_at -> Timestamptz,
     }
 }
 
@@ -450,11 +469,14 @@ diesel::table! {
 
 diesel::table! {
     policy_documents (policy_id) {
-        policy_id -> Uuid,
+        policy_id -> Text,
+        owner -> Text,
         scope -> Text,
         subject_ref -> Text,
         policy_type -> Text,
-        payload -> Jsonb,
+        document -> Jsonb,
+        version -> Int4,
+        signed_by -> Nullable<Text>,
         active -> Bool,
         updated_at -> Timestamptz,
     }
@@ -575,14 +597,14 @@ diesel::table! {
 }
 
 diesel::table! {
-    webrtc_sessions (session_id) {
-        session_id -> Uuid,
-        space_id -> Uuid,
-        creator -> Text,
-        state -> Text,
-        payload -> Jsonb,
-        ended_at -> Nullable<Timestamptz>,
+    webrtc_sessions (call_id) {
+        call_id -> Text,
+        space_id -> Text,
+        initiator_did -> Text,
+        ice_config -> Jsonb,
+        signaling_state -> Jsonb,
         created_at -> Timestamptz,
+        expires_at -> Timestamptz,
     }
 }
 
@@ -673,4 +695,5 @@ diesel::allow_tables_to_appear_in_same_query!(
     webrtc_sessions,
     audit_log,
     multisig_pending,
+    restore_tickets,
 );

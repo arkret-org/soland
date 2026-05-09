@@ -1243,6 +1243,9 @@ pub async fn admin_submit_multisig_partial(
             partials: std::collections::BTreeMap::new(),
             created_at: chrono::Utc::now(),
             expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
+            claimed_by_node_id: None,
+            claimed_until: None,
+            claim_seq: 0,
         },
     };
 
@@ -1523,6 +1526,45 @@ fn sha256_hex_for(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};
     let digest = Sha256::digest(bytes);
     digest.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+// ── MAL-13 GC candidates admin endpoint ──────────────────────────────────
+
+/// `GET /api/admin/v1/spaces/{space_id}/gc-candidates` response.
+#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
+pub struct GcCandidatesResponse {
+    pub space_id: String,
+    pub candidates: Vec<crate::gc::GcCandidate>,
+    pub total: usize,
+}
+
+/// `GET /api/admin/v1/spaces/{space_id}/gc-candidates` — list Moves that
+/// are GC-eligible per MAL-13 rules. Read-only (no actual deletion).
+#[salvo::oapi::endpoint(
+    operation_id = "cx.admin.spaces.gc_candidates",
+    tags("admin", "gc"),
+    summary = "List GC-eligible Moves for a Space",
+)]
+pub async fn admin_list_gc_candidates(
+    aa: AuthArgs,
+    depot: &mut Depot,
+    req: &mut Request,
+    space_id: PathParam<String>,
+) -> JsonResult<GcCandidatesResponse> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let _session = aa.authenticated_session(state, req)?;
+    let space_id_str = space_id.into_inner();
+    let space = SpaceId::new(space_id_str.clone()).map_err(|e| {
+        AppError::new(ErrorCode::InvalidParam, format!("invalid space_id: {e}"))
+            .with_status(StatusCode::BAD_REQUEST)
+    })?;
+    let candidates = crate::gc::scan_gc_candidates(state, &space);
+    let total = candidates.len();
+    json_ok(GcCandidatesResponse {
+        space_id: space_id_str,
+        candidates,
+        total,
+    })
 }
 
 #[cfg(test)]

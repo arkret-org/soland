@@ -26,6 +26,8 @@ fn test_config() -> AppConfig {
         lattice_first: false,
         anchorer_signing_key_seed: None,
         use_keystore: false,
+        federation_policy: soland::config::FederationPolicy::Mesh,
+        federation_peers: Vec::new(),
     }
 }
 

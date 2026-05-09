@@ -443,6 +443,20 @@ pub struct MultisigPendingRecord {
     pub partials: BTreeMap<String, Value>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub expires_at: chrono::DateTime<chrono::Utc>,
+    /// MAL-11 leader-election (round 25): node id of the watchdog instance
+    /// currently leasing this row, or `None` when unclaimed. The lease is
+    /// valid until [`MultisigPendingRecord::claimed_until`].
+    pub claimed_by_node_id: Option<String>,
+    /// Lease expiry timestamp. A row is "claimable" when this is `None` or
+    /// in the past.
+    pub claimed_until: Option<chrono::DateTime<chrono::Utc>>,
+    /// Round 28 — partition-tolerant fencing token. Every successful
+    /// `try_claim` bumps this counter; a stale leader (whose lease was
+    /// silently superseded after a network partition healed) carries the
+    /// pre-bump value so its post-aggregate `delete_with_fence` /
+    /// `renew_claim` is rejected at the row level. Monotonic across the
+    /// row's lifetime.
+    pub claim_seq: i64,
 }
 
 #[derive(Clone, Debug)]

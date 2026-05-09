@@ -132,6 +132,8 @@ mod tests {
             lattice_first: false,
             anchorer_signing_key_seed: None,
             use_keystore: false,
+            federation_policy: crate::config::FederationPolicy::Mesh,
+            federation_peers: Vec::new(),
         }
     }
 

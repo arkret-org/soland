@@ -1,5 +1,9 @@
 use salvo::prelude::*;
-use soland::{artifacts, config::AppConfig, db::Db, service, state::AppState};
+use soland::{
+    artifacts, config::AppConfig, db::Db,
+    multisig_watchdog::{MultisigWatchdog, MultisigWatchdogConfig},
+    service, state::AppState,
+};
 use tokio::signal;
 
 #[tokio::main]
@@ -52,6 +56,16 @@ async fn main() -> anyhow::Result<()> {
         }
     }
     let state = AppState::new(config.clone(), Db::from_env()?);
+
+    // MAL-11 round 25 — spawn the multisig leader-election watchdog. The
+    // task wakes every 30s by default, scans `multisig_pending` for rows
+    // whose threshold is met + canonical_b64 is non-empty, claims an
+    // unleased row, and aggregates via SDK `ThresholdAggregator`. Returns
+    // a JoinHandle we drop on the floor — the task lives for the process
+    // lifetime and shutdown_signal teardown closes the runtime.
+    let watchdog_config = MultisigWatchdogConfig::for_service(&state.config.service_did);
+    let _watchdog = MultisigWatchdog::new(state.clone(), watchdog_config).spawn();
+
     let acceptor = TcpListener::new(config.bind.to_string()).bind().await;
     tracing::info!(
         bind = %config.bind,

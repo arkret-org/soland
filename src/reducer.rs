@@ -68,8 +68,19 @@ pub struct ProjectionState {
     pub members: BTreeMap<(String, String), MembershipState>,
     /// Space lifecycle state keyed by space_id.
     pub space_states: BTreeMap<String, SpaceState>,
-    /// Redacted event IDs (tombstones).
+    /// Redacted event IDs (tombstones). Round 25 keeps this as a flat
+    /// fast-lookup index over the parallel [`Self::redaction_cells`] map
+    /// — entries sit here whenever the parallel cell is `Some(_)` and are
+    /// removed when the cas-register is set back to null (un-redaction).
     pub redactions: BTreeSet<String>,
+    /// Round 25 (MAL-14) — parallel `redaction` cells keyed by the target
+    /// event_id (subject). Each value is a [`RedactionCellValue`] holding
+    /// `{redacted_at, by, reason}` per the spec, or `None` after an
+    /// un-redaction. The original message entry in [`Self::messages`] is
+    /// left intact so the ordered-log historical entry id is preserved;
+    /// the projection layer consults this map at read time and replaces
+    /// the payload with the tombstone.
+    pub redaction_cells: BTreeMap<String, Option<RedactionCellValue>>,
     /// C10.B (2026-05-09 八轮 激进模式): per-cell effective state
     /// populated from the Move/Anchor pipeline's `apply_anchor` write-back.
     ///
@@ -104,6 +115,51 @@ pub struct ProjectionState {
     /// / `entities` / `relations` / `redactions`) stay structured per spec
     /// (those event kinds have no `cell_family` declaration).
     pub cells: BTreeMap<CellRef, CellState>,
+}
+
+/// Round 25 (MAL-14) — value of the parallel `redaction` cas-register
+/// cell on the same subject as the target message cell. Mirrors the spec
+/// shape `{redacted_at, by, reason}`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RedactionCellValue {
+    pub redacted_at: chrono::DateTime<chrono::Utc>,
+    pub by: String,
+    pub reason: Option<String>,
+}
+
+impl RedactionCellValue {
+    /// Render the cas-register payload as JSON for projection / wire emission.
+    pub fn to_json(&self) -> Value {
+        let mut obj = serde_json::Map::new();
+        obj.insert(
+            "redacted_at".to_owned(),
+            Value::String(self.redacted_at.to_rfc3339()),
+        );
+        obj.insert("by".to_owned(), Value::String(self.by.clone()));
+        if let Some(reason) = &self.reason {
+            obj.insert("reason".to_owned(), Value::String(reason.clone()));
+        }
+        Value::Object(obj)
+    }
+}
+
+/// Round 25 — projection-layer view of a single message cell. The reducer
+/// keeps the original [`MessageState`] intact; this view is what callers
+/// see at read time after the parallel `redaction` cell is consulted.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProjectedMessageView {
+    pub event_id: String,
+    pub space_id: String,
+    pub sender: String,
+    pub thread_id: String,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    /// `Some(content)` for live messages; `None` when a redaction tombstone
+    /// is in effect (the projection layer replaced the payload).
+    pub content: Option<Value>,
+    /// `Some(value)` while the parallel `redaction` cell is set; `None` for
+    /// live messages and for messages whose redaction was reverted (cell
+    /// set back to null).
+    pub redaction: Option<RedactionCellValue>,
 }
 
 #[derive(Clone, Debug)]
@@ -531,6 +587,16 @@ impl ProjectionState {
         }
     }
 
+    /// Round 25 (MAL-14) rewrite. Writes a parallel `redaction` cas-register
+    /// cell on the same subject as the target message cell, value
+    /// `{redacted_at, by, reason}`. The ordered-log historical entry id
+    /// (the original [`MessageState`]) is preserved unchanged; the
+    /// projection layer at read time consults the redaction cell and
+    /// replaces the payload with a tombstone.
+    ///
+    /// Un-redaction: an `apply_redaction` call whose payload sets
+    /// `redaction_value: null` (or the equivalent `unredact: true` flag)
+    /// resets the cas-register and removes the tombstone.
     fn apply_redaction(&mut self, operation: &Operation) -> ProjectionEffect {
         let target = operation
             .payload
@@ -540,16 +606,60 @@ impl ProjectionState {
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_owned();
-
-        if !target.is_empty() {
-            self.redactions.insert(target.clone());
-            if let Some(msg) = self.messages.get_mut(&target) {
-                msg.redacted_at = Some(operation.created_at);
-            }
-            ProjectionEffect::MessageRedacted { event_id: target }
-        } else {
-            ProjectionEffect::Ignored
+        if target.is_empty() {
+            return ProjectionEffect::Ignored;
         }
+
+        // Cas-register set-null path: clears the parallel cell and removes
+        // the tombstone. The original MessageState stays intact.
+        let unredact = operation
+            .payload
+            .get("redaction_value")
+            .map(|v| v.is_null())
+            .or_else(|| {
+                operation
+                    .payload
+                    .get("unredact")
+                    .and_then(|v| v.as_bool())
+            })
+            .unwrap_or(false);
+        if unredact {
+            self.redaction_cells.insert(target.clone(), None);
+            self.redactions.remove(&target);
+            if let Some(msg) = self.messages.get_mut(&target) {
+                msg.redacted_at = None;
+            }
+            return ProjectionEffect::MessageRedacted { event_id: target };
+        }
+
+        // Standard redact path: write the parallel cell + flag the
+        // historical entry without removing it.
+        let by = operation
+            .payload
+            .get("by")
+            .or_else(|| operation.payload.get("redacted_by"))
+            .or_else(|| operation.payload.get("sender"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_owned();
+        let reason = operation
+            .payload
+            .get("reason")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(ToOwned::to_owned);
+        let cell = RedactionCellValue {
+            redacted_at: operation.created_at,
+            by,
+            reason,
+        };
+        self.redaction_cells
+            .insert(target.clone(), Some(cell.clone()));
+        self.redactions.insert(target.clone());
+        if let Some(msg) = self.messages.get_mut(&target) {
+            msg.redacted_at = Some(operation.created_at);
+        }
+        ProjectionEffect::MessageRedacted { event_id: target }
     }
 
     fn apply_reaction_add(
@@ -1220,7 +1330,14 @@ impl ProjectionState {
         let mut msgs: Vec<_> = self
             .messages
             .values()
-            .filter(|m| m.space_id == space_id && m.redacted_at.is_none())
+            .filter(|m| {
+                m.space_id == space_id
+                    && self
+                        .redaction_cells
+                        .get(&m.event_id)
+                        .and_then(|cell| cell.as_ref())
+                        .is_none()
+            })
             .collect();
         msgs.sort_by_key(|a| a.created_at);
         msgs
@@ -1231,10 +1348,57 @@ impl ProjectionState {
         let mut msgs: Vec<_> = self
             .messages
             .values()
-            .filter(|m| m.thread_id == thread_id && m.redacted_at.is_none())
+            .filter(|m| {
+                m.thread_id == thread_id
+                    && self
+                        .redaction_cells
+                        .get(&m.event_id)
+                        .and_then(|cell| cell.as_ref())
+                        .is_none()
+            })
             .collect();
         msgs.sort_by_key(|a| a.created_at);
         msgs
+    }
+
+    /// Round 25 (MAL-14) — projection layer view of a single message that
+    /// consults the parallel `redaction` cell. Returns:
+    ///   - `Some(view)` with `content = Some(_)` for live messages (no
+    ///     redaction cell set, or set back to null);
+    ///   - `Some(view)` with `content = None` + `redaction = Some(_)` when
+    ///     the parallel cell is in effect — caller renders the tombstone;
+    ///   - `None` if no underlying [`MessageState`] is known.
+    ///
+    /// The ordered-log historical entry id is preserved unchanged so
+    /// federation / sync replay still emits the same `event_id`.
+    pub fn projected_message(
+        &self,
+        event_id: &str,
+        viewer_is_author: bool,
+    ) -> Option<ProjectedMessageView> {
+        let msg = self.messages.get(event_id)?;
+        let redaction = self
+            .redaction_cells
+            .get(event_id)
+            .and_then(|cell| cell.as_ref())
+            .cloned();
+        let content = match (&redaction, viewer_is_author) {
+            // No redaction in effect — full payload visible.
+            (None, _) => Some(msg.content.clone()),
+            // Author keeps the audit-view of the original payload.
+            (Some(_), true) => Some(msg.content.clone()),
+            // Other members see the tombstone.
+            (Some(_), false) => None,
+        };
+        Some(ProjectedMessageView {
+            event_id: msg.event_id.clone(),
+            space_id: msg.space_id.clone(),
+            sender: msg.sender.clone(),
+            thread_id: msg.thread_id.clone(),
+            created_at: msg.created_at,
+            content,
+            redaction,
+        })
     }
 
     /// Get active reactions for an event.
@@ -1435,14 +1599,181 @@ mod tests {
                 crate::kinds::CX_MESSAGE_REDACT,
                 "cx:space:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
-                    "target_event_id": "cx:event:01904100-0000-7000-8000-caaa6a15bce1"
+                    "target_event_id": "cx:event:01904100-0000-7000-8000-caaa6a15bce1",
+                    "by": "did:web:alice",
+                    "reason": "wrong room"
                 }),
             ),
             &hlc,
         );
 
-        assert!(state.messages_for_space("cx:space:01904100-0000-7000-8000-cfc039892036").is_empty());
+        assert!(
+            state
+                .messages_for_space("cx:space:01904100-0000-7000-8000-cfc039892036")
+                .is_empty()
+        );
         assert!(state.redactions.contains("cx:event:01904100-0000-7000-8000-caaa6a15bce1"));
+        // Round 25: the original MessageState is preserved (only the
+        // parallel cell + flat redactions index move).
+        assert!(state
+            .messages
+            .contains_key("cx:event:01904100-0000-7000-8000-caaa6a15bce1"));
+        let cell = state
+            .redaction_cells
+            .get("cx:event:01904100-0000-7000-8000-caaa6a15bce1")
+            .cloned()
+            .unwrap()
+            .unwrap();
+        assert_eq!(cell.by, "did:web:alice");
+        assert_eq!(cell.reason.as_deref(), Some("wrong room"));
+    }
+
+    // ── Round 25 MAL-14 redact reducer rewrite tests ─────────────────
+
+    fn redact_make_message(state: &mut ProjectionState, hlc: &ServerHlc, event_id: &str) {
+        state.apply(
+            &make_operation(
+                crate::kinds::CX_MESSAGE_CREATE,
+                "cx:space:01904100-0000-7000-8000-cfc039892036",
+                serde_json::json!({
+                    "event_id": event_id,
+                    "sender": "did:web:alice",
+                    "thread_id": "cx:thread:1",
+                    "content": {"body": "hello"}
+                }),
+            ),
+            hlc,
+        );
+    }
+
+    #[test]
+    fn mal14_tombstone_visible_to_author() {
+        let mut state = ProjectionState::new();
+        let hlc = ServerHlc::new("test");
+        let event_id = "cx:event:01904100-0000-7000-8000-aaaaaaaaaaa1";
+        redact_make_message(&mut state, &hlc, event_id);
+        state.apply(
+            &make_operation(
+                crate::kinds::CX_MESSAGE_REDACT,
+                "cx:space:01904100-0000-7000-8000-cfc039892036",
+                serde_json::json!({
+                    "target_event_id": event_id,
+                    "by": "did:web:alice",
+                    "reason": "rethink",
+                }),
+            ),
+            &hlc,
+        );
+        let view = state.projected_message(event_id, true).unwrap();
+        // Author still sees the original payload (audit-view).
+        assert!(view.content.is_some(), "author should see original content");
+        // Tombstone metadata is also present.
+        let r = view.redaction.unwrap();
+        assert_eq!(r.by, "did:web:alice");
+        assert_eq!(r.reason.as_deref(), Some("rethink"));
+    }
+
+    #[test]
+    fn mal14_tombstone_hidden_from_members() {
+        let mut state = ProjectionState::new();
+        let hlc = ServerHlc::new("test");
+        let event_id = "cx:event:01904100-0000-7000-8000-aaaaaaaaaaa2";
+        redact_make_message(&mut state, &hlc, event_id);
+        state.apply(
+            &make_operation(
+                crate::kinds::CX_MESSAGE_REDACT,
+                "cx:space:01904100-0000-7000-8000-cfc039892036",
+                serde_json::json!({
+                    "target_event_id": event_id,
+                    "by": "did:web:alice",
+                }),
+            ),
+            &hlc,
+        );
+        let view = state.projected_message(event_id, false).unwrap();
+        assert!(view.content.is_none(), "non-author should see tombstone");
+        assert!(view.redaction.is_some());
+    }
+
+    #[test]
+    fn mal14_unredaction_clears_cell_and_index() {
+        let mut state = ProjectionState::new();
+        let hlc = ServerHlc::new("test");
+        let event_id = "cx:event:01904100-0000-7000-8000-aaaaaaaaaaa3";
+        redact_make_message(&mut state, &hlc, event_id);
+        // Redact.
+        state.apply(
+            &make_operation(
+                crate::kinds::CX_MESSAGE_REDACT,
+                "cx:space:01904100-0000-7000-8000-cfc039892036",
+                serde_json::json!({
+                    "target_event_id": event_id,
+                    "by": "did:web:alice",
+                }),
+            ),
+            &hlc,
+        );
+        assert!(state.redactions.contains(event_id));
+        // Un-redact via cas-register set null.
+        state.apply(
+            &make_operation(
+                crate::kinds::CX_MESSAGE_REDACT,
+                "cx:space:01904100-0000-7000-8000-cfc039892036",
+                serde_json::json!({
+                    "target_event_id": event_id,
+                    "redaction_value": serde_json::Value::Null,
+                }),
+            ),
+            &hlc,
+        );
+        assert!(
+            !state.redactions.contains(event_id),
+            "un-redaction must clear the flat tombstone index"
+        );
+        let cell = state.redaction_cells.get(event_id).unwrap();
+        assert!(cell.is_none(), "parallel cell must be set to null");
+        // Un-redacted message renders content for everyone again.
+        let view_member = state.projected_message(event_id, false).unwrap();
+        assert!(view_member.content.is_some());
+        assert!(view_member.redaction.is_none());
+    }
+
+    #[test]
+    fn mal14_late_arriving_redaction_still_takes_effect() {
+        let mut state = ProjectionState::new();
+        let hlc = ServerHlc::new("test");
+        let event_id = "cx:event:01904100-0000-7000-8000-aaaaaaaaaaa4";
+        // Pre-create the projected message and let the projection
+        // rendering query it once before the redaction lands.
+        redact_make_message(&mut state, &hlc, event_id);
+        let pre = state.projected_message(event_id, false).unwrap();
+        assert!(pre.content.is_some());
+        assert!(pre.redaction.is_none());
+        // Now a delayed redaction arrives.
+        state.apply(
+            &make_operation(
+                crate::kinds::CX_MESSAGE_REDACT,
+                "cx:space:01904100-0000-7000-8000-cfc039892036",
+                serde_json::json!({
+                    "target_event_id": event_id,
+                    "by": "did:web:alice",
+                    "reason": "late",
+                }),
+            ),
+            &hlc,
+        );
+        let post = state.projected_message(event_id, false).unwrap();
+        assert!(
+            post.content.is_none(),
+            "late-arriving redaction must hide payload from non-authors"
+        );
+        let r = post.redaction.unwrap();
+        assert_eq!(r.reason.as_deref(), Some("late"));
+        // The flat-redactions index now has the entry.
+        assert!(state.redactions.contains(event_id));
+        // Author still sees the audit-view.
+        let post_author = state.projected_message(event_id, true).unwrap();
+        assert!(post_author.content.is_some());
     }
 
     #[test]

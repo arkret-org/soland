@@ -155,9 +155,9 @@ pub use admin_cells::{admin_get_cell, admin_list_cells};
 pub use admin_control::{admin_emit_resync_required, admin_emit_unauthorized};
 pub use anchor_admin::{
     admin_compact_anchor_dag, admin_get_anchor_dag, admin_get_anchorer,
-    admin_list_bottom_global, admin_list_multisig_pending, admin_list_space_bottom,
-    admin_reconfigure_anchorer, admin_repair_bottom, admin_rotate_signing_key,
-    admin_submit_multisig_partial,
+    admin_list_bottom_global, admin_list_gc_candidates, admin_list_multisig_pending,
+    admin_list_space_bottom, admin_reconfigure_anchorer, admin_repair_bottom,
+    admin_rotate_signing_key, admin_submit_multisig_partial,
 };
 pub use space::{
     add_space_member, create_space, delete_space, export_space, invite_token_matches_space,
@@ -172,8 +172,9 @@ pub use auth::{
     logout, revoke_device_record, session_token_hash, token_for,
 };
 pub use federation::{
-    federation_pull_operations, federation_push_operations, federation_space_members,
-    federation_transaction, federation_verify_actor,
+    broadcast_anchor_to_peers, broadcast_move_to_peers, federation_anchors_pull,
+    federation_anchors_push, federation_pull_operations, federation_push_operations,
+    federation_space_members, federation_transaction, federation_verify_actor,
 };
 pub use identity::{
     identity_describe, identity_document, identity_log, identity_receipts, identity_resolve,
@@ -409,6 +410,8 @@ mod operation_conformance_tests {
                 lattice_first: false,
                 anchorer_signing_key_seed: None,
                 use_keystore: false,
+                federation_policy: crate::config::FederationPolicy::Mesh,
+                federation_peers: Vec::new(),
             },
             Db { pool: None },
         )

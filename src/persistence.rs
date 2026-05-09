@@ -10,7 +10,7 @@ use chrono::Utc;
 use contrix_sdk::Operation;
 use diesel::{
     OptionalExtension, QueryableByName, RunQueryDsl, sql_query,
-    sql_types::{Array, BigInt, Binary, Integer, Jsonb, Nullable, Text, Timestamptz},
+    sql_types::{Array, BigInt, Binary, Bool, Integer, Jsonb, Nullable, Text, Timestamptz},
 };
 use serde_json::Value;
 
@@ -320,6 +320,65 @@ pub trait MultisigPendingStore: Send + Sync {
     ) -> PersistenceResult<MultisigPendingRecord>;
     fn list_for_space(&self, space_id: &str) -> PersistenceResult<Vec<MultisigPendingRecord>>;
     fn delete(&self, anchor_id: &str) -> PersistenceResult<bool>;
+
+    /// MAL-11 round 25 — list every row across all spaces. Used by the
+    /// leader-election watchdog to scan for threshold-met rows that need
+    /// aggregation + publication.
+    fn snapshot_all(&self) -> PersistenceResult<Vec<MultisigPendingRecord>>;
+
+    /// MAL-11 round 25 — atomically claim a row for `node_id` until
+    /// `claimed_until` if (a) the row exists, (b) it is currently unclaimed
+    /// or its existing lease has expired (relative to `now`).
+    ///
+    /// Round 28 — on success the row's monotonic `claim_seq` is bumped by
+    /// 1 and the new value is returned alongside the success flag. The
+    /// watchdog snapshots this value as its **fencing token**: any
+    /// follow-up `delete_with_fence` / `renew_claim` it issues against
+    /// the row carries the same `claim_seq`, and a stale leader (whose
+    /// lease was silently re-issued to another node after a partition
+    /// healed) finds its `claim_seq` no longer matches and is rejected
+    /// at the row level. Returns `Ok((true, new_seq))` when this caller
+    /// now owns the lease, `Ok((false, current_seq))` otherwise.
+    fn try_claim(
+        &self,
+        anchor_id: &str,
+        node_id: &str,
+        now: chrono::DateTime<chrono::Utc>,
+        claimed_until: chrono::DateTime<chrono::Utc>,
+    ) -> PersistenceResult<(bool, i64)>;
+
+    /// MAL-11 round 25 — release a held lease (called after the row was
+    /// successfully aggregated + deleted, or when the caller decided to
+    /// give up early). Idempotent — safe to call on a row that was already
+    /// deleted.
+    fn release_claim(&self, anchor_id: &str, node_id: &str) -> PersistenceResult<()>;
+
+    /// Round 28 — fenced delete. Only deletes the row when both the lease
+    /// holder *and* the fencing token match. A stale leader (one whose
+    /// lease was superseded after a partition heal) carries the pre-bump
+    /// `claim_seq`, so this returns `Ok(false)` and the row stays intact
+    /// for the live leader to publish. Returns `Ok(true)` iff the delete
+    /// happened.
+    fn delete_with_fence(
+        &self,
+        anchor_id: &str,
+        node_id: &str,
+        claim_seq: i64,
+    ) -> PersistenceResult<bool>;
+
+    /// Round 28 — happy-path lease renewal during long aggregation.
+    /// Pushes `claimed_until` forward without bumping `claim_seq` (so the
+    /// watchdog's snapshotted fencing token stays valid). Only succeeds
+    /// when the lease is still held by `node_id` AND the supplied
+    /// `claim_seq` matches the row — a stale leader's renewal is
+    /// rejected. Returns `Ok(true)` iff the renewal landed.
+    fn renew_claim(
+        &self,
+        anchor_id: &str,
+        node_id: &str,
+        claim_seq: i64,
+        new_claimed_until: chrono::DateTime<chrono::Utc>,
+    ) -> PersistenceResult<bool>;
 }
 
 /// Per-owner policy documents.
@@ -607,6 +666,87 @@ impl MultisigPendingStore for MemoryMultisigPendingStore {
     fn delete(&self, anchor_id: &str) -> PersistenceResult<bool> {
         let mut data = self.data.lock().expect("lock");
         Ok(data.remove(anchor_id).is_some())
+    }
+
+    fn snapshot_all(&self) -> PersistenceResult<Vec<MultisigPendingRecord>> {
+        let data = self.data.lock().expect("lock");
+        Ok(data.values().cloned().collect())
+    }
+
+    fn try_claim(
+        &self,
+        anchor_id: &str,
+        node_id: &str,
+        now: chrono::DateTime<chrono::Utc>,
+        claimed_until: chrono::DateTime<chrono::Utc>,
+    ) -> PersistenceResult<(bool, i64)> {
+        let mut data = self.data.lock().expect("lock");
+        let Some(record) = data.get_mut(anchor_id) else {
+            return Ok((false, 0));
+        };
+        let claimable = match (&record.claimed_by_node_id, record.claimed_until) {
+            (None, _) => true,
+            (Some(_), None) => true,
+            (Some(_), Some(deadline)) => deadline <= now,
+        };
+        if !claimable {
+            return Ok((false, record.claim_seq));
+        }
+        record.claimed_by_node_id = Some(node_id.to_owned());
+        record.claimed_until = Some(claimed_until);
+        record.claim_seq += 1;
+        Ok((true, record.claim_seq))
+    }
+
+    fn release_claim(&self, anchor_id: &str, node_id: &str) -> PersistenceResult<()> {
+        let mut data = self.data.lock().expect("lock");
+        if let Some(record) = data.get_mut(anchor_id)
+            && record.claimed_by_node_id.as_deref() == Some(node_id)
+        {
+            record.claimed_by_node_id = None;
+            record.claimed_until = None;
+        }
+        Ok(())
+    }
+
+    fn delete_with_fence(
+        &self,
+        anchor_id: &str,
+        node_id: &str,
+        claim_seq: i64,
+    ) -> PersistenceResult<bool> {
+        let mut data = self.data.lock().expect("lock");
+        let matches = data
+            .get(anchor_id)
+            .map(|r| {
+                r.claimed_by_node_id.as_deref() == Some(node_id) && r.claim_seq == claim_seq
+            })
+            .unwrap_or(false);
+        if !matches {
+            return Ok(false);
+        }
+        Ok(data.remove(anchor_id).is_some())
+    }
+
+    fn renew_claim(
+        &self,
+        anchor_id: &str,
+        node_id: &str,
+        claim_seq: i64,
+        new_claimed_until: chrono::DateTime<chrono::Utc>,
+    ) -> PersistenceResult<bool> {
+        let mut data = self.data.lock().expect("lock");
+        let Some(record) = data.get_mut(anchor_id) else {
+            return Ok(false);
+        };
+        if record.claimed_by_node_id.as_deref() != Some(node_id) {
+            return Ok(false);
+        }
+        if record.claim_seq != claim_seq {
+            return Ok(false);
+        }
+        record.claimed_until = Some(new_claimed_until);
+        Ok(true)
     }
 }
 
@@ -1854,6 +1994,15 @@ pub struct PgPersistenceStore {
     audit: PgAuditStore,
     push_devices: PgPushDeviceStore,
     events: PgEventStore,
+    federation_operations: PgFederationOperationsStore,
+    moderation: PgModerationStore,
+    presence: PgPresenceStore,
+    schemas: PgSchemaStore,
+    identity: PgIdentityStore,
+    space_invites: PgSpaceInviteStore,
+    key_backups: PgKeyBackupStore,
+    webrtc: PgWebrtcSessionStore,
+    policy_documents: PgPolicyDocumentStore,
     fallback: MemoryPersistenceStore,
 }
 
@@ -1868,7 +2017,16 @@ impl PgPersistenceStore {
             multisig_pending: PgMultisigPendingStore { pool: pool.clone() },
             audit: PgAuditStore { pool: pool.clone() },
             push_devices: PgPushDeviceStore { pool: pool.clone() },
-            events: PgEventStore { pool },
+            events: PgEventStore { pool: pool.clone() },
+            federation_operations: PgFederationOperationsStore { pool: pool.clone() },
+            moderation: PgModerationStore { pool: pool.clone() },
+            presence: PgPresenceStore { pool: pool.clone() },
+            schemas: PgSchemaStore { pool: pool.clone() },
+            identity: PgIdentityStore { pool: pool.clone() },
+            space_invites: PgSpaceInviteStore { pool: pool.clone() },
+            key_backups: PgKeyBackupStore { pool: pool.clone() },
+            webrtc: PgWebrtcSessionStore { pool: pool.clone() },
+            policy_documents: PgPolicyDocumentStore { pool },
             fallback: MemoryPersistenceStore::new(),
         }
     }
@@ -1912,11 +2070,11 @@ impl PersistenceStore for PgPersistenceStore {
     }
 
     fn moderation(&self) -> &dyn ModerationStore {
-        self.fallback.moderation()
+        &self.moderation
     }
 
     fn federation_operations(&self) -> &dyn FederationOperationsStore {
-        self.fallback.federation_operations()
+        &self.federation_operations
     }
 
     fn push_devices(&self) -> &dyn PushDeviceStore {
@@ -1928,7 +2086,7 @@ impl PersistenceStore for PgPersistenceStore {
     }
 
     fn presence(&self) -> &dyn PresenceStore {
-        self.fallback.presence()
+        &self.presence
     }
 
     fn typing(&self) -> &dyn TypingStore {
@@ -1940,23 +2098,23 @@ impl PersistenceStore for PgPersistenceStore {
     }
 
     fn webrtc(&self) -> &dyn WebrtcSessionStore {
-        self.fallback.webrtc()
+        &self.webrtc
     }
 
     fn policy_documents(&self) -> &dyn PolicyDocumentStore {
-        self.fallback.policy_documents()
+        &self.policy_documents
     }
 
     fn schemas(&self) -> &dyn SchemaStore {
-        self.fallback.schemas()
+        &self.schemas
     }
 
     fn identity(&self) -> &dyn IdentityStore {
-        self.fallback.identity()
+        &self.identity
     }
 
     fn space_invites(&self) -> &dyn SpaceInviteStore {
-        self.fallback.space_invites()
+        &self.space_invites
     }
 
     fn events(&self) -> &dyn EventStore {
@@ -1980,7 +2138,7 @@ impl PersistenceStore for PgPersistenceStore {
     }
 
     fn key_backups(&self) -> &dyn KeyBackupStore {
-        self.fallback.key_backups()
+        &self.key_backups
     }
 
     fn multisig_pending(&self) -> &dyn MultisigPendingStore {
@@ -2346,6 +2504,12 @@ struct MultisigPendingRow {
     created_at: chrono::DateTime<chrono::Utc>,
     #[diesel(sql_type = Timestamptz)]
     expires_at: chrono::DateTime<chrono::Utc>,
+    #[diesel(sql_type = Nullable<Text>)]
+    claimed_by_node_id: Option<String>,
+    #[diesel(sql_type = Nullable<Timestamptz>)]
+    claimed_until: Option<chrono::DateTime<chrono::Utc>>,
+    #[diesel(sql_type = BigInt)]
+    claim_seq: i64,
 }
 
 impl From<MultisigPendingRow> for MultisigPendingRecord {
@@ -2364,6 +2528,9 @@ impl From<MultisigPendingRow> for MultisigPendingRecord {
             partials,
             created_at: row.created_at,
             expires_at: row.expires_at,
+            claimed_by_node_id: row.claimed_by_node_id,
+            claimed_until: row.claimed_until,
+            claim_seq: row.claim_seq,
         }
     }
 }
@@ -2409,7 +2576,8 @@ impl MultisigPendingStore for PgMultisigPendingStore {
         let mut conn = pg_conn(&self.pool)?;
         sql_query(
             "SELECT anchor_id, space_id, threshold_k, threshold_n, members, canonical_b64, \
-             partials, created_at, expires_at FROM multisig_pending WHERE anchor_id = $1",
+             partials, created_at, expires_at, claimed_by_node_id, claimed_until, claim_seq \
+             FROM multisig_pending WHERE anchor_id = $1",
         )
         .bind::<Text, _>(anchor_id)
         .get_result::<MultisigPendingRow>(&mut conn)
@@ -2444,7 +2612,8 @@ impl MultisigPendingStore for PgMultisigPendingStore {
         let mut conn = pg_conn(&self.pool)?;
         sql_query(
             "SELECT anchor_id, space_id, threshold_k, threshold_n, members, canonical_b64, \
-             partials, created_at, expires_at FROM multisig_pending WHERE space_id = $1 \
+             partials, created_at, expires_at, claimed_by_node_id, claimed_until, claim_seq \
+             FROM multisig_pending WHERE space_id = $1 \
              ORDER BY created_at ASC",
         )
         .bind::<Text, _>(space_id)
@@ -2460,6 +2629,131 @@ impl MultisigPendingStore for PgMultisigPendingStore {
             .execute(&mut conn)
             .map(|n| n > 0)
             .map_err(PersistenceError::from)
+    }
+
+    fn snapshot_all(&self) -> PersistenceResult<Vec<MultisigPendingRecord>> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query(
+            "SELECT anchor_id, space_id, threshold_k, threshold_n, members, canonical_b64, \
+             partials, created_at, expires_at, claimed_by_node_id, claimed_until, claim_seq \
+             FROM multisig_pending ORDER BY created_at ASC",
+        )
+        .load::<MultisigPendingRow>(&mut conn)
+        .map(|rows| rows.into_iter().map(MultisigPendingRecord::from).collect())
+        .map_err(PersistenceError::from)
+    }
+
+    fn try_claim(
+        &self,
+        anchor_id: &str,
+        node_id: &str,
+        now: chrono::DateTime<chrono::Utc>,
+        claimed_until: chrono::DateTime<chrono::Utc>,
+    ) -> PersistenceResult<(bool, i64)> {
+        let mut conn = pg_conn(&self.pool)?;
+        // Atomic claim: only succeed when the row is unclaimed or its
+        // existing lease has expired. Round 28 — bump `claim_seq` on every
+        // successful claim and `RETURNING` the new value so the watchdog
+        // can use it as a fencing token for the subsequent
+        // `delete_with_fence` / `renew_claim`.
+        #[derive(QueryableByName)]
+        struct ClaimSeqRow {
+            #[diesel(sql_type = BigInt)]
+            claim_seq: i64,
+        }
+
+        let updated: Option<ClaimSeqRow> = sql_query(
+            "UPDATE multisig_pending \
+             SET claimed_by_node_id = $2, claimed_until = $4, \
+                 claim_seq = claim_seq + 1 \
+             WHERE anchor_id = $1 \
+               AND (claimed_by_node_id IS NULL \
+                    OR claimed_until IS NULL \
+                    OR claimed_until <= $3) \
+             RETURNING claim_seq",
+        )
+        .bind::<Text, _>(anchor_id)
+        .bind::<Text, _>(node_id)
+        .bind::<Timestamptz, _>(now)
+        .bind::<Timestamptz, _>(claimed_until)
+        .get_result::<ClaimSeqRow>(&mut conn)
+        .optional()
+        .map_err(PersistenceError::from)?;
+
+        if let Some(row) = updated {
+            Ok((true, row.claim_seq))
+        } else {
+            // No row was updated; surface the current `claim_seq` so callers
+            // can log it for diagnostics. Lookup is best-effort — a missing
+            // row reports `0`.
+            let cur: Option<ClaimSeqRow> = sql_query(
+                "SELECT claim_seq FROM multisig_pending WHERE anchor_id = $1",
+            )
+            .bind::<Text, _>(anchor_id)
+            .get_result::<ClaimSeqRow>(&mut conn)
+            .optional()
+            .map_err(PersistenceError::from)?;
+            Ok((false, cur.map(|r| r.claim_seq).unwrap_or(0)))
+        }
+    }
+
+    fn release_claim(&self, anchor_id: &str, node_id: &str) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query(
+            "UPDATE multisig_pending \
+             SET claimed_by_node_id = NULL, claimed_until = NULL \
+             WHERE anchor_id = $1 AND claimed_by_node_id = $2",
+        )
+        .bind::<Text, _>(anchor_id)
+        .bind::<Text, _>(node_id)
+        .execute(&mut conn)
+        .map(|_| ())
+        .map_err(PersistenceError::from)
+    }
+
+    fn delete_with_fence(
+        &self,
+        anchor_id: &str,
+        node_id: &str,
+        claim_seq: i64,
+    ) -> PersistenceResult<bool> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query(
+            "DELETE FROM multisig_pending \
+             WHERE anchor_id = $1 \
+               AND claimed_by_node_id = $2 \
+               AND claim_seq = $3",
+        )
+        .bind::<Text, _>(anchor_id)
+        .bind::<Text, _>(node_id)
+        .bind::<BigInt, _>(claim_seq)
+        .execute(&mut conn)
+        .map(|n| n > 0)
+        .map_err(PersistenceError::from)
+    }
+
+    fn renew_claim(
+        &self,
+        anchor_id: &str,
+        node_id: &str,
+        claim_seq: i64,
+        new_claimed_until: chrono::DateTime<chrono::Utc>,
+    ) -> PersistenceResult<bool> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query(
+            "UPDATE multisig_pending \
+             SET claimed_until = $4 \
+             WHERE anchor_id = $1 \
+               AND claimed_by_node_id = $2 \
+               AND claim_seq = $3",
+        )
+        .bind::<Text, _>(anchor_id)
+        .bind::<Text, _>(node_id)
+        .bind::<BigInt, _>(claim_seq)
+        .bind::<Timestamptz, _>(new_claimed_until)
+        .execute(&mut conn)
+        .map(|n| n > 0)
+        .map_err(PersistenceError::from)
     }
 }
 
@@ -2720,6 +3014,1148 @@ impl EventStore for PgEventStore {
         .load::<CanonicalEventRow>(&mut conn)
         .map(|rows| rows.into_iter().map(CanonicalEventRecord::from).collect())
         .map_err(PersistenceError::from)
+    }
+}
+
+// ── Round 25 — Pg-backed FederationOperationsStore ────────────────────────
+
+struct PgFederationOperationsStore {
+    pool: PgPool,
+}
+
+#[derive(QueryableByName)]
+struct FederationOperationRow {
+    #[diesel(sql_type = Jsonb)]
+    payload: Value,
+}
+
+impl FederationOperationsStore for PgFederationOperationsStore {
+    fn append(&self, operation: Operation) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool)?;
+        let payload = serde_json::to_value(&operation).map_err(|error| {
+            PersistenceError::Internal(format!("federation operation serialize: {error}"))
+        })?;
+        let object_id = operation.object_id.clone();
+        let operation_type =
+            serde_json::to_value(&operation.operation_type)
+                .ok()
+                .and_then(|v| v.as_str().map(ToOwned::to_owned))
+                .unwrap_or_else(|| "create".to_owned());
+        sql_query(
+            "INSERT INTO federation_operations \
+             (operation_id, space_id, object_type, object_id, operation_type, payload, created_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7) \
+             ON CONFLICT (operation_id) DO NOTHING",
+        )
+        .bind::<Text, _>(operation.operation_id.as_str())
+        .bind::<Text, _>(operation.space_id.as_str())
+        .bind::<Text, _>(&operation.object_type)
+        .bind::<Nullable<Text>, _>(&object_id)
+        .bind::<Text, _>(&operation_type)
+        .bind::<Jsonb, _>(&payload)
+        .bind::<Timestamptz, _>(operation.created_at)
+        .execute(&mut conn)
+        .map(|_| ())
+        .map_err(PersistenceError::from)
+    }
+
+    fn contains(&self, operation_id: &str) -> PersistenceResult<bool> {
+        let mut conn = pg_conn(&self.pool)?;
+        #[derive(QueryableByName)]
+        struct ExistsRow {
+            #[diesel(sql_type = diesel::sql_types::Bool)]
+            present: bool,
+        }
+        sql_query(
+            "SELECT EXISTS(SELECT 1 FROM federation_operations WHERE operation_id = $1) AS present",
+        )
+        .bind::<Text, _>(operation_id)
+        .get_result::<ExistsRow>(&mut conn)
+        .map(|row| row.present)
+        .map_err(PersistenceError::from)
+    }
+
+    fn list_for_space(&self, space_id: &str) -> PersistenceResult<Vec<Operation>> {
+        let mut conn = pg_conn(&self.pool)?;
+        let rows: Vec<FederationOperationRow> = sql_query(
+            "SELECT payload FROM federation_operations \
+             WHERE space_id = $1 ORDER BY created_at ASC, operation_id ASC",
+        )
+        .bind::<Text, _>(space_id)
+        .load::<FederationOperationRow>(&mut conn)
+        .map_err(PersistenceError::from)?;
+        rows.into_iter()
+            .map(|row| {
+                serde_json::from_value::<Operation>(row.payload).map_err(|error| {
+                    PersistenceError::Internal(format!(
+                        "federation operation deserialize: {error}"
+                    ))
+                })
+            })
+            .collect()
+    }
+
+    fn snapshot_all(&self) -> PersistenceResult<Vec<Operation>> {
+        let mut conn = pg_conn(&self.pool)?;
+        let rows: Vec<FederationOperationRow> = sql_query(
+            "SELECT payload FROM federation_operations \
+             ORDER BY created_at ASC, operation_id ASC",
+        )
+        .load::<FederationOperationRow>(&mut conn)
+        .map_err(PersistenceError::from)?;
+        rows.into_iter()
+            .map(|row| {
+                serde_json::from_value::<Operation>(row.payload).map_err(|error| {
+                    PersistenceError::Internal(format!(
+                        "federation operation deserialize: {error}"
+                    ))
+                })
+            })
+            .collect()
+    }
+}
+
+// ── Round 26 — Pg-backed wire-facing sub-stores ───────────────────────────
+//
+// ModerationStore / PresenceStore / SchemaStore / IdentityStore /
+// SpaceInviteStore. Each follows the same pattern as the round 24/25 stores:
+// a typed-column header (extracted from the JSON payload where applicable)
+// plus the full canonical envelope in a JSONB column. The trait surface
+// itself is the architectural contract; the Pg + Memory backends both
+// implement it identically.
+
+struct PgModerationStore {
+    pool: PgPool,
+}
+
+#[derive(QueryableByName)]
+struct ModerationPayloadRow {
+    #[diesel(sql_type = Jsonb)]
+    payload: Value,
+}
+
+impl ModerationStore for PgModerationStore {
+    fn append_report(&self, report: Value) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool)?;
+        let extract = |key: &str| -> Option<String> {
+            report.get(key).and_then(Value::as_str).map(ToOwned::to_owned)
+        };
+        let report_id = extract("report_id").ok_or_else(|| {
+            PersistenceError::Internal("moderation report missing report_id".to_owned())
+        })?;
+        let reporter = extract("reporter");
+        let target_actor = extract("target_actor");
+        let target_event_id = extract("target_event_id");
+        let space_id = extract("space_id");
+        sql_query(
+            "INSERT INTO moderation_reports \
+             (report_id, reporter, target_actor, target_event_id, space_id, payload, created_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, NOW()) \
+             ON CONFLICT (report_id) DO NOTHING",
+        )
+        .bind::<Text, _>(&report_id)
+        .bind::<Nullable<Text>, _>(&reporter)
+        .bind::<Nullable<Text>, _>(&target_actor)
+        .bind::<Nullable<Text>, _>(&target_event_id)
+        .bind::<Nullable<Text>, _>(&space_id)
+        .bind::<Jsonb, _>(&report)
+        .execute(&mut conn)
+        .map(|_| ())
+        .map_err(PersistenceError::from)
+    }
+
+    fn append_action(&self, action: Value) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool)?;
+        let extract = |key: &str| -> Option<String> {
+            action.get(key).and_then(Value::as_str).map(ToOwned::to_owned)
+        };
+        let action_id = extract("action_id").ok_or_else(|| {
+            PersistenceError::Internal("moderation action missing action_id".to_owned())
+        })?;
+        let moderator = extract("moderator");
+        let target_actor = extract("target_actor");
+        let action_kind = extract("action_kind");
+        let space_id = extract("space_id");
+        sql_query(
+            "INSERT INTO moderation_actions \
+             (action_id, moderator, target_actor, action_kind, space_id, payload, created_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, NOW()) \
+             ON CONFLICT (action_id) DO NOTHING",
+        )
+        .bind::<Text, _>(&action_id)
+        .bind::<Nullable<Text>, _>(&moderator)
+        .bind::<Nullable<Text>, _>(&target_actor)
+        .bind::<Nullable<Text>, _>(&action_kind)
+        .bind::<Nullable<Text>, _>(&space_id)
+        .bind::<Jsonb, _>(&action)
+        .execute(&mut conn)
+        .map(|_| ())
+        .map_err(PersistenceError::from)
+    }
+
+    fn list_reports(&self) -> PersistenceResult<Vec<Value>> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query(
+            "SELECT payload FROM moderation_reports ORDER BY created_at ASC, report_id ASC",
+        )
+        .load::<ModerationPayloadRow>(&mut conn)
+        .map(|rows| rows.into_iter().map(|row| row.payload).collect())
+        .map_err(PersistenceError::from)
+    }
+
+    fn list_actions(&self) -> PersistenceResult<Vec<Value>> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query(
+            "SELECT payload FROM moderation_actions ORDER BY created_at ASC, action_id ASC",
+        )
+        .load::<ModerationPayloadRow>(&mut conn)
+        .map(|rows| rows.into_iter().map(|row| row.payload).collect())
+        .map_err(PersistenceError::from)
+    }
+}
+
+struct PgPresenceStore {
+    pool: PgPool,
+}
+
+#[derive(QueryableByName)]
+struct PresenceRow {
+    #[diesel(sql_type = Text)]
+    actor: String,
+    #[diesel(sql_type = Text)]
+    status: String,
+    #[diesel(sql_type = Timestamptz)]
+    updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl From<PresenceRow> for PresenceRecord {
+    fn from(row: PresenceRow) -> Self {
+        Self {
+            actor: row.actor,
+            status: row.status,
+            updated_at: row.updated_at,
+        }
+    }
+}
+
+impl PresenceStore for PgPresenceStore {
+    fn put(&self, presence: PresenceRecord) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query(
+            "INSERT INTO presence (actor, status, updated_at) \
+             VALUES ($1, $2, $3) \
+             ON CONFLICT (actor) DO UPDATE SET \
+                status = EXCLUDED.status, \
+                updated_at = EXCLUDED.updated_at",
+        )
+        .bind::<Text, _>(&presence.actor)
+        .bind::<Text, _>(&presence.status)
+        .bind::<Timestamptz, _>(presence.updated_at)
+        .execute(&mut conn)
+        .map(|_| ())
+        .map_err(PersistenceError::from)
+    }
+
+    fn get(&self, actor: &str) -> PersistenceResult<Option<PresenceRecord>> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query("SELECT actor, status, updated_at FROM presence WHERE actor = $1")
+            .bind::<Text, _>(actor)
+            .get_result::<PresenceRow>(&mut conn)
+            .optional()
+            .map(|row| row.map(PresenceRecord::from))
+            .map_err(PersistenceError::from)
+    }
+}
+
+struct PgSchemaStore {
+    pool: PgPool,
+}
+
+#[derive(QueryableByName)]
+struct SchemaRow {
+    #[diesel(sql_type = Text)]
+    schema_id: String,
+    #[diesel(sql_type = Text)]
+    kind: String,
+    #[diesel(sql_type = Text)]
+    version: String,
+    #[diesel(sql_type = Nullable<Text>)]
+    name: Option<String>,
+    #[diesel(sql_type = Text)]
+    owner: String,
+    #[diesel(sql_type = Jsonb)]
+    definition: Value,
+    #[diesel(sql_type = Bool)]
+    active: bool,
+    #[diesel(sql_type = Timestamptz)]
+    created_at: chrono::DateTime<chrono::Utc>,
+    #[diesel(sql_type = Timestamptz)]
+    updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl From<SchemaRow> for SchemaRecord {
+    fn from(row: SchemaRow) -> Self {
+        Self {
+            schema_id: row.schema_id,
+            kind: row.kind,
+            version: row.version,
+            name: row.name,
+            owner: row.owner,
+            definition: row.definition,
+            active: row.active,
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+        }
+    }
+}
+
+impl SchemaStore for PgSchemaStore {
+    fn get(&self, schema_id: &str) -> PersistenceResult<Option<SchemaRecord>> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query(
+            "SELECT schema_id, kind, version, name, owner, definition, active, created_at, updated_at \
+             FROM schemas WHERE schema_id = $1",
+        )
+        .bind::<Text, _>(schema_id)
+        .get_result::<SchemaRow>(&mut conn)
+        .optional()
+        .map(|row| row.map(SchemaRecord::from))
+        .map_err(PersistenceError::from)
+    }
+
+    fn put(&self, record: SchemaRecord) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query(
+            "INSERT INTO schemas \
+             (schema_id, kind, version, name, owner, definition, active, created_at, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
+             ON CONFLICT (schema_id) DO UPDATE SET \
+                kind = EXCLUDED.kind, \
+                version = EXCLUDED.version, \
+                name = EXCLUDED.name, \
+                owner = EXCLUDED.owner, \
+                definition = EXCLUDED.definition, \
+                active = EXCLUDED.active, \
+                updated_at = EXCLUDED.updated_at",
+        )
+        .bind::<Text, _>(&record.schema_id)
+        .bind::<Text, _>(&record.kind)
+        .bind::<Text, _>(&record.version)
+        .bind::<Nullable<Text>, _>(&record.name)
+        .bind::<Text, _>(&record.owner)
+        .bind::<Jsonb, _>(&record.definition)
+        .bind::<Bool, _>(record.active)
+        .bind::<Timestamptz, _>(record.created_at)
+        .bind::<Timestamptz, _>(record.updated_at)
+        .execute(&mut conn)
+        .map(|_| ())
+        .map_err(PersistenceError::from)
+    }
+
+    fn delete(&self, schema_id: &str) -> PersistenceResult<bool> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query("DELETE FROM schemas WHERE schema_id = $1")
+            .bind::<Text, _>(schema_id)
+            .execute(&mut conn)
+            .map(|affected| affected > 0)
+            .map_err(PersistenceError::from)
+    }
+
+    fn snapshot_all(&self) -> PersistenceResult<Vec<SchemaRecord>> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query(
+            "SELECT schema_id, kind, version, name, owner, definition, active, created_at, updated_at \
+             FROM schemas ORDER BY schema_id ASC",
+        )
+        .load::<SchemaRow>(&mut conn)
+        .map(|rows| rows.into_iter().map(SchemaRecord::from).collect())
+        .map_err(PersistenceError::from)
+    }
+}
+
+struct PgIdentityStore {
+    pool: PgPool,
+}
+
+#[derive(QueryableByName)]
+struct IdentityDocumentRow {
+    #[diesel(sql_type = Text)]
+    did: String,
+    #[diesel(sql_type = Jsonb)]
+    did_document: Value,
+    #[diesel(sql_type = Nullable<Text>)]
+    key_log_head: Option<String>,
+    #[diesel(sql_type = BigInt)]
+    seq: i64,
+    #[diesel(sql_type = Jsonb)]
+    method_evidence: Value,
+    #[diesel(sql_type = Timestamptz)]
+    updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl From<IdentityDocumentRow> for IdentityDocumentRecord {
+    fn from(row: IdentityDocumentRow) -> Self {
+        Self {
+            did: row.did,
+            did_document: row.did_document,
+            key_log_head: row.key_log_head,
+            seq: row.seq.max(0) as u64,
+            method_evidence: row.method_evidence,
+            updated_at: row.updated_at,
+        }
+    }
+}
+
+#[derive(QueryableByName)]
+struct IdentityLogRow {
+    #[diesel(sql_type = Text)]
+    event_hash: String,
+    #[diesel(sql_type = Text)]
+    did: String,
+    #[diesel(sql_type = BigInt)]
+    seq: i64,
+    #[diesel(sql_type = Jsonb)]
+    operation: Value,
+    #[diesel(sql_type = Timestamptz)]
+    created_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl From<IdentityLogRow> for IdentityLogRecord {
+    fn from(row: IdentityLogRow) -> Self {
+        Self {
+            event_hash: row.event_hash,
+            did: row.did,
+            seq: row.seq.max(0) as u64,
+            operation: row.operation,
+            created_at: row.created_at,
+        }
+    }
+}
+
+impl IdentityStore for PgIdentityStore {
+    fn get_document(&self, did: &str) -> PersistenceResult<Option<IdentityDocumentRecord>> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query(
+            "SELECT did, did_document, key_log_head, seq, method_evidence, updated_at \
+             FROM identity_documents WHERE did = $1",
+        )
+        .bind::<Text, _>(did)
+        .get_result::<IdentityDocumentRow>(&mut conn)
+        .optional()
+        .map(|row| row.map(IdentityDocumentRecord::from))
+        .map_err(PersistenceError::from)
+    }
+
+    fn put_document(&self, record: IdentityDocumentRecord) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query(
+            "INSERT INTO identity_documents \
+             (did, did_document, key_log_head, seq, method_evidence, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6) \
+             ON CONFLICT (did) DO UPDATE SET \
+                did_document = EXCLUDED.did_document, \
+                key_log_head = EXCLUDED.key_log_head, \
+                seq = EXCLUDED.seq, \
+                method_evidence = EXCLUDED.method_evidence, \
+                updated_at = EXCLUDED.updated_at",
+        )
+        .bind::<Text, _>(&record.did)
+        .bind::<Jsonb, _>(&record.did_document)
+        .bind::<Nullable<Text>, _>(&record.key_log_head)
+        .bind::<BigInt, _>(record.seq as i64)
+        .bind::<Jsonb, _>(&record.method_evidence)
+        .bind::<Timestamptz, _>(record.updated_at)
+        .execute(&mut conn)
+        .map(|_| ())
+        .map_err(PersistenceError::from)
+    }
+
+    fn append_log_event(&self, event: IdentityLogRecord) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query(
+            "INSERT INTO identity_log_events \
+             (event_hash, did, seq, operation, created_at) \
+             VALUES ($1, $2, $3, $4, $5) \
+             ON CONFLICT (event_hash) DO NOTHING",
+        )
+        .bind::<Text, _>(&event.event_hash)
+        .bind::<Text, _>(&event.did)
+        .bind::<BigInt, _>(event.seq as i64)
+        .bind::<Jsonb, _>(&event.operation)
+        .bind::<Timestamptz, _>(event.created_at)
+        .execute(&mut conn)
+        .map(|_| ())
+        .map_err(PersistenceError::from)
+    }
+
+    fn list_log_events(&self, did: &str) -> PersistenceResult<Vec<IdentityLogRecord>> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query(
+            "SELECT event_hash, did, seq, operation, created_at \
+             FROM identity_log_events WHERE did = $1 ORDER BY seq ASC, event_hash ASC",
+        )
+        .bind::<Text, _>(did)
+        .load::<IdentityLogRow>(&mut conn)
+        .map(|rows| rows.into_iter().map(IdentityLogRecord::from).collect())
+        .map_err(PersistenceError::from)
+    }
+}
+
+struct PgSpaceInviteStore {
+    pool: PgPool,
+}
+
+#[derive(QueryableByName)]
+struct SpaceInviteRow {
+    #[diesel(sql_type = Text)]
+    invite_id: String,
+    #[diesel(sql_type = Text)]
+    space_id: String,
+    #[diesel(sql_type = Text)]
+    inviter: String,
+    #[diesel(sql_type = Nullable<Text>)]
+    invitee: Option<String>,
+    #[diesel(sql_type = Text)]
+    invite_token: String,
+    #[diesel(sql_type = Text)]
+    status: String,
+    #[diesel(sql_type = Nullable<Timestamptz>)]
+    expires_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[diesel(sql_type = Timestamptz)]
+    created_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl From<SpaceInviteRow> for SpaceInviteRecord {
+    fn from(row: SpaceInviteRow) -> Self {
+        Self {
+            invite_id: row.invite_id,
+            space_id: row.space_id,
+            inviter: row.inviter,
+            invitee: row.invitee,
+            invite_token: row.invite_token,
+            status: row.status,
+            expires_at: row.expires_at,
+            created_at: row.created_at,
+        }
+    }
+}
+
+impl SpaceInviteStore for PgSpaceInviteStore {
+    fn get(&self, invite_id: &str) -> PersistenceResult<Option<SpaceInviteRecord>> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query(
+            "SELECT invite_id, space_id, inviter, invitee, invite_token, status, expires_at, created_at \
+             FROM space_invites WHERE invite_id = $1",
+        )
+        .bind::<Text, _>(invite_id)
+        .get_result::<SpaceInviteRow>(&mut conn)
+        .optional()
+        .map(|row| row.map(SpaceInviteRecord::from))
+        .map_err(PersistenceError::from)
+    }
+
+    fn put(&self, record: SpaceInviteRecord) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query(
+            "INSERT INTO space_invites \
+             (invite_id, space_id, inviter, invitee, invite_token, status, expires_at, created_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
+             ON CONFLICT (invite_id) DO UPDATE SET \
+                space_id = EXCLUDED.space_id, \
+                inviter = EXCLUDED.inviter, \
+                invitee = EXCLUDED.invitee, \
+                invite_token = EXCLUDED.invite_token, \
+                status = EXCLUDED.status, \
+                expires_at = EXCLUDED.expires_at",
+        )
+        .bind::<Text, _>(&record.invite_id)
+        .bind::<Text, _>(&record.space_id)
+        .bind::<Text, _>(&record.inviter)
+        .bind::<Nullable<Text>, _>(&record.invitee)
+        .bind::<Text, _>(&record.invite_token)
+        .bind::<Text, _>(&record.status)
+        .bind::<Nullable<Timestamptz>, _>(record.expires_at)
+        .bind::<Timestamptz, _>(record.created_at)
+        .execute(&mut conn)
+        .map(|_| ())
+        .map_err(PersistenceError::from)
+    }
+
+    fn snapshot_all(&self) -> PersistenceResult<Vec<SpaceInviteRecord>> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query(
+            "SELECT invite_id, space_id, inviter, invitee, invite_token, status, expires_at, created_at \
+             FROM space_invites ORDER BY created_at ASC, invite_id ASC",
+        )
+        .load::<SpaceInviteRow>(&mut conn)
+        .map(|rows| rows.into_iter().map(SpaceInviteRecord::from).collect())
+        .map_err(PersistenceError::from)
+    }
+}
+
+// ── Round 27 — Pg-backed recovery / realtime sub-stores ───────────────────
+//
+// `PgKeyBackupStore` covers both the encrypted-key-backup envelopes and
+// the restore-ticket scaffold (executor / approval runs). The trait
+// methods are split into two table groups: `key_backups` for envelopes,
+// `restore_tickets` for the ticket FSM (status + executor_state +
+// approval_state in one row, upserted per put_*).
+//
+// `PgWebrtcSessionStore` persists `WebrtcSessionRecord` (participants set
+// + signals vec + next_seq) into one row keyed by `call_id`. The full
+// participants/signals/seq accumulator lives in the `signaling_state`
+// JSONB so concurrent appends rebuild from the round-trip envelope.
+//
+// `PgPolicyDocumentStore` mirrors the round-26 schema-store pattern:
+// typed `policy_id / owner / scope / subject_ref / policy_type` columns
+// for query predicates plus the canonical `document` JSONB.
+
+struct PgKeyBackupStore {
+    pool: PgPool,
+}
+
+#[derive(QueryableByName)]
+struct KeyBackupPayloadRow {
+    #[diesel(sql_type = Jsonb)]
+    payload: Value,
+}
+
+impl KeyBackupStore for PgKeyBackupStore {
+    fn put(&self, backup_id: String, payload: Value) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool)?;
+        let extract_str = |key: &str| -> Option<String> {
+            payload.get(key).and_then(Value::as_str).map(ToOwned::to_owned)
+        };
+        let account_id = extract_str("account_id").or_else(|| extract_str("actor"));
+        let device_id = extract_str("device_id");
+        let scheme = extract_str("scheme").or_else(|| extract_str("algorithm"));
+        let version: i32 = payload
+            .get("version")
+            .and_then(Value::as_i64)
+            .map(|v| v.clamp(i32::MIN as i64, i32::MAX as i64) as i32)
+            .unwrap_or(0);
+        // base64-decoded key material lives in `key_material_encrypted` if the
+        // caller already provided raw bytes via a `bytes_b64` field. Otherwise
+        // the encrypted material stays in the JSONB envelope.
+        let key_material: Option<Vec<u8>> = payload
+            .get("key_material_encrypted_b64")
+            .and_then(Value::as_str)
+            .and_then(|s| {
+                use base64::{engine::general_purpose::STANDARD, Engine as _};
+                STANDARD.decode(s).ok()
+            });
+        sql_query(
+            "INSERT INTO key_backups \
+             (backup_id, account_id, device_id, scheme, version, key_material_encrypted, payload, created_at, last_accessed_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NULL) \
+             ON CONFLICT (backup_id) DO UPDATE SET \
+                account_id = EXCLUDED.account_id, \
+                device_id = EXCLUDED.device_id, \
+                scheme = EXCLUDED.scheme, \
+                version = EXCLUDED.version, \
+                key_material_encrypted = EXCLUDED.key_material_encrypted, \
+                payload = EXCLUDED.payload",
+        )
+        .bind::<Text, _>(&backup_id)
+        .bind::<Nullable<Text>, _>(&account_id)
+        .bind::<Nullable<Text>, _>(&device_id)
+        .bind::<Nullable<Text>, _>(&scheme)
+        .bind::<Integer, _>(version)
+        .bind::<Nullable<Binary>, _>(key_material.as_deref())
+        .bind::<Jsonb, _>(&payload)
+        .execute(&mut conn)
+        .map(|_| ())
+        .map_err(PersistenceError::from)
+    }
+
+    fn get(&self, backup_id: &str) -> PersistenceResult<Option<Value>> {
+        let mut conn = pg_conn(&self.pool)?;
+        // last_accessed_at side-effect on read is informational; failure here
+        // must not crash the get path.
+        let _ = sql_query("UPDATE key_backups SET last_accessed_at = NOW() WHERE backup_id = $1")
+            .bind::<Text, _>(backup_id)
+            .execute(&mut conn);
+        sql_query("SELECT payload FROM key_backups WHERE backup_id = $1")
+            .bind::<Text, _>(backup_id)
+            .get_result::<KeyBackupPayloadRow>(&mut conn)
+            .optional()
+            .map(|row| row.map(|r| r.payload))
+            .map_err(PersistenceError::from)
+    }
+
+    fn delete(&self, backup_id: &str) -> PersistenceResult<bool> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query("DELETE FROM key_backups WHERE backup_id = $1")
+            .bind::<Text, _>(backup_id)
+            .execute(&mut conn)
+            .map(|n| n > 0)
+            .map_err(PersistenceError::from)
+    }
+
+    fn snapshot_all(&self) -> PersistenceResult<Vec<Value>> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query(
+            "SELECT payload FROM key_backups ORDER BY created_at ASC, backup_id ASC",
+        )
+        .load::<KeyBackupPayloadRow>(&mut conn)
+        .map(|rows| rows.into_iter().map(|r| r.payload).collect())
+        .map_err(PersistenceError::from)
+    }
+
+    fn put_ticket(&self, ticket_id: String, payload: Value) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool)?;
+        let account_id = payload
+            .get("account_id")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
+        let status = payload
+            .get("status")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| "issued".to_owned());
+        sql_query(
+            "INSERT INTO restore_tickets \
+             (ticket_id, account_id, status, payload, executor_state, approval_state, started_at, completed_at, created_at, updated_at) \
+             VALUES ($1, $2, $3, $4, NULL, NULL, NULL, NULL, NOW(), NOW()) \
+             ON CONFLICT (ticket_id) DO UPDATE SET \
+                account_id = EXCLUDED.account_id, \
+                status = EXCLUDED.status, \
+                payload = EXCLUDED.payload, \
+                updated_at = NOW()",
+        )
+        .bind::<Text, _>(&ticket_id)
+        .bind::<Nullable<Text>, _>(&account_id)
+        .bind::<Text, _>(&status)
+        .bind::<Jsonb, _>(&payload)
+        .execute(&mut conn)
+        .map(|_| ())
+        .map_err(PersistenceError::from)
+    }
+
+    fn get_ticket(&self, ticket_id: &str) -> PersistenceResult<Option<Value>> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query("SELECT payload FROM restore_tickets WHERE ticket_id = $1")
+            .bind::<Text, _>(ticket_id)
+            .get_result::<KeyBackupPayloadRow>(&mut conn)
+            .optional()
+            .map(|row| row.map(|r| r.payload))
+            .map_err(PersistenceError::from)
+    }
+
+    fn put_executor_run(&self, ticket_id: String, payload: Value) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool)?;
+        // Insert-or-update the per-ticket row, setting `executor_state`. If
+        // the ticket envelope was never written (rare smoke path), seed
+        // `payload` with the executor blob itself so the row remains valid.
+        sql_query(
+            "INSERT INTO restore_tickets \
+             (ticket_id, status, payload, executor_state, started_at, created_at, updated_at) \
+             VALUES ($1, 'executing', $2, $2, NOW(), NOW(), NOW()) \
+             ON CONFLICT (ticket_id) DO UPDATE SET \
+                executor_state = EXCLUDED.executor_state, \
+                started_at = COALESCE(restore_tickets.started_at, NOW()), \
+                updated_at = NOW()",
+        )
+        .bind::<Text, _>(&ticket_id)
+        .bind::<Jsonb, _>(&payload)
+        .execute(&mut conn)
+        .map(|_| ())
+        .map_err(PersistenceError::from)
+    }
+
+    fn get_executor_run(&self, ticket_id: &str) -> PersistenceResult<Option<Value>> {
+        let mut conn = pg_conn(&self.pool)?;
+        #[derive(QueryableByName)]
+        struct ExecRow {
+            #[diesel(sql_type = Nullable<Jsonb>)]
+            executor_state: Option<Value>,
+        }
+        sql_query("SELECT executor_state FROM restore_tickets WHERE ticket_id = $1")
+            .bind::<Text, _>(ticket_id)
+            .get_result::<ExecRow>(&mut conn)
+            .optional()
+            .map(|row| row.and_then(|r| r.executor_state))
+            .map_err(PersistenceError::from)
+    }
+
+    fn put_approval_run(&self, ticket_id: String, payload: Value) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query(
+            "INSERT INTO restore_tickets \
+             (ticket_id, status, payload, approval_state, created_at, updated_at) \
+             VALUES ($1, 'issued', $2, $2, NOW(), NOW()) \
+             ON CONFLICT (ticket_id) DO UPDATE SET \
+                approval_state = EXCLUDED.approval_state, \
+                updated_at = NOW()",
+        )
+        .bind::<Text, _>(&ticket_id)
+        .bind::<Jsonb, _>(&payload)
+        .execute(&mut conn)
+        .map(|_| ())
+        .map_err(PersistenceError::from)
+    }
+
+    fn get_approval_run(&self, ticket_id: &str) -> PersistenceResult<Option<Value>> {
+        let mut conn = pg_conn(&self.pool)?;
+        #[derive(QueryableByName)]
+        struct ApprovalRow {
+            #[diesel(sql_type = Nullable<Jsonb>)]
+            approval_state: Option<Value>,
+        }
+        sql_query("SELECT approval_state FROM restore_tickets WHERE ticket_id = $1")
+            .bind::<Text, _>(ticket_id)
+            .get_result::<ApprovalRow>(&mut conn)
+            .optional()
+            .map(|row| row.and_then(|r| r.approval_state))
+            .map_err(PersistenceError::from)
+    }
+}
+
+struct PgWebrtcSessionStore {
+    pool: PgPool,
+}
+
+#[derive(QueryableByName)]
+struct WebrtcSessionRow {
+    #[diesel(sql_type = Text)]
+    call_id: String,
+    #[diesel(sql_type = Text)]
+    space_id: String,
+    #[diesel(sql_type = Text)]
+    initiator_did: String,
+    #[diesel(sql_type = Jsonb)]
+    signaling_state: Value,
+    #[diesel(sql_type = Timestamptz)]
+    created_at: chrono::DateTime<chrono::Utc>,
+    #[diesel(sql_type = Timestamptz)]
+    expires_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl WebrtcSessionRow {
+    fn into_record(self) -> PersistenceResult<WebrtcSessionRecord> {
+        // The `signaling_state` envelope carries the live participants set,
+        // signals vec, and next_seq counter — round-tripped via serde_json.
+        let participants: BTreeSet<String> = self
+            .signaling_state
+            .get("participants")
+            .and_then(Value::as_array)
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(Value::as_str)
+                    .map(ToOwned::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default();
+        let next_seq = self
+            .signaling_state
+            .get("next_seq")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        let signals: Vec<WebrtcSignalRecord> = self
+            .signaling_state
+            .get("signals")
+            .and_then(Value::as_array)
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|signal| {
+                        Some(WebrtcSignalRecord {
+                            seq: signal.get("seq").and_then(Value::as_u64).unwrap_or(0),
+                            sender: signal
+                                .get("sender")
+                                .and_then(Value::as_str)
+                                .map(ToOwned::to_owned)
+                                .unwrap_or_default(),
+                            message_type: signal
+                                .get("message_type")
+                                .and_then(Value::as_str)
+                                .map(ToOwned::to_owned)
+                                .unwrap_or_default(),
+                            payload: signal.get("payload").cloned().unwrap_or(Value::Null),
+                            proofs: signal
+                                .get("proofs")
+                                .and_then(Value::as_array)
+                                .cloned()
+                                .unwrap_or_default(),
+                            created_at: signal
+                                .get("created_at")
+                                .and_then(Value::as_str)
+                                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                                .map(|dt| dt.with_timezone(&chrono::Utc))
+                                .unwrap_or_else(Utc::now),
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        Ok(WebrtcSessionRecord {
+            session_id: self.call_id,
+            space_id: self.space_id,
+            created_by: self.initiator_did,
+            participants,
+            expires_at: self.expires_at,
+            created_at: self.created_at,
+            next_seq,
+            signals,
+        })
+    }
+}
+
+fn webrtc_signaling_state(record: &WebrtcSessionRecord) -> Value {
+    serde_json::json!({
+        "participants": record.participants.iter().cloned().collect::<Vec<_>>(),
+        "next_seq": record.next_seq,
+        "signals": record
+            .signals
+            .iter()
+            .map(|s| serde_json::json!({
+                "seq": s.seq,
+                "sender": s.sender,
+                "message_type": s.message_type,
+                "payload": s.payload,
+                "proofs": s.proofs,
+                "created_at": s.created_at.to_rfc3339(),
+            }))
+            .collect::<Vec<_>>(),
+    })
+}
+
+impl WebrtcSessionStore for PgWebrtcSessionStore {
+    fn put(&self, record: WebrtcSessionRecord) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool)?;
+        let signaling_state = webrtc_signaling_state(&record);
+        let ice_config: Value = serde_json::json!({});
+        sql_query(
+            "INSERT INTO webrtc_sessions \
+             (call_id, space_id, initiator_did, ice_config, signaling_state, created_at, expires_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7) \
+             ON CONFLICT (call_id) DO UPDATE SET \
+                space_id = EXCLUDED.space_id, \
+                initiator_did = EXCLUDED.initiator_did, \
+                ice_config = EXCLUDED.ice_config, \
+                signaling_state = EXCLUDED.signaling_state, \
+                expires_at = EXCLUDED.expires_at",
+        )
+        .bind::<Text, _>(&record.session_id)
+        .bind::<Text, _>(&record.space_id)
+        .bind::<Text, _>(&record.created_by)
+        .bind::<Jsonb, _>(&ice_config)
+        .bind::<Jsonb, _>(&signaling_state)
+        .bind::<Timestamptz, _>(record.created_at)
+        .bind::<Timestamptz, _>(record.expires_at)
+        .execute(&mut conn)
+        .map(|_| ())
+        .map_err(PersistenceError::from)
+    }
+
+    fn get(&self, session_id: &str) -> PersistenceResult<Option<WebrtcSessionRecord>> {
+        let mut conn = pg_conn(&self.pool)?;
+        let row = sql_query(
+            "SELECT call_id, space_id, initiator_did, signaling_state, created_at, expires_at \
+             FROM webrtc_sessions WHERE call_id = $1",
+        )
+        .bind::<Text, _>(session_id)
+        .get_result::<WebrtcSessionRow>(&mut conn)
+        .optional()
+        .map_err(PersistenceError::from)?;
+        match row {
+            Some(r) => Ok(Some(r.into_record()?)),
+            None => Ok(None),
+        }
+    }
+
+    fn delete(&self, session_id: &str) -> PersistenceResult<bool> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query("DELETE FROM webrtc_sessions WHERE call_id = $1")
+            .bind::<Text, _>(session_id)
+            .execute(&mut conn)
+            .map(|n| n > 0)
+            .map_err(PersistenceError::from)
+    }
+
+    fn append_signal(
+        &self,
+        session_id: &str,
+        actor_must_be_participant: &str,
+        builder: SignalBuilder<'_>,
+    ) -> PersistenceResult<WebrtcAppendSignal> {
+        // Read-modify-write inside a single conn — acceptable since callers
+        // serialize on the WebRTC routing handler and the conflict surface
+        // is bounded by the active call session.
+        let mut record = match self.get(session_id)? {
+            Some(r) => r,
+            None => return Err(PersistenceError::NotFound(session_id.to_owned())),
+        };
+        if !record.participants.contains(actor_must_be_participant) {
+            return Err(PersistenceError::Conflict(format!(
+                "actor {actor_must_be_participant} is not a participant of {session_id}",
+            )));
+        }
+        let seq = record.next_seq;
+        record.next_seq += 1;
+        record.signals.push(builder(seq));
+        self.put(record)?;
+        Ok(WebrtcAppendSignal { seq })
+    }
+
+    fn prune_expired(&self) -> PersistenceResult<usize> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query("DELETE FROM webrtc_sessions WHERE expires_at <= NOW()")
+            .execute(&mut conn)
+            .map(|n| n as usize)
+            .map_err(PersistenceError::from)
+    }
+}
+
+struct PgPolicyDocumentStore {
+    pool: PgPool,
+}
+
+#[derive(QueryableByName)]
+struct PolicyDocumentRow {
+    #[diesel(sql_type = Text)]
+    policy_id: String,
+    #[diesel(sql_type = Text)]
+    owner: String,
+    #[diesel(sql_type = Text)]
+    scope: String,
+    #[diesel(sql_type = Text)]
+    subject_ref: String,
+    #[diesel(sql_type = Text)]
+    policy_type: String,
+    #[diesel(sql_type = Jsonb)]
+    document: Value,
+    #[diesel(sql_type = Bool)]
+    active: bool,
+    #[diesel(sql_type = Timestamptz)]
+    updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl From<PolicyDocumentRow> for PolicyDocumentRecord {
+    fn from(row: PolicyDocumentRow) -> Self {
+        Self {
+            policy_id: row.policy_id,
+            owner: row.owner,
+            scope: row.scope,
+            subject_ref: row.subject_ref,
+            policy_type: row.policy_type,
+            payload: row.document,
+            active: row.active,
+            updated_at: row.updated_at,
+        }
+    }
+}
+
+impl PolicyDocumentStore for PgPolicyDocumentStore {
+    fn get(&self, policy_id: &str) -> PersistenceResult<Option<PolicyDocumentRecord>> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query(
+            "SELECT policy_id, owner, scope, subject_ref, policy_type, document, active, updated_at \
+             FROM policy_documents WHERE policy_id = $1",
+        )
+        .bind::<Text, _>(policy_id)
+        .get_result::<PolicyDocumentRow>(&mut conn)
+        .optional()
+        .map(|row| row.map(PolicyDocumentRecord::from))
+        .map_err(PersistenceError::from)
+    }
+
+    fn put(&self, record: PolicyDocumentRecord) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool)?;
+        let version: i32 = record
+            .payload
+            .get("version")
+            .and_then(Value::as_i64)
+            .map(|v| v.clamp(i32::MIN as i64, i32::MAX as i64) as i32)
+            .unwrap_or(0);
+        let signed_by: Option<String> = record
+            .payload
+            .get("signed_by")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
+        sql_query(
+            "INSERT INTO policy_documents \
+             (policy_id, owner, scope, subject_ref, policy_type, document, version, signed_by, active, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) \
+             ON CONFLICT (policy_id) DO UPDATE SET \
+                owner = EXCLUDED.owner, \
+                scope = EXCLUDED.scope, \
+                subject_ref = EXCLUDED.subject_ref, \
+                policy_type = EXCLUDED.policy_type, \
+                document = EXCLUDED.document, \
+                version = EXCLUDED.version, \
+                signed_by = EXCLUDED.signed_by, \
+                active = EXCLUDED.active, \
+                updated_at = EXCLUDED.updated_at",
+        )
+        .bind::<Text, _>(&record.policy_id)
+        .bind::<Text, _>(&record.owner)
+        .bind::<Text, _>(&record.scope)
+        .bind::<Text, _>(&record.subject_ref)
+        .bind::<Text, _>(&record.policy_type)
+        .bind::<Jsonb, _>(&record.payload)
+        .bind::<Integer, _>(version)
+        .bind::<Nullable<Text>, _>(&signed_by)
+        .bind::<Bool, _>(record.active)
+        .bind::<Timestamptz, _>(record.updated_at)
+        .execute(&mut conn)
+        .map(|_| ())
+        .map_err(PersistenceError::from)
+    }
+
+    fn delete(&self, policy_id: &str) -> PersistenceResult<bool> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query("DELETE FROM policy_documents WHERE policy_id = $1")
+            .bind::<Text, _>(policy_id)
+            .execute(&mut conn)
+            .map(|n| n > 0)
+            .map_err(PersistenceError::from)
+    }
+
+    fn list_for_owner(&self, owner: &str) -> PersistenceResult<Vec<PolicyDocumentRecord>> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query(
+            "SELECT policy_id, owner, scope, subject_ref, policy_type, document, active, updated_at \
+             FROM policy_documents WHERE owner = $1 ORDER BY updated_at ASC, policy_id ASC",
+        )
+        .bind::<Text, _>(owner)
+        .load::<PolicyDocumentRow>(&mut conn)
+        .map(|rows| rows.into_iter().map(PolicyDocumentRecord::from).collect())
+        .map_err(PersistenceError::from)
+    }
+
+    fn snapshot_all(&self) -> PersistenceResult<Vec<PolicyDocumentRecord>> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query(
+            "SELECT policy_id, owner, scope, subject_ref, policy_type, document, active, updated_at \
+             FROM policy_documents ORDER BY updated_at ASC, policy_id ASC",
+        )
+        .load::<PolicyDocumentRow>(&mut conn)
+        .map(|rows| rows.into_iter().map(PolicyDocumentRecord::from).collect())
+        .map_err(PersistenceError::from)
+    }
+
+    fn find_active(
+        &self,
+        predicate: &dyn Fn(&PolicyDocumentRecord) -> bool,
+    ) -> PersistenceResult<Option<PolicyDocumentRecord>> {
+        // Linear scan in Pg — same semantics as Memory backend but driven by
+        // a SELECT. The row count is small (per-Space policy documents) so a
+        // full table walk is acceptable; pushing the predicate into SQL
+        // would require turning the closure into a typed query DSL.
+        let mut conn = pg_conn(&self.pool)?;
+        let rows: Vec<PolicyDocumentRow> = sql_query(
+            "SELECT policy_id, owner, scope, subject_ref, policy_type, document, active, updated_at \
+             FROM policy_documents WHERE active = TRUE ORDER BY updated_at ASC, policy_id ASC",
+        )
+        .load::<PolicyDocumentRow>(&mut conn)
+        .map_err(PersistenceError::from)?;
+        for row in rows {
+            let record: PolicyDocumentRecord = row.into();
+            if predicate(&record) {
+                return Ok(Some(record));
+            }
+        }
+        Ok(None)
     }
 }
 
@@ -3186,5 +4622,494 @@ mod tests {
         assert_eq!(store.max_actor_seq("bob").unwrap(), Some(1));
         assert_eq!(store.max_actor_seq("nobody").unwrap(), None);
         assert_eq!(store.snapshot_all().unwrap().len(), 3);
+    }
+
+    // ── Round 25 — Memory parity tests for the new T0-3 sub-store + the
+    // MAL-11 leader-election columns. Pg parity is enforced by the trait
+    // surface itself.
+
+    fn make_test_operation(operation_id: &str, space_id: &str) -> Operation {
+        use contrix_sdk::{OperationId, SpaceId};
+        let mut op = Operation::create(
+            OperationId::new(operation_id.to_owned()).unwrap(),
+            SpaceId::new(space_id.to_owned()).unwrap(),
+            "cx.message.create",
+            serde_json::json!({"sender": "did:web:alice", "thread_id": "cx:thread:1"}),
+        );
+        op.created_at = Utc::now();
+        op
+    }
+
+    #[test]
+    fn memory_federation_operations_store_dedups_and_filters_by_space() {
+        let store = MemoryFederationOperationsStore::new();
+        let space_a = "cx:space:0196419b-0000-7000-8000-00000000aaaa";
+        let space_b = "cx:space:0196419b-0000-7000-8000-00000000bbbb";
+        let op1 = make_test_operation("cx:operation:0196419b-0000-7000-8000-000000000001", space_a);
+        let op2 = make_test_operation("cx:operation:0196419b-0000-7000-8000-000000000002", space_a);
+        let op3 = make_test_operation("cx:operation:0196419b-0000-7000-8000-000000000003", space_b);
+
+        store.append(op1.clone()).unwrap();
+        store.append(op2.clone()).unwrap();
+        store.append(op3.clone()).unwrap();
+
+        assert!(store.contains(op1.operation_id.as_str()).unwrap());
+        assert!(!store.contains("cx:operation:missing").unwrap());
+        assert_eq!(store.list_for_space(space_a).unwrap().len(), 2);
+        assert_eq!(store.list_for_space(space_b).unwrap().len(), 1);
+        assert_eq!(store.snapshot_all().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn memory_multisig_pending_lease_acquire_release_round_trip() {
+        let store = MemoryMultisigPendingStore::new();
+        let now = Utc::now();
+        let record = MultisigPendingRecord {
+            anchor_id: "cx:anchor:sha256:lease".to_owned(),
+            space_id: "cx:space:0196419b-0000-7000-8000-00000000abcd".to_owned(),
+            threshold_k: 2,
+            threshold_n: 3,
+            members: vec![
+                "did:web:a".to_owned(),
+                "did:web:b".to_owned(),
+                "did:web:c".to_owned(),
+            ],
+            canonical_b64: String::new(),
+            partials: BTreeMap::new(),
+            created_at: now,
+            expires_at: now + chrono::Duration::hours(1),
+            claimed_by_node_id: None,
+            claimed_until: None,
+            claim_seq: 0,
+        };
+        store.upsert(record.clone()).unwrap();
+
+        let lease_until = now + chrono::Duration::seconds(60);
+        // First node successfully claims.
+        let (won_a, seq_a) = store
+            .try_claim("cx:anchor:sha256:lease", "node-A", now, lease_until)
+            .unwrap();
+        assert!(won_a);
+        assert_eq!(seq_a, 1);
+        // Second node bounces while lease is live.
+        let (won_b, seq_b) = store
+            .try_claim("cx:anchor:sha256:lease", "node-B", now, lease_until)
+            .unwrap();
+        assert!(!won_b);
+        assert_eq!(seq_b, 1, "claim_seq must not bump on a failed try_claim");
+        // Lease expiry — second node now wins.
+        let later = lease_until + chrono::Duration::seconds(1);
+        let (won_b2, seq_b2) = store
+            .try_claim(
+                "cx:anchor:sha256:lease",
+                "node-B",
+                later,
+                later + chrono::Duration::seconds(60),
+            )
+            .unwrap();
+        assert!(won_b2);
+        assert_eq!(seq_b2, 2, "claim_seq must bump on every successful claim");
+        // Release by node-B clears the lease so anyone can re-claim.
+        store.release_claim("cx:anchor:sha256:lease", "node-B").unwrap();
+        let row = store.get("cx:anchor:sha256:lease").unwrap().unwrap();
+        assert!(row.claimed_by_node_id.is_none());
+        assert_eq!(
+            row.claim_seq, 2,
+            "release_claim must NOT touch the fencing token"
+        );
+
+        // snapshot_all surfaces every row regardless of claim state.
+        assert_eq!(store.snapshot_all().unwrap().len(), 1);
+    }
+
+    // ── Round 26 — Memory parity tests for the five wire-facing T0-3
+    // sub-stores (moderation / presence / schemas / identity / invites).
+    // Pg parity is enforced by the trait surface itself; the integration
+    // tests in `tests/http_api.rs` exercise the Pg path when `DATABASE_URL`
+    // is set.
+
+    #[test]
+    fn memory_moderation_store_append_and_list_matches_trait() {
+        let store = MemoryModerationStore::new();
+        let report = serde_json::json!({
+            "report_id": "cx:report:01",
+            "reporter": "did:web:alice.example",
+            "target_actor": "did:web:bob.example",
+            "reason": "spam"
+        });
+        let action = serde_json::json!({
+            "action_id": "cx:moderation:01",
+            "moderator": "did:web:mod.example",
+            "target_actor": "did:web:bob.example",
+            "action_kind": "warn"
+        });
+
+        store.append_report(report.clone()).unwrap();
+        store.append_action(action.clone()).unwrap();
+
+        let reports = store.list_reports().unwrap();
+        assert_eq!(reports.len(), 1);
+        assert_eq!(reports[0]["report_id"], "cx:report:01");
+
+        let actions = store.list_actions().unwrap();
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0]["action_kind"], "warn");
+    }
+
+    #[test]
+    fn memory_presence_store_put_get_matches_trait() {
+        let store = MemoryPresenceStore::new();
+        let now = Utc::now();
+        let record = PresenceRecord {
+            actor: "did:web:alice.example".to_owned(),
+            status: "online".to_owned(),
+            updated_at: now,
+        };
+        store.put(record.clone()).unwrap();
+
+        let fetched = store.get("did:web:alice.example").unwrap().unwrap();
+        assert_eq!(fetched.status, "online");
+        assert_eq!(fetched.actor, "did:web:alice.example");
+
+        // Upsert: latest write wins.
+        let update = PresenceRecord {
+            actor: "did:web:alice.example".to_owned(),
+            status: "away".to_owned(),
+            updated_at: now + chrono::Duration::seconds(30),
+        };
+        store.put(update).unwrap();
+        let after = store.get("did:web:alice.example").unwrap().unwrap();
+        assert_eq!(after.status, "away");
+
+        // Missing actor → None.
+        assert!(store.get("did:web:nobody").unwrap().is_none());
+    }
+
+    #[test]
+    fn memory_schema_store_put_get_delete_matches_trait() {
+        let store = MemorySchemaStore::new();
+        let now = Utc::now();
+        let record = SchemaRecord {
+            schema_id: "cx.schema.event.message.v1".to_owned(),
+            kind: "event.message".to_owned(),
+            version: "1".to_owned(),
+            name: Some("message".to_owned()),
+            owner: "did:web:soland.local".to_owned(),
+            definition: serde_json::json!({"type": "object"}),
+            active: true,
+            created_at: now,
+            updated_at: now,
+        };
+        store.put(record.clone()).unwrap();
+
+        let fetched = store.get("cx.schema.event.message.v1").unwrap().unwrap();
+        assert_eq!(fetched.schema_id, "cx.schema.event.message.v1");
+        assert_eq!(fetched.kind, "event.message");
+        assert!(fetched.active);
+
+        let snapshot = store.snapshot_all().unwrap();
+        assert_eq!(snapshot.len(), 1);
+
+        assert!(store.delete("cx.schema.event.message.v1").unwrap());
+        assert!(!store.delete("cx.schema.event.message.v1").unwrap());
+        assert!(store.get("cx.schema.event.message.v1").unwrap().is_none());
+    }
+
+    #[test]
+    fn memory_identity_store_document_and_log_round_trip_matches_trait() {
+        let store = MemoryIdentityStore::new();
+        let now = Utc::now();
+        let doc = IdentityDocumentRecord {
+            did: "did:web:alice.example".to_owned(),
+            did_document: serde_json::json!({
+                "id": "did:web:alice.example",
+                "verificationMethod": []
+            }),
+            key_log_head: Some("sha256:head".to_owned()),
+            seq: 1,
+            method_evidence: serde_json::json!({"method": "key-rotation"}),
+            updated_at: now,
+        };
+        store.put_document(doc.clone()).unwrap();
+
+        let fetched = store
+            .get_document("did:web:alice.example")
+            .unwrap()
+            .unwrap();
+        assert_eq!(fetched.did, "did:web:alice.example");
+        assert_eq!(fetched.seq, 1);
+        assert_eq!(fetched.key_log_head.as_deref(), Some("sha256:head"));
+
+        // Append two log events under same DID.
+        let log1 = IdentityLogRecord {
+            event_hash: "sha256:event-1".to_owned(),
+            did: "did:web:alice.example".to_owned(),
+            seq: 1,
+            operation: serde_json::json!({"op": "rotate", "n": 1}),
+            created_at: now,
+        };
+        let log2 = IdentityLogRecord {
+            event_hash: "sha256:event-2".to_owned(),
+            did: "did:web:alice.example".to_owned(),
+            seq: 2,
+            operation: serde_json::json!({"op": "rotate", "n": 2}),
+            created_at: now + chrono::Duration::seconds(5),
+        };
+        store.append_log_event(log1).unwrap();
+        store.append_log_event(log2).unwrap();
+
+        let log = store.list_log_events("did:web:alice.example").unwrap();
+        assert_eq!(log.len(), 2);
+        assert_eq!(log[0].seq, 1);
+        assert_eq!(log[1].seq, 2);
+
+        // Unrelated DID → empty.
+        assert!(store.list_log_events("did:web:nobody").unwrap().is_empty());
+        assert!(store.get_document("did:web:nobody").unwrap().is_none());
+    }
+
+    #[test]
+    fn memory_space_invite_store_put_get_snapshot_matches_trait() {
+        let store = MemorySpaceInviteStore::new();
+        let now = Utc::now();
+        let record = SpaceInviteRecord {
+            invite_id: "cx:invite:01".to_owned(),
+            space_id: "cx:space:0196419b-0000-7000-8000-000000000001".to_owned(),
+            inviter: "did:web:alice.example".to_owned(),
+            invitee: Some("did:web:bob.example".to_owned()),
+            invite_token: "tok-abc".to_owned(),
+            status: "pending".to_owned(),
+            expires_at: Some(now + chrono::Duration::hours(24)),
+            created_at: now,
+        };
+        store.put(record.clone()).unwrap();
+
+        let fetched = store.get("cx:invite:01").unwrap().unwrap();
+        assert_eq!(fetched.invite_token, "tok-abc");
+        assert_eq!(fetched.status, "pending");
+        assert_eq!(fetched.invitee.as_deref(), Some("did:web:bob.example"));
+
+        // Idempotent upsert (latest status wins).
+        let updated = SpaceInviteRecord {
+            status: "accepted".to_owned(),
+            ..record
+        };
+        store.put(updated).unwrap();
+        let after = store.get("cx:invite:01").unwrap().unwrap();
+        assert_eq!(after.status, "accepted");
+
+        let snapshot = store.snapshot_all().unwrap();
+        assert_eq!(snapshot.len(), 1);
+        assert!(store.get("cx:invite:missing").unwrap().is_none());
+    }
+
+    // ── Round 27 — Memory parity tests for the four recovery / realtime
+    // sub-stores (key_backup / webrtc / policy / restore). Pg parity is
+    // enforced by the shared trait surface; the integration tests in
+    // `tests/http_api.rs` exercise the Pg path when `DATABASE_URL` is set.
+
+    #[test]
+    fn memory_key_backup_store_put_get_snapshot_matches_trait() {
+        let store = MemoryKeyBackupStore::new();
+        let envelope = serde_json::json!({
+            "backup_id": "cx:keybackup:01",
+            "account_id": "did:web:alice.example",
+            "device_id": "device-1",
+            "scheme": "x25519-aead-ratchet",
+            "version": 3,
+            "key_material_encrypted_b64": "AAAA"
+        });
+        store
+            .put("cx:keybackup:01".to_owned(), envelope.clone())
+            .unwrap();
+
+        let fetched = store.get("cx:keybackup:01").unwrap().unwrap();
+        assert_eq!(fetched["backup_id"], "cx:keybackup:01");
+        assert_eq!(fetched["scheme"], "x25519-aead-ratchet");
+
+        let snapshot = store.snapshot_all().unwrap();
+        assert_eq!(snapshot.len(), 1);
+
+        assert!(store.delete("cx:keybackup:01").unwrap());
+        assert!(!store.delete("cx:keybackup:01").unwrap());
+        assert!(store.get("cx:keybackup:01").unwrap().is_none());
+    }
+
+    #[test]
+    fn memory_webrtc_store_put_get_append_signal_matches_trait() {
+        let store = MemoryWebrtcSessionStore::new();
+        let now = Utc::now();
+        let mut participants = BTreeSet::new();
+        participants.insert("did:web:alice.example".to_owned());
+        participants.insert("did:web:bob.example".to_owned());
+        let record = WebrtcSessionRecord {
+            session_id: "cx:call:01".to_owned(),
+            space_id: "cx:space:0196419b-0000-7000-8000-000000000001".to_owned(),
+            created_by: "did:web:alice.example".to_owned(),
+            participants,
+            expires_at: now + chrono::Duration::minutes(30),
+            created_at: now,
+            next_seq: 0,
+            signals: Vec::new(),
+        };
+        store.put(record).unwrap();
+
+        let fetched = store.get("cx:call:01").unwrap().unwrap();
+        assert_eq!(fetched.session_id, "cx:call:01");
+        assert_eq!(fetched.participants.len(), 2);
+        assert_eq!(fetched.next_seq, 0);
+
+        // Participant appends a signal — seq is assigned by the store.
+        let appended = store
+            .append_signal(
+                "cx:call:01",
+                "did:web:alice.example",
+                Box::new(move |seq| WebrtcSignalRecord {
+                    seq,
+                    sender: "did:web:alice.example".to_owned(),
+                    message_type: "offer".to_owned(),
+                    payload: serde_json::json!({"sdp": "v=0..."}),
+                    proofs: Vec::new(),
+                    created_at: now,
+                }),
+            )
+            .unwrap();
+        assert_eq!(appended.seq, 0);
+
+        let after = store.get("cx:call:01").unwrap().unwrap();
+        assert_eq!(after.next_seq, 1);
+        assert_eq!(after.signals.len(), 1);
+        assert_eq!(after.signals[0].message_type, "offer");
+
+        // Non-participant gets rejected.
+        assert!(store
+            .append_signal(
+                "cx:call:01",
+                "did:web:carol.example",
+                Box::new(move |seq| WebrtcSignalRecord {
+                    seq,
+                    sender: "did:web:carol.example".to_owned(),
+                    message_type: "answer".to_owned(),
+                    payload: Value::Null,
+                    proofs: Vec::new(),
+                    created_at: now,
+                }),
+            )
+            .is_err());
+
+        // Delete clears the row.
+        assert!(store.delete("cx:call:01").unwrap());
+        assert!(store.get("cx:call:01").unwrap().is_none());
+    }
+
+    #[test]
+    fn memory_policy_document_store_put_list_owner_matches_trait() {
+        let store = MemoryPolicyDocumentStore::new();
+        let now = Utc::now();
+        let alice_doc = PolicyDocumentRecord {
+            policy_id: "cx:policy:01".to_owned(),
+            owner: "did:web:alice.example".to_owned(),
+            scope: "space".to_owned(),
+            subject_ref: "cx:space:0196419b-0000-7000-8000-000000000001".to_owned(),
+            policy_type: "rbac".to_owned(),
+            payload: serde_json::json!({
+                "version": 5,
+                "signed_by": "did:web:alice.example",
+                "rules": []
+            }),
+            active: true,
+            updated_at: now,
+        };
+        let bob_doc = PolicyDocumentRecord {
+            policy_id: "cx:policy:02".to_owned(),
+            owner: "did:web:bob.example".to_owned(),
+            scope: "space".to_owned(),
+            subject_ref: "cx:space:0196419b-0000-7000-8000-000000000002".to_owned(),
+            policy_type: "rbac".to_owned(),
+            payload: serde_json::json!({"version": 1, "signed_by": "did:web:bob.example"}),
+            active: true,
+            updated_at: now,
+        };
+        store.put(alice_doc.clone()).unwrap();
+        store.put(bob_doc.clone()).unwrap();
+
+        let fetched = store.get("cx:policy:01").unwrap().unwrap();
+        assert_eq!(fetched.owner, "did:web:alice.example");
+        assert_eq!(fetched.payload["version"], 5);
+
+        let alice_only = store.list_for_owner("did:web:alice.example").unwrap();
+        assert_eq!(alice_only.len(), 1);
+        assert_eq!(alice_only[0].policy_id, "cx:policy:01");
+
+        let snapshot = store.snapshot_all().unwrap();
+        assert_eq!(snapshot.len(), 2);
+
+        // find_active filters by predicate.
+        let found = store
+            .find_active(&|record: &PolicyDocumentRecord| record.subject_ref.ends_with("000000000002"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(found.policy_id, "cx:policy:02");
+
+        assert!(store.delete("cx:policy:01").unwrap());
+        assert!(store.get("cx:policy:01").unwrap().is_none());
+    }
+
+    #[test]
+    fn memory_restore_store_ticket_executor_approval_round_trip_matches_trait() {
+        // The restore-ticket FSM is reachable via KeyBackupStore's
+        // `put_ticket / put_executor_run / put_approval_run` triple. Each
+        // method targets a distinct sub-table on the Pg side; in the memory
+        // backend they are parallel BTreeMaps on the same struct.
+        let store = MemoryKeyBackupStore::new();
+        let ticket = serde_json::json!({
+            "ticket_id": "cx:restore:01",
+            "account_id": "did:web:alice.example",
+            "status": "issued"
+        });
+        let executor = serde_json::json!({
+            "ticket_id": "cx:restore:01",
+            "stage": "ExecutorRunning",
+            "started_at": "2026-05-10T00:00:00Z"
+        });
+        let approval = serde_json::json!({
+            "ticket_id": "cx:restore:01",
+            "stage": "Approving",
+            "approver": "did:web:carol.example"
+        });
+
+        store
+            .put_ticket("cx:restore:01".to_owned(), ticket.clone())
+            .unwrap();
+        store
+            .put_executor_run("cx:restore:01".to_owned(), executor.clone())
+            .unwrap();
+        store
+            .put_approval_run("cx:restore:01".to_owned(), approval.clone())
+            .unwrap();
+
+        let fetched_ticket = store.get_ticket("cx:restore:01").unwrap().unwrap();
+        assert_eq!(fetched_ticket["account_id"], "did:web:alice.example");
+
+        let fetched_executor = store.get_executor_run("cx:restore:01").unwrap().unwrap();
+        assert_eq!(fetched_executor["stage"], "ExecutorRunning");
+
+        let fetched_approval = store.get_approval_run("cx:restore:01").unwrap().unwrap();
+        assert_eq!(fetched_approval["approver"], "did:web:carol.example");
+
+        // Missing keys → None.
+        assert!(store.get_ticket("cx:restore:missing").unwrap().is_none());
+        assert!(
+            store
+                .get_executor_run("cx:restore:missing")
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            store
+                .get_approval_run("cx:restore:missing")
+                .unwrap()
+                .is_none()
+        );
     }
 }
