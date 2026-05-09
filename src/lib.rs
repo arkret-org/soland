@@ -11,6 +11,7 @@ pub mod db;
 pub mod error;
 pub mod hlc;
 pub mod ids;
+pub mod jws_verify;
 pub mod kinds;
 pub mod persistence;
 pub mod ratelimit;

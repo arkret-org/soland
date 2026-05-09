@@ -480,10 +480,18 @@ pub fn project_accepted_operations(state: &AppState, repo_id: &str, operations: 
         if let Ok(mut proj) = state.projection.lock() {
             proj.apply(operation, &state.hlc);
         }
-        append_projection_event(
-            state,
-            projection_event_from_operation(operation, Some(repo_id)),
-        );
+        let projected = projection_event_from_operation(operation, Some(repo_id));
+        // C10.B (2026-05-09 十轮): broadcast every accepted projection
+        // event to live subscribers on cx.events.subscribe. Subscribers
+        // filter by `space_id`. `send` returns Err only if there are no
+        // active receivers — that's not an error path, it's the steady
+        // state when no one's subscribed.
+        let _ = state.event_broadcast.send(crate::state::EventNotification {
+            space_id: projected.space_id.clone(),
+            cursor: projected.event_id.clone(),
+            event_payload: projection_event_json(&projected),
+        });
+        append_projection_event(state, projected);
         if let Err(error) = persist_projected_operation(state, repo_id, operation) {
             tracing::warn!(
                 error = %error,
@@ -643,14 +651,19 @@ pub fn persist_projected_operation(
     Ok(())
 }
 
-/// C14: project a `cx.space.read_receipt_policy` state event into
-/// `ProjectionState::read_receipt_policies`. Cas-register semantics — the
-/// latest write per Space wins. Reading code (`cx.receipt.read` fanout, etc.)
-/// hits the in-memory BTreeMap; the durable-event-scan fallback in
-/// `routing::events::effective_read_receipt_policy_for_space` remains as a
-/// recovery path for replays / cold start.
+/// C14 + C10.B (2026-05-09 八轮): project a `cx.space.read_receipt_policy`
+/// durable-event into `ProjectionState::cells` as a synthesized CasRegister
+/// value at the canonical cell `cx:cell:cx.component.space.read_receipt_policy.v1:<space_id>`.
+/// This unifies the read path with the Move/Anchor pipeline: both durable-
+/// event ingestion AND Move/Anchor `apply_anchor` write to the same cells
+/// map, so `routing::events::effective_read_receipt_policy_for_space`
+/// queries one source.
+///
+/// Cas-register semantics: the projection writer wins-by-arrival here
+/// (we don't have HLC ordering on synthesized values yet); for full
+/// cas-register conflict semantics writes should go through Move/Anchor.
 pub fn project_read_receipt_policy(state: &AppState, operation: &Operation) {
-    let space_id = operation.space_id.clone().to_string();
+    let space_id = operation.space_id.clone();
     let payload = match operation.payload.as_object() {
         Some(payload) => payload,
         None => return,
@@ -669,20 +682,25 @@ pub fn project_read_receipt_policy(state: &AppState, operation: &Operation) {
         .get("scope_overrides_allowed")
         .and_then(|v| v.as_bool())
         .unwrap_or(true);
-    let snapshot = crate::reducer::ReadReceiptPolicySnapshot {
-        disclosure,
-        visibility,
-        scope_overrides_allowed,
-        updated_at: now(),
+
+    // Synthesize a CellState::Value at the canonical cell ref. This lets
+    // the cells-map fast-path serve reads without scanning the durable
+    // Event store on every fanout.
+    let cell_id = match contrix_sdk::CellRef::new(format!(
+        "cx:cell:cx.component.space.read_receipt_policy.v1:{}",
+        space_id.as_str()
+    )) {
+        Ok(c) => c,
+        Err(_) => return,
     };
+    let value = serde_json::json!({
+        "disclosure": disclosure,
+        "visibility": visibility,
+        "scope_overrides_allowed": scope_overrides_allowed,
+    });
     if let Ok(mut proj) = state.projection.lock() {
-        // Cas-register: only overwrite when this update is at least as fresh.
-        match proj.read_receipt_policies.get(&space_id) {
-            Some(prev) if prev.updated_at > snapshot.updated_at => {}
-            _ => {
-                proj.read_receipt_policies.insert(space_id, snapshot);
-            }
-        }
+        proj.cells
+            .insert(cell_id, contrix_sdk::lattice::CellState::Value(value));
     }
 }
 

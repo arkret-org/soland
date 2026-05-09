@@ -39,7 +39,7 @@ use contrix_sdk::{
     },
 };
 
-use crate::routing::move_anchor::shape_only_jws_verifier_for_anchorer;
+use crate::routing::move_anchor::select_jws_verifier;
 use crate::state::AppState;
 
 /// Outcome of a single anchorer signing pass.
@@ -127,16 +127,34 @@ impl AnchorerWorker {
         // but we need the per-cell map for verify_move).
         let pre_state = self.read_effective_state(state, space_id)?;
 
-        // Step 5: deterministic order + pre-flight verify.
+        // Step 5: deterministic order + pre-flight verify. The signature
+        // verifier is chosen by `select_jws_verifier` (production
+        // Ed25519 vs dev shape-only) — anchorer must use the same one
+        // submit_anchor / submit_move use, otherwise pending Moves that
+        // passed admission could still be rejected at anchor time.
+        // Replay-window check (`Move.hlc`) is also enforced per Move so
+        // long-pending Moves whose hlc has aged out get dropped instead
+        // of resurrected into a fresh Anchor.
+        let verifier = select_jws_verifier(state);
+        let replay_default = state.config.jws_replay_window_seconds;
+        let replay_overrides = &state.config.jws_replay_window_per_family;
         let ordered = contrix_sdk::state_res::deterministic_order(pending);
         let mut accepted: Vec<Move> = Vec::with_capacity(ordered.len());
         let mut rejected: Vec<(MoveId, String)> = Vec::new();
         for m in ordered {
+            if let Err(reject) = crate::jws_verify::verify_replay_window_for_move(
+                &m,
+                replay_default,
+                replay_overrides,
+            ) {
+                rejected.push((m.id.clone(), format!("replay_window: {reject}")));
+                continue;
+            }
             match verify_move(
                 &m,
                 &pre_state,
                 state.cell_registry.as_ref(),
-                shape_only_jws_verifier_for_anchorer,
+                verifier,
             ) {
                 Ok(()) => accepted.push(m),
                 Err(reject) => rejected.push((m.id.clone(), reject.to_string())),
@@ -193,15 +211,33 @@ impl AnchorerWorker {
 
         // Step 8: submit through apply_anchor — this re-runs steps 1-8 of
         // the SDK pipeline and writes Anchor + marks Moves anchored.
+        // Reuse `verifier` from step 5; same closure satisfies the
+        // `Copy` bound apply_anchor's `F: Copy` requires.
         let effect = apply_anchor(
             &anchor,
             state.move_store.as_ref(),
             state.anchor_store.as_ref(),
             state.cell_store.as_ref(),
             state.cell_registry.as_ref(),
-            shape_only_jws_verifier_for_anchorer,
+            verifier,
         )
         .map_err(|reject| AnchorerError::ApplyAnchor(reject.to_string()))?;
+
+        // Step 8b (2026-05-09 八轮): write-back ProjectionState::cells
+        // from the now-updated CellStore so cell-keyed reads see the new
+        // effective state without waiting for an HTTP-side hook.
+        if let Ok(mut proj) = state.projection.lock() {
+            if let Err(error) = proj.reload_cells_from_store(
+                space_id,
+                state.cell_store.as_ref(),
+                state.cell_registry.as_ref(),
+            ) {
+                tracing::warn!(
+                    error = %error,
+                    "anchorer worker failed to refresh ProjectionState::cells after apply_anchor"
+                );
+            }
+        }
 
         Ok(Some(AnchorerOutcome {
             anchor_id: effect.anchor,

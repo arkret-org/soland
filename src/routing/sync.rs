@@ -33,12 +33,16 @@
 //! `cx:space:` prefix audit (M-15 / S4), and `$ME` / `*` substitution
 //! formalization (M-16 / S5).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use std::time::Duration;
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+use bytes::Bytes;
 use contrix_sdk::SpaceId;
+use futures_util::stream::StreamExt;
 use salvo::{http::StatusCode, prelude::*};
 use serde_json::json;
+use tokio::sync::broadcast::error::RecvError;
 
 use crate::{
     state::{AppState, PresenceRecord, SessionRecord, TypingRecord},
@@ -583,13 +587,31 @@ pub async fn set_typing(depot: &mut Depot, req: &mut Request, res: &mut Response
     }));
 }
 
-/// C17 (spec 2026-05-08): exposed at `GET /api/v1/events/subscribe` as
-/// `cx.events.subscribe`. The selector accepts `spaces[]` repeated query args.
-/// Aggressive cleanup (2026-05-09): legacy singular `space_id` transition
-/// fallback removed; clients MUST emit `spaces=` per spec.
+/// C17 (spec 2026-05-08) + C10.B (2026-05-09 十轮 long-poll/SSE):
+/// `cx.events.subscribe` at `GET /api/v1/events/subscribe`. NDJSON
+/// streaming: each line is one frame, frame `kind` is one of
+/// `event` / `catchup_complete` / `heartbeat` / `dropped`.
+///
+/// Selector: `spaces[]` repeated query args (multi-value). Singular
+/// `space_id` removed (transition-fallback cleanup, 七轮).
+///
+/// Lifecycle:
+///   1. Validate inputs (spaces, accessibility).
+///   2. Subscribe to the live event broadcast BEFORE serving history so
+///      no events are missed in the history-vs-live window.
+///   3. Build an async stream that yields:
+///      a) historical event frames (if `include_history=true`, default true)
+///      b) one `catchup_complete` frame
+///      c) live event frames as broadcast notifications arrive
+///      d) periodic `heartbeat` frames every 30s of idle
+///      e) `dropped` frames when broadcast lag is detected
+///   4. Stream terminates when:
+///      - `max_duration_ms` query param elapsed (default 60_000 ms)
+///      - client disconnects (drops the response stream)
+///      - the broadcast channel is closed (server shutdown)
 #[endpoint]
 pub async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Response) {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.obtain::<AppState>().expect("state injected").clone();
     // C17 selector: `spaces=` repeated args (multi-value). Singular
     // `space_id` is rejected as a removed legacy contract.
     let spaces = super::query_param_all(req, "spaces");
@@ -613,10 +635,10 @@ pub async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Re
             return;
         }
     }
-    let session = authenticated_session(state, req).ok();
+    let session = authenticated_session(&state, req).ok();
     let mut accessible_spaces: Vec<String> = Vec::with_capacity(spaces.len());
     for space in spaces {
-        if space_id_accessible(state, &space, session.as_ref()) {
+        if space_id_accessible(&state, &space, session.as_ref()) {
             accessible_spaces.push(space);
         }
     }
@@ -630,34 +652,44 @@ pub async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Re
         .min(100);
     // C17: cursor parameter renamed to `from`. Legacy `cursor` param removed.
     let cursor = query_param(req, "from");
-    // C17: `include_history` defaults to true (the legacy /sync/subscribe
-    // returned recent history then long-polled; in unary mode this is the
-    // safe default). When false, only the `frontier`+`catchup_complete`+
-    // `heartbeat` control trio is emitted so the client can establish its
-    // baseline cursor and start receiving events from new traffic.
     let include_history = query_param(req, "include_history")
         .as_deref()
         .map(|value| matches!(value, "true" | "1" | "yes"))
         .unwrap_or(true);
+    // 十轮: cap how long the stream stays open. Default 60s; tests
+    // typically pass `max_duration_ms=500` to bound assertion latency.
+    // Production clients reconnect after the close (HTTP/1.1 long-poll
+    // pattern) or use SSE EventSource auto-reconnect.
+    let max_duration_ms = query_param(req, "max_duration_ms")
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(60_000)
+        .min(600_000);
+    // 十轮: heartbeat interval. Default 15s; min 100ms (for tests).
+    let heartbeat_ms = query_param(req, "heartbeat_ms")
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(15_000)
+        .max(100);
 
-    let mut frames: Vec<serde_json::Value> = Vec::new();
+    // Subscribe to live notifications BEFORE serving history so we don't
+    // miss events that land between history-end and subscribe-start.
+    let mut rx = state.event_broadcast.subscribe();
+
+    // Pre-build history frames synchronously (same logic as the old unary
+    // handler). The async stream yields these first, then transitions to
+    // live events.
+    let mut history_frames: Vec<serde_json::Value> = Vec::new();
     let mut seq: u64 = 0;
     let mut last_cursor: Option<String> = None;
-    let mut any_has_more = false;
 
     if include_history {
         for space_id in &accessible_spaces {
-            match projected_event_page(state, space_id, cursor.as_deref(), limit) {
+            match projected_event_page(&state, space_id, cursor.as_deref(), limit) {
                 Ok(Some(page)) => {
-                    if page.has_more {
-                        any_has_more = true;
-                    }
                     for event in page.items {
                         seq += 1;
                         let event_cursor = event.event_id.clone();
                         last_cursor = Some(event_cursor.clone());
-                        // C17 frame: kind="event"
-                        frames.push(json!({
+                        history_frames.push(json!({
                             "kind": "event",
                             "seq": seq,
                             "cursor": event_cursor,
@@ -668,14 +700,11 @@ pub async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Re
                         last_cursor = Some(next);
                     }
                 }
-                Ok(None) => match state
-                    .repo
-                    .sync_space_operations(space_id, cursor.as_deref(), limit)
-                {
-                    Ok(page) => {
-                        if page.has_more {
-                            any_has_more = true;
-                        }
+                Ok(None) => {
+                    if let Ok(page) = state
+                        .repo
+                        .sync_space_operations(space_id, cursor.as_deref(), limit)
+                    {
                         for operation in page.items {
                             seq += 1;
                             let projected = projection_event_from_operation(&operation, None);
@@ -684,7 +713,7 @@ pub async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Re
                                 .clone()
                                 .unwrap_or_else(|| projected.event_id.clone());
                             last_cursor = Some(event_cursor.clone());
-                            frames.push(json!({
+                            history_frames.push(json!({
                                 "kind": "event",
                                 "seq": seq,
                                 "cursor": event_cursor,
@@ -695,24 +724,10 @@ pub async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Re
                             last_cursor = Some(next);
                         }
                     }
-                    Err(error) => {
-                        // Single-space failure: keep going for other spaces in
-                        // multi-selector; for single-space, surface the error.
-                        if accessible_spaces.len() == 1 {
-                            render_error(
-                                res,
-                                StatusCode::INTERNAL_SERVER_ERROR,
-                                "repo_error",
-                                &error.to_string(),
-                            );
-                            return;
-                        }
-                    }
-                },
+                }
                 Err(error) => {
-                    if error.to_string().contains("invalid_cursor") {
-                        // Surface immediately for single-space; for multi, fail
-                        // the whole request because cursor is stream-wide.
+                    if error.to_string().contains("invalid_cursor") && accessible_spaces.len() == 1
+                    {
                         render_error(
                             res,
                             StatusCode::BAD_REQUEST,
@@ -721,42 +736,102 @@ pub async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Re
                         );
                         return;
                     }
-                    if accessible_spaces.len() == 1 {
-                        render_error(
-                            res,
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            "projection_error",
-                            &error.to_string(),
-                        );
-                        return;
-                    }
                 }
             }
         }
     }
 
-    // C17 control frame: catchup_complete signals end of historical buffer.
-    // Emit when include_history=true OR after a fresh subscribe so clients
-    // know subsequent frames (in a real streaming impl) are live.
-    let catchup_cursor = last_cursor.clone().unwrap_or_else(sync_token);
-    frames.push(json!({
-        "kind": "catchup_complete",
-        "cursor": catchup_cursor,
-    }));
+    let catchup_cursor = last_cursor.unwrap_or_else(sync_token);
+    let space_filter: BTreeSet<String> = accessible_spaces.iter().cloned().collect();
+    let stream_deadline = tokio::time::Instant::now() + Duration::from_millis(max_duration_ms);
 
-    // C17 control frame: heartbeat closes the unary response so clients have
-    // an end-of-batch keep-alive marker. Real streaming impls would emit
-    // this every ~30s while the connection is otherwise idle.
-    frames.push(json!({
-        "kind": "heartbeat",
-        "ts": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-    }));
+    // The async stream — yields one NDJSON line (Bytes) per frame.
+    let body_stream = async_stream::stream! {
+        // 1. Historical frames.
+        for frame in &history_frames {
+            yield Ok::<Bytes, std::io::Error>(ndjson_line(frame));
+        }
+        let mut live_seq = seq;
 
-    res.render(Json(json!({
-        "frames": frames,
-        "next_cursor": last_cursor.unwrap_or_else(sync_token),
-        "has_more": any_has_more,
-    })));
+        // 2. catchup_complete signals end of historical buffer.
+        let catchup = json!({
+            "kind": "catchup_complete",
+            "cursor": catchup_cursor,
+        });
+        yield Ok(ndjson_line(&catchup));
+
+        // 3. Live loop: tokio::select on broadcast recv + heartbeat tick + deadline.
+        let mut heartbeat = tokio::time::interval(Duration::from_millis(heartbeat_ms));
+        // Skip first immediate tick — interval fires once at construction.
+        heartbeat.tick().await;
+        loop {
+            tokio::select! {
+                biased;
+                _ = tokio::time::sleep_until(stream_deadline) => {
+                    // Final heartbeat then close.
+                    let close_frame = json!({
+                        "kind": "heartbeat",
+                        "ts": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                        "stream_closing": true,
+                    });
+                    yield Ok(ndjson_line(&close_frame));
+                    break;
+                }
+                recv = rx.recv() => {
+                    match recv {
+                        Ok(notification) => {
+                            if !space_filter.contains(&notification.space_id) {
+                                continue;
+                            }
+                            live_seq += 1;
+                            let frame = json!({
+                                "kind": "event",
+                                "seq": live_seq,
+                                "cursor": notification.cursor,
+                                "payload": notification.event_payload,
+                            });
+                            yield Ok(ndjson_line(&frame));
+                        }
+                        Err(RecvError::Lagged(skipped)) => {
+                            // Broadcast capacity exceeded — emit `dropped`
+                            // so the client knows to resync from a fresh
+                            // /events?direction=backward query.
+                            let frame = json!({
+                                "kind": "dropped",
+                                "skipped": skipped,
+                                "reason": "broadcast_lagged",
+                            });
+                            yield Ok(ndjson_line(&frame));
+                        }
+                        Err(RecvError::Closed) => {
+                            // Server shutdown / channel dropped.
+                            break;
+                        }
+                    }
+                }
+                _ = heartbeat.tick() => {
+                    let frame = json!({
+                        "kind": "heartbeat",
+                        "ts": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                    });
+                    yield Ok(ndjson_line(&frame));
+                }
+            }
+        }
+    };
+
+    let _ = res.add_header("content-type", "application/x-ndjson", true);
+    res.stream(body_stream.boxed());
+}
+
+/// C10.B (2026-05-09 十轮): serialize a JSON frame to a length-prefixed
+/// NDJSON line. Each line ends with `\n` per the NDJSON / JSON-Lines
+/// convention so streaming clients can split-on-newline incrementally
+/// without parsing the whole buffer.
+fn ndjson_line(value: &serde_json::Value) -> Bytes {
+    let mut s = serde_json::to_string(value).unwrap_or_else(|_| "{}".to_owned());
+    s.push('\n');
+    Bytes::from(s)
 }
 
 /// C17 (spec 2026-05-08): `cx.events.query` at `GET /api/v1/events`.

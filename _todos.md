@@ -101,7 +101,7 @@
 | --- | --- | --- | --- |
 | **MAL-0** ⚠ | `[x]` | 旧产物清理：删除 `src/host_endorser.rs`（如已落地）、`src/routing/federation_hub.rs`、reducer kinds 中 `space_host.rs` / `space_host_transfer.rs` stub。回退 ids.rs / wire.rs 中 host_did / endorsed_at / space_writer_model 引用。同步 SDK W6/W7/W8 删除。 | `src/`、`tests/` | 根 C11 |
 | **MAL-1** ⚠ | `[x]` | `LatticeKind` trait 替代 `ReducerKind`。**(2026-05-09 六轮 激进模式) 完成核心架构替换**：(a) 35 个真实 LatticeKind impl 覆盖 spec event-kind-registry 全部 cell_family（`src/reducer/lattice_kinds.rs`）；(b) `build_sdk_cell_registry()` 工厂 bulk-register 到 SDK `MemoryCellRegistry`，AppState boot 时使用，让 Move/Anchor pipeline `verify_move` / `apply_anchor` 按 spec resolve；(c) **老 `ReducerKind` trait + `ReducerRegistry` + `src/reducer/kinds/` 13 文件 / 47-stub / 4 macros 全部删除**（净减 ~1248 行，行为等价）；(d) `ProjectionState::apply()` 直接 match-on-canonical-kind 分发到同一组 inline `apply_*` helper（这些 helper 早就存在；trait 只是一层薄包装）。lib `92/92` + move_anchor_wire `5/5` pass。`registry.rs` 现在只承载 `LatticeKind` 相关类型（trait / registry / `BottomPolicy` / `LatticeKindError` / `ComponentDescriptor` / `Criticality` / `StateCardinality`）。 | `src/reducer/registry.rs`, `src/reducer/lattice_kinds.rs`, `src/reducer.rs` | done |
-| **MAL-2** ⚠ | `[x]` | Move 提交入口 `POST /api/v1/moves` | `src/routing/move_anchor.rs` | 已落地 (2026-05-08)：`submit_move` 接收 typed `Move`，调 SDK `verify_move` 走 5 步流水线（structural + sig payload_hash + capability placeholder + preconditions + effect-shape via cell registry），通过则 `MoveStore::put_pending`；返回 `{move_id, state: pending\|rejected, reason?}`。JWS 校验当前 placeholder（accept any）— 收紧到 production-mode signature verifier 是 T7-9 的范围。 |
+| **MAL-2** ⚠ | `[x]` | Move 提交入口 `POST /api/v1/moves` | `src/routing/move_anchor.rs` | 已落地 (2026-05-08)：`submit_move` 接收 typed `Move`，调 SDK `verify_move` 走 5 步流水线（structural + sig payload_hash + capability placeholder + preconditions + effect-shape via cell registry），通过则 `MoveStore::put_pending`；返回 `{move_id, state: pending\|rejected, reason?}`。**(2026-05-09 十一轮)** JWS 校验从 shape-only 升级到真 Ed25519：`select_jws_verifier(state)` picker 在 `development_mode=true` 用 shape verifier，否则用新 `crate::jws_verify::verify_jws_ed25519` (DID resolver + multibase decode + ed25519-dalek 真验签)。`submit_anchor` / `AnchorerWorker` 也走同一 picker。 |
 | **MAL-3** ⚠ | `[~]` | Anchorer 签发 worker (单 DID 模式) | `src/anchorer.rs` (NEW), `src/routing/move_anchor.rs::admin_sign_anchor` | (2026-05-09 七轮) `AnchorerWorker::sign_pending_for_space`: authorization gate (`cx.component.anchorer.v1` cell value 读 + single_did 匹配, genesis 默认 trust service_did) → list_pending → effective_anchor_view 取 pre_state → deterministic_order + verify_move 逐 Move 判 accept/reject → 本地预测 post_state state_root (克隆 cell_store ops + 新 effects → lattice.join → compute_state_root) → 构造 Anchor + 占位 JWS (RFC 7515 §3.2, sha256-derived sig; T7-9 production Ed25519) → 调 apply_anchor 端到端。新 admin 端点 `POST /api/v1/admin/anchors/sign` (op_id `cx.admin.anchors.sign`) 触发一次 signing pass。2 集成测试 (`anchorer_worker_signs_pending_move_and_publishes_anchor` + `anchorer_worker_is_idempotent_when_no_pending_moves`) 端到端 + idempotency 验证；move_anchor_wire `5/5 → 7/7` pass。**剩余**：threshold/open_set/mixed profile (需 leader election + 多签协调)、production Ed25519 (需 DID resolver)、periodic ticker (需 tokio runtime + lease + shutdown)。 |
 | **MAL-4** ⚠ | `[x]` | Anchor 接收 / 验证 / apply `POST /api/v1/anchors` | `src/routing/move_anchor.rs` | 已落地 (2026-05-08)：`submit_anchor` 调 SDK `apply_anchor` 走 8 步算法（structural → predecessor_refs 已知 → frontier 单调 → joined pre_state → deterministic_order 批 verify_move → atomic effect append → recompute state_root + 比对 → persist Anchor + mark Moves anchored）。state_root 不匹配自动 rollback。返回 `{anchor_id, accepted_move_ids[], rejected_moves[{move_id,reason}], post_state_root}`。`AnchorReject` 映射 → wire error_code (`schema_violation` / `internal_error`) + 409 Conflict。 |
 | **MAL-5** ⚠ | `[ ]` | per-cell Lattice runtime | 新 `src/lattice/` | 6 个 Lattice 实现（或调用 SDK lattice crate）；effective state 物化为 `(cell_id, value | bottom_diagnostics)` 表 |
@@ -392,6 +392,140 @@ pub async fn send_message(
 ---
 
 ## Spec Phase 1-5 rollout changelog
+
+- **2026-05-09 十三轮 激进模式** — **space_states 双层迁移 (cells + structured cache)**：
+  - 把 ProjectionState `space_states: BTreeMap<String, SpaceState>` 这个最后的 cell-driven structured 字段也改成双层架构，跟 read_receipt_policies / memberships 一致。
+  - **结构化 cache 保留**: `space_states` 持续承载 server-side `created_at` / `updated_at` 时间戳 + 简单 `deleted` bool + side-band `owner` / `title` (consumer `routing/index.rs::space_state_count` 仍读这一层)。
+  - **Cells map 写入**: `apply_space_lifecycle` 现在按 canonical kind 选目标 cell family:
+    - `cx.space.create` → `cx.component.space.create.v1` (ordered-log, singleton): 把 `{owner, title, created_at, operation_id}` append 到现有 `Value::Array` 或初始化新 array
+    - `cx.space.update` → `cx.component.space.organization.v1` (cas-register, singleton): 写 `Value::Object {owner?, title?, updated_at}` latest-wins
+    - `cx.space.destroy` → `cx.component.space.destroy.v1` (cas-register, singleton): 写 `Value::Object {destroyed: true, at, operation_id}` terminal
+  - **Dispatcher 改动**: 之前 `Some(CX_SPACE_CREATE) | Some(CX_SPACE_UPDATE) | Some(CX_SPACE_DESTROY) => apply_space_lifecycle(operation, now)` 把 kind 丢了；改成 `Some(kind @ (CX_SPACE_CREATE | CX_SPACE_UPDATE | CX_SPACE_DESTROY)) => apply_space_lifecycle(operation, now, kind)` 透传到 helper，让它能按 kind 选目标 cell。
+  - **新 query helpers**:
+    - `space_create_log(space_id) -> Option<&[Value]>` 直接读 ordered-log cell, 返回 entries slice
+    - `space_organization_cell_value(space_id) -> Option<&Value>` 通过 `cell_value` (auto-filter Bottom) 返回 latest cas-register value
+    - `space_is_destroyed(space_id) -> bool` 检查 destroy.v1 cell 是不是 `Value(_)` (任何非 None / Bottom 都视为 destroyed)
+  - **5 新 unit tests** in `reducer::tests`:
+    - `space_create_writes_both_structured_cache_and_ordered_log_cell` — 验证 create event 把 owner/title 写到 `space_states[space_id]` AND 把同一信息 append 到 cells.create.v1 ordered-log
+    - `space_update_writes_organization_cell_with_cas_register_semantics` — 验证 update event 把 latest owner+title+updated_at 写到 organization cas-register
+    - `space_destroy_writes_destroy_cell_and_marks_cache_deleted` — 验证 destroy event 让 `space_is_destroyed()` true 同时 `space_states.deleted = true`
+    - `space_create_log_appends_on_repeated_create_events` — 验证 ordered-log 累积不是 latest-wins (与 cas-register 区别)
+    - `space_organization_cell_returns_none_for_uncreated_space` — helpers 对未创建空间返 None / false (不 panic)
+  - **依赖关系**: 不删 `space_states` field 因为 `routing/index.rs` 仍读它；删除是后续工作（先迁所有 consumers，再删字段）。
+  - lib `111/111 → 116/116` pass。
+  - **post-十三轮 双层架构总结**:
+    - read_receipt_policies (CasRegister) ✅ 删旧字段，纯 cells
+    - memberships (FSM) ✅ 双层 (cells + members structured cache)
+    - space_states (mixed: ordered-log + cas-register) ✅ 双层 (cells + space_states structured cache)
+    - durable-event-only fields (messages / reactions / read_markers / entities / relations / redactions) — spec 无 cell_family 声明，按 spec 应保持 structured 不迁移
+
+- **2026-05-09 十二轮 激进模式** — **JWS replay protection (HLC-window)**：
+  - **设计选择**: 用 `Move.hlc`/`Anchor.hlc` 物理时间作为 freshness anchor。这两个字段在 `canonical_bytes_for_id` 内 → 在 JWS 签名负载里 → 攻击者无法在不破坏签名的情况下篡改它们。**对比** `MoveSignature.created_at` 是 envelope 字段但不在签名里，可以被攻击者随意改 — 我们故意不信它。
+  - 新 `AppConfig::jws_replay_window_seconds: u64` 字段 (env `SERVERX_JWS_REPLAY_WINDOW_SECONDS`, 默认 300s = 5 分钟。0 = 完全关闭，dev / tests 用)。
+  - 新 `pub fn verify_replay_window(hlc: &Hlc, window_seconds: u64) -> Result<(), String>` 在 `src/jws_verify.rs`。+ test-only `verify_replay_window_at(..., now: DateTime<Utc>)` 注入 wall-clock。算法：解析 HLC 12-hex physical-ms 前缀 → `DateTime::from_timestamp_millis` → 计算 delta = now - signed_at → window=300s → if delta > window: "too old" → if -delta > window: "too far in future" → else: Ok。
+  - `submit_move` 在 `verify_move` (含 JWS crypto verify) 通过后调用 `verify_replay_window(&move_obj.hlc, ...)` — JWS verify 已经保证 Move.hlc 没被篡改。
+  - `submit_anchor` 在 `apply_anchor` 之前先做 `verify_replay_window(&anchor.hlc, ...)` — anchor.hlc 在 anchorer_sig 签名负载里。
+  - `AnchorerWorker::sign_pending_for_space` 在 step 5 (deterministic_order + per-Move verify) 中按 Move 检查 replay window — 长期 pending 的 Move 如果 hlc 已老化超过 window 会被 drop 而不是被 anchor 上链。
+  - **5 unit tests** in `jws_verify::tests`:
+    - `replay_window_zero_seconds_disables_check_for_any_hlc`
+    - `replay_window_accepts_hlc_within_bounds`
+    - `replay_window_rejects_stale_hlc` (1h 旧)
+    - `replay_window_rejects_future_hlc` (1h 未来 — 防 clock-skew 攻击)
+    - `replay_window_accepts_hlc_at_exact_boundary` (恰 300s — 边界条件 delta == window 应通过；用 `from_timestamp_millis` 对齐避免 ns 精度漂移)
+  - **3 integration tests** in `tests/move_anchor_wire.rs`:
+    - `submit_move_rejects_stale_hlc_with_replay_window_reason` — 1h 旧 hlc → state="rejected"，reason 含 `replay_window` + `too old`
+    - `submit_move_rejects_future_hlc` — 1h 未来 → reject + `future`
+    - `submit_move_accepts_current_hlc_under_replay_window` — now → state="pending"
+  - 测试用 `replay_window_test_config()` (window=300, dev_mode=true 保留 dev-login 取 token); 其他既有测试 `test_config()` 用 window=0 保留旧 fixed-time fixture 兼容 (`0189c4d2af00...` = July 2023 hlc，否则全 reject)。
+  - **双重防护**: Move.id 是 content-addressed sha256(canonical_bytes) → MoveStore.put_pending 是 idempotent → 相同 Move 重发自然 dedup (即使 hlc 旧也是 idempotent 的 no-op)；hlc-window 防护**截获后短时间内**的 replay 利用窗口。Server restart 后 MoveStore 清空，hlc-window 仍然防护。
+  - lib `106/106 → 111/111` + move_anchor_wire `14/14 → 17/17` pass。
+  - **剩余**: nonce-based dedup cache (依赖 store-id idempotency 已经够用，spec 不强制) ;不同 cell-family 差异化 window (high-stakes anchorer cell 60s vs messages 5min) — 都是 hardening 不阻塞 production。
+
+- **2026-05-09 十一轮 激进模式** — **T7-9 production Ed25519 JWS verify**：
+  - 新模块 `src/jws_verify.rs` (~290 行，6 unit tests) 含 `pub fn verify_jws_ed25519(canonical_bytes, jws, vm, issuer, &state) -> Result<(), String>` 完整 RFC 7515 §3.2/§5.2 verifier:
+    1. Detached shape parse (`<header>..<sig>`，3 段，payload 段空，sig 段非空且非 zero-sentinel)
+    2. Header b64u decode + alg=EdDSA 检查
+    3. Signature b64u decode → 64 字节 → `ed25519_dalek::Signature::from_bytes`
+    4. `state.did_resolver.lock().resolve_did(&did)` 解析 verification_method 的 DID 部分
+    5. DidDocument.verification_methods 三策略 lookup (full URL / fragment-only / single-key fallback for did:key)
+    6. `decode_ed25519_multibase`: z-prefix strip → `bs58::decode` → 0xed 0x01 multicodec varint check → 32 字节 raw key → `VerifyingKey::from_bytes`
+    7. RFC 7515 §5.2 signing_input 重组 `BASE64URL(header) || '.' || BASE64URL(canonical_bytes)`
+    8. `public_key.verify(signing_input.as_bytes(), &signature)` 真 Ed25519 验签
+  - 新 picker `routing::move_anchor::select_jws_verifier(state) -> impl Fn(&[u8],&str,&str,&str) -> Result<(),String> + Copy`：闭包捕 `&AppState`，按 `state.config.development_mode` 在 `verify_jws_shape` (dev) / `verify_jws_ed25519` (prod) 之间分发。`Copy` bound 满足 `apply_anchor`'s `F: Copy` 要求 (因为 `&AppState: Copy`)。
+  - `submit_move` / `submit_anchor` / `AnchorerWorker::sign_pending_for_space` 三处都改用 `select_jws_verifier(state)`，硬编码 `verify_jws_shape` 全部清除。
+  - 新依赖：`ed25519-dalek = "2.1.1"` + `bs58 = "0.5.1"`。
+  - **6 unit tests** (jws_verify::tests):
+    - `round_trip_multibase_decode_recovers_public_key`
+    - `decode_rejects_wrong_multicodec_prefix` (用 secp256k1 multicodec 0xe7 → 拒绝)
+    - `decode_rejects_missing_z_prefix`
+    - `parse_detached_jws_accepts_canonical_shape`
+    - `parse_detached_jws_rejects_non_empty_payload`
+    - `parse_detached_jws_rejects_too_few_segments`
+  - **4 integration tests** (move_anchor_wire 直接调 `soland::jws_verify::verify_jws_ed25519`，不走 HTTP — production 配置下 dev-login 关闭，无法取 token):
+    - `production_verifier_accepts_real_ed25519_did_key_signature` (deterministic seed [7;32] → SigningKey → encode_ed25519_multibase → did:key URL → 真签名 → 验证通过)
+    - `production_verifier_rejects_tampered_signature` (翻 sig 第一字节 → ed25519-dalek `verify_strict` 失败 → reject)
+    - `production_verifier_rejects_signature_over_different_payload` (签 payload A 验 payload B → 拒绝，证明 verifier 真绑 canonical_bytes 不只是 shape)
+    - `production_verifier_rejects_unknown_verification_method` (did:web:unreachable.example#k1 → resolve 失败 → reject)
+  - lib `100/100 → 106/106` + move_anchor_wire `10/10 → 14/14` pass。
+  - **生产部署 next steps**: service_did 的 DID Document 需要注册到 starid / DID resolver chain (现在 `did:web:soland.local` 解析需要 HTTP fetch); HW-backed signer (HSM / TPM 集成); JWS replay protection (created_at + nonce window 检查) 是独立的下一步。
+
+- **2026-05-09 十轮 激进模式** — **events.subscribe 改为 NDJSON 长连接流式响应**：
+  - **架构**: 新 `tokio::sync::broadcast::Sender<EventNotification>` 字段加到 AppState (capacity 1024)；`EventNotification { space_id, cursor, event_payload }` 类型；`AppState::new` 初始化 `broadcast::channel(1024).0`。
+  - **写端**: `routing::projection::project_accepted_operations` 在每个 accepted event 落地后调 `state.event_broadcast.send(...)` 广播；`send` 返回 `Err` 仅当无活跃 receiver — 不是 error path（无人订阅是稳态）。
+  - **读端**: `events_subscribe` 重写流式：(1) `subscribe()` 拿 receiver (在序列化历史 frames 前 — 防止漏掉历史与订阅之间到达的事件)，(2) `async_stream::stream!` 异步生成器 yield NDJSON 行 (`Bytes`)，调 `res.stream(stream.boxed())` 让 Salvo 走 `ResBody::Stream` 输出 chunked。
+  - **流逻辑**: 历史 frames → `catchup_complete` → tokio::select 循环 (broadcast recv / heartbeat tick / max_duration deadline)：
+    - `Ok(notification)` 通过 space_filter set 过滤后 yield `kind=event` frame
+    - `Err(RecvError::Lagged(n))` → yield `kind=dropped, skipped=n, reason=broadcast_lagged` (告诉 client 重 sync)
+    - `Err(RecvError::Closed)` → break (server shutdown)
+    - heartbeat tick → yield `kind=heartbeat, ts=...`
+    - deadline 到 → yield `kind=heartbeat, stream_closing=true` 后 break
+  - **可调参数**: `max_duration_ms` query param (default 60s, max 600s) + `heartbeat_ms` (default 15s, min 100ms)。
+  - **新依赖**: `bytes = "1.10.1"` (Salvo `res.stream` 要 `Into<BytesFrame>`)，`futures-util = "0.3.31"` (`StreamExt::boxed` / Stream combinators)，`async-stream = "0.3.6"` (`stream!` async-generator 宏)。
+  - **2 集成测试**:
+    - `events_subscribe_streams_live_event_then_closes_at_deadline` — 主路径：spawn writer 协程 wait 150ms 后 POST `/api/v1/messages/send`，`messages/send` 触发 `project_accepted_operations` → broadcast → subscriber 收到 NDJSON `kind=event` frame。验证 frame 顺序 (`catchup_complete` 在前，`event` / `heartbeat` 在后) + content-type `application/x-ndjson`。
+    - `events_subscribe_emits_close_heartbeat_at_deadline` — idle 流 deadline 后正常关闭，发出 `stream_closing=true` heartbeat。
+  - **测试用 demo space**: 这两个测试用 pre-seeded `cx:space:0196419b-0000-7000-8000-000000000000` (公开 + alice 是 member) 因为 `space_id_accessible` 在 events_subscribe 路径里 enforce；其他 Move/Anchor 测试用不同 space (那条路径不走 access check)。
+  - lib `100/100` + move_anchor_wire `8/8 → 10/10` pass。
+  - **剩余**: 真生产长连接需要反向代理 buffer 配置 (Nginx `proxy_buffering off` 等) + Salvo connection-keepalive 调参；`epoch_rotation` / `unauthorized` / `resync_required` 等 mid-stream control frames 需要专用触发器（不是 broadcast，是状态变化触发的，比如 anchorer cell 改变 / token 失效 / large lag 检测）。
+
+- **2026-05-09 九轮 激进模式** — **memberships 迁移到 cells + 结构化 cache 双层**：
+  - **完整删除** `pub memberships: BTreeMap<String, BTreeMap<String, MembershipState>>` + `pub banned_members: BTreeMap<String, BTreeSet<String>>` + `pub knocking_members: BTreeMap<String, BTreeSet<String>>` 三个旧字段。
+  - **替换为单一** `pub members: BTreeMap<(String, String), MembershipState>`（flat keying = (space_id, actor_did)，更清晰）。
+  - `MembershipState` 加 `state: String` 字段（镜像 FSM 状态，权威源在 cells map）。
+  - `apply_membership` 同时写两层：
+    1. `members[(space_id, actor)] = MembershipState { state, role, joined_at, updated_at, ... }` — side-band data + FSM mirror
+    2. `cells[cx:cell:cx.component.member.state.v1:<actor>] = CellState::Value(state)` — FSM 权威源
+  - FSM 表扩展 (`reducer/lattice_kinds.rs::build_sdk_cell_registry`)：原 5 转换 → 12 转换覆盖完整生命周期：
+    - 邀请：invited→{join, leave}
+    - 敲门：knock→{join, leave}
+    - 已加入：join→{leave, kick, ban}
+    - 重入：kick→{invited, knock}, leave→{invited, knock}, ban→invited（unban）
+  - 新 query helpers：
+    - `members_in_state(space, state) -> Vec<&MembershipState>` — 替代 banned_members BTreeSet 的查询路径（`members_in_state(space, "ban")`）+ knocking_members（`members_in_state(space, "knock")`）
+    - `member(space, actor) -> Option<&MembershipState>` — 单 entry 查询
+    - `member_fsm_state(actor) -> Option<String>` — 直接读 cells map 拿 FSM 状态（权威源）
+    - `members_of_space()` 保留 legacy 语义 (filter `state="join"`) — 行为等价于旧字段（旧字段只在 JOIN event 时插入）
+  - `unban` event 现在会把状态 set 成 `invited`（per FSM `ban→invited` 转换），不只是清除 `banned_members`。语义更精准。
+  - `routing/index.rs::membership_count` 改用 flat-map filter (`state="join"`)。
+  - 3 个新 unit tests：`membership_join_writes_both_structured_cache_and_fsm_cell` / `ban_then_unban_round_trips_through_fsm_states` / `knock_state_visible_in_members_in_state_query`。
+  - `routing/projection.rs` membership-related sites: 0 references (内部 `apply_membership` 自动适配；外部消费者只 `routing/index.rs` 一处)。
+  - lib `97/97 → 100/100` pass + move_anchor_wire `8/8` pass。
+  - **架构成果**：FSM 状态有了 cells map 权威源（cell-keyed），结构化 side-band data 在 `members` cache 里，两层不互斥（`members.state` mirror cell value）。`banned_members` / `knocking_members` 这种"特殊状态额外 BTreeSet" 全部消失 — 通过 `members_in_state` query 派生。
+  - 剩余：`space_states` 同样双层迁移 (mixed cell families + title/owner side-band)，本轮没动。
+
+- **2026-05-09 八轮 激进模式** — **ProjectionState::cells map 迁移启动**：
+  - **Inventory**：跨 11 个 structured 字段，仅 4 个对应 spec 声明的 `cell_family` (read_receipt_policies / memberships / banned_members / space_states 的部分内容)；其他 6 个 (messages / reactions / read_markers / entities / relations / redactions) 是 durable-event 投影，无 cell_family 声明，按 spec 应保持 structured。
+  - 新增 `pub cells: BTreeMap<CellRef, CellState>` 字段到 `ProjectionState` (`src/reducer.rs`)。
+  - 新增 accessor `ProjectionState::cell(&CellRef) -> Option<&CellState>` + `cell_value(&CellRef) -> Option<&Value>` (filter Bottom)；helper `read_receipt_policy_cell_value(space_id) -> Option<&Value>` 用于具名 cell 查询。
+  - 新方法 `ProjectionState::reload_cells_from_store(space_id, &dyn CellStore, &dyn CellRegistry) -> Result<(), StoreError>` 读 CellStore + lattice.join 写回 cells map。
+  - **删除** 旧 `pub read_receipt_policies: BTreeMap<String, ReadReceiptPolicySnapshot>` 字段 + `ReadReceiptPolicySnapshot` struct。
+  - `routing::move_anchor::submit_anchor` 在 `apply_anchor` 成功后调用 `proj.reload_cells_from_store(...)` 刷新该 Space 的 cells map。
+  - `crate::anchorer::AnchorerWorker::sign_pending_for_space` 同样在 apply_anchor 成功后调用 reload — 让 anchorer 推进的 Anchor 也能立即在 read 路径上看到。
+  - `routing::projection::project_read_receipt_policy` (durable-event 路径) 改写：直接 synth 一个 CellState::Value 到 cells map 的对应 CellRef，让 durable-event 与 Move/Anchor 两个写入路径**统一到 cells map 这一个目的地**。
+  - `routing::events::effective_read_receipt_policy_for_space` (用于 cx.receipt.read fanout 的 fast-path) 改用 `proj.cell_value(&cell_id)` 查询；durable-event 冷启 fallback 路径保留。
+  - 3 个新 unit tests in `reducer::tests`：`cell_value_returns_none_for_unwritten_cell` / `cell_value_returns_none_for_bottom_state` / `read_receipt_policy_cell_value_helper_extracts_canonical_value`；1 个新 integration test `anchorer_pass_populates_projection_cells_map`：完整端到端 (submit Move → trigger anchorer → assert `cells[member_cell] = Value("join")`)。
+  - lib `94/94 → 97/97` + move_anchor_wire `7/7 → 8/8` pass。
+  - **剩余迁移**: memberships (FSM cell + role/joined_at side-band) / banned_members / knocking_members / space_states (mixed cell families + title side-band) 都需要双层架构 (cells map + structured cache)，本轮没动。durable-event-only 字段 (messages / reactions / read_markers / entities / relations / redactions) 按 spec 应该 stay structured，不迁移。
 
 - **2026-05-09 七轮 激进模式** — **MAL-3 Anchorer 签发 worker 落地** (单 DID 模式)：
   - 新文件 `src/anchorer.rs`：`AnchorerWorker { service_did }` + `sign_pending_for_space(state, space_id, max_moves) -> Result<Option<AnchorerOutcome>, AnchorerError>`，9 步流水线匹配 spec event-auth-state-resolution.md §3-§4：(1) `is_authorized_for` 读 `cx.component.anchorer.v1` cell value（CasRegister，shape="single_did" + did 匹配 service_did，genesis Space 隐式信任 service_did），(2) `MoveStore::list_pending_for_anchorer`，(3) `AnchorStore::list_leaves` + `effective_anchor_view`，(4) `read_effective_state` 拼 pre_state map（重用 SDK lattice resolve + join），(5) `deterministic_order` + `verify_move` 逐 Move 判定，(6) `predict_post_state_root` 本地模拟（克隆现有 ops + 新 effects → per-cell lattice.join → compute_state_root），(7) `Anchor` 构造（predecessor_refs=current leaves, frontier=pred_frontier ∪ accepted moves, state_root=predicted）→ derive_id → 占位 sig 重签 over canonical_bytes_for_id，(8) `apply_anchor` SDK 端到端，(9) 返回 `AnchorerOutcome { anchor_id, accepted_move_ids, rejected_moves, post_state_root }`。

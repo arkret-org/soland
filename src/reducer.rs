@@ -31,7 +31,11 @@ pub mod registry;
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use contrix_sdk::Operation;
+use contrix_sdk::{
+    CellRef, Operation, SpaceId,
+    lattice::CellState,
+    state_res::{CellRegistry, CellStore, StoreError},
+};
 use serde_json::Value;
 
 use crate::hlc::ServerHlc;
@@ -49,30 +53,57 @@ pub struct ProjectionState {
     pub entities: BTreeMap<String, EntityState>,
     /// Relations keyed by relation_id. LWW by HLC.
     pub relations: BTreeMap<String, RelationState>,
-    /// Memberships keyed by (space_id, member_did). LWW.
-    pub memberships: BTreeMap<String, BTreeMap<String, MembershipState>>,
-    /// Banned members keyed by space_id. Set per spec event-auth-state-resolution.
-    pub banned_members: BTreeMap<String, BTreeSet<String>>,
-    /// Knocking members keyed by space_id. Cleared when the actor joins or leaves.
-    pub knocking_members: BTreeMap<String, BTreeSet<String>>,
+    /// C10.B (2026-05-09 九轮): structured side-band cache keyed by
+    /// `(space_id, actor_did)`. Holds the FSM state value plus `role` /
+    /// `joined_at` / `updated_at` side-band data that doesn't fit in the
+    /// `cx.component.member.state.v1` FSM cell itself. Reads should go
+    /// through helpers like [`ProjectionState::members_of_space`] /
+    /// [`ProjectionState::members_in_state`] / [`ProjectionState::member`]
+    /// rather than touching this directly.
+    ///
+    /// Replaces the legacy `memberships` (nested BTreeMap) +
+    /// `banned_members` (BTreeSet) + `knocking_members` (BTreeSet)
+    /// trio — banned / knocking are now derived via `members_in_state`
+    /// against the FSM state field, not stored as separate fields.
+    pub members: BTreeMap<(String, String), MembershipState>,
     /// Space lifecycle state keyed by space_id.
     pub space_states: BTreeMap<String, SpaceState>,
     /// Redacted event IDs (tombstones).
     pub redactions: BTreeSet<String>,
-    /// C14: Effective `cx.space.read_receipt_policy` per Space (cas-register
-    /// semantics — last-writer-wins by HLC). Populated by
-    /// `project_accepted_operations` when it sees a `cx.space.read_receipt_policy`
-    /// state event. Read by `routing::events::effective_read_receipt_policy_for_space`
-    /// (preferred fast-path; falls back to durable Event scan if absent).
-    pub read_receipt_policies: BTreeMap<String, ReadReceiptPolicySnapshot>,
-}
-
-#[derive(Clone, Debug)]
-pub struct ReadReceiptPolicySnapshot {
-    pub disclosure: String,
-    pub visibility: String,
-    pub scope_overrides_allowed: bool,
-    pub updated_at: chrono::DateTime<chrono::Utc>,
+    /// C10.B (2026-05-09 八轮 激进模式): per-cell effective state
+    /// populated from the Move/Anchor pipeline's `apply_anchor` write-back.
+    ///
+    /// Keyed by canonical `CellRef` (e.g.
+    /// `cx:cell:cx.component.space.read_receipt_policy.v1:<space_id>`).
+    /// Each successful apply_anchor (`routing::move_anchor::submit_anchor` or
+    /// `crate::anchorer::AnchorerWorker`) calls
+    /// [`ProjectionState::reload_cells_from_store`] to refresh this map for
+    /// the affected Space. Read handlers query via [`ProjectionState::cell`]
+    /// / [`ProjectionState::cell_value`] for cell-keyed state lookups
+    /// instead of scanning the durable Event store.
+    ///
+    /// **Migration status (2026-05-09 十三轮)**: this map is the canonical
+    /// source for all cell-driven state in the Move/Anchor pipeline.
+    /// Completed migrations:
+    ///   - `read_receipt_policies` (CasRegister) — old BTreeMap deleted; read
+    ///     path uses `cell_value`.
+    ///   - `memberships` / `banned_members` / `knocking_members` (FSM) —
+    ///     replaced by flat `members: BTreeMap<(String, String),
+    ///     MembershipState>` cache + per-actor `cx.component.member.state.v1`
+    ///     FSM cell.
+    ///   - `space_states` (mixed: ordered-log + cas-register) — kept as
+    ///     structured `space_states` side-band cache (server-side
+    ///     `created_at`/`updated_at`/`deleted` flag) BUT every
+    ///     `apply_space_lifecycle` now also writes one of:
+    ///     `cx.component.space.create.v1` (ordered-log, append) /
+    ///     `cx.component.space.organization.v1` (cas-register, latest
+    ///     metadata) / `cx.component.space.destroy.v1` (cas-register,
+    ///     terminal). Helpers: `space_create_log` / `space_organization_cell_value`
+    ///     / `space_is_destroyed` query cells directly.
+    /// Durable-event-only fields (`messages` / `reactions` / `read_markers`
+    /// / `entities` / `relations` / `redactions`) stay structured per spec
+    /// (those event kinds have no `cell_family` declaration).
+    pub cells: BTreeMap<CellRef, CellState>,
 }
 
 #[derive(Clone, Debug)]
@@ -139,6 +170,12 @@ pub struct RelationState {
 pub struct MembershipState {
     pub member: String,
     pub space_id: String,
+    /// Canonical FSM state value (one of `invited` / `join` / `leave` /
+    /// `kick` / `ban` / `knock`). Authoritative source is the
+    /// `cx.component.member.state.v1` cell in
+    /// [`ProjectionState::cells`]; this field is the structured-cache
+    /// mirror updated on every membership transition.
+    pub state: String,
     pub role: String,
     pub joined_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
@@ -217,6 +254,52 @@ impl ProjectionState {
         Self::default()
     }
 
+    /// Look up a cell's resolved state by its canonical [`CellRef`]. Returns
+    /// `None` if the cell hasn't been observed (no anchored Move ever wrote
+    /// to it). The returned `CellState` is either `Value(_)` (lattice
+    /// resolved successfully) or `Bottom(_)` (concurrent conflict requires
+    /// recovery).
+    pub fn cell(&self, cell_id: &CellRef) -> Option<&CellState> {
+        self.cells.get(cell_id)
+    }
+
+    /// Look up the JSON value stored in a cell. Returns `None` for absent
+    /// cells AND for cells in `Bottom` state — callers that need to
+    /// distinguish (e.g. UI showing "this state is in conflict") should
+    /// use [`ProjectionState::cell`] directly.
+    pub fn cell_value(&self, cell_id: &CellRef) -> Option<&Value> {
+        match self.cells.get(cell_id)? {
+            CellState::Value(v) => Some(v),
+            CellState::Bottom(_) => None,
+        }
+    }
+
+    /// Reload the cells map for one Space from the SDK CellStore + apply
+    /// each cell's lattice. Called after every successful `apply_anchor`
+    /// in the Move/Anchor pipeline (`routing::move_anchor::submit_anchor`
+    /// + `crate::anchorer::AnchorerWorker`) to keep this projection cache
+    /// in sync with anchored cell state.
+    ///
+    /// This is the only write path into [`ProjectionState::cells`]; the
+    /// durable-Event projection path (`apply()`) does NOT touch cells —
+    /// state cells are exclusively a Move/Anchor surface per spec.
+    pub fn reload_cells_from_store(
+        &mut self,
+        space_id: &SpaceId,
+        cell_store: &dyn CellStore,
+        cell_registry: &dyn CellRegistry,
+    ) -> Result<(), StoreError> {
+        for cell in cell_store.list_cells(space_id)? {
+            let ops = cell_store.anchored_ops_for_cell(space_id, &cell)?;
+            let binding = cell_registry
+                .resolve(space_id, &cell)
+                .map_err(|e| StoreError::Backend(format!("cell registry resolve: {e}")))?;
+            let resolved = binding.lattice.join(&cell, &ops);
+            self.cells.insert(cell, resolved);
+        }
+        Ok(())
+    }
+
     /// Apply a single operation and return the effect.
     ///
     /// Direct match-on-canonical-kind dispatch to per-domain helpers. As
@@ -259,8 +342,8 @@ impl ProjectionState {
                 self.apply_container_position(operation, now)
             }
             Some(kind) if is_membership_kind(kind) => self.apply_membership(operation, now, kind),
-            Some(CX_SPACE_CREATE) | Some(CX_SPACE_UPDATE) | Some(CX_SPACE_DESTROY) => {
-                self.apply_space_lifecycle(operation, now)
+            Some(kind @ (CX_SPACE_CREATE | CX_SPACE_UPDATE | CX_SPACE_DESTROY)) => {
+                self.apply_space_lifecycle(operation, now, kind)
             }
             // All cell-state events (cx.space.policy / cx.space.read_receipt_policy /
             // cx.consent.* / cx.member.state / cx.space.* facets) are routed via
@@ -856,15 +939,16 @@ impl ProjectionState {
         now: chrono::DateTime<chrono::Utc>,
         kind: &'static str,
     ) -> ProjectionEffect {
-        // Trust the canonical kind we matched on rather than re-deriving from
-        // payload — kick/leave/ban/unban/knock are distinct events and must
-        // not be collapsed by ad-hoc payload sniffing.
-        let action = match kind {
+        // C10.B (2026-05-09 九轮): map the durable cx.membership.* event
+        // kind to its canonical FSM state in `cx.component.member.state.v1`.
+        // The `unban` event clears a ban → returns the member to `invited`
+        // per the FSM transition table (ban→invited).
+        let new_state = match kind {
             crate::kinds::CX_MEMBERSHIP_JOIN => "join",
             crate::kinds::CX_MEMBERSHIP_LEAVE => "leave",
             crate::kinds::CX_MEMBERSHIP_KICK => "kick",
             crate::kinds::CX_MEMBERSHIP_BAN => "ban",
-            crate::kinds::CX_MEMBERSHIP_UNBAN => "unban",
+            crate::kinds::CX_MEMBERSHIP_UNBAN => "invited",
             crate::kinds::CX_MEMBERSHIP_KNOCK => "knock",
             _ => return ProjectionEffect::Ignored,
         };
@@ -877,68 +961,57 @@ impl ProjectionState {
             .unwrap_or("")
             .to_owned();
         let space_id = operation.space_id.to_string();
+
+        if member.is_empty() {
+            return ProjectionEffect::Ignored;
+        }
+
+        // Side-band data: `role` lives outside the FSM cell and is captured
+        // here for the structured cache. `joined_at` is set on the first
+        // `join` transition; subsequent transitions preserve the original.
         let role = operation
             .payload
             .get("role")
             .and_then(|v| v.as_str())
             .unwrap_or("member")
             .to_owned();
+        let key = (space_id.clone(), member.clone());
+        let joined_at = self
+            .members
+            .get(&key)
+            .map(|m| m.joined_at)
+            .unwrap_or(now);
 
-        if member.is_empty() {
-            return ProjectionEffect::Ignored;
-        }
+        // Update the structured cache with side-band + FSM state mirror.
+        self.members.insert(
+            key.clone(),
+            MembershipState {
+                member: member.clone(),
+                space_id: space_id.clone(),
+                state: new_state.to_owned(),
+                role,
+                joined_at,
+                updated_at: now,
+            },
+        );
 
-        match kind {
-            crate::kinds::CX_MEMBERSHIP_LEAVE
-            | crate::kinds::CX_MEMBERSHIP_KICK
-            | crate::kinds::CX_MEMBERSHIP_BAN => {
-                if let Some(space_members) = self.memberships.get_mut(&space_id) {
-                    space_members.remove(&member);
-                }
-                if kind == crate::kinds::CX_MEMBERSHIP_BAN {
-                    self.banned_members
-                        .entry(space_id.clone())
-                        .or_default()
-                        .insert(member.clone());
-                }
-            }
-            crate::kinds::CX_MEMBERSHIP_UNBAN => {
-                // Lift the ban marker but do NOT auto-rejoin. A subsequent
-                // join event is required to add membership back.
-                if let Some(banned) = self.banned_members.get_mut(&space_id) {
-                    banned.remove(&member);
-                }
-            }
-            crate::kinds::CX_MEMBERSHIP_KNOCK => {
-                // Knock records intent to join; it does not add membership.
-                self.knocking_members
-                    .entry(space_id.clone())
-                    .or_default()
-                    .insert(member.clone());
-            }
-            crate::kinds::CX_MEMBERSHIP_JOIN => {
-                let membership = MembershipState {
-                    member: member.clone(),
-                    space_id: space_id.clone(),
-                    role,
-                    joined_at: now,
-                    updated_at: now,
-                };
-                self.memberships
-                    .entry(space_id.clone())
-                    .or_default()
-                    .insert(member.clone(), membership);
-                if let Some(knocking) = self.knocking_members.get_mut(&space_id) {
-                    knocking.remove(&member);
-                }
-            }
-            _ => return ProjectionEffect::Ignored,
+        // Synthesize the FSM cell state. Cell ref shape per spec
+        // `cx:cell:cx.component.member.state.v1:<actor_did>` — note the
+        // cell_subject is `actor_id` (per-actor), not (space_id, actor)
+        // composite. The Space scoping is implicit in the CellStore key.
+        if let Ok(cell_id) = contrix_sdk::CellRef::new(format!(
+            "cx:cell:cx.component.member.state.v1:{member}"
+        )) {
+            self.cells.insert(
+                cell_id,
+                CellState::Value(Value::String(new_state.to_owned())),
+            );
         }
 
         ProjectionEffect::MembershipChanged {
             space_id,
             member,
-            action: action.to_owned(),
+            action: new_state.to_owned(),
         }
     }
 
@@ -946,7 +1019,20 @@ impl ProjectionState {
         &mut self,
         operation: &Operation,
         now: chrono::DateTime<chrono::Utc>,
+        kind: &'static str,
     ) -> ProjectionEffect {
+        // C10.B (2026-05-09 十三轮): structured cache + cells map double-write.
+        //
+        // Per spec event-kind-registry, each cx.space.* lifecycle event
+        // writes a distinct cell family with its own lattice:
+        //   cx.space.create  → cx.component.space.create.v1  (ordered-log, singleton)
+        //   cx.space.update  → cx.component.space.organization.v1 (cas-register, singleton)
+        //   cx.space.destroy → cx.component.space.destroy.v1 (cas-register, singleton)
+        //
+        // The structured `space_states` field is the side-band cache —
+        // keeps `created_at` / `updated_at` server-side timestamps and a
+        // simple `deleted` bool that consumers like `routing/index.rs`
+        // already query. Cells map is the protocol-canonical source.
         let action = operation
             .payload
             .get("action")
@@ -954,35 +1040,109 @@ impl ProjectionState {
             .unwrap_or("")
             .to_owned();
         let space_id = operation.space_id.to_string();
+        let owner = operation
+            .payload
+            .get("owner")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned);
+        let title = operation
+            .payload
+            .get("title")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned);
 
+        // Structured cache mirror.
         let space = self
             .space_states
             .entry(space_id.clone())
             .or_insert_with(|| SpaceState {
                 space_id: space_id.clone(),
-                owner: operation
-                    .payload
-                    .get("owner")
-                    .and_then(|v| v.as_str())
-                    .map(ToOwned::to_owned),
-                title: operation
-                    .payload
-                    .get("title")
-                    .and_then(|v| v.as_str())
-                    .map(ToOwned::to_owned),
+                owner: owner.clone(),
+                title: title.clone(),
                 deleted: false,
                 created_at: now,
                 updated_at: now,
             });
+        let is_destroy = matches!(
+            action.as_str(),
+            "delete" | "space.delete" | "destroy" | "space.destroy"
+        ) || kind == crate::kinds::CX_SPACE_DESTROY;
+        if is_destroy {
+            space.deleted = true;
+        }
+        if owner.is_some() {
+            space.owner.clone_from(&owner);
+        }
+        if title.is_some() {
+            space.title.clone_from(&title);
+        }
+        space.updated_at = now;
 
-        match action.as_str() {
-            "delete" | "space.delete" => {
-                space.deleted = true;
-                space.updated_at = now;
+        // Cells map: synth a CellState::Value per the spec cell family
+        // for this canonical kind.
+        match kind {
+            k if k == crate::kinds::CX_SPACE_CREATE => {
+                // ordered-log: append entries. We model the log here as
+                // an array of envelopes; each create event appends. For
+                // most Spaces there's exactly one create entry, but the
+                // spec lattice allows multiple (e.g. spec changes,
+                // re-genesis under recovery).
+                if let Ok(cell_id) = contrix_sdk::CellRef::new(format!(
+                    "cx:cell:cx.component.space.create.v1:{space_id}"
+                )) {
+                    let entry = serde_json::json!({
+                        "owner": owner,
+                        "title": title,
+                        "created_at": now.to_rfc3339(),
+                        "operation_id": operation.operation_id.as_str(),
+                    });
+                    let new_log = match self.cells.get(&cell_id) {
+                        Some(CellState::Value(Value::Array(existing))) => {
+                            let mut log = existing.clone();
+                            log.push(entry);
+                            CellState::Value(Value::Array(log))
+                        }
+                        _ => CellState::Value(Value::Array(vec![entry])),
+                    };
+                    self.cells.insert(cell_id, new_log);
+                }
             }
-            _ => {
-                space.updated_at = now;
+            k if k == crate::kinds::CX_SPACE_UPDATE => {
+                // cas-register: latest value wins. Composite of
+                // owner / title / arbitrary other organization fields
+                // pulled from payload (fields the spec evolves can land
+                // here without changing soland code).
+                if let Ok(cell_id) = contrix_sdk::CellRef::new(format!(
+                    "cx:cell:cx.component.space.organization.v1:{space_id}"
+                )) {
+                    let mut value = serde_json::Map::new();
+                    if let Some(o) = owner.as_ref() {
+                        value.insert("owner".to_owned(), Value::String(o.clone()));
+                    }
+                    if let Some(t) = title.as_ref() {
+                        value.insert("title".to_owned(), Value::String(t.clone()));
+                    }
+                    value.insert(
+                        "updated_at".to_owned(),
+                        Value::String(now.to_rfc3339()),
+                    );
+                    self.cells.insert(cell_id, CellState::Value(Value::Object(value)));
+                }
             }
+            k if k == crate::kinds::CX_SPACE_DESTROY => {
+                // cas-register: terminal {destroyed: true, at: ts}.
+                if let Ok(cell_id) = contrix_sdk::CellRef::new(format!(
+                    "cx:cell:cx.component.space.destroy.v1:{space_id}"
+                )) {
+                    let value = serde_json::json!({
+                        "destroyed": true,
+                        "at": now.to_rfc3339(),
+                        "operation_id": operation.operation_id.as_str(),
+                    });
+                    self.cells.insert(cell_id, CellState::Value(value));
+                }
+            }
+            _ => {}
         }
 
         ProjectionEffect::SpaceLifecycle { space_id, action }
@@ -1055,12 +1215,98 @@ impl ProjectionState {
             .collect()
     }
 
-    /// Get members of a space.
+    /// Get members of a space currently in `state="join"` (the legacy
+    /// `members_of_space` semantic — banned/kicked/left members are
+    /// excluded). For state-specific queries use [`members_in_state`].
     pub fn members_of_space(&self, space_id: &str) -> Vec<&MembershipState> {
-        self.memberships
-            .get(space_id)
-            .map(|m| m.values().collect())
-            .unwrap_or_default()
+        self.members_in_state(space_id, "join")
+    }
+
+    /// All `MembershipState` entries for a Space whose FSM state matches
+    /// `state` (`invited` / `join` / `leave` / `kick` / `ban` / `knock`).
+    /// Replaces the legacy `banned_members` / `knocking_members` BTreeSets:
+    /// query `members_in_state(space, "ban")` / `members_in_state(space, "knock")`.
+    pub fn members_in_state(&self, space_id: &str, state: &str) -> Vec<&MembershipState> {
+        self.members
+            .iter()
+            .filter(|((sid, _), m)| sid == space_id && m.state == state)
+            .map(|(_, m)| m)
+            .collect()
+    }
+
+    /// Look up a single `(space_id, actor_did)` member entry.
+    pub fn member(&self, space_id: &str, actor_did: &str) -> Option<&MembershipState> {
+        self.members
+            .get(&(space_id.to_owned(), actor_did.to_owned()))
+    }
+
+    /// Read the FSM state of a member directly from the cells map.
+    /// Returns `None` if the cell hasn't been written or is in `Bottom`
+    /// state. The cell_subject is the actor_did per spec
+    /// `cx.component.member.state.v1` cell_family declaration.
+    pub fn member_fsm_state(&self, actor_did: &str) -> Option<String> {
+        let cell_id = contrix_sdk::CellRef::new(format!(
+            "cx:cell:cx.component.member.state.v1:{actor_did}"
+        ))
+        .ok()?;
+        self.cell_value(&cell_id)
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned)
+    }
+
+    // ── C10.B (2026-05-09 八轮) cell-keyed query helpers ──
+
+    /// Read the effective `cx.space.read_receipt_policy` value out of the
+    /// cells map. Returns `None` when:
+    ///   - the cell has never been written, OR
+    ///   - the cell is in `Bottom` state (concurrent conflict needs recovery)
+    pub fn read_receipt_policy_cell_value(&self, space_id: &str) -> Option<&Value> {
+        let cell_id = contrix_sdk::CellRef::new(format!(
+            "cx:cell:cx.component.space.read_receipt_policy.v1:{space_id}"
+        ))
+        .ok()?;
+        self.cell_value(&cell_id)
+    }
+
+    // ── C10.B (2026-05-09 十三轮) space lifecycle cell helpers ──
+
+    /// Read the effective `cx.component.space.organization.v1` cas-register
+    /// value (mutable Space metadata: owner, title, updated_at). Returns
+    /// `None` if no `cx.space.update` event has landed for this space, or
+    /// if the cell is in `Bottom` (concurrent admin updates require recovery).
+    pub fn space_organization_cell_value(&self, space_id: &str) -> Option<&Value> {
+        let cell_id = contrix_sdk::CellRef::new(format!(
+            "cx:cell:cx.component.space.organization.v1:{space_id}"
+        ))
+        .ok()?;
+        self.cell_value(&cell_id)
+    }
+
+    /// Read the `cx.component.space.create.v1` ordered-log entries for the
+    /// space's genesis history. Returns `None` for spaces with no create
+    /// events (e.g. before first projection) or `Bottom` state.
+    pub fn space_create_log(&self, space_id: &str) -> Option<&[Value]> {
+        let cell_id = contrix_sdk::CellRef::new(format!(
+            "cx:cell:cx.component.space.create.v1:{space_id}"
+        ))
+        .ok()?;
+        match self.cells.get(&cell_id)? {
+            CellState::Value(Value::Array(entries)) => Some(entries.as_slice()),
+            _ => None,
+        }
+    }
+
+    /// True when the `cx.component.space.destroy.v1` cell has a Value
+    /// (any non-Bottom value indicates the destroy commit landed).
+    /// Equivalent to checking `space_states[space_id].deleted` but reads
+    /// from the protocol-canonical cells map source.
+    pub fn space_is_destroyed(&self, space_id: &str) -> bool {
+        let Ok(cell_id) = contrix_sdk::CellRef::new(format!(
+            "cx:cell:cx.component.space.destroy.v1:{space_id}"
+        )) else {
+            return false;
+        };
+        matches!(self.cells.get(&cell_id), Some(CellState::Value(_)))
     }
 }
 
@@ -1404,5 +1650,302 @@ mod tests {
             .find(|m| m.event_id == "cx:event:msg-1-rev1")
             .unwrap();
         assert_eq!(revision.revision_of.as_deref(), Some("cx:event:msg-1"));
+    }
+
+    // ── C10.B (2026-05-09 八轮) cells map tests ──
+
+    #[test]
+    fn cell_value_returns_none_for_unwritten_cell() {
+        let state = ProjectionState::new();
+        let cell_id = contrix_sdk::CellRef::new(
+            "cx:cell:cx.component.space.read_receipt_policy.v1:cx:space:test".to_owned(),
+        )
+        .unwrap();
+        assert!(state.cell(&cell_id).is_none());
+        assert!(state.cell_value(&cell_id).is_none());
+    }
+
+    #[test]
+    fn cell_value_returns_none_for_bottom_state() {
+        use contrix_sdk::lattice::CellState;
+        let mut state = ProjectionState::new();
+        let cell_id = contrix_sdk::CellRef::new(
+            "cx:cell:cx.component.space.policy.v1:cx:space:test".to_owned(),
+        )
+        .unwrap();
+        // Manually insert a Bottom state — represents concurrent conflict.
+        let bottom = contrix_sdk::Bottom {
+            kind: contrix_sdk::BottomKind::Conflict,
+            cells: vec![cell_id.clone()],
+            move_ids: vec![],
+            anchor_view: None,
+            heads: vec![],
+            details: Some(serde_json::json!({"reason": "concurrent set"})),
+            escalated_at: None,
+        };
+        state.cells.insert(cell_id.clone(), CellState::Bottom(bottom));
+
+        // cell() returns Some(Bottom)
+        assert!(matches!(
+            state.cell(&cell_id),
+            Some(CellState::Bottom(_))
+        ));
+        // cell_value() filters out Bottom.
+        assert!(state.cell_value(&cell_id).is_none());
+    }
+
+    // ── C10.B (2026-05-09 九轮) memberships → cells + structured cache ──
+
+    #[test]
+    fn membership_join_writes_both_structured_cache_and_fsm_cell() {
+        let mut state = ProjectionState::new();
+        let hlc = ServerHlc::new("test");
+
+        state.apply(
+            &make_operation(
+                crate::kinds::CX_MEMBERSHIP_JOIN,
+                "cx:space:test",
+                serde_json::json!({
+                    "member": "did:web:alice",
+                    "role": "admin"
+                }),
+            ),
+            &hlc,
+        );
+
+        // Structured cache populated with state="join" + role="admin".
+        let m = state
+            .member("cx:space:test", "did:web:alice")
+            .expect("member entry should exist after join");
+        assert_eq!(m.state, "join");
+        assert_eq!(m.role, "admin");
+
+        // FSM cell populated.
+        assert_eq!(
+            state.member_fsm_state("did:web:alice").as_deref(),
+            Some("join")
+        );
+
+        // members_of_space (legacy semantics: only `state="join"`) sees Alice.
+        assert_eq!(state.members_of_space("cx:space:test").len(), 1);
+    }
+
+    #[test]
+    fn ban_then_unban_round_trips_through_fsm_states() {
+        let mut state = ProjectionState::new();
+        let hlc = ServerHlc::new("test");
+
+        // join → ban → unban (back to invited) — full FSM lifecycle.
+        for kind in [
+            crate::kinds::CX_MEMBERSHIP_JOIN,
+            crate::kinds::CX_MEMBERSHIP_BAN,
+        ] {
+            state.apply(
+                &make_operation(
+                    kind,
+                    "cx:space:test",
+                    serde_json::json!({"member": "did:web:bob", "role": "member"}),
+                ),
+                &hlc,
+            );
+        }
+
+        // After ban, Bob is in `members_in_state("ban")` and NOT in
+        // `members_of_space()` (which filters by `state="join"`).
+        assert_eq!(state.members_in_state("cx:space:test", "ban").len(), 1);
+        assert_eq!(state.members_of_space("cx:space:test").len(), 0);
+        assert_eq!(state.member_fsm_state("did:web:bob").as_deref(), Some("ban"));
+
+        // Unban → invited (per FSM ban→invited transition).
+        state.apply(
+            &make_operation(
+                crate::kinds::CX_MEMBERSHIP_UNBAN,
+                "cx:space:test",
+                serde_json::json!({"member": "did:web:bob"}),
+            ),
+            &hlc,
+        );
+        assert_eq!(
+            state.member_fsm_state("did:web:bob").as_deref(),
+            Some("invited")
+        );
+        assert_eq!(state.members_in_state("cx:space:test", "ban").len(), 0);
+        assert_eq!(state.members_in_state("cx:space:test", "invited").len(), 1);
+    }
+
+    // ── C10.B (2026-05-09 十三轮) space_states 双层 tests ──
+
+    #[test]
+    fn space_create_writes_both_structured_cache_and_ordered_log_cell() {
+        let mut state = ProjectionState::new();
+        let hlc = ServerHlc::new("test");
+        state.apply(
+            &make_operation(
+                crate::kinds::CX_SPACE_CREATE,
+                "cx:space:test",
+                serde_json::json!({
+                    "action": "create",
+                    "owner": "did:web:alice",
+                    "title": "Test Space",
+                }),
+            ),
+            &hlc,
+        );
+
+        // Structured cache populated.
+        let space = state
+            .space_states
+            .get("cx:space:test")
+            .expect("space_states entry should exist after create");
+        assert_eq!(space.owner.as_deref(), Some("did:web:alice"));
+        assert_eq!(space.title.as_deref(), Some("Test Space"));
+        assert!(!space.deleted);
+
+        // Ordered-log cell has one entry.
+        let log = state
+            .space_create_log("cx:space:test")
+            .expect("create cell should be a Value(Array)");
+        assert_eq!(log.len(), 1);
+        assert_eq!(
+            log[0].get("owner").and_then(Value::as_str),
+            Some("did:web:alice")
+        );
+    }
+
+    #[test]
+    fn space_update_writes_organization_cell_with_cas_register_semantics() {
+        let mut state = ProjectionState::new();
+        let hlc = ServerHlc::new("test");
+        state.apply(
+            &make_operation(
+                crate::kinds::CX_SPACE_UPDATE,
+                "cx:space:test",
+                serde_json::json!({
+                    "action": "update",
+                    "owner": "did:web:alice",
+                    "title": "Renamed Space",
+                }),
+            ),
+            &hlc,
+        );
+
+        let value = state
+            .space_organization_cell_value("cx:space:test")
+            .expect("organization cell should resolve to Value");
+        assert_eq!(
+            value.get("title").and_then(Value::as_str),
+            Some("Renamed Space")
+        );
+        assert_eq!(
+            value.get("owner").and_then(Value::as_str),
+            Some("did:web:alice")
+        );
+        // updated_at is a server-side timestamp present on every update.
+        assert!(value.get("updated_at").is_some());
+    }
+
+    #[test]
+    fn space_destroy_writes_destroy_cell_and_marks_cache_deleted() {
+        let mut state = ProjectionState::new();
+        let hlc = ServerHlc::new("test");
+        // First create...
+        state.apply(
+            &make_operation(
+                crate::kinds::CX_SPACE_CREATE,
+                "cx:space:test",
+                serde_json::json!({"action": "create", "owner": "did:web:alice"}),
+            ),
+            &hlc,
+        );
+        assert!(!state.space_is_destroyed("cx:space:test"));
+
+        // ...then destroy.
+        state.apply(
+            &make_operation(
+                crate::kinds::CX_SPACE_DESTROY,
+                "cx:space:test",
+                serde_json::json!({"action": "destroy"}),
+            ),
+            &hlc,
+        );
+
+        // Cell-keyed query returns true.
+        assert!(state.space_is_destroyed("cx:space:test"));
+        // Structured cache mirror agrees.
+        let space = state.space_states.get("cx:space:test").unwrap();
+        assert!(space.deleted);
+    }
+
+    #[test]
+    fn space_create_log_appends_on_repeated_create_events() {
+        let mut state = ProjectionState::new();
+        let hlc = ServerHlc::new("test");
+        for owner in ["did:web:alice", "did:web:bob"] {
+            state.apply(
+                &make_operation(
+                    crate::kinds::CX_SPACE_CREATE,
+                    "cx:space:test",
+                    serde_json::json!({"action": "create", "owner": owner}),
+                ),
+                &hlc,
+            );
+        }
+        let log = state.space_create_log("cx:space:test").unwrap();
+        assert_eq!(log.len(), 2, "ordered-log should accumulate entries");
+    }
+
+    #[test]
+    fn space_organization_cell_returns_none_for_uncreated_space() {
+        let state = ProjectionState::new();
+        assert!(state
+            .space_organization_cell_value("cx:space:never_created")
+            .is_none());
+        assert!(state.space_create_log("cx:space:never_created").is_none());
+        assert!(!state.space_is_destroyed("cx:space:never_created"));
+    }
+
+    #[test]
+    fn knock_state_visible_in_members_in_state_query() {
+        let mut state = ProjectionState::new();
+        let hlc = ServerHlc::new("test");
+        state.apply(
+            &make_operation(
+                crate::kinds::CX_MEMBERSHIP_KNOCK,
+                "cx:space:test",
+                serde_json::json!({"member": "did:web:carol"}),
+            ),
+            &hlc,
+        );
+        let knockers = state.members_in_state("cx:space:test", "knock");
+        assert_eq!(knockers.len(), 1);
+        assert_eq!(knockers[0].member, "did:web:carol");
+        assert_eq!(state.member_fsm_state("did:web:carol").as_deref(), Some("knock"));
+    }
+
+    #[test]
+    fn read_receipt_policy_cell_value_helper_extracts_canonical_value() {
+        use contrix_sdk::lattice::CellState;
+        let mut state = ProjectionState::new();
+        let cell_id = contrix_sdk::CellRef::new(
+            "cx:cell:cx.component.space.read_receipt_policy.v1:cx:space:test".to_owned(),
+        )
+        .unwrap();
+        state.cells.insert(
+            cell_id,
+            CellState::Value(serde_json::json!({
+                "disclosure": "required",
+                "visibility": "members",
+                "scope_overrides_allowed": false,
+            })),
+        );
+        let value = state
+            .read_receipt_policy_cell_value("cx:space:test")
+            .expect("policy cell should resolve");
+        assert_eq!(value.get("disclosure").and_then(Value::as_str), Some("required"));
+        assert_eq!(value.get("visibility").and_then(Value::as_str), Some("members"));
+        assert_eq!(
+            value.get("scope_overrides_allowed").and_then(Value::as_bool),
+            Some(false)
+        );
     }
 }

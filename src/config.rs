@@ -13,6 +13,49 @@ pub struct AppConfig {
     pub session_grant_introspection_bearer: Option<String>,
     pub did_resolver_allow_methods: Vec<String>,
     pub starid_webvh_resolver_url: Option<String>,
+    /// C10.B (2026-05-09 十二轮) JWS replay protection window in seconds.
+    /// Move and Anchor signatures whose signed `hlc` is older than
+    /// `now - replay_window_seconds` OR newer than `now +
+    /// replay_window_seconds` are rejected.
+    ///
+    /// Default 300s = 5 min — matches the Contrix spec recommendation in
+    /// `signatures-and-replay.md`. Set to `0` to disable (dev / tests
+    /// using fixed-time fixtures rely on this; production deployments
+    /// MUST keep this > 0).
+    pub jws_replay_window_seconds: u64,
+    /// C10.B (2026-05-09 十四轮) per-cell-family replay-window overrides.
+    /// Some cell families have different freshness requirements than the
+    /// global default — e.g. `cx.component.anchorer.v1` (Space-wide
+    /// authority cell) needs a much tighter window than chat messages.
+    /// When a Move's `effects[]` touch any cell whose family appears in
+    /// this map, the **minimum** override across touched families wins
+    /// (most-restrictive). Falls back to `jws_replay_window_seconds` for
+    /// families without an override.
+    ///
+    /// Production default (built by [`AppConfig::default_replay_overrides`]):
+    /// - `cx.component.anchorer.v1` → 60s (very fresh — Space-wide pause risk)
+    /// - `cx.component.mls.epoch.v1` → 60s (E2EE fork risk)
+    /// - `cx.component.consent.grant.v1` → 120s (capability-equivalent)
+    /// - `cx.component.capability.grant.v1` → 120s
+    /// - `cx.component.capability.delegate.v1` → 120s
+    /// - `cx.component.capability.derived.v1` → 120s
+    pub jws_replay_window_per_family: std::collections::BTreeMap<&'static str, u64>,
+}
+
+impl AppConfig {
+    /// Spec-recommended per-cell-family replay-window overrides (十四轮).
+    /// Tighter windows for safety-critical / authority cells; the global
+    /// default still applies to everything else.
+    pub fn default_replay_overrides() -> std::collections::BTreeMap<&'static str, u64> {
+        let mut m = std::collections::BTreeMap::new();
+        m.insert("cx.component.anchorer.v1", 60);
+        m.insert("cx.component.mls.epoch.v1", 60);
+        m.insert("cx.component.consent.grant.v1", 120);
+        m.insert("cx.component.capability.grant.v1", 120);
+        m.insert("cx.component.capability.delegate.v1", 120);
+        m.insert("cx.component.capability.derived.v1", 120);
+        m
+    }
 }
 
 impl AppConfig {
@@ -45,6 +88,11 @@ impl AppConfig {
         let did_resolver_allow_methods = env_csv("SERVERX_DID_RESOLVER_ALLOW_METHODS")
             .unwrap_or_else(|| vec!["web".to_owned(), "key".to_owned(), "uuid".to_owned()]);
         let starid_webvh_resolver_url = env_non_empty("SERVERX_STARID_WEBVH_RESOLVER_URL");
+        // 0 disables replay-window enforcement; default 5 min per spec.
+        let jws_replay_window_seconds = std::env::var("SERVERX_JWS_REPLAY_WINDOW_SECONDS")
+            .ok()
+            .and_then(|value| value.trim().parse::<u64>().ok())
+            .unwrap_or(300);
 
         Ok(Self {
             bind,
@@ -58,6 +106,8 @@ impl AppConfig {
             session_grant_introspection_bearer,
             did_resolver_allow_methods,
             starid_webvh_resolver_url,
+            jws_replay_window_seconds,
+            jws_replay_window_per_family: Self::default_replay_overrides(),
         })
     }
 }

@@ -50,6 +50,31 @@ pub fn shape_only_jws_verifier_for_anchorer(
     verify_jws_shape(canonical_bytes, jws, verification_method, issuer)
 }
 
+/// T7-9 (2026-05-09 十一轮): pick the JWS verifier based on
+/// `config.development_mode`. Returns a closure of the exact type
+/// `verify_move` / `apply_anchor` expect (`Fn(&[u8], &str, &str, &str)
+/// -> Result<(), String> + Copy`). The closure captures `&AppState` by
+/// reference so the production branch can reach the DID resolver chain;
+/// `&AppState` is `Copy`, so the closure is `Copy` too — required by
+/// `apply_anchor`'s `F: Copy` bound for batch verify_move calls.
+pub fn select_jws_verifier(
+    state: &AppState,
+) -> impl Fn(&[u8], &str, &str, &str) -> Result<(), String> + Copy + use<'_> {
+    move |canonical_bytes, jws, vm, issuer| {
+        if state.config.development_mode {
+            verify_jws_shape(canonical_bytes, jws, vm, issuer)
+        } else {
+            crate::jws_verify::verify_jws_ed25519(
+                canonical_bytes,
+                jws,
+                vm,
+                issuer,
+                state,
+            )
+        }
+    }
+}
+
 /// JWS shape verifier used by `verify_move` / `apply_anchor`. Rejects:
 ///   - empty / sentinel signature segments
 ///   - JWS strings that don't have the `<protected>..<signature>` detached
@@ -168,11 +193,28 @@ pub async fn submit_move(
     let pre_state = std::collections::BTreeMap::new();
     let registry = state.cell_registry.as_ref();
 
-    if let Err(reject) = verify_move(&move_obj, &pre_state, registry, verify_jws_shape) {
+    let verifier = select_jws_verifier(state);
+    if let Err(reject) = verify_move(&move_obj, &pre_state, registry, verifier) {
         return Ok(salvo::writing::Json(SubmitMoveResponse {
             move_id: move_obj.id.as_str().to_owned(),
             state: "rejected".to_owned(),
             reason: Some(reject.to_string()),
+        }));
+    }
+    // C10.B (2026-05-09 十二轮 + 十四轮) replay-window check on Move.hlc.
+    // The hlc is part of canonical_bytes_for_id (signed envelope), so it
+    // can't be forged without invalidating verify_move; we trust it here.
+    // Window=0 (test config) bypasses entirely; per-cell-family overrides
+    // pick the tightest window across the Move's touched cells.
+    if let Err(reject) = crate::jws_verify::verify_replay_window_for_move(
+        &move_obj,
+        state.config.jws_replay_window_seconds,
+        &state.config.jws_replay_window_per_family,
+    ) {
+        return Ok(salvo::writing::Json(SubmitMoveResponse {
+            move_id: move_obj.id.as_str().to_owned(),
+            state: "rejected".to_owned(),
+            reason: Some(format!("replay_window: {reject}")),
         }));
     }
 
@@ -222,13 +264,27 @@ pub async fn submit_anchor(
     let cell_store = state.cell_store.as_ref();
     let registry = state.cell_registry.as_ref();
 
+    // C10.B (2026-05-09 十二轮) replay-window check on Anchor.hlc.
+    // anchor.hlc is part of canonical_bytes_for_id signed by anchorer_sig;
+    // window=0 (test config) bypasses entirely.
+    if let Err(reject) = crate::jws_verify::verify_replay_window(
+        &anchor.hlc,
+        state.config.jws_replay_window_seconds,
+    ) {
+        return Err(AppError::new(
+            ErrorCode::SchemaViolation,
+            format!("anchor replay_window: {reject}"),
+        )
+        .with_status(StatusCode::CONFLICT));
+    }
+    let verifier = select_jws_verifier(state);
     let effect = apply_anchor(
         &anchor,
         move_store,
         anchor_store,
         cell_store,
         registry,
-        verify_jws_shape,
+        verifier,
     )
     .map_err(|e| {
         let code = match &e {
@@ -249,6 +305,21 @@ pub async fn submit_anchor(
         .into_iter()
         .map(|(id, reason)| RejectedMoveEntry { move_id: id.as_str().to_owned(), reason })
         .collect();
+
+    // C10.B (2026-05-09 八轮): refresh ProjectionState::cells from CellStore
+    // for the anchored Space so cell-keyed read paths
+    // (read_receipt_policy / member.state / etc.) see the new effective
+    // state immediately. Lock failures are non-fatal — read paths fall
+    // back to the durable-event scan.
+    if let Ok(mut proj) = state.projection.lock() {
+        if let Err(error) = proj.reload_cells_from_store(
+            &anchor.space_id,
+            cell_store,
+            registry,
+        ) {
+            tracing::warn!(error = %error, "failed to refresh ProjectionState::cells after apply_anchor");
+        }
+    }
 
     json_ok(SubmitAnchorResponse {
         anchor_id: effect.anchor.as_str().to_owned(),

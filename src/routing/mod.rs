@@ -389,6 +389,11 @@ mod operation_conformance_tests {
                     "uuid".to_owned(),
                 ],
                 starid_webvh_resolver_url: None,
+                // Tests use fixed-time HLC fixtures (`0189c4d2af00...`) which
+                // are years in the past relative to wall-clock; disable
+                // replay-window enforcement so they pass.
+                jws_replay_window_seconds: 0,
+                jws_replay_window_per_family: std::collections::BTreeMap::new(),
             },
             Db { pool: None },
         )

@@ -1103,15 +1103,31 @@ pub fn effective_read_receipt_policy_for_space(
     state: &AppState,
     space_id: &str,
 ) -> Option<(String, String, bool)> {
-    // C14 fast path: in-memory ProjectionState cache populated by
-    // `project_read_receipt_policy` when the canonical state event lands.
+    // C10.B (2026-05-09 八轮 激进模式): cell-keyed fast path. The
+    // Move/Anchor pipeline writes `cx.component.space.read_receipt_policy.v1`
+    // resolved CasRegister value into `ProjectionState::cells` after every
+    // apply_anchor; we read directly from there.
     if let Ok(proj) = state.projection.lock() {
-        if let Some(snapshot) = proj.read_receipt_policies.get(space_id) {
-            return Some((
-                snapshot.disclosure.clone(),
-                snapshot.visibility.clone(),
-                snapshot.scope_overrides_allowed,
-            ));
+        let cell_id = contrix_sdk::CellRef::new(format!(
+            "cx:cell:cx.component.space.read_receipt_policy.v1:{space_id}"
+        ))
+        .ok()?;
+        if let Some(value) = proj.cell_value(&cell_id) {
+            let disclosure = value
+                .get("disclosure")
+                .and_then(Value::as_str)
+                .unwrap_or("optional")
+                .to_owned();
+            let visibility = value
+                .get("visibility")
+                .and_then(Value::as_str)
+                .unwrap_or("members")
+                .to_owned();
+            let scope_overrides_allowed = value
+                .get("scope_overrides_allowed")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            return Some((disclosure, visibility, scope_overrides_allowed));
         }
     }
     // Cold-path fallback: linear scan of the durable Event store. Used at

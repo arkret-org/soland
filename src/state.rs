@@ -2,6 +2,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     sync::{Arc, Mutex},
 };
+use tokio::sync::broadcast;
 
 use contrix_sdk::{
     Did, SpaceId, SpaceSearchEntry, SpaceSearchIndex,
@@ -17,6 +18,25 @@ use crate::hlc::ServerHlc;
 use crate::persistence::{MemoryPersistenceStore, PersistenceStore, PgPersistenceStore};
 use crate::reducer::ProjectionState;
 use crate::repo::{MemoryRepoAdapter, PgRepoAdapter, RepoAdapterRef};
+
+/// C10.B (2026-05-09 十轮): event payload broadcast on the
+/// [`AppState::event_broadcast`] channel each time the projection layer
+/// commits a new event. Subscribers in `cx.events.subscribe` filter by
+/// `space_id`, then write the `event_payload` (already in projection-event
+/// JSON shape — same payload used by the unary history slice) to the
+/// NDJSON streaming response wrapped in a `kind="event"` frame.
+#[derive(Clone, Debug)]
+pub struct EventNotification {
+    pub space_id: String,
+    /// Stable cursor for the event — typically the canonical
+    /// `event_id`. Used as the `cursor` field in the streaming frame so
+    /// clients can resume from this point on reconnect.
+    pub cursor: String,
+    /// Projection-event JSON shape (same as `projection_event_json` in
+    /// `routing::sync`). The streaming handler embeds this directly as
+    /// `payload` in the `kind="event"` frame.
+    pub event_payload: Value,
+}
 
 /// Single-process service state. Every long-lived data surface lives behind
 /// `persistence` (a `dyn PersistenceStore`); the few remaining fields are
@@ -45,6 +65,18 @@ pub struct AppState {
     pub anchor_store: Arc<contrix_sdk::state_res::MemoryAnchorStore>,
     pub cell_store: Arc<contrix_sdk::state_res::MemoryCellStore>,
     pub cell_registry: Arc<contrix_sdk::state_res::MemoryCellRegistry>,
+    /// C10.B (2026-05-09 十轮): live event notification channel for
+    /// `cx.events.subscribe` long-poll/SSE streaming. Writers
+    /// (`routing::projection::project_accepted_operations`,
+    /// `routing::move_anchor::submit_anchor`,
+    /// `crate::anchorer::AnchorerWorker`) broadcast each accepted
+    /// projection event; subscribers in `routing::sync::events_subscribe`
+    /// `recv()` on a fresh receiver and write live frames to the NDJSON
+    /// streaming response. Capacity 1024 — enough for a multi-Space
+    /// principal under burst load; receivers that fall behind get
+    /// `RecvError::Lagged` and emit a `dropped` control frame to nudge
+    /// the client to resync.
+    pub event_broadcast: broadcast::Sender<EventNotification>,
     // T0-2c follow-up: migrate the four key-backup scaffold maps below into
     // `state.persistence.key_backups()` once the routing layer's iter/retain/
     // get_mut patterns are rewritten in terms of the trait.
@@ -382,6 +414,10 @@ impl AppState {
             // cell family. Replaces the SDK's built-in defaults (which
             // covered only ~10 generic families).
             cell_registry: Arc::new(crate::reducer::lattice_kinds::build_sdk_cell_registry()),
+            // C10.B (2026-05-09 十轮): live event broadcast for
+            // cx.events.subscribe streaming. Capacity 1024 events; readers
+            // falling behind get `Lagged` and emit `dropped` control frames.
+            event_broadcast: broadcast::channel::<EventNotification>(1024).0,
             key_backups: Arc::new(Mutex::new(BTreeMap::new())),
             key_backup_restore_tickets: Arc::new(Mutex::new(BTreeMap::new())),
             key_backup_restore_executor_runs: Arc::new(Mutex::new(BTreeMap::new())),

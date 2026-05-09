@@ -686,16 +686,31 @@ pub fn build_sdk_cell_registry() -> MemoryCellRegistry {
     // Membership FSM (per spec event-auth-state-resolution.md §5.3): the
     // canonical legal-transition table for `cx.component.member.state.v1`.
     // States use the SDK-canonical noun form (`invited` / `join` / `leave` /
-    // `ban`) — not gerund/past-participle forms — to match the wire shape.
+    // `ban` / `kick` / `knock`) matching the cx.membership.* event kinds in
+    // `crate::kinds`. Initial state is `invited`; transitions cover every
+    // legal lifecycle move plus re-entry (unban → invited, kick → join).
     sdk_registry.register_fsm(
         "cx.component.member.state.v1",
         Some(json!("invited")),
         vec![
+            // Invitation acceptance / decline.
             (json!("invited"), json!("join")),
             (json!("invited"), json!("leave")),
+            // Knock-based join (admin approval) / withdraw.
+            (json!("knock"), json!("join")),
+            (json!("knock"), json!("leave")),
+            // Voluntary departure or admin actions while joined.
             (json!("join"), json!("leave")),
+            (json!("join"), json!("kick")),
             (json!("join"), json!("ban")),
-            (json!("leave"), json!("join")),
+            // Re-entry after kick (no longer banned).
+            (json!("kick"), json!("invited")),
+            (json!("kick"), json!("knock")),
+            // Re-invite / re-knock after voluntary leave.
+            (json!("leave"), json!("invited")),
+            (json!("leave"), json!("knock")),
+            // Unban: bans must be cleared explicitly (re-invite path).
+            (json!("ban"), json!("invited")),
         ],
         BottomMode::Reject,
     );

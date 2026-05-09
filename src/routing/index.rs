@@ -275,12 +275,17 @@ pub async fn index_reducer_debug(depot: &mut Depot, req: &mut Request, res: &mut
             .values()
             .filter(|relation| visible_space_ids.contains(&relation.space_id) && !relation.deleted)
             .count();
+        // C10.B (2026-05-09 九轮): post-flat members map. Count
+        // members in `state="join"` per visible space (was previously
+        // counting all entries in the nested-BTreeMap; the legacy field
+        // only inserted joined members so semantics match).
         let membership_count = projection
-            .memberships
+            .members
             .iter()
-            .filter(|(space_id, _)| visible_space_ids.contains(*space_id))
-            .map(|(_, members)| members.len())
-            .sum::<usize>();
+            .filter(|((space_id, _), m)| {
+                visible_space_ids.contains(space_id) && m.state == "join"
+            })
+            .count();
         let space_state_count = projection
             .space_states
             .values()
