@@ -225,6 +225,19 @@ pub fn router_with_rate_limiter_config(
                 // C10.B MAL-3 (2026-05-09 七轮): admin endpoint that
                 // triggers one anchorer signing pass for a Space.
                 .push(Router::with_path("admin/anchors/sign").post(admin_sign_anchor))
+                // C10.B / C17 follow-up (mid-stream control frame triggers):
+                // admin endpoints that broadcast `resync_required` /
+                // `unauthorized` frames to subscribers of one Space. Used
+                // for ops break-glass after compaction or session
+                // revocation.
+                .push(
+                    Router::with_path("admin/events/resync-required")
+                        .post(admin_emit_resync_required),
+                )
+                .push(
+                    Router::with_path("admin/events/unauthorized")
+                        .post(admin_emit_unauthorized),
+                )
                 .push(Router::with_path("audit/events").get(audit_events))
                 .push(
                     Router::with_path("policies")

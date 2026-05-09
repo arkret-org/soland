@@ -603,10 +603,12 @@ pub fn validate_content_block(block: &serde_json::Value) -> Result<(), &'static 
     let Some(block) = block.as_object() else {
         return Err("content block must be a JSON object");
     };
-    let Some(block_type) = block.get("type").and_then(|value| value.as_str()) else {
-        return Err("content block requires type");
+    // Per spec 2026-05-09 (C21): content_block.type → content_block.kind.
+    // Accept new `kind` only; v1 not yet released → no compat for legacy `type`.
+    let Some(block_kind) = block.get("kind").and_then(|value| value.as_str()) else {
+        return Err("content block requires kind");
     };
-    match block_type {
+    match block_kind {
         "text" | "formatted_text" => {
             if !block
                 .get("text")

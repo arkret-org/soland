@@ -44,7 +44,7 @@ pub async fn authz_check(depot: &mut Depot, req: &mut Request, res: &mut Respons
         }
     };
     // Extract space_id from resource
-    // Resource MUST be either a typed `cx:*:<ulid>` string (per spec M-15) or
+    // Resource MUST be either a typed `cx:*:<uuid>` string (per spec M-15) or
     // an object {"kind":"<kind>","space_id":"<id>"}. The legacy bare
     // `space:<id>` form is no longer accepted; downstream code receives the
     // resource string verbatim and treats the matching `space_id` as the same

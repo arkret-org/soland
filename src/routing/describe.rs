@@ -164,13 +164,13 @@ pub async fn authz_describe() -> JsonResult<Value> {
         "resource_selector_examples": [
             {
                 "kind": "event",
-                "space_id": "cx:space:01JS0SP000000000000000000",
-                "event_id": "cx:event:01JS0EV000000000000000000",
+                "space_id": "cx:space:01904100-0000-7000-8000-000000000000",
+                "event_id": "cx:event:01904101-0000-7000-8000-000000000000",
                 "scope": "exact"
             },
             {
                 "kind": "blob",
-                "space_id": "cx:space:01JS0SP000000000000000000",
+                "space_id": "cx:space:01904100-0000-7000-8000-000000000000",
                 "blob_ref": "cx:blob:sha256:0123456789abcdef",
                 "object_type": "encrypted_backup",
                 "object_ref": "backup-scaffold-current-device",
@@ -196,11 +196,11 @@ pub async fn authz_describe() -> JsonResult<Value> {
         "check_request_example": {
             "actor": "did:web:alice.example",
             "action": "keys.backups.restore",
-            "space_id": "cx:space:01JS0SP000000000000000000",
+            "space_id": "cx:space:01904100-0000-7000-8000-000000000000",
             "resources": [
                 {
                     "kind": "blob",
-                    "space_id": "cx:space:01JS0SP000000000000000000",
+                    "space_id": "cx:space:01904100-0000-7000-8000-000000000000",
                     "blob_ref": "cx:blob:sha256:0123456789abcdef",
                     "object_type": "encrypted_backup",
                     "object_ref": "backup-scaffold-current-device",
@@ -245,7 +245,7 @@ pub async fn policies_describe() -> JsonResult<Value> {
                 "actions": ["keys.backups.restore"],
                 "resource": {
                     "kind": "blob",
-                    "space_id": "cx:space:01JS0SP000000000000000000",
+                    "space_id": "cx:space:01904100-0000-7000-8000-000000000000",
                     "blob_ref": "cx:blob:sha256:0123456789abcdef",
                     "object_type": "encrypted_backup",
                     "object_ref": "backup-scaffold-current-device"

@@ -865,7 +865,7 @@ async fn anchorer_pass_broadcasts_frontier_frame_to_subscribers() {
 
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
-    let app = service(state.clone());
+    let _app = service(state.clone());
 
     // The anchor pipeline writes to space_id() (test-only space). We
     // subscribe to that space — the broadcast filter accepts any

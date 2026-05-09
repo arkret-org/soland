@@ -242,11 +242,11 @@ pub async fn get_key_backup_restore_describe(
         "example_authz_check_request": {
             "actor": "did:web:alice.example",
             "action": "keys.backups.restore",
-            "space_id": "cx:space:01JS0SP000000000000000000",
+            "space_id": "cx:space:01904100-0000-7000-8000-000000000000",
             "resources": [
                 {
                     "kind": "blob",
-                    "space_id": "cx:space:01JS0SP000000000000000000",
+                    "space_id": "cx:space:01904100-0000-7000-8000-000000000000",
                     "blob_ref": "cx:blob:sha256:0123456789abcdef",
                     "object_type": "encrypted_backup",
                     "object_ref": backup.get("backup_id").cloned().unwrap_or_else(|| json!("backup-scaffold-current-device")),
@@ -271,7 +271,7 @@ pub async fn get_key_backup_restore_describe(
                 "actions": ["keys.backups.restore"],
                 "resource": {
                     "kind": "blob",
-                    "space_id": "cx:space:01JS0SP000000000000000000",
+                    "space_id": "cx:space:01904100-0000-7000-8000-000000000000",
                     "blob_ref": "cx:blob:sha256:0123456789abcdef",
                     "object_type": "encrypted_backup",
                     "object_ref": backup.get("backup_id").cloned().unwrap_or_else(|| json!("backup-scaffold-current-device"))

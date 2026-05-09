@@ -39,7 +39,7 @@ use crate::{
 };
 
 use super::AuthArgs;
-use super::util::{query_param, render_error};
+use super::util::query_param;
 
 /// Default page size for the list endpoint when `limit` is absent.
 const DEFAULT_LIST_LIMIT: usize = 100;
@@ -359,14 +359,6 @@ pub async fn admin_list_cells(
         limit,
         offset,
     })
-}
-
-// `render_error` is used implicitly through `AppError::Writer`; the
-// import line above keeps the symbol visible for handlers that want to
-// fall through to the legacy raw-response pattern.
-#[allow(dead_code)]
-fn _ensure_render_error_in_scope(res: &mut Response) {
-    render_error(res, StatusCode::OK, "ok", "ok");
 }
 
 #[cfg(test)]

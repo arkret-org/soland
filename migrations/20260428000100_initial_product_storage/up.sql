@@ -30,7 +30,7 @@ CREATE INDEX IF NOT EXISTS identity_log_events_did_seq_idx
     ON identity_log_events (did, seq);
 
 CREATE TABLE IF NOT EXISTS identity_receipts (
-    receipt_id TEXT PRIMARY KEY,
+    receipt_id UUID PRIMARY KEY,
     did TEXT NOT NULL,
     head_event_hash TEXT,
     issuer TEXT NOT NULL,
@@ -63,7 +63,7 @@ CREATE INDEX IF NOT EXISTS contacts_target_status_idx
     ON contacts (target, status);
 
 CREATE TABLE IF NOT EXISTS spaces (
-    space_id TEXT PRIMARY KEY,
+    space_id UUID PRIMARY KEY,
     title TEXT NOT NULL,
     summary TEXT,
     owner TEXT,
@@ -81,7 +81,7 @@ CREATE INDEX IF NOT EXISTS spaces_discoverability_updated_idx
     WHERE deleted_at IS NULL;
 
 CREATE TABLE IF NOT EXISTS space_members (
-    space_id TEXT NOT NULL,
+    space_id UUID NOT NULL,
     actor TEXT NOT NULL,
     membership TEXT NOT NULL,
     role TEXT,
@@ -98,14 +98,14 @@ CREATE INDEX IF NOT EXISTS space_members_actor_idx
 
 CREATE TABLE IF NOT EXISTS space_aliases (
     alias TEXT PRIMARY KEY,
-    space_id TEXT NOT NULL,
+    space_id UUID NOT NULL,
     payload JSONB NOT NULL DEFAULT '{}'::JSONB,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS space_invites (
-    invite_id TEXT PRIMARY KEY,
-    space_id TEXT NOT NULL,
+    invite_id UUID PRIMARY KEY,
+    space_id UUID NOT NULL,
     inviter TEXT NOT NULL,
     invitee TEXT,
     invite_token_hash TEXT,
@@ -124,12 +124,12 @@ CREATE INDEX IF NOT EXISTS space_invites_invitee_status_idx
     ON space_invites (invitee, status);
 
 CREATE TABLE IF NOT EXISTS space_state_events (
-    event_id TEXT PRIMARY KEY,
-    space_id TEXT NOT NULL,
+    event_id UUID PRIMARY KEY,
+    space_id UUID NOT NULL,
     event_type TEXT NOT NULL,
     state_key TEXT NOT NULL DEFAULT '',
     sender TEXT,
-    operation_id TEXT,
+    operation_id UUID,
     payload JSONB NOT NULL,
     redacted_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -139,12 +139,12 @@ CREATE INDEX IF NOT EXISTS space_state_events_space_type_key_idx
     ON space_state_events (space_id, event_type, state_key, created_at);
 
 CREATE TABLE IF NOT EXISTS events (
-    event_id TEXT PRIMARY KEY,
-    space_id TEXT NOT NULL,
+    event_id UUID PRIMARY KEY,
+    space_id UUID NOT NULL,
     event_type TEXT NOT NULL,
     sender TEXT,
-    thread_id TEXT,
-    operation_id TEXT,
+    thread_id UUID,
+    operation_id UUID,
     payload JSONB NOT NULL,
     redacted_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -157,10 +157,10 @@ CREATE INDEX IF NOT EXISTS events_thread_created_idx
     ON events (thread_id, created_at, event_id);
 
 CREATE TABLE IF NOT EXISTS entities (
-    entity_id TEXT PRIMARY KEY,
-    space_id TEXT NOT NULL,
+    entity_id UUID PRIMARY KEY,
+    space_id UUID NOT NULL,
     entity_type TEXT NOT NULL,
-    current_version TEXT,
+    current_version UUID,
     payload JSONB NOT NULL,
     deleted_at TIMESTAMPTZ,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -170,10 +170,10 @@ CREATE INDEX IF NOT EXISTS entities_space_type_idx
     ON entities (space_id, entity_type, updated_at);
 
 CREATE TABLE IF NOT EXISTS entity_versions (
-    version_id TEXT PRIMARY KEY,
-    entity_id TEXT NOT NULL,
-    space_id TEXT NOT NULL,
-    operation_id TEXT,
+    version_id UUID PRIMARY KEY,
+    entity_id UUID NOT NULL,
+    space_id UUID NOT NULL,
+    operation_id UUID,
     payload JSONB NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -182,11 +182,11 @@ CREATE INDEX IF NOT EXISTS entity_versions_entity_created_idx
     ON entity_versions (entity_id, created_at);
 
 CREATE TABLE IF NOT EXISTS relations (
-    relation_id TEXT PRIMARY KEY,
-    space_id TEXT NOT NULL,
+    relation_id UUID PRIMARY KEY,
+    space_id UUID NOT NULL,
     relation_type TEXT NOT NULL,
-    from_entity_id TEXT NOT NULL,
-    to_entity_id TEXT NOT NULL,
+    from_entity_id UUID NOT NULL,
+    to_entity_id UUID NOT NULL,
     payload JSONB NOT NULL DEFAULT '{}'::JSONB,
     deleted_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -207,8 +207,8 @@ CREATE TABLE IF NOT EXISTS reactions (
 
 CREATE TABLE IF NOT EXISTS read_markers (
     actor TEXT NOT NULL,
-    space_id TEXT NOT NULL,
-    thread_id TEXT NOT NULL,
+    space_id UUID NOT NULL,
+    thread_id UUID NOT NULL,
     event_ref TEXT,
     payload JSONB NOT NULL DEFAULT '{}'::JSONB,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -216,9 +216,9 @@ CREATE TABLE IF NOT EXISTS read_markers (
 );
 
 CREATE TABLE IF NOT EXISTS read_receipts (
-    receipt_id TEXT PRIMARY KEY,
+    receipt_id UUID PRIMARY KEY,
     actor TEXT NOT NULL,
-    space_id TEXT NOT NULL,
+    space_id UUID NOT NULL,
     event_ref TEXT NOT NULL,
     visibility TEXT NOT NULL DEFAULT 'space',
     payload JSONB NOT NULL DEFAULT '{}'::JSONB,
@@ -229,8 +229,8 @@ CREATE INDEX IF NOT EXISTS read_receipts_event_idx
     ON read_receipts (event_ref, actor);
 
 CREATE TABLE IF NOT EXISTS reducer_snapshots (
-    snapshot_id TEXT PRIMARY KEY,
-    space_id TEXT NOT NULL,
+    snapshot_id UUID PRIMARY KEY,
+    space_id UUID NOT NULL,
     reducer_profile TEXT NOT NULL,
     frontier JSONB NOT NULL,
     state_hash TEXT NOT NULL,
@@ -242,8 +242,8 @@ CREATE INDEX IF NOT EXISTS reducer_snapshots_space_created_idx
     ON reducer_snapshots (space_id, created_at);
 
 CREATE TABLE IF NOT EXISTS repo_operations (
-    operation_id TEXT PRIMARY KEY,
-    space_id TEXT NOT NULL,
+    operation_id UUID PRIMARY KEY,
+    space_id UUID NOT NULL,
     digest TEXT NOT NULL UNIQUE,
     payload JSONB NOT NULL,
     created_at TIMESTAMPTZ NOT NULL
@@ -253,11 +253,11 @@ CREATE INDEX IF NOT EXISTS repo_operations_space_created_idx
     ON repo_operations (space_id, created_at, operation_id);
 
 CREATE TABLE IF NOT EXISTS repo_commits (
-    commit_id TEXT PRIMARY KEY,
-    repo_id TEXT NOT NULL,
+    commit_id UUID PRIMARY KEY,
+    repo_id UUID NOT NULL,
     author TEXT NOT NULL,
     author_seq BIGINT NOT NULL,
-    prev_commit TEXT,
+    prev_commit UUID,
     digest TEXT NOT NULL UNIQUE,
     payload JSONB NOT NULL,
     created_at TIMESTAMPTZ NOT NULL
@@ -267,20 +267,20 @@ CREATE INDEX IF NOT EXISTS repo_commits_repo_created_idx
     ON repo_commits (repo_id, created_at, commit_id);
 
 CREATE TABLE IF NOT EXISTS repo_commit_operations (
-    commit_id TEXT NOT NULL REFERENCES repo_commits(commit_id) ON DELETE CASCADE,
+    commit_id UUID NOT NULL REFERENCES repo_commits(commit_id) ON DELETE CASCADE,
     operation_digest TEXT NOT NULL REFERENCES repo_operations(digest) ON DELETE RESTRICT,
     position BIGINT NOT NULL,
     PRIMARY KEY (commit_id, operation_digest)
 );
 
 CREATE TABLE IF NOT EXISTS repo_heads (
-    repo_id TEXT PRIMARY KEY,
-    head_commit TEXT NOT NULL,
+    repo_id UUID PRIMARY KEY,
+    head_commit UUID NOT NULL,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS repo_author_sequences (
-    repo_id TEXT NOT NULL,
+    repo_id UUID NOT NULL,
     author TEXT NOT NULL,
     author_seq BIGINT NOT NULL,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -290,7 +290,7 @@ CREATE TABLE IF NOT EXISTS repo_author_sequences (
 CREATE TABLE IF NOT EXISTS sessions (
     token_hash TEXT PRIMARY KEY,
     actor TEXT NOT NULL,
-    device_id TEXT NOT NULL,
+    device_id UUID NOT NULL,
     audience TEXT NOT NULL,
     payload JSONB NOT NULL,
     expires_at TIMESTAMPTZ NOT NULL,
@@ -305,7 +305,7 @@ CREATE INDEX IF NOT EXISTS sessions_actor_device_idx
 
 CREATE TABLE IF NOT EXISTS devices (
     actor TEXT NOT NULL,
-    device_id TEXT NOT NULL,
+    device_id UUID NOT NULL,
     device_key TEXT,
     verification_state TEXT NOT NULL DEFAULT 'unverified',
     payload JSONB NOT NULL,
@@ -316,16 +316,16 @@ CREATE TABLE IF NOT EXISTS devices (
 
 CREATE TABLE IF NOT EXISTS device_keys (
     actor TEXT NOT NULL,
-    device_id TEXT NOT NULL,
+    device_id UUID NOT NULL,
     payload JSONB NOT NULL,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (actor, device_id)
 );
 
 CREATE TABLE IF NOT EXISTS mls_key_packages (
-    package_id TEXT PRIMARY KEY,
+    package_id UUID PRIMARY KEY,
     actor TEXT NOT NULL,
-    device_id TEXT NOT NULL,
+    device_id UUID NOT NULL,
     payload JSONB NOT NULL,
     claimed_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -336,9 +336,9 @@ CREATE INDEX IF NOT EXISTS mls_key_packages_available_idx
     WHERE claimed_at IS NULL;
 
 CREATE TABLE IF NOT EXISTS fallback_keys (
-    fallback_key_id TEXT PRIMARY KEY,
+    fallback_key_id UUID PRIMARY KEY,
     actor TEXT NOT NULL,
-    device_id TEXT NOT NULL,
+    device_id UUID NOT NULL,
     algorithm TEXT NOT NULL,
     payload JSONB NOT NULL,
     used_at TIMESTAMPTZ,
@@ -352,7 +352,7 @@ CREATE INDEX IF NOT EXISTS fallback_keys_available_idx
 CREATE TABLE IF NOT EXISTS one_time_keys (
     key_id BIGSERIAL PRIMARY KEY,
     actor TEXT NOT NULL,
-    device_id TEXT NOT NULL,
+    device_id UUID NOT NULL,
     algorithm TEXT NOT NULL,
     payload JSONB NOT NULL,
     claimed_at TIMESTAMPTZ,
@@ -364,10 +364,10 @@ CREATE INDEX IF NOT EXISTS one_time_keys_available_idx
     WHERE claimed_at IS NULL;
 
 CREATE TABLE IF NOT EXISTS device_messages (
-    txn_id TEXT PRIMARY KEY,
+    txn_id UUID PRIMARY KEY,
     sender TEXT NOT NULL,
     recipient TEXT NOT NULL,
-    device_id TEXT NOT NULL,
+    device_id UUID NOT NULL,
     payload JSONB NOT NULL,
     delivered_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -378,7 +378,7 @@ CREATE INDEX IF NOT EXISTS device_messages_recipient_device_idx
     WHERE delivered_at IS NULL;
 
 CREATE TABLE IF NOT EXISTS key_backups (
-    backup_id TEXT PRIMARY KEY,
+    backup_id UUID PRIMARY KEY,
     actor TEXT NOT NULL,
     version TEXT NOT NULL,
     payload JSONB NOT NULL,
@@ -391,7 +391,7 @@ CREATE TABLE IF NOT EXISTS blobs (
     media_type TEXT NOT NULL,
     filename TEXT,
     uploaded_by TEXT NOT NULL,
-    space_id TEXT,
+    space_id UUID,
     size_bytes BIGINT NOT NULL,
     storage_path TEXT,
     bytes BYTEA,
@@ -405,7 +405,7 @@ CREATE INDEX IF NOT EXISTS blobs_space_created_idx
     ON blobs (space_id, created_at);
 
 CREATE TABLE IF NOT EXISTS blob_access_grants (
-    grant_id TEXT PRIMARY KEY,
+    grant_id UUID PRIMARY KEY,
     blob_ref TEXT NOT NULL,
     actor TEXT NOT NULL,
     purpose TEXT NOT NULL,
@@ -418,9 +418,9 @@ CREATE INDEX IF NOT EXISTS blob_access_grants_actor_blob_idx
     ON blob_access_grants (actor, blob_ref, expires_at);
 
 CREATE TABLE IF NOT EXISTS push_devices (
-    registration_id TEXT PRIMARY KEY,
+    registration_id UUID PRIMARY KEY,
     actor TEXT,
-    device_id TEXT NOT NULL,
+    device_id UUID NOT NULL,
     push_gateway TEXT NOT NULL,
     push_key TEXT NOT NULL,
     platform TEXT,
@@ -439,8 +439,8 @@ CREATE TABLE IF NOT EXISTS push_rules (
 );
 
 CREATE TABLE IF NOT EXISTS moderation_reports (
-    report_id TEXT PRIMARY KEY,
-    space_id TEXT NOT NULL,
+    report_id UUID PRIMARY KEY,
+    space_id UUID NOT NULL,
     target_ref TEXT NOT NULL,
     reason TEXT NOT NULL,
     reporter TEXT NOT NULL,
@@ -450,9 +450,9 @@ CREATE TABLE IF NOT EXISTS moderation_reports (
 );
 
 CREATE TABLE IF NOT EXISTS moderation_actions (
-    action_id TEXT PRIMARY KEY,
-    report_id TEXT,
-    space_id TEXT,
+    action_id UUID PRIMARY KEY,
+    report_id UUID,
+    space_id UUID,
     actor TEXT NOT NULL,
     action_type TEXT NOT NULL,
     payload JSONB NOT NULL,
@@ -460,7 +460,7 @@ CREATE TABLE IF NOT EXISTS moderation_actions (
 );
 
 CREATE TABLE IF NOT EXISTS policy_documents (
-    policy_id TEXT PRIMARY KEY,
+    policy_id UUID PRIMARY KEY,
     scope TEXT NOT NULL,
     subject_ref TEXT NOT NULL,
     policy_type TEXT NOT NULL,
@@ -473,7 +473,7 @@ CREATE INDEX IF NOT EXISTS policy_documents_scope_subject_idx
     ON policy_documents (scope, subject_ref, policy_type);
 
 CREATE TABLE IF NOT EXISTS capability_grants (
-    grant_id TEXT PRIMARY KEY,
+    grant_id UUID PRIMARY KEY,
     subject TEXT NOT NULL,
     resource TEXT NOT NULL,
     capability TEXT NOT NULL,
@@ -490,7 +490,7 @@ CREATE INDEX IF NOT EXISTS capability_grants_subject_resource_idx
     WHERE revoked_at IS NULL;
 
 CREATE TABLE IF NOT EXISTS policy_decisions (
-    decision_id TEXT PRIMARY KEY,
+    decision_id UUID PRIMARY KEY,
     subject TEXT NOT NULL,
     action TEXT NOT NULL,
     resource TEXT NOT NULL,
@@ -519,9 +519,9 @@ CREATE TABLE IF NOT EXISTS account_data (
 );
 
 CREATE TABLE IF NOT EXISTS notifications (
-    notification_id TEXT PRIMARY KEY,
+    notification_id UUID PRIMARY KEY,
     actor TEXT NOT NULL,
-    space_id TEXT,
+    space_id UUID,
     event_ref TEXT,
     payload JSONB NOT NULL,
     read_at TIMESTAMPTZ,
@@ -533,7 +533,7 @@ CREATE INDEX IF NOT EXISTS notifications_actor_created_idx
 
 CREATE TABLE IF NOT EXISTS sync_positions (
     actor TEXT NOT NULL,
-    device_id TEXT NOT NULL,
+    device_id UUID NOT NULL,
     scope TEXT NOT NULL,
     cursor TEXT NOT NULL,
     positions JSONB NOT NULL DEFAULT '{}'::JSONB,
@@ -542,10 +542,10 @@ CREATE TABLE IF NOT EXISTS sync_positions (
 );
 
 CREATE TABLE IF NOT EXISTS federation_transactions (
-    txn_id TEXT NOT NULL,
+    txn_id UUID NOT NULL,
     source_service TEXT NOT NULL,
     destination_service TEXT NOT NULL,
-    space_id TEXT,
+    space_id UUID,
     status TEXT NOT NULL,
     content_digest TEXT NOT NULL,
     payload JSONB NOT NULL,
@@ -561,7 +561,7 @@ CREATE INDEX IF NOT EXISTS federation_transactions_destination_received_idx
     ON federation_transactions (destination_service, received_at);
 
 CREATE TABLE IF NOT EXISTS federation_memberships (
-    space_id TEXT NOT NULL,
+    space_id UUID NOT NULL,
     actor TEXT NOT NULL,
     principal_server TEXT NOT NULL,
     payload JSONB NOT NULL DEFAULT '{}'::JSONB,
@@ -570,7 +570,7 @@ CREATE TABLE IF NOT EXISTS federation_memberships (
 );
 
 CREATE TABLE IF NOT EXISTS applets (
-    applet_id TEXT PRIMARY KEY,
+    applet_id UUID PRIMARY KEY,
     owner TEXT NOT NULL,
     payload JSONB NOT NULL,
     disabled_at TIMESTAMPTZ,
@@ -579,16 +579,16 @@ CREATE TABLE IF NOT EXISTS applets (
 );
 
 CREATE TABLE IF NOT EXISTS applet_portals (
-    portal_id TEXT PRIMARY KEY,
-    applet_id TEXT NOT NULL,
-    space_id TEXT NOT NULL,
+    portal_id UUID PRIMARY KEY,
+    applet_id UUID NOT NULL,
+    space_id UUID NOT NULL,
     payload JSONB NOT NULL DEFAULT '{}'::JSONB,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS webrtc_sessions (
-    session_id TEXT PRIMARY KEY,
-    space_id TEXT NOT NULL,
+    session_id UUID PRIMARY KEY,
+    space_id UUID NOT NULL,
     creator TEXT NOT NULL,
     state TEXT NOT NULL,
     payload JSONB NOT NULL,
@@ -599,13 +599,13 @@ CREATE TABLE IF NOT EXISTS webrtc_sessions (
 CREATE TABLE IF NOT EXISTS audit_log (
     audit_id BIGSERIAL PRIMARY KEY,
     actor TEXT,
-    device_id TEXT,
-    space_id TEXT,
+    device_id UUID,
+    space_id UUID,
     action TEXT NOT NULL,
     resource TEXT,
-    request_id TEXT,
-    operation_id TEXT,
-    commit_id TEXT,
+    request_id UUID,
+    operation_id UUID,
+    commit_id UUID,
     outcome TEXT NOT NULL DEFAULT 'unknown',
     payload JSONB NOT NULL DEFAULT '{}'::JSONB,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),

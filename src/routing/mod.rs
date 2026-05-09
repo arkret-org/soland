@@ -17,6 +17,7 @@ use crate::{
 pub mod account;
 pub mod admin;
 pub mod admin_cells;
+pub mod admin_control;
 pub mod audit;
 pub mod auth;
 pub mod authz;
@@ -149,6 +150,7 @@ pub use account::{
 };
 pub use admin::admin_collection;
 pub use admin_cells::{admin_get_cell, admin_list_cells};
+pub use admin_control::{admin_emit_resync_required, admin_emit_unauthorized};
 pub use space::{
     add_space_member, create_space, delete_space, export_space, invite_token_matches_space,
     invite_token_space_id, is_space_deleted, next_author_seq, prune_expired_typing,

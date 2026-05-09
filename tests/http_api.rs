@@ -27,6 +27,10 @@ fn test_config() -> AppConfig {
         session_grant_introspection_bearer: None,
         did_resolver_allow_methods: vec!["web".to_owned(), "key".to_owned(), "uuid".to_owned()],
         starid_webvh_resolver_url: None,
+        // Tests use fixed-time HLC fixtures; window=0 disables replay-window
+        // enforcement so they keep passing.
+        jws_replay_window_seconds: 0,
+        jws_replay_window_per_family: std::collections::BTreeMap::new(),
     }
 }
 
@@ -1580,7 +1584,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         .add_header("authorization", format!("Bearer {alice}"), true)
         .json(&serde_json::json!({
             "space_id": space_id,
-            "content": {"blocks": [{"type": "image"}]},
+            "content": {"blocks": [{"kind": "image"}]},
             "encrypted": false
         }))
         .send(&app_from_state(state.clone()))
@@ -1591,7 +1595,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         .add_header("authorization", format!("Bearer {alice}"), true)
         .json(&serde_json::json!({
             "space_id": space_id,
-            "content": {"blocks": [{"type": "location", "latitude": 31.2304, "longitude": 121.4737}]},
+            "content": {"blocks": [{"kind": "location", "latitude": 31.2304, "longitude": 121.4737}]},
             "encrypted": false
         }))
         .send(&app_from_state(state.clone()))
@@ -1620,9 +1624,9 @@ async fn account_contacts_and_space_lifecycle_workflow() {
                     {"type": "entity", "entity_id": "cx:entity:mentioned"}
                 ],
                 "blocks": [
-                    {"type": "text", "text": "structured hello"},
-                    {"type": "location", "latitude": 312304000, "longitude": 1214737000},
-                    {"type": "poll", "question": "ship?", "options": ["yes", "no"]}
+                    {"kind": "text", "text": "structured hello"},
+                    {"kind": "location", "latitude": 312304000, "longitude": 1214737000},
+                    {"kind": "poll", "question": "ship?", "options": ["yes", "no"]}
                 ]
             },
             "encrypted": false

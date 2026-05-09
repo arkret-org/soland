@@ -21,6 +21,8 @@ fn test_config() -> AppConfig {
         session_grant_introspection_bearer: None,
         did_resolver_allow_methods: vec!["web".to_owned(), "key".to_owned(), "uuid".to_owned()],
         starid_webvh_resolver_url: None,
+        jws_replay_window_seconds: 0,
+        jws_replay_window_per_family: std::collections::BTreeMap::new(),
     }
 }
 

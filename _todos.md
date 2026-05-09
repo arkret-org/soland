@@ -393,6 +393,31 @@ pub async fn send_message(
 
 ## Spec Phase 1-5 rollout changelog
 
+## C19.C + events.subscribe control-frame triggers (2026-05-09 二十轮 激进模式)
+
+- **C19.C ULID audit (clean)**: `grep Ulid|ulid` in `src/` returned only one stale doc comment in `routing/authz.rs:47` (`cx:*:<ulid>` → `cx:*:<uuid>`). 真正的 `Ulid::new()` / `Ulid::from_string` 在 src 中 0 命中（`ids.rs` 早就是纯 `uuid::Uuid::now_v7()`）。
+- **C19.C ULID-shape literal cleanup**:
+  - `src/routing/describe.rs` 6 处 `cx:space:01JS0SP000000000000000000` / `cx:event:01JS0EV000000000000000000` 替换为 UUIDv7-shape `01904100-0000-7000-8000-000000000000` / `01904101-0000-7000-8000-000000000000`。
+  - `src/routing/key_backup_restore.rs` 3 处同样替换。
+  - 替换后 `grep '01[A-Z][A-Z0-9]\{23\}'` 在 `src/` + `tests/` 0 命中（确认无 ULID-shape literals 残留）。
+- **events.subscribe mid-stream control-frame triggers**:
+  - 新 `src/routing/admin_control.rs` (~190 行) 含 2 个 typed `#[endpoint]` handler:
+    - `POST /api/v1/admin/events/resync-required` (`cx.admin.events.resync_required`) — broadcast `EventNotificationKind::ResyncRequired { reason }` 到一个 Space 的订阅者，用于 anchor compaction / per-subscriber cursor drift 等场景；clients MUST drop local cache + re-subscribe `from=null`。
+    - `POST /api/v1/admin/events/unauthorized` (`cx.admin.events.unauthorized`) — broadcast `EventNotificationKind::Unauthorized { reason }`；clients MUST close stream + re-auth。
+  - Request shape `AdminControlFrameRequest { space_id, reason? }` (reason 可选，默认 `"admin_triggered"` / `"session_revoked"`)；response `AdminControlFrameResponse { broadcast, receivers, kind }` 报 broadcast 时的 receiver 计数。
+  - Auth gate: 复用 `AuthArgs::authenticated_session`（与 `admin_sign_anchor` / `admin_get_cell` 模式一致）。
+  - Wire 端：`routing::sync::events_subscribe` 已经在 `EventNotificationKind::ResyncRequired` / `EventNotificationKind::Unauthorized` 上 dispatch，发出 `kind: "resync_required"` / `"unauthorized"` NDJSON frame；只缺触发器 — 本轮补齐。`Dropped` (broadcast Lagged → `kind: "dropped", reason: "broadcast_lagged"`) 之前就内置在 receive loop。
+  - 路由注册：lib.rs 在 `admin/anchors/sign` 后追加两条 (`admin/events/resync-required` + `admin/events/unauthorized`)。
+- **Tests** (3 new unit tests in `routing::admin_control::tests`):
+  - `resync_required_notification_round_trips_through_channel` — 直接构造 `EventNotification::ResyncRequired` 通过 `tokio::sync::broadcast` channel 验证 round-trip（pin frame shape）。
+  - `unauthorized_notification_round_trips_through_channel` — 同上 for `Unauthorized`。
+  - `empty_space_id_request_is_caught_at_handler_level` — pin request shape (handler-level `space_id.is_empty()` 校验)。
+- **Counts (before → after)**: lib unit tests `131 → 134` (+3 admin_control unit tests). `cargo check --tests` clean (only 1 pre-existing unused-import warning in `jws_verify.rs:352`, not introduced by this turn). `cargo test --lib`: **134/134 pass**.
+- **C10.E status**: `GET /api/v1/admin/cells/{cell_id}` 端点 (在 `routing/admin_cells.rs`) 已经在 2026-05-09 十八轮落地并 wired 到 lib.rs；coauth invite consent gate 现在可以直接 HTTP 调用 `principal_server_url + /api/v1/admin/cells/{cell_id}` 查 OrSet `cx.component.consent.grant.v1` cell 状态。本轮无需新增工作。
+- **Out-of-scope deferred**:
+  - C10.B "把 LatticeRegistry 接到 ProjectionState::apply" 跳过 — 该 path 现在仍走旧 ReducerKind 47-stub trail（实际上 65% 已是真 impl，但 trait 通路还没 swap 到 LatticeKind dispatch；blocking 是 `ProjectionState::apply` 内的 dispatcher 与 `ReducerRegistry` 的耦合）；本轮 scope 中"如果太大可跳过"标的是这一项。
+  - Threshold/open_set/mixed anchorer signing path 跳过 — 需要 leader election + 多签协调，不适合单轮直加。
+
 ## C10.B 续 — admin cells endpoint (2026-05-09 十八轮 并行)
 
 - **What landed**:
