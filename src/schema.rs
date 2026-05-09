@@ -604,6 +604,20 @@ diesel::table! {
     }
 }
 
+diesel::table! {
+    multisig_pending (anchor_id) {
+        anchor_id -> Text,
+        space_id -> Text,
+        threshold_k -> Int4,
+        threshold_n -> Int4,
+        members -> Array<Text>,
+        canonical_b64 -> Text,
+        partials -> Jsonb,
+        created_at -> Timestamptz,
+        expires_at -> Timestamptz,
+    }
+}
+
 diesel::joinable!(repo_commit_operations -> repo_commits (commit_id));
 
 diesel::allow_tables_to_appear_in_same_query!(
@@ -658,4 +672,5 @@ diesel::allow_tables_to_appear_in_same_query!(
     applet_portals,
     webrtc_sessions,
     audit_log,
+    multisig_pending,
 );

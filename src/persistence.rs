@@ -10,7 +10,7 @@ use chrono::Utc;
 use contrix_sdk::Operation;
 use diesel::{
     OptionalExtension, QueryableByName, RunQueryDsl, sql_query,
-    sql_types::{Jsonb, Nullable, Text, Timestamptz},
+    sql_types::{Array, Integer, Jsonb, Nullable, Text, Timestamptz},
 };
 use serde_json::Value;
 
@@ -18,9 +18,9 @@ use crate::db::PgPool;
 use crate::state::{
     AccountRecord, BlobRecord, CanonicalEventRecord, ContactRecord, DeviceInventoryRecord,
     DeviceMessageRecord, FederationTransactionRecord, IdentityDocumentRecord, IdentityLogRecord,
-    MessageRecord, OutboundPushBridgeCacheRecord, PolicyDocumentRecord, PresenceRecord,
-    ProjectionEventRecord, PushRuleRecord, SchemaRecord, SessionRecord, SpaceInviteRecord,
-    SpaceMetaRecord, TypingRecord, WebrtcSessionRecord, WebrtcSignalRecord,
+    MessageRecord, MultisigPendingRecord, OutboundPushBridgeCacheRecord, PolicyDocumentRecord,
+    PresenceRecord, ProjectionEventRecord, PushRuleRecord, SchemaRecord, SessionRecord,
+    SpaceInviteRecord, SpaceMetaRecord, TypingRecord, WebrtcSessionRecord, WebrtcSignalRecord,
 };
 use std::collections::{BTreeSet, VecDeque};
 
@@ -302,6 +302,26 @@ pub trait KeyBackupStore: Send + Sync {
     fn get_approval_run(&self, ticket_id: &str) -> PersistenceResult<Option<Value>>;
 }
 
+/// MAL-11 (round 23) — persistent multisig partial-signature buffer.
+///
+/// The coordinator endpoints (`POST .../multisig/{anchor_id}/partial` and
+/// `GET .../multisig/pending`) operate against this store so partials
+/// survive restarts and can be picked up by a leader-election watchdog
+/// once the threshold is met. Memory backend is fine for dev/tests; the
+/// Pg backend writes to the `multisig_pending` table.
+pub trait MultisigPendingStore: Send + Sync {
+    fn upsert(&self, record: MultisigPendingRecord) -> PersistenceResult<()>;
+    fn get(&self, anchor_id: &str) -> PersistenceResult<Option<MultisigPendingRecord>>;
+    fn add_partial(
+        &self,
+        anchor_id: &str,
+        signer_did: &str,
+        partial: Value,
+    ) -> PersistenceResult<MultisigPendingRecord>;
+    fn list_for_space(&self, space_id: &str) -> PersistenceResult<Vec<MultisigPendingRecord>>;
+    fn delete(&self, anchor_id: &str) -> PersistenceResult<bool>;
+}
+
 /// Per-owner policy documents.
 pub trait PolicyDocumentStore: Send + Sync {
     fn get(&self, policy_id: &str) -> PersistenceResult<Option<PolicyDocumentRecord>>;
@@ -346,6 +366,7 @@ pub trait PersistenceStore: Send + Sync {
     fn device_keys(&self) -> &dyn DeviceKeyStore;
     fn one_time_keys(&self) -> &dyn OneTimeKeyStore;
     fn key_backups(&self) -> &dyn KeyBackupStore;
+    fn multisig_pending(&self) -> &dyn MultisigPendingStore;
 }
 
 /// In-memory implementation of persistence store.
@@ -377,6 +398,7 @@ pub struct MemoryPersistenceStore {
     device_keys: MemoryDeviceKeyStore,
     one_time_keys: MemoryOneTimeKeyStore,
     key_backups: MemoryKeyBackupStore,
+    multisig_pending: MemoryMultisigPendingStore,
 }
 
 impl MemoryPersistenceStore {
@@ -409,6 +431,7 @@ impl MemoryPersistenceStore {
             device_keys: MemoryDeviceKeyStore::new(),
             one_time_keys: MemoryOneTimeKeyStore::new(),
             key_backups: MemoryKeyBackupStore::new(),
+            multisig_pending: MemoryMultisigPendingStore::new(),
         }
     }
 }
@@ -526,6 +549,64 @@ impl PersistenceStore for MemoryPersistenceStore {
 
     fn key_backups(&self) -> &dyn KeyBackupStore {
         &self.key_backups
+    }
+
+    fn multisig_pending(&self) -> &dyn MultisigPendingStore {
+        &self.multisig_pending
+    }
+}
+
+// In-memory multisig pending store
+struct MemoryMultisigPendingStore {
+    data: Arc<Mutex<BTreeMap<String, MultisigPendingRecord>>>,
+}
+
+impl MemoryMultisigPendingStore {
+    fn new() -> Self {
+        Self {
+            data: Arc::new(Mutex::new(BTreeMap::new())),
+        }
+    }
+}
+
+impl MultisigPendingStore for MemoryMultisigPendingStore {
+    fn upsert(&self, record: MultisigPendingRecord) -> PersistenceResult<()> {
+        let mut data = self.data.lock().expect("lock");
+        data.insert(record.anchor_id.clone(), record);
+        Ok(())
+    }
+
+    fn get(&self, anchor_id: &str) -> PersistenceResult<Option<MultisigPendingRecord>> {
+        let data = self.data.lock().expect("lock");
+        Ok(data.get(anchor_id).cloned())
+    }
+
+    fn add_partial(
+        &self,
+        anchor_id: &str,
+        signer_did: &str,
+        partial: Value,
+    ) -> PersistenceResult<MultisigPendingRecord> {
+        let mut data = self.data.lock().expect("lock");
+        let record = data.get_mut(anchor_id).ok_or_else(|| {
+            PersistenceError::NotFound(format!("multisig_pending row {anchor_id} not found"))
+        })?;
+        record.partials.insert(signer_did.to_owned(), partial);
+        Ok(record.clone())
+    }
+
+    fn list_for_space(&self, space_id: &str) -> PersistenceResult<Vec<MultisigPendingRecord>> {
+        let data = self.data.lock().expect("lock");
+        Ok(data
+            .values()
+            .filter(|r| r.space_id == space_id)
+            .cloned()
+            .collect())
+    }
+
+    fn delete(&self, anchor_id: &str) -> PersistenceResult<bool> {
+        let mut data = self.data.lock().expect("lock");
+        Ok(data.remove(anchor_id).is_some())
     }
 }
 
@@ -1769,6 +1850,7 @@ pub struct PgPersistenceStore {
     devices: PgDeviceInventoryStore,
     federation_transactions: PgFederationTransactionStore,
     push_bridge_cache: PgPushBridgeCacheStore,
+    multisig_pending: PgMultisigPendingStore,
     fallback: MemoryPersistenceStore,
 }
 
@@ -1779,7 +1861,8 @@ impl PgPersistenceStore {
             sessions: PgSessionStore { pool: pool.clone() },
             devices: PgDeviceInventoryStore { pool: pool.clone() },
             federation_transactions: PgFederationTransactionStore { pool: pool.clone() },
-            push_bridge_cache: PgPushBridgeCacheStore { pool },
+            push_bridge_cache: PgPushBridgeCacheStore { pool: pool.clone() },
+            multisig_pending: PgMultisigPendingStore { pool },
             fallback: MemoryPersistenceStore::new(),
         }
     }
@@ -1892,6 +1975,10 @@ impl PersistenceStore for PgPersistenceStore {
 
     fn key_backups(&self) -> &dyn KeyBackupStore {
         self.fallback.key_backups()
+    }
+
+    fn multisig_pending(&self) -> &dyn MultisigPendingStore {
+        &self.multisig_pending
     }
 }
 
@@ -2225,6 +2312,147 @@ impl PushBridgeCacheStore for PgPushBridgeCacheStore {
         sql_query("SELECT COUNT(*) AS count FROM push_bridge_cache")
             .get_result::<CountRow>(&mut conn)
             .map(|row| row.count as usize)
+            .map_err(PersistenceError::from)
+    }
+}
+
+struct PgMultisigPendingStore {
+    pool: PgPool,
+}
+
+#[derive(QueryableByName)]
+struct MultisigPendingRow {
+    #[diesel(sql_type = Text)]
+    anchor_id: String,
+    #[diesel(sql_type = Text)]
+    space_id: String,
+    #[diesel(sql_type = Integer)]
+    threshold_k: i32,
+    #[diesel(sql_type = Integer)]
+    threshold_n: i32,
+    #[diesel(sql_type = Array<Text>)]
+    members: Vec<String>,
+    #[diesel(sql_type = Text)]
+    canonical_b64: String,
+    #[diesel(sql_type = Jsonb)]
+    partials: Value,
+    #[diesel(sql_type = Timestamptz)]
+    created_at: chrono::DateTime<chrono::Utc>,
+    #[diesel(sql_type = Timestamptz)]
+    expires_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl From<MultisigPendingRow> for MultisigPendingRecord {
+    fn from(row: MultisigPendingRow) -> Self {
+        let partials = match row.partials {
+            Value::Object(map) => map.into_iter().collect(),
+            _ => BTreeMap::new(),
+        };
+        Self {
+            anchor_id: row.anchor_id,
+            space_id: row.space_id,
+            threshold_k: row.threshold_k as u32,
+            threshold_n: row.threshold_n as u32,
+            members: row.members,
+            canonical_b64: row.canonical_b64,
+            partials,
+            created_at: row.created_at,
+            expires_at: row.expires_at,
+        }
+    }
+}
+
+fn partials_to_jsonb(partials: &BTreeMap<String, Value>) -> Value {
+    let mut map = serde_json::Map::new();
+    for (k, v) in partials {
+        map.insert(k.clone(), v.clone());
+    }
+    Value::Object(map)
+}
+
+impl MultisigPendingStore for PgMultisigPendingStore {
+    fn upsert(&self, record: MultisigPendingRecord) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query(
+            "INSERT INTO multisig_pending \
+             (anchor_id, space_id, threshold_k, threshold_n, members, canonical_b64, partials, created_at, expires_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
+             ON CONFLICT (anchor_id) DO UPDATE SET \
+                space_id = EXCLUDED.space_id, \
+                threshold_k = EXCLUDED.threshold_k, \
+                threshold_n = EXCLUDED.threshold_n, \
+                members = EXCLUDED.members, \
+                canonical_b64 = EXCLUDED.canonical_b64, \
+                expires_at = EXCLUDED.expires_at",
+        )
+        .bind::<Text, _>(&record.anchor_id)
+        .bind::<Text, _>(&record.space_id)
+        .bind::<Integer, _>(record.threshold_k as i32)
+        .bind::<Integer, _>(record.threshold_n as i32)
+        .bind::<Array<Text>, _>(&record.members)
+        .bind::<Text, _>(&record.canonical_b64)
+        .bind::<Jsonb, _>(partials_to_jsonb(&record.partials))
+        .bind::<Timestamptz, _>(record.created_at)
+        .bind::<Timestamptz, _>(record.expires_at)
+        .execute(&mut conn)
+        .map(|_| ())
+        .map_err(PersistenceError::from)
+    }
+
+    fn get(&self, anchor_id: &str) -> PersistenceResult<Option<MultisigPendingRecord>> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query(
+            "SELECT anchor_id, space_id, threshold_k, threshold_n, members, canonical_b64, \
+             partials, created_at, expires_at FROM multisig_pending WHERE anchor_id = $1",
+        )
+        .bind::<Text, _>(anchor_id)
+        .get_result::<MultisigPendingRow>(&mut conn)
+        .optional()
+        .map(|row| row.map(MultisigPendingRecord::from))
+        .map_err(PersistenceError::from)
+    }
+
+    fn add_partial(
+        &self,
+        anchor_id: &str,
+        signer_did: &str,
+        partial: Value,
+    ) -> PersistenceResult<MultisigPendingRecord> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query(
+            "UPDATE multisig_pending \
+             SET partials = jsonb_set(partials, ARRAY[$2]::text[], $3, true) \
+             WHERE anchor_id = $1",
+        )
+        .bind::<Text, _>(anchor_id)
+        .bind::<Text, _>(signer_did)
+        .bind::<Jsonb, _>(&partial)
+        .execute(&mut conn)
+        .map_err(PersistenceError::from)?;
+        self.get(anchor_id)?.ok_or_else(|| {
+            PersistenceError::NotFound(format!("multisig_pending row {anchor_id} not found"))
+        })
+    }
+
+    fn list_for_space(&self, space_id: &str) -> PersistenceResult<Vec<MultisigPendingRecord>> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query(
+            "SELECT anchor_id, space_id, threshold_k, threshold_n, members, canonical_b64, \
+             partials, created_at, expires_at FROM multisig_pending WHERE space_id = $1 \
+             ORDER BY created_at ASC",
+        )
+        .bind::<Text, _>(space_id)
+        .load::<MultisigPendingRow>(&mut conn)
+        .map(|rows| rows.into_iter().map(MultisigPendingRecord::from).collect())
+        .map_err(PersistenceError::from)
+    }
+
+    fn delete(&self, anchor_id: &str) -> PersistenceResult<bool> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query("DELETE FROM multisig_pending WHERE anchor_id = $1")
+            .bind::<Text, _>(anchor_id)
+            .execute(&mut conn)
+            .map(|n| n > 0)
             .map_err(PersistenceError::from)
     }
 }

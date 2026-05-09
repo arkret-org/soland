@@ -410,6 +410,32 @@ pub struct WebrtcSignalRecord {
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
+/// MAL-11 (round 23) — one row of the persistent multisig coordinator buffer.
+///
+/// Holds an in-flight pending Anchor that is awaiting threshold partial
+/// signatures. The `partials` map is keyed by signer DID → submitted partial
+/// payload (`{signature_b64, kid, submitted_at}`). When the number of
+/// partials reaches `threshold_k`, the leader aggregates them via SDK
+/// `ThresholdAggregator` and publishes the final threshold-signed Anchor,
+/// then deletes the row.
+#[derive(Clone, Debug)]
+pub struct MultisigPendingRecord {
+    pub anchor_id: String,
+    pub space_id: String,
+    pub threshold_k: u32,
+    pub threshold_n: u32,
+    pub members: Vec<String>,
+    /// Canonical bytes (base64) the partial signatures sign over. Empty when
+    /// the buffer was created without an explicit canonical body (smoke
+    /// tests). Real partial-signature aggregation requires this to be
+    /// non-empty.
+    pub canonical_b64: String,
+    /// `signer_did` -> JSON `{signature_b64, kid, submitted_at}`.
+    pub partials: BTreeMap<String, Value>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub expires_at: chrono::DateTime<chrono::Utc>,
+}
+
 #[derive(Clone, Debug)]
 pub struct PolicyDocumentRecord {
     pub policy_id: String,
