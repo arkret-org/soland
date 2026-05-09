@@ -40,17 +40,32 @@ pub struct AppConfig {
     /// - `cx.component.capability.delegate.v1` → 120s
     /// - `cx.component.capability.derived.v1` → 120s
     pub jws_replay_window_per_family: std::collections::BTreeMap<&'static str, u64>,
-    /// Round 21 — opt-in flag that routes `ProjectionState::apply()` through
-    /// the [`crate::reducer::registry::LatticeRegistry`] lookup before
-    /// falling back to the legacy per-domain `match` dispatcher. Default
-    /// `false`: today the registry only carries cell_family metadata for
-    /// Move/Anchor effect dispatch — durable Events still drive the
-    /// structured projection cache via inline `apply_*` helpers. Once the
-    /// `event_kind → cell_family → lattice op` mapping table is filled in
-    /// (per cell-family LatticeKind impl exposing a `event_kinds()`
-    /// declaration), flipping this flag will let the registry handle the
-    /// dispatch entirely. Set via env `SERVERX_LATTICE_FIRST=true`.
+    /// Round 22 default-true `lattice_first` flag (see doc comment above).
     pub lattice_first: bool,
+    /// Round 22 — base64-encoded 32-byte ed25519 seed for the AnchorerWorker
+    /// signing identity (env `SERVERX_ANCHORER_SIGNING_KEY`). When `Some(_)`
+    /// the worker uses a deterministic ed25519-dalek signing key derived
+    /// from this seed; when `None` the worker boots with an in-process
+    /// random ephemeral key and a sticky-warn log line on every signing
+    /// pass, matching the [`AnchorerSigningKeyOrigin::Ephemeral`] branch.
+    ///
+    /// Loading is identical to coauth's session-grant signing-key pattern
+    /// — the env var holds the raw seed, base64-standard-padded; bad shape
+    /// fails fast at startup with a clear error.
+    pub anchorer_signing_key_seed: Option<[u8; 32]>,
+}
+
+/// Round 22 — provenance tag for the AnchorerWorker's signing key. Surfaced
+/// on each signing pass so logs flag the dev-only ephemeral path.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AnchorerSigningKeyOrigin {
+    /// Loaded from `SERVERX_ANCHORER_SIGNING_KEY` (production-grade
+    /// persistent identity).
+    Configured,
+    /// In-process random seed — fine for tests, **never** for production:
+    /// every restart issues Anchors under a brand-new DID, breaking
+    /// signature-chain trust.
+    Ephemeral,
 }
 
 impl AppConfig {
@@ -104,9 +119,13 @@ impl AppConfig {
             .ok()
             .and_then(|value| value.trim().parse::<u64>().ok())
             .unwrap_or(300);
+        // Round 22: `lattice_first` defaults to **true** — full LatticeRegistry
+        // takeover for ProjectionState::apply. Override to `false` only for
+        // incident-response triage of event_kind classifier regressions.
         let lattice_first = std::env::var("SERVERX_LATTICE_FIRST")
-            .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes"))
-            .unwrap_or(false);
+            .map(|value| !matches!(value.as_str(), "0" | "false" | "FALSE" | "no"))
+            .unwrap_or(true);
+        let anchorer_signing_key_seed = load_anchorer_signing_key_seed()?;
 
         Ok(Self {
             bind,
@@ -123,8 +142,43 @@ impl AppConfig {
             jws_replay_window_seconds,
             jws_replay_window_per_family: Self::default_replay_overrides(),
             lattice_first,
+            anchorer_signing_key_seed,
         })
     }
+}
+
+/// Round 22 — load the AnchorerWorker signing seed from
+/// `SERVERX_ANCHORER_SIGNING_KEY` (base64-standard encoded 32 bytes).
+/// Returns `Ok(None)` when the env var is absent or empty (the
+/// AnchorerWorker then mints an ephemeral key with a sticky-warn).
+/// Returns `Err(_)` when the env var is set but malformed — fail-fast at
+/// startup rather than silently downgrading to ephemeral.
+fn load_anchorer_signing_key_seed() -> anyhow::Result<Option<[u8; 32]>> {
+    let raw = match std::env::var("SERVERX_ANCHORER_SIGNING_KEY") {
+        Ok(value) => value.trim().to_owned(),
+        Err(_) => return Ok(None),
+    };
+    if raw.is_empty() {
+        return Ok(None);
+    }
+    use base64::Engine as _;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(raw.as_bytes())
+        .or_else(|_| base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(raw.as_bytes()))
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "SERVERX_ANCHORER_SIGNING_KEY must be base64 (standard or url-safe-no-pad): {e}"
+            )
+        })?;
+    if bytes.len() != 32 {
+        anyhow::bail!(
+            "SERVERX_ANCHORER_SIGNING_KEY must decode to exactly 32 bytes (got {})",
+            bytes.len()
+        );
+    }
+    let mut seed = [0u8; 32];
+    seed.copy_from_slice(&bytes);
+    Ok(Some(seed))
 }
 
 fn env_csv(name: &str) -> Option<Vec<String>> {

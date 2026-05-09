@@ -130,6 +130,7 @@ mod tests {
             jws_replay_window_seconds: 300,
             jws_replay_window_per_family: std::collections::BTreeMap::new(),
             lattice_first: false,
+            anchorer_signing_key_seed: None,
         }
     }
 

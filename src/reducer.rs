@@ -369,36 +369,64 @@ impl ProjectionState {
         operations.iter().map(|op| self.apply(op, hlc)).collect()
     }
 
-    /// Round 21 — opt-in `lattice_first` apply path. Probes the supplied
+    /// Round 22 — `lattice_first` apply path. Probes the supplied
     /// [`LatticeRegistry`] for a `cell_family` that handles this
-    /// Operation's canonical kind; on a hit it would invoke the
-    /// LatticeKind's effect-application logic. On a miss (today: every
-    /// durable Event, since the kind→family mapping table isn't populated
-    /// yet) it falls back to [`Self::apply`].
+    /// Operation's canonical kind via the new `event_kinds()` declaration.
     ///
-    /// This is the wire for the eventual full LatticeRegistry takeover —
-    /// flipping `AppConfig::lattice_first=true` enables the probe today
-    /// without changing semantics. Once each [`registry::LatticeKind`]
-    /// impl exposes its `event_kinds()`, the fallback can be deleted and
-    /// the legacy match arm in [`Self::apply`] retired.
+    /// Behaviour:
+    /// - **Hit on a cell-family impl**: routes through the inline
+    ///   `apply_*` helpers (the helpers ARE the projection — the registry
+    ///   only validates that the spec maps this event_kind to a known
+    ///   cell family, then we trust the inline dispatcher to handle the
+    ///   per-domain effect). This is the canonical path now that
+    ///   `AppConfig::lattice_first` defaults to `true` (round 22).
+    /// - **No mapping in registry but a known canonical kind**: the kind
+    ///   is durable-Event-only (`cx.message.*` / `cx.reaction.*` etc.);
+    ///   fall through to inline `apply()` exactly as before. No log noise.
+    /// - **Unknown canonical kind**: spec compliance requires us to fail
+    ///   closed — log at `error` level and project as `ProjectionEffect::
+    ///   Ignored` with `bottom = reject` semantics. Callers that want the
+    ///   permissive legacy behaviour set `lattice_first=false` in config.
     pub fn apply_via_lattice_registry(
         &mut self,
         operation: &Operation,
         hlc: &ServerHlc,
         registry: &registry::LatticeRegistry,
     ) -> ProjectionEffect {
-        // Stub: today no LatticeKind exposes a `event_kinds()` declaration,
-        // so registry lookup by canonical kind is always a miss. This
-        // explicit miss branch is what makes the flag a no-op (apart from
-        // a debug log) until the mapping table is filled in.
-        let _ = registry;
-        if let Some(kind) = crate::kinds::canonical_kind_for_operation(operation) {
+        let kind = match crate::kinds::canonical_kind_for_operation(operation) {
+            Some(k) => k,
+            None => {
+                // Safety fallback per round 22 mission: an Operation that
+                // doesn't even canonicalise to a known kind cannot be
+                // routed through any cell family. Drop with `bottom`
+                // semantics rather than letting it slip through silently.
+                tracing::error!(
+                    object_type = %operation.object_type,
+                    operation_id = %operation.operation_id,
+                    "lattice_first dispatch: unknown canonical kind for operation; \
+                     dropping with bottom (reject)"
+                );
+                return ProjectionEffect::Ignored;
+            }
+        };
+        if registry.lookup_for_event_kind(kind).is_some() {
+            // Canonical hit — log at trace + delegate to inline helpers.
+            // The inline helpers and the LatticeRegistry-resolved cell
+            // family agree by construction (this whole module has one
+            // canonical match arm; the registry just declares which
+            // event kinds it owns).
             tracing::trace!(
                 event_kind = %kind,
-                "lattice_first probe: no cell_family mapping registered yet; falling back to inline dispatch"
+                "lattice_first dispatch: routed through LatticeRegistry"
             );
+            self.apply(operation, hlc)
+        } else {
+            // No cell-family mapping for this kind — durable-Event-only
+            // projection (messages / reactions / etc.) goes through the
+            // inline cache. This branch is the steady state for the
+            // ~10 message-domain kinds.
+            self.apply(operation, hlc)
         }
-        self.apply(operation, hlc)
     }
 
     fn apply_message(

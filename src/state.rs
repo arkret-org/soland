@@ -1,7 +1,10 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::{Arc, Mutex},
+    time::{SystemTime, UNIX_EPOCH},
 };
+use ed25519_dalek::SigningKey;
+use sha2::{Digest, Sha256};
 use tokio::sync::broadcast;
 
 use contrix_sdk::{
@@ -12,7 +15,7 @@ use serde_json::{Value, json};
 
 use crate::artifacts;
 use crate::authz::AuthzEngine;
-use crate::config::AppConfig;
+use crate::config::{AnchorerSigningKeyOrigin, AppConfig};
 use crate::db::Db;
 use crate::hlc::ServerHlc;
 use crate::persistence::{MemoryPersistenceStore, PersistenceStore, PgPersistenceStore};
@@ -156,6 +159,18 @@ pub struct AppState {
     /// `RecvError::Lagged` and emit a `dropped` control frame to nudge
     /// the client to resync.
     pub event_broadcast: broadcast::Sender<EventNotification>,
+    /// Round 22: persistent Ed25519 signing key for AnchorerWorker +
+    /// admin endpoints (`admin_reconfigure_anchorer`, `admin_repair_bottom`).
+    /// Loaded from `AppConfig::anchorer_signing_key_seed` at boot when set;
+    /// otherwise minted from `sha256(service_did || nanos_since_epoch)` and
+    /// flagged as `AnchorerSigningKeyOrigin::Ephemeral` so a sticky-warn
+    /// fires on first use.
+    ///
+    /// Shared across all signing paths so the AnchorerWorker, the
+    /// `service_admin_signer` admin shortcut, and the threshold partial-
+    /// signature coordinator all bind to the **same** key/DID identity.
+    pub anchorer_signing_key: Arc<SigningKey>,
+    pub anchorer_signing_key_origin: AnchorerSigningKeyOrigin,
     // T0-2c follow-up: migrate the four key-backup scaffold maps below into
     // `state.persistence.key_backups()` once the routing layer's iter/retain/
     // get_mut patterns are rewritten in terms of the trait.
@@ -408,6 +423,17 @@ pub struct PolicyDocumentRecord {
 }
 
 impl AppState {
+    /// Round 22: Borrow the persistent Ed25519 signing key shared by the
+    /// AnchorerWorker and all admin signing paths.
+    pub fn anchorer_signing_key(&self) -> &SigningKey {
+        &self.anchorer_signing_key
+    }
+
+    /// Round 22: Origin tag for diagnostics (Configured / Ephemeral).
+    pub fn anchorer_signing_key_origin(&self) -> AnchorerSigningKeyOrigin {
+        self.anchorer_signing_key_origin
+    }
+
     pub fn new(config: AppConfig, db: Db) -> Self {
         let mut spaces = SpaceSearchIndex::new();
         let mut demo = SpaceSearchEntry::new(
@@ -472,6 +498,33 @@ impl AppState {
             self::did_resolver_chain::build_did_resolver_chain(&config),
         ));
 
+        // Round 22 — derive the AnchorerWorker's Ed25519 signing key.
+        // Configured: deterministic from the env-supplied seed; Ephemeral:
+        // bound to (service_did, boot_nanos) so it's stable for this
+        // process lifetime but explicitly NOT persistent.
+        let (anchorer_signing_key, anchorer_signing_key_origin) =
+            match config.anchorer_signing_key_seed {
+                Some(seed) => (
+                    Arc::new(SigningKey::from_bytes(&seed)),
+                    AnchorerSigningKeyOrigin::Configured,
+                ),
+                None => {
+                    let mut hasher = Sha256::new();
+                    hasher.update(b"soland:anchorer-ephemeral:");
+                    hasher.update(service_did.as_bytes());
+                    let boot_nanos = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .map(|d| d.as_nanos() as u64)
+                        .unwrap_or(0);
+                    hasher.update(boot_nanos.to_le_bytes());
+                    let seed: [u8; 32] = hasher.finalize().into();
+                    (
+                        Arc::new(SigningKey::from_bytes(&seed)),
+                        AnchorerSigningKeyOrigin::Ephemeral,
+                    )
+                }
+            };
+
         Self {
             config,
             repo: db
@@ -499,6 +552,8 @@ impl AppState {
             // cx.events.subscribe streaming. Capacity 1024 events; readers
             // falling behind get `Lagged` and emit `dropped` control frames.
             event_broadcast: broadcast::channel::<EventNotification>(1024).0,
+            anchorer_signing_key,
+            anchorer_signing_key_origin,
             key_backups: Arc::new(Mutex::new(BTreeMap::new())),
             key_backup_restore_tickets: Arc::new(Mutex::new(BTreeMap::new())),
             key_backup_restore_executor_runs: Arc::new(Mutex::new(BTreeMap::new())),

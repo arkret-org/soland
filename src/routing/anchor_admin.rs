@@ -50,7 +50,6 @@ use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 
 use crate::{
     JsonResult,
@@ -221,29 +220,33 @@ pub struct CompactionResponse {
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
-/// Round 21: build a deterministic Ed25519 [`MoveSigner`] keyed off the
-/// service DID. The seed is `sha256("soland:service-signer:" + service_did)`,
-/// matching the convention used by `crate::anchorer::AnchorerWorker` for
-/// admin-flow signatures. The verification_method id is `<service_did>#admin-key`.
+/// Round 22: build the canonical [`MoveSigner`] for admin-issued Moves.
 ///
-/// This is the **dev-mode** path. Production deployments MUST plug a real
-/// keystore-backed [`MoveSigner`] in here (HSM, KMS, etc.). See
-/// `TODO(stream_h_admin)` notes throughout this module — the overall
-/// admin-Move flow is structurally correct now; only the signing identity
-/// needs swapping for production.
-fn service_admin_signer(service_did: &str) -> Result<Ed25519MoveSigner, AppError> {
+/// **Identity unification (round 22)**: the admin endpoints
+/// (`admin_reconfigure_anchorer`, `admin_repair_bottom`) and the in-process
+/// `AnchorerWorker` now bind to the **same** Ed25519 key — held on
+/// `AppState::anchorer_signing_key`. That key is sourced from
+/// `SERVERX_ANCHORER_SIGNING_KEY` (production) or minted ephemerally at
+/// boot (dev/test). Wrapping it in an `Ed25519MoveSigner` here gives the
+/// admin path a SDK-canonical signer with no key duplication.
+///
+/// The verification_method id is `<service_did>#anchorer-key`, matching
+/// the JWS the AnchorerWorker emits — so a single DID-document publication
+/// covers both the worker and the admin endpoints.
+fn service_admin_signer(state: &AppState) -> Result<Ed25519MoveSigner, AppError> {
+    let service_did = state.config.service_did.as_str();
     let did = Did::new(service_did.to_owned()).map_err(|e| {
         AppError::new(
             ErrorCode::InternalError,
             format!("invalid service DID `{service_did}`: {e}"),
         )
     })?;
-    let mut hasher = Sha256::new();
-    hasher.update(b"soland:service-signer:");
-    hasher.update(service_did.as_bytes());
-    let seed: [u8; 32] = hasher.finalize().into();
-    let kid = format!("{service_did}#admin-key");
-    Ok(Ed25519MoveSigner::from_did_key_seed(seed, did, kid))
+    let kid = format!("{service_did}#anchorer-key");
+    Ok(Ed25519MoveSigner::new(
+        state.anchorer_signing_key().clone(),
+        did,
+        kid,
+    ))
 }
 
 /// Round 21: convert an `AnchorerReconfigBody` into the canonical anchorer
@@ -686,8 +689,10 @@ pub async fn admin_reconfigure_anchorer(
         },
     };
 
-    // Construct + sign the Move via Ed25519MoveSigner.
-    let signer = service_admin_signer(&admin_did)?;
+    // Construct + sign the Move via Ed25519MoveSigner — round 22 binds
+    // this to the same key the AnchorerWorker uses (AppState::anchorer_signing_key).
+    let _ = admin_did;
+    let signer = service_admin_signer(state)?;
     let unsigned = UnsignedMove::new(
         signer.signer_did().clone(),
         space.clone(),
@@ -886,8 +891,7 @@ pub async fn admin_repair_bottom(
                 role: "recovery_capability".to_owned(),
                 critical: true,
             };
-            let admin_did = state.config.service_did.clone();
-            let signer = service_admin_signer(&admin_did)?;
+            let signer = service_admin_signer(state)?;
             let unsigned = UnsignedMove::new(
                 signer.signer_did().clone(),
                 space.clone(),
@@ -1138,6 +1142,124 @@ pub async fn admin_compact_anchor_dag(
         Err(e) => Err(AppError::new(ErrorCode::InternalError, e.to_string())
             .with_status(StatusCode::CONFLICT)),
     }
+}
+
+// ── Multi-sig coordinator (round 22) ─────────────────────────────────────
+//
+// `POST /api/admin/v1/spaces/{space_id}/multisig/{anchor_id}/partial` accepts
+// partial Anchor signatures from peer anchorers; once the threshold is
+// reached, the aggregated `Anchor` is published. Round 22 lands the wire
+// shape + the in-memory accumulator; production-grade persistence (a Postgres
+// `multisig_pending` table + leader-election watchdog) is a follow-up.
+//
+// `GET /api/admin/v1/spaces/{space_id}/multisig/pending` lists the in-flight
+// anchors awaiting threshold so sodmin's H'9 panel can render them.
+
+#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
+pub struct PartialSignatureBody {
+    pub signer_did: String,
+    pub signature_b64: String,
+    pub kid: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
+pub struct PartialSubmitResponse {
+    pub anchor_id: String,
+    pub collected: u32,
+    pub threshold: u32,
+    pub status: String, // "collecting" | "aggregated" | "rejected"
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aggregated_anchor_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
+pub struct MultisigPendingEntry {
+    pub anchor_id: String,
+    pub threshold_k: u32,
+    pub threshold_n: u32,
+    pub collected_partials: u32,
+    pub missing_signers: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
+pub struct MultisigPendingResponse {
+    pub entries: Vec<MultisigPendingEntry>,
+}
+
+/// `POST /api/admin/v1/spaces/{space_id}/multisig/{anchor_id}/partial`.
+///
+/// TODO(mal-11): persist partials to Postgres so they survive restarts and
+/// can be consumed by a leader-election watchdog. Round 22 returns a
+/// structurally-correct response (`status="collecting"|"aggregated"`) so the
+/// sodmin H'9 panel renders, but no actual aggregation runs yet — the SDK's
+/// `ThresholdAggregator::aggregate(...)` consumes verified partials, and
+/// production wiring needs a Postgres-backed buffer that holds them until
+/// `k` arrive.
+#[salvo::oapi::endpoint(operation_id = "cx.admin.multisig.partial", tags("admin", "multisig"))]
+pub async fn admin_submit_multisig_partial(
+    aa: AuthArgs,
+    depot: &mut Depot,
+    req: &mut Request,
+    space_id: PathParam<String>,
+    anchor_id: PathParam<String>,
+    body: JsonBody<PartialSignatureBody>,
+) -> JsonResult<PartialSubmitResponse> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let _session = aa.authenticated_session(state, req)?;
+    let _space_id = SpaceId::new(space_id.into_inner()).map_err(|e| {
+        AppError::new(ErrorCode::InvalidParam, format!("invalid space_id: {e}"))
+            .with_status(StatusCode::BAD_REQUEST)
+    })?;
+    let anchor_id_str = anchor_id.into_inner();
+    let _anchor_id = AnchorId::new(anchor_id_str.clone()).map_err(|e| {
+        AppError::new(ErrorCode::InvalidParam, format!("invalid anchor_id: {e}"))
+            .with_status(StatusCode::BAD_REQUEST)
+    })?;
+    let body = body.into_inner();
+
+    if body.signer_did.is_empty() || body.signature_b64.is_empty() || body.kid.is_empty() {
+        return Err(AppError::new(
+            ErrorCode::InvalidParam,
+            "signer_did, signature_b64 and kid are required".to_owned(),
+        )
+        .with_status(StatusCode::BAD_REQUEST));
+    }
+
+    // Structural placeholder: report status "collecting" until persistent
+    // multisig buffer is wired in MAL-11. Real impl will:
+    //   1. Look up the pending Anchor envelope by anchor_id.
+    //   2. Assert signer_did is in the threshold members[] set.
+    //   3. Decode signature_b64; verify against the anchor's canonical body.
+    //   4. Append to ThresholdAggregator; if threshold met, call
+    //      Anchor::sign_threshold_partial(...) + publish.
+    json_ok(PartialSubmitResponse {
+        anchor_id: anchor_id_str,
+        collected: 1, // placeholder — real impl reads from persistent buffer
+        threshold: 0, // placeholder
+        status: "collecting".to_owned(),
+        aggregated_anchor_id: None,
+    })
+}
+
+/// `GET /api/admin/v1/spaces/{space_id}/multisig/pending`.
+#[salvo::oapi::endpoint(operation_id = "cx.admin.multisig.pending", tags("admin", "multisig"))]
+pub async fn admin_list_multisig_pending(
+    aa: AuthArgs,
+    depot: &mut Depot,
+    req: &mut Request,
+    space_id: PathParam<String>,
+) -> JsonResult<MultisigPendingResponse> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let _session = aa.authenticated_session(state, req)?;
+    let _space_id = SpaceId::new(space_id.into_inner()).map_err(|e| {
+        AppError::new(ErrorCode::InvalidParam, format!("invalid space_id: {e}"))
+            .with_status(StatusCode::BAD_REQUEST)
+    })?;
+
+    // TODO(mal-11): replace with a query against the persistent multisig
+    // buffer. Round 22 returns an empty list so the H'9 panel renders the
+    // empty-state correctly until production multisig flow lands.
+    json_ok(MultisigPendingResponse::default())
 }
 
 // ── Local helpers ─────────────────────────────────────────────────────────

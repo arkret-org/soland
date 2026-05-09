@@ -154,8 +154,8 @@ pub use admin_cells::{admin_get_cell, admin_list_cells};
 pub use admin_control::{admin_emit_resync_required, admin_emit_unauthorized};
 pub use anchor_admin::{
     admin_compact_anchor_dag, admin_get_anchor_dag, admin_get_anchorer,
-    admin_list_bottom_global, admin_list_space_bottom, admin_reconfigure_anchorer,
-    admin_repair_bottom,
+    admin_list_bottom_global, admin_list_multisig_pending, admin_list_space_bottom,
+    admin_reconfigure_anchorer, admin_repair_bottom, admin_submit_multisig_partial,
 };
 pub use space::{
     add_space_member, create_space, delete_space, export_space, invite_token_matches_space,
@@ -405,6 +405,7 @@ mod operation_conformance_tests {
                 jws_replay_window_seconds: 0,
                 jws_replay_window_per_family: std::collections::BTreeMap::new(),
                 lattice_first: false,
+                anchorer_signing_key_seed: None,
             },
             Db { pool: None },
         )

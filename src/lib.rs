@@ -492,6 +492,14 @@ pub fn router_with_rate_limiter_config(
                 .push(
                     Router::with_path("spaces/{space_id}/anchor-dag/compact")
                         .post(admin_compact_anchor_dag),
+                )
+                .push(
+                    Router::with_path("spaces/{space_id}/multisig/pending")
+                        .get(admin_list_multisig_pending),
+                )
+                .push(
+                    Router::with_path("spaces/{space_id}/multisig/{anchor_id}/partial")
+                        .post(admin_submit_multisig_partial),
                 ),
         );
     let doc = cached_contrix_openapi_doc(&router);

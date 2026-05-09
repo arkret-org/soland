@@ -168,6 +168,25 @@ pub trait LatticeKind: Send + Sync {
     ) -> Result<Option<String>, LatticeKindError> {
         Ok(None)
     }
+
+    /// Round 22: durable Contrix event kinds (`cx.<facet>.<verb>`) whose
+    /// projection feeds **this** cell family. Empty by default — only the
+    /// cell families that have a 1:N event-kind → cell-family mapping
+    /// declare it (mostly the `cx.space.<facet>` lifecycle cells, the
+    /// `cx.message.*` / `cx.reaction.*` / `cx.entity.*` projection cells,
+    /// and the `cx.consent.*` / `cx.member.*` state cells). The
+    /// [`LatticeRegistry`] inverts this declaration into a global event-kind
+    /// → `LatticeKind` index used by [`LatticeRegistry::lookup_for_event_kind`]
+    /// to drive `ProjectionState::apply_via_lattice_registry`.
+    ///
+    /// SDK gap (round 22): the parallel contrix-rust-sdk round 22 agent is
+    /// adding a sibling `event_kinds()` directly on `contrix_sdk::lattice::
+    /// LatticeKind`. Once that lands we can collapse this declaration with
+    /// the SDK side; until then this method shadows the spec mapping inside
+    /// soland.
+    fn event_kinds(&self) -> &'static [&'static str] {
+        &[]
+    }
 }
 
 /// Canonical-cell-family registry. Holds one `Box<dyn LatticeKind>` per
@@ -176,9 +195,22 @@ pub trait LatticeKind: Send + Sync {
 /// The Move/Anchor receive path iterates Anchor frontier Moves, routes
 /// each effect to the matching `LatticeKind`, and applies `Lattice::join`
 /// over the per-cell anchored ops list.
+///
+/// Round 22 added the inverted `event_kind → cell_family` index built from
+/// each impl's [`LatticeKind::event_kinds`] declaration. That powers the
+/// `lattice_first` apply path in `ProjectionState`: durable Events (legacy
+/// projection input) look up the owning cell family before falling back to
+/// the inline `apply()` dispatcher.
 #[derive(Default)]
 pub struct LatticeRegistry {
     families: BTreeMap<&'static str, Box<dyn LatticeKind>>,
+    /// Inverted index: durable event_kind → cell_family. Filled at
+    /// [`Self::register`] time; collisions are tolerated (last-writer-wins,
+    /// matching the families map). For most kinds this is a single mapping
+    /// (`cx.consent.grant → cx.component.consent.grant.v1`), but space
+    /// lifecycle / membership both fan one event into one cell family
+    /// each.
+    event_kind_index: BTreeMap<&'static str, &'static str>,
 }
 
 impl LatticeRegistry {
@@ -192,7 +224,15 @@ impl LatticeRegistry {
     where
         K: LatticeKind + 'static,
     {
-        self.families.insert(kind.cell_family(), Box::new(kind));
+        // Snapshot the event_kinds declaration BEFORE moving the impl into
+        // the families map — the inverted index uses the same `&'static str`
+        // entries so lookups are O(log n) without re-borrowing through the
+        // boxed trait object.
+        let family = kind.cell_family();
+        for ek in kind.event_kinds() {
+            self.event_kind_index.insert(*ek, family);
+        }
+        self.families.insert(family, Box::new(kind));
     }
 
     /// Look up the impl for a cell_family, returning `None` for unknown
@@ -200,6 +240,22 @@ impl LatticeRegistry {
     /// the family's `Criticality` declaration).
     pub fn lookup(&self, cell_family: &str) -> Option<&dyn LatticeKind> {
         self.families.get(cell_family).map(|boxed| boxed.as_ref())
+    }
+
+    /// Round 22: look up the [`LatticeKind`] that owns the given durable
+    /// event_kind (e.g. `cx.consent.grant`). Returns `None` for events
+    /// that have no cell-family mapping declared (most messaging /
+    /// reaction / entity / relation events fall here; those still flow
+    /// through the inline durable-Event projection cache).
+    pub fn lookup_for_event_kind(&self, event_kind: &str) -> Option<&dyn LatticeKind> {
+        let family = self.event_kind_index.get(event_kind)?;
+        self.lookup(family)
+    }
+
+    /// Round 22: number of distinct durable event kinds mapped through the
+    /// registry. Used by tests + diagnostic logs.
+    pub fn event_kind_mappings(&self) -> usize {
+        self.event_kind_index.len()
     }
 
     /// Number of registered families. Used by tests to confirm migration

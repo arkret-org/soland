@@ -51,6 +51,9 @@ impl BottomPolicy {
 
 macro_rules! singleton_lattice {
     ($struct_name:ident, $cell_family:expr, $lattice:expr, $bottom:expr, $criticality:expr) => {
+        singleton_lattice!($struct_name, $cell_family, $lattice, $bottom, $criticality, &[]);
+    };
+    ($struct_name:ident, $cell_family:expr, $lattice:expr, $bottom:expr, $criticality:expr, $event_kinds:expr) => {
         pub struct $struct_name;
         impl LatticeKind for $struct_name {
             fn cell_family(&self) -> &'static str {
@@ -76,12 +79,18 @@ macro_rules! singleton_lattice {
             ) -> Result<Option<String>, LatticeKindError> {
                 Ok(None)
             }
+            fn event_kinds(&self) -> &'static [&'static str] {
+                $event_kinds
+            }
         }
     };
 }
 
 macro_rules! per_subject_lattice {
     ($struct_name:ident, $cell_family:expr, $lattice:expr, $bottom:expr, $criticality:expr, $subject_field:expr) => {
+        per_subject_lattice!($struct_name, $cell_family, $lattice, $bottom, $criticality, $subject_field, &[]);
+    };
+    ($struct_name:ident, $cell_family:expr, $lattice:expr, $bottom:expr, $criticality:expr, $subject_field:expr, $event_kinds:expr) => {
         pub struct $struct_name;
         impl LatticeKind for $struct_name {
             fn cell_family(&self) -> &'static str {
@@ -113,6 +122,9 @@ macro_rules! per_subject_lattice {
                         field: $subject_field,
                     })
             }
+            fn event_kinds(&self) -> &'static [&'static str] {
+                $event_kinds
+            }
         }
     };
 }
@@ -129,7 +141,8 @@ per_subject_lattice!(
     SdkLatticeKind::OrSet,
     BottomPolicy::Reject,
     Criticality::Required,
-    "consent_id"
+    "consent_id",
+    &["cx.consent.grant", "cx.consent.revoke"]
 );
 
 per_subject_lattice!(
@@ -249,7 +262,8 @@ singleton_lattice!(
     "cx.component.space.organization.v1",
     SdkLatticeKind::CasRegister,
     BottomPolicy::Reject,
-    Criticality::Required
+    Criticality::Required,
+    &["cx.space.update"]
 );
 
 singleton_lattice!(
@@ -289,7 +303,8 @@ singleton_lattice!(
     "cx.component.space.destroy.v1",
     SdkLatticeKind::CasRegister,
     BottomPolicy::Reject,
-    Criticality::Required
+    Criticality::Required,
+    &["cx.space.destroy"]
 );
 
 singleton_lattice!(
@@ -413,7 +428,16 @@ per_subject_lattice!(
     SdkLatticeKind::Fsm,
     BottomPolicy::Reject,
     Criticality::Required,
-    "actor_id"
+    "actor_id",
+    &[
+        "cx.membership.join",
+        "cx.membership.leave",
+        "cx.membership.kick",
+        "cx.membership.ban",
+        "cx.membership.unban",
+        "cx.membership.knock",
+        "cx.member.state",
+    ]
 );
 
 // ────────────────────────── OrderedLog families ──────────────────────────
@@ -427,7 +451,8 @@ singleton_lattice!(
     "cx.component.space.create.v1",
     SdkLatticeKind::OrderedLog,
     BottomPolicy::Reject,
-    Criticality::Required
+    Criticality::Required,
+    &["cx.space.create"]
 );
 
 singleton_lattice!(
@@ -843,5 +868,90 @@ mod tests {
         assert!(registry
             .lookup("cx.component.does.not.exist.v999")
             .is_none());
+    }
+
+    /// Round 22: durable event_kind → cell_family inversion. The
+    /// LatticeRegistry now indexes `LatticeKind::event_kinds()` so the
+    /// `lattice_first` apply path can decide whether a given Operation
+    /// has a cell-family routing or is a durable-Event-only fallback.
+    #[test]
+    fn event_kind_index_resolves_consent_grant_and_revoke() {
+        let registry = default_lattice_registry();
+        let grant = registry
+            .lookup_for_event_kind("cx.consent.grant")
+            .expect("cx.consent.grant should map to consent.grant.v1 cell");
+        assert_eq!(grant.cell_family(), "cx.component.consent.grant.v1");
+        let revoke = registry
+            .lookup_for_event_kind("cx.consent.revoke")
+            .expect("cx.consent.revoke shares the consent.grant.v1 cell (or-set rm)");
+        assert_eq!(revoke.cell_family(), "cx.component.consent.grant.v1");
+    }
+
+    #[test]
+    fn event_kind_index_resolves_membership_to_member_state_cell() {
+        let registry = default_lattice_registry();
+        for ek in [
+            "cx.membership.join",
+            "cx.membership.leave",
+            "cx.membership.kick",
+            "cx.membership.ban",
+            "cx.membership.unban",
+            "cx.membership.knock",
+            "cx.member.state",
+        ] {
+            let kind = registry
+                .lookup_for_event_kind(ek)
+                .unwrap_or_else(|| panic!("missing event_kind mapping for {ek}"));
+            assert_eq!(kind.cell_family(), "cx.component.member.state.v1");
+        }
+    }
+
+    #[test]
+    fn event_kind_index_resolves_space_lifecycle() {
+        let registry = default_lattice_registry();
+        assert_eq!(
+            registry
+                .lookup_for_event_kind("cx.space.create")
+                .unwrap()
+                .cell_family(),
+            "cx.component.space.create.v1"
+        );
+        assert_eq!(
+            registry
+                .lookup_for_event_kind("cx.space.update")
+                .unwrap()
+                .cell_family(),
+            "cx.component.space.organization.v1"
+        );
+        assert_eq!(
+            registry
+                .lookup_for_event_kind("cx.space.destroy")
+                .unwrap()
+                .cell_family(),
+            "cx.component.space.destroy.v1"
+        );
+    }
+
+    #[test]
+    fn event_kind_index_misses_durable_only_kinds() {
+        let registry = default_lattice_registry();
+        // Messages / reactions / read markers / entities don't have a
+        // cell_family in the spec — registry must miss; the
+        // `apply_via_lattice_registry` path falls through to inline
+        // dispatch.
+        assert!(registry.lookup_for_event_kind("cx.message.create").is_none());
+        assert!(registry.lookup_for_event_kind("cx.reaction.add").is_none());
+        assert!(registry.lookup_for_event_kind("cx.entity.update").is_none());
+    }
+
+    #[test]
+    fn event_kind_mappings_count_is_at_least_membership_consent_lifecycle() {
+        let registry = default_lattice_registry();
+        // 7 membership + 2 consent + 3 space lifecycle = 12 minimum.
+        assert!(
+            registry.event_kind_mappings() >= 12,
+            "expected ≥12 event_kind mappings, got {}",
+            registry.event_kind_mappings()
+        );
     }
 }

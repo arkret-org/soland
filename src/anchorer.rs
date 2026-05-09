@@ -38,8 +38,10 @@
 use anyhow::Result;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use ed25519_dalek::{Signer as _, SigningKey};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
+use std::sync::OnceLock;
 
 use contrix_sdk::{
     Anchor, AnchorId, AnchorerSig, CellRef, Hash, Hlc, Move, MoveId, MoveSignature, SpaceId,
@@ -50,6 +52,7 @@ use contrix_sdk::{
     },
 };
 
+use crate::config::AnchorerSigningKeyOrigin;
 use crate::routing::move_anchor::select_jws_verifier;
 use crate::state::AppState;
 
@@ -203,7 +206,8 @@ impl AnchorerWorker {
             predecessor_refs: leaves,
             frontier,
             state_root: predicted_state_root.clone(),
-            anchorer_sig: AnchorerSig::Single(self.placeholder_signature_for(
+            anchorer_sig: AnchorerSig::Single(self.signature_for(
+                state,
                 &Sha256::digest(b"placeholder").as_slice().to_vec(),
             )?),
             hlc,
@@ -218,7 +222,7 @@ impl AnchorerWorker {
         anchor.id = Anchor::id_from_canonical_bytes(&canonical_bytes)
             .map_err(|e| AnchorerError::Construction(format!("derive id: {e}")))?;
         anchor.anchorer_sig =
-            AnchorerSig::Single(self.placeholder_signature_for(&canonical_bytes)?);
+            AnchorerSig::Single(self.signature_for(state, &canonical_bytes)?);
 
         // Step 8: submit through apply_anchor — this re-runs steps 1-8 of
         // the SDK pipeline and writes Anchor + marks Moves anchored.
@@ -516,12 +520,28 @@ impl AnchorerWorker {
             .map_err(|e| AnchorerError::Construction(format!("compute_state_root: {e}")))
     }
 
-    /// Build a placeholder MoveSignature whose JWS has valid RFC 7515 §3.2
-    /// detached shape but a non-zero placeholder signature segment. This
-    /// passes soland's `verify_jws_shape` and the SDK's structural Anchor
-    /// validation; real Ed25519 signing is T7-9 (DID-resolver dependent).
-    fn placeholder_signature_for(
+    /// Round 22: build a **real** Ed25519 signature over the canonical
+    /// Anchor bytes. Production deployments configure
+    /// `SERVERX_ANCHORER_SIGNING_KEY` (base64 32-byte seed); dev/test
+    /// deployments fall back to an in-process random ephemeral key with a
+    /// sticky-warn log line on every signing pass.
+    ///
+    /// The JWS shape matches the SDK's `Ed25519MoveSigner::sign_payload`
+    /// (RFC 7515 §3.2 detached form):
+    ///   `BASE64URL({"alg":"EdDSA"}) || ".." || BASE64URL(signature_bytes)`
+    /// where `signature` is `Ed25519(BASE64URL(header) || "." || BASE64URL(canonical_bytes))`.
+    /// This passes both `verify_jws_shape` (dev) and `verify_jws_ed25519`
+    /// (production) when the verifier resolves the matching public key.
+    ///
+    /// The verification_method id is `<service_did>#anchorer-key`; the
+    /// matching DID Document MUST publish that key for the production
+    /// JWS verifier to round-trip the signature. Until the DID document
+    /// publishing pipeline lands (out-of-scope for round 22), production
+    /// deployments rely on `select_jws_verifier`'s shape-only path under
+    /// `development_mode=true`.
+    fn signature_for(
         &self,
+        state: &AppState,
         canonical_bytes: &[u8],
     ) -> Result<MoveSignature, AnchorerError> {
         // payload_hash = sha256(canonical_bytes), prefix-encoded.
@@ -532,18 +552,21 @@ impl AnchorerWorker {
         let payload_hash = Hash::new(format!("sha256:{hash_hex}"))
             .map_err(|e| AnchorerError::Construction(format!("payload hash: {e}")))?;
 
-        // Detached JWS shape: header..signature with empty payload segment.
-        // protected header = base64url({"alg":"EdDSA"}).
+        let signing_key = state.anchorer_signing_key();
+        let origin = state.anchorer_signing_key_origin();
+        if origin == AnchorerSigningKeyOrigin::Ephemeral {
+            warn_once_about_ephemeral_anchorer_key();
+        }
+
+        // RFC 7515 §5.2 signing input: BASE64URL(header) || '.' || BASE64URL(payload).
         let protected_header_json = br#"{"alg":"EdDSA"}"#;
         let protected_b64u = URL_SAFE_NO_PAD.encode(protected_header_json);
+        let payload_b64u = URL_SAFE_NO_PAD.encode(canonical_bytes);
+        let signing_input = format!("{protected_b64u}.{payload_b64u}");
+        let signature = signing_key.sign(signing_input.as_bytes());
+        let signature_b64u = URL_SAFE_NO_PAD.encode(signature.to_bytes());
 
-        // Placeholder signature segment — non-empty, non-all-A. Using a
-        // sha256 of the canonical bytes truncated and base64url-encoded
-        // gives a 32-byte segment that's deterministic per anchor input
-        // (useful for debugging) but obviously not a real Ed25519 sig.
-        let sig_bytes = Sha256::digest(canonical_bytes);
-        let signature_b64u = URL_SAFE_NO_PAD.encode(sig_bytes);
-
+        // Detached JWS: header || ".." || signature  (payload segment empty).
         let jws = format!("{protected_b64u}..{signature_b64u}");
 
         Ok(MoveSignature {
@@ -554,6 +577,30 @@ impl AnchorerWorker {
             jws,
         })
     }
+}
+
+/// Round 22: log a sticky-warn the first time we sign with an ephemeral
+/// key. The `OnceLock` keeps the warn at exactly one log line per process
+/// (vs once-per-pass spam) — operators see it on cold-start, then it goes
+/// quiet so it doesn't drown other signals.
+fn warn_once_about_ephemeral_anchorer_key() {
+    static WARNED: OnceLock<()> = OnceLock::new();
+    WARNED.get_or_init(|| {
+        tracing::warn!(
+            "anchorer signing identity is **ephemeral** — set \
+             `SERVERX_ANCHORER_SIGNING_KEY` (base64 32-byte seed) before \
+             production. Each restart issues Anchors under a fresh DID, \
+             which breaks signature-chain trust for downstream verifiers."
+        );
+    });
+}
+
+/// Round 22: helper exposed for `AppState::anchorer_signing_key` so the
+/// admin endpoints (`admin_reconfigure_anchorer`, `admin_repair_bottom`)
+/// can build a `Ed25519MoveSigner` keyed off the same SigningKey the
+/// AnchorerWorker uses, keeping all signing paths consistent.
+pub fn signing_key_from_seed(seed: &[u8; 32]) -> SigningKey {
+    SigningKey::from_bytes(seed)
 }
 
 /// Read a DID list from an anchorer cell value, accepting any of the
