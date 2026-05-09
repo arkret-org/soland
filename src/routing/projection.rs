@@ -452,12 +452,31 @@ pub fn project_federation_operation(state: &AppState, origin: &str, operation: &
     }
     // Also apply to the deterministic reducer
     if let Ok(mut proj) = state.projection.lock() {
-        proj.apply(operation, &state.hlc);
+        apply_with_lattice_first(state, &mut proj, operation);
     }
     append_projection_event(
         state,
         projection_event_from_operation(operation, Some(origin)),
     );
+}
+
+/// Round 21: respect [`crate::config::AppConfig::lattice_first`]. When
+/// the flag is `true`, route through the LatticeRegistry probe path;
+/// otherwise call the legacy `apply` directly. Helper exists in this
+/// module so both `project_inbound_membership_operation` and
+/// `project_accepted_operations` go through one branch and a future
+/// LatticeRegistry takeover only edits one site.
+fn apply_with_lattice_first(
+    state: &AppState,
+    proj: &mut crate::reducer::ProjectionState,
+    operation: &Operation,
+) {
+    if state.config.lattice_first {
+        let registry = crate::reducer::lattice_kinds::default_lattice_registry();
+        proj.apply_via_lattice_registry(operation, &state.hlc, &registry);
+    } else {
+        proj.apply(operation, &state.hlc);
+    }
 }
 
 pub fn project_accepted_operations(state: &AppState, repo_id: &str, operations: &[Operation]) {
@@ -478,7 +497,7 @@ pub fn project_accepted_operations(state: &AppState, repo_id: &str, operations: 
         }
         // Also apply to the deterministic reducer
         if let Ok(mut proj) = state.projection.lock() {
-            proj.apply(operation, &state.hlc);
+            apply_with_lattice_first(state, &mut proj, operation);
         }
         let projected = projection_event_from_operation(operation, Some(repo_id));
         // C10.B (2026-05-09 十轮): broadcast every accepted projection

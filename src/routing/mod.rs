@@ -404,6 +404,7 @@ mod operation_conformance_tests {
                 // replay-window enforcement so they pass.
                 jws_replay_window_seconds: 0,
                 jws_replay_window_per_family: std::collections::BTreeMap::new(),
+                lattice_first: false,
             },
             Db { pool: None },
         )

@@ -307,6 +307,11 @@ impl ProjectionState {
     /// `ReducerKind` trait + `ReducerRegistry` apparatus, which added
     /// zero value over inline match dispatch (every per-kind stub was a
     /// thin delegate to a `ProjectionState::apply_*` helper).
+    ///
+    /// Round 21: when `AppConfig::lattice_first` is true the caller routes
+    /// through [`Self::apply_via_lattice_registry`] first; that path is a
+    /// stub today (the registry only maps Move/Anchor effects, not durable
+    /// Events) but the wire is in place for the eventual flip.
     pub fn apply(&mut self, operation: &Operation, _hlc: &ServerHlc) -> ProjectionEffect {
         use crate::kinds::*;
         let now = operation.created_at;
@@ -362,6 +367,38 @@ impl ProjectionState {
         hlc: &ServerHlc,
     ) -> Vec<ProjectionEffect> {
         operations.iter().map(|op| self.apply(op, hlc)).collect()
+    }
+
+    /// Round 21 — opt-in `lattice_first` apply path. Probes the supplied
+    /// [`LatticeRegistry`] for a `cell_family` that handles this
+    /// Operation's canonical kind; on a hit it would invoke the
+    /// LatticeKind's effect-application logic. On a miss (today: every
+    /// durable Event, since the kind→family mapping table isn't populated
+    /// yet) it falls back to [`Self::apply`].
+    ///
+    /// This is the wire for the eventual full LatticeRegistry takeover —
+    /// flipping `AppConfig::lattice_first=true` enables the probe today
+    /// without changing semantics. Once each [`registry::LatticeKind`]
+    /// impl exposes its `event_kinds()`, the fallback can be deleted and
+    /// the legacy match arm in [`Self::apply`] retired.
+    pub fn apply_via_lattice_registry(
+        &mut self,
+        operation: &Operation,
+        hlc: &ServerHlc,
+        registry: &registry::LatticeRegistry,
+    ) -> ProjectionEffect {
+        // Stub: today no LatticeKind exposes a `event_kinds()` declaration,
+        // so registry lookup by canonical kind is always a miss. This
+        // explicit miss branch is what makes the flag a no-op (apart from
+        // a debug log) until the mapping table is filled in.
+        let _ = registry;
+        if let Some(kind) = crate::kinds::canonical_kind_for_operation(operation) {
+            tracing::trace!(
+                event_kind = %kind,
+                "lattice_first probe: no cell_family mapping registered yet; falling back to inline dispatch"
+            );
+        }
+        self.apply(operation, hlc)
     }
 
     fn apply_message(

@@ -35,6 +35,7 @@
 use contrix_sdk::identity::{
     CompositeDidResolver, DidKeyResolver, DidUuidResolver, DidWebResolver, DidWebvhResolver,
 };
+use std::time::Duration;
 
 use crate::config::AppConfig;
 
@@ -68,6 +69,39 @@ fn method_allowed(config: &AppConfig, method: &str) -> bool {
         .any(|allowed| allowed.eq_ignore_ascii_case(method))
 }
 
+/// Round 21: probe a starid `<URL>/describe` endpoint to confirm the
+/// configured `starid_webvh_resolver_url` actually responds before we
+/// commit to mounting the [`DidWebvhResolver`] in the chain. Returns
+/// `Ok(())` only when the HTTP GET returns a 2xx response in under
+/// `timeout`.
+///
+/// On the boot path (see `main.rs`), the caller catches `Err(_)` and
+/// clears `config.starid_webvh_resolver_url = None` so
+/// [`build_did_resolver_chain`] omits the webvh resolver. This keeps a
+/// misconfigured deployment from silently breaking `did:webvh` lookups —
+/// the chain reports `not supported` for `did:webvh` rather than dialing
+/// an unreachable endpoint per request.
+pub async fn probe_starid_describe(url: &str, timeout: Duration) -> Result<(), String> {
+    let trimmed = url.trim_end_matches('/');
+    let describe_url = format!("{trimmed}/describe");
+    let client = reqwest::Client::builder()
+        .timeout(timeout)
+        .build()
+        .map_err(|e| format!("failed to build reqwest client: {e}"))?;
+    let resp = client
+        .get(&describe_url)
+        .send()
+        .await
+        .map_err(|e| format!("starid /describe request failed: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!(
+            "starid /describe returned non-2xx status {}",
+            resp.status()
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -95,6 +129,7 @@ mod tests {
             starid_webvh_resolver_url: None,
             jws_replay_window_seconds: 300,
             jws_replay_window_per_family: std::collections::BTreeMap::new(),
+            lattice_first: false,
         }
     }
 

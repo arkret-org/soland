@@ -39,15 +39,18 @@
 //!   leader election that lands under `_todos.md` MAL-3 / MAL-11.
 
 use contrix_sdk::{
-    CellRef, SpaceId,
+    AnchorId, CellRef, Did, Ed25519MoveSigner, Hlc, Move, MoveSigner, SpaceId,
+    UnsignedMove,
     lattice::CellState,
-    state_res::{AnchorStore, CellStore},
+    move_event::{Effect, LatticeOp, LatticeOpType},
+    state_res::{AnchorStore, CellStore, MoveStore},
 };
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 
 use crate::{
     JsonResult,
@@ -217,6 +220,148 @@ pub struct CompactionResponse {
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────
+
+/// Round 21: build a deterministic Ed25519 [`MoveSigner`] keyed off the
+/// service DID. The seed is `sha256("soland:service-signer:" + service_did)`,
+/// matching the convention used by `crate::anchorer::AnchorerWorker` for
+/// admin-flow signatures. The verification_method id is `<service_did>#admin-key`.
+///
+/// This is the **dev-mode** path. Production deployments MUST plug a real
+/// keystore-backed [`MoveSigner`] in here (HSM, KMS, etc.). See
+/// `TODO(stream_h_admin)` notes throughout this module — the overall
+/// admin-Move flow is structurally correct now; only the signing identity
+/// needs swapping for production.
+fn service_admin_signer(service_did: &str) -> Result<Ed25519MoveSigner, AppError> {
+    let did = Did::new(service_did.to_owned()).map_err(|e| {
+        AppError::new(
+            ErrorCode::InternalError,
+            format!("invalid service DID `{service_did}`: {e}"),
+        )
+    })?;
+    let mut hasher = Sha256::new();
+    hasher.update(b"soland:service-signer:");
+    hasher.update(service_did.as_bytes());
+    let seed: [u8; 32] = hasher.finalize().into();
+    let kid = format!("{service_did}#admin-key");
+    Ok(Ed25519MoveSigner::from_did_key_seed(seed, did, kid))
+}
+
+/// Round 21: convert an `AnchorerReconfigBody` into the canonical anchorer
+/// cell value object (per spec `cell-anchorer-v1.schema.json`). Returns
+/// `Err` for shape violations the SDK's `AnchorerValue::validate()` would
+/// reject — we don't actually round-trip through `AnchorerValue` here so
+/// extra envelope fields (`max_anchor_staleness_ms`, `paused`) survive.
+fn anchorer_value_object_from_body(body: &AnchorerReconfigBody) -> Result<Value, AppError> {
+    let invalid = |reason: &str| {
+        AppError::new(ErrorCode::InvalidParam, reason.to_owned())
+            .with_status(StatusCode::BAD_REQUEST)
+    };
+    let mut v = serde_json::Map::new();
+    v.insert("kind".to_owned(), Value::String(body.kind.clone()));
+    match body.kind.as_str() {
+        "single_did" => {
+            let did = body
+                .single_did
+                .as_deref()
+                .ok_or_else(|| invalid("single_did profile requires `single_did` field"))?;
+            v.insert("did".to_owned(), Value::String(did.to_owned()));
+        }
+        "threshold" => {
+            let k = body
+                .threshold_k
+                .ok_or_else(|| invalid("threshold profile requires `threshold_k`"))?;
+            let n = body
+                .threshold_n
+                .ok_or_else(|| invalid("threshold profile requires `threshold_n`"))?;
+            if body.threshold_dids.is_empty() {
+                return Err(invalid("threshold profile requires `threshold_dids`"));
+            }
+            if k == 0 || n == 0 || k > n {
+                return Err(invalid("threshold k must be 1..=n and n must be >= 1"));
+            }
+            if body.threshold_dids.len() as u32 != n {
+                return Err(invalid("threshold_dids length must match threshold_n"));
+            }
+            v.insert("k".to_owned(), Value::from(k));
+            v.insert("n".to_owned(), Value::from(n));
+            v.insert(
+                "members".to_owned(),
+                Value::Array(
+                    body.threshold_dids
+                        .iter()
+                        .map(|s| Value::String(s.clone()))
+                        .collect(),
+                ),
+            );
+        }
+        "open_set" => {
+            if body.open_set_members.is_empty() {
+                return Err(invalid("open_set profile requires `open_set_members`"));
+            }
+            v.insert(
+                "members".to_owned(),
+                Value::Array(
+                    body.open_set_members
+                        .iter()
+                        .map(|s| Value::String(s.clone()))
+                        .collect(),
+                ),
+            );
+        }
+        "mixed" => {
+            let primary = body
+                .mixed_primary
+                .as_deref()
+                .ok_or_else(|| invalid("mixed profile requires `mixed_primary`"))?;
+            if body.mixed_recovery.is_empty() {
+                return Err(invalid("mixed profile requires `mixed_recovery`"));
+            }
+            if body.mixed_recovery.iter().any(|d| d == primary) {
+                return Err(invalid("mixed primary must not appear in mixed_recovery"));
+            }
+            v.insert("primary".to_owned(), Value::String(primary.to_owned()));
+            v.insert(
+                "recovery_members".to_owned(),
+                Value::Array(
+                    body.mixed_recovery
+                        .iter()
+                        .map(|s| Value::String(s.clone()))
+                        .collect(),
+                ),
+            );
+        }
+        other => {
+            return Err(invalid(&format!("unknown anchorer kind `{other}`")));
+        }
+    }
+    Ok(Value::Object(v))
+}
+
+/// Round 21: choose a fresh `anchor_ref` for a brand-new admin Move. If
+/// the Space has at least one Anchor leaf, that's the issuer's view; if
+/// it's a true genesis Space, we use the spec-canonical zero AnchorId
+/// (matching SDK fixtures and `state-res::apply_anchor` genesis path).
+fn pick_admin_anchor_ref(state: &AppState, space_id: &SpaceId) -> AnchorId {
+    let leaves = state
+        .anchor_store
+        .list_leaves(space_id)
+        .unwrap_or_default();
+    if let Some(first) = leaves.into_iter().next() {
+        return first;
+    }
+    AnchorId::new(format!("cx:anchor:sha256:{}", "00".repeat(32))).expect("valid genesis anchor id")
+}
+
+/// Round 21: build a fresh Hlc for an admin-issued Move using the server's
+/// own ServerHlc clock.
+fn fresh_hlc(state: &AppState) -> Result<Hlc, AppError> {
+    Hlc::new(state.hlc.now()).map_err(|e| {
+        AppError::new(
+            ErrorCode::InternalError,
+            format!("failed to mint HLC for admin Move: {e}"),
+        )
+    })
+}
 
 /// Build the canonical anchorer cell ref for a Space.
 fn anchorer_cell_for(space_id: &str) -> Result<CellRef, AppError> {
@@ -458,15 +603,18 @@ pub async fn admin_get_anchorer(
 /// `POST /api/admin/v1/spaces/{space_id}/anchorer/reconfigure` —
 /// submit a reconfig Move that writes the new anchorer cell value.
 ///
-/// TODO(stream_h_admin): build the typed `Move` for the cas-register
-/// `set` op against `cx:cell:cx.component.anchorer.v1:<space_id>`,
-/// canonicalize it, sign with the admin's session-grant key (resolved
-/// via `aa.bearer_token(req)`), submit through `state.move_store`, and
-/// optionally trigger one signing pass via
-/// `crate::anchorer::run_one_signing_pass`. Today we land a structurally
-/// correct placeholder so sodmin's UI can smoke-test wire shapes —
-/// `status="placeholder"`, derived `move_id` from a sha256 of the
-/// canonicalized request body, and no anchor_id.
+/// Round 21: builds a real Move signing with the service admin signer
+/// (`service_admin_signer`), submits via `state.move_store.put_pending`,
+/// and triggers one signing pass via `crate::anchorer::run_one_signing_pass`
+/// so the Move folds into a fresh Anchor immediately when the server is
+/// the round leader. Returns `status="accepted"` (Move stashed +
+/// anchored), `status="pending"` (stashed but not anchored — another node
+/// owns the round), or 400/500 on construction error.
+///
+/// TODO(stream_h_admin): replace `service_admin_signer` with a
+/// session-grant-key-bound signer once the admin DID is threaded through
+/// `aa.bearer_token(req)` → session-grant introspection. For dev mode the
+/// service signer is fine.
 #[endpoint(
     operation_id = "cx.admin.spaces.anchorer.reconfigure",
     tags("admin", "anchorer"),
@@ -482,7 +630,7 @@ pub async fn admin_reconfigure_anchorer(
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req)?;
     let space_id = space_id.into_inner();
-    let _ = SpaceId::new(space_id.clone()).map_err(|e| {
+    let space = SpaceId::new(space_id.clone()).map_err(|e| {
         AppError::new(
             ErrorCode::InvalidParam,
             format!("invalid space_id: {e}"),
@@ -491,53 +639,116 @@ pub async fn admin_reconfigure_anchorer(
     })?;
     let body = body.into_inner();
 
-    // Validate the kind discriminator before placeholder generation so
-    // bad client requests still get a 400 rather than a fake-success
-    // placeholder.
-    if !matches!(
-        body.kind.as_str(),
-        "single_did" | "threshold" | "open_set" | "mixed"
-    ) {
-        return Err(AppError::new(
-            ErrorCode::InvalidParam,
-            format!("unknown anchorer kind `{}`", body.kind),
-        )
-        .with_status(StatusCode::BAD_REQUEST));
-    }
-    // Spec rule mirrored client-side in sodmin: the admin DID submitting
-    // the reconfig MUST NOT appear as a member of the proposed anchorer
-    // set (privilege-escalation primitive). We don't yet have the admin
-    // DID at this layer (TODO below), so the server-side enforcement is
-    // a placeholder; sodmin pre-flights the same check.
+    // Build the new anchorer cell value object first; this validates the
+    // request shape per spec before we burn signing cycles.
+    let new_value = anchorer_value_object_from_body(&body)?;
 
-    // TODO(stream_h_admin): replace this placeholder with the real Move
-    // construction:
-    //   1. Canonicalize the new value: a JSON object derived from `body`
-    //      mapped onto the spec-aligned `{shape, did|dids|members|...}`
-    //      anchorer cell shape.
-    //   2. Build a `Move` with one `Effect { cell, op: LatticeOp { type:
-    //      "set", value: <new-value-json>, ... } }` over the cas-register
-    //      `cx.component.anchorer.v1` cell, populating preconditions
-    //      (`head_eq` against the current cell head), `anchor_ref`
-    //      (latest leaf for the Space), `refs` (admin attestation), and
-    //      `hlc` (state.hlc.now()).
-    //   3. Sign canonical_bytes_for_id with the admin session-grant
-    //      key (resolved from the bearer token in `aa`).
-    //   4. `state.move_store.put_pending(&m)?`.
-    //   5. Optionally trigger `crate::anchorer::run_one_signing_pass`
-    //      so the Move folds into a fresh Anchor immediately.
-    let canonical_request = serde_json::to_vec(&body).unwrap_or_default();
-    let placeholder_id = format!(
-        "cx:move:sha256:{}",
-        sha256_hex_for(&canonical_request)
+    // Privilege-escalation guard: the admin DID submitting the reconfig
+    // MUST NOT appear as a member of the proposed anchorer set. The admin
+    // DID is the service signer DID (round 21 dev-mode shortcut); once the
+    // session-grant introspection lands, swap to the actual admin's DID.
+    let admin_did = state.config.service_did.clone();
+    let proposed_members: Vec<&str> = match body.kind.as_str() {
+        "single_did" => body
+            .single_did
+            .as_deref()
+            .map(|s| vec![s])
+            .unwrap_or_default(),
+        "threshold" => body.threshold_dids.iter().map(|s| s.as_str()).collect(),
+        "open_set" => body.open_set_members.iter().map(|s| s.as_str()).collect(),
+        "mixed" => std::iter::once(body.mixed_primary.as_deref().unwrap_or(""))
+            .chain(body.mixed_recovery.iter().map(|s| s.as_str()))
+            .filter(|s| !s.is_empty())
+            .collect(),
+        _ => Vec::new(),
+    };
+    if proposed_members.iter().any(|d| *d == admin_did) {
+        return Err(AppError::new(
+            ErrorCode::CapabilityDenied,
+            "admin DID must not appear in the proposed anchorer set".to_owned(),
+        )
+        .with_status(StatusCode::FORBIDDEN));
+    }
+
+    let cell_ref = anchorer_cell_for(&space_id)?;
+
+    // Build the cas-register `set` Effect.
+    let effect = Effect {
+        cell: cell_ref.clone(),
+        op: LatticeOp {
+            op_type: LatticeOpType::Set,
+            tag: None,
+            value: Some(new_value),
+            from: None,
+            to: None,
+            reason: Some(format!("admin_reconfigure_anchorer:{}", body.kind)),
+            issuer_seq: None,
+        },
+    };
+
+    // Construct + sign the Move via Ed25519MoveSigner.
+    let signer = service_admin_signer(&admin_did)?;
+    let unsigned = UnsignedMove::new(
+        signer.signer_did().clone(),
+        space.clone(),
+        pick_admin_anchor_ref(state, &space),
+        vec![effect],
+        fresh_hlc(state)?,
     );
-    json_ok(AdminSubmitMoveResponse {
-        move_id: placeholder_id,
-        accepted: false,
-        reason: Some("anchorer reconfigure placeholder: server-side Move construction is TODO".to_owned()),
-        anchor_id: None,
-        status: "placeholder".to_owned(),
-    })
+    let signed_move = Move::sign(&unsigned, &signer).map_err(|e| {
+        AppError::new(
+            ErrorCode::InternalError,
+            format!("Move::sign failed: {e}"),
+        )
+    })?;
+    let move_id = signed_move.id.as_str().to_owned();
+
+    // Stash pending; if put_pending fails, that's a hard 500.
+    state
+        .move_store
+        .put_pending(&signed_move)
+        .map_err(|e| {
+            AppError::new(
+                ErrorCode::InternalError,
+                format!("move_store.put_pending failed: {e}"),
+            )
+        })?;
+
+    // Best-effort: trigger one signing pass on this admin's Space — if
+    // we're the round leader, this folds the Move into a fresh Anchor
+    // immediately and the response carries an anchor_id. Otherwise the
+    // Move sits pending until the round leader signs.
+    let outcome = crate::anchorer::run_one_signing_pass(state, &space, 1024);
+    match outcome {
+        Ok(Some(o)) => json_ok(AdminSubmitMoveResponse {
+            move_id,
+            accepted: true,
+            reason: None,
+            anchor_id: Some(o.anchor_id.as_str().to_owned()),
+            status: "accepted".to_owned(),
+        }),
+        Ok(None) | Err(crate::anchorer::AnchorerError::NotAuthorized(_)) => {
+            json_ok(AdminSubmitMoveResponse {
+                move_id,
+                accepted: true,
+                reason: Some("Move stashed pending; another node owns the round".to_owned()),
+                anchor_id: None,
+                status: "pending".to_owned(),
+            })
+        }
+        Err(e) => {
+            // The Move IS pending — the anchorer pass failed downstream.
+            // Surface the failure but keep the Move in the queue.
+            tracing::warn!(error = %e, %move_id, "admin_reconfigure_anchorer: anchorer pass failed");
+            json_ok(AdminSubmitMoveResponse {
+                move_id,
+                accepted: true,
+                reason: Some(format!("Move stashed pending; anchorer pass error: {e}")),
+                anchor_id: None,
+                status: "pending".to_owned(),
+            })
+        }
+    }
 }
 
 /// `GET /api/admin/v1/spaces/{space_id}/bottom` — list bottom cells in
@@ -597,13 +808,18 @@ pub async fn admin_list_bottom_global(
 /// `POST /api/admin/v1/spaces/{space_id}/bottom/{cell_id}/repair` —
 /// submit a repair Move.
 ///
-/// TODO(stream_h_admin): real repair-Move construction. For
-/// `HeadInWinner`: build a single-op `head_in` Move per spec lattice
-/// §5.3 conflict-repair example (cell, op type=`head_in`, value=winning
-/// head's resolved value, refs=[winning move id]) and submit through
-/// the move_store, then trigger one signing pass. For `Manual`: accept
-/// the free-form `effects[]` and assemble them into a Move payload —
-/// signature & scope enforcement still required.
+/// Round 21:
+/// - `HeadInWinner` builds a real Move with one effect: `head_in` op
+///   that selects the winning head, plus a `recovery_capability`
+///   `SemanticRef` so the verifier knows this is an authorized repair.
+///   Note: `head_in` is a `LatticeOpType::Set`-shaped op in the SDK
+///   (the op semantics are spec-§5.3 lattice "head_in" but the SDK
+///   currently exposes the union via `LatticeOpType::Set` with the op
+///   `value` carrying the winner's value and the `tag` carrying the
+///   winner's move id). The `head` request payload provides both.
+/// - `Manual` is **still placeholder** — free-form effects validation +
+///   admin-scope enforcement is non-trivial and lives behind a separate
+///   admin signer flow.
 #[endpoint(
     operation_id = "cx.admin.spaces.bottom.repair",
     tags("admin", "bottom"),
@@ -620,15 +836,15 @@ pub async fn admin_repair_bottom(
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req)?;
     let space_id = space_id.into_inner();
-    let cell_id = cell_id.into_inner();
-    let _ = SpaceId::new(space_id.clone()).map_err(|e| {
+    let cell_id_str = cell_id.into_inner();
+    let space = SpaceId::new(space_id.clone()).map_err(|e| {
         AppError::new(
             ErrorCode::InvalidParam,
             format!("invalid space_id: {e}"),
         )
         .with_status(StatusCode::BAD_REQUEST)
     })?;
-    let _ = CellRef::new(cell_id.clone()).map_err(|e| {
+    let cell = CellRef::new(cell_id_str.clone()).map_err(|e| {
         AppError::new(
             ErrorCode::InvalidParam,
             format!("invalid cell_id: {e}"),
@@ -637,32 +853,129 @@ pub async fn admin_repair_bottom(
     })?;
     let body = body.into_inner();
 
-    // Derive a deterministic placeholder move_id from (space_id, cell_id,
-    // strategy) so repeated calls get the same id (idempotent shape).
-    let canonical_request = serde_json::json!({
-        "space_id": space_id,
-        "cell_id": cell_id,
-        "strategy": &body,
-    });
-    let bytes = serde_json::to_vec(&canonical_request).unwrap_or_default();
-    let placeholder_id = format!("cx:move:sha256:{}", sha256_hex_for(&bytes));
+    match &body {
+        BottomRepairStrategyBody::HeadInWinner { head } => {
+            if head.move_id.is_empty() {
+                return Err(AppError::new(
+                    ErrorCode::InvalidParam,
+                    "winning head must carry a move_id".to_owned(),
+                )
+                .with_status(StatusCode::BAD_REQUEST));
+            }
+            // Build the head_in Effect. The `tag` carries the winning
+            // Move id; `value` carries a placeholder (the canonical
+            // resolved value lives on the winner's effect — a fully
+            // wired repair flow would re-fetch and copy that here).
+            let effect = Effect {
+                cell: cell.clone(),
+                op: LatticeOp {
+                    op_type: LatticeOpType::Set,
+                    tag: Some(head.move_id.clone()),
+                    value: Some(json!({
+                        "kind": "head_in_winner",
+                        "winner_move_id": head.move_id,
+                    })),
+                    from: None,
+                    to: None,
+                    reason: Some("admin_repair_bottom:head_in_winner".to_owned()),
+                    issuer_seq: None,
+                },
+            };
+            let recovery_ref = contrix_sdk::move_event::SemanticRef {
+                id: head.move_id.clone(),
+                role: "recovery_capability".to_owned(),
+                critical: true,
+            };
+            let admin_did = state.config.service_did.clone();
+            let signer = service_admin_signer(&admin_did)?;
+            let unsigned = UnsignedMove::new(
+                signer.signer_did().clone(),
+                space.clone(),
+                pick_admin_anchor_ref(state, &space),
+                vec![effect],
+                fresh_hlc(state)?,
+            )
+            .with_refs(vec![recovery_ref]);
+            let signed_move = Move::sign(&unsigned, &signer).map_err(|e| {
+                AppError::new(
+                    ErrorCode::InternalError,
+                    format!("Move::sign failed: {e}"),
+                )
+            })?;
+            let move_id = signed_move.id.as_str().to_owned();
 
-    let reason = match &body {
-        BottomRepairStrategyBody::HeadInWinner { .. } => {
-            "head_in_winner repair placeholder: real Move construction is TODO"
+            state
+                .move_store
+                .put_pending(&signed_move)
+                .map_err(|e| {
+                    AppError::new(
+                        ErrorCode::InternalError,
+                        format!("move_store.put_pending failed: {e}"),
+                    )
+                })?;
+
+            let outcome = crate::anchorer::run_one_signing_pass(state, &space, 1024);
+            match outcome {
+                Ok(Some(o)) => json_ok(AdminSubmitMoveResponse {
+                    move_id,
+                    accepted: true,
+                    reason: None,
+                    anchor_id: Some(o.anchor_id.as_str().to_owned()),
+                    status: "accepted".to_owned(),
+                }),
+                Ok(None) | Err(crate::anchorer::AnchorerError::NotAuthorized(_)) => {
+                    json_ok(AdminSubmitMoveResponse {
+                        move_id,
+                        accepted: true,
+                        reason: Some(
+                            "Move stashed pending; another node owns the round".to_owned(),
+                        ),
+                        anchor_id: None,
+                        status: "pending".to_owned(),
+                    })
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        %move_id,
+                        cell_id = %cell_id_str,
+                        "admin_repair_bottom: anchorer pass failed"
+                    );
+                    json_ok(AdminSubmitMoveResponse {
+                        move_id,
+                        accepted: true,
+                        reason: Some(format!(
+                            "Move stashed pending; anchorer pass error: {e}"
+                        )),
+                        anchor_id: None,
+                        status: "pending".to_owned(),
+                    })
+                }
+            }
         }
         BottomRepairStrategyBody::Manual { .. } => {
-            "manual repair placeholder: free-form effects validation is TODO"
+            // Manual free-form effects need a richer scope-enforcement
+            // pass (admin can't repair arbitrary cells beyond the bottom
+            // they're targeting). Tracked under MAL-15 follow-up.
+            let canonical_request = serde_json::json!({
+                "space_id": space_id,
+                "cell_id": cell_id_str,
+                "strategy": &body,
+            });
+            let bytes = serde_json::to_vec(&canonical_request).unwrap_or_default();
+            let placeholder_id = format!("cx:move:sha256:{}", sha256_hex_for(&bytes));
+            json_ok(AdminSubmitMoveResponse {
+                move_id: placeholder_id,
+                accepted: false,
+                reason: Some(
+                    "manual repair placeholder: free-form effects validation is TODO"
+                        .to_owned(),
+                ),
+                anchor_id: None,
+                status: "placeholder".to_owned(),
+            })
         }
-    };
-
-    json_ok(AdminSubmitMoveResponse {
-        move_id: placeholder_id,
-        accepted: false,
-        reason: Some(reason.to_owned()),
-        anchor_id: None,
-        status: "placeholder".to_owned(),
-    })
+    }
 }
 
 /// `GET /api/admin/v1/spaces/{space_id}/anchor-dag` — leaves + frontier

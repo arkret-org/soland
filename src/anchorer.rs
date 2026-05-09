@@ -7,18 +7,29 @@
 //! `state_root` (canonical Merkle, §4.2), signs an Anchor over the result,
 //! and submits it through `apply_anchor` (§4.3).
 //!
-//! # v1 scope (MVP)
+//! # v1 scope
 //!
-//! - **Single-DID anchorer mode only**. The `cx.component.anchorer.v1`
-//!   cell is consulted for authorization; if absent, the node's
-//!   `service_did` is treated as the implicit anchorer. Threshold /
-//!   open-set / mixed profiles are deferred (they need multi-signer
-//!   coordination + leader election).
-//! - **Placeholder JWS**. Anchorer signature uses a shape-valid JWS
-//!   sentinel (`eyJhbGciOiJFZERTQSJ9..<placeholder>`) — soland's verifier
-//!   accepts shape-only today (see [`routing::move_anchor::verify_jws_shape`]).
-//!   Real Ed25519 signing is T7-9 (depends on production DID resolver +
-//!   key management).
+//! - **All four anchorer profiles supported** (R21):
+//!   - `single_did` — straightforward DID match against `service_did`.
+//!   - `threshold(k, members[])` — simple deterministic leader election:
+//!     among the `members` set, the lex-smallest DID that *includes* this
+//!     node's `service_did` is the candidate to sign first; if `service_did`
+//!     IS that candidate, sign; otherwise this pass is a no-op (another
+//!     soland instance owns the round). The signature itself is single-DID
+//!     — `k`-of-`n` aggregation lives on the multi-signer coordinator
+//!     (future MAL-3 tail).
+//!   - `open_set(members[])` — any member may sign; if `service_did ∈
+//!     members` this node signs.
+//!   - `mixed(primary, recovery_members[])` — primary signs by default;
+//!     recovery members may sign only after the leaf-Anchor frontier has
+//!     gone stale beyond `max_anchor_staleness_ms` (default 60_000ms when
+//!     unset). Among recovery members the lex-smallest reachable DID owns
+//!     the round (same election as threshold).
+//! - **Placeholder JWS** under dev mode and **real Ed25519** under prod
+//!   mode — handled by `select_jws_verifier` in `routing/move_anchor.rs`.
+//!   The signing side here still emits a placeholder JWS payload (T7-9
+//!   tail: real Ed25519 *signing* needs HSM/keystore integration; verify
+//!   already lands in jws_verify.rs).
 //! - **Manual / on-demand only**. Trigger via the admin endpoint
 //!   `POST /api/admin/v1/anchors/sign`. A periodic ticker / push-loop is
 //!   left to a future production-ops batch (needs lease coordination +
@@ -292,11 +303,25 @@ impl AnchorerWorker {
         }))
     }
 
-    /// v1 authorization check: read the anchorer cell value via the SDK
-    /// effective-state read (this is the cell that holds `AnchorerValue`).
-    /// If the cell is unset (genesis), the node's `service_did` is the
-    /// implicit anchorer. If set to a `single_did` value matching our DID,
-    /// also authorized. Threshold / open-set / mixed are deferred.
+    /// R21 authorization check: read the anchorer cell value via the SDK
+    /// effective-state read (this is the cell that holds `AnchorerValue`)
+    /// and decide whether this node is the leader for *this* signing pass.
+    /// Returns `true` if this node should sign now, `false` if either it
+    /// isn't part of the authoritative set or another node owns the round.
+    ///
+    /// Profile dispatch:
+    ///
+    /// - **Genesis** (no anchorer cell yet) — implicit `service_did` is
+    ///   the anchorer.
+    /// - **Bottom** on the anchorer cell — Space-wide pause; not authorized.
+    /// - **single_did** — DID match against `service_did`.
+    /// - **threshold(k, members)** / **open_set(members)** — leader election:
+    ///   among `members`, the lex-smallest DID is the round leader; if it
+    ///   matches `service_did`, this node signs; otherwise no-op.
+    /// - **mixed(primary, recovery_members, max_anchor_staleness_ms?)** —
+    ///   primary signs by default. If the latest leaf is older than
+    ///   `max_anchor_staleness_ms` (default 60_000ms), the recovery set
+    ///   takes over with the same lex-smallest leader election.
     fn is_authorized_for(
         &self,
         state: &AppState,
@@ -328,13 +353,106 @@ impl AnchorerWorker {
             // not authorized to advance until recovery.
             return Ok(false);
         };
-        // Match against `single_did` shape only for v1.
-        let shape = value.get("shape").and_then(|s| s.as_str()).unwrap_or("");
-        if shape != "single_did" {
+        let shape = value
+            .get("shape")
+            .or_else(|| value.get("kind"))
+            .or_else(|| value.get("kind_raw"))
+            .and_then(|s| s.as_str())
+            .unwrap_or("");
+        // Optional `paused` short-circuit — sodmin can flip the cell value
+        // to a paused form to halt the worker without changing the profile.
+        if value
+            .get("paused")
+            .and_then(|p| p.as_bool())
+            .unwrap_or(false)
+        {
             return Ok(false);
         }
-        let did = value.get("did").and_then(|d| d.as_str()).unwrap_or("");
-        Ok(did == self.service_did)
+        match shape {
+            "single_did" => {
+                let did = value
+                    .get("did")
+                    .or_else(|| value.get("single_did"))
+                    .and_then(|d| d.as_str())
+                    .unwrap_or("");
+                Ok(did == self.service_did)
+            }
+            "threshold" => {
+                let members = read_did_list(&value, &["members", "threshold_dids", "dids"]);
+                Ok(self.is_round_leader(&members))
+            }
+            "open_set" => {
+                let members = read_did_list(&value, &["members", "open_set_members"]);
+                Ok(self.is_round_leader(&members))
+            }
+            "mixed" => {
+                let primary = value
+                    .get("primary")
+                    .or_else(|| value.get("mixed_primary"))
+                    .and_then(|d| d.as_str())
+                    .unwrap_or("");
+                let recovery = read_did_list(
+                    &value,
+                    &["recovery_members", "mixed_recovery"],
+                );
+                let staleness_ms = value
+                    .get("max_anchor_staleness_ms")
+                    .and_then(|n| n.as_u64())
+                    .unwrap_or(60_000);
+                if primary == self.service_did {
+                    return Ok(true);
+                }
+                // Recovery members take over only if the latest leaf is
+                // older than `staleness_ms` AND this node is the lex-smallest
+                // recovery member.
+                if recovery.iter().any(|d| d == &self.service_did)
+                    && self.frontier_is_stale(state, space_id, staleness_ms)?
+                {
+                    Ok(self.is_round_leader(&recovery))
+                } else {
+                    Ok(false)
+                }
+            }
+            _ => Ok(false),
+        }
+    }
+
+    /// Lex-smallest-DID leader election: this node is the leader when its
+    /// `service_did` is the smallest entry in `members`. Empty list → no
+    /// leader (returns false).
+    fn is_round_leader(&self, members: &[String]) -> bool {
+        let Some(leader) = members.iter().min() else {
+            return false;
+        };
+        leader == &self.service_did
+    }
+
+    /// Mixed-profile recovery gate: did the latest leaf go stale beyond
+    /// `staleness_ms`? When there is no leaf at all (genesis), recovery
+    /// is NOT eligible (primary should sign the genesis Anchor).
+    fn frontier_is_stale(
+        &self,
+        state: &AppState,
+        space_id: &SpaceId,
+        staleness_ms: u64,
+    ) -> Result<bool, AnchorerError> {
+        let leaves = state.anchor_store.list_leaves(space_id)?;
+        let Some(leaf_id) = leaves.first() else {
+            return Ok(false);
+        };
+        let Some(anchor) = state.anchor_store.get(leaf_id)? else {
+            return Ok(false);
+        };
+        // The Anchor.hlc carries a 12-hex physical-millis prefix per the
+        // HLC encoding. Reuse the same parser the replay-window checker
+        // uses to compare against now.
+        let signed_at = match crate::jws_verify::physical_millis_from_hlc(anchor.hlc.as_str()) {
+            Some(ms) => ms,
+            None => return Ok(false),
+        };
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let delta_ms = (now_ms - signed_at).max(0) as u64;
+        Ok(delta_ms > staleness_ms)
     }
 
     /// Read current effective state per cell from the cell_store, joining
@@ -438,6 +556,21 @@ impl AnchorerWorker {
     }
 }
 
+/// Read a DID list from an anchorer cell value, accepting any of the
+/// alternate field names emitted by sodmin / spec / soland's own
+/// admin DTO. Returns an empty vec when no candidate field exists.
+fn read_did_list(value: &serde_json::Value, candidates: &[&str]) -> Vec<String> {
+    for key in candidates {
+        if let Some(arr) = value.get(*key).and_then(|v| v.as_array()) {
+            return arr
+                .iter()
+                .filter_map(|v| v.as_str().map(str::to_owned))
+                .collect();
+        }
+    }
+    Vec::new()
+}
+
 /// Convenience: trigger a single signing pass and report a structured
 /// summary — used by the admin endpoint.
 pub fn run_one_signing_pass(
@@ -447,4 +580,66 @@ pub fn run_one_signing_pass(
 ) -> Result<Option<AnchorerOutcome>, AnchorerError> {
     let worker = AnchorerWorker::for_service(state.config.service_did.clone());
     worker.sign_pending_for_space(state, space_id, max_moves)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn read_did_list_picks_first_present_alias() {
+        let v = json!({
+            "members": ["did:cx:a", "did:cx:b"],
+            "threshold_dids": ["did:should-not-be-read"],
+        });
+        let dids = read_did_list(&v, &["members", "threshold_dids"]);
+        assert_eq!(dids, vec!["did:cx:a".to_owned(), "did:cx:b".to_owned()]);
+    }
+
+    #[test]
+    fn read_did_list_returns_empty_when_no_candidate_matches() {
+        let v = json!({"unrelated": [1, 2, 3]});
+        assert!(read_did_list(&v, &["members", "dids"]).is_empty());
+    }
+
+    #[test]
+    fn read_did_list_filters_non_string_entries_silently() {
+        let v = json!({
+            "members": ["did:cx:a", 42, null, "did:cx:b"],
+        });
+        let dids = read_did_list(&v, &["members"]);
+        assert_eq!(dids, vec!["did:cx:a".to_owned(), "did:cx:b".to_owned()]);
+    }
+
+    #[test]
+    fn is_round_leader_picks_lex_smallest_did() {
+        let worker = AnchorerWorker::for_service("did:cx:b");
+        assert!(!worker.is_round_leader(&[
+            "did:cx:a".to_owned(),
+            "did:cx:b".to_owned(),
+            "did:cx:c".to_owned(),
+        ]));
+        let worker = AnchorerWorker::for_service("did:cx:a");
+        assert!(worker.is_round_leader(&[
+            "did:cx:a".to_owned(),
+            "did:cx:b".to_owned(),
+            "did:cx:c".to_owned(),
+        ]));
+    }
+
+    #[test]
+    fn is_round_leader_rejects_when_not_a_member() {
+        let worker = AnchorerWorker::for_service("did:cx:other");
+        assert!(!worker.is_round_leader(&[
+            "did:cx:a".to_owned(),
+            "did:cx:b".to_owned(),
+        ]));
+    }
+
+    #[test]
+    fn is_round_leader_returns_false_for_empty_member_set() {
+        let worker = AnchorerWorker::for_service("did:cx:a");
+        assert!(!worker.is_round_leader(&[]));
+    }
 }

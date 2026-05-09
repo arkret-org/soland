@@ -40,6 +40,17 @@ pub struct AppConfig {
     /// - `cx.component.capability.delegate.v1` → 120s
     /// - `cx.component.capability.derived.v1` → 120s
     pub jws_replay_window_per_family: std::collections::BTreeMap<&'static str, u64>,
+    /// Round 21 — opt-in flag that routes `ProjectionState::apply()` through
+    /// the [`crate::reducer::registry::LatticeRegistry`] lookup before
+    /// falling back to the legacy per-domain `match` dispatcher. Default
+    /// `false`: today the registry only carries cell_family metadata for
+    /// Move/Anchor effect dispatch — durable Events still drive the
+    /// structured projection cache via inline `apply_*` helpers. Once the
+    /// `event_kind → cell_family → lattice op` mapping table is filled in
+    /// (per cell-family LatticeKind impl exposing a `event_kinds()`
+    /// declaration), flipping this flag will let the registry handle the
+    /// dispatch entirely. Set via env `SERVERX_LATTICE_FIRST=true`.
+    pub lattice_first: bool,
 }
 
 impl AppConfig {
@@ -93,6 +104,9 @@ impl AppConfig {
             .ok()
             .and_then(|value| value.trim().parse::<u64>().ok())
             .unwrap_or(300);
+        let lattice_first = std::env::var("SERVERX_LATTICE_FIRST")
+            .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes"))
+            .unwrap_or(false);
 
         Ok(Self {
             bind,
@@ -108,6 +122,7 @@ impl AppConfig {
             starid_webvh_resolver_url,
             jws_replay_window_seconds,
             jws_replay_window_per_family: Self::default_replay_overrides(),
+            lattice_first,
         })
     }
 }

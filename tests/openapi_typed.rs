@@ -23,6 +23,7 @@ fn test_config() -> AppConfig {
         starid_webvh_resolver_url: None,
         jws_replay_window_seconds: 0,
         jws_replay_window_per_family: std::collections::BTreeMap::new(),
+        lattice_first: false,
     }
 }
 

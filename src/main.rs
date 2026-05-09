@@ -13,7 +13,7 @@ async fn main() -> anyhow::Result<()> {
     // of crashing the first request that touches the offending OnceLock.
     artifacts::validate_embedded_artifacts()?;
 
-    let config = AppConfig::from_env_and_args()?;
+    let mut config = AppConfig::from_env_and_args()?;
     if let Some(database_url) = &config.database_url {
         // SAFETY: invoked once, before any worker thread starts touching the
         // env, so there is no concurrent reader. Diesel's `Pool::builder`
@@ -22,6 +22,33 @@ async fn main() -> anyhow::Result<()> {
         // style arg parsing.
         unsafe {
             std::env::set_var("DATABASE_URL", database_url);
+        }
+    }
+    // Round 21: probe the starid `/describe` endpoint before mounting the
+    // DidWebvhResolver into the resolver chain. A misconfigured URL would
+    // otherwise silently break `did:webvh` lookups; here we strip the
+    // resolver from the chain on probe failure and log a warning.
+    if let Some(url) = config.starid_webvh_resolver_url.clone() {
+        match soland::state::did_resolver_chain::probe_starid_describe(
+            &url,
+            std::time::Duration::from_secs(3),
+        )
+        .await
+        {
+            Ok(()) => {
+                tracing::info!(
+                    starid_url = %url,
+                    "starid /describe probe succeeded — DidWebvhResolver enabled"
+                );
+            }
+            Err(error) => {
+                tracing::warn!(
+                    starid_url = %url,
+                    %error,
+                    "starid /describe probe failed — DidWebvhResolver omitted from chain"
+                );
+                config.starid_webvh_resolver_url = None;
+            }
         }
     }
     let state = AppState::new(config.clone(), Db::from_env()?);

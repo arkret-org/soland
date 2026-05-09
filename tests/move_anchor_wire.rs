@@ -57,6 +57,7 @@ fn test_config() -> AppConfig {
         // protection tests build a custom config with a non-zero window.
         jws_replay_window_seconds: 0,
         jws_replay_window_per_family: std::collections::BTreeMap::new(),
+        lattice_first: false,
     }
 }
 
@@ -1043,6 +1044,85 @@ async fn anchorer_pass_populates_projection_cells_map() {
             panic!("member.state cell should resolve to Value, not Bottom: {b:?}");
         }
     }
+}
+
+/// Round 21: `admin_reconfigure_anchorer` builds a real Move signed
+/// with the service admin signer, submits it through the move_store,
+/// and triggers one anchorer signing pass. Endpoint should return
+/// `status="accepted"` with a real `move_id` and (since this node is
+/// the genesis anchorer) a non-null `anchor_id`.
+#[tokio::test]
+async fn admin_reconfigure_anchorer_builds_real_move_and_anchors_it() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+    let app = service(state.clone());
+
+    // Reconfigure to an open_set profile that does NOT include the
+    // server's service DID (admin-as-member would be a privilege-
+    // escalation primitive and should be rejected by the endpoint —
+    // but we want a successful reconfigure here, so pick external DIDs).
+    let url = format!(
+        "http://server/api/admin/v1/spaces/{}/anchorer/reconfigure",
+        space_id().as_str()
+    );
+    let resp: Value = TestClient::post(&url)
+        .add_header("Authorization", format!("Bearer {token}"), true)
+        .json(&json!({
+            "kind": "open_set",
+            "open_set_members": ["did:cx:alice", "did:cx:bob"],
+        }))
+        .send(&app)
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp["status"], "accepted",
+        "admin_reconfigure_anchorer should produce a real signed Move (got {resp:?})"
+    );
+    let move_id = resp["move_id"]
+        .as_str()
+        .expect("move_id should be set");
+    assert!(
+        move_id.starts_with("cx:move:sha256:"),
+        "move_id should be content-addressed sha256, got {move_id}"
+    );
+    let anchor_id = resp["anchor_id"]
+        .as_str()
+        .expect("anchor_id should be set when this node is the round leader");
+    assert!(
+        anchor_id.starts_with("cx:anchor:sha256:"),
+        "anchor_id should be content-addressed sha256, got {anchor_id}"
+    );
+}
+
+/// Round 21: `admin_reconfigure_anchorer` rejects requests where the
+/// admin DID (= service DID for now) appears in the proposed anchorer
+/// member set, because that's a privilege-escalation primitive.
+#[tokio::test]
+async fn admin_reconfigure_anchorer_rejects_self_in_proposed_member_set() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+    let app = service(state.clone());
+
+    let url = format!(
+        "http://server/api/admin/v1/spaces/{}/anchorer/reconfigure",
+        space_id().as_str()
+    );
+    let response = TestClient::post(&url)
+        .add_header("Authorization", format!("Bearer {token}"), true)
+        .json(&json!({
+            "kind": "open_set",
+            // service DID `did:web:soland.local` IS the admin signer.
+            "open_set_members": ["did:web:soland.local", "did:cx:other"],
+        }))
+        .send(&app)
+        .await;
+    assert_eq!(
+        response.status_code,
+        Some(StatusCode::FORBIDDEN),
+        "admin DID in proposed member set must be rejected as privilege-escalation"
+    );
 }
 
 /// Idempotency: signing twice in a row publishes once. The second pass

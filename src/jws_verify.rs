@@ -281,6 +281,15 @@ pub fn effective_window_for_move(
     effective
 }
 
+/// Extract the physical-millis prefix of an HLC string (R21). Format is
+/// `<12-hex-physical-ms>-<8-hex-logical>-<8-hex-node>`. Returns `None`
+/// when the prefix can't be parsed; callers MUST treat that as "freshness
+/// check is unavailable" rather than as a pass.
+pub fn physical_millis_from_hlc(hlc_str: &str) -> Option<i64> {
+    let physical_hex = hlc_str.split('-').next()?;
+    i64::from_str_radix(physical_hex, 16).ok()
+}
+
 /// Same as [`verify_replay_window`] but with an injectable wall-clock
 /// reference for unit tests.
 pub fn verify_replay_window_at(
