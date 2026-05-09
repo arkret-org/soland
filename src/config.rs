@@ -53,6 +53,20 @@ pub struct AppConfig {
     /// — the env var holds the raw seed, base64-standard-padded; bad shape
     /// fails fast at startup with a clear error.
     pub anchorer_signing_key_seed: Option<[u8; 32]>,
+    /// Round 24 — when true, the AnchorerWorker loads its signing seed
+    /// from the SDK platform `KeyStore` (`platform_default_keystore("soland.<service_did>")`)
+    /// at boot and stores rotated keys back into the same KeyStore. When
+    /// false (default), only `anchorer_signing_key_seed` (env-loaded) is
+    /// honored. The KeyStore key id is `contrix:signer:soland-anchorer:<service_did>`.
+    ///
+    /// Behavior when `use_keystore=true`:
+    /// - First boot: try `KeyStore::load(...)`; on `not_found` fall back to
+    ///   `anchorer_signing_key_seed`; if that's also absent, mint a fresh
+    ///   seed and persist it via `KeyStore::store(...)` (one-shot init).
+    /// - `rotate-signing-key` endpoint: mint, persist via KeyStore, hot-swap.
+    ///
+    /// Behavior when `use_keystore=false`: identical to round 22.
+    pub use_keystore: bool,
 }
 
 /// Round 22 — provenance tag for the AnchorerWorker's signing key. Surfaced
@@ -126,6 +140,9 @@ impl AppConfig {
             .map(|value| !matches!(value.as_str(), "0" | "false" | "FALSE" | "no"))
             .unwrap_or(true);
         let anchorer_signing_key_seed = load_anchorer_signing_key_seed()?;
+        let use_keystore = std::env::var("SERVERX_USE_KEYSTORE")
+            .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes"))
+            .unwrap_or(false);
 
         Ok(Self {
             bind,
@@ -143,6 +160,7 @@ impl AppConfig {
             jws_replay_window_per_family: Self::default_replay_overrides(),
             lattice_first,
             anchorer_signing_key_seed,
+            use_keystore,
         })
     }
 }

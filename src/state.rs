@@ -3,6 +3,7 @@ use std::{
     sync::{Arc, Mutex},
     time::{SystemTime, UNIX_EPOCH},
 };
+use arc_swap::ArcSwap;
 use ed25519_dalek::SigningKey;
 use sha2::{Digest, Sha256};
 use tokio::sync::broadcast;
@@ -169,8 +170,16 @@ pub struct AppState {
     /// Shared across all signing paths so the AnchorerWorker, the
     /// `service_admin_signer` admin shortcut, and the threshold partial-
     /// signature coordinator all bind to the **same** key/DID identity.
-    pub anchorer_signing_key: Arc<SigningKey>,
-    pub anchorer_signing_key_origin: AnchorerSigningKeyOrigin,
+    /// Round 24 (rotate-signing-key): swapped lock-free via [`ArcSwap`] so
+    /// the `POST /api/admin/v1/spaces/{id}/anchorer/rotate-signing-key`
+    /// endpoint can publish a fresh ed25519 seed without tearing concurrent
+    /// signing passes. Readers acquire the current key via `load_full()`
+    /// (returns `Arc<SigningKey>`); writers `store(...)` a new `Arc`.
+    pub anchorer_signing_key: Arc<ArcSwap<SigningKey>>,
+    /// Round 24: origin tag is also rotated. Stored alongside the key
+    /// behind a [`Mutex`] (one-shot writes from the rotation path are not
+    /// in the hot read path; the per-pass diagnostic helper just snapshots).
+    pub anchorer_signing_key_origin: Arc<Mutex<AnchorerSigningKeyOrigin>>,
     // T0-2c follow-up: migrate the four key-backup scaffold maps below into
     // `state.persistence.key_backups()` once the routing layer's iter/retain/
     // get_mut patterns are rewritten in terms of the trait.
@@ -449,15 +458,38 @@ pub struct PolicyDocumentRecord {
 }
 
 impl AppState {
-    /// Round 22: Borrow the persistent Ed25519 signing key shared by the
-    /// AnchorerWorker and all admin signing paths.
-    pub fn anchorer_signing_key(&self) -> &SigningKey {
-        &self.anchorer_signing_key
+    /// Round 22 / 24: Snapshot the persistent Ed25519 signing key shared by
+    /// the AnchorerWorker and all admin signing paths. Returns a fresh
+    /// `Arc<SigningKey>` (lock-free `ArcSwap::load_full`) so callers can
+    /// hold the snapshot for the duration of a signing pass even if the
+    /// rotate-signing-key endpoint races with them.
+    pub fn anchorer_signing_key(&self) -> Arc<SigningKey> {
+        self.anchorer_signing_key.load_full()
     }
 
-    /// Round 22: Origin tag for diagnostics (Configured / Ephemeral).
+    /// Round 22: Origin tag for diagnostics (Configured / Ephemeral / Rotated).
     pub fn anchorer_signing_key_origin(&self) -> AnchorerSigningKeyOrigin {
-        self.anchorer_signing_key_origin
+        *self
+            .anchorer_signing_key_origin
+            .lock()
+            .expect("anchorer signing key origin lock")
+    }
+
+    /// Round 24: hot-rotate the AnchorerWorker signing key. Writers swap
+    /// the `ArcSwap` and update the origin tag in lockstep. Returns the
+    /// newly-published `Arc<SigningKey>` for callers (the rotate-signing-key
+    /// endpoint uses it to compute the resulting did:key kid).
+    pub fn rotate_anchorer_signing_key(
+        &self,
+        seed: &[u8; 32],
+        origin: AnchorerSigningKeyOrigin,
+    ) -> Arc<SigningKey> {
+        let new_key = Arc::new(SigningKey::from_bytes(seed));
+        self.anchorer_signing_key.store(new_key.clone());
+        if let Ok(mut guard) = self.anchorer_signing_key_origin.lock() {
+            *guard = origin;
+        }
+        new_key
     }
 
     pub fn new(config: AppConfig, db: Db) -> Self {
@@ -524,32 +556,71 @@ impl AppState {
             self::did_resolver_chain::build_did_resolver_chain(&config),
         ));
 
-        // Round 22 — derive the AnchorerWorker's Ed25519 signing key.
-        // Configured: deterministic from the env-supplied seed; Ephemeral:
-        // bound to (service_did, boot_nanos) so it's stable for this
-        // process lifetime but explicitly NOT persistent.
-        let (anchorer_signing_key, anchorer_signing_key_origin) =
-            match config.anchorer_signing_key_seed {
-                Some(seed) => (
-                    Arc::new(SigningKey::from_bytes(&seed)),
-                    AnchorerSigningKeyOrigin::Configured,
-                ),
-                None => {
-                    let mut hasher = Sha256::new();
-                    hasher.update(b"soland:anchorer-ephemeral:");
-                    hasher.update(service_did.as_bytes());
-                    let boot_nanos = SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .map(|d| d.as_nanos() as u64)
-                        .unwrap_or(0);
-                    hasher.update(boot_nanos.to_le_bytes());
-                    let seed: [u8; 32] = hasher.finalize().into();
-                    (
-                        Arc::new(SigningKey::from_bytes(&seed)),
-                        AnchorerSigningKeyOrigin::Ephemeral,
-                    )
+        // Round 22/24 — derive the AnchorerWorker's Ed25519 signing key.
+        // Resolution order:
+        //   1. KeyStore (when `use_keystore=true` and the platform store
+        //      has a previously-persisted seed under our id) → Configured.
+        //   2. `config.anchorer_signing_key_seed` (env-loaded) → Configured.
+        //      When `use_keystore=true` we *also* persist this seed back
+        //      to the KeyStore on first boot so subsequent restarts skip
+        //      the env path.
+        //   3. SHA-256(service_did || boot_nanos) → Ephemeral.
+        let (signing_seed, anchorer_signing_key_origin) = (|| -> ([u8; 32], AnchorerSigningKeyOrigin) {
+            if config.use_keystore {
+                let app_id = format!("soland.{service_did}");
+                let key_id = format!("contrix:signer:soland-anchorer:{service_did}");
+                let store = contrix_sdk::keystore::platform_default_keystore(&app_id);
+                if let Ok(bytes) = store.load(&key_id) {
+                    if bytes.len() == 32 {
+                        let mut seed = [0u8; 32];
+                        seed.copy_from_slice(&bytes);
+                        tracing::info!(%key_id, "loaded anchorer signing seed from platform KeyStore");
+                        return (seed, AnchorerSigningKeyOrigin::Configured);
+                    }
+                    tracing::warn!(%key_id, len = bytes.len(),
+                        "platform KeyStore returned non-32-byte payload; falling back");
                 }
-            };
+                if let Some(seed) = config.anchorer_signing_key_seed {
+                    if let Err(error) = store.store(&key_id, &seed) {
+                        tracing::warn!(%error, %key_id,
+                            "failed to seed platform KeyStore from env-supplied seed");
+                    } else {
+                        tracing::info!(%key_id,
+                            "persisted env-supplied anchorer seed into platform KeyStore");
+                    }
+                    return (seed, AnchorerSigningKeyOrigin::Configured);
+                }
+                // Mint + persist a one-shot seed.
+                let mut seed = [0u8; 32];
+                getrandom_seed(&mut seed);
+                if let Err(error) = store.store(&key_id, &seed) {
+                    tracing::warn!(%error, %key_id,
+                        "failed to persist freshly-minted anchorer seed to KeyStore");
+                } else {
+                    tracing::info!(%key_id,
+                        "minted + persisted fresh anchorer seed via platform KeyStore");
+                }
+                return (seed, AnchorerSigningKeyOrigin::Configured);
+            }
+            if let Some(seed) = config.anchorer_signing_key_seed {
+                return (seed, AnchorerSigningKeyOrigin::Configured);
+            }
+            let mut hasher = Sha256::new();
+            hasher.update(b"soland:anchorer-ephemeral:");
+            hasher.update(service_did.as_bytes());
+            let boot_nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_nanos() as u64)
+                .unwrap_or(0);
+            hasher.update(boot_nanos.to_le_bytes());
+            let seed: [u8; 32] = hasher.finalize().into();
+            (seed, AnchorerSigningKeyOrigin::Ephemeral)
+        })();
+
+        let anchorer_signing_key = Arc::new(ArcSwap::from_pointee(SigningKey::from_bytes(
+            &signing_seed,
+        )));
+        let anchorer_signing_key_origin = Arc::new(Mutex::new(anchorer_signing_key_origin));
 
         Self {
             config,
@@ -748,4 +819,12 @@ fn schema_name_from_id(schema_id: &str) -> String {
         .strip_prefix("cx.schema.")
         .unwrap_or(schema_id)
         .replace(['.', '_'], " ")
+}
+
+/// Round 24 — fill `out` with cryptographically secure random bytes via
+/// `rand::OsRng`. Used by both the boot path (one-shot KeyStore mint) and
+/// the rotate-signing-key endpoint.
+pub(crate) fn getrandom_seed(out: &mut [u8; 32]) {
+    use rand::RngCore;
+    rand::rngs::OsRng.fill_bytes(out);
 }

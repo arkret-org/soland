@@ -33,6 +33,7 @@ fn test_config() -> AppConfig {
         jws_replay_window_per_family: std::collections::BTreeMap::new(),
         lattice_first: false,
         anchorer_signing_key_seed: None,
+        use_keystore: false,
     }
 }
 

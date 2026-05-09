@@ -242,11 +242,11 @@ fn service_admin_signer(state: &AppState) -> Result<Ed25519MoveSigner, AppError>
         )
     })?;
     let kid = format!("{service_did}#anchorer-key");
-    Ok(Ed25519MoveSigner::new(
-        state.anchorer_signing_key().clone(),
-        did,
-        kid,
-    ))
+    // Round 24: `state.anchorer_signing_key()` returns `Arc<SigningKey>`
+    // (lock-free `ArcSwap` snapshot). `Ed25519MoveSigner::new` takes a
+    // `SigningKey` by value, so dereference + clone.
+    let signing_key = (*state.anchorer_signing_key()).clone();
+    Ok(Ed25519MoveSigner::new(signing_key, did, kid))
 }
 
 /// Round 21: convert an `AnchorerReconfigBody` into the canonical anchorer
@@ -1344,6 +1344,124 @@ pub async fn admin_list_multisig_pending(
         .collect();
 
     json_ok(MultisigPendingResponse { entries })
+}
+
+/// `POST /api/admin/v1/spaces/{space_id}/anchorer/rotate-signing-key` —
+/// mint a fresh ed25519 seed, persist via the platform `KeyStore` (when
+/// `state.config.use_keystore` is true), hot-swap the AnchorerWorker key
+/// via `AppState::rotate_anchorer_signing_key`, return `{kid, did, rotated_at}`.
+///
+/// Response shape (locked for sodmin H'8):
+/// ```json
+/// { "kid": "did:web:soland.local#anchorer-key",
+///   "did": "did:web:soland.local",
+///   "rotated_at": "2026-05-09T12:00:00Z" }
+/// ```
+///
+/// Round 24 wire-up: when `use_keystore=true`, the new seed is also stored
+/// under `contrix:signer:soland-anchorer:<service_did>` so it survives
+/// process restart. When `use_keystore=false`, the rotation lives only in
+/// the running process's `ArcSwap` (suitable for dev/test, not production
+/// — the next restart re-loads the env-supplied seed). The space_id path
+/// param is required by the H'8 contract for symmetry with the other
+/// per-space anchorer endpoints; the signing key itself is process-wide,
+/// not Space-scoped.
+#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
+pub struct RotateSigningKeyResponse {
+    pub kid: String,
+    pub did: String,
+    pub rotated_at: chrono::DateTime<chrono::Utc>,
+    /// Provenance tag of the **post-rotation** key — `Configured` when
+    /// persisted to the platform KeyStore (`use_keystore=true`), else
+    /// `Configured` when the rotation succeeded (we never roll forward to
+    /// `Ephemeral`).
+    pub origin: String,
+    /// Whether the new seed was persisted to the platform KeyStore. False
+    /// when `use_keystore=false`; true (or accompanied by a non-fatal
+    /// `keystore_warning`) when the platform store accepted the write.
+    pub keystore_persisted: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keystore_warning: Option<String>,
+}
+
+#[salvo::oapi::endpoint(
+    operation_id = "cx.admin.spaces.anchorer.rotate_signing_key",
+    tags("admin", "anchorer"),
+    summary = "Rotate the AnchorerWorker signing key",
+)]
+pub async fn admin_rotate_signing_key(
+    aa: AuthArgs,
+    depot: &mut Depot,
+    req: &mut Request,
+    space_id: PathParam<String>,
+    _body: JsonBody<serde_json::Value>,
+) -> JsonResult<RotateSigningKeyResponse> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let _session = aa.authenticated_session(state, req)?;
+    // Validate space_id shape so the endpoint surfaces a clean 400 on a
+    // bogus path; the rotation itself is process-wide.
+    let space_id_str = space_id.into_inner();
+    let _ = SpaceId::new(space_id_str.clone()).map_err(|e| {
+        AppError::new(ErrorCode::InvalidParam, format!("invalid space_id: {e}"))
+            .with_status(StatusCode::BAD_REQUEST)
+    })?;
+
+    let mut seed = [0u8; 32];
+    crate::state::getrandom_seed(&mut seed);
+
+    // Persist via the platform KeyStore if configured. Failure to persist
+    // is non-fatal — the in-process key still gets rotated; we surface a
+    // warning for ops.
+    let mut keystore_persisted = false;
+    let mut keystore_warning: Option<String> = None;
+    if state.config.use_keystore {
+        let app_id = format!("soland.{}", state.config.service_did);
+        let key_id = format!("contrix:signer:soland-anchorer:{}", state.config.service_did);
+        let store = contrix_sdk::keystore::platform_default_keystore(&app_id);
+        match store.store(&key_id, &seed) {
+            Ok(()) => {
+                keystore_persisted = true;
+                tracing::info!(%key_id, "rotated anchorer signing key persisted to platform KeyStore");
+            }
+            Err(error) => {
+                let msg = format!(
+                    "platform KeyStore rejected rotated key write ({error}); rotation applied in-process only"
+                );
+                tracing::warn!(%error, %key_id, "rotate-signing-key: KeyStore write failed");
+                keystore_warning = Some(msg);
+            }
+        }
+    } else {
+        keystore_warning = Some(
+            "use_keystore=false; rotation is in-process only and will not survive restart"
+                .to_owned(),
+        );
+    }
+
+    let _new_key = state.rotate_anchorer_signing_key(
+        &seed,
+        crate::config::AnchorerSigningKeyOrigin::Configured,
+    );
+
+    let did = state.config.service_did.clone();
+    let kid = format!("{did}#anchorer-key");
+    let rotated_at = chrono::Utc::now();
+    crate::routing::append_audit_log(
+        state,
+        Some(did.as_str()),
+        "admin.anchorer.rotate_signing_key",
+        json!({"space_id": space_id_str, "kid": kid, "keystore_persisted": keystore_persisted}),
+        "accepted",
+    );
+
+    json_ok(RotateSigningKeyResponse {
+        kid,
+        did,
+        rotated_at,
+        origin: "Configured".to_owned(),
+        keystore_persisted,
+        keystore_warning,
+    })
 }
 
 fn persistence_to_app_err(e: crate::persistence::PersistenceError) -> AppError {

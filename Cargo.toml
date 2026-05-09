@@ -40,6 +40,12 @@ async-stream = "0.3.6"
 # segment of did:key DID URLs and didDocument verificationMethod entries.
 ed25519-dalek = "2.1.1"
 bs58 = "0.5.1"
+# Round 24: lock-free pointer swap for the AnchorerWorker signing key. Used
+# by `rotate-signing-key` admin endpoint so concurrent signing passes never
+# observe a torn read across the rotation.
+arc-swap = "1.7.1"
+# Round 24: rand for fresh ed25519 seed generation in rotate-signing-key.
+rand = "0.8.5"
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
 reqwest = { version = "0.12.28", default-features = false, features = ["json", "rustls-tls"] }

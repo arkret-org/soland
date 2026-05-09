@@ -59,6 +59,7 @@ fn test_config() -> AppConfig {
         jws_replay_window_per_family: std::collections::BTreeMap::new(),
         lattice_first: false,
         anchorer_signing_key_seed: None,
+        use_keystore: false,
     }
 }
 
@@ -1423,5 +1424,106 @@ async fn admin_list_cells_paginates_with_limit_and_offset() {
     assert!(
         total >= 2,
         "test seeds ≥2 cells under the space (got total={total} body={body})"
+    );
+}
+
+/// Round 24: `admin_rotate_signing_key` mints a fresh ed25519 seed,
+/// hot-swaps the AnchorerWorker key via `AppState::rotate_anchorer_signing_key`,
+/// and returns `{kid, did, rotated_at, origin, keystore_persisted, keystore_warning}`.
+/// The pre-rotation key MUST differ byte-for-byte from the post-rotation key
+/// (proves the swap actually published a new key into the ArcSwap).
+#[tokio::test]
+async fn admin_rotate_signing_key_publishes_a_fresh_key() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+    let app = service(state.clone());
+    let pre = state.anchorer_signing_key().to_bytes();
+
+    let url = format!(
+        "http://server/api/admin/v1/spaces/{}/anchorer/rotate-signing-key",
+        space_id().as_str()
+    );
+    let resp: Value = TestClient::post(&url)
+        .add_header("Authorization", format!("Bearer {token}"), true)
+        .json(&json!({}))
+        .send(&app)
+        .await
+        .take_json()
+        .await
+        .unwrap();
+
+    assert_eq!(
+        resp["did"], "did:web:soland.local",
+        "rotate response did mirrors service_did (got {resp:?})"
+    );
+    assert_eq!(
+        resp["kid"], "did:web:soland.local#anchorer-key",
+        "rotate response kid is `<did>#anchorer-key` (got {resp:?})"
+    );
+    assert!(resp.get("rotated_at").is_some(), "rotated_at present");
+    assert_eq!(
+        resp["origin"], "Configured",
+        "post-rotation origin is Configured (got {resp:?})"
+    );
+    // use_keystore=false in test_config → keystore_persisted is false but
+    // a non-fatal warning is surfaced.
+    assert_eq!(resp["keystore_persisted"], false);
+    assert!(resp["keystore_warning"].is_string(), "warning surfaced");
+
+    let post = state.anchorer_signing_key().to_bytes();
+    assert_ne!(
+        pre, post,
+        "rotate-signing-key MUST publish a fresh key (pre and post seeds matched)"
+    );
+}
+
+/// Round 24: `account/{did}/principal-space` returns the deterministic
+/// DID → control-Space mapping. Two queries for the same DID return the
+/// same `space_id`; two queries for different DIDs return different ones.
+#[tokio::test]
+async fn account_principal_space_is_deterministic() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+    let app = service(state.clone());
+
+    let alice_url = "http://server/api/v1/account/did:web:alice.example/principal-space";
+    let resp_a: Value = TestClient::get(alice_url)
+        .add_header("Authorization", format!("Bearer {token}"), true)
+        .send(&app)
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    let resp_a2: Value = TestClient::get(alice_url)
+        .add_header("Authorization", format!("Bearer {token}"), true)
+        .send(&app)
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp_a["space_id"], resp_a2["space_id"],
+        "same DID → same space_id (got {resp_a:?} vs {resp_a2:?})"
+    );
+    assert_eq!(resp_a["mapping_kind"], "deterministic");
+    assert_eq!(resp_a["did"], "did:web:alice.example");
+    let space_id_str = resp_a["space_id"].as_str().expect("space_id present");
+    assert!(
+        space_id_str.starts_with("cx:space:"),
+        "space_id has cx:space: prefix (got {space_id_str})"
+    );
+
+    let bob_url = "http://server/api/v1/account/did:web:bob.example/principal-space";
+    let resp_b: Value = TestClient::get(bob_url)
+        .add_header("Authorization", format!("Bearer {token}"), true)
+        .send(&app)
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_ne!(
+        resp_a["space_id"], resp_b["space_id"],
+        "alice and bob MUST map to different spaces (both got {})",
+        resp_a["space_id"]
     );
 }

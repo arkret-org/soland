@@ -10,7 +10,7 @@ use chrono::Utc;
 use contrix_sdk::Operation;
 use diesel::{
     OptionalExtension, QueryableByName, RunQueryDsl, sql_query,
-    sql_types::{Array, Integer, Jsonb, Nullable, Text, Timestamptz},
+    sql_types::{Array, BigInt, Binary, Integer, Jsonb, Nullable, Text, Timestamptz},
 };
 use serde_json::Value;
 
@@ -1851,6 +1851,9 @@ pub struct PgPersistenceStore {
     federation_transactions: PgFederationTransactionStore,
     push_bridge_cache: PgPushBridgeCacheStore,
     multisig_pending: PgMultisigPendingStore,
+    audit: PgAuditStore,
+    push_devices: PgPushDeviceStore,
+    events: PgEventStore,
     fallback: MemoryPersistenceStore,
 }
 
@@ -1862,7 +1865,10 @@ impl PgPersistenceStore {
             devices: PgDeviceInventoryStore { pool: pool.clone() },
             federation_transactions: PgFederationTransactionStore { pool: pool.clone() },
             push_bridge_cache: PgPushBridgeCacheStore { pool: pool.clone() },
-            multisig_pending: PgMultisigPendingStore { pool },
+            multisig_pending: PgMultisigPendingStore { pool: pool.clone() },
+            audit: PgAuditStore { pool: pool.clone() },
+            push_devices: PgPushDeviceStore { pool: pool.clone() },
+            events: PgEventStore { pool },
             fallback: MemoryPersistenceStore::new(),
         }
     }
@@ -1902,7 +1908,7 @@ impl PersistenceStore for PgPersistenceStore {
     }
 
     fn audit(&self) -> &dyn AuditStore {
-        self.fallback.audit()
+        &self.audit
     }
 
     fn moderation(&self) -> &dyn ModerationStore {
@@ -1914,7 +1920,7 @@ impl PersistenceStore for PgPersistenceStore {
     }
 
     fn push_devices(&self) -> &dyn PushDeviceStore {
-        self.fallback.push_devices()
+        &self.push_devices
     }
 
     fn push_rules(&self) -> &dyn PushRuleStore {
@@ -1954,7 +1960,7 @@ impl PersistenceStore for PgPersistenceStore {
     }
 
     fn events(&self) -> &dyn EventStore {
-        self.fallback.events()
+        &self.events
     }
 
     fn projection_events(&self) -> &dyn ProjectionEventStore {
@@ -2457,6 +2463,266 @@ impl MultisigPendingStore for PgMultisigPendingStore {
     }
 }
 
+// ── Round 24 — Pg-backed AuditStore / PushDeviceStore / EventStore ─────────
+
+struct PgAuditStore {
+    pool: PgPool,
+}
+
+#[derive(QueryableByName)]
+struct AuditPayloadRow {
+    #[diesel(sql_type = Jsonb)]
+    payload: Value,
+}
+
+impl AuditStore for PgAuditStore {
+    fn append(&self, entry: Value) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool)?;
+        let extract = |key: &str| -> Option<String> {
+            entry.get(key).and_then(Value::as_str).map(ToOwned::to_owned)
+        };
+        let audit_id = extract("audit_id")
+            .ok_or_else(|| PersistenceError::Internal("audit entry missing audit_id".to_owned()))?;
+        let action = extract("action")
+            .ok_or_else(|| PersistenceError::Internal("audit entry missing action".to_owned()))?;
+        let outcome = extract("outcome")
+            .ok_or_else(|| PersistenceError::Internal("audit entry missing outcome".to_owned()))?;
+        let actor = extract("actor");
+        let request_id = extract("request_id");
+        let space_id = extract("space_id");
+        let operation_id = extract("operation_id");
+        let commit_id = extract("commit_id");
+        let device_id = extract("device_id");
+        sql_query(
+            "INSERT INTO audit_events \
+             (audit_id, actor, request_id, action, outcome, space_id, operation_id, commit_id, device_id, payload, created_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW()) \
+             ON CONFLICT (audit_id) DO NOTHING",
+        )
+        .bind::<Text, _>(&audit_id)
+        .bind::<Nullable<Text>, _>(&actor)
+        .bind::<Nullable<Text>, _>(&request_id)
+        .bind::<Text, _>(&action)
+        .bind::<Text, _>(&outcome)
+        .bind::<Nullable<Text>, _>(&space_id)
+        .bind::<Nullable<Text>, _>(&operation_id)
+        .bind::<Nullable<Text>, _>(&commit_id)
+        .bind::<Nullable<Text>, _>(&device_id)
+        .bind::<Jsonb, _>(&entry)
+        .execute(&mut conn)
+        .map(|_| ())
+        .map_err(PersistenceError::from)
+    }
+
+    fn list_for_actor(&self, actor: &str) -> PersistenceResult<Vec<Value>> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query(
+            "SELECT payload FROM audit_events WHERE actor = $1 ORDER BY created_at ASC, audit_id ASC",
+        )
+        .bind::<Text, _>(actor)
+        .load::<AuditPayloadRow>(&mut conn)
+        .map(|rows| rows.into_iter().map(|row| row.payload).collect())
+        .map_err(PersistenceError::from)
+    }
+
+    fn snapshot_all(&self) -> PersistenceResult<Vec<Value>> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query("SELECT payload FROM audit_events ORDER BY created_at ASC, audit_id ASC")
+            .load::<AuditPayloadRow>(&mut conn)
+            .map(|rows| rows.into_iter().map(|row| row.payload).collect())
+            .map_err(PersistenceError::from)
+    }
+}
+
+struct PgPushDeviceStore {
+    pool: PgPool,
+}
+
+#[derive(QueryableByName)]
+struct PushDevicePayloadRow {
+    #[diesel(sql_type = Jsonb)]
+    payload: Value,
+}
+
+impl PushDeviceStore for PgPushDeviceStore {
+    fn register(&self, device: Value) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool)?;
+        let extract = |key: &str| -> Option<String> {
+            device.get(key).and_then(Value::as_str).map(ToOwned::to_owned)
+        };
+        let registration_id = extract("registration_id").ok_or_else(|| {
+            PersistenceError::Internal("push device registration missing registration_id".to_owned())
+        })?;
+        let device_id = extract("device_id").ok_or_else(|| {
+            PersistenceError::Internal("push device registration missing device_id".to_owned())
+        })?;
+        let push_gateway = extract("push_gateway").unwrap_or_default();
+        let push_key = extract("push_key").unwrap_or_default();
+        let actor = extract("actor");
+        let platform = extract("platform");
+        let app_id = extract("app_id");
+        sql_query(
+            "INSERT INTO push_devices \
+             (registration_id, actor, device_id, push_gateway, push_key, platform, app_id, payload, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW()) \
+             ON CONFLICT (registration_id) DO UPDATE SET \
+                actor = EXCLUDED.actor, \
+                device_id = EXCLUDED.device_id, \
+                push_gateway = EXCLUDED.push_gateway, \
+                push_key = EXCLUDED.push_key, \
+                platform = EXCLUDED.platform, \
+                app_id = EXCLUDED.app_id, \
+                payload = EXCLUDED.payload, \
+                updated_at = NOW()",
+        )
+        .bind::<Text, _>(&registration_id)
+        .bind::<Nullable<Text>, _>(&actor)
+        .bind::<Text, _>(&device_id)
+        .bind::<Text, _>(&push_gateway)
+        .bind::<Text, _>(&push_key)
+        .bind::<Nullable<Text>, _>(&platform)
+        .bind::<Nullable<Text>, _>(&app_id)
+        .bind::<Jsonb, _>(&device)
+        .execute(&mut conn)
+        .map(|_| ())
+        .map_err(PersistenceError::from)
+    }
+
+    fn snapshot_all(&self) -> PersistenceResult<Vec<Value>> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query("SELECT payload FROM push_devices ORDER BY updated_at ASC, registration_id ASC")
+            .load::<PushDevicePayloadRow>(&mut conn)
+            .map(|rows| rows.into_iter().map(|row| row.payload).collect())
+            .map_err(PersistenceError::from)
+    }
+}
+
+struct PgEventStore {
+    pool: PgPool,
+}
+
+#[derive(QueryableByName)]
+struct CanonicalEventRow {
+    #[diesel(sql_type = Text)]
+    event_id: String,
+    #[diesel(sql_type = Text)]
+    actor_id: String,
+    #[diesel(sql_type = BigInt)]
+    actor_seq: i64,
+    #[diesel(sql_type = Nullable<Text>)]
+    space_id: Option<String>,
+    #[diesel(sql_type = Text)]
+    kind: String,
+    #[diesel(sql_type = Text)]
+    schema_id: String,
+    #[diesel(sql_type = Text)]
+    canonical_digest: String,
+    #[diesel(sql_type = Binary)]
+    canonical_bytes: Vec<u8>,
+    #[diesel(sql_type = Jsonb)]
+    envelope: Value,
+    #[diesel(sql_type = Timestamptz)]
+    received_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl From<CanonicalEventRow> for CanonicalEventRecord {
+    fn from(row: CanonicalEventRow) -> Self {
+        Self {
+            event_id: row.event_id,
+            actor_id: row.actor_id,
+            actor_seq: row.actor_seq.max(0) as u64,
+            space_id: row.space_id,
+            kind: row.kind,
+            schema_id: row.schema_id,
+            canonical_digest: row.canonical_digest,
+            canonical_bytes: row.canonical_bytes,
+            envelope: row.envelope,
+            received_at: row.received_at,
+        }
+    }
+}
+
+impl EventStore for PgEventStore {
+    fn put(&self, record: CanonicalEventRecord) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query(
+            "INSERT INTO canonical_events \
+             (event_id, actor_id, actor_seq, space_id, kind, schema_id, canonical_digest, canonical_bytes, envelope, received_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) \
+             ON CONFLICT (event_id) DO NOTHING",
+        )
+        .bind::<Text, _>(&record.event_id)
+        .bind::<Text, _>(&record.actor_id)
+        .bind::<BigInt, _>(record.actor_seq as i64)
+        .bind::<Nullable<Text>, _>(&record.space_id)
+        .bind::<Text, _>(&record.kind)
+        .bind::<Text, _>(&record.schema_id)
+        .bind::<Text, _>(&record.canonical_digest)
+        .bind::<Binary, _>(&record.canonical_bytes)
+        .bind::<Jsonb, _>(&record.envelope)
+        .bind::<Timestamptz, _>(record.received_at)
+        .execute(&mut conn)
+        .map(|_| ())
+        .map_err(PersistenceError::from)
+    }
+
+    fn get(&self, event_id: &str) -> PersistenceResult<Option<CanonicalEventRecord>> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query(
+            "SELECT event_id, actor_id, actor_seq, space_id, kind, schema_id, canonical_digest, canonical_bytes, envelope, received_at \
+             FROM canonical_events WHERE event_id = $1",
+        )
+        .bind::<Text, _>(event_id)
+        .get_result::<CanonicalEventRow>(&mut conn)
+        .optional()
+        .map(|row| row.map(CanonicalEventRecord::from))
+        .map_err(PersistenceError::from)
+    }
+
+    fn contains(&self, event_id: &str) -> PersistenceResult<bool> {
+        let mut conn = pg_conn(&self.pool)?;
+        #[derive(QueryableByName)]
+        struct ExistsRow {
+            #[diesel(sql_type = diesel::sql_types::Bool)]
+            present: bool,
+        }
+        sql_query(
+            "SELECT EXISTS(SELECT 1 FROM canonical_events WHERE event_id = $1) AS present",
+        )
+        .bind::<Text, _>(event_id)
+        .get_result::<ExistsRow>(&mut conn)
+        .map(|row| row.present)
+        .map_err(PersistenceError::from)
+    }
+
+    fn max_actor_seq(&self, actor_id: &str) -> PersistenceResult<Option<u64>> {
+        let mut conn = pg_conn(&self.pool)?;
+        #[derive(QueryableByName)]
+        struct MaxRow {
+            #[diesel(sql_type = Nullable<BigInt>)]
+            max_seq: Option<i64>,
+        }
+        sql_query(
+            "SELECT MAX(actor_seq) AS max_seq FROM canonical_events WHERE actor_id = $1",
+        )
+        .bind::<Text, _>(actor_id)
+        .get_result::<MaxRow>(&mut conn)
+        .map(|row| row.max_seq.map(|n| n.max(0) as u64))
+        .map_err(PersistenceError::from)
+    }
+
+    fn snapshot_all(&self) -> PersistenceResult<Vec<CanonicalEventRecord>> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query(
+            "SELECT event_id, actor_id, actor_seq, space_id, kind, schema_id, canonical_digest, canonical_bytes, envelope, received_at \
+             FROM canonical_events ORDER BY received_at ASC, event_id ASC",
+        )
+        .load::<CanonicalEventRow>(&mut conn)
+        .map(|rows| rows.into_iter().map(CanonicalEventRecord::from).collect())
+        .map_err(PersistenceError::from)
+    }
+}
+
 #[derive(QueryableByName)]
 struct AccountRow {
     #[diesel(sql_type = Text)]
@@ -2837,5 +3103,88 @@ mod tests {
         assert!(store.delete(url).unwrap());
         assert!(!store.delete(url).unwrap());
         assert!(store.is_empty().unwrap());
+    }
+
+    // ── Round 24 — Memory parity tests for the new sub-stores. ────────────
+    //
+    // Pg parity is enforced by the trait surface itself (Memory + Pg
+    // implement the same trait methods); the integration tests in
+    // `tests/http_api.rs` exercise the Pg path when `DATABASE_URL` is set.
+    // Here we only assert the Memory path because pure-unit tests run
+    // without Pg.
+
+    #[test]
+    fn memory_audit_store_actor_scoped_filter_matches_trait() {
+        let store = MemoryAuditStore::new();
+        let alice_a = serde_json::json!({"audit_id": "a1", "actor": "alice", "action": "x", "outcome": "ok"});
+        let alice_b = serde_json::json!({"audit_id": "a2", "actor": "alice", "action": "y", "outcome": "ok"});
+        let bob_a = serde_json::json!({"audit_id": "b1", "actor": "bob", "action": "z", "outcome": "ok"});
+        store.append(alice_a.clone()).unwrap();
+        store.append(bob_a.clone()).unwrap();
+        store.append(alice_b.clone()).unwrap();
+
+        let alice = store.list_for_actor("alice").unwrap();
+        assert_eq!(alice.len(), 2);
+        assert_eq!(alice[0]["audit_id"], "a1");
+        assert_eq!(alice[1]["audit_id"], "a2");
+
+        let bob = store.list_for_actor("bob").unwrap();
+        assert_eq!(bob.len(), 1);
+        assert_eq!(bob[0]["audit_id"], "b1");
+
+        let all = store.snapshot_all().unwrap();
+        assert_eq!(all.len(), 3);
+    }
+
+    #[test]
+    fn memory_push_device_store_register_and_snapshot() {
+        let store = MemoryPushDeviceStore::new();
+        let dev1 = serde_json::json!({
+            "registration_id": "cx:push:dev-1",
+            "actor": "did:web:alice.example",
+            "device_id": "dev-1",
+            "push_gateway": "https://floria.example",
+            "push_key": "k1"
+        });
+        let dev2 = serde_json::json!({
+            "registration_id": "cx:push:dev-2",
+            "actor": "did:web:bob.example",
+            "device_id": "dev-2",
+            "push_gateway": "https://floria.example",
+            "push_key": "k2"
+        });
+        store.register(dev1.clone()).unwrap();
+        store.register(dev2.clone()).unwrap();
+        let snap = store.snapshot_all().unwrap();
+        assert_eq!(snap.len(), 2);
+    }
+
+    #[test]
+    fn memory_event_store_round_trip_with_actor_seq() {
+        let store = MemoryEventStore::new();
+        let now = Utc::now();
+        let make = |event_id: &str, actor: &str, seq: u64| CanonicalEventRecord {
+            event_id: event_id.to_owned(),
+            actor_id: actor.to_owned(),
+            actor_seq: seq,
+            space_id: Some("cx:space:0196419b-0000-7000-8000-000000000000".to_owned()),
+            kind: "cx.message.create".to_owned(),
+            schema_id: "cx.schema.event.message.v1".to_owned(),
+            canonical_digest: "sha256:abc".to_owned(),
+            canonical_bytes: b"canonical-bytes".to_vec(),
+            envelope: serde_json::json!({"event_id": event_id}),
+            received_at: now,
+        };
+        store.put(make("e1", "alice", 1)).unwrap();
+        store.put(make("e2", "alice", 2)).unwrap();
+        store.put(make("e3", "bob", 1)).unwrap();
+
+        assert!(store.contains("e1").unwrap());
+        assert!(!store.contains("missing").unwrap());
+        assert_eq!(store.get("e2").unwrap().unwrap().actor_seq, 2);
+        assert_eq!(store.max_actor_seq("alice").unwrap(), Some(2));
+        assert_eq!(store.max_actor_seq("bob").unwrap(), Some(1));
+        assert_eq!(store.max_actor_seq("nobody").unwrap(), None);
+        assert_eq!(store.snapshot_all().unwrap().len(), 3);
     }
 }

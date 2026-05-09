@@ -85,6 +85,14 @@ pub fn router_with_rate_limiter_config(
                 .push(Router::with_path("auth/bridge/describe").get(auth_bridge_describe))
                 .push(Router::with_path("account/register").post(account_register))
                 .push(Router::with_path("account/me").get(account_me))
+                // Round 24: principal-space lookup endpoint. Returns the
+                // deterministic DID → control-Space mapping coauth currently
+                // mirrors locally; future custom mappings will land behind
+                // this same path so coauth can swap without a wire bump.
+                .push(
+                    Router::with_path("account/{did}/principal-space")
+                        .get(account_principal_space),
+                )
                 .push(Router::with_path("auth/dev-login").post(dev_login))
                 .push(
                     Router::with_path("auth/session-grant/exchange")
@@ -475,6 +483,14 @@ pub fn router_with_rate_limiter_config(
                 .push(
                     Router::with_path("spaces/{space_id}/anchorer/reconfigure")
                         .post(admin_reconfigure_anchorer),
+                )
+                // Round 24 — rotate the AnchorerWorker signing key.
+                // Mints a fresh ed25519 seed, persists via platform
+                // KeyStore (when `use_keystore=true`), hot-swaps the
+                // in-process signer, returns `{kid, did, rotated_at}`.
+                .push(
+                    Router::with_path("spaces/{space_id}/anchorer/rotate-signing-key")
+                        .post(admin_rotate_signing_key),
                 )
                 .push(
                     Router::with_path("spaces/{space_id}/bottom")

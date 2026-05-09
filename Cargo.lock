@@ -94,6 +94,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
+name = "arc-swap"
+version = "1.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6a3a1fd6f75306b68087b831f025c712524bcb19aad54e557b1129cfa0a2b207"
+dependencies = [
+ "rustversion",
+]
+
+[[package]]
 name = "arrayvec"
 version = "0.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -499,7 +508,7 @@ dependencies = [
 
 [[package]]
 name = "contrix"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "base64",
  "chacha20poly1305",
@@ -538,13 +547,14 @@ dependencies = [
  "sha2",
  "thiserror",
  "tls_codec",
+ "tokio",
  "ulid",
  "uuid",
 ]
 
 [[package]]
 name = "contrix-api"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "contrix-core",
  "serde",
@@ -552,7 +562,7 @@ dependencies = [
 
 [[package]]
 name = "contrix-appservice-api"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "chrono",
  "contrix-core",
@@ -563,7 +573,7 @@ dependencies = [
 
 [[package]]
 name = "contrix-client"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "contrix-core",
  "reqwest 0.12.28",
@@ -575,7 +585,7 @@ dependencies = [
 
 [[package]]
 name = "contrix-client-api"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "chrono",
  "contrix-core",
@@ -589,7 +599,7 @@ dependencies = [
 
 [[package]]
 name = "contrix-core"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "base64",
  "chrono",
@@ -606,7 +616,7 @@ dependencies = [
 
 [[package]]
 name = "contrix-crypto"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "chrono",
  "contrix-core",
@@ -618,7 +628,7 @@ dependencies = [
 
 [[package]]
 name = "contrix-events"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "chrono",
  "contrix-core",
@@ -628,7 +638,7 @@ dependencies = [
 
 [[package]]
 name = "contrix-federation-api"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "chrono",
  "contrix-core",
@@ -639,7 +649,7 @@ dependencies = [
 
 [[package]]
 name = "contrix-ffi"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "contrix-core",
  "serde",
@@ -648,7 +658,7 @@ dependencies = [
 
 [[package]]
 name = "contrix-html"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "contrix-core",
  "serde",
@@ -657,7 +667,7 @@ dependencies = [
 
 [[package]]
 name = "contrix-identifiers"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "getrandom 0.3.4",
  "salvo",
@@ -670,7 +680,7 @@ dependencies = [
 
 [[package]]
 name = "contrix-identity-api"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "chrono",
  "contrix-core",
@@ -680,7 +690,7 @@ dependencies = [
 
 [[package]]
 name = "contrix-lattice"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "contrix-core",
  "serde",
@@ -690,7 +700,7 @@ dependencies = [
 
 [[package]]
 name = "contrix-operations"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "contrix-core",
  "serde",
@@ -699,7 +709,7 @@ dependencies = [
 
 [[package]]
 name = "contrix-push-gateway-api"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "contrix-core",
  "serde",
@@ -708,7 +718,7 @@ dependencies = [
 
 [[package]]
 name = "contrix-schema"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "contrix-core",
  "serde",
@@ -717,7 +727,7 @@ dependencies = [
 
 [[package]]
 name = "contrix-server"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "contrix-api",
  "contrix-appservice-api",
@@ -734,7 +744,7 @@ dependencies = [
 
 [[package]]
 name = "contrix-signatures"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "base64",
  "chrono",
@@ -747,7 +757,7 @@ dependencies = [
 
 [[package]]
 name = "contrix-state-res"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "chrono",
  "contrix-core",
@@ -760,7 +770,7 @@ dependencies = [
 
 [[package]]
 name = "contrix-store"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "chrono",
  "contrix-core",
@@ -771,7 +781,7 @@ dependencies = [
 
 [[package]]
 name = "contrix-testing"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "chrono",
  "contrix-api",
@@ -799,7 +809,7 @@ dependencies = [
 
 [[package]]
 name = "contrix-ui"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "chrono",
  "contrix-core",
@@ -3981,6 +3991,7 @@ name = "soland"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "arc-swap",
  "async-stream",
  "base64",
  "bs58",
@@ -3992,6 +4003,7 @@ dependencies = [
  "dotenvy",
  "ed25519-dalek",
  "futures-util",
+ "rand 0.8.6",
  "reqwest 0.12.28",
  "salvo",
  "salvo-oapi",
