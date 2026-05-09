@@ -486,11 +486,11 @@ pub fn project_accepted_operations(state: &AppState, repo_id: &str, operations: 
         // filter by `space_id`. `send` returns Err only if there are no
         // active receivers — that's not an error path, it's the steady
         // state when no one's subscribed.
-        let _ = state.event_broadcast.send(crate::state::EventNotification {
-            space_id: projected.space_id.clone(),
-            cursor: projected.event_id.clone(),
-            event_payload: projection_event_json(&projected),
-        });
+        let _ = state.event_broadcast.send(crate::state::EventNotification::event(
+            projected.space_id.clone(),
+            projected.event_id.clone(),
+            projection_event_json(&projected),
+        ));
         append_projection_event(state, projected);
         if let Err(error) = persist_projected_operation(state, repo_id, operation) {
             tracing::warn!(

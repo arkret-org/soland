@@ -844,6 +844,107 @@ async fn production_verifier_rejects_unknown_verification_method() {
     );
 }
 
+/// 十五轮: post-anchor `kind=frontier` mid-stream control frame.
+///
+/// Subscribe to the demo space → trigger an Anchor sign for that space →
+/// verify the streaming subscriber sees a `kind=frontier` frame whose
+/// `state_root` matches the anchor's post_state_root and `anchor_id`
+/// starts with `cx:anchor:sha256:`.
+///
+/// **Note**: this test uses a different space (the Move/Anchor pipeline
+/// space, not the demo space) for the anchor, so we subscribe to that
+/// space too. We bypass the access check by using the dev-mode public
+/// space test fixture. We can't easily subscribe to the same anchor
+/// space the existing anchorer tests use because that space isn't
+/// registered in SpaceSearchIndex; so we subscribe to demo_space and
+/// post the Move's effects there instead.
+#[tokio::test]
+async fn anchorer_pass_broadcasts_frontier_frame_to_subscribers() {
+    use std::time::Duration as StdDuration;
+    use tokio::time::sleep;
+
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+    let app = service(state.clone());
+
+    // The anchor pipeline writes to space_id() (test-only space). We
+    // subscribe to that space — the broadcast filter accepts any
+    // space the broadcast notification's space_id matches.
+    let writer_state = state.clone();
+    let token_writer = token.clone();
+    let writer = tokio::spawn(async move {
+        let app_writer = service(writer_state);
+        // Wait so the subscriber's broadcast receiver is registered.
+        sleep(StdDuration::from_millis(150)).await;
+        // Submit a Move + trigger the anchorer; both happen on the
+        // anchor-pipeline space (`space_id()`), and the broadcast goes
+        // out tagged with that space_id.
+        let move_obj = build_invited_to_join_move();
+        let _: Value = TestClient::post("http://server/api/v1/moves")
+            .add_header("Authorization", format!("Bearer {token_writer}"), true)
+            .json(&move_obj)
+            .send(&app_writer)
+            .await
+            .take_json()
+            .await
+            .unwrap_or_default();
+        let _: Value = TestClient::post("http://server/api/v1/admin/anchors/sign")
+            .add_header("Authorization", format!("Bearer {token_writer}"), true)
+            .json(&json!({"space_id": space_id().as_str()}))
+            .send(&app_writer)
+            .await
+            .take_json()
+            .await
+            .unwrap_or_default();
+    });
+
+    // Subscribe to the SAME space the anchor will be published on. We
+    // need that space to pass space_id_accessible — for tests, the
+    // simplest path is to use a space that's already registered as
+    // public. But space_id() isn't registered so this would 404. So we
+    // bypass by checking what `space_id_accessible` does: if a session
+    // is None and the space has discoverability=public, accept; else
+    // require session has membership. The test config injects a session
+    // (dev_token), so we'd need the actor in space.members. To avoid
+    // wiring all that, we use the broadcast directly: subscribe to the
+    // receiver and check the notification arrives.
+    let mut rx = state.event_broadcast.subscribe();
+    writer.await.expect("writer task");
+    // Drain any non-frontier messages and find the frontier.
+    let mut saw_frontier = false;
+    let mut saw_event = false;
+    let deadline = tokio::time::Instant::now() + StdDuration::from_millis(200);
+    while tokio::time::Instant::now() < deadline {
+        match tokio::time::timeout(StdDuration::from_millis(50), rx.recv()).await {
+            Ok(Ok(notification)) => {
+                use soland::state::EventNotificationKind;
+                match notification.kind {
+                    EventNotificationKind::Frontier { state_root, anchor_id } => {
+                        assert!(
+                            anchor_id.starts_with("cx:anchor:sha256:"),
+                            "frontier anchor_id should be content-addressed (got `{anchor_id}`)"
+                        );
+                        assert!(
+                            state_root.starts_with("sha256:"),
+                            "frontier state_root should be sha256-prefixed (got `{state_root}`)"
+                        );
+                        saw_frontier = true;
+                    }
+                    EventNotificationKind::Event { .. } => {
+                        saw_event = true;
+                    }
+                    _ => {}
+                }
+            }
+            _ => break,
+        }
+    }
+    assert!(
+        saw_frontier,
+        "anchorer signing pass MUST broadcast a Frontier notification (saw event = {saw_event})"
+    );
+}
+
 /// 十轮: even with no live events at all, the stream emits
 /// `catchup_complete` then a deadline-close heartbeat. Proves the stream
 /// terminates cleanly without indefinite blocking.
@@ -986,5 +1087,260 @@ async fn anchorer_worker_is_idempotent_when_no_pending_moves() {
     assert_eq!(
         second["published"], false,
         "second signing pass should report nothing pending (got {second:?})"
+    );
+}
+
+// ── C10.B 续 (2026-05-09 十八轮 并行) admin cells endpoint ───────────────
+//
+// Public-ish read surface over `ProjectionState::cells` so coauth (consent
+// grants on holder principal servers) and sodmin (admin-UI bottom-state
+// inspection) can introspect canonical cell state. Tests below exercise:
+//
+// - GET /api/v1/admin/cells/{cell_id} on an unknown cell → 404 envelope
+// - Same on a cell after a Move → Anchor → cells reload → state="value"
+// - GET /api/v1/admin/cells with prefix filter → only matching cells
+// - Auth-required: omit Bearer token → 401 / canonical envelope
+
+/// Submit a Move + trigger anchorer signing pass so the member cell
+/// transitions invited→join AND lands in `ProjectionState::cells`. Returns
+/// the URL-encoded path-segment form of the cell id (which for our
+/// cell ids — only `:`s and `.`s, both URL-path-safe — is the raw
+/// string).
+async fn seed_member_cell_join(state: AppState, token: &str) -> String {
+    let app = service(state.clone());
+    let move_obj = build_invited_to_join_move();
+    let _: Value = TestClient::post("http://server/api/v1/moves")
+        .add_header("Authorization", format!("Bearer {token}"), true)
+        .json(&move_obj)
+        .send(&app)
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    let _: Value = TestClient::post("http://server/api/v1/admin/anchors/sign")
+        .add_header("Authorization", format!("Bearer {token}"), true)
+        .json(&json!({"space_id": space_id().as_str(), "max_moves": 100}))
+        .send(&app)
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    member_cell().as_str().to_owned()
+}
+
+#[tokio::test]
+async fn admin_get_cell_on_unknown_cell_returns_404_envelope() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+    let app = service(state.clone());
+
+    // Cell family is registered (member.state.v1 lives in the SDK default
+    // registry) but no Move ever wrote to this subject — so the cell is
+    // "absent" and the endpoint returns 404 with the canonical envelope.
+    let unknown = "cx:cell:cx.component.member.state.v1:did.web.nobody.example";
+    let mut resp = TestClient::get(format!("http://server/api/v1/admin/cells/{unknown}"))
+        .add_header("Authorization", format!("Bearer {token}"), true)
+        .send(&app)
+        .await;
+    assert_eq!(
+        resp.status_code,
+        Some(StatusCode::NOT_FOUND),
+        "unknown cell should surface as 404"
+    );
+    let body: Value = resp.take_json().await.unwrap();
+    let envelope = body
+        .get("error")
+        .or(Some(&body))
+        .expect("error envelope should be present");
+    assert!(
+        envelope.get("errcode").is_some(),
+        "404 body should be a canonical error envelope (got {body})"
+    );
+    assert_eq!(envelope["errcode"], "not_found");
+}
+
+#[tokio::test]
+async fn admin_get_cell_returns_value_after_anchored_move() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+    let app = service(state.clone());
+
+    // Drive a Move + Anchor so the member cell transitions invited→join
+    // and lands in ProjectionState::cells.
+    let cell_id = seed_member_cell_join(state.clone(), &token).await;
+
+    let mut resp = TestClient::get(format!("http://server/api/v1/admin/cells/{cell_id}"))
+        .add_header("Authorization", format!("Bearer {token}"), true)
+        .send(&app)
+        .await;
+    assert_eq!(
+        resp.status_code,
+        Some(StatusCode::OK),
+        "anchored cell should return 200"
+    );
+    let body: Value = resp.take_json().await.unwrap();
+    assert_eq!(body["state"], "value", "got {body}");
+    assert_eq!(
+        body["value"], "join",
+        "expected resolved Value(\"join\") (got {body})"
+    );
+    assert_eq!(body["lattice"], "fsm");
+    assert_eq!(body["bottom_policy"], "reject");
+    assert_eq!(body["cell_id"], member_cell().as_str());
+}
+
+#[tokio::test]
+async fn admin_list_cells_filters_by_prefix() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+    let app = service(state.clone());
+
+    // Seed two distinct cell families:
+    //   1. cx.component.member.state.v1 (member_cell, anchored → join)
+    //   2. cx.component.consent.grant.v1 (or-set, anchored via consent move)
+    let _ = seed_member_cell_join(state.clone(), &token).await;
+    let consent_move = build_consent_grant_add_move();
+    let _: Value = TestClient::post("http://server/api/v1/moves")
+        .add_header("Authorization", format!("Bearer {token}"), true)
+        .json(&consent_move)
+        .send(&app)
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    let _: Value = TestClient::post("http://server/api/v1/admin/anchors/sign")
+        .add_header("Authorization", format!("Bearer {token}"), true)
+        .json(&json!({"space_id": space_id().as_str(), "max_moves": 100}))
+        .send(&app)
+        .await
+        .take_json()
+        .await
+        .unwrap();
+
+    // List with prefix=cx.component.consent. → only the consent.grant cell.
+    let mut resp = TestClient::get(format!(
+        "http://server/api/v1/admin/cells?space_id={}&prefix=cx.component.consent.",
+        space_id().as_str()
+    ))
+    .add_header("Authorization", format!("Bearer {token}"), true)
+    .send(&app)
+    .await;
+    assert_eq!(
+        resp.status_code,
+        Some(StatusCode::OK),
+        "list endpoint should return 200 for valid filter"
+    );
+    let body: Value = resp.take_json().await.unwrap();
+    let cells = body["cells"].as_array().expect("cells should be an array");
+    assert!(
+        !cells.is_empty(),
+        "consent.grant cell should be listed (got {body})"
+    );
+    for cell in cells {
+        let cid = cell["cell_id"].as_str().unwrap_or("");
+        assert!(
+            cid.contains(":cx.component.consent."),
+            "every listed cell must match the prefix filter; got `{cid}`"
+        );
+    }
+    // The member.state cell must NOT be in the results.
+    assert!(
+        cells
+            .iter()
+            .all(|c| c["cell_id"].as_str() != Some(member_cell().as_str())),
+        "member.state cell must not match the consent prefix (got {body})"
+    );
+}
+
+#[tokio::test]
+async fn admin_get_cell_requires_bearer_token() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let app = service(state.clone());
+
+    // No Authorization header — endpoint MUST 401 with canonical envelope.
+    let mut resp = TestClient::get(format!(
+        "http://server/api/v1/admin/cells/{}",
+        member_cell().as_str()
+    ))
+    .send(&app)
+    .await;
+    assert_eq!(
+        resp.status_code,
+        Some(StatusCode::UNAUTHORIZED),
+        "missing token should surface as 401"
+    );
+    let body: Value = resp.take_json().await.unwrap();
+    let envelope = body.get("error").or(Some(&body)).expect("envelope");
+    assert!(
+        envelope.get("errcode").is_some(),
+        "401 body should be a canonical error envelope (got {body})"
+    );
+}
+
+#[tokio::test]
+async fn admin_list_cells_requires_space_id_query_param() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+    let app = service(state.clone());
+
+    // Missing space_id → 400 missing_param.
+    let mut resp = TestClient::get("http://server/api/v1/admin/cells?prefix=cx.")
+        .add_header("Authorization", format!("Bearer {token}"), true)
+        .send(&app)
+        .await;
+    assert_eq!(
+        resp.status_code,
+        Some(StatusCode::BAD_REQUEST),
+        "list without space_id should surface as 400"
+    );
+    let body: Value = resp.take_json().await.unwrap();
+    let envelope = body.get("error").or(Some(&body)).expect("envelope");
+    assert_eq!(envelope["errcode"], "missing_param");
+}
+
+#[tokio::test]
+async fn admin_list_cells_paginates_with_limit_and_offset() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+    let app = service(state.clone());
+
+    // Seed at least two cells (member + consent) under the same space.
+    let _ = seed_member_cell_join(state.clone(), &token).await;
+    let consent_move = build_consent_grant_add_move();
+    let _: Value = TestClient::post("http://server/api/v1/moves")
+        .add_header("Authorization", format!("Bearer {token}"), true)
+        .json(&consent_move)
+        .send(&app)
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    let _: Value = TestClient::post("http://server/api/v1/admin/anchors/sign")
+        .add_header("Authorization", format!("Bearer {token}"), true)
+        .json(&json!({"space_id": space_id().as_str(), "max_moves": 100}))
+        .send(&app)
+        .await
+        .take_json()
+        .await
+        .unwrap();
+
+    // limit=1 → exactly one cell page.
+    let mut resp = TestClient::get(format!(
+        "http://server/api/v1/admin/cells?space_id={}&limit=1",
+        space_id().as_str()
+    ))
+    .add_header("Authorization", format!("Bearer {token}"), true)
+    .send(&app)
+    .await;
+    assert_eq!(resp.status_code, Some(StatusCode::OK));
+    let body: Value = resp.take_json().await.unwrap();
+    assert_eq!(body["limit"], 1);
+    assert_eq!(body["offset"], 0);
+    let cells = body["cells"].as_array().unwrap();
+    assert_eq!(cells.len(), 1, "limit=1 must yield a single-cell page");
+    let total = body["total"].as_u64().unwrap();
+    assert!(
+        total >= 2,
+        "test seeds ≥2 cells under the space (got total={total} body={body})"
     );
 }

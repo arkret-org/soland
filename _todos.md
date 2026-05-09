@@ -393,6 +393,94 @@ pub async fn send_message(
 
 ## Spec Phase 1-5 rollout changelog
 
+## C10.B 续 — admin cells endpoint (2026-05-09 十八轮 并行)
+
+- **What landed**:
+  - 新文件 `src/routing/admin_cells.rs` — 两个 typed `#[endpoint]` handler:
+    - `admin_get_cell` (GET /api/v1/admin/cells/{cell_id}) — 读单个 cell 当前 state，返回 `{cell_id, state: "value"|"bottom"|"absent", value?, bottom?, lattice, bottom_policy}`。 family resolves 不到 → 404 (`not_found` envelope)；cell 在 registry 里但从没被写过 → 404 absent。
+    - `admin_list_cells` (GET /api/v1/admin/cells?space_id=...&prefix=...&limit=...&offset=...) — `space_id` 必填；`prefix` 按 cell family component 前缀过滤；`limit` 默认 100 / max 1000；分页通过 `offset`。
+  - 数据流：路径绕开 SDK 直接读 `state.projection.lock().cells` (Move/Anchor pipeline 的写入端是 `apply_anchor` → `reload_cells_from_store`)；lattice + bottom_mode 通过 `state.cell_registry.resolve(space_id, &cell)` 获得，`LatticeKind::as_wire_str()` 直接做 wire 字符串映射。
+  - 路由注册：在 `src/lib.rs` `admin/{resource}` 路由 *之前* 追加两条 (`admin/cells` + `admin/cells/{cell_id}`) 以确保 literal `cells` segment 优先匹配；ADD-only，不动现有行。
+  - Auth：复用 `AuthArgs::authenticated_session` pattern (匹配 `admin_sign_anchor`)；缺 Bearer token → 401 canonical envelope；rate limit 走全局 middleware。
+  - URL encoding：cell_id 走 path segment，正则只含 `:` + `.` + alnum (URL-path-safe)，receiver 直接 `req.param::<String>("cell_id")` 拿到 decoded 字符串再 `CellRef::new` 严格 round-trip。
+- **Why this**:
+  - coauth 在 holder principal server 上需要查 `cx:cell:cx.component.consent.grant.v1:<cnt>` 来核 consent grant 状态；sodmin 管理 UI 需要 list bottom-state cells；都缺 public-ish HTTP read endpoint。
+  - 该端点是 read-only 切口；写入路径仍只走 Move + Anchor → `apply_anchor` (单一权威)。
+- **Tests** (4 unit tests + 6 integration tests):
+  - Unit (in `src/routing/admin_cells.rs::tests`): `state_response_value_serializes_with_value_field` / `state_response_absent_state_omits_value_and_bottom` / `resolve_space_extracts_space_subject_when_no_explicit` / `resolve_space_uses_sentinel_for_actor_keyed_cell_when_no_explicit`.
+  - Integration (`tests/move_anchor_wire.rs`):
+    - `admin_get_cell_on_unknown_cell_returns_404_envelope` — 未写过 cell → 404 + canonical `error.errcode=not_found`。
+    - `admin_get_cell_returns_value_after_anchored_move` — Move (invited→join) + admin/anchors/sign → GET cell → `state="value"`, `value="join"`, `lattice="fsm"`, `bottom_policy="reject"`。
+    - `admin_list_cells_filters_by_prefix` — 同时存在 member.state + consent.grant 两个 cell；prefix=cx.component.consent. → 只返回 consent.grant，member.state 必须缺席。
+    - `admin_get_cell_requires_bearer_token` — 缺 Authorization header → 401 + canonical envelope。
+    - `admin_list_cells_requires_space_id_query_param` — 缺 space_id → 400 + `errcode=missing_param`。
+    - `admin_list_cells_paginates_with_limit_and_offset` — 两个 cell + limit=1 → cells.len()=1, total≥2, limit=1, offset=0。
+- **Counts (before → after)**:
+  - lib unit tests: 127 → 131 (+4 admin_cells unit tests)。
+  - `cargo test --test move_anchor_wire`: 18 → 24 (+6 integration tests)。
+  - Final: `test result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.59s`。
+- **Out-of-scope deferred**:
+  - `MAX_LIST_LIMIT` / `DEFAULT_LIST_LIMIT` hard-coded (1000 / 100)；TODO comment notes 应迁到 AppConfig 一次 parallel task B 落地。
+  - `space_id` 在 cell registry resolve 用 sentinel scope（actor-keyed cell 没法从 subject 推 space）；待 cell_registry 支持 per-Space scoping 后细化。
+
+## C10.B 续 — DidWebvhResolver chain (2026-05-09 十八轮 并行)
+
+- **What landed**:
+  - 新文件 `src/did_resolver_chain.rs` — `pub fn build_did_resolver_chain(&AppConfig) -> CompositeDidResolver` helper. 把以前内联在 `AppState::new` 里的链构造抽出来，按优先级 `DidUuidResolver → DidWebvhResolver (optional) → DidWebResolver → DidKeyResolver` 组装。
+  - `src/state.rs` 改动: `AppState::new` 里原本 4-行 inline `CompositeDidResolver::new() + push(DidUuidResolver) + push(DidWebResolver) + push(DidKeyResolver)` 替换成单行 `did_resolver_chain::build_did_resolver_chain(&config)`。Imports 同步从 `{CompositeDidResolver, DidKeyResolver, DidUuidResolver, DidWebResolver}` 收窄到 `CompositeDidResolver` (helper 自己引剩下 3 个)。
+  - `did_resolver_chain` 用 `#[path = "did_resolver_chain.rs"] pub mod did_resolver_chain;` 挂在 `state` 模块下而不是 `lib.rs` 顶层 — 因为 parallel task A 当前持有 `lib.rs` 的编辑锁。Re-export 路径是 `crate::state::did_resolver_chain`。
+- **Integration with starid**:
+  - 配置入口: `SERVERX_STARID_WEBVH_RESOLVER_URL=https://starid.example` (no trailing slash) 通过既有 `AppConfig::starid_webvh_resolver_url: Option<String>` 字段。`Some(_)` 时 helper 把 `DidWebvhResolver::new()` 推入链；`None` (默认) 时跳过。
+  - URL shape: starid 在 `<URL>/<scid>/<host>/<path...>/did.json` 提供 `did:webvh` 文档；chain 里的 SDK resolver 是 cache-based (`insert_from_https_response` / `ingest_log`)，production 还需要 fetcher 来填充 cache (后续工作)。当前 chain 落位是 fetcher 接入的前提。
+  - **Resolver priority**: `DidWebvhResolver` 排在 `DidWebResolver` 之前，确保 `did:webvh:...` DID 不会 fallthrough 到 `did:web` (`DidWebResolver::supports()` 本身就拒 webvh，但 ordering 把 intent 写死，免得未来引入 fallback 行为时偷偷换语义)。
+  - **`did_resolver_allow_methods` 过滤**: helper honor 既有 `AppConfig::did_resolver_allow_methods: Vec<String>` 字段。允许列表包含 `"webvh"` (case-insensitive) 时才推入 webvh resolver；空列表当 "allow all" 处理（向后兼容旧 deployment）。production env CSV 里加 `webvh` 才能启用，跟 spec discovery 端点 `identity_describe` 已宣告的 `cx.identity.starid.webvh.optional.v1` profile 对齐。
+- **Tests** (5 新 unit tests in `state::did_resolver_chain::tests`):
+  - `chain_includes_webvh_resolver_when_url_configured` — 配置 starid URL → chain `supports(did:webvh:...)` 返 true
+  - `chain_omits_webvh_resolver_when_url_absent` — URL=None → chain `supports(did:webvh:...)` 返 false (但 did:web 仍 supported)
+  - `chain_priority_puts_webvh_before_web` — well-formed did:webvh DID 触发的错误是 webvh-flavored ("did:webvh document not cached")，证明 dispatch 走 webvh 而不是 web
+  - `did_resolver_allow_methods_filter_applies_to_webvh` — allow_methods 不含 "webvh" 时，即使设了 URL chain 也不推 webvh resolver
+  - `empty_allow_methods_treated_as_allow_all` — 空 allow list 视作 "全允许"，chain 同时 support webvh + web
+- **测试结果**: lib `122 → 131` pass (+5 new + 4 from concurrent十六+十七轮 lands in same window). Build clean (`cargo build --lib` finishes). Integration tests `tests/http_api.rs` / `tests/openapi_typed.rs` 仍因十四+十五轮 添加的 `jws_replay_window_seconds` / `jws_replay_window_per_family` 字段 missing 而 pre-broken (out-of-scope for this round; tracked separately).
+- **Out of scope / follow-ups**:
+  - `DidWebvhResolver` 是 cache-based — 实际 HTTPS fetch (调用 `insert_from_https_response` + `ingest_log`) 需要单独的 fetcher worker 来定期或 on-demand 拉 starid 的 `did.json` / `did.jsonl`。chain placement 是这个 fetcher 接入的前提。
+  - `starid_webvh_resolver_url` 当前只用作 "enable" toggle；多 starid instance 或 `GET /describe` 探活检查留待 fetcher PR 一起做。
+  - `routing/identity.rs::identity_describe` 已经 surface 这个 profile，无需改动。
+
+- **2026-05-09 十四+十五轮 并行** — **differentiated replay window + mid-stream control frames**：
+  - 用户指示 "没做的能并行, 并行" — 在本轮内同批落地两个相互独立但触及相同文件 (`submit_anchor` / `anchorer.rs`) 的 soland-internal 任务。其他跨项目任务 (C10.D yougen / C10.E coauth / C10.F sodmin) 按 "其他等待下一轮" 推后。
+  - **十四轮 — Differentiated replay window per cell-family**:
+    - 新 `AppConfig::jws_replay_window_per_family: BTreeMap<&'static str, u64>` 字段（key 必须是 `&'static str` 的 cell_family 名，避免 String allocation per check）。
+    - 新 `AppConfig::default_replay_overrides()` 工厂：anchorer.v1=60s / mls.epoch.v1=60s / consent.grant.v1=120s / capability.{grant,delegate,derived}.v1=120s（spec 推荐的 tight 窗口）。
+    - 新 `jws_verify::verify_replay_window_for_move(move, default, overrides)` + 暴露的 `effective_window_for_move(move, default, overrides)` helper。算法：
+      1. 遍历 `move.effects[]`
+      2. 用 `CellId::parse(cell.as_str()).component()` 提取 cell_family
+      3. 在 overrides 里 lookup → 找到则更新 `effective`：`if effective == 0 { override } else { effective.min(override) }`
+      4. 返回 effective 作为生效 window
+    - 特殊语义：default=0 (disable) 但有 override → override 接管。让 dev/test config (window=0) 仍能保护 anchorer cell；如果想全关只能清空 overrides map（`BTreeMap::new()`）。
+    - `submit_move` 和 `AnchorerWorker::sign_pending_for_space` 都改用 `verify_replay_window_for_move`。`submit_anchor` 仍用 `verify_replay_window(&anchor.hlc, ...)` 因为 Anchor.hlc 是 anchor 自己的而不是 effects 衍生的。
+    - test_config 加 `jws_replay_window_per_family: BTreeMap::new()` 保留旧 fixture 兼容。
+    - **6 新 unit tests** in `jws_verify::tests`:
+      - `effective_window_picks_default_when_no_overrides_apply`
+      - `effective_window_uses_anchorer_override_when_anchorer_cell_touched`
+      - `effective_window_takes_minimum_when_default_tighter_than_override`
+      - `effective_window_zero_default_with_override_uses_override`
+      - `anchorer_cell_with_60s_override_rejects_2min_old_hlc`
+      - `message_cell_under_default_300s_accepts_2min_old_hlc`
+  - **十五轮 — Mid-stream control frames**:
+    - `EventNotification` 改成 enum 包装：`{space_id, kind: EventNotificationKind}` 五变体 (Event / EpochRotation / Frontier / ResyncRequired / Unauthorized)。
+    - 旧用法 `EventNotification { space_id, cursor, event_payload }` 改成 `EventNotification::event(space_id, cursor, event_payload)` 工厂。`projection.rs::project_accepted_operations` 同步改名调用。
+    - 新工厂 `EventNotification::epoch_rotation(...)` / `::frontier(...)`。
+    - `submit_anchor` (`routing/move_anchor.rs`) 和 `AnchorerWorker::sign_pending_for_space` (`anchorer.rs`) 在 `apply_anchor` 成功后：
+      1. 在 reload_cells_from_store **前** 捕 `mls.epoch` cell 的旧值
+      2. reload (写入新值)
+      3. 无条件 broadcast `Frontier { state_root: post_state_root, anchor_id: anchor.id }`
+      4. 仅当 prev != new 时 broadcast `EpochRotation { previous_epoch, new_epoch }`
+    - `events_subscribe` (`routing/sync.rs`) 在 broadcast `recv` arm 改用 match-on-kind 分发产出 NDJSON：`Event` → `kind=event` (含 seq+cursor+payload)、`EpochRotation` → `kind=epoch_rotation` (含 previous/new_epoch)、`Frontier` → `kind=frontier` (含 state_root+anchor_id)、`ResyncRequired` → `kind=resync_required` (含 reason)、`Unauthorized` → `kind=unauthorized`。
+    - `ResyncRequired` / `Unauthorized` 变体的触发器（per-subscriber drift detection / session token 过期）暂未接入，留 placeholder for next round；当前 broadcast 通道触发只发 EpochRotation + Frontier。
+    - **1 新集成测试** `anchorer_pass_broadcasts_frontier_frame_to_subscribers`：直接 `state.event_broadcast.subscribe()` (跳过 HTTP subscribe 的 demo-space 注册要求) → 触发 admin/anchors/sign → drain notifications → 找到 `Frontier { anchor_id, state_root }` 验证 anchor_id starts with `cx:anchor:sha256:` + state_root starts with `sha256:`。
+  - 测试结果：lib `116/116 → 122/122` + move_anchor_wire `17/17 → 18/18` pass。
+  - 剩余 production 工作：subscribe-side `kind=resync_required`/`unauthorized` triggers (需要 per-subscriber state); cell_registry 跨 Space scoping (现 anchorer cell 全局共享，多 Space 部署需要细化)。
+
 - **2026-05-09 十三轮 激进模式** — **space_states 双层迁移 (cells + structured cache)**：
   - 把 ProjectionState `space_states: BTreeMap<String, SpaceState>` 这个最后的 cell-driven structured 字段也改成双层架构，跟 read_receipt_policies / memberships 一致。
   - **结构化 cache 保留**: `space_states` 持续承载 server-side `created_at` / `updated_at` 时间戳 + 简单 `deleted` bool + side-band `owner` / `title` (consumer `routing/index.rs::space_state_count` 仍读这一层)。

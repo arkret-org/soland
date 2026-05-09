@@ -311,6 +311,21 @@ pub async fn submit_anchor(
     // (read_receipt_policy / member.state / etc.) see the new effective
     // state immediately. Lock failures are non-fatal — read paths fall
     // back to the durable-event scan.
+    //
+    // 十五轮: capture mls.epoch BEFORE the reload so we can detect a
+    // shift after the reload writes the new value.
+    let mls_epoch_cell = contrix_sdk::CellRef::new(format!(
+        "cx:cell:cx.component.mls.epoch.v1:{}",
+        anchor.space_id.as_str()
+    ))
+    .ok();
+    let prev_epoch_value: Option<serde_json::Value> = mls_epoch_cell.as_ref().and_then(|cell_id| {
+        state
+            .projection
+            .lock()
+            .ok()
+            .and_then(|proj| proj.cell_value(cell_id).cloned())
+    });
     if let Ok(mut proj) = state.projection.lock() {
         if let Err(error) = proj.reload_cells_from_store(
             &anchor.space_id,
@@ -318,6 +333,34 @@ pub async fn submit_anchor(
             registry,
         ) {
             tracing::warn!(error = %error, "failed to refresh ProjectionState::cells after apply_anchor");
+        }
+    }
+    // 十五轮: post-apply_anchor mid-stream control frames.
+    // 1. Frontier — every successful Anchor advances the frontier.
+    let _ = state
+        .event_broadcast
+        .send(crate::state::EventNotification::frontier(
+            anchor.space_id.as_str().to_owned(),
+            effect.anchor.as_str().to_owned(),
+            effect.post_state_root.as_str().to_owned(),
+        ));
+    // 2. EpochRotation — only if mls.epoch cell value changed.
+    if let Some(cell_id) = mls_epoch_cell {
+        let new_epoch_value: Option<serde_json::Value> = state
+            .projection
+            .lock()
+            .ok()
+            .and_then(|proj| proj.cell_value(&cell_id).cloned());
+        if let Some(new_epoch) = new_epoch_value
+            && prev_epoch_value.as_ref() != Some(&new_epoch)
+        {
+            let _ = state
+                .event_broadcast
+                .send(crate::state::EventNotification::epoch_rotation(
+                    anchor.space_id.as_str().to_owned(),
+                    prev_epoch_value,
+                    new_epoch,
+                ));
         }
     }
 

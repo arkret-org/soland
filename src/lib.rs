@@ -214,6 +214,13 @@ pub fn router_with_rate_limiter_config(
                 .push(Router::with_path("authz/grants").post(create_grant))
                 .push(Router::with_path("authz/grants/{grant_id}").delete(revoke_grant))
                 .push(Router::with_path("authz/invites").get(invites))
+                // C10.B 续 (2026-05-09 十八轮 并行): admin cells endpoint —
+                // public-ish read surface over `ProjectionState::cells` for
+                // coauth (consent grants) + sodmin (bottom-state inspection).
+                // Registered BEFORE `admin/{resource}` so the literal `cells`
+                // segment wins over the generic resource-collection route.
+                .push(Router::with_path("admin/cells").get(admin_list_cells))
+                .push(Router::with_path("admin/cells/{cell_id}").get(admin_get_cell))
                 .push(Router::with_path("admin/{resource}").get(admin_collection))
                 // C10.B MAL-3 (2026-05-09 七轮): admin endpoint that
                 // triggers one anchorer signing pass for a Space.

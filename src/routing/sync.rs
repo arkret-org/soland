@@ -783,13 +783,50 @@ pub async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Re
                             if !space_filter.contains(&notification.space_id) {
                                 continue;
                             }
-                            live_seq += 1;
-                            let frame = json!({
-                                "kind": "event",
-                                "seq": live_seq,
-                                "cursor": notification.cursor,
-                                "payload": notification.event_payload,
-                            });
+                            // 十五轮: dispatch on notification.kind to
+                            // produce the right NDJSON frame shape.
+                            use crate::state::EventNotificationKind;
+                            let frame = match notification.kind {
+                                EventNotificationKind::Event { cursor, event_payload } => {
+                                    live_seq += 1;
+                                    json!({
+                                        "kind": "event",
+                                        "seq": live_seq,
+                                        "cursor": cursor,
+                                        "payload": event_payload,
+                                    })
+                                }
+                                EventNotificationKind::EpochRotation { previous_epoch, new_epoch } => {
+                                    json!({
+                                        "kind": "epoch_rotation",
+                                        "space_id": notification.space_id,
+                                        "previous_epoch": previous_epoch,
+                                        "new_epoch": new_epoch,
+                                    })
+                                }
+                                EventNotificationKind::Frontier { state_root, anchor_id } => {
+                                    json!({
+                                        "kind": "frontier",
+                                        "space_id": notification.space_id,
+                                        "state_root": state_root,
+                                        "anchor_id": anchor_id,
+                                    })
+                                }
+                                EventNotificationKind::ResyncRequired { reason } => {
+                                    json!({
+                                        "kind": "resync_required",
+                                        "space_id": notification.space_id,
+                                        "reason": reason,
+                                    })
+                                }
+                                EventNotificationKind::Unauthorized { reason } => {
+                                    json!({
+                                        "kind": "unauthorized",
+                                        "space_id": notification.space_id,
+                                        "reason": reason,
+                                    })
+                                }
+                            };
                             yield Ok(ndjson_line(&frame));
                         }
                         Err(RecvError::Lagged(skipped)) => {

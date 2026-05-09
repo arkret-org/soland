@@ -6,7 +6,7 @@ use tokio::sync::broadcast;
 
 use contrix_sdk::{
     Did, SpaceId, SpaceSearchEntry, SpaceSearchIndex,
-    identity::{CompositeDidResolver, DidKeyResolver, DidUuidResolver, DidWebResolver},
+    identity::CompositeDidResolver,
 };
 use serde_json::{Value, json};
 
@@ -19,23 +19,102 @@ use crate::persistence::{MemoryPersistenceStore, PersistenceStore, PgPersistence
 use crate::reducer::ProjectionState;
 use crate::repo::{MemoryRepoAdapter, PgRepoAdapter, RepoAdapterRef};
 
-/// C10.B (2026-05-09 十轮): event payload broadcast on the
-/// [`AppState::event_broadcast`] channel each time the projection layer
-/// commits a new event. Subscribers in `cx.events.subscribe` filter by
-/// `space_id`, then write the `event_payload` (already in projection-event
-/// JSON shape — same payload used by the unary history slice) to the
-/// NDJSON streaming response wrapped in a `kind="event"` frame.
+// C10.B (2026-05-09 十八轮 并行) — `did_resolver_chain.rs` lives at
+// `src/did_resolver_chain.rs`; declared here as a submodule of `state`
+// (rather than top-level via `lib.rs`) because the parallel task A in
+// this branch holds the `lib.rs` edit lock. Re-exported as
+// `crate::state::did_resolver_chain` and used immediately below in
+// `AppState::new`.
+#[path = "did_resolver_chain.rs"]
+pub mod did_resolver_chain;
+
+/// C10.B (2026-05-09 十轮 / 十五轮): broadcast payload for the
+/// [`AppState::event_broadcast`] channel. Subscribers filter by
+/// `space_id` first, then dispatch on `kind` to produce the right
+/// NDJSON frame.
+///
+/// 十五轮 added control-frame variants alongside the original `Event`
+/// (mid-stream control frames per spec):
+///   - `EpochRotation` — emitted when `cx.component.mls.epoch.v1` cell
+///     changes (E2EE epoch shift; clients MUST re-fetch keys)
+///   - `Frontier` — anchor frontier advanced (Snapshot of cursor /
+///     state_root after `apply_anchor`); clients use this as a
+///     resync waypoint
+///   - `ResyncRequired` — server detected per-subscriber drift; client
+///     MUST drop local cache and re-subscribe with `from=null`
+///   - `Unauthorized` — subscriber's session token revoked / expired
+///     mid-stream; client MUST close + re-auth
 #[derive(Clone, Debug)]
 pub struct EventNotification {
     pub space_id: String,
-    /// Stable cursor for the event — typically the canonical
-    /// `event_id`. Used as the `cursor` field in the streaming frame so
-    /// clients can resume from this point on reconnect.
-    pub cursor: String,
-    /// Projection-event JSON shape (same as `projection_event_json` in
-    /// `routing::sync`). The streaming handler embeds this directly as
-    /// `payload` in the `kind="event"` frame.
-    pub event_payload: Value,
+    pub kind: EventNotificationKind,
+}
+
+#[derive(Clone, Debug)]
+pub enum EventNotificationKind {
+    /// Ordinary projection event (one `cx.message.create` etc.).
+    Event {
+        /// Stable cursor for the event — typically the canonical
+        /// `event_id`. Clients use as resume position.
+        cursor: String,
+        /// Projection-event JSON (same shape as `projection_event_json`).
+        event_payload: Value,
+    },
+    /// MLS epoch shift detected on `cx.component.mls.epoch.v1` cell.
+    EpochRotation {
+        /// Old epoch value (the previous CellState::Value if known).
+        previous_epoch: Option<Value>,
+        /// New epoch value (current CellState::Value after the
+        /// triggering apply_anchor).
+        new_epoch: Value,
+    },
+    /// Anchor frontier advanced. Emitted post-`apply_anchor` so clients
+    /// can update their resume cursor without waiting for the next event.
+    Frontier {
+        /// `apply_anchor`'s `post_state_root` (canonical Merkle).
+        state_root: String,
+        /// The Anchor's id, useful for clients tracking Anchor DAG.
+        anchor_id: String,
+    },
+    /// Per-subscriber drift / corrupted-cursor signal. Clients SHOULD
+    /// drop local cache + restart subscription with no `from`.
+    ResyncRequired {
+        reason: String,
+    },
+    /// Session token invalidated mid-stream — client MUST close.
+    Unauthorized {
+        reason: String,
+    },
+}
+
+impl EventNotification {
+    pub fn event(space_id: String, cursor: String, event_payload: Value) -> Self {
+        Self {
+            space_id,
+            kind: EventNotificationKind::Event { cursor, event_payload },
+        }
+    }
+
+    pub fn epoch_rotation(
+        space_id: String,
+        previous_epoch: Option<Value>,
+        new_epoch: Value,
+    ) -> Self {
+        Self {
+            space_id,
+            kind: EventNotificationKind::EpochRotation {
+                previous_epoch,
+                new_epoch,
+            },
+        }
+    }
+
+    pub fn frontier(space_id: String, anchor_id: String, state_root: String) -> Self {
+        Self {
+            space_id,
+            kind: EventNotificationKind::Frontier { state_root, anchor_id },
+        }
+    }
 }
 
 /// Single-process service state. Every long-lived data surface lives behind
@@ -385,6 +464,14 @@ impl AppState {
             }
         }
 
+        // C10.B (2026-05-09 十八轮 并行) — build the production DID
+        // resolver chain BEFORE the struct literal so we can still
+        // borrow `&config` for the helper before `config` itself is
+        // moved into `Self.config`.
+        let did_resolver = Arc::new(Mutex::new(
+            self::did_resolver_chain::build_did_resolver_chain(&config),
+        ));
+
         Self {
             config,
             repo: db
@@ -398,13 +485,7 @@ impl AppState {
             db,
             persistence,
             spaces: Arc::new(Mutex::new(spaces)),
-            did_resolver: {
-                let mut resolver = CompositeDidResolver::new();
-                resolver.push(DidUuidResolver::new());
-                resolver.push(DidWebResolver::new());
-                resolver.push(DidKeyResolver::new());
-                Arc::new(Mutex::new(resolver))
-            },
+            did_resolver,
             move_store: Arc::new(contrix_sdk::state_res::MemoryMoveStore::default()),
             anchor_store: Arc::new(contrix_sdk::state_res::MemoryAnchorStore::default()),
             cell_store: Arc::new(contrix_sdk::state_res::MemoryCellStore::default()),
