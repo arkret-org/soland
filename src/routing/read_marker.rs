@@ -1,9 +1,19 @@
-//! Read marker handlers (per-actor read position within a Space).
+//! Read marker + read receipt handlers.
 //!
 //! Surfaces:
-//! - `POST /api/v1/read-markers` — set the actor's read marker
-//! - `GET  /api/v1/read-markers` — list the actor's read markers, optionally
-//!   filtered by `?space_id=...`
+//! - `POST /api/v1/read-markers` — set the actor's read marker (durable
+//!   persistent state per-actor; spec discovery/read-receipts.md §6).
+//! - `GET  /api/v1/read-markers` — list the actor's read markers,
+//!   optionally filtered by `?space_id=...`.
+//! - `POST /api/v1/receipts/read` — ephemeral `cx.receipt.read` fanout
+//!   request (spec discovery/read-receipts.md §2.4-2.5). The handler
+//!   applies the effective Space `read_receipt_policy`:
+//!   - `disclosure="disabled"` → drop with HTTP 403 + `policy_violation`
+//!     (`retry_after_ms=null`; retry will not change the outcome).
+//!   - `visibility="private"` → fanout only to the original sender of
+//!     `event_id`; non-sender callers see `fanout="private"`.
+//!   - `disclosure="required"` / `visibility="public"|"members"` →
+//!     normal fanout (`fanout="members"`).
 
 use contrix_sdk::{Commit, CommitId, Did, Hash, Operation, OperationId, SpaceId};
 use salvo::http::StatusCode;
@@ -16,7 +26,9 @@ use crate::{
     error::{AppError, ErrorCode},
     ids, json_ok, kinds,
     state::AppState,
-    wire::{ReadMarkerResponse, SetReadMarkerRequest},
+    wire::{
+        ReadMarkerResponse, SendReadReceiptRequest, SendReadReceiptResponse, SetReadMarkerRequest,
+    },
 };
 
 use super::{
@@ -118,4 +130,69 @@ pub async fn get_read_markers(
             .collect::<Vec<_>>()
     };
     json_ok(json!({ "markers": markers }))
+}
+
+/// C14 / read-receipts §2.4-2.5: ephemeral `cx.receipt.read` fanout
+/// endpoint. Applies the effective Space `read_receipt_policy` before
+/// fanout — `disclosure="disabled"` returns 403 `policy_violation`;
+/// `visibility="private"` returns `fanout="private"` so the client knows
+/// only the sender of the referenced event will see the receipt.
+#[endpoint(
+    operation_id = "cx.receipt.read",
+    tags("receipts"),
+    summary = "Send an ephemeral read receipt for an event in a Space",
+)]
+pub async fn send_read_receipt(
+    aa: AuthArgs,
+    depot: &mut Depot,
+    req: &mut Request,
+    body: JsonBody<SendReadReceiptRequest>,
+) -> JsonResult<SendReadReceiptResponse> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req)?;
+    let body = body.into_inner();
+
+    // Look up effective Space policy. If no policy event has been written,
+    // treat as `Optional` / `Members` / `scope_overrides_allowed=true` per
+    // spec default.
+    let (disclosure, visibility, _scope_overrides_allowed) =
+        super::effective_read_receipt_policy_for_space(state, &body.space_id)
+            .unwrap_or_else(|| ("optional".to_owned(), "members".to_owned(), true));
+
+    if disclosure == "disabled" {
+        // Spec read-receipts §2.5: hard refusal. retry_after_ms=null because
+        // retry will not change the outcome.
+        return Err(AppError::new(
+            ErrorCode::PolicyViolation,
+            format!(
+                "Space '{}' read_receipt_policy.disclosure=disabled; cx.receipt.read dropped",
+                body.space_id
+            ),
+        )
+        .with_status(StatusCode::FORBIDDEN));
+    }
+
+    // Determine fanout scope. `private` means we only echo to the sender of
+    // the referenced event_id; for now we surface the policy outcome and
+    // let the client/server decide on the actual broadcast list.
+    let fanout = if visibility == "private" {
+        "private".to_owned()
+    } else {
+        // public / members both broadcast to space members; track + flow_id
+        // scoping is informational — the projection layer decides who
+        // actually receives the event.
+        if body.flow_id.is_some() || body.track.is_some() {
+            "track_scoped".to_owned()
+        } else {
+            "members".to_owned()
+        }
+    };
+
+    json_ok(SendReadReceiptResponse {
+        space_id: body.space_id,
+        actor: session.actor.clone(),
+        event_id: body.event_id,
+        fanout,
+        received_at: now().to_rfc3339(),
+    })
 }

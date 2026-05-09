@@ -61,6 +61,20 @@ pub struct ProjectionState {
     pub space_states: BTreeMap<String, SpaceState>,
     /// Redacted event IDs (tombstones).
     pub redactions: BTreeSet<String>,
+    /// C14: Effective `cx.space.read_receipt_policy` per Space (cas-register
+    /// semantics — last-writer-wins by HLC). Populated by
+    /// `project_accepted_operations` when it sees a `cx.space.read_receipt_policy`
+    /// state event. Read by `routing::events::effective_read_receipt_policy_for_space`
+    /// (preferred fast-path; falls back to durable Event scan if absent).
+    pub read_receipt_policies: BTreeMap<String, ReadReceiptPolicySnapshot>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ReadReceiptPolicySnapshot {
+    pub disclosure: String,
+    pub visibility: String,
+    pub scope_overrides_allowed: bool,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
 #[derive(Clone, Debug)]

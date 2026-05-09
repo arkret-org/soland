@@ -87,7 +87,8 @@ fn build_invited_to_join_move() -> Move {
             "verification_method": "did:web:admin.example#k1",
             "payload_hash": payload_hash,
             "created_at": "2026-05-08T00:00:00Z",
-            "jws": "AAAA.BBBB.CCCC"
+            // Detached JWS shape (RFC 7515 §3.2). Real Ed25519 verify is T7-9.
+            "jws": "eyJhbGciOiJFZERTQSJ9..ZmFrZS1zaWctZm9yLXRlc3Rz"
         }),
     );
     serde_json::from_value(Value::Object(full)).unwrap()
@@ -101,7 +102,12 @@ fn build_genesis_anchor(frontier: MoveId, state_root: Hash) -> Anchor {
         created_at: chrono::DateTime::parse_from_rfc3339("2026-05-08T00:00:00Z")
             .unwrap()
             .with_timezone(&chrono::Utc),
-        jws: "AAAA.BBBB.CCCC".to_owned(),
+        // Detached JWS shape (RFC 7515 §3.2): empty payload segment between
+// the protected header and signature. Header is base64url of
+// `{"alg":"EdDSA"}`; signature is a non-zero placeholder. Real Ed25519
+// verify is T7-9 (DID-resolver-dependent); the soland verifier currently
+// validates JWS shape only.
+jws: "eyJhbGciOiJFZERTQSJ9..ZmFrZS1zaWctZm9yLXRlc3Rz".to_owned(),
     };
     let mut a = Anchor {
         id: AnchorId::new(format!("cx:anchor:sha256:{}", "00".repeat(32))).unwrap(),

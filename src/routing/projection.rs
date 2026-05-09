@@ -470,6 +470,12 @@ pub fn project_accepted_operations(state: &AppState, repo_id: &str, operations: 
         {
             project_membership_operation(state, repo_id, operation);
         }
+        // C14: cache cx.space.read_receipt_policy state into ProjectionState so
+        // ephemeral cx.receipt.read fanout (and other readers) can hit a
+        // BTreeMap lookup instead of scanning the durable Event store.
+        if kinds::canonical_kind_string(operation) == "cx.space.read_receipt_policy" {
+            project_read_receipt_policy(state, operation);
+        }
         // Also apply to the deterministic reducer
         if let Ok(mut proj) = state.projection.lock() {
             proj.apply(operation, &state.hlc);
@@ -635,6 +641,49 @@ pub fn persist_projected_operation(
             .execute(&mut conn)?;
     }
     Ok(())
+}
+
+/// C14: project a `cx.space.read_receipt_policy` state event into
+/// `ProjectionState::read_receipt_policies`. Cas-register semantics — the
+/// latest write per Space wins. Reading code (`cx.receipt.read` fanout, etc.)
+/// hits the in-memory BTreeMap; the durable-event-scan fallback in
+/// `routing::events::effective_read_receipt_policy_for_space` remains as a
+/// recovery path for replays / cold start.
+pub fn project_read_receipt_policy(state: &AppState, operation: &Operation) {
+    let space_id = operation.space_id.clone().to_string();
+    let payload = match operation.payload.as_object() {
+        Some(payload) => payload,
+        None => return,
+    };
+    let disclosure = payload
+        .get("disclosure")
+        .and_then(|v| v.as_str())
+        .unwrap_or("optional")
+        .to_owned();
+    let visibility = payload
+        .get("visibility")
+        .and_then(|v| v.as_str())
+        .unwrap_or("members")
+        .to_owned();
+    let scope_overrides_allowed = payload
+        .get("scope_overrides_allowed")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+    let snapshot = crate::reducer::ReadReceiptPolicySnapshot {
+        disclosure,
+        visibility,
+        scope_overrides_allowed,
+        updated_at: now(),
+    };
+    if let Ok(mut proj) = state.projection.lock() {
+        // Cas-register: only overwrite when this update is at least as fresh.
+        match proj.read_receipt_policies.get(&space_id) {
+            Some(prev) if prev.updated_at > snapshot.updated_at => {}
+            _ => {
+                proj.read_receipt_policies.insert(space_id, snapshot);
+            }
+        }
+    }
 }
 
 pub fn ensure_projected_space(state: &AppState, origin: &str, operation: &Operation) {

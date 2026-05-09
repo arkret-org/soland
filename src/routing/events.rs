@@ -1108,6 +1108,20 @@ pub fn effective_read_receipt_policy_for_space(
     state: &AppState,
     space_id: &str,
 ) -> Option<(String, String, bool)> {
+    // C14 fast path: in-memory ProjectionState cache populated by
+    // `project_read_receipt_policy` when the canonical state event lands.
+    if let Ok(proj) = state.projection.lock() {
+        if let Some(snapshot) = proj.read_receipt_policies.get(space_id) {
+            return Some((
+                snapshot.disclosure.clone(),
+                snapshot.visibility.clone(),
+                snapshot.scope_overrides_allowed,
+            ));
+        }
+    }
+    // Cold-path fallback: linear scan of the durable Event store. Used at
+    // boot before the projection has been rehydrated, or when a server is
+    // running with persistence disabled.
     let records = state.persistence.events().snapshot_all().ok()?;
     let mut latest: Option<&CanonicalEventRecord> = None;
     for record in &records {

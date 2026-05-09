@@ -115,6 +115,11 @@ pub fn router_with_rate_limiter_config(
                         .post(set_read_marker)
                         .get(get_read_markers),
                 )
+                // C14 (spec 2026-05-09 read-receipts §2.4-2.5): ephemeral
+                // cx.receipt.read fanout endpoint. Policy gate applied
+                // server-side; clients see HTTP 403 + policy_violation when
+                // the Space declares disclosure="disabled".
+                .push(Router::with_path("receipts/read").post(send_read_receipt))
                 .push(
                     Router::with_path("entities")
                         .post(create_entity)

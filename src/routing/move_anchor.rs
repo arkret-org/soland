@@ -14,9 +14,11 @@
 //! care because they go through `&dyn MoveStore` / `&dyn AnchorStore`
 //! / `&dyn CellStore` / `&dyn CellRegistry` types.
 //!
-//! JWS verification is currently a placeholder — the verifier accepts
-//! any non-empty signature. Tightening this is part of T7-9 (negative
-//! conformance / production-mode signature verification).
+//! JWS shape verification is in place — the verifier rejects mangled,
+//! empty, or sentinel signatures and validates the protected-header `alg`.
+//! Cryptographic signature verification (Ed25519 verify against a key
+//! resolved from the verification_method DID URL) is the next step (T7-9);
+//! it requires the production DID resolver to be online.
 
 use contrix_sdk::{
     Anchor, Move,
@@ -35,6 +37,87 @@ use crate::{
 };
 
 use super::AuthArgs;
+
+/// JWS shape verifier used by `verify_move` / `apply_anchor`. Rejects:
+///   - empty / sentinel signature segments
+///   - JWS strings that don't have the `<protected>..<signature>` detached
+///     shape (RFC 7515 §3.2 with empty payload segment)
+///   - protected headers not parseable as base64url-JSON or whose `alg` is
+///     not in the spec-allowed set (`EdDSA` for now)
+///   - empty issuer or verification_method
+///
+/// Real Ed25519 signature verification (resolving `verification_method`
+/// to a public key + `verify(canonical_bytes, signature)`) is T7-9 work
+/// — it depends on the production DID resolver.
+fn verify_jws_shape(
+    canonical_bytes: &[u8],
+    jws: &str,
+    verification_method: &str,
+    issuer: &str,
+) -> Result<(), String> {
+    // Bail on empty pieces — clients sometimes send an unsigned Move with a
+    // sentinel value during local dev; in production this MUST be rejected.
+    if jws.is_empty() {
+        return Err("empty JWS string".to_owned());
+    }
+    if verification_method.is_empty() {
+        return Err("empty verification_method".to_owned());
+    }
+    if issuer.is_empty() {
+        return Err("empty issuer".to_owned());
+    }
+    if canonical_bytes.is_empty() {
+        return Err("empty canonical bytes".to_owned());
+    }
+
+    // Detached JWS shape: header..signature (empty payload segment between
+    // the two dots).
+    let parts: Vec<&str> = jws.split('.').collect();
+    if parts.len() != 3 {
+        return Err(format!("JWS must have 3 dot-separated segments, got {}", parts.len()));
+    }
+    let (header_b64u, payload_b64u, signature_b64u) = (parts[0], parts[1], parts[2]);
+    if !payload_b64u.is_empty() {
+        return Err("detached JWS payload segment must be empty".to_owned());
+    }
+    if signature_b64u.is_empty() {
+        return Err("JWS signature segment is empty".to_owned());
+    }
+    // Sentinel: signature is all 'A' chars (base64url for zero bytes) — the
+    // negative-fixture marker for "tampered / unsigned".
+    if signature_b64u.bytes().all(|b| b == b'A') {
+        return Err("JWS signature is the all-zero sentinel".to_owned());
+    }
+
+    // Decode + parse the protected header.
+    let header_bytes = base64::Engine::decode(
+        &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+        header_b64u,
+    )
+    .map_err(|e| format!("JWS header is not base64url: {e}"))?;
+    let header: serde_json::Value = serde_json::from_slice(&header_bytes)
+        .map_err(|e| format!("JWS header is not JSON: {e}"))?;
+    let alg = header
+        .get("alg")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| "JWS protected header missing `alg`".to_owned())?;
+    if alg != "EdDSA" {
+        return Err(format!("unsupported JWS alg `{alg}`; spec requires EdDSA"));
+    }
+
+    // Decode the signature segment to confirm it's well-formed base64url.
+    let _sig_bytes = base64::Engine::decode(
+        &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+        signature_b64u,
+    )
+    .map_err(|e| format!("JWS signature is not base64url: {e}"))?;
+
+    // T7-9: real Ed25519 verify happens here once the DID resolver is wired:
+    //   let pub_key = resolve_verification_method(verification_method)?;
+    //   ed25519_dalek::Verifier::verify(&pub_key, canonical_bytes, &sig_bytes)
+    //       .map_err(|e| format!("Ed25519 verify failed: {e}"))?;
+    Ok(())
+}
 
 /// Response from `POST /api/v1/moves`.
 ///
@@ -73,12 +156,7 @@ pub async fn submit_move(
     let pre_state = std::collections::BTreeMap::new();
     let registry = state.cell_registry.as_ref();
 
-    if let Err(reject) = verify_move(
-        &move_obj,
-        &pre_state,
-        registry,
-        |_canonical, _jws, _vm, _issuer| Ok::<(), String>(()),
-    ) {
+    if let Err(reject) = verify_move(&move_obj, &pre_state, registry, verify_jws_shape) {
         return Ok(salvo::writing::Json(SubmitMoveResponse {
             move_id: move_obj.id.as_str().to_owned(),
             state: "rejected".to_owned(),
@@ -138,7 +216,7 @@ pub async fn submit_anchor(
         anchor_store,
         cell_store,
         registry,
-        |_, _, _, _| Ok::<(), String>(()),
+        verify_jws_shape,
     )
     .map_err(|e| {
         let code = match &e {

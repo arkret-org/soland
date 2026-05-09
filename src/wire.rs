@@ -1298,6 +1298,7 @@ pub fn describe(
             "cx.policies.upsert".to_owned(),
             "cx.policies.delete".to_owned(),
             "cx.policy.check".to_owned(),
+            "cx.receipt.read".to_owned(),
             "cx.moderation.report".to_owned(),
             "cx.mimi.provider_directory".to_owned(),
             "cx.mimi.key_material".to_owned(),
@@ -1483,6 +1484,35 @@ pub struct ReadMarkerResponse {
     pub scope_id: String,
     pub event_id: String,
     pub read_at: String,
+}
+
+/// C14 / read-receipts §2.4-2.5: ephemeral `cx.receipt.read` request body.
+/// `flow_id` / `track` are optional per §2.4 — receipts on a Flow track are
+/// scoped, top-level receipts are Space-wide. The Sync Service applies the
+/// effective Space `read_receipt_policy` before fanout: `disclosure="disabled"`
+/// → drop with 403 + `policy_violation`; `visibility="private"` → fanout
+/// only to the original sender.
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
+pub struct SendReadReceiptRequest {
+    pub space_id: String,
+    pub event_id: String,
+    #[serde(default)]
+    pub flow_id: Option<String>,
+    #[serde(default)]
+    pub track: Option<String>,
+}
+
+/// C14: ephemeral `cx.receipt.read` accepted-for-fanout response. Soland
+/// returns this when the receipt passed policy gating; clients use the
+/// `fanout` field to know whether they're broadcast (members) or
+/// echoed-only (private — only sender will receive).
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
+pub struct SendReadReceiptResponse {
+    pub space_id: String,
+    pub actor: String,
+    pub event_id: String,
+    pub fanout: String,
+    pub received_at: String,
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]

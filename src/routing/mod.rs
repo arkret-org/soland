@@ -115,7 +115,7 @@ pub use events::{
     events_query_durable_scope, events_query_durable_scope_impl, get_event, submit_event,
 };
 pub use reaction::{add_reaction, remove_reaction};
-pub use read_marker::{get_read_markers, set_read_marker};
+pub use read_marker::{get_read_markers, send_read_receipt, set_read_marker};
 pub use relation::{create_relation, delete_relation, list_relations};
 pub use repo::{
     get_commit, get_operations, list_commits, repo_describe, repo_sync, submit_commit,
