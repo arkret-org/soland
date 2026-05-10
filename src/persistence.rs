@@ -288,18 +288,60 @@ pub trait OneTimeKeyStore: Send + Sync {
     fn claim(&self, actor: &str, device_id: &str) -> PersistenceResult<Option<Value>>;
 }
 
-/// Encrypted key backups + the restore-ticket scaffold tables.
+/// Encrypted key backups + the restore-ticket FSM tables.
+///
+/// C32.5 — round 28 (2026-05-10): the restore-ticket trio (ticket envelope +
+/// `executor_state` + `approval_state`) is now durable behind the same row
+/// per `ticket_id` in the `restore_tickets` table. The FSM is
+/// `pending → approved → executed → revoked` (with `rejected` and
+/// `cancelled` as terminals); transitions live in
+/// [`crate::routing::key_backup_restore::ticket_status_transition`] and bump
+/// the row's monotonic `fence_token` so a stale concurrent writer that read
+/// the pre-bump token cannot land its update.
+///
+/// `snapshot_tickets` / `snapshot_executor_runs` / `snapshot_approval_runs`
+/// satisfy the routing-layer's per-actor filter / iter / retain patterns —
+/// every record carries an `actor` field in its envelope and the routing
+/// layer filters in-process. The `delete_*` family is used by the restore-
+/// state import path's `replace_owned` mode.
 pub trait KeyBackupStore: Send + Sync {
     fn put(&self, backup_id: String, payload: Value) -> PersistenceResult<()>;
     fn get(&self, backup_id: &str) -> PersistenceResult<Option<Value>>;
     fn delete(&self, backup_id: &str) -> PersistenceResult<bool>;
     fn snapshot_all(&self) -> PersistenceResult<Vec<Value>>;
+
     fn put_ticket(&self, ticket_id: String, payload: Value) -> PersistenceResult<()>;
     fn get_ticket(&self, ticket_id: &str) -> PersistenceResult<Option<Value>>;
+    fn delete_ticket(&self, ticket_id: &str) -> PersistenceResult<bool>;
+    fn snapshot_tickets(&self) -> PersistenceResult<Vec<(String, Value)>>;
+
     fn put_executor_run(&self, ticket_id: String, payload: Value) -> PersistenceResult<()>;
     fn get_executor_run(&self, ticket_id: &str) -> PersistenceResult<Option<Value>>;
+    fn delete_executor_run(&self, ticket_id: &str) -> PersistenceResult<bool>;
+    fn snapshot_executor_runs(&self) -> PersistenceResult<Vec<(String, Value)>>;
+
     fn put_approval_run(&self, ticket_id: String, payload: Value) -> PersistenceResult<()>;
     fn get_approval_run(&self, ticket_id: &str) -> PersistenceResult<Option<Value>>;
+    fn delete_approval_run(&self, ticket_id: &str) -> PersistenceResult<bool>;
+    fn snapshot_approval_runs(&self) -> PersistenceResult<Vec<(String, Value)>>;
+
+    /// Read the current monotonic fence token for a ticket. Returns 0 when
+    /// the row does not exist yet (next put_* will bump to 1).
+    fn ticket_fence_token(&self, ticket_id: &str) -> PersistenceResult<i64>;
+
+    /// CAS-style transition. Updates `status` to `next_status` IFF the row's
+    /// current `fence_token` matches `expected_fence`. On success bumps the
+    /// fence by 1 and returns `Ok(new_fence)`; on a stale CAS returns
+    /// `Ok(None)` so the caller can render a 409. The ticket envelope JSONB
+    /// is NOT touched — callers update `payload` (and approval/executor
+    /// envelopes) via `put_ticket` / `put_approval_run` / `put_executor_run`
+    /// AFTER a successful CAS.
+    fn cas_ticket_status(
+        &self,
+        ticket_id: &str,
+        expected_fence: i64,
+        next_status: &str,
+    ) -> PersistenceResult<Option<i64>>;
 }
 
 /// MAL-11 (round 23) — persistent multisig partial-signature buffer.
@@ -1887,12 +1929,26 @@ impl OneTimeKeyStore for MemoryOneTimeKeyStore {
     }
 }
 
+/// In-memory restore-ticket FSM row. Mirrors the Pg `restore_tickets`
+/// schema: `payload` is the ticket envelope JSON, `executor_state` and
+/// `approval_state` are the side-band sub-envelopes the routing layer
+/// updates via `put_executor_run` / `put_approval_run`. `status` is the
+/// coarse FSM tag (`pending` / `approved` / `executed` / `revoked` /
+/// `rejected` / `cancelled`); `fence_token` is the monotonic per-row
+/// CAS token bumped on every successful `cas_ticket_status`.
+#[derive(Clone, Debug, Default)]
+struct MemoryRestoreTicketRow {
+    status: String,
+    payload: Value,
+    executor_state: Option<Value>,
+    approval_state: Option<Value>,
+    fence_token: i64,
+}
+
 #[derive(Default)]
 struct MemoryKeyBackupStore {
     backups: Mutex<BTreeMap<String, Value>>,
-    tickets: Mutex<BTreeMap<String, Value>>,
-    executor_runs: Mutex<BTreeMap<String, Value>>,
-    approval_runs: Mutex<BTreeMap<String, Value>>,
+    tickets: Mutex<BTreeMap<String, MemoryRestoreTicketRow>>,
 }
 
 impl MemoryKeyBackupStore {
@@ -1934,49 +1990,157 @@ impl KeyBackupStore for MemoryKeyBackupStore {
     }
 
     fn put_ticket(&self, ticket_id: String, payload: Value) -> PersistenceResult<()> {
-        self.tickets
-            .lock()
-            .expect("restore tickets lock")
-            .insert(ticket_id, payload);
+        let mut tickets = self.tickets.lock().expect("restore tickets lock");
+        let row = tickets.entry(ticket_id).or_default();
+        let status = payload
+            .get("status")
+            .and_then(Value::as_str)
+            .or_else(|| payload.get("lifecycle_state").and_then(Value::as_str))
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| {
+                if row.status.is_empty() {
+                    "pending".to_owned()
+                } else {
+                    row.status.clone()
+                }
+            });
+        row.status = status;
+        row.payload = payload;
         Ok(())
     }
 
     fn get_ticket(&self, ticket_id: &str) -> PersistenceResult<Option<Value>> {
-        Ok(self.tickets.lock().expect("restore tickets lock").get(ticket_id).cloned())
+        Ok(self
+            .tickets
+            .lock()
+            .expect("restore tickets lock")
+            .get(ticket_id)
+            .map(|row| row.payload.clone()))
+    }
+
+    fn delete_ticket(&self, ticket_id: &str) -> PersistenceResult<bool> {
+        Ok(self
+            .tickets
+            .lock()
+            .expect("restore tickets lock")
+            .remove(ticket_id)
+            .is_some())
+    }
+
+    fn snapshot_tickets(&self) -> PersistenceResult<Vec<(String, Value)>> {
+        Ok(self
+            .tickets
+            .lock()
+            .expect("restore tickets lock")
+            .iter()
+            .map(|(k, row)| (k.clone(), row.payload.clone()))
+            .collect())
     }
 
     fn put_executor_run(&self, ticket_id: String, payload: Value) -> PersistenceResult<()> {
-        self.executor_runs
-            .lock()
-            .expect("restore executor lock")
-            .insert(ticket_id, payload);
+        let mut tickets = self.tickets.lock().expect("restore tickets lock");
+        let row = tickets.entry(ticket_id).or_default();
+        if row.status.is_empty() {
+            row.status = "pending".to_owned();
+        }
+        row.executor_state = Some(payload);
         Ok(())
     }
 
     fn get_executor_run(&self, ticket_id: &str) -> PersistenceResult<Option<Value>> {
         Ok(self
-            .executor_runs
+            .tickets
             .lock()
-            .expect("restore executor lock")
+            .expect("restore tickets lock")
             .get(ticket_id)
-            .cloned())
+            .and_then(|row| row.executor_state.clone()))
+    }
+
+    fn delete_executor_run(&self, ticket_id: &str) -> PersistenceResult<bool> {
+        let mut tickets = self.tickets.lock().expect("restore tickets lock");
+        if let Some(row) = tickets.get_mut(ticket_id) {
+            let had = row.executor_state.is_some();
+            row.executor_state = None;
+            Ok(had)
+        } else {
+            Ok(false)
+        }
+    }
+
+    fn snapshot_executor_runs(&self) -> PersistenceResult<Vec<(String, Value)>> {
+        Ok(self
+            .tickets
+            .lock()
+            .expect("restore tickets lock")
+            .iter()
+            .filter_map(|(k, row)| row.executor_state.clone().map(|v| (k.clone(), v)))
+            .collect())
     }
 
     fn put_approval_run(&self, ticket_id: String, payload: Value) -> PersistenceResult<()> {
-        self.approval_runs
-            .lock()
-            .expect("restore approval lock")
-            .insert(ticket_id, payload);
+        let mut tickets = self.tickets.lock().expect("restore tickets lock");
+        let row = tickets.entry(ticket_id).or_default();
+        if row.status.is_empty() {
+            row.status = "pending".to_owned();
+        }
+        row.approval_state = Some(payload);
         Ok(())
     }
 
     fn get_approval_run(&self, ticket_id: &str) -> PersistenceResult<Option<Value>> {
         Ok(self
-            .approval_runs
+            .tickets
             .lock()
-            .expect("restore approval lock")
+            .expect("restore tickets lock")
             .get(ticket_id)
-            .cloned())
+            .and_then(|row| row.approval_state.clone()))
+    }
+
+    fn delete_approval_run(&self, ticket_id: &str) -> PersistenceResult<bool> {
+        let mut tickets = self.tickets.lock().expect("restore tickets lock");
+        if let Some(row) = tickets.get_mut(ticket_id) {
+            let had = row.approval_state.is_some();
+            row.approval_state = None;
+            Ok(had)
+        } else {
+            Ok(false)
+        }
+    }
+
+    fn snapshot_approval_runs(&self) -> PersistenceResult<Vec<(String, Value)>> {
+        Ok(self
+            .tickets
+            .lock()
+            .expect("restore tickets lock")
+            .iter()
+            .filter_map(|(k, row)| row.approval_state.clone().map(|v| (k.clone(), v)))
+            .collect())
+    }
+
+    fn ticket_fence_token(&self, ticket_id: &str) -> PersistenceResult<i64> {
+        Ok(self
+            .tickets
+            .lock()
+            .expect("restore tickets lock")
+            .get(ticket_id)
+            .map(|row| row.fence_token)
+            .unwrap_or(0))
+    }
+
+    fn cas_ticket_status(
+        &self,
+        ticket_id: &str,
+        expected_fence: i64,
+        next_status: &str,
+    ) -> PersistenceResult<Option<i64>> {
+        let mut tickets = self.tickets.lock().expect("restore tickets lock");
+        let row = tickets.entry(ticket_id.to_owned()).or_default();
+        if row.fence_token != expected_fence {
+            return Ok(None);
+        }
+        row.fence_token += 1;
+        row.status = next_status.to_owned();
+        Ok(Some(row.fence_token))
     }
 }
 
@@ -3809,6 +3973,172 @@ impl KeyBackupStore for PgKeyBackupStore {
             .map(|row| row.and_then(|r| r.approval_state))
             .map_err(PersistenceError::from)
     }
+
+    fn delete_ticket(&self, ticket_id: &str) -> PersistenceResult<bool> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query("DELETE FROM restore_tickets WHERE ticket_id = $1")
+            .bind::<Text, _>(ticket_id)
+            .execute(&mut conn)
+            .map(|n| n > 0)
+            .map_err(PersistenceError::from)
+    }
+
+    fn snapshot_tickets(&self) -> PersistenceResult<Vec<(String, Value)>> {
+        let mut conn = pg_conn(&self.pool)?;
+        #[derive(QueryableByName)]
+        struct TicketIdPayload {
+            #[diesel(sql_type = Text)]
+            ticket_id: String,
+            #[diesel(sql_type = Jsonb)]
+            payload: Value,
+        }
+        sql_query(
+            "SELECT ticket_id, payload FROM restore_tickets ORDER BY created_at ASC, ticket_id ASC",
+        )
+        .load::<TicketIdPayload>(&mut conn)
+        .map(|rows| {
+            rows.into_iter()
+                .map(|r| (r.ticket_id, r.payload))
+                .collect()
+        })
+        .map_err(PersistenceError::from)
+    }
+
+    fn delete_executor_run(&self, ticket_id: &str) -> PersistenceResult<bool> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query(
+            "UPDATE restore_tickets SET executor_state = NULL, updated_at = NOW() \
+             WHERE ticket_id = $1 AND executor_state IS NOT NULL",
+        )
+        .bind::<Text, _>(ticket_id)
+        .execute(&mut conn)
+        .map(|n| n > 0)
+        .map_err(PersistenceError::from)
+    }
+
+    fn snapshot_executor_runs(&self) -> PersistenceResult<Vec<(String, Value)>> {
+        let mut conn = pg_conn(&self.pool)?;
+        #[derive(QueryableByName)]
+        struct ExecRow {
+            #[diesel(sql_type = Text)]
+            ticket_id: String,
+            #[diesel(sql_type = Jsonb)]
+            executor_state: Value,
+        }
+        sql_query(
+            "SELECT ticket_id, executor_state FROM restore_tickets \
+             WHERE executor_state IS NOT NULL ORDER BY created_at ASC, ticket_id ASC",
+        )
+        .load::<ExecRow>(&mut conn)
+        .map(|rows| {
+            rows.into_iter()
+                .map(|r| (r.ticket_id, r.executor_state))
+                .collect()
+        })
+        .map_err(PersistenceError::from)
+    }
+
+    fn delete_approval_run(&self, ticket_id: &str) -> PersistenceResult<bool> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query(
+            "UPDATE restore_tickets SET approval_state = NULL, updated_at = NOW() \
+             WHERE ticket_id = $1 AND approval_state IS NOT NULL",
+        )
+        .bind::<Text, _>(ticket_id)
+        .execute(&mut conn)
+        .map(|n| n > 0)
+        .map_err(PersistenceError::from)
+    }
+
+    fn snapshot_approval_runs(&self) -> PersistenceResult<Vec<(String, Value)>> {
+        let mut conn = pg_conn(&self.pool)?;
+        #[derive(QueryableByName)]
+        struct ApprRow {
+            #[diesel(sql_type = Text)]
+            ticket_id: String,
+            #[diesel(sql_type = Jsonb)]
+            approval_state: Value,
+        }
+        sql_query(
+            "SELECT ticket_id, approval_state FROM restore_tickets \
+             WHERE approval_state IS NOT NULL ORDER BY created_at ASC, ticket_id ASC",
+        )
+        .load::<ApprRow>(&mut conn)
+        .map(|rows| {
+            rows.into_iter()
+                .map(|r| (r.ticket_id, r.approval_state))
+                .collect()
+        })
+        .map_err(PersistenceError::from)
+    }
+
+    fn ticket_fence_token(&self, ticket_id: &str) -> PersistenceResult<i64> {
+        let mut conn = pg_conn(&self.pool)?;
+        #[derive(QueryableByName)]
+        struct FenceRow {
+            #[diesel(sql_type = BigInt)]
+            fence_token: i64,
+        }
+        sql_query("SELECT fence_token FROM restore_tickets WHERE ticket_id = $1")
+            .bind::<Text, _>(ticket_id)
+            .get_result::<FenceRow>(&mut conn)
+            .optional()
+            .map(|row| row.map(|r| r.fence_token).unwrap_or(0))
+            .map_err(PersistenceError::from)
+    }
+
+    fn cas_ticket_status(
+        &self,
+        ticket_id: &str,
+        expected_fence: i64,
+        next_status: &str,
+    ) -> PersistenceResult<Option<i64>> {
+        let mut conn = pg_conn(&self.pool)?;
+        #[derive(QueryableByName)]
+        struct FenceRow {
+            #[diesel(sql_type = BigInt)]
+            fence_token: i64,
+        }
+        // Two-row-affected paths:
+        //   1) row exists AND fence matches → bump fence + status, return new fence
+        //   2) row absent AND expected_fence == 0 → seed a placeholder ticket
+        //      with status=next_status, fence=1. The routing layer follows up
+        //      with `put_ticket` to fill in the canonical envelope.
+        let updated = sql_query(
+            "UPDATE restore_tickets \
+             SET status = $1, fence_token = fence_token + 1, updated_at = NOW() \
+             WHERE ticket_id = $2 AND fence_token = $3 \
+             RETURNING fence_token",
+        )
+        .bind::<Text, _>(next_status)
+        .bind::<Text, _>(ticket_id)
+        .bind::<BigInt, _>(expected_fence)
+        .get_result::<FenceRow>(&mut conn)
+        .optional()
+        .map_err(PersistenceError::from)?;
+        if let Some(row) = updated {
+            return Ok(Some(row.fence_token));
+        }
+        if expected_fence == 0 {
+            // Seed-on-absent path. Insert a placeholder row with empty payload —
+            // the caller's subsequent `put_ticket` rewrites `payload` and
+            // preserves the seeded `status` + `fence_token`.
+            let inserted = sql_query(
+                "INSERT INTO restore_tickets \
+                 (ticket_id, status, payload, fence_token, created_at, updated_at) \
+                 VALUES ($1, $2, '{}'::JSONB, 1, NOW(), NOW()) \
+                 ON CONFLICT (ticket_id) DO NOTHING \
+                 RETURNING fence_token",
+            )
+            .bind::<Text, _>(ticket_id)
+            .bind::<Text, _>(next_status)
+            .get_result::<FenceRow>(&mut conn)
+            .optional()
+            .map_err(PersistenceError::from)?;
+            return Ok(inserted.map(|r| r.fence_token));
+        }
+        Ok(None)
+    }
 }
 
 struct PgWebrtcSessionStore {
@@ -5111,5 +5441,79 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+
+        // C32.5 — snapshot_* surfaces every row currently in the store, used
+        // by the routing layer for per-actor filtering of restore-state
+        // export and the ticket-collection listing.
+        let tickets = store.snapshot_tickets().unwrap();
+        assert_eq!(tickets.len(), 1);
+        assert_eq!(tickets[0].0, "cx:restore:01");
+        let executors = store.snapshot_executor_runs().unwrap();
+        assert_eq!(executors.len(), 1);
+        assert_eq!(executors[0].1["stage"], "ExecutorRunning");
+        let approvals = store.snapshot_approval_runs().unwrap();
+        assert_eq!(approvals.len(), 1);
+
+        // delete_executor_run / delete_approval_run clear the side-band
+        // sub-envelopes without dropping the ticket envelope itself.
+        assert!(store.delete_executor_run("cx:restore:01").unwrap());
+        assert!(!store.delete_executor_run("cx:restore:01").unwrap());
+        assert!(store.get_executor_run("cx:restore:01").unwrap().is_none());
+        assert!(store.get_ticket("cx:restore:01").unwrap().is_some());
+        assert!(store.delete_approval_run("cx:restore:01").unwrap());
+
+        // delete_ticket evicts the whole row.
+        assert!(store.delete_ticket("cx:restore:01").unwrap());
+        assert!(!store.delete_ticket("cx:restore:01").unwrap());
+        assert!(store.snapshot_tickets().unwrap().is_empty());
+    }
+
+    // ── C32.5 — fence-token CAS for the restore-ticket FSM. ───────────────
+    //
+    // The state machine is `pending → approved → executed → revoked` (with
+    // `rejected` and `cancelled` as terminals). Each successful
+    // `cas_ticket_status` bumps the row's monotonic `fence_token`; a
+    // concurrent writer carrying the pre-bump token finds its CAS rejected
+    // (returns `Ok(None)`).
+    #[test]
+    fn memory_key_backup_store_cas_ticket_status_bumps_fence_and_blocks_stale_writer() {
+        let store = MemoryKeyBackupStore::new();
+        // Brand-new ticket: fence starts at 0; first transition seeds the
+        // row at fence=1.
+        assert_eq!(store.ticket_fence_token("cx:restore:fence").unwrap(), 0);
+        let new_fence = store
+            .cas_ticket_status("cx:restore:fence", 0, "pending")
+            .unwrap()
+            .expect("seed transition must land");
+        assert_eq!(new_fence, 1);
+        assert_eq!(store.ticket_fence_token("cx:restore:fence").unwrap(), 1);
+
+        // Two concurrent writers both snapshot fence=1; only one can land
+        // a fence=1→2 bump.
+        let snapshot_a = store.ticket_fence_token("cx:restore:fence").unwrap();
+        let snapshot_b = snapshot_a;
+        let landed_a = store
+            .cas_ticket_status("cx:restore:fence", snapshot_a, "approved")
+            .unwrap();
+        let landed_b = store
+            .cas_ticket_status("cx:restore:fence", snapshot_b, "approved")
+            .unwrap();
+        assert_eq!(landed_a, Some(2), "first writer must observe fence=2");
+        assert_eq!(landed_b, None, "stale writer must be fenced off");
+
+        // Subsequent transitions continue to bump.
+        assert_eq!(
+            store
+                .cas_ticket_status("cx:restore:fence", 2, "executed")
+                .unwrap(),
+            Some(3)
+        );
+        assert_eq!(
+            store
+                .cas_ticket_status("cx:restore:fence", 3, "revoked")
+                .unwrap(),
+            Some(4)
+        );
+        assert_eq!(store.ticket_fence_token("cx:restore:fence").unwrap(), 4);
     }
 }

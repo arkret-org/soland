@@ -70,55 +70,51 @@ pub async fn get_recovery_live_snapshot(
     let Some(session) = auth_or_render(state, req, res) else {
         return;
     };
-    let tickets = state
-        .key_backup_restore_tickets
-        .lock()
-        .expect("key backup restore ticket lock");
-    let approvals = state
-        .key_backup_restore_approval_runs
-        .lock()
-        .expect("key backup restore approval lock");
-    let executors = state
-        .key_backup_restore_executor_runs
-        .lock()
-        .expect("key backup restore executor lock");
-    let items = tickets
-        .iter()
-        .filter_map(|(ticket_id, ticket)| {
-            ticket
-                .get("actor")
+    // C32.5: read durable per-actor restore state from
+    // `state.persistence.key_backups()` rather than the (now removed)
+    // process-memory scaffold maps. Filtering happens in-process; the
+    // routing layer's per-actor index is fed by the `actor` field in the
+    // ticket/approval/executor envelopes.
+    let store = state.persistence.key_backups();
+    let actor_owned = |value: &Value| {
+        value
+            .get("actor")
+            .and_then(Value::as_str)
+            .is_some_and(|actor| actor == session.actor)
+            || value
+                .get("actor_id")
                 .and_then(Value::as_str)
                 .is_some_and(|actor| actor == session.actor)
-                .then(|| {
-                    json!({
-                        "ticket_id": ticket_id,
-                        "backup_id": ticket.get("backup_id").cloned().unwrap_or_else(|| json!("unknown")),
-                        "lifecycle_state": ticket.get("lifecycle_state").cloned().unwrap_or_else(|| json!("unknown")),
-                        "activity_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/activity"),
-                        "bundle_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/bundle"),
-                        "status_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}")
-                    })
-                })
+    };
+    let tickets = store.snapshot_tickets().unwrap_or_default();
+    let approvals = store.snapshot_approval_runs().unwrap_or_default();
+    let executors = store.snapshot_executor_runs().unwrap_or_default();
+    let items = tickets
+        .iter()
+        .filter(|(_, value)| actor_owned(value))
+        .map(|(ticket_id, ticket)| {
+            json!({
+                "ticket_id": ticket_id,
+                "backup_id": ticket.get("backup_id").cloned().unwrap_or_else(|| json!("unknown")),
+                "lifecycle_state": ticket.get("status").cloned()
+                    .or_else(|| ticket.get("lifecycle_state").cloned())
+                    .unwrap_or_else(|| json!("unknown")),
+                "activity_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/activity"),
+                "bundle_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/bundle"),
+                "status_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}")
+            })
         })
         .collect::<Vec<_>>();
     let approval_pending_count = approvals
-        .values()
-        .filter(|approval| {
-            approval
-                .get("actor")
-                .and_then(Value::as_str)
-                .is_some_and(|actor| actor == session.actor)
-                && approval.get("state").and_then(Value::as_str) == Some("pending")
+        .iter()
+        .filter(|(_, approval)| {
+            actor_owned(approval) && approval.get("state").and_then(Value::as_str) == Some("pending")
         })
         .count();
     let executor_running_count = executors
-        .values()
-        .filter(|executor| {
-            executor
-                .get("actor")
-                .and_then(Value::as_str)
-                .is_some_and(|actor| actor == session.actor)
-                && executor.get("state").and_then(Value::as_str) == Some("running")
+        .iter()
+        .filter(|(_, executor)| {
+            actor_owned(executor) && executor.get("state").and_then(Value::as_str) == Some("running")
         })
         .count();
     res.render(Json(json!({
@@ -198,21 +194,25 @@ pub async fn get_recovery_readiness(
     let Some(session) = auth_or_render(state, req, res) else {
         return;
     };
-    let backup_count = state
-        .key_backups
-        .lock()
-        .expect("key backup lock")
-        .values()
-        .filter(|backup| {
-            backup
+    // C32.5: every recovery aggregate now reads from the durable
+    // `KeyBackupStore` trait — the four scaffold `state.*` BTreeMaps were
+    // removed in the same change.
+    let kb_store = state.persistence.key_backups();
+    let actor_owned = |value: &Value| {
+        value
+            .get("actor")
+            .and_then(Value::as_str)
+            .is_some_and(|actor| actor == session.actor)
+            || value
                 .get("actor_id")
                 .and_then(Value::as_str)
                 .is_some_and(|actor| actor == session.actor)
-                || backup
-                    .get("actor")
-                    .and_then(Value::as_str)
-                    .is_some_and(|actor| actor == session.actor)
-        })
+    };
+    let backup_count = kb_store
+        .snapshot_all()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|backup| actor_owned(backup))
         .count();
     let device_message_count = {
         // Naive count via list_after for both sender+recipient channels.
@@ -225,43 +225,23 @@ pub async fn get_recovery_readiness(
             .len();
         recv
     };
-    let ticket_count = state
-        .key_backup_restore_tickets
-        .lock()
-        .expect("key backup restore ticket lock")
-        .values()
-        .filter(|ticket| {
-            ticket
-                .get("actor")
-                .and_then(Value::as_str)
-                .is_some_and(|actor| actor == session.actor)
-        })
+    let ticket_count = kb_store
+        .snapshot_tickets()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|(_, t)| actor_owned(t))
         .count();
-    let approval_pending_count = state
-        .key_backup_restore_approval_runs
-        .lock()
-        .expect("key backup restore approval lock")
-        .values()
-        .filter(|approval| {
-            approval
-                .get("actor")
-                .and_then(Value::as_str)
-                .is_some_and(|actor| actor == session.actor)
-                && approval.get("state").and_then(Value::as_str) == Some("pending")
-        })
+    let approval_pending_count = kb_store
+        .snapshot_approval_runs()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|(_, a)| actor_owned(a) && a.get("state").and_then(Value::as_str) == Some("pending"))
         .count();
-    let executor_running_count = state
-        .key_backup_restore_executor_runs
-        .lock()
-        .expect("key backup restore executor lock")
-        .values()
-        .filter(|executor| {
-            executor
-                .get("actor")
-                .and_then(Value::as_str)
-                .is_some_and(|actor| actor == session.actor)
-                && executor.get("state").and_then(Value::as_str) == Some("running")
-        })
+    let executor_running_count = kb_store
+        .snapshot_executor_runs()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|(_, e)| actor_owned(e) && e.get("state").and_then(Value::as_str) == Some("running"))
         .count();
     let readiness_state = if backup_count > 0 || ticket_count > 0 {
         "ready"
@@ -331,17 +311,24 @@ pub async fn get_recovery_stack_bundle(
     let Some(session) = auth_or_render(state, req, res) else {
         return;
     };
-    let tickets = state
-        .key_backup_restore_tickets
-        .lock()
-        .expect("key backup restore ticket lock");
-    let owned_ticket_count = tickets
-        .values()
-        .filter(|ticket| {
+    // C32.5: durable ticket count — same per-actor filter as
+    // `get_recovery_readiness`, but aggregated against the Pg-backed
+    // `KeyBackupStore::snapshot_tickets`.
+    let owned_ticket_count = state
+        .persistence
+        .key_backups()
+        .snapshot_tickets()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|(_, ticket)| {
             ticket
                 .get("actor")
                 .and_then(Value::as_str)
                 .is_some_and(|actor| actor == session.actor)
+                || ticket
+                    .get("actor_id")
+                    .and_then(Value::as_str)
+                    .is_some_and(|actor| actor == session.actor)
         })
         .count();
     res.render(Json(json!({

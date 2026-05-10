@@ -385,6 +385,7 @@ diesel::table! {
         completed_at -> Nullable<Timestamptz>,
         created_at -> Timestamptz,
         updated_at -> Timestamptz,
+        fence_token -> Int8,
     }
 }
 

@@ -5,7 +5,7 @@ PostgreSQL. The HTTP surface mirrors `contrix-spec/spec/v1/artifacts/openapi/con
 in-memory mode keeps the same API for fast local iteration.
 
 > See [DEPLOYMENT.md](DEPLOYMENT.md) for production guidance, [SECURITY.md](SECURITY.md)
-> for vulnerability disclosure, and [_todos.md](_todos.md) for the open
+> for vulnerability disclosure, and [../_todos.md](../_todos.md) for the open
 > task list.
 
 ## Quick start
@@ -142,7 +142,7 @@ cargo test --locked
 
 The OpenAPI snapshot test (`contrix_openapi_spec_contains_facet_projection_contracts`
 in `tests/http_api.rs`) locks the operation-id surface at the framework level;
-`tests/http_api.rs` covers protocol behaviors. See the `_todos.md` `F5/F6`
+`tests/http_api.rs` covers protocol behaviors. See the root `../_todos.md` `F5/F6`
 entries for the known pre-existing test failures.
 
 ## Status & roadmap
@@ -151,7 +151,7 @@ The current implementation has product-shaped auth/session, identity, repo
 adapter, device key, to-device, blob, directory, sync, and index surfaces.
 PostgreSQL migrations and the repo adapter are wired; in-memory mode is the
 development fallback. Remaining production work is tracked in
-[`_todos.md`](_todos.md) — reducer-backed projections, full policy ordering,
+[`../_todos.md`](../_todos.md) — reducer-backed projections, full policy ordering,
 durable device/blob stores, full E2EE client workflow, anti-enumeration, and
 the complete federation/media/recovery/key-backup surfaces.
 

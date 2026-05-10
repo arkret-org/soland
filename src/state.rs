@@ -123,12 +123,17 @@ impl EventNotification {
 
 /// Single-process service state. Every long-lived data surface lives behind
 /// `persistence` (a `dyn PersistenceStore`); the few remaining fields are
-/// either non-record state (config, db pool, hlc, authz engine), runtime
+/// either non-record state (config, db pool, hlc, authz engine) or runtime
 /// facets that don't fit the trait shape (in-memory `SpaceSearchIndex`,
-/// `CompositeDidResolver`, `ProjectionState`), or the temporarily-retained
-/// key-backup-restore scaffold maps (T0-2c — `routing/key_backup_restore.rs`
-/// uses `BTreeMap` semantics like `iter / retain / get_mut` against these
-/// maps, and the trait migration is tracked separately).
+/// `CompositeDidResolver`, `ProjectionState`).
+///
+/// C32.5 (2026-05-10) — round 28: the four key-backup-restore scaffold
+/// `Arc<Mutex<BTreeMap<...>>>` fields are gone. Every key-backup CRUD +
+/// restore-ticket FSM read/write now flows through
+/// `persistence.key_backups()` (Pg-backed in production, `MemoryKeyBackupStore`
+/// in tests). See `routing/key_backup_restore.rs` for the
+/// `pending → approved → executed → revoked` state machine and the
+/// `cas_ticket_status` fence-token CAS.
 #[derive(Clone)]
 pub struct AppState {
     pub config: AppConfig,
@@ -180,13 +185,6 @@ pub struct AppState {
     /// behind a [`Mutex`] (one-shot writes from the rotation path are not
     /// in the hot read path; the per-pass diagnostic helper just snapshots).
     pub anchorer_signing_key_origin: Arc<Mutex<AnchorerSigningKeyOrigin>>,
-    // T0-2c follow-up: migrate the four key-backup scaffold maps below into
-    // `state.persistence.key_backups()` once the routing layer's iter/retain/
-    // get_mut patterns are rewritten in terms of the trait.
-    pub key_backups: Arc<Mutex<BTreeMap<String, Value>>>,
-    pub key_backup_restore_tickets: Arc<Mutex<BTreeMap<String, Value>>>,
-    pub key_backup_restore_executor_runs: Arc<Mutex<BTreeMap<String, Value>>>,
-    pub key_backup_restore_approval_runs: Arc<Mutex<BTreeMap<String, Value>>>,
 }
 
 #[derive(Clone, Debug)]
@@ -665,10 +663,6 @@ impl AppState {
             event_broadcast: broadcast::channel::<EventNotification>(1024).0,
             anchorer_signing_key,
             anchorer_signing_key_origin,
-            key_backups: Arc::new(Mutex::new(BTreeMap::new())),
-            key_backup_restore_tickets: Arc::new(Mutex::new(BTreeMap::new())),
-            key_backup_restore_executor_runs: Arc::new(Mutex::new(BTreeMap::new())),
-            key_backup_restore_approval_runs: Arc::new(Mutex::new(BTreeMap::new())),
         }
     }
 }

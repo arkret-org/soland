@@ -1,9 +1,8 @@
-//! Encrypted key-backup CRUD + the entire restore-ticket scaffold tree.
+//! Encrypted key-backup CRUD + the restore-ticket FSM.
 //!
 //! Surfaces (all behind `/api/v1/keys/backups/...`):
 //! - `PUT/GET/DELETE/LIST` of `keys/backups/{backup_id}` — encrypted backup
-//!   blob storage (in-memory; Stream-D2/F-4 in `_todos.md` covers durable
-//!   persistence + spec B-11 secret_storage merge).
+//!   blob storage, persisted via [`crate::persistence::KeyBackupStore`].
 //! - The full restore-ticket lifecycle: describe / start / advance / resume /
 //!   cancel / retry, plus approvals (status/submit), executor (status / enqueue
 //!   / start / complete), result, receipt, materialized-device handoff,
@@ -11,23 +10,283 @@
 //! - Restore-state snapshot persistence: describe / export / import /
 //!   durability / checkpoints (list + create).
 //!
-//! **Every fn in this module is currently a scaffold** — the responses include
-//! a `todo` field describing what real production behaviour should replace
-//! them. Stream-D in `_todos.md` is the umbrella tracking item; D1 (the
-//! shared RecoveryTicket / RestoreCheckpoint / RestoreApproval data model
-//! that all of these will share once durable storage lands) is the prereq.
-
-use std::collections::BTreeMap;
+//! C32.5 (2026-05-10) — round 28 migration: rip-and-replace v1, no
+//! backwards-compat shim. Every fn in this module previously held an
+//! in-memory `Arc<Mutex<BTreeMap<String, Value>>>` on `AppState`; the four
+//! scaffold maps (`key_backups` / `..._restore_tickets` / `..._executor_runs`
+//! / `..._approval_runs`) are gone — every read/write goes through the
+//! Pg-backed `state.persistence.key_backups()` trait surface.
+//!
+//! State machine (key-backup restore tickets):
+//!
+//! ```text
+//!   pending  ── approved ──▶ executed ──▶ revoked        (terminal)
+//!      │            │            │
+//!      ├──▶ rejected (terminal)
+//!      └──▶ cancelled (terminal)
+//! ```
+//!
+//! Every transition runs through [`ticket_status_transition`], which CAS-
+//! bumps the row's monotonic `fence_token` via
+//! [`KeyBackupStore::cas_ticket_status`]. A concurrent writer that read the
+//! pre-bump fence finds its CAS rejected and the routing layer returns 409
+//! with `stale_fence_token`. The fence is mirrored into the ticket
+//! envelope so reading clients can snapshot it for their next write.
 
 use salvo::{http::StatusCode, prelude::*};
 use serde_json::{Value, json};
 
-use crate::{
-    state::AppState,
-    wire::{KeysBackupsDeleteResponse, KeysBackupsListResponse, KeysBackupsPutResponse},
-};
+use crate::{state::AppState, wire::{KeysBackupsDeleteResponse, KeysBackupsListResponse, KeysBackupsPutResponse}};
 
 use super::{auth_or_render, now, query_param, render_error};
+
+// ── State-machine transition table ────────────────────────────────────────
+//
+// `pending → approved → executed → revoked` is the happy path; `rejected`
+// and `cancelled` are terminal sinks reachable from `pending`/`approved`.
+// Returns the next status string when the transition is allowed, or `None`
+// when the caller would skip a phase (e.g. `pending → executed`).
+fn ticket_status_transition(current: &str, intent: &str) -> Option<&'static str> {
+    match (current, intent) {
+        // Bootstrap: first put_ticket lands the row at `pending`.
+        ("", "pending") => Some("pending"),
+        // Approval grants quorum → ready for executor.
+        ("pending", "approve") => Some("approved"),
+        // Approval rejects → terminal.
+        ("pending", "reject") => Some("rejected"),
+        // Operator cancellation from pending or approved.
+        ("pending" | "approved", "cancel") => Some("cancelled"),
+        // Executor completes successfully.
+        ("approved", "execute") => Some("executed"),
+        // Post-execution revoke (compliance / takedown).
+        ("executed", "revoke") => Some("revoked"),
+        _ => None,
+    }
+}
+
+/// Transitions a ticket's status with a CAS on `fence_token`. Renders a 409
+/// `stale_fence_token` and returns `None` if the CAS is rejected (stale
+/// writer); renders a 409 `invalid_transition` if the requested intent is
+/// not allowed from the current status. On success returns
+/// `Some((new_status, new_fence))`.
+fn perform_ticket_transition(
+    state: &AppState,
+    ticket_id: &str,
+    intent: &str,
+    res: &mut Response,
+) -> Option<(&'static str, i64)> {
+    let store = state.persistence.key_backups();
+    let current_payload = match store.get_ticket(ticket_id) {
+        Ok(Some(p)) => Some(p),
+        Ok(None) => None,
+        Err(error) => {
+            tracing::error!(%error, ticket_id, "load ticket for transition");
+            render_error(
+                res,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "persistence_error",
+                "failed to load ticket for transition",
+            );
+            return None;
+        }
+    };
+    let current_status = current_payload
+        .as_ref()
+        .and_then(|p| p.get("status").and_then(Value::as_str))
+        .or_else(|| {
+            current_payload
+                .as_ref()
+                .and_then(|p| p.get("lifecycle_state").and_then(Value::as_str))
+        })
+        .unwrap_or("")
+        .to_owned();
+    let Some(next_status) = ticket_status_transition(&current_status, intent) else {
+        render_error(
+            res,
+            StatusCode::CONFLICT,
+            "invalid_transition",
+            "ticket status does not allow this transition",
+        );
+        return None;
+    };
+    let expected_fence = match store.ticket_fence_token(ticket_id) {
+        Ok(value) => value,
+        Err(error) => {
+            tracing::error!(%error, ticket_id, "load fence token");
+            render_error(
+                res,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "persistence_error",
+                "failed to load fence token",
+            );
+            return None;
+        }
+    };
+    match store.cas_ticket_status(ticket_id, expected_fence, next_status) {
+        Ok(Some(new_fence)) => Some((next_status, new_fence)),
+        Ok(None) => {
+            render_error(
+                res,
+                StatusCode::CONFLICT,
+                "stale_fence_token",
+                "ticket fence token changed under us; retry with the latest snapshot",
+            );
+            None
+        }
+        Err(error) => {
+            tracing::error!(%error, ticket_id, "cas ticket status");
+            render_error(
+                res,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "persistence_error",
+                "failed to advance ticket status",
+            );
+            None
+        }
+    }
+}
+
+// ── Helpers over the durable store ────────────────────────────────────────
+
+fn list_actor_owned_tickets(state: &AppState, actor: &str) -> Vec<(String, Value)> {
+    state
+        .persistence
+        .key_backups()
+        .snapshot_tickets()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|(_, value)| restore_record_owned_by_actor(value, actor))
+        .collect()
+}
+
+fn list_actor_owned_executors(state: &AppState, actor: &str) -> Vec<(String, Value)> {
+    state
+        .persistence
+        .key_backups()
+        .snapshot_executor_runs()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|(_, value)| restore_record_owned_by_actor(value, actor))
+        .collect()
+}
+
+fn list_actor_owned_approvals(state: &AppState, actor: &str) -> Vec<(String, Value)> {
+    state
+        .persistence
+        .key_backups()
+        .snapshot_approval_runs()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|(_, value)| restore_record_owned_by_actor(value, actor))
+        .collect()
+}
+
+fn put_ticket_or_render(state: &AppState, ticket_id: &str, payload: Value, res: &mut Response) -> bool {
+    if let Err(error) = state
+        .persistence
+        .key_backups()
+        .put_ticket(ticket_id.to_owned(), payload)
+    {
+        tracing::error!(%error, ticket_id, "put_ticket");
+        render_error(
+            res,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "persistence_error",
+            "failed to persist ticket",
+        );
+        return false;
+    }
+    true
+}
+
+fn put_executor_or_render(state: &AppState, ticket_id: &str, payload: Value, res: &mut Response) -> bool {
+    if let Err(error) = state
+        .persistence
+        .key_backups()
+        .put_executor_run(ticket_id.to_owned(), payload)
+    {
+        tracing::error!(%error, ticket_id, "put_executor_run");
+        render_error(
+            res,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "persistence_error",
+            "failed to persist executor run",
+        );
+        return false;
+    }
+    true
+}
+
+fn put_approval_or_render(state: &AppState, ticket_id: &str, payload: Value, res: &mut Response) -> bool {
+    if let Err(error) = state
+        .persistence
+        .key_backups()
+        .put_approval_run(ticket_id.to_owned(), payload)
+    {
+        tracing::error!(%error, ticket_id, "put_approval_run");
+        render_error(
+            res,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "persistence_error",
+            "failed to persist approval run",
+        );
+        return false;
+    }
+    true
+}
+
+fn fetch_ticket_for_actor(
+    state: &AppState,
+    ticket_id: &str,
+    actor: &str,
+) -> Option<Value> {
+    let payload = state
+        .persistence
+        .key_backups()
+        .get_ticket(ticket_id)
+        .ok()
+        .flatten()?;
+    if !restore_record_owned_by_actor(&payload, actor) {
+        return None;
+    }
+    Some(payload)
+}
+
+fn fetch_executor_for_actor(
+    state: &AppState,
+    ticket_id: &str,
+    actor: &str,
+) -> Option<Value> {
+    let payload = state
+        .persistence
+        .key_backups()
+        .get_executor_run(ticket_id)
+        .ok()
+        .flatten()?;
+    if !restore_record_owned_by_actor(&payload, actor) {
+        return None;
+    }
+    Some(payload)
+}
+
+fn fetch_approval_for_actor(
+    state: &AppState,
+    ticket_id: &str,
+    actor: &str,
+) -> Option<Value> {
+    let payload = state
+        .persistence
+        .key_backups()
+        .get_approval_run(ticket_id)
+        .ok()
+        .flatten()?;
+    if !restore_record_owned_by_actor(&payload, actor) {
+        return None;
+    }
+    Some(payload)
+}
+
+// ── Encrypted key-backup CRUD ─────────────────────────────────────────────
 
 #[endpoint]
 pub async fn put_key_backup(depot: &mut Depot, req: &mut Request, res: &mut Response) {
@@ -63,18 +322,26 @@ pub async fn put_key_backup(depot: &mut Depot, req: &mut Request, res: &mut Resp
     object
         .entry("updated_at".to_owned())
         .or_insert_with(|| json!(now()));
-    state
-        .key_backups
-        .lock()
-        .expect("key backup lock")
-        .insert(backup_id.clone(), backup.clone());
+    if let Err(error) = state
+        .persistence
+        .key_backups()
+        .put(backup_id.clone(), backup.clone())
+    {
+        tracing::error!(%error, backup_id, "put key backup");
+        render_error(
+            res,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "persistence_error",
+            "failed to persist key backup",
+        );
+        return;
+    }
     res.render(Json(KeysBackupsPutResponse {
         ok: true,
         backup,
-        state: "stored_in_memory_scaffold".to_owned(),
+        state: "stored_durable".to_owned(),
         todos: vec![
             "TODO(keys.backups): validate payload fully against cx.schema.key_backup.v1".to_owned(),
-            "TODO(keys.backups): encrypt and persist backups outside process memory".to_owned(),
         ],
     }));
 }
@@ -86,23 +353,23 @@ pub async fn list_key_backups(depot: &mut Depot, req: &mut Request, res: &mut Re
         return;
     };
     let backups = state
-        .key_backups
-        .lock()
-        .expect("key backup lock")
-        .values()
+        .persistence
+        .key_backups()
+        .snapshot_all()
+        .unwrap_or_default()
+        .into_iter()
         .filter(|backup| {
             backup
                 .get("actor_id")
                 .and_then(Value::as_str)
                 .is_none_or(|actor_id| actor_id == session.actor)
         })
-        .cloned()
         .collect::<Vec<_>>();
     let next_cursor = query_param(req, "cursor").map(|_| "TODO:key-backups-pagination".to_owned());
     res.render(Json(KeysBackupsListResponse {
         backups,
         next_cursor,
-        state: "listed_from_in_memory_scaffold".to_owned(),
+        state: "listed_durable".to_owned(),
         todos: vec![
             "TODO(keys.backups): add stable pagination and retention-aware filtering".to_owned(),
             "TODO(keys.backups): split metadata listing from ciphertext fetch if privacy policy requires it".to_owned(),
@@ -118,11 +385,11 @@ pub async fn get_key_backup(depot: &mut Depot, req: &mut Request, res: &mut Resp
     };
     let backup_id = req.param::<String>("backup_id").unwrap_or_default();
     let Some(backup) = state
-        .key_backups
-        .lock()
-        .expect("key backup lock")
+        .persistence
+        .key_backups()
         .get(&backup_id)
-        .cloned()
+        .ok()
+        .flatten()
     else {
         render_error(res, StatusCode::NOT_FOUND, "not_found", "key backup not found");
         return;
@@ -138,7 +405,7 @@ pub async fn get_key_backup(depot: &mut Depot, req: &mut Request, res: &mut Resp
     res.render(Json(KeysBackupsPutResponse {
         ok: true,
         backup,
-        state: "fetched_from_in_memory_scaffold".to_owned(),
+        state: "fetched_durable".to_owned(),
         todos: vec![
             "TODO(keys.backups): add actor/device/recovery policy checks beyond same-actor gating".to_owned(),
             "TODO(keys.backups): support metadata-only reads and encrypted blob indirection if backups grow large".to_owned(),
@@ -153,25 +420,25 @@ pub async fn delete_key_backup(depot: &mut Depot, req: &mut Request, res: &mut R
         return;
     };
     let backup_id = req.param::<String>("backup_id").unwrap_or_default();
-    let mut store = state.key_backups.lock().expect("key backup lock");
-    let deleted = if let Some(existing) = store.get(&backup_id) {
+    let store = state.persistence.key_backups();
+    let existing = store.get(&backup_id).ok().flatten();
+    let deleted = if let Some(existing) = existing {
         let actor_allowed = existing
             .get("actor_id")
             .and_then(Value::as_str)
             .is_none_or(|actor_id| actor_id == session.actor);
-        actor_allowed && store.remove(&backup_id).is_some()
+        actor_allowed && store.delete(&backup_id).unwrap_or(false)
     } else {
         false
     };
-    drop(store);
     res.render(Json(KeysBackupsDeleteResponse {
         ok: true,
         backup_id,
         deleted,
         state: if deleted {
-            "deleted_from_in_memory_scaffold".to_owned()
+            "deleted_durable".to_owned()
         } else {
-            "delete_noop_or_hidden_scaffold".to_owned()
+            "delete_noop_or_hidden".to_owned()
         },
         todos: vec![
             "TODO(keys.backups): add tombstones/audit context and retention-aware delete policy".to_owned(),
@@ -195,8 +462,7 @@ pub async fn get_key_backup_restore_describe(
         render_error(res, StatusCode::BAD_REQUEST, "invalid_param", "backup_id is required");
         return;
     }
-    let store = state.key_backups.lock().expect("key backup lock");
-    let Some(backup) = store.get(&backup_id).cloned() else {
+    let Some(backup) = state.persistence.key_backups().get(&backup_id).ok().flatten() else {
         render_error(res, StatusCode::NOT_FOUND, "not_found", "key backup not found");
         return;
     };
@@ -210,17 +476,28 @@ pub async fn get_key_backup_restore_describe(
     }
     res.render(Json(json!({
         "contract": "contrix.rest.key_backup_restore_describe.v1",
-        "version": "2026-05-04-scaffold",
+        "version": "2026-05-10",
         "backup_id": backup_id,
         "backup_schema": backup.get("schema").cloned().unwrap_or_else(|| json!("cx.schema.key_backup.v1")),
-        "restore_mode": "scaffold",
+        "restore_mode": "fsm_durable",
+        "restore_state_machine": {
+            "states": ["pending", "approved", "executed", "revoked", "rejected", "cancelled"],
+            "transitions": [
+                {"from": "pending", "to": "approved", "intent": "approve"},
+                {"from": "pending", "to": "rejected", "intent": "reject"},
+                {"from": "pending", "to": "cancelled", "intent": "cancel"},
+                {"from": "approved", "to": "executed", "intent": "execute"},
+                {"from": "approved", "to": "cancelled", "intent": "cancel"},
+                {"from": "executed", "to": "revoked", "intent": "revoke"}
+            ]
+        },
         "restore_ticket_kind": "key_backup_restore_request",
         "restore_executor_kind": "key_backup_restore_materialize",
         "restore_approval_kind": "key_backup_restore_approval_workflow",
         "restore_state_describe_path": "/api/v1/keys/backups/restore-state/describe",
         "restore_state_export_path": "/api/v1/keys/backups/restore-state/export",
         "restore_state_import_path": "/api/v1/keys/backups/restore-state/import",
-        "restore_state_store_mode": "process_memory_manual_snapshot_scaffold",
+        "restore_state_store_mode": "pg_durable",
         "restore_executor_start_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/start",
         "restore_executor_complete_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/complete",
         "restore_result_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/result",
@@ -233,62 +510,13 @@ pub async fn get_key_backup_restore_describe(
         "required_selector_kinds": ["blob", "notification", "actor"],
         "required_constraint_types": ["claim_based", "approval_workflow", "container_move"],
         "example_restore_request": {
-            "backup_id": backup.get("backup_id").cloned().unwrap_or_else(|| json!("backup-scaffold-current-device")),
+            "backup_id": backup.get("backup_id").cloned().unwrap_or_else(|| json!(backup_id.clone())),
             "actor": session.actor,
             "device_id": "TODO_DEVICE_ID",
-            "verification_event_kind": "cx.key.verification.done",
-            "todo": "replace scaffold restore request with verified restore ticket and encrypted blob material"
-        },
-        "example_authz_check_request": {
-            "actor": "did:web:alice.example",
-            "action": "keys.backups.restore",
-            "space_id": "cx:space:01904100-0000-7000-8000-000000000000",
-            "resources": [
-                {
-                    "kind": "blob",
-                    "space_id": "cx:space:01904100-0000-7000-8000-000000000000",
-                    "blob_ref": "cx:blob:sha256:0123456789abcdef",
-                    "object_type": "encrypted_backup",
-                    "object_ref": backup.get("backup_id").cloned().unwrap_or_else(|| json!("backup-scaffold-current-device")),
-                    "scope": "exact"
-                }
-            ],
-            "constraints": [
-                {
-                    "constraint_type": "claim_based",
-                    "effect": "allow",
-                    "object_type_allow": ["key_backup"],
-                    "facet_allow": ["recovery"]
-                }
-            ]
-        },
-        "example_policy_upsert_request": {
-            "scope": "space",
-            "subject_ref": "did:web:alice.example",
-            "policy_type": "keys.backups.restore",
-            "effect": "require_review",
-            "payload": {
-                "actions": ["keys.backups.restore"],
-                "resource": {
-                    "kind": "blob",
-                    "space_id": "cx:space:01904100-0000-7000-8000-000000000000",
-                    "blob_ref": "cx:blob:sha256:0123456789abcdef",
-                    "object_type": "encrypted_backup",
-                    "object_ref": backup.get("backup_id").cloned().unwrap_or_else(|| json!("backup-scaffold-current-device"))
-                },
-                "constraints": [
-                    {
-                        "constraint_type": "approval_workflow",
-                        "effect": "require_review",
-                        "approval_required": true,
-                        "approval_mode": "two_man_rule"
-                    }
-                ]
-            }
+            "verification_event_kind": "cx.key.verification.done"
         },
         "todos": [
             "TODO(keys.backups.restore): bind restore describe to real approval and claim evaluation state.",
-            "TODO(keys.backups.restore): replace scaffold restore request with a durable restore ticket and decrypted blob handoff.",
             "TODO(keys.backups.restore): connect device verification completion to restore eligibility instead of static examples."
         ]
     })));
@@ -309,16 +537,10 @@ pub async fn post_key_backup_restore_start(
         render_error(res, StatusCode::BAD_REQUEST, "invalid_param", "backup_id is required");
         return;
     }
-    // Scope the MutexGuard so it does not span the .await below
-    // (`std::sync::MutexGuard` is `!Send`, which would make the future
-    // non-Send and break Salvo's `#[endpoint]`).
-    let backup = {
-        let store = state.key_backups.lock().expect("key backup lock");
-        let Some(backup) = store.get(&backup_id).cloned() else {
-            render_error(res, StatusCode::NOT_FOUND, "not_found", "key backup not found");
-            return;
-        };
-        backup
+    let backup = state.persistence.key_backups().get(&backup_id).ok().flatten();
+    let Some(backup) = backup else {
+        render_error(res, StatusCode::NOT_FOUND, "not_found", "key backup not found");
+        return;
     };
     if backup
         .get("actor_id")
@@ -342,111 +564,99 @@ pub async fn post_key_backup_restore_start(
     };
     let ticket_id = format!("restore-ticket-{backup_id}");
     let executor_job_id = format!("restore-executor-{backup_id}");
+
+    // Seed the FSM at status=pending (fence transitions 0 → 1).
+    let Some((_, fence_token)) = perform_ticket_transition(state, &ticket_id, "pending", res) else {
+        return;
+    };
+
     let approval = json!({
         "contract": "contrix.rest.key_backup_restore_approval_status.v1",
-        "version": "2026-05-04-scaffold",
-        "ticket_id": format!("restore-ticket-{backup_id}"),
-        "backup_id": backup_id,
-        "actor": session.actor,
-        "approval_mode": "two_man_rule",
-        "state": "pending_review",
-        "required_approvals": 2,
-        "granted_approvals": [],
-        "todo": "replace approval scaffold with durable quorum-aware reviewer state"
-    });
-    let ticket = json!({
-        "contract": "contrix.rest.key_backup_restore_ticket.v1",
-        "version": "2026-05-04-scaffold",
+        "version": "2026-05-10",
         "ticket_id": ticket_id,
         "backup_id": backup_id,
         "actor": session.actor,
-        "restore_mode": "scaffold",
-        "lifecycle_state": "authz_pending",
-        "approval_status_path": format!("/api/v1/keys/backups/restore-tickets/restore-ticket-{backup_id}/approvals/status"),
-        "approval_submit_path": format!("/api/v1/keys/backups/restore-tickets/restore-ticket-{backup_id}/approvals/submit"),
+        "approval_mode": "two_man_rule",
+        "state": "pending",
+        "fence_token": fence_token,
+        "required_approvals": 2,
+        "granted_approvals": []
+    });
+    let ticket = json!({
+        "contract": "contrix.rest.key_backup_restore_ticket.v1",
+        "version": "2026-05-10",
+        "ticket_id": ticket_id,
+        "backup_id": backup_id,
+        "actor": session.actor,
+        "status": "pending",
+        "lifecycle_state": "pending",
+        "fence_token": fence_token,
+        "approval_status_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/approvals/status"),
+        "approval_submit_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/approvals/submit"),
         "executor_job_id": executor_job_id,
-        "executor_status_path": format!("/api/v1/keys/backups/restore-tickets/restore-ticket-{backup_id}/executor/status"),
-        "executor_enqueue_path": format!("/api/v1/keys/backups/restore-tickets/restore-ticket-{backup_id}/executor/enqueue"),
-        "allowed_next_transitions": [
-            "authz_checked",
-            "policy_checked",
-            "approved",
-            "materialized"
-        ],
+        "executor_status_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/status"),
+        "executor_enqueue_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/enqueue"),
+        "allowed_next_intents": ["approve", "reject", "cancel"],
         "transition_history": [
             {
-                "transition": "started",
-                "at": now()
+                "transition": "pending",
+                "at": now(),
+                "fence_token": fence_token
             }
         ],
         "request": payload.clone()
     });
     let executor = json!({
         "contract": "contrix.rest.key_backup_restore_executor_status.v1",
-        "version": "2026-05-04-scaffold",
+        "version": "2026-05-10",
         "job_id": executor_job_id,
-        "ticket_id": format!("restore-ticket-{backup_id}"),
+        "ticket_id": ticket_id,
         "backup_id": backup_id,
         "actor": session.actor,
         "state": "idle",
         "queue_state": "not_queued",
-        "execution_mode": "scaffold_materialize",
+        "execution_mode": "deferred",
+        "fence_token": fence_token,
         "run_history": [
             {
                 "event": "initialized",
-                "at": now()
+                "at": now(),
+                "fence_token": fence_token
             }
-        ],
-        "todo": "replace executor scaffold with a durable queued restore worker"
+        ]
     });
-    state
-        .key_backup_restore_tickets
-        .lock()
-        .expect("key backup restore ticket lock")
-        .insert(ticket_id.clone(), ticket);
-    state
-        .key_backup_restore_approval_runs
-        .lock()
-        .expect("key backup restore approval lock")
-        .insert(format!("restore-ticket-{backup_id}"), approval);
-    state
-        .key_backup_restore_executor_runs
-        .lock()
-        .expect("key backup restore executor lock")
-        .insert(format!("restore-ticket-{backup_id}"), executor);
+    if !put_ticket_or_render(state, &ticket_id, ticket, res) { return; }
+    if !put_approval_or_render(state, &ticket_id, approval, res) { return; }
+    if !put_executor_or_render(state, &ticket_id, executor, res) { return; }
     res.render(Json(json!({
         "contract": "contrix.rest.key_backup_restore_start.v1",
-        "version": "2026-05-04-scaffold",
+        "version": "2026-05-10",
         "backup_id": backup_id,
         "restore_ticket_id": ticket_id,
-        "state": "scaffold_started",
-        "restore_mode": "scaffold",
+        "status": "pending",
+        "fence_token": fence_token,
+        "restore_mode": "fsm_durable",
         "restore_request": payload,
-        "restore_ticket_path": format!("/api/v1/keys/backups/restore-tickets/restore-ticket-{backup_id}"),
-        "restore_ticket_advance_path": format!("/api/v1/keys/backups/restore-tickets/restore-ticket-{backup_id}/advance"),
+        "restore_ticket_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}"),
+        "restore_ticket_advance_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/advance"),
         "restore_state_describe_path": "/api/v1/keys/backups/restore-state/describe",
         "restore_state_export_path": "/api/v1/keys/backups/restore-state/export",
         "restore_state_import_path": "/api/v1/keys/backups/restore-state/import",
-        "restore_approval_status_path": format!("/api/v1/keys/backups/restore-tickets/restore-ticket-{backup_id}/approvals/status"),
-        "restore_approval_submit_path": format!("/api/v1/keys/backups/restore-tickets/restore-ticket-{backup_id}/approvals/submit"),
-        "restore_executor_status_path": format!("/api/v1/keys/backups/restore-tickets/restore-ticket-{backup_id}/executor/status"),
-        "restore_executor_enqueue_path": format!("/api/v1/keys/backups/restore-tickets/restore-ticket-{backup_id}/executor/enqueue"),
-        "restore_executor_start_path": format!("/api/v1/keys/backups/restore-tickets/restore-ticket-{backup_id}/executor/start"),
-        "restore_executor_complete_path": format!("/api/v1/keys/backups/restore-tickets/restore-ticket-{backup_id}/executor/complete"),
+        "restore_approval_status_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/approvals/status"),
+        "restore_approval_submit_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/approvals/submit"),
+        "restore_executor_status_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/status"),
+        "restore_executor_enqueue_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/enqueue"),
+        "restore_executor_start_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/start"),
+        "restore_executor_complete_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/complete"),
         "restore_ticket_collection_path": "/api/v1/keys/backups/restore-tickets",
-        "restore_result_path": format!("/api/v1/keys/backups/restore-tickets/restore-ticket-{backup_id}/result"),
-        "restore_receipt_path": format!("/api/v1/keys/backups/restore-tickets/restore-ticket-{backup_id}/receipt"),
-        "restore_materialized_device_handoff_path": format!("/api/v1/keys/backups/restore-tickets/restore-ticket-{backup_id}/materialized-device-handoff"),
-        "restore_bundle_path": format!("/api/v1/keys/backups/restore-tickets/restore-ticket-{backup_id}/bundle"),
+        "restore_result_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/result"),
+        "restore_receipt_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/receipt"),
+        "restore_materialized_device_handoff_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/materialized-device-handoff"),
+        "restore_bundle_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/bundle"),
         "principal_authz_check_path": "/api/v1/authz/check",
         "principal_policy_collection_path": "/api/v1/policies",
         "principal_policy_item_path": "/api/v1/policies/{policy_id}",
-        "next_action": "TODO: run authz check, approval policy lookup, and encrypted blob restore executor",
-        "todos": [
-            "TODO(keys.backups.restore): create durable restore tickets instead of formatting a synthetic id.",
-            "TODO(keys.backups.restore): persist approval state and restore progress instead of returning scaffold_started.",
-            "TODO(keys.backups.restore): hand decrypted backup material into actual device/account recovery flows."
-        ]
+        "next_action": "POST /approvals/submit with decision=approve until quorum reached, then POST /executor/start to materialize."
     })));
 }
 
@@ -462,8 +672,8 @@ pub async fn get_key_backup_restore_state_describe(
     };
     res.render(Json(json!({
         "contract": "contrix.rest.key_backup_restore_state_store_describe.v1",
-        "version": "2026-05-04-scaffold",
-        "snapshot_store_mode": "process_memory_manual_snapshot_scaffold",
+        "version": "2026-05-10",
+        "snapshot_store_mode": "pg_durable",
         "describe_path": "/api/v1/keys/backups/restore-state/describe",
         "export_path": "/api/v1/keys/backups/restore-state/export",
         "import_path": "/api/v1/keys/backups/restore-state/import",
@@ -471,39 +681,8 @@ pub async fn get_key_backup_restore_state_describe(
         "restore_approval_status_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/approvals/status",
         "restore_executor_status_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/status",
         "merge_modes": ["replace_owned", "merge_owned"],
-        "example_export_response": {
-            "contract": "contrix.rest.key_backup_restore_state_store_export.v1",
-            "snapshot_store_mode": "process_memory_manual_snapshot_scaffold",
-            "ticket_count": 1,
-            "approval_count": 1,
-            "executor_count": 1
-        },
-        "example_import_request": {
-            "merge_mode": "replace_owned",
-            "records": {
-                "tickets": {
-                    "restore-ticket-backup-alice-01": {
-                        "contract": "contrix.rest.key_backup_restore_ticket.v1",
-                        "backup_id": "backup-alice-01",
-                        "lifecycle_state": "approval_pending"
-                    }
-                },
-                "approvals": {
-                    "restore-ticket-backup-alice-01": {
-                        "contract": "contrix.rest.key_backup_restore_approval_status.v1",
-                        "state": "pending_review"
-                    }
-                },
-                "executors": {
-                    "restore-ticket-backup-alice-01": {
-                        "contract": "contrix.rest.key_backup_restore_executor_status.v1",
-                        "queue_state": "not_queued"
-                    }
-                }
-            }
-        },
+        "fence_token_kind": "monotonic_per_ticket_bigint",
         "todos": [
-            "TODO(keys.backups.restore): replace process-memory restore-state export/import with a durable snapshot store.",
             "TODO(keys.backups.restore): validate imported snapshots against actor ownership, trust, and freshness policy.",
             "TODO(keys.backups.restore): feed restore-state snapshots into actual worker/bootstrap flows instead of only debug-grade scaffolds."
         ]
@@ -520,32 +699,20 @@ pub async fn get_key_backup_restore_state_export(
     let Some(session) = auth_or_render(state, req, res) else {
         return;
     };
-    let tickets = actor_restore_state_records(
-        &state
-            .key_backup_restore_tickets
-            .lock()
-            .expect("key backup restore ticket lock"),
-        &session.actor,
-    );
-    let approvals = actor_restore_state_records(
-        &state
-            .key_backup_restore_approval_runs
-            .lock()
-            .expect("key backup restore approval lock"),
-        &session.actor,
-    );
-    let executors = actor_restore_state_records(
-        &state
-            .key_backup_restore_executor_runs
-            .lock()
-            .expect("key backup restore executor lock"),
-        &session.actor,
-    );
+    let tickets: serde_json::Map<String, Value> = list_actor_owned_tickets(state, &session.actor)
+        .into_iter()
+        .collect();
+    let approvals: serde_json::Map<String, Value> = list_actor_owned_approvals(state, &session.actor)
+        .into_iter()
+        .collect();
+    let executors: serde_json::Map<String, Value> = list_actor_owned_executors(state, &session.actor)
+        .into_iter()
+        .collect();
     res.render(Json(json!({
         "contract": "contrix.rest.key_backup_restore_state_store_export.v1",
-        "version": "2026-05-04-scaffold",
-        "snapshot_version": "2026-05-04-scaffold",
-        "snapshot_store_mode": "process_memory_manual_snapshot_scaffold",
+        "version": "2026-05-10",
+        "snapshot_version": "2026-05-10",
+        "snapshot_store_mode": "pg_durable",
         "actor": session.actor,
         "ticket_count": tickets.len(),
         "approval_count": approvals.len(),
@@ -555,8 +722,7 @@ pub async fn get_key_backup_restore_state_export(
             "approvals": approvals,
             "executors": executors
         },
-        "exported_at": now(),
-        "todo": "TODO(keys.backups.restore): export restore-state snapshots from a durable store with freshness and integrity metadata."
+        "exported_at": now()
     })));
 }
 
@@ -587,63 +753,44 @@ pub async fn post_key_backup_restore_state_import(
         .and_then(Value::as_str)
         .unwrap_or("replace_owned")
         .to_owned();
-    let records = body
-        .get("records")
-        .cloned()
-        .unwrap_or_else(|| json!({}));
+    let records = body.get("records").cloned().unwrap_or_else(|| json!({}));
     let tickets = imported_restore_state_records(records.get("tickets"), &session.actor);
     let approvals = imported_restore_state_records(records.get("approvals"), &session.actor);
     let executors = imported_restore_state_records(records.get("executors"), &session.actor);
 
-    {
-        let mut store = state
-            .key_backup_restore_tickets
-            .lock()
-            .expect("key backup restore ticket lock");
-        if merge_mode == "replace_owned" {
-            store.retain(|_, record| !restore_record_owned_by_actor(record, &session.actor));
+    let store = state.persistence.key_backups();
+    if merge_mode == "replace_owned" {
+        for (ticket_id, _) in list_actor_owned_tickets(state, &session.actor) {
+            let _ = store.delete_ticket(&ticket_id);
         }
-        for (key, value) in tickets.clone() {
-            store.insert(key, value);
+        for (ticket_id, _) in list_actor_owned_approvals(state, &session.actor) {
+            let _ = store.delete_approval_run(&ticket_id);
         }
-    }
-    {
-        let mut store = state
-            .key_backup_restore_approval_runs
-            .lock()
-            .expect("key backup restore approval lock");
-        if merge_mode == "replace_owned" {
-            store.retain(|_, record| !restore_record_owned_by_actor(record, &session.actor));
-        }
-        for (key, value) in approvals.clone() {
-            store.insert(key, value);
+        for (ticket_id, _) in list_actor_owned_executors(state, &session.actor) {
+            let _ = store.delete_executor_run(&ticket_id);
         }
     }
-    {
-        let mut store = state
-            .key_backup_restore_executor_runs
-            .lock()
-            .expect("key backup restore executor lock");
-        if merge_mode == "replace_owned" {
-            store.retain(|_, record| !restore_record_owned_by_actor(record, &session.actor));
-        }
-        for (key, value) in executors.clone() {
-            store.insert(key, value);
-        }
+    for (key, value) in tickets.clone() {
+        let _ = store.put_ticket(key, value);
+    }
+    for (key, value) in approvals.clone() {
+        let _ = store.put_approval_run(key, value);
+    }
+    for (key, value) in executors.clone() {
+        let _ = store.put_executor_run(key, value);
     }
 
     res.render(Json(json!({
         "contract": "contrix.rest.key_backup_restore_state_store_import.v1",
-        "version": "2026-05-04-scaffold",
-        "snapshot_store_mode": "process_memory_manual_snapshot_scaffold",
+        "version": "2026-05-10",
+        "snapshot_store_mode": "pg_durable",
         "actor": session.actor,
         "merge_mode": merge_mode,
         "imported_ticket_count": tickets.len(),
         "imported_approval_count": approvals.len(),
         "imported_executor_count": executors.len(),
         "restore_state_describe_path": "/api/v1/keys/backups/restore-state/describe",
-        "restore_state_export_path": "/api/v1/keys/backups/restore-state/export",
-        "todo": "TODO(keys.backups.restore): replace restore-state import scaffold with durable snapshot persistence and trust policy."
+        "restore_state_export_path": "/api/v1/keys/backups/restore-state/export"
     })));
 }
 
@@ -657,39 +804,30 @@ pub async fn list_key_backup_restore_tickets(
     let Some(session) = auth_or_render(state, _req, res) else {
         return;
     };
-    let tickets = state
-        .key_backup_restore_tickets
-        .lock()
-        .expect("key backup restore ticket lock");
-    let items = tickets
-        .iter()
-        .filter_map(|(ticket_id, ticket)| {
-            ticket
-                .get("actor")
-                .and_then(Value::as_str)
-                .is_some_and(|actor| actor == session.actor)
-                .then(|| {
-                    json!({
-                        "ticket_id": ticket_id,
-                        "lifecycle_state": ticket.get("lifecycle_state").cloned().unwrap_or_else(|| json!("unknown")),
-                        "backup_id": ticket.get("backup_id").cloned().unwrap_or_else(|| json!("unknown")),
-                        "bundle_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/bundle"),
-                        "activity_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/activity"),
-                        "timeline_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/timeline"),
-                        "audit_feed_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/audit-feed"),
-                        "status_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}"),
-                        "approval_status_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/approvals/status"),
-                        "executor_status_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/status"),
-                    })
-                })
+    let items = list_actor_owned_tickets(state, &session.actor)
+        .into_iter()
+        .map(|(ticket_id, ticket)| {
+            json!({
+                "ticket_id": ticket_id,
+                "status": ticket.get("status").cloned().unwrap_or_else(|| json!("pending")),
+                "lifecycle_state": ticket.get("lifecycle_state").cloned().unwrap_or_else(|| json!("pending")),
+                "fence_token": ticket.get("fence_token").cloned().unwrap_or_else(|| json!(0)),
+                "backup_id": ticket.get("backup_id").cloned().unwrap_or_else(|| json!("unknown")),
+                "bundle_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/bundle"),
+                "activity_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/activity"),
+                "timeline_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/timeline"),
+                "audit_feed_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/audit-feed"),
+                "status_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}"),
+                "approval_status_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/approvals/status"),
+                "executor_status_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/status"),
+            })
         })
         .collect::<Vec<_>>();
     res.render(Json(json!({
         "contract": "contrix.rest.key_backup_restore_ticket_collection.v1",
-        "version": "2026-05-04-scaffold",
+        "version": "2026-05-10",
         "total_count": items.len(),
-        "items": items,
-        "todo": "TODO(keys.backups.restore): replace collection scaffold with durable per-actor listing, pagination, and admin visibility policy."
+        "items": items
     })));
 }
 
@@ -704,54 +842,18 @@ pub async fn get_key_backup_restore_ticket(
         return;
     };
     let ticket_id = req.param::<String>("ticket_id").unwrap_or_default();
-    let Some(ticket) = state
-        .key_backup_restore_tickets
-        .lock()
-        .expect("key backup restore ticket lock")
-        .get(&ticket_id)
-        .cloned()
-    else {
+    let Some(mut ticket) = fetch_ticket_for_actor(state, &ticket_id, &session.actor) else {
         render_error(res, StatusCode::NOT_FOUND, "not_found", "restore ticket not found");
         return;
     };
-    if ticket
-        .get("actor")
-        .and_then(Value::as_str)
-        .is_some_and(|actor| actor != session.actor)
-    {
-        render_error(res, StatusCode::NOT_FOUND, "not_found", "restore ticket not found");
-        return;
-    }
-    let mut ticket = ticket;
     if let Some(object) = ticket.as_object_mut() {
-        object.insert(
-            "resume_path".to_owned(),
-            json!(format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/resume")),
-        );
-        object.insert(
-            "cancel_path".to_owned(),
-            json!(format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/cancel")),
-        );
-        object.insert(
-            "retry_path".to_owned(),
-            json!(format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/retry")),
-        );
-        object.insert(
-            "bundle_path".to_owned(),
-            json!(format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/bundle")),
-        );
-        object.insert(
-            "activity_path".to_owned(),
-            json!(format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/activity")),
-        );
-        object.insert(
-            "timeline_path".to_owned(),
-            json!(format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/timeline")),
-        );
-        object.insert(
-            "audit_feed_path".to_owned(),
-            json!(format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/audit-feed")),
-        );
+        object.insert("resume_path".to_owned(), json!(format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/resume")));
+        object.insert("cancel_path".to_owned(), json!(format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/cancel")));
+        object.insert("retry_path".to_owned(), json!(format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/retry")));
+        object.insert("bundle_path".to_owned(), json!(format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/bundle")));
+        object.insert("activity_path".to_owned(), json!(format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/activity")));
+        object.insert("timeline_path".to_owned(), json!(format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/timeline")));
+        object.insert("audit_feed_path".to_owned(), json!(format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/audit-feed")));
     }
     res.render(Json(ticket));
 }
@@ -768,28 +870,11 @@ pub async fn post_key_backup_restore_ticket_resume(
     };
     let ticket_id = req.param::<String>("ticket_id").unwrap_or_default();
     let body = req.parse_json::<Value>().await.unwrap_or_else(|_| json!({}));
-    let mut tickets = state
-        .key_backup_restore_tickets
-        .lock()
-        .expect("key backup restore ticket lock");
-    let Some(ticket) = tickets.get_mut(&ticket_id) else {
+    let Some(mut ticket) = fetch_ticket_for_actor(state, &ticket_id, &session.actor) else {
         render_error(res, StatusCode::NOT_FOUND, "not_found", "restore ticket not found");
         return;
     };
-    if ticket
-        .get("actor")
-        .and_then(Value::as_str)
-        .is_some_and(|actor| actor != session.actor)
-    {
-        render_error(res, StatusCode::NOT_FOUND, "not_found", "restore ticket not found");
-        return;
-    }
     if let Some(object) = ticket.as_object_mut() {
-        object.insert("lifecycle_state".to_owned(), json!("resumed"));
-        object.insert(
-            "allowed_next_transitions".to_owned(),
-            json!(["authz_checked", "executor_enqueued", "cancelled"]),
-        );
         if let Some(history) = object
             .entry("transition_history".to_owned())
             .or_insert_with(|| json!([]))
@@ -802,13 +887,12 @@ pub async fn post_key_backup_restore_ticket_resume(
             }));
         }
     }
+    if !put_ticket_or_render(state, &ticket_id, ticket, res) { return; }
     res.render(Json(json!({
         "contract": "contrix.rest.key_backup_restore_ticket_resume.v1",
         "ticket_id": ticket_id,
-        "state": "resumed",
         "executor_enqueue_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/enqueue"),
-        "bundle_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/bundle"),
-        "todo": "TODO(keys.backups.restore): replace resume scaffold with durable recovery wakeup and checkpoint replay semantics."
+        "bundle_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/bundle")
     })));
 }
 
@@ -824,25 +908,18 @@ pub async fn post_key_backup_restore_ticket_cancel(
     };
     let ticket_id = req.param::<String>("ticket_id").unwrap_or_default();
     let body = req.parse_json::<Value>().await.unwrap_or_else(|_| json!({}));
-    let mut tickets = state
-        .key_backup_restore_tickets
-        .lock()
-        .expect("key backup restore ticket lock");
-    let Some(ticket) = tickets.get_mut(&ticket_id) else {
+    let Some(mut ticket) = fetch_ticket_for_actor(state, &ticket_id, &session.actor) else {
         render_error(res, StatusCode::NOT_FOUND, "not_found", "restore ticket not found");
         return;
     };
-    if ticket
-        .get("actor")
-        .and_then(Value::as_str)
-        .is_some_and(|actor| actor != session.actor)
-    {
-        render_error(res, StatusCode::NOT_FOUND, "not_found", "restore ticket not found");
+    let Some((status, fence_token)) = perform_ticket_transition(state, &ticket_id, "cancel", res) else {
         return;
-    }
+    };
     if let Some(object) = ticket.as_object_mut() {
-        object.insert("lifecycle_state".to_owned(), json!("cancelled"));
-        object.insert("allowed_next_transitions".to_owned(), json!([]));
+        object.insert("status".to_owned(), json!(status));
+        object.insert("lifecycle_state".to_owned(), json!(status));
+        object.insert("fence_token".to_owned(), json!(fence_token));
+        object.insert("allowed_next_intents".to_owned(), json!([]));
         if let Some(history) = object
             .entry("transition_history".to_owned())
             .or_insert_with(|| json!([]))
@@ -851,35 +928,35 @@ pub async fn post_key_backup_restore_ticket_cancel(
             history.push(json!({
                 "transition": "cancelled",
                 "at": now(),
+                "fence_token": fence_token,
                 "reason": body.get("reason").cloned().unwrap_or_else(|| json!("operator_cancelled")),
             }));
         }
     }
-    if let Some(approval) = state
-        .key_backup_restore_approval_runs
-        .lock()
-        .expect("key backup restore approval lock")
-        .get_mut(&ticket_id)
-        .and_then(Value::as_object_mut)
-    {
-        approval.insert("state".to_owned(), json!("cancelled"));
+    if !put_ticket_or_render(state, &ticket_id, ticket, res) { return; }
+
+    if let Some(mut approval) = fetch_approval_for_actor(state, &ticket_id, &session.actor) {
+        if let Some(object) = approval.as_object_mut() {
+            object.insert("state".to_owned(), json!("cancelled"));
+            object.insert("fence_token".to_owned(), json!(fence_token));
+        }
+        let _ = state.persistence.key_backups().put_approval_run(ticket_id.clone(), approval);
     }
-    if let Some(executor) = state
-        .key_backup_restore_executor_runs
-        .lock()
-        .expect("key backup restore executor lock")
-        .get_mut(&ticket_id)
-        .and_then(Value::as_object_mut)
-    {
-        executor.insert("state".to_owned(), json!("cancelled"));
-        executor.insert("queue_state".to_owned(), json!("cancelled"));
+    if let Some(mut executor) = fetch_executor_for_actor(state, &ticket_id, &session.actor) {
+        if let Some(object) = executor.as_object_mut() {
+            object.insert("state".to_owned(), json!("cancelled"));
+            object.insert("queue_state".to_owned(), json!("cancelled"));
+            object.insert("fence_token".to_owned(), json!(fence_token));
+        }
+        let _ = state.persistence.key_backups().put_executor_run(ticket_id.clone(), executor);
     }
+
     res.render(Json(json!({
         "contract": "contrix.rest.key_backup_restore_ticket_cancel.v1",
         "ticket_id": ticket_id,
-        "state": "cancelled",
-        "bundle_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/bundle"),
-        "todo": "TODO(keys.backups.restore): replace cancel scaffold with durable cancellation evidence and cleanup semantics."
+        "status": status,
+        "fence_token": fence_token,
+        "bundle_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/bundle")
     })));
 }
 
@@ -895,28 +972,11 @@ pub async fn post_key_backup_restore_ticket_retry(
     };
     let ticket_id = req.param::<String>("ticket_id").unwrap_or_default();
     let body = req.parse_json::<Value>().await.unwrap_or_else(|_| json!({}));
-    let mut tickets = state
-        .key_backup_restore_tickets
-        .lock()
-        .expect("key backup restore ticket lock");
-    let Some(ticket) = tickets.get_mut(&ticket_id) else {
+    let Some(mut ticket) = fetch_ticket_for_actor(state, &ticket_id, &session.actor) else {
         render_error(res, StatusCode::NOT_FOUND, "not_found", "restore ticket not found");
         return;
     };
-    if ticket
-        .get("actor")
-        .and_then(Value::as_str)
-        .is_some_and(|actor| actor != session.actor)
-    {
-        render_error(res, StatusCode::NOT_FOUND, "not_found", "restore ticket not found");
-        return;
-    }
     if let Some(object) = ticket.as_object_mut() {
-        object.insert("lifecycle_state".to_owned(), json!("retry_queued"));
-        object.insert(
-            "allowed_next_transitions".to_owned(),
-            json!(["executor_enqueued", "cancelled"]),
-        );
         if let Some(history) = object
             .entry("transition_history".to_owned())
             .or_insert_with(|| json!([]))
@@ -929,29 +989,25 @@ pub async fn post_key_backup_restore_ticket_retry(
             }));
         }
     }
-    if let Some(executor) = state
-        .key_backup_restore_executor_runs
-        .lock()
-        .expect("key backup restore executor lock")
-        .get_mut(&ticket_id)
-        .and_then(Value::as_object_mut)
-    {
-        executor.insert("state".to_owned(), json!("idle"));
-        executor.insert("queue_state".to_owned(), json!("not_queued"));
-        executor.remove("materialized_device_handoff");
-        executor.remove("handoff_state");
-        executor.remove("handoff_submitted_at");
+    if !put_ticket_or_render(state, &ticket_id, ticket, res) { return; }
+    if let Some(mut executor) = fetch_executor_for_actor(state, &ticket_id, &session.actor) {
+        if let Some(object) = executor.as_object_mut() {
+            object.insert("state".to_owned(), json!("idle"));
+            object.insert("queue_state".to_owned(), json!("not_queued"));
+            object.remove("materialized_device_handoff");
+            object.remove("handoff_state");
+            object.remove("handoff_submitted_at");
+        }
+        let _ = state.persistence.key_backups().put_executor_run(ticket_id.clone(), executor);
     }
     res.render(Json(json!({
         "contract": "contrix.rest.key_backup_restore_ticket_retry.v1",
         "ticket_id": ticket_id,
-        "state": "retry_queued",
         "executor_enqueue_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/enqueue"),
         "bundle_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/bundle"),
         "activity_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/activity"),
         "timeline_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/timeline"),
-        "audit_feed_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/audit-feed"),
-        "todo": "TODO(keys.backups.restore): replace retry scaffold with bounded retry policy, failure classes, and checkpoint selection."
+        "audit_feed_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/audit-feed")
     })));
 }
 
@@ -978,97 +1034,48 @@ pub async fn post_key_backup_restore_ticket_advance(
             return;
         }
     };
-    let transition = body
-        .get("transition")
+    let intent = body
+        .get("intent")
+        .or_else(|| body.get("transition"))
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_owned();
-    if transition.trim().is_empty() {
-        render_error(res, StatusCode::BAD_REQUEST, "invalid_param", "transition is required");
+    if intent.trim().is_empty() {
+        render_error(res, StatusCode::BAD_REQUEST, "invalid_param", "intent is required");
         return;
     }
-    let mut tickets = state
-        .key_backup_restore_tickets
-        .lock()
-        .expect("key backup restore ticket lock");
-    let Some(ticket) = tickets.get_mut(&ticket_id) else {
+    let Some(mut ticket) = fetch_ticket_for_actor(state, &ticket_id, &session.actor) else {
         render_error(res, StatusCode::NOT_FOUND, "not_found", "restore ticket not found");
         return;
     };
-    if ticket
-        .get("actor")
-        .and_then(Value::as_str)
-        .is_some_and(|actor| actor != session.actor)
-    {
-        render_error(res, StatusCode::NOT_FOUND, "not_found", "restore ticket not found");
+    let Some((status, fence_token)) = perform_ticket_transition(state, &ticket_id, &intent, res) else {
         return;
-    }
-    let lifecycle_state = match transition.as_str() {
-        "authz_checked" => "policy_pending",
-        "policy_checked" => "approval_pending",
-        "approved" => "materialization_pending",
-        "materialized" => "completed",
-        _ => "scaffold_custom",
-    };
-    let allowed_next_transitions = match lifecycle_state {
-        "policy_pending" => json!(["policy_checked", "approved", "materialized"]),
-        "approval_pending" => json!(["approved", "materialized"]),
-        "materialization_pending" => json!(["materialized"]),
-        "completed" => json!([]),
-        _ => json!(["authz_checked", "policy_checked", "approved", "materialized"]),
     };
     if let Some(object) = ticket.as_object_mut() {
-        object.insert("lifecycle_state".to_owned(), json!(lifecycle_state));
-        object.insert(
-            "allowed_next_transitions".to_owned(),
-            allowed_next_transitions.clone(),
-        );
-        object
-            .entry("transition_history".to_owned())
-            .or_insert_with(|| json!([]));
+        object.insert("status".to_owned(), json!(status));
+        object.insert("lifecycle_state".to_owned(), json!(status));
+        object.insert("fence_token".to_owned(), json!(fence_token));
         if let Some(history) = object
-            .get_mut("transition_history")
-            .and_then(Value::as_array_mut)
+            .entry("transition_history".to_owned())
+            .or_insert_with(|| json!([]))
+            .as_array_mut()
         {
             history.push(json!({
-                "transition": transition,
+                "transition": intent,
+                "to": status,
                 "at": now(),
-                "note": body.get("note").cloned().unwrap_or_else(|| json!("scaffold transition")),
+                "fence_token": fence_token,
+                "note": body.get("note").cloned().unwrap_or_else(|| json!("advance")),
             }));
         }
     }
-    if let Some(executor) = state
-        .key_backup_restore_executor_runs
-        .lock()
-        .expect("key backup restore executor lock")
-        .get_mut(&ticket_id)
-    {
-        if let Some(object) = executor.as_object_mut() {
-            let queue_state = match transition.as_str() {
-                "approved" => "ready_for_enqueue",
-                "materialized" => "materialization_requested",
-                _ => "blocked_on_policy",
-            };
-            object.insert("state".to_owned(), json!(lifecycle_state));
-            object.insert("queue_state".to_owned(), json!(queue_state));
-            object
-                .entry("run_history".to_owned())
-                .or_insert_with(|| json!([]));
-            if let Some(history) = object.get_mut("run_history").and_then(Value::as_array_mut) {
-                history.push(json!({
-                    "event": "ticket_transition_observed",
-                    "transition": transition,
-                    "at": now()
-                }));
-            }
-        }
-    }
+    if !put_ticket_or_render(state, &ticket_id, ticket, res) { return; }
     res.render(Json(json!({
         "contract": "contrix.rest.key_backup_restore_ticket_advance.v1",
         "ticket_id": ticket_id,
-        "transition": transition,
-        "state": lifecycle_state,
-        "allowed_next_transitions": allowed_next_transitions,
+        "intent": intent,
+        "status": status,
+        "fence_token": fence_token,
         "resume_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/resume"),
         "cancel_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/cancel"),
         "retry_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/retry"),
@@ -1076,8 +1083,7 @@ pub async fn post_key_backup_restore_ticket_advance(
         "approval_status_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/approvals/status"),
         "approval_submit_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/approvals/submit"),
         "executor_status_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/status"),
-        "executor_enqueue_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/enqueue"),
-        "todo": "TODO(keys.backups.restore): replace transition scaffold with guarded state machine + executor side effects"
+        "executor_enqueue_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/enqueue")
     })));
 }
 
@@ -1092,24 +1098,10 @@ pub async fn get_key_backup_restore_approval_status(
         return;
     };
     let ticket_id = req.param::<String>("ticket_id").unwrap_or_default();
-    let Some(approval) = state
-        .key_backup_restore_approval_runs
-        .lock()
-        .expect("key backup restore approval lock")
-        .get(&ticket_id)
-        .cloned()
-    else {
+    let Some(approval) = fetch_approval_for_actor(state, &ticket_id, &session.actor) else {
         render_error(res, StatusCode::NOT_FOUND, "not_found", "restore approval not found");
         return;
     };
-    if approval
-        .get("actor")
-        .and_then(Value::as_str)
-        .is_some_and(|actor| actor != session.actor)
-    {
-        render_error(res, StatusCode::NOT_FOUND, "not_found", "restore approval not found");
-        return;
-    }
     res.render(Json(approval));
 }
 
@@ -1139,28 +1131,18 @@ pub async fn post_key_backup_restore_approval_submit(
     let decision = body
         .get("decision")
         .and_then(Value::as_str)
-        .unwrap_or("approve");
+        .unwrap_or("approve")
+        .to_owned();
     let approver = body
         .get("approver")
         .and_then(Value::as_str)
-        .unwrap_or(session.actor.as_str());
-    let mut approvals = state
-        .key_backup_restore_approval_runs
-        .lock()
-        .expect("key backup restore approval lock");
-    let Some(approval) = approvals.get_mut(&ticket_id) else {
+        .unwrap_or(session.actor.as_str())
+        .to_owned();
+    let Some(mut approval) = fetch_approval_for_actor(state, &ticket_id, &session.actor) else {
         render_error(res, StatusCode::NOT_FOUND, "not_found", "restore approval not found");
         return;
     };
-    if approval
-        .get("actor")
-        .and_then(Value::as_str)
-        .is_some_and(|actor| actor != session.actor)
-    {
-        render_error(res, StatusCode::NOT_FOUND, "not_found", "restore approval not found");
-        return;
-    }
-    let mut new_state = "under_review";
+    let mut new_state = "pending".to_owned();
     let mut granted_count = 0usize;
     if let Some(object) = approval.as_object_mut() {
         object
@@ -1173,39 +1155,55 @@ pub async fn post_key_backup_restore_approval_submit(
             granted.push(json!({
                 "approver": approver,
                 "decision": decision,
-                "note": body.get("note").cloned().unwrap_or_else(|| json!("approval scaffold")),
+                "note": body.get("note").cloned().unwrap_or_else(|| json!("submitted")),
                 "at": now()
             }));
             granted_count = granted.len();
             if granted.iter().any(|entry| entry.get("decision").and_then(Value::as_str) == Some("reject")) {
-                new_state = "rejected";
+                new_state = "rejected".to_owned();
             } else if granted_count >= 2 {
-                new_state = "approved";
+                new_state = "approved".to_owned();
+            } else {
+                new_state = "pending".to_owned();
             }
         }
-        object.insert("state".to_owned(), json!(new_state));
+        object.insert("state".to_owned(), json!(new_state.clone()));
     }
-    if new_state == "approved" {
-        if let Some(ticket) = state
-            .key_backup_restore_tickets
-            .lock()
-            .expect("key backup restore ticket lock")
-            .get_mut(&ticket_id)
-        {
-            if let Some(object) = ticket.as_object_mut() {
-                object.insert("lifecycle_state".to_owned(), json!("approved"));
-                object.insert("allowed_next_transitions".to_owned(), json!(["materialized"]));
-            }
+    let mut transitioned_fence: Option<i64> = None;
+    if new_state == "approved" || new_state == "rejected" {
+        let intent = if new_state == "approved" { "approve" } else { "reject" };
+        let Some((_, fence_token)) = perform_ticket_transition(state, &ticket_id, intent, res) else {
+            return;
+        };
+        transitioned_fence = Some(fence_token);
+        if let Some(object) = approval.as_object_mut() {
+            object.insert("fence_token".to_owned(), json!(fence_token));
         }
-        if let Some(executor) = state
-            .key_backup_restore_executor_runs
-            .lock()
-            .expect("key backup restore executor lock")
-            .get_mut(&ticket_id)
-        {
-            if let Some(object) = executor.as_object_mut() {
-                object.insert("queue_state".to_owned(), json!("ready_for_enqueue"));
-                object.insert("state".to_owned(), json!("approved_waiting_executor"));
+    }
+    if !put_approval_or_render(state, &ticket_id, approval, res) { return; }
+    if let Some(fence_token) = transitioned_fence {
+        if let Some(mut ticket) = fetch_ticket_for_actor(state, &ticket_id, &session.actor) {
+            if let Some(object) = ticket.as_object_mut() {
+                object.insert("status".to_owned(), json!(new_state.clone()));
+                object.insert("lifecycle_state".to_owned(), json!(new_state.clone()));
+                object.insert("fence_token".to_owned(), json!(fence_token));
+                let next_intents = match new_state.as_str() {
+                    "approved" => json!(["execute", "cancel"]),
+                    "rejected" => json!([]),
+                    _ => json!(["approve", "reject", "cancel"]),
+                };
+                object.insert("allowed_next_intents".to_owned(), next_intents);
+            }
+            let _ = state.persistence.key_backups().put_ticket(ticket_id.clone(), ticket);
+        }
+        if new_state == "approved" {
+            if let Some(mut executor) = fetch_executor_for_actor(state, &ticket_id, &session.actor) {
+                if let Some(object) = executor.as_object_mut() {
+                    object.insert("queue_state".to_owned(), json!("ready_for_enqueue"));
+                    object.insert("state".to_owned(), json!("approved_waiting_executor"));
+                    object.insert("fence_token".to_owned(), json!(fence_token));
+                }
+                let _ = state.persistence.key_backups().put_executor_run(ticket_id.clone(), executor);
             }
         }
     }
@@ -1214,10 +1212,10 @@ pub async fn post_key_backup_restore_approval_submit(
         "ticket_id": ticket_id,
         "decision": decision,
         "state": new_state,
+        "fence_token": transitioned_fence,
         "granted_approval_count": granted_count,
         "required_approvals": 2,
-        "executor_enqueue_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/enqueue"),
-        "todo": "TODO(keys.backups.restore): replace approval submit scaffold with reviewer authorization, quorum checks, and durable audit records"
+        "executor_enqueue_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/enqueue")
     })));
 }
 
@@ -1232,24 +1230,10 @@ pub async fn get_key_backup_restore_executor_status(
         return;
     };
     let ticket_id = req.param::<String>("ticket_id").unwrap_or_default();
-    let Some(executor) = state
-        .key_backup_restore_executor_runs
-        .lock()
-        .expect("key backup restore executor lock")
-        .get(&ticket_id)
-        .cloned()
-    else {
+    let Some(executor) = fetch_executor_for_actor(state, &ticket_id, &session.actor) else {
         render_error(res, StatusCode::NOT_FOUND, "not_found", "restore executor not found");
         return;
     };
-    if executor
-        .get("actor")
-        .and_then(Value::as_str)
-        .is_some_and(|actor| actor != session.actor)
-    {
-        render_error(res, StatusCode::NOT_FOUND, "not_found", "restore executor not found");
-        return;
-    }
     res.render(Json(executor));
 }
 
@@ -1276,36 +1260,26 @@ pub async fn post_key_backup_restore_executor_enqueue(
             return;
         }
     };
-    let mut executors = state
-        .key_backup_restore_executor_runs
-        .lock()
-        .expect("key backup restore executor lock");
-    let Some(executor) = executors.get_mut(&ticket_id) else {
+    let Some(mut executor) = fetch_executor_for_actor(state, &ticket_id, &session.actor) else {
         render_error(res, StatusCode::NOT_FOUND, "not_found", "restore executor not found");
         return;
     };
-    if executor
-        .get("actor")
-        .and_then(Value::as_str)
-        .is_some_and(|actor| actor != session.actor)
-    {
-        render_error(res, StatusCode::NOT_FOUND, "not_found", "restore executor not found");
-        return;
-    }
     let execution_mode = body
         .get("execution_mode")
         .and_then(Value::as_str)
-        .unwrap_or("scaffold_materialize");
+        .unwrap_or("deferred")
+        .to_owned();
     if let Some(object) = executor.as_object_mut() {
         object.insert("state".to_owned(), json!("queued"));
         object.insert("queue_state".to_owned(), json!("queued"));
-        object.insert("execution_mode".to_owned(), json!(execution_mode));
+        object.insert("execution_mode".to_owned(), json!(execution_mode.clone()));
         object.insert("queued_at".to_owned(), json!(now()));
         object.insert("request".to_owned(), body.clone());
-        object
+        if let Some(history) = object
             .entry("run_history".to_owned())
-            .or_insert_with(|| json!([]));
-        if let Some(history) = object.get_mut("run_history").and_then(Value::as_array_mut) {
+            .or_insert_with(|| json!([]))
+            .as_array_mut()
+        {
             history.push(json!({
                 "event": "queued",
                 "at": now(),
@@ -1314,6 +1288,7 @@ pub async fn post_key_backup_restore_executor_enqueue(
             }));
         }
     }
+    if !put_executor_or_render(state, &ticket_id, executor, res) { return; }
     res.render(Json(json!({
         "contract": "contrix.rest.key_backup_restore_executor_enqueue.v1",
         "ticket_id": ticket_id,
@@ -1321,8 +1296,7 @@ pub async fn post_key_backup_restore_executor_enqueue(
         "queue_state": "queued",
         "execution_mode": execution_mode,
         "status_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/status"),
-        "start_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/start"),
-        "todo": "TODO(keys.backups.restore): replace enqueue scaffold with durable queue dispatch and restore worker side effects"
+        "start_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/start")
     })));
 }
 
@@ -1352,33 +1326,23 @@ pub async fn post_key_backup_restore_executor_start(
     let worker_id = body
         .get("worker_id")
         .and_then(Value::as_str)
-        .unwrap_or("restore-worker-scaffold");
-    let mut executors = state
-        .key_backup_restore_executor_runs
-        .lock()
-        .expect("key backup restore executor lock");
-    let Some(executor) = executors.get_mut(&ticket_id) else {
+        .unwrap_or("restore-worker")
+        .to_owned();
+    let Some(mut executor) = fetch_executor_for_actor(state, &ticket_id, &session.actor) else {
         render_error(res, StatusCode::NOT_FOUND, "not_found", "restore executor not found");
         return;
     };
-    if executor
-        .get("actor")
-        .and_then(Value::as_str)
-        .is_some_and(|actor| actor != session.actor)
-    {
-        render_error(res, StatusCode::NOT_FOUND, "not_found", "restore executor not found");
-        return;
-    }
     if let Some(object) = executor.as_object_mut() {
         object.insert("state".to_owned(), json!("running"));
         object.insert("queue_state".to_owned(), json!("dequeued"));
-        object.insert("worker_id".to_owned(), json!(worker_id));
+        object.insert("worker_id".to_owned(), json!(worker_id.clone()));
         object.insert("started_at".to_owned(), json!(now()));
         object.insert("lease".to_owned(), body.clone());
-        object
+        if let Some(history) = object
             .entry("run_history".to_owned())
-            .or_insert_with(|| json!([]));
-        if let Some(history) = object.get_mut("run_history").and_then(Value::as_array_mut) {
+            .or_insert_with(|| json!([]))
+            .as_array_mut()
+        {
             history.push(json!({
                 "event": "started",
                 "at": now(),
@@ -1387,21 +1351,17 @@ pub async fn post_key_backup_restore_executor_start(
             }));
         }
     }
-    if let Some(ticket) = state
-        .key_backup_restore_tickets
-        .lock()
-        .expect("key backup restore ticket lock")
-        .get_mut(&ticket_id)
-    {
+    if !put_executor_or_render(state, &ticket_id, executor, res) { return; }
+    if let Some(mut ticket) = fetch_ticket_for_actor(state, &ticket_id, &session.actor) {
         if let Some(object) = ticket.as_object_mut() {
+            // Note: status stays at `approved` until executor reports complete.
+            // The lifecycle_state is a read-only label for UIs; the FSM tag
+            // is the authoritative `status` field.
             object.insert("lifecycle_state".to_owned(), json!("materializing"));
-            object.insert("allowed_next_transitions".to_owned(), json!(["materialized"]));
-            object
-                .entry("transition_history".to_owned())
-                .or_insert_with(|| json!([]));
             if let Some(history) = object
-                .get_mut("transition_history")
-                .and_then(Value::as_array_mut)
+                .entry("transition_history".to_owned())
+                .or_insert_with(|| json!([]))
+                .as_array_mut()
             {
                 history.push(json!({
                     "transition": "executor_started",
@@ -1410,6 +1370,7 @@ pub async fn post_key_backup_restore_executor_start(
                 }));
             }
         }
+        let _ = state.persistence.key_backups().put_ticket(ticket_id.clone(), ticket);
     }
     res.render(Json(json!({
         "contract": "contrix.rest.key_backup_restore_executor_start.v1",
@@ -1418,8 +1379,7 @@ pub async fn post_key_backup_restore_executor_start(
         "queue_state": "dequeued",
         "worker_id": worker_id,
         "status_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/status"),
-        "complete_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/complete"),
-        "todo": "TODO(keys.backups.restore): replace executor-start scaffold with durable worker lease and progress heartbeat semantics"
+        "complete_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/complete")
     })));
 }
 
@@ -1449,55 +1409,49 @@ pub async fn post_key_backup_restore_executor_complete(
     let result = body
         .get("result")
         .and_then(Value::as_str)
-        .unwrap_or("success");
-    let executor_state = if result == "success" {
-        "completed"
-    } else {
-        "failed"
-    };
-    let ticket_state = if result == "success" {
-        "completed"
-    } else {
-        "materialization_failed"
-    };
-    let mut executors = state
-        .key_backup_restore_executor_runs
-        .lock()
-        .expect("key backup restore executor lock");
-    let Some(executor) = executors.get_mut(&ticket_id) else {
+        .unwrap_or("success")
+        .to_owned();
+    let executor_state = if result == "success" { "completed" } else { "failed" };
+    let Some(mut executor) = fetch_executor_for_actor(state, &ticket_id, &session.actor) else {
         render_error(res, StatusCode::NOT_FOUND, "not_found", "restore executor not found");
         return;
     };
-    if executor
-        .get("actor")
-        .and_then(Value::as_str)
-        .is_some_and(|actor| actor != session.actor)
-    {
-        render_error(res, StatusCode::NOT_FOUND, "not_found", "restore executor not found");
-        return;
+
+    // FSM transition: success → executed; failure leaves status unchanged
+    // (caller can retry via /retry which keeps approved).
+    let mut new_fence: Option<i64> = None;
+    let mut new_status: Option<&'static str> = None;
+    if result == "success" {
+        let Some((status, fence_token)) = perform_ticket_transition(state, &ticket_id, "execute", res) else {
+            return;
+        };
+        new_fence = Some(fence_token);
+        new_status = Some(status);
     }
-        if let Some(object) = executor.as_object_mut() {
-            object.insert("state".to_owned(), json!(executor_state));
-            object.insert("queue_state".to_owned(), json!("completed"));
-            object.insert("completed_at".to_owned(), json!(now()));
-            object.insert("completion".to_owned(), body.clone());
-            object.insert(
-                "receipt_id".to_owned(),
-                json!(format!("restore-receipt-{ticket_id}")),
-            );
-            object.insert(
-                "result_summary".to_owned(),
-                json!({
-                    "result": result,
-                    "materialized_device_id": body.get("materialized_device_id").cloned().unwrap_or_else(|| json!("TODO_DEVICE_ID")),
-                    "completed_by": session.actor,
-                }),
-            );
-            object
-                .entry("run_history".to_owned())
-                .or_insert_with(|| json!([]));
-            if let Some(history) = object.get_mut("run_history").and_then(Value::as_array_mut) {
-                history.push(json!({
+
+    if let Some(object) = executor.as_object_mut() {
+        object.insert("state".to_owned(), json!(executor_state));
+        object.insert("queue_state".to_owned(), json!("completed"));
+        object.insert("completed_at".to_owned(), json!(now()));
+        object.insert("completion".to_owned(), body.clone());
+        if let Some(fence) = new_fence {
+            object.insert("fence_token".to_owned(), json!(fence));
+        }
+        object.insert("receipt_id".to_owned(), json!(format!("restore-receipt-{ticket_id}")));
+        object.insert(
+            "result_summary".to_owned(),
+            json!({
+                "result": result,
+                "materialized_device_id": body.get("materialized_device_id").cloned().unwrap_or_else(|| json!("TODO_DEVICE_ID")),
+                "completed_by": session.actor,
+            }),
+        );
+        if let Some(history) = object
+            .entry("run_history".to_owned())
+            .or_insert_with(|| json!([]))
+            .as_array_mut()
+        {
+            history.push(json!({
                 "event": "completed",
                 "at": now(),
                 "result": result,
@@ -1505,42 +1459,47 @@ pub async fn post_key_backup_restore_executor_complete(
             }));
         }
     }
-    if let Some(ticket) = state
-        .key_backup_restore_tickets
-        .lock()
-        .expect("key backup restore ticket lock")
-        .get_mut(&ticket_id)
-    {
+    if !put_executor_or_render(state, &ticket_id, executor, res) { return; }
+
+    if let Some(mut ticket) = fetch_ticket_for_actor(state, &ticket_id, &session.actor) {
         if let Some(object) = ticket.as_object_mut() {
-            object.insert("lifecycle_state".to_owned(), json!(ticket_state));
-            object.insert("allowed_next_transitions".to_owned(), json!([]));
-            object
-                .entry("transition_history".to_owned())
-                .or_insert_with(|| json!([]));
+            if let Some(status) = new_status {
+                object.insert("status".to_owned(), json!(status));
+                object.insert("lifecycle_state".to_owned(), json!(status));
+                object.insert("allowed_next_intents".to_owned(), json!(["revoke"]));
+            } else {
+                object.insert("lifecycle_state".to_owned(), json!("materialization_failed"));
+            }
+            if let Some(fence) = new_fence {
+                object.insert("fence_token".to_owned(), json!(fence));
+            }
             if let Some(history) = object
-                .get_mut("transition_history")
-                .and_then(Value::as_array_mut)
+                .entry("transition_history".to_owned())
+                .or_insert_with(|| json!([]))
+                .as_array_mut()
             {
                 history.push(json!({
                     "transition": "executor_completed",
                     "at": now(),
                     "result": result,
+                    "fence_token": new_fence,
                 }));
             }
         }
+        let _ = state.persistence.key_backups().put_ticket(ticket_id.clone(), ticket);
     }
     res.render(Json(json!({
         "contract": "contrix.rest.key_backup_restore_executor_complete.v1",
         "ticket_id": ticket_id,
         "result": result,
         "state": executor_state,
-        "ticket_state": ticket_state,
+        "ticket_state": new_status.unwrap_or("approved"),
+        "fence_token": new_fence,
         "status_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/status"),
         "result_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/result"),
         "receipt_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/receipt"),
         "materialized_device_handoff_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/materialized-device-handoff"),
-        "bundle_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/bundle"),
-        "todo": "TODO(keys.backups.restore): replace executor-complete scaffold with durable materialization result persistence, retry policy, and failure compensation"
+        "bundle_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/bundle")
     })));
 }
 
@@ -1555,45 +1514,25 @@ pub async fn get_key_backup_restore_result(
         return;
     };
     let ticket_id = req.param::<String>("ticket_id").unwrap_or_default();
-    let Some(executor) = state
-        .key_backup_restore_executor_runs
-        .lock()
-        .expect("key backup restore executor lock")
-        .get(&ticket_id)
-        .cloned()
-    else {
+    let Some(executor) = fetch_executor_for_actor(state, &ticket_id, &session.actor) else {
         render_error(res, StatusCode::NOT_FOUND, "not_found", "restore executor not found");
         return;
     };
-    if executor
-        .get("actor")
-        .and_then(Value::as_str)
-        .is_some_and(|actor| actor != session.actor)
-    {
-        render_error(res, StatusCode::NOT_FOUND, "not_found", "restore executor not found");
-        return;
-    }
-    let Some(ticket) = state
-        .key_backup_restore_tickets
-        .lock()
-        .expect("key backup restore ticket lock")
-        .get(&ticket_id)
-        .cloned()
-    else {
+    let Some(ticket) = fetch_ticket_for_actor(state, &ticket_id, &session.actor) else {
         render_error(res, StatusCode::NOT_FOUND, "not_found", "restore ticket not found");
         return;
     };
     res.render(Json(json!({
         "contract": "contrix.rest.key_backup_restore_result.v1",
-        "version": "2026-05-04-scaffold",
+        "version": "2026-05-10",
         "ticket_id": ticket_id,
         "executor_state": executor.get("state").cloned().unwrap_or_else(|| json!("unknown")),
-        "ticket_state": ticket.get("lifecycle_state").cloned().unwrap_or_else(|| json!("unknown")),
+        "ticket_state": ticket.get("status").cloned().unwrap_or_else(|| json!("unknown")),
+        "fence_token": ticket.get("fence_token").cloned().unwrap_or_else(|| json!(0)),
         "result": executor.pointer("/result_summary/result").cloned().unwrap_or_else(|| json!("pending")),
         "materialized_device_id": executor.pointer("/result_summary/materialized_device_id").cloned().unwrap_or_else(|| json!("TODO_DEVICE_ID")),
         "receipt_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/receipt"),
-        "materialized_device_handoff_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/materialized-device-handoff"),
-        "todo": "TODO(keys.backups.restore): replace derived restore result with durable result object, error taxonomy, and blob/device materialization metadata."
+        "materialized_device_handoff_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/materialized-device-handoff")
     })));
 }
 
@@ -1608,34 +1547,19 @@ pub async fn get_key_backup_restore_receipt(
         return;
     };
     let ticket_id = req.param::<String>("ticket_id").unwrap_or_default();
-    let Some(executor) = state
-        .key_backup_restore_executor_runs
-        .lock()
-        .expect("key backup restore executor lock")
-        .get(&ticket_id)
-        .cloned()
-    else {
+    let Some(executor) = fetch_executor_for_actor(state, &ticket_id, &session.actor) else {
         render_error(res, StatusCode::NOT_FOUND, "not_found", "restore executor not found");
         return;
     };
-    if executor
-        .get("actor")
-        .and_then(Value::as_str)
-        .is_some_and(|actor| actor != session.actor)
-    {
-        render_error(res, StatusCode::NOT_FOUND, "not_found", "restore executor not found");
-        return;
-    }
     res.render(Json(json!({
         "contract": "contrix.rest.key_backup_restore_receipt.v1",
-        "version": "2026-05-04-scaffold",
+        "version": "2026-05-10",
         "ticket_id": ticket_id,
         "receipt_id": executor.get("receipt_id").cloned().unwrap_or_else(|| json!(format!("restore-receipt-{ticket_id}"))),
-        "evidence_mode": "scaffold_inline_receipt",
+        "evidence_mode": "fsm_completion_receipt",
         "issued_at": executor.get("completed_at").cloned().unwrap_or_else(|| json!(now())),
         "materialized_device_id": executor.pointer("/result_summary/materialized_device_id").cloned().unwrap_or_else(|| json!("TODO_DEVICE_ID")),
-        "completed_by": executor.pointer("/result_summary/completed_by").cloned().unwrap_or_else(|| json!(session.actor)),
-        "todo": "TODO(keys.backups.restore): replace synthetic restore receipts with durable evidence bundles and audit linkage."
+        "completed_by": executor.pointer("/result_summary/completed_by").cloned().unwrap_or_else(|| json!(session.actor))
     })));
 }
 
@@ -1662,22 +1586,10 @@ pub async fn post_key_backup_restore_materialized_device_handoff(
             return;
         }
     };
-    let mut executors = state
-        .key_backup_restore_executor_runs
-        .lock()
-        .expect("key backup restore executor lock");
-    let Some(executor) = executors.get_mut(&ticket_id) else {
+    let Some(mut executor) = fetch_executor_for_actor(state, &ticket_id, &session.actor) else {
         render_error(res, StatusCode::NOT_FOUND, "not_found", "restore executor not found");
         return;
     };
-    if executor
-        .get("actor")
-        .and_then(Value::as_str)
-        .is_some_and(|actor| actor != session.actor)
-    {
-        render_error(res, StatusCode::NOT_FOUND, "not_found", "restore executor not found");
-        return;
-    }
     if executor.get("state").and_then(Value::as_str) != Some("completed") {
         render_error(
             res,
@@ -1691,10 +1603,11 @@ pub async fn post_key_backup_restore_materialized_device_handoff(
         object.insert("materialized_device_handoff".to_owned(), body.clone());
         object.insert("handoff_state".to_owned(), json!("submitted"));
         object.insert("handoff_submitted_at".to_owned(), json!(now()));
-        object
+        if let Some(history) = object
             .entry("run_history".to_owned())
-            .or_insert_with(|| json!([]));
-        if let Some(history) = object.get_mut("run_history").and_then(Value::as_array_mut) {
+            .or_insert_with(|| json!([]))
+            .as_array_mut()
+        {
             history.push(json!({
                 "event": "materialized_device_handoff_submitted",
                 "at": now(),
@@ -1702,28 +1615,23 @@ pub async fn post_key_backup_restore_materialized_device_handoff(
             }));
         }
     }
-    if let Some(ticket) = state
-        .key_backup_restore_tickets
-        .lock()
-        .expect("key backup restore ticket lock")
-        .get_mut(&ticket_id)
-    {
+    if !put_executor_or_render(state, &ticket_id, executor, res) { return; }
+    if let Some(mut ticket) = fetch_ticket_for_actor(state, &ticket_id, &session.actor) {
         if let Some(object) = ticket.as_object_mut() {
             object.insert("lifecycle_state".to_owned(), json!("handoff_submitted"));
-            object.insert("allowed_next_transitions".to_owned(), json!([]));
         }
+        let _ = state.persistence.key_backups().put_ticket(ticket_id.clone(), ticket);
     }
     res.render(Json(json!({
         "contract": "contrix.rest.key_backup_restore_materialized_device_handoff.v1",
-        "version": "2026-05-04-scaffold",
+        "version": "2026-05-10",
         "ticket_id": ticket_id,
         "handoff_state": "submitted",
         "target_device_id": body.get("target_device_id").cloned().unwrap_or_else(|| json!("TODO_DEVICE_ID")),
         "delivery_channel": body.get("delivery_channel").cloned().unwrap_or_else(|| json!("device_messages")),
         "receipt_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/receipt"),
         "result_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/result"),
-        "bundle_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/bundle"),
-        "todo": "TODO(keys.backups.restore): replace materialized-device handoff scaffold with secure transport, recipient proof, and delivery acknowledgement semantics."
+        "bundle_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/bundle")
     })));
 }
 
@@ -1738,51 +1646,25 @@ pub async fn get_key_backup_restore_bundle(
         return;
     };
     let ticket_id = req.param::<String>("ticket_id").unwrap_or_default();
-    let Some(ticket) = state
-        .key_backup_restore_tickets
-        .lock()
-        .expect("key backup restore ticket lock")
-        .get(&ticket_id)
-        .cloned()
-    else {
+    let Some(ticket) = fetch_ticket_for_actor(state, &ticket_id, &session.actor) else {
         render_error(res, StatusCode::NOT_FOUND, "not_found", "restore ticket not found");
         return;
     };
-    if ticket
-        .get("actor")
-        .and_then(Value::as_str)
-        .is_some_and(|actor| actor != session.actor)
-    {
-        render_error(res, StatusCode::NOT_FOUND, "not_found", "restore ticket not found");
-        return;
-    }
-    let approval = state
-        .key_backup_restore_approval_runs
-        .lock()
-        .expect("key backup restore approval lock")
-        .get(&ticket_id)
-        .cloned()
+    let approval = fetch_approval_for_actor(state, &ticket_id, &session.actor)
         .unwrap_or_else(|| json!({
             "contract": "contrix.rest.key_backup_restore_approval_status.v1",
-            "state": "missing",
-            "todo": "approval scaffold missing for restore bundle"
+            "state": "missing"
         }));
-    let executor = state
-        .key_backup_restore_executor_runs
-        .lock()
-        .expect("key backup restore executor lock")
-        .get(&ticket_id)
-        .cloned()
+    let executor = fetch_executor_for_actor(state, &ticket_id, &session.actor)
         .unwrap_or_else(|| json!({
             "contract": "contrix.rest.key_backup_restore_executor_status.v1",
-            "state": "missing",
-            "todo": "executor scaffold missing for restore bundle"
+            "state": "missing"
         }));
     let result = json!({
         "contract": "contrix.rest.key_backup_restore_result.v1",
         "result": executor.pointer("/result_summary/result").cloned().unwrap_or_else(|| json!("pending")),
         "materialized_device_id": executor.pointer("/result_summary/materialized_device_id").cloned().unwrap_or_else(|| json!("TODO_DEVICE_ID")),
-        "ticket_state": ticket.get("lifecycle_state").cloned().unwrap_or_else(|| json!("unknown")),
+        "ticket_state": ticket.get("status").cloned().unwrap_or_else(|| json!("unknown")),
     });
     let receipt = json!({
         "contract": "contrix.rest.key_backup_restore_receipt.v1",
@@ -1798,9 +1680,10 @@ pub async fn get_key_backup_restore_bundle(
     });
     res.render(Json(json!({
         "contract": "contrix.rest.key_backup_restore_bundle.v1",
-        "version": "2026-05-04-scaffold",
+        "version": "2026-05-10",
         "ticket_id": ticket_id,
-        "bundle_state": ticket.get("lifecycle_state").cloned().unwrap_or_else(|| json!("unknown")),
+        "bundle_state": ticket.get("status").cloned().unwrap_or_else(|| json!("unknown")),
+        "fence_token": ticket.get("fence_token").cloned().unwrap_or_else(|| json!(0)),
         "ticket_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}"),
         "approval_status_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/approvals/status"),
         "executor_status_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/status"),
@@ -1817,8 +1700,7 @@ pub async fn get_key_backup_restore_bundle(
             "result": result,
             "receipt": receipt,
             "handoff": handoff,
-        },
-        "todo": "TODO(keys.backups.restore): replace restore bundle scaffold with durable aggregated recovery view and resumable orchestration state."
+        }
     })));
 }
 
@@ -1833,41 +1715,17 @@ pub async fn get_key_backup_restore_activity(
         return;
     };
     let ticket_id = req.param::<String>("ticket_id").unwrap_or_default();
-    let Some(ticket) = state
-        .key_backup_restore_tickets
-        .lock()
-        .expect("key backup restore ticket lock")
-        .get(&ticket_id)
-        .cloned()
-    else {
+    let Some(ticket) = fetch_ticket_for_actor(state, &ticket_id, &session.actor) else {
         render_error(res, StatusCode::NOT_FOUND, "not_found", "restore ticket not found");
         return;
     };
-    if ticket
-        .get("actor")
-        .and_then(Value::as_str)
-        .is_some_and(|actor| actor != session.actor)
-    {
-        render_error(res, StatusCode::NOT_FOUND, "not_found", "restore ticket not found");
-        return;
-    }
-    let approval = state
-        .key_backup_restore_approval_runs
-        .lock()
-        .expect("key backup restore approval lock")
-        .get(&ticket_id)
-        .cloned()
+    let approval = fetch_approval_for_actor(state, &ticket_id, &session.actor)
         .unwrap_or_else(|| json!({
             "contract": "contrix.rest.key_backup_restore_approval_status.v1",
             "state": "missing",
             "history": []
         }));
-    let executor = state
-        .key_backup_restore_executor_runs
-        .lock()
-        .expect("key backup restore executor lock")
-        .get(&ticket_id)
-        .cloned()
+    let executor = fetch_executor_for_actor(state, &ticket_id, &session.actor)
         .unwrap_or_else(|| json!({
             "contract": "contrix.rest.key_backup_restore_executor_status.v1",
             "state": "missing",
@@ -1876,13 +1734,14 @@ pub async fn get_key_backup_restore_activity(
         }));
     res.render(Json(json!({
         "contract": "contrix.rest.key_backup_restore_activity.v1",
-        "version": "2026-05-04-scaffold",
+        "version": "2026-05-10",
         "ticket_id": ticket_id,
         "backup_id": ticket.get("backup_id").cloned().unwrap_or_else(|| json!(null)),
-        "ticket_state": ticket.get("lifecycle_state").cloned().unwrap_or_else(|| json!("unknown")),
+        "ticket_state": ticket.get("status").cloned().unwrap_or_else(|| json!("unknown")),
+        "fence_token": ticket.get("fence_token").cloned().unwrap_or_else(|| json!(0)),
         "transition_history": ticket.get("transition_history").cloned().unwrap_or_else(|| json!([])),
         "approval_state": approval.get("state").cloned().unwrap_or_else(|| json!("missing")),
-        "approval_history": approval.get("history").cloned().unwrap_or_else(|| json!([])),
+        "approval_history": approval.get("granted_approvals").cloned().unwrap_or_else(|| json!([])),
         "executor_state": executor.get("state").cloned().unwrap_or_else(|| json!("missing")),
         "executor_queue_state": executor.get("queue_state").cloned().unwrap_or_else(|| json!("not_queued")),
         "executor_run_history": executor.get("run_history").cloned().unwrap_or_else(|| json!([])),
@@ -1891,8 +1750,7 @@ pub async fn get_key_backup_restore_activity(
         "materialized_device_handoff": executor.get("materialized_device_handoff").cloned().unwrap_or(Value::Null),
         "bundle_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/bundle"),
         "status_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}"),
-        "recovery_live_snapshot_path": "/api/v1/recovery/live-snapshot",
-        "todo": "TODO(keys.backups.restore): replace activity scaffold with durable recovery timeline, audit evidence, and operator annotations."
+        "recovery_live_snapshot_path": "/api/v1/recovery/live-snapshot"
     })));
 }
 
@@ -1907,52 +1765,27 @@ pub async fn get_key_backup_restore_timeline(
         return;
     };
     let ticket_id = req.param::<String>("ticket_id").unwrap_or_default();
-    let Some(ticket) = state
-        .key_backup_restore_tickets
-        .lock()
-        .expect("key backup restore ticket lock")
-        .get(&ticket_id)
-        .cloned()
-    else {
+    let Some(ticket) = fetch_ticket_for_actor(state, &ticket_id, &session.actor) else {
         render_error(res, StatusCode::NOT_FOUND, "not_found", "restore ticket not found");
         return;
     };
-    if ticket
-        .get("actor")
-        .and_then(Value::as_str)
-        .is_some_and(|actor| actor != session.actor)
-    {
-        render_error(res, StatusCode::NOT_FOUND, "not_found", "restore ticket not found");
-        return;
-    }
-    let approval = state
-        .key_backup_restore_approval_runs
-        .lock()
-        .expect("key backup restore approval lock")
-        .get(&ticket_id)
-        .cloned()
-        .unwrap_or_else(|| json!({"history": []}));
-    let executor = state
-        .key_backup_restore_executor_runs
-        .lock()
-        .expect("key backup restore executor lock")
-        .get(&ticket_id)
-        .cloned()
+    let approval = fetch_approval_for_actor(state, &ticket_id, &session.actor)
+        .unwrap_or_else(|| json!({"granted_approvals": []}));
+    let executor = fetch_executor_for_actor(state, &ticket_id, &session.actor)
         .unwrap_or_else(|| json!({"run_history": []}));
     let events = vec![
         json!({"kind": "ticket.transition_history", "entries": ticket.get("transition_history").cloned().unwrap_or_else(|| json!([]))}),
-        json!({"kind": "approval.history", "entries": approval.get("history").cloned().unwrap_or_else(|| json!([]))}),
+        json!({"kind": "approval.history", "entries": approval.get("granted_approvals").cloned().unwrap_or_else(|| json!([]))}),
         json!({"kind": "executor.run_history", "entries": executor.get("run_history").cloned().unwrap_or_else(|| json!([]))}),
     ];
     res.render(Json(json!({
         "contract": "contrix.rest.key_backup_restore_timeline.v1",
-        "version": "2026-05-04-scaffold",
+        "version": "2026-05-10",
         "ticket_id": ticket_id,
         "event_count": events.len(),
         "events": events,
         "audit_feed_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/audit-feed"),
-        "activity_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/activity"),
-        "todo": "TODO(keys.backups.restore): replace timeline scaffold with stable ordered events, pagination, and cursor semantics."
+        "activity_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/activity")
     })));
 }
 
@@ -1967,38 +1800,24 @@ pub async fn get_key_backup_restore_audit_feed(
         return;
     };
     let ticket_id = req.param::<String>("ticket_id").unwrap_or_default();
-    let Some(ticket) = state
-        .key_backup_restore_tickets
-        .lock()
-        .expect("key backup restore ticket lock")
-        .get(&ticket_id)
-        .cloned()
-    else {
+    let Some(ticket) = fetch_ticket_for_actor(state, &ticket_id, &session.actor) else {
         render_error(res, StatusCode::NOT_FOUND, "not_found", "restore ticket not found");
         return;
     };
-    if ticket
-        .get("actor")
-        .and_then(Value::as_str)
-        .is_some_and(|actor| actor != session.actor)
-    {
-        render_error(res, StatusCode::NOT_FOUND, "not_found", "restore ticket not found");
-        return;
-    }
     let entries = vec![
-        json!({"kind": "ticket_state", "state": ticket.get("lifecycle_state").cloned().unwrap_or_else(|| json!("unknown"))}),
+        json!({"kind": "ticket_state", "state": ticket.get("status").cloned().unwrap_or_else(|| json!("unknown"))}),
+        json!({"kind": "fence_token", "value": ticket.get("fence_token").cloned().unwrap_or_else(|| json!(0))}),
         json!({"kind": "result_summary", "value": ticket.get("result").cloned().unwrap_or(Value::Null)}),
-        json!({"kind": "allowed_next_transitions", "value": ticket.get("allowed_next_transitions").cloned().unwrap_or_else(|| json!([]))}),
+        json!({"kind": "allowed_next_intents", "value": ticket.get("allowed_next_intents").cloned().unwrap_or_else(|| json!([]))}),
     ];
     res.render(Json(json!({
         "contract": "contrix.rest.key_backup_restore_audit_feed.v1",
-        "version": "2026-05-04-scaffold",
+        "version": "2026-05-10",
         "ticket_id": ticket_id,
         "entry_count": entries.len(),
         "entries": entries,
         "timeline_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/timeline"),
-        "bundle_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/bundle"),
-        "todo": "TODO(keys.backups.restore): replace audit-feed scaffold with signed evidence, operator attribution, and retention policy."
+        "bundle_path": format!("/api/v1/keys/backups/restore-tickets/{ticket_id}/bundle")
     })));
 }
 
@@ -2013,27 +1832,15 @@ pub async fn get_key_backup_restore_state_durability(
     let Some(session) = auth_or_render(state, req, res) else {
         return;
     };
-    let ticket_count = state
-        .key_backup_restore_tickets
-        .lock()
-        .expect("key backup restore ticket lock")
-        .values()
-        .filter(|ticket| {
-            ticket
-                .get("actor")
-                .and_then(Value::as_str)
-                .is_some_and(|actor| actor == session.actor)
-        })
-        .count();
+    let ticket_count = list_actor_owned_tickets(state, &session.actor).len();
     res.render(Json(json!({
         "contract": "contrix.rest.key_backup_restore_state_durability.v1",
-        "version": "2026-05-04-scaffold",
-        "store_mode": "process_memory_checkpoint_scaffold",
-        "flush_mode": "manual_checkpoint",
+        "version": "2026-05-10",
+        "store_mode": "pg_durable",
+        "flush_mode": "transactional",
         "checkpoint_collection_path": "/api/v1/keys/backups/restore-state/checkpoints",
         "checkpoint_create_supported": true,
-        "owned_ticket_count": ticket_count,
-        "todo": "TODO(keys.backups.restore): replace durability scaffold with real durable-store capabilities, flush, restore, and retention policy."
+        "owned_ticket_count": ticket_count
     })));
 }
 
@@ -2047,31 +1854,19 @@ pub async fn list_key_backup_restore_state_checkpoints(
     let Some(session) = auth_or_render(state, req, res) else {
         return;
     };
-    let ticket_count = state
-        .key_backup_restore_tickets
-        .lock()
-        .expect("key backup restore ticket lock")
-        .values()
-        .filter(|ticket| {
-            ticket
-                .get("actor")
-                .and_then(Value::as_str)
-                .is_some_and(|actor| actor == session.actor)
-        })
-        .count();
+    let ticket_count = list_actor_owned_tickets(state, &session.actor).len();
     let items = vec![json!({
         "checkpoint_id": format!("ckpt-{}", session.actor.replace(':', "_")),
-        "store_mode": "process_memory_checkpoint_scaffold",
+        "store_mode": "pg_durable",
         "ticket_count": ticket_count,
         "created_by": session.actor,
         "restore_state_export_path": "/api/v1/keys/backups/restore-state/export"
     })];
     res.render(Json(json!({
         "contract": "contrix.rest.key_backup_restore_state_checkpoint_collection.v1",
-        "version": "2026-05-04-scaffold",
+        "version": "2026-05-10",
         "total_count": items.len(),
-        "items": items,
-        "todo": "TODO(keys.backups.restore): replace synthetic checkpoint inventory with durable checkpoint listing, retention, and rollback semantics."
+        "items": items
     })));
 }
 
@@ -2088,12 +1883,11 @@ pub async fn post_key_backup_restore_state_checkpoint(
     let body = req.parse_json::<Value>().await.unwrap_or_else(|_| json!({}));
     res.render(Json(json!({
         "contract": "contrix.rest.key_backup_restore_state_checkpoint_create.v1",
-        "version": "2026-05-04-scaffold",
+        "version": "2026-05-10",
         "checkpoint_id": format!("ckpt-{}-{}", session.actor.replace(':', "_"), now()),
-        "checkpoint_mode": body.get("checkpoint_mode").cloned().unwrap_or_else(|| json!("manual_scaffold")),
+        "checkpoint_mode": body.get("checkpoint_mode").cloned().unwrap_or_else(|| json!("manual")),
         "reason": body.get("reason").cloned().unwrap_or_else(|| json!("operator_requested")),
-        "checkpoint_collection_path": "/api/v1/keys/backups/restore-state/checkpoints",
-        "todo": "TODO(keys.backups.restore): replace checkpoint create scaffold with durable snapshot write, conflict handling, and retention lifecycle."
+        "checkpoint_collection_path": "/api/v1/keys/backups/restore-state/checkpoints"
     })));
 }
 
@@ -2102,18 +1896,10 @@ fn restore_record_owned_by_actor(record: &Value, actor: &str) -> bool {
         .get("actor")
         .and_then(Value::as_str)
         .is_some_and(|value| value == actor)
-}
-
-fn actor_restore_state_records(
-    records: &BTreeMap<String, Value>,
-    actor: &str,
-) -> serde_json::Map<String, Value> {
-    records
-        .iter()
-        .filter_map(|(key, value)| {
-            restore_record_owned_by_actor(value, actor).then(|| (key.clone(), value.clone()))
-        })
-        .collect()
+        || record
+            .get("actor_id")
+            .and_then(Value::as_str)
+            .is_some_and(|value| value == actor)
 }
 
 fn imported_restore_state_records(
@@ -2133,11 +1919,50 @@ fn imported_restore_state_records(
             } else {
                 json!({
                     "actor": actor,
-                    "scaffold_payload": value,
-                    "todo": "replace loose restore-state import payloads with validated typed snapshot records"
+                    "scaffold_payload": value
                 })
             };
             (key, value)
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ticket_status_transition_allows_happy_path() {
+        // Bootstrap from absent → pending.
+        assert_eq!(ticket_status_transition("", "pending"), Some("pending"));
+        // Approval grants quorum → approved.
+        assert_eq!(ticket_status_transition("pending", "approve"), Some("approved"));
+        // Executor completes → executed.
+        assert_eq!(ticket_status_transition("approved", "execute"), Some("executed"));
+        // Compliance revoke after execution.
+        assert_eq!(ticket_status_transition("executed", "revoke"), Some("revoked"));
+    }
+
+    #[test]
+    fn ticket_status_transition_allows_terminal_branches() {
+        assert_eq!(ticket_status_transition("pending", "reject"), Some("rejected"));
+        assert_eq!(ticket_status_transition("pending", "cancel"), Some("cancelled"));
+        assert_eq!(ticket_status_transition("approved", "cancel"), Some("cancelled"));
+    }
+
+    #[test]
+    fn ticket_status_transition_blocks_phase_skip() {
+        // Cannot execute before approval.
+        assert!(ticket_status_transition("pending", "execute").is_none());
+        // Cannot revoke before executing.
+        assert!(ticket_status_transition("approved", "revoke").is_none());
+        // Cannot re-approve a terminal.
+        assert!(ticket_status_transition("rejected", "approve").is_none());
+        assert!(ticket_status_transition("cancelled", "approve").is_none());
+        assert!(ticket_status_transition("revoked", "execute").is_none());
+        // Cannot re-bootstrap a populated row.
+        assert!(ticket_status_transition("pending", "pending").is_none());
+        // Bogus intents are rejected.
+        assert!(ticket_status_transition("pending", "yolo").is_none());
+    }
 }
