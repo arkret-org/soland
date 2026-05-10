@@ -171,6 +171,11 @@ pub trait TypingStore: Send + Sync {
 }
 
 /// Outbound push-bridge contract cache (`bridge_describe_url` → snapshot).
+///
+/// C33.1 (T0-3a): the cache row doubles as the canonical gateway-contract
+/// snapshot. `record_contract_snapshot` lands a digest+etag+trust_level,
+/// `current_contract` reads it back, and `verify_contract_freshness` is the
+/// fail-closed gate the push outbound publish path calls before fan-out.
 pub trait PushBridgeCacheStore: Send + Sync {
     fn get(&self, bridge_describe_url: &str)
     -> PersistenceResult<Option<OutboundPushBridgeCacheRecord>>;
@@ -185,6 +190,71 @@ pub trait PushBridgeCacheStore: Send + Sync {
     fn len(&self) -> PersistenceResult<usize>;
     fn is_empty(&self) -> PersistenceResult<bool> {
         Ok(self.len()? == 0)
+    }
+
+    /// Persist a fresh contract snapshot for `gateway_describe_url`. Bumps
+    /// `freshness_at` to NOW, sets `trust_level`, and stores `digest`+`etag`.
+    /// Creates a new row if no prior snapshot exists; otherwise overwrites
+    /// the digest/etag/trust/freshness columns in place (rip-and-replace).
+    fn record_contract_snapshot(
+        &self,
+        gateway_describe_url: &str,
+        digest: &str,
+        etag: &str,
+        trust_level: &str,
+    ) -> PersistenceResult<()>;
+
+    /// Read the current persisted contract snapshot for a gateway, if any.
+    fn current_contract(
+        &self,
+        gateway_describe_url: &str,
+    ) -> PersistenceResult<Option<OutboundPushBridgeCacheRecord>>;
+
+    /// Compare a freshly observed contract digest against the persisted
+    /// snapshot. Used by `push_notify` (and any other outbound publish
+    /// surface) to fail closed before fan-out. The decision is:
+    ///
+    /// * `Match`           — observed digest matches the persisted digest,
+    ///                       trust_level is `trusted`, freshness within
+    ///                       `max_age`. Caller may proceed.
+    /// * `Stale`           — digest matches but `freshness_at` is older
+    ///                       than `max_age`. Caller must NOT proceed.
+    /// * `DigestMismatch`  — persisted snapshot exists but `observed_digest`
+    ///                       differs (or persisted trust_level is `revoked`).
+    /// * `Unknown`         — no snapshot persisted, OR the snapshot is still
+    ///                       `pending` / has empty digest. Fail-closed.
+    fn verify_contract_freshness(
+        &self,
+        gateway_describe_url: &str,
+        observed_digest: &str,
+        max_age: chrono::Duration,
+    ) -> PersistenceResult<DriftResult>;
+}
+
+/// Outcome of `PushBridgeCacheStore::verify_contract_freshness`. The push
+/// outbound publish path treats anything other than `Match` as fail-closed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DriftResult {
+    /// Observed digest matches a trusted, fresh snapshot.
+    Match,
+    /// Digest matches but the snapshot is older than `max_age`.
+    Stale,
+    /// Persisted digest differs from observed (or snapshot revoked).
+    DigestMismatch,
+    /// No snapshot persisted, or snapshot still pending / empty digest.
+    Unknown,
+}
+
+impl DriftResult {
+    /// Stable string label suitable for audit `outcome` fields and the
+    /// `drift_result` field on rejection responses.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            DriftResult::Match => "match",
+            DriftResult::Stale => "stale",
+            DriftResult::DigestMismatch => "digest_mismatch",
+            DriftResult::Unknown => "unknown",
+        }
     }
 }
 
@@ -1454,6 +1524,94 @@ impl PushBridgeCacheStore for MemoryPushBridgeCacheStore {
     fn len(&self) -> PersistenceResult<usize> {
         Ok(self.data.lock().expect("push bridge cache lock").len())
     }
+
+    fn record_contract_snapshot(
+        &self,
+        gateway_describe_url: &str,
+        digest: &str,
+        etag: &str,
+        trust_level: &str,
+    ) -> PersistenceResult<()> {
+        let mut data = self.data.lock().expect("push bridge cache lock");
+        let now = Utc::now();
+        if let Some(existing) = data.get_mut(gateway_describe_url) {
+            existing.contract_digest = digest.to_owned();
+            existing.etag = etag.to_owned();
+            existing.trust_level = trust_level.to_owned();
+            existing.freshness_at = now;
+        } else {
+            data.insert(
+                gateway_describe_url.to_owned(),
+                OutboundPushBridgeCacheRecord {
+                    push_gateway_url: gateway_describe_url.to_owned(),
+                    service_base_url: gateway_describe_url.to_owned(),
+                    bridge_describe_url: gateway_describe_url.to_owned(),
+                    fetch_state: "snapshot_recorded".to_owned(),
+                    cache_state: "snapshot_recorded".to_owned(),
+                    contract_digest: digest.to_owned(),
+                    fetched_at: now,
+                    remote_contract: serde_json::Value::Null,
+                    trust_level: trust_level.to_owned(),
+                    freshness_at: now,
+                    etag: etag.to_owned(),
+                },
+            );
+        }
+        Ok(())
+    }
+
+    fn current_contract(
+        &self,
+        gateway_describe_url: &str,
+    ) -> PersistenceResult<Option<OutboundPushBridgeCacheRecord>> {
+        Ok(self
+            .data
+            .lock()
+            .expect("push bridge cache lock")
+            .get(gateway_describe_url)
+            .cloned())
+    }
+
+    fn verify_contract_freshness(
+        &self,
+        gateway_describe_url: &str,
+        observed_digest: &str,
+        max_age: chrono::Duration,
+    ) -> PersistenceResult<DriftResult> {
+        let snapshot = self
+            .data
+            .lock()
+            .expect("push bridge cache lock")
+            .get(gateway_describe_url)
+            .cloned();
+        Ok(evaluate_drift(snapshot.as_ref(), observed_digest, max_age))
+    }
+}
+
+/// Pure decision function shared by Memory + Pg backends. Keeps the
+/// fail-closed semantics in one place so the two impls cannot drift.
+fn evaluate_drift(
+    snapshot: Option<&OutboundPushBridgeCacheRecord>,
+    observed_digest: &str,
+    max_age: chrono::Duration,
+) -> DriftResult {
+    let Some(record) = snapshot else {
+        return DriftResult::Unknown;
+    };
+    if record.contract_digest.is_empty() || record.trust_level == "pending" {
+        return DriftResult::Unknown;
+    }
+    if record.trust_level == "revoked" {
+        return DriftResult::DigestMismatch;
+    }
+    if record.contract_digest != observed_digest {
+        return DriftResult::DigestMismatch;
+    }
+    let age = Utc::now().signed_duration_since(record.freshness_at);
+    if age > max_age {
+        return DriftResult::Stale;
+    }
+    DriftResult::Match
 }
 
 #[derive(Default)]
@@ -2556,7 +2714,8 @@ impl PushBridgeCacheStore for PgPushBridgeCacheStore {
         let mut conn = pg_conn(&self.pool)?;
         sql_query(
             "SELECT push_gateway_url, service_base_url, bridge_describe_url, fetch_state, \
-             cache_state, contract_digest, fetched_at, remote_contract \
+             cache_state, contract_digest, fetched_at, remote_contract, \
+             trust_level, freshness_at, etag \
              FROM push_bridge_cache WHERE cache_key = $1",
         )
         .bind::<Text, _>(bridge_describe_url)
@@ -2575,8 +2734,9 @@ impl PushBridgeCacheStore for PgPushBridgeCacheStore {
         sql_query(
             "INSERT INTO push_bridge_cache \
              (cache_key, push_gateway_url, service_base_url, bridge_describe_url, fetch_state, \
-              cache_state, contract_digest, fetched_at, remote_contract, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW()) \
+              cache_state, contract_digest, fetched_at, remote_contract, \
+              trust_level, freshness_at, etag, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW()) \
              ON CONFLICT (cache_key) DO UPDATE SET \
                 push_gateway_url = EXCLUDED.push_gateway_url, \
                 service_base_url = EXCLUDED.service_base_url, \
@@ -2586,6 +2746,9 @@ impl PushBridgeCacheStore for PgPushBridgeCacheStore {
                 contract_digest = EXCLUDED.contract_digest, \
                 fetched_at = EXCLUDED.fetched_at, \
                 remote_contract = EXCLUDED.remote_contract, \
+                trust_level = EXCLUDED.trust_level, \
+                freshness_at = EXCLUDED.freshness_at, \
+                etag = EXCLUDED.etag, \
                 updated_at = NOW()",
         )
         .bind::<Text, _>(bridge_describe_url)
@@ -2597,6 +2760,9 @@ impl PushBridgeCacheStore for PgPushBridgeCacheStore {
         .bind::<Text, _>(&record.contract_digest)
         .bind::<Timestamptz, _>(record.fetched_at)
         .bind::<Jsonb, _>(&record.remote_contract)
+        .bind::<Text, _>(&record.trust_level)
+        .bind::<Timestamptz, _>(record.freshness_at)
+        .bind::<Text, _>(&record.etag)
         .execute(&mut conn)
         .map(|_| ())
         .map_err(PersistenceError::from)
@@ -2622,7 +2788,8 @@ impl PushBridgeCacheStore for PgPushBridgeCacheStore {
         let mut conn = pg_conn(&self.pool)?;
         sql_query(
             "SELECT push_gateway_url, service_base_url, bridge_describe_url, fetch_state, \
-             cache_state, contract_digest, fetched_at, remote_contract \
+             cache_state, contract_digest, fetched_at, remote_contract, \
+             trust_level, freshness_at, etag \
              FROM push_bridge_cache ORDER BY cache_key",
         )
         .load::<PushBridgeCacheRow>(&mut conn)
@@ -2641,6 +2808,59 @@ impl PushBridgeCacheStore for PgPushBridgeCacheStore {
             .get_result::<CountRow>(&mut conn)
             .map(|row| row.count as usize)
             .map_err(PersistenceError::from)
+    }
+
+    fn record_contract_snapshot(
+        &self,
+        gateway_describe_url: &str,
+        digest: &str,
+        etag: &str,
+        trust_level: &str,
+    ) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool)?;
+        // Upsert: if a row already exists, only bump digest/etag/trust/freshness;
+        // otherwise create a stub row that mirrors the gateway URL into the
+        // describe-URL columns until the next live fetch fills in the contract.
+        sql_query(
+            "INSERT INTO push_bridge_cache \
+             (cache_key, push_gateway_url, service_base_url, bridge_describe_url, fetch_state, \
+              cache_state, contract_digest, fetched_at, remote_contract, \
+              trust_level, freshness_at, etag, updated_at) \
+             VALUES ($1, $1, $1, $1, 'snapshot_recorded', 'snapshot_recorded', \
+                     $2, NOW(), '{}'::jsonb, $4, NOW(), $3, NOW()) \
+             ON CONFLICT (cache_key) DO UPDATE SET \
+                contract_digest = EXCLUDED.contract_digest, \
+                etag = EXCLUDED.etag, \
+                trust_level = EXCLUDED.trust_level, \
+                freshness_at = NOW(), \
+                updated_at = NOW()",
+        )
+        .bind::<Text, _>(gateway_describe_url)
+        .bind::<Text, _>(digest)
+        .bind::<Text, _>(etag)
+        .bind::<Text, _>(trust_level)
+        .execute(&mut conn)
+        .map(|_| ())
+        .map_err(PersistenceError::from)
+    }
+
+    fn current_contract(
+        &self,
+        gateway_describe_url: &str,
+    ) -> PersistenceResult<Option<OutboundPushBridgeCacheRecord>> {
+        // Same projection as `get`; named separately so the call site reads
+        // intent (drift verification, not raw cache lookup).
+        self.get(gateway_describe_url)
+    }
+
+    fn verify_contract_freshness(
+        &self,
+        gateway_describe_url: &str,
+        observed_digest: &str,
+        max_age: chrono::Duration,
+    ) -> PersistenceResult<DriftResult> {
+        let snapshot = self.current_contract(gateway_describe_url)?;
+        Ok(evaluate_drift(snapshot.as_ref(), observed_digest, max_age))
     }
 }
 
@@ -4638,6 +4858,12 @@ struct PushBridgeCacheRow {
     fetched_at: chrono::DateTime<chrono::Utc>,
     #[diesel(sql_type = Jsonb)]
     remote_contract: Value,
+    #[diesel(sql_type = Text)]
+    trust_level: String,
+    #[diesel(sql_type = Timestamptz)]
+    freshness_at: chrono::DateTime<chrono::Utc>,
+    #[diesel(sql_type = Text)]
+    etag: String,
 }
 
 impl From<PushBridgeCacheRow> for OutboundPushBridgeCacheRecord {
@@ -4651,6 +4877,9 @@ impl From<PushBridgeCacheRow> for OutboundPushBridgeCacheRecord {
             contract_digest: row.contract_digest,
             fetched_at: row.fetched_at,
             remote_contract: row.remote_contract,
+            trust_level: row.trust_level,
+            freshness_at: row.freshness_at,
+            etag: row.etag,
         }
     }
 }
@@ -4842,6 +5071,9 @@ mod tests {
                 "version": "v1.0",
                 "provider_capabilities_version": "2026-05-07",
             }),
+            trust_level: "trusted".to_owned(),
+            freshness_at: now,
+            etag: "W/\"v1\"".to_owned(),
         };
 
         store.put(url, record.clone()).unwrap();
@@ -4869,6 +5101,144 @@ mod tests {
         assert!(store.delete(url).unwrap());
         assert!(!store.delete(url).unwrap());
         assert!(store.is_empty().unwrap());
+    }
+
+    // ── C33.1 (T0-3a) ──────────────────────────────────────────────────────
+    // Drift policy: `record_contract_snapshot` + `verify_contract_freshness`
+    // are the fail-closed gate the push outbound publish path leans on.
+    // Memory backend asserts the decision matrix; Pg parity rides on the
+    // trait surface (same `evaluate_drift` callee).
+
+    #[test]
+    fn push_bridge_record_contract_snapshot_first_time_stored_pending_then_trusted() {
+        let store = MemoryPushBridgeCacheStore::new();
+        let url = "https://floria.example/api/v1/push/bridge/describe";
+
+        // First snapshot: pending trust → stored, but verify rejects as Unknown.
+        store
+            .record_contract_snapshot(url, "sha256:v1", "W/\"v1\"", "pending")
+            .unwrap();
+        let stored = store.current_contract(url).unwrap().unwrap();
+        assert_eq!(stored.contract_digest, "sha256:v1");
+        assert_eq!(stored.etag, "W/\"v1\"");
+        assert_eq!(stored.trust_level, "pending");
+        assert_eq!(
+            store
+                .verify_contract_freshness(url, "sha256:v1", chrono::Duration::hours(1))
+                .unwrap(),
+            DriftResult::Unknown,
+            "pending snapshot must fail closed even with matching digest",
+        );
+
+        // Promote to trusted → match.
+        store
+            .record_contract_snapshot(url, "sha256:v1", "W/\"v1\"", "trusted")
+            .unwrap();
+        assert_eq!(
+            store
+                .verify_contract_freshness(url, "sha256:v1", chrono::Duration::hours(1))
+                .unwrap(),
+            DriftResult::Match,
+        );
+    }
+
+    #[test]
+    fn push_bridge_verify_contract_freshness_digest_match() {
+        let store = MemoryPushBridgeCacheStore::new();
+        let url = "https://floria.example/api/v1/push/bridge/describe";
+        store
+            .record_contract_snapshot(url, "sha256:abc", "etag-abc", "trusted")
+            .unwrap();
+        let result = store
+            .verify_contract_freshness(url, "sha256:abc", chrono::Duration::hours(24))
+            .unwrap();
+        assert_eq!(result, DriftResult::Match);
+    }
+
+    #[test]
+    fn push_bridge_verify_contract_freshness_digest_mismatch_rejected() {
+        let store = MemoryPushBridgeCacheStore::new();
+        let url = "https://floria.example/api/v1/push/bridge/describe";
+        store
+            .record_contract_snapshot(url, "sha256:abc", "etag-abc", "trusted")
+            .unwrap();
+        let result = store
+            .verify_contract_freshness(url, "sha256:rotated", chrono::Duration::hours(24))
+            .unwrap();
+        assert_eq!(
+            result,
+            DriftResult::DigestMismatch,
+            "rotated upstream digest must trigger fail-closed",
+        );
+    }
+
+    #[test]
+    fn push_bridge_verify_contract_freshness_stale_rejected() {
+        let store = MemoryPushBridgeCacheStore::new();
+        let url = "https://floria.example/api/v1/push/bridge/describe";
+        store
+            .record_contract_snapshot(url, "sha256:abc", "etag-abc", "trusted")
+            .unwrap();
+        // Force-age the persisted snapshot by rewriting freshness_at into the
+        // distant past. Mirrors what would happen if the refresh worker fell
+        // behind for several days.
+        {
+            let mut data = store.data.lock().unwrap();
+            let record = data.get_mut(url).unwrap();
+            record.freshness_at = Utc::now() - chrono::Duration::days(7);
+        }
+        let result = store
+            .verify_contract_freshness(url, "sha256:abc", chrono::Duration::hours(24))
+            .unwrap();
+        assert_eq!(
+            result,
+            DriftResult::Stale,
+            "snapshot older than max_age must fail closed even with matching digest",
+        );
+    }
+
+    #[test]
+    fn push_bridge_verify_contract_freshness_unknown_gateway_rejected() {
+        let store = MemoryPushBridgeCacheStore::new();
+        let result = store
+            .verify_contract_freshness(
+                "https://never-seen.example/api/v1/push/bridge/describe",
+                "sha256:abc",
+                chrono::Duration::hours(24),
+            )
+            .unwrap();
+        assert_eq!(
+            result,
+            DriftResult::Unknown,
+            "unknown gateway must default to fail-closed (no implicit trust)",
+        );
+    }
+
+    #[test]
+    fn push_bridge_verify_contract_freshness_revoked_snapshot_rejected() {
+        let store = MemoryPushBridgeCacheStore::new();
+        let url = "https://floria.example/api/v1/push/bridge/describe";
+        store
+            .record_contract_snapshot(url, "sha256:abc", "etag-abc", "trusted")
+            .unwrap();
+        // Revocation flips trust state; even a digest-match must be rejected.
+        store
+            .record_contract_snapshot(url, "sha256:abc", "etag-abc", "revoked")
+            .unwrap();
+        let result = store
+            .verify_contract_freshness(url, "sha256:abc", chrono::Duration::hours(24))
+            .unwrap();
+        assert_eq!(result, DriftResult::DigestMismatch);
+    }
+
+    #[test]
+    fn push_bridge_drift_result_label_is_stable_for_audit() {
+        // Audit consumers key off `DriftResult::as_str`; lock the labels so a
+        // future rename doesn't silently break dashboards.
+        assert_eq!(DriftResult::Match.as_str(), "match");
+        assert_eq!(DriftResult::Stale.as_str(), "stale");
+        assert_eq!(DriftResult::DigestMismatch.as_str(), "digest_mismatch");
+        assert_eq!(DriftResult::Unknown.as_str(), "unknown");
     }
 
     // ── Round 24 — Memory parity tests for the new sub-stores. ────────────

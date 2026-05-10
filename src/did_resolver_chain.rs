@@ -10,14 +10,16 @@
 //! 1. [`DidUuidResolver`] — first because uuid DIDs are local-only,
 //!    deterministic, and never need an upstream call.
 //! 2. [`DidWebvhResolver`] — only inserted when
-//!    [`AppConfig::starid_webvh_resolver_url`] is `Some(_)`. Production
-//!    deployments configure `SERVERX_STARID_WEBVH_RESOLVER_URL` to point
-//!    at the starid instance that hosts `did.json` /  `did.jsonl` for
-//!    `did:webvh:` DIDs (per starid `_todos.md` "Production resolver
-//!    chain"). The SDK resolver is a cache — production ingestion still
-//!    requires a separate fetcher to call `insert_from_https_response` /
-//!    `ingest_log` (tracked separately as a follow-up; the chain
-//!    placement here is the precondition for that work).
+//!    [`AppConfig::starid_webvh_resolver_active`] is `true`. The active
+//!    flag is set at boot by `main.rs` after [`probe_starid_describe`]
+//!    succeeds against the configured `SERVERX_STARID_WEBVH_RESOLVER_URL`.
+//!    The URL itself records admin intent and is preserved on probe
+//!    failure (so `/identity/describe` can keep advertising the profile
+//!    for sibling-service discovery). The SDK resolver is a cache —
+//!    production ingestion still requires a separate fetcher to call
+//!    `insert_from_https_response` / `ingest_log` (tracked separately as
+//!    a follow-up; the chain placement here is the precondition for that
+//!    work).
 //! 3. [`DidWebResolver`] — generic `did:web:` fallback. Placed AFTER
 //!    `DidWebvhResolver` so a `did:webvh:...` DID never falls through
 //!    here (DidWebResolver does not support webvh, but ordering keeps
@@ -40,14 +42,14 @@ use std::time::Duration;
 use crate::config::AppConfig;
 
 /// Build the production `CompositeDidResolver` chain for `AppState`.
-/// Honors the `did_resolver_allow_methods` filter and the optional
-/// `starid_webvh_resolver_url` toggle.
+/// Honors the `did_resolver_allow_methods` filter and the
+/// `starid_webvh_resolver_active` runtime liveness flag.
 pub fn build_did_resolver_chain(config: &AppConfig) -> CompositeDidResolver {
     let mut resolver = CompositeDidResolver::new();
     if method_allowed(config, "uuid") {
         resolver.push(DidUuidResolver::new());
     }
-    if method_allowed(config, "webvh") && config.starid_webvh_resolver_url.is_some() {
+    if method_allowed(config, "webvh") && config.starid_webvh_resolver_active {
         resolver.push(DidWebvhResolver::new());
     }
     if method_allowed(config, "web") {
@@ -75,12 +77,14 @@ fn method_allowed(config: &AppConfig, method: &str) -> bool {
 /// `Ok(())` only when the HTTP GET returns a 2xx response in under
 /// `timeout`.
 ///
-/// On the boot path (see `main.rs`), the caller catches `Err(_)` and
-/// clears `config.starid_webvh_resolver_url = None` so
-/// [`build_did_resolver_chain`] omits the webvh resolver. This keeps a
-/// misconfigured deployment from silently breaking `did:webvh` lookups —
-/// the chain reports `not supported` for `did:webvh` rather than dialing
-/// an unreachable endpoint per request.
+/// On the boot path (see `main.rs`), the caller flips
+/// `config.starid_webvh_resolver_active = true` only on `Ok(())`. On `Err(_)`
+/// the flag stays `false` (the URL itself is preserved so
+/// `/identity/describe` can keep advertising the configured profile for
+/// sibling-service discovery). [`build_did_resolver_chain`] consults the
+/// active flag — not the URL — so a misconfigured deployment does not
+/// silently break `did:webvh` lookups: the chain reports `not supported`
+/// for `did:webvh` rather than dialing an unreachable endpoint per request.
 pub async fn probe_starid_describe(url: &str, timeout: Duration) -> Result<(), String> {
     let trimmed = url.trim_end_matches('/');
     let describe_url = format!("{trimmed}/describe");
@@ -127,6 +131,7 @@ mod tests {
                 "webvh".to_owned(),
             ],
             starid_webvh_resolver_url: None,
+            starid_webvh_resolver_active: false,
             jws_replay_window_seconds: 300,
             jws_replay_window_per_family: std::collections::BTreeMap::new(),
             lattice_first: false,
@@ -148,9 +153,10 @@ mod tests {
     }
 
     #[test]
-    fn chain_includes_webvh_resolver_when_url_configured() {
+    fn chain_includes_webvh_resolver_when_active() {
         let mut config = base_config();
         config.starid_webvh_resolver_url = Some("https://starid.example".to_owned());
+        config.starid_webvh_resolver_active = true;
         let chain = build_did_resolver_chain(&config);
 
         // The webvh resolver claims `supports()` purely on DID method +
@@ -159,14 +165,34 @@ mod tests {
         // a webvh resolver is in the chain.
         assert!(
             chain.supports(&sample_webvh_did()),
-            "chain should support did:webvh when starid url is configured"
+            "chain should support did:webvh when starid resolver is active"
         );
+    }
+
+    #[test]
+    fn chain_omits_webvh_resolver_when_inactive_even_if_url_set() {
+        // C36.2 — admin set the URL (intent) but the boot probe failed,
+        // so `active` stays false. The chain MUST NOT mount the resolver,
+        // but `/identity/describe` keeps advertising the profile (tested
+        // separately in `routing/identity.rs`).
+        let mut config = base_config();
+        config.starid_webvh_resolver_url = Some("https://starid.example".to_owned());
+        config.starid_webvh_resolver_active = false;
+        let chain = build_did_resolver_chain(&config);
+
+        assert!(
+            !chain.supports(&sample_webvh_did()),
+            "chain must NOT support did:webvh when active flag is false"
+        );
+        // The other methods should still be reachable.
+        assert!(chain.supports(&sample_web_did()));
     }
 
     #[test]
     fn chain_omits_webvh_resolver_when_url_absent() {
         let mut config = base_config();
         config.starid_webvh_resolver_url = None;
+        config.starid_webvh_resolver_active = false;
         let chain = build_did_resolver_chain(&config);
 
         assert!(
@@ -187,6 +213,7 @@ mod tests {
         // intent and protects against future fallback-style behavior.
         let mut config = base_config();
         config.starid_webvh_resolver_url = Some("https://starid.example".to_owned());
+        config.starid_webvh_resolver_active = true;
         let chain = build_did_resolver_chain(&config);
 
         // Resolver returns `Err("did:webvh document not cached")` from
@@ -204,11 +231,12 @@ mod tests {
 
     #[test]
     fn did_resolver_allow_methods_filter_applies_to_webvh() {
-        // allow list excludes "webvh" → resolver omitted even with URL set.
+        // allow list excludes "webvh" → resolver omitted even when active.
         let mut config = base_config();
         config.did_resolver_allow_methods =
             vec!["web".to_owned(), "key".to_owned(), "uuid".to_owned()];
         config.starid_webvh_resolver_url = Some("https://starid.example".to_owned());
+        config.starid_webvh_resolver_active = true;
         let chain = build_did_resolver_chain(&config);
         assert!(
             !chain.supports(&sample_webvh_did()),
@@ -224,6 +252,7 @@ mod tests {
         let mut config = base_config();
         config.did_resolver_allow_methods.clear();
         config.starid_webvh_resolver_url = Some("https://starid.example".to_owned());
+        config.starid_webvh_resolver_active = true;
         let chain = build_did_resolver_chain(&config);
         assert!(chain.supports(&sample_webvh_did()));
         assert!(chain.supports(&sample_web_did()));

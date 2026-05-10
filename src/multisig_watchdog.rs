@@ -397,6 +397,7 @@ mod tests {
             session_grant_introspection_bearer: None,
             did_resolver_allow_methods: vec!["web".to_owned(), "key".to_owned()],
             starid_webvh_resolver_url: None,
+            starid_webvh_resolver_active: false,
             jws_replay_window_seconds: 0,
             jws_replay_window_per_family: AppConfig::default_replay_overrides(),
             lattice_first: true,

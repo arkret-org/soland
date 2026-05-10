@@ -393,6 +393,18 @@ pub struct OutboundPushBridgeCacheRecord {
     pub contract_digest: String,
     pub fetched_at: chrono::DateTime<chrono::Utc>,
     pub remote_contract: Value,
+    /// Explicit trust state for the cached snapshot. C33.1 introduces
+    /// `pending` / `trusted` / `revoked` so `verify_contract_freshness` can
+    /// fail-closed when a snapshot has not yet been promoted to trusted.
+    pub trust_level: String,
+    /// Last time we affirmatively re-checked the upstream contract; bumped
+    /// independently from `fetched_at` so freshness/age policy can reject
+    /// snapshots that haven't been re-verified within `max_age`.
+    pub freshness_at: chrono::DateTime<chrono::Utc>,
+    /// Opaque server-issued ETag from the upstream describe response.
+    /// Compared alongside `contract_digest` so a same-digest-but-rotated
+    /// etag still trips drift fail-closed.
+    pub etag: String,
 }
 
 #[derive(Clone, Debug)]

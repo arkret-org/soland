@@ -12,7 +12,19 @@ pub struct AppConfig {
     pub session_grant_introspection_url: Option<String>,
     pub session_grant_introspection_bearer: Option<String>,
     pub did_resolver_allow_methods: Vec<String>,
+    /// Configured starid `did:webvh` resolver URL. Records **admin intent** —
+    /// always reflects whatever was passed via `SERVERX_STARID_WEBVH_RESOLVER_URL`,
+    /// regardless of whether the upstream is currently reachable. The `/identity/describe`
+    /// handler surfaces this as `starid_profile.enabled` so admin / sibling services
+    /// can discover the configured profile even when the upstream is down.
     pub starid_webvh_resolver_url: Option<String>,
+    /// C36.2 — runtime liveness flag for the `did:webvh` resolver chain entry.
+    /// `true` only when [`probe_starid_describe`] succeeded at boot; consumed by
+    /// [`build_did_resolver_chain`] to decide whether to actually mount the
+    /// `DidWebvhResolver` in the chain. Decoupling intent (`starid_webvh_resolver_url`)
+    /// from liveness (`starid_webvh_resolver_active`) prevents the boot probe
+    /// from silently disabling profile discovery — the bug surfaced in C36.2.
+    pub starid_webvh_resolver_active: bool,
     /// C10.B (2026-05-09 十二轮) JWS replay protection window in seconds.
     /// Move and Anchor signatures whose signed `hlc` is older than
     /// `now - replay_window_seconds` OR newer than `now +
@@ -213,6 +225,11 @@ impl AppConfig {
             session_grant_introspection_bearer,
             did_resolver_allow_methods,
             starid_webvh_resolver_url,
+            // C36.2 — boot probe in `main.rs` flips this to true on success.
+            // Default false: until proven reachable, the resolver is not mounted
+            // even if the URL is configured. Intent (URL) and liveness (active)
+            // are independent.
+            starid_webvh_resolver_active: false,
             jws_replay_window_seconds,
             jws_replay_window_per_family: Self::default_replay_overrides(),
             lattice_first,

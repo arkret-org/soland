@@ -275,7 +275,14 @@ pub async fn outbound_push_bridge_fetch(
         .send()
         .await;
     match response {
-        Ok(response) if response.status().is_success() => match response.json::<Value>().await {
+        Ok(response) if response.status().is_success() => {
+            let etag = response
+                .headers()
+                .get(reqwest::header::ETAG)
+                .and_then(|value| value.to_str().ok())
+                .map(ToOwned::to_owned)
+                .unwrap_or_default();
+            match response.json::<Value>().await {
             Ok(remote_contract) => {
                 let contract_digest = sha256_hex(
                     &serde_json::to_vec(&remote_contract).unwrap_or_else(|_| b"{}".to_vec()),
@@ -303,6 +310,9 @@ pub async fn outbound_push_bridge_fetch(
                     contract_digest: contract_digest.clone(),
                     fetched_at,
                     remote_contract: remote_contract.clone(),
+                    trust_level: "trusted".to_owned(),
+                    freshness_at: fetched_at,
+                    etag: etag.clone(),
                 };
                 if let Err(error) = state
                     .persistence
@@ -323,6 +333,9 @@ pub async fn outbound_push_bridge_fetch(
                         &record.remote_contract,
                     ),
                     remote_contract: Some(remote_contract),
+                    trust_level: record.trust_level.clone(),
+                    freshness_at: Some(record.freshness_at),
+                    etag,
                     todos: vec![
                         "TODO(push-outbound): validate fetched auth/privacy modes before enabling signed delivery".to_owned(),
                         "TODO(push-outbound): persist cache entries outside process memory and attach freshness/etag metadata".to_owned(),
@@ -339,7 +352,8 @@ pub async fn outbound_push_bridge_fetch(
                     res,
                 );
             }
-        },
+            }
+        }
         Ok(response) => {
             render_outbound_push_bridge_fetch_fallback(
                 existing_cache,
@@ -500,7 +514,7 @@ pub async fn outbound_push_bridge_cache_invalidate(
     }));
 }
 
-fn derive_push_gateway_service_base_url(push_gateway_url: &str) -> Option<String> {
+pub(super) fn derive_push_gateway_service_base_url(push_gateway_url: &str) -> Option<String> {
     let mut value = push_gateway_url.trim().trim_end_matches('/').to_owned();
     if value.is_empty() || !value.contains("://") {
         return None;
@@ -523,7 +537,7 @@ fn derive_push_gateway_service_base_url(push_gateway_url: &str) -> Option<String
     if value.is_empty() { None } else { Some(value) }
 }
 
-fn join_api_v1_url(base: &str, path: &str) -> String {
+pub(super) fn join_api_v1_url(base: &str, path: &str) -> String {
     let base = base.trim_end_matches('/');
     let path = path.trim_start_matches('/');
     let path = path.strip_prefix("api/v1/").unwrap_or(path);
@@ -603,6 +617,9 @@ fn outbound_push_bridge_cache_entry(
         contract_digest: record.contract_digest,
         fetched_at: record.fetched_at,
         fetched_contract: outbound_push_resolved_contract_from_remote(&record.remote_contract),
+        trust_level: record.trust_level,
+        freshness_at: record.freshness_at,
+        etag: record.etag,
     }
 }
 
@@ -618,12 +635,16 @@ fn outbound_push_bridge_cache_snapshot(
         contract_digest: record.contract_digest,
         fetched_at: record.fetched_at,
         remote_contract: record.remote_contract,
+        trust_level: record.trust_level,
+        freshness_at: Some(record.freshness_at),
+        etag: record.etag,
     }
 }
 
 fn outbound_push_bridge_cache_record(
     snapshot: OutboundPushBridgeCacheSnapshot,
 ) -> OutboundPushBridgeCacheRecord {
+    let freshness_at = snapshot.freshness_at.unwrap_or(snapshot.fetched_at);
     OutboundPushBridgeCacheRecord {
         push_gateway_url: snapshot.push_gateway_url,
         service_base_url: snapshot.service_base_url,
@@ -633,6 +654,9 @@ fn outbound_push_bridge_cache_record(
         contract_digest: snapshot.contract_digest,
         fetched_at: snapshot.fetched_at,
         remote_contract: snapshot.remote_contract,
+        trust_level: snapshot.trust_level,
+        freshness_at,
+        etag: snapshot.etag,
     }
 }
 
@@ -650,6 +674,9 @@ fn outbound_push_bridge_fetch_response_from_cache(
         fetched_at: Some(record.fetched_at),
         fetched_contract,
         remote_contract: Some(record.remote_contract),
+        trust_level: record.trust_level,
+        freshness_at: Some(record.freshness_at),
+        etag: record.etag,
         todos: vec![
             "TODO(push-outbound): persist cache entries outside process memory and attach freshness/etag metadata".to_owned(),
             "TODO(push-outbound): add explicit cache invalidation policy instead of only force_refresh".to_owned(),
@@ -682,6 +709,9 @@ fn render_outbound_push_bridge_fetch_fallback(
         fetched_at: None,
         fetched_contract: default_outbound_push_resolved_contract(),
         remote_contract: None,
+        trust_level: "pending".to_owned(),
+        freshness_at: None,
+        etag: String::new(),
         todos: vec![
             "TODO(push-outbound): retry remote bridge fetch and persist the first successful contract snapshot".to_owned(),
             "TODO(push-outbound): fail closed on contract drift once a persisted snapshot exists".to_owned(),

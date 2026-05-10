@@ -27,6 +27,7 @@ use salvo::{http::StatusCode, prelude::*};
 use serde_json::{Value, json};
 
 use crate::{
+    persistence::DriftResult,
     state::{AppState, PushRuleRecord, SessionRecord},
     wire::{
         OkResponse, PushNotifyRequest, PushNotifyResponse, PushRegisterRequest,
@@ -36,10 +37,20 @@ use crate::{
 };
 
 use super::{
+    audit::append_audit_log,
     auth::{SessionGrantValidationInput, validate_session_grant_binding},
-    auth_or_render, authenticated_session, now, render_error, sha256_hex,
-    validate_canonical_json_value, validate_device_id, validate_no_removed_legacy_contracts,
+    auth_or_render, authenticated_session, now,
+    push_outbound::{derive_push_gateway_service_base_url, join_api_v1_url},
+    render_error, sha256_hex, validate_canonical_json_value, validate_device_id,
+    validate_no_removed_legacy_contracts,
 };
+
+/// C33.1 (T0-3a): freshness budget for the persisted gateway-contract
+/// snapshot before `push_notify` fails closed. Picked to be lenient enough
+/// to absorb a routine refresh cadence but tight enough to surface a stuck
+/// fetch worker before fan-out leaks past a stale contract. v1 unreleased,
+/// no operator knob yet — bump here when the refresh worker lands.
+const PUSH_GATEWAY_CONTRACT_MAX_AGE_HOURS: i64 = 24;
 
 #[endpoint]
 pub async fn push_register(depot: &mut Depot, req: &mut Request, res: &mut Response) {
@@ -315,6 +326,7 @@ pub async fn push_notify(depot: &mut Depot, req: &mut Request, res: &mut Respons
         .snapshot_all()
         .unwrap_or_default();
     let mut rejected = Vec::new();
+    let max_age = chrono::Duration::hours(PUSH_GATEWAY_CONTRACT_MAX_AGE_HOURS);
     for device in devices {
         let device_id = device
             .get("device_id")
@@ -331,6 +343,33 @@ pub async fn push_notify(depot: &mut Depot, req: &mut Request, res: &mut Respons
             .get("actor")
             .and_then(|value| value.as_str())
             .unwrap_or_default();
+
+        // C33.1 fail-closed: every push fan-out must be backed by a trusted,
+        // fresh gateway-contract snapshot. Anything other than `Match` is a
+        // hard reject (no notify is sent, an audit row is appended, the
+        // device shows up in `rejected`).
+        let push_gateway_url = registered_device
+            .get("push_gateway")
+            .and_then(|value| value.as_str())
+            .unwrap_or_default();
+        let drift = verify_push_gateway_contract_drift(state, push_gateway_url, max_age);
+        if drift != DriftResult::Match {
+            let drift_label = drift.as_str();
+            append_audit_log(
+                state,
+                Some(actor),
+                "push.notify.contract_drift_rejected",
+                json!({
+                    "device_id": device_id,
+                    "push_gateway": push_gateway_url,
+                    "drift_result": drift_label,
+                }),
+                "rejected",
+            );
+            rejected.push(push_rejection(device, "contract_drift", Some(drift_label.to_owned())));
+            continue;
+        }
+
         if let Some(rule_id) =
             push_device_suppressed_by_rule(state, actor, &body.notification, registered_device)
         {
@@ -338,6 +377,42 @@ pub async fn push_notify(depot: &mut Depot, req: &mut Request, res: &mut Respons
         }
     }
     res.render(Json(PushNotifyResponse { rejected }));
+}
+
+/// Resolve the gateway URL of a registered device into a `bridge_describe_url`
+/// and ask `PushBridgeCacheStore::verify_contract_freshness` whether the
+/// persisted snapshot is trusted + fresh + matches its own digest. Returns
+/// `Unknown` (fail-closed) when the gateway URL is empty or doesn't parse,
+/// and when no snapshot has been persisted yet.
+fn verify_push_gateway_contract_drift(
+    state: &AppState,
+    push_gateway_url: &str,
+    max_age: chrono::Duration,
+) -> DriftResult {
+    let trimmed = push_gateway_url.trim();
+    if trimmed.is_empty() {
+        return DriftResult::Unknown;
+    }
+    let Some(service_base_url) = derive_push_gateway_service_base_url(trimmed) else {
+        return DriftResult::Unknown;
+    };
+    let bridge_describe_url =
+        join_api_v1_url(&service_base_url, "/api/v1/push/bridge/describe");
+    let cache = state.persistence.push_bridge_cache();
+    let snapshot_digest = match cache.current_contract(&bridge_describe_url) {
+        Ok(Some(record)) => record.contract_digest,
+        Ok(None) => return DriftResult::Unknown,
+        Err(error) => {
+            tracing::error!(%error, "failed to read push bridge cache snapshot");
+            return DriftResult::Unknown;
+        }
+    };
+    if snapshot_digest.is_empty() {
+        return DriftResult::Unknown;
+    }
+    cache
+        .verify_contract_freshness(&bridge_describe_url, &snapshot_digest, max_age)
+        .unwrap_or(DriftResult::Unknown)
 }
 
 async fn push_register_session_grant_bridge(
@@ -597,15 +672,24 @@ fn value_matches_expected(actual: &Value, expected: &Value) -> bool {
     }
 }
 
-fn push_rejection(device: Value, reason: &str, rule_id: Option<String>) -> Value {
+fn push_rejection(device: Value, reason: &str, detail: Option<String>) -> Value {
     let mut rejected = match device {
         Value::Object(object) => Value::Object(object),
         other => json!({"device": other}),
     };
     if let Some(object) = rejected.as_object_mut() {
         object.insert("reason".to_owned(), Value::String(reason.to_owned()));
-        if let Some(rule_id) = rule_id {
-            object.insert("rule_id".to_owned(), Value::String(rule_id));
+        if let Some(detail) = detail {
+            // Both `push_rule` and `contract_drift` rejections supply a
+            // small string detail (the rule id, or a `DriftResult` label
+            // like `unknown` / `digest_mismatch`); historically this was
+            // surfaced as `rule_id`, but C33.1 reuses the same envelope so
+            // operator dashboards keep one shape.
+            let key = match reason {
+                "contract_drift" => "drift_result",
+                _ => "rule_id",
+            };
+            object.insert(key.to_owned(), Value::String(detail));
         }
     }
     rejected

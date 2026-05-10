@@ -27,6 +27,7 @@ fn test_config() -> AppConfig {
         session_grant_introspection_bearer: None,
         did_resolver_allow_methods: vec!["web".to_owned(), "key".to_owned(), "uuid".to_owned()],
         starid_webvh_resolver_url: None,
+        starid_webvh_resolver_active: false,
         // Tests use fixed-time HLC fixtures; window=0 disables replay-window
         // enforcement so they keep passing.
         jws_replay_window_seconds: 0,
@@ -2300,6 +2301,7 @@ async fn identity_surface_works() {
 async fn identity_describe_exposes_optional_starid_profile() {
     let mut config = test_config();
     config.starid_webvh_resolver_url = Some("http://starid.local".to_owned());
+    config.starid_webvh_resolver_active = true;
     config.did_resolver_allow_methods = vec![
         "web".to_owned(),
         "key".to_owned(),
@@ -2319,12 +2321,59 @@ async fn identity_describe_exposes_optional_starid_profile() {
         describe["starid_profile"]["resolver_url"],
         "http://starid.local"
     );
+    // C36.2 — health.active reflects boot probe success.
+    assert_eq!(describe["starid_profile"]["health"]["active"], true);
+    assert_eq!(describe["starid_profile"]["health"]["probe"], "ok");
     assert!(
         describe["profiles"]
             .as_array()
             .unwrap()
             .iter()
             .any(|profile| profile.as_str() == Some("cx.identity.starid.webvh.optional.v1"))
+    );
+}
+
+/// C36.2 — bug regression: when admin set `SERVERX_STARID_WEBVH_RESOLVER_URL`
+/// but the boot probe failed (upstream unreachable, common in cotest / staging
+/// fixtures), `/identity/describe` MUST still report `enabled: true` so
+/// sibling-service discovery sees the configured profile. The runtime
+/// liveness state is surfaced separately under `starid_profile.health`.
+#[tokio::test]
+async fn identity_describe_keeps_starid_profile_enabled_when_probe_fails() {
+    let mut config = test_config();
+    config.starid_webvh_resolver_url = Some("http://starid.unreachable.local".to_owned());
+    config.starid_webvh_resolver_active = false; // probe failed at boot
+    config.did_resolver_allow_methods = vec![
+        "web".to_owned(),
+        "key".to_owned(),
+        "uuid".to_owned(),
+        "webvh".to_owned(),
+    ];
+    let describe: Value = TestClient::get("http://server/api/v1/identity/describe")
+        .send(&app_from_state(AppState::new(config, Db { pool: None })))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+
+    // Intent: profile is still discoverable.
+    assert_eq!(describe["starid_profile"]["enabled"], true);
+    assert_eq!(
+        describe["starid_profile"]["resolver_url"],
+        "http://starid.unreachable.local"
+    );
+    assert!(
+        describe["profiles"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|profile| profile.as_str() == Some("cx.identity.starid.webvh.optional.v1"))
+    );
+    // Liveness: clearly flagged as down.
+    assert_eq!(describe["starid_profile"]["health"]["active"], false);
+    assert_eq!(
+        describe["starid_profile"]["health"]["probe"],
+        "probe_failed_at_boot"
     );
 }
 

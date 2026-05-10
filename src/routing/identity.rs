@@ -31,7 +31,13 @@ use super::{append_audit_log, now, query_param, render_error, sha256_hex, valida
 pub async fn identity_describe(depot: &mut Depot, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     let allow_methods = state.config.did_resolver_allow_methods.clone();
+    // C36.2 — `enabled` reports admin **intent** (URL configured), independent
+    // of whether the boot probe succeeded. Sibling services need the profile
+    // to be discoverable even when the upstream is currently down. Liveness is
+    // surfaced separately under `starid_profile.health.active` so operators
+    // can detect probe failures via the same endpoint.
     let starid_enabled = state.config.starid_webvh_resolver_url.is_some();
+    let starid_active = state.config.starid_webvh_resolver_active;
     let mut profiles = vec!["cx.identity.local-dev.v1".to_owned()];
     if starid_enabled {
         profiles.push("cx.identity.starid.webvh.optional.v1".to_owned());
@@ -62,6 +68,14 @@ pub async fn identity_describe(depot: &mut Depot, res: &mut Response) {
             "enabled": starid_enabled,
             "resolver_url": state.config.starid_webvh_resolver_url.clone(),
             "role": "optional_high_trust_profile",
+            "health": {
+                "active": starid_active,
+                "probe": if starid_enabled {
+                    if starid_active { "ok" } else { "probe_failed_at_boot" }
+                } else {
+                    "not_configured"
+                }
+            },
             "migration": {
                 "portable": "todo",
                 "watcher_mirror": "todo"

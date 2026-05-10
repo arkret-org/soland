@@ -28,10 +28,13 @@ async fn main() -> anyhow::Result<()> {
             std::env::set_var("DATABASE_URL", database_url);
         }
     }
-    // Round 21: probe the starid `/describe` endpoint before mounting the
-    // DidWebvhResolver into the resolver chain. A misconfigured URL would
-    // otherwise silently break `did:webvh` lookups; here we strip the
-    // resolver from the chain on probe failure and log a warning.
+    // Round 21 / C36.2: probe the starid `/describe` endpoint before mounting
+    // the DidWebvhResolver into the resolver chain. A misconfigured URL would
+    // otherwise silently break `did:webvh` lookups. The probe result flips
+    // the runtime liveness flag (`starid_webvh_resolver_active`) — the URL
+    // itself is preserved so `/identity/describe` keeps advertising the
+    // configured profile for sibling-service discovery (intent vs liveness
+    // are independent concerns; conflating them was the C36.2 bug).
     if let Some(url) = config.starid_webvh_resolver_url.clone() {
         match soland::state::did_resolver_chain::probe_starid_describe(
             &url,
@@ -44,14 +47,18 @@ async fn main() -> anyhow::Result<()> {
                     starid_url = %url,
                     "starid /describe probe succeeded — DidWebvhResolver enabled"
                 );
+                config.starid_webvh_resolver_active = true;
             }
             Err(error) => {
                 tracing::warn!(
                     starid_url = %url,
                     %error,
-                    "starid /describe probe failed — DidWebvhResolver omitted from chain"
+                    "starid /describe probe failed — DidWebvhResolver omitted from chain (URL preserved for /identity/describe discovery)"
                 );
-                config.starid_webvh_resolver_url = None;
+                // Intentionally do NOT clear `starid_webvh_resolver_url`.
+                // The active flag stays false (already its default), so
+                // `build_did_resolver_chain` skips the resolver, but
+                // describe handlers still see the configured URL.
             }
         }
     }

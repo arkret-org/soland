@@ -163,6 +163,20 @@ pub struct OutboundPushBridgeCacheSnapshot {
     pub contract_digest: String,
     pub fetched_at: DateTime<Utc>,
     pub remote_contract: Value,
+    /// C33.1: trust state for the cached snapshot (`pending` / `trusted` /
+    /// `revoked`). Imported snapshots default to `pending` if omitted.
+    #[serde(default = "default_trust_pending")]
+    pub trust_level: String,
+    /// Last freshness check timestamp, distinct from `fetched_at`.
+    #[serde(default)]
+    pub freshness_at: Option<DateTime<Utc>>,
+    /// Opaque server ETag from the upstream describe response.
+    #[serde(default)]
+    pub etag: String,
+}
+
+fn default_trust_pending() -> String {
+    "pending".to_owned()
 }
 
 #[derive(Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
@@ -230,6 +244,13 @@ pub struct OutboundPushBridgeFetchResponse {
     pub fetched_contract: OutboundPushResolvedContract,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remote_contract: Option<Value>,
+    /// C33.1: trust state of the cached snapshot returned by the fetch path.
+    #[serde(default = "default_trust_pending")]
+    pub trust_level: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub freshness_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub etag: String,
     #[serde(default)]
     pub todos: Vec<String>,
 }
@@ -250,6 +271,11 @@ pub struct OutboundPushBridgeCacheEntry {
     pub contract_digest: String,
     pub fetched_at: DateTime<Utc>,
     pub fetched_contract: OutboundPushResolvedContract,
+    /// C33.1: trust state surfaced to status callers so dashboards can flag
+    /// `pending` / `revoked` snapshots without round-tripping the export API.
+    pub trust_level: String,
+    pub freshness_at: DateTime<Utc>,
+    pub etag: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
