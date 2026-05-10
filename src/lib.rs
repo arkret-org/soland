@@ -424,8 +424,11 @@ pub fn router_with_rate_limiter_config(
                 )
                 .push(Router::with_path("keys/backups").get(list_key_backups))
                 .push(Router::with_path("device_messages/describe").get(device_messages_describe))
-                .push(Router::with_path("device_messages/{txn_id}").put(put_device_messages))
-                .push(Router::with_path("device_messages").get(get_device_messages))
+                .push(
+                    Router::with_path("device_messages")
+                        .post(send_device_messages)
+                        .get(get_device_messages),
+                )
                 .push(
                     Router::with_path("federation/transactions/{txn_id}")
                         .put(federation_transaction),

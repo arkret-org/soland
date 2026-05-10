@@ -1,9 +1,10 @@
 //! To-device message transport.
 //!
 //! Surfaces:
-//! - `PUT /api/v1/device_messages/{txn_id}` — send to-device messages,
-//!   idempotent on `(actor, txn_id)` so duplicate retries return 200 without
-//!   re-queueing
+//! - `POST /api/v1/device_messages` — send to-device messages, idempotent on
+//!   `(actor, idempotency_key)` so duplicate retries return 200 without
+//!   re-queueing. The idempotency key is supplied via the `Idempotency-Key`
+//!   request header.
 //! - `GET /api/v1/device_messages` — pull pending to-device messages for the
 //!   bound session/device. Uses the `cx:cursor:` `to_device_position` from
 //!   `parse_and_validate_sync_cursor` so a duplicate sync cannot prematurely
@@ -30,12 +31,17 @@ use super::{
 };
 
 #[endpoint]
-pub async fn put_device_messages(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+pub async fn send_device_messages(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     let Some(session) = auth_or_render(state, req, res) else {
         return;
     };
-    let txn_id = req.param::<String>("txn_id").unwrap_or_else(sync_token);
+    let idempotency_key = req
+        .headers()
+        .get("Idempotency-Key")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_owned())
+        .unwrap_or_else(sync_token);
     let body = match req.parse_json::<DeviceMessagesSendRequest>().await {
         Ok(body) => body,
         Err(_) => {
@@ -76,7 +82,7 @@ pub async fn put_device_messages(depot: &mut Depot, req: &mut Request, res: &mut
     }
     let device_messages = state.persistence.device_messages();
     let registered = device_messages
-        .try_register_txn(format!("{}:{txn_id}", session.actor))
+        .try_register_txn(format!("{}:{idempotency_key}", session.actor))
         .unwrap_or(false);
     if !registered {
         res.render(Json(DeviceMessagesSendResponse {
@@ -92,7 +98,7 @@ pub async fn put_device_messages(depot: &mut Depot, req: &mut Request, res: &mut
         for (device_id, content) in devices {
             let created_at = now();
             if let Err(error) = device_messages.append(DeviceMessageRecord {
-                txn_id: txn_id.clone(),
+                idempotency_key: idempotency_key.clone(),
                 sender: session.actor.clone(),
                 recipient: recipient.clone(),
                 device_id: device_id.clone(),
@@ -198,7 +204,7 @@ pub fn device_message_events_after(messages: &[DeviceMessageRecord]) -> Vec<Valu
         .iter()
         .map(|message| {
             json!({
-                "txn_id": message.txn_id,
+                "idempotency_key": message.idempotency_key,
                 "sender": message.sender,
                 "recipient": message.recipient,
                 "device_id": message.device_id,

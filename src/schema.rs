@@ -348,8 +348,8 @@ diesel::table! {
 }
 
 diesel::table! {
-    device_messages (txn_id) {
-        txn_id -> Uuid,
+    device_messages (idempotency_key) {
+        idempotency_key -> Uuid,
         sender -> Text,
         recipient -> Text,
         device_id -> Uuid,

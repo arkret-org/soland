@@ -255,7 +255,7 @@ pub trait ProjectionEventStore: Send + Sync {
 /// To-device message queue + idempotency-key set.
 pub trait DeviceMessageStore: Send + Sync {
     fn append(&self, message: DeviceMessageRecord) -> PersistenceResult<()>;
-    /// Insert a fresh `(actor:txn_id)` key — returns `false` if it was already there.
+    /// Insert a fresh `(actor:idempotency_key)` key — returns `false` if it was already there.
     fn try_register_txn(&self, key: String) -> PersistenceResult<bool>;
     /// Remove every queued message for the given recipient+device whose
     /// position is `<= ack_position`. Returns the number removed.

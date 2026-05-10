@@ -65,7 +65,7 @@ pub use blob::{blob_get, blob_upload};
 pub use device::{device_authorize_pairing, device_pairing_challenge};
 pub use device_messages::{
     device_message_events_after, get_device_messages, prune_acked_device_messages,
-    put_device_messages,
+    send_device_messages,
 };
 pub use index::{
     index_describe, index_entity, index_inbox, index_notifications, index_query,

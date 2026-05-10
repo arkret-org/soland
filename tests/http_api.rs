@@ -3843,8 +3843,9 @@ async fn auth_keys_device_messages_and_blobs_work() {
         "backup-key"
     );
 
-    let invalid_device_message = TestClient::put("http://server/api/v1/device_messages/bad-txn")
+    let invalid_device_message = TestClient::post("http://server/api/v1/device_messages")
         .add_header("authorization", format!("Bearer {token}"), true)
+        .add_header("Idempotency-Key", "bad-txn", true)
         .json(&serde_json::json!({
             "messages": {
                 "did:web:alice.example": {
@@ -3859,8 +3860,9 @@ async fn auth_keys_device_messages_and_blobs_work() {
         .await;
     assert_eq!(invalid_device_message.status_code.unwrap().as_u16(), 400);
 
-    let send: Value = TestClient::put("http://server/api/v1/device_messages/txn1")
+    let send: Value = TestClient::post("http://server/api/v1/device_messages")
         .add_header("authorization", format!("Bearer {token}"), true)
+        .add_header("Idempotency-Key", "txn1", true)
         .json(&serde_json::json!({
             "messages": {
                 "did:web:alice.example": {
@@ -3878,8 +3880,9 @@ async fn auth_keys_device_messages_and_blobs_work() {
         .unwrap();
     assert_eq!(send["ok"], true);
 
-    let duplicate: Value = TestClient::put("http://server/api/v1/device_messages/txn1")
+    let duplicate: Value = TestClient::post("http://server/api/v1/device_messages")
         .add_header("authorization", format!("Bearer {token}"), true)
+        .add_header("Idempotency-Key", "txn1", true)
         .json(&serde_json::json!({
             "messages": {
                 "did:web:alice.example": {
@@ -4296,8 +4299,9 @@ async fn server_preserves_e2ee_payloads_as_opaque_data() {
     let token = dev_token(state.clone()).await;
     let ciphertext = "base64url-opaque-ciphertext";
 
-    TestClient::put("http://server/api/v1/device_messages/e2ee-txn")
+    TestClient::post("http://server/api/v1/device_messages")
         .add_header("authorization", format!("Bearer {token}"), true)
+        .add_header("Idempotency-Key", "e2ee-txn", true)
         .json(&serde_json::json!({
             "messages": {
                 "did:web:alice.example": {
@@ -4329,8 +4333,9 @@ async fn to_device_messages_survive_duplicate_sync_until_cursor_ack() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
 
-    TestClient::put("http://server/api/v1/device_messages/ack-txn")
+    TestClient::post("http://server/api/v1/device_messages")
         .add_header("authorization", format!("Bearer {token}"), true)
+        .add_header("Idempotency-Key", "ack-txn", true)
         .json(&serde_json::json!({
             "messages": {
                 "did:web:alice.example": {
@@ -4382,8 +4387,9 @@ async fn device_messages_evicted_after_session_logout() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
 
-    TestClient::put("http://server/api/v1/device_messages/logout-txn")
+    TestClient::post("http://server/api/v1/device_messages")
         .add_header("authorization", format!("Bearer {token}"), true)
+        .add_header("Idempotency-Key", "logout-txn", true)
         .json(&serde_json::json!({
             "messages": {
                 "did:web:alice.example": {

@@ -325,7 +325,7 @@ pub struct ProjectionEventRecord {
 
 #[derive(Clone, Debug)]
 pub struct DeviceMessageRecord {
-    pub txn_id: String,
+    pub idempotency_key: String,
     pub sender: String,
     pub recipient: String,
     pub device_id: String,

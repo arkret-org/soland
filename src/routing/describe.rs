@@ -281,7 +281,8 @@ pub async fn device_messages_describe() -> JsonResult<Value> {
         "contract": "contrix.rest.device_messages_describe.v1",
         "version": "2026-05-04-scaffold",
         "collection_path": "/api/v1/device_messages",
-        "txn_put_path": "/api/v1/device_messages/{txn_id}",
+        "send_path": "/api/v1/device_messages",
+        "idempotency_header": "Idempotency-Key",
         "schema": "cx.schema.device_message.v1",
         "verification_event_kinds": [
             "cx.key.verification.request",
@@ -293,7 +294,7 @@ pub async fn device_messages_describe() -> JsonResult<Value> {
             "cx.key.verification.done",
             "cx.key.verification.cancel"
         ],
-        "put_request_example": {
+        "send_request_example": {
             "messages": {
                 "did:web:alice.example": {
                     "dev_alice": {
