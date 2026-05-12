@@ -18,6 +18,10 @@ use super::{
     validate_space_id,
 };
 
+pub fn router() -> Router {
+    Router::with_path("moderation/report").post(moderation_report)
+}
+
 #[endpoint]
 pub async fn moderation_report(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");

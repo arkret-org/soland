@@ -27,6 +27,12 @@ use super::{
     validate_space_id,
 };
 
+pub fn router() -> Router {
+    Router::new()
+        .push(Router::with_path("blob/upload").post(blob_upload))
+        .push(Router::with_path("blob/get").get(blob_get).head(blob_get))
+}
+
 #[endpoint]
 pub async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");

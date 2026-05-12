@@ -30,6 +30,19 @@ use super::{
     validate_did,
 };
 
+pub fn router() -> Router {
+    Router::new()
+        .push(
+            Router::with_path("device_messages/describe")
+                .get(super::describe::device_messages_describe),
+        )
+        .push(
+            Router::with_path("device_messages")
+                .post(send_device_messages)
+                .get(get_device_messages),
+        )
+}
+
 #[endpoint]
 pub async fn send_device_messages(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");

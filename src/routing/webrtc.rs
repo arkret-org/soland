@@ -30,6 +30,21 @@ use super::{
     validate_canonical_json_value, validate_did, validate_space_id,
 };
 
+pub fn router() -> Router {
+    Router::new()
+        .push(Router::with_path("webrtc/sessions").post(create_webrtc_session))
+        .push(
+            Router::with_path("webrtc/sessions/{session_id}/signals")
+                .post(put_webrtc_signal)
+                .get(get_webrtc_signals),
+        )
+        .push(Router::with_path("webrtc/sessions/{session_id}").delete(delete_webrtc_session))
+}
+
+pub fn contrix_router() -> Router {
+    Router::with_path("contrix/v1/ice-config").post(ice_config)
+}
+
 #[endpoint]
 pub async fn ice_config(depot: &mut Depot, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");

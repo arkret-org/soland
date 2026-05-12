@@ -33,6 +33,16 @@ use crate::{
     },
 };
 
+pub fn health_router() -> Router {
+    Router::with_path("health").get(health)
+}
+
+pub fn router() -> Router {
+    Router::new()
+        .push(Router::with_path("server/describe").get(server_describe))
+        .push(Router::with_path("integration/describe").get(integration_describe))
+}
+
 #[endpoint(
     operation_id = "cx.system.health",
     tags("system"),

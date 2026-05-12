@@ -39,6 +39,12 @@ use crate::{
 use super::AuthArgs;
 use super::util::query_param;
 
+pub fn router() -> Router {
+    Router::new()
+        .push(Router::with_path("admin/cells").get(admin_list_cells))
+        .push(Router::with_path("admin/cells/{cell_id}").get(admin_get_cell))
+}
+
 /// Default page size for the list endpoint when `limit` is absent.
 const DEFAULT_LIST_LIMIT: usize = 100;
 /// Hard cap so a misbehaving client can't exhaust memory.

@@ -1,8 +1,16 @@
-use contrix_sdk::SpaceId;
-use salvo::{oapi::OpenApi, prelude::*};
+use contrix_sdk::{SpaceId, salvo_adapter::register_contrix_oapi_components};
+use salvo::{
+    affix_state,
+    cors::{Cors, CorsHandler},
+    http::Method,
+    oapi::{OpenApi, Operation, PathItem, PathItemType, Response as OapiResponse, RouterExt},
+    prelude::*,
+};
 use serde_json::{Value, json};
+use std::sync::OnceLock;
 
 use crate::{
+    ratelimit::{RateLimiter, RateLimiterConfig, RateLimiterMiddleware},
     state::{AppState, DeviceInventoryRecord, MessageRecord},
     wire::{now, sync_token},
 };
@@ -44,70 +52,70 @@ pub mod space;
 pub mod sync;
 pub mod util;
 pub mod webrtc;
-pub use account::{
+use account::{
     account_me, account_principal_space, account_register, contact_request, contact_respond,
     list_contacts, principal_space_for_did,
 };
-pub use admin::admin_collection;
-pub use admin_cells::{admin_get_cell, admin_list_cells};
-pub use admin_control::{admin_emit_resync_required, admin_emit_unauthorized};
-pub use anchor_admin::{
+use admin::admin_collection;
+use admin_cells::{admin_get_cell, admin_list_cells};
+use admin_control::{admin_emit_resync_required, admin_emit_unauthorized};
+use anchor_admin::{
     admin_compact_anchor_dag, admin_get_anchor_dag, admin_get_anchorer, admin_list_bottom_global,
     admin_list_gc_candidates, admin_list_multisig_pending, admin_list_space_bottom,
     admin_reconfigure_anchorer, admin_repair_bottom, admin_rotate_signing_key,
     admin_submit_multisig_partial,
 };
-pub use audit::{append_audit_log, audit_events};
-pub use auth::{
+use audit::{append_audit_log, audit_events};
+use auth::{
     auth_or_render, authenticated_session, dev_login, exchange_session_grant, is_device_revoked,
     logout, revoke_device_record, session_token_hash, token_for,
 };
-pub use authz::{authz_check, create_grant, effective_grants, invites, revoke_grant};
-pub use blob::{blob_get, blob_upload};
-pub use describe::{
+use authz::{authz_check, create_grant, effective_grants, invites, revoke_grant};
+use blob::{blob_get, blob_upload};
+use describe::{
     auth_bridge_describe, authz_describe, device_messages_describe, health, integration_describe,
     key_backups_describe, policies_describe, server_describe,
 };
-pub use device::{device_authorize_pairing, device_pairing_challenge};
-pub use device_messages::{
+use device::{device_authorize_pairing, device_pairing_challenge};
+use device_messages::{
     device_message_events_after, get_device_messages, prune_acked_device_messages,
     send_device_messages,
 };
-pub use directory::{
+use directory::{
     actor_visible_to, checked_limit, demo_actors, demo_organization, directory_describe,
     facets_match, has_accepted_contact, query_limit, query_matches, resolve_handle,
     resolve_organization, resolve_space, search_actors, search_organizations, search_spaces,
     search_users,
 };
-pub use events::{
+use events::{
     batch_get_events, effective_read_receipt_policy_for_space, events_describe, events_frontier,
     events_query_durable_scope, events_query_durable_scope_impl, get_event, submit_event,
 };
-pub use extract::AuthArgs;
-pub use federation::{
+use extract::AuthArgs;
+use federation::{
     broadcast_anchor_to_peers, broadcast_move_to_peers, federation_anchors_pull,
     federation_anchors_push, federation_pull_operations, federation_push_operations,
     federation_space_members, federation_transaction, federation_verify_actor,
 };
-pub use flow::{
+use flow::{
     default_discussion_track, derived_flow_id, discussion_track_for_projection_event,
     flow_history_visibility_for_space, flow_id_for_projection_event, flow_id_from_space_id,
     flow_projection_for_space, message_id_from_event_id, retag_typed_id,
 };
-pub use identity::{
+use identity::{
     identity_describe, identity_document, identity_log, identity_receipts, identity_resolve,
     submit_did_operation, validate_did_document_services,
 };
-pub use key_backup::{delete_key_backup, get_key_backup, list_key_backups, put_key_backup};
-pub use keys::{keys_claim, keys_query, keys_upload};
-pub use mimi::{
+use key_backup::{delete_key_backup, get_key_backup, list_key_backups, put_key_backup};
+use keys::{keys_claim, keys_query, keys_upload};
+use mimi::{
     mimi_consent_request, mimi_consent_update, mimi_group_info, mimi_identifiers_query,
     mimi_key_material, mimi_protocol_directory, mimi_provider_directory, mimi_proxy_download,
     mimi_report_abuse, mimi_room_message, mimi_room_notify, mimi_room_update,
 };
-pub use moderation::moderation_report;
-pub use move_anchor::{admin_sign_anchor, submit_anchor, submit_move};
-pub use operations::{
+use moderation::moderation_report;
+use move_anchor::{admin_sign_anchor, submit_anchor, submit_move};
+use operations::{
     OperationPayloadSchema, PayloadRequirement, canonical_json_digest,
     known_space_denies_plaintext_service, message_operation_is_encrypted,
     operation_schema_for_kind, payload_field_present, validate_canonical_json_value,
@@ -116,13 +124,13 @@ pub use operations::{
     validate_message_operation_payload, validate_operation_policy, validate_operation_schema,
     validate_operation_semantics, validate_rfc3339_utc_z,
 };
-pub use policy::{
+use policy::{
     delete_policy_document, get_policy_document, is_supported_policy_effect,
     is_valid_generated_or_custom_id, is_valid_policy_scope, is_valid_policy_type,
     list_policy_documents, policy_check, policy_document_to_response, upsert_policy_document,
 };
-pub use profile::profile_presence;
-pub use projection::{
+use profile::profile_presence;
+use projection::{
     FederationIngestResult, ProjectedEventPage, accept_local_operations, append_projection_event,
     backfill_gap_events, ensure_projected_space, event_is_visible, ingest_federation_operations,
     load_projected_events_from_pg, operation_event_id, operation_is_visible,
@@ -132,19 +140,19 @@ pub use projection::{
     projection_event_json, redaction_targets_from_events, redaction_targets_from_operations,
     sync_timeline_message_json, truncate_gap_events,
 };
-pub use push::{
+use push::{
     delete_push_rule, push_notify, push_register, push_rules, push_unregister, upsert_push_rule,
 };
-pub use push_outbound::{
+use push_outbound::{
     outbound_push_bridge_cache_export, outbound_push_bridge_cache_import,
     outbound_push_bridge_cache_invalidate, outbound_push_bridge_cache_status,
     outbound_push_bridge_describe, outbound_push_bridge_fetch, outbound_push_bridge_resolve,
 };
-pub use reaction::{add_reaction, remove_reaction};
-pub use read_marker::{get_read_markers, send_read_receipt, set_read_marker};
-pub use relation::{create_relation, delete_relation, list_relations};
-pub use schema::{delete_schema, get_schema, list_schemas, register_schema};
-pub use space::{
+use reaction::{add_reaction, remove_reaction};
+use read_marker::{get_read_markers, send_read_receipt, set_read_marker};
+use relation::{create_relation, delete_relation, list_relations};
+use schema::{delete_schema, get_schema, list_schemas, register_schema};
+use space::{
     add_space_member, create_space, delete_space, export_space, invite_token_matches_space,
     invite_token_space_id, is_space_deleted, prune_expired_typing,
     record_space_lifecycle_operation, remove_space_member, space_allows_plaintext_service,
@@ -153,24 +161,862 @@ pub use space::{
     space_search_discoverability, space_search_visible_to, space_visible_to, touch_space,
     typing_ephemeral_for_space,
 };
-pub use sync::{
+use sync::{
     SyncCursor, SyncCursorError, bound_cursor, bound_cursor_with_positions, client_sync,
     decode_sync_cursor_value, events_query, events_subscribe, normalized_strings,
     parse_and_validate_sync_cursor, set_typing, snapshot_chunk, snapshot_head, sync_describe,
     sync_filter_hash, sync_gap_backfill, sync_token_for_client_sync,
 };
-// Re-export every util fn at the `crate::routing` level so existing callers
-// in mod.rs (and `super::name` in sibling submodules) keep working unchanged.
-pub use util::{
+// Private legacy imports keep existing `super::name` sibling references
+// working while avoiding public re-exports from `crate::routing`.
+use util::{
     bearer_token, handle_for_did, is_json_integer, is_supported_cx_entity_type,
     is_valid_discoverability, is_valid_entity_type, is_valid_handle, is_valid_sha256_digest,
     is_valid_sha256_hex, is_valid_sync_token, normalize_handle, query_flag, query_list,
     query_param, query_param_all, render_error, sha256_hex, validate_device_id, validate_did,
     validate_space_id,
 };
-pub use webrtc::{
+use webrtc::{
     create_webrtc_session, delete_webrtc_session, get_webrtc_signals, ice_config, put_webrtc_signal,
 };
+
+pub fn router(state: AppState) -> Router {
+    router_with_rate_limiter_config(state, RateLimiterConfig::default())
+}
+
+pub fn router_with_rate_limiter_config(
+    state: AppState,
+    rate_limiter_config: RateLimiterConfig,
+) -> Router {
+    let cors_allow_origin = state.config.cors_allow_origin.clone();
+    let rate_limiter = RateLimiter::new(rate_limiter_config);
+    let mut router = Router::new()
+        .hoop(affix_state::inject(state))
+        .hoop(RateLimiterMiddleware::new(rate_limiter));
+    if let Some(origin) = cors_allow_origin {
+        router = router.hoop(cors_handler_for_origin(origin));
+    }
+    let router = router
+        .push(describe::health_router())
+        .push(mimi::well_known_router())
+        .push(api_v1_router())
+        .push(policy::contrix_router())
+        .push(webrtc::contrix_router())
+        .push(api_admin_v1_router());
+    let doc = cached_contrix_openapi_doc(&router);
+    router
+        .unshift(
+            Router::with_path(".well-known/contrix/openapi.yaml")
+                .hoop(affix_state::inject(ContrixOpenApiDoc(doc.clone())))
+                .get(contrix_openapi_yaml),
+        )
+        .unshift(doc.into_router(".well-known/contrix/openapi.json"))
+}
+
+fn api_v1_router() -> Router {
+    Router::with_path("api/v1")
+        .oapi_tag("api")
+        .hoop(wait_for_sync_token)
+        .push(describe::router())
+        .push(auth::router())
+        .push(account::router())
+        .push(space::router())
+        .push(move_anchor::router())
+        .push(reaction::router())
+        .push(
+            Router::with_path("read-markers")
+                .post(read_marker::set_read_marker)
+                .get(read_marker::get_read_markers),
+        )
+        .push(Router::with_path("receipts/read").post(read_marker::send_read_receipt))
+        .push(relation::router())
+        .push(
+            Router::with_path("schemas")
+                .get(schema::list_schemas)
+                .post(schema::register_schema),
+        )
+        .push(
+            Router::with_path("schemas/{schema_id}")
+                .get(schema::get_schema)
+                .delete(schema::delete_schema),
+        )
+        .push(Router::with_path("identity/describe").get(identity::identity_describe))
+        .push(Router::with_path("identity/resolve").post(identity::identity_resolve))
+        .push(Router::with_path("identity/document").get(identity::identity_document))
+        .push(Router::with_path("identity/log").get(identity::identity_log))
+        .push(
+            Router::with_path("identity/submit-did-operation").post(identity::submit_did_operation),
+        )
+        .push(Router::with_path("identity/receipts").get(identity::identity_receipts))
+        .push(sync::router())
+        .push(events::router())
+        .push(directory::router())
+        .push(authz::router())
+        .push(admin_cells::router())
+        .push(Router::with_path("admin/{resource}").get(admin::admin_collection))
+        .push(move_anchor::api_admin_router())
+        .push(admin_control::router())
+        .push(audit::router())
+        .push(policy::router())
+        .push(profile::router())
+        .push(Router::with_path("push/register-device").post(push::push_register))
+        .push(Router::with_path("push/unregister-device").post(push::push_unregister))
+        .push(push_outbound::router())
+        .push(
+            Router::with_path("push/rules")
+                .get(push::push_rules)
+                .post(push::upsert_push_rule),
+        )
+        .push(Router::with_path("push/rules/{rule_id}").delete(push::delete_push_rule))
+        .push(Router::with_path("push/notify").post(push::push_notify))
+        .push(device::router())
+        .push(Router::with_path("keys/upload").post(keys::keys_upload))
+        .push(Router::with_path("keys/query").post(keys::keys_query))
+        .push(Router::with_path("keys/claim").post(keys::keys_claim))
+        .push(key_backup::router())
+        .push(device_messages::router())
+        .push(
+            Router::with_path("federation/transactions/{txn_id}")
+                .put(federation::federation_transaction),
+        )
+        .push(
+            Router::with_path("federation/push-operations")
+                .post(federation::federation_push_operations),
+        )
+        .push(
+            Router::with_path("federation/pull-operations")
+                .get(federation::federation_pull_operations),
+        )
+        .push(
+            Router::with_path("federation/space-members").get(federation::federation_space_members),
+        )
+        .push(
+            Router::with_path("federation/verify-actor").post(federation::federation_verify_actor),
+        )
+        .push(
+            Router::with_path("federation/anchors")
+                .get(federation::federation_anchors_pull)
+                .post(federation::federation_anchors_push),
+        )
+        .push(webrtc::router())
+        .push(blob::router())
+        .push(moderation::router())
+        .push(mimi::router())
+        .push(
+            Router::with_path("{**rest}")
+                .options(cors_preflight)
+                .get(api_not_found),
+        )
+}
+
+fn api_admin_v1_router() -> Router {
+    Router::with_path("api/admin/v1")
+        .oapi_tag("admin")
+        .push(Router::with_path("spaces/{space_id}/anchorer").get(anchor_admin::admin_get_anchorer))
+        .push(
+            Router::with_path("spaces/{space_id}/anchorer/reconfigure")
+                .post(anchor_admin::admin_reconfigure_anchorer),
+        )
+        .push(
+            Router::with_path("spaces/{space_id}/anchorer/rotate-signing-key")
+                .post(anchor_admin::admin_rotate_signing_key),
+        )
+        .push(
+            Router::with_path("spaces/{space_id}/bottom")
+                .get(anchor_admin::admin_list_space_bottom),
+        )
+        .push(Router::with_path("bottom").get(anchor_admin::admin_list_bottom_global))
+        .push(
+            Router::with_path("spaces/{space_id}/bottom/{cell_id}/repair")
+                .post(anchor_admin::admin_repair_bottom),
+        )
+        .push(
+            Router::with_path("spaces/{space_id}/anchor-dag")
+                .get(anchor_admin::admin_get_anchor_dag),
+        )
+        .push(
+            Router::with_path("spaces/{space_id}/anchor-dag/compact")
+                .post(anchor_admin::admin_compact_anchor_dag),
+        )
+        .push(
+            Router::with_path("spaces/{space_id}/multisig/pending")
+                .get(anchor_admin::admin_list_multisig_pending),
+        )
+        .push(
+            Router::with_path("spaces/{space_id}/multisig/{anchor_id}/partial")
+                .post(anchor_admin::admin_submit_multisig_partial),
+        )
+        .push(
+            Router::with_path("spaces/{space_id}/gc-candidates")
+                .get(anchor_admin::admin_list_gc_candidates),
+        )
+}
+
+static CONTRIX_OPENAPI_DOC: OnceLock<OpenApi> = OnceLock::new();
+
+fn cached_contrix_openapi_doc(router: &Router) -> OpenApi {
+    CONTRIX_OPENAPI_DOC
+        .get_or_init(|| contrix_openapi_doc(router))
+        .clone()
+}
+
+fn contrix_openapi_doc(router: &Router) -> OpenApi {
+    let mut doc = OpenApi::new("soland", "0.1.0")
+        .add_extension(
+            "x-operation-aliases",
+            json!({
+                "events.submit": "cx.events.submit",
+                "events.query": "cx.events.query",
+                "events.subscribe": "cx.events.subscribe",
+                "sync.account": "cx.sync.account",
+            }),
+        )
+        .add_extension(
+            "x-contrix-artifacts",
+            json!({
+                "registries": crate::artifacts::registry_summary(),
+                "openapi_source": "contrix-spec/spec/v1/artifacts/openapi/contrix-service-api.openapi.yaml"
+            }),
+        )
+        .merge_router(router);
+    // Pre-register every Contrix protocol schema published by the SDK so the
+    // generated document carries real types in `components.schemas` rather than
+    // free-form blobs. Soland-specific schemas are layered on top.
+    register_contrix_oapi_components(&mut doc.components);
+    register_soland_extension_operations(&mut doc);
+    doc
+}
+
+fn register_soland_extension_operations(doc: &mut OpenApi) {
+    // Stable, spec-aligned operation IDs for the soland-specific surface. The
+    // base Contrix surface (server.describe, events.*, identity.*, …) already
+    // has its components registered via `register_contrix_oapi_components`;
+    // this table covers operations that soland exposes on top of the canonical
+    // protocol — auth/account/admin/policy/etc. — until each `#[endpoint]`
+    // grows its own typed extractors and operation_id annotation.
+    for (path, method, tag, operation_id, summary) in SOLAND_EXTENSION_OPERATIONS {
+        add_contract_operation(doc, path, *method, tag, operation_id, summary);
+    }
+}
+
+fn add_contract_operation(
+    doc: &mut OpenApi,
+    path: &str,
+    method: PathItemType,
+    tag: &str,
+    operation_id: &str,
+    summary: &str,
+) {
+    let operation = Operation::new()
+        .tags([tag])
+        .summary(summary)
+        .operation_id(operation_id)
+        .add_response("200", OapiResponse::new("ok"));
+    doc.paths.insert(path, PathItem::new(method, operation));
+}
+
+const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &[
+    (
+        "/health",
+        PathItemType::Get,
+        "system",
+        "cx.system.health",
+        "health and liveness",
+    ),
+    (
+        "/api/v1/account/register",
+        PathItemType::Post,
+        "account",
+        "cx.account.register",
+        "register account",
+    ),
+    (
+        "/api/v1/account/me",
+        PathItemType::Get,
+        "account",
+        "cx.account.me",
+        "get current account",
+    ),
+    (
+        "/api/v1/auth/session-grant/exchange",
+        PathItemType::Post,
+        "auth",
+        "cx.auth.exchange_session_grant",
+        "exchange coauth session grant for principal bearer session",
+    ),
+    (
+        "/api/v1/auth/logout",
+        PathItemType::Post,
+        "auth",
+        "cx.auth.logout",
+        "logout active session",
+    ),
+    (
+        "/api/v1/contacts/request",
+        PathItemType::Post,
+        "contacts",
+        "cx.contacts.request",
+        "request contact",
+    ),
+    (
+        "/api/v1/contacts/respond",
+        PathItemType::Post,
+        "contacts",
+        "cx.contacts.respond",
+        "respond to contact request",
+    ),
+    (
+        "/api/v1/contacts",
+        PathItemType::Get,
+        "contacts",
+        "cx.contacts.list",
+        "list contacts",
+    ),
+    (
+        "/api/v1/spaces",
+        PathItemType::Post,
+        "spaces",
+        "cx.spaces.create",
+        "create space",
+    ),
+    (
+        "/api/v1/spaces/{space_id}",
+        PathItemType::Delete,
+        "spaces",
+        "cx.spaces.delete",
+        "delete space",
+    ),
+    (
+        "/api/v1/server/describe",
+        PathItemType::Get,
+        "server",
+        "cx.server.describe",
+        "server feature description",
+    ),
+    (
+        "/api/v1/spaces/{space_id}/members",
+        PathItemType::Post,
+        "spaces",
+        "cx.spaces.add_member",
+        "add space member",
+    ),
+    (
+        "/api/v1/spaces/{space_id}/members/{member_did}",
+        PathItemType::Delete,
+        "spaces",
+        "cx.spaces.remove_member",
+        "remove space member",
+    ),
+    (
+        "/api/v1/events/describe",
+        PathItemType::Get,
+        "events",
+        "cx.events.describe",
+        "describe Event Envelope ingestion profile",
+    ),
+    (
+        "/api/v1/events",
+        PathItemType::Post,
+        "events",
+        "cx.events.submit",
+        "submit one Event Envelope",
+    ),
+    (
+        "/api/v1/events/{event_id}",
+        PathItemType::Get,
+        "events",
+        "cx.events.get",
+        "get one Event Envelope",
+    ),
+    (
+        "/api/v1/events/batch-get",
+        PathItemType::Post,
+        "events",
+        "cx.events.batch_get",
+        "get multiple Event Envelopes",
+    ),
+    (
+        "/api/v1/events",
+        PathItemType::Get,
+        "events",
+        "cx.events.query",
+        "query Event Envelopes (forward / backward)",
+    ),
+    (
+        "/api/v1/events/subscribe",
+        PathItemType::Get,
+        "events",
+        "cx.events.subscribe",
+        "subscribe to Event stream",
+    ),
+    (
+        "/api/v1/events/frontier",
+        PathItemType::Get,
+        "events",
+        "cx.events.frontier",
+        "get Event frontier",
+    ),
+    (
+        "/api/v1/authz/effective-grants",
+        PathItemType::Get,
+        "authz",
+        "cx.authz.get_effective_grants",
+        "get effective grants",
+    ),
+    (
+        "/api/v1/authz/invites",
+        PathItemType::Get,
+        "authz",
+        "cx.authz.get_invites",
+        "list invites",
+    ),
+    (
+        "/api/v1/federation/transactions/{txn_id}",
+        PathItemType::Put,
+        "federation",
+        "cx.federation.transaction",
+        "submit federation transaction",
+    ),
+    (
+        "/api/v1/federation/push-operations",
+        PathItemType::Post,
+        "federation",
+        "cx.federation.push_operations",
+        "push federation operations",
+    ),
+    (
+        "/api/v1/federation/pull-operations",
+        PathItemType::Get,
+        "federation",
+        "cx.federation.pull_operations",
+        "pull federation operations",
+    ),
+    (
+        "/api/v1/federation/space-members",
+        PathItemType::Get,
+        "federation",
+        "cx.federation.space_members",
+        "list space memberships",
+    ),
+    (
+        "/api/v1/federation/verify-actor",
+        PathItemType::Post,
+        "federation",
+        "cx.federation.verify_actor",
+        "verify federation actor",
+    ),
+    (
+        "/api/v1/sync",
+        PathItemType::Post,
+        "sync",
+        "cx.sync.account",
+        "account-aggregate sync",
+    ),
+    (
+        "/api/v1/sync/typing",
+        PathItemType::Post,
+        "sync",
+        "cx.sync.typing",
+        "set typing state",
+    ),
+    (
+        "/api/v1/sync/backfill/gap",
+        PathItemType::Get,
+        "sync",
+        "cx.sync.backfill_gap",
+        "sync gap backfill (deployment-local)",
+    ),
+    (
+        "/api/v1/sync/snapshot-head",
+        PathItemType::Get,
+        "sync",
+        "cx.sync.get_snapshot_head",
+        "snapshot head",
+    ),
+    (
+        "/api/v1/sync/snapshot-chunk",
+        PathItemType::Get,
+        "sync",
+        "cx.sync.get_snapshot_chunk",
+        "snapshot chunk",
+    ),
+    (
+        "/api/v1/directory/describe",
+        PathItemType::Get,
+        "directory",
+        "cx.directory.describe",
+        "directory describe",
+    ),
+    (
+        "/api/v1/directory/search-spaces",
+        PathItemType::Post,
+        "directory",
+        "cx.directory.search_spaces",
+        "search spaces",
+    ),
+    (
+        "/api/v1/directory/resolve-space",
+        PathItemType::Post,
+        "directory",
+        "cx.directory.resolve_space",
+        "resolve space",
+    ),
+    (
+        "/api/v1/admin/actors",
+        PathItemType::Get,
+        "admin",
+        "cx.admin.actors",
+        "admin actor snapshot",
+    ),
+    (
+        "/api/v1/admin/spaces",
+        PathItemType::Get,
+        "admin",
+        "cx.admin.spaces",
+        "admin space snapshot",
+    ),
+    (
+        "/api/v1/admin/devices",
+        PathItemType::Get,
+        "admin",
+        "cx.admin.devices",
+        "admin device snapshot",
+    ),
+    (
+        "/api/v1/admin/capabilities",
+        PathItemType::Get,
+        "admin",
+        "cx.admin.capabilities",
+        "admin capability snapshot",
+    ),
+    (
+        "/api/v1/admin/federation",
+        PathItemType::Get,
+        "admin",
+        "cx.admin.federation",
+        "admin federation snapshot",
+    ),
+    (
+        "/api/v1/admin/applets",
+        PathItemType::Get,
+        "admin",
+        "cx.admin.applets",
+        "admin applet snapshot",
+    ),
+    (
+        "/api/v1/admin/agents",
+        PathItemType::Get,
+        "admin",
+        "cx.admin.agents",
+        "admin agent snapshot",
+    ),
+    (
+        "/api/v1/admin/reports",
+        PathItemType::Get,
+        "admin",
+        "cx.admin.reports",
+        "admin report snapshot",
+    ),
+    (
+        "/api/v1/admin/invite-tokens",
+        PathItemType::Get,
+        "admin",
+        "cx.admin.invite_tokens",
+        "admin invite token snapshot",
+    ),
+    (
+        "/api/v1/admin/audit",
+        PathItemType::Get,
+        "admin",
+        "cx.admin.audit",
+        "admin audit snapshot",
+    ),
+    (
+        "/api/v1/admin/policy",
+        PathItemType::Get,
+        "admin",
+        "cx.admin.policy",
+        "admin policy snapshot",
+    ),
+    (
+        "/api/v1/admin/media",
+        PathItemType::Get,
+        "admin",
+        "cx.admin.media",
+        "admin media snapshot",
+    ),
+    (
+        "/api/v1/authz/check",
+        PathItemType::Post,
+        "authz",
+        "cx.authz.check",
+        "check authorization",
+    ),
+    (
+        "/api/v1/policies",
+        PathItemType::Get,
+        "policy",
+        "cx.policies.list",
+        "list policies",
+    ),
+    (
+        "/api/v1/policies/{policy_id}",
+        PathItemType::Get,
+        "policy",
+        "cx.policies.get",
+        "get policy",
+    ),
+    (
+        "/api/v1/policies",
+        PathItemType::Post,
+        "policy",
+        "cx.policies.upsert",
+        "upsert policy",
+    ),
+    (
+        "/api/v1/policies/{policy_id}",
+        PathItemType::Delete,
+        "policy",
+        "cx.policies.delete",
+        "delete policy",
+    ),
+    (
+        "/api/v1/push/register-device",
+        PathItemType::Post,
+        "push",
+        "cx.push.register_device",
+        "register push device",
+    ),
+    (
+        "/api/v1/push/outbound/bridge/cache/export",
+        PathItemType::Get,
+        "push",
+        "cx.push.outbound_bridge_cache_export",
+        "export outbound push bridge cache snapshots",
+    ),
+    (
+        "/api/v1/push/outbound/bridge/cache/import",
+        PathItemType::Post,
+        "push",
+        "cx.push.outbound_bridge_cache_import",
+        "import outbound push bridge cache snapshots",
+    ),
+    (
+        "/api/v1/keys/backups/{backup_id}",
+        PathItemType::Put,
+        "keys",
+        "cx.keys.backups.put",
+        "store encrypted key backup",
+    ),
+    (
+        "/api/v1/keys/backups/{backup_id}",
+        PathItemType::Get,
+        "keys",
+        "cx.keys.backups.get",
+        "get encrypted key backup",
+    ),
+    (
+        "/api/v1/keys/backups/{backup_id}",
+        PathItemType::Delete,
+        "keys",
+        "cx.keys.backups.delete",
+        "delete encrypted key backup",
+    ),
+    (
+        "/api/v1/keys/backups",
+        PathItemType::Get,
+        "keys",
+        "cx.keys.backups.list",
+        "list encrypted key backups",
+    ),
+    (
+        "/api/v1/devices/pairing-challenge",
+        PathItemType::Post,
+        "devices",
+        "cx.devices.pairing_challenge",
+        "create device pairing challenge",
+    ),
+    (
+        "/api/v1/devices/authorize-pairing",
+        PathItemType::Post,
+        "devices",
+        "cx.devices.authorize_pairing",
+        "authorize device pairing",
+    ),
+    (
+        "/api/v1/push/unregister-device",
+        PathItemType::Post,
+        "push",
+        "cx.push.unregister_device",
+        "unregister push device",
+    ),
+    (
+        "/api/v1/push/rules",
+        PathItemType::Get,
+        "push",
+        "cx.push.rules",
+        "list push rules",
+    ),
+    (
+        "/api/v1/push/notify",
+        PathItemType::Post,
+        "push",
+        "cx.push.notify",
+        "send push notification",
+    ),
+    (
+        "/api/v1/webrtc/sessions",
+        PathItemType::Post,
+        "webrtc",
+        "cx.webrtc.create_session",
+        "create WebRTC session",
+    ),
+    (
+        "/api/v1/webrtc/sessions/{session_id}/signals",
+        PathItemType::Post,
+        "webrtc",
+        "cx.webrtc.send_signal",
+        "send WebRTC signal",
+    ),
+    (
+        "/api/v1/webrtc/sessions/{session_id}",
+        PathItemType::Delete,
+        "webrtc",
+        "cx.webrtc.close_session",
+        "close WebRTC session",
+    ),
+    (
+        "/contrix/v1/check",
+        PathItemType::Post,
+        "policy",
+        "cx.policy.check",
+        "policy check",
+    ),
+    (
+        "/api/v1/moderation/report",
+        PathItemType::Post,
+        "moderation",
+        "cx.moderation.report",
+        "report moderation issue",
+    ),
+    (
+        "/api/v1/mimi/provider-directory",
+        PathItemType::Get,
+        "mimi",
+        "cx.mimi.provider_directory",
+        "MIMI provider directory",
+    ),
+    (
+        "/api/v1/mimi/key-material",
+        PathItemType::Post,
+        "mimi",
+        "cx.mimi.key_material",
+        "MIMI key material",
+    ),
+    (
+        "/api/v1/mimi/rooms/{room_id}/update",
+        PathItemType::Put,
+        "mimi",
+        "cx.mimi.room_update",
+        "MIMI external room interop update",
+    ),
+    (
+        "/api/v1/mimi/rooms/{room_id}/notify",
+        PathItemType::Post,
+        "mimi",
+        "cx.mimi.notify",
+        "MIMI external room interop notify",
+    ),
+    (
+        "/api/v1/mimi/rooms/{room_id}/messages",
+        PathItemType::Post,
+        "mimi",
+        "cx.mimi.submit_message",
+        "MIMI external room interop submit message",
+    ),
+    (
+        "/api/v1/mimi/rooms/{room_id}/group-info",
+        PathItemType::Get,
+        "mimi",
+        "cx.mimi.group_info",
+        "MIMI external room interop group info",
+    ),
+    (
+        "/api/v1/mimi/consent/request",
+        PathItemType::Post,
+        "mimi",
+        "cx.mimi.request_consent",
+        "MIMI request consent",
+    ),
+    (
+        "/api/v1/mimi/consent/update",
+        PathItemType::Post,
+        "mimi",
+        "cx.mimi.update_consent",
+        "MIMI update consent",
+    ),
+    (
+        "/api/v1/mimi/identifiers/query",
+        PathItemType::Post,
+        "mimi",
+        "cx.mimi.identifier_query",
+        "MIMI identifier query",
+    ),
+    (
+        "/api/v1/mimi/report-abuse",
+        PathItemType::Post,
+        "mimi",
+        "cx.mimi.report_abuse",
+        "MIMI report abuse",
+    ),
+    (
+        "/api/v1/mimi/proxy-download",
+        PathItemType::Post,
+        "mimi",
+        "cx.mimi.proxy_download",
+        "MIMI proxy download",
+    ),
+];
+
+#[handler]
+async fn cors_preflight(res: &mut Response) {
+    res.status_code(StatusCode::NO_CONTENT);
+}
+
+#[handler]
+async fn api_not_found(res: &mut Response) {
+    res.status_code(StatusCode::NOT_FOUND);
+}
+
+fn cors_handler_for_origin(origin: String) -> CorsHandler {
+    Cors::new()
+        .allow_origin(vec![origin.as_str()])
+        .allow_credentials(true)
+        .allow_methods(vec![
+            Method::GET,
+            Method::POST,
+            Method::PUT,
+            Method::PATCH,
+            Method::DELETE,
+            Method::HEAD,
+            Method::OPTIONS,
+        ])
+        .allow_headers(vec![
+            "authorization",
+            "content-type",
+            "x-contrix-wait-for",
+            "x-contrix-sha256",
+            "range",
+        ])
+        .expose_headers(vec![
+            "retry-after",
+            "x-contrix-wait-for-satisfied",
+            "content-range",
+            "accept-ranges",
+        ])
+        .max_age(3600)
+        .into_handler()
+}
 
 #[derive(Clone)]
 pub struct ContrixOpenApiDoc(pub OpenApi);

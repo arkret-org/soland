@@ -26,6 +26,12 @@ use super::{
     AuthArgs, append_audit_log, device_inventory_to_json, now, sha256_hex, validate_device_id,
 };
 
+pub fn router() -> Router {
+    Router::new()
+        .push(Router::with_path("devices/pairing-challenge").post(device_pairing_challenge))
+        .push(Router::with_path("devices/authorize-pairing").post(device_authorize_pairing))
+}
+
 #[endpoint(
     operation_id = "cx.devices.pairing_challenge",
     tags("devices"),

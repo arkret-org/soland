@@ -22,6 +22,12 @@ use crate::{
 
 use super::{AuthArgs, accept_local_operations};
 
+pub fn router() -> Router {
+    Router::with_path("reactions")
+        .post(add_reaction)
+        .delete(remove_reaction)
+}
+
 #[endpoint(
     operation_id = "cx.reactions.add",
     tags("reactions"),

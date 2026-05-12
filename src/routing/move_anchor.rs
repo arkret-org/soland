@@ -37,6 +37,16 @@ use crate::{
 
 use super::AuthArgs;
 
+pub fn router() -> Router {
+    Router::new()
+        .push(Router::with_path("moves").post(submit_move))
+        .push(Router::with_path("anchors").post(submit_anchor))
+}
+
+pub fn api_admin_router() -> Router {
+    Router::with_path("admin/anchors/sign").post(admin_sign_anchor)
+}
+
 /// Public re-export of the shape-only verifier so the anchorer worker
 /// (`crate::anchorer`) can pass it to `apply_anchor` without duplicating
 /// the JWS shape rules.

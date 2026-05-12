@@ -14,6 +14,10 @@ use crate::{ids, state::AppState};
 
 use super::{auth_or_render, now, query_param, render_error};
 
+pub fn router() -> Router {
+    Router::with_path("audit/events").get(audit_events)
+}
+
 #[endpoint]
 pub async fn audit_events(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");

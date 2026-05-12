@@ -31,6 +31,25 @@ use super::{
     validate_canonical_json_value, validate_did, validate_space_id,
 };
 
+pub fn router() -> Router {
+    Router::new()
+        .push(
+            Router::with_path("policies")
+                .get(list_policy_documents)
+                .post(upsert_policy_document),
+        )
+        .push(Router::with_path("policies/describe").get(super::describe::policies_describe))
+        .push(
+            Router::with_path("policies/{policy_id}")
+                .get(get_policy_document)
+                .delete(delete_policy_document),
+        )
+}
+
+pub fn contrix_router() -> Router {
+    Router::with_path("contrix/v1/check").post(policy_check)
+}
+
 #[endpoint]
 pub async fn list_policy_documents(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");

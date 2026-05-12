@@ -38,6 +38,29 @@ use crate::{
 
 use super::{now, render_error, sha256_hex};
 
+pub fn router() -> Router {
+    Router::new()
+        .push(Router::with_path("push/outbound/bridge/describe").get(outbound_push_bridge_describe))
+        .push(Router::with_path("push/outbound/bridge/resolve").post(outbound_push_bridge_resolve))
+        .push(Router::with_path("push/outbound/bridge/fetch").post(outbound_push_bridge_fetch))
+        .push(
+            Router::with_path("push/outbound/bridge/cache/status")
+                .get(outbound_push_bridge_cache_status),
+        )
+        .push(
+            Router::with_path("push/outbound/bridge/cache/export")
+                .get(outbound_push_bridge_cache_export),
+        )
+        .push(
+            Router::with_path("push/outbound/bridge/cache/import")
+                .post(outbound_push_bridge_cache_import),
+        )
+        .push(
+            Router::with_path("push/outbound/bridge/cache/invalidate")
+                .post(outbound_push_bridge_cache_invalidate),
+        )
+}
+
 #[endpoint]
 pub async fn outbound_push_bridge_describe(depot: &mut Depot, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");

@@ -33,6 +33,12 @@ use crate::{
 
 use super::AuthArgs;
 
+pub fn router() -> Router {
+    Router::new()
+        .push(Router::with_path("admin/events/resync-required").post(admin_emit_resync_required))
+        .push(Router::with_path("admin/events/unauthorized").post(admin_emit_unauthorized))
+}
+
 /// Request body for the resync-required / unauthorized triggers. Both
 /// endpoints share the same shape — a target Space and a free-form reason
 /// surfaced verbatim to subscribers in the control frame.

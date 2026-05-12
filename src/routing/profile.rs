@@ -14,6 +14,10 @@ use crate::state::AppState;
 
 use super::{now, query_param, render_error, validate_did};
 
+pub fn router() -> Router {
+    Router::with_path("profile/presence").get(profile_presence)
+}
+
 #[endpoint]
 pub async fn profile_presence(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");

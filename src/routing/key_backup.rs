@@ -10,6 +10,18 @@ use crate::{
 
 use super::{auth_or_render, query_param, render_error};
 
+pub fn router() -> Router {
+    Router::new()
+        .push(Router::with_path("keys/backups/describe").get(super::describe::key_backups_describe))
+        .push(
+            Router::with_path("keys/backups/{backup_id}")
+                .put(put_key_backup)
+                .get(get_key_backup)
+                .delete(delete_key_backup),
+        )
+        .push(Router::with_path("keys/backups").get(list_key_backups))
+}
+
 const REQUIRED_KEY_BACKUP_FIELDS: &[&str] = &[
     "backup_id",
     "actor_id",

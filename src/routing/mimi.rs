@@ -14,6 +14,25 @@ use crate::{ids, state::AppState};
 
 use super::{append_audit_log, now, render_error, sha256_hex};
 
+pub fn router() -> Router {
+    Router::with_path("mimi")
+        .push(Router::with_path("provider-directory").get(mimi_provider_directory))
+        .push(Router::with_path("key-material").post(mimi_key_material))
+        .push(Router::with_path("rooms/{room_id}/update").put(mimi_room_update))
+        .push(Router::with_path("rooms/{room_id}/notify").post(mimi_room_notify))
+        .push(Router::with_path("rooms/{room_id}/messages").post(mimi_room_message))
+        .push(Router::with_path("rooms/{room_id}/group-info").get(mimi_group_info))
+        .push(Router::with_path("consent/request").post(mimi_consent_request))
+        .push(Router::with_path("consent/update").post(mimi_consent_update))
+        .push(Router::with_path("identifiers/query").post(mimi_identifiers_query))
+        .push(Router::with_path("report-abuse").post(mimi_report_abuse))
+        .push(Router::with_path("proxy-download").post(mimi_proxy_download))
+}
+
+pub fn well_known_router() -> Router {
+    Router::with_path(".well-known/mimi-protocol-directory").get(mimi_protocol_directory)
+}
+
 #[endpoint]
 pub async fn mimi_protocol_directory(depot: &mut Depot, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");

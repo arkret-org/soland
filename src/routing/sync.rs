@@ -56,6 +56,16 @@ use super::{
     validate_did, validate_space_id,
 };
 
+pub fn router() -> Router {
+    Router::new()
+        .push(Router::with_path("sync/describe").get(sync_describe))
+        .push(Router::with_path("sync").post(client_sync))
+        .push(Router::with_path("sync/typing").post(set_typing))
+        .push(Router::with_path("sync/backfill/gap").get(sync_gap_backfill))
+        .push(Router::with_path("sync/snapshot-head").get(snapshot_head))
+        .push(Router::with_path("sync/snapshot-chunk").get(snapshot_chunk))
+}
+
 #[endpoint]
 pub async fn sync_describe(depot: &mut Depot, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");

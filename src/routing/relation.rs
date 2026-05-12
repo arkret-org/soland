@@ -25,6 +25,16 @@ use super::{
     accept_local_operations, auth_or_render, query_param, render_error, validate_space_id,
 };
 
+pub fn router() -> Router {
+    Router::new()
+        .push(
+            Router::with_path("relations")
+                .post(create_relation)
+                .get(list_relations),
+        )
+        .push(Router::with_path("relations/{relation_id}").delete(delete_relation))
+}
+
 #[endpoint]
 pub async fn create_relation(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");

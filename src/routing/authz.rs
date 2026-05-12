@@ -26,6 +26,16 @@ use crate::{
 
 use super::{append_audit_log, auth_or_render, now, query_param, render_error};
 
+pub fn router() -> Router {
+    Router::new()
+        .push(Router::with_path("authz/describe").get(super::describe::authz_describe))
+        .push(Router::with_path("authz/check").post(authz_check))
+        .push(Router::with_path("authz/effective-grants").get(effective_grants))
+        .push(Router::with_path("authz/grants").post(create_grant))
+        .push(Router::with_path("authz/grants/{grant_id}").delete(revoke_grant))
+        .push(Router::with_path("authz/invites").get(invites))
+}
+
 #[endpoint]
 pub async fn authz_check(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");

@@ -35,6 +35,18 @@ use super::{
     space_resolvable_to, space_search_discoverability, space_search_visible_to,
 };
 
+pub fn router() -> Router {
+    Router::new()
+        .push(Router::with_path("directory/describe").get(directory_describe))
+        .push(Router::with_path("directory/search-spaces").post(search_spaces))
+        .push(Router::with_path("directory/resolve-space").post(resolve_space))
+        .push(Router::with_path("directory/search-organizations").post(search_organizations))
+        .push(Router::with_path("directory/resolve-organization").post(resolve_organization))
+        .push(Router::with_path("directory/search-actors").post(search_actors))
+        .push(Router::with_path("directory/search-users").get(search_users))
+        .push(Router::with_path("directory/resolve-handle").post(resolve_handle))
+}
+
 #[endpoint]
 pub async fn directory_describe(depot: &mut Depot, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");

@@ -32,6 +32,15 @@ use super::{
     is_valid_discoverability, now, validate_did, validate_space_id,
 };
 
+pub fn router() -> Router {
+    Router::with_path("spaces")
+        .post(create_space)
+        .push(Router::with_path("{space_id}").delete(delete_space))
+        .push(Router::with_path("{space_id}/export").get(export_space))
+        .push(Router::with_path("{space_id}/members").post(add_space_member))
+        .push(Router::with_path("{space_id}/members/{member_did}").delete(remove_space_member))
+}
+
 #[endpoint(
     operation_id = "cx.spaces.create",
     tags("spaces"),

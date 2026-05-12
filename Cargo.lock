@@ -642,6 +642,7 @@ dependencies = [
  "salvo",
  "serde",
  "serde_json",
+ "serde_norway",
  "url",
 ]
 

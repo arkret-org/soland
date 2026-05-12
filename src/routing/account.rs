@@ -29,6 +29,22 @@ use super::{
     validate_did,
 };
 
+pub fn router() -> Router {
+    Router::new()
+        .push(
+            Router::with_path("account")
+                .push(Router::with_path("register").post(account_register))
+                .push(Router::with_path("me").get(account_me))
+                .push(Router::with_path("{did}/principal-space").get(account_principal_space)),
+        )
+        .push(
+            Router::with_path("contacts")
+                .get(list_contacts)
+                .push(Router::with_path("request").post(contact_request))
+                .push(Router::with_path("respond").post(contact_respond)),
+        )
+}
+
 #[endpoint(
     operation_id = "cx.account.register",
     tags("account"),

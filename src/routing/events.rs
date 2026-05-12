@@ -35,6 +35,20 @@ use super::{
     validate_operation_semantics, validate_space_id,
 };
 
+pub fn router() -> Router {
+    Router::new()
+        .push(Router::with_path("events/describe").get(events_describe))
+        .push(Router::with_path("events/subscribe").get(super::sync::events_subscribe))
+        .push(
+            Router::with_path("events")
+                .post(submit_event)
+                .get(super::sync::events_query),
+        )
+        .push(Router::with_path("events/batch-get").post(batch_get_events))
+        .push(Router::with_path("events/frontier").get(events_frontier))
+        .push(Router::with_path("events/{event_id}").get(get_event))
+}
+
 const MAX_EVENT_BYTES: usize = 64 * 1024;
 const MAX_EVENT_PREV_REFS: usize = 32;
 const MAX_EVENT_REFS: usize = 64;

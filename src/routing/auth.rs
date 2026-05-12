@@ -39,6 +39,14 @@ use super::{append_audit_log, bearer_token, now, render_error, validate_device_i
 
 const PRINCIPAL_SESSION_BIND_SCOPE: &str = "urn:contrix:principal-server:session.bind";
 
+pub fn router() -> Router {
+    Router::with_path("auth")
+        .push(Router::with_path("bridge/describe").get(super::describe::auth_bridge_describe))
+        .push(Router::with_path("dev-login").post(dev_login))
+        .push(Router::with_path("session-grant/exchange").post(exchange_session_grant))
+        .push(Router::with_path("logout").post(logout))
+}
+
 #[endpoint(
     operation_id = "cx.auth.dev_login",
     tags("auth"),
