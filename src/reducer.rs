@@ -28,11 +28,9 @@ pub mod registry;
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use contrix_sdk::{
-    CellRef, Operation, SpaceId,
-    lattice::CellState,
-    state_res::{CellRegistry, CellStore, StoreError},
-};
+use contrix_sdk::lattice::CellState;
+use contrix_sdk::state_res::{CellRegistry, CellStore, StoreError};
+use contrix_sdk::{CellRef, Operation, SpaceId};
 use serde_json::Value;
 
 use crate::hlc::ServerHlc;
@@ -89,21 +87,18 @@ pub struct ProjectionState {
     /// This map is the canonical source for all cell-driven state in the
     /// Move/Anchor pipeline.
     /// Completed migrations:
-    ///   - `read_receipt_policies` (CasRegister) — old BTreeMap deleted; read
-    ///     path uses `cell_value`.
-    ///   - `memberships` / `banned_members` / `knocking_members` (FSM) —
-    ///     replaced by flat `members: BTreeMap<(String, String),
-    ///     MembershipState>` cache + per-actor `cx.component.member.state.v1`
-    ///     FSM cell.
-    ///   - `space_states` (mixed: ordered-log + cas-register) — kept as
-    ///     structured `space_states` side-band cache (server-side
-    ///     `created_at`/`updated_at`/`deleted` flag) BUT every
-    ///     `apply_space_lifecycle` now also writes one of:
-    ///     `cx.component.space.create.v1` (ordered-log, append) /
-    ///     `cx.component.space.organization.v1` (cas-register, latest
-    ///     metadata) / `cx.component.space.destroy.v1` (cas-register,
-    ///     terminal). Helpers: `space_create_log` / `space_organization_cell_value`
-    ///     / `space_is_destroyed` query cells directly.
+    ///   - `read_receipt_policies` (CasRegister) — old BTreeMap deleted; read path uses
+    ///     `cell_value`.
+    ///   - `memberships` / `banned_members` / `knocking_members` (FSM) — replaced by flat
+    ///     `members: BTreeMap<(String, String), MembershipState>` cache + per-actor
+    ///     `cx.component.member.state.v1` FSM cell.
+    ///   - `space_states` (mixed: ordered-log + cas-register) — kept as structured `space_states`
+    ///     side-band cache (server-side `created_at`/`updated_at`/`deleted` flag) BUT every
+    ///     `apply_space_lifecycle` now also writes one of: `cx.component.space.create.v1`
+    ///     (ordered-log, append) / `cx.component.space.organization.v1` (cas-register, latest
+    ///     metadata) / `cx.component.space.destroy.v1` (cas-register, terminal). Helpers:
+    ///     `space_create_log` / `space_organization_cell_value` / `space_is_destroyed` query cells
+    ///     directly.
     /// Durable-event-only fields (`messages` / `reactions` / `read_markers`
     /// / `relations` / `redactions`) stay structured per spec
     /// (those event kinds have no `cell_family` declaration).
@@ -365,17 +360,14 @@ impl ProjectionState {
     /// handles this Operation's canonical kind via `event_kinds()`.
     ///
     /// Behaviour:
-    /// - **Hit on a cell-family impl**: routes through the inline
-    ///   `apply_*` helpers (the helpers ARE the projection — the registry
-    ///   only validates that the spec maps this event_kind to a known
-    ///   cell family, then we trust the inline dispatcher to handle the
-    ///   per-domain effect).
-    /// - **No mapping in registry but a known canonical kind**: the kind
-    ///   is durable-Event-only (`cx.message.*` / `cx.reaction.*` etc.);
-    ///   fall through to inline `apply()` exactly as before. No log noise.
-    /// - **Unknown canonical kind**: spec compliance requires us to fail
-    ///   closed — log at `error` level and project as `ProjectionEffect::
-    ///   Ignored` with `bottom = reject` semantics.
+    /// - **Hit on a cell-family impl**: routes through the inline `apply_*` helpers (the helpers
+    ///   ARE the projection — the registry only validates that the spec maps this event_kind to a
+    ///   known cell family, then we trust the inline dispatcher to handle the per-domain effect).
+    /// - **No mapping in registry but a known canonical kind**: the kind is durable-Event-only
+    ///   (`cx.message.*` / `cx.reaction.*` etc.); fall through to inline `apply()` exactly as
+    ///   before. No log noise.
+    /// - **Unknown canonical kind**: spec compliance requires us to fail closed — log at `error`
+    ///   level and project as `ProjectionEffect:: Ignored` with `bottom = reject` semantics.
     pub fn apply_via_lattice_registry(
         &mut self,
         operation: &Operation,
@@ -1147,10 +1139,10 @@ impl ProjectionState {
 
     /// Projection-layer view of a single message that
     /// consults the parallel `redaction` cell. Returns:
-    ///   - `Some(view)` with `content = Some(_)` for live messages (no
-    ///     redaction cell set, or set back to null);
-    ///   - `Some(view)` with `content = None` + `redaction = Some(_)` when
-    ///     the parallel cell is in effect — caller renders the tombstone;
+    ///   - `Some(view)` with `content = Some(_)` for live messages (no redaction cell set, or set
+    ///     back to null);
+    ///   - `Some(view)` with `content = None` + `redaction = Some(_)` when the parallel cell is in
+    ///     effect — caller renders the tombstone;
     ///   - `None` if no underlying [`MessageState`] is known.
     ///
     /// The ordered-log historical entry id is preserved unchanged so

@@ -21,28 +21,26 @@
 //! transition, so the Move passes verify and the post-state is
 //! `Value("join")`.
 
-use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use ed25519_dalek::{Signer, SigningKey};
-use salvo::{
-    http::StatusCode,
-    test::{ResponseExt, TestClient},
-};
-use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use contrix_sdk::lattice::CellState;
+use contrix_sdk::state_res::compute_state_root;
+use contrix_sdk::state_res::state_root::EMPTY_STATE_ROOT;
 use contrix_sdk::{
     Anchor, AnchorId, AnchorerSig, CellRef, Hash, Hlc, Move, MoveId, MoveSignature, SpaceId,
     canonical,
-    lattice::CellState,
-    state_res::{compute_state_root, state_root::EMPTY_STATE_ROOT},
 };
-use soland::{
-    config::{AppConfig, ObjectStorageConfig},
-    db::Db,
-    service,
-    state::AppState,
-};
+use ed25519_dalek::{Signer, SigningKey};
+use salvo::http::StatusCode;
+use salvo::test::{ResponseExt, TestClient};
+use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
+use soland::config::{AppConfig, ObjectStorageConfig};
+use soland::db::Db;
+use soland::service;
+use soland::state::AppState;
 
 fn test_config() -> AppConfig {
     AppConfig {
@@ -186,8 +184,8 @@ async fn move_then_anchor_apply_returns_recomputed_state_root() {
     let token = dev_token(state.clone()).await;
     let app = service(state.clone());
 
-    // 1. Submit Move — soland verifies signature + effect shape and
-    //    stashes it in the in-memory MoveStore.
+    // 1. Submit Move — soland verifies signature + effect shape and stashes it in the in-memory
+    //    MoveStore.
     let move_obj = build_invited_to_join_move();
     let submit: Value = TestClient::post("http://server/api/v1/moves")
         .add_header("Authorization", format!("Bearer {token}"), true)
@@ -203,15 +201,14 @@ async fn move_then_anchor_apply_returns_recomputed_state_root() {
     );
     assert_eq!(submit["move_id"].as_str().unwrap(), move_obj.id.as_str());
 
-    // 2. Compute the expected post-state_root. After this Move,
-    //    member.state cell holds Value("join").
+    // 2. Compute the expected post-state_root. After this Move, member.state cell holds
+    //    Value("join").
     let mut expected = BTreeMap::new();
     expected.insert(member_cell(), CellState::Value(json!("join")));
     let expected_root = compute_state_root(&expected).unwrap();
 
-    // 3. Submit Anchor — soland delegates to apply_anchor, which:
-    //    structural OK → no predecessors (genesis) → frontier monotonic →
-    //    deterministic_order → verify_move → atomic apply effect →
+    // 3. Submit Anchor — soland delegates to apply_anchor, which: structural OK → no predecessors
+    //    (genesis) → frontier monotonic → deterministic_order → verify_move → atomic apply effect →
     //    recompute state_root → match A.state_root.
     let anchor = build_genesis_anchor(move_obj.id.clone(), expected_root.clone());
     let resp: Value = TestClient::post("http://server/api/v1/anchors")
@@ -435,10 +432,9 @@ async fn anchorer_worker_signs_pending_move_and_publishes_anchor() {
         "Move should be queued pending after submit_move (got {submit:?})"
     );
 
-    // 2. Trigger the anchorer worker via the admin endpoint. This runs
-    //    one signing pass: collect pending Moves → deterministic_order →
-    //    verify each → predict state_root → build & sign Anchor →
-    //    apply_anchor (which re-verifies).
+    // 2. Trigger the anchorer worker via the admin endpoint. This runs one signing pass: collect
+    //    pending Moves → deterministic_order → verify each → predict state_root → build & sign
+    //    Anchor → apply_anchor (which re-verifies).
     let sign_resp: Value = TestClient::post("http://server/api/v1/admin/anchors/sign")
         .add_header("Authorization", format!("Bearer {token}"), true)
         .json(&json!({
@@ -542,19 +538,18 @@ fn sha256_json(value: &Value) -> String {
 
 /// events.subscribe is a streaming NDJSON
 /// response. This test:
-///   1. Calls GET /api/v1/events/subscribe with `max_duration_ms=500` so
-///      the stream auto-closes quickly enough for TestClient to collect
-///      the full body.
-///   2. (Concurrently) submits a message Event via /api/v1/events which
-///      triggers `project_accepted_operations` → broadcast notification.
+///   1. Calls GET /api/v1/events/subscribe with `max_duration_ms=500` so the stream auto-closes
+///      quickly enough for TestClient to collect the full body.
+///   2. (Concurrently) submits a message Event via /api/v1/events which triggers
+///      `project_accepted_operations` → broadcast notification.
 ///   3. Asserts the response body contains:
 ///      - one `kind="catchup_complete"` frame
 ///      - at least one `kind="event"` frame with the message id we sent
-///      - one `kind="heartbeat"` frame with `stream_closing=true`
-///        (deadline fire)
+///      - one `kind="heartbeat"` frame with `stream_closing=true` (deadline fire)
 #[tokio::test]
 async fn events_subscribe_streams_live_event_then_closes_at_deadline() {
     use std::time::Duration as StdDuration;
+
     use tokio::time::sleep;
 
     let state = AppState::new(test_config(), Db { pool: None });
@@ -944,6 +939,7 @@ async fn production_verifier_rejects_unknown_verification_method() {
 #[tokio::test]
 async fn anchorer_pass_broadcasts_frontier_frame_to_subscribers() {
     use std::time::Duration as StdDuration;
+
     use tokio::time::sleep;
 
     let state = AppState::new(test_config(), Db { pool: None });

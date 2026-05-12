@@ -4,19 +4,17 @@
 //! `state.persistence.moderation()`. Tier 6-D in `_todos.md` covers the async
 //! review workflow + reducer linkage.
 
-use salvo::{http::StatusCode, prelude::*};
+use salvo::http::StatusCode;
+use salvo::prelude::*;
 use serde_json::json;
-
-use crate::{
-    ids,
-    state::AppState,
-    wire::{ModerationReportRequest, ModerationReportResponse},
-};
 
 use super::{
     append_audit_log, auth_or_render, now, render_error, space_has_member, validate_did,
     validate_space_id,
 };
+use crate::ids;
+use crate::state::AppState;
+use crate::wire::{ModerationReportRequest, ModerationReportResponse};
 
 pub(super) fn router() -> Router {
     Router::with_path("moderation/report").post(moderation_report)

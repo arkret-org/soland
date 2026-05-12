@@ -10,15 +10,15 @@
 //! in their owning module so they can carry their own invariants. They will
 //! land here only if they outgrow that scope.
 
-use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use contrix_sdk::{DeviceId, Did, ErrorEnvelope, SpaceId};
-use salvo::{
-    http::{StatusCode, header},
-    prelude::*,
-};
+use salvo::http::{StatusCode, header};
+use salvo::prelude::*;
 use sha2::{Digest, Sha256};
 
-use crate::{ids, wire::ApiError};
+use crate::ids;
+use crate::wire::ApiError;
 
 // ── HTTP helpers ────────────────────────────────────────────────────────────
 

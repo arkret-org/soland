@@ -13,21 +13,17 @@ use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::{
-    JsonResult,
-    error::AppError,
-    json_ok,
-    state::{AccountRecord, AppState, ContactRecord, DeviceInventoryRecord},
-    wire::{
-        AccountResponse, ContactRequestRequest, ContactRespondRequest, ContactResponse,
-        ContactsResponse, RegisterAccountRequest,
-    },
-};
-
 use super::{
     AuthArgs, append_audit_log, is_valid_handle, normalize_handle, now, validate_device_id,
     validate_did,
 };
+use crate::error::AppError;
+use crate::state::{AccountRecord, AppState, ContactRecord, DeviceInventoryRecord};
+use crate::wire::{
+    AccountResponse, ContactRequestRequest, ContactRespondRequest, ContactResponse,
+    ContactsResponse, RegisterAccountRequest,
+};
+use crate::{JsonResult, json_ok};
 
 pub(super) fn router() -> Router {
     Router::new()
@@ -297,11 +293,11 @@ async fn list_contacts(
 /// ```
 ///
 /// `mapping_kind` is one of:
-/// - `"deterministic"` — the response was computed via the SHA-256 mapping
-///   (current behavior; matches `coauth::holder_principal_space_for_did`).
-/// - `"custom"` — a future override (admin-set or onboarding-time pinned)
-///   was applied. v1 only emits `"deterministic"`; the field is reserved
-///   so coauth can swap the mapping later without a wire bump.
+/// - `"deterministic"` — the response was computed via the SHA-256 mapping (current behavior;
+///   matches `coauth::holder_principal_space_for_did`).
+/// - `"custom"` — a future override (admin-set or onboarding-time pinned) was applied. v1 only
+///   emits `"deterministic"`; the field is reserved so coauth can swap the mapping later without a
+///   wire bump.
 ///
 /// `stashed` indicates the result was persisted to the audit log as a
 /// follow-up hook so future custom-mapping overrides can write to the same

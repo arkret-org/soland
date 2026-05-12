@@ -13,18 +13,16 @@
 //! the 10 condition.kind types, the capability lattice, and grant/invite/policy
 //! lifecycle integration.
 
-use salvo::{http::StatusCode, prelude::*};
+use salvo::http::StatusCode;
+use salvo::prelude::*;
 use serde_json::json;
 
-use crate::{
-    state::AppState,
-    wire::{
-        AuthzCheckRequest, AuthzCheckResponse, CreateGrantRequest, EffectiveGrantsResponse,
-        InvitesResponse,
-    },
-};
-
 use super::{append_audit_log, auth_or_render, now, query_param, render_error};
+use crate::state::AppState;
+use crate::wire::{
+    AuthzCheckRequest, AuthzCheckResponse, CreateGrantRequest, EffectiveGrantsResponse,
+    InvitesResponse,
+};
 
 pub(super) fn router() -> Router {
     Router::new()

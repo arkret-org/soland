@@ -18,25 +18,22 @@
 //! `render_outbound_push_bridge_fetch_fallback`) all stay private to this
 //! module — none cross domain.
 
-use salvo::{http::StatusCode, prelude::*};
+use salvo::http::StatusCode;
+use salvo::prelude::*;
 use serde_json::{Value, json};
 
-use crate::{
-    state::{AppState, OutboundPushBridgeCacheRecord},
-    wire::{
-        OutboundPushBridgeCacheEntry, OutboundPushBridgeCacheExportResponse,
-        OutboundPushBridgeCacheImportRequest, OutboundPushBridgeCacheImportResponse,
-        OutboundPushBridgeCacheInvalidateRequest, OutboundPushBridgeCacheInvalidateResponse,
-        OutboundPushBridgeCacheSnapshot, OutboundPushBridgeCacheStatusResponse,
-        OutboundPushBridgeDescribeResponse, OutboundPushBridgeExamples,
-        OutboundPushBridgeFetchRequest, OutboundPushBridgeFetchResponse,
-        OutboundPushBridgeResolveRequest, OutboundPushBridgeResolveResponse,
-        OutboundPushDeliveryDescriptor, OutboundPushGatewayContractDescriptor,
-        OutboundPushResolvedContract,
-    },
-};
-
 use super::{now, render_error, sha256_hex};
+use crate::state::{AppState, OutboundPushBridgeCacheRecord};
+use crate::wire::{
+    OutboundPushBridgeCacheEntry, OutboundPushBridgeCacheExportResponse,
+    OutboundPushBridgeCacheImportRequest, OutboundPushBridgeCacheImportResponse,
+    OutboundPushBridgeCacheInvalidateRequest, OutboundPushBridgeCacheInvalidateResponse,
+    OutboundPushBridgeCacheSnapshot, OutboundPushBridgeCacheStatusResponse,
+    OutboundPushBridgeDescribeResponse, OutboundPushBridgeExamples, OutboundPushBridgeFetchRequest,
+    OutboundPushBridgeFetchResponse, OutboundPushBridgeResolveRequest,
+    OutboundPushBridgeResolveResponse, OutboundPushDeliveryDescriptor,
+    OutboundPushGatewayContractDescriptor, OutboundPushResolvedContract,
+};
 
 pub(super) fn router() -> Router {
     Router::new()

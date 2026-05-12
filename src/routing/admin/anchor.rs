@@ -1,22 +1,20 @@
 //! Stream H' admin surface — anchorer cell, Bottom diagnostics, Anchor DAG.
 //!
 //! Endpoints:
-//! - `GET  /api/admin/v1/spaces/{space_id}/anchorer` — typed anchorer
-//!   cell value (`{kind, single_did?|threshold_*?|open_set_members?|mixed_*?,
-//!   max_anchor_staleness_ms?, paused}`).
-//! - `POST /api/admin/v1/spaces/{space_id}/anchorer/reconfigure` —
-//!   submit a reconfig Move that writes the new anchorer cell value
-//!   (cas-register on `cx:cell:cx.component.anchorer.v1:<space_id>`).
-//!   Server-side signs with admin's session-grant key.
-//! - `GET  /api/admin/v1/spaces/{space_id}/bottom` — list cells whose
-//!   join produced a `Bottom` diagnostic.
+//! - `GET  /api/admin/v1/spaces/{space_id}/anchorer` — typed anchorer cell value (`{kind,
+//!   single_did?|threshold_*?|open_set_members?|mixed_*?, max_anchor_staleness_ms?, paused}`).
+//! - `POST /api/admin/v1/spaces/{space_id}/anchorer/reconfigure` — submit a reconfig Move that
+//!   writes the new anchorer cell value (cas-register on
+//!   `cx:cell:cx.component.anchorer.v1:<space_id>`). Server-side signs with admin's session-grant
+//!   key.
+//! - `GET  /api/admin/v1/spaces/{space_id}/bottom` — list cells whose join produced a `Bottom`
+//!   diagnostic.
 //! - `GET  /api/admin/v1/bottom` — global cross-space list.
-//! - `POST /api/admin/v1/spaces/{space_id}/bottom/{cell_id}/repair` —
-//!   submit a `head_in` (or manual) repair Move.
-//! - `GET  /api/admin/v1/spaces/{space_id}/anchor-dag` — leaves +
-//!   frontier + state_root snapshot.
-//! - `POST /api/admin/v1/spaces/{space_id}/anchor-dag/compact` —
-//!   trigger a signed compaction Anchor.
+//! - `POST /api/admin/v1/spaces/{space_id}/bottom/{cell_id}/repair` — submit a `head_in` (or
+//!   manual) repair Move.
+//! - `GET  /api/admin/v1/spaces/{space_id}/anchor-dag` — leaves + frontier + state_root snapshot.
+//! - `POST /api/admin/v1/spaces/{space_id}/anchor-dag/compact` — trigger a signed compaction
+//!   Anchor.
 //!
 //! DTO shapes mirror `sodmin/src/types/anchor.rs` (`AnchorerValue`,
 //! `BottomEntry`, `WinnerHead`, `BottomRepairStrategy`, `AnchorDagSnapshot`,
@@ -24,26 +22,23 @@
 //! `CompactionRequest`).
 //!
 //! v1 scope:
-//! - `single_did` reconfigure / `head_in_winner` repair / compaction
-//!   each invoke the existing in-process anchorer worker
-//!   (`crate::anchorer::run_one_signing_pass`) so the new admin Move /
-//!   Anchor flows through the same `apply_anchor` pipeline as everything
-//!   else. Where Move construction / signing for a brand-new admin DID
-//!   needs threading through the admin signer flow, we land a structurally
-//!   correct placeholder response **and** an inline `TODO(stream_h_admin)`
-//!   anchor so sodmin's UI can smoke-test wire shapes without blocking on
+//! - `single_did` reconfigure / `head_in_winner` repair / compaction each invoke the existing
+//!   in-process anchorer worker (`crate::anchorer::run_one_signing_pass`) so the new admin Move /
+//!   Anchor flows through the same `apply_anchor` pipeline as everything else. Where Move
+//!   construction / signing for a brand-new admin DID needs threading through the admin signer
+//!   flow, we land a structurally correct placeholder response **and** an inline
+//!   `TODO(stream_h_admin)` anchor so sodmin's UI can smoke-test wire shapes without blocking on
 //!   the multi-signer / DID-resolver work.
-//! - `threshold` / `open_set` / `mixed` anchorer profiles, `Manual`
-//!   repair (free-form effects), and full multi-signer compaction are
-//!   placeholder-only — these need the admin signer flow + per-Space
-//!   leader election that lands under `_todos.md` MAL-3 / MAL-11.
+//! - `threshold` / `open_set` / `mixed` anchorer profiles, `Manual` repair (free-form effects), and
+//!   full multi-signer compaction are placeholder-only — these need the admin signer flow +
+//!   per-Space leader election that lands under `_todos.md` MAL-3 / MAL-11.
 
+use contrix_sdk::lattice::CellState;
+use contrix_sdk::move_event::{Effect, LatticeOp, LatticeOpType};
+use contrix_sdk::state_res::{AnchorStore, CellStore, MoveStore};
 use contrix_sdk::{
     AnchorId, CellRef, Did, Ed25519MoveSigner, Hlc, Move, MoveSigner, PartialSignature, SpaceId,
     ThresholdAggregator, UnsignedMove,
-    lattice::CellState,
-    move_event::{Effect, LatticeOp, LatticeOpType},
-    state_res::{AnchorStore, CellStore, MoveStore},
 };
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam};
@@ -51,14 +46,10 @@ use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::{
-    JsonResult,
-    error::{AppError, ErrorCode},
-    json_ok,
-    state::AppState,
-};
-
 use super::AuthArgs;
+use crate::error::{AppError, ErrorCode};
+use crate::state::AppState;
+use crate::{JsonResult, json_ok};
 
 // ── DTOs (mirroring sodmin/src/types/anchor.rs exactly) ──────────────────
 
@@ -792,17 +783,14 @@ pub(super) async fn admin_list_bottom_global(
 /// submit a repair Move.
 ///
 /// Round 21:
-/// - `HeadInWinner` builds a real Move with one effect: `head_in` op
-///   that selects the winning head, plus a `recovery_capability`
-///   `SemanticRef` so the verifier knows this is an authorized repair.
-///   Note: `head_in` is a `LatticeOpType::Set`-shaped op in the SDK
-///   (the op semantics are spec-§5.3 lattice "head_in" but the SDK
-///   currently exposes the union via `LatticeOpType::Set` with the op
-///   `value` carrying the winner's value and the `tag` carrying the
-///   winner's move id). The `head` request payload provides both.
-/// - `Manual` is **still placeholder** — free-form effects validation +
-///   admin-scope enforcement is non-trivial and lives behind a separate
-///   admin signer flow.
+/// - `HeadInWinner` builds a real Move with one effect: `head_in` op that selects the winning head,
+///   plus a `recovery_capability` `SemanticRef` so the verifier knows this is an authorized repair.
+///   Note: `head_in` is a `LatticeOpType::Set`-shaped op in the SDK (the op semantics are spec-§5.3
+///   lattice "head_in" but the SDK currently exposes the union via `LatticeOpType::Set` with the op
+///   `value` carrying the winner's value and the `tag` carrying the winner's move id). The `head`
+///   request payload provides both.
+/// - `Manual` is **still placeholder** — free-form effects validation + admin-scope enforcement is
+///   non-trivial and lives behind a separate admin signer flow.
 #[endpoint(
     operation_id = "cx.admin.spaces.bottom.repair",
     tags("admin", "bottom"),
@@ -1435,7 +1423,8 @@ fn persistence_to_app_err(e: crate::persistence::PersistenceError) -> AppError {
 /// Errors are intentionally swallowed by the caller (best-effort); the
 /// row stays in the store so a watchdog can retry.
 fn try_aggregate_partials(record: &crate::state::MultisigPendingRecord) -> Result<String, String> {
-    use base64::{Engine, engine::general_purpose::STANDARD};
+    use base64::Engine;
+    use base64::engine::general_purpose::STANDARD;
 
     let canonical_bytes = STANDARD
         .decode(&record.canonical_b64)
@@ -1525,8 +1514,9 @@ pub(super) async fn admin_list_gc_candidates(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use serde_json::json;
+
+    use super::*;
 
     #[test]
     fn anchorer_value_from_cell_defaults_to_service_did_when_absent() {

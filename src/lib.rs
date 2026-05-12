@@ -26,12 +26,13 @@ pub mod wire;
 
 pub use error::AppError;
 pub use result::{AppResult, EmptyResponse, EmptyResult, JsonResult, empty_ok, json_ok};
-
-use salvo::{catcher::Catcher, prelude::Service};
-
-use crate::{ratelimit::RateLimiterConfig, routing::error_catcher, state::AppState};
-
 pub use routing::{router, router_with_rate_limiter_config};
+use salvo::catcher::Catcher;
+use salvo::prelude::Service;
+
+use crate::ratelimit::RateLimiterConfig;
+use crate::routing::error_catcher;
+use crate::state::AppState;
 
 pub fn service(state: AppState) -> Service {
     Service::new(router(state)).catcher(Catcher::default().hoop(error_catcher))

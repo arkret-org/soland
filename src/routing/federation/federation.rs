@@ -6,13 +6,11 @@
 //! - `GET /api/v1/federation/pull-operations`
 //! - `GET /api/v1/federation/space-members`
 //! - `POST /api/v1/federation/verify-actor`
-//! - **MAL-12 round 25**: `GET /api/v1/federation/anchors?space_id=...`
-//!   (peer-pull: list locally-held Anchors for a Space) +
-//!   `POST /api/v1/federation/anchors` (peer-push: accept Anchor envelopes
-//!   for replication). The wire path is identical for both
-//!   [`crate::config::FederationPolicy::Mesh`] and
-//!   [`crate::config::FederationPolicy::Hub`]; only the outbound routing
-//!   decision (broadcast vs hub-only) differs.
+//! - **MAL-12 round 25**: `GET /api/v1/federation/anchors?space_id=...` (peer-pull: list
+//!   locally-held Anchors for a Space) + `POST /api/v1/federation/anchors` (peer-push: accept
+//!   Anchor envelopes for replication). The wire path is identical for both
+//!   [`crate::config::FederationPolicy::Mesh`] and [`crate::config::FederationPolicy::Hub`]; only
+//!   the outbound routing decision (broadcast vs hub-only) differs.
 //!
 //! Stream-C in `_todos.md` covers the production gaps: RFC 9421 transcript
 //! (B-06), idempotency (M-20), validation_class instead of bool (M-19),
@@ -22,19 +20,17 @@
 use chrono::Duration;
 use contrix_sdk::state_res::AnchorStore;
 use contrix_sdk::{Anchor, SpaceId};
-use salvo::{http::StatusCode, prelude::*};
+use salvo::http::StatusCode;
+use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-
-use crate::{
-    ids,
-    state::{AppState, FederationTransactionRecord},
-};
 
 use super::{
     ingest_federation_operations, now, operation_is_visible, query_flag, query_param,
     redaction_targets_from_operations, render_error, sha256_hex, sync_token, validate_space_id,
 };
+use crate::ids;
+use crate::state::{AppState, FederationTransactionRecord};
 
 #[endpoint]
 pub(super) async fn federation_transaction(
@@ -601,13 +597,13 @@ pub fn broadcast_anchor_to_peers(state: &AppState, anchor_id: &str) -> Vec<Strin
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::config::AppConfig;
-    use crate::config::FederationPolicy;
-    use crate::db::Db;
-    use crate::state::AppState;
     use std::net::SocketAddr;
     use std::str::FromStr;
+
+    use super::*;
+    use crate::config::{AppConfig, FederationPolicy};
+    use crate::db::Db;
+    use crate::state::AppState;
 
     fn config_with_policy(policy: FederationPolicy, peers: Vec<String>) -> AppConfig {
         AppConfig {

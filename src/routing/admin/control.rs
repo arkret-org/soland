@@ -9,10 +9,10 @@
 //! local cache).
 //!
 //! Endpoints:
-//! - `POST /api/v1/admin/events/resync-required` — emit a `resync_required`
-//!   frame to all subscribers of one Space. Body: `{space_id, reason}`.
-//! - `POST /api/v1/admin/events/unauthorized` — emit an `unauthorized`
-//!   frame; clients MUST close the stream and re-auth.
+//! - `POST /api/v1/admin/events/resync-required` — emit a `resync_required` frame to all
+//!   subscribers of one Space. Body: `{space_id, reason}`.
+//! - `POST /api/v1/admin/events/unauthorized` — emit an `unauthorized` frame; clients MUST close
+//!   the stream and re-auth.
 //!
 //! Both endpoints are auth-gated via the standard `AuthArgs` bearer
 //! check; rate limiting comes from the global RateLimiter middleware.
@@ -24,14 +24,10 @@ use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    JsonResult,
-    error::{AppError, ErrorCode},
-    json_ok,
-    state::{AppState, EventNotification, EventNotificationKind},
-};
-
 use super::AuthArgs;
+use crate::error::{AppError, ErrorCode};
+use crate::state::{AppState, EventNotification, EventNotificationKind};
+use crate::{JsonResult, json_ok};
 
 pub(super) fn router() -> Router {
     Router::new()
@@ -70,8 +66,8 @@ pub struct AdminControlFrameResponse {
 /// `POST /api/v1/admin/events/resync-required` — emit a
 /// `resync_required` mid-stream control frame to subscribers of one
 /// Space. Use cases:
-/// - Server-side compaction or recovery rewrote the Anchor DAG and
-///   client-cached cursors are no longer valid.
+/// - Server-side compaction or recovery rewrote the Anchor DAG and client-cached cursors are no
+///   longer valid.
 /// - Operator detected per-subscriber drift via out-of-band monitoring.
 ///
 /// Clients receiving this frame MUST drop their local cache and
@@ -115,8 +111,8 @@ async fn admin_emit_resync_required(
 /// `POST /api/v1/admin/events/unauthorized` — emit an `unauthorized`
 /// mid-stream control frame to subscribers of one Space. Use cases:
 /// - Bulk session revocation (compromised refresh token, deleted account).
-/// - Capability lattice change demoted the subscriber's grant below the
-///   subscribe threshold mid-session.
+/// - Capability lattice change demoted the subscriber's grant below the subscribe threshold
+///   mid-session.
 ///
 /// Clients receiving this frame MUST close the stream and re-authenticate
 /// before reconnecting; the existing session token is no longer accepted.
@@ -157,9 +153,10 @@ async fn admin_emit_unauthorized(
 
 #[cfg(test)]
 mod tests {
+    use tokio::sync::broadcast;
+
     use super::*;
     use crate::state::EventNotificationKind;
-    use tokio::sync::broadcast;
 
     #[tokio::test]
     async fn resync_required_notification_round_trips_through_channel() {

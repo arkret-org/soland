@@ -19,28 +19,65 @@ git clone https://github.com/contrix/soland.git
 cd soland
 ```
 
+The shortest local workflow uses [`just`](https://github.com/casey/just).
+Install it if needed:
+
+```bash
+cargo install just
+```
+
+Run `just` to see every available recipe.
+
 ### Run with the in-memory store (no database)
 
 ```bash
-SOLAND_DEVELOPMENT_MODE=true cargo run -- --bind 127.0.0.1:8698
+just start
 ```
 
 `DATABASE_URL` is optional. Without it, soland runs with an in-memory repository
 and demo Space data while keeping the same HTTP API. `SOLAND_DEVELOPMENT_MODE`
 **defaults to `false`**; turn it on explicitly when you need `dev_login`,
 the admin snapshot endpoints, or the relaxed DID-document validation that
-the development workflow relies on.
+the development workflow relies on. The `just start` recipe sets it to `true`
+for local runs unless you override it.
 
 ### Run against PostgreSQL
+
+```bash
+just start-db
+```
+
+`just start-db` starts a local `postgres:16` container named `soland-postgres`,
+waits for it to accept connections, then starts soland with the connection
+string below. This path requires Docker:
+
+```dotenv
+DATABASE_URL=postgres://soland:soland@localhost:5432/soland
+```
+
+Embedded Diesel migrations run on every startup; the tables are created
+idempotently. To stop the local database container:
+
+```bash
+just db-down
+```
+
+If you prefer a persistent `.env`, copy the example and uncomment or replace
+the `DATABASE_URL` line:
+
+```bash
+just init-env
+```
+
+Then `just start` will use the database configured in `.env`.
+
+Manual equivalent:
 
 ```bash
 DATABASE_URL=postgres://soland:soland@localhost:5432/soland \
   SOLAND_DEVELOPMENT_MODE=true \
   cargo run -- --bind 127.0.0.1:8698
 ```
-
-Embedded Diesel migrations run on every startup; the `accounts / sessions /
-devices / federation_transactions` tables are created idempotently.
 
 ### Run with Docker
 
@@ -138,9 +175,9 @@ contrix-dev/
 ```
 
 ```bash
-cargo fmt --all -- --check     # respects rustfmt.toml
-cargo clippy --all-targets --locked -- -D warnings
-cargo test --locked
+just fmt-check     # respects rustfmt.toml
+just check
+just test
 ```
 
 The OpenAPI snapshot test (`contrix_openapi_spec_contains_facet_projection_contracts`

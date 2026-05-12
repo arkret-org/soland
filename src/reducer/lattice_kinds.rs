@@ -10,18 +10,16 @@
 //! if the typed field is absent.
 //!
 //! Coverage:
-//! - **OrSet** (causal add/remove): consent.grant, capability.grant /
-//!   delegate / derived, session.grant, device.authorized, device.list_update,
-//!   covered_frontier (MLS).
-//! - **CasRegister** (last-writer-wins, conflict→Bottom): space.policy,
-//!   space.read_receipt_policy, space.history_visibility, space.join_rule,
-//!   space.discovery, space.organization, space.upgrade, flow.position,
-//!   place.parent, anchorer (Move/Anchor authority cell), mls_epoch.
+//! - **OrSet** (causal add/remove): consent.grant, capability.grant / delegate / derived,
+//!   session.grant, device.authorized, device.list_update, covered_frontier (MLS).
+//! - **CasRegister** (last-writer-wins, conflict→Bottom): space.policy, space.read_receipt_policy,
+//!   space.history_visibility, space.join_rule, space.discovery, space.organization, space.upgrade,
+//!   flow.position, place.parent, anchorer (Move/Anchor authority cell), mls_epoch.
 //! - **Fsm** (legal transitions only): member.state.
-//! - **OrderedLog** (per-issuer monotonic append): space.create, space.child,
-//!   space.parent, account.status, policy.rule.
-//! - **MvRegister** (concurrent multi-value): profile.create, view.create /
-//!   update / reconcile, mimi.room_binding.
+//! - **OrderedLog** (per-issuer monotonic append): space.create, space.child, space.parent,
+//!   account.status, policy.rule.
+//! - **MvRegister** (concurrent multi-value): profile.create, view.create / update / reconcile,
+//!   mimi.room_binding.
 //!
 //! Each impl is a ZST + trait impl. The factory [`default_lattice_registry`]
 //! pre-registers every spec-declared family; downstream Move/Anchor receive
@@ -60,7 +58,14 @@ macro_rules! singleton_lattice {
             &[]
         );
     };
-    ($struct_name:ident, $cell_family:expr, $lattice:expr, $bottom:expr, $criticality:expr, $event_kinds:expr) => {
+    (
+        $struct_name:ident,
+        $cell_family:expr,
+        $lattice:expr,
+        $bottom:expr,
+        $criticality:expr,
+        $event_kinds:expr
+    ) => {
         pub struct $struct_name;
         impl LatticeKind for $struct_name {
             fn cell_family(&self) -> &'static str {
@@ -94,7 +99,14 @@ macro_rules! singleton_lattice {
 }
 
 macro_rules! per_subject_lattice {
-    ($struct_name:ident, $cell_family:expr, $lattice:expr, $bottom:expr, $criticality:expr, $subject_field:expr) => {
+    (
+        $struct_name:ident,
+        $cell_family:expr,
+        $lattice:expr,
+        $bottom:expr,
+        $criticality:expr,
+        $subject_field:expr
+    ) => {
         per_subject_lattice!(
             $struct_name,
             $cell_family,
@@ -105,7 +117,15 @@ macro_rules! per_subject_lattice {
             &[]
         );
     };
-    ($struct_name:ident, $cell_family:expr, $lattice:expr, $bottom:expr, $criticality:expr, $subject_field:expr, $event_kinds:expr) => {
+    (
+        $struct_name:ident,
+        $cell_family:expr,
+        $lattice:expr,
+        $bottom:expr,
+        $criticality:expr,
+        $subject_field:expr,
+        $event_kinds:expr
+    ) => {
         pub struct $struct_name;
         impl LatticeKind for $struct_name {
             fn cell_family(&self) -> &'static str {
@@ -780,8 +800,9 @@ pub fn build_sdk_cell_registry() -> MemoryCellRegistry {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use serde_json::json;
+
+    use super::*;
 
     #[test]
     fn default_registry_covers_at_least_all_singleton_cas_families() {

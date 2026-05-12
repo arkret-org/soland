@@ -2,8 +2,7 @@
 //!
 //! Surfaces:
 //! - `POST   /api/v1/relations`                — create
-//! - `GET    /api/v1/relations`                — list, filtered by `?space_id`
-//!   / `?kind`
+//! - `GET    /api/v1/relations`                — list, filtered by `?space_id` / `?kind`
 //! - `DELETE /api/v1/relations/{relation_id}`  — delete (soft)
 //!
 //! `cx.relation.update` is intentionally not exposed as its own handler — the
@@ -12,18 +11,16 @@
 //! submit endpoint instead.
 
 use contrix_sdk::{Operation, OperationId, SpaceId};
-use salvo::{http::StatusCode, prelude::*};
+use salvo::http::StatusCode;
+use salvo::prelude::*;
 use serde_json::json;
-
-use crate::{
-    ids, kinds,
-    state::AppState,
-    wire::{CreateRelationRequest, RelationResponse},
-};
 
 use super::{
     accept_local_operations, auth_or_render, query_param, render_error, validate_space_id,
 };
+use crate::state::AppState;
+use crate::wire::{CreateRelationRequest, RelationResponse};
+use crate::{ids, kinds};
 
 pub(super) fn router() -> Router {
     Router::new()

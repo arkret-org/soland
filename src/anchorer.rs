@@ -11,45 +11,40 @@
 //!
 //! - **All four anchorer profiles supported**:
 //!   - `single_did` — straightforward DID match against `service_did`.
-//!   - `threshold(k, members[])` — simple deterministic leader election:
-//!     among the `members` set, the lex-smallest DID that *includes* this
-//!     node's `service_did` is the candidate to sign first; if `service_did`
-//!     IS that candidate, sign; otherwise this pass is a no-op (another
-//!     soland instance owns the round). The signature itself is single-DID
-//!     — `k`-of-`n` aggregation lives on the multi-signer coordinator.
-//!   - `open_set(members[])` — any member may sign; if `service_did ∈
-//!     members` this node signs.
-//!   - `mixed(primary, recovery_members[])` — primary signs by default;
-//!     recovery members may sign only after the leaf-Anchor frontier has
-//!     gone stale beyond `max_anchor_staleness_ms` (default 60_000ms when
-//!     unset). Among recovery members the lex-smallest reachable DID owns
-//!     the round (same election as threshold).
-//! - **Placeholder JWS** under dev mode and **real Ed25519** under prod
-//!   mode — handled by `select_jws_verifier` in `routing/move_anchor.rs`.
-//!   The signing side here still emits a placeholder JWS payload (real
-//!   Ed25519 *signing* needs HSM/keystore integration; verify
-//!   already lands in jws_verify.rs).
-//! - **Manual / on-demand only**. Trigger via the admin endpoint
-//!   `POST /api/admin/v1/anchors/sign`. A periodic ticker / push-loop is
-//!   left to future production work (needs lease coordination + shutdown
-//!   handling under tokio).
+//!   - `threshold(k, members[])` — simple deterministic leader election: among the `members` set,
+//!     the lex-smallest DID that *includes* this node's `service_did` is the candidate to sign
+//!     first; if `service_did` IS that candidate, sign; otherwise this pass is a no-op (another
+//!     soland instance owns the round). The signature itself is single-DID — `k`-of-`n` aggregation
+//!     lives on the multi-signer coordinator.
+//!   - `open_set(members[])` — any member may sign; if `service_did ∈ members` this node signs.
+//!   - `mixed(primary, recovery_members[])` — primary signs by default; recovery members may sign
+//!     only after the leaf-Anchor frontier has gone stale beyond `max_anchor_staleness_ms` (default
+//!     60_000ms when unset). Among recovery members the lex-smallest reachable DID owns the round
+//!     (same election as threshold).
+//! - **Placeholder JWS** under dev mode and **real Ed25519** under prod mode — handled by
+//!   `select_jws_verifier` in `routing/move_anchor.rs`. The signing side here still emits a
+//!   placeholder JWS payload (real Ed25519 *signing* needs HSM/keystore integration; verify already
+//!   lands in jws_verify.rs).
+//! - **Manual / on-demand only**. Trigger via the admin endpoint `POST /api/admin/v1/anchors/sign`.
+//!   A periodic ticker / push-loop is left to future production work (needs lease coordination +
+//!   shutdown handling under tokio).
+
+use std::collections::BTreeMap;
+use std::sync::OnceLock;
 
 use anyhow::Result;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use ed25519_dalek::{Signer as _, SigningKey};
-use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
-use std::sync::OnceLock;
-
+use contrix_sdk::lattice::{AnchoredOp, CellState};
+use contrix_sdk::state_res::{
+    AnchorStore, CellRegistry, CellStore, MoveStore, StoreError, apply_anchor, compute_state_root,
+    effective_anchor_view, verify_move,
+};
 use contrix_sdk::{
     Anchor, AnchorId, AnchorerSig, CellRef, Hash, Hlc, Move, MoveId, MoveSignature, SpaceId,
-    lattice::{AnchoredOp, CellState},
-    state_res::{
-        AnchorStore, CellRegistry, CellStore, MoveStore, StoreError, apply_anchor,
-        compute_state_root, effective_anchor_view, verify_move,
-    },
 };
+use ed25519_dalek::{Signer as _, SigningKey};
+use sha2::{Digest, Sha256};
 
 use crate::config::AnchorerSigningKeyOrigin;
 use crate::routing::federation::move_anchor::select_jws_verifier;
@@ -99,10 +94,9 @@ impl AnchorerWorker {
     /// Run one signing pass for the given Space. Returns:
     ///
     /// - `Ok(Some(outcome))` when an Anchor was published
-    /// - `Ok(None)` when there were no pending Moves to anchor (or none
-    ///   that passed verify)
-    /// - `Err(_)` when the worker hit a hard error (storage / signing /
-    ///   apply_anchor rejection that wasn't `StateRootMismatch`)
+    /// - `Ok(None)` when there were no pending Moves to anchor (or none that passed verify)
+    /// - `Err(_)` when the worker hit a hard error (storage / signing / apply_anchor rejection that
+    ///   wasn't `StateRootMismatch`)
     pub fn sign_pending_for_space(
         &self,
         state: &AppState,
@@ -302,17 +296,15 @@ impl AnchorerWorker {
     ///
     /// Profile dispatch:
     ///
-    /// - **Genesis** (no anchorer cell yet) — implicit `service_did` is
-    ///   the anchorer.
+    /// - **Genesis** (no anchorer cell yet) — implicit `service_did` is the anchorer.
     /// - **Bottom** on the anchorer cell — Space-wide pause; not authorized.
     /// - **single_did** — DID match against `service_did`.
-    /// - **threshold(k, members)** / **open_set(members)** — leader election:
-    ///   among `members`, the lex-smallest DID is the round leader; if it
-    ///   matches `service_did`, this node signs; otherwise no-op.
-    /// - **mixed(primary, recovery_members, max_anchor_staleness_ms?)** —
-    ///   primary signs by default. If the latest leaf is older than
-    ///   `max_anchor_staleness_ms` (default 60_000ms), the recovery set
-    ///   takes over with the same lex-smallest leader election.
+    /// - **threshold(k, members)** / **open_set(members)** — leader election: among `members`, the
+    ///   lex-smallest DID is the round leader; if it matches `service_did`, this node signs;
+    ///   otherwise no-op.
+    /// - **mixed(primary, recovery_members, max_anchor_staleness_ms?)** — primary signs by default.
+    ///   If the latest leaf is older than `max_anchor_staleness_ms` (default 60_000ms), the
+    ///   recovery set takes over with the same lex-smallest leader election.
     fn is_authorized_for(
         &self,
         state: &AppState,
@@ -618,8 +610,9 @@ pub fn run_one_signing_pass(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use serde_json::json;
+
+    use super::*;
 
     #[test]
     fn read_did_list_picks_first_present_alias() {

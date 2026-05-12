@@ -5,8 +5,8 @@
 //!
 //! Endpoints:
 //! - `GET /api/v1/admin/cells/{cell_id}` — return one cell's resolved state.
-//! - `GET /api/v1/admin/cells?space_id=...&prefix=cx.component.consent.`
-//!     — list matching cells (paginated; `limit`/`offset` query params).
+//! - `GET /api/v1/admin/cells?space_id=...&prefix=cx.component.consent.` — list matching cells
+//!   (paginated; `limit`/`offset` query params).
 //!
 //! Both endpoints are auth-gated via the existing `AuthArgs` bearer-session
 //! check; rate limiting comes from the global RateLimiter middleware.
@@ -19,25 +19,19 @@
 //! so the sentinel only affects diagnostic logging — TODO: thread real
 //! space_id through once cell_registry per-Space scoping lands).
 
-use contrix_sdk::{
-    CellRef, SpaceId,
-    lattice::CellState,
-    state_res::{CellRegistry, CellStore},
-};
+use contrix_sdk::lattice::CellState;
+use contrix_sdk::state_res::{CellRegistry, CellStore};
+use contrix_sdk::{CellRef, SpaceId};
 use salvo::http::StatusCode;
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::{
-    JsonResult,
-    error::{AppError, ErrorCode},
-    json_ok,
-    state::AppState,
-};
-
 use super::AuthArgs;
 use super::util::query_param;
+use crate::error::{AppError, ErrorCode};
+use crate::state::AppState;
+use crate::{JsonResult, json_ok};
 
 pub(super) fn router() -> Router {
     Router::new()
@@ -243,12 +237,11 @@ async fn admin_get_cell(
 /// — list cells matching the filter.
 ///
 /// Filters:
-/// - `space_id` (required) — the SpaceId scope. Cells are scoped per Space
-///   in the underlying CellStore; we walk `cell_store.list_cells(space_id)`
-///   for the canonical set then read each cell's effective state from
-///   `ProjectionState::cells`.
-/// - `prefix` (optional) — filter to cells whose `<family>` (component)
-///   starts with this prefix (e.g. `cx.component.consent.`).
+/// - `space_id` (required) — the SpaceId scope. Cells are scoped per Space in the underlying
+///   CellStore; we walk `cell_store.list_cells(space_id)` for the canonical set then read each
+///   cell's effective state from `ProjectionState::cells`.
+/// - `prefix` (optional) — filter to cells whose `<family>` (component) starts with this prefix
+///   (e.g. `cx.component.consent.`).
 /// - `limit` (default 100, max 1000) / `offset` (default 0) — pagination.
 #[endpoint(
     operation_id = "cx.admin.cells.list",
@@ -361,8 +354,9 @@ async fn admin_list_cells(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use serde_json::json;
+
+    use super::*;
 
     #[test]
     fn state_response_value_serializes_with_value_field() {

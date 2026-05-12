@@ -2,40 +2,36 @@
 //!
 //! Surfaces:
 //! - `POST /api/v1/auth/dev-login` — dev-mode bearer issue
-//! - `POST /api/v1/auth/session-grant/exchange` — coauth bridge (scaffold; see
-//!   the `TODO(session-grant-exchange)` annotation below and Stream-F-9 in
-//!   `_todos.md`)
+//! - `POST /api/v1/auth/session-grant/exchange` — coauth bridge (scaffold; see the
+//!   `TODO(session-grant-exchange)` annotation below and Stream-F-9 in `_todos.md`)
 //! - `POST /api/v1/auth/logout` — revoke the bearer + the bound device
 //!
 //! Internal helpers exported for the rest of `crate::routing`:
-//! - `auth_or_render` — the standard "extract session or 401" wrapper used by
-//!   nearly every protected handler
+//! - `auth_or_render` — the standard "extract session or 401" wrapper used by nearly every
+//!   protected handler
 //! - `authenticated_session` — the underlying session-lookup pipeline
-//! - `is_device_revoked` / `revoke_device_record` — device-revocation gates
-//!   (also used by `keys_query` to mask revoked devices and by other auth
-//!   adjacent paths)
+//! - `is_device_revoked` / `revoke_device_record` — device-revocation gates (also used by
+//!   `keys_query` to mask revoked devices and by other auth adjacent paths)
 //! - `session_token_hash` / `token_for` — token derivation primitives
 
-use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, Duration, Utc};
+use salvo::http::StatusCode;
 use salvo::oapi::extract::JsonBody;
-use salvo::{http::StatusCode, prelude::*};
+use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
-use crate::{
-    JsonResult,
-    error::{AppError, ErrorCode},
-    ids, json_ok,
-    state::{AppState, DeviceInventoryRecord, SessionRecord},
-    wire::{
-        DevLoginRequest, DevLoginResponse, LogoutResponse, SessionGrantExchangeRequest,
-        SessionGrantIntrospectionProof,
-    },
-};
-
 use super::{append_audit_log, bearer_token, now, render_error, validate_device_id, validate_did};
+use crate::error::{AppError, ErrorCode};
+use crate::state::{AppState, DeviceInventoryRecord, SessionRecord};
+use crate::wire::{
+    DevLoginRequest, DevLoginResponse, LogoutResponse, SessionGrantExchangeRequest,
+    SessionGrantIntrospectionProof,
+};
+use crate::{JsonResult, ids, json_ok};
 
 const PRINCIPAL_SESSION_BIND_SCOPE: &str = "urn:contrix:principal-server:session.bind";
 

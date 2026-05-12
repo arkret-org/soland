@@ -1,19 +1,19 @@
 //! Read marker + read receipt handlers.
 //!
 //! Surfaces:
-//! - `POST /api/v1/read-markers` — set the actor's read marker (durable
-//!   persistent state per-actor; spec discovery/read-receipts.md §6).
-//! - `GET  /api/v1/read-markers` — list the actor's read markers,
-//!   optionally filtered by `?space_id=...`.
-//! - `POST /api/v1/receipts/read` — ephemeral `cx.receipt.read` fanout
-//!   request (spec discovery/read-receipts.md §2.4-2.5). The handler
-//!   applies the effective Space `read_receipt_policy`:
-//!   - `disclosure="disabled"` → drop with HTTP 403 + `policy_violation`
-//!     (`retry_after_ms=null`; retry will not change the outcome).
-//!   - `visibility="private"` → fanout only to the original sender of
-//!     `event_id`; non-sender callers see `fanout="private"`.
-//!   - `disclosure="required"` / `visibility="public"|"members"` →
-//!     normal fanout (`fanout="members"`).
+//! - `POST /api/v1/read-markers` — set the actor's read marker (durable persistent state per-actor;
+//!   spec discovery/read-receipts.md §6).
+//! - `GET  /api/v1/read-markers` — list the actor's read markers, optionally filtered by
+//!   `?space_id=...`.
+//! - `POST /api/v1/receipts/read` — ephemeral `cx.receipt.read` fanout request (spec
+//!   discovery/read-receipts.md §2.4-2.5). The handler applies the effective Space
+//!   `read_receipt_policy`:
+//!   - `disclosure="disabled"` → drop with HTTP 403 + `policy_violation` (`retry_after_ms=null`;
+//!     retry will not change the outcome).
+//!   - `visibility="private"` → fanout only to the original sender of `event_id`; non-sender
+//!     callers see `fanout="private"`.
+//!   - `disclosure="required"` / `visibility="public"|"members"` → normal fanout
+//!     (`fanout="members"`).
 
 use contrix_sdk::{Commit, CommitId, Did, Hash, Operation, OperationId, SpaceId};
 use salvo::http::StatusCode;
@@ -21,19 +21,15 @@ use salvo::oapi::extract::{JsonBody, QueryParam};
 use salvo::prelude::*;
 use serde_json::{Value, json};
 
-use crate::{
-    JsonResult,
-    error::{AppError, ErrorCode},
-    ids, json_ok, kinds,
-    state::AppState,
-    wire::{
-        ReadMarkerResponse, SendReadReceiptRequest, SendReadReceiptResponse, SetReadMarkerRequest,
-    },
-};
-
 use super::{
     AuthArgs, DevProofVerifier, dev_proof, next_author_seq, now, project_accepted_operations,
 };
+use crate::error::{AppError, ErrorCode};
+use crate::state::AppState;
+use crate::wire::{
+    ReadMarkerResponse, SendReadReceiptRequest, SendReadReceiptResponse, SetReadMarkerRequest,
+};
+use crate::{JsonResult, ids, json_ok, kinds};
 
 #[endpoint(
     operation_id = "cx.read_markers.set",

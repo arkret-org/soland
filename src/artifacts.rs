@@ -1,7 +1,5 @@
-use std::{
-    collections::{BTreeSet, HashMap},
-    sync::OnceLock,
-};
+use std::collections::{BTreeSet, HashMap};
+use std::sync::OnceLock;
 
 use serde_json::{Value, json};
 

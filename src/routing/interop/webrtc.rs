@@ -13,21 +13,19 @@
 use std::collections::BTreeSet;
 
 use chrono::Duration;
-use salvo::{http::StatusCode, prelude::*};
+use salvo::http::StatusCode;
+use salvo::prelude::*;
 use serde_json::{Value, json};
-
-use crate::{
-    ids,
-    state::{AppState, WebrtcSessionRecord, WebrtcSignalRecord},
-    wire::{
-        CreateWebrtcSessionRequest, CreateWebrtcSessionResponse, OkResponse, WebrtcSignalRequest,
-        WebrtcSignalResponse, WebrtcSignalsResponse,
-    },
-};
 
 use super::{
     auth_or_render, now, query_param, render_error, space_has_member,
     validate_canonical_json_value, validate_did, validate_space_id,
+};
+use crate::ids;
+use crate::state::{AppState, WebrtcSessionRecord, WebrtcSignalRecord};
+use crate::wire::{
+    CreateWebrtcSessionRequest, CreateWebrtcSessionResponse, OkResponse, WebrtcSignalRequest,
+    WebrtcSignalResponse, WebrtcSignalsResponse,
 };
 
 pub(super) fn router() -> Router {

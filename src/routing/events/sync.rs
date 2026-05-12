@@ -3,21 +3,16 @@
 //!
 //! Surfaces for the current sync/event wire layout:
 //! - `GET  /api/v1/sync/describe`
-//! - `POST /api/v1/sync`                    — `cx.sync.account` (account-aggregate
-//!                                            sync: timeline, presence, typing,
-//!                                            to_device). Renamed from
-//!                                            `cx.sync.client_sync` — path unchanged.
+//! - `POST /api/v1/sync`                    — `cx.sync.account` (account-aggregate sync: timeline,
+//!   presence, typing, to_device). Renamed from `cx.sync.client_sync` — path unchanged.
 //! - `POST /api/v1/sync/typing`             — `cx.sync.typing` (transient ephemeral)
-//! - `GET  /api/v1/events/subscribe`        — `cx.events.subscribe` (replaces
-//!                                            `cx.sync.subscribe` /
-//!                                            `/api/v1/sync/subscribe`).
-//!                                            Multi-space / multi-actor stream;
-//!                                            frame `kind` field replaces `type`.
-//! - `GET  /api/v1/events`                  — `cx.events.query` (replaces
-//!                                            `cx.events.list` + `cx.sync.backfill`
-//!                                            via `direction=forward|backward`).
-//! - `GET  /api/v1/sync/backfill/gap`       — `cx.sync.backfill_gap`
-//!                                            (deployment-local; not in spec)
+//! - `GET  /api/v1/events/subscribe`        — `cx.events.subscribe` (replaces `cx.sync.subscribe` /
+//!   `/api/v1/sync/subscribe`). Multi-space / multi-actor stream; frame `kind` field replaces
+//!   `type`.
+//! - `GET  /api/v1/events`                  — `cx.events.query` (replaces `cx.events.list` +
+//!   `cx.sync.backfill` via `direction=forward|backward`).
+//! - `GET  /api/v1/sync/backfill/gap`       — `cx.sync.backfill_gap` (deployment-local; not in
+//!   spec)
 //! - `GET  /api/v1/sync/snapshot-head`
 //! - `GET  /api/v1/sync/snapshot-chunk`
 //!
@@ -30,22 +25,16 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
-use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use bytes::Bytes;
 use chrono::{Duration as ChronoDuration, SecondsFormat};
 use contrix_sdk::SpaceId;
 use futures_util::stream::StreamExt;
-use salvo::{http::StatusCode, prelude::*};
+use salvo::http::StatusCode;
+use salvo::prelude::*;
 use serde_json::json;
 use tokio::sync::broadcast::error::RecvError;
-
-use crate::{
-    state::{AppState, PresenceRecord, SessionRecord, TypingRecord},
-    wire::{
-        BackfillResponse, ClientSyncRequest, ClientSyncResponse, SetTypingRequest,
-        SetTypingResponse, SnapshotHeadResponse, SyncDescribeResponse, sync_token,
-    },
-};
 
 use super::{
     auth_or_render, authenticated_session, backfill_gap_events, device_message_events_after,
@@ -54,6 +43,11 @@ use super::{
     render_error, sha256_hex, snapshot_bundle_for_space, space_has_member, space_id_accessible,
     space_visible_to, sync_timeline_message_json, truncate_gap_events, typing_ephemeral_for_space,
     validate_did, validate_space_id,
+};
+use crate::state::{AppState, PresenceRecord, SessionRecord, TypingRecord};
+use crate::wire::{
+    BackfillResponse, ClientSyncRequest, ClientSyncResponse, SetTypingRequest, SetTypingResponse,
+    SnapshotHeadResponse, SyncDescribeResponse, sync_token,
 };
 
 pub(super) fn router() -> Router {
@@ -602,14 +596,12 @@ async fn set_typing(depot: &mut Depot, req: &mut Request, res: &mut Response) {
 ///
 /// Lifecycle:
 ///   1. Validate inputs (spaces, accessibility).
-///   2. Subscribe to the live event broadcast BEFORE serving history so
-///      no events are missed in the history-vs-live window.
-///   3. Build an async stream that yields:
-///      a) historical event frames (if `include_history=true`, default true)
-///      b) one `catchup_complete` frame
-///      c) live event frames as broadcast notifications arrive
-///      d) periodic `heartbeat` frames every 30s of idle
-///      e) `dropped` frames when broadcast lag is detected
+///   2. Subscribe to the live event broadcast BEFORE serving history so no events are missed in the
+///      history-vs-live window.
+///   3. Build an async stream that yields: a) historical event frames (if `include_history=true`,
+///      default true) b) one `catchup_complete` frame c) live event frames as broadcast
+///      notifications arrive d) periodic `heartbeat` frames every 30s of idle e) `dropped` frames
+///      when broadcast lag is detected
 ///   4. Stream terminates when:
 ///      - `max_duration_ms` query param elapsed (default 60_000 ms)
 ///      - client disconnects (drops the response stream)

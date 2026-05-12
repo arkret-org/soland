@@ -1,12 +1,11 @@
 //! Move / Anchor wire endpoints.
 //!
 //! Surfaces:
-//! - `POST /api/v1/moves`   — submit a Move; verifier validates structural
-//!   shape + signature payload_hash + effect-shape against the cell
-//!   registry, then stashes pending in [`MoveStore`].
-//! - `POST /api/v1/anchors` — submit an Anchor; runs `apply_anchor` end-to-end:
-//!   structural → predecessor known → frontier monotonic → batch-verify
-//!   Moves → atomic effect append → recompute state_root → persist.
+//! - `POST /api/v1/moves`   — submit a Move; verifier validates structural shape + signature
+//!   payload_hash + effect-shape against the cell registry, then stashes pending in [`MoveStore`].
+//! - `POST /api/v1/anchors` — submit an Anchor; runs `apply_anchor` end-to-end: structural →
+//!   predecessor known → frontier monotonic → batch-verify Moves → atomic effect append → recompute
+//!   state_root → persist.
 //!
 //! Both endpoints back onto in-memory SDK store implementations on
 //! [`AppState`]. Production deployments will swap to Pg-backed
@@ -19,23 +18,17 @@
 //! Ed25519 verification runs against the public key resolved from the
 //! `verification_method` DID URL.
 
-use contrix_sdk::{
-    Anchor, Move, SpaceId,
-    state_res::{apply_anchor, verify_move},
-};
+use contrix_sdk::state_res::{apply_anchor, verify_move};
+use contrix_sdk::{Anchor, Move, SpaceId};
 use salvo::http::StatusCode;
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    JsonResult,
-    error::{AppError, ErrorCode},
-    json_ok,
-    state::AppState,
-};
-
 use super::AuthArgs;
+use crate::error::{AppError, ErrorCode};
+use crate::state::AppState;
+use crate::{JsonResult, json_ok};
 
 pub(super) fn router() -> Router {
     Router::new()
@@ -80,10 +73,10 @@ pub fn select_jws_verifier(
 
 /// JWS shape verifier used by `verify_move` / `apply_anchor`. Rejects:
 ///   - empty / sentinel signature segments
-///   - JWS strings that don't have the `<protected>..<signature>` detached
-///     shape (RFC 7515 §3.2 with empty payload segment)
-///   - protected headers not parseable as base64url-JSON or whose `alg` is
-///     not in the spec-allowed set (`EdDSA` for now)
+///   - JWS strings that don't have the `<protected>..<signature>` detached shape (RFC 7515 §3.2
+///     with empty payload segment)
+///   - protected headers not parseable as base64url-JSON or whose `alg` is not in the spec-allowed
+///     set (`EdDSA` for now)
 ///   - empty issuer or verification_method
 ///
 /// Real Ed25519 signature verification (resolving `verification_method`
@@ -496,8 +489,9 @@ impl MoveStorePutVia for contrix_sdk::state_res::MemoryMoveStore {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use serde_json::json;
+
+    use super::*;
 
     #[test]
     fn rejected_move_entry_serializes() {

@@ -1,14 +1,12 @@
 //! Encrypted key-backup CRUD.
 
-use salvo::{http::StatusCode, prelude::*};
+use salvo::http::StatusCode;
+use salvo::prelude::*;
 use serde_json::Value;
 
-use crate::{
-    state::AppState,
-    wire::{KeysBackupsDeleteResponse, KeysBackupsListResponse, KeysBackupsPutResponse},
-};
-
 use super::{auth_or_render, query_param, render_error};
+use crate::state::AppState;
+use crate::wire::{KeysBackupsDeleteResponse, KeysBackupsListResponse, KeysBackupsPutResponse};
 
 pub(super) fn router() -> Router {
     Router::new()

@@ -6,12 +6,10 @@
 //! references that prove the conversion is real (not just metadata).
 
 use salvo::test::{ResponseExt, TestClient};
-use soland::{
-    config::{AppConfig, ObjectStorageConfig},
-    db::Db,
-    service,
-    state::AppState,
-};
+use soland::config::{AppConfig, ObjectStorageConfig};
+use soland::db::Db;
+use soland::service;
+use soland::state::AppState;
 
 fn test_config() -> AppConfig {
     AppConfig {

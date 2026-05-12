@@ -14,21 +14,19 @@
 //! Production note: see `_todos.md` B9 (merge `policy_check` and `authz_check`
 //! into a single evaluator), B10 (obligation execution), B12 (cache TTL).
 
-use salvo::{http::StatusCode, prelude::*};
+use salvo::http::StatusCode;
+use salvo::prelude::*;
 use serde_json::{Value, json};
-
-use crate::{
-    ids,
-    state::{AppState, PolicyDocumentRecord},
-    wire::{
-        OkResponse, PolicyCheckRequest, PolicyCheckResponse, PolicyDocumentResponse,
-        PolicyDocumentsResponse, UpsertPolicyDocumentRequest,
-    },
-};
 
 use super::{
     auth_or_render, is_valid_sha256_digest, now, query_flag, query_param, render_error, sha256_hex,
     validate_canonical_json_value, validate_did, validate_space_id,
+};
+use crate::ids;
+use crate::state::{AppState, PolicyDocumentRecord};
+use crate::wire::{
+    OkResponse, PolicyCheckRequest, PolicyCheckResponse, PolicyDocumentResponse,
+    PolicyDocumentsResponse, UpsertPolicyDocumentRequest,
 };
 
 pub(super) fn router() -> Router {

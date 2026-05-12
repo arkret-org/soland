@@ -5,8 +5,9 @@
 //!
 //! Format: `<12-hex-physical>-<8-hex-logical>-<8-hex-node>` (30 chars total)
 
-use contrix_sdk::HlcGenerator;
 use std::sync::{Arc, Mutex};
+
+use contrix_sdk::HlcGenerator;
 
 /// Thread-safe HLC state for the server.
 ///

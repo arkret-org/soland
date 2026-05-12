@@ -1,31 +1,27 @@
 //! Blob upload + download handlers.
 //!
 //! Surfaces:
-//! - `POST /api/v1/blob/upload`         — multipart-or-raw upload, normalises
-//!   MIME / filename, enforces per-actor / per-space / per-upload quotas,
-//!   rejects plaintext blobs in private Spaces unless this service is in
-//!   `plaintext_visible_services`.
+//! - `POST /api/v1/blob/upload`         — multipart-or-raw upload, normalises MIME / filename,
+//!   enforces per-actor / per-space / per-upload quotas, rejects plaintext blobs in private Spaces
+//!   unless this service is in `plaintext_visible_services`.
 //! - `HEAD /api/v1/blob/get`            — metadata + size for range planning
-//! - `GET  /api/v1/blob/get`            — content (supports `Range` and the
-//!   `?purpose=` discriminator)
+//! - `GET  /api/v1/blob/get`            — content (supports `Range` and the `?purpose=`
+//!   discriminator)
 //!
 //! Stream-F-7 (`_todos.md`): blob metadata still misses the spec B-23
 //! `space_id` association, and plaintext-visibility is enforced at write
 //! time but not at GC.
 
-use salvo::{
-    http::{Method, StatusCode},
-    prelude::*,
-};
+use salvo::http::{Method, StatusCode};
+use salvo::prelude::*;
 use serde_json::json;
-
-use crate::state::{AppState, BlobRecord, SessionRecord};
 
 use super::{
     append_audit_log, auth_or_render, is_valid_sha256_digest, is_valid_sha256_hex, now,
     query_param, render_error, sha256_hex, space_allows_plaintext_service, space_has_member,
     validate_space_id,
 };
+use crate::state::{AppState, BlobRecord, SessionRecord};
 
 pub(super) fn router() -> Router {
     Router::new()

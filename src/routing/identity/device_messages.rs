@@ -1,33 +1,29 @@
 //! To-device message transport.
 //!
 //! Surfaces:
-//! - `POST /api/v1/device_messages` — send to-device messages, idempotent on
-//!   `(actor, idempotency_key)` so duplicate retries return 200 without
-//!   re-queueing. The idempotency key is supplied via the `Idempotency-Key`
-//!   request header.
-//! - `GET /api/v1/device_messages` — pull pending to-device messages for the
-//!   bound session/device. Uses the `cx:cursor:` `to_device_position` from
-//!   `parse_and_validate_sync_cursor` so a duplicate sync cannot prematurely
-//!   ack a delivery (this is what the README calls out as the cursor-acked
-//!   eviction guarantee).
+//! - `POST /api/v1/device_messages` — send to-device messages, idempotent on `(actor,
+//!   idempotency_key)` so duplicate retries return 200 without re-queueing. The idempotency key is
+//!   supplied via the `Idempotency-Key` request header.
+//! - `GET /api/v1/device_messages` — pull pending to-device messages for the bound session/device.
+//!   Uses the `cx:cursor:` `to_device_position` from `parse_and_validate_sync_cursor` so a
+//!   duplicate sync cannot prematurely ack a delivery (this is what the README calls out as the
+//!   cursor-acked eviction guarantee).
 
 use std::collections::BTreeMap;
 
-use salvo::{http::StatusCode, prelude::*};
+use salvo::http::StatusCode;
+use salvo::prelude::*;
 use serde_json::{Value, json};
-
-use crate::{
-    state::{AppState, DeviceMessageRecord, SessionRecord},
-    wire::{
-        DeviceMessagesReceiveResponse, DeviceMessagesSendRequest, DeviceMessagesSendResponse,
-        sync_token,
-    },
-};
 
 use super::{
     SyncCursorError, auth_or_render, now, parse_and_validate_sync_cursor, query_param,
     render_error, sync_token_for_client_sync, validate_device_id, validate_device_message_payload,
     validate_did,
+};
+use crate::state::{AppState, DeviceMessageRecord, SessionRecord};
+use crate::wire::{
+    DeviceMessagesReceiveResponse, DeviceMessagesSendRequest, DeviceMessagesSendResponse,
+    sync_token,
 };
 
 pub(super) fn router() -> Router {

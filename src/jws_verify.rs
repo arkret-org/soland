@@ -7,13 +7,12 @@
 //! # Two-tier verifier model
 //!
 //! - Dev mode (`config.development_mode == true`): handlers use
-//!   `routing::federation::move_anchor::verify_jws_shape` — RFC 7515 §3.2 detached
-//!   shape, alg = EdDSA, no zero-sentinel signature, no actual crypto.
-//!   Lets test fixtures and local dev iterate without managing real keys.
+//!   `routing::federation::move_anchor::verify_jws_shape` — RFC 7515 §3.2 detached shape, alg =
+//!   EdDSA, no zero-sentinel signature, no actual crypto. Lets test fixtures and local dev iterate
+//!   without managing real keys.
 //! - Production mode (default): handlers use [`verify_jws_ed25519`] via
-//!   [`AppState::jws_verifier`]'s closure factory — same shape checks
-//!   PLUS DID resolution + Ed25519 public-key extraction + RFC 7515 §5.2
-//!   signing-input reconstruction + ed25519-dalek verify.
+//!   [`AppState::jws_verifier`]'s closure factory — same shape checks PLUS DID resolution + Ed25519
+//!   public-key extraction + RFC 7515 §5.2 signing-input reconstruction + ed25519-dalek verify.
 //!
 //! # Detached JWS shape (recap)
 //!
@@ -29,11 +28,9 @@
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, Utc};
-use ed25519_dalek::{Signature, Verifier, VerifyingKey};
-
-use contrix_sdk::Did;
-use contrix_sdk::Hlc;
 use contrix_sdk::identity::DidResolver;
+use contrix_sdk::{Did, Hlc};
+use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 
 use crate::state::AppState;
 
@@ -111,13 +108,12 @@ pub fn verify_jws_ed25519(
 /// its Ed25519 [`VerifyingKey`] via [`AppState::did_resolver`].
 ///
 /// Accepts:
-///   - Full DID URL: `did:web:alice.example#k1` — resolves the DID, then
-///     looks up `verification_methods["did:web:alice.example#k1"]`.
-///   - Fragment fallback: if the full URL isn't a key, also tries the
-///     fragment-only key id (`#k1` → `k1`).
-///   - did:key: the multibase-encoded key is in the DID itself; resolve
-///     returns a doc whose verification_methods entry points at the same
-///     multibase string.
+///   - Full DID URL: `did:web:alice.example#k1` — resolves the DID, then looks up
+///     `verification_methods["did:web:alice.example#k1"]`.
+///   - Fragment fallback: if the full URL isn't a key, also tries the fragment-only key id (`#k1` →
+///     `k1`).
+///   - did:key: the multibase-encoded key is in the DID itself; resolve returns a doc whose
+///     verification_methods entry points at the same multibase string.
 pub fn resolve_ed25519_pubkey(
     state: &AppState,
     verification_method: &str,
@@ -210,15 +206,12 @@ fn decode_ed25519_multibase(multibase: &str) -> Result<VerifyingKey, String> {
 /// JWS replay protection: verify the SIGNED `Hlc` is within `±window`
 /// of wall-clock now. Replay attackers who capture a valid `(canonical_bytes,
 /// jws)` pair cannot reuse it past this window because:
-///   - The Move's / Anchor's `hlc` is part of `canonical_bytes_for_id` —
-///     i.e. it IS in the signed payload (`MoveSignature.created_at` is
-///     a separate envelope field that's NOT signed; we deliberately
-///     don't trust it).
-///   - Same canonical bytes → same content-addressed id → MoveStore /
-///     AnchorStore put-pending dedup naturally rejects exact replays of
-///     already-stored Moves; the window check protects against replays
-///     that haven't reached this server's storage yet (post-restart,
-///     federation, etc.).
+///   - The Move's / Anchor's `hlc` is part of `canonical_bytes_for_id` — i.e. it IS in the signed
+///     payload (`MoveSignature.created_at` is a separate envelope field that's NOT signed; we
+///     deliberately don't trust it).
+///   - Same canonical bytes → same content-addressed id → MoveStore / AnchorStore put-pending dedup
+///     naturally rejects exact replays of already-stored Moves; the window check protects against
+///     replays that haven't reached this server's storage yet (post-restart, federation, etc.).
 ///
 /// `window_seconds = 0` disables the check (returns Ok without inspecting
 /// the HLC). Production deploys MUST keep `window_seconds > 0`.
@@ -366,8 +359,9 @@ fn parse_detached_jws(jws: &str) -> Result<(&str, &str), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use ed25519_dalek::SigningKey;
+
+    use super::*;
 
     /// Encode an Ed25519 public key as the multibase form used by did:key
     /// and DID Document verificationMethod entries.

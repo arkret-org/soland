@@ -16,23 +16,21 @@
 
 use std::collections::BTreeMap;
 
-use salvo::{http::StatusCode, prelude::*};
+use salvo::http::StatusCode;
+use salvo::prelude::*;
 use serde_json::{Value, json};
-
-use crate::{
-    state::{AppState, SessionRecord},
-    wire::{
-        DirectoryDescribeResponse, DirectoryValueSearchResponse, ResolveHandleRequest,
-        ResolveHandleResponse, ResolveOrganizationRequest, ResolveOrganizationResponse,
-        ResolveSpaceRequest, ResolveSpaceResponse, SearchActorsRequest, SearchOrganizationsRequest,
-        SearchSpacesRequest, SearchSpacesResponse,
-    },
-};
 
 use super::{
     authenticated_session, device_inventory_to_json, handle_for_did, invite_token_space_id,
     is_space_deleted, normalize_handle, now, query_param, render_error, space_discoverability,
     space_resolvable_to, space_search_discoverability, space_search_visible_to,
+};
+use crate::state::{AppState, SessionRecord};
+use crate::wire::{
+    DirectoryDescribeResponse, DirectoryValueSearchResponse, ResolveHandleRequest,
+    ResolveHandleResponse, ResolveOrganizationRequest, ResolveOrganizationResponse,
+    ResolveSpaceRequest, ResolveSpaceResponse, SearchActorsRequest, SearchOrganizationsRequest,
+    SearchSpacesRequest, SearchSpacesResponse,
 };
 
 pub(super) fn router() -> Router {

@@ -1,17 +1,14 @@
-use arc_swap::ArcSwap;
-use ed25519_dalek::SigningKey;
-use sha2::{Digest, Sha256};
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    sync::{Arc, Mutex},
-    time::{SystemTime, UNIX_EPOCH},
-};
-use tokio::sync::broadcast;
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
 
-use contrix_sdk::{
-    Did, SpaceId, SpaceSearchEntry, SpaceSearchIndex, identity::CompositeDidResolver,
-};
+use arc_swap::ArcSwap;
+use contrix_sdk::identity::CompositeDidResolver;
+use contrix_sdk::{Did, SpaceId, SpaceSearchEntry, SpaceSearchIndex};
+use ed25519_dalek::SigningKey;
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
+use tokio::sync::broadcast;
 
 use crate::artifacts;
 use crate::authz::AuthzEngine;
@@ -35,15 +32,14 @@ pub mod did_resolver_chain;
 ///
 /// added control-frame variants alongside the original `Event`
 /// (mid-stream control frames per spec):
-///   - `EpochRotation` — emitted when `cx.component.mls.epoch.v1` cell
-///     changes (E2EE epoch shift; clients MUST re-fetch keys)
-///   - `Frontier` — anchor frontier advanced (Snapshot of cursor /
-///     state_root after `apply_anchor`); clients use this as a
-///     resync waypoint
-///   - `ResyncRequired` — server detected per-subscriber drift; client
-///     MUST drop local cache and re-subscribe with `from=null`
-///   - `Unauthorized` — subscriber's session token revoked / expired
-///     mid-stream; client MUST close + re-auth
+///   - `EpochRotation` — emitted when `cx.component.mls.epoch.v1` cell changes (E2EE epoch shift;
+///     clients MUST re-fetch keys)
+///   - `Frontier` — anchor frontier advanced (Snapshot of cursor / state_root after
+///     `apply_anchor`); clients use this as a resync waypoint
+///   - `ResyncRequired` — server detected per-subscriber drift; client MUST drop local cache and
+///     re-subscribe with `from=null`
+///   - `Unauthorized` — subscriber's session token revoked / expired mid-stream; client MUST close
+///     + re-auth
 #[derive(Clone, Debug)]
 pub struct EventNotification {
     pub space_id: String,
@@ -124,7 +120,6 @@ impl EventNotification {
 /// either non-record state (config, db pool, hlc, authz engine) or runtime
 /// facets that don't fit the trait shape (in-memory `SpaceSearchIndex`,
 /// `CompositeDidResolver`, `ProjectionState`).
-///
 #[derive(Clone)]
 pub struct AppState {
     pub config: AppConfig,
@@ -577,12 +572,11 @@ impl AppState {
 
         // Derive the AnchorerWorker's Ed25519 signing key.
         // Resolution order:
-        //   1. KeyStore (when `use_keystore=true` and the platform store
-        //      has a previously-persisted seed under our id) → Configured.
-        //   2. `config.anchorer_signing_key_seed` (env-loaded) → Configured.
-        //      When `use_keystore=true` we *also* persist this seed back
-        //      to the KeyStore on first boot so subsequent restarts skip
-        //      the env path.
+        //   1. KeyStore (when `use_keystore=true` and the platform store has a previously-persisted
+        //      seed under our id) → Configured.
+        //   2. `config.anchorer_signing_key_seed` (env-loaded) → Configured. When
+        //      `use_keystore=true` we *also* persist this seed back to the KeyStore on first boot
+        //      so subsequent restarts skip the env path.
         //   3. SHA-256(service_did || boot_nanos) → Ephemeral.
         let (signing_seed, anchorer_signing_key_origin) =
             (|| -> ([u8; 32], AnchorerSigningKeyOrigin) {

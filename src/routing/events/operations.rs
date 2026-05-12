@@ -1,24 +1,22 @@
 //! Operation envelope + payload validators.
 //!
 //! Surfaces:
-//! - `OperationPayloadSchema` / `PayloadRequirement` — per-kind required /
-//!   optional / enum field schemas.
-//! - `validate_operation_semantics` / `validate_operation_schema` — the
-//!   entrypoint validators called from `repo::submit_commit`,
-//!   `projection::project_accepted_operations`, and the federation ingest
-//!   path.
-//! - `validate_operation_policy` — high-level policy gate (plaintext-Space
-//!   gating + B-09 redact constraints).
-//! - `validate_canonical_json_value` (+ `_inner`) — the canonical-JSON shape
-//!   gate that operation payloads MUST pass.
-//! - `validate_content_blocks` / `validate_mentions` / `validate_content_block`
-//!   — message body shape.
-//! - `validate_encrypted_payload_envelope` — `cx.profile.encrypted_payload.v1`
-//!   envelope shape (MLS sender / scheme / version / `key_ref`).
+//! - `OperationPayloadSchema` / `PayloadRequirement` — per-kind required / optional / enum field
+//!   schemas.
+//! - `validate_operation_semantics` / `validate_operation_schema` — the entrypoint validators
+//!   called from `repo::submit_commit`, `projection::project_accepted_operations`, and the
+//!   federation ingest path.
+//! - `validate_operation_policy` — high-level policy gate (plaintext-Space gating + B-09 redact
+//!   constraints).
+//! - `validate_canonical_json_value` (+ `_inner`) — the canonical-JSON shape gate that operation
+//!   payloads MUST pass.
+//! - `validate_content_blocks` / `validate_mentions` / `validate_content_block` — message body
+//!   shape.
+//! - `validate_encrypted_payload_envelope` — `cx.profile.encrypted_payload.v1` envelope shape (MLS
+//!   sender / scheme / version / `key_ref`).
 //! - `validate_device_message_payload` — to-device payload shape.
-//! - `validate_no_removed_legacy_contracts` (+ scanners) — kicks payloads that
-//!   reference the removed legacy `cx.subject.*` / `cx.room.*` / `cx.card.*`
-//!   contracts.
+//! - `validate_no_removed_legacy_contracts` (+ scanners) — kicks payloads that reference the
+//!   removed legacy `cx.subject.*` / `cx.room.*` / `cx.card.*` contracts.
 //! - `validate_rfc3339_utc_z` — UTC-Z timestamp shape.
 //! - `canonical_json_digest` — sha256 over canonical-JSON bytes.
 //!
@@ -30,9 +28,9 @@
 use contrix_sdk::{Hash, Operation};
 use serde_json::Value;
 
-use crate::{kinds, state::AppState};
-
 use super::{is_json_integer, is_valid_entity_type, is_valid_sha256_digest, validate_did};
+use crate::kinds;
+use crate::state::AppState;
 
 #[derive(Clone, Copy)]
 pub struct OperationPayloadSchema {

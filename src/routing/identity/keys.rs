@@ -1,23 +1,21 @@
 //! E2EE key surfaces.
 //!
 //! Surfaces:
-//! - `POST /api/v1/keys/upload` - upload one-time / fallback prekeys with
-//!   the current device signature.
+//! - `POST /api/v1/keys/upload` - upload one-time / fallback prekeys with the current device
+//!   signature.
 //! - `POST /api/v1/keys/query` - fetch device key bundles for a peer set.
 //! - `POST /api/v1/keys/claim` - claim one-time keys, draining the per-device pool.
 
-use salvo::{http::StatusCode, prelude::*};
+use salvo::http::StatusCode;
+use salvo::prelude::*;
 use serde_json::json;
 
-use crate::{
-    state::{AppState, DeviceInventoryRecord},
-    wire::{
-        KeysClaimRequest, KeysClaimResponse, KeysQueryRequest, KeysQueryResponse,
-        KeysUploadRequest, KeysUploadResponse,
-    },
-};
-
 use super::{auth_or_render, is_device_revoked, now, render_error, validate_device_id};
+use crate::state::{AppState, DeviceInventoryRecord};
+use crate::wire::{
+    KeysClaimRequest, KeysClaimResponse, KeysQueryRequest, KeysQueryResponse, KeysUploadRequest,
+    KeysUploadResponse,
+};
 
 pub(super) fn router() -> Router {
     Router::new()

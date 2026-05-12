@@ -12,9 +12,8 @@
 
 use serde_json::json;
 
-use crate::state::{AppState, ProjectionEventRecord};
-
 use super::{now, sha256_hex, space_allows_plaintext_service, space_discoverability};
+use crate::state::{AppState, ProjectionEventRecord};
 
 pub fn retag_typed_id(value: &str, from_prefix: &str, to_prefix: &str) -> Option<String> {
     value

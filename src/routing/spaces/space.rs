@@ -19,18 +19,14 @@ use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde_json::{Value, json};
 
-use crate::{
-    JsonResult,
-    error::{AppError, ErrorCode},
-    ids, json_ok, kinds,
-    state::{AppState, SessionRecord, SpaceInviteRecord, SpaceMetaRecord},
-    wire::{AddSpaceMemberRequest, CreateSpaceRequest, SpaceLifecycleResponse},
-};
-
 use super::{
     AuthArgs, accept_local_operations, append_audit_log, generate_invite_token,
     is_valid_discoverability, now, validate_did, validate_space_id,
 };
+use crate::error::{AppError, ErrorCode};
+use crate::state::{AppState, SessionRecord, SpaceInviteRecord, SpaceMetaRecord};
+use crate::wire::{AddSpaceMemberRequest, CreateSpaceRequest, SpaceLifecycleResponse};
+use crate::{JsonResult, ids, json_ok, kinds};
 
 pub(super) fn router() -> Router {
     Router::with_path("spaces")

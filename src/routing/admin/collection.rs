@@ -1,20 +1,18 @@
 //! Dev-only admin collection surfaces.
 //!
 //! Surfaces:
-//! - `GET /api/v1/admin/{resource}` — paginated dev snapshot of one of the
-//!   builtin admin collections (`actors`, `spaces`, `devices`, `capabilities`,
-//!   `federation`, `applets`, `agents`, `reports`, `invite-tokens`, `audit`,
-//!   `policy`, `media`).
+//! - `GET /api/v1/admin/{resource}` — paginated dev snapshot of one of the builtin admin
+//!   collections (`actors`, `spaces`, `devices`, `capabilities`, `federation`, `applets`, `agents`,
+//!   `reports`, `invite-tokens`, `audit`, `policy`, `media`).
 //!
 //! Production-grade replacement is tracked under `_todos.md` Q9 — capability-
 //! scoped admin actions, durable pagination, redaction policy, high-risk audit.
 
 use std::collections::BTreeMap;
 
-use salvo::{http::StatusCode, prelude::*};
+use salvo::http::StatusCode;
+use salvo::prelude::*;
 use serde_json::{Value, json};
-
-use crate::{kinds, state::AppState};
 
 use super::{
     append_audit_log, auth_or_render, demo_actors, device_inventory_to_json,
@@ -22,6 +20,8 @@ use super::{
     flow_projection_for_space, policy_document_to_response, projection_event_from_operation,
     query_param, render_error, sha256_hex,
 };
+use crate::kinds;
+use crate::state::AppState;
 
 #[endpoint]
 pub(super) async fn admin_collection(depot: &mut Depot, req: &mut Request, res: &mut Response) {

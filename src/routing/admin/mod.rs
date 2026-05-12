@@ -6,6 +6,8 @@ mod cells;
 mod collection;
 mod control;
 
+use audit::append_audit_log;
+
 use super::system::util;
 use super::{
     AuthArgs, auth_or_render, demo_actors, device_inventory_to_json,
@@ -13,7 +15,6 @@ use super::{
     flow_projection_for_space, now, policy_document_to_response, projection_event_from_operation,
     query_param, render_error, sha256_hex,
 };
-use audit::append_audit_log;
 
 pub fn router() -> Router {
     Router::new()

@@ -64,15 +64,13 @@ pub struct ComponentDescriptor {
 
 /// Bottom-handling policy for a cell family.
 ///
-/// - `Reject`: when the Lattice's `join` returns a structured `Bottom`,
-///   the receiver MUST quarantine the resolved cell and emit
-///   `bottom_diagnostics` events. Lattice queries on this cell return
-///   `bottom` rather than choosing a winner. This is the v1 default for
-///   safety-critical cells (capability, consent, anchorer).
-/// - `Expose`: callers are expected to render the multi-value set
-///   directly (e.g. UI shows "two concurrent edits, please reconcile"
-///   rather than blocking). Suitable for advisory cells (Flow titles,
-///   user profile fields).
+/// - `Reject`: when the Lattice's `join` returns a structured `Bottom`, the receiver MUST
+///   quarantine the resolved cell and emit `bottom_diagnostics` events. Lattice queries on this
+///   cell return `bottom` rather than choosing a winner. This is the v1 default for safety-critical
+///   cells (capability, consent, anchorer).
+/// - `Expose`: callers are expected to render the multi-value set directly (e.g. UI shows "two
+///   concurrent edits, please reconcile" rather than blocking). Suitable for advisory cells (Flow
+///   titles, user profile fields).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BottomPolicy {
     Reject,
@@ -156,11 +154,10 @@ pub trait LatticeKind: Send + Sync {
     fn component(&self) -> ComponentDescriptor;
 
     /// Derive the cell subject from a Move effect's typed fields. Returns:
-    /// - `Ok(None)` if the cell family is a singleton (one cell per
-    ///   space, e.g. `cx.component.space.policy.v1`) — the subject is
-    ///   empty per spec convention.
-    /// - `Ok(Some(subject))` for per-subject cells; subject is the typed
-    ///   field value (or composite hash for multi-component subjects).
+    /// - `Ok(None)` if the cell family is a singleton (one cell per space, e.g.
+    ///   `cx.component.space.policy.v1`) — the subject is empty per spec convention.
+    /// - `Ok(Some(subject))` for per-subject cells; subject is the typed field value (or composite
+    ///   hash for multi-component subjects).
     /// - `Err(_)` if the required typed field is missing on the effect.
     fn subject_for_effect(
         &self,

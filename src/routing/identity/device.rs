@@ -1,10 +1,10 @@
 //! Device-pairing handlers.
 //!
 //! Surfaces:
-//! - `POST /api/v1/devices/pairing-challenge` — current device asks the
-//!   server to mint a short-lived pairing challenge for a new sibling device
-//! - `POST /api/v1/devices/authorize-pairing` — current device authorises the
-//!   sibling and registers it in the device inventory
+//! - `POST /api/v1/devices/pairing-challenge` — current device asks the server to mint a
+//!   short-lived pairing challenge for a new sibling device
+//! - `POST /api/v1/devices/authorize-pairing` — current device authorises the sibling and registers
+//!   it in the device inventory
 //!
 //! Both routes are scaffolds: the proof at `body.proof` is accepted as
 //! `{"alg":"dev-none"}` by default and the authorization event is built but
@@ -15,16 +15,12 @@ use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde_json::{Value, json};
 
-use crate::{
-    JsonResult,
-    error::AppError,
-    ids, json_ok,
-    state::{AppState, DeviceInventoryRecord},
-};
-
 use super::{
     AuthArgs, append_audit_log, device_inventory_to_json, now, sha256_hex, validate_device_id,
 };
+use crate::error::AppError;
+use crate::state::{AppState, DeviceInventoryRecord};
+use crate::{JsonResult, ids, json_ok};
 
 pub(super) fn router() -> Router {
     Router::new()

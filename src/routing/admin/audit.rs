@@ -1,18 +1,19 @@
 //! Audit-log surface.
 //!
-//! - `GET /api/v1/audit/events` — actor-scoped audit query (cursor-paginated).
-//!   Auth-restricted to the authenticated actor (no cross-actor reads).
-//! - `append_audit_log` — internal helper used everywhere a side-effect needs
-//!   to be recorded (auth, space lifecycle, message send, federation, etc.).
+//! - `GET /api/v1/audit/events` — actor-scoped audit query (cursor-paginated). Auth-restricted to
+//!   the authenticated actor (no cross-actor reads).
+//! - `append_audit_log` — internal helper used everywhere a side-effect needs to be recorded (auth,
+//!   space lifecycle, message send, federation, etc.).
 //!
 //! Both back onto `state.persistence.audit()` (see Tier 0 in `_todos.md`).
 
-use salvo::{http::StatusCode, prelude::*};
+use salvo::http::StatusCode;
+use salvo::prelude::*;
 use serde_json::{Value, json};
 
-use crate::{ids, state::AppState};
-
 use super::{auth_or_render, now, query_param, render_error};
+use crate::ids;
+use crate::state::AppState;
 
 pub(super) fn router() -> Router {
     Router::with_path("audit/events").get(audit_events)

@@ -6,12 +6,12 @@
 //! and the deterministic reducer fan-out (`state.projection.lock().apply(op)`).
 //!
 //! Surfaces:
-//! - **inbound**: local operation builders, `federation::federation_push_operations`
-//!   and `federation::federation_transaction` call `project_accepted_operations`
-//!   and `ingest_federation_operations` from here.
-//! - **outbound**: `events::list_events`, `sync::*` and `index::*` consume
-//!   `projected_event_page`, `backfill_gap_events`, `truncate_gap_events`,
-//!   and `sync_timeline_message_json` to render timeline-shaped responses.
+//! - **inbound**: local operation builders, `federation::federation_push_operations` and
+//!   `federation::federation_transaction` call `project_accepted_operations` and
+//!   `ingest_federation_operations` from here.
+//! - **outbound**: `events::list_events`, `sync::*` and `index::*` consume `projected_event_page`,
+//!   `backfill_gap_events`, `truncate_gap_events`, and `sync_timeline_message_json` to render
+//!   timeline-shaped responses.
 //!
 //! Stream-A (`_todos.md`) is the umbrella for the missing reducer kinds —
 //! today this layer only fans out `cx.message.*` / `cx.member.state` /
@@ -23,22 +23,17 @@
 use std::collections::HashSet;
 
 use contrix_sdk::{Did, Operation, OperationId, SpaceSearchEntry};
-use diesel::{
-    QueryableByName, RunQueryDsl, sql_query,
-    sql_types::{Jsonb, Nullable, Text, Timestamptz},
-};
+use diesel::sql_types::{Jsonb, Nullable, Text, Timestamptz};
+use diesel::{QueryableByName, RunQueryDsl, sql_query};
 use serde_json::{Value, json};
-
-use crate::{
-    kinds,
-    state::{AppState, MessageRecord, ProjectionEventRecord, SpaceMetaRecord},
-};
 
 use super::{
     default_discussion_track, discussion_track_for_projection_event, flow_id_for_projection_event,
     flow_id_from_space_id, is_valid_discoverability, message_id_from_event_id, now, touch_space,
     validate_operation_policy, validate_operation_semantics,
 };
+use crate::kinds;
+use crate::state::{AppState, MessageRecord, ProjectionEventRecord, SpaceMetaRecord};
 
 #[derive(Clone, Debug)]
 pub struct ProjectedEventPage {

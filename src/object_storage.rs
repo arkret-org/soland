@@ -7,10 +7,10 @@
 use std::sync::Arc;
 
 use futures_util::future::BoxFuture;
-use object_store::{
-    ObjectStore, ObjectStoreExt, aws::AmazonS3Builder, local::LocalFileSystem,
-    path::Path as ObjectPath,
-};
+use object_store::aws::AmazonS3Builder;
+use object_store::local::LocalFileSystem;
+use object_store::path::Path as ObjectPath;
+use object_store::{ObjectStore, ObjectStoreExt};
 
 use crate::config::ObjectStorageConfig;
 
@@ -139,8 +139,9 @@ fn object_path(key: &str) -> ObjectStorageResult<ObjectPath> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use uuid::Uuid;
+
+    use super::*;
 
     #[tokio::test]
     async fn local_storage_round_trips_bytes_with_prefix() {

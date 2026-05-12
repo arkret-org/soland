@@ -9,17 +9,15 @@
 //! Scope is `state.persistence.schemas()`; the reducer-side
 //! `SchemaRegistryState` is tracked in T1-3 of `_todos.md`.
 
-use salvo::{http::StatusCode, prelude::*};
+use salvo::http::StatusCode;
+use salvo::prelude::*;
 use serde_json::json;
-
-use crate::{
-    state::{AppState, SchemaRecord},
-    wire::{OkResponse, RegisterSchemaRequest, SchemaResponse, SchemasResponse},
-};
 
 use super::{
     auth_or_render, now, query_flag, query_param, render_error, validate_canonical_json_value,
 };
+use crate::state::{AppState, SchemaRecord};
+use crate::wire::{OkResponse, RegisterSchemaRequest, SchemaResponse, SchemasResponse};
 
 #[endpoint]
 pub(super) async fn list_schemas(depot: &mut Depot, req: &mut Request, res: &mut Response) {

@@ -19,19 +19,19 @@
 //! `sync_describe` is still in `mod.rs` pending sync-module extraction.
 
 use contrix_sdk::ServerDescription;
-use diesel::{QueryableByName, RunQueryDsl, sql_query, sql_types::Integer};
-use salvo::{http::StatusCode, prelude::*};
+use diesel::sql_types::Integer;
+use diesel::{QueryableByName, RunQueryDsl, sql_query};
+use salvo::http::StatusCode;
+use salvo::prelude::*;
 use serde_json::{Value, json};
 
-use crate::{
-    JsonResult, json_ok,
-    state::AppState,
-    wire::{
-        AuthBridgeAuthDescriptor, AuthBridgeDescribeResponse, AuthBridgeExamples,
-        AuthBridgePushDescriptor, HealthResponse, IntegrationDependencyDescriptor,
-        IntegrationDescribeResponse, IntegrationSurfaceDescriptor, describe,
-    },
+use crate::state::AppState;
+use crate::wire::{
+    AuthBridgeAuthDescriptor, AuthBridgeDescribeResponse, AuthBridgeExamples,
+    AuthBridgePushDescriptor, HealthResponse, IntegrationDependencyDescriptor,
+    IntegrationDescribeResponse, IntegrationSurfaceDescriptor, describe,
 };
+use crate::{JsonResult, json_ok};
 
 pub(super) fn health_router() -> Router {
     Router::with_path("health").get(health)

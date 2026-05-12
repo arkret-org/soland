@@ -5,8 +5,8 @@
 //! - `POST /api/v1/push/unregister-device` — opaque ack scaffold
 //! - `GET / POST /api/v1/push/rules` — list / upsert push rules
 //! - `DELETE /api/v1/push/rules/{rule_id}` — drop one
-//! - `POST /api/v1/push/notify` — fan-out a notification through the rule
-//!   engine (see the 12-fn helper block at the bottom of this file).
+//! - `POST /api/v1/push/notify` — fan-out a notification through the rule engine (see the 12-fn
+//!   helper block at the bottom of this file).
 //!
 //! `push_register_session_grant_bridge` is the local stand-in that accepts an
 //! `X-Contrix-Session-Grant` header for clients that haven't yet picked up a
@@ -23,26 +23,22 @@
 //! `push_rule_to_json`. They were quietly mis-attributed to blob during
 //! round 6 and re-anchored here.
 
-use salvo::{http::StatusCode, prelude::*};
+use salvo::http::StatusCode;
+use salvo::prelude::*;
 use serde_json::{Value, json};
 
-use crate::{
-    persistence::DriftResult,
-    state::{AppState, PushRuleRecord, SessionRecord},
-    wire::{
-        OkResponse, PushNotifyRequest, PushNotifyResponse, PushRegisterRequest,
-        PushRegisterResponse, PushUnregisterRequest, SessionGrantIntrospectionProof,
-        UpsertPushRuleRequest,
-    },
-};
-
+use super::audit::append_audit_log;
+use super::auth::{SessionGrantValidationInput, validate_session_grant_binding};
+use super::push_outbound::{derive_push_gateway_service_base_url, join_api_v1_url};
 use super::{
-    audit::append_audit_log,
-    auth::{SessionGrantValidationInput, validate_session_grant_binding},
-    auth_or_render, authenticated_session, now,
-    push_outbound::{derive_push_gateway_service_base_url, join_api_v1_url},
-    render_error, sha256_hex, validate_canonical_json_value, validate_device_id,
-    validate_no_removed_legacy_contracts,
+    auth_or_render, authenticated_session, now, render_error, sha256_hex,
+    validate_canonical_json_value, validate_device_id, validate_no_removed_legacy_contracts,
+};
+use crate::persistence::DriftResult;
+use crate::state::{AppState, PushRuleRecord, SessionRecord};
+use crate::wire::{
+    OkResponse, PushNotifyRequest, PushNotifyResponse, PushRegisterRequest, PushRegisterResponse,
+    PushUnregisterRequest, SessionGrantIntrospectionProof, UpsertPushRuleRequest,
 };
 
 /// C33.1 (T0-3a): freshness budget for the persisted gateway-contract

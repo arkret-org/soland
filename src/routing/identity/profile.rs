@@ -1,18 +1,18 @@
 //! Profile / presence handlers.
 //!
 //! Surfaces:
-//! - `GET /api/v1/profile/presence?did=…` — render the actor's current presence
-//!   record together with display name and avatar.
+//! - `GET /api/v1/profile/presence?did=…` — render the actor's current presence record together
+//!   with display name and avatar.
 //!
 //! Production note: presence is currently in-memory (see `AppState.presence`).
 //! Durable presence + ephemeral/durable channel split is tracked under `_todos.md` F-11.
 
-use salvo::{http::StatusCode, prelude::*};
+use salvo::http::StatusCode;
+use salvo::prelude::*;
 use serde_json::json;
 
-use crate::state::AppState;
-
 use super::{now, query_param, render_error, validate_did};
+use crate::state::AppState;
 
 pub(super) fn router() -> Router {
     Router::with_path("profile/presence").get(profile_presence)

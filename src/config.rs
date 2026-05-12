@@ -1,4 +1,5 @@
-use std::{net::SocketAddr, path::PathBuf};
+use std::net::SocketAddr;
+use std::path::PathBuf;
 
 #[derive(Clone, Debug)]
 pub struct AppConfig {
@@ -71,8 +72,8 @@ pub struct AppConfig {
     ///
     /// Behavior when `use_keystore=true`:
     /// - First boot: try `KeyStore::load(...)`; on `not_found` fall back to
-    ///   `anchorer_signing_key_seed`; if that's also absent, mint a fresh
-    ///   seed and persist it via `KeyStore::store(...)` (one-shot init).
+    ///   `anchorer_signing_key_seed`; if that's also absent, mint a fresh seed and persist it via
+    ///   `KeyStore::store(...)` (one-shot init).
     /// - `rotate-signing-key` endpoint: mint, persist via KeyStore, hot-swap.
     ///
     /// Behavior when `use_keystore=false`: identical to round 22.
@@ -82,11 +83,10 @@ pub struct AppConfig {
     /// pull-push under `/api/v1/federation/{push-operations,anchors,...}`);
     /// the policy only changes which set of peer endpoints we talk to.
     ///
-    /// - [`FederationPolicy::Mesh`] — broadcast each accepted Move to every
-    ///   known peer (gossip-like). Anchors are replicated via pull-push
-    ///   when peer pressure spikes. Default.
-    /// - [`FederationPolicy::Hub`] — push only to a single configured
-    ///   upstream hub; rely on the hub for outbound dissemination.
+    /// - [`FederationPolicy::Mesh`] — broadcast each accepted Move to every known peer
+    ///   (gossip-like). Anchors are replicated via pull-push when peer pressure spikes. Default.
+    /// - [`FederationPolicy::Hub`] — push only to a single configured upstream hub; rely on the
+    ///   hub for outbound dissemination.
     pub federation_policy: FederationPolicy,
     /// Peer DIDs the federation outbound layer
     /// considers as broadcast targets (mesh) or hub upstream (hub). Empty

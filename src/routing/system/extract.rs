@@ -9,11 +9,10 @@ use salvo::oapi::ToParameters;
 use salvo::prelude::Request;
 use serde::Deserialize;
 
-use crate::error::AppError;
-use crate::state::{AppState, SessionRecord};
-
 use super::auth::authenticated_session as authenticated_session_inner;
 use super::util::bearer_token;
+use crate::error::AppError;
+use crate::state::{AppState, SessionRecord};
 
 /// Authentication header bundle. Carries the raw `Authorization: Bearer ...`
 /// header and exposes the same `authenticated_session` lookup that

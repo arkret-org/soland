@@ -1,10 +1,10 @@
 //! Signed Event Envelope ingestion + read API (`/api/v1/events/*`).
 //!
 //! Surfaces:
-//! - `GET  /api/v1/events/describe`  — declare the active event registry,
-//!   schema/reducer profiles, and limits.
-//! - `POST /api/v1/events`           — submit one canonical Event Envelope.
-//!   Batched submit is intentionally rejected.
+//! - `GET  /api/v1/events/describe`  — declare the active event registry, schema/reducer profiles,
+//!   and limits.
+//! - `POST /api/v1/events`           — submit one canonical Event Envelope. Batched submit is
+//!   intentionally rejected.
 //! - `GET  /api/v1/events/{event_id}` — fetch one envelope.
 //! - `POST /api/v1/events/batch-get`  — fetch up to `MAX_EVENT_BATCH_GET`.
 //! - `GET  /api/v1/events`            — paginated list (filtered by actor / space).
@@ -17,22 +17,20 @@ use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
 use contrix_sdk::{Operation, OperationId, SpaceId};
-use salvo::{http::StatusCode, prelude::*};
+use salvo::http::StatusCode;
+use salvo::prelude::*;
 use serde_json::{Value, json};
-
-use crate::{
-    artifacts,
-    state::{AppState, CanonicalEventRecord, SessionRecord},
-    wire::{
-        EventBatchGetRequest, EventBatchGetResponse, EventDescribeResponse, EventReadResponse,
-        EventSubmitResponse, EventsFrontierResponse, EventsPageResponse, sync_token,
-    },
-};
 
 use super::{
     append_audit_log, auth_or_render, now, project_accepted_operations, query_param, render_error,
     sha256_hex, space_has_member, validate_did, validate_operation_policy,
     validate_operation_semantics, validate_space_id,
+};
+use crate::artifacts;
+use crate::state::{AppState, CanonicalEventRecord, SessionRecord};
+use crate::wire::{
+    EventBatchGetRequest, EventBatchGetResponse, EventDescribeResponse, EventReadResponse,
+    EventSubmitResponse, EventsFrontierResponse, EventsPageResponse, sync_token,
 };
 
 pub(super) fn router() -> Router {

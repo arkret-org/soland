@@ -1,19 +1,19 @@
-use contrix_sdk::{SpaceId, salvo_adapter::register_contrix_oapi_components};
-use salvo::{
-    affix_state,
-    cors::{Cors, CorsHandler},
-    http::Method,
-    oapi::{OpenApi, Operation, PathItem, PathItemType, Response as OapiResponse, RouterExt},
-    prelude::*,
-};
-use serde_json::{Value, json};
 use std::sync::OnceLock;
 
-use crate::{
-    ratelimit::{RateLimiter, RateLimiterConfig, RateLimiterMiddleware},
-    state::{AppState, DeviceInventoryRecord, MessageRecord},
-    wire::{now, sync_token},
+use contrix_sdk::SpaceId;
+use contrix_sdk::salvo_adapter::register_contrix_oapi_components;
+use salvo::affix_state;
+use salvo::cors::{Cors, CorsHandler};
+use salvo::http::Method;
+use salvo::oapi::{
+    OpenApi, Operation, PathItem, PathItemType, Response as OapiResponse, RouterExt,
 };
+use salvo::prelude::*;
+use serde_json::{Value, json};
+
+use crate::ratelimit::{RateLimiter, RateLimiterConfig, RateLimiterMiddleware};
+use crate::state::{AppState, DeviceInventoryRecord, MessageRecord};
+use crate::wire::{now, sync_token};
 
 mod access;
 mod admin;
@@ -941,14 +941,13 @@ fn message_event(message: &MessageRecord) -> serde_json::Value {
 
 #[cfg(test)]
 mod operation_conformance_tests {
-    use super::*;
-    use crate::{
-        config::{AppConfig, ObjectStorageConfig},
-        db::Db,
-        kinds,
-    };
     use contrix_sdk::{Operation, OperationId};
     use serde_json::{Value, json};
+
+    use super::*;
+    use crate::config::{AppConfig, ObjectStorageConfig};
+    use crate::db::Db;
+    use crate::kinds;
 
     struct OperationVector {
         name: &'static str,
@@ -1141,9 +1140,10 @@ mod operation_conformance_tests {
 
 #[cfg(test)]
 mod canonical_conformance_vectors {
-    use super::*;
     use contrix_sdk::canonical::{canonical_json_bytes, canonical_json_string, canonical_sha256};
     use serde_json::json;
+
+    use super::*;
 
     // ── Canonical JSON encoding vectors ──────────────────────────────────
 

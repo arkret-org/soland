@@ -13,19 +13,17 @@
 //! durable store (see todo F2) — currently in-memory.
 
 use contrix_sdk::identity::DidResolver;
-use salvo::{http::StatusCode, prelude::*};
+use salvo::http::StatusCode;
+use salvo::prelude::*;
 use serde_json::{Value, json};
 
-use crate::{
-    state::{AppState, IdentityDocumentRecord, IdentityLogRecord},
-    wire::{
-        IdentityDescribeResponse, IdentityLogResponse, IdentityReceiptsResponse,
-        IdentityResolveRequest, IdentityResolveResponse, SubmitDidOperationRequest,
-        SubmitDidOperationResponse,
-    },
-};
-
 use super::{append_audit_log, now, query_param, render_error, sha256_hex, validate_did};
+use crate::state::{AppState, IdentityDocumentRecord, IdentityLogRecord};
+use crate::wire::{
+    IdentityDescribeResponse, IdentityLogResponse, IdentityReceiptsResponse,
+    IdentityResolveRequest, IdentityResolveResponse, SubmitDidOperationRequest,
+    SubmitDidOperationResponse,
+};
 
 #[endpoint]
 pub(super) async fn identity_describe(depot: &mut Depot, res: &mut Response) {
