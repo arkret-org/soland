@@ -40,6 +40,8 @@ ack = "ack"
 acked = "acked"
 Frank = "Frank"
 frank = "frank"
+datas = "datas"
+ba = "ba"
 
 [files]
 extend-exclude = [

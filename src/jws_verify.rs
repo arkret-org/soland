@@ -1,7 +1,7 @@
 //! Production JWS (RFC 7515) Ed25519 detached-signature verifier.
 //!
-//! T7-9 (2026-05-09 十一轮): real cryptographic verification of Move /
-//! Anchor signatures via the AppState DID resolver chain (
+//! Real cryptographic verification of Move / Anchor signatures via the
+//! AppState DID resolver chain (
 //! `did:key` / `did:web` / `did:webvh` / static).
 //!
 //! # Two-tier verifier model
@@ -69,7 +69,10 @@ pub fn verify_jws_ed25519(
         .map_err(|e| format!("JWS header is not base64url: {e}"))?;
     let header: serde_json::Value = serde_json::from_slice(&header_bytes)
         .map_err(|e| format!("JWS header is not JSON: {e}"))?;
-    let alg = header.get("alg").and_then(serde_json::Value::as_str).unwrap_or("");
+    let alg = header
+        .get("alg")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
     if alg != "EdDSA" {
         return Err(format!("JWS alg `{alg}` is not EdDSA"));
     }
@@ -115,7 +118,10 @@ pub fn verify_jws_ed25519(
 ///   - did:key: the multibase-encoded key is in the DID itself; resolve
 ///     returns a doc whose verification_methods entry points at the same
 ///     multibase string.
-pub fn resolve_ed25519_pubkey(state: &AppState, verification_method: &str) -> Result<VerifyingKey, String> {
+pub fn resolve_ed25519_pubkey(
+    state: &AppState,
+    verification_method: &str,
+) -> Result<VerifyingKey, String> {
     let (did_str, fragment) = verification_method
         .split_once('#')
         .map(|(d, f)| (d.to_owned(), Some(f.to_owned())))
@@ -175,7 +181,10 @@ fn decode_ed25519_multibase(multibase: &str) -> Result<VerifyingKey, String> {
         .into_vec()
         .map_err(|e| format!("base58btc decode failed: {e}"))?;
     if decoded.len() < 2 {
-        return Err(format!("multicodec key too short ({} bytes)", decoded.len()));
+        return Err(format!(
+            "multicodec key too short ({} bytes)",
+            decoded.len()
+        ));
     }
     // Ed25519-pub multicodec: 0xed 0x01 (varint).
     if decoded[0] != 0xed || decoded[1] != 0x01 {
@@ -217,7 +226,7 @@ pub fn verify_replay_window(hlc: &Hlc, window_seconds: u64) -> Result<(), String
     verify_replay_window_at(hlc, window_seconds, Utc::now())
 }
 
-/// C10.B (2026-05-09 十四轮): differentiated replay window for a Move
+/// Differentiated replay window for a Move
 /// based on the cell families its `effects[]` touch. Looks up each
 /// effect's `cell_family` segment in `per_family_overrides`; takes the
 /// **minimum** (tightest) override across all touched cells; falls back
@@ -248,7 +257,8 @@ pub fn verify_replay_window_for_move_at(
     per_family_overrides: &std::collections::BTreeMap<&'static str, u64>,
     now: DateTime<Utc>,
 ) -> Result<(), String> {
-    let effective = effective_window_for_move(move_obj, default_window_seconds, per_family_overrides);
+    let effective =
+        effective_window_for_move(move_obj, default_window_seconds, per_family_overrides);
     verify_replay_window_at(&move_obj.hlc, effective, now)
 }
 
@@ -310,9 +320,8 @@ pub fn verify_replay_window_at(
         .ok_or_else(|| format!("invalid HLC format `{hlc_str}` (no segments)"))?;
     let physical_ms = i64::from_str_radix(physical_hex, 16)
         .map_err(|e| format!("HLC physical-ms hex `{physical_hex}` parse failed: {e}"))?;
-    let signed_at = DateTime::<Utc>::from_timestamp_millis(physical_ms).ok_or_else(|| {
-        format!("HLC physical-ms {physical_ms} is out of representable range")
-    })?;
+    let signed_at = DateTime::<Utc>::from_timestamp_millis(physical_ms)
+        .ok_or_else(|| format!("HLC physical-ms {physical_ms} is out of representable range"))?;
     let window = chrono::Duration::seconds(window_seconds as i64);
     let delta = now - signed_at;
     if delta > window {
@@ -358,7 +367,7 @@ fn parse_detached_jws(jws: &str) -> Result<(&str, &str), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ed25519_dalek::{Signer, SigningKey};
+    use ed25519_dalek::SigningKey;
 
     /// Encode an Ed25519 public key as the multibase form used by did:key
     /// and DID Document verificationMethod entries.
@@ -414,7 +423,7 @@ mod tests {
         assert!(err.contains("3 dot-separated segments"));
     }
 
-    // ── replay-window tests (十二轮) ──
+    // ── Replay-window tests ──
 
     fn hlc_at_ms(physical_ms: u64) -> Hlc {
         Hlc::new(format!("{physical_ms:012x}-00000000-aabbccdd")).unwrap()
@@ -459,10 +468,10 @@ mod tests {
         );
     }
 
-    // ── per-family override tests (十四轮) ──
+    // ── Per-family override tests ──
 
     fn build_test_move_touching(cell_id: &str, hlc_ms: u64) -> contrix_sdk::Move {
-        use contrix_sdk::{CellRef, MoveId, MoveSignature, Hash};
+        use contrix_sdk::{CellRef, Hash, MoveId, MoveSignature};
         contrix_sdk::Move {
             id: MoveId::new(format!("cx:move:sha256:{}", "1".repeat(64))).unwrap(),
             issuer: contrix_sdk::Did::new("did:web:test").unwrap(),
@@ -483,11 +492,8 @@ mod tests {
                     issuer_seq: None,
                 },
             }],
-            anchor_ref: contrix_sdk::AnchorId::new(format!(
-                "cx:anchor:sha256:{}",
-                "00".repeat(32)
-            ))
-            .unwrap(),
+            anchor_ref: contrix_sdk::AnchorId::new(format!("cx:anchor:sha256:{}", "00".repeat(32)))
+                .unwrap(),
             refs: vec![],
             hlc: Hlc::new(format!("{hlc_ms:012x}-00000000-aabbccdd")).unwrap(),
             sig: MoveSignature {
@@ -502,20 +508,14 @@ mod tests {
 
     #[test]
     fn effective_window_picks_default_when_no_overrides_apply() {
-        let m = build_test_move_touching(
-            "cx:cell:cx.component.message.create.v1:cx.event.foo",
-            0,
-        );
+        let m = build_test_move_touching("cx:cell:cx.component.message.create.v1:cx.event.foo", 0);
         let overrides = std::collections::BTreeMap::new();
         assert_eq!(effective_window_for_move(&m, 300, &overrides), 300);
     }
 
     #[test]
     fn effective_window_uses_anchorer_override_when_anchorer_cell_touched() {
-        let m = build_test_move_touching(
-            "cx:cell:cx.component.anchorer.v1:cx.space.x",
-            0,
-        );
+        let m = build_test_move_touching("cx:cell:cx.component.anchorer.v1:cx.space.x", 0);
         let mut overrides = std::collections::BTreeMap::new();
         overrides.insert("cx.component.anchorer.v1", 60u64);
         // Default 300, anchorer override 60 → effective 60.
@@ -524,10 +524,7 @@ mod tests {
 
     #[test]
     fn effective_window_takes_minimum_when_default_tighter_than_override() {
-        let m = build_test_move_touching(
-            "cx:cell:cx.component.anchorer.v1:cx.space.x",
-            0,
-        );
+        let m = build_test_move_touching("cx:cell:cx.component.anchorer.v1:cx.space.x", 0);
         let mut overrides = std::collections::BTreeMap::new();
         overrides.insert("cx.component.anchorer.v1", 600u64); // looser than default
         // Default 300, anchorer override 600 → min = 300 (default wins because tighter).
@@ -538,10 +535,7 @@ mod tests {
     fn effective_window_zero_default_with_override_uses_override() {
         // Test config has window=0 but spec-critical cells should still
         // be window-checked. The override "wins" in this case.
-        let m = build_test_move_touching(
-            "cx:cell:cx.component.anchorer.v1:cx.space.x",
-            0,
-        );
+        let m = build_test_move_touching("cx:cell:cx.component.anchorer.v1:cx.space.x", 0);
         let mut overrides = std::collections::BTreeMap::new();
         overrides.insert("cx.component.anchorer.v1", 60u64);
         assert_eq!(effective_window_for_move(&m, 0, &overrides), 60);
@@ -550,8 +544,7 @@ mod tests {
     #[test]
     fn anchorer_cell_with_60s_override_rejects_2min_old_hlc() {
         let now = chrono::Utc::now();
-        let two_min_ago_ms =
-            (now - chrono::Duration::minutes(2)).timestamp_millis() as u64;
+        let two_min_ago_ms = (now - chrono::Duration::minutes(2)).timestamp_millis() as u64;
         let m = build_test_move_touching(
             "cx:cell:cx.component.anchorer.v1:cx.space.x",
             two_min_ago_ms,
@@ -568,8 +561,7 @@ mod tests {
     #[test]
     fn message_cell_under_default_300s_accepts_2min_old_hlc() {
         let now = chrono::Utc::now();
-        let two_min_ago_ms =
-            (now - chrono::Duration::minutes(2)).timestamp_millis() as u64;
+        let two_min_ago_ms = (now - chrono::Duration::minutes(2)).timestamp_millis() as u64;
         let m = build_test_move_touching(
             "cx:cell:cx.component.message.create.v1:cx.event.foo",
             two_min_ago_ms,

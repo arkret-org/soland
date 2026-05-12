@@ -19,21 +19,21 @@ use crate::{
     json_ok,
     state::{AccountRecord, AppState, ContactRecord, DeviceInventoryRecord},
     wire::{
-        AccountResponse, ContactRequestRequest, ContactResponse, ContactRespondRequest,
+        AccountResponse, ContactRequestRequest, ContactRespondRequest, ContactResponse,
         ContactsResponse, RegisterAccountRequest,
     },
 };
 
 use super::{
-    AuthArgs, append_audit_log, is_valid_handle, normalize_handle, now,
-    validate_device_id, validate_did,
+    AuthArgs, append_audit_log, is_valid_handle, normalize_handle, now, validate_device_id,
+    validate_did,
 };
 
 #[endpoint(
     operation_id = "cx.account.register",
     tags("account"),
     summary = "Register a new account record",
-    status_codes(201, 400, 401, 409, 500),
+    status_codes(201, 400, 401, 409, 500)
 )]
 pub async fn account_register(
     depot: &mut Depot,
@@ -117,7 +117,7 @@ pub async fn account_register(
 #[endpoint(
     operation_id = "cx.account.me",
     tags("account"),
-    summary = "Get the authenticated principal's account record",
+    summary = "Get the authenticated principal's account record"
 )]
 pub async fn account_me(
     aa: AuthArgs,
@@ -141,7 +141,7 @@ pub async fn account_me(
     operation_id = "cx.contacts.request",
     tags("contacts"),
     summary = "Open a pending contact relationship",
-    status_codes(200, 201, 400, 401, 404, 409, 500),
+    status_codes(200, 201, 400, 401, 404, 409, 500)
 )]
 pub async fn contact_request(
     aa: AuthArgs,
@@ -198,7 +198,7 @@ pub async fn contact_request(
 #[endpoint(
     operation_id = "cx.contacts.respond",
     tags("contacts"),
-    summary = "Accept or reject a pending contact request",
+    summary = "Accept or reject a pending contact request"
 )]
 pub async fn contact_respond(
     aa: AuthArgs,
@@ -248,7 +248,7 @@ pub async fn contact_respond(
 #[endpoint(
     operation_id = "cx.contacts.list",
     tags("contacts"),
-    summary = "List contacts visible to the authenticated actor",
+    summary = "List contacts visible to the authenticated actor"
 )]
 pub async fn list_contacts(
     aa: AuthArgs,
@@ -312,7 +312,7 @@ pub struct PrincipalSpaceResponse {
 #[endpoint(
     operation_id = "cx.account.principal_space",
     tags("account"),
-    summary = "Resolve the principal control Space for a DID",
+    summary = "Resolve the principal control Space for a DID"
 )]
 pub async fn account_principal_space(
     aa: AuthArgs,

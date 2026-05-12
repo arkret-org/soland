@@ -400,7 +400,7 @@ pub async fn mimi_proxy_download(depot: &mut Depot, req: &mut Request, res: &mut
         "ok": true,
         "blob_ref": blob_ref,
         "media_type": blob.as_ref().map(|blob| blob.media_type.clone()),
-        "size": blob.as_ref().map(|blob| blob.bytes.len()),
+        "size": blob.as_ref().map(|blob| blob.size_bytes),
         "proxy_url": if proxy_required {
             Some(format!("{}/proxy-download?blob_ref={}", mimi_base_url(state), blob_ref))
         } else {

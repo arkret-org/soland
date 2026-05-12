@@ -1,4 +1,4 @@
-//! Anchorer signing worker (C10.B MAL-3).
+//! Anchorer signing worker.
 //!
 //! Per spec `event-auth-state-resolution.md` §3-§4: when this node is the
 //! authoritative anchorer for a Space, it periodically takes pending Move
@@ -9,15 +9,14 @@
 //!
 //! # v1 scope
 //!
-//! - **All four anchorer profiles supported** (R21):
+//! - **All four anchorer profiles supported**:
 //!   - `single_did` — straightforward DID match against `service_did`.
 //!   - `threshold(k, members[])` — simple deterministic leader election:
 //!     among the `members` set, the lex-smallest DID that *includes* this
 //!     node's `service_did` is the candidate to sign first; if `service_did`
 //!     IS that candidate, sign; otherwise this pass is a no-op (another
 //!     soland instance owns the round). The signature itself is single-DID
-//!     — `k`-of-`n` aggregation lives on the multi-signer coordinator
-//!     (future MAL-3 tail).
+//!     — `k`-of-`n` aggregation lives on the multi-signer coordinator.
 //!   - `open_set(members[])` — any member may sign; if `service_did ∈
 //!     members` this node signs.
 //!   - `mixed(primary, recovery_members[])` — primary signs by default;
@@ -27,13 +26,13 @@
 //!     the round (same election as threshold).
 //! - **Placeholder JWS** under dev mode and **real Ed25519** under prod
 //!   mode — handled by `select_jws_verifier` in `routing/move_anchor.rs`.
-//!   The signing side here still emits a placeholder JWS payload (T7-9
-//!   tail: real Ed25519 *signing* needs HSM/keystore integration; verify
+//!   The signing side here still emits a placeholder JWS payload (real
+//!   Ed25519 *signing* needs HSM/keystore integration; verify
 //!   already lands in jws_verify.rs).
 //! - **Manual / on-demand only**. Trigger via the admin endpoint
 //!   `POST /api/admin/v1/anchors/sign`. A periodic ticker / push-loop is
-//!   left to a future production-ops batch (needs lease coordination +
-//!   shutdown handling under tokio).
+//!   left to future production work (needs lease coordination + shutdown
+//!   handling under tokio).
 
 use anyhow::Result;
 use base64::Engine as _;
@@ -92,7 +91,9 @@ pub struct AnchorerWorker {
 
 impl AnchorerWorker {
     pub fn for_service(service_did: impl Into<String>) -> Self {
-        Self { service_did: service_did.into() }
+        Self {
+            service_did: service_did.into(),
+        }
     }
 
     /// Run one signing pass for the given Space. Returns:
@@ -164,12 +165,7 @@ impl AnchorerWorker {
                 rejected.push((m.id.clone(), format!("replay_window: {reject}")));
                 continue;
             }
-            match verify_move(
-                &m,
-                &pre_state,
-                state.cell_registry.as_ref(),
-                verifier,
-            ) {
+            match verify_move(&m, &pre_state, state.cell_registry.as_ref(), verifier) {
                 Ok(()) => accepted.push(m),
                 Err(reject) => rejected.push((m.id.clone(), reject.to_string())),
             }
@@ -181,12 +177,8 @@ impl AnchorerWorker {
 
         // Step 6: predict the post-state and state_root after applying
         // accepted moves' effects on top of pre_state.
-        let predicted_state_root = self.predict_post_state_root(
-            state,
-            space_id,
-            &pre_state,
-            &accepted,
-        )?;
+        let predicted_state_root =
+            self.predict_post_state_root(state, space_id, &pre_state, &accepted)?;
 
         // Step 7: compose Anchor (predecessor_refs = current leaves, frontier
         // = predecessor frontier ∪ new accepted moves), then derive id, then
@@ -206,10 +198,9 @@ impl AnchorerWorker {
             predecessor_refs: leaves,
             frontier,
             state_root: predicted_state_root.clone(),
-            anchorer_sig: AnchorerSig::Single(self.signature_for(
-                state,
-                &Sha256::digest(b"placeholder").as_slice().to_vec(),
-            )?),
+            anchorer_sig: AnchorerSig::Single(
+                self.signature_for(state, &Sha256::digest(b"placeholder").as_slice().to_vec())?,
+            ),
             hlc,
         };
 
@@ -221,8 +212,7 @@ impl AnchorerWorker {
             .map_err(|e| AnchorerError::Construction(format!("canonical bytes: {e}")))?;
         anchor.id = Anchor::id_from_canonical_bytes(&canonical_bytes)
             .map_err(|e| AnchorerError::Construction(format!("derive id: {e}")))?;
-        anchor.anchorer_sig =
-            AnchorerSig::Single(self.signature_for(state, &canonical_bytes)?);
+        anchor.anchorer_sig = AnchorerSig::Single(self.signature_for(state, &canonical_bytes)?);
 
         // Step 8: submit through apply_anchor — this re-runs steps 1-8 of
         // the SDK pipeline and writes Anchor + marks Moves anchored.
@@ -238,19 +228,18 @@ impl AnchorerWorker {
         )
         .map_err(|reject| AnchorerError::ApplyAnchor(reject.to_string()))?;
 
-        // Step 8b (2026-05-09 八轮): write-back ProjectionState::cells
+        // Refresh ProjectionState::cells
         // from the now-updated CellStore so cell-keyed reads see the new
         // effective state without waiting for an HTTP-side hook.
         //
-        // 十五轮: capture mls.epoch before reload so we can detect rotation.
+        // Capture mls.epoch before reload so we can detect rotation.
         let mls_epoch_cell = CellRef::new(format!(
             "cx:cell:cx.component.mls.epoch.v1:{}",
             space_id.as_str()
         ))
         .ok();
-        let prev_epoch_value: Option<serde_json::Value> = mls_epoch_cell
-            .as_ref()
-            .and_then(|cell_id| {
+        let prev_epoch_value: Option<serde_json::Value> =
+            mls_epoch_cell.as_ref().and_then(|cell_id| {
                 state
                     .projection
                     .lock()
@@ -269,7 +258,7 @@ impl AnchorerWorker {
                 );
             }
         }
-        // 十五轮: broadcast Frontier (always) + EpochRotation (conditional).
+        // Broadcast Frontier (always) + EpochRotation (conditional).
         let _ = state
             .event_broadcast
             .send(crate::state::EventNotification::frontier(
@@ -286,23 +275,21 @@ impl AnchorerWorker {
             if let Some(new_epoch) = new_epoch_value
                 && prev_epoch_value.as_ref() != Some(&new_epoch)
             {
-                let _ = state
-                    .event_broadcast
-                    .send(crate::state::EventNotification::epoch_rotation(
-                        space_id.as_str().to_owned(),
-                        prev_epoch_value,
-                        new_epoch,
-                    ));
+                let _ =
+                    state
+                        .event_broadcast
+                        .send(crate::state::EventNotification::epoch_rotation(
+                            space_id.as_str().to_owned(),
+                            prev_epoch_value,
+                            new_epoch,
+                        ));
             }
         }
 
         Ok(Some(AnchorerOutcome {
             anchor_id: effect.anchor,
             accepted_move_ids: effect.accepted_move_ids,
-            rejected_moves: rejected
-                .into_iter()
-                .chain(effect.rejected_moves)
-                .collect(),
+            rejected_moves: rejected.into_iter().chain(effect.rejected_moves).collect(),
             post_state_root: effect.post_state_root,
         }))
     }
@@ -395,10 +382,7 @@ impl AnchorerWorker {
                     .or_else(|| value.get("mixed_primary"))
                     .and_then(|d| d.as_str())
                     .unwrap_or("");
-                let recovery = read_did_list(
-                    &value,
-                    &["recovery_members", "mixed_recovery"],
-                );
+                let recovery = read_did_list(&value, &["recovery_members", "mixed_recovery"]);
                 let staleness_ms = value
                     .get("max_anchor_staleness_ms")
                     .and_then(|n| n.as_u64())
@@ -502,7 +486,10 @@ impl AnchorerWorker {
         for m in accepted {
             for effect in &m.effects {
                 let aop = AnchoredOp::new(m.id.clone(), effect.op.clone());
-                ops_by_cell.entry(effect.cell.clone()).or_default().push(aop);
+                ops_by_cell
+                    .entry(effect.cell.clone())
+                    .or_default()
+                    .push(aop);
             }
         }
         // Run lattice.join per cell to get predicted CellState.
@@ -520,7 +507,7 @@ impl AnchorerWorker {
             .map_err(|e| AnchorerError::Construction(format!("compute_state_root: {e}")))
     }
 
-    /// Round 22: build a **real** Ed25519 signature over the canonical
+    /// Build a **real** Ed25519 signature over the canonical
     /// Anchor bytes. Production deployments configure
     /// `SERVERX_ANCHORER_SIGNING_KEY` (base64 32-byte seed); dev/test
     /// deployments fall back to an in-process random ephemeral key with a
@@ -579,7 +566,7 @@ impl AnchorerWorker {
     }
 }
 
-/// Round 22: log a sticky-warn the first time we sign with an ephemeral
+/// Log a sticky warning the first time we sign with an ephemeral
 /// key. The `OnceLock` keeps the warn at exactly one log line per process
 /// (vs once-per-pass spam) — operators see it on cold-start, then it goes
 /// quiet so it doesn't drown other signals.
@@ -595,7 +582,7 @@ fn warn_once_about_ephemeral_anchorer_key() {
     });
 }
 
-/// Round 22: helper exposed for `AppState::anchorer_signing_key` so the
+/// Helper exposed for `AppState::anchorer_signing_key` so the
 /// admin endpoints (`admin_reconfigure_anchorer`, `admin_repair_bottom`)
 /// can build a `Ed25519MoveSigner` keyed off the same SigningKey the
 /// AnchorerWorker uses, keeping all signing paths consistent.
@@ -678,10 +665,7 @@ mod tests {
     #[test]
     fn is_round_leader_rejects_when_not_a_member() {
         let worker = AnchorerWorker::for_service("did:cx:other");
-        assert!(!worker.is_round_leader(&[
-            "did:cx:a".to_owned(),
-            "did:cx:b".to_owned(),
-        ]));
+        assert!(!worker.is_round_leader(&["did:cx:a".to_owned(), "did:cx:b".to_owned(),]));
     }
 
     #[test]

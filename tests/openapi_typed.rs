@@ -6,7 +6,12 @@
 //! references that prove the conversion is real (not just metadata).
 
 use salvo::test::{ResponseExt, TestClient};
-use soland::{config::AppConfig, db::Db, service, state::AppState};
+use soland::{
+    config::{AppConfig, ObjectStorageConfig},
+    db::Db,
+    service,
+    state::AppState,
+};
 
 fn test_config() -> AppConfig {
     AppConfig {
@@ -14,7 +19,9 @@ fn test_config() -> AppConfig {
         public_base_url: "http://server".to_owned(),
         service_did: "did:web:soland.local".to_owned(),
         database_url: None,
-        blob_root: std::env::temp_dir().join("soland-openapi-typed-blobs"),
+        object_storage: ObjectStorageConfig::local(
+            std::env::temp_dir().join("soland-openapi-typed-blobs"),
+        ),
         cors_allow_origin: None,
         development_mode: true,
         session_grant_introspection_url: None,
@@ -24,7 +31,6 @@ fn test_config() -> AppConfig {
         starid_webvh_resolver_active: false,
         jws_replay_window_seconds: 0,
         jws_replay_window_per_family: std::collections::BTreeMap::new(),
-        lattice_first: false,
         anchorer_signing_key_seed: None,
         use_keystore: false,
         federation_policy: soland::config::FederationPolicy::Mesh,
@@ -61,7 +67,7 @@ async fn typed_describe_handlers_publish_response_schemas() {
         "ErrorEnvelope missing — AppError EndpointOutRegister didn't fire"
     );
 
-    // 3. carry the new operation_ids that didn't exist in the legacy table,
+    // 3. carry generated operation_ids for typed handlers,
     for typed_only in [
         "cx.auth.bridge.describe",
         "cx.authz.describe",
@@ -84,9 +90,6 @@ async fn typed_describe_handlers_publish_response_schemas() {
         "RegisterAccountRequest",
         "ContactRequestRequest",
         "ContactRespondRequest",
-        "SendMessageRequest",
-        "ReviseMessageRequest",
-        "RedactMessageRequest",
         "AddReactionRequest",
         "RemoveReactionRequest",
         "SetReadMarkerRequest",
@@ -106,9 +109,6 @@ async fn typed_describe_handlers_publish_response_schemas() {
         "AccountResponse",
         "ContactResponse",
         "ContactsResponse",
-        "SendMessageResponse",
-        "ReviseMessageResponse",
-        "RedactMessageResponse",
         "ReactionResponse",
         "ReadMarkerResponse",
         "SpaceLifecycleResponse",

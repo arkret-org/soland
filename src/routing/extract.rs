@@ -44,9 +44,9 @@ pub struct AuthArgs {
 
 impl AuthArgs {
     /// Validate the bearer session against `state` and return the matched
-    /// `SessionRecord`. The same checks as the legacy `authenticated_session`
-    /// helper run here: query-string auth-material rejection, audience match,
-    /// session not revoked, device not revoked, expiry not yet hit.
+    /// `SessionRecord`. The same checks as `authenticated_session` run here:
+    /// query-string auth-material rejection, audience match, session not
+    /// revoked, device not revoked, expiry not yet hit.
     pub fn authenticated_session(
         &self,
         state: &AppState,
@@ -54,14 +54,12 @@ impl AuthArgs {
     ) -> Result<SessionRecord, AppError> {
         match authenticated_session_inner(state, req) {
             Ok(session) => Ok(session),
-            Err((status, code, message)) => {
-                Err(AppError::new(
-                    crate::error::ErrorCode::from_wire(code)
-                        .unwrap_or(crate::error::ErrorCode::Unauthenticated),
-                    message,
-                )
-                .with_status(status))
-            }
+            Err((status, code, message)) => Err(AppError::new(
+                crate::error::ErrorCode::from_wire(code)
+                    .unwrap_or(crate::error::ErrorCode::Unauthenticated),
+                message,
+            )
+            .with_status(status)),
         }
     }
 

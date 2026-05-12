@@ -157,10 +157,11 @@ pub async fn get_device_messages(depot: &mut Depot, req: &mut Request, res: &mut
         },
         None => 0,
     };
-    let _ = state
-        .persistence
-        .device_messages()
-        .ack(&session.actor, &session.device_id, ack_position);
+    let _ =
+        state
+            .persistence
+            .device_messages()
+            .ack(&session.actor, &session.device_id, ack_position);
     let queued = state
         .persistence
         .device_messages()
@@ -188,15 +189,12 @@ pub async fn get_device_messages(depot: &mut Depot, req: &mut Request, res: &mut
     }));
 }
 
-pub fn prune_acked_device_messages(
-    state: &AppState,
-    session: &SessionRecord,
-    ack_position: i64,
-) {
-    let _ = state
-        .persistence
-        .device_messages()
-        .ack(&session.actor, &session.device_id, ack_position);
+pub fn prune_acked_device_messages(state: &AppState, session: &SessionRecord, ack_position: i64) {
+    let _ =
+        state
+            .persistence
+            .device_messages()
+            .ack(&session.actor, &session.device_id, ack_position);
 }
 
 pub fn device_message_events_after(messages: &[DeviceMessageRecord]) -> Vec<Value> {

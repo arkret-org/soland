@@ -29,7 +29,7 @@ use super::{
 #[endpoint(
     operation_id = "cx.devices.pairing_challenge",
     tags("devices"),
-    summary = "Mint a short-lived device pairing challenge",
+    summary = "Mint a short-lived device pairing challenge"
 )]
 pub async fn device_pairing_challenge(
     aa: AuthArgs,
@@ -89,7 +89,7 @@ pub async fn device_pairing_challenge(
 #[endpoint(
     operation_id = "cx.devices.authorize_pairing",
     tags("devices"),
-    summary = "Authorise and register a paired sibling device",
+    summary = "Authorise and register a paired sibling device"
 )]
 pub async fn device_authorize_pairing(
     aa: AuthArgs,

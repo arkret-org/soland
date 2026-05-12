@@ -1,7 +1,7 @@
 //! Client sync + snapshot handlers + the cursor-helper machinery they share
-//! with the index / events modules.
+//! with events and device-message modules.
 //!
-//! Surfaces (post-C17 wire-break, spec 2026-05-08):
+//! Surfaces for the current sync/event wire layout:
 //! - `GET  /api/v1/sync/describe`
 //! - `POST /api/v1/sync`                    — `cx.sync.account` (account-aggregate
 //!                                            sync: timeline, presence, typing,
@@ -24,20 +24,15 @@
 //! `SyncCursor`, `SyncCursorError`, `parse_and_validate_sync_cursor`,
 //! `decode_sync_cursor_value`, `sync_token_for_client_sync`, `sync_filter_hash`,
 //! `bound_cursor`, `bound_cursor_with_positions`, `normalized_strings` are all
-//! `pub` because the index module + device_messages module reuse them. They
+//! `pub` because sibling routing modules reuse them. They
 //! live here because the cursor lifecycle is anchored to `client_sync`.
-//!
-//! Stream-S in `_todos.md` covers the still-open work: `cx:cursor:` ↔ reducer
-//! event-seq mapping (S1, `handlers.rs:7623` TODO), deterministic
-//! snapshot-chunk sharding (S2), history-visibility unification (B-03 / S3),
-//! `cx:space:` prefix audit (M-15 / S4), and `$ME` / `*` substitution
-//! formalization (M-16 / S5).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use bytes::Bytes;
+use chrono::{Duration as ChronoDuration, SecondsFormat};
 use contrix_sdk::SpaceId;
 use futures_util::stream::StreamExt;
 use salvo::{http::StatusCode, prelude::*};
@@ -53,15 +48,12 @@ use crate::{
 };
 
 use super::{
-    auth_or_render, authenticated_session, backfill_gap_events,
-    device_message_events_after, flow_projection_for_space, is_space_deleted,
-    is_supported_view_renderer, now, operation_is_visible, parse_snapshot_ref,
-    projected_event_page, projection_event_from_operation, projection_event_json,
-    prune_acked_device_messages, prune_expired_typing, query_param,
-    redaction_targets_from_operations, render_error, sha256_hex, snapshot_bundle_for_space,
-    space_has_member, space_id_accessible, space_visible_to, sync_timeline_message_json,
-    truncate_gap_events, typing_ephemeral_for_space, validate_did,
-    validate_no_removed_legacy_contracts, validate_space_id,
+    auth_or_render, authenticated_session, backfill_gap_events, device_message_events_after,
+    flow_projection_for_space, is_space_deleted, now, parse_snapshot_ref, projected_event_page,
+    projection_event_json, prune_acked_device_messages, prune_expired_typing, query_param,
+    render_error, sha256_hex, snapshot_bundle_for_space, space_has_member, space_id_accessible,
+    space_visible_to, sync_timeline_message_json, truncate_gap_events, typing_ephemeral_for_space,
+    validate_did, validate_space_id,
 };
 
 #[endpoint]
@@ -96,12 +88,6 @@ pub async fn client_sync(depot: &mut Depot, req: &mut Request, res: &mut Respons
             return;
         }
     };
-    if let Some(filter) = body.filter.as_ref()
-        && let Err(message) = validate_no_removed_legacy_contracts(filter)
-    {
-        render_error(res, StatusCode::BAD_REQUEST, "invalid_param", message);
-        return;
-    }
     let session = authenticated_session(state, req).ok();
     let since_cursor = if let Some(since) = body.since.as_deref() {
         match parse_and_validate_sync_cursor(
@@ -168,7 +154,7 @@ pub async fn client_sync(depot: &mut Depot, req: &mut Request, res: &mut Respons
             res,
             StatusCode::BAD_REQUEST,
             "invalid_param",
-            "renderer must be collection, conversation, graph, queue, list, kanban, table, calendar, or timeline",
+            "renderer must be collection, timeline, graph, document, or composite",
         );
         return;
     }
@@ -302,6 +288,13 @@ pub async fn client_sync(depot: &mut Depot, req: &mut Request, res: &mut Respons
     }));
 }
 
+fn is_supported_view_renderer(renderer: &str) -> bool {
+    matches!(
+        renderer,
+        "collection" | "timeline" | "graph" | "document" | "composite"
+    )
+}
+
 #[derive(Debug, Default)]
 pub struct SyncCursor {
     pub positions: BTreeMap<String, i64>,
@@ -326,7 +319,7 @@ pub fn sync_token_for_client_sync(
     to_device_position: i64,
 ) -> String {
     let issued_at = chrono::Utc::now();
-    let expires_at = issued_at + chrono::Duration::hours(1);
+    let expires_at = issued_at + ChronoDuration::hours(1);
     let principal_id = session
         .map(|session| session.actor.clone())
         .unwrap_or_else(|| "anonymous".to_owned());
@@ -336,27 +329,26 @@ pub fn sync_token_for_client_sync(
     let device_positions = BTreeMap::from([(device_id.clone(), issued_at.timestamp_micros())]);
     let profile = profile.unwrap_or("incremental");
     let cursor = json!({
-        "schema": "cx.schema.cursor.v1",
-        "version": 1,
-        "profile": profile,
+        "v": "1",
+        "purpose": "stream",
+        "t": issued_at.to_rfc3339_opts(SecondsFormat::Millis, true),
+        "x": expires_at.timestamp_millis(),
+        "_profile": profile,
         "principal_id": principal_id,
         "device_id": device_id,
         "service_id": state.config.service_did.clone(),
         "renderer": renderer,
         "facets": facets,
-        "filter_hash": sync_filter_hash(profile, filter, renderer, facets),
-        "issued_at": issued_at,
-        "issued_at_ms": issued_at.timestamp_millis(),
-        "expires_at": expires_at,
-        "expires_at_ms": expires_at.timestamp_millis(),
-        "positions": {
+        "_filter_hash": sync_filter_hash(profile, filter, renderer, facets),
+        "_positions": {
             "spaces": spaces_positions,
             "devices": device_positions,
-            "to_device": to_device_position,
-            "repo": null
+            "to_device": to_device_position
         }
     });
-    format!("cx:cursor:{}", URL_SAFE_NO_PAD.encode(cursor.to_string()))
+    let bytes = contrix_sdk::canonical::canonical_json_bytes(&cursor)
+        .unwrap_or_else(|_| cursor.to_string().into_bytes());
+    format!("cx:cursor:{}", URL_SAFE_NO_PAD.encode(bytes))
 }
 
 pub fn parse_and_validate_sync_cursor(
@@ -371,20 +363,20 @@ pub fn parse_and_validate_sync_cursor(
 ) -> Result<SyncCursor, SyncCursorError> {
     let value = decode_sync_cursor_value(token)?;
     if value
-        .get("schema")
-        .and_then(|schema| schema.as_str())
-        .is_none_or(|schema| schema != "cx.schema.cursor.v1")
+        .get("v")
+        .and_then(|v| v.as_str())
+        .is_none_or(|v| v != "1")
         || value
-            .get("version")
-            .and_then(|version| version.as_u64())
-            .is_none_or(|version| version != 1)
+            .get("purpose")
+            .and_then(|purpose| purpose.as_str())
+            .is_none_or(|purpose| purpose != "stream")
     {
         return Err(SyncCursorError::Invalid("since must be a v1 sync cursor"));
     }
     if value
-        .get("expires_at_ms")
-        .and_then(|expires_at_ms| expires_at_ms.as_i64())
-        .is_some_and(|expires_at_ms| expires_at_ms <= now_ms)
+        .get("x")
+        .and_then(|expires_at| expires_at.as_i64())
+        .is_some_and(|expires_at| expires_at <= now_ms)
     {
         return Err(SyncCursorError::Expired);
     }
@@ -424,7 +416,7 @@ pub fn parse_and_validate_sync_cursor(
     let expected_filter_hash =
         sync_filter_hash(profile.unwrap_or("incremental"), filter, renderer, facets);
     if value
-        .get("filter_hash")
+        .get("_filter_hash")
         .and_then(|filter_hash| filter_hash.as_str())
         .is_some_and(|filter_hash| filter_hash != expected_filter_hash)
     {
@@ -432,14 +424,14 @@ pub fn parse_and_validate_sync_cursor(
             "sync token filter hash does not match request filter",
         ));
     }
-    let positions_value = value.get("positions").ok_or(SyncCursorError::Invalid(
-        "since cursor must contain positions",
+    let positions_value = value.get("_positions").ok_or(SyncCursorError::Invalid(
+        "since cursor must contain _positions",
     ))?;
     let positions = positions_value
         .get("spaces")
         .and_then(|spaces| spaces.as_object())
         .ok_or(SyncCursorError::Invalid(
-            "since cursor must contain positions.spaces",
+            "since cursor must contain _positions.spaces",
         ))?
         .iter()
         .filter_map(|(space_id, position)| {
@@ -489,7 +481,7 @@ pub fn sync_filter_hash(
 }
 
 pub fn bound_cursor(profile: &str, binding: serde_json::Value) -> String {
-    bound_cursor_with_positions(profile, binding, json!({"repo": null}))
+    bound_cursor_with_positions(profile, binding, json!({}))
 }
 
 pub fn bound_cursor_with_positions(
@@ -498,18 +490,22 @@ pub fn bound_cursor_with_positions(
     positions: serde_json::Value,
 ) -> String {
     let now = chrono::Utc::now();
+    let expires_at = now + ChronoDuration::days(7);
     let filter_hash = contrix_sdk::canonical::canonical_sha256(&binding)
         .unwrap_or_else(|_| format!("sha256:{}", sha256_hex(binding.to_string().as_bytes())));
     let cursor = json!({
-        "schema": "cx.schema.cursor.v1",
-        "version": 1,
-        "profile": profile,
-        "filter_hash": filter_hash,
-        "issued_at": now,
-        "issued_at_ms": now.timestamp_millis(),
-        "positions": positions
+        "v": "1",
+        "purpose": "stream",
+        "t": now.to_rfc3339_opts(SecondsFormat::Millis, true),
+        "x": expires_at.timestamp_millis(),
+        "_profile": profile,
+        "_filter_hash": filter_hash,
+        "_binding": binding,
+        "_positions": positions
     });
-    format!("cx:cursor:{}", URL_SAFE_NO_PAD.encode(cursor.to_string()))
+    let bytes = contrix_sdk::canonical::canonical_json_bytes(&cursor)
+        .unwrap_or_else(|_| cursor.to_string().into_bytes());
+    format!("cx:cursor:{}", URL_SAFE_NO_PAD.encode(bytes))
 }
 
 pub fn normalized_strings(values: &[String]) -> Vec<String> {
@@ -587,13 +583,12 @@ pub async fn set_typing(depot: &mut Depot, req: &mut Request, res: &mut Response
     }));
 }
 
-/// C17 (spec 2026-05-08) + C10.B (2026-05-09 十轮 long-poll/SSE):
 /// `cx.events.subscribe` at `GET /api/v1/events/subscribe`. NDJSON
 /// streaming: each line is one frame, frame `kind` is one of
 /// `event` / `catchup_complete` / `heartbeat` / `dropped`.
 ///
-/// Selector: `spaces[]` repeated query args (multi-value). Singular
-/// `space_id` removed (transition-fallback cleanup, 七轮).
+/// Selector: repeated `spaces[]` query args (multi-value). The legacy
+/// singular `space_id` parameter is not supported.
 ///
 /// Lifecycle:
 ///   1. Validate inputs (spaces, accessibility).
@@ -612,8 +607,7 @@ pub async fn set_typing(depot: &mut Depot, req: &mut Request, res: &mut Response
 #[endpoint]
 pub async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected").clone();
-    // C17 selector: `spaces=` repeated args (multi-value). Singular
-    // `space_id` is rejected as a removed legacy contract.
+    // Repeated `spaces=` query args (multi-value).
     let spaces = super::query_param_all(req, "spaces");
     if spaces.is_empty() {
         render_error(
@@ -650,13 +644,13 @@ pub async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Re
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(100)
         .min(100);
-    // C17: cursor parameter renamed to `from`. Legacy `cursor` param removed.
+    // Cursor parameter uses `from`; the legacy `cursor` param is not supported.
     let cursor = query_param(req, "from");
     let include_history = query_param(req, "include_history")
         .as_deref()
         .map(|value| matches!(value, "true" | "1" | "yes"))
         .unwrap_or(true);
-    // 十轮: cap how long the stream stays open. Default 60s; tests
+    // Cap how long the stream stays open. Default 60s; tests
     // typically pass `max_duration_ms=500` to bound assertion latency.
     // Production clients reconnect after the close (HTTP/1.1 long-poll
     // pattern) or use SSE EventSource auto-reconnect.
@@ -664,7 +658,7 @@ pub async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Re
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(60_000)
         .min(600_000);
-    // 十轮: heartbeat interval. Default 15s; min 100ms (for tests).
+    // Heartbeat interval. Default 15s; min 100ms (for tests).
     let heartbeat_ms = query_param(req, "heartbeat_ms")
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(15_000)
@@ -700,31 +694,7 @@ pub async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Re
                         last_cursor = Some(next);
                     }
                 }
-                Ok(None) => {
-                    if let Ok(page) = state
-                        .repo
-                        .sync_space_operations(space_id, cursor.as_deref(), limit)
-                    {
-                        for operation in page.items {
-                            seq += 1;
-                            let projected = projection_event_from_operation(&operation, None);
-                            let event_cursor = projected
-                                .operation_id
-                                .clone()
-                                .unwrap_or_else(|| projected.event_id.clone());
-                            last_cursor = Some(event_cursor.clone());
-                            history_frames.push(json!({
-                                "kind": "event",
-                                "seq": seq,
-                                "cursor": event_cursor,
-                                "payload": projection_event_json(&projected)
-                            }));
-                        }
-                        if let Some(next) = page.next_cursor {
-                            last_cursor = Some(next);
-                        }
-                    }
-                }
+                Ok(None) => {}
                 Err(error) => {
                     if error.to_string().contains("invalid_cursor") && accessible_spaces.len() == 1
                     {
@@ -783,7 +753,7 @@ pub async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Re
                             if !space_filter.contains(&notification.space_id) {
                                 continue;
                             }
-                            // 十五轮: dispatch on notification.kind to
+                            // Dispatch on notification.kind to
                             // produce the right NDJSON frame shape.
                             use crate::state::EventNotificationKind;
                             let frame = match notification.kind {
@@ -861,7 +831,7 @@ pub async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Re
     res.stream(body_stream.boxed());
 }
 
-/// C10.B (2026-05-09 十轮): serialize a JSON frame to a length-prefixed
+/// Serialize a JSON frame to a length-prefixed
 /// NDJSON line. Each line ends with `\n` per the NDJSON / JSON-Lines
 /// convention so streaming clients can split-on-newline incrementally
 /// without parsing the whole buffer.
@@ -871,26 +841,22 @@ fn ndjson_line(value: &serde_json::Value) -> Bytes {
     Bytes::from(s)
 }
 
-/// C17 (spec 2026-05-08): `cx.events.query` at `GET /api/v1/events`.
-/// Folds the legacy `cx.events.list` (forward) and `cx.sync.backfill`
-/// (backward) into one op gated by the `direction` parameter (forward
-/// default). Reads from the projection layer so callers writing through
-/// `/api/v1/messages/send` see their messages here.
+/// `cx.events.query` at `GET /api/v1/events`.
+/// Reads from the projection layer so callers writing through
+/// `POST /api/v1/events` see their messages here.
 ///
 /// Selector: `spaces[]` ∪ `actors[]` repeated query args (multi-value).
-/// Aggressive cleanup (2026-05-09): legacy singular `space_id` / `actor_id`
-/// transition fallback removed. Multi-space queries call `projected_event_page`
-/// per space and merge sorted by HLC; the result paginates as a single stream.
+/// Multi-space queries call `projected_event_page` per space and merge sorted
+/// by HLC; the result paginates as a single stream.
 /// `actors[]`-only queries dispatch to the durable Event-store reader.
 ///
-/// Range: `from?` (replaces legacy `cursor`) + `until?` + `direction`.
+/// Range: `from?` + `until?` + `direction`.
 /// `direction=backward` reverses the merged stream so callers can paginate
 /// older events with the same `next_cursor` semantics.
 #[endpoint]
 pub async fn events_query(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
-    // C17 selector: collect all `spaces=` and `actors=` repeated args.
-    // Singular `space_id` / `actor_id` are rejected as removed legacy contracts.
+    // Collect all `spaces=` and `actors=` repeated args.
     let spaces = super::query_param_all(req, "spaces");
     let actors = super::query_param_all(req, "actors");
     if spaces.is_empty() && actors.is_empty() {
@@ -946,8 +912,8 @@ pub async fn events_query(depot: &mut Depot, req: &mut Request, res: &mut Respon
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(100)
         .min(100);
-    // C17: `cursor` → `from`; `direction = forward | backward`. Legacy
-    // `cursor` param removed (aggressive cleanup 2026-05-09).
+    // `from` is the cursor parameter; `direction = forward | backward`.
+    // The legacy `cursor` parameter is not supported.
     let cursor = query_param(req, "from");
     let direction = query_param(req, "direction").unwrap_or_else(|| "forward".to_owned());
     if direction != "forward" && direction != "backward" {
@@ -1000,39 +966,12 @@ pub async fn events_query(depot: &mut Depot, req: &mut Request, res: &mut Respon
                 return;
             }
         }
-        let page = match state
-            .repo
-            .sync_space_operations(space_id, cursor.as_deref(), limit)
-        {
-            Ok(page) => page,
-            Err(error) => {
-                render_error(
-                    res,
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "repo_error",
-                    &error.to_string(),
-                );
-                return;
-            }
-        };
-        let redacted = redaction_targets_from_operations(&page.items);
-        let mut events: Vec<_> = page
-            .items
-            .into_iter()
-            .filter(|operation| operation_is_visible(operation, &redacted))
-            .map(|operation| {
-                projection_event_json(&projection_event_from_operation(&operation, None))
-            })
-            .collect();
-        if backward {
-            events.reverse();
-        }
         res.render(Json(BackfillResponse {
-            events,
+            events: Vec::new(),
             prev_cursor: cursor.clone(),
             prev_batch: cursor,
-            next_cursor: page.next_cursor.or_else(|| Some(sync_token())),
-            limited: page.has_more,
+            next_cursor: Some(sync_token()),
+            limited: false,
         }));
         return;
     }
@@ -1052,26 +991,7 @@ pub async fn events_query(depot: &mut Depot, req: &mut Request, res: &mut Respon
                 }
                 merged.extend(page.items.iter().map(projection_event_json));
             }
-            Ok(None) => {
-                // Fall back to repo sync for this space if no projection.
-                match state.repo.sync_space_operations(space_id, cursor.as_deref(), limit) {
-                    Ok(page) => {
-                        if page.has_more {
-                            any_has_more = true;
-                        }
-                        let redacted = redaction_targets_from_operations(&page.items);
-                        merged.extend(page.items.into_iter().filter_map(|operation| {
-                            if !operation_is_visible(&operation, &redacted) {
-                                return None;
-                            }
-                            Some(projection_event_json(&projection_event_from_operation(
-                                &operation, None,
-                            )))
-                        }));
-                    }
-                    Err(_) => continue,
-                }
-            }
+            Ok(None) => {}
             Err(error) => {
                 if error.to_string().contains("invalid_cursor") {
                     render_error(

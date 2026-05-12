@@ -1,6 +1,5 @@
-// Several routing scaffolds (recovery / key-backup restore / push outbound)
-// build large `serde_json::json!` literals that exceed the default macro
-// recursion limit. Bump it for the whole crate.
+// Some route descriptors build large `serde_json::json!` literals that exceed
+// the default macro recursion limit. Bump it for the whole crate.
 #![recursion_limit = "512"]
 
 pub mod anchorer;
@@ -15,10 +14,10 @@ pub mod ids;
 pub mod jws_verify;
 pub mod kinds;
 pub mod multisig_watchdog;
+pub mod object_storage;
 pub mod persistence;
 pub mod ratelimit;
 pub mod reducer;
-pub mod repo;
 pub mod result;
 pub mod routing;
 pub mod schema;
@@ -34,16 +33,15 @@ use salvo::catcher::Catcher;
 use salvo::cors::{Cors, CorsHandler};
 use salvo::http::Method;
 use salvo::oapi::{
-    Array, BasicType, Object, OpenApi, Operation, PathItem, PathItemType, Ref, RefOr,
-    Response as OapiResponse, RouterExt, Schema,
+    OpenApi, Operation, PathItem, PathItemType, Response as OapiResponse, RouterExt,
 };
 use salvo::prelude::*;
 use serde_json::json;
 use std::sync::OnceLock;
 
 use crate::{
-    routing::*,
     ratelimit::{RateLimiter, RateLimiterConfig, RateLimiterMiddleware},
+    routing::*,
     state::AppState,
 };
 
@@ -87,19 +85,15 @@ pub fn router_with_rate_limiter_config(
                 .push(Router::with_path("auth/bridge/describe").get(auth_bridge_describe))
                 .push(Router::with_path("account/register").post(account_register))
                 .push(Router::with_path("account/me").get(account_me))
-                // Round 24: principal-space lookup endpoint. Returns the
+                // Principal-space lookup endpoint. Returns the
                 // deterministic DID → control-Space mapping coauth currently
                 // mirrors locally; future custom mappings will land behind
                 // this same path so coauth can swap without a wire bump.
                 .push(
-                    Router::with_path("account/{did}/principal-space")
-                        .get(account_principal_space),
+                    Router::with_path("account/{did}/principal-space").get(account_principal_space),
                 )
                 .push(Router::with_path("auth/dev-login").post(dev_login))
-                .push(
-                    Router::with_path("auth/session-grant/exchange")
-                        .post(exchange_session_grant),
-                )
+                .push(Router::with_path("auth/session-grant/exchange").post(exchange_session_grant))
                 .push(Router::with_path("auth/logout").post(logout))
                 .push(Router::with_path("contacts/request").post(contact_request))
                 .push(Router::with_path("contacts/respond").post(contact_respond))
@@ -112,9 +106,6 @@ pub fn router_with_rate_limiter_config(
                     Router::with_path("spaces/{space_id}/members/{member_did}")
                         .delete(remove_space_member),
                 )
-                .push(Router::with_path("messages/send").post(send_message))
-                .push(Router::with_path("messages/revise").post(revise_message))
-                .push(Router::with_path("messages/redact").post(redact_message))
                 .push(Router::with_path("moves").post(submit_move))
                 .push(Router::with_path("anchors").post(submit_anchor))
                 .push(
@@ -127,33 +118,17 @@ pub fn router_with_rate_limiter_config(
                         .post(set_read_marker)
                         .get(get_read_markers),
                 )
-                // C14 (spec 2026-05-09 read-receipts §2.4-2.5): ephemeral
+                // Ephemeral
                 // cx.receipt.read fanout endpoint. Policy gate applied
                 // server-side; clients see HTTP 403 + policy_violation when
                 // the Space declares disclosure="disabled".
                 .push(Router::with_path("receipts/read").post(send_read_receipt))
-                .push(
-                    Router::with_path("entities")
-                        .post(create_entity)
-                        .get(list_entities),
-                )
-                .push(
-                    Router::with_path("entities/{entity_id}")
-                        .get(get_entity)
-                        .patch(update_entity)
-                        .delete(delete_entity),
-                )
                 .push(
                     Router::with_path("relations")
                         .post(create_relation)
                         .get(list_relations),
                 )
                 .push(Router::with_path("relations/{relation_id}").delete(delete_relation))
-                .push(Router::with_path("views").post(create_view))
-                .push(Router::with_path("views/{view_id}").get(get_view))
-                .push(
-                    Router::with_path("views/{view_id}/projection").post(view_projection),
-                )
                 .push(
                     Router::with_path("schemas")
                         .get(list_schemas)
@@ -170,8 +145,9 @@ pub fn router_with_rate_limiter_config(
                 .push(Router::with_path("identity/log").get(identity_log))
                 .push(Router::with_path("identity/submit-did-operation").post(submit_did_operation))
                 .push(Router::with_path("identity/receipts").get(identity_receipts))
-                // C17 (spec 2026-05-08): cx.sync.client_sync → cx.sync.account
-                // (path unchanged); cx.sync.subscribe → cx.events.subscribe at
+                // Route layout for the current sync/event wire model:
+                // cx.sync.client_sync → cx.sync.account (path unchanged);
+                // cx.sync.subscribe → cx.events.subscribe at
                 // /events/subscribe; cx.events.list + cx.sync.backfill folded
                 // into cx.events.query at GET /events.
                 .push(Router::with_path("sync/describe").get(sync_describe))
@@ -202,29 +178,13 @@ pub fn router_with_rate_limiter_config(
                 .push(Router::with_path("directory/search-actors").post(search_actors))
                 .push(Router::with_path("directory/search-users").get(search_users))
                 .push(Router::with_path("directory/resolve-handle").post(resolve_handle))
-                .push(Router::with_path("index/describe").get(index_describe))
-                .push(Router::with_path("index/debug/reducer").get(index_reducer_debug))
-                .push(Router::with_path("index/entity").get(index_entity))
-                .push(Router::with_path("index/query").post(index_query))
-                .push(Router::with_path("index/thread").get(index_thread))
-                .push(Router::with_path("index/notifications").get(index_notifications))
-                .push(Router::with_path("index/inbox").get(index_inbox))
-                .push(Router::with_path("index/search").post(index_search))
-                .push(Router::with_path("index/space-hierarchy").get(index_space_hierarchy))
-                .push(Router::with_path("repo/describe").get(repo_describe))
-                .push(Router::with_path("repo/commits").get(list_commits))
-                .push(Router::with_path("repo/commit").get(get_commit))
-                .push(Router::with_path("repo/operations").post(get_operations))
-                .push(Router::with_path("repo/sync").post(repo_sync))
-                .push(Router::with_path("repo/submit-commit").post(submit_commit))
-                .push(Router::with_path("recovery/contract-stack").get(recovery_contract_stack))
                 .push(Router::with_path("authz/describe").get(authz_describe))
                 .push(Router::with_path("authz/check").post(authz_check))
                 .push(Router::with_path("authz/effective-grants").get(effective_grants))
                 .push(Router::with_path("authz/grants").post(create_grant))
                 .push(Router::with_path("authz/grants/{grant_id}").delete(revoke_grant))
                 .push(Router::with_path("authz/invites").get(invites))
-                // C10.B 续 (2026-05-09 十八轮 并行): admin cells endpoint —
+                // admin cells endpoint —
                 // public-ish read surface over `ProjectionState::cells` for
                 // coauth (consent grants) + sodmin (bottom-state inspection).
                 // Registered BEFORE `admin/{resource}` so the literal `cells`
@@ -232,11 +192,10 @@ pub fn router_with_rate_limiter_config(
                 .push(Router::with_path("admin/cells").get(admin_list_cells))
                 .push(Router::with_path("admin/cells/{cell_id}").get(admin_get_cell))
                 .push(Router::with_path("admin/{resource}").get(admin_collection))
-                // C10.B MAL-3 (2026-05-09 七轮): admin endpoint that
-                // triggers one anchorer signing pass for a Space.
+                // Admin endpoint that triggers one anchorer signing pass
+                // for a Space.
                 .push(Router::with_path("admin/anchors/sign").post(admin_sign_anchor))
-                // C10.B / C17 follow-up (mid-stream control frame triggers):
-                // admin endpoints that broadcast `resync_required` /
+                // Admin endpoints that broadcast `resync_required` /
                 // `unauthorized` frames to subscribers of one Space. Used
                 // for ops break-glass after compaction or session
                 // revocation.
@@ -244,10 +203,7 @@ pub fn router_with_rate_limiter_config(
                     Router::with_path("admin/events/resync-required")
                         .post(admin_emit_resync_required),
                 )
-                .push(
-                    Router::with_path("admin/events/unauthorized")
-                        .post(admin_emit_unauthorized),
-                )
+                .push(Router::with_path("admin/events/unauthorized").post(admin_emit_unauthorized))
                 .push(Router::with_path("audit/events").get(audit_events))
                 .push(
                     Router::with_path("policies")
@@ -303,119 +259,7 @@ pub fn router_with_rate_limiter_config(
                 .push(Router::with_path("keys/upload").post(keys_upload))
                 .push(Router::with_path("keys/query").post(keys_query))
                 .push(Router::with_path("keys/claim").post(keys_claim))
-                .push(
-                    Router::with_path("keys/backups/describe")
-                        .get(key_backups_describe),
-                )
-                .push(
-                    Router::with_path("keys/backups/restore-state/describe")
-                        .get(get_key_backup_restore_state_describe),
-                )
-                .push(
-                    Router::with_path("keys/backups/restore-state/export")
-                        .get(get_key_backup_restore_state_export),
-                )
-                .push(
-                    Router::with_path("keys/backups/restore-state/import")
-                        .post(post_key_backup_restore_state_import),
-                )
-                .push(
-                    Router::with_path("keys/backups/restore-state/durability")
-                        .get(get_key_backup_restore_state_durability),
-                )
-                .push(
-                    Router::with_path("keys/backups/restore-state/checkpoints")
-                        .get(list_key_backup_restore_state_checkpoints)
-                        .post(post_key_backup_restore_state_checkpoint),
-                )
-                .push(
-                    Router::with_path("keys/backups/{backup_id}/restore/describe")
-                        .get(get_key_backup_restore_describe),
-                )
-                .push(
-                    Router::with_path("keys/backups/{backup_id}/restore/start")
-                        .post(post_key_backup_restore_start),
-                )
-                .push(
-                    Router::with_path("keys/backups/restore-tickets")
-                        .get(list_key_backup_restore_tickets),
-                )
-                .push(
-                    Router::with_path("keys/backups/restore-tickets/{ticket_id}")
-                        .get(get_key_backup_restore_ticket),
-                )
-                .push(
-                    Router::with_path("keys/backups/restore-tickets/{ticket_id}/advance")
-                        .post(post_key_backup_restore_ticket_advance),
-                )
-                .push(
-                    Router::with_path("keys/backups/restore-tickets/{ticket_id}/resume")
-                        .post(post_key_backup_restore_ticket_resume),
-                )
-                .push(
-                    Router::with_path("keys/backups/restore-tickets/{ticket_id}/cancel")
-                        .post(post_key_backup_restore_ticket_cancel),
-                )
-                .push(
-                    Router::with_path("keys/backups/restore-tickets/{ticket_id}/retry")
-                        .post(post_key_backup_restore_ticket_retry),
-                )
-                .push(
-                    Router::with_path("keys/backups/restore-tickets/{ticket_id}/approvals/status")
-                        .get(get_key_backup_restore_approval_status),
-                )
-                .push(
-                    Router::with_path("keys/backups/restore-tickets/{ticket_id}/approvals/submit")
-                        .post(post_key_backup_restore_approval_submit),
-                )
-                .push(
-                    Router::with_path("keys/backups/restore-tickets/{ticket_id}/executor/status")
-                        .get(get_key_backup_restore_executor_status),
-                )
-                .push(
-                    Router::with_path("keys/backups/restore-tickets/{ticket_id}/executor/enqueue")
-                        .post(post_key_backup_restore_executor_enqueue),
-                )
-                .push(
-                    Router::with_path("keys/backups/restore-tickets/{ticket_id}/executor/start")
-                        .post(post_key_backup_restore_executor_start),
-                )
-                .push(
-                    Router::with_path("keys/backups/restore-tickets/{ticket_id}/executor/complete")
-                        .post(post_key_backup_restore_executor_complete),
-                )
-                .push(
-                    Router::with_path("keys/backups/restore-tickets/{ticket_id}/result")
-                        .get(get_key_backup_restore_result),
-                )
-                .push(
-                    Router::with_path("keys/backups/restore-tickets/{ticket_id}/receipt")
-                        .get(get_key_backup_restore_receipt),
-                )
-                .push(
-                    Router::with_path("keys/backups/restore-tickets/{ticket_id}/materialized-device-handoff")
-                        .post(post_key_backup_restore_materialized_device_handoff),
-                )
-                .push(
-                    Router::with_path("keys/backups/restore-tickets/{ticket_id}/bundle")
-                        .get(get_key_backup_restore_bundle),
-                )
-                .push(
-                    Router::with_path("keys/backups/restore-tickets/{ticket_id}/activity")
-                        .get(get_key_backup_restore_activity),
-                )
-                .push(
-                    Router::with_path("keys/backups/restore-tickets/{ticket_id}/timeline")
-                        .get(get_key_backup_restore_timeline),
-                )
-                .push(
-                    Router::with_path("keys/backups/restore-tickets/{ticket_id}/audit-feed")
-                        .get(get_key_backup_restore_audit_feed),
-                )
-                .push(Router::with_path("recovery/discovery").get(get_recovery_discovery))
-                .push(Router::with_path("recovery/readiness").get(get_recovery_readiness))
-                .push(Router::with_path("recovery/live-snapshot").get(get_recovery_live_snapshot))
-                .push(Router::with_path("recovery/stack-bundle").get(get_recovery_stack_bundle))
+                .push(Router::with_path("keys/backups/describe").get(key_backups_describe))
                 .push(
                     Router::with_path("keys/backups/{backup_id}")
                         .put(put_key_backup)
@@ -442,7 +286,7 @@ pub fn router_with_rate_limiter_config(
                 )
                 .push(Router::with_path("federation/space-members").get(federation_space_members))
                 .push(Router::with_path("federation/verify-actor").post(federation_verify_actor))
-                // MAL-12 round 25 — Anchor pull/push (peer-mesh
+                // Anchor pull/push (peer-mesh
                 // replication). Wire path is identical regardless of
                 // policy; outbound routing decisions live in
                 // `broadcast_*_to_peers`.
@@ -490,15 +334,12 @@ pub fn router_with_rate_limiter_config(
         .push(
             Router::with_path("api/admin/v1")
                 .oapi_tag("admin")
-                .push(
-                    Router::with_path("spaces/{space_id}/anchorer")
-                        .get(admin_get_anchorer),
-                )
+                .push(Router::with_path("spaces/{space_id}/anchorer").get(admin_get_anchorer))
                 .push(
                     Router::with_path("spaces/{space_id}/anchorer/reconfigure")
                         .post(admin_reconfigure_anchorer),
                 )
-                // Round 24 — rotate the AnchorerWorker signing key.
+                // Rotate the AnchorerWorker signing key.
                 // Mints a fresh ed25519 seed, persists via platform
                 // KeyStore (when `use_keystore=true`), hot-swaps the
                 // in-process signer, returns `{kid, did, rotated_at}`.
@@ -506,19 +347,13 @@ pub fn router_with_rate_limiter_config(
                     Router::with_path("spaces/{space_id}/anchorer/rotate-signing-key")
                         .post(admin_rotate_signing_key),
                 )
-                .push(
-                    Router::with_path("spaces/{space_id}/bottom")
-                        .get(admin_list_space_bottom),
-                )
+                .push(Router::with_path("spaces/{space_id}/bottom").get(admin_list_space_bottom))
                 .push(Router::with_path("bottom").get(admin_list_bottom_global))
                 .push(
                     Router::with_path("spaces/{space_id}/bottom/{cell_id}/repair")
                         .post(admin_repair_bottom),
                 )
-                .push(
-                    Router::with_path("spaces/{space_id}/anchor-dag")
-                        .get(admin_get_anchor_dag),
-                )
+                .push(Router::with_path("spaces/{space_id}/anchor-dag").get(admin_get_anchor_dag))
                 .push(
                     Router::with_path("spaces/{space_id}/anchor-dag/compact")
                         .post(admin_compact_anchor_dag),
@@ -531,7 +366,7 @@ pub fn router_with_rate_limiter_config(
                     Router::with_path("spaces/{space_id}/multisig/{anchor_id}/partial")
                         .post(admin_submit_multisig_partial),
                 )
-                // Round 25 — MAL-13 GC scanner. Lists Moves that are
+                // GC scanner. Lists Moves that are
                 // GC-eligible (not referenced by any current Anchor frontier
                 // and not pending). Read-only; no actual deletion yet.
                 .push(
@@ -565,8 +400,6 @@ fn contrix_openapi_doc(router: &Router) -> OpenApi {
                 "events.submit": "cx.events.submit",
                 "events.query": "cx.events.query",
                 "events.subscribe": "cx.events.subscribe",
-                "index.query": "cx.index.query",
-                "repo.submit_commit": "cx.repo.submit_commit",
                 "sync.account": "cx.sync.account",
             }),
         )
@@ -582,76 +415,13 @@ fn contrix_openapi_doc(router: &Router) -> OpenApi {
     // generated document carries real types in `components.schemas` rather than
     // free-form blobs. Soland-specific schemas are layered on top.
     register_contrix_oapi_components(&mut doc.components);
-    register_soland_specific_schemas(&mut doc);
     register_soland_extension_operations(&mut doc);
     doc
 }
 
-fn register_soland_specific_schemas(doc: &mut OpenApi) {
-    let string_schema = Object::with_type(BasicType::String);
-    doc.components.schemas.insert(
-        "FacetName",
-        schema_object(Object::with_type(BasicType::String).enum_values([
-            "container",
-            "replyable",
-            "renderable",
-            "stateful",
-            "rankable",
-        ])),
-    );
-    doc.components.schemas.insert(
-        "ViewRenderer",
-        schema_object(Object::with_type(BasicType::String).enum_values([
-            "collection",
-            "conversation",
-            "graph",
-            "queue",
-            "timeline",
-        ])),
-    );
-    doc.components.schemas.insert(
-        "FacetConstraint",
-        schema_object(
-            Object::with_type(BasicType::Object)
-                .required("type")
-                .required("facets")
-                .property(
-                    "type",
-                    Object::with_type(BasicType::String).enum_values(["allowed_entity_facets"]),
-                )
-                .property(
-                    "facets",
-                    Array::new().items(Ref::from_schema_name("FacetName")),
-                ),
-        ),
-    );
-    doc.components.schemas.insert(
-        "IndexQueryRequest",
-        schema_object(
-            Object::with_type(BasicType::Object)
-                .property("renderer", Ref::from_schema_name("ViewRenderer"))
-                .property(
-                    "facets",
-                    Array::new().items(Ref::from_schema_name("FacetName")),
-                )
-                .property("filters", Object::with_type(BasicType::Object))
-                .property(
-                    "sort",
-                    Array::new().items(Object::with_type(BasicType::Object)),
-                )
-                .property("cursor", string_schema.clone())
-                .property("limit", Object::with_type(BasicType::Integer)),
-        ),
-    );
-}
-
-fn schema_object(object: Object) -> RefOr<Schema> {
-    RefOr::Type(Schema::object(object))
-}
-
 fn register_soland_extension_operations(doc: &mut OpenApi) {
     // Stable, spec-aligned operation IDs for the soland-specific surface. The
-    // base Contrix surface (server.describe, repo.*, identity.*, …) already
+    // base Contrix surface (server.describe, events.*, identity.*, …) already
     // has its components registered via `register_contrix_oapi_components`;
     // this table covers operations that soland exposes on top of the canonical
     // protocol — auth/account/admin/policy/etc. — until each `#[endpoint]`
@@ -770,13 +540,6 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "remove space member",
     ),
     (
-        "/api/v1/messages/send",
-        PathItemType::Post,
-        "messages",
-        "cx.messages.send",
-        "send message",
-    ),
-    (
         "/api/v1/events/describe",
         PathItemType::Get,
         "events",
@@ -826,41 +589,6 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "get Event frontier",
     ),
     (
-        "/api/v1/repo/describe",
-        PathItemType::Get,
-        "repo",
-        "cx.repo.describe",
-        "get repo metadata",
-    ),
-    (
-        "/api/v1/repo/commits",
-        PathItemType::Get,
-        "repo",
-        "cx.repo.list_commits",
-        "list commits",
-    ),
-    (
-        "/api/v1/repo/operations",
-        PathItemType::Post,
-        "repo",
-        "cx.repo.get_operations",
-        "fetch operations by id",
-    ),
-    (
-        "/api/v1/repo/sync",
-        PathItemType::Post,
-        "repo",
-        "cx.repo.sync",
-        "sync repo operations",
-    ),
-    (
-        "/api/v1/index/query",
-        PathItemType::Post,
-        "index",
-        "cx.index.query",
-        "run indexed query",
-    ),
-    (
         "/api/v1/authz/effective-grants",
         PathItemType::Get,
         "authz",
@@ -873,13 +601,6 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "authz",
         "cx.authz.get_invites",
         "list invites",
-    ),
-    (
-        "/api/v1/repo/submit-commit",
-        PathItemType::Post,
-        "repo",
-        "cx.repo.submit_commit",
-        "append commit with canonical operations",
     ),
     (
         "/api/v1/federation/transactions/{txn_id}",
@@ -971,20 +692,6 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "directory",
         "cx.directory.resolve_space",
         "resolve space",
-    ),
-    (
-        "/api/v1/index/describe",
-        PathItemType::Get,
-        "index",
-        "cx.index.describe",
-        "index describe",
-    ),
-    (
-        "/api/v1/index/debug/reducer",
-        PathItemType::Get,
-        "index",
-        "cx.index.debug_reducer",
-        "explain reducer projection frontier",
     ),
     (
         "/api/v1/admin/actors",
@@ -1125,167 +832,6 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "push",
         "cx.push.outbound_bridge_cache_import",
         "import outbound push bridge cache snapshots",
-    ),
-    (
-        "/api/v1/keys/backups/restore-state/describe",
-        PathItemType::Get,
-        "keys",
-        "cx.keys.backups.restore_state_describe",
-        "describe restore-state snapshot store scaffold",
-    ),
-    (
-        "/api/v1/keys/backups/restore-state/export",
-        PathItemType::Get,
-        "keys",
-        "cx.keys.backups.restore_state_export",
-        "export restore-state snapshots",
-    ),
-    (
-        "/api/v1/keys/backups/restore-state/import",
-        PathItemType::Post,
-        "keys",
-        "cx.keys.backups.restore_state_import",
-        "import restore-state snapshots",
-    ),
-    (
-        "/api/v1/keys/backups/restore-state/durability",
-        PathItemType::Get,
-        "keys",
-        "cx.keys.backups.restore_state_durability",
-        "describe restore-state durability scaffold",
-    ),
-    (
-        "/api/v1/keys/backups/restore-state/checkpoints",
-        PathItemType::Get,
-        "keys",
-        "cx.keys.backups.restore_state_checkpoint_collection",
-        "list restore-state checkpoint scaffolds",
-    ),
-    (
-        "/api/v1/keys/backups/restore-state/checkpoints",
-        PathItemType::Post,
-        "keys",
-        "cx.keys.backups.restore_state_checkpoint_create",
-        "create restore-state checkpoint scaffold",
-    ),
-    (
-        "/api/v1/keys/backups/restore-tickets",
-        PathItemType::Get,
-        "keys",
-        "cx.keys.backups.restore_ticket_collection",
-        "list restore ticket scaffold collection",
-    ),
-    (
-        "/api/v1/keys/backups/restore-tickets/{ticket_id}/resume",
-        PathItemType::Post,
-        "keys",
-        "cx.keys.backups.restore_ticket_resume",
-        "resume restore ticket scaffold",
-    ),
-    (
-        "/api/v1/keys/backups/restore-tickets/{ticket_id}/cancel",
-        PathItemType::Post,
-        "keys",
-        "cx.keys.backups.restore_ticket_cancel",
-        "cancel restore ticket scaffold",
-    ),
-    (
-        "/api/v1/keys/backups/restore-tickets/{ticket_id}/retry",
-        PathItemType::Post,
-        "keys",
-        "cx.keys.backups.restore_ticket_retry",
-        "retry restore ticket scaffold",
-    ),
-    (
-        "/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/start",
-        PathItemType::Post,
-        "keys",
-        "cx.keys.backups.restore_executor_start",
-        "start restore executor scaffold",
-    ),
-    (
-        "/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/complete",
-        PathItemType::Post,
-        "keys",
-        "cx.keys.backups.restore_executor_complete",
-        "complete restore executor scaffold",
-    ),
-    (
-        "/api/v1/keys/backups/restore-tickets/{ticket_id}/result",
-        PathItemType::Get,
-        "keys",
-        "cx.keys.backups.restore_result",
-        "get restore result scaffold",
-    ),
-    (
-        "/api/v1/keys/backups/restore-tickets/{ticket_id}/receipt",
-        PathItemType::Get,
-        "keys",
-        "cx.keys.backups.restore_receipt",
-        "get restore receipt scaffold",
-    ),
-    (
-        "/api/v1/keys/backups/restore-tickets/{ticket_id}/materialized-device-handoff",
-        PathItemType::Post,
-        "keys",
-        "cx.keys.backups.restore_materialized_device_handoff",
-        "submit materialized device handoff scaffold",
-    ),
-    (
-        "/api/v1/keys/backups/restore-tickets/{ticket_id}/bundle",
-        PathItemType::Get,
-        "keys",
-        "cx.keys.backups.restore_bundle",
-        "get restore bundle scaffold",
-    ),
-    (
-        "/api/v1/keys/backups/restore-tickets/{ticket_id}/activity",
-        PathItemType::Get,
-        "keys",
-        "cx.keys.backups.restore_activity",
-        "get restore activity scaffold",
-    ),
-    (
-        "/api/v1/keys/backups/restore-tickets/{ticket_id}/timeline",
-        PathItemType::Get,
-        "keys",
-        "cx.keys.backups.restore_timeline",
-        "get restore timeline scaffold",
-    ),
-    (
-        "/api/v1/keys/backups/restore-tickets/{ticket_id}/audit-feed",
-        PathItemType::Get,
-        "keys",
-        "cx.keys.backups.restore_audit_feed",
-        "get restore audit feed scaffold",
-    ),
-    (
-        "/api/v1/recovery/discovery",
-        PathItemType::Get,
-        "recovery",
-        "cx.recovery.discovery",
-        "get recovery discovery scaffold",
-    ),
-    (
-        "/api/v1/recovery/readiness",
-        PathItemType::Get,
-        "recovery",
-        "cx.recovery.readiness",
-        "get recovery readiness scaffold",
-    ),
-    (
-        "/api/v1/recovery/live-snapshot",
-        PathItemType::Get,
-        "recovery",
-        "cx.recovery.live_snapshot",
-        "get live recovery snapshot scaffold",
-    ),
-    (
-        "/api/v1/recovery/stack-bundle",
-        PathItemType::Get,
-        "recovery",
-        "cx.recovery.stack_bundle",
-        "get recovery stack bundle scaffold",
     ),
     (
         "/api/v1/keys/backups/{backup_id}",

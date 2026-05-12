@@ -350,7 +350,7 @@ fn evaluate_constraint(
     constraint: &Constraint,
     _actor: &str,
     _resource: &str,
-    resource_facets: &[String],
+    _resource_facets: &[String],
 ) -> Option<String> {
     match constraint.constraint_type.as_str() {
         "temporal" => {
@@ -366,59 +366,11 @@ fn evaluate_constraint(
             }
             None
         }
-        "type_restriction" => {
-            // Restrict to specific entity types
-            None // v1: always pass
-        }
         "delegation_control" => {
             // Check delegation depth
             None // v1: always pass
         }
-        "allowed_entity_facets" => {
-            let allowed = constraint_facet_names(&constraint.value);
-            if allowed.is_empty() {
-                Some("allowed_entity_facets constraint has no allowed facets".to_owned())
-            } else if resource_facets.is_empty() {
-                Some(format!(
-                    "resource facets are missing but allowed_entity_facets requires one of [{}]",
-                    allowed.join(", ")
-                ))
-            } else if resource_facets
-                .iter()
-                .any(|facet| allowed.iter().any(|allowed| allowed == facet))
-            {
-                None
-            } else {
-                Some(format!(
-                    "resource facets [{}] do not match allowed_entity_facets [{}]",
-                    resource_facets.join(", "),
-                    allowed.join(", ")
-                ))
-            }
-        }
         _ => None, // Unknown constraints pass
-    }
-}
-
-fn constraint_facet_names(value: &serde_json::Value) -> Vec<String> {
-    let value = value
-        .get("facets")
-        .or_else(|| value.get("allowed_entity_facets"))
-        .or_else(|| value.get("value"))
-        .unwrap_or(value);
-    match value {
-        serde_json::Value::Array(values) => values
-            .iter()
-            .filter_map(|value| value.as_str().map(ToOwned::to_owned))
-            .collect(),
-        serde_json::Value::Object(values) => values.keys().cloned().collect(),
-        serde_json::Value::String(value) => value
-            .split(',')
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned)
-            .collect(),
-        _ => Vec::new(),
     }
 }
 
@@ -617,50 +569,6 @@ mod tests {
             &[],
         );
         assert!(!result.allowed);
-    }
-
-    #[test]
-    fn allowed_entity_facets_fail_closed_without_matching_reducer_facets() {
-        let engine = AuthzEngine::new();
-        engine.create_grant(
-            "cx:space:1".to_owned(),
-            "did:web:alice".to_owned(),
-            "did:web:bob".to_owned(),
-            "entity:*".to_owned(),
-            vec!["entity.update".to_owned()],
-            vec![Constraint {
-                constraint_type: "allowed_entity_facets".to_owned(),
-                value: serde_json::json!({"facets": ["rankable"]}),
-            }],
-        );
-        let allowed = engine.check(
-            "did:web:bob",
-            "entity.update",
-            "entity:cx:entity:1",
-            "cx:space:1",
-            Some("did:web:alice"),
-            &[],
-            &["rankable".to_owned(), "stateful".to_owned()],
-        );
-        assert!(allowed.allowed);
-
-        let missing_facets = engine.check(
-            "did:web:bob",
-            "entity.update",
-            "entity:cx:entity:1",
-            "cx:space:1",
-            Some("did:web:alice"),
-            &[],
-            &[],
-        );
-        assert!(!missing_facets.allowed);
-        assert_eq!(missing_facets.reason, "constraints_not_satisfied");
-        assert!(
-            missing_facets
-                .reason_detail
-                .as_ref()
-                .is_some_and(|reason| reason.contains("allowed_entity_facets"))
-        );
     }
 
     #[test]

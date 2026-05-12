@@ -11,7 +11,7 @@
 //! `_todos.md`); update-by-relation-id is reached via the canonical event
 //! submit endpoint instead.
 
-use contrix_sdk::{Commit, CommitId, Did, Hash, Operation, OperationId, SpaceId};
+use contrix_sdk::{Operation, OperationId, SpaceId};
 use salvo::{http::StatusCode, prelude::*};
 use serde_json::json;
 
@@ -22,8 +22,7 @@ use crate::{
 };
 
 use super::{
-    DevProofVerifier, auth_or_render, dev_proof, next_author_seq, project_accepted_operations,
-    query_param, render_error, validate_space_id,
+    accept_local_operations, auth_or_render, query_param, render_error, validate_space_id,
 };
 
 #[endpoint]
@@ -55,7 +54,6 @@ pub async fn create_relation(depot: &mut Depot, req: &mut Request, res: &mut Res
     }
     let relation_id = ids::generate_relation_id();
     let operation_id = ids::generate_operation_id();
-    let commit_id = ids::generate_commit_id();
     let payload = json!({
         "relation_id": relation_id,
         "relation_kind": body.relation_kind,
@@ -69,36 +67,8 @@ pub async fn create_relation(depot: &mut Depot, req: &mut Request, res: &mut Res
         kinds::CX_RELATION_CREATE,
         payload,
     );
-    let operation_digest = match operation.operation_digest() {
-        Ok(d) => d,
-        Err(e) => {
-            render_error(
-                res,
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "digest_error",
-                &e.to_string(),
-            );
-            return;
-        }
-    };
-    let mut commit = Commit::new(
-        CommitId::new(commit_id.clone()).unwrap(),
-        &session.actor,
-        Did::new(session.actor.clone()).unwrap(),
-        next_author_seq(state, &session.actor),
-    );
-    commit.operations.push(Hash::new(operation_digest).unwrap());
-    commit.proofs.push(dev_proof(&session.actor));
-    let expected_head = commit.prev_commit.as_ref().map(ToString::to_string);
-    match state.repo.submit_commit(
-        &session.actor,
-        expected_head.as_deref(),
-        vec![operation.clone()],
-        commit,
-        &DevProofVerifier,
-    ) {
-        Ok(_head_commit) => {
-            project_accepted_operations(state, &session.actor, std::slice::from_ref(&operation));
+    match accept_local_operations(state, &session.actor, std::slice::from_ref(&operation)) {
+        Ok(()) => {
             let relation = {
                 let proj = state.projection.lock().expect("projection lock");
                 proj.relations.get(&relation_id).cloned()
@@ -127,7 +97,7 @@ pub async fn create_relation(depot: &mut Depot, req: &mut Request, res: &mut Res
             render_error(
                 res,
                 StatusCode::CONFLICT,
-                "repo_conflict",
+                "operation_conflict",
                 &error.to_string(),
             );
         }
@@ -163,50 +133,21 @@ pub async fn delete_relation(depot: &mut Depot, req: &mut Request, res: &mut Res
         return;
     };
     let operation_id = ids::generate_operation_id();
-    let commit_id = ids::generate_commit_id();
     let operation = Operation::create(
         OperationId::new(operation_id.clone()).unwrap(),
         SpaceId::new(space_id).unwrap(),
         kinds::CX_RELATION_DELETE,
         json!({ "relation_id": relation_id }),
     );
-    let operation_digest = match operation.operation_digest() {
-        Ok(d) => d,
-        Err(e) => {
-            render_error(
-                res,
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "digest_error",
-                &e.to_string(),
-            );
-            return;
-        }
-    };
-    let mut commit = Commit::new(
-        CommitId::new(commit_id.clone()).unwrap(),
-        &session.actor,
-        Did::new(session.actor.clone()).unwrap(),
-        next_author_seq(state, &session.actor),
-    );
-    commit.operations.push(Hash::new(operation_digest).unwrap());
-    commit.proofs.push(dev_proof(&session.actor));
-    let expected_head = commit.prev_commit.as_ref().map(ToString::to_string);
-    match state.repo.submit_commit(
-        &session.actor,
-        expected_head.as_deref(),
-        vec![operation.clone()],
-        commit,
-        &DevProofVerifier,
-    ) {
-        Ok(_head_commit) => {
-            project_accepted_operations(state, &session.actor, std::slice::from_ref(&operation));
+    match accept_local_operations(state, &session.actor, std::slice::from_ref(&operation)) {
+        Ok(()) => {
             res.render(Json(json!({ "deleted": true, "relation_id": relation_id })));
         }
         Err(error) => {
             render_error(
                 res,
                 StatusCode::CONFLICT,
-                "repo_conflict",
+                "operation_conflict",
                 &error.to_string(),
             );
         }

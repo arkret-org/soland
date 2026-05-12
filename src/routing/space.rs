@@ -8,14 +8,12 @@
 //! - `GET    /api/v1/spaces/{space_id}/export` — full event log + projection dump
 //!
 //! Plus the visibility / membership / typing query helpers and the
-//! `record_space_lifecycle_operation` writer (round 10): every other domain
+//! `record_space_lifecycle_operation` writer: every other domain
 //! (federation, message, blob, directory, mimi, …) calls into this layer to
-//! resolve "is this actor allowed to see / write to this Space?". These were
-//! the last-but-one chunk to leave `mod.rs`; `next_author_seq` rides along
-//! because the lifecycle writer needs it.
+//! resolve "is this actor allowed to see / write to this Space?".
 
 use chrono::Duration;
-use contrix_sdk::{Commit, CommitId, Did, Hash, Operation, OperationId, SpaceId, SpaceSearchEntry};
+use contrix_sdk::{Did, Operation, OperationId, SpaceId, SpaceSearchEntry};
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
@@ -26,22 +24,19 @@ use crate::{
     error::{AppError, ErrorCode},
     ids, json_ok, kinds,
     state::{AppState, SessionRecord, SpaceInviteRecord, SpaceMetaRecord},
-    wire::{
-        AddSpaceMemberRequest, CreateSpaceRequest, SpaceLifecycleResponse,
-    },
+    wire::{AddSpaceMemberRequest, CreateSpaceRequest, SpaceLifecycleResponse},
 };
 
 use super::{
-    AuthArgs, ProofVerifier, append_audit_log, append_projection_event, dev_proof,
-    generate_invite_token, is_valid_discoverability, now, projection_event_from_operation,
-    validate_did, validate_space_id,
+    AuthArgs, accept_local_operations, append_audit_log, generate_invite_token,
+    is_valid_discoverability, now, validate_did, validate_space_id,
 };
 
 #[endpoint(
     operation_id = "cx.spaces.create",
     tags("spaces"),
     summary = "Create a Space, optionally inviting peers",
-    status_codes(201, 400, 401, 409, 500),
+    status_codes(201, 400, 401, 409, 500)
 )]
 pub async fn create_space(
     aa: AuthArgs,
@@ -161,7 +156,7 @@ pub async fn create_space(
 #[endpoint(
     operation_id = "cx.spaces.add_member",
     tags("spaces"),
-    summary = "Owner adds a member to a Space",
+    summary = "Owner adds a member to a Space"
 )]
 pub async fn add_space_member(
     aa: AuthArgs,
@@ -182,8 +177,8 @@ pub async fn add_space_member(
     if validate_did(&body.member).is_err() {
         return Err(AppError::invalid_param("invalid member did"));
     }
-    let space_id_value = SpaceId::new(space_id.clone())
-        .map_err(|_| AppError::invalid_param("invalid space_id"))?;
+    let space_id_value =
+        SpaceId::new(space_id.clone()).map_err(|_| AppError::invalid_param("invalid space_id"))?;
     {
         let mut spaces = state.spaces.lock().expect("spaces lock");
         let mut entry = spaces
@@ -196,15 +191,13 @@ pub async fn add_space_member(
         spaces.upsert(entry);
     }
     touch_space(state, &space_id);
-    record_space_lifecycle_operation(
+    record_member_state_operation(
         state,
         &session.actor,
         &space_id,
-        json!({
-            "action": "member.add",
-            "member": body.member.clone(),
-            "membership": "join",
-        }),
+        &body.member,
+        "join",
+        json!({}),
     )
     .map_err(|error| {
         AppError::new(ErrorCode::Conflict, error.to_string()).with_status(StatusCode::CONFLICT)
@@ -212,7 +205,7 @@ pub async fn add_space_member(
     append_audit_log(
         state,
         Some(&session.actor),
-        "space.member.add",
+        "cx.member.state",
         json!({"space_id": space_id.clone(), "member": body.member}),
         "accepted",
     );
@@ -222,7 +215,7 @@ pub async fn add_space_member(
 #[endpoint(
     operation_id = "cx.spaces.remove_member",
     tags("spaces"),
-    summary = "Owner removes a member from a Space",
+    summary = "Owner removes a member from a Space"
 )]
 pub async fn remove_space_member(
     aa: AuthArgs,
@@ -241,10 +234,13 @@ pub async fn remove_space_member(
         ));
     }
     if member_did == session.actor {
-        return Err(AppError::new(ErrorCode::Conflict, "owner cannot remove self"));
+        return Err(AppError::new(
+            ErrorCode::Conflict,
+            "owner cannot remove self",
+        ));
     }
-    let space_id_value = SpaceId::new(space_id.clone())
-        .map_err(|_| AppError::invalid_param("invalid space_id"))?;
+    let space_id_value =
+        SpaceId::new(space_id.clone()).map_err(|_| AppError::invalid_param("invalid space_id"))?;
     let member = Did::new(member_did).map_err(|_| AppError::invalid_param("invalid member did"))?;
     {
         let mut spaces = state.spaces.lock().expect("spaces lock");
@@ -256,15 +252,13 @@ pub async fn remove_space_member(
         spaces.upsert(entry);
     }
     touch_space(state, &space_id);
-    record_space_lifecycle_operation(
+    record_member_state_operation(
         state,
         &session.actor,
         &space_id,
-        json!({
-            "action": "member.remove",
-            "member": member.to_string(),
-            "membership": "leave",
-        }),
+        member.as_str(),
+        "leave",
+        json!({}),
     )
     .map_err(|error| {
         AppError::new(ErrorCode::Conflict, error.to_string()).with_status(StatusCode::CONFLICT)
@@ -272,7 +266,7 @@ pub async fn remove_space_member(
     append_audit_log(
         state,
         Some(&session.actor),
-        "space.member.remove",
+        "cx.member.state",
         json!({"space_id": space_id.clone(), "member": member.to_string()}),
         "accepted",
     );
@@ -282,7 +276,7 @@ pub async fn remove_space_member(
 #[endpoint(
     operation_id = "cx.spaces.delete",
     tags("spaces"),
-    summary = "Owner soft-deletes a Space",
+    summary = "Owner soft-deletes a Space"
 )]
 pub async fn delete_space(
     aa: AuthArgs,
@@ -335,7 +329,7 @@ pub async fn delete_space(
 #[endpoint(
     operation_id = "cx.spaces.export",
     tags("spaces"),
-    summary = "Full event log + projection dump for a Space",
+    summary = "Full event log + projection dump for a Space"
 )]
 pub async fn export_space(
     aa: AuthArgs,
@@ -352,13 +346,6 @@ pub async fn export_space(
     if !space_id_accessible(state, &space_id, Some(&session)) {
         return Err(AppError::not_found("not found"));
     }
-    let operations = state
-        .repo
-        .sync_space_operations(&space_id, None, 500)
-        .map(|page| page.items)
-        .map_err(|error| {
-            AppError::new(ErrorCode::Conflict, error.to_string()).with_status(StatusCode::CONFLICT)
-        })?;
     let events = state
         .persistence
         .projection_events()
@@ -375,6 +362,20 @@ pub async fn export_space(
                 "sender": event.sender,
                 "payload": event.payload,
                 "created_at": event.created_at,
+            })
+        })
+        .collect::<Vec<_>>();
+    let operations = events
+        .iter()
+        .filter(|event| event["operation_id"].is_string())
+        .map(|event| {
+            json!({
+                "operation_id": event["operation_id"],
+                "space_id": event["space_id"],
+                "object_type": event["event_kind"],
+                "operation_type": event["operation_type"],
+                "payload": event["payload"],
+                "created_at": event["created_at"],
             })
         })
         .collect::<Vec<_>>();
@@ -570,7 +571,11 @@ pub fn space_search_discoverability(state: &AppState, space_id: &str) -> bool {
     )
 }
 
-pub fn space_id_visible_to(state: &AppState, space_id: &str, session: Option<&SessionRecord>) -> bool {
+pub fn space_id_visible_to(
+    state: &AppState,
+    space_id: &str,
+    session: Option<&SessionRecord>,
+) -> bool {
     if is_space_deleted(state, space_id) {
         return false;
     }
@@ -586,7 +591,11 @@ pub fn space_id_visible_to(state: &AppState, space_id: &str, session: Option<&Se
 }
 
 /// Check if a space is accessible for backfill/subscribe (allows deleted spaces for members).
-pub fn space_id_accessible(state: &AppState, space_id: &str, session: Option<&SessionRecord>) -> bool {
+pub fn space_id_accessible(
+    state: &AppState,
+    space_id: &str,
+    session: Option<&SessionRecord>,
+) -> bool {
     let Ok(sid) = SpaceId::new(space_id.to_owned()) else {
         return false;
     };
@@ -681,45 +690,35 @@ pub fn record_space_lifecycle_operation(
     let operation = Operation::create(
         OperationId::new(ids::generate_operation_id()).expect("generated valid operation id"),
         SpaceId::new(space_id.to_owned()).expect("validated space id"),
-        kinds::canonical_kind_for_local_payload("space.lifecycle", &payload)
-            .unwrap_or(kinds::CX_SPACE_UPDATE),
+        match payload.get("action").and_then(serde_json::Value::as_str) {
+            Some("create") => kinds::CX_SPACE_CREATE,
+            Some("destroy") | Some("delete") => kinds::CX_SPACE_DESTROY,
+            _ => kinds::CX_SPACE_UPDATE,
+        },
         payload,
     );
-    let projection_event = projection_event_from_operation(&operation, Some(actor));
-    let operation_digest = Hash::new(operation.operation_digest()?)?;
-    let mut commit = Commit::new(
-        CommitId::new(ids::generate_commit_id()).expect("generated valid commit id"),
-        actor.to_owned(),
-        Did::new(actor.to_owned()).expect("session actor is valid"),
-        next_author_seq(state, actor),
-    );
-    commit.prev_commit = state.repo.head(actor)?.map(Hash::new).transpose()?;
-    commit.operations.push(operation_digest);
-    commit.proofs.push(dev_proof(actor));
-
-    let expected_head = commit.prev_commit.as_ref().map(ToString::to_string);
-    let head = state.repo.submit_commit(
-        actor,
-        expected_head.as_deref(),
-        vec![operation],
-        commit,
-        &ProofVerifier::for_state(state),
-    )?;
-    append_projection_event(state, projection_event);
-    Ok(head)
+    accept_local_operations(state, actor, std::slice::from_ref(&operation))
+        .map_err(|message| contrix_sdk::Error::Protocol(message.to_owned()))?;
+    Ok(None)
 }
 
-pub fn next_author_seq(state: &AppState, repo_id: &str) -> u64 {
-    state
-        .repo
-        .list_commits(repo_id, None, 100)
-        .map(|page| {
-            page.items
-                .iter()
-                .map(|commit| commit.author_seq)
-                .max()
-                .unwrap_or(0)
-                + 1
-        })
-        .unwrap_or(1)
+pub fn record_member_state_operation(
+    state: &AppState,
+    actor: &str,
+    space_id: &str,
+    member: &str,
+    membership: &str,
+    mut payload: serde_json::Value,
+) -> contrix_sdk::Result<Option<String>> {
+    payload["actor_id"] = json!(member);
+    payload["membership"] = json!(membership);
+    let operation = Operation::create(
+        OperationId::new(ids::generate_operation_id()).expect("generated valid operation id"),
+        SpaceId::new(space_id.to_owned()).expect("validated space id"),
+        kinds::CX_MEMBER_STATE,
+        payload,
+    );
+    accept_local_operations(state, actor, std::slice::from_ref(&operation))
+        .map_err(|message| contrix_sdk::Error::Protocol(message.to_owned()))?;
+    Ok(None)
 }

@@ -29,14 +29,6 @@ pub fn generate_operation_id() -> String {
     generate("operation")
 }
 
-pub fn generate_commit_id() -> String {
-    generate("commit")
-}
-
-pub fn generate_entity_id() -> String {
-    generate("entity")
-}
-
 pub fn generate_relation_id() -> String {
     generate("relation")
 }
@@ -102,9 +94,8 @@ pub fn typed_uuid_part(typed: &str) -> Option<Uuid> {
 /// code that handles untrusted input MUST use `typed_uuid_part` and
 /// propagate the `None` case as a typed error.
 pub fn typed_uuid_part_or_panic(typed: &str) -> Uuid {
-    typed_uuid_part(typed).unwrap_or_else(|| {
-        panic!("malformed typed wire ID at persistence boundary: {typed:?}")
-    })
+    typed_uuid_part(typed)
+        .unwrap_or_else(|| panic!("malformed typed wire ID at persistence boundary: {typed:?}"))
 }
 
 /// Format a raw `Uuid` back to a typed wire ID `cx:<kind>:<uuid>`.
@@ -156,7 +147,6 @@ where
     parts.join("|")
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -178,8 +168,6 @@ mod tests {
         assert!(generate_space_id().starts_with("cx:space:"));
         assert!(generate_event_id().starts_with("cx:event:"));
         assert!(generate_operation_id().starts_with("cx:operation:"));
-        assert!(generate_commit_id().starts_with("cx:commit:"));
-        assert!(generate_entity_id().starts_with("cx:entity:"));
         assert!(generate_relation_id().starts_with("cx:relation:"));
         assert!(generate_grant_id().starts_with("cx:grant:"));
         assert!(generate_invite_id().starts_with("cx:invite:"));
@@ -243,5 +231,4 @@ mod tests {
         assert_eq!(subject_compose::<_, &str>([]), "");
         assert_eq!(subject_compose(["", "x"]), "|x");
     }
-
 }

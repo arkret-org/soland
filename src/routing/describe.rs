@@ -1,4 +1,4 @@
-//! Describe-scaffold handlers (the `*_describe` family).
+//! Describe handlers (the `*_describe` family).
 //!
 //! These are the introspection / capability-probe surfaces every Contrix
 //! client uses to discover what the server actually implements. None of them
@@ -6,7 +6,7 @@
 //! injection (config, registry version metadata).
 //!
 //! Surfaces:
-//! - `GET /health` — liveness + database/repo health
+//! - `GET /health` — liveness + database/events health
 //! - `GET /api/v1/server/describe`
 //! - `GET /api/v1/auth/bridge/describe`
 //! - `GET /api/v1/authz/describe`
@@ -15,9 +15,7 @@
 //! - `GET /api/v1/keys/backups/describe`
 //! - `GET /api/v1/integration/describe`
 //!
-//! `recovery_contract_stack`, `recovery/discovery`, `recovery/readiness`, and
-//! `recovery/stack-bundle` belong to `routing/recovery.rs`. `events_describe`
-//! lives in `routing/events.rs` (it carries the registry version pull).
+//! `events_describe` lives in `routing/events.rs` (it carries the registry version pull).
 //! `sync_describe` is still in `mod.rs` pending sync-module extraction.
 
 use contrix_sdk::ServerDescription;
@@ -38,7 +36,7 @@ use crate::{
 #[endpoint(
     operation_id = "cx.system.health",
     tags("system"),
-    summary = "Liveness probe + database / repo health snapshot",
+    summary = "Liveness probe + database / events health snapshot"
 )]
 pub async fn health(depot: &mut Depot, res: &mut Response) -> JsonResult<HealthResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
@@ -51,8 +49,7 @@ pub async fn health(depot: &mut Depot, res: &mut Response) -> JsonResult<HealthR
         },
         None => true,
     };
-    let repo_ok = state.repo.head(&state.config.service_did).is_ok();
-    let ok = database_ok && repo_ok;
+    let ok = database_ok;
     if !ok {
         res.status_code(StatusCode::SERVICE_UNAVAILABLE);
     }
@@ -65,8 +62,8 @@ pub async fn health(depot: &mut Depot, res: &mut Response) -> JsonResult<HealthR
                 "ok": database_ok,
                 "mode": state.db.mode(),
             },
-            "repo": {
-                "ok": repo_ok,
+            "events": {
+                "ok": true,
             },
         }),
     })
@@ -81,7 +78,7 @@ struct HealthCheckRow {
 #[endpoint(
     operation_id = "cx.server.describe",
     tags("server"),
-    summary = "Server capability description",
+    summary = "Server capability description"
 )]
 pub async fn server_describe(depot: &mut Depot) -> JsonResult<ServerDescription> {
     let state = depot.obtain::<AppState>().expect("state injected");
@@ -95,7 +92,7 @@ pub async fn server_describe(depot: &mut Depot) -> JsonResult<ServerDescription>
 #[endpoint(
     operation_id = "cx.auth.bridge.describe",
     tags("auth"),
-    summary = "Auth bridge contract description (session-grant exchange + push)",
+    summary = "Auth bridge contract description (session-grant exchange + push)"
 )]
 pub async fn auth_bridge_describe() -> JsonResult<AuthBridgeDescribeResponse> {
     json_ok(AuthBridgeDescribeResponse {
@@ -150,7 +147,7 @@ pub async fn auth_bridge_describe() -> JsonResult<AuthBridgeDescribeResponse> {
 #[endpoint(
     operation_id = "cx.authz.describe",
     tags("authz"),
-    summary = "Authz scaffold description (constraint + condition examples)",
+    summary = "Authz scaffold description (constraint + condition examples)"
 )]
 pub async fn authz_describe() -> JsonResult<Value> {
     json_ok(json!({
@@ -195,7 +192,7 @@ pub async fn authz_describe() -> JsonResult<Value> {
         ],
         "check_request_example": {
             "actor": "did:web:alice.example",
-            "action": "keys.backups.restore",
+            "action": "cx.keys.backups.get",
             "space_id": "cx:space:01904100-0000-7000-8000-000000000000",
             "resources": [
                 {
@@ -227,7 +224,7 @@ pub async fn authz_describe() -> JsonResult<Value> {
 #[endpoint(
     operation_id = "cx.policies.describe",
     tags("policy"),
-    summary = "Policy collection scaffold description",
+    summary = "Policy collection scaffold description"
 )]
 pub async fn policies_describe() -> JsonResult<Value> {
     json_ok(json!({
@@ -239,10 +236,10 @@ pub async fn policies_describe() -> JsonResult<Value> {
         "upsert_request_example": {
             "scope": "space",
             "subject_ref": "did:web:alice.example",
-            "policy_type": "keys.backups.restore",
+            "policy_type": "cx.keys.backups.get",
             "effect": "require_review",
             "payload": {
-                "actions": ["keys.backups.restore"],
+                "actions": ["cx.keys.backups.get"],
                 "resource": {
                     "kind": "blob",
                     "space_id": "cx:space:01904100-0000-7000-8000-000000000000",
@@ -261,8 +258,8 @@ pub async fn policies_describe() -> JsonResult<Value> {
                 ]
             }
         },
-        "get_path_example": "/api/v1/policies/policy-backup-restore-01",
-        "delete_path_example": "/api/v1/policies/policy-backup-restore-01",
+        "get_path_example": "/api/v1/policies/policy-key-backup-read-01",
+        "delete_path_example": "/api/v1/policies/policy-key-backup-read-01",
         "todos": [
             "TODO: bind policy describe examples to live policy validation and revision semantics.",
             "TODO: add explicit query/filter examples once policy list pagination is stabilized."
@@ -270,11 +267,10 @@ pub async fn policies_describe() -> JsonResult<Value> {
     }))
 }
 
-
 #[endpoint(
     operation_id = "cx.device_messages.describe",
     tags("device_messages"),
-    summary = "Device messages contract description",
+    summary = "Device messages contract description"
 )]
 pub async fn device_messages_describe() -> JsonResult<Value> {
     json_ok(json!({
@@ -318,48 +314,19 @@ pub async fn device_messages_describe() -> JsonResult<Value> {
 #[endpoint(
     operation_id = "cx.keys.backups.describe",
     tags("keys"),
-    summary = "Encrypted key-backup + restore-state describe scaffold",
+    summary = "Encrypted key-backup surface description"
 )]
 pub async fn key_backups_describe() -> JsonResult<Value> {
     json_ok(json!({
         "contract": "contrix.rest.key_backups_describe.v1",
-        "version": "2026-05-04-scaffold",
         "collection_path": "/api/v1/keys/backups",
         "item_path": "/api/v1/keys/backups/{backup_id}",
-        "restore_state_describe_path": "/api/v1/keys/backups/restore-state/describe",
-        "restore_state_export_path": "/api/v1/keys/backups/restore-state/export",
-        "restore_state_import_path": "/api/v1/keys/backups/restore-state/import",
-        "restore_state_durability_path": "/api/v1/keys/backups/restore-state/durability",
-        "restore_state_checkpoint_collection_path": "/api/v1/keys/backups/restore-state/checkpoints",
-        "restore_state_store_mode": "process_memory_manual_snapshot_scaffold",
-        "restore_describe_path": "/api/v1/keys/backups/{backup_id}/restore/describe",
-        "restore_start_path": "/api/v1/keys/backups/{backup_id}/restore/start",
-        "restore_ticket_collection_path": "/api/v1/keys/backups/restore-tickets",
-        "restore_ticket_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}",
-        "restore_ticket_advance_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/advance",
-        "restore_ticket_resume_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/resume",
-        "restore_ticket_cancel_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/cancel",
-        "restore_ticket_retry_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/retry",
-        "restore_approval_status_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/approvals/status",
-        "restore_approval_submit_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/approvals/submit",
-        "restore_executor_status_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/status",
-        "restore_executor_enqueue_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/enqueue",
-        "restore_executor_start_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/start",
-        "restore_executor_complete_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/executor/complete",
-        "restore_result_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/result",
-        "restore_receipt_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/receipt",
-        "restore_materialized_device_handoff_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/materialized-device-handoff",
-        "restore_bundle_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/bundle",
-        "restore_activity_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/activity",
-        "restore_timeline_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/timeline",
-        "restore_audit_feed_path": "/api/v1/keys/backups/restore-tickets/{ticket_id}/audit-feed",
-        "recovery_live_snapshot_path": "/api/v1/recovery/live-snapshot",
-        "recovery_stack_bundle_path": "/api/v1/recovery/stack-bundle",
         "schema": "cx.schema.key_backup.v1",
-        "todos": [
-            "TODO: bind key-backups describe examples to durable encrypted backup storage semantics.",
-            "TODO: add explicit rotate/export/import examples once backup revision semantics stabilize.",
-            "TODO: replace process-memory restore-state export/import with durable snapshot store semantics."
+        "operations": [
+            "cx.keys.backups.put",
+            "cx.keys.backups.list",
+            "cx.keys.backups.get",
+            "cx.keys.backups.delete"
         ]
     }))
 }
@@ -367,7 +334,7 @@ pub async fn key_backups_describe() -> JsonResult<Value> {
 #[endpoint(
     operation_id = "cx.integration.describe",
     tags("system"),
-    summary = "Integration manifest (dependencies + service surface inventory)",
+    summary = "Integration manifest (dependencies + service surface inventory)"
 )]
 pub async fn integration_describe() -> JsonResult<IntegrationDescribeResponse> {
     json_ok(IntegrationDescribeResponse {
@@ -425,14 +392,6 @@ pub async fn integration_describe() -> JsonResult<IntegrationDescribeResponse> {
                 contract: "contrix.rest.principal_push_register.v1".to_owned(),
                 stability: "scaffold".to_owned(),
                 todo: "TODO: unify bearer and session-grant registration paths behind one capability-checked flow.".to_owned(),
-            },
-            IntegrationSurfaceDescriptor {
-                name: "recovery_contract_stack".to_owned(),
-                method: "GET".to_owned(),
-                path: "/api/v1/recovery/contract-stack".to_owned(),
-                contract: "contrix.rest.recovery_contract_stack.v1".to_owned(),
-                stability: "scaffold".to_owned(),
-                todo: "TODO: replace inline recovery contract stack with generated artifacts assembled from direct describe endpoints.".to_owned(),
             },
             IntegrationSurfaceDescriptor {
                 name: "device_messages_describe".to_owned(),

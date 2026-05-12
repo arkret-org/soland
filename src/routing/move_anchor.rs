@@ -1,4 +1,4 @@
-//! Move / Anchor wire endpoints (C10.B MAL-2 + MAL-4).
+//! Move / Anchor wire endpoints.
 //!
 //! Surfaces:
 //! - `POST /api/v1/moves`   — submit a Move; verifier validates structural
@@ -14,11 +14,10 @@
 //! care because they go through `&dyn MoveStore` / `&dyn AnchorStore`
 //! / `&dyn CellStore` / `&dyn CellRegistry` types.
 //!
-//! JWS shape verification is in place — the verifier rejects mangled,
-//! empty, or sentinel signatures and validates the protected-header `alg`.
-//! Cryptographic signature verification (Ed25519 verify against a key
-//! resolved from the verification_method DID URL) is the next step (T7-9);
-//! it requires the production DID resolver to be online.
+//! JWS shape verification rejects mangled, empty, or sentinel signatures
+//! and validates the protected-header `alg`. In production mode, full
+//! Ed25519 verification runs against the public key resolved from the
+//! `verification_method` DID URL.
 
 use contrix_sdk::{
     Anchor, Move, SpaceId,
@@ -50,8 +49,8 @@ pub fn shape_only_jws_verifier_for_anchorer(
     verify_jws_shape(canonical_bytes, jws, verification_method, issuer)
 }
 
-/// T7-9 (2026-05-09 十一轮): pick the JWS verifier based on
-/// `config.development_mode`. Returns a closure of the exact type
+/// Pick the JWS verifier based on `config.development_mode`. Returns a
+/// closure of the exact type
 /// `verify_move` / `apply_anchor` expect (`Fn(&[u8], &str, &str, &str)
 /// -> Result<(), String> + Copy`). The closure captures `&AppState` by
 /// reference so the production branch can reach the DID resolver chain;
@@ -64,13 +63,7 @@ pub fn select_jws_verifier(
         if state.config.development_mode {
             verify_jws_shape(canonical_bytes, jws, vm, issuer)
         } else {
-            crate::jws_verify::verify_jws_ed25519(
-                canonical_bytes,
-                jws,
-                vm,
-                issuer,
-                state,
-            )
+            crate::jws_verify::verify_jws_ed25519(canonical_bytes, jws, vm, issuer, state)
         }
     }
 }
@@ -84,8 +77,8 @@ pub fn select_jws_verifier(
 ///   - empty issuer or verification_method
 ///
 /// Real Ed25519 signature verification (resolving `verification_method`
-/// to a public key + `verify(canonical_bytes, signature)`) is T7-9 work
-/// — it depends on the production DID resolver.
+/// to a public key + `verify(canonical_bytes, signature)`) depends on the
+/// production DID resolver.
 fn verify_jws_shape(
     canonical_bytes: &[u8],
     jws: &str,
@@ -111,7 +104,10 @@ fn verify_jws_shape(
     // the two dots).
     let parts: Vec<&str> = jws.split('.').collect();
     if parts.len() != 3 {
-        return Err(format!("JWS must have 3 dot-separated segments, got {}", parts.len()));
+        return Err(format!(
+            "JWS must have 3 dot-separated segments, got {}",
+            parts.len()
+        ));
     }
     let (header_b64u, payload_b64u, signature_b64u) = (parts[0], parts[1], parts[2]);
     if !payload_b64u.is_empty() {
@@ -149,7 +145,8 @@ fn verify_jws_shape(
     )
     .map_err(|e| format!("JWS signature is not base64url: {e}"))?;
 
-    // T7-9: real Ed25519 verify happens here once the DID resolver is wired:
+    // Production Ed25519 verification runs here once the DID resolver is
+    // available:
     //   let pub_key = resolve_verification_method(verification_method)?;
     //   ed25519_dalek::Verifier::verify(&pub_key, canonical_bytes, &sig_bytes)
     //       .map_err(|e| format!("Ed25519 verify failed: {e}"))?;
@@ -172,7 +169,7 @@ pub struct SubmitMoveResponse {
 #[endpoint(
     operation_id = "cx.moves.submit",
     tags("moves"),
-    summary = "Submit a Move for the next Anchor batch",
+    summary = "Submit a Move for the next Anchor batch"
 )]
 pub async fn submit_move(
     aa: AuthArgs,
@@ -201,7 +198,7 @@ pub async fn submit_move(
             reason: Some(reject.to_string()),
         }));
     }
-    // C10.B (2026-05-09 十二轮 + 十四轮) replay-window check on Move.hlc.
+    // Replay-window check on Move.hlc.
     // The hlc is part of canonical_bytes_for_id (signed envelope), so it
     // can't be forged without invalidating verify_move; we trust it here.
     // Window=0 (test config) bypasses entirely; per-cell-family overrides
@@ -218,9 +215,13 @@ pub async fn submit_move(
         }));
     }
 
-    state.move_store.put_pending_via_trait(&move_obj).map_err(|e| {
-        AppError::new(ErrorCode::InternalError, e.to_string()).with_status(StatusCode::INTERNAL_SERVER_ERROR)
-    })?;
+    state
+        .move_store
+        .put_pending_via_trait(&move_obj)
+        .map_err(|e| {
+            AppError::new(ErrorCode::InternalError, e.to_string())
+                .with_status(StatusCode::INTERNAL_SERVER_ERROR)
+        })?;
 
     json_ok(SubmitMoveResponse {
         move_id: move_obj.id.as_str().to_owned(),
@@ -247,7 +248,7 @@ pub struct RejectedMoveEntry {
 #[endpoint(
     operation_id = "cx.anchors.submit",
     tags("anchors"),
-    summary = "Submit an Anchor; runs apply_anchor end-to-end",
+    summary = "Submit an Anchor; runs apply_anchor end-to-end"
 )]
 pub async fn submit_anchor(
     aa: AuthArgs,
@@ -264,13 +265,12 @@ pub async fn submit_anchor(
     let cell_store = state.cell_store.as_ref();
     let registry = state.cell_registry.as_ref();
 
-    // C10.B (2026-05-09 十二轮) replay-window check on Anchor.hlc.
+    // Replay-window check on Anchor.hlc.
     // anchor.hlc is part of canonical_bytes_for_id signed by anchorer_sig;
     // window=0 (test config) bypasses entirely.
-    if let Err(reject) = crate::jws_verify::verify_replay_window(
-        &anchor.hlc,
-        state.config.jws_replay_window_seconds,
-    ) {
+    if let Err(reject) =
+        crate::jws_verify::verify_replay_window(&anchor.hlc, state.config.jws_replay_window_seconds)
+    {
         return Err(AppError::new(
             ErrorCode::SchemaViolation,
             format!("anchor replay_window: {reject}"),
@@ -303,16 +303,19 @@ pub async fn submit_anchor(
     let rejected = effect
         .rejected_moves
         .into_iter()
-        .map(|(id, reason)| RejectedMoveEntry { move_id: id.as_str().to_owned(), reason })
+        .map(|(id, reason)| RejectedMoveEntry {
+            move_id: id.as_str().to_owned(),
+            reason,
+        })
         .collect();
 
-    // C10.B (2026-05-09 八轮): refresh ProjectionState::cells from CellStore
+    // Refresh ProjectionState::cells from CellStore
     // for the anchored Space so cell-keyed read paths
     // (read_receipt_policy / member.state / etc.) see the new effective
     // state immediately. Lock failures are non-fatal — read paths fall
     // back to the durable-event scan.
     //
-    // 十五轮: capture mls.epoch BEFORE the reload so we can detect a
+    // Capture mls.epoch before the reload so we can detect a
     // shift after the reload writes the new value.
     let mls_epoch_cell = contrix_sdk::CellRef::new(format!(
         "cx:cell:cx.component.mls.epoch.v1:{}",
@@ -327,15 +330,11 @@ pub async fn submit_anchor(
             .and_then(|proj| proj.cell_value(cell_id).cloned())
     });
     if let Ok(mut proj) = state.projection.lock() {
-        if let Err(error) = proj.reload_cells_from_store(
-            &anchor.space_id,
-            cell_store,
-            registry,
-        ) {
+        if let Err(error) = proj.reload_cells_from_store(&anchor.space_id, cell_store, registry) {
             tracing::warn!(error = %error, "failed to refresh ProjectionState::cells after apply_anchor");
         }
     }
-    // 十五轮: post-apply_anchor mid-stream control frames.
+    // Post-apply_anchor mid-stream control frames.
     // 1. Frontier — every successful Anchor advances the frontier.
     let _ = state
         .event_broadcast
@@ -403,7 +402,7 @@ pub struct SignAnchorResponse {
     pub post_state_root: Option<String>,
 }
 
-/// C10.B MAL-3 (2026-05-09 七轮): admin endpoint that triggers one
+/// Admin endpoint that triggers one
 /// signing pass by the in-process anchorer worker. Useful for tests and
 /// for ops to manually flush pending Moves into an Anchor without a
 /// background ticker. Production deploys will eventually wire a
@@ -411,7 +410,7 @@ pub struct SignAnchorResponse {
 #[endpoint(
     operation_id = "cx.admin.anchors.sign",
     tags("admin", "anchors"),
-    summary = "Trigger one anchorer signing pass for a Space",
+    summary = "Trigger one anchorer signing pass for a Space"
 )]
 pub async fn admin_sign_anchor(
     aa: AuthArgs,
@@ -421,7 +420,10 @@ pub async fn admin_sign_anchor(
 ) -> JsonResult<SignAnchorResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req)?;
-    let SignAnchorRequest { space_id, max_moves } = body.into_inner();
+    let SignAnchorRequest {
+        space_id,
+        max_moves,
+    } = body.into_inner();
     let space = SpaceId::new(space_id.clone()).map_err(|e| {
         AppError::new(ErrorCode::SchemaViolation, format!("invalid space_id: {e}"))
             .with_status(StatusCode::BAD_REQUEST)
@@ -457,17 +459,13 @@ pub async fn admin_sign_anchor(
             rejected_moves: vec![],
             post_state_root: None,
         }),
-        Err(crate::anchorer::AnchorerError::NotAuthorized(_)) => {
-            Err(AppError::new(
-                ErrorCode::PolicyViolation,
-                "not authorized to sign anchors for this space".to_owned(),
-            )
-            .with_status(StatusCode::FORBIDDEN))
-        }
-        Err(e) => Err(
-            AppError::new(ErrorCode::InternalError, e.to_string())
-                .with_status(StatusCode::CONFLICT),
-        ),
+        Err(crate::anchorer::AnchorerError::NotAuthorized(_)) => Err(AppError::new(
+            ErrorCode::PolicyViolation,
+            "not authorized to sign anchors for this space".to_owned(),
+        )
+        .with_status(StatusCode::FORBIDDEN)),
+        Err(e) => Err(AppError::new(ErrorCode::InternalError, e.to_string())
+            .with_status(StatusCode::CONFLICT)),
     }
 }
 

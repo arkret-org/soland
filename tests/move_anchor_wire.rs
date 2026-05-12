@@ -16,8 +16,8 @@
 //!
 //! Cells: the test transitions
 //! `cx:cell:cx.component.member.state.v1:did.web.alice.example` from
-//! `invited` to `join`. That cell family is pre-registered in
-//! `MemoryCellRegistry::default()` as an FSM with `invited → join`
+//! `invite` to `join`. That cell family is pre-registered in
+//! `MemoryCellRegistry::default()` as an FSM with `invite -> join`
 //! transition, so the Move passes verify and the post-state is
 //! `Value("join")`.
 
@@ -37,7 +37,12 @@ use contrix_sdk::{
     lattice::CellState,
     state_res::{compute_state_root, state_root::EMPTY_STATE_ROOT},
 };
-use soland::{config::AppConfig, db::Db, service, state::AppState};
+use soland::{
+    config::{AppConfig, ObjectStorageConfig},
+    db::Db,
+    service,
+    state::AppState,
+};
 
 fn test_config() -> AppConfig {
     AppConfig {
@@ -45,7 +50,9 @@ fn test_config() -> AppConfig {
         public_base_url: "http://server".to_owned(),
         service_did: "did:web:soland.local".to_owned(),
         database_url: None,
-        blob_root: std::env::temp_dir().join("soland-test-blobs-move-anchor"),
+        object_storage: ObjectStorageConfig::local(
+            std::env::temp_dir().join("soland-test-blobs-move-anchor"),
+        ),
         cors_allow_origin: None,
         development_mode: true,
         session_grant_introspection_url: None,
@@ -58,7 +65,6 @@ fn test_config() -> AppConfig {
         // protection tests build a custom config with a non-zero window.
         jws_replay_window_seconds: 0,
         jws_replay_window_per_family: std::collections::BTreeMap::new(),
-        lattice_first: false,
         anchorer_signing_key_seed: None,
         use_keystore: false,
         federation_policy: soland::config::FederationPolicy::Mesh,
@@ -81,7 +87,7 @@ fn build_invited_to_join_move() -> Move {
         "preconditions": [],
         "effects": [{
             "cell": member_cell().as_str(),
-            "op": { "type": "transition", "from": "invited", "to": "join" }
+            "op": { "type": "transition", "from": "invite", "to": "join" }
         }],
         "anchor_ref": format!("cx:anchor:sha256:{}", "aa".repeat(32)),
         "refs": [],
@@ -89,9 +95,15 @@ fn build_invited_to_join_move() -> Move {
     });
     let body_bytes = canonical::canonical_json_bytes(&body).unwrap();
     let payload_hash = canonical::sha256_digest(&body_bytes);
-    let id_hex: String = Sha256::digest(&body_bytes).iter().map(|b| format!("{b:02x}")).collect();
+    let id_hex: String = Sha256::digest(&body_bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
     let mut full = body.as_object().unwrap().clone();
-    full.insert("id".into(), Value::String(format!("cx:move:sha256:{id_hex}")));
+    full.insert(
+        "id".into(),
+        Value::String(format!("cx:move:sha256:{id_hex}")),
+    );
     full.insert(
         "sig".into(),
         json!({
@@ -99,7 +111,8 @@ fn build_invited_to_join_move() -> Move {
             "verification_method": "did:web:admin.example#k1",
             "payload_hash": payload_hash,
             "created_at": "2026-05-08T00:00:00Z",
-            // Detached JWS shape (RFC 7515 §3.2). Real Ed25519 verify is T7-9.
+            // Detached JWS shape (RFC 7515 §3.2). Real Ed25519 verification
+            // is covered by separate production-verifier tests.
             "jws": "eyJhbGciOiJFZERTQSJ9..ZmFrZS1zaWctZm9yLXRlc3Rz"
         }),
     );
@@ -115,11 +128,11 @@ fn build_genesis_anchor(frontier: MoveId, state_root: Hash) -> Anchor {
             .unwrap()
             .with_timezone(&chrono::Utc),
         // Detached JWS shape (RFC 7515 §3.2): empty payload segment between
-// the protected header and signature. Header is base64url of
-// `{"alg":"EdDSA"}`; signature is a non-zero placeholder. Real Ed25519
-// verify is T7-9 (DID-resolver-dependent); the soland verifier currently
-// validates JWS shape only.
-jws: "eyJhbGciOiJFZERTQSJ9..ZmFrZS1zaWctZm9yLXRlc3Rz".to_owned(),
+        // the protected header and signature. Header is base64url of
+        // `{"alg":"EdDSA"}`; signature is a non-zero placeholder. Real
+        // Ed25519 verification is DID-resolver-dependent; the fixture here
+        // only needs valid detached-JWS shape.
+        jws: "eyJhbGciOiJFZERTQSJ9..ZmFrZS1zaWctZm9yLXRlc3Rz".to_owned(),
     };
     let mut a = Anchor {
         id: AnchorId::new(format!("cx:anchor:sha256:{}", "00".repeat(32))).unwrap(),
@@ -322,7 +335,7 @@ fn cursor_helper_compiles() {
     assert_eq!(s, "aGVsbG8");
 }
 
-/// C10.B (2026-05-09 五轮 激进模式): exercise a cell family registered ONLY
+/// Exercise a cell family registered ONLY
 /// via soland's `build_sdk_cell_registry()` (not in the SDK's built-in
 /// defaults) to prove the registry wiring is live.
 ///
@@ -347,9 +360,15 @@ fn build_consent_grant_add_move() -> Move {
     });
     let body_bytes = canonical::canonical_json_bytes(&body).unwrap();
     let payload_hash = canonical::sha256_digest(&body_bytes);
-    let id_hex: String = Sha256::digest(&body_bytes).iter().map(|b| format!("{b:02x}")).collect();
+    let id_hex: String = Sha256::digest(&body_bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
     let mut full = body.as_object().unwrap().clone();
-    full.insert("id".into(), Value::String(format!("cx:move:sha256:{id_hex}")));
+    full.insert(
+        "id".into(),
+        Value::String(format!("cx:move:sha256:{id_hex}")),
+    );
     full.insert(
         "sig".into(),
         json!({
@@ -389,7 +408,7 @@ async fn move_on_soland_registered_cell_family_passes_verify() {
     );
 }
 
-/// C10.B MAL-3 (2026-05-09 七轮): the anchorer worker takes one or more
+/// The anchorer worker takes one or more
 /// pending Moves and produces a signed Anchor. This is the END-TO-END
 /// proof of the Move → Anchor flow without requiring the client to
 /// hand-craft an Anchor: the client submits a Move, then triggers the
@@ -401,7 +420,7 @@ async fn anchorer_worker_signs_pending_move_and_publishes_anchor() {
     let token = dev_token(state.clone()).await;
     let app = service(state.clone());
 
-    // 1. Submit a Move (membership FSM transition invited→join).
+    // 1. Submit a Move (membership FSM transition invite->join).
     let move_obj = build_invited_to_join_move();
     let submit: Value = TestClient::post("http://server/api/v1/moves")
         .add_header("Authorization", format!("Bearer {token}"), true)
@@ -473,12 +492,60 @@ fn demo_space_id() -> &'static str {
     "cx:space:0196419b-0000-7000-8000-000000000000"
 }
 
-/// C10.B (2026-05-09 十轮): events.subscribe is a streaming NDJSON
+fn event_envelope(event_id: &str, actor: &str, space_id: &str, payload: Value) -> Value {
+    let suffix = event_id.trim_start_matches("cx:event:");
+    let mut event = json!({
+        "event_id": event_id,
+        "kind": "cx.message.create",
+        "actor_id": actor,
+        "actor_seq": 1,
+        "space_id": space_id,
+        "created_at": "2026-05-02T00:00:00Z",
+        "hlc": "01970e589d21-00000001-a13f9c2e",
+        "payload": payload,
+        "prev_refs": [],
+        "refs": [],
+        "unsigned": {
+            "local_operation_idempotency_alias": format!("cx:operation:{suffix}"),
+        },
+        "proofs": [{
+            "kind": "detached_jws",
+            "alg": "EdDSA",
+            "verification_method": format!("{actor}#test"),
+            "payload_hash": "",
+            "created_at": "2026-05-02T00:00:00Z",
+            "jws": "a..b",
+        }],
+    });
+    refresh_event_proof(&mut event);
+    event
+}
+
+fn event_digest(event: &Value) -> String {
+    let mut canonical = event.clone();
+    if let Value::Object(object) = &mut canonical {
+        object.remove("proofs");
+        object.remove("unsigned");
+    }
+    sha256_json(&canonical)
+}
+
+fn refresh_event_proof(event: &mut Value) {
+    let digest = event_digest(event);
+    event["proofs"][0]["payload_hash"] = Value::String(digest);
+}
+
+fn sha256_json(value: &Value) -> String {
+    let bytes = serde_json::to_vec(value).expect("JSON value serializes");
+    format!("sha256:{:x}", Sha256::digest(bytes))
+}
+
+/// events.subscribe is a streaming NDJSON
 /// response. This test:
 ///   1. Calls GET /api/v1/events/subscribe with `max_duration_ms=500` so
 ///      the stream auto-closes quickly enough for TestClient to collect
 ///      the full body.
-///   2. (Concurrently) sends a message via /api/v1/messages/send which
+///   2. (Concurrently) submits a message Event via /api/v1/events which
 ///      triggers `project_accepted_operations` → broadcast notification.
 ///   3. Asserts the response body contains:
 ///      - one `kind="catchup_complete"` frame
@@ -506,15 +573,19 @@ async fn events_subscribe_streams_live_event_then_closes_at_deadline() {
         let app_writer = service(writer_state);
         // Wait for the subscribe request to land + register its receiver.
         sleep(StdDuration::from_millis(150)).await;
-        let _: Value = TestClient::post("http://server/api/v1/messages/send")
+        let event_id = "cx:event:01984101-0000-7000-8000-000000000abc";
+        let _: Value = TestClient::post("http://server/api/v1/events")
             .add_header("Authorization", format!("Bearer {token_writer}"), true)
-            .json(&json!({
-                "space_id": space,
-                "event_id": "cx:event:01984101-0000-7000-8000-000000000abc",
-                "sender": "did:web:admin.example",
-                "thread_id": "cx:thread:t1",
-                "content": {"body": "hello live"}
-            }))
+            .json(&event_envelope(
+                event_id,
+                "did:web:alice.example",
+                &space,
+                json!({
+                    "body": "hello live",
+                    "content": {"body": "hello live"},
+                    "thread_id": "cx:thread:t1",
+                }),
+            ))
             .send(&app_writer)
             .await
             .take_json()
@@ -571,7 +642,7 @@ async fn events_subscribe_streams_live_event_then_closes_at_deadline() {
     );
 }
 
-// ── T7-9 + 十二轮 replay protection ─────────────────────────────
+// ── Replay protection ─────────────────────────────────────────
 
 /// Build a Move whose `hlc` is set to the given physical-ms timestamp
 /// (so we can craft replay scenarios). Uses the dev-mode shape verifier
@@ -585,7 +656,7 @@ fn build_member_state_move_with_hlc(physical_ms: u64) -> Move {
         "preconditions": [],
         "effects": [{
             "cell": member_cell().as_str(),
-            "op": { "type": "transition", "from": "invited", "to": "join" }
+            "op": { "type": "transition", "from": "invite", "to": "join" }
         }],
         "anchor_ref": format!("cx:anchor:sha256:{}", "aa".repeat(32)),
         "refs": [],
@@ -593,9 +664,15 @@ fn build_member_state_move_with_hlc(physical_ms: u64) -> Move {
     });
     let body_bytes = canonical::canonical_json_bytes(&body).unwrap();
     let payload_hash = canonical::sha256_digest(&body_bytes);
-    let id_hex: String = Sha256::digest(&body_bytes).iter().map(|b| format!("{b:02x}")).collect();
+    let id_hex: String = Sha256::digest(&body_bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
     let mut full = body.as_object().unwrap().clone();
-    full.insert("id".into(), Value::String(format!("cx:move:sha256:{id_hex}")));
+    full.insert(
+        "id".into(),
+        Value::String(format!("cx:move:sha256:{id_hex}")),
+    );
     full.insert(
         "sig".into(),
         json!({
@@ -700,7 +777,7 @@ async fn submit_move_accepts_current_hlc_under_replay_window() {
     );
 }
 
-// ── T7-9 production Ed25519 verifier (十一轮) ─────────────────
+// ── Production Ed25519 verifier ───────────────────────────────
 //
 // dev-login is gated by `config.development_mode=true`, so we can't use
 // the HTTP path with auth tokens to test the production verifier. Instead
@@ -850,7 +927,7 @@ async fn production_verifier_rejects_unknown_verification_method() {
     );
 }
 
-/// 十五轮: post-anchor `kind=frontier` mid-stream control frame.
+/// Post-anchor `kind=frontier` mid-stream control frame.
 ///
 /// Subscribe to the demo space → trigger an Anchor sign for that space →
 /// verify the streaming subscriber sees a `kind=frontier` frame whose
@@ -925,7 +1002,10 @@ async fn anchorer_pass_broadcasts_frontier_frame_to_subscribers() {
             Ok(Ok(notification)) => {
                 use soland::state::EventNotificationKind;
                 match notification.kind {
-                    EventNotificationKind::Frontier { state_root, anchor_id } => {
+                    EventNotificationKind::Frontier {
+                        state_root,
+                        anchor_id,
+                    } => {
                         assert!(
                             anchor_id.starts_with("cx:anchor:sha256:"),
                             "frontier anchor_id should be content-addressed (got `{anchor_id}`)"
@@ -951,7 +1031,7 @@ async fn anchorer_pass_broadcasts_frontier_frame_to_subscribers() {
     );
 }
 
-/// 十轮: even with no live events at all, the stream emits
+/// Even with no live events at all, the stream emits
 /// `catchup_complete` then a deadline-close heartbeat. Proves the stream
 /// terminates cleanly without indefinite blocking.
 #[tokio::test]
@@ -999,7 +1079,7 @@ async fn events_subscribe_emits_close_heartbeat_at_deadline() {
     );
 }
 
-/// C10.B (2026-05-09 八轮): after the anchorer publishes an Anchor,
+/// After the anchorer publishes an Anchor,
 /// `ProjectionState::cells` MUST contain the resolved CellState for the
 /// member.state cell. Proves the write-back hook in
 /// `AnchorerWorker::sign_pending_for_space` actually refreshes the
@@ -1051,7 +1131,7 @@ async fn anchorer_pass_populates_projection_cells_map() {
     }
 }
 
-/// Round 21: `admin_reconfigure_anchorer` builds a real Move signed
+/// `admin_reconfigure_anchorer` builds a real Move signed
 /// with the service admin signer, submits it through the move_store,
 /// and triggers one anchorer signing pass. Endpoint should return
 /// `status="accepted"` with a real `move_id` and (since this node is
@@ -1085,9 +1165,7 @@ async fn admin_reconfigure_anchorer_builds_real_move_and_anchors_it() {
         resp["status"], "accepted",
         "admin_reconfigure_anchorer should produce a real signed Move (got {resp:?})"
     );
-    let move_id = resp["move_id"]
-        .as_str()
-        .expect("move_id should be set");
+    let move_id = resp["move_id"].as_str().expect("move_id should be set");
     assert!(
         move_id.starts_with("cx:move:sha256:"),
         "move_id should be content-addressed sha256, got {move_id}"
@@ -1101,7 +1179,7 @@ async fn admin_reconfigure_anchorer_builds_real_move_and_anchors_it() {
     );
 }
 
-/// Round 21: `admin_reconfigure_anchorer` rejects requests where the
+/// `admin_reconfigure_anchorer` rejects requests where the
 /// admin DID (= service DID for now) appears in the proposed anchorer
 /// member set, because that's a privilege-escalation primitive.
 #[tokio::test]
@@ -1175,7 +1253,7 @@ async fn anchorer_worker_is_idempotent_when_no_pending_moves() {
     );
 }
 
-// ── C10.B 续 (2026-05-09 十八轮 并行) admin cells endpoint ───────────────
+// ── Admin cells endpoint ──────────────────────────────────────
 //
 // Public-ish read surface over `ProjectionState::cells` so coauth (consent
 // grants on holder principal servers) and sodmin (admin-UI bottom-state
@@ -1187,7 +1265,7 @@ async fn anchorer_worker_is_idempotent_when_no_pending_moves() {
 // - Auth-required: omit Bearer token → 401 / canonical envelope
 
 /// Submit a Move + trigger anchorer signing pass so the member cell
-/// transitions invited→join AND lands in `ProjectionState::cells`. Returns
+/// transitions invite->join AND lands in `ProjectionState::cells`. Returns
 /// the URL-encoded path-segment form of the cell id (which for our
 /// cell ids — only `:`s and `.`s, both URL-path-safe — is the raw
 /// string).
@@ -1250,7 +1328,7 @@ async fn admin_get_cell_returns_value_after_anchored_move() {
     let token = dev_token(state.clone()).await;
     let app = service(state.clone());
 
-    // Drive a Move + Anchor so the member cell transitions invited→join
+    // Drive a Move + Anchor so the member cell transitions invite->join
     // and lands in ProjectionState::cells.
     let cell_id = seed_member_cell_join(state.clone(), &token).await;
 
@@ -1430,7 +1508,7 @@ async fn admin_list_cells_paginates_with_limit_and_offset() {
     );
 }
 
-/// Round 24: `admin_rotate_signing_key` mints a fresh ed25519 seed,
+/// `admin_rotate_signing_key` mints a fresh ed25519 seed,
 /// hot-swaps the AnchorerWorker key via `AppState::rotate_anchorer_signing_key`,
 /// and returns `{kid, did, rotated_at, origin, keystore_persisted, keystore_warning}`.
 /// The pre-rotation key MUST differ byte-for-byte from the post-rotation key
@@ -1480,7 +1558,7 @@ async fn admin_rotate_signing_key_publishes_a_fresh_key() {
     );
 }
 
-/// Round 24: `account/{did}/principal-space` returns the deterministic
+/// `account/{did}/principal-space` returns the deterministic
 /// DID → control-Space mapping. Two queries for the same DID return the
 /// same `space_id`; two queries for different DIDs return different ones.
 #[tokio::test]

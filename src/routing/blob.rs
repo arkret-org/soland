@@ -170,18 +170,8 @@ pub async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Respons
         }
     }
     let blob_ref = format!("cx:blob:sha256:{sha256}");
-    let blob_dir = state.config.blob_root.join("sha256");
-    if let Err(error) = std::fs::create_dir_all(&blob_dir) {
-        render_error(
-            res,
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "blob_store_error",
-            &error.to_string(),
-        );
-        return;
-    }
-    let storage_path = blob_dir.join(&sha256);
-    if let Err(error) = std::fs::write(&storage_path, &bytes) {
+    let storage_key = state.object_storage.object_key_for_sha256(&sha256);
+    if let Err(error) = state.object_storage.put(&storage_key, bytes).await {
         render_error(
             res,
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -191,8 +181,10 @@ pub async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Respons
         return;
     }
     let record = BlobRecord {
-        bytes,
-        storage_path: Some(storage_path),
+        sha256: sha256.clone(),
+        size_bytes: size as i64,
+        storage_backend: state.object_storage.backend_name().to_owned(),
+        storage_key: storage_key.clone(),
         media_type: media_type.clone(),
         filename: filename.clone(),
         space_id: space_id.clone(),
@@ -202,6 +194,9 @@ pub async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Respons
     };
     if let Err(error) = state.persistence.blobs().put(&blob_ref, &record) {
         tracing::error!(%error, "failed to persist blob");
+        if let Err(delete_error) = state.object_storage.delete(&storage_key).await {
+            tracing::warn!(%delete_error, %storage_key, "failed to clean up blob after metadata write failure");
+        }
         render_error(
             res,
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -271,26 +266,32 @@ pub async fn blob_get(depot: &mut Depot, req: &mut Request, res: &mut Response) 
                 render_error(res, StatusCode::NOT_FOUND, "not_found", "not found");
                 return;
             }
-            let blob_bytes = blob
-                .storage_path
-                .as_ref()
-                .and_then(|path| std::fs::read(path).ok())
-                .unwrap_or_else(|| blob.bytes.clone());
-            let total_len = blob_bytes.len();
-            let (status, body, content_range) = match parse_range(req, total_len).transpose() {
-                Ok(Some((start, end))) => {
-                    let body = blob_bytes[start..=end].to_vec();
-                    (
-                        StatusCode::PARTIAL_CONTENT,
-                        body,
-                        Some(format!("bytes {start}-{end}/{total_len}")),
-                    )
+            let total_len = match usize::try_from(blob.size_bytes) {
+                Ok(total_len) => total_len,
+                Err(_) => {
+                    render_error(
+                        res,
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "blob_store_error",
+                        "invalid blob size metadata",
+                    );
+                    return;
                 }
-                Ok(None) => (StatusCode::OK, blob_bytes, None),
+            };
+            let range = match parse_range(req, total_len).transpose() {
+                Ok(range) => range,
                 Err(message) => {
                     render_error(res, StatusCode::BAD_REQUEST, "invalid_param", message);
                     return;
                 }
+            };
+            let (status, content_length, content_range) = match range {
+                Some((start, end)) => (
+                    StatusCode::PARTIAL_CONTENT,
+                    end.saturating_sub(start) + 1,
+                    Some(format!("bytes {start}-{end}/{total_len}")),
+                ),
+                None => (StatusCode::OK, total_len, None),
             };
             res.status_code(status);
             res.headers_mut().insert(
@@ -299,7 +300,7 @@ pub async fn blob_get(depot: &mut Depot, req: &mut Request, res: &mut Response) 
             );
             res.headers_mut().insert(
                 salvo::http::header::CONTENT_LENGTH,
-                body.len().to_string().parse().unwrap(),
+                content_length.to_string().parse().unwrap(),
             );
             res.headers_mut().insert(
                 salvo::http::header::HeaderName::from_static("digest"),
@@ -339,6 +340,38 @@ pub async fn blob_get(depot: &mut Depot, req: &mut Request, res: &mut Response) 
                 "accepted",
             );
             if req.method() != Method::HEAD {
+                let blob_bytes = match state.object_storage.get(&blob.storage_key).await {
+                    Ok(bytes) => bytes,
+                    Err(error) => {
+                        tracing::error!(%error, storage_key = %blob.storage_key, "failed to read blob object");
+                        render_error(
+                            res,
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            "blob_store_error",
+                            "blob object unavailable",
+                        );
+                        return;
+                    }
+                };
+                if blob_bytes.len() != total_len {
+                    tracing::error!(
+                        storage_key = %blob.storage_key,
+                        expected = total_len,
+                        actual = blob_bytes.len(),
+                        "blob object size differs from metadata"
+                    );
+                    render_error(
+                        res,
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "blob_store_error",
+                        "blob object size metadata mismatch",
+                    );
+                    return;
+                }
+                let body = match range {
+                    Some((start, end)) => blob_bytes[start..=end].to_vec(),
+                    None => blob_bytes,
+                };
                 res.write_body(body).ok();
             }
         }
@@ -550,7 +583,7 @@ fn enforce_blob_quota(
     let actor_bytes: usize = blobs
         .iter()
         .filter(|blob| blob.uploaded_by == actor)
-        .map(|blob| blob.bytes.len())
+        .map(|blob| blob.size_bytes.max(0) as usize)
         .sum();
     if actor_bytes.saturating_add(size) > MAX_BLOB_ACCOUNT_BYTES {
         return Err("account blob quota exceeded");
@@ -559,7 +592,7 @@ fn enforce_blob_quota(
         let space_bytes: usize = blobs
             .iter()
             .filter(|blob| blob.space_id.as_deref() == Some(space_id))
-            .map(|blob| blob.bytes.len())
+            .map(|blob| blob.size_bytes.max(0) as usize)
             .sum();
         if space_bytes.saturating_add(size) > MAX_BLOB_SPACE_BYTES {
             return Err("space blob quota exceeded");

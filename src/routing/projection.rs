@@ -1,12 +1,12 @@
 //! Projection writers + read-side helpers.
 //!
 //! This is the in-process projection layer: ingestion of accepted operations
-//! (local repo + federation push), per-space lifecycle materialization, the
+//! (local service writes + federation push), per-space lifecycle materialization, the
 //! `state.projection_events` log, redaction tombstones, gap/backfill helpers,
 //! and the deterministic reducer fan-out (`state.projection.lock().apply(op)`).
 //!
 //! Surfaces:
-//! - **inbound**: `repo::submit_commit`, `federation::federation_push_operations`
+//! - **inbound**: local operation builders, `federation::federation_push_operations`
 //!   and `federation::federation_transaction` call `project_accepted_operations`
 //!   and `ingest_federation_operations` from here.
 //! - **outbound**: `events::list_events`, `sync::*` and `index::*` consume
@@ -14,7 +14,7 @@
 //!   and `sync_timeline_message_json` to render timeline-shaped responses.
 //!
 //! Stream-A (`_todos.md`) is the umbrella for the missing reducer kinds —
-//! today this layer only fans out `cx.message.*` / `cx.membership.*` /
+//! today this layer only fans out `cx.message.*` / `cx.member.state` /
 //! `cx.space.*` lifecycle events; everything else is dropped on the floor
 //! (`project_accepted_operations` only routes message+membership+lifecycle).
 //! P0 F2 covers persistence: `projection_events` is in-memory plus a Pg
@@ -312,17 +312,8 @@ pub fn backfill_gap_events(
         return Ok((events, page.next_cursor, page.has_more));
     }
 
-    let page = state
-        .repo
-        .sync_space_operations(space_id, from_cursor, limit)?;
-    let redacted = redaction_targets_from_operations(&page.items);
-    let events = page
-        .items
-        .into_iter()
-        .filter(|operation| operation_is_visible(operation, &redacted))
-        .map(|operation| projection_event_json(&projection_event_from_operation(&operation, None)))
-        .collect::<Vec<_>>();
-    Ok((events, page.next_cursor, page.has_more))
+    let _ = (space_id, from_cursor);
+    Ok((Vec::new(), None, false))
 }
 
 pub fn truncate_gap_events(mut events: Vec<Value>, to_cursor: Option<&str>) -> (Vec<Value>, bool) {
@@ -452,7 +443,7 @@ pub fn project_federation_operation(state: &AppState, origin: &str, operation: &
     }
     // Also apply to the deterministic reducer
     if let Ok(mut proj) = state.projection.lock() {
-        apply_with_lattice_first(state, &mut proj, operation);
+        apply_via_lattice_registry(state, &mut proj, operation);
     }
     append_projection_event(
         state,
@@ -460,36 +451,37 @@ pub fn project_federation_operation(state: &AppState, origin: &str, operation: &
     );
 }
 
-/// Round 21: respect [`crate::config::AppConfig::lattice_first`]. When
-/// the flag is `true`, route through the LatticeRegistry probe path;
-/// otherwise call the legacy `apply` directly. Helper exists in this
-/// module so both `project_inbound_membership_operation` and
-/// `project_accepted_operations` go through one branch and a future
-/// LatticeRegistry takeover only edits one site.
-fn apply_with_lattice_first(
+pub fn accept_local_operations(
+    state: &AppState,
+    actor: &str,
+    operations: &[Operation],
+) -> Result<(), &'static str> {
+    validate_operation_semantics(state, operations)?;
+    validate_operation_policy(state, operations)?;
+    project_accepted_operations(state, actor, operations);
+    Ok(())
+}
+
+fn apply_via_lattice_registry(
     state: &AppState,
     proj: &mut crate::reducer::ProjectionState,
     operation: &Operation,
 ) {
-    if state.config.lattice_first {
-        let registry = crate::reducer::lattice_kinds::default_lattice_registry();
-        proj.apply_via_lattice_registry(operation, &state.hlc, &registry);
-    } else {
-        proj.apply(operation, &state.hlc);
-    }
+    let registry = crate::reducer::lattice_kinds::default_lattice_registry();
+    proj.apply_via_lattice_registry(operation, &state.hlc, &registry);
 }
 
-pub fn project_accepted_operations(state: &AppState, repo_id: &str, operations: &[Operation]) {
+pub fn project_accepted_operations(state: &AppState, origin: &str, operations: &[Operation]) {
     for operation in operations {
-        ensure_projected_space(state, repo_id, operation);
+        ensure_projected_space(state, origin, operation);
         if kinds::operation_is_message_create(operation) {
-            project_federated_message(state, repo_id, operation);
+            project_federated_message(state, origin, operation);
         } else if kinds::operation_is_membership(operation)
             || kinds::operation_is_space_lifecycle(operation)
         {
-            project_membership_operation(state, repo_id, operation);
+            project_membership_operation(state, origin, operation);
         }
-        // C14: cache cx.space.read_receipt_policy state into ProjectionState so
+        // Cache cx.space.read_receipt_policy state into ProjectionState so
         // ephemeral cx.receipt.read fanout (and other readers) can hit a
         // BTreeMap lookup instead of scanning the durable Event store.
         if kinds::canonical_kind_string(operation) == "cx.space.read_receipt_policy" {
@@ -497,21 +489,23 @@ pub fn project_accepted_operations(state: &AppState, repo_id: &str, operations: 
         }
         // Also apply to the deterministic reducer
         if let Ok(mut proj) = state.projection.lock() {
-            apply_with_lattice_first(state, &mut proj, operation);
+            apply_via_lattice_registry(state, &mut proj, operation);
         }
-        let projected = projection_event_from_operation(operation, Some(repo_id));
-        // C10.B (2026-05-09 十轮): broadcast every accepted projection
+        let projected = projection_event_from_operation(operation, Some(origin));
+        // Broadcast every accepted projection
         // event to live subscribers on cx.events.subscribe. Subscribers
         // filter by `space_id`. `send` returns Err only if there are no
         // active receivers — that's not an error path, it's the steady
         // state when no one's subscribed.
-        let _ = state.event_broadcast.send(crate::state::EventNotification::event(
-            projected.space_id.clone(),
-            projected.event_id.clone(),
-            projection_event_json(&projected),
-        ));
+        let _ = state
+            .event_broadcast
+            .send(crate::state::EventNotification::event(
+                projected.space_id.clone(),
+                projected.event_id.clone(),
+                projection_event_json(&projected),
+            ));
         append_projection_event(state, projected);
-        if let Err(error) = persist_projected_operation(state, repo_id, operation) {
+        if let Err(error) = persist_projected_operation(state, origin, operation) {
             tracing::warn!(
                 error = %error,
                 operation_id = %operation.operation_id,
@@ -524,7 +518,7 @@ pub fn project_accepted_operations(state: &AppState, repo_id: &str, operations: 
 
 pub fn persist_projected_operation(
     state: &AppState,
-    repo_id: &str,
+    origin: &str,
     operation: &Operation,
 ) -> anyhow::Result<()> {
     let Some(pool) = state.db.pool.as_ref() else {
@@ -548,7 +542,7 @@ pub fn persist_projected_operation(
             .payload
             .get("sender")
             .and_then(|value| value.as_str())
-            .unwrap_or(repo_id);
+            .unwrap_or(origin);
         let thread_id = operation
             .payload
             .get("thread_id")
@@ -605,7 +599,7 @@ pub fn persist_projected_operation(
             .bind::<Text, _>(operation.space_id.as_str())
             .bind::<Text, _>(title)
             .bind::<Nullable<Text>, _>(summary)
-            .bind::<Nullable<Text>, _>(Some(repo_id))
+            .bind::<Nullable<Text>, _>(Some(origin))
             .bind::<Text, _>(discoverability)
             .bind::<Jsonb, _>(&operation.payload)
             .bind::<Timestamptz, _>(operation.created_at)
@@ -613,25 +607,14 @@ pub fn persist_projected_operation(
 
         if let Some(member) = operation
             .payload
-            .get("member")
+            .get("actor_id")
             .and_then(|value| value.as_str())
         {
             let membership = operation
                 .payload
                 .get("membership")
                 .and_then(|value| value.as_str())
-                .unwrap_or_else(|| {
-                    if operation
-                        .payload
-                        .get("action")
-                        .and_then(|value| value.as_str())
-                        .is_some_and(|action| matches!(action, "member.remove" | "leave" | "ban"))
-                    {
-                        "leave"
-                    } else {
-                        "join"
-                    }
-                });
+                .unwrap_or("join");
             sql_query(
                     "INSERT INTO space_members (space_id, actor, membership, payload, joined_at, left_at, updated_at) \
                      VALUES ($1, $2, $3, $4, CASE WHEN $3 = 'join' THEN $5 ELSE NULL END, CASE WHEN $3 <> 'join' THEN $5 ELSE NULL END, $5) \
@@ -662,7 +645,7 @@ pub fn persist_projected_operation(
                     .and_then(|value| value.as_str())
                     .unwrap_or(""),
             )
-            .bind::<Nullable<Text>, _>(Some(repo_id))
+            .bind::<Nullable<Text>, _>(Some(origin))
             .bind::<Jsonb, _>(&operation.payload)
             .bind::<Timestamptz, _>(operation.created_at)
             .execute(&mut conn)?;
@@ -670,7 +653,7 @@ pub fn persist_projected_operation(
     Ok(())
 }
 
-/// C14 + C10.B (2026-05-09 八轮): project a `cx.space.read_receipt_policy`
+/// Project a `cx.space.read_receipt_policy`
 /// durable-event into `ProjectionState::cells` as a synthesized CasRegister
 /// value at the canonical cell `cx:cell:cx.component.space.read_receipt_policy.v1:<space_id>`.
 /// This unifies the read path with the Move/Anchor pipeline: both durable-
@@ -808,12 +791,11 @@ pub fn ensure_projected_space(state: &AppState, origin: &str, operation: &Operat
 }
 
 pub fn project_membership_operation(state: &AppState, origin: &str, operation: &Operation) {
-    let action = operation
+    let membership = operation
         .payload
-        .get("action")
-        .and_then(|value| value.as_str())
-        .unwrap_or(operation.object_type.as_str());
-    if matches!(action, "delete" | "space.delete") {
+        .get("membership")
+        .and_then(|value| value.as_str());
+    if kinds::canonical_kind_for_operation(operation) == Some(kinds::CX_SPACE_DESTROY) {
         let store = state.persistence.space_meta();
         if let Ok(Some(mut record)) = store.get(operation.space_id.as_str()) {
             record.deleted = true;
@@ -825,52 +807,21 @@ pub fn project_membership_operation(state: &AppState, origin: &str, operation: &
         return;
     }
 
-    let mut member_values = Vec::new();
-    if let Some(member) = operation
+    let member = operation
         .payload
-        .get("member")
+        .get("actor_id")
         .and_then(|value| value.as_str())
-    {
-        member_values.push(member.to_owned());
-    }
-    if let Some(sender) = operation
-        .payload
-        .get("sender")
-        .and_then(|value| value.as_str())
-    {
-        member_values.push(sender.to_owned());
-    }
-    if let Some(actor) = operation
-        .payload
-        .get("actor")
-        .and_then(|value| value.as_str())
-    {
-        member_values.push(actor.to_owned());
-    }
-    if let Some(members) = operation
-        .payload
-        .get("members")
-        .and_then(|value| value.as_array())
-    {
-        member_values.extend(
-            members
-                .iter()
-                .filter_map(|member| member.as_str().map(ToOwned::to_owned)),
-        );
-    }
-    member_values.push(origin.to_owned());
+        .unwrap_or(origin);
 
     let mut spaces = state.spaces.lock().expect("spaces lock");
     let Some(mut entry) = spaces.get(&operation.space_id).cloned() else {
         return;
     };
-    for member in member_values {
-        if let Ok(member) = Did::new(member) {
-            if matches!(action, "member.remove" | "leave" | "ban") {
-                entry.members.remove(&member);
-            } else {
-                entry.members.insert(member);
-            }
+    if let Ok(member) = Did::new(member) {
+        if matches!(membership, Some("leave" | "ban")) {
+            entry.members.remove(&member);
+        } else if matches!(membership, Some("join" | "invite" | "knock")) {
+            entry.members.insert(member);
         }
     }
     spaces.upsert(entry);
@@ -898,12 +849,6 @@ pub fn project_federated_message(state: &AppState, origin: &str, operation: &Ope
         .payload
         .get("content")
         .cloned()
-        .or_else(|| {
-            operation
-                .payload
-                .get("body")
-                .map(|body| json!({"body": body}))
-        })
         .unwrap_or_else(|| operation.payload.clone());
     let sender = operation
         .payload

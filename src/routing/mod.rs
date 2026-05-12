@@ -1,16 +1,9 @@
 use contrix_sdk::SpaceId;
-use salvo::{
-    oapi::OpenApi,
-    prelude::*,
-};
+use salvo::{oapi::OpenApi, prelude::*};
 use serde_json::{Value, json};
 
 use crate::{
-    state::{
-        AppState,
-        DeviceInventoryRecord,
-        MessageRecord,
-    },
+    state::{AppState, DeviceInventoryRecord, MessageRecord},
     wire::{now, sync_token},
 };
 
@@ -27,16 +20,13 @@ pub mod describe;
 pub mod device;
 pub mod device_messages;
 pub mod directory;
-pub mod entity;
 pub mod events;
 pub mod extract;
 pub mod federation;
 pub mod flow;
 pub mod identity;
-pub mod index;
-pub mod key_backup_restore;
+pub mod key_backup;
 pub mod keys;
-pub mod message;
 pub mod mimi;
 pub mod moderation;
 pub mod move_anchor;
@@ -44,108 +34,16 @@ pub mod operations;
 pub mod policy;
 pub mod profile;
 pub mod projection;
-pub mod proof;
 pub mod push;
 pub mod push_outbound;
 pub mod reaction;
 pub mod read_marker;
-pub mod recovery;
 pub mod relation;
-pub mod repo;
 pub mod schema;
 pub mod space;
 pub mod sync;
 pub mod util;
-pub mod view;
 pub mod webrtc;
-pub use extract::AuthArgs;
-pub use audit::{append_audit_log, audit_events};
-pub use authz::{authz_check, create_grant, effective_grants, invites, revoke_grant};
-pub use blob::{blob_get, blob_upload};
-pub use device::{device_authorize_pairing, device_pairing_challenge};
-pub use device_messages::{
-    device_message_events_after, get_device_messages, prune_acked_device_messages,
-    send_device_messages,
-};
-pub use index::{
-    index_describe, index_entity, index_inbox, index_notifications, index_query,
-    index_reducer_debug, index_search, index_space_hierarchy, index_thread,
-};
-pub use keys::{keys_claim, keys_query, keys_upload};
-pub use flow::{
-    default_discussion_track, derived_flow_id, discussion_track_for_projection_event,
-    flow_history_visibility_for_space, flow_id_for_projection_event, flow_id_from_entity_id,
-    flow_id_from_space_id, flow_projection_for_space, message_id_from_event_id, retag_typed_id,
-};
-pub use projection::{
-    FederationIngestResult, ProjectedEventPage, append_projection_event, backfill_gap_events,
-    ensure_projected_space, event_is_visible, ingest_federation_operations,
-    load_projected_events_from_pg, operation_event_id, operation_is_visible,
-    operation_kind_records, operation_type_string, persist_projected_operation,
-    project_accepted_operations, project_federated_message, project_federation_operation,
-    project_membership_operation, projected_event_page, projection_event_from_operation,
-    projection_event_json, redaction_targets_from_events, redaction_targets_from_operations,
-    sync_timeline_message_json, truncate_gap_events,
-};
-pub use proof::{DevProofVerifier, ProofVerifier, dev_proof};
-pub use push::{
-    delete_push_rule, push_notify, push_register, push_rules, push_unregister, upsert_push_rule,
-};
-pub use push_outbound::{
-    outbound_push_bridge_cache_export, outbound_push_bridge_cache_import,
-    outbound_push_bridge_cache_invalidate, outbound_push_bridge_cache_status,
-    outbound_push_bridge_describe, outbound_push_bridge_fetch, outbound_push_bridge_resolve,
-};
-pub use sync::{
-    SyncCursor, SyncCursorError, bound_cursor, bound_cursor_with_positions, client_sync,
-    decode_sync_cursor_value, events_query, events_subscribe, normalized_strings,
-    parse_and_validate_sync_cursor, set_typing, snapshot_chunk, snapshot_head, sync_describe,
-    sync_filter_hash, sync_gap_backfill, sync_token_for_client_sync,
-};
-pub use describe::{
-    auth_bridge_describe, authz_describe, device_messages_describe, health, integration_describe,
-    key_backups_describe, policies_describe, server_describe,
-};
-pub use directory::{
-    actor_visible_to, checked_limit, demo_actors, demo_organization, directory_describe,
-    facets_match, find_demo_entity, has_accepted_contact, query_limit, query_matches,
-    resolve_handle, resolve_organization, resolve_space, search_actors, search_organizations,
-    search_spaces, search_users,
-};
-pub use entity::{create_entity, delete_entity, get_entity, list_entities, update_entity};
-pub use events::{
-    batch_get_events, effective_read_receipt_policy_for_space, events_describe, events_frontier,
-    events_query_durable_scope, events_query_durable_scope_impl, get_event, submit_event,
-};
-pub use reaction::{add_reaction, remove_reaction};
-pub use read_marker::{get_read_markers, send_read_receipt, set_read_marker};
-pub use relation::{create_relation, delete_relation, list_relations};
-pub use repo::{
-    get_commit, get_operations, list_commits, repo_describe, repo_sync, submit_commit,
-};
-pub use schema::{delete_schema, get_schema, list_schemas, register_schema};
-pub use view::{
-    create_view, facet_names_from_value, get_view, is_supported_view_kind,
-    is_supported_view_renderer, view_projection,
-};
-pub use key_backup_restore::{
-    delete_key_backup, get_key_backup, get_key_backup_restore_activity,
-    get_key_backup_restore_approval_status, get_key_backup_restore_audit_feed,
-    get_key_backup_restore_bundle, get_key_backup_restore_describe,
-    get_key_backup_restore_executor_status, get_key_backup_restore_receipt,
-    get_key_backup_restore_result, get_key_backup_restore_state_describe,
-    get_key_backup_restore_state_durability, get_key_backup_restore_state_export,
-    get_key_backup_restore_ticket, get_key_backup_restore_timeline,
-    list_key_backup_restore_state_checkpoints, list_key_backup_restore_tickets,
-    list_key_backups, post_key_backup_restore_approval_submit,
-    post_key_backup_restore_executor_complete, post_key_backup_restore_executor_enqueue,
-    post_key_backup_restore_executor_start, post_key_backup_restore_materialized_device_handoff,
-    post_key_backup_restore_start, post_key_backup_restore_state_checkpoint,
-    post_key_backup_restore_state_import, post_key_backup_restore_ticket_advance,
-    post_key_backup_restore_ticket_cancel, post_key_backup_restore_ticket_resume,
-    post_key_backup_restore_ticket_retry, put_key_backup,
-};
-pub use message::{redact_message, revise_message, send_message};
 pub use account::{
     account_me, account_principal_space, account_register, contact_request, contact_respond,
     list_contacts, principal_space_for_did,
@@ -154,32 +52,54 @@ pub use admin::admin_collection;
 pub use admin_cells::{admin_get_cell, admin_list_cells};
 pub use admin_control::{admin_emit_resync_required, admin_emit_unauthorized};
 pub use anchor_admin::{
-    admin_compact_anchor_dag, admin_get_anchor_dag, admin_get_anchorer,
-    admin_list_bottom_global, admin_list_gc_candidates, admin_list_multisig_pending,
-    admin_list_space_bottom, admin_reconfigure_anchorer, admin_repair_bottom,
-    admin_rotate_signing_key, admin_submit_multisig_partial,
+    admin_compact_anchor_dag, admin_get_anchor_dag, admin_get_anchorer, admin_list_bottom_global,
+    admin_list_gc_candidates, admin_list_multisig_pending, admin_list_space_bottom,
+    admin_reconfigure_anchorer, admin_repair_bottom, admin_rotate_signing_key,
+    admin_submit_multisig_partial,
 };
-pub use space::{
-    add_space_member, create_space, delete_space, export_space, invite_token_matches_space,
-    invite_token_space_id, is_space_deleted, next_author_seq, prune_expired_typing,
-    record_space_lifecycle_operation, remove_space_member, space_lifecycle_response,
-    space_allows_plaintext_service, space_discoverability, space_has_member, space_id_accessible,
-    space_id_visible_to, space_owner_matches, space_resolvable_to, space_search_discoverability,
-    space_search_visible_to, space_visible_to, touch_space, typing_ephemeral_for_space,
-};
+pub use audit::{append_audit_log, audit_events};
 pub use auth::{
     auth_or_render, authenticated_session, dev_login, exchange_session_grant, is_device_revoked,
     logout, revoke_device_record, session_token_hash, token_for,
 };
+pub use authz::{authz_check, create_grant, effective_grants, invites, revoke_grant};
+pub use blob::{blob_get, blob_upload};
+pub use describe::{
+    auth_bridge_describe, authz_describe, device_messages_describe, health, integration_describe,
+    key_backups_describe, policies_describe, server_describe,
+};
+pub use device::{device_authorize_pairing, device_pairing_challenge};
+pub use device_messages::{
+    device_message_events_after, get_device_messages, prune_acked_device_messages,
+    send_device_messages,
+};
+pub use directory::{
+    actor_visible_to, checked_limit, demo_actors, demo_organization, directory_describe,
+    facets_match, has_accepted_contact, query_limit, query_matches, resolve_handle,
+    resolve_organization, resolve_space, search_actors, search_organizations, search_spaces,
+    search_users,
+};
+pub use events::{
+    batch_get_events, effective_read_receipt_policy_for_space, events_describe, events_frontier,
+    events_query_durable_scope, events_query_durable_scope_impl, get_event, submit_event,
+};
+pub use extract::AuthArgs;
 pub use federation::{
     broadcast_anchor_to_peers, broadcast_move_to_peers, federation_anchors_pull,
     federation_anchors_push, federation_pull_operations, federation_push_operations,
     federation_space_members, federation_transaction, federation_verify_actor,
 };
+pub use flow::{
+    default_discussion_track, derived_flow_id, discussion_track_for_projection_event,
+    flow_history_visibility_for_space, flow_id_for_projection_event, flow_id_from_space_id,
+    flow_projection_for_space, message_id_from_event_id, retag_typed_id,
+};
 pub use identity::{
     identity_describe, identity_document, identity_log, identity_receipts, identity_resolve,
     submit_did_operation, validate_did_document_services,
 };
+pub use key_backup::{delete_key_backup, get_key_backup, list_key_backups, put_key_backup};
+pub use keys::{keys_claim, keys_query, keys_upload};
 pub use mimi::{
     mimi_consent_request, mimi_consent_update, mimi_group_info, mimi_identifiers_query,
     mimi_key_material, mimi_protocol_directory, mimi_provider_directory, mimi_proxy_download,
@@ -189,14 +109,12 @@ pub use moderation::moderation_report;
 pub use move_anchor::{admin_sign_anchor, submit_anchor, submit_move};
 pub use operations::{
     OperationPayloadSchema, PayloadRequirement, canonical_json_digest,
-    is_removed_legacy_contract_string, known_space_denies_plaintext_service,
-    message_operation_is_encrypted, operation_schema_for_kind, payload_field_present,
-    validate_canonical_json_value, validate_canonical_json_value_inner, validate_content_block,
-    validate_content_blocks, validate_device_message_payload,
-    validate_encrypted_payload_envelope, validate_entity_create_operation_payload,
-    validate_mentions, validate_message_operation_payload, validate_no_removed_legacy_contracts,
-    validate_operation_policy, validate_operation_schema, validate_operation_semantics,
-    validate_rfc3339_utc_z, value_contains_removed_legacy_contract,
+    known_space_denies_plaintext_service, message_operation_is_encrypted,
+    operation_schema_for_kind, payload_field_present, validate_canonical_json_value,
+    validate_canonical_json_value_inner, validate_content_block, validate_content_blocks,
+    validate_device_message_payload, validate_encrypted_payload_envelope, validate_mentions,
+    validate_message_operation_payload, validate_operation_policy, validate_operation_schema,
+    validate_operation_semantics, validate_rfc3339_utc_z,
 };
 pub use policy::{
     delete_policy_document, get_policy_document, is_supported_policy_effect,
@@ -204,9 +122,42 @@ pub use policy::{
     list_policy_documents, policy_check, policy_document_to_response, upsert_policy_document,
 };
 pub use profile::profile_presence;
-pub use recovery::{
-    get_recovery_discovery, get_recovery_live_snapshot, get_recovery_readiness,
-    get_recovery_stack_bundle, recovery_contract_stack,
+pub use projection::{
+    FederationIngestResult, ProjectedEventPage, accept_local_operations, append_projection_event,
+    backfill_gap_events, ensure_projected_space, event_is_visible, ingest_federation_operations,
+    load_projected_events_from_pg, operation_event_id, operation_is_visible,
+    operation_kind_records, operation_type_string, persist_projected_operation,
+    project_accepted_operations, project_federated_message, project_federation_operation,
+    project_membership_operation, projected_event_page, projection_event_from_operation,
+    projection_event_json, redaction_targets_from_events, redaction_targets_from_operations,
+    sync_timeline_message_json, truncate_gap_events,
+};
+pub use push::{
+    delete_push_rule, push_notify, push_register, push_rules, push_unregister, upsert_push_rule,
+};
+pub use push_outbound::{
+    outbound_push_bridge_cache_export, outbound_push_bridge_cache_import,
+    outbound_push_bridge_cache_invalidate, outbound_push_bridge_cache_status,
+    outbound_push_bridge_describe, outbound_push_bridge_fetch, outbound_push_bridge_resolve,
+};
+pub use reaction::{add_reaction, remove_reaction};
+pub use read_marker::{get_read_markers, send_read_receipt, set_read_marker};
+pub use relation::{create_relation, delete_relation, list_relations};
+pub use schema::{delete_schema, get_schema, list_schemas, register_schema};
+pub use space::{
+    add_space_member, create_space, delete_space, export_space, invite_token_matches_space,
+    invite_token_space_id, is_space_deleted, prune_expired_typing,
+    record_space_lifecycle_operation, remove_space_member, space_allows_plaintext_service,
+    space_discoverability, space_has_member, space_id_accessible, space_id_visible_to,
+    space_lifecycle_response, space_owner_matches, space_resolvable_to,
+    space_search_discoverability, space_search_visible_to, space_visible_to, touch_space,
+    typing_ephemeral_for_space,
+};
+pub use sync::{
+    SyncCursor, SyncCursorError, bound_cursor, bound_cursor_with_positions, client_sync,
+    decode_sync_cursor_value, events_query, events_subscribe, normalized_strings,
+    parse_and_validate_sync_cursor, set_typing, snapshot_chunk, snapshot_head, sync_describe,
+    sync_filter_hash, sync_gap_backfill, sync_token_for_client_sync,
 };
 // Re-export every util fn at the `crate::routing` level so existing callers
 // in mod.rs (and `super::name` in sibling submodules) keep working unchanged.
@@ -218,17 +169,11 @@ pub use util::{
     validate_space_id,
 };
 pub use webrtc::{
-    create_webrtc_session, delete_webrtc_session, get_webrtc_signals, ice_config,
-    put_webrtc_signal,
+    create_webrtc_session, delete_webrtc_session, get_webrtc_signals, ice_config, put_webrtc_signal,
 };
 
 #[derive(Clone)]
 pub struct ContrixOpenApiDoc(pub OpenApi);
-
-
-
-
-
 
 struct SnapshotBundle {
     snapshot_ref: String,
@@ -334,12 +279,7 @@ fn parse_snapshot_ref(snapshot_ref: &str) -> Option<(String, String)> {
     Some((space_id.to_owned(), format!("sha256:{digest}")))
 }
 
-
-
-
-
 /// Verify federation origin is a valid DID.
-
 
 fn device_inventory_to_json(device: &DeviceInventoryRecord) -> serde_json::Value {
     json!({
@@ -367,13 +307,14 @@ fn message_event(message: &MessageRecord) -> serde_json::Value {
     })
 }
 
-
-
-
 #[cfg(test)]
 mod operation_conformance_tests {
     use super::*;
-    use crate::{config::AppConfig, db::Db, kinds};
+    use crate::{
+        config::{AppConfig, ObjectStorageConfig},
+        db::Db,
+        kinds,
+    };
     use contrix_sdk::{Operation, OperationId};
     use serde_json::{Value, json};
 
@@ -391,7 +332,9 @@ mod operation_conformance_tests {
                 public_base_url: "http://server".to_owned(),
                 service_did: "did:web:soland.local".to_owned(),
                 database_url: None,
-                blob_root: std::env::temp_dir().join("soland-test-blobs"),
+                object_storage: ObjectStorageConfig::local(
+                    std::env::temp_dir().join("soland-test-blobs"),
+                ),
                 cors_allow_origin: None,
                 development_mode: true,
                 session_grant_introspection_url: None,
@@ -408,7 +351,6 @@ mod operation_conformance_tests {
                 // replay-window enforcement so they pass.
                 jws_replay_window_seconds: 0,
                 jws_replay_window_per_family: std::collections::BTreeMap::new(),
-                lattice_first: false,
                 anchorer_signing_key_seed: None,
                 use_keystore: false,
                 federation_policy: crate::config::FederationPolicy::Mesh,
@@ -472,33 +414,9 @@ mod operation_conformance_tests {
                 valid: true,
             },
             OperationVector {
-                name: "entity create",
-                kind: kinds::CX_ENTITY_CREATE,
-                payload: json!({"entity_id": "cx:entity:01904100-0000-7000-8000-ca33616973bb", "entity_type": "cx.task", "fields": {"title": "Ship"}}),
-                valid: true,
-            },
-            OperationVector {
-                name: "unsupported standard entity create",
-                kind: kinds::CX_ENTITY_CREATE,
-                payload: json!({"entity_id": "cx:entity:01904100-0000-7000-8000-7236ab93539a", "entity_type": "cx.unsupported.object"}),
-                valid: false,
-            },
-            OperationVector {
-                name: "entity update",
-                kind: kinds::CX_ENTITY_UPDATE,
-                payload: json!({"entity_id": "cx:entity:01904100-0000-7000-8000-ca33616973bb", "fields": {"status": "done"}}),
-                valid: true,
-            },
-            OperationVector {
-                name: "entity delete",
-                kind: kinds::CX_ENTITY_DELETE,
-                payload: json!({"entity_id": "cx:entity:01904100-0000-7000-8000-ca33616973bb"}),
-                valid: true,
-            },
-            OperationVector {
                 name: "relation create",
                 kind: kinds::CX_RELATION_CREATE,
-                payload: json!({"relation_id": "cx:relation:01904100-0000-7000-8000-71604d58ec0b", "relation_kind": "blocks", "from": "cx:entity:01904100-0000-7000-8000-ca33616973bb", "to": "cx:entity:01904100-0000-7000-8000-7191ddd787e5"}),
+                payload: json!({"relation_id": "cx:relation:01904100-0000-7000-8000-71604d58ec0b", "relation_kind": "blocks", "from_ref": "cx:flow:01904100-0000-7000-8000-ca33616973bb", "to_ref": "cx:morph:01904100-0000-7000-8000-7191ddd787e5"}),
                 valid: true,
             },
             OperationVector {
@@ -514,73 +432,27 @@ mod operation_conformance_tests {
                 valid: true,
             },
             OperationVector {
-                name: "legacy task move with migration profile",
-                kind: "task.move",
-                payload: json!({
-                    "migration_profile": kinds::LEGACY_KIND_MIGRATION_PROFILE,
-                    "entity_id": "cx:entity:01904100-0000-7000-8000-ca33616973bb",
-                    "group_by": "fields.status",
-                    "to_value": "done",
-                    "rank": "B"
-                }),
+                name: "member state join",
+                kind: kinds::CX_MEMBER_STATE,
+                payload: json!({"actor_id": "did:web:alice.example", "membership": "join"}),
                 valid: true,
             },
             OperationVector {
-                name: "legacy task move without migration profile",
-                kind: "task.move",
-                payload: json!({
-                    "entity_id": "cx:entity:01904100-0000-7000-8000-ca33616973bb",
-                    "group_by": "fields.status",
-                    "to_value": "done",
-                    "rank": "B"
-                }),
-                valid: false,
-            },
-            OperationVector {
-                name: "legacy relation move with migration profile",
-                kind: "relation.move",
-                payload: json!({
-                    "migration_profile": kinds::LEGACY_KIND_MIGRATION_PROFILE,
-                    "relation_id": "cx:relation:01904100-0000-7000-8000-71604d58ec0b",
-                    "from": "cx:entity:01904100-0000-7000-8000-ca33616973bb",
-                    "to": "cx:entity:01904100-0000-7000-8000-7191ddd787e5"
-                }),
+                name: "member state leave",
+                kind: kinds::CX_MEMBER_STATE,
+                payload: json!({"actor_id": "did:web:alice.example", "membership": "leave"}),
                 valid: true,
             },
             OperationVector {
-                name: "membership join",
-                kind: kinds::CX_MEMBERSHIP_JOIN,
-                payload: json!({"member": "did:web:alice.example", "membership": "join"}),
+                name: "member state ban",
+                kind: kinds::CX_MEMBER_STATE,
+                payload: json!({"actor_id": "did:web:bob.example", "membership": "ban"}),
                 valid: true,
             },
             OperationVector {
-                name: "membership leave",
-                kind: kinds::CX_MEMBERSHIP_LEAVE,
-                payload: json!({"member": "did:web:alice.example", "membership": "leave"}),
-                valid: true,
-            },
-            OperationVector {
-                name: "membership kick",
-                kind: kinds::CX_MEMBERSHIP_KICK,
-                payload: json!({"member": "did:web:bob.example", "membership": "kick"}),
-                valid: true,
-            },
-            OperationVector {
-                name: "membership ban",
-                kind: kinds::CX_MEMBERSHIP_BAN,
-                payload: json!({"member": "did:web:bob.example", "membership": "ban"}),
-                valid: true,
-            },
-            OperationVector {
-                name: "membership unban",
-                kind: kinds::CX_MEMBERSHIP_UNBAN,
-                payload: json!({"member": "did:web:bob.example", "membership": "unban"}),
-                valid: true,
-            },
-            OperationVector {
-                name: "membership knock",
-                kind: kinds::CX_MEMBERSHIP_KNOCK,
-                payload: json!({"member": "did:web:bob.example", "membership": "knock"}),
+                name: "member state knock",
+                kind: kinds::CX_MEMBER_STATE,
+                payload: json!({"actor_id": "did:web:bob.example", "membership": "knock"}),
                 valid: true,
             },
             OperationVector {
@@ -638,10 +510,7 @@ mod operation_conformance_tests {
 #[cfg(test)]
 mod canonical_conformance_vectors {
     use super::*;
-    use contrix_sdk::{
-        Audience, Commit, CommitId, CommitProofVerifier, Did, Hash, Proof,
-        canonical::{canonical_json_bytes, canonical_json_string, canonical_sha256},
-    };
+    use contrix_sdk::canonical::{canonical_json_bytes, canonical_json_string, canonical_sha256};
     use serde_json::json;
 
     // ── Canonical JSON encoding vectors ──────────────────────────────────
@@ -819,190 +688,6 @@ mod canonical_conformance_vectors {
         assert!(validate_canonical_json_value(&value).is_ok());
     }
 
-    // ── Proof verifier vectors ───────────────────────────────────────────
-
-    const TEST_SERVICE_DID: &str = "did:web:soland.local";
-
-    fn production_verifier() -> ProofVerifier {
-        ProofVerifier {
-            development_mode: false,
-            service_did: TEST_SERVICE_DID.to_owned(),
-        }
-    }
-
-    fn development_verifier() -> ProofVerifier {
-        ProofVerifier {
-            development_mode: true,
-            service_did: TEST_SERVICE_DID.to_owned(),
-        }
-    }
-
-    fn bound_production_commit(commit_id: &str) -> Commit {
-        let mut commit = Commit::new(
-            CommitId::new(commit_id).unwrap(),
-            "did:web:alice.example".to_owned(),
-            Did::new("did:web:alice.example").unwrap(),
-            1,
-        );
-        let digest = commit.commit_digest().unwrap();
-        commit.proofs.push(Proof {
-            kind: "detached_jws".to_owned(),
-            alg: "EdDSA".to_owned(),
-            verification_method: "did:web:alice.example#key-1".to_owned(),
-            payload_hash: Hash::new(digest).unwrap(),
-            created_at: commit.created_at,
-            domain: Some(TEST_SERVICE_DID.to_owned()),
-            audience: Some(Audience::Single(TEST_SERVICE_DID.to_owned())),
-            jws: "real-jws".to_owned(),
-        });
-        commit
-    }
-
-    #[test]
-    fn proof_verifier_rejects_alg_none_in_production() {
-        let verifier = production_verifier();
-        let mut commit = Commit::new(
-            CommitId::new("cx:commit:01904100-0000-7000-8000-3cacafe9f747").unwrap(),
-            "did:web:alice.example".to_owned(),
-            Did::new("did:web:alice.example").unwrap(),
-            1,
-        );
-        commit.proofs.push(Proof {
-            kind: "detached_jws".to_owned(),
-            alg: "none".to_owned(),
-            verification_method: "did:web:alice.example#key-1".to_owned(),
-            payload_hash: Hash::new(
-                "sha256:0000000000000000000000000000000000000000000000000000000000000000",
-            )
-            .unwrap(),
-            created_at: chrono::Utc::now(),
-            domain: None,
-            audience: None,
-            jws: "some-jws".to_owned(),
-        });
-        assert!(verifier.verify_commit(&commit).is_err());
-    }
-
-    #[test]
-    fn proof_verifier_rejects_dev_proof_in_production() {
-        let verifier = production_verifier();
-        let mut commit = Commit::new(
-            CommitId::new("cx:commit:01904100-0000-7000-8000-c9957daeacb6").unwrap(),
-            "did:web:alice.example".to_owned(),
-            Did::new("did:web:alice.example").unwrap(),
-            1,
-        );
-        commit.proofs.push(Proof {
-            kind: "detached_jws".to_owned(),
-            alg: "EdDSA".to_owned(),
-            verification_method: "did:web:alice.example#key-1".to_owned(),
-            payload_hash: Hash::new(
-                "sha256:0000000000000000000000000000000000000000000000000000000000000000",
-            )
-            .unwrap(),
-            created_at: chrono::Utc::now(),
-            domain: None,
-            audience: None,
-            jws: "dev-proof".to_owned(),
-        });
-        assert!(verifier.verify_commit(&commit).is_err());
-    }
-
-    #[test]
-    fn proof_verifier_accepts_dev_proof_in_development() {
-        let verifier = development_verifier();
-        let mut commit = Commit::new(
-            CommitId::new("cx:commit:01904100-0000-7000-8000-4d054756a73c").unwrap(),
-            "did:web:alice.example".to_owned(),
-            Did::new("did:web:alice.example").unwrap(),
-            1,
-        );
-        commit.proofs.push(Proof {
-            kind: "detached_jws".to_owned(),
-            alg: "none".to_owned(),
-            verification_method: "did:web:alice.example#dev".to_owned(),
-            payload_hash: Hash::new(
-                "sha256:0000000000000000000000000000000000000000000000000000000000000000",
-            )
-            .unwrap(),
-            created_at: chrono::Utc::now(),
-            domain: Some("soland-dev".to_owned()),
-            audience: None,
-            jws: "dev-proof".to_owned(),
-        });
-        assert!(verifier.verify_commit(&commit).is_ok());
-    }
-
-    #[test]
-    fn proof_verifier_rejects_empty_proofs() {
-        let verifier = development_verifier();
-        let commit = Commit::new(
-            CommitId::new("cx:commit:01904100-0000-7000-8000-b7383eb02ead").unwrap(),
-            "did:web:alice.example".to_owned(),
-            Did::new("did:web:alice.example").unwrap(),
-            1,
-        );
-        assert!(verifier.verify_commit(&commit).is_err());
-    }
-
-    #[test]
-    fn proof_verifier_validates_payload_hash_binding() {
-        let verifier = production_verifier();
-        let mut commit = Commit::new(
-            CommitId::new("cx:commit:01904100-0000-7000-8000-e7d9e824ff3e").unwrap(),
-            "did:web:alice.example".to_owned(),
-            Did::new("did:web:alice.example").unwrap(),
-            1,
-        );
-        // Use a zero hash that won't match the commit digest.
-        commit.proofs.push(Proof {
-            kind: "detached_jws".to_owned(),
-            alg: "EdDSA".to_owned(),
-            verification_method: "did:web:alice.example#key-1".to_owned(),
-            payload_hash: Hash::new(
-                "sha256:0000000000000000000000000000000000000000000000000000000000000000",
-            )
-            .unwrap(),
-            created_at: chrono::Utc::now(),
-            domain: None,
-            audience: None,
-            jws: "real-jws".to_owned(),
-        });
-        // Should fail because payload_hash doesn't match commit digest.
-        assert!(verifier.verify_commit(&commit).is_err());
-    }
-
-    #[test]
-    fn proof_verifier_accepts_bound_production_proof() {
-        let verifier = production_verifier();
-        let commit = bound_production_commit("cx:commit:01904100-0000-7000-8000-07ad306cbbfc");
-        assert!(verifier.verify_commit(&commit).is_ok());
-    }
-
-    #[test]
-    fn proof_verifier_rejects_wrong_author_binding() {
-        let verifier = production_verifier();
-        let mut commit = bound_production_commit("cx:commit:01904100-0000-7000-8000-a98b09e8a7ff");
-        commit.proofs[0].verification_method = "did:web:bob.example#key-1".to_owned();
-        assert!(verifier.verify_commit(&commit).is_err());
-    }
-
-    #[test]
-    fn proof_verifier_rejects_missing_service_binding() {
-        let verifier = production_verifier();
-        let mut commit = bound_production_commit("cx:commit:01904100-0000-7000-8000-a7e3ee676552");
-        commit.proofs[0].audience = None;
-        assert!(verifier.verify_commit(&commit).is_err());
-    }
-
-    #[test]
-    fn proof_verifier_rejects_stale_created_at_binding() {
-        let verifier = production_verifier();
-        let mut commit = bound_production_commit("cx:commit:01904100-0000-7000-8000-437db881b060");
-        commit.proofs[0].created_at = commit.created_at - chrono::Duration::minutes(6);
-        assert!(verifier.verify_commit(&commit).is_err());
-    }
-
     // ── DID service endpoint validation vectors ──────────────────────────
 
     #[test]
@@ -1042,7 +727,6 @@ mod canonical_conformance_vectors {
     }
 }
 
-
 #[endpoint]
 pub async fn contrix_openapi_yaml(depot: &mut Depot, res: &mut Response) {
     let doc = depot
@@ -1062,8 +746,6 @@ pub async fn contrix_openapi_yaml(depot: &mut Depot, res: &mut Response) {
     );
     res.write_body(spec.as_bytes().to_vec()).ok();
 }
-
-
 
 #[handler]
 pub async fn error_catcher(res: &mut Response, ctrl: &mut FlowCtrl) {
@@ -1141,7 +823,6 @@ pub async fn wait_for_sync_token(
     );
     ctrl.call_next(req, depot, res).await;
 }
-
 
 fn generate_invite_token(invite_id: &str, space_id: &str, invitee: &str) -> String {
     format!(

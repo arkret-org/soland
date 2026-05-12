@@ -1,9 +1,9 @@
 # Security policy
 
-soland is a reference Contrix v1 server. Several scaffold endpoints (recovery,
-key-backup restore, push outbound bridge, MIMI provider directory, …) return
-placeholder shapes today; production deployments must keep `_todos.md` in mind
-when assessing security posture.
+soland is a reference Contrix v1 server. Several scaffold endpoints (push
+outbound bridge, MIMI provider directory, parts of directory discovery, ...)
+return placeholder shapes today; production deployments must keep `_todos.md`
+in mind when assessing security posture.
 
 ## Supported versions
 

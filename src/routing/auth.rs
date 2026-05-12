@@ -35,17 +35,14 @@ use crate::{
     },
 };
 
-use super::{
-    append_audit_log, bearer_token, now, render_error,
-    validate_device_id, validate_did,
-};
+use super::{append_audit_log, bearer_token, now, render_error, validate_device_id, validate_did};
 
 const PRINCIPAL_SESSION_BIND_SCOPE: &str = "urn:contrix:principal-server:session.bind";
 
 #[endpoint(
     operation_id = "cx.auth.dev_login",
     tags("auth"),
-    summary = "Development bearer-token login",
+    summary = "Development bearer-token login"
 )]
 pub async fn dev_login(
     depot: &mut Depot,
@@ -129,7 +126,7 @@ pub async fn dev_login(
 #[endpoint(
     operation_id = "cx.auth.exchange_session_grant",
     tags("auth"),
-    summary = "Exchange a coauth session-grant for a principal-server bearer session",
+    summary = "Exchange a coauth session-grant for a principal-server bearer session"
 )]
 pub async fn exchange_session_grant(
     depot: &mut Depot,
@@ -318,12 +315,15 @@ pub(crate) async fn validate_session_grant_binding(
             response.status()
         )));
     }
-    let response = response.json::<SessionGrantIntrospectionResponse>().await.map_err(|error| {
-        AppError::new(
-            ErrorCode::TemporarilyUnavailable,
-            format!("invalid session grant introspection response: {error}"),
-        )
-    })?;
+    let response = response
+        .json::<SessionGrantIntrospectionResponse>()
+        .await
+        .map_err(|error| {
+            AppError::new(
+                ErrorCode::TemporarilyUnavailable,
+                format!("invalid session grant introspection response: {error}"),
+            )
+        })?;
     if !response.active || response.status != "active" {
         return Err(AppError::capability_denied(format!(
             "session grant is not active: {}",
@@ -372,7 +372,7 @@ pub(crate) async fn validate_session_grant_binding(
 #[endpoint(
     operation_id = "cx.auth.logout",
     tags("auth"),
-    summary = "Revoke the current bearer session and bound device",
+    summary = "Revoke the current bearer session and bound device"
 )]
 pub async fn logout(
     aa: super::AuthArgs,
@@ -506,11 +506,7 @@ pub fn authenticated_session(
 
 /// Persist that the device is revoked. Used by `logout` and by the
 /// device-management handlers in mod.rs.
-pub fn revoke_device_record(
-    state: &AppState,
-    actor: &str,
-    device_id: &str,
-) -> Result<(), String> {
+pub fn revoke_device_record(state: &AppState, actor: &str, device_id: &str) -> Result<(), String> {
     let revoked_at = now();
     let mut record = state
         .persistence

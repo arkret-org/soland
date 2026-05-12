@@ -1,5 +1,3 @@
-//! C10.B 续 (2026-05-09 十八轮 并行) — admin cell-state read endpoints.
-//!
 //! Surfaces a public-ish HTTP read interface over `ProjectionState::cells`
 //! so coauth (consent grants on holder principal servers) and sodmin
 //! (admin UI bottom-state inspection) can introspect the canonical cell
@@ -44,8 +42,8 @@ use super::util::query_param;
 /// Default page size for the list endpoint when `limit` is absent.
 const DEFAULT_LIST_LIMIT: usize = 100;
 /// Hard cap so a misbehaving client can't exhaust memory.
-/// TODO: surface this via AppConfig once C10.B parallel task B lands its
-/// config additions.
+/// TODO: surface this via AppConfig once the admin-cell paging config is
+/// centralized there.
 const MAX_LIST_LIMIT: usize = 1000;
 /// Sentinel space scope used when the caller hasn't provided one and the
 /// cell subject doesn't carry a recognisable space id. The MemoryCellRegistry
@@ -118,10 +116,7 @@ fn state_response_from(
 /// looks like a `cx:space:...` id (space-scoped families: `cx.component.space.*`)
 /// we use it; otherwise we fall back to a sentinel scope. The MemoryCellRegistry
 /// is space-agnostic today so this only affects future per-Space scoping.
-fn resolve_space_for_cell(
-    explicit: Option<&str>,
-    cell_id: &CellRef,
-) -> Result<SpaceId, AppError> {
+fn resolve_space_for_cell(explicit: Option<&str>, cell_id: &CellRef) -> Result<SpaceId, AppError> {
     if let Some(explicit) = explicit {
         return SpaceId::new(explicit.to_owned()).map_err(|e| {
             AppError::new(
@@ -156,7 +151,7 @@ fn resolve_space_for_cell(
 #[endpoint(
     operation_id = "cx.admin.cells.get",
     tags("admin", "cells"),
-    summary = "Get one cell's resolved state",
+    summary = "Get one cell's resolved state"
 )]
 pub async fn admin_get_cell(
     aa: AuthArgs,
@@ -252,7 +247,7 @@ pub async fn admin_get_cell(
 #[endpoint(
     operation_id = "cx.admin.cells.list",
     tags("admin", "cells"),
-    summary = "List cells matching a space + family prefix filter",
+    summary = "List cells matching a space + family prefix filter"
 )]
 pub async fn admin_list_cells(
     aa: AuthArgs,
@@ -313,16 +308,13 @@ pub async fn admin_list_cells(
     // (in-memory hash lookup), but we want one lock acquisition for the
     // whole page rather than per-cell.
     let cell_states: Vec<(CellRef, Option<CellState>)> = {
-        let proj = state
-            .projection
-            .lock()
-            .map_err(|e| {
-                AppError::new(
-                    ErrorCode::InternalError,
-                    format!("projection lock poisoned: {e}"),
-                )
-                .with_status(StatusCode::INTERNAL_SERVER_ERROR)
-            })?;
+        let proj = state.projection.lock().map_err(|e| {
+            AppError::new(
+                ErrorCode::InternalError,
+                format!("projection lock poisoned: {e}"),
+            )
+            .with_status(StatusCode::INTERNAL_SERVER_ERROR)
+        })?;
         page.into_iter()
             .map(|cell| {
                 let st = proj.cell(&cell).cloned();

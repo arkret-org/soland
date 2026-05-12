@@ -7,13 +7,10 @@
 //! - Messages: append-only, revisions form chains
 //! - Ordered lists: fractional indexing
 //!
-//! # Architecture (2026-05-09 六轮 aggressive batch)
+//! # Architecture
 //!
 //! [`ProjectionState::apply`] is a direct match-on-canonical-kind
-//! dispatcher to inline projection helpers. The legacy per-event-kind
-//! `ReducerKind` trait + 47-stub `ReducerRegistry` + macro-generated
-//! `src/reducer/kinds/` tree was deleted: it added zero value over a
-//! direct match (every stub was a thin delegate).
+//! dispatcher to inline projection helpers.
 //!
 //! The Move/Anchor receive pipeline (`POST /api/v1/moves` /
 //! `POST /api/v1/anchors`) routes through [`registry::LatticeKind`] /
@@ -49,11 +46,9 @@ pub struct ProjectionState {
     pub reactions: BTreeMap<String, BTreeMap<String, BTreeMap<String, ReactionState>>>,
     /// Read markers keyed by (space_id, actor, scope_id). LWW.
     pub read_markers: BTreeMap<(String, String, String), ReadMarkerState>,
-    /// Entities keyed by entity_id. LWW by HLC.
-    pub entities: BTreeMap<String, EntityState>,
     /// Relations keyed by relation_id. LWW by HLC.
     pub relations: BTreeMap<String, RelationState>,
-    /// C10.B (2026-05-09 九轮): structured side-band cache keyed by
+    /// Structured side-band cache keyed by
     /// `(space_id, actor_did)`. Holds the FSM state value plus `role` /
     /// `joined_at` / `updated_at` side-band data that doesn't fit in the
     /// `cx.component.member.state.v1` FSM cell itself. Reads should go
@@ -61,19 +56,17 @@ pub struct ProjectionState {
     /// [`ProjectionState::members_in_state`] / [`ProjectionState::member`]
     /// rather than touching this directly.
     ///
-    /// Replaces the legacy `memberships` (nested BTreeMap) +
-    /// `banned_members` (BTreeSet) + `knocking_members` (BTreeSet)
-    /// trio — banned / knocking are now derived via `members_in_state`
-    /// against the FSM state field, not stored as separate fields.
+    /// Banned and knocking members are derived via `members_in_state`
+    /// against the FSM state field, not stored as separate collections.
     pub members: BTreeMap<(String, String), MembershipState>,
     /// Space lifecycle state keyed by space_id.
     pub space_states: BTreeMap<String, SpaceState>,
-    /// Redacted event IDs (tombstones). Round 25 keeps this as a flat
+    /// Redacted event IDs (tombstones). This stays as a flat
     /// fast-lookup index over the parallel [`Self::redaction_cells`] map
     /// — entries sit here whenever the parallel cell is `Some(_)` and are
     /// removed when the cas-register is set back to null (un-redaction).
     pub redactions: BTreeSet<String>,
-    /// Round 25 (MAL-14) — parallel `redaction` cells keyed by the target
+    /// Parallel `redaction` cells keyed by the target
     /// event_id (subject). Each value is a [`RedactionCellValue`] holding
     /// `{redacted_at, by, reason}` per the spec, or `None` after an
     /// un-redaction. The original message entry in [`Self::messages`] is
@@ -81,7 +74,7 @@ pub struct ProjectionState {
     /// the projection layer consults this map at read time and replaces
     /// the payload with the tombstone.
     pub redaction_cells: BTreeMap<String, Option<RedactionCellValue>>,
-    /// C10.B (2026-05-09 八轮 激进模式): per-cell effective state
+    /// Per-cell effective state
     /// populated from the Move/Anchor pipeline's `apply_anchor` write-back.
     ///
     /// Keyed by canonical `CellRef` (e.g.
@@ -93,8 +86,8 @@ pub struct ProjectionState {
     /// / [`ProjectionState::cell_value`] for cell-keyed state lookups
     /// instead of scanning the durable Event store.
     ///
-    /// **Migration status (2026-05-09 十三轮)**: this map is the canonical
-    /// source for all cell-driven state in the Move/Anchor pipeline.
+    /// This map is the canonical source for all cell-driven state in the
+    /// Move/Anchor pipeline.
     /// Completed migrations:
     ///   - `read_receipt_policies` (CasRegister) — old BTreeMap deleted; read
     ///     path uses `cell_value`.
@@ -112,12 +105,12 @@ pub struct ProjectionState {
     ///     terminal). Helpers: `space_create_log` / `space_organization_cell_value`
     ///     / `space_is_destroyed` query cells directly.
     /// Durable-event-only fields (`messages` / `reactions` / `read_markers`
-    /// / `entities` / `relations` / `redactions`) stay structured per spec
+    /// / `relations` / `redactions`) stay structured per spec
     /// (those event kinds have no `cell_family` declaration).
     pub cells: BTreeMap<CellRef, CellState>,
 }
 
-/// Round 25 (MAL-14) — value of the parallel `redaction` cas-register
+/// Value of the parallel `redaction` cas-register
 /// cell on the same subject as the target message cell. Mirrors the spec
 /// shape `{redacted_at, by, reason}`.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -143,7 +136,7 @@ impl RedactionCellValue {
     }
 }
 
-/// Round 25 — projection-layer view of a single message cell. The reducer
+/// Projection-layer view of a single message cell. The reducer
 /// keeps the original [`MessageState`] intact; this view is what callers
 /// see at read time after the parallel `redaction` cell is consulted.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -196,20 +189,6 @@ pub struct ReadMarkerState {
 }
 
 #[derive(Clone, Debug)]
-pub struct EntityState {
-    pub entity_id: String,
-    pub space_id: String,
-    pub entity_type: String,
-    pub facets: Vec<String>,
-    pub title: Option<String>,
-    pub content: Option<Value>,
-    pub fields: BTreeMap<String, Value>,
-    pub deleted: bool,
-    pub created_at: chrono::DateTime<chrono::Utc>,
-    pub updated_at: chrono::DateTime<chrono::Utc>,
-}
-
-#[derive(Clone, Debug)]
 pub struct RelationState {
     pub relation_id: String,
     pub space_id: String,
@@ -226,8 +205,8 @@ pub struct RelationState {
 pub struct MembershipState {
     pub member: String,
     pub space_id: String,
-    /// Canonical FSM state value (one of `invited` / `join` / `leave` /
-    /// `kick` / `ban` / `knock`). Authoritative source is the
+    /// Canonical FSM state value (one of `invite` / `join` / `leave` /
+    /// `ban` / `knock`). Authoritative source is the
     /// `cx.component.member.state.v1` cell in
     /// [`ProjectionState::cells`]; this field is the structured-cache
     /// mirror updated on every membership transition.
@@ -265,11 +244,6 @@ pub enum ProjectionEffect {
         active: bool,
     },
     ReadMarkerUpdated(ReadMarkerState),
-    EntityCreated(EntityState),
-    EntityUpdated(EntityState),
-    EntityDeleted {
-        entity_id: String,
-    },
     RelationCreated(RelationState),
     RelationUpdated(RelationState),
     RelationDeleted {
@@ -285,24 +259,6 @@ pub enum ProjectionEffect {
         action: String,
     },
     Ignored,
-}
-
-fn extract_entity_facets(payload: &Value) -> Vec<String> {
-    match payload.get("facets") {
-        Some(Value::Array(values)) => values
-            .iter()
-            .filter_map(|value| value.as_str().map(ToOwned::to_owned))
-            .collect(),
-        Some(Value::Object(values)) => values.keys().cloned().collect(),
-        _ => Vec::new(),
-    }
-}
-
-fn field_path_to_storage_key(field_path: &str) -> String {
-    field_path
-        .strip_prefix("fields.")
-        .unwrap_or(field_path)
-        .to_owned()
 }
 
 impl ProjectionState {
@@ -358,16 +314,14 @@ impl ProjectionState {
 
     /// Apply a single operation and return the effect.
     ///
-    /// Direct match-on-canonical-kind dispatch to per-domain helpers. As
-    /// of 2026-05-09 六轮 aggressive batch this replaced the per-kind
+    /// Direct match-on-canonical-kind dispatch to per-domain helpers. This
+    /// replaced the per-kind
     /// `ReducerKind` trait + `ReducerRegistry` apparatus, which added
     /// zero value over inline match dispatch (every per-kind stub was a
     /// thin delegate to a `ProjectionState::apply_*` helper).
     ///
-    /// Round 21: when `AppConfig::lattice_first` is true the caller routes
-    /// through [`Self::apply_via_lattice_registry`] first; that path is a
-    /// stub today (the registry only maps Move/Anchor effects, not durable
-    /// Events) but the wire is in place for the eventual flip.
+    /// Durable-event projection now probes the lattice registry before
+    /// applying these inline caches, so unknown event kinds fail closed.
     pub fn apply(&mut self, operation: &Operation, _hlc: &ServerHlc) -> ProjectionEffect {
         use crate::kinds::*;
         let now = operation.created_at;
@@ -378,31 +332,13 @@ impl ProjectionState {
             Some(CX_REACTION_ADD) => self.apply_reaction_add(operation, now),
             Some(CX_REACTION_REMOVE) => self.apply_reaction_remove(operation),
             Some(CX_READ_MARKER) => self.apply_read_marker(operation, now),
-            Some(CX_ENTITY_CREATE) => self.apply_entity_create(operation, now),
-            Some(CX_ENTITY_UPDATE) => self.apply_entity_update(operation, now, _hlc),
-            Some(CX_ENTITY_DELETE) => self.apply_entity_delete(operation),
-            Some(CX_FIELD_POSITION_MOVE) | Some(CX_FIELD_POSITION_REORDER) => {
-                self.apply_entity_update(operation, now, _hlc)
-            }
-            Some(CX_LEGACY_TASK_MOVE) => {
-                if operation
-                    .payload
-                    .get("migration_profile")
-                    .and_then(Value::as_str)
-                    == Some(LEGACY_KIND_MIGRATION_PROFILE)
-                {
-                    self.apply_entity_update(operation, now, _hlc)
-                } else {
-                    ProjectionEffect::Ignored
-                }
-            }
             Some(CX_RELATION_CREATE) => self.apply_relation_create(operation, now),
             Some(CX_RELATION_UPDATE) => self.apply_relation_update(operation, now, _hlc),
             Some(CX_RELATION_DELETE) => self.apply_relation_delete(operation),
             Some(CX_CONTAINER_MOVE_ITEM) | Some(CX_CONTAINER_REBALANCE) => {
                 self.apply_container_position(operation, now)
             }
-            Some(kind) if is_membership_kind(kind) => self.apply_membership(operation, now, kind),
+            Some(CX_MEMBER_STATE) => self.apply_membership(operation, now),
             Some(kind @ (CX_SPACE_CREATE | CX_SPACE_UPDATE | CX_SPACE_DESTROY)) => {
                 self.apply_space_lifecycle(operation, now, kind)
             }
@@ -425,24 +361,21 @@ impl ProjectionState {
         operations.iter().map(|op| self.apply(op, hlc)).collect()
     }
 
-    /// Round 22 — `lattice_first` apply path. Probes the supplied
-    /// [`LatticeRegistry`] for a `cell_family` that handles this
-    /// Operation's canonical kind via the new `event_kinds()` declaration.
+    /// Probe the supplied [`LatticeRegistry`] for a `cell_family` that
+    /// handles this Operation's canonical kind via `event_kinds()`.
     ///
     /// Behaviour:
     /// - **Hit on a cell-family impl**: routes through the inline
     ///   `apply_*` helpers (the helpers ARE the projection — the registry
     ///   only validates that the spec maps this event_kind to a known
     ///   cell family, then we trust the inline dispatcher to handle the
-    ///   per-domain effect). This is the canonical path now that
-    ///   `AppConfig::lattice_first` defaults to `true` (round 22).
+    ///   per-domain effect).
     /// - **No mapping in registry but a known canonical kind**: the kind
     ///   is durable-Event-only (`cx.message.*` / `cx.reaction.*` etc.);
     ///   fall through to inline `apply()` exactly as before. No log noise.
     /// - **Unknown canonical kind**: spec compliance requires us to fail
     ///   closed — log at `error` level and project as `ProjectionEffect::
-    ///   Ignored` with `bottom = reject` semantics. Callers that want the
-    ///   permissive legacy behaviour set `lattice_first=false` in config.
+    ///   Ignored` with `bottom = reject` semantics.
     pub fn apply_via_lattice_registry(
         &mut self,
         operation: &Operation,
@@ -452,14 +385,10 @@ impl ProjectionState {
         let kind = match crate::kinds::canonical_kind_for_operation(operation) {
             Some(k) => k,
             None => {
-                // Safety fallback per round 22 mission: an Operation that
-                // doesn't even canonicalise to a known kind cannot be
-                // routed through any cell family. Drop with `bottom`
-                // semantics rather than letting it slip through silently.
                 tracing::error!(
                     object_type = %operation.object_type,
                     operation_id = %operation.operation_id,
-                    "lattice_first dispatch: unknown canonical kind for operation; \
+                    "lattice registry dispatch: unknown canonical kind for operation; \
                      dropping with bottom (reject)"
                 );
                 return ProjectionEffect::Ignored;
@@ -473,7 +402,7 @@ impl ProjectionState {
             // event kinds it owns).
             tracing::trace!(
                 event_kind = %kind,
-                "lattice_first dispatch: routed through LatticeRegistry"
+                "lattice registry dispatch: routed through LatticeRegistry"
             );
             self.apply(operation, hlc)
         } else {
@@ -512,14 +441,7 @@ impl ProjectionState {
             .payload
             .get("content")
             .cloned()
-            .unwrap_or_else(|| {
-                // Support legacy "body" field
-                if let Some(body) = operation.payload.get("body") {
-                    serde_json::json!({ "body": body })
-                } else {
-                    operation.payload.clone()
-                }
-            });
+            .unwrap_or_else(|| operation.payload.clone());
         let encrypted = operation
             .payload
             .get("encrypted")
@@ -572,9 +494,6 @@ impl ProjectionState {
             if let Some(content) = operation.payload.get("content") {
                 revised.content = content.clone();
             }
-            if let Some(body) = operation.payload.get("body") {
-                revised.content = serde_json::json!({ "body": body });
-            }
             let effect = ProjectionEffect::MessageRevised {
                 original_id: original_id.clone(),
                 revision: revised.clone(),
@@ -587,7 +506,7 @@ impl ProjectionState {
         }
     }
 
-    /// Round 25 (MAL-14) rewrite. Writes a parallel `redaction` cas-register
+    /// Writes a parallel `redaction` cas-register
     /// cell on the same subject as the target message cell, value
     /// `{redacted_at, by, reason}`. The ordered-log historical entry id
     /// (the original [`MessageState`]) is preserved unchanged; the
@@ -616,12 +535,7 @@ impl ProjectionState {
             .payload
             .get("redaction_value")
             .map(|v| v.is_null())
-            .or_else(|| {
-                operation
-                    .payload
-                    .get("unredact")
-                    .and_then(|v| v.as_bool())
-            })
+            .or_else(|| operation.payload.get("unredact").and_then(|v| v.as_bool()))
             .unwrap_or(false);
         if unredact {
             self.redaction_cells.insert(target.clone(), None);
@@ -805,120 +719,6 @@ impl ProjectionState {
         ProjectionEffect::ReadMarkerUpdated(marker)
     }
 
-    fn apply_entity_create(
-        &mut self,
-        operation: &Operation,
-        now: chrono::DateTime<chrono::Utc>,
-    ) -> ProjectionEffect {
-        let entity_id = operation
-            .payload
-            .get("entity_id")
-            .or_else(|| operation.payload.get("id"))
-            .and_then(|v| v.as_str())
-            .unwrap_or(operation.operation_id.as_str())
-            .to_owned();
-        let entity_type = operation
-            .payload
-            .get("entity_type")
-            .or_else(|| operation.payload.get("type"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("unknown")
-            .to_owned();
-        let title = operation
-            .payload
-            .get("title")
-            .and_then(|v| v.as_str())
-            .map(ToOwned::to_owned);
-        let facets = extract_entity_facets(&operation.payload);
-        let content = operation.payload.get("content").cloned();
-        let fields = operation
-            .payload
-            .get("fields")
-            .and_then(|v| v.as_object())
-            .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
-            .unwrap_or_default();
-
-        let state = EntityState {
-            entity_id: entity_id.clone(),
-            space_id: operation.space_id.to_string(),
-            entity_type,
-            facets,
-            title,
-            content,
-            fields,
-            deleted: false,
-            created_at: now,
-            updated_at: now,
-        };
-        let effect = ProjectionEffect::EntityCreated(state.clone());
-        self.entities.insert(entity_id, state);
-        effect
-    }
-
-    fn apply_entity_update(
-        &mut self,
-        operation: &Operation,
-        now: chrono::DateTime<chrono::Utc>,
-        _hlc: &ServerHlc,
-    ) -> ProjectionEffect {
-        let entity_id = operation
-            .payload
-            .get("entity_id")
-            .or_else(|| operation.payload.get("id"))
-            .and_then(|v| v.as_str())
-            .unwrap_or(operation.operation_id.as_str())
-            .to_owned();
-
-        if let Some(existing) = self.entities.get_mut(&entity_id) {
-            // LWW: merge fields
-            if let Some(title) = operation.payload.get("title").and_then(|v| v.as_str()) {
-                existing.title = Some(title.to_owned());
-            }
-            if let Some(content) = operation.payload.get("content") {
-                existing.content = Some(content.clone());
-            }
-            if let Some(fields) = operation.payload.get("fields").and_then(|v| v.as_object()) {
-                for (k, v) in fields {
-                    existing.fields.insert(k.clone(), v.clone());
-                }
-            }
-            if let Some(field_path) = operation.payload.get("group_by").and_then(|v| v.as_str())
-                && let Some(value) = operation.payload.get("to_value")
-            {
-                existing
-                    .fields
-                    .insert(field_path_to_storage_key(field_path), value.clone());
-            }
-            if let Some(rank) = operation.payload.get("rank") {
-                existing.fields.insert("rank".to_owned(), rank.clone());
-            }
-            if operation.payload.get("facets").is_some() {
-                existing.facets = extract_entity_facets(&operation.payload);
-            }
-            existing.updated_at = now;
-            ProjectionEffect::EntityUpdated(existing.clone())
-        } else {
-            // Entity doesn't exist yet; create it
-            self.apply_entity_create(operation, now)
-        }
-    }
-
-    fn apply_entity_delete(&mut self, operation: &Operation) -> ProjectionEffect {
-        let entity_id = operation
-            .payload
-            .get("entity_id")
-            .or_else(|| operation.payload.get("id"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_owned();
-
-        if let Some(entity) = self.entities.get_mut(&entity_id) {
-            entity.deleted = true;
-            entity.updated_at = operation.created_at;
-        }
-        ProjectionEffect::EntityDeleted { entity_id }
-    }
-
     fn apply_relation_create(
         &mut self,
         operation: &Operation,
@@ -941,13 +741,13 @@ impl ProjectionState {
         let from_ref = operation
             .payload
             .get("from")
-            .or_else(|| operation.payload.get("from_entity_id"))
+            .or_else(|| operation.payload.get("from_ref"))
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned);
         let to_ref = operation
             .payload
             .get("to")
-            .or_else(|| operation.payload.get("to_entity_id"))
+            .or_else(|| operation.payload.get("to_ref"))
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned);
         let fields = operation
@@ -1006,14 +806,14 @@ impl ProjectionState {
         if let Some(value) = operation
             .payload
             .get("from")
-            .or_else(|| operation.payload.get("from_entity_id"))
+            .or_else(|| operation.payload.get("from_ref"))
         {
             relation.from_ref = value.as_str().map(ToOwned::to_owned);
         }
         if let Some(value) = operation
             .payload
             .get("to")
-            .or_else(|| operation.payload.get("to_entity_id"))
+            .or_else(|| operation.payload.get("to_ref"))
         {
             relation.to_ref = value.as_str().map(ToOwned::to_owned);
         }
@@ -1069,9 +869,9 @@ impl ProjectionState {
             .and_then(|v| v.as_str())
             .unwrap_or("contains")
             .to_owned();
-        let entity_id = operation
+        let object_ref = operation
             .payload
-            .get("entity_id")
+            .get("object_ref")
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned);
         let container_id = operation
@@ -1093,7 +893,7 @@ impl ProjectionState {
                 space_id: operation.space_id.to_string(),
                 relation_kind: relation_kind.clone(),
                 from_ref: container_id.clone(),
-                to_ref: entity_id.clone(),
+                to_ref: object_ref.clone(),
                 fields: BTreeMap::new(),
                 deleted: false,
                 created_at: now,
@@ -1101,7 +901,7 @@ impl ProjectionState {
             });
         state.relation_kind = relation_kind;
         state.from_ref = container_id;
-        state.to_ref = entity_id;
+        state.to_ref = object_ref;
         state.fields.extend(fields);
         state.deleted = false;
         state.updated_at = now;
@@ -1112,26 +912,16 @@ impl ProjectionState {
         &mut self,
         operation: &Operation,
         now: chrono::DateTime<chrono::Utc>,
-        kind: &'static str,
     ) -> ProjectionEffect {
-        // C10.B (2026-05-09 九轮): map the durable cx.membership.* event
-        // kind to its canonical FSM state in `cx.component.member.state.v1`.
-        // The `unban` event clears a ban → returns the member to `invited`
-        // per the FSM transition table (ban→invited).
-        let new_state = match kind {
-            crate::kinds::CX_MEMBERSHIP_JOIN => "join",
-            crate::kinds::CX_MEMBERSHIP_LEAVE => "leave",
-            crate::kinds::CX_MEMBERSHIP_KICK => "kick",
-            crate::kinds::CX_MEMBERSHIP_BAN => "ban",
-            crate::kinds::CX_MEMBERSHIP_UNBAN => "invited",
-            crate::kinds::CX_MEMBERSHIP_KNOCK => "knock",
-            _ => return ProjectionEffect::Ignored,
+        let Some(new_state) = operation.payload.get("membership").and_then(Value::as_str) else {
+            return ProjectionEffect::Ignored;
         };
+        if !matches!(new_state, "invite" | "join" | "leave" | "ban" | "knock") {
+            return ProjectionEffect::Ignored;
+        }
         let member = operation
             .payload
-            .get("member")
-            .or_else(|| operation.payload.get("sender"))
-            .or_else(|| operation.payload.get("actor"))
+            .get("actor_id")
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_owned();
@@ -1151,11 +941,7 @@ impl ProjectionState {
             .unwrap_or("member")
             .to_owned();
         let key = (space_id.clone(), member.clone());
-        let joined_at = self
-            .members
-            .get(&key)
-            .map(|m| m.joined_at)
-            .unwrap_or(now);
+        let joined_at = self.members.get(&key).map(|m| m.joined_at).unwrap_or(now);
 
         // Update the structured cache with side-band + FSM state mirror.
         self.members.insert(
@@ -1174,9 +960,9 @@ impl ProjectionState {
         // `cx:cell:cx.component.member.state.v1:<actor_did>` — note the
         // cell_subject is `actor_id` (per-actor), not (space_id, actor)
         // composite. The Space scoping is implicit in the CellStore key.
-        if let Ok(cell_id) = contrix_sdk::CellRef::new(format!(
-            "cx:cell:cx.component.member.state.v1:{member}"
-        )) {
+        if let Ok(cell_id) =
+            contrix_sdk::CellRef::new(format!("cx:cell:cx.component.member.state.v1:{member}"))
+        {
             self.cells.insert(
                 cell_id,
                 CellState::Value(Value::String(new_state.to_owned())),
@@ -1196,7 +982,7 @@ impl ProjectionState {
         now: chrono::DateTime<chrono::Utc>,
         kind: &'static str,
     ) -> ProjectionEffect {
-        // C10.B (2026-05-09 十三轮): structured cache + cells map double-write.
+        // Keep the structured cache and the canonical cells map in sync.
         //
         // Per spec event-kind-registry, each cx.space.* lifecycle event
         // writes a distinct cell family with its own lattice:
@@ -1206,7 +992,7 @@ impl ProjectionState {
         //
         // The structured `space_states` field is the side-band cache —
         // keeps `created_at` / `updated_at` server-side timestamps and a
-        // simple `deleted` bool that consumers like `routing/index.rs`
+        // simple `deleted` bool that directory/sync consumers
         // already query. Cells map is the protocol-canonical source.
         let action = operation
             .payload
@@ -1297,11 +1083,9 @@ impl ProjectionState {
                     if let Some(t) = title.as_ref() {
                         value.insert("title".to_owned(), Value::String(t.clone()));
                     }
-                    value.insert(
-                        "updated_at".to_owned(),
-                        Value::String(now.to_rfc3339()),
-                    );
-                    self.cells.insert(cell_id, CellState::Value(Value::Object(value)));
+                    value.insert("updated_at".to_owned(), Value::String(now.to_rfc3339()));
+                    self.cells
+                        .insert(cell_id, CellState::Value(Value::Object(value)));
                 }
             }
             k if k == crate::kinds::CX_SPACE_DESTROY => {
@@ -1361,7 +1145,7 @@ impl ProjectionState {
         msgs
     }
 
-    /// Round 25 (MAL-14) — projection layer view of a single message that
+    /// Projection-layer view of a single message that
     /// consults the parallel `redaction` cell. Returns:
     ///   - `Some(view)` with `content = Some(_)` for live messages (no
     ///     redaction cell set, or set back to null);
@@ -1414,26 +1198,6 @@ impl ProjectionState {
             .unwrap_or_default()
     }
 
-    /// Get entities for a space, optionally filtered by type and required facets.
-    pub fn entities_for_space(
-        &self,
-        space_id: &str,
-        entity_type: Option<&str>,
-        facets: &[String],
-    ) -> Vec<&EntityState> {
-        self.entities
-            .values()
-            .filter(|e| {
-                e.space_id == space_id
-                    && !e.deleted
-                    && entity_type.is_none_or(|t| e.entity_type == t)
-                    && facets
-                        .iter()
-                        .all(|facet| e.facets.iter().any(|value| value == facet))
-            })
-            .collect()
-    }
-
     /// Get relations for a space, optionally filtered by kind.
     pub fn relations_for_space(&self, space_id: &str, kind: Option<&str>) -> Vec<&RelationState> {
         self.relations
@@ -1444,17 +1208,14 @@ impl ProjectionState {
             .collect()
     }
 
-    /// Get members of a space currently in `state="join"` (the legacy
-    /// `members_of_space` semantic — banned/kicked/left members are
-    /// excluded). For state-specific queries use [`members_in_state`].
+    /// Get members of a space currently in `state="join"`.
+    /// For state-specific queries use [`members_in_state`].
     pub fn members_of_space(&self, space_id: &str) -> Vec<&MembershipState> {
         self.members_in_state(space_id, "join")
     }
 
     /// All `MembershipState` entries for a Space whose FSM state matches
-    /// `state` (`invited` / `join` / `leave` / `kick` / `ban` / `knock`).
-    /// Replaces the legacy `banned_members` / `knocking_members` BTreeSets:
-    /// query `members_in_state(space, "ban")` / `members_in_state(space, "knock")`.
+    /// `state` (`invite` / `join` / `leave` / `ban` / `knock`).
     pub fn members_in_state(&self, space_id: &str, state: &str) -> Vec<&MembershipState> {
         self.members
             .iter()
@@ -1474,16 +1235,15 @@ impl ProjectionState {
     /// state. The cell_subject is the actor_did per spec
     /// `cx.component.member.state.v1` cell_family declaration.
     pub fn member_fsm_state(&self, actor_did: &str) -> Option<String> {
-        let cell_id = contrix_sdk::CellRef::new(format!(
-            "cx:cell:cx.component.member.state.v1:{actor_did}"
-        ))
-        .ok()?;
+        let cell_id =
+            contrix_sdk::CellRef::new(format!("cx:cell:cx.component.member.state.v1:{actor_did}"))
+                .ok()?;
         self.cell_value(&cell_id)
             .and_then(Value::as_str)
             .map(ToOwned::to_owned)
     }
 
-    // ── C10.B (2026-05-09 八轮) cell-keyed query helpers ──
+    // ── Cell-keyed query helpers ──
 
     /// Read the effective `cx.space.read_receipt_policy` value out of the
     /// cells map. Returns `None` when:
@@ -1497,7 +1257,7 @@ impl ProjectionState {
         self.cell_value(&cell_id)
     }
 
-    // ── C10.B (2026-05-09 十三轮) space lifecycle cell helpers ──
+    // ── Space lifecycle cell helpers ──
 
     /// Read the effective `cx.component.space.organization.v1` cas-register
     /// value (mutable Space metadata: owner, title, updated_at). Returns
@@ -1515,10 +1275,9 @@ impl ProjectionState {
     /// space's genesis history. Returns `None` for spaces with no create
     /// events (e.g. before first projection) or `Bottom` state.
     pub fn space_create_log(&self, space_id: &str) -> Option<&[Value]> {
-        let cell_id = contrix_sdk::CellRef::new(format!(
-            "cx:cell:cx.component.space.create.v1:{space_id}"
-        ))
-        .ok()?;
+        let cell_id =
+            contrix_sdk::CellRef::new(format!("cx:cell:cx.component.space.create.v1:{space_id}"))
+                .ok()?;
         match self.cells.get(&cell_id)? {
             CellState::Value(Value::Array(entries)) => Some(entries.as_slice()),
             _ => None,
@@ -1530,9 +1289,9 @@ impl ProjectionState {
     /// Equivalent to checking `space_states[space_id].deleted` but reads
     /// from the protocol-canonical cells map source.
     pub fn space_is_destroyed(&self, space_id: &str) -> bool {
-        let Ok(cell_id) = contrix_sdk::CellRef::new(format!(
-            "cx:cell:cx.component.space.destroy.v1:{space_id}"
-        )) else {
+        let Ok(cell_id) =
+            contrix_sdk::CellRef::new(format!("cx:cell:cx.component.space.destroy.v1:{space_id}"))
+        else {
             return false;
         };
         matches!(self.cells.get(&cell_id), Some(CellState::Value(_)))
@@ -1573,7 +1332,10 @@ mod tests {
 
         let msgs = state.messages_for_space("cx:space:01904100-0000-7000-8000-cfc039892036");
         assert_eq!(msgs.len(), 1);
-        assert_eq!(msgs[0].event_id, "cx:event:01904100-0000-7000-8000-caaa6a15bce1");
+        assert_eq!(
+            msgs[0].event_id,
+            "cx:event:01904100-0000-7000-8000-caaa6a15bce1"
+        );
     }
 
     #[test]
@@ -1612,12 +1374,18 @@ mod tests {
                 .messages_for_space("cx:space:01904100-0000-7000-8000-cfc039892036")
                 .is_empty()
         );
-        assert!(state.redactions.contains("cx:event:01904100-0000-7000-8000-caaa6a15bce1"));
-        // Round 25: the original MessageState is preserved (only the
+        assert!(
+            state
+                .redactions
+                .contains("cx:event:01904100-0000-7000-8000-caaa6a15bce1")
+        );
+        // The original MessageState is preserved (only the
         // parallel cell + flat redactions index move).
-        assert!(state
-            .messages
-            .contains_key("cx:event:01904100-0000-7000-8000-caaa6a15bce1"));
+        assert!(
+            state
+                .messages
+                .contains_key("cx:event:01904100-0000-7000-8000-caaa6a15bce1")
+        );
         let cell = state
             .redaction_cells
             .get("cx:event:01904100-0000-7000-8000-caaa6a15bce1")
@@ -1628,7 +1396,7 @@ mod tests {
         assert_eq!(cell.reason.as_deref(), Some("wrong room"));
     }
 
-    // ── Round 25 MAL-14 redact reducer rewrite tests ─────────────────
+    // ── Redaction reducer tests ───────────────────────────────────────
 
     fn redact_make_message(state: &mut ProjectionState, hlc: &ServerHlc, event_id: &str) {
         state.apply(
@@ -1793,7 +1561,12 @@ mod tests {
             ),
             &hlc,
         );
-        assert_eq!(state.reactions_for_event("cx:event:01904100-0000-7000-8000-caaa6a15bce1").len(), 1);
+        assert_eq!(
+            state
+                .reactions_for_event("cx:event:01904100-0000-7000-8000-caaa6a15bce1")
+                .len(),
+            1
+        );
 
         state.apply(
             &make_operation(
@@ -1807,170 +1580,11 @@ mod tests {
             ),
             &hlc,
         );
-        assert_eq!(state.reactions_for_event("cx:event:01904100-0000-7000-8000-caaa6a15bce1").len(), 0);
-    }
-
-    #[test]
-    fn entity_crud_lifecycle() {
-        let mut state = ProjectionState::new();
-        let hlc = ServerHlc::new("test");
-
-        state.apply(
-            &make_operation(
-                crate::kinds::CX_ENTITY_CREATE,
-                "cx:space:01904100-0000-7000-8000-cfc039892036",
-                serde_json::json!({
-                    "entity_id": "cx:entity:01904100-0000-7000-8000-ca33616973bb",
-                    "entity_type": "task",
-                    "title": "Do the thing"
-                }),
-            ),
-            &hlc,
-        );
-        assert_eq!(
-            state.entities_for_space("cx:space:01904100-0000-7000-8000-cfc039892036", None, &[]).len(),
-            1
-        );
-
-        state.apply(
-            &make_operation(
-                crate::kinds::CX_ENTITY_DELETE,
-                "cx:space:01904100-0000-7000-8000-cfc039892036",
-                serde_json::json!({
-                    "entity_id": "cx:entity:01904100-0000-7000-8000-ca33616973bb"
-                }),
-            ),
-            &hlc,
-        );
-        assert_eq!(
-            state.entities_for_space("cx:space:01904100-0000-7000-8000-cfc039892036", None, &[]).len(),
-            0
-        );
-    }
-
-    #[test]
-    fn entity_facets_filter_queries() {
-        let mut state = ProjectionState::new();
-        let hlc = ServerHlc::new("test");
-
-        state.apply(
-            &make_operation(
-                crate::kinds::CX_ENTITY_CREATE,
-                "cx:space:01904100-0000-7000-8000-cfc039892036",
-                serde_json::json!({
-                    "entity_id": "cx:entity:01904100-0000-7000-8000-ca33616973bb",
-                    "entity_type": "task",
-                    "facets": ["stateful", "rankable", "renderable"],
-                    "title": "Do the thing"
-                }),
-            ),
-            &hlc,
-        );
-
         assert_eq!(
             state
-                .entities_for_space(
-                    "cx:space:01904100-0000-7000-8000-cfc039892036",
-                    None,
-                    &["stateful".to_owned(), "rankable".to_owned()]
-                )
-                .len(),
-            1
-        );
-        assert_eq!(
-            state
-                .entities_for_space("cx:space:01904100-0000-7000-8000-cfc039892036", None, &["documentable".to_owned()])
+                .reactions_for_event("cx:event:01904100-0000-7000-8000-caaa6a15bce1")
                 .len(),
             0
-        );
-    }
-
-    #[test]
-    fn canonical_field_position_move_updates_entity_position_fields() {
-        let mut state = ProjectionState::new();
-        let hlc = ServerHlc::new("test");
-
-        state.apply(
-            &make_operation(
-                crate::kinds::CX_ENTITY_CREATE,
-                "cx:space:01904100-0000-7000-8000-cfc039892036",
-                serde_json::json!({
-                    "entity_id": "cx:entity:01904100-0000-7000-8000-ca33616973bb",
-                    "entity_type": "task",
-                    "fields": {"status": "todo", "rank": "F"}
-                }),
-            ),
-            &hlc,
-        );
-        state.apply(
-            &make_operation(
-                crate::kinds::CX_FIELD_POSITION_MOVE,
-                "cx:space:01904100-0000-7000-8000-cfc039892036",
-                serde_json::json!({
-                    "entity_id": "cx:entity:01904100-0000-7000-8000-ca33616973bb",
-                    "view_id": "cx:view:01904100-0000-7000-8000-3bbd26004285",
-                    "group_by": "fields.status",
-                    "to_value": "done",
-                    "rank": "V"
-                }),
-            ),
-            &hlc,
-        );
-
-        let entity = state.entities.get("cx:entity:01904100-0000-7000-8000-ca33616973bb").unwrap();
-        assert_eq!(entity.fields["status"], "done");
-        assert_eq!(entity.fields["rank"], "V");
-    }
-
-    #[test]
-    fn legacy_task_move_requires_migration_profile() {
-        let mut state = ProjectionState::new();
-        let hlc = ServerHlc::new("test");
-
-        state.apply(
-            &make_operation(
-                crate::kinds::CX_ENTITY_CREATE,
-                "cx:space:01904100-0000-7000-8000-cfc039892036",
-                serde_json::json!({
-                    "entity_id": "cx:entity:01904100-0000-7000-8000-ca33616973bb",
-                    "entity_type": "task",
-                    "fields": {"status": "todo"}
-                }),
-            ),
-            &hlc,
-        );
-        state.apply(
-            &make_operation(
-                crate::kinds::CX_LEGACY_TASK_MOVE,
-                "cx:space:01904100-0000-7000-8000-cfc039892036",
-                serde_json::json!({
-                    "entity_id": "cx:entity:01904100-0000-7000-8000-ca33616973bb",
-                    "group_by": "fields.status",
-                    "to_value": "blocked",
-                    "rank": "M"
-                }),
-            ),
-            &hlc,
-        );
-        assert_eq!(state.entities["cx:entity:01904100-0000-7000-8000-ca33616973bb"].fields["status"], "todo");
-
-        state.apply(
-            &make_operation(
-                crate::kinds::CX_LEGACY_TASK_MOVE,
-                "cx:space:01904100-0000-7000-8000-cfc039892036",
-                serde_json::json!({
-                    "migration_profile": crate::kinds::LEGACY_KIND_MIGRATION_PROFILE,
-                    "entity_id": "cx:entity:01904100-0000-7000-8000-ca33616973bb",
-                    "group_by": "fields.status",
-                    "to_value": "blocked",
-                    "rank": "M"
-                }),
-            ),
-            &hlc,
-        );
-        assert_eq!(
-            state.entities["cx:entity:01904100-0000-7000-8000-ca33616973bb"].fields["status"],
-            "blocked"
         );
     }
 
@@ -1981,30 +1595,40 @@ mod tests {
 
         state.apply(
             &make_operation(
-                crate::kinds::CX_MEMBERSHIP_JOIN,
+                crate::kinds::CX_MEMBER_STATE,
                 "cx:space:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
-                    "member": "did:web:bob",
-                    "action": "join",
+                    "actor_id": "did:web:bob",
+                    "membership": "join",
                     "role": "member"
                 }),
             ),
             &hlc,
         );
-        assert_eq!(state.members_of_space("cx:space:01904100-0000-7000-8000-cfc039892036").len(), 1);
+        assert_eq!(
+            state
+                .members_of_space("cx:space:01904100-0000-7000-8000-cfc039892036")
+                .len(),
+            1
+        );
 
         state.apply(
             &make_operation(
-                crate::kinds::CX_MEMBERSHIP_LEAVE,
+                crate::kinds::CX_MEMBER_STATE,
                 "cx:space:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
-                    "member": "did:web:bob",
-                    "action": "leave"
+                    "actor_id": "did:web:bob",
+                    "membership": "leave"
                 }),
             ),
             &hlc,
         );
-        assert_eq!(state.members_of_space("cx:space:01904100-0000-7000-8000-cfc039892036").len(), 0);
+        assert_eq!(
+            state
+                .members_of_space("cx:space:01904100-0000-7000-8000-cfc039892036")
+                .len(),
+            0
+        );
     }
 
     #[test]
@@ -2045,10 +1669,13 @@ mod tests {
             .iter()
             .find(|m| m.event_id == "cx:event:01904100-0000-7000-8000-c4daaba541fc")
             .unwrap();
-        assert_eq!(revision.revision_of.as_deref(), Some("cx:event:01904100-0000-7000-8000-caaa6a15bce1"));
+        assert_eq!(
+            revision.revision_of.as_deref(),
+            Some("cx:event:01904100-0000-7000-8000-caaa6a15bce1")
+        );
     }
 
-    // ── C10.B (2026-05-09 八轮) cells map tests ──
+    // ── Cells map tests ──
 
     #[test]
     fn cell_value_returns_none_for_unwritten_cell() {
@@ -2066,7 +1693,8 @@ mod tests {
         use contrix_sdk::lattice::CellState;
         let mut state = ProjectionState::new();
         let cell_id = contrix_sdk::CellRef::new(
-            "cx:cell:cx.component.space.policy.v1:cx:space:01904100-0000-7000-8000-cfc039892036".to_owned(),
+            "cx:cell:cx.component.space.policy.v1:cx:space:01904100-0000-7000-8000-cfc039892036"
+                .to_owned(),
         )
         .unwrap();
         // Manually insert a Bottom state — represents concurrent conflict.
@@ -2079,18 +1707,17 @@ mod tests {
             details: Some(serde_json::json!({"reason": "concurrent set"})),
             escalated_at: None,
         };
-        state.cells.insert(cell_id.clone(), CellState::Bottom(bottom));
+        state
+            .cells
+            .insert(cell_id.clone(), CellState::Bottom(bottom));
 
         // cell() returns Some(Bottom)
-        assert!(matches!(
-            state.cell(&cell_id),
-            Some(CellState::Bottom(_))
-        ));
+        assert!(matches!(state.cell(&cell_id), Some(CellState::Bottom(_))));
         // cell_value() filters out Bottom.
         assert!(state.cell_value(&cell_id).is_none());
     }
 
-    // ── C10.B (2026-05-09 九轮) memberships → cells + structured cache ──
+    // ── Membership cache + FSM cell tests ──
 
     #[test]
     fn membership_join_writes_both_structured_cache_and_fsm_cell() {
@@ -2099,10 +1726,11 @@ mod tests {
 
         state.apply(
             &make_operation(
-                crate::kinds::CX_MEMBERSHIP_JOIN,
+                crate::kinds::CX_MEMBER_STATE,
                 "cx:space:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
-                    "member": "did:web:alice",
+                    "actor_id": "did:web:alice",
+                    "membership": "join",
                     "role": "admin"
                 }),
             ),
@@ -2111,7 +1739,10 @@ mod tests {
 
         // Structured cache populated with state="join" + role="admin".
         let m = state
-            .member("cx:space:01904100-0000-7000-8000-cfc039892036", "did:web:alice")
+            .member(
+                "cx:space:01904100-0000-7000-8000-cfc039892036",
+                "did:web:alice",
+            )
             .expect("member entry should exist after join");
         assert_eq!(m.state, "join");
         assert_eq!(m.role, "admin");
@@ -2122,25 +1753,31 @@ mod tests {
             Some("join")
         );
 
-        // members_of_space (legacy semantics: only `state="join"`) sees Alice.
-        assert_eq!(state.members_of_space("cx:space:01904100-0000-7000-8000-cfc039892036").len(), 1);
+        // members_of_space only returns entries in `state="join"`.
+        assert_eq!(
+            state
+                .members_of_space("cx:space:01904100-0000-7000-8000-cfc039892036")
+                .len(),
+            1
+        );
     }
 
     #[test]
-    fn ban_then_unban_round_trips_through_fsm_states() {
+    fn ban_then_invite_round_trips_through_fsm_states() {
         let mut state = ProjectionState::new();
         let hlc = ServerHlc::new("test");
 
-        // join → ban → unban (back to invited) — full FSM lifecycle.
-        for kind in [
-            crate::kinds::CX_MEMBERSHIP_JOIN,
-            crate::kinds::CX_MEMBERSHIP_BAN,
-        ] {
+        // join -> ban -> invite — full FSM lifecycle.
+        for membership in ["join", "ban"] {
             state.apply(
                 &make_operation(
-                    kind,
+                    crate::kinds::CX_MEMBER_STATE,
                     "cx:space:01904100-0000-7000-8000-cfc039892036",
-                    serde_json::json!({"member": "did:web:bob", "role": "member"}),
+                    serde_json::json!({
+                        "actor_id": "did:web:bob",
+                        "membership": membership,
+                        "role": "member"
+                    }),
                 ),
                 &hlc,
             );
@@ -2148,28 +1785,51 @@ mod tests {
 
         // After ban, Bob is in `members_in_state("ban")` and NOT in
         // `members_of_space()` (which filters by `state="join"`).
-        assert_eq!(state.members_in_state("cx:space:01904100-0000-7000-8000-cfc039892036", "ban").len(), 1);
-        assert_eq!(state.members_of_space("cx:space:01904100-0000-7000-8000-cfc039892036").len(), 0);
-        assert_eq!(state.member_fsm_state("did:web:bob").as_deref(), Some("ban"));
+        assert_eq!(
+            state
+                .members_in_state("cx:space:01904100-0000-7000-8000-cfc039892036", "ban")
+                .len(),
+            1
+        );
+        assert_eq!(
+            state
+                .members_of_space("cx:space:01904100-0000-7000-8000-cfc039892036")
+                .len(),
+            0
+        );
+        assert_eq!(
+            state.member_fsm_state("did:web:bob").as_deref(),
+            Some("ban")
+        );
 
-        // Unban → invited (per FSM ban→invited transition).
+        // invite returns the actor to the invite state.
         state.apply(
             &make_operation(
-                crate::kinds::CX_MEMBERSHIP_UNBAN,
+                crate::kinds::CX_MEMBER_STATE,
                 "cx:space:01904100-0000-7000-8000-cfc039892036",
-                serde_json::json!({"member": "did:web:bob"}),
+                serde_json::json!({"actor_id": "did:web:bob", "membership": "invite"}),
             ),
             &hlc,
         );
         assert_eq!(
             state.member_fsm_state("did:web:bob").as_deref(),
-            Some("invited")
+            Some("invite")
         );
-        assert_eq!(state.members_in_state("cx:space:01904100-0000-7000-8000-cfc039892036", "ban").len(), 0);
-        assert_eq!(state.members_in_state("cx:space:01904100-0000-7000-8000-cfc039892036", "invited").len(), 1);
+        assert_eq!(
+            state
+                .members_in_state("cx:space:01904100-0000-7000-8000-cfc039892036", "ban")
+                .len(),
+            0
+        );
+        assert_eq!(
+            state
+                .members_in_state("cx:space:01904100-0000-7000-8000-cfc039892036", "invite")
+                .len(),
+            1
+        );
     }
 
-    // ── C10.B (2026-05-09 十三轮) space_states 双层 tests ──
+    // ── Space lifecycle cache + cell tests ──
 
     #[test]
     fn space_create_writes_both_structured_cache_and_ordered_log_cell() {
@@ -2268,7 +1928,10 @@ mod tests {
         // Cell-keyed query returns true.
         assert!(state.space_is_destroyed("cx:space:01904100-0000-7000-8000-cfc039892036"));
         // Structured cache mirror agrees.
-        let space = state.space_states.get("cx:space:01904100-0000-7000-8000-cfc039892036").unwrap();
+        let space = state
+            .space_states
+            .get("cx:space:01904100-0000-7000-8000-cfc039892036")
+            .unwrap();
         assert!(space.deleted);
     }
 
@@ -2286,17 +1949,25 @@ mod tests {
                 &hlc,
             );
         }
-        let log = state.space_create_log("cx:space:01904100-0000-7000-8000-cfc039892036").unwrap();
+        let log = state
+            .space_create_log("cx:space:01904100-0000-7000-8000-cfc039892036")
+            .unwrap();
         assert_eq!(log.len(), 2, "ordered-log should accumulate entries");
     }
 
     #[test]
     fn space_organization_cell_returns_none_for_uncreated_space() {
         let state = ProjectionState::new();
-        assert!(state
-            .space_organization_cell_value("cx:space:01904100-0000-7000-8000-0f863ed7d6d2")
-            .is_none());
-        assert!(state.space_create_log("cx:space:01904100-0000-7000-8000-0f863ed7d6d2").is_none());
+        assert!(
+            state
+                .space_organization_cell_value("cx:space:01904100-0000-7000-8000-0f863ed7d6d2")
+                .is_none()
+        );
+        assert!(
+            state
+                .space_create_log("cx:space:01904100-0000-7000-8000-0f863ed7d6d2")
+                .is_none()
+        );
         assert!(!state.space_is_destroyed("cx:space:01904100-0000-7000-8000-0f863ed7d6d2"));
     }
 
@@ -2306,16 +1977,20 @@ mod tests {
         let hlc = ServerHlc::new("test");
         state.apply(
             &make_operation(
-                crate::kinds::CX_MEMBERSHIP_KNOCK,
+                crate::kinds::CX_MEMBER_STATE,
                 "cx:space:01904100-0000-7000-8000-cfc039892036",
-                serde_json::json!({"member": "did:web:carol"}),
+                serde_json::json!({"actor_id": "did:web:carol", "membership": "knock"}),
             ),
             &hlc,
         );
-        let knockers = state.members_in_state("cx:space:01904100-0000-7000-8000-cfc039892036", "knock");
+        let knockers =
+            state.members_in_state("cx:space:01904100-0000-7000-8000-cfc039892036", "knock");
         assert_eq!(knockers.len(), 1);
         assert_eq!(knockers[0].member, "did:web:carol");
-        assert_eq!(state.member_fsm_state("did:web:carol").as_deref(), Some("knock"));
+        assert_eq!(
+            state.member_fsm_state("did:web:carol").as_deref(),
+            Some("knock")
+        );
     }
 
     #[test]
@@ -2337,10 +2012,18 @@ mod tests {
         let value = state
             .read_receipt_policy_cell_value("cx:space:01904100-0000-7000-8000-cfc039892036")
             .expect("policy cell should resolve");
-        assert_eq!(value.get("disclosure").and_then(Value::as_str), Some("required"));
-        assert_eq!(value.get("visibility").and_then(Value::as_str), Some("members"));
         assert_eq!(
-            value.get("scope_overrides_allowed").and_then(Value::as_bool),
+            value.get("disclosure").and_then(Value::as_str),
+            Some("required")
+        );
+        assert_eq!(
+            value.get("visibility").and_then(Value::as_str),
+            Some("members")
+        );
+        assert_eq!(
+            value
+                .get("scope_overrides_allowed")
+                .and_then(Value::as_bool),
             Some(false)
         );
     }

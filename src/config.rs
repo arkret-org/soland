@@ -6,7 +6,7 @@ pub struct AppConfig {
     pub public_base_url: String,
     pub service_did: String,
     pub database_url: Option<String>,
-    pub blob_root: PathBuf,
+    pub object_storage: ObjectStorageConfig,
     pub cors_allow_origin: Option<String>,
     pub development_mode: bool,
     pub session_grant_introspection_url: Option<String>,
@@ -18,14 +18,14 @@ pub struct AppConfig {
     /// handler surfaces this as `starid_profile.enabled` so admin / sibling services
     /// can discover the configured profile even when the upstream is down.
     pub starid_webvh_resolver_url: Option<String>,
-    /// C36.2 — runtime liveness flag for the `did:webvh` resolver chain entry.
+    /// Runtime liveness flag for the `did:webvh` resolver chain entry.
     /// `true` only when [`probe_starid_describe`] succeeded at boot; consumed by
     /// [`build_did_resolver_chain`] to decide whether to actually mount the
     /// `DidWebvhResolver` in the chain. Decoupling intent (`starid_webvh_resolver_url`)
     /// from liveness (`starid_webvh_resolver_active`) prevents the boot probe
-    /// from silently disabling profile discovery — the bug surfaced in C36.2.
+    /// from silently disabling profile discovery.
     pub starid_webvh_resolver_active: bool,
-    /// C10.B (2026-05-09 十二轮) JWS replay protection window in seconds.
+    /// JWS replay protection window in seconds.
     /// Move and Anchor signatures whose signed `hlc` is older than
     /// `now - replay_window_seconds` OR newer than `now +
     /// replay_window_seconds` are rejected.
@@ -35,7 +35,7 @@ pub struct AppConfig {
     /// using fixed-time fixtures rely on this; production deployments
     /// MUST keep this > 0).
     pub jws_replay_window_seconds: u64,
-    /// C10.B (2026-05-09 十四轮) per-cell-family replay-window overrides.
+    /// Per-cell-family replay-window overrides.
     /// Some cell families have different freshness requirements than the
     /// global default — e.g. `cx.component.anchorer.v1` (Space-wide
     /// authority cell) needs a much tighter window than chat messages.
@@ -52,9 +52,7 @@ pub struct AppConfig {
     /// - `cx.component.capability.delegate.v1` → 120s
     /// - `cx.component.capability.derived.v1` → 120s
     pub jws_replay_window_per_family: std::collections::BTreeMap<&'static str, u64>,
-    /// Round 22 default-true `lattice_first` flag (see doc comment above).
-    pub lattice_first: bool,
-    /// Round 22 — base64-encoded 32-byte ed25519 seed for the AnchorerWorker
+    /// Base64-encoded 32-byte ed25519 seed for the AnchorerWorker
     /// signing identity (env `SERVERX_ANCHORER_SIGNING_KEY`). When `Some(_)`
     /// the worker uses a deterministic ed25519-dalek signing key derived
     /// from this seed; when `None` the worker boots with an in-process
@@ -65,7 +63,7 @@ pub struct AppConfig {
     /// — the env var holds the raw seed, base64-standard-padded; bad shape
     /// fails fast at startup with a clear error.
     pub anchorer_signing_key_seed: Option<[u8; 32]>,
-    /// Round 24 — when true, the AnchorerWorker loads its signing seed
+    /// When true, the AnchorerWorker loads its signing seed
     /// from the SDK platform `KeyStore` (`platform_default_keystore("soland.<service_did>")`)
     /// at boot and stores rotated keys back into the same KeyStore. When
     /// false (default), only `anchorer_signing_key_seed` (env-loaded) is
@@ -79,7 +77,7 @@ pub struct AppConfig {
     ///
     /// Behavior when `use_keystore=false`: identical to round 22.
     pub use_keystore: bool,
-    /// MAL-12 (round 25) — federation routing policy. The on-the-wire
+    /// Federation routing policy. The on-the-wire
     /// shape is identical for both variants (Move broadcast push / Anchor
     /// pull-push under `/api/v1/federation/{push-operations,anchors,...}`);
     /// the policy only changes which set of peer endpoints we talk to.
@@ -90,13 +88,74 @@ pub struct AppConfig {
     /// - [`FederationPolicy::Hub`] — push only to a single configured
     ///   upstream hub; rely on the hub for outbound dissemination.
     pub federation_policy: FederationPolicy,
-    /// MAL-12 (round 25) — peer DIDs the federation outbound layer
+    /// Peer DIDs the federation outbound layer
     /// considers as broadcast targets (mesh) or hub upstream (hub). Empty
     /// disables federation outbound.
     pub federation_peers: Vec<String>,
 }
 
-/// MAL-12 (round 25) — federation routing policy. Selected at config-load
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ObjectStorageConfig {
+    Local {
+        root: PathBuf,
+        prefix: String,
+    },
+    S3Compatible {
+        bucket: String,
+        region: String,
+        endpoint: Option<String>,
+        access_key_id: Option<String>,
+        secret_access_key: Option<String>,
+        session_token: Option<String>,
+        prefix: String,
+        force_path_style: bool,
+        allow_http: bool,
+        skip_signature: bool,
+    },
+}
+
+impl ObjectStorageConfig {
+    pub fn local(root: impl Into<PathBuf>) -> Self {
+        Self::Local {
+            root: root.into(),
+            prefix: String::new(),
+        }
+    }
+
+    pub fn backend_name(&self) -> &'static str {
+        match self {
+            Self::Local { .. } => "local",
+            Self::S3Compatible { .. } => "s3",
+        }
+    }
+
+    pub fn log_target(&self) -> String {
+        match self {
+            Self::Local { root, prefix } => {
+                if prefix.is_empty() {
+                    root.display().to_string()
+                } else {
+                    format!("{}:{}", root.display(), prefix)
+                }
+            }
+            Self::S3Compatible {
+                bucket,
+                endpoint,
+                prefix,
+                ..
+            } => {
+                let endpoint = endpoint.as_deref().unwrap_or("aws-region-endpoint");
+                if prefix.is_empty() {
+                    format!("{endpoint}/{bucket}")
+                } else {
+                    format!("{endpoint}/{bucket}/{prefix}")
+                }
+            }
+        }
+    }
+}
+
+/// Federation routing policy. Selected at config-load
 /// time via `SERVERX_FEDERATION_POLICY` env var (`mesh` | `hub`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FederationPolicy {
@@ -124,7 +183,7 @@ impl FederationPolicy {
     }
 }
 
-/// Round 22 — provenance tag for the AnchorerWorker's signing key. Surfaced
+/// Provenance tag for the AnchorerWorker's signing key. Surfaced
 /// on each signing pass so logs flag the dev-only ephemeral path.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AnchorerSigningKeyOrigin {
@@ -138,7 +197,7 @@ pub enum AnchorerSigningKeyOrigin {
 }
 
 impl AppConfig {
-    /// Spec-recommended per-cell-family replay-window overrides (十四轮).
+    /// Spec-recommended per-cell-family replay-window overrides.
     /// Tighter windows for safety-critical / authority cells; the global
     /// default still applies to everything else.
     pub fn default_replay_overrides() -> std::collections::BTreeMap<&'static str, u64> {
@@ -157,7 +216,7 @@ impl AppConfig {
     pub fn from_env_and_args() -> anyhow::Result<Self> {
         let bind = arg_value("--bind")
             .or_else(|| std::env::var("SERVERX_BIND").ok())
-            .unwrap_or_else(|| "127.0.0.1:8787".to_owned())
+            .unwrap_or_else(|| "127.0.0.1:8698".to_owned())
             .parse()?;
         let public_base_url =
             std::env::var("SERVERX_PUBLIC_BASE_URL").unwrap_or_else(|_| format!("http://{bind}"));
@@ -166,9 +225,7 @@ impl AppConfig {
         let database_url = std::env::var("DATABASE_URL")
             .ok()
             .filter(|value| !value.trim().is_empty());
-        let blob_root = std::env::var("SERVERX_BLOB_ROOT")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| std::env::temp_dir().join("soland-blobs"));
+        let object_storage = load_object_storage_config()?;
         let cors_allow_origin = std::env::var("SERVERX_CORS_ALLOW_ORIGIN").ok();
         // Default to a production-safe posture (no `dev_login`, no relaxed DID
         // validation, no admin snapshot endpoints). Local development must opt
@@ -188,12 +245,6 @@ impl AppConfig {
             .ok()
             .and_then(|value| value.trim().parse::<u64>().ok())
             .unwrap_or(300);
-        // Round 22: `lattice_first` defaults to **true** — full LatticeRegistry
-        // takeover for ProjectionState::apply. Override to `false` only for
-        // incident-response triage of event_kind classifier regressions.
-        let lattice_first = std::env::var("SERVERX_LATTICE_FIRST")
-            .map(|value| !matches!(value.as_str(), "0" | "false" | "FALSE" | "no"))
-            .unwrap_or(true);
         let anchorer_signing_key_seed = load_anchorer_signing_key_seed()?;
         let use_keystore = std::env::var("SERVERX_USE_KEYSTORE")
             .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes"))
@@ -218,21 +269,20 @@ impl AppConfig {
             public_base_url,
             service_did,
             database_url,
-            blob_root,
+            object_storage,
             cors_allow_origin,
             development_mode,
             session_grant_introspection_url,
             session_grant_introspection_bearer,
             did_resolver_allow_methods,
             starid_webvh_resolver_url,
-            // C36.2 — boot probe in `main.rs` flips this to true on success.
+            // `main.rs` flips this to true after a successful boot probe.
             // Default false: until proven reachable, the resolver is not mounted
             // even if the URL is configured. Intent (URL) and liveness (active)
             // are independent.
             starid_webvh_resolver_active: false,
             jws_replay_window_seconds,
             jws_replay_window_per_family: Self::default_replay_overrides(),
-            lattice_first,
             anchorer_signing_key_seed,
             use_keystore,
             federation_policy,
@@ -241,7 +291,65 @@ impl AppConfig {
     }
 }
 
-/// Round 22 — load the AnchorerWorker signing seed from
+fn load_object_storage_config() -> anyhow::Result<ObjectStorageConfig> {
+    let backend = env_non_empty("SERVERX_OBJECT_STORAGE_BACKEND")
+        .unwrap_or_else(|| "local".to_owned())
+        .to_ascii_lowercase();
+    let prefix = normalized_storage_prefix(env_non_empty("SERVERX_OBJECT_STORAGE_PREFIX"));
+    match backend.as_str() {
+        "local" | "fs" | "filesystem" => {
+            let root = env_non_empty("SERVERX_OBJECT_STORAGE_LOCAL_ROOT")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| std::env::temp_dir().join("soland-objects"));
+            Ok(ObjectStorageConfig::Local { root, prefix })
+        }
+        "s3" | "s3-compatible" | "s3_compatible" => {
+            let bucket = required_env("SERVERX_OBJECT_STORAGE_S3_BUCKET")?;
+            let region = env_non_empty("SERVERX_OBJECT_STORAGE_S3_REGION")
+                .unwrap_or_else(|| "us-east-1".to_owned());
+            let access_key_id = env_non_empty("SERVERX_OBJECT_STORAGE_S3_ACCESS_KEY_ID");
+            let secret_access_key = env_non_empty("SERVERX_OBJECT_STORAGE_S3_SECRET_ACCESS_KEY");
+            if access_key_id.is_some() != secret_access_key.is_some() {
+                anyhow::bail!(
+                    "SERVERX_OBJECT_STORAGE_S3_ACCESS_KEY_ID and SERVERX_OBJECT_STORAGE_S3_SECRET_ACCESS_KEY must be set together"
+                );
+            }
+            Ok(ObjectStorageConfig::S3Compatible {
+                bucket,
+                region,
+                endpoint: env_non_empty("SERVERX_OBJECT_STORAGE_S3_ENDPOINT"),
+                access_key_id,
+                secret_access_key,
+                session_token: env_non_empty("SERVERX_OBJECT_STORAGE_S3_SESSION_TOKEN"),
+                prefix,
+                force_path_style: env_bool("SERVERX_OBJECT_STORAGE_S3_FORCE_PATH_STYLE")?
+                    .unwrap_or(true),
+                allow_http: env_bool("SERVERX_OBJECT_STORAGE_S3_ALLOW_HTTP")?.unwrap_or(false),
+                skip_signature: env_bool("SERVERX_OBJECT_STORAGE_S3_SKIP_SIGNATURE")?
+                    .unwrap_or(false),
+            })
+        }
+        other => anyhow::bail!(
+            "SERVERX_OBJECT_STORAGE_BACKEND must be local or s3-compatible, got {other}"
+        ),
+    }
+}
+
+fn normalized_storage_prefix(prefix: Option<String>) -> String {
+    prefix
+        .map(|value| {
+            value
+                .trim()
+                .trim_matches('/')
+                .split('/')
+                .filter(|part| !part.is_empty())
+                .collect::<Vec<_>>()
+                .join("/")
+        })
+        .unwrap_or_default()
+}
+
+/// Load the AnchorerWorker signing seed from
 /// `SERVERX_ANCHORER_SIGNING_KEY` (base64-standard encoded 32 bytes).
 /// Returns `Ok(None)` when the env var is absent or empty (the
 /// AnchorerWorker then mints an ephemeral key with a sticky-warn).
@@ -294,6 +402,21 @@ fn env_non_empty(name: &str) -> Option<String> {
         .ok()
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty())
+}
+
+fn required_env(name: &str) -> anyhow::Result<String> {
+    env_non_empty(name).ok_or_else(|| anyhow::anyhow!("{name} is required"))
+}
+
+fn env_bool(name: &str) -> anyhow::Result<Option<bool>> {
+    let Some(value) = env_non_empty(name) else {
+        return Ok(None);
+    };
+    match value.to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Ok(Some(true)),
+        "0" | "false" | "no" | "off" => Ok(Some(false)),
+        _ => anyhow::bail!("{name} must be true or false"),
+    }
 }
 
 fn arg_value(name: &str) -> Option<String> {

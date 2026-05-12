@@ -1,16 +1,15 @@
+use arc_swap::ArcSwap;
+use ed25519_dalek::SigningKey;
+use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::{Arc, Mutex},
     time::{SystemTime, UNIX_EPOCH},
 };
-use arc_swap::ArcSwap;
-use ed25519_dalek::SigningKey;
-use sha2::{Digest, Sha256};
 use tokio::sync::broadcast;
 
 use contrix_sdk::{
-    Did, SpaceId, SpaceSearchEntry, SpaceSearchIndex,
-    identity::CompositeDidResolver,
+    Did, SpaceId, SpaceSearchEntry, SpaceSearchIndex, identity::CompositeDidResolver,
 };
 use serde_json::{Value, json};
 
@@ -19,25 +18,22 @@ use crate::authz::AuthzEngine;
 use crate::config::{AnchorerSigningKeyOrigin, AppConfig};
 use crate::db::Db;
 use crate::hlc::ServerHlc;
+use crate::object_storage::{ObjectStorage, build_object_storage};
 use crate::persistence::{MemoryPersistenceStore, PersistenceStore, PgPersistenceStore};
 use crate::reducer::ProjectionState;
-use crate::repo::{MemoryRepoAdapter, PgRepoAdapter, RepoAdapterRef};
 
-// C10.B (2026-05-09 十八轮 并行) — `did_resolver_chain.rs` lives at
-// `src/did_resolver_chain.rs`; declared here as a submodule of `state`
-// (rather than top-level via `lib.rs`) because the parallel task A in
-// this branch holds the `lib.rs` edit lock. Re-exported as
-// `crate::state::did_resolver_chain` and used immediately below in
-// `AppState::new`.
+// `did_resolver_chain.rs` lives at `src/did_resolver_chain.rs`; declare it as
+// a submodule of `state` so `AppState::new` can construct the resolver chain
+// locally and re-export it as `crate::state::did_resolver_chain`.
 #[path = "did_resolver_chain.rs"]
 pub mod did_resolver_chain;
 
-/// C10.B (2026-05-09 十轮 / 十五轮): broadcast payload for the
+/// broadcast payload for the
 /// [`AppState::event_broadcast`] channel. Subscribers filter by
 /// `space_id` first, then dispatch on `kind` to produce the right
 /// NDJSON frame.
 ///
-/// 十五轮 added control-frame variants alongside the original `Event`
+/// added control-frame variants alongside the original `Event`
 /// (mid-stream control frames per spec):
 ///   - `EpochRotation` — emitted when `cx.component.mls.epoch.v1` cell
 ///     changes (E2EE epoch shift; clients MUST re-fetch keys)
@@ -82,20 +78,19 @@ pub enum EventNotificationKind {
     },
     /// Per-subscriber drift / corrupted-cursor signal. Clients SHOULD
     /// drop local cache + restart subscription with no `from`.
-    ResyncRequired {
-        reason: String,
-    },
+    ResyncRequired { reason: String },
     /// Session token invalidated mid-stream — client MUST close.
-    Unauthorized {
-        reason: String,
-    },
+    Unauthorized { reason: String },
 }
 
 impl EventNotification {
     pub fn event(space_id: String, cursor: String, event_payload: Value) -> Self {
         Self {
             space_id,
-            kind: EventNotificationKind::Event { cursor, event_payload },
+            kind: EventNotificationKind::Event {
+                cursor,
+                event_payload,
+            },
         }
     }
 
@@ -116,7 +111,10 @@ impl EventNotification {
     pub fn frontier(space_id: String, anchor_id: String, state_root: String) -> Self {
         Self {
             space_id,
-            kind: EventNotificationKind::Frontier { state_root, anchor_id },
+            kind: EventNotificationKind::Frontier {
+                state_root,
+                anchor_id,
+            },
         }
     }
 }
@@ -127,25 +125,18 @@ impl EventNotification {
 /// facets that don't fit the trait shape (in-memory `SpaceSearchIndex`,
 /// `CompositeDidResolver`, `ProjectionState`).
 ///
-/// C32.5 (2026-05-10) — round 28: the four key-backup-restore scaffold
-/// `Arc<Mutex<BTreeMap<...>>>` fields are gone. Every key-backup CRUD +
-/// restore-ticket FSM read/write now flows through
-/// `persistence.key_backups()` (Pg-backed in production, `MemoryKeyBackupStore`
-/// in tests). See `routing/key_backup_restore.rs` for the
-/// `pending → approved → executed → revoked` state machine and the
-/// `cas_ticket_status` fence-token CAS.
 #[derive(Clone)]
 pub struct AppState {
     pub config: AppConfig,
     pub db: Db,
-    pub repo: RepoAdapterRef,
     pub persistence: Arc<dyn PersistenceStore>,
+    pub object_storage: Arc<dyn ObjectStorage>,
     pub hlc: ServerHlc,
     pub projection: Arc<Mutex<ProjectionState>>,
     pub authz: AuthzEngine,
     pub spaces: Arc<Mutex<SpaceSearchIndex>>,
     pub did_resolver: Arc<Mutex<CompositeDidResolver>>,
-    /// Move/Anchor/Lattice runtime stores (C10.B MAL-2..MAL-5).
+    /// Move/Anchor/Lattice runtime stores.
     /// In-memory backends from the SDK; production deployments will
     /// swap these for Pg-backed implementations behind the same trait
     /// surface (`MoveStore` / `AnchorStore` / `CellStore` / `CellRegistry`).
@@ -153,8 +144,8 @@ pub struct AppState {
     pub anchor_store: Arc<contrix_sdk::state_res::MemoryAnchorStore>,
     pub cell_store: Arc<contrix_sdk::state_res::MemoryCellStore>,
     pub cell_registry: Arc<contrix_sdk::state_res::MemoryCellRegistry>,
-    /// C10.B (2026-05-09 十轮): live event notification channel for
-    /// `cx.events.subscribe` long-poll/SSE streaming. Writers
+    /// Live event notification channel for `cx.events.subscribe`
+    /// long-poll/SSE streaming. Writers
     /// (`routing::projection::project_accepted_operations`,
     /// `routing::move_anchor::submit_anchor`,
     /// `crate::anchorer::AnchorerWorker`) broadcast each accepted
@@ -165,7 +156,7 @@ pub struct AppState {
     /// `RecvError::Lagged` and emit a `dropped` control frame to nudge
     /// the client to resync.
     pub event_broadcast: broadcast::Sender<EventNotification>,
-    /// Round 22: persistent Ed25519 signing key for AnchorerWorker +
+    /// Persistent Ed25519 signing key for AnchorerWorker +
     /// admin endpoints (`admin_reconfigure_anchorer`, `admin_repair_bottom`).
     /// Loaded from `AppConfig::anchorer_signing_key_seed` at boot when set;
     /// otherwise minted from `sha256(service_did || nanos_since_epoch)` and
@@ -175,13 +166,13 @@ pub struct AppState {
     /// Shared across all signing paths so the AnchorerWorker, the
     /// `service_admin_signer` admin shortcut, and the threshold partial-
     /// signature coordinator all bind to the **same** key/DID identity.
-    /// Round 24 (rotate-signing-key): swapped lock-free via [`ArcSwap`] so
+    /// Swapped lock-free via [`ArcSwap`] so
     /// the `POST /api/admin/v1/spaces/{id}/anchorer/rotate-signing-key`
     /// endpoint can publish a fresh ed25519 seed without tearing concurrent
     /// signing passes. Readers acquire the current key via `load_full()`
     /// (returns `Arc<SigningKey>`); writers `store(...)` a new `Arc`.
     pub anchorer_signing_key: Arc<ArcSwap<SigningKey>>,
-    /// Round 24: origin tag is also rotated. Stored alongside the key
+    /// The origin tag rotates with the key. Stored alongside it
     /// behind a [`Mutex`] (one-shot writes from the rotation path are not
     /// in the hot read path; the per-pass diagnostic helper just snapshots).
     pub anchorer_signing_key_origin: Arc<Mutex<AnchorerSigningKeyOrigin>>,
@@ -310,9 +301,7 @@ pub struct CanonicalEventRecord {
 pub struct ProjectionEventRecord {
     pub event_id: String,
     pub space_id: String,
-    /// Canonical Contrix event kind (e.g. `cx.message.create`). Spec
-    /// M-01 collapsed the legacy `event_type / input_event_type /
-    /// canonical_event_type` triple into this single field.
+    /// Canonical Contrix event kind (e.g. `cx.message.create`).
     pub event_kind: String,
     pub operation_type: String,
     pub operation_id: Option<String>,
@@ -334,8 +323,10 @@ pub struct DeviceMessageRecord {
 
 #[derive(Clone, Debug)]
 pub struct BlobRecord {
-    pub bytes: Vec<u8>,
-    pub storage_path: Option<std::path::PathBuf>,
+    pub sha256: String,
+    pub size_bytes: i64,
+    pub storage_backend: String,
+    pub storage_key: String,
     pub media_type: String,
     pub filename: Option<String>,
     pub space_id: Option<String>,
@@ -393,7 +384,7 @@ pub struct OutboundPushBridgeCacheRecord {
     pub contract_digest: String,
     pub fetched_at: chrono::DateTime<chrono::Utc>,
     pub remote_contract: Value,
-    /// Explicit trust state for the cached snapshot. C33.1 introduces
+    /// Explicit trust state for the cached snapshot. This introduces
     /// `pending` / `trusted` / `revoked` so `verify_contract_freshness` can
     /// fail-closed when a snapshot has not yet been promoted to trusted.
     pub trust_level: String,
@@ -429,7 +420,7 @@ pub struct WebrtcSignalRecord {
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
-/// MAL-11 (round 23) — one row of the persistent multisig coordinator buffer.
+/// One row of the persistent multisig coordinator buffer.
 ///
 /// Holds an in-flight pending Anchor that is awaiting threshold partial
 /// signatures. The `partials` map is keyed by signer DID → submitted partial
@@ -453,14 +444,14 @@ pub struct MultisigPendingRecord {
     pub partials: BTreeMap<String, Value>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub expires_at: chrono::DateTime<chrono::Utc>,
-    /// MAL-11 leader-election (round 25): node id of the watchdog instance
-    /// currently leasing this row, or `None` when unclaimed. The lease is
-    /// valid until [`MultisigPendingRecord::claimed_until`].
+    /// Node id of the watchdog instance currently leasing this row, or
+    /// `None` when unclaimed. The lease is valid until
+    /// [`MultisigPendingRecord::claimed_until`].
     pub claimed_by_node_id: Option<String>,
     /// Lease expiry timestamp. A row is "claimable" when this is `None` or
     /// in the past.
     pub claimed_until: Option<chrono::DateTime<chrono::Utc>>,
-    /// Round 28 — partition-tolerant fencing token. Every successful
+    /// Partition-tolerant fencing token. Every successful
     /// `try_claim` bumps this counter; a stale leader (whose lease was
     /// silently superseded after a network partition healed) carries the
     /// pre-bump value so its post-aggregate `delete_with_fence` /
@@ -482,7 +473,7 @@ pub struct PolicyDocumentRecord {
 }
 
 impl AppState {
-    /// Round 22 / 24: Snapshot the persistent Ed25519 signing key shared by
+    /// Snapshot the persistent Ed25519 signing key shared by
     /// the AnchorerWorker and all admin signing paths. Returns a fresh
     /// `Arc<SigningKey>` (lock-free `ArcSwap::load_full`) so callers can
     /// hold the snapshot for the duration of a signing pass even if the
@@ -491,7 +482,7 @@ impl AppState {
         self.anchorer_signing_key.load_full()
     }
 
-    /// Round 22: Origin tag for diagnostics (Configured / Ephemeral / Rotated).
+    /// Origin tag for diagnostics (`Configured` / `Ephemeral` / `Rotated`).
     pub fn anchorer_signing_key_origin(&self) -> AnchorerSigningKeyOrigin {
         *self
             .anchorer_signing_key_origin
@@ -499,7 +490,7 @@ impl AppState {
             .expect("anchorer signing key origin lock")
     }
 
-    /// Round 24: hot-rotate the AnchorerWorker signing key. Writers swap
+    /// Hot-rotate the AnchorerWorker signing key. Writers swap
     /// the `ArcSwap` and update the origin tag in lockstep. Returns the
     /// newly-published `Arc<SigningKey>` for callers (the rotate-signing-key
     /// endpoint uses it to compute the resulting did:key kid).
@@ -519,7 +510,8 @@ impl AppState {
     pub fn new(config: AppConfig, db: Db) -> Self {
         let mut spaces = SpaceSearchIndex::new();
         let mut demo = SpaceSearchEntry::new(
-            SpaceId::new("cx:space:0196419b-0000-7000-8000-000000000000").expect("valid demo space id"),
+            SpaceId::new("cx:space:0196419b-0000-7000-8000-000000000000")
+                .expect("valid demo space id"),
             "Contrix Demo Space",
         );
         demo.description = Some("Shared demo Space served by soland".to_owned());
@@ -532,6 +524,9 @@ impl AppState {
         let now = chrono::Utc::now();
 
         let service_did = config.service_did.clone();
+
+        let object_storage = build_object_storage(&config.object_storage)
+            .expect("object storage backend initializes");
 
         let persistence: Arc<dyn PersistenceStore> = db
             .pool
@@ -559,10 +554,10 @@ impl AppState {
             created_at: now,
             updated_at: now,
         };
-        if let Err(error) = persistence
-            .space_meta()
-            .put("cx:space:0196419b-0000-7000-8000-000000000000", &demo_space_meta)
-        {
+        if let Err(error) = persistence.space_meta().put(
+            "cx:space:0196419b-0000-7000-8000-000000000000",
+            &demo_space_meta,
+        ) {
             tracing::warn!(%error, "failed to seed demo space metadata into persistence store");
         }
 
@@ -572,15 +567,15 @@ impl AppState {
             }
         }
 
-        // C10.B (2026-05-09 十八轮 并行) — build the production DID
-        // resolver chain BEFORE the struct literal so we can still
+        // Build the production DID resolver chain before the struct literal
+        // so we can still
         // borrow `&config` for the helper before `config` itself is
         // moved into `Self.config`.
         let did_resolver = Arc::new(Mutex::new(
             self::did_resolver_chain::build_did_resolver_chain(&config),
         ));
 
-        // Round 22/24 — derive the AnchorerWorker's Ed25519 signing key.
+        // Derive the AnchorerWorker's Ed25519 signing key.
         // Resolution order:
         //   1. KeyStore (when `use_keystore=true` and the platform store
         //      has a previously-persisted seed under our id) → Configured.
@@ -589,88 +584,84 @@ impl AppState {
         //      to the KeyStore on first boot so subsequent restarts skip
         //      the env path.
         //   3. SHA-256(service_did || boot_nanos) → Ephemeral.
-        let (signing_seed, anchorer_signing_key_origin) = (|| -> ([u8; 32], AnchorerSigningKeyOrigin) {
-            if config.use_keystore {
-                let app_id = format!("soland.{service_did}");
-                let key_id = format!("contrix:signer:soland-anchorer:{service_did}");
-                let store = contrix_sdk::keystore::platform_default_keystore(&app_id);
-                if let Ok(bytes) = store.load(&key_id) {
-                    if bytes.len() == 32 {
-                        let mut seed = [0u8; 32];
-                        seed.copy_from_slice(&bytes);
-                        tracing::info!(%key_id, "loaded anchorer signing seed from platform KeyStore");
+        let (signing_seed, anchorer_signing_key_origin) =
+            (|| -> ([u8; 32], AnchorerSigningKeyOrigin) {
+                if config.use_keystore {
+                    let app_id = format!("soland.{service_did}");
+                    let key_id = format!("contrix:signer:soland-anchorer:{service_did}");
+                    let store = contrix_sdk::keystore::platform_default_keystore(&app_id);
+                    if let Ok(bytes) = store.load(&key_id) {
+                        if bytes.len() == 32 {
+                            let mut seed = [0u8; 32];
+                            seed.copy_from_slice(&bytes);
+                            tracing::info!(%key_id, "loaded anchorer signing seed from platform KeyStore");
+                            return (seed, AnchorerSigningKeyOrigin::Configured);
+                        }
+                        tracing::warn!(%key_id, len = bytes.len(),
+                        "platform KeyStore returned non-32-byte payload; falling back");
+                    }
+                    if let Some(seed) = config.anchorer_signing_key_seed {
+                        if let Err(error) = store.store(&key_id, &seed) {
+                            tracing::warn!(%error, %key_id,
+                            "failed to seed platform KeyStore from env-supplied seed");
+                        } else {
+                            tracing::info!(%key_id,
+                            "persisted env-supplied anchorer seed into platform KeyStore");
+                        }
                         return (seed, AnchorerSigningKeyOrigin::Configured);
                     }
-                    tracing::warn!(%key_id, len = bytes.len(),
-                        "platform KeyStore returned non-32-byte payload; falling back");
-                }
-                if let Some(seed) = config.anchorer_signing_key_seed {
+                    // Mint + persist a one-shot seed.
+                    let mut seed = [0u8; 32];
+                    getrandom_seed(&mut seed);
                     if let Err(error) = store.store(&key_id, &seed) {
                         tracing::warn!(%error, %key_id,
-                            "failed to seed platform KeyStore from env-supplied seed");
+                        "failed to persist freshly-minted anchorer seed to KeyStore");
                     } else {
                         tracing::info!(%key_id,
-                            "persisted env-supplied anchorer seed into platform KeyStore");
+                        "minted + persisted fresh anchorer seed via platform KeyStore");
                     }
                     return (seed, AnchorerSigningKeyOrigin::Configured);
                 }
-                // Mint + persist a one-shot seed.
-                let mut seed = [0u8; 32];
-                getrandom_seed(&mut seed);
-                if let Err(error) = store.store(&key_id, &seed) {
-                    tracing::warn!(%error, %key_id,
-                        "failed to persist freshly-minted anchorer seed to KeyStore");
-                } else {
-                    tracing::info!(%key_id,
-                        "minted + persisted fresh anchorer seed via platform KeyStore");
+                if let Some(seed) = config.anchorer_signing_key_seed {
+                    return (seed, AnchorerSigningKeyOrigin::Configured);
                 }
-                return (seed, AnchorerSigningKeyOrigin::Configured);
-            }
-            if let Some(seed) = config.anchorer_signing_key_seed {
-                return (seed, AnchorerSigningKeyOrigin::Configured);
-            }
-            let mut hasher = Sha256::new();
-            hasher.update(b"soland:anchorer-ephemeral:");
-            hasher.update(service_did.as_bytes());
-            let boot_nanos = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map(|d| d.as_nanos() as u64)
-                .unwrap_or(0);
-            hasher.update(boot_nanos.to_le_bytes());
-            let seed: [u8; 32] = hasher.finalize().into();
-            (seed, AnchorerSigningKeyOrigin::Ephemeral)
-        })();
+                let mut hasher = Sha256::new();
+                hasher.update(b"soland:anchorer-ephemeral:");
+                hasher.update(service_did.as_bytes());
+                let boot_nanos = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map(|d| d.as_nanos() as u64)
+                    .unwrap_or(0);
+                hasher.update(boot_nanos.to_le_bytes());
+                let seed: [u8; 32] = hasher.finalize().into();
+                (seed, AnchorerSigningKeyOrigin::Ephemeral)
+            })();
 
-        let anchorer_signing_key = Arc::new(ArcSwap::from_pointee(SigningKey::from_bytes(
-            &signing_seed,
-        )));
+        let anchorer_signing_key =
+            Arc::new(ArcSwap::from_pointee(SigningKey::from_bytes(&signing_seed)));
         let anchorer_signing_key_origin = Arc::new(Mutex::new(anchorer_signing_key_origin));
 
         Self {
             config,
-            repo: db
-                .pool
-                .as_ref()
-                .map(|pool| Arc::new(PgRepoAdapter::new(pool.clone())) as RepoAdapterRef)
-                .unwrap_or_else(|| Arc::new(MemoryRepoAdapter::new())),
             hlc: ServerHlc::new(&service_did),
             projection: Arc::new(Mutex::new(ProjectionState::new())),
             authz: AuthzEngine::new(),
             db,
             persistence,
+            object_storage,
             spaces: Arc::new(Mutex::new(spaces)),
             did_resolver,
             move_store: Arc::new(contrix_sdk::state_res::MemoryMoveStore::default()),
             anchor_store: Arc::new(contrix_sdk::state_res::MemoryAnchorStore::default()),
             cell_store: Arc::new(contrix_sdk::state_res::MemoryCellStore::default()),
-            // C10.B (2026-05-09 五轮 激进模式): bulk-register all 35
-            // soland LatticeKind impls into the SDK cell registry so the
+            // Register all soland LatticeKind impls into the SDK cell
+            // registry so the
             // Move/Anchor receive pipeline resolves every spec-declared
             // cell family. Replaces the SDK's built-in defaults (which
             // covered only ~10 generic families).
             cell_registry: Arc::new(crate::reducer::lattice_kinds::build_sdk_cell_registry()),
-            // C10.B (2026-05-09 十轮): live event broadcast for
-            // cx.events.subscribe streaming. Capacity 1024 events; readers
+            // Live event broadcast for cx.events.subscribe streaming.
+            // Capacity 1024 events; readers
             // falling behind get `Lagged` and emit `dropped` control frames.
             event_broadcast: broadcast::channel::<EventNotification>(1024).0,
             anchorer_signing_key,
@@ -714,20 +705,12 @@ fn core_schema_records(
         .collect::<BTreeMap<_, _>>();
 
     for (schema_id, kind, name) in [
-        ("cx.schema.entity.generic.v1", "entity", "Generic entity"),
-        ("cx.schema.entity.task.v1", "entity", "Task entity"),
-        ("cx.schema.entity.channel.v1", "entity", "Channel entity"),
-        ("cx.schema.entity.topic.v1", "entity", "Topic entity"),
-        (
-            "cx.schema.entity.memory_semantic.v1",
-            "entity",
-            "Semantic memory entity",
-        ),
-        (
-            "cx.schema.entity.agent_run.v1",
-            "entity",
-            "Agent run entity",
-        ),
+        ("cx.schema.space.v1", "space", "Space object"),
+        ("cx.schema.flow.v1", "flow", "Flow object"),
+        ("cx.schema.place.v1", "place", "Place object"),
+        ("cx.schema.morph.v1", "morph", "Morph object"),
+        ("cx.schema.relation.v1", "relation", "Relation object"),
+        ("cx.schema.view.v1", "view", "View object"),
         ("cx.schema.event.message.v1", "event", "Message event"),
         ("cx.schema.event.reaction.v1", "event", "Reaction event"),
         ("cx.schema.event.redaction.v1", "event", "Redaction event"),
@@ -752,16 +735,6 @@ fn core_schema_records(
             "Reaction operation",
         ),
         (
-            "cx.schema.operation.entity_create.v1",
-            "operation",
-            "Entity create operation",
-        ),
-        (
-            "cx.schema.operation.entity_mutation.v1",
-            "operation",
-            "Entity mutation operation",
-        ),
-        (
             "cx.schema.operation.relation_create.v1",
             "operation",
             "Relation create operation",
@@ -770,6 +743,16 @@ fn core_schema_records(
             "cx.schema.operation.relation_mutation.v1",
             "operation",
             "Relation mutation operation",
+        ),
+        (
+            "cx.schema.operation.container_move_item.v1",
+            "operation",
+            "Container move item operation",
+        ),
+        (
+            "cx.schema.operation.container_rebalance.v1",
+            "operation",
+            "Container rebalance operation",
         ),
         (
             "cx.schema.operation.membership.v1",
@@ -805,8 +788,7 @@ fn core_schema_records(
                 definition: json!({
                     "$id": schema_id,
                     "type": "object",
-                    "additionalProperties": true,
-                    "x-contrix-compatibility": "soland-local-schema-alias"
+                    "additionalProperties": true
                 }),
                 active: true,
                 created_at: now,
@@ -841,7 +823,7 @@ fn schema_name_from_id(schema_id: &str) -> String {
         .replace(['.', '_'], " ")
 }
 
-/// Round 24 — fill `out` with cryptographically secure random bytes via
+/// Fill `out` with cryptographically secure random bytes via
 /// `rand::OsRng`. Used by both the boot path (one-shot KeyStore mint) and
 /// the rotate-signing-key endpoint.
 pub(crate) fn getrandom_seed(out: &mut [u8; 32]) {

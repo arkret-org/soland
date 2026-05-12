@@ -1,7 +1,7 @@
 //! Concrete [`LatticeKind`] implementations for the spec-normative cell
 //! families.
 //!
-//! C10.B (2026-05-09 aggressive batch): per-cell-family Lattice runtime,
+//! Per-cell-family Lattice runtime,
 //! one impl per `cell_family` declared in
 //! `contrix-spec/spec/v1/artifacts/registry/event-kind-registry.json`. The
 //! `lattice` choice for each family mirrors the spec registry exactly (no
@@ -9,7 +9,7 @@
 //! per the spec's `cell_subject` field; `MissingSubjectField` is returned
 //! if the typed field is absent.
 //!
-//! Coverage (post-aggressive-batch):
+//! Coverage:
 //! - **OrSet** (causal add/remove): consent.grant, capability.grant /
 //!   delegate / derived, session.grant, device.authorized, device.list_update,
 //!   covered_frontier (MLS).
@@ -51,7 +51,14 @@ impl BottomPolicy {
 
 macro_rules! singleton_lattice {
     ($struct_name:ident, $cell_family:expr, $lattice:expr, $bottom:expr, $criticality:expr) => {
-        singleton_lattice!($struct_name, $cell_family, $lattice, $bottom, $criticality, &[]);
+        singleton_lattice!(
+            $struct_name,
+            $cell_family,
+            $lattice,
+            $bottom,
+            $criticality,
+            &[]
+        );
     };
     ($struct_name:ident, $cell_family:expr, $lattice:expr, $bottom:expr, $criticality:expr, $event_kinds:expr) => {
         pub struct $struct_name;
@@ -88,7 +95,15 @@ macro_rules! singleton_lattice {
 
 macro_rules! per_subject_lattice {
     ($struct_name:ident, $cell_family:expr, $lattice:expr, $bottom:expr, $criticality:expr, $subject_field:expr) => {
-        per_subject_lattice!($struct_name, $cell_family, $lattice, $bottom, $criticality, $subject_field, &[]);
+        per_subject_lattice!(
+            $struct_name,
+            $cell_family,
+            $lattice,
+            $bottom,
+            $criticality,
+            $subject_field,
+            &[]
+        );
     };
     ($struct_name:ident, $cell_family:expr, $lattice:expr, $bottom:expr, $criticality:expr, $subject_field:expr, $event_kinds:expr) => {
         pub struct $struct_name;
@@ -151,7 +166,8 @@ per_subject_lattice!(
     SdkLatticeKind::OrSet,
     BottomPolicy::Reject,
     Criticality::Required,
-    "capability_id"
+    "capability_id",
+    &["cx.capability.grant", "cx.capability.revoke"]
 );
 
 per_subject_lattice!(
@@ -160,7 +176,8 @@ per_subject_lattice!(
     SdkLatticeKind::OrSet,
     BottomPolicy::Reject,
     Criticality::Required,
-    "capability_id"
+    "capability_id",
+    &["cx.capability.delegate"]
 );
 
 per_subject_lattice!(
@@ -169,7 +186,8 @@ per_subject_lattice!(
     SdkLatticeKind::OrSet,
     BottomPolicy::Reject,
     Criticality::Required,
-    "capability_id"
+    "capability_id",
+    &["cx.capability.derived"]
 );
 
 per_subject_lattice!(
@@ -178,7 +196,8 @@ per_subject_lattice!(
     SdkLatticeKind::OrSet,
     BottomPolicy::Reject,
     Criticality::Required,
-    "session_id"
+    "session_id",
+    &["cx.session.grant"]
 );
 
 per_subject_lattice!(
@@ -187,7 +206,8 @@ per_subject_lattice!(
     SdkLatticeKind::OrSet,
     BottomPolicy::Reject,
     Criticality::Required,
-    "device_id"
+    "device_id",
+    &["cx.device.authorized", "cx.device.revoked"]
 );
 
 per_subject_lattice!(
@@ -196,7 +216,8 @@ per_subject_lattice!(
     SdkLatticeKind::OrSet,
     BottomPolicy::Reject,
     Criticality::Required,
-    "owner_did"
+    "owner_did",
+    &["cx.device.list_update"]
 );
 
 // MLS covered_frontier cell — `or-set` of governance-frontier event refs
@@ -222,7 +243,8 @@ singleton_lattice!(
     "cx.component.space.policy.v1",
     SdkLatticeKind::CasRegister,
     BottomPolicy::Reject,
-    Criticality::Required
+    Criticality::Required,
+    &["cx.space.policy"]
 );
 
 singleton_lattice!(
@@ -230,7 +252,8 @@ singleton_lattice!(
     "cx.component.space.read_receipt_policy.v1",
     SdkLatticeKind::CasRegister,
     BottomPolicy::Reject,
-    Criticality::Required
+    Criticality::Required,
+    &["cx.space.read_receipt_policy"]
 );
 
 singleton_lattice!(
@@ -238,7 +261,8 @@ singleton_lattice!(
     "cx.component.space.history_visibility.v1",
     SdkLatticeKind::CasRegister,
     BottomPolicy::Reject,
-    Criticality::Required
+    Criticality::Required,
+    &["cx.space.history_visibility"]
 );
 
 singleton_lattice!(
@@ -246,7 +270,8 @@ singleton_lattice!(
     "cx.component.space.join_rule.v1",
     SdkLatticeKind::CasRegister,
     BottomPolicy::Reject,
-    Criticality::Required
+    Criticality::Required,
+    &["cx.space.join_rule"]
 );
 
 singleton_lattice!(
@@ -254,7 +279,8 @@ singleton_lattice!(
     "cx.component.space.discovery.v1",
     SdkLatticeKind::CasRegister,
     BottomPolicy::Reject,
-    Criticality::Required
+    Criticality::Required,
+    &["cx.space.discovery"]
 );
 
 singleton_lattice!(
@@ -263,7 +289,7 @@ singleton_lattice!(
     SdkLatticeKind::CasRegister,
     BottomPolicy::Reject,
     Criticality::Required,
-    &["cx.space.update"]
+    &["cx.space.organization", "cx.space.update"]
 );
 
 singleton_lattice!(
@@ -271,7 +297,8 @@ singleton_lattice!(
     "cx.component.space.upgrade.v1",
     SdkLatticeKind::CasRegister,
     BottomPolicy::Reject,
-    Criticality::Required
+    Criticality::Required,
+    &["cx.space.upgrade"]
 );
 
 singleton_lattice!(
@@ -279,7 +306,8 @@ singleton_lattice!(
     "cx.component.space.archive.v1",
     SdkLatticeKind::CasRegister,
     BottomPolicy::Reject,
-    Criticality::Required
+    Criticality::Required,
+    &["cx.space.archive"]
 );
 
 singleton_lattice!(
@@ -287,7 +315,8 @@ singleton_lattice!(
     "cx.component.space.freeze.v1",
     SdkLatticeKind::CasRegister,
     BottomPolicy::Reject,
-    Criticality::Required
+    Criticality::Required,
+    &["cx.space.freeze"]
 );
 
 singleton_lattice!(
@@ -295,7 +324,8 @@ singleton_lattice!(
     "cx.component.space.tombstone.v1",
     SdkLatticeKind::CasRegister,
     BottomPolicy::Reject,
-    Criticality::Required
+    Criticality::Required,
+    &["cx.space.tombstone"]
 );
 
 singleton_lattice!(
@@ -312,7 +342,8 @@ singleton_lattice!(
     "cx.component.space.moderation_policy.v1",
     SdkLatticeKind::CasRegister,
     BottomPolicy::Reject,
-    Criticality::Required
+    Criticality::Required,
+    &["cx.space.moderation_policy"]
 );
 
 singleton_lattice!(
@@ -320,7 +351,8 @@ singleton_lattice!(
     "cx.component.space.history_sharing_policy.v1",
     SdkLatticeKind::CasRegister,
     BottomPolicy::Reject,
-    Criticality::Required
+    Criticality::Required,
+    &["cx.space.history_sharing_policy"]
 );
 
 singleton_lattice!(
@@ -328,7 +360,8 @@ singleton_lattice!(
     "cx.component.space.asset_privacy_policy.v1",
     SdkLatticeKind::CasRegister,
     BottomPolicy::Reject,
-    Criticality::Required
+    Criticality::Required,
+    &["cx.space.asset_privacy_policy"]
 );
 
 singleton_lattice!(
@@ -336,7 +369,8 @@ singleton_lattice!(
     "cx.component.space.policy_components.v1",
     SdkLatticeKind::CasRegister,
     BottomPolicy::Reject,
-    Criticality::Required
+    Criticality::Required,
+    &["cx.space.policy_components"]
 );
 
 singleton_lattice!(
@@ -344,7 +378,8 @@ singleton_lattice!(
     "cx.component.space.policy_server.v1",
     SdkLatticeKind::CasRegister,
     BottomPolicy::Reject,
-    Criticality::Required
+    Criticality::Required,
+    &["cx.space.policy_server"]
 );
 
 singleton_lattice!(
@@ -352,7 +387,8 @@ singleton_lattice!(
     "cx.component.space.plaintext_visible_services.v1",
     SdkLatticeKind::CasRegister,
     BottomPolicy::Reject,
-    Criticality::Required
+    Criticality::Required,
+    &["cx.space.plaintext_visible_services"]
 );
 
 singleton_lattice!(
@@ -360,7 +396,8 @@ singleton_lattice!(
     "cx.component.space.media_service.v1",
     SdkLatticeKind::CasRegister,
     BottomPolicy::Reject,
-    Criticality::Required
+    Criticality::Required,
+    &["cx.space.media_service"]
 );
 
 singleton_lattice!(
@@ -368,7 +405,8 @@ singleton_lattice!(
     "cx.component.space.schema.v1",
     SdkLatticeKind::CasRegister,
     BottomPolicy::Reject,
-    Criticality::Required
+    Criticality::Required,
+    &["cx.space.schema"]
 );
 
 singleton_lattice!(
@@ -376,7 +414,8 @@ singleton_lattice!(
     "cx.component.space.inheritance_policy.v1",
     SdkLatticeKind::CasRegister,
     BottomPolicy::Reject,
-    Criticality::Required
+    Criticality::Required,
+    &["cx.space.inheritance_policy"]
 );
 
 per_subject_lattice!(
@@ -385,7 +424,8 @@ per_subject_lattice!(
     SdkLatticeKind::CasRegister,
     BottomPolicy::Reject,
     Criticality::Required,
-    "flow_id"
+    "flow_id",
+    &["cx.flow.move", "cx.flow.reorder"]
 );
 
 per_subject_lattice!(
@@ -394,7 +434,8 @@ per_subject_lattice!(
     SdkLatticeKind::CasRegister,
     BottomPolicy::Reject,
     Criticality::Required,
-    "place_id"
+    "place_id",
+    &["cx.place.parent"]
 );
 
 // Anchorer cell — singleton `(space_id) → AnchorerValue`. Cas-register so
@@ -429,15 +470,7 @@ per_subject_lattice!(
     BottomPolicy::Reject,
     Criticality::Required,
     "actor_id",
-    &[
-        "cx.membership.join",
-        "cx.membership.leave",
-        "cx.membership.kick",
-        "cx.membership.ban",
-        "cx.membership.unban",
-        "cx.membership.knock",
-        "cx.member.state",
-    ]
+    &["cx.member.state"]
 );
 
 // ────────────────────────── OrderedLog families ──────────────────────────
@@ -460,7 +493,8 @@ singleton_lattice!(
     "cx.component.space.child.v1",
     SdkLatticeKind::OrderedLog,
     BottomPolicy::Reject,
-    Criticality::Required
+    Criticality::Required,
+    &["cx.space.child"]
 );
 
 singleton_lattice!(
@@ -468,7 +502,8 @@ singleton_lattice!(
     "cx.component.space.parent.v1",
     SdkLatticeKind::OrderedLog,
     BottomPolicy::Reject,
-    Criticality::Required
+    Criticality::Required,
+    &["cx.space.parent"]
 );
 
 per_subject_lattice!(
@@ -477,7 +512,8 @@ per_subject_lattice!(
     SdkLatticeKind::OrderedLog,
     BottomPolicy::Reject,
     Criticality::Required,
-    "account_id"
+    "account_id",
+    &["cx.account.status"]
 );
 
 per_subject_lattice!(
@@ -486,7 +522,8 @@ per_subject_lattice!(
     SdkLatticeKind::OrderedLog,
     BottomPolicy::Reject,
     Criticality::Required,
-    "rule_id"
+    "rule_id",
+    &["cx.policy.rule"]
 );
 
 // ────────────────────────── MvRegister families ──────────────────────────
@@ -500,7 +537,8 @@ per_subject_lattice!(
     SdkLatticeKind::MvRegister,
     BottomPolicy::Expose,
     Criticality::Required,
-    "actor_id"
+    "actor_id",
+    &["cx.profile.create", "cx.profile.update"]
 );
 
 per_subject_lattice!(
@@ -509,7 +547,8 @@ per_subject_lattice!(
     SdkLatticeKind::MvRegister,
     BottomPolicy::Expose,
     Criticality::Required,
-    "view_id"
+    "view_id",
+    &["cx.view.create"]
 );
 
 per_subject_lattice!(
@@ -518,7 +557,8 @@ per_subject_lattice!(
     SdkLatticeKind::MvRegister,
     BottomPolicy::Expose,
     Criticality::Required,
-    "view_id"
+    "view_id",
+    &["cx.view.update"]
 );
 
 per_subject_lattice!(
@@ -527,7 +567,8 @@ per_subject_lattice!(
     SdkLatticeKind::MvRegister,
     BottomPolicy::Expose,
     Criticality::Required,
-    "view_id"
+    "view_id",
+    &["cx.view.reconcile"]
 );
 
 per_subject_lattice!(
@@ -536,7 +577,8 @@ per_subject_lattice!(
     SdkLatticeKind::MvRegister,
     BottomPolicy::Expose,
     Criticality::Required,
-    "room_id"
+    "room_id",
+    &["cx.mimi.room_binding"]
 );
 
 // ───────────────────────── Factory ─────────────────────────
@@ -546,9 +588,8 @@ per_subject_lattice!(
 /// call this once at boot.
 ///
 /// Coverage target: all 40 unique cell families declared in the spec
-/// `event-kind-registry.json` (2026-05-09 batch landed 35; remaining 5 are
-/// MIMI bridge / niche cells with non-trivial composite subjects pending
-/// per-subject typed registry support).
+/// `event-kind-registry.json`. The remaining niche families need
+/// per-subject typed registry support before they can be wired here.
 pub fn default_lattice_registry() -> LatticeRegistry {
     let mut registry = LatticeRegistry::new();
 
@@ -617,8 +658,7 @@ pub fn default_lattice_registry() -> LatticeRegistry {
 /// Returning a `Vec` (not direct mutation) keeps test assertions easy and
 /// lets a future `LatticeKind` impl declare an FSM transition table that
 /// would otherwise need a different `register_*` SDK call.
-pub fn lattice_bindings_for_sdk_registry()
--> Vec<(&'static str, SdkLatticeKind, BottomMode)> {
+pub fn lattice_bindings_for_sdk_registry() -> Vec<(&'static str, SdkLatticeKind, BottomMode)> {
     let registry = default_lattice_registry();
     // We rely on `default_lattice_registry`'s public surface: iterate every
     // family our soland-side registry knows about. The registry doesn't
@@ -710,32 +750,28 @@ pub fn build_sdk_cell_registry() -> MemoryCellRegistry {
     }
     // Membership FSM (per spec event-auth-state-resolution.md §5.3): the
     // canonical legal-transition table for `cx.component.member.state.v1`.
-    // States use the SDK-canonical noun form (`invited` / `join` / `leave` /
-    // `ban` / `kick` / `knock`) matching the cx.membership.* event kinds in
-    // `crate::kinds`. Initial state is `invited`; transitions cover every
-    // legal lifecycle move plus re-entry (unban → invited, kick → join).
+    // States match the spec enum: `invite` / `join` / `leave` / `ban` /
+    // `knock`. Initial state is `invite`; transitions cover re-entry after
+    // leave or ban via a new invite/knock.
     sdk_registry.register_fsm(
         "cx.component.member.state.v1",
-        Some(json!("invited")),
+        Some(json!("invite")),
         vec![
             // Invitation acceptance / decline.
-            (json!("invited"), json!("join")),
-            (json!("invited"), json!("leave")),
+            (json!("invite"), json!("join")),
+            (json!("invite"), json!("leave")),
             // Knock-based join (admin approval) / withdraw.
             (json!("knock"), json!("join")),
             (json!("knock"), json!("leave")),
-            // Voluntary departure or admin actions while joined.
+            // Voluntary departure or admin ban while joined.
             (json!("join"), json!("leave")),
-            (json!("join"), json!("kick")),
             (json!("join"), json!("ban")),
-            // Re-entry after kick (no longer banned).
-            (json!("kick"), json!("invited")),
-            (json!("kick"), json!("knock")),
             // Re-invite / re-knock after voluntary leave.
-            (json!("leave"), json!("invited")),
+            (json!("leave"), json!("invite")),
             (json!("leave"), json!("knock")),
-            // Unban: bans must be cleared explicitly (re-invite path).
-            (json!("ban"), json!("invited")),
+            // Bans must be cleared explicitly through a new invite/knock.
+            (json!("ban"), json!("invite")),
+            (json!("ban"), json!("knock")),
         ],
         BottomMode::Reject,
     );
@@ -750,8 +786,8 @@ mod tests {
     #[test]
     fn default_registry_covers_at_least_all_singleton_cas_families() {
         let registry = default_lattice_registry();
-        // Spec event-kind-registry has 40 unique cell_family strings as of
-        // 2026-05-09; this aggressive batch lands 40 impls.
+        // Spec event-kind-registry has 40 unique `cell_family` strings, and
+        // this registry should cover them all.
         assert!(
             registry.len() >= 40,
             "expected ≥40 cell families registered, got {}",
@@ -852,7 +888,9 @@ mod tests {
     fn missing_subject_field_surfaces_typed_error() {
         let registry = default_lattice_registry();
         let kind = registry.lookup("cx.component.flow.position.v1").unwrap();
-        let err = kind.subject_for_effect(&json!({"unrelated": "x"})).unwrap_err();
+        let err = kind
+            .subject_for_effect(&json!({"unrelated": "x"}))
+            .unwrap_err();
         match err {
             LatticeKindError::MissingSubjectField { cell_family, field } => {
                 assert_eq!(cell_family, "cx.component.flow.position.v1");
@@ -865,14 +903,16 @@ mod tests {
     #[test]
     fn lookup_unknown_family_returns_none() {
         let registry = default_lattice_registry();
-        assert!(registry
-            .lookup("cx.component.does.not.exist.v999")
-            .is_none());
+        assert!(
+            registry
+                .lookup("cx.component.does.not.exist.v999")
+                .is_none()
+        );
     }
 
-    /// Round 22: durable event_kind → cell_family inversion. The
+    /// Durable event_kind → cell_family inversion. The
     /// LatticeRegistry now indexes `LatticeKind::event_kinds()` so the
-    /// `lattice_first` apply path can decide whether a given Operation
+    /// lattice-registry apply path can decide whether a given Operation
     /// has a cell-family routing or is a durable-Event-only fallback.
     #[test]
     fn event_kind_index_resolves_consent_grant_and_revoke() {
@@ -890,20 +930,10 @@ mod tests {
     #[test]
     fn event_kind_index_resolves_membership_to_member_state_cell() {
         let registry = default_lattice_registry();
-        for ek in [
-            "cx.membership.join",
-            "cx.membership.leave",
-            "cx.membership.kick",
-            "cx.membership.ban",
-            "cx.membership.unban",
-            "cx.membership.knock",
-            "cx.member.state",
-        ] {
-            let kind = registry
-                .lookup_for_event_kind(ek)
-                .unwrap_or_else(|| panic!("missing event_kind mapping for {ek}"));
-            assert_eq!(kind.cell_family(), "cx.component.member.state.v1");
-        }
+        let kind = registry
+            .lookup_for_event_kind("cx.member.state")
+            .expect("cx.member.state should map to member.state.v1 cell");
+        assert_eq!(kind.cell_family(), "cx.component.member.state.v1");
     }
 
     #[test]
@@ -939,7 +969,11 @@ mod tests {
         // cell_family in the spec — registry must miss; the
         // `apply_via_lattice_registry` path falls through to inline
         // dispatch.
-        assert!(registry.lookup_for_event_kind("cx.message.create").is_none());
+        assert!(
+            registry
+                .lookup_for_event_kind("cx.message.create")
+                .is_none()
+        );
         assert!(registry.lookup_for_event_kind("cx.reaction.add").is_none());
         assert!(registry.lookup_for_event_kind("cx.entity.update").is_none());
     }

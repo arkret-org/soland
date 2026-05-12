@@ -10,10 +10,9 @@
 //! - `GET  /api/v1/directory/search-users`        — same as search-actors via `?query`
 //! - `POST /api/v1/directory/resolve-handle`
 //!
-//! Demo data lives here too — `demo_organization` / `demo_actors` /
-//! `find_demo_entity` are the placeholders the directory + index layers consume
-//! until E1/E2/E3 (Stream-E in `_todos.md`) lands a real `actors` /
-//! `organizations` / `handles` PgStore.
+//! Demo data lives here too — `demo_organization` / `demo_actors` are
+//! placeholders until E1/E2/E3 (Stream-E in `_todos.md`) lands a real
+//! `actors` / `organizations` / `handles` PgStore.
 
 use std::collections::BTreeMap;
 
@@ -31,9 +30,8 @@ use crate::{
 };
 
 use super::{
-    authenticated_session, device_inventory_to_json, flow_id_from_space_id,
-    flow_projection_for_space, handle_for_did, invite_token_space_id, is_space_deleted,
-    normalize_handle, now, query_param, render_error, space_discoverability,
+    authenticated_session, device_inventory_to_json, handle_for_did, invite_token_space_id,
+    is_space_deleted, normalize_handle, now, query_param, render_error, space_discoverability,
     space_resolvable_to, space_search_discoverability, space_search_visible_to,
 };
 
@@ -47,7 +45,7 @@ pub async fn directory_describe(depot: &mut Depot, res: &mut Response) {
             "organization".to_owned(),
             "actor".to_owned(),
         ],
-        discovery_profiles: vec!["cx.profile.directory.v1".to_owned()],
+        discovery_profiles: vec!["cx.profile.directory_service.v1".to_owned()],
         restricted_query_proof: false,
     }));
 }
@@ -356,9 +354,8 @@ pub async fn resolve_handle(depot: &mut Depot, req: &mut Request, res: &mut Resp
 
 // ── Helpers shared with the rest of `crate::routing` ───────────────────────
 //
-// These are `pub` so the index handlers (still in `mod.rs`) can use them via
-// the `pub use directory::*` re-exports. Once `index.rs` is also extracted
-// they will become private again.
+// These remain public for sibling routing modules that share directory
+// authorization and visibility checks.
 
 pub fn has_accepted_contact(state: &AppState, left: &str, right: &str) -> bool {
     state
@@ -374,11 +371,7 @@ pub fn has_accepted_contact(state: &AppState, left: &str, right: &str) -> bool {
         })
 }
 
-pub fn actor_visible_to(
-    state: &AppState,
-    actor: &Value,
-    session: Option<&SessionRecord>,
-) -> bool {
+pub fn actor_visible_to(state: &AppState, actor: &Value, session: Option<&SessionRecord>) -> bool {
     let Some(did) = actor["did"].as_str() else {
         return false;
     };
@@ -390,10 +383,7 @@ pub fn actor_visible_to(
     })
 }
 
-pub fn demo_organization(
-    spaces: &[&contrix_sdk::SpaceSearchEntry],
-    service_did: &str,
-) -> Value {
+pub fn demo_organization(spaces: &[&contrix_sdk::SpaceSearchEntry], service_did: &str) -> Value {
     json!({
         "organization_id": "cx:org:demo",
         "handle": "@contrix-demo",
@@ -469,50 +459,6 @@ pub fn demo_actors(state: &AppState) -> Vec<Value> {
         }));
     }
     actors
-}
-
-pub fn find_demo_entity(state: &AppState, entity_id: &str) -> Option<Value> {
-    if entity_id == "cx:org:demo" {
-        let spaces = state.spaces.lock().expect("spaces lock");
-        return Some(demo_organization(
-            &spaces.search(Default::default()),
-            &state.config.service_did,
-        ));
-    }
-    if let Some(actor) = demo_actors(state)
-        .into_iter()
-        .find(|actor| actor["did"].as_str() == Some(entity_id))
-    {
-        return Some(actor);
-    }
-    let spaces = state.spaces.lock().expect("spaces lock");
-    spaces
-        .search(Default::default())
-        .into_iter()
-        .find(|space| {
-            space.space_id.as_str() == entity_id
-                && !is_space_deleted(state, space.space_id.as_str())
-        })
-        .map(|space| {
-            let flow = flow_projection_for_space(
-                state,
-                space.space_id.as_str(),
-                &space.name,
-                space.description.as_deref(),
-            );
-            json!({
-                "kind": "space",
-                "flow": flow,
-                "flow_id": flow_id_from_space_id(space.space_id.as_str()),
-                "entity_id": space.space_id,
-                "space_id": space.space_id,
-                "facets": ["container", "replyable", "renderable"],
-                "title": space.name,
-                "summary": space.description,
-                "category": space.category,
-                "tags": space.tags,
-            })
-        })
 }
 
 pub fn query_matches(value: &Value, query: Option<&str>) -> bool {

@@ -216,11 +216,7 @@ pub async fn outbound_push_bridge_resolve(
 }
 
 #[endpoint]
-pub async fn outbound_push_bridge_fetch(
-    depot: &mut Depot,
-    req: &mut Request,
-    res: &mut Response,
-) {
+pub async fn outbound_push_bridge_fetch(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = match req.parse_json::<OutboundPushBridgeFetchRequest>().await {
         Ok(body) => body,
@@ -283,45 +279,45 @@ pub async fn outbound_push_bridge_fetch(
                 .map(ToOwned::to_owned)
                 .unwrap_or_default();
             match response.json::<Value>().await {
-            Ok(remote_contract) => {
-                let contract_digest = sha256_hex(
-                    &serde_json::to_vec(&remote_contract).unwrap_or_else(|_| b"{}".to_vec()),
-                );
-                if let Some(existing) = existing_cache.clone() {
-                    if existing.contract_digest != contract_digest && !body.force_refresh {
-                        render_outbound_push_bridge_fetch_fallback(
-                            Some(existing),
-                            push_gateway_url,
-                            service_base_url,
-                            bridge_describe_url,
-                            "contract_drift_detected_force_refresh_required".to_owned(),
-                            res,
-                        );
-                        return;
+                Ok(remote_contract) => {
+                    let contract_digest = sha256_hex(
+                        &serde_json::to_vec(&remote_contract).unwrap_or_else(|_| b"{}".to_vec()),
+                    );
+                    if let Some(existing) = existing_cache.clone() {
+                        if existing.contract_digest != contract_digest && !body.force_refresh {
+                            render_outbound_push_bridge_fetch_fallback(
+                                Some(existing),
+                                push_gateway_url,
+                                service_base_url,
+                                bridge_describe_url,
+                                "contract_drift_detected_force_refresh_required".to_owned(),
+                                res,
+                            );
+                            return;
+                        }
                     }
-                }
-                let fetched_at = now();
-                let record = OutboundPushBridgeCacheRecord {
-                    push_gateway_url: push_gateway_url.clone(),
-                    service_base_url: service_base_url.clone(),
-                    bridge_describe_url: bridge_describe_url.clone(),
-                    fetch_state: "live_remote_fetch_ok".to_owned(),
-                    cache_state: "memory_cached".to_owned(),
-                    contract_digest: contract_digest.clone(),
-                    fetched_at,
-                    remote_contract: remote_contract.clone(),
-                    trust_level: "trusted".to_owned(),
-                    freshness_at: fetched_at,
-                    etag: etag.clone(),
-                };
-                if let Err(error) = state
-                    .persistence
-                    .push_bridge_cache()
-                    .put(&bridge_describe_url, record.clone())
-                {
-                    tracing::error!(%error, "failed to persist push bridge cache entry");
-                }
-                res.render(Json(OutboundPushBridgeFetchResponse {
+                    let fetched_at = now();
+                    let record = OutboundPushBridgeCacheRecord {
+                        push_gateway_url: push_gateway_url.clone(),
+                        service_base_url: service_base_url.clone(),
+                        bridge_describe_url: bridge_describe_url.clone(),
+                        fetch_state: "live_remote_fetch_ok".to_owned(),
+                        cache_state: "memory_cached".to_owned(),
+                        contract_digest: contract_digest.clone(),
+                        fetched_at,
+                        remote_contract: remote_contract.clone(),
+                        trust_level: "trusted".to_owned(),
+                        freshness_at: fetched_at,
+                        etag: etag.clone(),
+                    };
+                    if let Err(error) = state
+                        .persistence
+                        .push_bridge_cache()
+                        .put(&bridge_describe_url, record.clone())
+                    {
+                        tracing::error!(%error, "failed to persist push bridge cache entry");
+                    }
+                    res.render(Json(OutboundPushBridgeFetchResponse {
                     push_gateway_url,
                     service_base_url,
                     bridge_describe_url,
@@ -341,17 +337,17 @@ pub async fn outbound_push_bridge_fetch(
                         "TODO(push-outbound): persist cache entries outside process memory and attach freshness/etag metadata".to_owned(),
                     ],
                 }));
-            }
-            Err(error) => {
-                render_outbound_push_bridge_fetch_fallback(
-                    existing_cache,
-                    push_gateway_url,
-                    service_base_url,
-                    bridge_describe_url,
-                    format!("live_remote_fetch_bad_json:{error}"),
-                    res,
-                );
-            }
+                }
+                Err(error) => {
+                    render_outbound_push_bridge_fetch_fallback(
+                        existing_cache,
+                        push_gateway_url,
+                        service_base_url,
+                        bridge_describe_url,
+                        format!("live_remote_fetch_bad_json:{error}"),
+                        res,
+                    );
+                }
             }
         }
         Ok(response) => {
@@ -419,7 +415,10 @@ pub async fn outbound_push_bridge_cache_import(
     res: &mut Response,
 ) {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let body = match req.parse_json::<OutboundPushBridgeCacheImportRequest>().await {
+    let body = match req
+        .parse_json::<OutboundPushBridgeCacheImportRequest>()
+        .await
+    {
         Ok(body) => body,
         Err(_) => {
             render_error(

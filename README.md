@@ -22,7 +22,7 @@ cd soland
 ### Run with the in-memory store (no database)
 
 ```bash
-SERVERX_DEVELOPMENT_MODE=true cargo run -- --bind 127.0.0.1:8787
+SERVERX_DEVELOPMENT_MODE=true cargo run -- --bind 127.0.0.1:8698
 ```
 
 `DATABASE_URL` is optional. Without it, soland runs with an in-memory repository
@@ -36,7 +36,7 @@ the development workflow relies on.
 ```bash
 DATABASE_URL=postgres://soland:soland@localhost:5432/soland \
   SERVERX_DEVELOPMENT_MODE=true \
-  cargo run -- --bind 127.0.0.1:8787
+  cargo run -- --bind 127.0.0.1:8698
 ```
 
 Embedded Diesel migrations run on every startup; the `accounts / sessions /
@@ -45,11 +45,13 @@ devices / federation_transactions` tables are created idempotently.
 ### Run with Docker
 
 ```bash
-docker run --rm -p 8787:8787 \
+docker run --rm -p 8698:8698 \
   -e SERVERX_PUBLIC_BASE_URL=https://soland.example \
   -e SERVERX_SERVICE_DID=did:web:soland.example \
   -e DATABASE_URL=postgres://soland:soland@db:5432/soland \
-  -v soland-blobs:/var/lib/soland \
+  -e SERVERX_OBJECT_STORAGE_BACKEND=local \
+  -e SERVERX_OBJECT_STORAGE_LOCAL_ROOT=/var/lib/soland/objects \
+  -v soland-objects:/var/lib/soland \
   ghcr.io/contrix/soland:latest
 ```
 
@@ -62,11 +64,15 @@ All settings can be supplied via environment variables (preferred) or a
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `SERVERX_BIND` (or `--bind`) | `127.0.0.1:8787` | Listen address |
+| `SERVERX_BIND` (or `--bind`) | `127.0.0.1:8698` | Listen address |
 | `SERVERX_PUBLIC_BASE_URL` | `http://<bind>` | Advertised base URL (`/api/v1/server/describe`) |
 | `SERVERX_SERVICE_DID` | `did:web:soland.local` | Service DID — also the proof `audience` binding |
 | `DATABASE_URL` | unset | If set, enables PostgreSQL and runs migrations |
-| `SERVERX_BLOB_ROOT` | system temp + `/soland-blobs` | Filesystem root for blob storage |
+| `SERVERX_OBJECT_STORAGE_BACKEND` | `local` | Blob object backend: `local` or `s3-compatible` |
+| `SERVERX_OBJECT_STORAGE_LOCAL_ROOT` | system temp + `/soland-objects` | Local filesystem root when using `local` |
+| `SERVERX_OBJECT_STORAGE_PREFIX` | unset | Optional object key prefix shared by local and S3-compatible backends |
+| `SERVERX_OBJECT_STORAGE_S3_BUCKET` | required for S3 | S3-compatible bucket name |
+| `SERVERX_OBJECT_STORAGE_S3_ENDPOINT` | region endpoint | Optional custom endpoint for MinIO/R2/etc. |
 | `SERVERX_CORS_ALLOW_ORIGIN` | unset | Single explicit CORS origin for browser clients |
 | `SERVERX_DEVELOPMENT_MODE` | `false` | Enable dev-only endpoints (`dev_login`, admin snapshots, relaxed DID validation) |
 | `RUST_LOG` | unset | Tracing subscriber filter, e.g. `soland=info,salvo=warn` |
@@ -92,9 +98,7 @@ Space.
 
 The v1 primary write path is the signed Event Envelope API: `GET /api/v1/events/describe`
 declares the active event registry, schema/reducer profiles, and limits, and
-`POST /api/v1/events` accepts one canonical Event Envelope. The
-`/api/v1/repo/*` endpoints remain a local legacy adapter, not the canonical
-shared-history path.
+`POST /api/v1/events` accepts one canonical Event Envelope.
 
 Federation transaction IDs are recorded per origin with canonical request
 digests. Replaying the same `(origin, txn_id)` and body returns the stored
@@ -113,8 +117,7 @@ soland exposes the canonical Contrix v1 routes (~180 routes total). Highlights:
   generated OpenAPI 3.1 document seeded with `contrix_sdk::salvo_adapter::register_contrix_oapi_components`
 - `GET  /.well-known/mimi-protocol-directory`
 - `POST /api/v1/events`, `GET /api/v1/events/describe`, …
-- `POST /api/v1/repo/submit-commit`, `GET /api/v1/repo/sync`, …
-- `POST /api/v1/index/query`, `GET /api/v1/sync`, `GET /api/v1/identity/*`
+- `GET /api/v1/sync`, `GET /api/v1/identity/*`, `GET /api/v1/directory/*`
 - `POST /api/v1/auth/dev-login` (development_mode only)
 
 A complete list lives in the OpenAPI document above; `/api/v1/admin/{resource}`
@@ -152,7 +155,7 @@ adapter, device key, to-device, blob, directory, sync, and index surfaces.
 PostgreSQL migrations and the repo adapter are wired; in-memory mode is the
 development fallback. Remaining production work is tracked in
 [`../_todos.md`](../_todos.md) — reducer-backed projections, full policy ordering,
-durable device/blob stores, full E2EE client workflow, anti-enumeration, and
+durable projection/device sub-stores, full E2EE client workflow, anti-enumeration, and
 the complete federation/media/recovery/key-backup surfaces.
 
 ## License

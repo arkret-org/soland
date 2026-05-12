@@ -27,8 +27,8 @@ use crate::{
 };
 
 use super::{
-    auth_or_render, is_valid_sha256_digest, now, query_flag, query_param, render_error,
-    sha256_hex, validate_canonical_json_value, validate_did, validate_space_id,
+    auth_or_render, is_valid_sha256_digest, now, query_flag, query_param, render_error, sha256_hex,
+    validate_canonical_json_value, validate_did, validate_space_id,
 };
 
 #[endpoint]

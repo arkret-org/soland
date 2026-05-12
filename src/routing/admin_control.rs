@@ -1,5 +1,4 @@
-//! Admin mid-stream control-frame triggers for `cx.events.subscribe` (C10.B
-//! 续 / 十五轮 follow-up).
+//! Admin mid-stream control-frame triggers for `cx.events.subscribe`.
 //!
 //! `events.subscribe` already dispatches five `EventNotificationKind`
 //! variants — `Event` / `EpochRotation` / `Frontier` / `ResyncRequired` /
@@ -18,7 +17,7 @@
 //! Both endpoints are auth-gated via the standard `AuthArgs` bearer
 //! check; rate limiting comes from the global RateLimiter middleware.
 //! Production hardening (admin-only role gate, audit-log, replay
-//! protection) is tracked under T3-x admin scope work.
+//! protection) remains future work.
 
 use salvo::http::StatusCode;
 use salvo::oapi::extract::JsonBody;
@@ -75,7 +74,7 @@ pub struct AdminControlFrameResponse {
 #[endpoint(
     operation_id = "cx.admin.events.resync_required",
     tags("admin", "events"),
-    summary = "Broadcast a resync_required control frame to subscribers",
+    summary = "Broadcast a resync_required control frame to subscribers"
 )]
 pub async fn admin_emit_resync_required(
     aa: AuthArgs,
@@ -88,11 +87,10 @@ pub async fn admin_emit_resync_required(
 
     let AdminControlFrameRequest { space_id, reason } = body.into_inner();
     if space_id.is_empty() {
-        return Err(AppError::new(
-            ErrorCode::InvalidParam,
-            "space_id is required".to_owned(),
-        )
-        .with_status(StatusCode::BAD_REQUEST));
+        return Err(
+            AppError::new(ErrorCode::InvalidParam, "space_id is required".to_owned())
+                .with_status(StatusCode::BAD_REQUEST),
+        );
     }
     let reason = reason.unwrap_or_else(|| "admin_triggered".to_owned());
 
@@ -119,7 +117,7 @@ pub async fn admin_emit_resync_required(
 #[endpoint(
     operation_id = "cx.admin.events.unauthorized",
     tags("admin", "events"),
-    summary = "Broadcast an unauthorized control frame to subscribers",
+    summary = "Broadcast an unauthorized control frame to subscribers"
 )]
 pub async fn admin_emit_unauthorized(
     aa: AuthArgs,
@@ -132,11 +130,10 @@ pub async fn admin_emit_unauthorized(
 
     let AdminControlFrameRequest { space_id, reason } = body.into_inner();
     if space_id.is_empty() {
-        return Err(AppError::new(
-            ErrorCode::InvalidParam,
-            "space_id is required".to_owned(),
-        )
-        .with_status(StatusCode::BAD_REQUEST));
+        return Err(
+            AppError::new(ErrorCode::InvalidParam, "space_id is required".to_owned())
+                .with_status(StatusCode::BAD_REQUEST),
+        );
     }
     let reason = reason.unwrap_or_else(|| "session_revoked".to_owned());
 

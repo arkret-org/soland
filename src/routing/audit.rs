@@ -97,10 +97,6 @@ pub fn append_audit_log(
         .get("operation_id")
         .and_then(|value| value.as_str())
         .map(ToOwned::to_owned);
-    let commit_id = target
-        .get("commit_id")
-        .and_then(|value| value.as_str())
-        .map(ToOwned::to_owned);
     let entry = json!({
         "audit_id": ids::generate("audit"),
         "request_id": ids::generate_request_id(),
@@ -108,7 +104,6 @@ pub fn append_audit_log(
         "device_id": device_id,
         "space_id": space_id,
         "operation_id": operation_id,
-        "commit_id": commit_id,
         "action": action,
         "target": target,
         "outcome": outcome,

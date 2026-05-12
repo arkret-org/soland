@@ -1,11 +1,8 @@
-//! C10.B per-cell-family `LatticeKind` registry.
+//! Per-cell-family `LatticeKind` registry.
 //!
-//! This module owns the **only** projection-routing trait in soland after
-//! the 2026-05-09 六轮 aggressive batch. The legacy per-event-kind
-//! `ReducerKind` trait + 47-stub `ReducerRegistry` + macro-generated kinds
-//! tree (`src/reducer/kinds/`) was deleted; `ProjectionState::apply()` now
-//! does direct match-on-canonical-kind dispatch to inline projection
-//! helpers, and the new model lookups (subject derivation, lattice
+//! This module owns the projection-routing trait in soland.
+//! `ProjectionState::apply()` does direct match-on-canonical-kind dispatch to
+//! inline projection helpers, and model lookups (subject derivation, lattice
 //! resolution, bottom policy) all run through [`LatticeKind`] /
 //! [`LatticeRegistry`] in this module.
 //!
@@ -18,8 +15,8 @@
 //! per-cell-family lattice resolution.
 //!
 //! Common metadata types ([`StateCardinality`], [`Criticality`],
-//! [`ComponentDescriptor`]) are kept here because both registries (legacy
-//! durable Event projection and new Move/Anchor pipeline) report them.
+//! [`ComponentDescriptor`]) are kept here because durable Event projection
+//! and the Move/Anchor pipeline both report them.
 
 use std::collections::BTreeMap;
 
@@ -112,7 +109,10 @@ impl std::fmt::Display for LatticeKindError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::MissingSubjectField { cell_family, field } => {
-                write!(f, "{cell_family} requires effect field `{field}` for cell subject")
+                write!(
+                    f,
+                    "{cell_family} requires effect field `{field}` for cell subject"
+                )
             }
             Self::UnknownCellFamily { observed, declared } => {
                 write!(
@@ -152,7 +152,7 @@ pub trait LatticeKind: Send + Sync {
         BottomPolicy::Reject
     }
 
-    /// Component metadata for forward-compat handling.
+    /// Component metadata for extension handling.
     fn component(&self) -> ComponentDescriptor;
 
     /// Derive the cell subject from a Move effect's typed fields. Returns:
@@ -169,7 +169,7 @@ pub trait LatticeKind: Send + Sync {
         Ok(None)
     }
 
-    /// Round 22: durable Contrix event kinds (`cx.<facet>.<verb>`) whose
+    /// Durable Contrix event kinds (`cx.<facet>.<verb>`) whose
     /// projection feeds **this** cell family. Empty by default — only the
     /// cell families that have a 1:N event-kind → cell-family mapping
     /// declare it (mostly the `cx.space.<facet>` lifecycle cells, the
@@ -196,11 +196,10 @@ pub trait LatticeKind: Send + Sync {
 /// each effect to the matching `LatticeKind`, and applies `Lattice::join`
 /// over the per-cell anchored ops list.
 ///
-/// Round 22 added the inverted `event_kind → cell_family` index built from
-/// each impl's [`LatticeKind::event_kinds`] declaration. That powers the
-/// `lattice_first` apply path in `ProjectionState`: durable Events (legacy
-/// projection input) look up the owning cell family before falling back to
-/// the inline `apply()` dispatcher.
+/// The inverted `event_kind -> cell_family` index is built from each impl's
+/// [`LatticeKind::event_kinds`] declaration. Durable Events look up the
+/// owning cell family before the inline projection dispatcher applies the
+/// cache update.
 #[derive(Default)]
 pub struct LatticeRegistry {
     families: BTreeMap<&'static str, Box<dyn LatticeKind>>,
@@ -242,7 +241,7 @@ impl LatticeRegistry {
         self.families.get(cell_family).map(|boxed| boxed.as_ref())
     }
 
-    /// Round 22: look up the [`LatticeKind`] that owns the given durable
+    /// Look up the [`LatticeKind`] that owns the given durable
     /// event_kind (e.g. `cx.consent.grant`). Returns `None` for events
     /// that have no cell-family mapping declared (most messaging /
     /// reaction / entity / relation events fall here; those still flow
@@ -252,7 +251,7 @@ impl LatticeRegistry {
         self.lookup(family)
     }
 
-    /// Round 22: number of distinct durable event kinds mapped through the
+    /// Number of distinct durable event kinds mapped through the
     /// registry. Used by tests + diagnostic logs.
     pub fn event_kind_mappings(&self) -> usize {
         self.event_kind_index.len()

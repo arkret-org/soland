@@ -2,7 +2,7 @@
 
 Production guidance for running soland as a single-process Contrix v1 reference
 server. soland is pre-1.0 — review [_todos.md](_todos.md) for the open scaffold
-endpoints (recovery, key-backup restore, push outbound, MIMI provider directory)
+endpoints (push outbound, MIMI provider directory and directory discovery)
 before serving real users.
 
 ## Prerequisites
@@ -12,7 +12,7 @@ before serving real users.
 | OS | Linux (Debian/Ubuntu LTS) | Other targets are CI-tested but less battle-hardened |
 | PostgreSQL | 16+ | `pq-src` builds libpq inline; the runtime image only needs the network reachability |
 | Reverse proxy | nginx, Caddy, or Traefik | TLS termination is **expected** to live in the reverse proxy, not soland itself |
-| Persistent volume | for `SERVERX_BLOB_ROOT` | At least the size of the largest expected attachment × concurrent uploads |
+| Object storage | local volume or S3-compatible bucket | Local disk is fine for one node; production should prefer S3/MinIO/R2-style object storage |
 | Container runtime | Docker / containerd / Podman | Image is published to `ghcr.io/contrix/soland` on every tagged release |
 
 ## 1. Provision PostgreSQL
@@ -30,10 +30,17 @@ soland runs Diesel migrations on startup; no manual DDL is required.
 Create a deploy-time `.env` (or a Kubernetes Secret / systemd EnvironmentFile):
 
 ```dotenv
-SERVERX_BIND=0.0.0.0:8787
+SERVERX_BIND=0.0.0.0:8698
 SERVERX_PUBLIC_BASE_URL=https://soland.example
 SERVERX_SERVICE_DID=did:web:soland.example
-SERVERX_BLOB_ROOT=/var/lib/soland/blobs
+SERVERX_OBJECT_STORAGE_BACKEND=s3-compatible
+SERVERX_OBJECT_STORAGE_S3_BUCKET=soland
+SERVERX_OBJECT_STORAGE_S3_REGION=us-east-1
+SERVERX_OBJECT_STORAGE_S3_ENDPOINT=https://s3.example.com
+SERVERX_OBJECT_STORAGE_S3_ACCESS_KEY_ID=<access-key>
+SERVERX_OBJECT_STORAGE_S3_SECRET_ACCESS_KEY=<secret-key>
+SERVERX_OBJECT_STORAGE_S3_FORCE_PATH_STYLE=true
+SERVERX_OBJECT_STORAGE_PREFIX=prod
 SERVERX_CORS_ALLOW_ORIGIN=https://app.example
 DATABASE_URL=postgres://soland:<password>@db.internal:5432/soland?sslmode=verify-full
 
@@ -88,18 +95,22 @@ in-flight requests before exiting.
 
 ```bash
 docker run --name soland --restart=always -d \
-  -p 127.0.0.1:8787:8787 \
-  -e SERVERX_BIND=0.0.0.0:8787 \
+  -p 127.0.0.1:8698:8698 \
+  -e SERVERX_BIND=0.0.0.0:8698 \
   -e SERVERX_PUBLIC_BASE_URL=https://soland.example \
   -e SERVERX_SERVICE_DID=did:web:soland.example \
   -e DATABASE_URL=postgres://soland:<password>@db:5432/soland?sslmode=verify-full \
+  -e SERVERX_OBJECT_STORAGE_BACKEND=local \
+  -e SERVERX_OBJECT_STORAGE_LOCAL_ROOT=/var/lib/soland/objects \
   -e RUST_LOG=soland=info \
-  -v soland-blobs:/var/lib/soland \
+  -v soland-objects:/var/lib/soland \
   ghcr.io/contrix/soland:<tag>
 ```
 
-The image runs as UID `10001`. Mounted volumes for `SERVERX_BLOB_ROOT` must be
-chowned to that UID (or use a named Docker volume so Docker handles it).
+The image runs as UID `10001`. Mounted volumes for
+`SERVERX_OBJECT_STORAGE_LOCAL_ROOT` must be chowned to that UID (or use a named
+Docker volume so Docker handles it). S3-compatible backends do not need a media
+volume.
 
 ## 4. Front with TLS
 
@@ -115,7 +126,7 @@ soland.example {
         path /api/* /.well-known/* /health
     }
     handle @api {
-        reverse_proxy 127.0.0.1:8787 {
+        reverse_proxy 127.0.0.1:8698 {
             header_up X-Forwarded-Proto {scheme}
             header_up X-Forwarded-For {remote_host}
         }
@@ -137,7 +148,7 @@ Docker:
 
 ```dockerfile
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-  CMD curl -fsS http://localhost:8787/health || exit 1
+  CMD curl -fsS http://localhost:8698/health || exit 1
 ```
 
 Kubernetes:
@@ -146,13 +157,13 @@ Kubernetes:
 livenessProbe:
   httpGet:
     path: /health
-    port: 8787
+    port: 8698
   initialDelaySeconds: 10
   periodSeconds: 30
 readinessProbe:
   httpGet:
     path: /health
-    port: 8787
+    port: 8698
   initialDelaySeconds: 5
   periodSeconds: 10
 ```
@@ -162,10 +173,10 @@ readinessProbe:
 | Object | What to back up | How |
 | --- | --- | --- |
 | PostgreSQL | All tables | `pg_dump` daily, plus continuous WAL archiving for point-in-time recovery |
-| `SERVERX_BLOB_ROOT` | Uploaded media | snapshot the volume on the same cadence as the database; align so blob references in the DB stay resolvable |
+| Object storage bucket/volume | Uploaded media | enable bucket versioning or snapshot the local volume on the same cadence as the database; align so blob references in the DB stay resolvable |
 | `SERVERX_SERVICE_DID` material | DID rotation history | Out of scope — manage via the DID method (`did:web` vs `did:plc`) |
 
-Restore order: stop soland → restore DB → restore blob volume → start soland.
+Restore order: stop soland → restore DB → restore object storage bucket/volume → start soland.
 The startup migrations are idempotent.
 
 ## 7. Observability
@@ -203,7 +214,8 @@ pre-upgrade backup if you need to roll back.
   control (Vault / Kubernetes Secret / systemd `LoadCredential`).
 - `SERVERX_CORS_ALLOW_ORIGIN` is the **single** browser origin you trust;
   never `*` while soland sets `Access-Control-Allow-Credentials: true`.
-- `SERVERX_BLOB_ROOT` lives on a dedicated volume with quota enforcement.
+- Object storage uses a dedicated bucket/prefix or a dedicated local volume
+  with quota enforcement.
 - Reverse proxy enforces TLS 1.2+ and the security headers you require.
 - `cargo deny check` runs in CI on every dependabot bump.
 - soland process runs as a non-root user (UID 10001 in the published image).
@@ -215,10 +227,9 @@ pre-upgrade backup if you need to roll back.
 - **Single-process**: soland is a reference implementation. Multi-replica
   deployments need an out-of-process rate-limit store (`_todos.md` Q6) and
   durable persistence for everything in `_todos.md` F2.
-- **Scaffold endpoints**: recovery, key-backup restore, push outbound bridge,
-  the MIMI provider directory, and most of the directory surface return
-  placeholder shapes. See `_todos.md` Streams D / E / F for the production
-  rollout.
+- **Scaffold endpoints**: push outbound bridge, the MIMI provider directory,
+  and most of the directory surface return placeholder shapes. See `_todos.md`
+  Streams D / E / F for the production rollout.
 - **No metrics endpoint yet** (`_todos.md` Dep-6).
 - **Pre-1.0 schema drift**: protocol field renames listed in `_todos.md` Q2/Q3
   may require client updates between releases.

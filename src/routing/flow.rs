@@ -1,12 +1,11 @@
 //! Flow ID derivation + discussion-track projection helpers.
 //!
-//! Flow IDs are derived from Space / Entity IDs via `cx:space:` → `cx:flow:`
-//! / `cx:entity:` → `cx:flow:` re-tagging (sha256 fallback for unrecognised
-//! prefixes). The discussion-track projection wraps the same flow_id with a
-//! default `discussion` shape that the index handlers use to render flow-aware
-//! responses.
+//! Flow IDs are derived from Space IDs via `cx:space:` → `cx:flow:` re-tagging
+//! (sha256 fallback for unrecognised prefixes). The discussion-track
+//! projection wraps the same flow_id with a default `discussion` shape for
+//! account sync and admin snapshots.
 //!
-//! All fns are `pub` because index/sync/projection writers all consume them.
+//! All fns are `pub` because sync/projection writers consume them.
 //! Stream-A5 in `_todos.md` will lift this into a real `cx.flow.*` reducer
 //! state once the wire schema lands; for now it's a derivation layer the
 //! server fakes for clients that already speak the flow protocol.
@@ -32,11 +31,6 @@ pub fn flow_id_from_space_id(space_id: &str) -> String {
     retag_typed_id(space_id, "cx:space:", "cx:flow:").unwrap_or_else(|| derived_flow_id(space_id))
 }
 
-pub fn flow_id_from_entity_id(entity_id: &str) -> String {
-    retag_typed_id(entity_id, "cx:entity:", "cx:flow:")
-        .unwrap_or_else(|| derived_flow_id(entity_id))
-}
-
 pub fn message_id_from_event_id(event_id: &str) -> String {
     retag_typed_id(event_id, "cx:event:", "cx:message:")
         .unwrap_or_else(|| format!("cx:message:{event_id}"))
@@ -59,13 +53,6 @@ pub fn flow_id_for_projection_event(event: &ProjectionEventRecord) -> Option<Str
         .get("flow_id")
         .and_then(|value| value.as_str())
         .map(ToOwned::to_owned)
-        .or_else(|| {
-            event
-                .payload
-                .get("entity_id")
-                .and_then(|value| value.as_str())
-                .map(flow_id_from_entity_id)
-        })
         .or_else(|| Some(flow_id_from_space_id(&event.space_id)))
 }
 
@@ -101,8 +88,14 @@ pub fn flow_projection_for_space(
         .as_ref()
         .map(|meta| meta.owner.clone())
         .unwrap_or_else(|| state.config.service_did.clone());
-    let created_at = meta.as_ref().map(|meta| meta.created_at).unwrap_or_else(now);
-    let updated_at = meta.as_ref().map(|meta| meta.updated_at).unwrap_or(created_at);
+    let created_at = meta
+        .as_ref()
+        .map(|meta| meta.created_at)
+        .unwrap_or_else(now);
+    let updated_at = meta
+        .as_ref()
+        .map(|meta| meta.updated_at)
+        .unwrap_or(created_at);
     let deleted = meta.as_ref().is_some_and(|meta| meta.deleted);
     json!({
         "id": flow_id_from_space_id(space_id),

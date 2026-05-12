@@ -24,9 +24,7 @@ use crate::{
     },
 };
 
-use super::{
-    append_audit_log, auth_or_render, facet_names_from_value, now, query_param, render_error,
-};
+use super::{append_audit_log, auth_or_render, now, query_param, render_error};
 
 #[endpoint]
 pub async fn authz_check(depot: &mut Depot, req: &mut Request, res: &mut Response) {
@@ -45,37 +43,15 @@ pub async fn authz_check(depot: &mut Depot, req: &mut Request, res: &mut Respons
     };
     // Extract space_id from resource
     // Resource MUST be either a typed `cx:*:<uuid>` string (per spec M-15) or
-    // an object {"kind":"<kind>","space_id":"<id>"}. The legacy bare
-    // `space:<id>` form is no longer accepted; downstream code receives the
-    // resource string verbatim and treats the matching `space_id` as the same
-    // typed id.
+    // an object {"kind":"<kind>","space_id":"<id>"}.
     let (resource_str, space_id, resource_facets) = if let Some(s) = body.resource.as_str() {
         (s.to_owned(), s.to_owned(), Vec::new())
     } else if let Some(obj) = body.resource.as_object() {
         let kind = obj.get("kind").and_then(|v| v.as_str()).unwrap_or("space");
-        let entity_id = obj
-            .get("entity_id")
-            .or_else(|| (kind == "entity").then(|| obj.get("id")).flatten())
-            .and_then(|v| v.as_str())
-            .map(ToOwned::to_owned);
-        let projected_entity = entity_id.as_deref().and_then(|entity_id| {
-            state
-                .projection
-                .lock()
-                .expect("projection lock")
-                .entities
-                .get(entity_id)
-                .cloned()
-        });
         let sid = obj
             .get("space_id")
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned)
-            .or_else(|| {
-                projected_entity
-                    .as_ref()
-                    .map(|entity| entity.space_id.clone())
-            })
             .or_else(|| {
                 (kind == "space")
                     .then(|| {
@@ -86,20 +62,12 @@ pub async fn authz_check(depot: &mut Depot, req: &mut Request, res: &mut Respons
                     .flatten()
             })
             .unwrap_or_default();
-        let resource = entity_id
-            .as_ref()
-            .map(|entity_id| format!("entity:{entity_id}"))
+        let resource = obj
+            .get("id")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned)
             .unwrap_or_else(|| format!("{kind}:{sid}"));
-        let facets = facet_names_from_value(obj.get("facets"))
-            .into_iter()
-            .chain(
-                projected_entity
-                    .as_ref()
-                    .filter(|_| obj.get("facets").is_none())
-                    .map(|entity| entity.facets.clone())
-                    .unwrap_or_default(),
-            )
-            .collect();
+        let facets = facet_names_from_value(obj.get("facets"));
         (resource, sid, facets)
     } else {
         (String::new(), String::new(), Vec::new())
@@ -116,8 +84,10 @@ pub async fn authz_check(depot: &mut Depot, req: &mut Request, res: &mut Respons
         let spaces = state.spaces.lock().expect("spaces lock");
         let members = spaces
             .get(
-                &contrix_sdk::SpaceId::new(space_id.clone())
-                    .unwrap_or_else(|_| contrix_sdk::SpaceId::new("cx:space:01904100-0000-7000-8000-ec4565bea379").unwrap()),
+                &contrix_sdk::SpaceId::new(space_id.clone()).unwrap_or_else(|_| {
+                    contrix_sdk::SpaceId::new("cx:space:01904100-0000-7000-8000-ec4565bea379")
+                        .unwrap()
+                }),
             )
             .map(|s| s.members.iter().map(|m| m.to_string()).collect::<Vec<_>>())
             .unwrap_or_default();
@@ -154,6 +124,18 @@ pub async fn authz_check(depot: &mut Depot, req: &mut Request, res: &mut Respons
             .collect(),
         obligations: Vec::new(),
     }));
+}
+
+fn facet_names_from_value(value: Option<&serde_json::Value>) -> Vec<String> {
+    match value {
+        Some(serde_json::Value::Array(values)) => values
+            .iter()
+            .filter_map(|value| value.as_str().map(ToOwned::to_owned))
+            .collect(),
+        Some(serde_json::Value::Object(values)) => values.keys().cloned().collect(),
+        Some(serde_json::Value::String(value)) => vec![value.clone()],
+        _ => Vec::new(),
+    }
 }
 
 #[endpoint]
@@ -198,7 +180,7 @@ pub async fn effective_grants(depot: &mut Depot, req: &mut Request, res: &mut Re
     let default_grants = if grants.is_empty() {
         vec![json!({
             "subject": subject,
-            "actions": ["space.read", "directory.search", "repo.read"],
+            "actions": ["space.read", "directory.search"],
             "resources": [{"kind": "space", "space_id": "*"}]
         })]
     } else {
