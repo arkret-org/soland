@@ -117,7 +117,7 @@ async fn put_key_backup(depot: &mut Depot, req: &mut Request, res: &mut Response
         .to_owned();
     let store = state.persistence.key_backups();
     let duplicate = store.get(&backup_id).ok().flatten().is_some();
-    if let Err(error) = store.put(backup_id.clone(), backup) {
+    if let Err(error) = store.put(backup_id.clone(), backup.clone()) {
         tracing::error!(%error, backup_id, "put key backup");
         render_error(
             res,
@@ -128,9 +128,13 @@ async fn put_key_backup(depot: &mut Depot, req: &mut Request, res: &mut Response
         return;
     }
     res.render(Json(KeysBackupsPutResponse {
-        status: if duplicate { "duplicate" } else { "accepted" }.to_owned(),
-        backup_id,
-        ciphertext_digest,
+        ok: true,
+        backup: serde_json::json!({
+            "backup_id": backup_id,
+            "ciphertext_digest": ciphertext_digest,
+        }),
+        state: if duplicate { "duplicate" } else { "accepted" }.to_owned(),
+        todos: Vec::new(),
     }));
 }
 
@@ -152,6 +156,8 @@ async fn list_key_backups(depot: &mut Depot, req: &mut Request, res: &mut Respon
     res.render(Json(KeysBackupsListResponse {
         backups,
         next_cursor,
+        state: "active".to_owned(),
+        todos: Vec::new(),
     }));
 }
 
@@ -203,5 +209,11 @@ async fn delete_key_backup(depot: &mut Depot, req: &mut Request, res: &mut Respo
         .flatten()
         .filter(|backup| backup.get("actor_id").and_then(Value::as_str) == Some(&session.actor))
         .is_some_and(|_| store.delete(&backup_id).unwrap_or(false));
-    res.render(Json(KeysBackupsDeleteResponse { deleted }));
+    res.render(Json(KeysBackupsDeleteResponse {
+        ok: true,
+        backup_id,
+        deleted,
+        state: if deleted { "deleted" } else { "missing" }.to_owned(),
+        todos: Vec::new(),
+    }));
 }

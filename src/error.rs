@@ -26,7 +26,7 @@ use salvo::http::StatusCode;
 use salvo::oapi::{self, Components, EndpointOutRegister, Operation, ToSchema};
 use salvo::prelude::*;
 
-use crate::routing::util::render_error;
+use crate::routing::system::util::render_error;
 
 /// Every canonical Contrix error code, in registry order.
 ///

@@ -41,8 +41,9 @@ use events::operations::{
     operation_schema_for_kind, payload_field_present, validate_canonical_json_value,
     validate_canonical_json_value_inner, validate_content_block, validate_content_blocks,
     validate_device_message_payload, validate_encrypted_payload_envelope, validate_mentions,
-    validate_message_operation_payload, validate_operation_policy, validate_operation_schema,
-    validate_operation_semantics, validate_rfc3339_utc_z,
+    validate_message_operation_payload, validate_no_removed_legacy_contracts,
+    validate_operation_policy, validate_operation_schema, validate_operation_semantics,
+    validate_rfc3339_utc_z,
 };
 use events::projection::{
     FederationIngestResult, ProjectedEventPage, accept_local_operations, append_projection_event,

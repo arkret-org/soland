@@ -11,10 +11,11 @@ mod profile;
 
 use super::system::describe;
 use super::{
-    SyncCursorError, append_audit_log, auth_or_render, authenticated_session, bearer_token,
-    is_device_revoked, is_valid_handle, normalize_handle, now, parse_and_validate_sync_cursor,
-    prune_acked_device_messages, query_param, render_error, sha256_hex, sync_token_for_client_sync,
-    validate_device_id, validate_device_message_payload, validate_did,
+    AuthArgs, SyncCursorError, append_audit_log, auth_or_render, authenticated_session,
+    bearer_token, device_inventory_to_json, is_device_revoked, is_valid_handle, normalize_handle,
+    now, parse_and_validate_sync_cursor, prune_acked_device_messages, query_param, render_error,
+    sha256_hex, sync_token_for_client_sync, validate_device_id, validate_device_message_payload,
+    validate_did,
 };
 
 pub fn router() -> Router {

@@ -27,20 +27,11 @@ use crate::wire::ApiError;
 /// Always attaches an opaque `request_id` to `error.extra` so logs and
 /// client-facing diagnostics line up.
 pub fn render_error(res: &mut Response, status: StatusCode, code: &str, message: &str) {
-    let mut extra = std::collections::BTreeMap::new();
-    extra.insert(
-        "request_id".to_owned(),
-        serde_json::Value::String(ids::generate_request_id()),
-    );
+    let request_id = ids::generate_request_id();
     res.status_code(status);
     res.render(Json(ApiError {
         ok: false,
-        error: ErrorEnvelope {
-            errcode: code.to_owned(),
-            error: message.to_owned(),
-            retry_after_ms: None,
-            extra,
-        },
+        error: ErrorEnvelope::new(code, message).with_request_id(request_id),
     }));
 }
 

@@ -13,7 +13,7 @@ use super::{
     append_audit_log, auth_or_render, authenticated_session, is_valid_sha256_digest,
     is_valid_sha256_hex, now, query_param, render_error, sha256_hex,
     space_allows_plaintext_service, space_has_member, validate_canonical_json_value,
-    validate_device_id, validate_did, validate_space_id,
+    validate_device_id, validate_did, validate_no_removed_legacy_contracts, validate_space_id,
 };
 
 pub fn router() -> Router {

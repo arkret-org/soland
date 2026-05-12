@@ -146,11 +146,12 @@ async fn keys_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         return;
     }
 
-    if let Err(error) = state.persistence.one_time_keys().put(
-        session.actor,
-        body.device_id,
-        body.one_time_keys.into_iter().map(|(_, key)| key).collect(),
-    ) {
+    if let Err(error) =
+        state
+            .persistence
+            .one_time_keys()
+            .put(session.actor, body.device_id, body.one_time_keys)
+    {
         tracing::error!(%error, "failed to persist one-time keys");
     }
 

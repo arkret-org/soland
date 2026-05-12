@@ -314,7 +314,7 @@ fn admin_media_items(state: &AppState) -> Vec<Value> {
                 "space_id": blob.space_id,
                 "encrypted": blob.encryption.is_some(),
                 "uploaded_by": blob.uploaded_by,
-                "size": blob.bytes.len(),
+                "size": blob.size_bytes,
                 "created_at": blob.created_at,
             })
         })

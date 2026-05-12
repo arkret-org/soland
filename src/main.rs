@@ -78,7 +78,8 @@ async fn main() -> anyhow::Result<()> {
         bind = %config.bind,
         public_base_url = %config.public_base_url,
         service_did = %config.service_did,
-        blob_root = %config.blob_root.display(),
+        object_storage_backend = %config.object_storage.backend_name(),
+        object_storage_target = %config.object_storage.log_target(),
         development_mode = config.development_mode,
         storage = state.db.mode(),
         "starting soland"

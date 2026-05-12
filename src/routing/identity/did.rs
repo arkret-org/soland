@@ -334,11 +334,6 @@ pub(super) async fn submit_did_operation(depot: &mut Depot, req: &mut Request, r
             let doc = contrix_sdk::identity::DidDocument::new(did.clone(), key_id, public_key);
             let mut resolver = state.did_resolver.lock().expect("did resolver lock");
             match did.method() {
-                "uuid" => {
-                    let mut r = contrix_sdk::identity::DidUuidResolver::new();
-                    let _ = r.insert(doc);
-                    resolver.push(r);
-                }
                 "web" => {
                     let mut r = contrix_sdk::identity::DidWebResolver::new();
                     let _ = r.insert(doc);

@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, Utc};
-use contrix_sdk::{Commit, ErrorEnvelope, Operation, ServerDescription, SpaceSearchEntry};
+use contrix_sdk::{ErrorEnvelope, ServerDescription, SpaceSearchEntry};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -634,7 +634,7 @@ pub struct RepoDescribeResponse {
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct ListCommitsResponse {
-    pub commits: Vec<Commit>,
+    pub commits: Vec<Value>,
     pub next_cursor: Option<String>,
     pub has_more: bool,
 }
@@ -653,7 +653,7 @@ fn default_include_payload() -> bool {
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct GetOperationsResponse {
-    pub operations: Vec<Operation>,
+    pub operations: Vec<Value>,
     pub missing: Vec<String>,
     pub unauthorized: Vec<String>,
 }
@@ -669,7 +669,7 @@ pub struct RepoSyncRequest {
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct RepoSyncResponse {
-    pub operations: Vec<Operation>,
+    pub operations: Vec<Value>,
     pub next_cursor: Option<String>,
     pub has_more: bool,
 }
@@ -677,9 +677,9 @@ pub struct RepoSyncResponse {
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct SubmitCommitRequest {
     pub repo_id: String,
-    pub commit: Commit,
+    pub commit: Value,
     #[serde(default)]
-    pub operations: Vec<Operation>,
+    pub operations: Vec<Value>,
     pub expected_head: Option<String>,
     pub idempotency_key: Option<String>,
 }

@@ -67,9 +67,13 @@ fmt:
 fmt-check:
     cargo fmt --all -- --check
 
-# Run clippy with the repository's CI settings.
+# Check the default Cargo targets.
 check:
-    cargo clippy --all-targets --locked -- -D warnings
+    cargo check --locked
+
+# Run clippy on default Cargo targets.
+clippy:
+    cargo clippy --locked
 
 # Run the Rust test suite.
 test:

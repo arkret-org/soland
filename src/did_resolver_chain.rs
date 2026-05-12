@@ -7,9 +7,7 @@
 //!
 //! Priority order (first resolver that `supports()` a DID wins):
 //!
-//! 1. [`DidUuidResolver`] — first because uuid DIDs are local-only, deterministic, and never need
-//!    an upstream call.
-//! 2. [`DidWebvhResolver`] — only inserted when [`AppConfig::starid_webvh_resolver_active`] is
+//! 1. [`DidWebvhResolver`] — only inserted when [`AppConfig::starid_webvh_resolver_active`] is
 //!    `true`. The active flag is set at boot by `main.rs` after [`probe_starid_describe`] succeeds
 //!    against the configured `SERVERX_STARID_WEBVH_RESOLVER_URL`. The URL itself records admin
 //!    intent and is preserved on probe failure (so `/identity/describe` can keep advertising the
@@ -17,15 +15,15 @@
 //!    still requires a separate fetcher to call `insert_from_https_response` / `ingest_log`
 //!    (tracked separately as a follow-up; the chain placement here is the precondition for that
 //!    work).
-//! 3. [`DidWebResolver`] — generic `did:web:` fallback. Placed AFTER `DidWebvhResolver` so a
+//! 2. [`DidWebResolver`] — generic `did:web:` fallback. Placed AFTER `DidWebvhResolver` so a
 //!    `did:webvh:...` DID never falls through here (DidWebResolver does not support webvh, but
 //!    ordering keeps intent clear and makes future `did:web` ↔ `did:webvh` migration semantics
 //!    explicit).
-//! 4. [`DidKeyResolver`] — pure-cryptographic last-resort.
+//! 3. [`DidKeyResolver`] — pure-cryptographic last-resort.
 //!
 //! Filtering: [`AppConfig::did_resolver_allow_methods`] is honoured by
 //! omitting any resolver whose method is not in the allow list. Method
-//! names compared are bare ("uuid", "web", "webvh", "key") — matching
+//! names compared are bare ("web", "webvh", "key") — matching
 //! the existing CSV shape produced by `env_csv` in `config.rs`. An
 //! empty / missing allow list (legacy config) is treated as "allow
 //! everything" so we don't break existing deployments.
@@ -33,7 +31,7 @@
 use std::time::Duration;
 
 use contrix_sdk::identity::{
-    CompositeDidResolver, DidKeyResolver, DidUuidResolver, DidWebResolver, DidWebvhResolver,
+    CompositeDidResolver, DidKeyResolver, DidWebResolver, DidWebvhResolver,
 };
 
 use crate::config::AppConfig;
@@ -43,9 +41,6 @@ use crate::config::AppConfig;
 /// `starid_webvh_resolver_active` runtime liveness flag.
 pub fn build_did_resolver_chain(config: &AppConfig) -> CompositeDidResolver {
     let mut resolver = CompositeDidResolver::new();
-    if method_allowed(config, "uuid") {
-        resolver.push(DidUuidResolver::new());
-    }
     if method_allowed(config, "webvh") && config.starid_webvh_resolver_active {
         resolver.push(DidWebvhResolver::new());
     }
