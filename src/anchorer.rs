@@ -52,7 +52,7 @@ use contrix_sdk::{
 };
 
 use crate::config::AnchorerSigningKeyOrigin;
-use crate::routing::move_anchor::select_jws_verifier;
+use crate::routing::federation::move_anchor::select_jws_verifier;
 use crate::state::AppState;
 
 /// Outcome of a single anchorer signing pass.

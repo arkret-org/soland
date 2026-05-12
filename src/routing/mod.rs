@@ -15,78 +15,27 @@ use crate::{
     wire::{now, sync_token},
 };
 
-pub mod account;
-pub mod admin;
-pub mod admin_cells;
-pub mod admin_control;
-pub mod anchor_admin;
-pub mod audit;
-pub mod auth;
-pub mod authz;
-pub mod blob;
-pub mod describe;
-pub mod device;
-pub mod device_messages;
-pub mod directory;
-pub mod events;
-pub mod extract;
-pub mod federation;
-pub mod flow;
-pub mod identity;
-pub mod key_backup;
-pub mod keys;
-pub mod mimi;
-pub mod moderation;
-pub mod move_anchor;
-pub mod operations;
-pub mod policy;
-pub mod profile;
-pub mod projection;
-pub mod push;
-pub mod push_outbound;
-pub mod reaction;
-pub mod read_marker;
-pub mod relation;
-pub mod schema;
-pub mod space;
-pub mod sync;
-pub mod util;
-pub mod webrtc;
-use account::principal_space_for_did;
-use admin::admin_collection;
-use anchor_admin::{
-    admin_compact_anchor_dag, admin_get_anchor_dag, admin_get_anchorer, admin_list_bottom_global,
-    admin_list_gc_candidates, admin_list_multisig_pending, admin_list_space_bottom,
-    admin_reconfigure_anchorer, admin_repair_bottom, admin_rotate_signing_key,
-    admin_submit_multisig_partial,
+mod access;
+mod admin;
+mod events;
+pub(crate) mod federation;
+mod identity;
+mod interop;
+mod spaces;
+pub(crate) mod system;
+
+use access::policy::{
+    is_supported_policy_effect, is_valid_generated_or_custom_id, is_valid_policy_scope,
+    is_valid_policy_type, policy_document_to_response,
 };
-use audit::append_audit_log;
-use auth::{
-    auth_or_render, authenticated_session, is_device_revoked, revoke_device_record,
-    session_token_hash, token_for,
-};
-use device_messages::{device_message_events_after, prune_acked_device_messages};
-use directory::{
-    actor_visible_to, checked_limit, demo_actors, demo_organization, facets_match,
-    has_accepted_contact, query_limit, query_matches,
-};
-use events::{effective_read_receipt_policy_for_space, events_query_durable_scope_impl};
-use extract::AuthArgs;
-use federation::{
-    broadcast_anchor_to_peers, broadcast_move_to_peers, federation_anchors_pull,
-    federation_anchors_push, federation_pull_operations, federation_push_operations,
-    federation_space_members, federation_transaction, federation_verify_actor,
-};
-use flow::{
+use admin::audit::append_audit_log;
+use events::event_log::effective_read_receipt_policy_for_space;
+use events::flow::{
     default_discussion_track, derived_flow_id, discussion_track_for_projection_event,
     flow_history_visibility_for_space, flow_id_for_projection_event, flow_id_from_space_id,
     flow_projection_for_space, message_id_from_event_id, retag_typed_id,
 };
-use identity::{
-    identity_describe, identity_document, identity_log, identity_receipts, identity_resolve,
-    submit_did_operation, validate_did_document_services,
-};
-use operations::{
+use events::operations::{
     OperationPayloadSchema, PayloadRequirement, canonical_json_digest,
     known_space_denies_plaintext_service, message_operation_is_encrypted,
     operation_schema_for_kind, payload_field_present, validate_canonical_json_value,
@@ -95,11 +44,7 @@ use operations::{
     validate_message_operation_payload, validate_operation_policy, validate_operation_schema,
     validate_operation_semantics, validate_rfc3339_utc_z,
 };
-use policy::{
-    is_supported_policy_effect, is_valid_generated_or_custom_id, is_valid_policy_scope,
-    is_valid_policy_type, policy_document_to_response,
-};
-use projection::{
+use events::projection::{
     FederationIngestResult, ProjectedEventPage, accept_local_operations, append_projection_event,
     backfill_gap_events, ensure_projected_space, event_is_visible, ingest_federation_operations,
     load_projected_events_from_pg, operation_event_id, operation_is_visible,
@@ -109,26 +54,31 @@ use projection::{
     projection_event_json, redaction_targets_from_events, redaction_targets_from_operations,
     sync_timeline_message_json, truncate_gap_events,
 };
-use push::{
-    delete_push_rule, push_notify, push_register, push_rules, push_unregister, upsert_push_rule,
+use events::sync::{
+    SyncCursor, SyncCursorError, bound_cursor, bound_cursor_with_positions,
+    decode_sync_cursor_value, normalized_strings, parse_and_validate_sync_cursor, sync_filter_hash,
+    sync_token_for_client_sync,
 };
-use read_marker::{get_read_markers, send_read_receipt, set_read_marker};
-use schema::{delete_schema, get_schema, list_schemas, register_schema};
-use space::{
+use identity::account::principal_space_for_did;
+use identity::auth::{
+    auth_or_render, authenticated_session, is_device_revoked, revoke_device_record,
+    session_token_hash, token_for,
+};
+use identity::device_messages::{device_message_events_after, prune_acked_device_messages};
+use identity::did::validate_did_document_services;
+use spaces::directory::{
+    actor_visible_to, checked_limit, demo_actors, demo_organization, facets_match,
+    has_accepted_contact, query_limit, query_matches,
+};
+use spaces::space::{
     invite_token_matches_space, invite_token_space_id, is_space_deleted, prune_expired_typing,
     record_space_lifecycle_operation, space_allows_plaintext_service, space_discoverability,
     space_has_member, space_id_accessible, space_id_visible_to, space_lifecycle_response,
     space_owner_matches, space_resolvable_to, space_search_discoverability,
     space_search_visible_to, space_visible_to, touch_space, typing_ephemeral_for_space,
 };
-use sync::{
-    SyncCursor, SyncCursorError, bound_cursor, bound_cursor_with_positions,
-    decode_sync_cursor_value, normalized_strings, parse_and_validate_sync_cursor, sync_filter_hash,
-    sync_token_for_client_sync,
-};
-// Private legacy imports keep existing `super::name` sibling references
-// working while avoiding public re-exports from `crate::routing`.
-use util::{
+use system::extract::AuthArgs;
+use system::util::{
     bearer_token, handle_for_did, is_json_integer, is_supported_cx_entity_type,
     is_valid_discoverability, is_valid_entity_type, is_valid_handle, is_valid_sha256_digest,
     is_valid_sha256_hex, is_valid_sync_token, normalize_handle, query_flag, query_list,
@@ -153,12 +103,12 @@ pub fn router_with_rate_limiter_config(
         router = router.hoop(cors_handler_for_origin(origin));
     }
     let router = router
-        .push(describe::health_router())
-        .push(mimi::well_known_router())
+        .push(system::health_router())
+        .push(interop::well_known_router())
         .push(api_v1_router())
-        .push(policy::contrix_router())
-        .push(webrtc::contrix_router())
-        .push(api_admin_v1_router());
+        .push(access::contrix_router())
+        .push(interop::contrix_router())
+        .push(admin::admin_router());
     let doc = cached_contrix_openapi_doc(&router);
     router
         .unshift(
@@ -173,136 +123,18 @@ fn api_v1_router() -> Router {
     Router::with_path("api/v1")
         .oapi_tag("api")
         .hoop(wait_for_sync_token)
-        .push(describe::router())
-        .push(auth::router())
-        .push(account::router())
-        .push(space::router())
-        .push(move_anchor::router())
-        .push(reaction::router())
-        .push(
-            Router::with_path("read-markers")
-                .post(read_marker::set_read_marker)
-                .get(read_marker::get_read_markers),
-        )
-        .push(Router::with_path("receipts/read").post(read_marker::send_read_receipt))
-        .push(relation::router())
-        .push(
-            Router::with_path("schemas")
-                .get(schema::list_schemas)
-                .post(schema::register_schema),
-        )
-        .push(
-            Router::with_path("schemas/{schema_id}")
-                .get(schema::get_schema)
-                .delete(schema::delete_schema),
-        )
-        .push(Router::with_path("identity/describe").get(identity::identity_describe))
-        .push(Router::with_path("identity/resolve").post(identity::identity_resolve))
-        .push(Router::with_path("identity/document").get(identity::identity_document))
-        .push(Router::with_path("identity/log").get(identity::identity_log))
-        .push(
-            Router::with_path("identity/submit-did-operation").post(identity::submit_did_operation),
-        )
-        .push(Router::with_path("identity/receipts").get(identity::identity_receipts))
-        .push(sync::router())
+        .push(system::router())
+        .push(identity::router())
+        .push(spaces::router())
+        .push(federation::router())
         .push(events::router())
-        .push(directory::router())
-        .push(authz::router())
-        .push(admin_cells::router())
-        .push(Router::with_path("admin/{resource}").get(admin::admin_collection))
-        .push(move_anchor::api_admin_router())
-        .push(admin_control::router())
-        .push(audit::router())
-        .push(policy::router())
-        .push(profile::router())
-        .push(Router::with_path("push/register-device").post(push::push_register))
-        .push(Router::with_path("push/unregister-device").post(push::push_unregister))
-        .push(push_outbound::router())
-        .push(
-            Router::with_path("push/rules")
-                .get(push::push_rules)
-                .post(push::upsert_push_rule),
-        )
-        .push(Router::with_path("push/rules/{rule_id}").delete(push::delete_push_rule))
-        .push(Router::with_path("push/notify").post(push::push_notify))
-        .push(device::router())
-        .push(keys::router())
-        .push(key_backup::router())
-        .push(device_messages::router())
-        .push(
-            Router::with_path("federation/transactions/{txn_id}")
-                .put(federation::federation_transaction),
-        )
-        .push(
-            Router::with_path("federation/push-operations")
-                .post(federation::federation_push_operations),
-        )
-        .push(
-            Router::with_path("federation/pull-operations")
-                .get(federation::federation_pull_operations),
-        )
-        .push(
-            Router::with_path("federation/space-members").get(federation::federation_space_members),
-        )
-        .push(
-            Router::with_path("federation/verify-actor").post(federation::federation_verify_actor),
-        )
-        .push(
-            Router::with_path("federation/anchors")
-                .get(federation::federation_anchors_pull)
-                .post(federation::federation_anchors_push),
-        )
-        .push(webrtc::router())
-        .push(blob::router())
-        .push(moderation::router())
-        .push(mimi::router())
+        .push(access::router())
+        .push(admin::router())
+        .push(interop::router())
         .push(
             Router::with_path("{**rest}")
                 .options(cors_preflight)
                 .get(api_not_found),
-        )
-}
-
-fn api_admin_v1_router() -> Router {
-    Router::with_path("api/admin/v1")
-        .oapi_tag("admin")
-        .push(Router::with_path("spaces/{space_id}/anchorer").get(anchor_admin::admin_get_anchorer))
-        .push(
-            Router::with_path("spaces/{space_id}/anchorer/reconfigure")
-                .post(anchor_admin::admin_reconfigure_anchorer),
-        )
-        .push(
-            Router::with_path("spaces/{space_id}/anchorer/rotate-signing-key")
-                .post(anchor_admin::admin_rotate_signing_key),
-        )
-        .push(
-            Router::with_path("spaces/{space_id}/bottom")
-                .get(anchor_admin::admin_list_space_bottom),
-        )
-        .push(Router::with_path("bottom").get(anchor_admin::admin_list_bottom_global))
-        .push(
-            Router::with_path("spaces/{space_id}/bottom/{cell_id}/repair")
-                .post(anchor_admin::admin_repair_bottom),
-        )
-        .push(
-            Router::with_path("spaces/{space_id}/anchor-dag")
-                .get(anchor_admin::admin_get_anchor_dag),
-        )
-        .push(
-            Router::with_path("spaces/{space_id}/anchor-dag/compact")
-                .post(anchor_admin::admin_compact_anchor_dag),
-        )
-        .push(
-            Router::with_path("spaces/{space_id}/multisig/pending")
-                .get(anchor_admin::admin_list_multisig_pending),
-        )
-        .push(
-            Router::with_path("spaces/{space_id}/multisig/{anchor_id}/partial")
-                .post(anchor_admin::admin_submit_multisig_partial),
-        )
-        .push(
-            Router::with_path("spaces/{space_id}/gc-candidates")
-                .get(anchor_admin::admin_list_gc_candidates),
         )
 }
 

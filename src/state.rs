@@ -146,10 +146,10 @@ pub struct AppState {
     pub cell_registry: Arc<contrix_sdk::state_res::MemoryCellRegistry>,
     /// Live event notification channel for `cx.events.subscribe`
     /// long-poll/SSE streaming. Writers
-    /// (`routing::projection::project_accepted_operations`,
-    /// `routing::move_anchor::submit_anchor`,
+    /// (`routing::events::projection::project_accepted_operations`,
+    /// `routing::federation::move_anchor::submit_anchor`,
     /// `crate::anchorer::AnchorerWorker`) broadcast each accepted
-    /// projection event; subscribers in `routing::sync::events_subscribe`
+    /// projection event; subscribers in `routing::events::sync::events_subscribe`
     /// `recv()` on a fresh receiver and write live frames to the NDJSON
     /// streaming response. Capacity 1024 — enough for a multi-Space
     /// principal under burst load; receivers that fall behind get

@@ -7,7 +7,7 @@
 //! # Two-tier verifier model
 //!
 //! - Dev mode (`config.development_mode == true`): handlers use
-//!   `routing::move_anchor::verify_jws_shape` — RFC 7515 §3.2 detached
+//!   `routing::federation::move_anchor::verify_jws_shape` — RFC 7515 §3.2 detached
 //!   shape, alg = EdDSA, no zero-sentinel signature, no actual crypto.
 //!   Lets test fixtures and local dev iterate without managing real keys.
 //! - Production mode (default): handlers use [`verify_jws_ed25519`] via

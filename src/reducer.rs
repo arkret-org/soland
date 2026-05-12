@@ -79,7 +79,7 @@ pub struct ProjectionState {
     ///
     /// Keyed by canonical `CellRef` (e.g.
     /// `cx:cell:cx.component.space.read_receipt_policy.v1:<space_id>`).
-    /// Each successful apply_anchor (`routing::move_anchor::submit_anchor` or
+    /// Each successful apply_anchor (`routing::federation::move_anchor::submit_anchor` or
     /// `crate::anchorer::AnchorerWorker`) calls
     /// [`ProjectionState::reload_cells_from_store`] to refresh this map for
     /// the affected Space. Read handlers query via [`ProjectionState::cell`]
@@ -288,7 +288,7 @@ impl ProjectionState {
 
     /// Reload the cells map for one Space from the SDK CellStore + apply
     /// each cell's lattice. Called after every successful `apply_anchor`
-    /// in the Move/Anchor pipeline (`routing::move_anchor::submit_anchor`
+    /// in the Move/Anchor pipeline (`routing::federation::move_anchor::submit_anchor`
     /// + `crate::anchorer::AnchorerWorker`) to keep this projection cache
     /// in sync with anchored cell state.
     ///
