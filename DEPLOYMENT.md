@@ -33,6 +33,10 @@ Create a deploy-time `.env` (or a Kubernetes Secret / systemd EnvironmentFile):
 SOLAND_BIND=0.0.0.0:8698
 SOLAND_PUBLIC_BASE_URL=https://soland.example
 SOLAND_SERVICE_DID=did:web:soland.example
+SOLAND_EMBEDDED_WEBVH_PROVIDER_ENABLED=true
+# Optional: use a standalone webvh provider instead of, or alongside, the embedded provider.
+# SOLAND_EXTERNAL_WEBVH_PROVIDER_URL=https://webvh.example
+# SOLAND_DEFAULT_WEBVH_PROVIDER_ID=soland.embedded
 SOLAND_OBJECT_STORAGE_BACKEND=s3-compatible
 SOLAND_OBJECT_STORAGE_S3_BUCKET=soland
 SOLAND_OBJECT_STORAGE_S3_REGION=us-east-1

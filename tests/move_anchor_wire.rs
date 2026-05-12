@@ -56,8 +56,10 @@ fn test_config() -> AppConfig {
         session_grant_introspection_url: None,
         session_grant_introspection_bearer: None,
         did_resolver_allow_methods: vec!["web".to_owned(), "key".to_owned(), "uuid".to_owned()],
-        starid_webvh_resolver_url: None,
-        starid_webvh_resolver_active: false,
+        embedded_webvh_provider_enabled: false,
+        external_webvh_provider_url: None,
+        external_webvh_provider_active: false,
+        default_webvh_provider_id: None,
         // 0 disables replay-window enforcement so existing fixed-time HLC
         // fixtures (`0189c4d2af00...`, July 2023) keep passing. Replay-
         // protection tests build a custom config with a non-zero window.

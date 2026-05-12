@@ -1004,7 +1004,7 @@ pub struct IdentityDescribeResponse {
     pub protocol_version: String,
     pub profiles: Vec<String>,
     pub resolver_policy: Value,
-    pub starid_profile: Value,
+    pub did_webvh: Value,
     pub todos: Vec<String>,
 }
 

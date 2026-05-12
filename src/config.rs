@@ -13,19 +13,22 @@ pub struct AppConfig {
     pub session_grant_introspection_url: Option<String>,
     pub session_grant_introspection_bearer: Option<String>,
     pub did_resolver_allow_methods: Vec<String>,
-    /// Configured starid `did:webvh` resolver URL. Records **admin intent** —
-    /// always reflects whatever was passed via `SOLAND_STARID_WEBVH_RESOLVER_URL`,
-    /// regardless of whether the upstream is currently reachable. The `/identity/describe`
-    /// handler surfaces this as `starid_profile.enabled` so admin / sibling services
-    /// can discover the configured profile even when the upstream is down.
-    pub starid_webvh_resolver_url: Option<String>,
-    /// Runtime liveness flag for the `did:webvh` resolver chain entry.
-    /// `true` only when [`probe_starid_describe`] succeeded at boot; consumed by
-    /// [`build_did_resolver_chain`] to decide whether to actually mount the
-    /// `DidWebvhResolver` in the chain. Decoupling intent (`starid_webvh_resolver_url`)
-    /// from liveness (`starid_webvh_resolver_active`) prevents the boot probe
-    /// from silently disabling profile discovery.
-    pub starid_webvh_resolver_active: bool,
+    /// Enable soland's built-in `did:webvh` provider. This is intended for
+    /// ordinary self-hosted deployments and tests: coauth can discover it via
+    /// `/api/v1/identity/describe`, register a user DID through soland, then
+    /// resolve the resulting document through soland's local identity store.
+    pub embedded_webvh_provider_enabled: bool,
+    /// Optional external `did:webvh` provider URL. This can point at StarID or
+    /// any compatible provider. It records admin intent and is surfaced in
+    /// `/identity/describe` even when the boot probe fails.
+    pub external_webvh_provider_url: Option<String>,
+    /// Runtime liveness for the external provider. `true` only when the
+    /// external provider's `/describe` probe succeeds at boot.
+    pub external_webvh_provider_active: bool,
+    /// Provider id coauth should preselect. When unset, soland chooses
+    /// `soland.embedded` if the embedded provider is enabled, otherwise the
+    /// first configured external provider.
+    pub default_webvh_provider_id: Option<String>,
     /// JWS replay protection window in seconds.
     /// Move and Anchor signatures whose signed `hlc` is older than
     /// `now - replay_window_seconds` OR newer than `now +
@@ -239,7 +242,10 @@ impl AppConfig {
             env_non_empty("SOLAND_SESSION_GRANT_INTROSPECTION_BEARER");
         let did_resolver_allow_methods = env_csv("SOLAND_DID_RESOLVER_ALLOW_METHODS")
             .unwrap_or_else(|| vec!["web".to_owned(), "key".to_owned(), "uuid".to_owned()]);
-        let starid_webvh_resolver_url = env_non_empty("SOLAND_STARID_WEBVH_RESOLVER_URL");
+        let embedded_webvh_provider_enabled =
+            env_bool("SOLAND_EMBEDDED_WEBVH_PROVIDER_ENABLED")?.unwrap_or(true);
+        let external_webvh_provider_url = env_non_empty("SOLAND_EXTERNAL_WEBVH_PROVIDER_URL");
+        let default_webvh_provider_id = env_non_empty("SOLAND_DEFAULT_WEBVH_PROVIDER_ID");
         // 0 disables replay-window enforcement; default 5 min per spec.
         let jws_replay_window_seconds = std::env::var("SOLAND_JWS_REPLAY_WINDOW_SECONDS")
             .ok()
@@ -275,12 +281,11 @@ impl AppConfig {
             session_grant_introspection_url,
             session_grant_introspection_bearer,
             did_resolver_allow_methods,
-            starid_webvh_resolver_url,
+            embedded_webvh_provider_enabled,
+            external_webvh_provider_url,
             // `main.rs` flips this to true after a successful boot probe.
-            // Default false: until proven reachable, the resolver is not mounted
-            // even if the URL is configured. Intent (URL) and liveness (active)
-            // are independent.
-            starid_webvh_resolver_active: false,
+            external_webvh_provider_active: false,
+            default_webvh_provider_id,
             jws_replay_window_seconds,
             jws_replay_window_per_family: Self::default_replay_overrides(),
             anchorer_signing_key_seed,

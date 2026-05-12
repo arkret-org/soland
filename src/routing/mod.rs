@@ -976,8 +976,10 @@ mod operation_conformance_tests {
                     "key".to_owned(),
                     "uuid".to_owned(),
                 ],
-                starid_webvh_resolver_url: None,
-                starid_webvh_resolver_active: false,
+                embedded_webvh_provider_enabled: false,
+                external_webvh_provider_url: None,
+                external_webvh_provider_active: false,
+                default_webvh_provider_id: None,
                 // Tests use fixed-time HLC fixtures (`0189c4d2af00...`) which
                 // are years in the past relative to wall-clock; disable
                 // replay-window enforcement so they pass.

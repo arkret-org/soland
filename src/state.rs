@@ -567,7 +567,10 @@ impl AppState {
         // borrow `&config` for the helper before `config` itself is
         // moved into `Self.config`.
         let did_resolver = Arc::new(Mutex::new(
-            self::did_resolver_chain::build_did_resolver_chain(&config),
+            self::did_resolver_chain::build_did_resolver_chain_with_identity(
+                &config,
+                Some(persistence.clone()),
+            ),
         ));
 
         // Derive the AnchorerWorker's Ed25519 signing key.

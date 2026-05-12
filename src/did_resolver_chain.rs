@@ -1,25 +1,20 @@
-//! C10.B (2026-05-09 十八轮 并行) — DID resolver chain wiring for
-//! production. The chain is the single source of truth that
-//! `jws_verify` consults when it needs to resolve a JWS
-//! `verification_method` DID into a public key. Keeping the wiring in
-//! its own helper means the chain composition can grow (`did:keri`,
-//! `did:peer`, etc.) without `AppState::new` ballooning.
+//! DID resolver chain wiring. The chain is the single source of truth that
+//! `jws_verify` consults when it needs to resolve a JWS `verification_method`
+//! DID into a public key.
 //!
 //! Priority order (first resolver that `supports()` a DID wins):
 //!
-//! 1. [`DidWebvhResolver`] — only inserted when [`AppConfig::starid_webvh_resolver_active`] is
-//!    `true`. The active flag is set at boot by `main.rs` after [`probe_starid_describe`] succeeds
-//!    against the configured `SERVERX_STARID_WEBVH_RESOLVER_URL`. The URL itself records admin
-//!    intent and is preserved on probe failure (so `/identity/describe` can keep advertising the
-//!    profile for sibling-service discovery). The SDK resolver is a cache — production ingestion
-//!    still requires a separate fetcher to call `insert_from_https_response` / `ingest_log`
-//!    (tracked separately as a follow-up; the chain placement here is the precondition for that
-//!    work).
-//! 2. [`DidWebResolver`] — generic `did:web:` fallback. Placed AFTER `DidWebvhResolver` so a
+//! 1. [`LocalIdentityResolver`] — resolves DID documents stored in soland's
+//!    durable identity store. This is what makes the embedded `did:webvh`
+//!    provider usable without an external StarID/webvh service.
+//! 2. [`DidWebvhResolver`] — inserted when the external provider boot probe
+//!    succeeds. The SDK resolver is cache-oriented; actual external fetching
+//!    still belongs to a provider-specific client.
+//! 3. [`DidWebResolver`] — generic `did:web:` fallback. Placed AFTER `DidWebvhResolver` so a
 //!    `did:webvh:...` DID never falls through here (DidWebResolver does not support webvh, but
 //!    ordering keeps intent clear and makes future `did:web` ↔ `did:webvh` migration semantics
 //!    explicit).
-//! 3. [`DidKeyResolver`] — pure-cryptographic last-resort.
+//! 4. [`DidKeyResolver`] — pure-cryptographic last-resort.
 //!
 //! Filtering: [`AppConfig::did_resolver_allow_methods`] is honoured by
 //! omitting any resolver whose method is not in the allow list. Method
@@ -28,20 +23,41 @@
 //! empty / missing allow list (legacy config) is treated as "allow
 //! everything" so we don't break existing deployments.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use contrix_sdk::identity::{
-    CompositeDidResolver, DidKeyResolver, DidWebResolver, DidWebvhResolver,
+    CompositeDidResolver, DidDocument, DidKeyResolver, DidResolver, DidWebResolver,
+    DidWebvhResolver,
 };
+use contrix_sdk::{Did, Error};
 
 use crate::config::AppConfig;
+use crate::persistence::PersistenceStore;
 
 /// Build the production `CompositeDidResolver` chain for `AppState`.
-/// Honors the `did_resolver_allow_methods` filter and the
-/// `starid_webvh_resolver_active` runtime liveness flag.
+/// Honors the `did_resolver_allow_methods` filter.
 pub fn build_did_resolver_chain(config: &AppConfig) -> CompositeDidResolver {
+    build_did_resolver_chain_with_identity(config, None)
+}
+
+/// Build the resolver chain and optionally place soland's local identity
+/// store first. Tests that only care about static resolver composition can use
+/// [`build_did_resolver_chain`]; `AppState` uses this variant so newly
+/// registered embedded webvh DIDs are immediately resolvable by signature
+/// verification.
+pub fn build_did_resolver_chain_with_identity(
+    config: &AppConfig,
+    persistence: Option<Arc<dyn PersistenceStore>>,
+) -> CompositeDidResolver {
     let mut resolver = CompositeDidResolver::new();
-    if method_allowed(config, "webvh") && config.starid_webvh_resolver_active {
+    if let Some(persistence) = persistence {
+        resolver.push(LocalIdentityResolver {
+            persistence,
+            allowed_methods: config.did_resolver_allow_methods.clone(),
+        });
+    }
+    if method_allowed(config, "webvh") && config.external_webvh_provider_active {
         resolver.push(DidWebvhResolver::new());
     }
     if method_allowed(config, "web") {
@@ -51,6 +67,52 @@ pub fn build_did_resolver_chain(config: &AppConfig) -> CompositeDidResolver {
         resolver.push(DidKeyResolver::new());
     }
     resolver
+}
+
+struct LocalIdentityResolver {
+    persistence: Arc<dyn PersistenceStore>,
+    allowed_methods: Vec<String>,
+}
+
+impl LocalIdentityResolver {
+    fn method_allowed(&self, method: &str) -> bool {
+        self.allowed_methods.is_empty()
+            || self
+                .allowed_methods
+                .iter()
+                .any(|allowed| allowed.eq_ignore_ascii_case(method))
+    }
+
+    fn document(&self, did: &Did) -> Result<DidDocument, Error> {
+        if !self.method_allowed(did.method()) {
+            return Err(Error::Protocol("DID method not allowed".to_owned()));
+        }
+        let Some(record) = self
+            .persistence
+            .identity()
+            .get_document(did.as_str())
+            .map_err(|e| Error::Protocol(format!("local DID store read failed: {e}")))?
+        else {
+            return Err(Error::Protocol("local DID document not found".to_owned()));
+        };
+        let document: DidDocument = serde_json::from_value(record.did_document)
+            .map_err(|e| Error::Protocol(format!("local DID document decode failed: {e}")))?;
+        if &document.id != did {
+            return Err(Error::Protocol("local DID document id mismatch".to_owned()));
+        }
+        document.validate()?;
+        Ok(document)
+    }
+}
+
+impl DidResolver for LocalIdentityResolver {
+    fn supports(&self, did: &Did) -> bool {
+        self.document(did).is_ok()
+    }
+
+    fn resolve_did(&self, did: &Did) -> Result<DidDocument, Error> {
+        self.document(did)
+    }
 }
 
 fn method_allowed(config: &AppConfig, method: &str) -> bool {
@@ -63,21 +125,10 @@ fn method_allowed(config: &AppConfig, method: &str) -> bool {
         .any(|allowed| allowed.eq_ignore_ascii_case(method))
 }
 
-/// Round 21: probe a starid `<URL>/describe` endpoint to confirm the
-/// configured `starid_webvh_resolver_url` actually responds before we
-/// commit to mounting the [`DidWebvhResolver`] in the chain. Returns
-/// `Ok(())` only when the HTTP GET returns a 2xx response in under
-/// `timeout`.
-///
-/// On the boot path (see `main.rs`), the caller flips
-/// `config.starid_webvh_resolver_active = true` only on `Ok(())`. On `Err(_)`
-/// the flag stays `false` (the URL itself is preserved so
-/// `/identity/describe` can keep advertising the configured profile for
-/// sibling-service discovery). [`build_did_resolver_chain`] consults the
-/// active flag — not the URL — so a misconfigured deployment does not
-/// silently break `did:webvh` lookups: the chain reports `not supported`
-/// for `did:webvh` rather than dialing an unreachable endpoint per request.
-pub async fn probe_starid_describe(url: &str, timeout: Duration) -> Result<(), String> {
+/// Probe an external webvh provider `<URL>/describe` endpoint. The configured
+/// URL records admin intent and is still advertised when the probe fails; this
+/// function only controls runtime liveness.
+pub async fn probe_webvh_provider_describe(url: &str, timeout: Duration) -> Result<(), String> {
     let trimmed = url.trim_end_matches('/');
     let describe_url = format!("{trimmed}/describe");
     let client = reqwest::Client::builder()
@@ -88,10 +139,10 @@ pub async fn probe_starid_describe(url: &str, timeout: Duration) -> Result<(), S
         .get(&describe_url)
         .send()
         .await
-        .map_err(|e| format!("starid /describe request failed: {e}"))?;
+        .map_err(|e| format!("webvh provider /describe request failed: {e}"))?;
     if !resp.status().is_success() {
         return Err(format!(
-            "starid /describe returned non-2xx status {}",
+            "webvh provider /describe returned non-2xx status {}",
             resp.status()
         ));
     }
@@ -101,12 +152,12 @@ pub async fn probe_starid_describe(url: &str, timeout: Duration) -> Result<(), S
 #[cfg(test)]
 mod tests {
     use std::net::SocketAddr;
-    use std::path::PathBuf;
 
     use contrix_sdk::Did;
     use contrix_sdk::identity::DidResolver;
 
     use super::*;
+    use crate::config::ObjectStorageConfig;
 
     fn base_config() -> AppConfig {
         AppConfig {
@@ -114,7 +165,7 @@ mod tests {
             public_base_url: "http://127.0.0.1:0".to_owned(),
             service_did: "did:web:soland.test".to_owned(),
             database_url: None,
-            blob_root: PathBuf::from("/tmp/soland-blobs"),
+            object_storage: ObjectStorageConfig::local(std::env::temp_dir().join("soland-blobs")),
             cors_allow_origin: None,
             development_mode: false,
             session_grant_introspection_url: None,
@@ -125,11 +176,12 @@ mod tests {
                 "uuid".to_owned(),
                 "webvh".to_owned(),
             ],
-            starid_webvh_resolver_url: None,
-            starid_webvh_resolver_active: false,
+            embedded_webvh_provider_enabled: false,
+            external_webvh_provider_url: None,
+            external_webvh_provider_active: false,
+            default_webvh_provider_id: None,
             jws_replay_window_seconds: 300,
             jws_replay_window_per_family: std::collections::BTreeMap::new(),
-            lattice_first: false,
             anchorer_signing_key_seed: None,
             use_keystore: false,
             federation_policy: crate::config::FederationPolicy::Mesh,
@@ -140,7 +192,7 @@ mod tests {
     /// `did:webvh:<scid>:<host>:<path...>` — well-formed sample that
     /// `DidWebvhResolver::supports()` accepts after URL-shape validation.
     fn sample_webvh_did() -> Did {
-        Did::new("did:webvh:zabc:starid.example:users:alice").expect("valid did:webvh")
+        Did::new("did:webvh:zabc:webvh.example:users:alice").expect("valid did:webvh")
     }
 
     fn sample_web_did() -> Did {
@@ -150,8 +202,8 @@ mod tests {
     #[test]
     fn chain_includes_webvh_resolver_when_active() {
         let mut config = base_config();
-        config.starid_webvh_resolver_url = Some("https://starid.example".to_owned());
-        config.starid_webvh_resolver_active = true;
+        config.external_webvh_provider_url = Some("https://webvh.example".to_owned());
+        config.external_webvh_provider_active = true;
         let chain = build_did_resolver_chain(&config);
 
         // The webvh resolver claims `supports()` purely on DID method +
@@ -160,7 +212,7 @@ mod tests {
         // a webvh resolver is in the chain.
         assert!(
             chain.supports(&sample_webvh_did()),
-            "chain should support did:webvh when starid resolver is active"
+            "chain should support did:webvh when external provider resolver is active"
         );
     }
 
@@ -171,8 +223,8 @@ mod tests {
         // but `/identity/describe` keeps advertising the profile (tested
         // separately in `routing/identity.rs`).
         let mut config = base_config();
-        config.starid_webvh_resolver_url = Some("https://starid.example".to_owned());
-        config.starid_webvh_resolver_active = false;
+        config.external_webvh_provider_url = Some("https://webvh.example".to_owned());
+        config.external_webvh_provider_active = false;
         let chain = build_did_resolver_chain(&config);
 
         assert!(
@@ -186,13 +238,13 @@ mod tests {
     #[test]
     fn chain_omits_webvh_resolver_when_url_absent() {
         let mut config = base_config();
-        config.starid_webvh_resolver_url = None;
-        config.starid_webvh_resolver_active = false;
+        config.external_webvh_provider_url = None;
+        config.external_webvh_provider_active = false;
         let chain = build_did_resolver_chain(&config);
 
         assert!(
             !chain.supports(&sample_webvh_did()),
-            "chain must NOT support did:webvh when starid url is absent"
+            "chain must NOT support did:webvh when external provider url is absent"
         );
         // The other methods should still be reachable.
         assert!(chain.supports(&sample_web_did()));
@@ -207,8 +259,8 @@ mod tests {
         // `did:webvh:` (method != "web"), but ordering still encodes
         // intent and protects against future fallback-style behavior.
         let mut config = base_config();
-        config.starid_webvh_resolver_url = Some("https://starid.example".to_owned());
-        config.starid_webvh_resolver_active = true;
+        config.external_webvh_provider_url = Some("https://webvh.example".to_owned());
+        config.external_webvh_provider_active = true;
         let chain = build_did_resolver_chain(&config);
 
         // Resolver returns `Err("did:webvh document not cached")` from
@@ -230,8 +282,8 @@ mod tests {
         let mut config = base_config();
         config.did_resolver_allow_methods =
             vec!["web".to_owned(), "key".to_owned(), "uuid".to_owned()];
-        config.starid_webvh_resolver_url = Some("https://starid.example".to_owned());
-        config.starid_webvh_resolver_active = true;
+        config.external_webvh_provider_url = Some("https://webvh.example".to_owned());
+        config.external_webvh_provider_active = true;
         let chain = build_did_resolver_chain(&config);
         assert!(
             !chain.supports(&sample_webvh_did()),
@@ -246,8 +298,8 @@ mod tests {
         // existing chains keep resolving did:web / did:key.
         let mut config = base_config();
         config.did_resolver_allow_methods.clear();
-        config.starid_webvh_resolver_url = Some("https://starid.example".to_owned());
-        config.starid_webvh_resolver_active = true;
+        config.external_webvh_provider_url = Some("https://webvh.example".to_owned());
+        config.external_webvh_provider_active = true;
         let chain = build_did_resolver_chain(&config);
         assert!(chain.supports(&sample_webvh_did()));
         assert!(chain.supports(&sample_web_did()));

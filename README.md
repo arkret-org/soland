@@ -104,6 +104,9 @@ All settings can be supplied via environment variables (preferred) or a
 | `SOLAND_BIND` (or `--bind`) | `127.0.0.1:8698` | Listen address |
 | `SOLAND_PUBLIC_BASE_URL` | `http://<bind>` | Advertised base URL (`/api/v1/server/describe`) |
 | `SOLAND_SERVICE_DID` | `did:web:soland.local` | Service DID — also the proof `audience` binding |
+| `SOLAND_EMBEDDED_WEBVH_PROVIDER_ENABLED` | `true` | Enable soland's built-in `did:webvh` provider for coauth registration |
+| `SOLAND_EXTERNAL_WEBVH_PROVIDER_URL` | unset | Optional external `did:webvh` provider, such as a standalone StarID service |
+| `SOLAND_DEFAULT_WEBVH_PROVIDER_ID` | unset | Optional coauth default provider id: `soland.embedded` or `external.webvh` |
 | `DATABASE_URL` | unset | If set, enables PostgreSQL and runs migrations |
 | `SOLAND_OBJECT_STORAGE_BACKEND` | `local` | Blob object backend: `local` or `s3-compatible` |
 | `SOLAND_OBJECT_STORAGE_LOCAL_ROOT` | system temp + `/soland-objects` | Local filesystem root when using `local` |
@@ -119,6 +122,11 @@ production proof material — no `alg: none` or `dev-proof`, proof `payload_hash
 must match the canonical commit digest, the verification method must be rooted
 in the commit author DID, and proof `domain`/`audience` must bind to
 `SOLAND_SERVICE_DID`.
+
+`GET /api/v1/identity/describe` exposes `did_webvh.providers[]` for coauth.
+When the embedded provider is enabled, coauth can register through
+`POST /api/v1/identity/webvh/register`; soland then serves the DID document and
+webvh log from `/api/v1/identity/webvh/{local_id}/did.json` and `.jsonl`.
 
 Client-sync `next_batch` cursors are structured `cx:cursor:` tokens bound to
 the principal, device, service DID, filter hash, stream positions, and expiry.

@@ -28,15 +28,11 @@ async fn main() -> anyhow::Result<()> {
             std::env::set_var("DATABASE_URL", database_url);
         }
     }
-    // Round 21 / C36.2: probe the starid `/describe` endpoint before mounting
-    // the DidWebvhResolver into the resolver chain. A misconfigured URL would
-    // otherwise silently break `did:webvh` lookups. The probe result flips
-    // the runtime liveness flag (`starid_webvh_resolver_active`) — the URL
-    // itself is preserved so `/identity/describe` keeps advertising the
-    // configured profile for sibling-service discovery (intent vs liveness
-    // are independent concerns; conflating them was the C36.2 bug).
-    if let Some(url) = config.starid_webvh_resolver_url.clone() {
-        match soland::state::did_resolver_chain::probe_starid_describe(
+    // Probe the optional external webvh provider before advertising it as
+    // active. The configured URL remains visible in `/identity/describe` even
+    // when the probe fails so coauth can show the operator's intended setup.
+    if let Some(url) = config.external_webvh_provider_url.clone() {
+        match soland::state::did_resolver_chain::probe_webvh_provider_describe(
             &url,
             std::time::Duration::from_secs(3),
         )
@@ -44,21 +40,17 @@ async fn main() -> anyhow::Result<()> {
         {
             Ok(()) => {
                 tracing::info!(
-                    starid_url = %url,
-                    "starid /describe probe succeeded — DidWebvhResolver enabled"
+                    webvh_provider_url = %url,
+                    "external webvh provider /describe probe succeeded"
                 );
-                config.starid_webvh_resolver_active = true;
+                config.external_webvh_provider_active = true;
             }
             Err(error) => {
                 tracing::warn!(
-                    starid_url = %url,
+                    webvh_provider_url = %url,
                     %error,
-                    "starid /describe probe failed — DidWebvhResolver omitted from chain (URL preserved for /identity/describe discovery)"
+                    "external webvh provider /describe probe failed"
                 );
-                // Intentionally do NOT clear `starid_webvh_resolver_url`.
-                // The active flag stays false (already its default), so
-                // `build_did_resolver_chain` skips the resolver, but
-                // describe handlers still see the configured URL.
             }
         }
     }
@@ -78,6 +70,8 @@ async fn main() -> anyhow::Result<()> {
         bind = %config.bind,
         public_base_url = %config.public_base_url,
         service_did = %config.service_did,
+        embedded_webvh_provider_enabled = config.embedded_webvh_provider_enabled,
+        external_webvh_provider_url = ?config.external_webvh_provider_url,
         object_storage_backend = %config.object_storage.backend_name(),
         object_storage_target = %config.object_storage.log_target(),
         development_mode = config.development_mode,

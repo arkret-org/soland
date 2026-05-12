@@ -22,6 +22,7 @@ pub const CX_SPACE_CREATE: &str = "cx.space.create";
 pub const CX_SPACE_UPDATE: &str = "cx.space.update";
 pub const CX_SPACE_DESTROY: &str = "cx.space.destroy";
 pub const CX_REDACTION: &str = "cx.redaction";
+pub const LEGACY_KIND_MIGRATION_PROFILE: &str = "cx.profile.legacy_kind_migration.v1";
 
 pub fn canonical_kind_for_operation(operation: &Operation) -> Option<&'static str> {
     canonical_kind_for_payload(&operation.object_type, &operation.payload)
