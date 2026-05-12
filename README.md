@@ -22,11 +22,11 @@ cd soland
 ### Run with the in-memory store (no database)
 
 ```bash
-SERVERX_DEVELOPMENT_MODE=true cargo run -- --bind 127.0.0.1:8698
+SOLAND_DEVELOPMENT_MODE=true cargo run -- --bind 127.0.0.1:8698
 ```
 
 `DATABASE_URL` is optional. Without it, soland runs with an in-memory repository
-and demo Space data while keeping the same HTTP API. `SERVERX_DEVELOPMENT_MODE`
+and demo Space data while keeping the same HTTP API. `SOLAND_DEVELOPMENT_MODE`
 **defaults to `false`**; turn it on explicitly when you need `dev_login`,
 the admin snapshot endpoints, or the relaxed DID-document validation that
 the development workflow relies on.
@@ -35,7 +35,7 @@ the development workflow relies on.
 
 ```bash
 DATABASE_URL=postgres://soland:soland@localhost:5432/soland \
-  SERVERX_DEVELOPMENT_MODE=true \
+  SOLAND_DEVELOPMENT_MODE=true \
   cargo run -- --bind 127.0.0.1:8698
 ```
 
@@ -46,11 +46,11 @@ devices / federation_transactions` tables are created idempotently.
 
 ```bash
 docker run --rm -p 8698:8698 \
-  -e SERVERX_PUBLIC_BASE_URL=https://soland.example \
-  -e SERVERX_SERVICE_DID=did:web:soland.example \
+  -e SOLAND_PUBLIC_BASE_URL=https://soland.example \
+  -e SOLAND_SERVICE_DID=did:web:soland.example \
   -e DATABASE_URL=postgres://soland:soland@db:5432/soland \
-  -e SERVERX_OBJECT_STORAGE_BACKEND=local \
-  -e SERVERX_OBJECT_STORAGE_LOCAL_ROOT=/var/lib/soland/objects \
+  -e SOLAND_OBJECT_STORAGE_BACKEND=local \
+  -e SOLAND_OBJECT_STORAGE_LOCAL_ROOT=/var/lib/soland/objects \
   -v soland-objects:/var/lib/soland \
   ghcr.io/contrix/soland:latest
 ```
@@ -64,24 +64,24 @@ All settings can be supplied via environment variables (preferred) or a
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `SERVERX_BIND` (or `--bind`) | `127.0.0.1:8698` | Listen address |
-| `SERVERX_PUBLIC_BASE_URL` | `http://<bind>` | Advertised base URL (`/api/v1/server/describe`) |
-| `SERVERX_SERVICE_DID` | `did:web:soland.local` | Service DID — also the proof `audience` binding |
+| `SOLAND_BIND` (or `--bind`) | `127.0.0.1:8698` | Listen address |
+| `SOLAND_PUBLIC_BASE_URL` | `http://<bind>` | Advertised base URL (`/api/v1/server/describe`) |
+| `SOLAND_SERVICE_DID` | `did:web:soland.local` | Service DID — also the proof `audience` binding |
 | `DATABASE_URL` | unset | If set, enables PostgreSQL and runs migrations |
-| `SERVERX_OBJECT_STORAGE_BACKEND` | `local` | Blob object backend: `local` or `s3-compatible` |
-| `SERVERX_OBJECT_STORAGE_LOCAL_ROOT` | system temp + `/soland-objects` | Local filesystem root when using `local` |
-| `SERVERX_OBJECT_STORAGE_PREFIX` | unset | Optional object key prefix shared by local and S3-compatible backends |
-| `SERVERX_OBJECT_STORAGE_S3_BUCKET` | required for S3 | S3-compatible bucket name |
-| `SERVERX_OBJECT_STORAGE_S3_ENDPOINT` | region endpoint | Optional custom endpoint for MinIO/R2/etc. |
-| `SERVERX_CORS_ALLOW_ORIGIN` | unset | Single explicit CORS origin for browser clients |
-| `SERVERX_DEVELOPMENT_MODE` | `false` | Enable dev-only endpoints (`dev_login`, admin snapshots, relaxed DID validation) |
+| `SOLAND_OBJECT_STORAGE_BACKEND` | `local` | Blob object backend: `local` or `s3-compatible` |
+| `SOLAND_OBJECT_STORAGE_LOCAL_ROOT` | system temp + `/soland-objects` | Local filesystem root when using `local` |
+| `SOLAND_OBJECT_STORAGE_PREFIX` | unset | Optional object key prefix shared by local and S3-compatible backends |
+| `SOLAND_OBJECT_STORAGE_S3_BUCKET` | required for S3 | S3-compatible bucket name |
+| `SOLAND_OBJECT_STORAGE_S3_ENDPOINT` | region endpoint | Optional custom endpoint for MinIO/R2/etc. |
+| `SOLAND_CORS_ALLOW_ORIGIN` | unset | Single explicit CORS origin for browser clients |
+| `SOLAND_DEVELOPMENT_MODE` | `false` | Enable dev-only endpoints (`dev_login`, admin snapshots, relaxed DID validation) |
 | `RUST_LOG` | unset | Tracing subscriber filter, e.g. `soland=info,salvo=warn` |
 
-When `SERVERX_DEVELOPMENT_MODE=false` (the default), submitted commits must use
+When `SOLAND_DEVELOPMENT_MODE=false` (the default), submitted commits must use
 production proof material — no `alg: none` or `dev-proof`, proof `payload_hash`
 must match the canonical commit digest, the verification method must be rooted
 in the commit author DID, and proof `domain`/`audience` must bind to
-`SERVERX_SERVICE_DID`.
+`SOLAND_SERVICE_DID`.
 
 Client-sync `next_batch` cursors are structured `cx:cursor:` tokens bound to
 the principal, device, service DID, filter hash, stream positions, and expiry.
@@ -121,7 +121,7 @@ soland exposes the canonical Contrix v1 routes (~180 routes total). Highlights:
 - `POST /api/v1/auth/dev-login` (development_mode only)
 
 A complete list lives in the OpenAPI document above; `/api/v1/admin/{resource}`
-and `/api/v1/auth/dev-login` are gated behind `SERVERX_DEVELOPMENT_MODE=true`.
+and `/api/v1/auth/dev-login` are gated behind `SOLAND_DEVELOPMENT_MODE=true`.
 
 ## Development
 

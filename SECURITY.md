@@ -48,7 +48,7 @@ We aim to:
 
 - Vulnerabilities in upstream dependencies that have not yet been advised by
   RustSec. Run `cargo deny check advisories` to see what we already track.
-- Any path explicitly behind `SERVERX_DEVELOPMENT_MODE=true` (`dev_login`, the
+- Any path explicitly behind `SOLAND_DEVELOPMENT_MODE=true` (`dev_login`, the
   admin snapshot endpoints, relaxed DID validation). These are dev-only and
   must be disabled in production.
 - Denial-of-service issues that require flooding from the same authenticated

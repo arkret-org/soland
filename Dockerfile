@@ -22,9 +22,9 @@ COPY --from=builder /usr/local/bin/soland /usr/local/bin/soland
 USER 10001:10001
 WORKDIR /var/lib/soland
 
-ENV SERVERX_BIND=0.0.0.0:8698
-ENV SERVERX_OBJECT_STORAGE_BACKEND=local
-ENV SERVERX_OBJECT_STORAGE_LOCAL_ROOT=/var/lib/soland/objects
+ENV SOLAND_BIND=0.0.0.0:8698
+ENV SOLAND_OBJECT_STORAGE_BACKEND=local
+ENV SOLAND_OBJECT_STORAGE_LOCAL_ROOT=/var/lib/soland/objects
 EXPOSE 8698
 
 ENTRYPOINT ["/usr/local/bin/soland"]

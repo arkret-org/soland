@@ -13,7 +13,7 @@ pub struct AppConfig {
     pub session_grant_introspection_bearer: Option<String>,
     pub did_resolver_allow_methods: Vec<String>,
     /// Configured starid `did:webvh` resolver URL. Records **admin intent** —
-    /// always reflects whatever was passed via `SERVERX_STARID_WEBVH_RESOLVER_URL`,
+    /// always reflects whatever was passed via `SOLAND_STARID_WEBVH_RESOLVER_URL`,
     /// regardless of whether the upstream is currently reachable. The `/identity/describe`
     /// handler surfaces this as `starid_profile.enabled` so admin / sibling services
     /// can discover the configured profile even when the upstream is down.
@@ -53,7 +53,7 @@ pub struct AppConfig {
     /// - `cx.component.capability.derived.v1` → 120s
     pub jws_replay_window_per_family: std::collections::BTreeMap<&'static str, u64>,
     /// Base64-encoded 32-byte ed25519 seed for the AnchorerWorker
-    /// signing identity (env `SERVERX_ANCHORER_SIGNING_KEY`). When `Some(_)`
+    /// signing identity (env `SOLAND_ANCHORER_SIGNING_KEY`). When `Some(_)`
     /// the worker uses a deterministic ed25519-dalek signing key derived
     /// from this seed; when `None` the worker boots with an in-process
     /// random ephemeral key and a sticky-warn log line on every signing
@@ -156,7 +156,7 @@ impl ObjectStorageConfig {
 }
 
 /// Federation routing policy. Selected at config-load
-/// time via `SERVERX_FEDERATION_POLICY` env var (`mesh` | `hub`).
+/// time via `SOLAND_FEDERATION_POLICY` env var (`mesh` | `hub`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FederationPolicy {
     /// Default — broadcast every accepted Move to every peer in
@@ -187,7 +187,7 @@ impl FederationPolicy {
 /// on each signing pass so logs flag the dev-only ephemeral path.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AnchorerSigningKeyOrigin {
-    /// Loaded from `SERVERX_ANCHORER_SIGNING_KEY` (production-grade
+    /// Loaded from `SOLAND_ANCHORER_SIGNING_KEY` (production-grade
     /// persistent identity).
     Configured,
     /// In-process random seed — fine for tests, **never** for production:
@@ -215,45 +215,45 @@ impl AppConfig {
 impl AppConfig {
     pub fn from_env_and_args() -> anyhow::Result<Self> {
         let bind = arg_value("--bind")
-            .or_else(|| std::env::var("SERVERX_BIND").ok())
+            .or_else(|| std::env::var("SOLAND_BIND").ok())
             .unwrap_or_else(|| "127.0.0.1:8698".to_owned())
             .parse()?;
         let public_base_url =
-            std::env::var("SERVERX_PUBLIC_BASE_URL").unwrap_or_else(|_| format!("http://{bind}"));
-        let service_did = std::env::var("SERVERX_SERVICE_DID")
+            std::env::var("SOLAND_PUBLIC_BASE_URL").unwrap_or_else(|_| format!("http://{bind}"));
+        let service_did = std::env::var("SOLAND_SERVICE_DID")
             .unwrap_or_else(|_| "did:web:soland.local".to_owned());
         let database_url = std::env::var("DATABASE_URL")
             .ok()
             .filter(|value| !value.trim().is_empty());
         let object_storage = load_object_storage_config()?;
-        let cors_allow_origin = std::env::var("SERVERX_CORS_ALLOW_ORIGIN").ok();
+        let cors_allow_origin = std::env::var("SOLAND_CORS_ALLOW_ORIGIN").ok();
         // Default to a production-safe posture (no `dev_login`, no relaxed DID
         // validation, no admin snapshot endpoints). Local development must opt
-        // in explicitly via `SERVERX_DEVELOPMENT_MODE=true`.
-        let development_mode = std::env::var("SERVERX_DEVELOPMENT_MODE")
+        // in explicitly via `SOLAND_DEVELOPMENT_MODE=true`.
+        let development_mode = std::env::var("SOLAND_DEVELOPMENT_MODE")
             .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes"))
             .unwrap_or(false);
         let session_grant_introspection_url =
-            env_non_empty("SERVERX_SESSION_GRANT_INTROSPECTION_URL");
+            env_non_empty("SOLAND_SESSION_GRANT_INTROSPECTION_URL");
         let session_grant_introspection_bearer =
-            env_non_empty("SERVERX_SESSION_GRANT_INTROSPECTION_BEARER");
-        let did_resolver_allow_methods = env_csv("SERVERX_DID_RESOLVER_ALLOW_METHODS")
+            env_non_empty("SOLAND_SESSION_GRANT_INTROSPECTION_BEARER");
+        let did_resolver_allow_methods = env_csv("SOLAND_DID_RESOLVER_ALLOW_METHODS")
             .unwrap_or_else(|| vec!["web".to_owned(), "key".to_owned(), "uuid".to_owned()]);
-        let starid_webvh_resolver_url = env_non_empty("SERVERX_STARID_WEBVH_RESOLVER_URL");
+        let starid_webvh_resolver_url = env_non_empty("SOLAND_STARID_WEBVH_RESOLVER_URL");
         // 0 disables replay-window enforcement; default 5 min per spec.
-        let jws_replay_window_seconds = std::env::var("SERVERX_JWS_REPLAY_WINDOW_SECONDS")
+        let jws_replay_window_seconds = std::env::var("SOLAND_JWS_REPLAY_WINDOW_SECONDS")
             .ok()
             .and_then(|value| value.trim().parse::<u64>().ok())
             .unwrap_or(300);
         let anchorer_signing_key_seed = load_anchorer_signing_key_seed()?;
-        let use_keystore = std::env::var("SERVERX_USE_KEYSTORE")
+        let use_keystore = std::env::var("SOLAND_USE_KEYSTORE")
             .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes"))
             .unwrap_or(false);
-        let federation_policy = std::env::var("SERVERX_FEDERATION_POLICY")
+        let federation_policy = std::env::var("SOLAND_FEDERATION_POLICY")
             .ok()
             .map(|value| FederationPolicy::from_env_value(&value))
             .unwrap_or(FederationPolicy::Mesh);
-        let federation_peers = std::env::var("SERVERX_FEDERATION_PEERS")
+        let federation_peers = std::env::var("SOLAND_FEDERATION_PEERS")
             .ok()
             .map(|value| {
                 value
@@ -292,45 +292,45 @@ impl AppConfig {
 }
 
 fn load_object_storage_config() -> anyhow::Result<ObjectStorageConfig> {
-    let backend = env_non_empty("SERVERX_OBJECT_STORAGE_BACKEND")
+    let backend = env_non_empty("SOLAND_OBJECT_STORAGE_BACKEND")
         .unwrap_or_else(|| "local".to_owned())
         .to_ascii_lowercase();
-    let prefix = normalized_storage_prefix(env_non_empty("SERVERX_OBJECT_STORAGE_PREFIX"));
+    let prefix = normalized_storage_prefix(env_non_empty("SOLAND_OBJECT_STORAGE_PREFIX"));
     match backend.as_str() {
         "local" | "fs" | "filesystem" => {
-            let root = env_non_empty("SERVERX_OBJECT_STORAGE_LOCAL_ROOT")
+            let root = env_non_empty("SOLAND_OBJECT_STORAGE_LOCAL_ROOT")
                 .map(PathBuf::from)
                 .unwrap_or_else(|| std::env::temp_dir().join("soland-objects"));
             Ok(ObjectStorageConfig::Local { root, prefix })
         }
         "s3" | "s3-compatible" | "s3_compatible" => {
-            let bucket = required_env("SERVERX_OBJECT_STORAGE_S3_BUCKET")?;
-            let region = env_non_empty("SERVERX_OBJECT_STORAGE_S3_REGION")
+            let bucket = required_env("SOLAND_OBJECT_STORAGE_S3_BUCKET")?;
+            let region = env_non_empty("SOLAND_OBJECT_STORAGE_S3_REGION")
                 .unwrap_or_else(|| "us-east-1".to_owned());
-            let access_key_id = env_non_empty("SERVERX_OBJECT_STORAGE_S3_ACCESS_KEY_ID");
-            let secret_access_key = env_non_empty("SERVERX_OBJECT_STORAGE_S3_SECRET_ACCESS_KEY");
+            let access_key_id = env_non_empty("SOLAND_OBJECT_STORAGE_S3_ACCESS_KEY_ID");
+            let secret_access_key = env_non_empty("SOLAND_OBJECT_STORAGE_S3_SECRET_ACCESS_KEY");
             if access_key_id.is_some() != secret_access_key.is_some() {
                 anyhow::bail!(
-                    "SERVERX_OBJECT_STORAGE_S3_ACCESS_KEY_ID and SERVERX_OBJECT_STORAGE_S3_SECRET_ACCESS_KEY must be set together"
+                    "SOLAND_OBJECT_STORAGE_S3_ACCESS_KEY_ID and SOLAND_OBJECT_STORAGE_S3_SECRET_ACCESS_KEY must be set together"
                 );
             }
             Ok(ObjectStorageConfig::S3Compatible {
                 bucket,
                 region,
-                endpoint: env_non_empty("SERVERX_OBJECT_STORAGE_S3_ENDPOINT"),
+                endpoint: env_non_empty("SOLAND_OBJECT_STORAGE_S3_ENDPOINT"),
                 access_key_id,
                 secret_access_key,
-                session_token: env_non_empty("SERVERX_OBJECT_STORAGE_S3_SESSION_TOKEN"),
+                session_token: env_non_empty("SOLAND_OBJECT_STORAGE_S3_SESSION_TOKEN"),
                 prefix,
-                force_path_style: env_bool("SERVERX_OBJECT_STORAGE_S3_FORCE_PATH_STYLE")?
+                force_path_style: env_bool("SOLAND_OBJECT_STORAGE_S3_FORCE_PATH_STYLE")?
                     .unwrap_or(true),
-                allow_http: env_bool("SERVERX_OBJECT_STORAGE_S3_ALLOW_HTTP")?.unwrap_or(false),
-                skip_signature: env_bool("SERVERX_OBJECT_STORAGE_S3_SKIP_SIGNATURE")?
+                allow_http: env_bool("SOLAND_OBJECT_STORAGE_S3_ALLOW_HTTP")?.unwrap_or(false),
+                skip_signature: env_bool("SOLAND_OBJECT_STORAGE_S3_SKIP_SIGNATURE")?
                     .unwrap_or(false),
             })
         }
         other => anyhow::bail!(
-            "SERVERX_OBJECT_STORAGE_BACKEND must be local or s3-compatible, got {other}"
+            "SOLAND_OBJECT_STORAGE_BACKEND must be local or s3-compatible, got {other}"
         ),
     }
 }
@@ -350,13 +350,13 @@ fn normalized_storage_prefix(prefix: Option<String>) -> String {
 }
 
 /// Load the AnchorerWorker signing seed from
-/// `SERVERX_ANCHORER_SIGNING_KEY` (base64-standard encoded 32 bytes).
+/// `SOLAND_ANCHORER_SIGNING_KEY` (base64-standard encoded 32 bytes).
 /// Returns `Ok(None)` when the env var is absent or empty (the
 /// AnchorerWorker then mints an ephemeral key with a sticky-warn).
 /// Returns `Err(_)` when the env var is set but malformed — fail-fast at
 /// startup rather than silently downgrading to ephemeral.
 fn load_anchorer_signing_key_seed() -> anyhow::Result<Option<[u8; 32]>> {
-    let raw = match std::env::var("SERVERX_ANCHORER_SIGNING_KEY") {
+    let raw = match std::env::var("SOLAND_ANCHORER_SIGNING_KEY") {
         Ok(value) => value.trim().to_owned(),
         Err(_) => return Ok(None),
     };
@@ -369,12 +369,12 @@ fn load_anchorer_signing_key_seed() -> anyhow::Result<Option<[u8; 32]>> {
         .or_else(|_| base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(raw.as_bytes()))
         .map_err(|e| {
             anyhow::anyhow!(
-                "SERVERX_ANCHORER_SIGNING_KEY must be base64 (standard or url-safe-no-pad): {e}"
+                "SOLAND_ANCHORER_SIGNING_KEY must be base64 (standard or url-safe-no-pad): {e}"
             )
         })?;
     if bytes.len() != 32 {
         anyhow::bail!(
-            "SERVERX_ANCHORER_SIGNING_KEY must decode to exactly 32 bytes (got {})",
+            "SOLAND_ANCHORER_SIGNING_KEY must decode to exactly 32 bytes (got {})",
             bytes.len()
         );
     }

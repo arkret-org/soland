@@ -288,7 +288,7 @@ pub(crate) async fn validate_session_grant_binding(
             return Ok(None);
         }
         return Err(AppError::unsupported_feature(
-            "session grant exchange requires SERVERX_SESSION_GRANT_INTROSPECTION_URL outside development mode",
+            "session grant exchange requires SOLAND_SESSION_GRANT_INTROSPECTION_URL outside development mode",
         ));
     };
     let bearer = state
@@ -297,7 +297,7 @@ pub(crate) async fn validate_session_grant_binding(
         .as_deref()
         .ok_or_else(|| {
             AppError::unsupported_feature(
-                "session grant exchange requires SERVERX_SESSION_GRANT_INTROSPECTION_BEARER",
+                "session grant exchange requires SOLAND_SESSION_GRANT_INTROSPECTION_BEARER",
             )
         })?;
     let request = SessionGrantIntrospectionRequest {

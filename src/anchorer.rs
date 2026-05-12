@@ -509,7 +509,7 @@ impl AnchorerWorker {
 
     /// Build a **real** Ed25519 signature over the canonical
     /// Anchor bytes. Production deployments configure
-    /// `SERVERX_ANCHORER_SIGNING_KEY` (base64 32-byte seed); dev/test
+    /// `SOLAND_ANCHORER_SIGNING_KEY` (base64 32-byte seed); dev/test
     /// deployments fall back to an in-process random ephemeral key with a
     /// sticky-warn log line on every signing pass.
     ///
@@ -575,7 +575,7 @@ fn warn_once_about_ephemeral_anchorer_key() {
     WARNED.get_or_init(|| {
         tracing::warn!(
             "anchorer signing identity is **ephemeral** — set \
-             `SERVERX_ANCHORER_SIGNING_KEY` (base64 32-byte seed) before \
+             `SOLAND_ANCHORER_SIGNING_KEY` (base64 32-byte seed) before \
              production. Each restart issues Anchors under a fresh DID, \
              which breaks signature-chain trust for downstream verifiers."
         );

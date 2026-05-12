@@ -30,21 +30,21 @@ soland runs Diesel migrations on startup; no manual DDL is required.
 Create a deploy-time `.env` (or a Kubernetes Secret / systemd EnvironmentFile):
 
 ```dotenv
-SERVERX_BIND=0.0.0.0:8698
-SERVERX_PUBLIC_BASE_URL=https://soland.example
-SERVERX_SERVICE_DID=did:web:soland.example
-SERVERX_OBJECT_STORAGE_BACKEND=s3-compatible
-SERVERX_OBJECT_STORAGE_S3_BUCKET=soland
-SERVERX_OBJECT_STORAGE_S3_REGION=us-east-1
-SERVERX_OBJECT_STORAGE_S3_ENDPOINT=https://s3.example.com
-SERVERX_OBJECT_STORAGE_S3_ACCESS_KEY_ID=<access-key>
-SERVERX_OBJECT_STORAGE_S3_SECRET_ACCESS_KEY=<secret-key>
-SERVERX_OBJECT_STORAGE_S3_FORCE_PATH_STYLE=true
-SERVERX_OBJECT_STORAGE_PREFIX=prod
-SERVERX_CORS_ALLOW_ORIGIN=https://app.example
+SOLAND_BIND=0.0.0.0:8698
+SOLAND_PUBLIC_BASE_URL=https://soland.example
+SOLAND_SERVICE_DID=did:web:soland.example
+SOLAND_OBJECT_STORAGE_BACKEND=s3-compatible
+SOLAND_OBJECT_STORAGE_S3_BUCKET=soland
+SOLAND_OBJECT_STORAGE_S3_REGION=us-east-1
+SOLAND_OBJECT_STORAGE_S3_ENDPOINT=https://s3.example.com
+SOLAND_OBJECT_STORAGE_S3_ACCESS_KEY_ID=<access-key>
+SOLAND_OBJECT_STORAGE_S3_SECRET_ACCESS_KEY=<secret-key>
+SOLAND_OBJECT_STORAGE_S3_FORCE_PATH_STYLE=true
+SOLAND_OBJECT_STORAGE_PREFIX=prod
+SOLAND_CORS_ALLOW_ORIGIN=https://app.example
 DATABASE_URL=postgres://soland:<password>@db.internal:5432/soland?sslmode=verify-full
 
-# `SERVERX_DEVELOPMENT_MODE` is unset (defaults to false). Enabling it in
+# `SOLAND_DEVELOPMENT_MODE` is unset (defaults to false). Enabling it in
 # production exposes `dev_login`, the admin snapshot endpoints, and a relaxed
 # DID-document validation path — never set this in a real deploy.
 
@@ -54,7 +54,7 @@ RUST_LOG=soland=info,salvo=info,warn
 Validate the env block on the target host once:
 
 ```bash
-soland --bind "${SERVERX_BIND}" --help    # cheap startup sanity check
+soland --bind "${SOLAND_BIND}" --help    # cheap startup sanity check
 ```
 
 ## 3. Run the binary
@@ -96,19 +96,19 @@ in-flight requests before exiting.
 ```bash
 docker run --name soland --restart=always -d \
   -p 127.0.0.1:8698:8698 \
-  -e SERVERX_BIND=0.0.0.0:8698 \
-  -e SERVERX_PUBLIC_BASE_URL=https://soland.example \
-  -e SERVERX_SERVICE_DID=did:web:soland.example \
+  -e SOLAND_BIND=0.0.0.0:8698 \
+  -e SOLAND_PUBLIC_BASE_URL=https://soland.example \
+  -e SOLAND_SERVICE_DID=did:web:soland.example \
   -e DATABASE_URL=postgres://soland:<password>@db:5432/soland?sslmode=verify-full \
-  -e SERVERX_OBJECT_STORAGE_BACKEND=local \
-  -e SERVERX_OBJECT_STORAGE_LOCAL_ROOT=/var/lib/soland/objects \
+  -e SOLAND_OBJECT_STORAGE_BACKEND=local \
+  -e SOLAND_OBJECT_STORAGE_LOCAL_ROOT=/var/lib/soland/objects \
   -e RUST_LOG=soland=info \
   -v soland-objects:/var/lib/soland \
   ghcr.io/contrix/soland:<tag>
 ```
 
 The image runs as UID `10001`. Mounted volumes for
-`SERVERX_OBJECT_STORAGE_LOCAL_ROOT` must be chowned to that UID (or use a named
+`SOLAND_OBJECT_STORAGE_LOCAL_ROOT` must be chowned to that UID (or use a named
 Docker volume so Docker handles it). S3-compatible backends do not need a media
 volume.
 
@@ -174,7 +174,7 @@ readinessProbe:
 | --- | --- | --- |
 | PostgreSQL | All tables | `pg_dump` daily, plus continuous WAL archiving for point-in-time recovery |
 | Object storage bucket/volume | Uploaded media | enable bucket versioning or snapshot the local volume on the same cadence as the database; align so blob references in the DB stay resolvable |
-| `SERVERX_SERVICE_DID` material | DID rotation history | Out of scope — manage via the DID method (`did:web` vs `did:plc`) |
+| `SOLAND_SERVICE_DID` material | DID rotation history | Out of scope — manage via the DID method (`did:web` vs `did:plc`) |
 
 Restore order: stop soland → restore DB → restore object storage bucket/volume → start soland.
 The startup migrations are idempotent.
@@ -193,7 +193,7 @@ Until then, ship `RUST_LOG=soland=info` to your log pipeline and alert on:
 - `200 /health` request rate dropping below the configured threshold
 - 5xx error rate over rolling 5-minute windows
 - `auth.dev_login` audit events outside the development environment (this
-  should be impossible with `SERVERX_DEVELOPMENT_MODE=false`, but alert
+  should be impossible with `SOLAND_DEVELOPMENT_MODE=false`, but alert
   belt-and-braces)
 
 ## 8. Upgrade procedure
@@ -209,10 +209,10 @@ pre-upgrade backup if you need to roll back.
 
 ## 9. Hardening checklist
 
-- `SERVERX_DEVELOPMENT_MODE` is unset (or explicitly `false`).
+- `SOLAND_DEVELOPMENT_MODE` is unset (or explicitly `false`).
 - `DATABASE_URL` uses `sslmode=verify-full` and a password kept out of source
   control (Vault / Kubernetes Secret / systemd `LoadCredential`).
-- `SERVERX_CORS_ALLOW_ORIGIN` is the **single** browser origin you trust;
+- `SOLAND_CORS_ALLOW_ORIGIN` is the **single** browser origin you trust;
   never `*` while soland sets `Access-Control-Allow-Credentials: true`.
 - Object storage uses a dedicated bucket/prefix or a dedicated local volume
   with quota enforcement.
