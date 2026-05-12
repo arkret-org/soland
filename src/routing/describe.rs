@@ -48,7 +48,7 @@ pub fn router() -> Router {
     tags("system"),
     summary = "Liveness probe + database / events health snapshot"
 )]
-pub async fn health(depot: &mut Depot, res: &mut Response) -> JsonResult<HealthResponse> {
+async fn health(depot: &mut Depot, res: &mut Response) -> JsonResult<HealthResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let database_ok = match state.db.pool.as_ref() {
         Some(pool) => match pool.get() {
@@ -90,7 +90,7 @@ struct HealthCheckRow {
     tags("server"),
     summary = "Server capability description"
 )]
-pub async fn server_describe(depot: &mut Depot) -> JsonResult<ServerDescription> {
+async fn server_describe(depot: &mut Depot) -> JsonResult<ServerDescription> {
     let state = depot.obtain::<AppState>().expect("state injected");
     json_ok(describe(
         &state.config.service_did,
@@ -346,7 +346,7 @@ pub async fn key_backups_describe() -> JsonResult<Value> {
     tags("system"),
     summary = "Integration manifest (dependencies + service surface inventory)"
 )]
-pub async fn integration_describe() -> JsonResult<IntegrationDescribeResponse> {
+async fn integration_describe() -> JsonResult<IntegrationDescribeResponse> {
     json_ok(IntegrationDescribeResponse {
         contract: "contrix.rest.integration_manifest.v1".to_owned(),
         version: "2026-05-04-scaffold".to_owned(),

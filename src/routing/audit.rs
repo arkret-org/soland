@@ -19,7 +19,7 @@ pub fn router() -> Router {
 }
 
 #[endpoint]
-pub async fn audit_events(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+async fn audit_events(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     let Some(session) = auth_or_render(state, req, res) else {
         return;

@@ -181,7 +181,7 @@ pub struct SubmitMoveResponse {
     tags("moves"),
     summary = "Submit a Move for the next Anchor batch"
 )]
-pub async fn submit_move(
+async fn submit_move(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
@@ -260,7 +260,7 @@ pub struct RejectedMoveEntry {
     tags("anchors"),
     summary = "Submit an Anchor; runs apply_anchor end-to-end"
 )]
-pub async fn submit_anchor(
+async fn submit_anchor(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
@@ -422,7 +422,7 @@ pub struct SignAnchorResponse {
     tags("admin", "anchors"),
     summary = "Trigger one anchorer signing pass for a Space"
 )]
-pub async fn admin_sign_anchor(
+async fn admin_sign_anchor(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,

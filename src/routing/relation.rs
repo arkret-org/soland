@@ -36,7 +36,7 @@ pub fn router() -> Router {
 }
 
 #[endpoint]
-pub async fn create_relation(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+async fn create_relation(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     let Some(session) = auth_or_render(state, req, res) else {
         return;
@@ -115,7 +115,7 @@ pub async fn create_relation(depot: &mut Depot, req: &mut Request, res: &mut Res
 }
 
 #[endpoint]
-pub async fn delete_relation(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+async fn delete_relation(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     let Some(session) = auth_or_render(state, req, res) else {
         return;
@@ -165,7 +165,7 @@ pub async fn delete_relation(depot: &mut Depot, req: &mut Request, res: &mut Res
 }
 
 #[endpoint]
-pub async fn list_relations(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+async fn list_relations(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     let Some(_session) = auth_or_render(state, req, res) else {
         return;

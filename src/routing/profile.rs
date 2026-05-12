@@ -19,7 +19,7 @@ pub fn router() -> Router {
 }
 
 #[endpoint]
-pub async fn profile_presence(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+async fn profile_presence(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     let did = query_param(req, "did").unwrap_or_else(|| "did:web:alice.example".to_owned());
     if validate_did(&did).is_err() {

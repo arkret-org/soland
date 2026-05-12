@@ -51,7 +51,7 @@ pub fn contrix_router() -> Router {
 }
 
 #[endpoint]
-pub async fn list_policy_documents(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+async fn list_policy_documents(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     let Some(session) = auth_or_render(state, req, res) else {
         return;
@@ -81,7 +81,7 @@ pub async fn list_policy_documents(depot: &mut Depot, req: &mut Request, res: &m
 }
 
 #[endpoint]
-pub async fn get_policy_document(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+async fn get_policy_document(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     let Some(session) = auth_or_render(state, req, res) else {
         return;
@@ -110,7 +110,7 @@ pub async fn get_policy_document(depot: &mut Depot, req: &mut Request, res: &mut
 }
 
 #[endpoint]
-pub async fn upsert_policy_document(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+async fn upsert_policy_document(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     let Some(session) = auth_or_render(state, req, res) else {
         return;
@@ -232,7 +232,7 @@ pub async fn upsert_policy_document(depot: &mut Depot, req: &mut Request, res: &
 }
 
 #[endpoint]
-pub async fn delete_policy_document(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+async fn delete_policy_document(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     let Some(session) = auth_or_render(state, req, res) else {
         return;
@@ -265,7 +265,7 @@ pub async fn delete_policy_document(depot: &mut Depot, req: &mut Request, res: &
 }
 
 #[endpoint]
-pub async fn policy_check(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+async fn policy_check(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = match req.parse_json::<PolicyCheckRequest>().await {
         Ok(body) => body,

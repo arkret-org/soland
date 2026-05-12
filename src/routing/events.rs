@@ -55,7 +55,7 @@ const MAX_EVENT_REFS: usize = 64;
 const MAX_EVENT_BATCH_GET: usize = 100;
 
 #[endpoint]
-pub async fn events_describe(depot: &mut Depot, res: &mut Response) {
+async fn events_describe(depot: &mut Depot, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     let event_kinds = artifacts::active_durable_event_kinds()
         .iter()
@@ -131,7 +131,7 @@ pub async fn events_describe(depot: &mut Depot, res: &mut Response) {
 }
 
 #[endpoint]
-pub async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     let Some(session) = auth_or_render(state, req, res) else {
         return;
@@ -315,7 +315,7 @@ pub async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Respon
 }
 
 #[endpoint]
-pub async fn get_event(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+async fn get_event(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     let Some(session) = auth_or_render(state, req, res) else {
         return;
@@ -341,7 +341,7 @@ pub async fn get_event(depot: &mut Depot, req: &mut Request, res: &mut Response)
 }
 
 #[endpoint]
-pub async fn batch_get_events(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+async fn batch_get_events(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     let Some(session) = auth_or_render(state, req, res) else {
         return;
@@ -517,12 +517,12 @@ pub async fn events_query_durable_scope_impl(
 /// (currently used only as a fallback dispatched from `routing::sync::events_query`
 /// when the selector has no `spaces[]`).
 #[endpoint]
-pub async fn events_query_durable_scope(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+async fn events_query_durable_scope(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     events_query_durable_scope_impl(depot, req, res).await
 }
 
 #[endpoint]
-pub async fn events_frontier(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+async fn events_frontier(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     let Some(session) = auth_or_render(state, req, res) else {
         return;

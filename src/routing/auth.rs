@@ -52,7 +52,7 @@ pub fn router() -> Router {
     tags("auth"),
     summary = "Development bearer-token login"
 )]
-pub async fn dev_login(
+async fn dev_login(
     depot: &mut Depot,
     body: JsonBody<DevLoginRequest>,
 ) -> JsonResult<DevLoginResponse> {
@@ -136,7 +136,7 @@ pub async fn dev_login(
     tags("auth"),
     summary = "Exchange a coauth session-grant for a principal-server bearer session"
 )]
-pub async fn exchange_session_grant(
+async fn exchange_session_grant(
     depot: &mut Depot,
     body: JsonBody<SessionGrantExchangeRequest>,
 ) -> JsonResult<DevLoginResponse> {
@@ -382,7 +382,7 @@ pub(crate) async fn validate_session_grant_binding(
     tags("auth"),
     summary = "Revoke the current bearer session and bound device"
 )]
-pub async fn logout(
+async fn logout(
     aa: super::AuthArgs,
     depot: &mut Depot,
     req: &mut Request,

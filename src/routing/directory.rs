@@ -48,7 +48,7 @@ pub fn router() -> Router {
 }
 
 #[endpoint]
-pub async fn directory_describe(depot: &mut Depot, res: &mut Response) {
+async fn directory_describe(depot: &mut Depot, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     res.render(Json(DirectoryDescribeResponse {
         service_did: state.config.service_did.clone(),
@@ -63,7 +63,7 @@ pub async fn directory_describe(depot: &mut Depot, res: &mut Response) {
 }
 
 #[endpoint]
-pub async fn search_spaces(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+async fn search_spaces(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = req
         .parse_json::<SearchSpacesRequest>()
@@ -93,7 +93,7 @@ pub async fn search_spaces(depot: &mut Depot, req: &mut Request, res: &mut Respo
 }
 
 #[endpoint]
-pub async fn resolve_space(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+async fn resolve_space(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = match req.parse_json::<ResolveSpaceRequest>().await {
         Ok(body) => body,
@@ -173,7 +173,7 @@ pub async fn resolve_space(depot: &mut Depot, req: &mut Request, res: &mut Respo
 }
 
 #[endpoint]
-pub async fn search_organizations(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+async fn search_organizations(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = req
         .parse_json::<SearchOrganizationsRequest>()
@@ -204,7 +204,7 @@ pub async fn search_organizations(depot: &mut Depot, req: &mut Request, res: &mu
 }
 
 #[endpoint]
-pub async fn resolve_organization(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+async fn resolve_organization(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = match req.parse_json::<ResolveOrganizationRequest>().await {
         Ok(body) => body,
@@ -266,7 +266,7 @@ pub async fn resolve_organization(depot: &mut Depot, req: &mut Request, res: &mu
 }
 
 #[endpoint]
-pub async fn search_actors(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+async fn search_actors(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = req
         .parse_json::<SearchActorsRequest>()
@@ -303,7 +303,7 @@ pub async fn search_actors(depot: &mut Depot, req: &mut Request, res: &mut Respo
 }
 
 #[endpoint]
-pub async fn search_users(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+async fn search_users(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     let Some(limit) = query_limit(req, res) else {
         return;
@@ -323,7 +323,7 @@ pub async fn search_users(depot: &mut Depot, req: &mut Request, res: &mut Respon
 }
 
 #[endpoint]
-pub async fn resolve_handle(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+async fn resolve_handle(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = match req.parse_json::<ResolveHandleRequest>().await {
         Ok(body) => body,

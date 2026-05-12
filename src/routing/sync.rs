@@ -67,7 +67,7 @@ pub fn router() -> Router {
 }
 
 #[endpoint]
-pub async fn sync_describe(depot: &mut Depot, res: &mut Response) {
+async fn sync_describe(depot: &mut Depot, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     res.render(Json(SyncDescribeResponse {
         service_did: state.config.service_did.clone(),
@@ -84,7 +84,7 @@ pub async fn sync_describe(depot: &mut Depot, res: &mut Response) {
 }
 
 #[endpoint]
-pub async fn client_sync(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+async fn client_sync(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = match req.parse_json::<ClientSyncRequest>().await {
         Ok(body) => body,
@@ -526,7 +526,7 @@ pub fn normalized_strings(values: &[String]) -> Vec<String> {
 }
 
 #[endpoint]
-pub async fn set_typing(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+async fn set_typing(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     let Some(session) = auth_or_render(state, req, res) else {
         return;
@@ -1053,7 +1053,7 @@ pub async fn events_query(depot: &mut Depot, req: &mut Request, res: &mut Respon
 }
 
 #[endpoint]
-pub async fn sync_gap_backfill(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+async fn sync_gap_backfill(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     let Some(space_id) = query_param(req, "space_id") else {
         render_error(
@@ -1150,7 +1150,7 @@ pub async fn sync_gap_backfill(depot: &mut Depot, req: &mut Request, res: &mut R
 }
 
 #[endpoint]
-pub async fn snapshot_head(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+async fn snapshot_head(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     let Some(space_id) = query_param(req, "space_id") else {
         render_error(
@@ -1213,7 +1213,7 @@ pub async fn snapshot_head(depot: &mut Depot, req: &mut Request, res: &mut Respo
 }
 
 #[endpoint]
-pub async fn snapshot_chunk(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+async fn snapshot_chunk(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     let Some(snapshot_ref) = query_param(req, "snapshot_ref") else {
         render_error(

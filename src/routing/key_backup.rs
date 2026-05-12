@@ -82,7 +82,7 @@ fn validate_key_backup_body(
 }
 
 #[endpoint]
-pub async fn put_key_backup(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+async fn put_key_backup(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     let Some(session) = auth_or_render(state, req, res) else {
         return;
@@ -137,7 +137,7 @@ pub async fn put_key_backup(depot: &mut Depot, req: &mut Request, res: &mut Resp
 }
 
 #[endpoint]
-pub async fn list_key_backups(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+async fn list_key_backups(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     let Some(session) = auth_or_render(state, req, res) else {
         return;
@@ -158,7 +158,7 @@ pub async fn list_key_backups(depot: &mut Depot, req: &mut Request, res: &mut Re
 }
 
 #[endpoint]
-pub async fn get_key_backup(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+async fn get_key_backup(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     let Some(session) = auth_or_render(state, req, res) else {
         return;
@@ -192,7 +192,7 @@ pub async fn get_key_backup(depot: &mut Depot, req: &mut Request, res: &mut Resp
 }
 
 #[endpoint]
-pub async fn delete_key_backup(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+async fn delete_key_backup(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     let Some(session) = auth_or_render(state, req, res) else {
         return;

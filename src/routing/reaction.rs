@@ -33,7 +33,7 @@ pub fn router() -> Router {
     tags("reactions"),
     summary = "Add a reaction to an event"
 )]
-pub async fn add_reaction(
+async fn add_reaction(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
@@ -69,7 +69,7 @@ pub async fn add_reaction(
     tags("reactions"),
     summary = "Remove a previously-added reaction"
 )]
-pub async fn remove_reaction(
+async fn remove_reaction(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,

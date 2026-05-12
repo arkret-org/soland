@@ -47,7 +47,7 @@ pub fn router() -> Router {
     summary = "Create a Space, optionally inviting peers",
     status_codes(201, 400, 401, 409, 500)
 )]
-pub async fn create_space(
+async fn create_space(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
@@ -167,7 +167,7 @@ pub async fn create_space(
     tags("spaces"),
     summary = "Owner adds a member to a Space"
 )]
-pub async fn add_space_member(
+async fn add_space_member(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
@@ -226,7 +226,7 @@ pub async fn add_space_member(
     tags("spaces"),
     summary = "Owner removes a member from a Space"
 )]
-pub async fn remove_space_member(
+async fn remove_space_member(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
@@ -287,7 +287,7 @@ pub async fn remove_space_member(
     tags("spaces"),
     summary = "Owner soft-deletes a Space"
 )]
-pub async fn delete_space(
+async fn delete_space(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
@@ -340,7 +340,7 @@ pub async fn delete_space(
     tags("spaces"),
     summary = "Full event log + projection dump for a Space"
 )]
-pub async fn export_space(
+async fn export_space(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,

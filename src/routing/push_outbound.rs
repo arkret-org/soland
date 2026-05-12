@@ -62,7 +62,7 @@ pub fn router() -> Router {
 }
 
 #[endpoint]
-pub async fn outbound_push_bridge_describe(depot: &mut Depot, res: &mut Response) {
+async fn outbound_push_bridge_describe(depot: &mut Depot, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     res.render(Json(OutboundPushBridgeDescribeResponse {
         contract: "contrix.rest.outbound_push_bridge.v1".to_owned(),
@@ -155,11 +155,7 @@ pub async fn outbound_push_bridge_describe(depot: &mut Depot, res: &mut Response
 }
 
 #[endpoint]
-pub async fn outbound_push_bridge_resolve(
-    depot: &mut Depot,
-    req: &mut Request,
-    res: &mut Response,
-) {
+async fn outbound_push_bridge_resolve(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = match req.parse_json::<OutboundPushBridgeResolveRequest>().await {
         Ok(body) => body,
@@ -239,7 +235,7 @@ pub async fn outbound_push_bridge_resolve(
 }
 
 #[endpoint]
-pub async fn outbound_push_bridge_fetch(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+async fn outbound_push_bridge_fetch(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = match req.parse_json::<OutboundPushBridgeFetchRequest>().await {
         Ok(body) => body,
@@ -397,7 +393,7 @@ pub async fn outbound_push_bridge_fetch(depot: &mut Depot, req: &mut Request, re
 }
 
 #[endpoint]
-pub async fn outbound_push_bridge_cache_status(depot: &mut Depot, res: &mut Response) {
+async fn outbound_push_bridge_cache_status(depot: &mut Depot, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     let entries = state
         .persistence
@@ -411,7 +407,7 @@ pub async fn outbound_push_bridge_cache_status(depot: &mut Depot, res: &mut Resp
 }
 
 #[endpoint]
-pub async fn outbound_push_bridge_cache_export(depot: &mut Depot, res: &mut Response) {
+async fn outbound_push_bridge_cache_export(depot: &mut Depot, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     let entries = state
         .persistence
@@ -432,7 +428,7 @@ pub async fn outbound_push_bridge_cache_export(depot: &mut Depot, res: &mut Resp
 }
 
 #[endpoint]
-pub async fn outbound_push_bridge_cache_import(
+async fn outbound_push_bridge_cache_import(
     depot: &mut Depot,
     req: &mut Request,
     res: &mut Response,
@@ -495,7 +491,7 @@ pub async fn outbound_push_bridge_cache_import(
 }
 
 #[endpoint]
-pub async fn outbound_push_bridge_cache_invalidate(
+async fn outbound_push_bridge_cache_invalidate(
     depot: &mut Depot,
     req: &mut Request,
     res: &mut Response,

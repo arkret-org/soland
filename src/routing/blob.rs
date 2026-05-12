@@ -34,7 +34,7 @@ pub fn router() -> Router {
 }
 
 #[endpoint]
-pub async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     let Some(session) = auth_or_render(state, req, res) else {
         return;
@@ -228,7 +228,7 @@ pub async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Respons
 }
 
 #[endpoint]
-pub async fn blob_get(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+async fn blob_get(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     let Some(session) = auth_or_render(state, req, res) else {
         return;

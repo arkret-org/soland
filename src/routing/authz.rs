@@ -37,7 +37,7 @@ pub fn router() -> Router {
 }
 
 #[endpoint]
-pub async fn authz_check(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+async fn authz_check(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = match req.parse_json::<AuthzCheckRequest>().await {
         Ok(body) => body,
@@ -149,7 +149,7 @@ fn facet_names_from_value(value: Option<&serde_json::Value>) -> Vec<String> {
 }
 
 #[endpoint]
-pub async fn effective_grants(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+async fn effective_grants(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     let subject = query_param(req, "subject").unwrap_or_else(|| "did:web:alice.example".to_owned());
     let space_id = query_param(req, "space_id").unwrap_or_else(|| "*".to_owned());
@@ -209,7 +209,7 @@ pub async fn effective_grants(depot: &mut Depot, req: &mut Request, res: &mut Re
 // ── Grant CRUD ──
 
 #[endpoint]
-pub async fn create_grant(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+async fn create_grant(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     let Some(session) = auth_or_render(state, req, res) else {
         return;
@@ -263,7 +263,7 @@ pub async fn create_grant(depot: &mut Depot, req: &mut Request, res: &mut Respon
 }
 
 #[endpoint]
-pub async fn revoke_grant(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+async fn revoke_grant(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     let Some(session) = auth_or_render(state, req, res) else {
         return;
@@ -292,7 +292,7 @@ pub async fn revoke_grant(depot: &mut Depot, req: &mut Request, res: &mut Respon
 }
 
 #[endpoint]
-pub async fn invites(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+async fn invites(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     let Some(session) = auth_or_render(state, req, res) else {
         return;

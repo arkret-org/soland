@@ -34,19 +34,19 @@ pub fn well_known_router() -> Router {
 }
 
 #[endpoint]
-pub async fn mimi_protocol_directory(depot: &mut Depot, res: &mut Response) {
+async fn mimi_protocol_directory(depot: &mut Depot, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     res.render(Json(mimi_provider_directory_value(state)));
 }
 
 #[endpoint]
-pub async fn mimi_provider_directory(depot: &mut Depot, res: &mut Response) {
+async fn mimi_provider_directory(depot: &mut Depot, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     res.render(Json(mimi_provider_directory_value(state)));
 }
 
 #[endpoint]
-pub async fn mimi_key_material(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+async fn mimi_key_material(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = match mimi_body(req, res).await {
         Some(body) => body,
@@ -74,7 +74,7 @@ pub async fn mimi_key_material(depot: &mut Depot, req: &mut Request, res: &mut R
 }
 
 #[endpoint]
-pub async fn mimi_room_update(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+async fn mimi_room_update(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     let room_id = req.param::<String>("room_id").unwrap_or_default();
     let body = match mimi_body(req, res).await {
@@ -106,7 +106,7 @@ pub async fn mimi_room_update(depot: &mut Depot, req: &mut Request, res: &mut Re
 }
 
 #[endpoint]
-pub async fn mimi_room_notify(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+async fn mimi_room_notify(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     let room_id = req.param::<String>("room_id").unwrap_or_default();
     let body = match mimi_body(req, res).await {
@@ -138,7 +138,7 @@ pub async fn mimi_room_notify(depot: &mut Depot, req: &mut Request, res: &mut Re
 }
 
 #[endpoint]
-pub async fn mimi_room_message(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+async fn mimi_room_message(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     let room_id = req.param::<String>("room_id").unwrap_or_default();
     let body = match mimi_body(req, res).await {
@@ -228,7 +228,7 @@ pub async fn mimi_room_message(depot: &mut Depot, req: &mut Request, res: &mut R
 }
 
 #[endpoint]
-pub async fn mimi_group_info(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+async fn mimi_group_info(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     let room_id = req.param::<String>("room_id").unwrap_or_default();
     if !valid_mimi_room_id(&room_id) {
@@ -254,7 +254,7 @@ pub async fn mimi_group_info(depot: &mut Depot, req: &mut Request, res: &mut Res
 }
 
 #[endpoint]
-pub async fn mimi_consent_request(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+async fn mimi_consent_request(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = match mimi_body(req, res).await {
         Some(body) => body,
@@ -278,7 +278,7 @@ pub async fn mimi_consent_request(depot: &mut Depot, req: &mut Request, res: &mu
 }
 
 #[endpoint]
-pub async fn mimi_consent_update(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+async fn mimi_consent_update(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = match mimi_body(req, res).await {
         Some(body) => body,
@@ -309,7 +309,7 @@ pub async fn mimi_consent_update(depot: &mut Depot, req: &mut Request, res: &mut
 }
 
 #[endpoint]
-pub async fn mimi_identifiers_query(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+async fn mimi_identifiers_query(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = match mimi_body(req, res).await {
         Some(body) => body,
@@ -355,7 +355,7 @@ pub async fn mimi_identifiers_query(depot: &mut Depot, req: &mut Request, res: &
 }
 
 #[endpoint]
-pub async fn mimi_report_abuse(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+async fn mimi_report_abuse(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = match mimi_body(req, res).await {
         Some(body) => body,
@@ -390,7 +390,7 @@ pub async fn mimi_report_abuse(depot: &mut Depot, req: &mut Request, res: &mut R
 }
 
 #[endpoint]
-pub async fn mimi_proxy_download(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+async fn mimi_proxy_download(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = match mimi_body(req, res).await {
         Some(body) => body,

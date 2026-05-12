@@ -46,7 +46,7 @@ pub fn contrix_router() -> Router {
 }
 
 #[endpoint]
-pub async fn ice_config(depot: &mut Depot, res: &mut Response) {
+async fn ice_config(depot: &mut Depot, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     res.render(Json(json!({
         "service_did": state.config.service_did.clone(),
@@ -57,7 +57,7 @@ pub async fn ice_config(depot: &mut Depot, res: &mut Response) {
 }
 
 #[endpoint]
-pub async fn create_webrtc_session(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+async fn create_webrtc_session(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     let Some(session) = auth_or_render(state, req, res) else {
         return;
@@ -153,7 +153,7 @@ pub async fn create_webrtc_session(depot: &mut Depot, req: &mut Request, res: &m
 }
 
 #[endpoint]
-pub async fn put_webrtc_signal(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+async fn put_webrtc_signal(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     let Some(session) = auth_or_render(state, req, res) else {
         return;
@@ -260,7 +260,7 @@ pub async fn put_webrtc_signal(depot: &mut Depot, req: &mut Request, res: &mut R
 }
 
 #[endpoint]
-pub async fn get_webrtc_signals(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+async fn get_webrtc_signals(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     let Some(session) = auth_or_render(state, req, res) else {
         return;
@@ -329,7 +329,7 @@ pub async fn get_webrtc_signals(depot: &mut Depot, req: &mut Request, res: &mut 
 }
 
 #[endpoint]
-pub async fn delete_webrtc_session(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+async fn delete_webrtc_session(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     let Some(session) = auth_or_render(state, req, res) else {
         return;

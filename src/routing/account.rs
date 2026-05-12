@@ -51,7 +51,7 @@ pub fn router() -> Router {
     summary = "Register a new account record",
     status_codes(201, 400, 401, 409, 500)
 )]
-pub async fn account_register(
+async fn account_register(
     depot: &mut Depot,
     res: &mut Response,
     body: JsonBody<RegisterAccountRequest>,
@@ -135,7 +135,7 @@ pub async fn account_register(
     tags("account"),
     summary = "Get the authenticated principal's account record"
 )]
-pub async fn account_me(
+async fn account_me(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
@@ -159,7 +159,7 @@ pub async fn account_me(
     summary = "Open a pending contact relationship",
     status_codes(200, 201, 400, 401, 404, 409, 500)
 )]
-pub async fn contact_request(
+async fn contact_request(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
@@ -216,7 +216,7 @@ pub async fn contact_request(
     tags("contacts"),
     summary = "Accept or reject a pending contact request"
 )]
-pub async fn contact_respond(
+async fn contact_respond(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
@@ -266,7 +266,7 @@ pub async fn contact_respond(
     tags("contacts"),
     summary = "List contacts visible to the authenticated actor"
 )]
-pub async fn list_contacts(
+async fn list_contacts(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
@@ -330,7 +330,7 @@ pub struct PrincipalSpaceResponse {
     tags("account"),
     summary = "Resolve the principal control Space for a DID"
 )]
-pub async fn account_principal_space(
+async fn account_principal_space(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,

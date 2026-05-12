@@ -82,7 +82,7 @@ pub struct AdminControlFrameResponse {
     tags("admin", "events"),
     summary = "Broadcast a resync_required control frame to subscribers"
 )]
-pub async fn admin_emit_resync_required(
+async fn admin_emit_resync_required(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
@@ -125,7 +125,7 @@ pub async fn admin_emit_resync_required(
     tags("admin", "events"),
     summary = "Broadcast an unauthorized control frame to subscribers"
 )]
-pub async fn admin_emit_unauthorized(
+async fn admin_emit_unauthorized(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,

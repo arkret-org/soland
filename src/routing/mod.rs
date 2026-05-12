@@ -52,45 +52,25 @@ pub mod space;
 pub mod sync;
 pub mod util;
 pub mod webrtc;
-use account::{
-    account_me, account_principal_space, account_register, contact_request, contact_respond,
-    list_contacts, principal_space_for_did,
-};
+use account::principal_space_for_did;
 use admin::admin_collection;
-use admin_cells::{admin_get_cell, admin_list_cells};
-use admin_control::{admin_emit_resync_required, admin_emit_unauthorized};
 use anchor_admin::{
     admin_compact_anchor_dag, admin_get_anchor_dag, admin_get_anchorer, admin_list_bottom_global,
     admin_list_gc_candidates, admin_list_multisig_pending, admin_list_space_bottom,
     admin_reconfigure_anchorer, admin_repair_bottom, admin_rotate_signing_key,
     admin_submit_multisig_partial,
 };
-use audit::{append_audit_log, audit_events};
+use audit::append_audit_log;
 use auth::{
-    auth_or_render, authenticated_session, dev_login, exchange_session_grant, is_device_revoked,
-    logout, revoke_device_record, session_token_hash, token_for,
+    auth_or_render, authenticated_session, is_device_revoked, revoke_device_record,
+    session_token_hash, token_for,
 };
-use authz::{authz_check, create_grant, effective_grants, invites, revoke_grant};
-use blob::{blob_get, blob_upload};
-use describe::{
-    auth_bridge_describe, authz_describe, device_messages_describe, health, integration_describe,
-    key_backups_describe, policies_describe, server_describe,
-};
-use device::{device_authorize_pairing, device_pairing_challenge};
-use device_messages::{
-    device_message_events_after, get_device_messages, prune_acked_device_messages,
-    send_device_messages,
-};
+use device_messages::{device_message_events_after, prune_acked_device_messages};
 use directory::{
-    actor_visible_to, checked_limit, demo_actors, demo_organization, directory_describe,
-    facets_match, has_accepted_contact, query_limit, query_matches, resolve_handle,
-    resolve_organization, resolve_space, search_actors, search_organizations, search_spaces,
-    search_users,
+    actor_visible_to, checked_limit, demo_actors, demo_organization, facets_match,
+    has_accepted_contact, query_limit, query_matches,
 };
-use events::{
-    batch_get_events, effective_read_receipt_policy_for_space, events_describe, events_frontier,
-    events_query_durable_scope, events_query_durable_scope_impl, get_event, submit_event,
-};
+use events::{effective_read_receipt_policy_for_space, events_query_durable_scope_impl};
 use extract::AuthArgs;
 use federation::{
     broadcast_anchor_to_peers, broadcast_move_to_peers, federation_anchors_pull,
@@ -106,15 +86,6 @@ use identity::{
     identity_describe, identity_document, identity_log, identity_receipts, identity_resolve,
     submit_did_operation, validate_did_document_services,
 };
-use key_backup::{delete_key_backup, get_key_backup, list_key_backups, put_key_backup};
-use keys::{keys_claim, keys_query, keys_upload};
-use mimi::{
-    mimi_consent_request, mimi_consent_update, mimi_group_info, mimi_identifiers_query,
-    mimi_key_material, mimi_protocol_directory, mimi_provider_directory, mimi_proxy_download,
-    mimi_report_abuse, mimi_room_message, mimi_room_notify, mimi_room_update,
-};
-use moderation::moderation_report;
-use move_anchor::{admin_sign_anchor, submit_anchor, submit_move};
 use operations::{
     OperationPayloadSchema, PayloadRequirement, canonical_json_digest,
     known_space_denies_plaintext_service, message_operation_is_encrypted,
@@ -125,11 +96,9 @@ use operations::{
     validate_operation_semantics, validate_rfc3339_utc_z,
 };
 use policy::{
-    delete_policy_document, get_policy_document, is_supported_policy_effect,
-    is_valid_generated_or_custom_id, is_valid_policy_scope, is_valid_policy_type,
-    list_policy_documents, policy_check, policy_document_to_response, upsert_policy_document,
+    is_supported_policy_effect, is_valid_generated_or_custom_id, is_valid_policy_scope,
+    is_valid_policy_type, policy_document_to_response,
 };
-use profile::profile_presence;
 use projection::{
     FederationIngestResult, ProjectedEventPage, accept_local_operations, append_projection_event,
     backfill_gap_events, ensure_projected_space, event_is_visible, ingest_federation_operations,
@@ -143,29 +112,19 @@ use projection::{
 use push::{
     delete_push_rule, push_notify, push_register, push_rules, push_unregister, upsert_push_rule,
 };
-use push_outbound::{
-    outbound_push_bridge_cache_export, outbound_push_bridge_cache_import,
-    outbound_push_bridge_cache_invalidate, outbound_push_bridge_cache_status,
-    outbound_push_bridge_describe, outbound_push_bridge_fetch, outbound_push_bridge_resolve,
-};
-use reaction::{add_reaction, remove_reaction};
 use read_marker::{get_read_markers, send_read_receipt, set_read_marker};
-use relation::{create_relation, delete_relation, list_relations};
 use schema::{delete_schema, get_schema, list_schemas, register_schema};
 use space::{
-    add_space_member, create_space, delete_space, export_space, invite_token_matches_space,
-    invite_token_space_id, is_space_deleted, prune_expired_typing,
-    record_space_lifecycle_operation, remove_space_member, space_allows_plaintext_service,
-    space_discoverability, space_has_member, space_id_accessible, space_id_visible_to,
-    space_lifecycle_response, space_owner_matches, space_resolvable_to,
-    space_search_discoverability, space_search_visible_to, space_visible_to, touch_space,
-    typing_ephemeral_for_space,
+    invite_token_matches_space, invite_token_space_id, is_space_deleted, prune_expired_typing,
+    record_space_lifecycle_operation, space_allows_plaintext_service, space_discoverability,
+    space_has_member, space_id_accessible, space_id_visible_to, space_lifecycle_response,
+    space_owner_matches, space_resolvable_to, space_search_discoverability,
+    space_search_visible_to, space_visible_to, touch_space, typing_ephemeral_for_space,
 };
 use sync::{
-    SyncCursor, SyncCursorError, bound_cursor, bound_cursor_with_positions, client_sync,
-    decode_sync_cursor_value, events_query, events_subscribe, normalized_strings,
-    parse_and_validate_sync_cursor, set_typing, snapshot_chunk, snapshot_head, sync_describe,
-    sync_filter_hash, sync_gap_backfill, sync_token_for_client_sync,
+    SyncCursor, SyncCursorError, bound_cursor, bound_cursor_with_positions,
+    decode_sync_cursor_value, normalized_strings, parse_and_validate_sync_cursor, sync_filter_hash,
+    sync_token_for_client_sync,
 };
 // Private legacy imports keep existing `super::name` sibling references
 // working while avoiding public re-exports from `crate::routing`.
@@ -175,9 +134,6 @@ use util::{
     is_valid_sha256_hex, is_valid_sync_token, normalize_handle, query_flag, query_list,
     query_param, query_param_all, render_error, sha256_hex, validate_device_id, validate_did,
     validate_space_id,
-};
-use webrtc::{
-    create_webrtc_session, delete_webrtc_session, get_webrtc_signals, ice_config, put_webrtc_signal,
 };
 
 pub fn router(state: AppState) -> Router {
@@ -270,9 +226,7 @@ fn api_v1_router() -> Router {
         .push(Router::with_path("push/rules/{rule_id}").delete(push::delete_push_rule))
         .push(Router::with_path("push/notify").post(push::push_notify))
         .push(device::router())
-        .push(Router::with_path("keys/upload").post(keys::keys_upload))
-        .push(Router::with_path("keys/query").post(keys::keys_query))
-        .push(Router::with_path("keys/claim").post(keys::keys_claim))
+        .push(keys::router())
         .push(key_backup::router())
         .push(device_messages::router())
         .push(
@@ -1574,7 +1528,7 @@ mod canonical_conformance_vectors {
 }
 
 #[endpoint]
-pub async fn contrix_openapi_yaml(depot: &mut Depot, res: &mut Response) {
+async fn contrix_openapi_yaml(depot: &mut Depot, res: &mut Response) {
     let doc = depot
         .obtain::<ContrixOpenApiDoc>()
         .expect("openapi doc injected");
@@ -1618,7 +1572,7 @@ pub async fn error_catcher(res: &mut Response, ctrl: &mut FlowCtrl) {
 }
 
 #[handler]
-pub async fn wait_for_sync_token(
+async fn wait_for_sync_token(
     req: &mut Request,
     depot: &mut Depot,
     res: &mut Response,

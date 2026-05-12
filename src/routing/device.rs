@@ -37,7 +37,7 @@ pub fn router() -> Router {
     tags("devices"),
     summary = "Mint a short-lived device pairing challenge"
 )]
-pub async fn device_pairing_challenge(
+async fn device_pairing_challenge(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
@@ -97,7 +97,7 @@ pub async fn device_pairing_challenge(
     tags("devices"),
     summary = "Authorise and register a paired sibling device"
 )]
-pub async fn device_authorize_pairing(
+async fn device_authorize_pairing(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,

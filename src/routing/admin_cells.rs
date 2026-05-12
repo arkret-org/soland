@@ -159,7 +159,7 @@ fn resolve_space_for_cell(explicit: Option<&str>, cell_id: &CellRef) -> Result<S
     tags("admin", "cells"),
     summary = "Get one cell's resolved state"
 )]
-pub async fn admin_get_cell(
+async fn admin_get_cell(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
@@ -255,7 +255,7 @@ pub async fn admin_get_cell(
     tags("admin", "cells"),
     summary = "List cells matching a space + family prefix filter"
 )]
-pub async fn admin_list_cells(
+async fn admin_list_cells(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
