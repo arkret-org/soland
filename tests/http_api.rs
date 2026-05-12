@@ -77,10 +77,13 @@ fn test_config() -> AppConfig {
         object_storage: ObjectStorageConfig::local(std::env::temp_dir().join("soland-test-blobs")),
         cors_allow_origin: None,
         development_mode: true,
+        oauth_introspection_url: None,
+        oauth_introspection_bearer: None,
         session_grant_introspection_url: None,
         session_grant_introspection_bearer: None,
         did_resolver_allow_methods: vec!["web".to_owned(), "key".to_owned(), "uuid".to_owned()],
         embedded_webvh_provider_enabled: false,
+        embedded_webvh_registration_bearer: None,
         external_webvh_provider_url: None,
         external_webvh_provider_active: false,
         default_webvh_provider_id: None,
@@ -239,6 +242,86 @@ async fn register_account(state: AppState, did: &str, handle: &str, device_id: &
     login["access_token"].as_str().unwrap().to_owned()
 }
 
+fn spawn_oauth_introspection_server() -> (String, std::thread::JoinHandle<String>) {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!(
+        "http://{}/oauth2/introspect",
+        listener.local_addr().unwrap()
+    );
+    let handle = std::thread::spawn(move || {
+        use std::io::{Read, Write};
+
+        let (mut stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let mut buffer = [0_u8; 4096];
+        let read = stream.read(&mut buffer).unwrap();
+        let request = String::from_utf8_lossy(&buffer[..read]).to_string();
+        let request_lc = request.to_ascii_lowercase();
+        let accepted = request_lc.contains("authorization: bearer shared-secret")
+            && request.contains("token=coauth_access_token")
+            && request.contains("token_type_hint=access_token");
+        let (status, body) = if accepted {
+            (
+                "200 OK",
+                serde_json::json!({
+                    "active": true,
+                    "scope": "urn:contrix:principal-server:session.bind",
+                    "sub": "coauth-subject-1",
+                    "username": "OAuth Alice",
+                    "org.contrix.principal_did": "did:web:oauth.example",
+                    "org.contrix.device_id": "dev_oauth",
+                    "exp": 4102444800_i64
+                })
+                .to_string(),
+            )
+        } else {
+            ("401 Unauthorized", "{}".to_owned())
+        };
+        let response = format!(
+            "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        stream.write_all(response.as_bytes()).unwrap();
+        request
+    });
+    (url, handle)
+}
+
+#[tokio::test]
+async fn oauth_bearer_introspection_authenticates_directly() {
+    let (introspection_url, request_handle) = spawn_oauth_introspection_server();
+    let mut config = test_config();
+    config.development_mode = false;
+    config.oauth_introspection_url = Some(introspection_url);
+    config.oauth_introspection_bearer = Some("shared-secret".to_owned());
+    let state = AppState::new(config, Db { pool: None });
+
+    let me: Value = TestClient::get("http://server/api/v1/account/me")
+        .add_header("authorization", "Bearer coauth_access_token", true)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(me["did"], "did:web:oauth.example");
+    assert_eq!(me["handle"], "@oauth-alice");
+
+    let request = request_handle.join().unwrap();
+    assert!(request.contains("token=coauth_access_token"));
+    let devices = state
+        .persistence
+        .devices()
+        .list_for_actor("did:web:oauth.example")
+        .unwrap();
+    let oauth_device = devices
+        .iter()
+        .find(|device| device.payload["raw_device_id"] == "dev_oauth")
+        .expect("OAuth device auto-provisioned");
+    assert!(oauth_device.device_id.starts_with("cx:device:"));
+}
+
 #[tokio::test]
 async fn health_and_describe_work() {
     let health: Value = TestClient::get("http://server/health")
@@ -249,7 +332,7 @@ async fn health_and_describe_work() {
         .unwrap();
     assert_eq!(health["ok"], true);
     assert_eq!(health["checks"]["database"]["ok"], true);
-    assert_eq!(health["checks"]["repo"]["ok"], true);
+    assert_eq!(health["checks"]["events"]["ok"], true);
 
     let describe: Value = TestClient::get("http://server/api/v1/server/describe")
         .send(&app())
@@ -2489,6 +2572,7 @@ async fn embedded_webvh_provider_registers_and_serves_identity() {
     let mut config = test_config();
     config.public_base_url = "https://soland.example".to_owned();
     config.embedded_webvh_provider_enabled = true;
+    config.embedded_webvh_registration_bearer = Some("test-webvh-token".to_owned());
     config.did_resolver_allow_methods = vec![
         "web".to_owned(),
         "key".to_owned(),
@@ -2512,8 +2596,23 @@ async fn embedded_webvh_provider_registers_and_serves_identity() {
         "soland.embedded"
     );
     assert_eq!(describe["did_webvh"]["providers"][0]["default"], true);
+    assert_eq!(describe["did_webvh"]["providers"][0]["active"], true);
+    assert_eq!(
+        describe["did_webvh"]["providers"][0]["registration_auth"]["configured"],
+        true
+    );
+
+    let unauthorized = TestClient::post("http://server/api/v1/identity/webvh/register")
+        .json(&serde_json::json!({
+            "local_id": "mallory",
+            "public_key_multibase": "z6Mkmallory"
+        }))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(unauthorized.status_code.unwrap(), StatusCode::UNAUTHORIZED);
 
     let registered: Value = TestClient::post("http://server/api/v1/identity/webvh/register")
+        .add_header("authorization", "Bearer test-webvh-token", true)
         .json(&serde_json::json!({
             "local_id": "alice",
             "public_key_multibase": "z6Mkembedded",

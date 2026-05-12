@@ -168,6 +168,8 @@ mod tests {
             object_storage: ObjectStorageConfig::local(std::env::temp_dir().join("soland-blobs")),
             cors_allow_origin: None,
             development_mode: false,
+            oauth_introspection_url: None,
+            oauth_introspection_bearer: None,
             session_grant_introspection_url: None,
             session_grant_introspection_bearer: None,
             did_resolver_allow_methods: vec![
@@ -177,6 +179,7 @@ mod tests {
                 "webvh".to_owned(),
             ],
             embedded_webvh_provider_enabled: false,
+            embedded_webvh_registration_bearer: None,
             external_webvh_provider_url: None,
             external_webvh_provider_active: false,
             default_webvh_provider_id: None,

@@ -21,7 +21,9 @@ use salvo::prelude::*;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::{append_audit_log, now, query_param, render_error, sha256_hex, validate_did};
+use super::{
+    append_audit_log, bearer_token, now, query_param, render_error, sha256_hex, validate_did,
+};
 use crate::state::{AppState, IdentityDocumentRecord, IdentityLogRecord};
 use crate::wire::{
     IdentityDescribeResponse, IdentityLogResponse, IdentityReceiptsResponse,
@@ -85,6 +87,9 @@ pub(super) async fn embedded_webvh_register(
             "not_found",
             "embedded did:webvh provider is disabled",
         );
+        return;
+    }
+    if !require_embedded_webvh_registration_bearer(state, req, res) {
         return;
     }
     let body = match req.parse_json::<EmbeddedWebvhRegisterRequest>().await {
@@ -666,6 +671,11 @@ fn did_webvh_descriptor(state: &AppState) -> Value {
     let embedded_id = "soland.embedded";
     let external_id = "external.webvh";
     let embedded_enabled = state.config.embedded_webvh_provider_enabled;
+    let embedded_registration_auth_configured = state
+        .config
+        .embedded_webvh_registration_bearer
+        .as_deref()
+        .is_some_and(|value| !value.trim().is_empty());
     let embedded_authority = embedded_webvh_authority(&state.config.public_base_url);
     let external_enabled = state.config.external_webvh_provider_url.is_some();
     let default_provider_id = state
@@ -682,16 +692,29 @@ fn did_webvh_descriptor(state: &AppState) -> Value {
     let mut providers = Vec::new();
     if embedded_enabled {
         let (active, probe, document_url_template, log_url_template) = match &embedded_authority {
-            Ok((_, https_authority)) => (
-                true,
-                "ok".to_owned(),
-                Some(format!(
+            Ok((_, https_authority)) => {
+                let document_url_template = Some(format!(
                     "https://{https_authority}/api/v1/identity/webvh/{{local_id}}/did.json"
-                )),
-                Some(format!(
+                ));
+                let log_url_template = Some(format!(
                     "https://{https_authority}/api/v1/identity/webvh/{{local_id}}/did.jsonl"
-                )),
-            ),
+                ));
+                if embedded_registration_auth_configured {
+                    (
+                        true,
+                        "ok".to_owned(),
+                        document_url_template,
+                        log_url_template,
+                    )
+                } else {
+                    (
+                        false,
+                        "missing_registration_bearer".to_owned(),
+                        document_url_template,
+                        log_url_template,
+                    )
+                }
+            }
             Err(message) => (false, message.clone(), None, None),
         };
         providers.push(json!({
@@ -705,6 +728,13 @@ fn did_webvh_descriptor(state: &AppState) -> Value {
             "resolver_url": format!("{}/api/v1/identity", state.config.public_base_url.trim_end_matches('/')),
             "document_url_template": document_url_template,
             "log_url_template": log_url_template,
+            "registration_auth": {
+                "required": true,
+                "mode": "bearer",
+                "header": "Authorization",
+                "scheme": "Bearer",
+                "configured": embedded_registration_auth_configured,
+            },
             "health": {
                 "active": active,
                 "probe": probe,
@@ -746,6 +776,50 @@ fn did_webvh_descriptor(state: &AppState) -> Value {
             "required_when_default_missing": default_missing,
         },
     })
+}
+
+fn require_embedded_webvh_registration_bearer(
+    state: &AppState,
+    req: &Request,
+    res: &mut Response,
+) -> bool {
+    let Some(expected) = state
+        .config
+        .embedded_webvh_registration_bearer
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        render_error(
+            res,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "invalid_config",
+            "embedded did:webvh registration requires SOLAND_EMBEDDED_WEBVH_REGISTRATION_BEARER",
+        );
+        return false;
+    };
+    let Some(provided) = bearer_token(req)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        render_error(
+            res,
+            StatusCode::UNAUTHORIZED,
+            "unauthenticated",
+            "embedded did:webvh registration requires Authorization: Bearer <token>",
+        );
+        return false;
+    };
+    if sha256_hex(provided.as_bytes()) != sha256_hex(expected.as_bytes()) {
+        render_error(
+            res,
+            StatusCode::UNAUTHORIZED,
+            "unauthenticated",
+            "invalid embedded did:webvh registration bearer",
+        );
+        return false;
+    }
+    true
 }
 
 fn embedded_webvh_record_for_request(

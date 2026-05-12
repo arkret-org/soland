@@ -1215,7 +1215,16 @@ pub fn describe(
     service_did: &str,
     storage: &'static str,
     development_mode: bool,
+    oauth_introspection_enabled: bool,
 ) -> ServerDescription {
+    let mut supported_auth_methods = Vec::new();
+    if development_mode {
+        supported_auth_methods.push("dev_bearer_token");
+    }
+    if oauth_introspection_enabled {
+        supported_auth_methods.push("oauth2_bearer_introspection");
+    }
+
     ServerDescription {
         service_did: service_did.parse().expect("valid service DID"),
         service_type: "principal_server".to_owned(),
@@ -1344,11 +1353,7 @@ pub fn describe(
         supported_schema_profiles: vec!["cx.schema.core.v1".to_owned()],
         auth_metadata: serde_json::json!({
             "mode": if development_mode { "development" } else { "production" },
-            "supported_auth_methods": if development_mode {
-                vec!["dev_bearer_token"]
-            } else {
-                Vec::<&str>::new()
-            },
+            "supported_auth_methods": supported_auth_methods,
         }),
         limits: serde_json::json!({
             "storage": storage,

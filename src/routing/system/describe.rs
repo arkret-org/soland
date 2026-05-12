@@ -96,23 +96,26 @@ async fn server_describe(depot: &mut Depot) -> JsonResult<ServerDescription> {
         &state.config.service_did,
         state.db.mode(),
         state.config.development_mode,
+        state.config.oauth_introspection_url.is_some(),
     ))
 }
 
 #[endpoint(
     operation_id = "cx.auth.bridge.describe",
     tags("auth"),
-    summary = "Auth bridge contract description (session-grant exchange + push)"
+    summary = "Auth bridge contract description (OAuth bearer introspection + push)"
 )]
 pub(in crate::routing) async fn auth_bridge_describe() -> JsonResult<AuthBridgeDescribeResponse> {
     json_ok(AuthBridgeDescribeResponse {
         contract: "contrix.rest.principal_bridge.v1".to_owned(),
-        version: "2026-05-04-scaffold".to_owned(),
+        version: "2026-05-12-oauth-introspection".to_owned(),
         api_base_path: "/api/v1".to_owned(),
         auth: AuthBridgeAuthDescriptor {
             dev_login_path: "/api/v1/auth/dev-login".to_owned(),
-            session_grant_exchange_path: "/api/v1/auth/session-grant/exchange".to_owned(),
-            bearer_auth_scheme: "Authorization: Bearer <access_token>".to_owned(),
+            session_grant_exchange_path: "legacy:/api/v1/auth/session-grant/exchange".to_owned(),
+            bearer_auth_scheme:
+                "Authorization: Bearer <coauth OAuth access token>; soland introspects it server-side"
+                    .to_owned(),
             principal_did_body_field: "principal_did".to_owned(),
         },
         push: AuthBridgePushDescriptor {
@@ -120,12 +123,12 @@ pub(in crate::routing) async fn auth_bridge_describe() -> JsonResult<AuthBridgeD
             unregister_device_path: "/api/v1/push/unregister-device".to_owned(),
             session_grant_header: "X-Contrix-Session-Grant".to_owned(),
             principal_did_body_field: "principal_did".to_owned(),
-            register_device_mode:
-                "bearer_session_or_session_grant_bridge_with_principal_did".to_owned(),
+            register_device_mode: "bearer_session_or_oauth_bearer_introspection".to_owned(),
         },
         examples: AuthBridgeExamples {
             session_grant_exchange_request: json!({
-                "grant_jwt": "TODO_SESSION_GRANT_JWT",
+                "legacy": true,
+                "grant_jwt": "TODO_LEGACY_SESSION_GRANT_JWT",
                 "principal_did": "did:web:alice.example",
                 "device_id": "device-web",
                 "introspection_proof": {
@@ -147,9 +150,8 @@ pub(in crate::routing) async fn auth_bridge_describe() -> JsonResult<AuthBridgeD
             }),
         },
         todos: vec![
-            "TODO: require coauth-backed session-grant introspection in every non-development deployment and publish the client proof profile".to_owned(),
-            "TODO: replace push register grant bridge with the same coauth-backed proof/introspection path before production use".to_owned(),
-            "TODO: publish formal examples for session-grant exchange and push registration in the principal-server OpenAPI surface".to_owned(),
+            "TODO: publish a first-class OAuth bearer introspection descriptor instead of reusing the legacy session-grant bridge shape".to_owned(),
+            "TODO: replace push register grant bridge headers with the same Authorization bearer path used by ordinary requests".to_owned(),
         ],
     })
 }
@@ -357,9 +359,9 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeResponse> {
         dependencies: vec![
             IntegrationDependencyDescriptor {
                 service: "coauth".to_owned(),
-                purpose: "session_grant_bridge".to_owned(),
-                required_contract: "contrix.rest.auth_bridge.v1".to_owned(),
-                discovery_path: "/api/v1/auth/bridge/describe".to_owned(),
+                purpose: "oauth_bearer_introspection".to_owned(),
+                required_contract: "oauth2.token_introspection.rfc7662".to_owned(),
+                discovery_path: "/oauth2/introspect".to_owned(),
                 mode: "remote_service_contract".to_owned(),
             },
             IntegrationDependencyDescriptor {
@@ -377,15 +379,15 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeResponse> {
                 path: "/api/v1/auth/bridge/describe".to_owned(),
                 contract: "contrix.rest.principal_bridge.v1".to_owned(),
                 stability: "scaffold".to_owned(),
-                todo: "TODO: replace local session-grant bridge validation with coauth-backed proof and audience checks.".to_owned(),
+                todo: "TODO: split legacy session-grant fields from the primary OAuth bearer introspection contract.".to_owned(),
             },
             IntegrationSurfaceDescriptor {
-                name: "session_grant_exchange".to_owned(),
-                method: "POST".to_owned(),
-                path: "/api/v1/auth/session-grant/exchange".to_owned(),
-                contract: "contrix.rest.principal_session_grant_exchange.v1".to_owned(),
+                name: "oauth_bearer_introspection".to_owned(),
+                method: "Authorization".to_owned(),
+                path: "all protected /api/v1 routes".to_owned(),
+                contract: "oauth2.token_introspection.rfc7662".to_owned(),
                 stability: "scaffold".to_owned(),
-                todo: "TODO: bind exchanged sessions to proof-bearing grants and durable actor/device policy checks.".to_owned(),
+                todo: "TODO: make the introspection cache/timeout policy explicit in the published contract.".to_owned(),
             },
             IntegrationSurfaceDescriptor {
                 name: "outbound_push_bridge".to_owned(),
@@ -438,14 +440,14 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeResponse> {
         ],
         examples: json!({
             "compose_flow": {
-                "step_1": {"service": "coauth", "path": "/api/v1/auth/oidc/exchange", "method": "POST"},
-                "step_2": {"service": "soland", "path": "/api/v1/auth/session-grant/exchange", "method": "POST"},
+                "step_1": {"service": "coauth", "path": "/oauth2/token", "method": "POST"},
+                "step_2": {"service": "soland", "path": "protected route", "method": "Authorization: Bearer <coauth access token>"},
                 "step_3": {"service": "soland", "path": "/api/v1/push/outbound/bridge/fetch", "method": "POST"},
                 "step_4": {"service": "soland", "path": "/api/v1/push/register-device", "method": "POST"}
             }
         }),
         todos: vec![
-            "TODO: swap local session-grant and push bridge scaffolds for production proof/introspection paths.".to_owned(),
+            "TODO: replace legacy session-grant and push bridge scaffolds with the direct OAuth bearer path.".to_owned(),
             "TODO: persist outbound push gateway snapshots and use them in notification fan-out.".to_owned(),
             "TODO: publish the same integration manifest fields in the OpenAPI surface.".to_owned(),
         ],

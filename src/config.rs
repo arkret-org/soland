@@ -10,6 +10,16 @@ pub struct AppConfig {
     pub object_storage: ObjectStorageConfig,
     pub cors_allow_origin: Option<String>,
     pub development_mode: bool,
+    /// Matrix/Palpo-style OAuth 2.0 introspection endpoint. When configured,
+    /// soland accepts the caller's `Authorization: Bearer <coauth access token>`
+    /// directly and verifies it by POSTing to this endpoint with
+    /// [`oauth_introspection_bearer`].
+    pub oauth_introspection_url: Option<String>,
+    /// Shared service bearer sent to [`oauth_introspection_url`] as
+    /// `Authorization: Bearer ...`. This mirrors the Matrix Authentication
+    /// Service / homeserver shared-secret model and is never exposed to
+    /// browsers or clients.
+    pub oauth_introspection_bearer: Option<String>,
     pub session_grant_introspection_url: Option<String>,
     pub session_grant_introspection_bearer: Option<String>,
     pub did_resolver_allow_methods: Vec<String>,
@@ -18,6 +28,11 @@ pub struct AppConfig {
     /// `/api/v1/identity/describe`, register a user DID through soland, then
     /// resolve the resulting document through soland's local identity store.
     pub embedded_webvh_provider_enabled: bool,
+    /// Shared bearer token required to write embedded `did:webvh` records.
+    /// Read endpoints remain public because DID resolution needs them, but
+    /// registration must be restricted to the trusted registration service
+    /// (normally coauth).
+    pub embedded_webvh_registration_bearer: Option<String>,
     /// Optional external `did:webvh` provider URL. This can point at StarID or
     /// any compatible provider. It records admin intent and is surfaced in
     /// `/identity/describe` even when the boot probe fails.
@@ -236,6 +251,8 @@ impl AppConfig {
         let development_mode = std::env::var("SOLAND_DEVELOPMENT_MODE")
             .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes"))
             .unwrap_or(false);
+        let oauth_introspection_url = env_non_empty("SOLAND_OAUTH_INTROSPECTION_URL");
+        let oauth_introspection_bearer = env_non_empty("SOLAND_OAUTH_INTROSPECTION_BEARER");
         let session_grant_introspection_url =
             env_non_empty("SOLAND_SESSION_GRANT_INTROSPECTION_URL");
         let session_grant_introspection_bearer =
@@ -244,6 +261,8 @@ impl AppConfig {
             .unwrap_or_else(|| vec!["web".to_owned(), "key".to_owned(), "uuid".to_owned()]);
         let embedded_webvh_provider_enabled =
             env_bool("SOLAND_EMBEDDED_WEBVH_PROVIDER_ENABLED")?.unwrap_or(true);
+        let embedded_webvh_registration_bearer =
+            env_non_empty("SOLAND_EMBEDDED_WEBVH_REGISTRATION_BEARER");
         let external_webvh_provider_url = env_non_empty("SOLAND_EXTERNAL_WEBVH_PROVIDER_URL");
         let default_webvh_provider_id = env_non_empty("SOLAND_DEFAULT_WEBVH_PROVIDER_ID");
         // 0 disables replay-window enforcement; default 5 min per spec.
@@ -278,10 +297,13 @@ impl AppConfig {
             object_storage,
             cors_allow_origin,
             development_mode,
+            oauth_introspection_url,
+            oauth_introspection_bearer,
             session_grant_introspection_url,
             session_grant_introspection_bearer,
             did_resolver_allow_methods,
             embedded_webvh_provider_enabled,
+            embedded_webvh_registration_bearer,
             external_webvh_provider_url,
             // `main.rs` flips this to true after a successful boot probe.
             external_webvh_provider_active: false,

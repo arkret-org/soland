@@ -34,9 +34,12 @@ SOLAND_BIND=0.0.0.0:8698
 SOLAND_PUBLIC_BASE_URL=https://soland.example
 SOLAND_SERVICE_DID=did:web:soland.example
 SOLAND_EMBEDDED_WEBVH_PROVIDER_ENABLED=true
+SOLAND_EMBEDDED_WEBVH_REGISTRATION_BEARER=<shared-secret-configured-in-coauth>
 # Optional: use a standalone webvh provider instead of, or alongside, the embedded provider.
 # SOLAND_EXTERNAL_WEBVH_PROVIDER_URL=https://webvh.example
 # SOLAND_DEFAULT_WEBVH_PROVIDER_ID=soland.embedded
+SOLAND_OAUTH_INTROSPECTION_URL=https://coauth.example/oauth2/introspect
+SOLAND_OAUTH_INTROSPECTION_BEARER=<shared-secret-configured-in-coauth>
 SOLAND_OBJECT_STORAGE_BACKEND=s3-compatible
 SOLAND_OBJECT_STORAGE_S3_BUCKET=soland
 SOLAND_OBJECT_STORAGE_S3_REGION=us-east-1
@@ -103,6 +106,8 @@ docker run --name soland --restart=always -d \
   -e SOLAND_BIND=0.0.0.0:8698 \
   -e SOLAND_PUBLIC_BASE_URL=https://soland.example \
   -e SOLAND_SERVICE_DID=did:web:soland.example \
+  -e SOLAND_OAUTH_INTROSPECTION_URL=https://coauth.example/oauth2/introspect \
+  -e SOLAND_OAUTH_INTROSPECTION_BEARER=<shared-secret-configured-in-coauth> \
   -e DATABASE_URL=postgres://soland:<password>@db:5432/soland?sslmode=verify-full \
   -e SOLAND_OBJECT_STORAGE_BACKEND=local \
   -e SOLAND_OBJECT_STORAGE_LOCAL_ROOT=/var/lib/soland/objects \
@@ -214,6 +219,9 @@ pre-upgrade backup if you need to roll back.
 ## 9. Hardening checklist
 
 - `SOLAND_DEVELOPMENT_MODE` is unset (or explicitly `false`).
+- `SOLAND_OAUTH_INTROSPECTION_URL` points at coauth's `/oauth2/introspect`,
+  and `SOLAND_OAUTH_INTROSPECTION_BEARER` matches the shared server-to-server
+  secret configured there.
 - `DATABASE_URL` uses `sslmode=verify-full` and a password kept out of source
   control (Vault / Kubernetes Secret / systemd `LoadCredential`).
 - `SOLAND_CORS_ALLOW_ORIGIN` is the **single** browser origin you trust;

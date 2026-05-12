@@ -85,6 +85,8 @@ DATABASE_URL=postgres://soland:soland@localhost:5432/soland \
 docker run --rm -p 8698:8698 \
   -e SOLAND_PUBLIC_BASE_URL=https://soland.example \
   -e SOLAND_SERVICE_DID=did:web:soland.example \
+  -e SOLAND_OAUTH_INTROSPECTION_URL=https://coauth.example/oauth2/introspect \
+  -e SOLAND_OAUTH_INTROSPECTION_BEARER=shared-secret-known-by-coauth \
   -e DATABASE_URL=postgres://soland:soland@db:5432/soland \
   -e SOLAND_OBJECT_STORAGE_BACKEND=local \
   -e SOLAND_OBJECT_STORAGE_LOCAL_ROOT=/var/lib/soland/objects \
@@ -105,8 +107,11 @@ All settings can be supplied via environment variables (preferred) or a
 | `SOLAND_PUBLIC_BASE_URL` | `http://<bind>` | Advertised base URL (`/api/v1/server/describe`) |
 | `SOLAND_SERVICE_DID` | `did:web:soland.local` | Service DID — also the proof `audience` binding |
 | `SOLAND_EMBEDDED_WEBVH_PROVIDER_ENABLED` | `true` | Enable soland's built-in `did:webvh` provider for coauth registration |
+| `SOLAND_EMBEDDED_WEBVH_REGISTRATION_BEARER` | unset | Shared bearer token coauth must present to write embedded `did:webvh` registrations |
 | `SOLAND_EXTERNAL_WEBVH_PROVIDER_URL` | unset | Optional external `did:webvh` provider, such as a standalone StarID service |
 | `SOLAND_DEFAULT_WEBVH_PROVIDER_ID` | unset | Optional coauth default provider id: `soland.embedded` or `external.webvh` |
+| `SOLAND_OAUTH_INTROSPECTION_URL` | unset | coauth OAuth introspection endpoint for direct bearer-token auth |
+| `SOLAND_OAUTH_INTROSPECTION_BEARER` | unset | Server-to-server bearer sent to the introspection endpoint |
 | `DATABASE_URL` | unset | If set, enables PostgreSQL and runs migrations |
 | `SOLAND_OBJECT_STORAGE_BACKEND` | `local` | Blob object backend: `local` or `s3-compatible` |
 | `SOLAND_OBJECT_STORAGE_LOCAL_ROOT` | system temp + `/soland-objects` | Local filesystem root when using `local` |
@@ -125,8 +130,20 @@ in the commit author DID, and proof `domain`/`audience` must bind to
 
 `GET /api/v1/identity/describe` exposes `did_webvh.providers[]` for coauth.
 When the embedded provider is enabled, coauth can register through
-`POST /api/v1/identity/webvh/register`; soland then serves the DID document and
-webvh log from `/api/v1/identity/webvh/{local_id}/did.json` and `.jsonl`.
+`POST /api/v1/identity/webvh/register` with `Authorization: Bearer
+<SOLAND_EMBEDDED_WEBVH_REGISTRATION_BEARER>`; soland then serves the DID
+document and webvh log from `/api/v1/identity/webvh/{local_id}/did.json` and
+`.jsonl`.
+
+Production authentication follows the Matrix/Palpo delegated-auth shape. A
+client sends its coauth OAuth access token directly to soland as
+`Authorization: Bearer <access_token>`. If the token is not a local dev session,
+soland calls `SOLAND_OAUTH_INTROSPECTION_URL` with
+`Authorization: Bearer <SOLAND_OAUTH_INTROSPECTION_BEARER>`, requires an active
+token with `urn:contrix:principal-server:session.bind`, then maps
+`org.contrix.principal_did` and `org.contrix.device_id` into the local
+account/device view. The older `/api/v1/auth/session-grant/exchange` bridge is
+kept as a legacy scaffold, not the primary login path.
 
 Client-sync `next_batch` cursors are structured `cx:cursor:` tokens bound to
 the principal, device, service DID, filter hash, stream positions, and expiry.
