@@ -4,6 +4,7 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::Utc;
 use contrix_sdk::{Did, Hash, Operation, OperationId, Proof, SpaceId};
+use ed25519_dalek::{Signer, SigningKey};
 use salvo::http::StatusCode;
 use salvo::test::{ResponseExt, TestClient};
 use serde::Serialize;
@@ -73,9 +74,12 @@ fn test_config() -> AppConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         public_base_url: "http://server".to_owned(),
         service_did: "did:web:soland.local".to_owned(),
+        tls_cert_path: None,
+        tls_key_path: None,
         database_url: None,
         object_storage: ObjectStorageConfig::local(std::env::temp_dir().join("soland-test-blobs")),
         cors_allow_origin: None,
+        auth_server_url: None,
         development_mode: true,
         oauth_introspection_url: None,
         oauth_introspection_bearer: None,
@@ -324,6 +328,11 @@ async fn oauth_bearer_introspection_authenticates_directly() {
 
 #[tokio::test]
 async fn health_and_describe_work() {
+    let mut home = TestClient::get("http://server/").send(&app()).await;
+    assert_eq!(home.status_code.unwrap(), StatusCode::OK);
+    let home_body = home.take_string().await.unwrap();
+    assert!(home_body.contains("<h1>it works</h1>"));
+
     let health: Value = TestClient::get("http://server/health")
         .send(&app())
         .await
@@ -1261,6 +1270,25 @@ async fn configured_cors_allows_only_explicit_origin() {
             .headers()
             .get("access-control-allow-origin")
             .is_none()
+    );
+}
+
+#[tokio::test]
+async fn server_describe_advertises_auth_server_url_when_configured() {
+    let mut config = test_config();
+    config.auth_server_url = Some("https://auth.local.host".to_owned());
+    let service = app_from_state(AppState::new(config, Db { pool: None }));
+
+    let describe: Value = TestClient::get("http://server/api/v1/server/describe")
+        .send(&service)
+        .await
+        .take_json()
+        .await
+        .unwrap();
+
+    assert_eq!(
+        describe["auth_metadata"]["auth_server_url"],
+        "https://auth.local.host"
     );
 }
 
@@ -2601,23 +2629,62 @@ async fn embedded_webvh_provider_registers_and_serves_identity() {
         describe["did_webvh"]["providers"][0]["registration_auth"]["configured"],
         true
     );
+    assert_eq!(
+        describe["did_webvh"]["providers"][0]["document_url_template"],
+        "https://soland.example/webvh/{local_id}/did.json"
+    );
+    assert_eq!(
+        describe["did_webvh"]["providers"][0]["log_url_template"],
+        "https://soland.example/webvh/{local_id}/did.jsonl"
+    );
 
     let unauthorized = TestClient::post("http://server/api/v1/identity/webvh/register")
         .json(&serde_json::json!({
             "local_id": "mallory",
-            "public_key_multibase": "z6Mkmallory"
+            "did_public_key_multibase": "z6Mkmallory",
+            "update_public_key_multibase": "z6Mkmalloryupdate"
         }))
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(unauthorized.status_code.unwrap(), StatusCode::UNAUTHORIZED);
 
+    let reused_key = TestClient::post("http://server/api/v1/identity/webvh/register")
+        .add_header("authorization", "Bearer test-webvh-token", true)
+        .json(&serde_json::json!({
+            "local_id": "reused",
+            "did_public_key_multibase": "z6Mkreused",
+            "update_public_key_multibase": "z6Mkreused"
+        }))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(reused_key.status_code.unwrap(), StatusCode::BAD_REQUEST);
+
+    let did_signing = SigningKey::from_bytes(&[41u8; 32]);
+    let update_signing = SigningKey::from_bytes(&[42u8; 32]);
+    let did_public_key = test_ed25519_multibase_public(&did_signing);
+    let update_public_key = test_ed25519_multibase_public(&update_signing);
+    let version_time = "2026-05-12T00:00:00Z";
+    let proof = test_embedded_webvh_proof(
+        "https://soland.example",
+        "alice",
+        &did_public_key,
+        &update_public_key,
+        "did-key-1",
+        &update_signing,
+        version_time,
+    );
+
     let registered: Value = TestClient::post("http://server/api/v1/identity/webvh/register")
         .add_header("authorization", "Bearer test-webvh-token", true)
         .json(&serde_json::json!({
             "local_id": "alice",
-            "public_key_multibase": "z6Mkembedded",
-            "key_id": "key-1",
-            "also_known_as": ["acct:alice@example.com"]
+            "did_public_key_multibase": did_public_key,
+            "update_public_key_multibase": update_public_key,
+            "did_key_id": "did-key-1",
+            "update_key_id": "update-key-1",
+            "also_known_as": ["acct:alice@example.com"],
+            "version_time": version_time,
+            "proof": proof,
         }))
         .send(&app_from_state(state.clone()))
         .await
@@ -2631,12 +2698,32 @@ async fn embedded_webvh_provider_registers_and_serves_identity() {
             .unwrap()
             .starts_with("did:webvh:z")
     );
+    assert!(
+        registered["did"]
+            .as_str()
+            .unwrap()
+            .ends_with(":soland.example:webvh:alice")
+    );
+    assert!(
+        !registered["did"]
+            .as_str()
+            .unwrap()
+            .contains(":api:v1:identity:")
+    );
     assert_eq!(
         registered["document_url"],
-        "https://soland.example/api/v1/identity/webvh/alice/did.json"
+        "https://soland.example/webvh/alice/did.json"
+    );
+    assert_eq!(
+        registered["did_key_id"],
+        format!("{}#did-key-1", registered["did"].as_str().unwrap())
+    );
+    assert_eq!(
+        registered["update_key_id"],
+        format!("{}#update-key-1", registered["did"].as_str().unwrap())
     );
 
-    let did_document: Value = TestClient::get("http://server/api/v1/identity/webvh/alice/did.json")
+    let did_document: Value = TestClient::get("http://server/webvh/alice/did.json")
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
@@ -2645,15 +2732,20 @@ async fn embedded_webvh_provider_registers_and_serves_identity() {
     assert_eq!(did_document["id"], registered["did"]);
     assert_eq!(
         did_document["verificationMethod"][0]["publicKeyMultibase"],
-        "z6Mkembedded"
+        did_public_key
     );
+    assert_eq!(did_document["authentication"][0], registered["did_key_id"]);
+    assert_eq!(did_document["assertionMethod"][0], registered["did_key_id"]);
 
-    let mut log_response = TestClient::get("http://server/api/v1/identity/webvh/alice/did.jsonl")
+    let mut log_response = TestClient::get("http://server/webvh/alice/did.jsonl")
         .send(&app_from_state(state.clone()))
         .await;
     let log_body = log_response.take_string().await.unwrap();
     assert!(log_body.contains("\"versionId\""));
     assert!(log_body.contains("\"did:webvh:1.0\""));
+    assert!(log_body.contains(&update_public_key));
+    assert!(!log_body.contains(&format!("\"updateKeys\":[\"{did_public_key}\"]")));
+    assert!(log_body.contains("\"DataIntegrityProof\""));
 
     let resolved: Value = TestClient::post("http://server/api/v1/identity/resolve")
         .json(&serde_json::json!({"did": registered["did"]}))
@@ -2664,6 +2756,118 @@ async fn embedded_webvh_provider_registers_and_serves_identity() {
         .unwrap();
     assert_eq!(resolved["did_document"]["id"], registered["did"]);
     assert_eq!(resolved["key_log_head"], registered["key_log_head"]);
+}
+
+fn test_ed25519_multibase_public(signing: &SigningKey) -> String {
+    let mut bytes = Vec::with_capacity(34);
+    bytes.extend_from_slice(&[0xed, 0x01]);
+    bytes.extend_from_slice(signing.verifying_key().as_bytes());
+    format!("z{}", bs58::encode(bytes).into_string())
+}
+
+fn test_embedded_webvh_proof(
+    principal_server_url: &str,
+    local_id: &str,
+    did_public_key_multibase: &str,
+    update_public_key_multibase: &str,
+    did_key_fragment: &str,
+    update_signing: &SigningKey,
+    version_time: &str,
+) -> Value {
+    let method_authority = test_webvh_method_authority(principal_server_url);
+    let placeholder_did = format!("did:webvh:{{SCID}}:{method_authority}:webvh:{local_id}");
+    let did_key_id = format!("{placeholder_did}#{did_key_fragment}");
+    let skeleton = serde_json::json!({
+        "versionId": "0-{SCID}",
+        "versionTime": version_time,
+        "parameters": {
+            "scid": "{SCID}",
+            "method": "did:webvh:1.0",
+            "updateKeys": [update_public_key_multibase],
+        },
+        "state": {
+            "@context": ["https://www.w3.org/ns/did/v1"],
+            "id": placeholder_did,
+            "verificationMethod": [{
+                "id": did_key_id,
+                "type": "Multikey",
+                "controller": placeholder_did,
+                "publicKeyMultibase": did_public_key_multibase,
+            }],
+            "authentication": [did_key_id],
+            "assertionMethod": [did_key_id],
+            "alsoKnownAs": ["acct:alice@example.com"],
+            "service": [{
+                "id": format!("{placeholder_did}#soland"),
+                "type": "ContrixPrincipalServer",
+                "serviceEndpoint": principal_server_url.trim_end_matches('/'),
+            }],
+        },
+    });
+    let scid = test_scid(&skeleton);
+    let did = format!("did:webvh:{scid}:{method_authority}:webvh:{local_id}");
+    let mut entry = test_replace_scid(skeleton, &scid);
+    let entry_hash = test_webvh_entry_hash(&entry);
+    if let Value::Object(map) = &mut entry {
+        map.insert(
+            "versionId".to_owned(),
+            Value::String(format!("1-{entry_hash}")),
+        );
+    }
+    let payload = contrix_sdk::canonical::canonical_json_bytes(&entry).unwrap();
+    let signature = update_signing.sign(&payload);
+    serde_json::json!({
+        "type": "DataIntegrityProof",
+        "cryptosuite": "eddsa-jcs-2022",
+        "proofPurpose": "authentication",
+        "verificationMethod": format!("{did}#{update_public_key_multibase}"),
+        "proofValue": format!("z{}", bs58::encode(signature.to_bytes()).into_string()),
+    })
+}
+
+fn test_webvh_method_authority(url: &str) -> String {
+    let authority = url
+        .split_once("://")
+        .map(|(_, rest)| rest)
+        .unwrap_or(url)
+        .trim_end_matches('/')
+        .split('/')
+        .next()
+        .unwrap_or(url);
+    authority.replace(':', "%3A")
+}
+
+fn test_scid(value: &Value) -> String {
+    let canonical = contrix_sdk::canonical::canonical_json_bytes(value).unwrap();
+    test_sha256_multihash_multibase(&canonical)
+}
+
+fn test_webvh_entry_hash(value: &Value) -> String {
+    let mut clone = value.clone();
+    if let Value::Object(map) = &mut clone {
+        map.remove("proof");
+        map.remove("versionId");
+    }
+    let canonical = contrix_sdk::canonical::canonical_json_bytes(&clone).unwrap();
+    test_sha256_multihash_multibase(&canonical)
+}
+
+fn test_replace_scid(value: Value, scid: &str) -> Value {
+    serde_json::from_str(
+        &serde_json::to_string(&value)
+            .unwrap()
+            .replace("{SCID}", scid),
+    )
+    .unwrap()
+}
+
+fn test_sha256_multihash_multibase(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
+    let mut multihash = Vec::with_capacity(34);
+    multihash.push(0x12);
+    multihash.push(0x20);
+    multihash.extend_from_slice(&digest);
+    format!("z{}", bs58::encode(multihash).into_string())
 }
 
 #[tokio::test]

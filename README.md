@@ -88,7 +88,7 @@ docker run --rm -p 8698:8698 \
   -e SOLAND_OAUTH_INTROSPECTION_URL=https://coauth.example/oauth2/introspect \
   -e SOLAND_OAUTH_INTROSPECTION_BEARER=shared-secret-known-by-coauth \
   -e DATABASE_URL=postgres://soland:soland@db:5432/soland \
-  -e SOLAND_OBJECT_STORAGE_BACKEND=local \
+  -e SOLAND_OBJECT_STORAGE_BACKEND=filesystem \
   -e SOLAND_OBJECT_STORAGE_LOCAL_ROOT=/var/lib/soland/objects \
   -v soland-objects:/var/lib/soland \
   ghcr.io/contrix/soland:latest
@@ -105,6 +105,8 @@ All settings can be supplied via environment variables (preferred) or a
 | --- | --- | --- |
 | `SOLAND_BIND` (or `--bind`) | `127.0.0.1:8698` | Listen address |
 | `SOLAND_PUBLIC_BASE_URL` | `http://<bind>` | Advertised base URL (`/api/v1/server/describe`) |
+| `SOLAND_TLS_CERT_PATH` | unset | TLS certificate PEM path; when paired with `SOLAND_TLS_KEY_PATH`, soland serves HTTPS via rustls |
+| `SOLAND_TLS_KEY_PATH` | unset | TLS private-key PEM path paired with `SOLAND_TLS_CERT_PATH` |
 | `SOLAND_SERVICE_DID` | `did:web:soland.local` | Service DID — also the proof `audience` binding |
 | `SOLAND_EMBEDDED_WEBVH_PROVIDER_ENABLED` | `true` | Enable soland's built-in `did:webvh` provider for coauth registration |
 | `SOLAND_EMBEDDED_WEBVH_REGISTRATION_BEARER` | unset | Shared bearer token coauth must present to write embedded `did:webvh` registrations |
@@ -113,14 +115,86 @@ All settings can be supplied via environment variables (preferred) or a
 | `SOLAND_OAUTH_INTROSPECTION_URL` | unset | coauth OAuth introspection endpoint for direct bearer-token auth |
 | `SOLAND_OAUTH_INTROSPECTION_BEARER` | unset | Server-to-server bearer sent to the introspection endpoint |
 | `DATABASE_URL` | unset | If set, enables PostgreSQL and runs migrations |
-| `SOLAND_OBJECT_STORAGE_BACKEND` | `local` | Blob object backend: `local` or `s3-compatible` |
-| `SOLAND_OBJECT_STORAGE_LOCAL_ROOT` | system temp + `/soland-objects` | Local filesystem root when using `local` |
+| `SOLAND_OBJECT_STORAGE_BACKEND` | `filesystem` | Blob object backend: `filesystem`/`local` or `s3-compatible` |
+| `SOLAND_OBJECT_STORAGE_LOCAL_ROOT` | system temp + `/soland-objects` | Local filesystem root when using `filesystem`/`local` |
 | `SOLAND_OBJECT_STORAGE_PREFIX` | unset | Optional object key prefix shared by local and S3-compatible backends |
 | `SOLAND_OBJECT_STORAGE_S3_BUCKET` | required for S3 | S3-compatible bucket name |
 | `SOLAND_OBJECT_STORAGE_S3_ENDPOINT` | region endpoint | Optional custom endpoint for MinIO/R2/etc. |
 | `SOLAND_CORS_ALLOW_ORIGIN` | unset | Single explicit CORS origin for browser clients |
+| `SOLAND_AUTH_SERVER_URL` | unset | Public Auth / Account Server URL advertised to browser clients; registration and recovery calls go there |
 | `SOLAND_DEVELOPMENT_MODE` | `false` | Enable dev-only endpoints (`dev_login`, admin snapshots, relaxed DID validation) |
 | `RUST_LOG` | unset | Tracing subscriber filter, e.g. `soland=info,salvo=warn` |
+
+## Local TLS
+
+For local HTTPS development, use `mkcert`. It installs a local CA into your
+OS/browser trust store and produces PEM files that soland can hand directly to
+Salvo's rustls listener.
+
+The embedded `did:webvh` provider needs a dotted host, so plain `localhost` is
+not enough. The examples below use `local.host`, matching the checked-in `.env`
+and the `local.host.pem` / `local.host-key.pem` file names.
+
+1. Install `mkcert` and trust its local CA:
+
+   ```bash
+   mkcert -install
+   ```
+
+2. Generate a certificate for the local hostname:
+
+   ```bash
+   mkcert local.host
+   ```
+
+3. If `local.host` does not already resolve to loopback on your machine, add a
+   hosts entry pointing it at `127.0.0.1`.
+
+4. Configure soland to use the generated files:
+
+   ```dotenv
+   SOLAND_BIND=127.0.0.1:443
+   SOLAND_PUBLIC_BASE_URL=https://local.host:443
+   SOLAND_SERVICE_DID=did:web:local.host
+   SOLAND_TLS_CERT_PATH=./local.host.pem
+   SOLAND_TLS_KEY_PATH=./local.host-key.pem
+   SOLAND_OBJECT_STORAGE_BACKEND=filesystem
+   SOLAND_OBJECT_STORAGE_LOCAL_ROOT=../testdata
+   SOLAND_DEVELOPMENT_MODE=true
+   ```
+
+5. Start the server:
+
+   ```bash
+   cargo run
+   ```
+
+If you choose a different hostname, update `SOLAND_PUBLIC_BASE_URL`,
+`SOLAND_SERVICE_DID`, and the TLS file paths together. Use a host name that
+contains a dot so embedded `did:webvh` URLs remain valid.
+
+### Run local Caddy for coauth integration
+
+For local coauth + soland testing, the checked-in `Caddyfile` terminates HTTPS
+on port 443 and proxies:
+
+```text
+https://local.host      -> 127.0.0.1:8698
+https://auth.local.host -> 127.0.0.1:7080
+```
+
+Start soland on `127.0.0.1:8698`, start coauth on `127.0.0.1:7080`, then run:
+
+```bash
+just caddy
+```
+
+If either host does not resolve to loopback on your machine, add both names to
+your hosts file:
+
+```text
+127.0.0.1 local.host auth.local.host
+```
 
 When `SOLAND_DEVELOPMENT_MODE=false` (the default), submitted commits must use
 production proof material — no `alg: none` or `dev-proof`, proof `payload_hash`
@@ -132,8 +206,9 @@ in the commit author DID, and proof `domain`/`audience` must bind to
 When the embedded provider is enabled, coauth can register through
 `POST /api/v1/identity/webvh/register` with `Authorization: Bearer
 <SOLAND_EMBEDDED_WEBVH_REGISTRATION_BEARER>`; soland then serves the DID
-document and webvh log from `/api/v1/identity/webvh/{local_id}/did.json` and
-`.jsonl`.
+document and webvh log from `/webvh/{local_id}/did.json` and `.jsonl`. The
+embedded DID uses the public `did:webvh:<scid>:<host>:webvh:<local_id>` path
+rather than the internal registration API path.
 
 Production authentication follows the Matrix/Palpo delegated-auth shape. A
 client sends its coauth OAuth access token directly to soland as

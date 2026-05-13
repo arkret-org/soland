@@ -106,6 +106,7 @@ pub fn router_with_rate_limiter_config(
     let router = router
         .push(system::health_router())
         .push(interop::well_known_router())
+        .push(identity::embedded_webvh_public_router())
         .push(api_v1_router())
         .push(access::contrix_router())
         .push(interop::contrix_router())
@@ -118,6 +119,7 @@ pub fn router_with_rate_limiter_config(
                 .get(contrix_openapi_yaml),
         )
         .unshift(doc.into_router(".well-known/contrix/openapi.json"))
+        .unshift(Router::new().get(home_page))
 }
 
 fn api_v1_router() -> Router {
@@ -265,6 +267,20 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "spaces",
         "cx.spaces.create",
         "create space",
+    ),
+    (
+        "/api/v1/spaces/{space_id}",
+        PathItemType::Patch,
+        "spaces",
+        "cx.spaces.update",
+        "update space",
+    ),
+    (
+        "/api/v1/spaces/{space_id}/policy",
+        PathItemType::Put,
+        "spaces",
+        "cx.spaces.set_policy",
+        "set space policy",
     ),
     (
         "/api/v1/spaces/{space_id}",
@@ -766,6 +782,49 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
 ];
 
 #[handler]
+async fn home_page(res: &mut Response) {
+    res.render(Text::Html(
+        r#"<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>soland</title>
+  <style>
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      font: 16px/1.5 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: #172033;
+      background: #f7f8fb;
+    }
+    main {
+      text-align: center;
+    }
+    h1 {
+      margin: 0 0 8px;
+      font-size: 40px;
+      letter-spacing: 0;
+    }
+    p {
+      margin: 0;
+      color: #586174;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>it works</h1>
+    <p>soland is running</p>
+  </main>
+</body>
+</html>"#,
+    ));
+}
+
+#[handler]
 async fn cors_preflight(res: &mut Response) {
     res.status_code(StatusCode::NO_CONTENT);
 }
@@ -791,6 +850,8 @@ fn cors_handler_for_origin(origin: String) -> CorsHandler {
         .allow_headers(vec![
             "authorization",
             "content-type",
+            "idempotency-key",
+            "x-contrix-request-id",
             "x-contrix-wait-for",
             "x-contrix-sha256",
             "range",
@@ -963,11 +1024,14 @@ mod operation_conformance_tests {
                 bind: "127.0.0.1:0".parse().unwrap(),
                 public_base_url: "http://server".to_owned(),
                 service_did: "did:web:soland.local".to_owned(),
+                tls_cert_path: None,
+                tls_key_path: None,
                 database_url: None,
                 object_storage: ObjectStorageConfig::local(
                     std::env::temp_dir().join("soland-test-blobs"),
                 ),
                 cors_allow_origin: None,
+                auth_server_url: None,
                 development_mode: true,
                 oauth_introspection_url: None,
                 oauth_introspection_bearer: None,

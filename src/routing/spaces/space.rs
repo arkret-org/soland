@@ -2,6 +2,8 @@
 //!
 //! Surfaces:
 //! - `POST   /api/v1/spaces` — create a space, optionally invite peers
+//! - `PATCH  /api/v1/spaces/{space_id}` — owner updates title / summary / visibility
+//! - `PUT    /api/v1/spaces/{space_id}/policy` — owner updates coarse join/history policy
 //! - `POST   /api/v1/spaces/{space_id}/members` — owner adds a member
 //! - `DELETE /api/v1/spaces/{space_id}/members/{member_did}` — owner removes a member
 //! - `DELETE /api/v1/spaces/{space_id}` — owner soft-deletes the space
@@ -25,13 +27,21 @@ use super::{
 };
 use crate::error::{AppError, ErrorCode};
 use crate::state::{AppState, SessionRecord, SpaceInviteRecord, SpaceMetaRecord};
-use crate::wire::{AddSpaceMemberRequest, CreateSpaceRequest, SpaceLifecycleResponse};
+use crate::wire::{
+    AddSpaceMemberRequest, CreateSpaceRequest, SetSpacePolicyRequest, SpaceLifecycleResponse,
+    SpacePolicyResponse, UpdateSpaceRequest, UpdateSpaceResponse,
+};
 use crate::{JsonResult, ids, json_ok, kinds};
 
 pub(super) fn router() -> Router {
     Router::with_path("spaces")
         .post(create_space)
-        .push(Router::with_path("{space_id}").delete(delete_space))
+        .push(
+            Router::with_path("{space_id}")
+                .patch(update_space)
+                .delete(delete_space),
+        )
+        .push(Router::with_path("{space_id}/policy").put(set_space_policy))
         .push(Router::with_path("{space_id}/export").get(export_space))
         .push(Router::with_path("{space_id}/members").post(add_space_member))
         .push(Router::with_path("{space_id}/members/{member_did}").delete(remove_space_member))
@@ -156,6 +166,205 @@ async fn create_space(
         "accepted",
     );
     space_lifecycle_response(state, &space_id).map(salvo::prelude::Json)
+}
+
+#[endpoint(
+    operation_id = "cx.spaces.update",
+    tags("spaces"),
+    summary = "Owner updates Space metadata and visibility"
+)]
+async fn update_space(
+    aa: AuthArgs,
+    depot: &mut Depot,
+    req: &mut Request,
+    space_id: PathParam<String>,
+    body: JsonBody<UpdateSpaceRequest>,
+) -> JsonResult<UpdateSpaceResponse> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req)?;
+    let space_id = space_id.into_inner();
+    if !space_owner_matches(state, &space_id, &session.actor) {
+        return Err(AppError::capability_denied(
+            "only the space owner can update the space",
+        ));
+    }
+    let body = body.into_inner();
+    if body
+        .title
+        .as_deref()
+        .is_some_and(|title| title.trim().is_empty())
+    {
+        return Err(AppError::missing_param("title cannot be empty"));
+    }
+    let discoverability = body.discoverability.clone().or_else(|| {
+        body.public
+            .map(|public| if public { "public" } else { "invite_only" }.to_owned())
+    });
+    if discoverability
+        .as_deref()
+        .is_some_and(|value| !is_valid_discoverability(value))
+    {
+        return Err(AppError::invalid_param("invalid discoverability"));
+    }
+    if let Some(services) = body.plaintext_visible_services.as_ref() {
+        for service_did in services {
+            if validate_did(service_did).is_err() {
+                return Err(AppError::invalid_param(
+                    "invalid plaintext_visible_services did",
+                ));
+            }
+        }
+    }
+    let space_id_value =
+        SpaceId::new(space_id.clone()).map_err(|_| AppError::invalid_param("invalid space_id"))?;
+    {
+        let mut spaces = state.spaces.lock().expect("spaces lock");
+        let mut entry = spaces
+            .get(&space_id_value)
+            .cloned()
+            .ok_or_else(|| AppError::not_found("not found"))?;
+        if let Some(title) = body.title.as_deref() {
+            entry.name = title.trim().to_owned();
+        }
+        if let Some(summary) = body.summary.clone() {
+            entry.description = Some(summary);
+        }
+        if let Some(discoverability) = discoverability.as_deref() {
+            entry.public = discoverability == "public";
+        }
+        spaces.upsert(entry);
+    }
+    {
+        let store = state.persistence.space_meta();
+        let mut record = store
+            .get(&space_id)
+            .map_err(|error| AppError::internal(error.to_string()))?
+            .ok_or_else(|| AppError::not_found("not found"))?;
+        if let Some(discoverability) = discoverability.clone() {
+            record.discoverability = discoverability;
+        }
+        if let Some(services) = body.plaintext_visible_services {
+            record.plaintext_visible_services = services.into_iter().collect();
+        }
+        record.updated_at = now();
+        store
+            .put(&space_id, &record)
+            .map_err(|error| AppError::internal(error.to_string()))?;
+    }
+    record_space_lifecycle_operation(
+        state,
+        &session.actor,
+        &space_id,
+        json!({
+            "action": "update",
+            "title": body.title,
+            "summary": body.summary,
+            "discoverability": discoverability,
+        }),
+    )
+    .map_err(|error| {
+        AppError::new(ErrorCode::Conflict, error.to_string()).with_status(StatusCode::CONFLICT)
+    })?;
+    append_audit_log(
+        state,
+        Some(&session.actor),
+        "space.update",
+        json!({"space_id": space_id.clone()}),
+        "accepted",
+    );
+    json_ok(UpdateSpaceResponse { ok: true, space_id })
+}
+
+#[endpoint(
+    operation_id = "cx.spaces.set_policy",
+    tags("spaces"),
+    summary = "Owner updates coarse Space join and history policy"
+)]
+async fn set_space_policy(
+    aa: AuthArgs,
+    depot: &mut Depot,
+    req: &mut Request,
+    space_id: PathParam<String>,
+    body: JsonBody<SetSpacePolicyRequest>,
+) -> JsonResult<SpacePolicyResponse> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req)?;
+    let space_id = space_id.into_inner();
+    if !space_owner_matches(state, &space_id, &session.actor) {
+        return Err(AppError::capability_denied(
+            "only the space owner can update policy",
+        ));
+    }
+    let body = body.into_inner();
+    let join_rule = body.join_rule;
+    let history_visibility = body.history_visibility;
+    if !matches!(
+        join_rule.as_str(),
+        "public" | "invite_only" | "restricted" | "knock"
+    ) {
+        return Err(AppError::invalid_param("invalid join_rule"));
+    }
+    if !matches!(
+        history_visibility.as_str(),
+        "shared" | "joined" | "invited" | "world_readable"
+    ) {
+        return Err(AppError::invalid_param("invalid history_visibility"));
+    }
+    let discoverability = match join_rule.as_str() {
+        "public" => "public",
+        "restricted" => "restricted",
+        _ => "invite_only",
+    };
+    {
+        let store = state.persistence.space_meta();
+        let mut record = store
+            .get(&space_id)
+            .map_err(|error| AppError::internal(error.to_string()))?
+            .ok_or_else(|| AppError::not_found("not found"))?;
+        record.discoverability = discoverability.to_owned();
+        record.updated_at = now();
+        store
+            .put(&space_id, &record)
+            .map_err(|error| AppError::internal(error.to_string()))?;
+    }
+    {
+        let space_id_value = SpaceId::new(space_id.clone())
+            .map_err(|_| AppError::invalid_param("invalid space_id"))?;
+        let mut spaces = state.spaces.lock().expect("spaces lock");
+        let mut entry = spaces
+            .get(&space_id_value)
+            .cloned()
+            .ok_or_else(|| AppError::not_found("not found"))?;
+        entry.public = discoverability == "public";
+        spaces.upsert(entry);
+    }
+    record_space_lifecycle_operation(
+        state,
+        &session.actor,
+        &space_id,
+        json!({
+            "action": "policy",
+            "join_rule": join_rule,
+            "history_visibility": history_visibility,
+            "discoverability": discoverability,
+        }),
+    )
+    .map_err(|error| {
+        AppError::new(ErrorCode::Conflict, error.to_string()).with_status(StatusCode::CONFLICT)
+    })?;
+    append_audit_log(
+        state,
+        Some(&session.actor),
+        "space.policy",
+        json!({"space_id": space_id.clone()}),
+        "accepted",
+    );
+    json_ok(SpacePolicyResponse {
+        ok: true,
+        space_id,
+        join_rule,
+        history_visibility,
+    })
 }
 
 #[endpoint(
@@ -715,6 +924,7 @@ pub fn record_member_state_operation(
     membership: &str,
     mut payload: serde_json::Value,
 ) -> contrix_sdk::Result<Option<String>> {
+    payload["member"] = json!(member);
     payload["actor_id"] = json!(member);
     payload["membership"] = json!(membership);
     let operation = Operation::create(

@@ -6,9 +6,21 @@ pub struct AppConfig {
     pub bind: SocketAddr,
     pub public_base_url: String,
     pub service_did: String,
+    /// Optional TLS certificate PEM path. When both this and
+    /// [`tls_key_path`] are configured, soland starts an HTTPS listener using
+    /// Salvo's rustls integration instead of plain TCP.
+    pub tls_cert_path: Option<PathBuf>,
+    /// Optional TLS private-key PEM path paired with [`tls_cert_path`].
+    pub tls_key_path: Option<PathBuf>,
     pub database_url: Option<String>,
     pub object_storage: ObjectStorageConfig,
     pub cors_allow_origin: Option<String>,
+    /// Public Auth / Account Server base URL advertised to browser clients in
+    /// `/api/v1/server/describe.auth_metadata`. Registration, password
+    /// recovery, passkey, OIDC, and email verification live there; soland only
+    /// consumes the resulting OAuth/session grants and may expose DID provider
+    /// primitives for trusted server-to-server calls.
+    pub auth_server_url: Option<String>,
     pub development_mode: bool,
     /// Matrix/Palpo-style OAuth 2.0 introspection endpoint. When configured,
     /// soland accepts the caller's `Authorization: Bearer <coauth access token>`
@@ -240,11 +252,17 @@ impl AppConfig {
             std::env::var("SOLAND_PUBLIC_BASE_URL").unwrap_or_else(|_| format!("http://{bind}"));
         let service_did = std::env::var("SOLAND_SERVICE_DID")
             .unwrap_or_else(|_| "did:web:soland.local".to_owned());
+        let tls_cert_path = env_non_empty("SOLAND_TLS_CERT_PATH").map(PathBuf::from);
+        let tls_key_path = env_non_empty("SOLAND_TLS_KEY_PATH").map(PathBuf::from);
+        if tls_cert_path.is_some() != tls_key_path.is_some() {
+            anyhow::bail!("SOLAND_TLS_CERT_PATH and SOLAND_TLS_KEY_PATH must be set together");
+        }
         let database_url = std::env::var("DATABASE_URL")
             .ok()
             .filter(|value| !value.trim().is_empty());
         let object_storage = load_object_storage_config()?;
         let cors_allow_origin = std::env::var("SOLAND_CORS_ALLOW_ORIGIN").ok();
+        let auth_server_url = env_non_empty("SOLAND_AUTH_SERVER_URL");
         // Default to a production-safe posture (no `dev_login`, no relaxed DID
         // validation, no admin snapshot endpoints). Local development must opt
         // in explicitly via `SOLAND_DEVELOPMENT_MODE=true`.
@@ -293,9 +311,12 @@ impl AppConfig {
             bind,
             public_base_url,
             service_did,
+            tls_cert_path,
+            tls_key_path,
             database_url,
             object_storage,
             cors_allow_origin,
+            auth_server_url,
             development_mode,
             oauth_introspection_url,
             oauth_introspection_bearer,
@@ -315,6 +336,11 @@ impl AppConfig {
             federation_policy,
             federation_peers,
         })
+    }
+
+    #[inline]
+    pub fn tls_enabled(&self) -> bool {
+        self.tls_cert_path.is_some() && self.tls_key_path.is_some()
     }
 }
 

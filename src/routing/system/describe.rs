@@ -97,6 +97,7 @@ async fn server_describe(depot: &mut Depot) -> JsonResult<ServerDescription> {
         state.db.mode(),
         state.config.development_mode,
         state.config.oauth_introspection_url.is_some(),
+        state.config.auth_server_url.as_deref(),
     ))
 }
 

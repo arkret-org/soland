@@ -1,0 +1,45 @@
+(dev_cors) {
+	@has_origin header Origin *
+	header @has_origin {
+		Access-Control-Allow-Origin "{http.request.header.Origin}"
+		Access-Control-Allow-Credentials "true"
+		Access-Control-Allow-Methods "GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS"
+		Access-Control-Allow-Headers "authorization, content-type, idempotency-key, x-contrix-request-id, x-contrix-wait-for, x-contrix-sha256, range"
+		Access-Control-Expose-Headers "retry-after, x-contrix-wait-for-satisfied, content-range, accept-ranges"
+		Vary "Origin"
+		defer
+	}
+
+	@preflight method OPTIONS
+	respond @preflight "" 204
+}
+
+(dev_error_cors) {
+	handle_errors {
+		@error_has_origin header Origin *
+		header @error_has_origin {
+			Access-Control-Allow-Origin "{http.request.header.Origin}"
+			Access-Control-Allow-Credentials "true"
+			Access-Control-Allow-Methods "GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS"
+			Access-Control-Allow-Headers "authorization, content-type, idempotency-key, x-contrix-request-id, x-contrix-wait-for, x-contrix-sha256, range"
+			Access-Control-Expose-Headers "retry-after, x-contrix-wait-for-satisfied, content-range, accept-ranges"
+			Vary "Origin"
+		}
+		respond "{err.status_code} {err.status_text}" {err.status_code}
+	}
+}
+
+https://local.host:443 {
+	tls internal
+	import dev_cors
+	import dev_error_cors
+
+	reverse_proxy 127.0.0.1:8698
+}
+
+https://auth.local.host:443 {
+	tls internal
+	import dev_cors
+	import dev_error_cors
+	reverse_proxy 127.0.0.1:7080
+}

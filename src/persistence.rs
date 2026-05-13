@@ -293,6 +293,10 @@ pub trait SchemaStore: Send + Sync {
 /// `submit_did_operation` writes a document and appends a log entry.
 pub trait IdentityStore: Send + Sync {
     fn get_document(&self, did: &str) -> PersistenceResult<Option<IdentityDocumentRecord>>;
+    fn get_embedded_webvh_document_by_local_id(
+        &self,
+        local_id: &str,
+    ) -> PersistenceResult<Option<IdentityDocumentRecord>>;
     fn put_document(&self, record: IdentityDocumentRecord) -> PersistenceResult<()>;
     fn append_log_event(&self, event: IdentityLogRecord) -> PersistenceResult<()>;
     fn list_log_events(&self, did: &str) -> PersistenceResult<Vec<IdentityLogRecord>>;
@@ -1814,6 +1818,30 @@ impl IdentityStore for MemoryIdentityStore {
             .lock()
             .expect("identity documents lock")
             .get(did)
+            .cloned())
+    }
+
+    fn get_embedded_webvh_document_by_local_id(
+        &self,
+        local_id: &str,
+    ) -> PersistenceResult<Option<IdentityDocumentRecord>> {
+        Ok(self
+            .documents
+            .lock()
+            .expect("identity documents lock")
+            .values()
+            .find(|record| {
+                record
+                    .method_evidence
+                    .get("mode")
+                    .and_then(serde_json::Value::as_str)
+                    == Some("embedded_webvh_provider")
+                    && record
+                        .method_evidence
+                        .get("local_id")
+                        .and_then(serde_json::Value::as_str)
+                        == Some(local_id)
+            })
             .cloned())
     }
 
@@ -3848,6 +3876,26 @@ impl IdentityStore for PgIdentityStore {
              FROM identity_documents WHERE did = $1",
         )
         .bind::<Text, _>(did)
+        .get_result::<IdentityDocumentRow>(&mut conn)
+        .optional()
+        .map(|row| row.map(IdentityDocumentRecord::from))
+        .map_err(PersistenceError::from)
+    }
+
+    fn get_embedded_webvh_document_by_local_id(
+        &self,
+        local_id: &str,
+    ) -> PersistenceResult<Option<IdentityDocumentRecord>> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query(
+            "SELECT did, did_document, key_log_head, seq, method_evidence, updated_at \
+             FROM identity_documents \
+             WHERE method_evidence->>'mode' = 'embedded_webvh_provider' \
+               AND method_evidence->>'local_id' = $1 \
+             ORDER BY updated_at DESC \
+             LIMIT 1",
+        )
+        .bind::<Text, _>(local_id)
         .get_result::<IdentityDocumentRow>(&mut conn)
         .optional()
         .map(|row| row.map(IdentityDocumentRecord::from))

@@ -3625,6 +3625,7 @@ dependencies = [
  "local-ip-address",
  "percent-encoding",
  "reqwest 0.13.3",
+ "rustls",
  "salvo_core",
  "tokio",
  "tracing",
@@ -3647,6 +3648,7 @@ version = "0.93.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7cfdd1110c4b15f0813f461f899d40ea41f090eee0c46cd9ed26887bb4261dc6"
 dependencies = [
+ "arc-swap",
  "async-trait",
  "base64",
  "brotli",

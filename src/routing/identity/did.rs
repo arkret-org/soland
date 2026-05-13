@@ -6,8 +6,8 @@
 //! - `GET  /api/v1/identity/document`     — fetch the locally-cached DID document
 //! - `GET  /api/v1/identity/log`          — return the local key log for a DID
 //! - `POST /api/v1/identity/webvh/register` — register through the embedded webvh provider
-//! - `GET  /api/v1/identity/webvh/{local_id}/did.json` — embedded webvh DID document
-//! - `GET  /api/v1/identity/webvh/{local_id}/did.jsonl` — embedded webvh log
+//! - `GET  /webvh/{local_id}/did.json` — embedded webvh DID document
+//! - `GET  /webvh/{local_id}/did.jsonl` — embedded webvh log
 //! - `POST /api/v1/identity/did-operation`— submit a DID-operation (rotate/recover)
 //! - `GET  /api/v1/identity/receipts`     — issuer receipts for the local key log
 //!
@@ -16,10 +16,12 @@
 //! durable store (see todo F2) — currently in-memory.
 
 use contrix_sdk::identity::DidResolver;
+use ed25519_dalek::{PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH, Signature, Verifier, VerifyingKey};
 use salvo::http::{StatusCode, header};
 use salvo::prelude::*;
 use serde::Deserialize;
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 
 use super::{
     append_audit_log, bearer_token, now, query_param, render_error, sha256_hex, validate_did,
@@ -30,6 +32,10 @@ use crate::wire::{
     IdentityResolveRequest, IdentityResolveResponse, SubmitDidOperationRequest,
     SubmitDidOperationResponse,
 };
+
+const WEBVH_SCID_PLACEHOLDER: &str = "{SCID}";
+const WEBVH_METHOD_VERSION: &str = "did:webvh:1.0";
+const ED25519_MULTICODEC_PREFIX: [u8; 2] = [0xed, 0x01];
 
 #[endpoint]
 pub(super) async fn identity_describe(depot: &mut Depot, res: &mut Response) {
@@ -66,11 +72,18 @@ pub(super) async fn identity_describe(depot: &mut Depot, res: &mut Response) {
 pub struct EmbeddedWebvhRegisterRequest {
     #[serde(default)]
     pub local_id: Option<String>,
-    pub public_key_multibase: String,
+    pub did_public_key_multibase: String,
+    pub update_public_key_multibase: String,
     #[serde(default)]
-    pub key_id: Option<String>,
+    pub did_key_id: Option<String>,
+    #[serde(default)]
+    pub update_key_id: Option<String>,
     #[serde(default)]
     pub also_known_as: Vec<String>,
+    #[serde(default)]
+    pub version_time: Option<String>,
+    #[serde(default)]
+    pub proof: Option<Value>,
 }
 
 #[endpoint]
@@ -104,21 +117,71 @@ pub(super) async fn embedded_webvh_register(
             return;
         }
     };
-    if !body.public_key_multibase.starts_with('z') || body.public_key_multibase.len() < 2 {
+    if !valid_multibase_key(&body.did_public_key_multibase) {
         render_error(
             res,
             StatusCode::BAD_REQUEST,
             "invalid_param",
-            "public_key_multibase must be a non-empty multibase value",
+            "did_public_key_multibase must be a non-empty multibase value",
         );
         return;
     }
+    if !valid_multibase_key(&body.update_public_key_multibase) {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            "update_public_key_multibase must be a non-empty multibase value",
+        );
+        return;
+    }
+    if body.did_public_key_multibase == body.update_public_key_multibase {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            "did_public_key_multibase and update_public_key_multibase must be separate keys",
+        );
+        return;
+    }
+    let version_time = match body.version_time.as_deref().map(str::trim) {
+        Some(value) if !value.is_empty() => {
+            if chrono::DateTime::parse_from_rfc3339(value).is_err() {
+                render_error(
+                    res,
+                    StatusCode::BAD_REQUEST,
+                    "invalid_param",
+                    "version_time must be an RFC3339 timestamp",
+                );
+                return;
+            }
+            value.to_owned()
+        }
+        _ => {
+            render_error(
+                res,
+                StatusCode::BAD_REQUEST,
+                "invalid_param",
+                "version_time is required so the client can sign the webvh log entry",
+            );
+            return;
+        }
+    };
+    let Some(proof) = body.proof.clone() else {
+        render_error(
+            res,
+            StatusCode::UNAUTHORIZED,
+            "proof_required",
+            "embedded did:webvh registration requires a client-signed log proof",
+        );
+        return;
+    };
     let local_id = match body
         .local_id
         .as_deref()
         .and_then(normalize_webvh_local_id)
         .or_else(|| {
-            let digest = sha256_hex(body.public_key_multibase.as_bytes());
+            let digest = sha256_hex(body.did_public_key_multibase.as_bytes());
             normalize_webvh_local_id(&format!("user-{}", &digest[..12]))
         }) {
         Some(local_id) => local_id,
@@ -132,32 +195,45 @@ pub(super) async fn embedded_webvh_register(
             return;
         }
     };
-    let key_fragment = normalize_webvh_key_fragment(body.key_id.as_deref().unwrap_or("key-1"));
-    let Some(key_fragment) = key_fragment else {
+    let did_key_fragment =
+        normalize_webvh_key_fragment(body.did_key_id.as_deref().unwrap_or("did-key-1"));
+    let Some(did_key_fragment) = did_key_fragment else {
         render_error(
             res,
             StatusCode::BAD_REQUEST,
             "invalid_param",
-            "invalid key_id",
+            "invalid did_key_id",
         );
         return;
     };
-    let location = match embedded_webvh_location(&state.config.public_base_url, &local_id) {
-        Ok(location) => location,
-        Err(message) => {
-            render_error(
-                res,
-                StatusCode::SERVICE_UNAVAILABLE,
-                "invalid_config",
-                &message,
-            );
-            return;
-        }
+    let update_key_fragment =
+        normalize_webvh_key_fragment(body.update_key_id.as_deref().unwrap_or("update-key-1"));
+    let Some(update_key_fragment) = update_key_fragment else {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            "invalid update_key_id",
+        );
+        return;
     };
+    let (method_authority, https_authority) =
+        match embedded_webvh_authority(&state.config.public_base_url) {
+            Ok(parts) => parts,
+            Err(message) => {
+                render_error(
+                    res,
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "invalid_config",
+                    &message,
+                );
+                return;
+            }
+        };
     if state
         .persistence
         .identity()
-        .get_document(&location.did)
+        .get_embedded_webvh_document_by_local_id(&local_id)
         .ok()
         .flatten()
         .is_some()
@@ -172,39 +248,62 @@ pub(super) async fn embedded_webvh_register(
     }
 
     let now = now();
-    let version_time = now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    let key_id = format!("{}#{}", location.did, key_fragment);
-    let did_document = json!({
-        "@context": ["https://www.w3.org/ns/did/v1"],
-        "id": location.did,
-        "verificationMethod": [{
-            "id": key_id,
-            "type": "Multikey",
-            "controller": location.did,
-            "publicKeyMultibase": body.public_key_multibase,
-        }],
-        "authentication": [key_id],
-        "assertionMethod": [key_id],
-        "alsoKnownAs": body.also_known_as,
-        "service": [{
-            "id": format!("{}#soland", location.did),
-            "type": "ContrixPrincipalServer",
-            "serviceEndpoint": state.config.public_base_url,
-        }],
-    });
-    let version_hash = sha256_hex(did_document.to_string().as_bytes());
-    let version_id = format!("1-{}", &version_hash[..16]);
-    let log_entry = json!({
-        "versionId": version_id,
+    let placeholder_did = embedded_webvh_did(&method_authority, WEBVH_SCID_PLACEHOLDER, &local_id);
+    let did_key_id = format!("{}#{}", placeholder_did, did_key_fragment);
+    let service_endpoint = state
+        .config
+        .public_base_url
+        .trim_end_matches('/')
+        .to_owned();
+    let did_document_skeleton = embedded_webvh_document_value(
+        &placeholder_did,
+        &did_key_id,
+        body.did_public_key_multibase.as_str(),
+        &body.also_known_as,
+        service_endpoint.as_str(),
+    );
+    let entry_skeleton = json!({
+        "versionId": format!("0-{WEBVH_SCID_PLACEHOLDER}"),
         "versionTime": version_time,
         "parameters": {
-            "scid": location.scid,
-            "method": "did:webvh:1.0",
-            "updateKeys": [body.public_key_multibase],
+            "scid": WEBVH_SCID_PLACEHOLDER,
+            "method": WEBVH_METHOD_VERSION,
+            "updateKeys": [body.update_public_key_multibase.clone()],
         },
-        "state": did_document,
-        "proof": [],
+        "state": did_document_skeleton,
     });
+    let scid = match derive_webvh_scid(&entry_skeleton) {
+        Ok(scid) => scid,
+        Err(message) => {
+            render_error(res, StatusCode::BAD_REQUEST, "invalid_webvh_log", &message);
+            return;
+        }
+    };
+    let location =
+        embedded_webvh_location_with_scid(&method_authority, &https_authority, &local_id, &scid);
+    let did_key_id = format!("{}#{}", location.did, did_key_fragment);
+    let update_key_id = format!("{}#{}", location.did, update_key_fragment);
+    let mut log_entry = substitute_webvh_scid(entry_skeleton, &scid);
+    let version_hash = match webvh_entry_hash_multibase(&log_entry) {
+        Ok(hash) => hash,
+        Err(message) => {
+            render_error(res, StatusCode::BAD_REQUEST, "invalid_webvh_log", &message);
+            return;
+        }
+    };
+    let version_id = format!("1-{version_hash}");
+    if let Value::Object(map) = &mut log_entry {
+        map.insert("versionId".to_owned(), Value::String(version_id.clone()));
+        map.insert("proof".to_owned(), Value::Array(vec![proof]));
+    }
+    let did_document = log_entry
+        .get("state")
+        .cloned()
+        .unwrap_or_else(|| json!({"id": location.did}));
+    if let Err(message) = verify_webvh_log_proof(&log_entry) {
+        render_error(res, StatusCode::UNAUTHORIZED, "invalid_proof", &message);
+        return;
+    }
     if let Err(error) = state
         .persistence
         .identity()
@@ -219,6 +318,8 @@ pub(super) async fn embedded_webvh_register(
                 "local_id": local_id,
                 "document_url": location.document_url,
                 "log_url": location.log_url,
+                "scid": location.scid,
+                "updateKeys": [body.update_public_key_multibase.clone()],
             }),
             updated_at: now,
         })
@@ -269,7 +370,10 @@ pub(super) async fn embedded_webvh_register(
         "status": "created",
         "provider_id": "soland.embedded",
         "did": location.did,
-        "key_id": key_id,
+        "did_key_id": did_key_id,
+        "update_key_id": update_key_id,
+        "did_public_key_multibase": body.did_public_key_multibase,
+        "update_public_key_multibase": body.update_public_key_multibase,
         "seq": 1,
         "key_log_head": version_id,
         "document_url": location.document_url,
@@ -694,10 +798,10 @@ fn did_webvh_descriptor(state: &AppState) -> Value {
         let (active, probe, document_url_template, log_url_template) = match &embedded_authority {
             Ok((_, https_authority)) => {
                 let document_url_template = Some(format!(
-                    "https://{https_authority}/api/v1/identity/webvh/{{local_id}}/did.json"
+                    "https://{https_authority}/webvh/{{local_id}}/did.json"
                 ));
                 let log_url_template = Some(format!(
-                    "https://{https_authority}/api/v1/identity/webvh/{{local_id}}/did.jsonl"
+                    "https://{https_authority}/webvh/{{local_id}}/did.jsonl"
                 ));
                 if embedded_registration_auth_configured {
                     (
@@ -854,19 +958,11 @@ fn embedded_webvh_record_for_request(
         );
         return None;
     };
-    let location = match embedded_webvh_location(&state.config.public_base_url, &local_id) {
-        Ok(location) => location,
-        Err(message) => {
-            render_error(
-                res,
-                StatusCode::SERVICE_UNAVAILABLE,
-                "invalid_config",
-                &message,
-            );
-            return None;
-        }
-    };
-    match state.persistence.identity().get_document(&location.did) {
+    match state
+        .persistence
+        .identity()
+        .get_embedded_webvh_document_by_local_id(&local_id)
+    {
         Ok(Some(record)) => Some(record),
         Ok(None) => {
             render_error(
@@ -890,20 +986,23 @@ fn embedded_webvh_record_for_request(
     }
 }
 
-fn embedded_webvh_location(
-    public_base_url: &str,
+fn embedded_webvh_location_with_scid(
+    method_authority: &str,
+    https_authority: &str,
     local_id: &str,
-) -> Result<EmbeddedWebvhLocation, String> {
-    let (method_authority, https_authority) = embedded_webvh_authority(public_base_url)?;
-    let path = format!("api:v1:identity:webvh:{local_id}");
-    let path_url = format!("api/v1/identity/webvh/{local_id}");
-    let scid = embedded_webvh_scid(&method_authority, local_id);
-    Ok(EmbeddedWebvhLocation {
-        did: format!("did:webvh:{scid}:{method_authority}:{path}"),
-        scid,
+    scid: &str,
+) -> EmbeddedWebvhLocation {
+    let path_url = format!("webvh/{local_id}");
+    EmbeddedWebvhLocation {
+        did: embedded_webvh_did(method_authority, scid, local_id),
+        scid: scid.to_owned(),
         document_url: format!("https://{https_authority}/{path_url}/did.json"),
         log_url: format!("https://{https_authority}/{path_url}/did.jsonl"),
-    })
+    }
+}
+
+fn embedded_webvh_did(method_authority: &str, scid: &str, local_id: &str) -> String {
+    format!("did:webvh:{scid}:{method_authority}:webvh:{local_id}")
 }
 
 fn embedded_webvh_authority(public_base_url: &str) -> Result<(String, String), String> {
@@ -926,10 +1025,175 @@ fn embedded_webvh_authority(public_base_url: &str) -> Result<(String, String), S
     Ok((method_authority, https_authority))
 }
 
-fn embedded_webvh_scid(method_authority: &str, local_id: &str) -> String {
-    let material = format!("soland:webvh:v1:{method_authority}:api:v1:identity:webvh:{local_id}");
-    let digest = sha256_hex(material.as_bytes());
-    format!("z{}", &digest[..24])
+fn embedded_webvh_document_value(
+    did: &str,
+    did_key_id: &str,
+    did_public_key_multibase: &str,
+    also_known_as: &[String],
+    service_endpoint: &str,
+) -> Value {
+    json!({
+        "@context": ["https://www.w3.org/ns/did/v1"],
+        "id": did,
+        "verificationMethod": [{
+            "id": did_key_id,
+            "type": "Multikey",
+            "controller": did,
+            "publicKeyMultibase": did_public_key_multibase,
+        }],
+        "authentication": [did_key_id],
+        "assertionMethod": [did_key_id],
+        "alsoKnownAs": also_known_as,
+        "service": [{
+            "id": format!("{did}#soland"),
+            "type": "ContrixPrincipalServer",
+            "serviceEndpoint": service_endpoint,
+        }],
+    })
+}
+
+fn derive_webvh_scid(skeleton: &Value) -> Result<String, String> {
+    if !contains_webvh_placeholder(skeleton) {
+        return Err(format!(
+            "inception log entry must contain {WEBVH_SCID_PLACEHOLDER} placeholders"
+        ));
+    }
+    let canonical = contrix_sdk::canonical::canonical_json_bytes(skeleton)
+        .map_err(|error| error.to_string())?;
+    Ok(sha256_multihash_multibase(&canonical))
+}
+
+fn contains_webvh_placeholder(value: &Value) -> bool {
+    match value {
+        Value::String(value) => value.contains(WEBVH_SCID_PLACEHOLDER),
+        Value::Array(items) => items.iter().any(contains_webvh_placeholder),
+        Value::Object(map) => map.values().any(contains_webvh_placeholder),
+        _ => false,
+    }
+}
+
+fn substitute_webvh_scid(value: Value, scid: &str) -> Value {
+    let Ok(text) = serde_json::to_string(&value) else {
+        return value;
+    };
+    serde_json::from_str(&text.replace(WEBVH_SCID_PLACEHOLDER, scid)).unwrap_or(value)
+}
+
+fn webvh_entry_hash_multibase(value: &Value) -> Result<String, String> {
+    let canonical =
+        contrix_sdk::canonical::canonical_json_bytes(&strip_webvh_entry_for_hash(value))
+            .map_err(|error| error.to_string())?;
+    Ok(sha256_multihash_multibase(&canonical))
+}
+
+fn strip_webvh_entry_for_hash(value: &Value) -> Value {
+    let mut clone = value.clone();
+    if let Value::Object(map) = &mut clone {
+        map.remove("proof");
+        map.remove("versionId");
+    }
+    clone
+}
+
+fn sha256_multihash_multibase(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
+    let mut multihash = Vec::with_capacity(34);
+    multihash.push(0x12);
+    multihash.push(0x20);
+    multihash.extend_from_slice(&digest);
+    format!("z{}", bs58::encode(multihash).into_string())
+}
+
+fn verify_webvh_log_proof(entry: &Value) -> Result<(), String> {
+    let proof = entry
+        .get("proof")
+        .and_then(Value::as_array)
+        .and_then(|items| items.first())
+        .and_then(Value::as_object)
+        .ok_or_else(|| "entry must include proof[0]".to_owned())?;
+    let proof_type = proof
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if proof_type != "DataIntegrityProof" {
+        return Err("proof type must be DataIntegrityProof".to_owned());
+    }
+    let cryptosuite = proof
+        .get("cryptosuite")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if cryptosuite != "eddsa-jcs-2022" {
+        return Err("proof cryptosuite must be eddsa-jcs-2022".to_owned());
+    }
+    let verification_method = proof
+        .get("verificationMethod")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let public_key_multibase = verification_method
+        .rsplit_once('#')
+        .map(|(_, fragment)| fragment)
+        .unwrap_or(verification_method);
+    let update_keys = entry
+        .pointer("/parameters/updateKeys")
+        .and_then(Value::as_array)
+        .map(|items| items.iter().filter_map(Value::as_str).collect::<Vec<_>>())
+        .unwrap_or_default();
+    if !update_keys.iter().any(|key| *key == public_key_multibase) {
+        return Err("proof verificationMethod must reference updateKeys[0]".to_owned());
+    }
+    let public_key = decode_ed25519_public_key(public_key_multibase)?;
+    let signature = decode_webvh_signature(
+        proof
+            .get("proofValue")
+            .and_then(Value::as_str)
+            .unwrap_or_default(),
+    )?;
+    let mut canonical = entry.clone();
+    if let Value::Object(map) = &mut canonical {
+        map.remove("proof");
+    }
+    let payload = contrix_sdk::canonical::canonical_json_bytes(&canonical)
+        .map_err(|error| error.to_string())?;
+    public_key
+        .verify(&payload, &signature)
+        .map_err(|_| "webvh log proof signature is invalid".to_owned())
+}
+
+fn decode_ed25519_public_key(value: &str) -> Result<VerifyingKey, String> {
+    let rest = value
+        .strip_prefix('z')
+        .ok_or_else(|| "public key must use base58btc multibase".to_owned())?;
+    let raw = bs58::decode(rest)
+        .into_vec()
+        .map_err(|error| format!("public key base58 decode failed: {error}"))?;
+    let bytes = raw
+        .strip_prefix(&ED25519_MULTICODEC_PREFIX)
+        .ok_or_else(|| "public key must be ed25519-pub multicodec".to_owned())?;
+    if bytes.len() != PUBLIC_KEY_LENGTH {
+        return Err("ed25519 public key must be 32 bytes".to_owned());
+    }
+    let mut key_bytes = [0u8; PUBLIC_KEY_LENGTH];
+    key_bytes.copy_from_slice(bytes);
+    VerifyingKey::from_bytes(&key_bytes).map_err(|_| "invalid ed25519 public key".to_owned())
+}
+
+fn decode_webvh_signature(value: &str) -> Result<Signature, String> {
+    let rest = value
+        .strip_prefix('z')
+        .ok_or_else(|| "proofValue must use base58btc multibase".to_owned())?;
+    let raw = bs58::decode(rest)
+        .into_vec()
+        .map_err(|error| format!("proofValue base58 decode failed: {error}"))?;
+    if raw.len() != SIGNATURE_LENGTH {
+        return Err("ed25519 proofValue must be 64 bytes".to_owned());
+    }
+    let mut signature_bytes = [0u8; SIGNATURE_LENGTH];
+    signature_bytes.copy_from_slice(&raw);
+    Ok(Signature::from_bytes(&signature_bytes))
+}
+
+fn valid_multibase_key(value: &str) -> bool {
+    value.starts_with('z') && value.len() >= 2
 }
 
 fn normalize_webvh_local_id(value: &str) -> Option<String> {

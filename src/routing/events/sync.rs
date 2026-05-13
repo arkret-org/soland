@@ -37,13 +37,15 @@ use serde_json::json;
 use tokio::sync::broadcast::error::RecvError;
 
 use super::{
-    auth_or_render, authenticated_session, backfill_gap_events, device_message_events_after,
-    flow_projection_for_space, is_space_deleted, now, parse_snapshot_ref, projected_event_page,
-    projection_event_json, prune_acked_device_messages, prune_expired_typing, query_param,
-    render_error, sha256_hex, snapshot_bundle_for_space, space_has_member, space_id_accessible,
-    space_visible_to, sync_timeline_message_json, truncate_gap_events, typing_ephemeral_for_space,
-    validate_did, validate_space_id,
+    auth_or_render, authenticated_session, backfill_gap_events, default_discussion_track,
+    device_message_events_after, flow_id_from_space_id, flow_projection_for_space,
+    is_space_deleted, now, parse_snapshot_ref, projected_event_page, projection_event_json,
+    prune_acked_device_messages, prune_expired_typing, query_param, render_error, sha256_hex,
+    snapshot_bundle_for_space, space_has_member, space_id_accessible, space_visible_to,
+    sync_timeline_message_json, truncate_gap_events, typing_ephemeral_for_space, validate_did,
+    validate_space_id,
 };
+use crate::reducer::ProjectionState;
 use crate::state::{AppState, PresenceRecord, SessionRecord, TypingRecord};
 use crate::wire::{
     BackfillResponse, ClientSyncRequest, ClientSyncResponse, SetTypingRequest, SetTypingResponse,
@@ -215,18 +217,8 @@ async fn client_sync(depot: &mut Depot, req: &mut Request, res: &mut Response) {
             .get(&space_id)
             .copied()
             .unwrap_or_default();
-        let messages = projection.messages_for_space(&space_id);
-        let space_position = messages
-            .iter()
-            .map(|message| message.created_at.timestamp_micros())
-            .max()
-            .unwrap_or(since_position);
-        let timeline_events: Vec<_> = projection
-            .messages_for_space(&space_id)
-            .into_iter()
-            .filter(|message| message.created_at.timestamp_micros() > since_position)
-            .map(sync_timeline_message_json)
-            .collect();
+        let (timeline_events, space_position) =
+            timeline_events_for_space(state, &projection, &space_id, since_position);
         positions.insert(space_id.clone(), space_position);
         sync_spaces.insert(
             space_id.clone(),
@@ -290,6 +282,72 @@ async fn client_sync(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         account_data: Vec::new(),
         device_lists: json!({"changed": [], "left": []}),
     }));
+}
+
+fn timeline_events_for_space(
+    state: &AppState,
+    projection: &ProjectionState,
+    space_id: &str,
+    since_position: i64,
+) -> (Vec<serde_json::Value>, i64) {
+    let mut seen = BTreeSet::new();
+    let mut newest_position = since_position;
+    let mut timeline_entries = Vec::new();
+
+    for message in projection.messages_for_space(space_id) {
+        let position = message.created_at.timestamp_micros();
+        newest_position = newest_position.max(position);
+        if position <= since_position || !seen.insert(message.event_id.clone()) {
+            continue;
+        }
+        timeline_entries.push((position, sync_timeline_message_json(message)));
+    }
+
+    for message in state
+        .persistence
+        .messages()
+        .list_for_space(space_id, 100)
+        .unwrap_or_default()
+    {
+        let position = message.created_at.timestamp_micros();
+        newest_position = newest_position.max(position);
+        if position <= since_position || !seen.insert(message.event_id.clone()) {
+            continue;
+        }
+        timeline_entries.push((position, sync_timeline_message_record_json(&message)));
+    }
+
+    timeline_entries.sort_by(|left, right| left.0.cmp(&right.0));
+    (
+        timeline_entries
+            .into_iter()
+            .map(|(_, event)| event)
+            .collect(),
+        newest_position,
+    )
+}
+
+fn sync_timeline_message_record_json(message: &crate::state::MessageRecord) -> serde_json::Value {
+    let flow_id = if message.thread_id.starts_with("cx:flow:") {
+        message.thread_id.clone()
+    } else {
+        flow_id_from_space_id(&message.space_id)
+    };
+    let track_id = message.thread_id.clone();
+    json!({
+        "kind": "cx.message.create",
+        "event_id": message.event_id,
+        "message_id": super::message_id_from_event_id(&message.event_id),
+        "flow_id": flow_id,
+        "space_id": message.space_id,
+        "track": default_discussion_track(&flow_id, &track_id),
+        "thread_id": message.thread_id,
+        "sender": message.sender,
+        "content": message.content,
+        "encrypted": message.encrypted,
+        "decryption_state": if message.encrypted { "opaque" } else { "cleartext" },
+        "created_at": message.created_at,
+    })
 }
 
 fn is_supported_view_renderer(renderer: &str) -> bool {

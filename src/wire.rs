@@ -964,8 +964,42 @@ pub struct CreateSpaceRequest {
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
+pub struct UpdateSpaceRequest {
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub summary: Option<String>,
+    #[serde(default)]
+    pub public: Option<bool>,
+    #[serde(default)]
+    pub discoverability: Option<String>,
+    #[serde(default)]
+    pub plaintext_visible_services: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
+pub struct SetSpacePolicyRequest {
+    pub join_rule: String,
+    pub history_visibility: String,
+}
+
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct AddSpaceMemberRequest {
     pub member: String,
+}
+
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
+pub struct UpdateSpaceResponse {
+    pub ok: bool,
+    pub space_id: String,
+}
+
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
+pub struct SpacePolicyResponse {
+    pub ok: bool,
+    pub space_id: String,
+    pub join_rule: String,
+    pub history_visibility: String,
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
@@ -1216,6 +1250,7 @@ pub fn describe(
     storage: &'static str,
     development_mode: bool,
     oauth_introspection_enabled: bool,
+    auth_server_url: Option<&str>,
 ) -> ServerDescription {
     let mut supported_auth_methods = Vec::new();
     if development_mode {
@@ -1223,6 +1258,13 @@ pub fn describe(
     }
     if oauth_introspection_enabled {
         supported_auth_methods.push("oauth2_bearer_introspection");
+    }
+    let mut auth_metadata = json!({
+        "mode": if development_mode { "development" } else { "production" },
+        "supported_auth_methods": supported_auth_methods,
+    });
+    if let Some(auth_server_url) = auth_server_url.filter(|value| !value.trim().is_empty()) {
+        auth_metadata["auth_server_url"] = json!(auth_server_url);
     }
 
     ServerDescription {
@@ -1351,10 +1393,7 @@ pub fn describe(
         supported_bindings: vec![serde_json::json!({"kind": "http_json", "base_path": "/api/v1"})],
         supported_reducer_profiles: vec!["cx.reducer.v1".to_owned()],
         supported_schema_profiles: vec!["cx.schema.core.v1".to_owned()],
-        auth_metadata: serde_json::json!({
-            "mode": if development_mode { "development" } else { "production" },
-            "supported_auth_methods": supported_auth_methods,
-        }),
+        auth_metadata,
         limits: serde_json::json!({
             "storage": storage,
             "max_limit": 100,

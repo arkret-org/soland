@@ -28,6 +28,10 @@ dev:
 # Alias for `dev`.
 start: dev
 
+# Run the local Caddy reverse proxy defined in Caddyfile.
+caddy:
+    caddy run --config Caddyfile
+
 # Start a local Postgres container, wait for it, then run soland against it.
 dev-db: db-up db-ready
     just --set database_url "{{ local_database_url }}" dev

@@ -29,11 +29,6 @@ pub fn router() -> Router {
                 .push(Router::with_path("document").get(did::identity_document))
                 .push(Router::with_path("log").get(did::identity_log))
                 .push(Router::with_path("webvh/register").post(did::embedded_webvh_register))
-                .push(
-                    Router::with_path("webvh/{local_id}/did.json")
-                        .get(did::embedded_webvh_document),
-                )
-                .push(Router::with_path("webvh/{local_id}/did.jsonl").get(did::embedded_webvh_log))
                 .push(Router::with_path("submit-did-operation").post(did::submit_did_operation))
                 .push(Router::with_path("receipts").get(did::identity_receipts)),
         )
@@ -42,4 +37,10 @@ pub fn router() -> Router {
         .push(key_backup::router())
         .push(device_messages::router())
         .push(profile::router())
+}
+
+pub(super) fn embedded_webvh_public_router() -> Router {
+    Router::with_path("webvh")
+        .push(Router::with_path("{local_id}/did.json").get(did::embedded_webvh_document))
+        .push(Router::with_path("{local_id}/did.jsonl").get(did::embedded_webvh_log))
 }

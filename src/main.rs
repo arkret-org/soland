@@ -1,3 +1,6 @@
+use anyhow::Context;
+use salvo::conn::Acceptor;
+use salvo::conn::rustls::{Keycert, RustlsConfig};
 use salvo::prelude::*;
 use soland::config::AppConfig;
 use soland::db::Db;
@@ -65,11 +68,13 @@ async fn main() -> anyhow::Result<()> {
     let watchdog_config = MultisigWatchdogConfig::for_service(&state.config.service_did);
     let _watchdog = MultisigWatchdog::new(state.clone(), watchdog_config).spawn();
 
-    let acceptor = TcpListener::new(config.bind.to_string()).bind().await;
     tracing::info!(
         bind = %config.bind,
         public_base_url = %config.public_base_url,
         service_did = %config.service_did,
+        tls_enabled = config.tls_enabled(),
+        tls_cert_path = ?config.tls_cert_path,
+        tls_key_path = ?config.tls_key_path,
         embedded_webvh_provider_enabled = config.embedded_webvh_provider_enabled,
         external_webvh_provider_url = ?config.external_webvh_provider_url,
         object_storage_backend = %config.object_storage.backend_name(),
@@ -78,7 +83,40 @@ async fn main() -> anyhow::Result<()> {
         storage = state.db.mode(),
         "starting soland"
     );
+    if config.tls_enabled() {
+        let keycert = Keycert::new()
+            .cert_from_path(
+                config
+                    .tls_cert_path
+                    .as_ref()
+                    .expect("tls_enabled guarantees cert path"),
+            )
+            .context("failed to read SOLAND_TLS_CERT_PATH")?
+            .key_from_path(
+                config
+                    .tls_key_path
+                    .as_ref()
+                    .expect("tls_enabled guarantees key path"),
+            )
+            .context("failed to read SOLAND_TLS_KEY_PATH")?;
+        let acceptor = TcpListener::new(config.bind.to_string())
+            .rustls(RustlsConfig::new(keycert))
+            .bind()
+            .await;
+        tracing::info!("TLS listener enabled with rustls");
+        run_server(acceptor, state).await;
+    } else {
+        let acceptor = TcpListener::new(config.bind.to_string()).bind().await;
+        run_server(acceptor, state).await;
+    }
+    tracing::info!("soland stopped");
+    Ok(())
+}
 
+async fn run_server<A>(acceptor: A, state: AppState)
+where
+    A: Acceptor + Send + 'static,
+{
     let server = Server::new(acceptor);
     let handle = server.handle();
     tokio::spawn(async move {
@@ -88,8 +126,6 @@ async fn main() -> anyhow::Result<()> {
         handle.stop_graceful(None);
     });
     server.serve(service(state)).await;
-    tracing::info!("soland stopped");
-    Ok(())
 }
 
 /// Resolves once an OS shutdown signal arrives. On Unix this is `SIGINT`

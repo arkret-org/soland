@@ -32,6 +32,8 @@ Create a deploy-time `.env` (or a Kubernetes Secret / systemd EnvironmentFile):
 ```dotenv
 SOLAND_BIND=0.0.0.0:8698
 SOLAND_PUBLIC_BASE_URL=https://soland.example
+SOLAND_TLS_CERT_PATH=/etc/soland/tls/fullchain.pem
+SOLAND_TLS_KEY_PATH=/etc/soland/tls/privkey.pem
 SOLAND_SERVICE_DID=did:web:soland.example
 SOLAND_EMBEDDED_WEBVH_PROVIDER_ENABLED=true
 SOLAND_EMBEDDED_WEBVH_REGISTRATION_BEARER=<shared-secret-configured-in-coauth>
@@ -109,7 +111,7 @@ docker run --name soland --restart=always -d \
   -e SOLAND_OAUTH_INTROSPECTION_URL=https://coauth.example/oauth2/introspect \
   -e SOLAND_OAUTH_INTROSPECTION_BEARER=<shared-secret-configured-in-coauth> \
   -e DATABASE_URL=postgres://soland:<password>@db:5432/soland?sslmode=verify-full \
-  -e SOLAND_OBJECT_STORAGE_BACKEND=local \
+  -e SOLAND_OBJECT_STORAGE_BACKEND=filesystem \
   -e SOLAND_OBJECT_STORAGE_LOCAL_ROOT=/var/lib/soland/objects \
   -e RUST_LOG=soland=info \
   -v soland-objects:/var/lib/soland \
