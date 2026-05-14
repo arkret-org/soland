@@ -39,12 +39,6 @@ pub(super) fn router() -> Router {
         .push(Router::with_path("admin/cells/{cell_id}").get(admin_get_cell))
 }
 
-/// Default page size for the list endpoint when `limit` is absent.
-const DEFAULT_LIST_LIMIT: usize = 100;
-/// Hard cap so a misbehaving client can't exhaust memory.
-/// TODO: surface this via AppConfig once the admin-cell paging config is
-/// centralized there.
-const MAX_LIST_LIMIT: usize = 1000;
 /// Sentinel space scope used when the caller hasn't provided one and the
 /// cell subject doesn't carry a recognisable space id. The MemoryCellRegistry
 /// resolves families uniformly across spaces; the scope only affects the
@@ -242,7 +236,10 @@ async fn admin_get_cell(
 ///   cell's effective state from `ProjectionState::cells`.
 /// - `prefix` (optional) — filter to cells whose `<family>` (component) starts with this prefix
 ///   (e.g. `cx.component.consent.`).
-/// - `limit` (default 100, max 1000) / `offset` (default 0) — pagination.
+/// - `limit` / `offset` — pagination. Default and max page sizes come from
+///   `AppConfig::admin_default_page_limit` (env `SOLAND_ADMIN_PAGE_LIMIT`,
+///   default `100`) and `admin_max_page_limit` (env `SOLAND_ADMIN_MAX_PAGE_LIMIT`,
+///   default `1000`). `offset` defaults to `0`.
 #[endpoint(
     operation_id = "cx.admin.cells.list",
     tags("admin", "cells"),
@@ -271,10 +268,12 @@ async fn admin_list_cells(
         .with_status(StatusCode::BAD_REQUEST)
     })?;
     let prefix = query_param(req, "prefix");
+    let default_limit = state.config.admin_default_page_limit;
+    let max_limit = state.config.admin_max_page_limit;
     let limit = query_param(req, "limit")
         .and_then(|v| v.parse::<usize>().ok())
-        .unwrap_or(DEFAULT_LIST_LIMIT)
-        .min(MAX_LIST_LIMIT);
+        .unwrap_or(default_limit)
+        .min(max_limit);
     let offset = query_param(req, "offset")
         .and_then(|v| v.parse::<usize>().ok())
         .unwrap_or(0);

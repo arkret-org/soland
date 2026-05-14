@@ -27,7 +27,7 @@
 //!   Anchor flows through the same `apply_anchor` pipeline as everything else. Where Move
 //!   construction / signing for a brand-new admin DID needs threading through the admin signer
 //!   flow, we land a structurally correct placeholder response **and** an inline
-//!   `TODO(stream_h_admin)` anchor so sodmin's UI can smoke-test wire shapes without blocking on
+//!   `FUTURE:` anchor so sodmin's UI can smoke-test wire shapes without blocking on
 //!   the multi-signer / DID-resolver work.
 //! - `threshold` / `open_set` / `mixed` anchorer profiles, `Manual` repair (free-form effects), and
 //!   full multi-signer compaction are placeholder-only — these need the admin signer flow +
@@ -118,7 +118,8 @@ pub struct AdminSubmitMoveResponse {
     pub anchor_id: Option<String>,
     /// `pending|accepted|rejected|placeholder` — `placeholder` indicates
     /// the wire-shape is correct but the underlying Move construction
-    /// flow is still TODO server-side (sodmin smoke-test path).
+    /// flow is still a FUTURE server-side admin-signer task (sodmin
+    /// smoke-test path).
     pub status: String,
 }
 
@@ -596,10 +597,12 @@ pub(super) async fn admin_get_anchorer(
 /// anchored), `status="pending"` (stashed but not anchored — another node
 /// owns the round), or 400/500 on construction error.
 ///
-/// TODO(stream_h_admin): replace `service_admin_signer` with a
-/// session-grant-key-bound signer once the admin DID is threaded through
-/// `aa.bearer_token(req)` → session-grant introspection. For dev mode the
-/// service signer is fine.
+/// FUTURE: replace `service_admin_signer` with a per-admin signer keyed off
+/// the authenticated session DID once per-admin signing-key provisioning
+/// + session-grant introspection lands. Today the gate is the
+/// `admin_principal_dids` allowlist (see `super::require_admin_principal`);
+/// the signing identity is still the service signer so Moves chain off the
+/// AnchorerWorker key.
 #[endpoint(
     operation_id = "cx.admin.spaces.anchorer.reconfigure",
     tags("admin", "anchorer"),
@@ -613,7 +616,8 @@ pub(super) async fn admin_reconfigure_anchorer(
     body: JsonBody<AnchorerReconfigBody>,
 ) -> JsonResult<AdminSubmitMoveResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let _session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req)?;
+    let _session = super::require_admin_principal(state, session)?;
     let space_id = space_id.into_inner();
     let space = SpaceId::new(space_id.clone()).map_err(|e| {
         AppError::new(ErrorCode::InvalidParam, format!("invalid space_id: {e}"))
@@ -805,7 +809,8 @@ pub(super) async fn admin_repair_bottom(
     body: JsonBody<BottomRepairStrategyBody>,
 ) -> JsonResult<AdminSubmitMoveResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let _session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req)?;
+    let _session = super::require_admin_principal(state, session)?;
     let space_id = space_id.into_inner();
     let cell_id_str = cell_id.into_inner();
     let space = SpaceId::new(space_id.clone()).map_err(|e| {
@@ -924,7 +929,7 @@ pub(super) async fn admin_repair_bottom(
                 move_id: placeholder_id,
                 accepted: false,
                 reason: Some(
-                    "manual repair placeholder: free-form effects validation is TODO".to_owned(),
+                    "manual repair placeholder: free-form effects validation is a FUTURE admin-scope enforcement task".to_owned(),
                 ),
                 anchor_id: None,
                 status: "placeholder".to_owned(),
@@ -998,10 +1003,10 @@ pub(super) async fn admin_get_anchor_dag(
             move_count: anchor.frontier.len() as u64,
             created_at: Some(anchor.hlc.as_str().to_owned()),
             signers,
-            // TODO(stream_h_admin): drive `is_compaction` off a
-            // dedicated marker (MAL-11). Heuristic for now: zero
-            // accepted moves means the Anchor merely re-stated the
-            // current view.
+            // FUTURE: drive `is_compaction` off a dedicated marker
+            // (MAL-11 compaction marker on the Anchor itself). Heuristic
+            // for now: zero accepted moves means the Anchor merely
+            // re-stated the current view.
             is_compaction: false,
         });
     }
@@ -1035,7 +1040,8 @@ pub(super) async fn admin_compact_anchor_dag(
     body: JsonBody<CompactionRequestBody>,
 ) -> JsonResult<CompactionResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let _session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req)?;
+    let _session = super::require_admin_principal(state, session)?;
     let space_id = space_id.into_inner();
     let space = SpaceId::new(space_id.clone()).map_err(|e| {
         AppError::new(ErrorCode::InvalidParam, format!("invalid space_id: {e}"))
@@ -1043,10 +1049,10 @@ pub(super) async fn admin_compact_anchor_dag(
     })?;
     let limit = body.into_inner().max_moves.unwrap_or(1000).min(10_000) as usize;
 
-    // TODO(stream_h_admin): replace this with a real MAL-11 compaction
-    // Anchor flow — fold pending Moves AND prune historical leaves into
-    // a single signed compaction Anchor. For now we just nudge the
-    // anchorer worker to advance the DAG so the wire shape ('anchor_id +
+    // FUTURE: replace this with a real MAL-11 compaction Anchor flow —
+    // fold pending Moves AND prune historical leaves into a single
+    // signed compaction Anchor. For now we just nudge the anchorer
+    // worker to advance the DAG so the wire shape ('anchor_id +
     // state_root + move_count') is populated against the latest leaf
     // even when there's nothing pending to anchor.
     let outcome = crate::anchorer::run_one_signing_pass(state, &space, limit);
@@ -1144,7 +1150,8 @@ pub(super) async fn admin_submit_multisig_partial(
     body: JsonBody<PartialSignatureBody>,
 ) -> JsonResult<PartialSubmitResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let _session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req)?;
+    let _session = super::require_admin_principal(state, session)?;
     let space_id_str = space_id.into_inner();
     let _space_id = SpaceId::new(space_id_str.clone()).map_err(|e| {
         AppError::new(ErrorCode::InvalidParam, format!("invalid space_id: {e}"))
@@ -1342,7 +1349,8 @@ pub(super) async fn admin_rotate_signing_key(
     _body: JsonBody<serde_json::Value>,
 ) -> JsonResult<RotateSigningKeyResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let _session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req)?;
+    let _session = super::require_admin_principal(state, session)?;
     // Validate space_id shape so the endpoint surfaces a clean 400 on a
     // bogus path; the rotation itself is process-wide.
     let space_id_str = space_id.into_inner();

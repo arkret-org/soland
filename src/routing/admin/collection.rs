@@ -5,8 +5,12 @@
 //!   collections (`actors`, `spaces`, `devices`, `capabilities`, `federation`, `applets`, `agents`,
 //!   `reports`, `invite-tokens`, `audit`, `policy`, `media`).
 //!
-//! Production-grade replacement is tracked under `_todos.md` Q9 — capability-
-//! scoped admin actions, durable pagination, redaction policy, high-risk audit.
+//! Authorization: in `development_mode` any authenticated bearer session
+//! reaches the snapshot. In production mode the session actor MUST be listed
+//! in `AppConfig::admin_principal_dids` (env `SOLAND_ADMIN_PRINCIPAL_DIDS`)
+//! — empty list keeps the gate closed. Further hardening (durable cursor
+//! pagination, redaction policy, high-risk audit signing) is tracked under
+//! `_todos.md` Q9.
 
 use std::collections::BTreeMap;
 
@@ -29,12 +33,12 @@ pub(super) async fn admin_collection(depot: &mut Depot, req: &mut Request, res: 
     let Some(session) = auth_or_render(state, req, res) else {
         return;
     };
-    if !state.config.development_mode {
+    if !state.config.development_mode && !state.config.is_admin_principal(&session.actor) {
         render_error(
             res,
             StatusCode::FORBIDDEN,
             "capability_denied",
-            "admin collection API requires explicit admin capability",
+            "admin collection API requires the caller DID to be listed in SOLAND_ADMIN_PRINCIPAL_DIDS",
         );
         return;
     }
@@ -47,10 +51,12 @@ pub(super) async fn admin_collection(depot: &mut Depot, req: &mut Request, res: 
         );
         return;
     };
+    let default_limit = state.config.admin_default_page_limit;
+    let max_limit = state.config.admin_max_page_limit;
     let limit = query_param(req, "limit")
         .and_then(|value| value.parse::<usize>().ok())
-        .unwrap_or(100)
-        .clamp(1, 500);
+        .unwrap_or(default_limit)
+        .clamp(1, max_limit);
     let cursor = query_param(req, "cursor");
 
     let (field, mut items) = match resource.as_str() {
@@ -110,8 +116,6 @@ pub(super) async fn admin_collection(depot: &mut Depot, req: &mut Request, res: 
     }
     let next_cursor = has_more.then(|| (start + limit).to_string());
 
-    // TODO(P1 admin): replace this dev-only snapshot API with capability-scoped
-    // admin actions, durable pagination, redaction policy, and high-risk audit.
     append_audit_log(
         state,
         Some(&session.actor),
@@ -132,7 +136,7 @@ pub(super) async fn admin_collection(depot: &mut Depot, req: &mut Request, res: 
     body.insert("next_cursor".to_owned(), json!(next_cursor));
     body.insert(
         "production_gap".to_owned(),
-        json!("admin_authorization_and_durable_pagination"),
+        json!("durable_cursor_pagination_and_high_risk_audit_signing"),
     );
     res.render(Json(Value::Object(body)));
 }

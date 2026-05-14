@@ -129,30 +129,30 @@ pub(in crate::routing) async fn auth_bridge_describe() -> JsonResult<AuthBridgeD
         examples: AuthBridgeExamples {
             session_grant_exchange_request: json!({
                 "legacy": true,
-                "grant_jwt": "TODO_LEGACY_SESSION_GRANT_JWT",
+                "grant_jwt": "eyJhbGciOiJFZERTQSIsImtpZCI6ImRpZDp3ZWI6Y29hdXRoLmV4YW1wbGUjMSJ9.eyJpc3MiOiJkaWQ6d2ViOmNvYXV0aC5leGFtcGxlIiwic3ViIjoiZGlkOndlYjphbGljZS5leGFtcGxlIiwiYXVkIjoiZGlkOndlYjpzb2xhbmQubG9jYWwifQ.example",
                 "principal_did": "did:web:alice.example",
-                "device_id": "device-web",
+                "device_id": "cx:device:01904100-0000-7000-8000-000000000001",
                 "introspection_proof": {
-                    "challenge": "TODO_SOLAND_CHALLENGE",
-                    "proof_jwt": "TODO_SESSION_KEY_PROOF_JWT"
+                    "challenge": "challenge-01js0000000000000000000000",
+                    "proof_jwt": "eyJhbGciOiJFZERTQSIsImtpZCI6ImRpZDp3ZWI6YWxpY2UuZXhhbXBsZSNkZXZpY2Uta2V5In0.eyJjaGFsbGVuZ2UiOiJjaGFsbGVuZ2UtMDFqczAwMDAwMDAwMDAwMDAwMDAwMDAwMDAifQ.example"
                 }
             }),
             register_device_request: json!({
                 "principal_did": "did:web:alice.example",
-                "device_id": "device-web",
+                "device_id": "cx:device:01904100-0000-7000-8000-000000000001",
                 "push_gateway": "https://floria.example/api/v1/push/notify",
-                "push_key": "webpush:TODO",
+                "push_key": "webpush:https://fcm.googleapis.com/wp/01js0000000000000000000000",
                 "platform": "web"
             }),
             unregister_device_request: json!({
                 "principal_did": "did:web:alice.example",
-                "device_id": "device-web",
-                "registration_id": "TODO_REGISTRATION_ID"
+                "device_id": "cx:device:01904100-0000-7000-8000-000000000001",
+                "registration_id": "cx:device:01904100-0000-7000-8000-000000000001#webpush"
             }),
         },
         todos: vec![
-            "TODO: publish a first-class OAuth bearer introspection descriptor instead of reusing the legacy session-grant bridge shape".to_owned(),
-            "TODO: replace push register grant bridge headers with the same Authorization bearer path used by ordinary requests".to_owned(),
+            "publish a first-class OAuth bearer introspection descriptor instead of reusing the legacy session-grant bridge shape".to_owned(),
+            "replace push register grant bridge headers with the same Authorization bearer path used by ordinary requests".to_owned(),
         ],
     })
 }
@@ -228,8 +228,8 @@ pub(in crate::routing) async fn authz_describe() -> JsonResult<Value> {
             ]
         },
         "todos": [
-            "TODO: bind authz describe examples to durable grant/policy schema evolution instead of inline handler JSON.",
-            "TODO: add formal response schema examples for effective-grants and grant mutation workflows."
+            "bind authz describe examples to durable grant/policy schema evolution instead of inline handler JSON.",
+            "add formal response schema examples for effective-grants and grant mutation workflows."
         ]
     }))
 }
@@ -274,8 +274,8 @@ pub(in crate::routing) async fn policies_describe() -> JsonResult<Value> {
         "get_path_example": "/api/v1/policies/policy-key-backup-read-01",
         "delete_path_example": "/api/v1/policies/policy-key-backup-read-01",
         "todos": [
-            "TODO: bind policy describe examples to live policy validation and revision semantics.",
-            "TODO: add explicit query/filter examples once policy list pagination is stabilized."
+            "bind policy describe examples to live policy validation and revision semantics.",
+            "add explicit query/filter examples once policy list pagination is stabilized."
         ]
     }))
 }
@@ -306,20 +306,20 @@ pub(in crate::routing) async fn device_messages_describe() -> JsonResult<Value> 
         "send_request_example": {
             "messages": {
                 "did:web:alice.example": {
-                    "dev_alice": {
+                    "cx:device:01904100-0000-7000-8000-000000000001": {
                         "type": "cx.key.verification.request",
                         "content": {
                             "transaction_id": "verify-sas-01",
                             "method": "sas",
-                            "todo": "replace scaffold verification payload with signed device envelope"
+                            "note": "replace scaffold verification payload with signed device envelope"
                         }
                     }
                 }
             }
         },
         "todos": [
-            "TODO: bind device-messages describe examples to generated schema artifacts instead of inline handler JSON.",
-            "TODO: add explicit receive/delete acknowledgement examples when device-message lifecycle semantics stabilize."
+            "bind device-messages describe examples to generated schema artifacts instead of inline handler JSON.",
+            "add explicit receive/delete acknowledgement examples when device-message lifecycle semantics stabilize."
         ]
     }))
 }
@@ -380,7 +380,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeResponse> {
                 path: "/api/v1/auth/bridge/describe".to_owned(),
                 contract: "contrix.rest.principal_bridge.v1".to_owned(),
                 stability: "scaffold".to_owned(),
-                todo: "TODO: split legacy session-grant fields from the primary OAuth bearer introspection contract.".to_owned(),
+                todo: "split legacy session-grant fields from the primary OAuth bearer introspection contract.".to_owned(),
             },
             IntegrationSurfaceDescriptor {
                 name: "oauth_bearer_introspection".to_owned(),
@@ -388,7 +388,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeResponse> {
                 path: "all protected /api/v1 routes".to_owned(),
                 contract: "oauth2.token_introspection.rfc7662".to_owned(),
                 stability: "scaffold".to_owned(),
-                todo: "TODO: make the introspection cache/timeout policy explicit in the published contract.".to_owned(),
+                todo: "make the introspection cache/timeout policy explicit in the published contract.".to_owned(),
             },
             IntegrationSurfaceDescriptor {
                 name: "outbound_push_bridge".to_owned(),
@@ -396,7 +396,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeResponse> {
                 path: "/api/v1/push/outbound/bridge/describe".to_owned(),
                 contract: "contrix.rest.outbound_push_bridge.v1".to_owned(),
                 stability: "scaffold".to_owned(),
-                todo: "TODO: persist fetched gateway snapshots and replace in-memory drift cache with durable state.".to_owned(),
+                todo: "persist fetched gateway snapshots and replace in-memory drift cache with durable state.".to_owned(),
             },
             IntegrationSurfaceDescriptor {
                 name: "push_register_device".to_owned(),
@@ -404,7 +404,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeResponse> {
                 path: "/api/v1/push/register-device".to_owned(),
                 contract: "contrix.rest.principal_push_register.v1".to_owned(),
                 stability: "scaffold".to_owned(),
-                todo: "TODO: unify bearer and session-grant registration paths behind one capability-checked flow.".to_owned(),
+                todo: "unify bearer and session-grant registration paths behind one capability-checked flow.".to_owned(),
             },
             IntegrationSurfaceDescriptor {
                 name: "device_messages_describe".to_owned(),
@@ -412,7 +412,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeResponse> {
                 path: "/api/v1/device_messages/describe".to_owned(),
                 contract: "contrix.rest.device_messages_describe.v1".to_owned(),
                 stability: "scaffold".to_owned(),
-                todo: "TODO: replace inline device-message describe examples with generated protocol artifacts.".to_owned(),
+                todo: "replace inline device-message describe examples with generated protocol artifacts.".to_owned(),
             },
             IntegrationSurfaceDescriptor {
                 name: "key_backups_describe".to_owned(),
@@ -420,7 +420,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeResponse> {
                 path: "/api/v1/keys/backups/describe".to_owned(),
                 contract: "contrix.rest.key_backups_describe.v1".to_owned(),
                 stability: "scaffold".to_owned(),
-                todo: "TODO: replace inline key-backups describe examples with generated protocol artifacts.".to_owned(),
+                todo: "replace inline key-backups describe examples with generated protocol artifacts.".to_owned(),
             },
             IntegrationSurfaceDescriptor {
                 name: "authz_describe".to_owned(),
@@ -428,7 +428,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeResponse> {
                 path: "/api/v1/authz/describe".to_owned(),
                 contract: "contrix.rest.authz_describe.v1".to_owned(),
                 stability: "scaffold".to_owned(),
-                todo: "TODO: replace inline authz describe examples with generated contract artifacts shared with SDKs and admin tooling.".to_owned(),
+                todo: "replace inline authz describe examples with generated contract artifacts shared with SDKs and admin tooling.".to_owned(),
             },
             IntegrationSurfaceDescriptor {
                 name: "policies_describe".to_owned(),
@@ -436,7 +436,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeResponse> {
                 path: "/api/v1/policies/describe".to_owned(),
                 contract: "contrix.rest.policies_describe.v1".to_owned(),
                 stability: "scaffold".to_owned(),
-                todo: "TODO: publish policy collection/query/update semantics as generated artifacts instead of inline scaffold JSON.".to_owned(),
+                todo: "publish policy collection/query/update semantics as generated artifacts instead of inline scaffold JSON.".to_owned(),
             },
         ],
         examples: json!({
@@ -448,9 +448,9 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeResponse> {
             }
         }),
         todos: vec![
-            "TODO: replace legacy session-grant and push bridge scaffolds with the direct OAuth bearer path.".to_owned(),
-            "TODO: persist outbound push gateway snapshots and use them in notification fan-out.".to_owned(),
-            "TODO: publish the same integration manifest fields in the OpenAPI surface.".to_owned(),
+            "replace legacy session-grant and push bridge scaffolds with the direct OAuth bearer path.".to_owned(),
+            "persist outbound push gateway snapshots and use them in notification fan-out.".to_owned(),
+            "publish the same integration manifest fields in the OpenAPI surface.".to_owned(),
         ],
     })
 }

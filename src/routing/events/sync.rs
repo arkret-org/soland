@@ -1140,24 +1140,25 @@ async fn sync_gap_backfill(depot: &mut Depot, req: &mut Request, res: &mut Respo
         .or_else(|| query_param(req, "to"))
         .or_else(|| query_param(req, "next_batch"));
 
-    // TODO(P0 sync): map durable cx:cursor space positions to reducer event
-    // cursors. This first contract accepts the event/operation cursors returned
-    // by sync/backfill and sync/subscribe.
-    if from_cursor
-        .as_deref()
-        .is_some_and(|cursor| cursor.starts_with("cx:cursor:"))
-        || to_cursor
-            .as_deref()
-            .is_some_and(|cursor| cursor.starts_with("cx:cursor:"))
-    {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "invalid_param",
-            "gap backfill currently expects event cursors, not sync tokens",
-        );
-        return;
-    }
+    // Resolve sync `cx:cursor:` tokens to reducer event cursors. The
+    // sync token's `_positions` map encodes per-Space `timestamp_micros`
+    // checkpoints; we translate that into the last `event_id` at or
+    // before the checkpoint so backfill can resume from there. Plain
+    // event-id cursors flow through unchanged.
+    let from_cursor = match resolve_sync_cursor_to_event_id(state, &space_id, from_cursor) {
+        Ok(cursor) => cursor,
+        Err(message) => {
+            render_error(res, StatusCode::BAD_REQUEST, "invalid_param", message);
+            return;
+        }
+    };
+    let to_cursor = match resolve_sync_cursor_to_event_id(state, &space_id, to_cursor) {
+        Ok(cursor) => cursor,
+        Err(message) => {
+            render_error(res, StatusCode::BAD_REQUEST, "invalid_param", message);
+            return;
+        }
+    };
 
     let (events, next_cursor, limited) =
         match backfill_gap_events(state, &space_id, from_cursor.as_deref(), limit) {

@@ -41,6 +41,9 @@ fn test_config() -> AppConfig {
         use_keystore: false,
         federation_policy: soland::config::FederationPolicy::Mesh,
         federation_peers: Vec::new(),
+        admin_default_page_limit: 100,
+        admin_max_page_limit: 1000,
+        admin_principal_dids: Vec::new(),
     }
 }
 

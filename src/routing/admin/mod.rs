@@ -8,6 +8,9 @@ mod control;
 
 use audit::append_audit_log;
 
+use crate::error::{AppError, ErrorCode};
+use crate::state::{AppState, SessionRecord};
+
 use super::system::util;
 use super::{
     AuthArgs, auth_or_render, demo_actors, device_inventory_to_json,
@@ -15,6 +18,28 @@ use super::{
     flow_projection_for_space, now, policy_document_to_response, projection_event_from_operation,
     query_param, render_error, sha256_hex,
 };
+
+/// Gate a write-side admin handler on the caller's authorization.
+///
+/// In `development_mode` any authenticated session is allowed. In production
+/// mode the session actor MUST appear in `AppConfig::admin_principal_dids`
+/// (env `SOLAND_ADMIN_PRINCIPAL_DIDS`). Returns the original session on
+/// success or an `AppError` with `capability_denied` on failure.
+pub(super) fn require_admin_principal(
+    state: &AppState,
+    session: SessionRecord,
+) -> Result<SessionRecord, AppError> {
+    if state.config.development_mode || state.config.is_admin_principal(&session.actor) {
+        Ok(session)
+    } else {
+        Err(AppError::new(
+            ErrorCode::CapabilityDenied,
+            "admin API requires the caller DID to be listed in SOLAND_ADMIN_PRINCIPAL_DIDS"
+                .to_owned(),
+        )
+        .with_status(salvo::http::StatusCode::FORBIDDEN))
+    }
+}
 
 pub fn router() -> Router {
     Router::new()

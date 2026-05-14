@@ -122,6 +122,20 @@ pub struct AppConfig {
     /// considers as broadcast targets (mesh) or hub upstream (hub). Empty
     /// disables federation outbound.
     pub federation_peers: Vec<String>,
+    /// Default page size for `GET /api/v1/admin/cells` and the rest of
+    /// the admin paginated read surfaces when the caller omits `limit`.
+    /// Env: `SOLAND_ADMIN_PAGE_LIMIT` (default `100`).
+    pub admin_default_page_limit: usize,
+    /// Hard cap on `limit` query for the admin paginated read surfaces;
+    /// requests asking for a larger page are clamped down. Defends
+    /// against a misbehaving client exhausting in-memory projection state.
+    /// Env: `SOLAND_ADMIN_MAX_PAGE_LIMIT` (default `1000`).
+    pub admin_max_page_limit: usize,
+    /// Principal DIDs allowed to call `GET /api/v1/admin/{resource}` and the
+    /// other production-gated admin read surfaces when `development_mode` is
+    /// false. Empty (default) keeps the previous "dev-mode only" posture for
+    /// these endpoints. Env: `SOLAND_ADMIN_PRINCIPAL_DIDS` (comma-separated).
+    pub admin_principal_dids: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -306,6 +320,27 @@ impl AppConfig {
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
+        let admin_default_page_limit = std::env::var("SOLAND_ADMIN_PAGE_LIMIT")
+            .ok()
+            .and_then(|value| value.trim().parse::<usize>().ok())
+            .filter(|n| *n > 0)
+            .unwrap_or(100);
+        let admin_max_page_limit = std::env::var("SOLAND_ADMIN_MAX_PAGE_LIMIT")
+            .ok()
+            .and_then(|value| value.trim().parse::<usize>().ok())
+            .filter(|n| *n > 0)
+            .unwrap_or(1000)
+            .max(admin_default_page_limit);
+        let admin_principal_dids = std::env::var("SOLAND_ADMIN_PRINCIPAL_DIDS")
+            .ok()
+            .map(|value| {
+                value
+                    .split(',')
+                    .map(|v| v.trim().to_owned())
+                    .filter(|v| !v.is_empty())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
 
         Ok(Self {
             bind,
@@ -335,7 +370,18 @@ impl AppConfig {
             use_keystore,
             federation_policy,
             federation_peers,
+            admin_default_page_limit,
+            admin_max_page_limit,
+            admin_principal_dids,
         })
+    }
+
+    /// Returns true when `actor` is configured as an admin principal in
+    /// production mode via `SOLAND_ADMIN_PRINCIPAL_DIDS`.
+    pub fn is_admin_principal(&self, actor: &str) -> bool {
+        self.admin_principal_dids
+            .iter()
+            .any(|configured| configured == actor)
     }
 
     #[inline]
