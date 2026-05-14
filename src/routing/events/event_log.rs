@@ -447,7 +447,7 @@ pub(super) async fn events_query_durable_scope_impl(
         );
         return;
     }
-    let _until = query_param(req, "until"); // upper-bound cursor — TODO follow-up.
+    let _until = query_param(req, "until"); // FUTURE: enforce upper-bound cursor; currently swallowed.
     let limit = query_param(req, "limit")
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(50)

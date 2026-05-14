@@ -525,6 +525,67 @@ pub fn decode_sync_cursor_value(token: &str) -> Result<serde_json::Value, SyncCu
         .map_err(|_| SyncCursorError::Invalid("since cursor must contain JSON"))
 }
 
+/// Translate an optional client cursor to a backfill (event-id) cursor.
+///
+/// - `None` → `None` (start from the beginning).
+/// - Plain string that does NOT start with `cx:cursor:` → pass through
+///   unchanged; the caller already speaks the projection's `event_id` cursor.
+/// - `cx:cursor:...` → decode the structured sync token, look up
+///   `_positions[space_id]` (a `timestamp_micros` checkpoint), then walk
+///   the space's projected events and persisted messages to find the most
+///   recent event at-or-before that checkpoint and return its
+///   `event_id`. When no event sits at-or-before the checkpoint, return
+///   `None` so backfill streams from the start of the space.
+pub fn resolve_sync_cursor_to_event_id(
+    state: &AppState,
+    space_id: &str,
+    cursor: Option<String>,
+) -> Result<Option<String>, &'static str> {
+    let Some(cursor) = cursor else {
+        return Ok(None);
+    };
+    if !cursor.starts_with("cx:cursor:") {
+        return Ok(Some(cursor));
+    }
+    let value = decode_sync_cursor_value(&cursor)
+        .map_err(|_| "sync cursor is not a valid cx:cursor token")?;
+    let checkpoint = value
+        .pointer("/_positions")
+        .and_then(|positions| positions.get(space_id))
+        .and_then(|position| position.as_i64());
+    let Some(checkpoint) = checkpoint else {
+        return Ok(None);
+    };
+
+    let mut newest_event_id: Option<(i64, String)> = None;
+    let projection = state.projection.lock().expect("projection lock");
+    for message in projection.messages_for_space(space_id) {
+        let position = message.created_at.timestamp_micros();
+        if position <= checkpoint {
+            match &newest_event_id {
+                Some((existing_pos, _)) if *existing_pos >= position => {}
+                _ => newest_event_id = Some((position, message.event_id.clone())),
+            }
+        }
+    }
+    drop(projection);
+    for message in state
+        .persistence
+        .messages()
+        .list_for_space(space_id, 1000)
+        .unwrap_or_default()
+    {
+        let position = message.created_at.timestamp_micros();
+        if position <= checkpoint {
+            match &newest_event_id {
+                Some((existing_pos, _)) if *existing_pos >= position => {}
+                _ => newest_event_id = Some((position, message.event_id.clone())),
+            }
+        }
+    }
+    Ok(newest_event_id.map(|(_, event_id)| event_id))
+}
+
 pub fn sync_filter_hash(
     profile: &str,
     filter: Option<&serde_json::Value>,
@@ -1312,8 +1373,11 @@ async fn snapshot_chunk(depot: &mut Depot, req: &mut Request, res: &mut Response
         return;
     }
 
-    // TODO(P1 snapshot): replace the single JSON chunk with deterministic
-    // multi-chunk Merkle output and signed generator proofs.
+    // FUTURE: replace the single JSON chunk with deterministic multi-chunk
+    // Merkle output and signed generator proofs (spec snapshot-frontier
+    // v2). Today we ship the entire snapshot as a single base64-url JSON
+    // chunk and verify the digest in-band — fine for small Spaces, not for
+    // production-scale archives.
     res.render(Json(json!({
         "snapshot_ref": snapshot_ref,
         "chunk_id": chunk_id,
