@@ -240,6 +240,20 @@ per_subject_lattice!(
     &["cx.device.list_update"]
 );
 
+// Cross-signing publish / reset — spec `crypto-media/device-lifecycle.md`
+// §5.1 / §14.1. The cell key is the principal_id; later publishes MUST
+// monotonically advance `generation` and a `cx.cross_signing.reset.v1`
+// MUST precede any publish whose generation > previous_accepted.
+per_subject_lattice!(
+    CrossSigningPublish,
+    "cx.component.cross_signing.publish.v1",
+    SdkLatticeKind::OrSet,
+    BottomPolicy::Reject,
+    Criticality::Required,
+    "principal_id",
+    &["cx.cross_signing.publish.v1", "cx.cross_signing.reset.v1"]
+);
+
 // MLS covered_frontier cell — `or-set` of governance-frontier event refs
 // each MLS commit attests to. Empty / missing covered_frontier blocks E2EE
 // message Moves but not governance Moves (per spec §MLS).
@@ -621,6 +635,7 @@ pub fn default_lattice_registry() -> LatticeRegistry {
     registry.register(SessionGrant);
     registry.register(DeviceAuthorized);
     registry.register(DeviceListUpdate);
+    registry.register(CrossSigningPublish);
     registry.register(CoveredFrontier);
 
     // CasRegister

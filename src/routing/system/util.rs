@@ -12,26 +12,35 @@
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use contrix_sdk::{DeviceId, Did, ErrorEnvelope, SpaceId};
+use contrix_sdk::{DeviceId, Did, SpaceId};
 use salvo::http::{StatusCode, header};
 use salvo::prelude::*;
 use sha2::{Digest, Sha256};
 
 use crate::ids;
-use crate::wire::ApiError;
+use crate::wire::{ApiError, ApiErrorDetail};
 
 // ── HTTP helpers ────────────────────────────────────────────────────────────
 
 /// Render a Contrix-shaped error envelope and stamp the response status.
 ///
-/// Always attaches an opaque `request_id` to `error.extra` so logs and
-/// client-facing diagnostics line up.
+/// Produces the flat Matrix/Palpo-style envelope:
+/// `{"ok": false, "error": {"errcode": <code>, "error": <message>,
+///  "request_id": <opaque>}}` — aligning with how downstream clients
+/// (sodmin, yougen, cotest) read errors via `body.error.errcode` /
+/// `body.error.error`.
 pub fn render_error(res: &mut Response, status: StatusCode, code: &str, message: &str) {
     let request_id = ids::generate_request_id();
     res.status_code(status);
     res.render(Json(ApiError {
         ok: false,
-        error: ErrorEnvelope::new(code, message).with_request_id(request_id),
+        error: ApiErrorDetail {
+            errcode: code.to_owned(),
+            error: message.to_owned(),
+            request_id,
+            retry_after_ms: None,
+            details: std::collections::BTreeMap::new(),
+        },
     }));
 }
 

@@ -864,10 +864,28 @@ pub struct PolicyCheckResponse {
     pub signature: Value,
 }
 
+/// Flat error envelope returned by every soland error path.
+///
+/// `errcode` is the canonical wire-form code from
+/// `contrix_core::error::KNOWN_ERROR_CODES`; `error` is the human-readable
+/// message; `request_id` is an opaque correlation token. Additional fields
+/// (`retry_after_ms`, `details`, etc.) MAY be stamped in `details` without
+/// breaking existing clients.
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
+pub struct ApiErrorDetail {
+    pub errcode: String,
+    pub error: String,
+    pub request_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_after_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub details: std::collections::BTreeMap<String, Value>,
+}
+
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct ApiError {
     pub ok: bool,
-    pub error: ErrorEnvelope,
+    pub error: ApiErrorDetail,
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]

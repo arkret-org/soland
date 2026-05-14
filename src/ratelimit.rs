@@ -1,13 +1,12 @@
 //! Simple in-memory rate limiter middleware.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use contrix_sdk::ErrorEnvelope;
 use salvo::prelude::*;
 
-use crate::wire::ApiError;
+use crate::wire::{ApiError, ApiErrorDetail};
 
 /// Rate limiter configuration.
 #[derive(Clone, Debug)]
@@ -119,12 +118,13 @@ impl Handler for RateLimiterMiddleware {
                 .insert(salvo::http::header::RETRY_AFTER, retry_after_seconds.into());
             res.render(Json(ApiError {
                 ok: false,
-                error: ErrorEnvelope::new(
-                    "rate_limited",
-                    "Too many requests. Please try again later.",
-                )
-                .with_request_id(request_id)
-                .with_retry_after_ms(Some(retry_after_ms)),
+                error: ApiErrorDetail {
+                    errcode: "rate_limited".to_owned(),
+                    error: "Too many requests. Please try again later.".to_owned(),
+                    request_id,
+                    retry_after_ms: Some(retry_after_ms),
+                    details: BTreeMap::new(),
+                },
             }));
             return;
         }
