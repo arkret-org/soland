@@ -251,7 +251,7 @@ soland exposes the canonical Contrix v1 routes (~180 routes total). Highlights:
 
 - `GET  /health` — liveness + DB/repo health (used as the Docker healthcheck)
 - `GET  /.well-known/contrix/openapi.json` and `.../openapi.yaml` — the
-  generated OpenAPI 3.1 document seeded with `contrix_sdk::salvo_adapter::register_contrix_oapi_components`
+  generated OpenAPI 3.1 document from soland's Salvo route wiring
 - `GET  /.well-known/mimi-protocol-directory`
 - `POST /api/v1/events`, `GET /api/v1/events/describe`, …
 - `GET /api/v1/sync`, `GET /api/v1/identity/*`, `GET /api/v1/directory/*`

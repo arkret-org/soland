@@ -8,11 +8,16 @@ use std::sync::{Arc, Mutex};
 
 use chrono::Utc;
 use contrix_sdk::Operation;
-use diesel::sql_types::{Array, BigInt, Binary, Bool, Integer, Jsonb, Nullable, Text, Timestamptz};
+use diesel::sql_types::{
+    Array, BigInt, Binary, Bool, Integer, Jsonb, Nullable, Text, Timestamptz,
+    Uuid as SqlUuid,
+};
 use diesel::{OptionalExtension, QueryableByName, RunQueryDsl, sql_query};
 use serde_json::Value;
+use uuid::Uuid;
 
 use crate::db::PgPool;
+use crate::ids;
 use crate::state::{
     AccountRecord, BlobRecord, CanonicalEventRecord, ContactRecord, DeviceInventoryRecord,
     DeviceMessageRecord, FederationTransactionRecord, IdentityDocumentRecord, IdentityLogRecord,
@@ -2729,6 +2734,8 @@ impl FederationTransactionStore for PgFederationTransactionStore {
 
     fn put(&self, record: &FederationTransactionRecord) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool)?;
+        let space_id_uuid: Option<Uuid> =
+            record.space_id.as_deref().map(ids::typed_uuid_part_or_panic);
         sql_query(
             "INSERT INTO federation_transactions \
              (txn_id, source_service, destination_service, space_id, status, content_digest, payload, received_at, processed_at) \
@@ -2738,7 +2745,7 @@ impl FederationTransactionStore for PgFederationTransactionStore {
         .bind::<Text, _>(&record.txn_id)
         .bind::<Text, _>(&record.origin)
         .bind::<Text, _>(&record.destination)
-        .bind::<Nullable<Text>, _>(&record.space_id)
+        .bind::<Nullable<SqlUuid>, _>(space_id_uuid)
         .bind::<Text, _>(&record.status)
         .bind::<Text, _>(&record.content_digest)
         .bind::<Jsonb, _>(&record.response)
@@ -2924,8 +2931,8 @@ struct PgMultisigPendingStore {
 struct MultisigPendingRow {
     #[diesel(sql_type = Text)]
     anchor_id: String,
-    #[diesel(sql_type = Text)]
-    space_id: String,
+    #[diesel(sql_type = SqlUuid)]
+    space_id: Uuid,
     #[diesel(sql_type = Integer)]
     threshold_k: i32,
     #[diesel(sql_type = Integer)]
@@ -2956,7 +2963,7 @@ impl From<MultisigPendingRow> for MultisigPendingRecord {
         };
         Self {
             anchor_id: row.anchor_id,
-            space_id: row.space_id,
+            space_id: ids::format_typed_uuid("space", &row.space_id),
             threshold_k: row.threshold_k as u32,
             threshold_n: row.threshold_n as u32,
             members: row.members,
@@ -2982,6 +2989,7 @@ fn partials_to_jsonb(partials: &BTreeMap<String, Value>) -> Value {
 impl MultisigPendingStore for PgMultisigPendingStore {
     fn upsert(&self, record: MultisigPendingRecord) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool)?;
+        let space_id_uuid = ids::typed_uuid_part_or_panic(&record.space_id);
         sql_query(
             "INSERT INTO multisig_pending \
              (anchor_id, space_id, threshold_k, threshold_n, members, canonical_b64, partials, created_at, expires_at) \
@@ -2995,7 +3003,7 @@ impl MultisigPendingStore for PgMultisigPendingStore {
                 expires_at = EXCLUDED.expires_at",
         )
         .bind::<Text, _>(&record.anchor_id)
-        .bind::<Text, _>(&record.space_id)
+        .bind::<SqlUuid, _>(space_id_uuid)
         .bind::<Integer, _>(record.threshold_k as i32)
         .bind::<Integer, _>(record.threshold_n as i32)
         .bind::<Array<Text>, _>(&record.members)
@@ -3046,13 +3054,14 @@ impl MultisigPendingStore for PgMultisigPendingStore {
 
     fn list_for_space(&self, space_id: &str) -> PersistenceResult<Vec<MultisigPendingRecord>> {
         let mut conn = pg_conn(&self.pool)?;
+        let space_id_uuid = ids::typed_uuid_part_or_panic(space_id);
         sql_query(
             "SELECT anchor_id, space_id, threshold_k, threshold_n, members, canonical_b64, \
              partials, created_at, expires_at, claimed_by_node_id, claimed_until, claim_seq \
              FROM multisig_pending WHERE space_id = $1 \
              ORDER BY created_at ASC",
         )
-        .bind::<Text, _>(space_id)
+        .bind::<SqlUuid, _>(space_id_uuid)
         .load::<MultisigPendingRow>(&mut conn)
         .map(|rows| rows.into_iter().map(MultisigPendingRecord::from).collect())
         .map_err(PersistenceError::from)
@@ -3223,22 +3232,27 @@ impl AuditStore for PgAuditStore {
         let request_id = extract("request_id");
         let space_id = extract("space_id");
         let operation_id = extract("operation_id");
-        let commit_id = extract("commit_id");
         let device_id = extract("device_id");
+        let audit_id_uuid = ids::typed_uuid_part_or_panic(&audit_id);
+        let request_id_uuid: Option<Uuid> =
+            request_id.as_deref().map(ids::typed_uuid_part_or_panic);
+        let space_id_uuid: Option<Uuid> =
+            space_id.as_deref().map(ids::typed_uuid_part_or_panic);
+        let operation_id_uuid: Option<Uuid> =
+            operation_id.as_deref().map(ids::typed_uuid_part_or_panic);
         sql_query(
-            "INSERT INTO audit_events \
-             (audit_id, actor, request_id, action, outcome, space_id, operation_id, commit_id, device_id, payload, created_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW()) \
-             ON CONFLICT (audit_id) DO NOTHING",
+            "INSERT INTO audit_logs \
+             (id, actor, request_id, action, outcome, space_id, operation_id, device_id, payload, created_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW()) \
+             ON CONFLICT (id) DO NOTHING",
         )
-        .bind::<Text, _>(&audit_id)
+        .bind::<SqlUuid, _>(audit_id_uuid)
         .bind::<Nullable<Text>, _>(&actor)
-        .bind::<Nullable<Text>, _>(&request_id)
+        .bind::<Nullable<SqlUuid>, _>(request_id_uuid)
         .bind::<Text, _>(&action)
         .bind::<Text, _>(&outcome)
-        .bind::<Nullable<Text>, _>(&space_id)
-        .bind::<Nullable<Text>, _>(&operation_id)
-        .bind::<Nullable<Text>, _>(&commit_id)
+        .bind::<Nullable<SqlUuid>, _>(space_id_uuid)
+        .bind::<Nullable<SqlUuid>, _>(operation_id_uuid)
         .bind::<Nullable<Text>, _>(&device_id)
         .bind::<Jsonb, _>(&entry)
         .execute(&mut conn)
@@ -3249,7 +3263,7 @@ impl AuditStore for PgAuditStore {
     fn list_for_actor(&self, actor: &str) -> PersistenceResult<Vec<Value>> {
         let mut conn = pg_conn(&self.pool)?;
         sql_query(
-            "SELECT payload FROM audit_events WHERE actor = $1 ORDER BY created_at ASC, audit_id ASC",
+            "SELECT payload FROM audit_logs WHERE actor = $1 ORDER BY created_at ASC, id ASC",
         )
         .bind::<Text, _>(actor)
         .load::<AuditPayloadRow>(&mut conn)
@@ -3259,7 +3273,7 @@ impl AuditStore for PgAuditStore {
 
     fn snapshot_all(&self) -> PersistenceResult<Vec<Value>> {
         let mut conn = pg_conn(&self.pool)?;
-        sql_query("SELECT payload FROM audit_events ORDER BY created_at ASC, audit_id ASC")
+        sql_query("SELECT payload FROM audit_logs ORDER BY created_at ASC, id ASC")
             .load::<AuditPayloadRow>(&mut conn)
             .map(|rows| rows.into_iter().map(|row| row.payload).collect())
             .map_err(PersistenceError::from)
@@ -3340,14 +3354,14 @@ struct PgEventStore {
 
 #[derive(QueryableByName)]
 struct CanonicalEventRow {
-    #[diesel(sql_type = Text)]
-    event_id: String,
+    #[diesel(sql_type = SqlUuid)]
+    id: Uuid,
     #[diesel(sql_type = Text)]
     actor_id: String,
     #[diesel(sql_type = BigInt)]
     actor_seq: i64,
-    #[diesel(sql_type = Nullable<Text>)]
-    space_id: Option<String>,
+    #[diesel(sql_type = Nullable<SqlUuid>)]
+    space_id: Option<Uuid>,
     #[diesel(sql_type = Text)]
     kind: String,
     #[diesel(sql_type = Text)]
@@ -3365,10 +3379,10 @@ struct CanonicalEventRow {
 impl From<CanonicalEventRow> for CanonicalEventRecord {
     fn from(row: CanonicalEventRow) -> Self {
         Self {
-            event_id: row.event_id,
+            event_id: ids::format_typed_uuid("event", &row.id),
             actor_id: row.actor_id,
             actor_seq: row.actor_seq.max(0) as u64,
-            space_id: row.space_id,
+            space_id: row.space_id.as_ref().map(|u| ids::format_typed_uuid("space", u)),
             kind: row.kind,
             schema_id: row.schema_id,
             canonical_digest: row.canonical_digest,
@@ -3382,16 +3396,19 @@ impl From<CanonicalEventRow> for CanonicalEventRecord {
 impl EventStore for PgEventStore {
     fn put(&self, record: CanonicalEventRecord) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool)?;
+        let event_id_uuid = ids::typed_uuid_part_or_panic(&record.event_id);
+        let space_id_uuid: Option<Uuid> =
+            record.space_id.as_deref().map(ids::typed_uuid_part_or_panic);
         sql_query(
             "INSERT INTO canonical_events \
-             (event_id, actor_id, actor_seq, space_id, kind, schema_id, canonical_digest, canonical_bytes, envelope, received_at) \
+             (id, actor_id, actor_seq, space_id, kind, schema_id, canonical_digest, canonical_bytes, envelope, received_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) \
-             ON CONFLICT (event_id) DO NOTHING",
+             ON CONFLICT (id) DO NOTHING",
         )
-        .bind::<Text, _>(&record.event_id)
+        .bind::<SqlUuid, _>(event_id_uuid)
         .bind::<Text, _>(&record.actor_id)
         .bind::<BigInt, _>(record.actor_seq as i64)
-        .bind::<Nullable<Text>, _>(&record.space_id)
+        .bind::<Nullable<SqlUuid>, _>(space_id_uuid)
         .bind::<Text, _>(&record.kind)
         .bind::<Text, _>(&record.schema_id)
         .bind::<Text, _>(&record.canonical_digest)
@@ -3405,11 +3422,12 @@ impl EventStore for PgEventStore {
 
     fn get(&self, event_id: &str) -> PersistenceResult<Option<CanonicalEventRecord>> {
         let mut conn = pg_conn(&self.pool)?;
+        let event_id_uuid = ids::typed_uuid_part_or_panic(event_id);
         sql_query(
-            "SELECT event_id, actor_id, actor_seq, space_id, kind, schema_id, canonical_digest, canonical_bytes, envelope, received_at \
-             FROM canonical_events WHERE event_id = $1",
+            "SELECT id, actor_id, actor_seq, space_id, kind, schema_id, canonical_digest, canonical_bytes, envelope, received_at \
+             FROM canonical_events WHERE id = $1",
         )
-        .bind::<Text, _>(event_id)
+        .bind::<SqlUuid, _>(event_id_uuid)
         .get_result::<CanonicalEventRow>(&mut conn)
         .optional()
         .map(|row| row.map(CanonicalEventRecord::from))
@@ -3423,8 +3441,9 @@ impl EventStore for PgEventStore {
             #[diesel(sql_type = diesel::sql_types::Bool)]
             present: bool,
         }
-        sql_query("SELECT EXISTS(SELECT 1 FROM canonical_events WHERE event_id = $1) AS present")
-            .bind::<Text, _>(event_id)
+        let event_id_uuid = ids::typed_uuid_part_or_panic(event_id);
+        sql_query("SELECT EXISTS(SELECT 1 FROM canonical_events WHERE id = $1) AS present")
+            .bind::<SqlUuid, _>(event_id_uuid)
             .get_result::<ExistsRow>(&mut conn)
             .map(|row| row.present)
             .map_err(PersistenceError::from)
@@ -3447,8 +3466,8 @@ impl EventStore for PgEventStore {
     fn snapshot_all(&self) -> PersistenceResult<Vec<CanonicalEventRecord>> {
         let mut conn = pg_conn(&self.pool)?;
         sql_query(
-            "SELECT event_id, actor_id, actor_seq, space_id, kind, schema_id, canonical_digest, canonical_bytes, envelope, received_at \
-             FROM canonical_events ORDER BY received_at ASC, event_id ASC",
+            "SELECT id, actor_id, actor_seq, space_id, kind, schema_id, canonical_digest, canonical_bytes, envelope, received_at \
+             FROM canonical_events ORDER BY received_at ASC, id ASC",
         )
         .load::<CanonicalEventRow>(&mut conn)
         .map(|rows| rows.into_iter().map(CanonicalEventRecord::from).collect())
@@ -3479,14 +3498,16 @@ impl FederationOperationsStore for PgFederationOperationsStore {
             .ok()
             .and_then(|v| v.as_str().map(ToOwned::to_owned))
             .unwrap_or_else(|| "create".to_owned());
+        let operation_id_uuid = ids::typed_uuid_part_or_panic(operation.operation_id.as_str());
+        let space_id_uuid = ids::typed_uuid_part_or_panic(operation.space_id.as_str());
         sql_query(
             "INSERT INTO federation_operations \
-             (operation_id, space_id, object_type, object_id, operation_type, payload, created_at) \
+             (id, space_id, object_type, object_id, operation_type, payload, created_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7) \
-             ON CONFLICT (operation_id) DO NOTHING",
+             ON CONFLICT (id) DO NOTHING",
         )
-        .bind::<Text, _>(operation.operation_id.as_str())
-        .bind::<Text, _>(operation.space_id.as_str())
+        .bind::<SqlUuid, _>(operation_id_uuid)
+        .bind::<SqlUuid, _>(space_id_uuid)
         .bind::<Text, _>(&operation.object_type)
         .bind::<Nullable<Text>, _>(&object_id)
         .bind::<Text, _>(&operation_type)
@@ -3504,10 +3525,11 @@ impl FederationOperationsStore for PgFederationOperationsStore {
             #[diesel(sql_type = diesel::sql_types::Bool)]
             present: bool,
         }
+        let operation_id_uuid = ids::typed_uuid_part_or_panic(operation_id);
         sql_query(
-            "SELECT EXISTS(SELECT 1 FROM federation_operations WHERE operation_id = $1) AS present",
+            "SELECT EXISTS(SELECT 1 FROM federation_operations WHERE id = $1) AS present",
         )
-        .bind::<Text, _>(operation_id)
+        .bind::<SqlUuid, _>(operation_id_uuid)
         .get_result::<ExistsRow>(&mut conn)
         .map(|row| row.present)
         .map_err(PersistenceError::from)
@@ -3515,11 +3537,12 @@ impl FederationOperationsStore for PgFederationOperationsStore {
 
     fn list_for_space(&self, space_id: &str) -> PersistenceResult<Vec<Operation>> {
         let mut conn = pg_conn(&self.pool)?;
+        let space_id_uuid = ids::typed_uuid_part_or_panic(space_id);
         let rows: Vec<FederationOperationRow> = sql_query(
             "SELECT payload FROM federation_operations \
-             WHERE space_id = $1 ORDER BY created_at ASC, operation_id ASC",
+             WHERE space_id = $1 ORDER BY created_at ASC, id ASC",
         )
-        .bind::<Text, _>(space_id)
+        .bind::<SqlUuid, _>(space_id_uuid)
         .load::<FederationOperationRow>(&mut conn)
         .map_err(PersistenceError::from)?;
         rows.into_iter()
@@ -3535,7 +3558,7 @@ impl FederationOperationsStore for PgFederationOperationsStore {
         let mut conn = pg_conn(&self.pool)?;
         let rows: Vec<FederationOperationRow> = sql_query(
             "SELECT payload FROM federation_operations \
-             ORDER BY created_at ASC, operation_id ASC",
+             ORDER BY created_at ASC, id ASC",
         )
         .load::<FederationOperationRow>(&mut conn)
         .map_err(PersistenceError::from)?;
@@ -3584,17 +3607,23 @@ impl ModerationStore for PgModerationStore {
         let target_actor = extract("target_actor");
         let target_event_id = extract("target_event_id");
         let space_id = extract("space_id");
+        let report_id_uuid = ids::typed_uuid_part_or_panic(&report_id);
+        let target_event_id_uuid: Option<Uuid> = target_event_id
+            .as_deref()
+            .map(ids::typed_uuid_part_or_panic);
+        let space_id_uuid: Option<Uuid> =
+            space_id.as_deref().map(ids::typed_uuid_part_or_panic);
         sql_query(
             "INSERT INTO moderation_reports \
-             (report_id, reporter, target_actor, target_event_id, space_id, payload, created_at) \
+             (id, reporter, target_actor, target_event_id, space_id, payload, created_at) \
              VALUES ($1, $2, $3, $4, $5, $6, NOW()) \
-             ON CONFLICT (report_id) DO NOTHING",
+             ON CONFLICT (id) DO NOTHING",
         )
-        .bind::<Text, _>(&report_id)
+        .bind::<SqlUuid, _>(report_id_uuid)
         .bind::<Nullable<Text>, _>(&reporter)
         .bind::<Nullable<Text>, _>(&target_actor)
-        .bind::<Nullable<Text>, _>(&target_event_id)
-        .bind::<Nullable<Text>, _>(&space_id)
+        .bind::<Nullable<SqlUuid>, _>(target_event_id_uuid)
+        .bind::<Nullable<SqlUuid>, _>(space_id_uuid)
         .bind::<Jsonb, _>(&report)
         .execute(&mut conn)
         .map(|_| ())
@@ -3616,17 +3645,20 @@ impl ModerationStore for PgModerationStore {
         let target_actor = extract("target_actor");
         let action_kind = extract("action_kind");
         let space_id = extract("space_id");
+        let action_id_uuid = ids::typed_uuid_part_or_panic(&action_id);
+        let space_id_uuid: Option<Uuid> =
+            space_id.as_deref().map(ids::typed_uuid_part_or_panic);
         sql_query(
             "INSERT INTO moderation_actions \
-             (action_id, moderator, target_actor, action_kind, space_id, payload, created_at) \
+             (id, moderator, target_actor, action_kind, space_id, payload, created_at) \
              VALUES ($1, $2, $3, $4, $5, $6, NOW()) \
-             ON CONFLICT (action_id) DO NOTHING",
+             ON CONFLICT (id) DO NOTHING",
         )
-        .bind::<Text, _>(&action_id)
+        .bind::<SqlUuid, _>(action_id_uuid)
         .bind::<Nullable<Text>, _>(&moderator)
         .bind::<Nullable<Text>, _>(&target_actor)
         .bind::<Nullable<Text>, _>(&action_kind)
-        .bind::<Nullable<Text>, _>(&space_id)
+        .bind::<Nullable<SqlUuid>, _>(space_id_uuid)
         .bind::<Jsonb, _>(&action)
         .execute(&mut conn)
         .map(|_| ())
@@ -3635,7 +3667,7 @@ impl ModerationStore for PgModerationStore {
 
     fn list_reports(&self) -> PersistenceResult<Vec<Value>> {
         let mut conn = pg_conn(&self.pool)?;
-        sql_query("SELECT payload FROM moderation_reports ORDER BY created_at ASC, report_id ASC")
+        sql_query("SELECT payload FROM moderation_reports ORDER BY created_at ASC, id ASC")
             .load::<ModerationPayloadRow>(&mut conn)
             .map(|rows| rows.into_iter().map(|row| row.payload).collect())
             .map_err(PersistenceError::from)
@@ -3643,7 +3675,7 @@ impl ModerationStore for PgModerationStore {
 
     fn list_actions(&self) -> PersistenceResult<Vec<Value>> {
         let mut conn = pg_conn(&self.pool)?;
-        sql_query("SELECT payload FROM moderation_actions ORDER BY created_at ASC, action_id ASC")
+        sql_query("SELECT payload FROM moderation_actions ORDER BY created_at ASC, id ASC")
             .load::<ModerationPayloadRow>(&mut conn)
             .map(|rows| rows.into_iter().map(|row| row.payload).collect())
             .map_err(PersistenceError::from)
@@ -3963,10 +3995,10 @@ struct PgSpaceInviteStore {
 
 #[derive(QueryableByName)]
 struct SpaceInviteRow {
-    #[diesel(sql_type = Text)]
-    invite_id: String,
-    #[diesel(sql_type = Text)]
-    space_id: String,
+    #[diesel(sql_type = SqlUuid)]
+    id: Uuid,
+    #[diesel(sql_type = SqlUuid)]
+    space_id: Uuid,
     #[diesel(sql_type = Text)]
     inviter: String,
     #[diesel(sql_type = Nullable<Text>)]
@@ -3984,8 +4016,8 @@ struct SpaceInviteRow {
 impl From<SpaceInviteRow> for SpaceInviteRecord {
     fn from(row: SpaceInviteRow) -> Self {
         Self {
-            invite_id: row.invite_id,
-            space_id: row.space_id,
+            invite_id: ids::format_typed_uuid("invite", &row.id),
+            space_id: ids::format_typed_uuid("space", &row.space_id),
             inviter: row.inviter,
             invitee: row.invitee,
             invite_token: row.invite_token,
@@ -3999,11 +4031,12 @@ impl From<SpaceInviteRow> for SpaceInviteRecord {
 impl SpaceInviteStore for PgSpaceInviteStore {
     fn get(&self, invite_id: &str) -> PersistenceResult<Option<SpaceInviteRecord>> {
         let mut conn = pg_conn(&self.pool)?;
+        let invite_id_uuid = ids::typed_uuid_part_or_panic(invite_id);
         sql_query(
-            "SELECT invite_id, space_id, inviter, invitee, invite_token, status, expires_at, created_at \
-             FROM space_invites WHERE invite_id = $1",
+            "SELECT id, space_id, inviter, invitee, invite_token, status, expires_at, created_at \
+             FROM space_invites WHERE id = $1",
         )
-        .bind::<Text, _>(invite_id)
+        .bind::<SqlUuid, _>(invite_id_uuid)
         .get_result::<SpaceInviteRow>(&mut conn)
         .optional()
         .map(|row| row.map(SpaceInviteRecord::from))
@@ -4012,11 +4045,13 @@ impl SpaceInviteStore for PgSpaceInviteStore {
 
     fn put(&self, record: SpaceInviteRecord) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool)?;
+        let invite_id_uuid = ids::typed_uuid_part_or_panic(&record.invite_id);
+        let space_id_uuid = ids::typed_uuid_part_or_panic(&record.space_id);
         sql_query(
             "INSERT INTO space_invites \
-             (invite_id, space_id, inviter, invitee, invite_token, status, expires_at, created_at) \
+             (id, space_id, inviter, invitee, invite_token, status, expires_at, created_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
-             ON CONFLICT (invite_id) DO UPDATE SET \
+             ON CONFLICT (id) DO UPDATE SET \
                 space_id = EXCLUDED.space_id, \
                 inviter = EXCLUDED.inviter, \
                 invitee = EXCLUDED.invitee, \
@@ -4024,8 +4059,8 @@ impl SpaceInviteStore for PgSpaceInviteStore {
                 status = EXCLUDED.status, \
                 expires_at = EXCLUDED.expires_at",
         )
-        .bind::<Text, _>(&record.invite_id)
-        .bind::<Text, _>(&record.space_id)
+        .bind::<SqlUuid, _>(invite_id_uuid)
+        .bind::<SqlUuid, _>(space_id_uuid)
         .bind::<Text, _>(&record.inviter)
         .bind::<Nullable<Text>, _>(&record.invitee)
         .bind::<Text, _>(&record.invite_token)
@@ -4040,8 +4075,8 @@ impl SpaceInviteStore for PgSpaceInviteStore {
     fn snapshot_all(&self) -> PersistenceResult<Vec<SpaceInviteRecord>> {
         let mut conn = pg_conn(&self.pool)?;
         sql_query(
-            "SELECT invite_id, space_id, inviter, invitee, invite_token, status, expires_at, created_at \
-             FROM space_invites ORDER BY created_at ASC, invite_id ASC",
+            "SELECT id, space_id, inviter, invitee, invite_token, status, expires_at, created_at \
+             FROM space_invites ORDER BY created_at ASC, id ASC",
         )
         .load::<SpaceInviteRow>(&mut conn)
         .map(|rows| rows.into_iter().map(SpaceInviteRecord::from).collect())
@@ -4437,10 +4472,10 @@ struct PgWebrtcSessionStore {
 
 #[derive(QueryableByName)]
 struct WebrtcSessionRow {
-    #[diesel(sql_type = Text)]
-    call_id: String,
-    #[diesel(sql_type = Text)]
-    space_id: String,
+    #[diesel(sql_type = SqlUuid)]
+    id: Uuid,
+    #[diesel(sql_type = SqlUuid)]
+    space_id: Uuid,
     #[diesel(sql_type = Text)]
     initiator_did: String,
     #[diesel(sql_type = Jsonb)]
@@ -4508,8 +4543,8 @@ impl WebrtcSessionRow {
             })
             .unwrap_or_default();
         Ok(WebrtcSessionRecord {
-            session_id: self.call_id,
-            space_id: self.space_id,
+            session_id: ids::format_typed_uuid("webrtc", &self.id),
+            space_id: ids::format_typed_uuid("space", &self.space_id),
             created_by: self.initiator_did,
             participants,
             expires_at: self.expires_at,
@@ -4544,19 +4579,21 @@ impl WebrtcSessionStore for PgWebrtcSessionStore {
         let mut conn = pg_conn(&self.pool)?;
         let signaling_state = webrtc_signaling_state(&record);
         let ice_config: Value = serde_json::json!({});
+        let session_id_uuid = ids::typed_uuid_part_or_panic(&record.session_id);
+        let space_id_uuid = ids::typed_uuid_part_or_panic(&record.space_id);
         sql_query(
             "INSERT INTO webrtc_sessions \
-             (call_id, space_id, initiator_did, ice_config, signaling_state, created_at, expires_at) \
+             (id, space_id, initiator_did, ice_config, signaling_state, created_at, expires_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7) \
-             ON CONFLICT (call_id) DO UPDATE SET \
+             ON CONFLICT (id) DO UPDATE SET \
                 space_id = EXCLUDED.space_id, \
                 initiator_did = EXCLUDED.initiator_did, \
                 ice_config = EXCLUDED.ice_config, \
                 signaling_state = EXCLUDED.signaling_state, \
                 expires_at = EXCLUDED.expires_at",
         )
-        .bind::<Text, _>(&record.session_id)
-        .bind::<Text, _>(&record.space_id)
+        .bind::<SqlUuid, _>(session_id_uuid)
+        .bind::<SqlUuid, _>(space_id_uuid)
         .bind::<Text, _>(&record.created_by)
         .bind::<Jsonb, _>(&ice_config)
         .bind::<Jsonb, _>(&signaling_state)
@@ -4569,11 +4606,12 @@ impl WebrtcSessionStore for PgWebrtcSessionStore {
 
     fn get(&self, session_id: &str) -> PersistenceResult<Option<WebrtcSessionRecord>> {
         let mut conn = pg_conn(&self.pool)?;
+        let session_id_uuid = ids::typed_uuid_part_or_panic(session_id);
         let row = sql_query(
-            "SELECT call_id, space_id, initiator_did, signaling_state, created_at, expires_at \
-             FROM webrtc_sessions WHERE call_id = $1",
+            "SELECT id, space_id, initiator_did, signaling_state, created_at, expires_at \
+             FROM webrtc_sessions WHERE id = $1",
         )
-        .bind::<Text, _>(session_id)
+        .bind::<SqlUuid, _>(session_id_uuid)
         .get_result::<WebrtcSessionRow>(&mut conn)
         .optional()
         .map_err(PersistenceError::from)?;
@@ -4585,8 +4623,9 @@ impl WebrtcSessionStore for PgWebrtcSessionStore {
 
     fn delete(&self, session_id: &str) -> PersistenceResult<bool> {
         let mut conn = pg_conn(&self.pool)?;
-        sql_query("DELETE FROM webrtc_sessions WHERE call_id = $1")
-            .bind::<Text, _>(session_id)
+        let session_id_uuid = ids::typed_uuid_part_or_panic(session_id);
+        sql_query("DELETE FROM webrtc_sessions WHERE id = $1")
+            .bind::<SqlUuid, _>(session_id_uuid)
             .execute(&mut conn)
             .map(|n| n > 0)
             .map_err(PersistenceError::from)
@@ -4880,8 +4919,8 @@ struct FederationTransactionRow {
     txn_id: String,
     #[diesel(sql_type = Text)]
     destination: String,
-    #[diesel(sql_type = Nullable<Text>)]
-    space_id: Option<String>,
+    #[diesel(sql_type = Nullable<SqlUuid>)]
+    space_id: Option<Uuid>,
     #[diesel(sql_type = Text)]
     content_digest: String,
     #[diesel(sql_type = Text)]
@@ -4900,7 +4939,7 @@ impl From<FederationTransactionRow> for FederationTransactionRecord {
             origin: row.origin,
             txn_id: row.txn_id,
             destination: row.destination,
-            space_id: row.space_id,
+            space_id: row.space_id.as_ref().map(|u| ids::format_typed_uuid("space", u)),
             content_digest: row.content_digest,
             status: row.status,
             response: row.response,

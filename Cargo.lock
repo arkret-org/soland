@@ -639,11 +639,8 @@ dependencies = [
  "contrix-api",
  "contrix-core",
  "contrix-signatures",
- "salvo",
  "serde",
  "serde_json",
- "serde_norway",
- "url",
 ]
 
 [[package]]

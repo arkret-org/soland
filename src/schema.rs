@@ -42,7 +42,7 @@ diesel::table! {
         source_service -> Text,
         txn_id -> Text,
         destination_service -> Text,
-        space_id -> Nullable<Text>,
+        space_id -> Nullable<Uuid>,
         status -> Text,
         content_digest -> Text,
         payload -> Jsonb,
@@ -72,7 +72,7 @@ diesel::table! {
 diesel::table! {
     multisig_pending (anchor_id) {
         anchor_id -> Text,
-        space_id -> Text,
+        space_id -> Uuid,
         threshold_k -> Int4,
         threshold_n -> Int4,
         members -> Array<Text>,
@@ -87,14 +87,14 @@ diesel::table! {
 }
 
 diesel::table! {
-    audit_logs (audit_id) {
-        audit_id -> Text,
+    audit_logs (id) {
+        id -> Uuid,
         actor -> Nullable<Text>,
-        request_id -> Nullable<Text>,
+        request_id -> Nullable<Uuid>,
         action -> Text,
         outcome -> Text,
-        space_id -> Nullable<Text>,
-        operation_id -> Nullable<Text>,
+        space_id -> Nullable<Uuid>,
+        operation_id -> Nullable<Uuid>,
         device_id -> Nullable<Text>,
         payload -> Jsonb,
         created_at -> Timestamptz,
@@ -116,11 +116,11 @@ diesel::table! {
 }
 
 diesel::table! {
-    canonical_events (event_id) {
-        event_id -> Text,
+    canonical_events (id) {
+        id -> Uuid,
         actor_id -> Text,
         actor_seq -> Int8,
-        space_id -> Nullable<Text>,
+        space_id -> Nullable<Uuid>,
         kind -> Text,
         schema_id -> Text,
         canonical_digest -> Text,
@@ -131,9 +131,9 @@ diesel::table! {
 }
 
 diesel::table! {
-    federation_operations (operation_id) {
-        operation_id -> Text,
-        space_id -> Text,
+    federation_operations (id) {
+        id -> Uuid,
+        space_id -> Uuid,
         object_type -> Text,
         object_id -> Nullable<Text>,
         operation_type -> Text,
@@ -143,24 +143,24 @@ diesel::table! {
 }
 
 diesel::table! {
-    moderation_reports (report_id) {
-        report_id -> Text,
+    moderation_reports (id) {
+        id -> Uuid,
         reporter -> Nullable<Text>,
         target_actor -> Nullable<Text>,
-        target_event_id -> Nullable<Text>,
-        space_id -> Nullable<Text>,
+        target_event_id -> Nullable<Uuid>,
+        space_id -> Nullable<Uuid>,
         payload -> Jsonb,
         created_at -> Timestamptz,
     }
 }
 
 diesel::table! {
-    moderation_actions (action_id) {
-        action_id -> Text,
+    moderation_actions (id) {
+        id -> Uuid,
         moderator -> Nullable<Text>,
         target_actor -> Nullable<Text>,
         action_kind -> Nullable<Text>,
-        space_id -> Nullable<Text>,
+        space_id -> Nullable<Uuid>,
         payload -> Jsonb,
         created_at -> Timestamptz,
     }
@@ -210,9 +210,9 @@ diesel::table! {
 }
 
 diesel::table! {
-    space_invites (invite_id) {
-        invite_id -> Text,
-        space_id -> Text,
+    space_invites (id) {
+        id -> Uuid,
+        space_id -> Uuid,
         inviter -> Text,
         invitee -> Nullable<Text>,
         invite_token -> Text,
@@ -229,7 +229,7 @@ diesel::table! {
         media_type -> Text,
         filename -> Nullable<Text>,
         uploaded_by -> Text,
-        space_id -> Nullable<Text>,
+        space_id -> Nullable<Uuid>,
         size_bytes -> Int8,
         storage_backend -> Text,
         storage_key -> Text,
@@ -254,9 +254,9 @@ diesel::table! {
 }
 
 diesel::table! {
-    webrtc_sessions (call_id) {
-        call_id -> Text,
-        space_id -> Text,
+    webrtc_sessions (id) {
+        id -> Uuid,
+        space_id -> Uuid,
         initiator_did -> Text,
         ice_config -> Jsonb,
         signaling_state -> Jsonb,
@@ -281,8 +281,8 @@ diesel::table! {
 }
 
 diesel::table! {
-    spaces (space_id) {
-        space_id -> Text,
+    spaces (id) {
+        id -> Uuid,
         title -> Text,
         summary -> Nullable<Text>,
         owner -> Nullable<Text>,
@@ -295,7 +295,7 @@ diesel::table! {
 
 diesel::table! {
     space_members (space_id, actor) {
-        space_id -> Text,
+        space_id -> Uuid,
         actor -> Text,
         membership -> Text,
         payload -> Jsonb,
@@ -306,26 +306,26 @@ diesel::table! {
 }
 
 diesel::table! {
-    events (event_id) {
-        event_id -> Text,
-        space_id -> Text,
+    events (id) {
+        id -> Uuid,
+        space_id -> Uuid,
         event_type -> Text,
         sender -> Nullable<Text>,
         thread_id -> Nullable<Text>,
-        operation_id -> Nullable<Text>,
+        operation_id -> Nullable<Uuid>,
         payload -> Jsonb,
         created_at -> Timestamptz,
     }
 }
 
 diesel::table! {
-    space_state_events (event_id) {
-        event_id -> Text,
-        space_id -> Text,
+    space_state_events (id) {
+        id -> Uuid,
+        space_id -> Uuid,
         event_type -> Text,
         subject -> Text,
         sender -> Nullable<Text>,
-        operation_id -> Nullable<Text>,
+        operation_id -> Nullable<Uuid>,
         payload -> Jsonb,
         created_at -> Timestamptz,
     }

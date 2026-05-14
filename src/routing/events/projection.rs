@@ -23,15 +23,17 @@
 use std::collections::HashSet;
 
 use contrix_sdk::{Did, Operation, OperationId, SpaceSearchEntry};
-use diesel::sql_types::{Jsonb, Nullable, Text, Timestamptz};
+use diesel::sql_types::{Jsonb, Nullable, Text, Timestamptz, Uuid as SqlUuid};
 use diesel::{QueryableByName, RunQueryDsl, sql_query};
 use serde_json::{Value, json};
+use uuid::Uuid;
 
 use super::{
     default_discussion_track, discussion_track_for_projection_event, flow_id_for_projection_event,
     flow_id_from_space_id, is_valid_discoverability, message_id_from_event_id, now, touch_space,
     validate_operation_policy, validate_operation_semantics,
 };
+use crate::ids;
 use crate::kinds;
 use crate::state::{AppState, MessageRecord, ProjectionEventRecord, SpaceMetaRecord};
 
@@ -44,10 +46,10 @@ pub struct ProjectedEventPage {
 
 #[derive(QueryableByName)]
 struct ProjectionEventRow {
-    #[diesel(sql_type = Text)]
-    event_id: String,
-    #[diesel(sql_type = Text)]
-    space_id: String,
+    #[diesel(sql_type = SqlUuid)]
+    event_id: Uuid,
+    #[diesel(sql_type = SqlUuid)]
+    space_id: Uuid,
     /// DB column is still `event_type` (M-01 schema rename is a separate
     /// migration tracked in `_todos.md` "DB schema follow-up"); SQL
     /// queries alias it as `event_kind` so the in-memory struct uses the
@@ -56,8 +58,8 @@ struct ProjectionEventRow {
     event_kind: String,
     #[diesel(sql_type = Text)]
     operation_type: String,
-    #[diesel(sql_type = Nullable<Text>)]
-    operation_id: Option<String>,
+    #[diesel(sql_type = Nullable<SqlUuid>)]
+    operation_id: Option<Uuid>,
     #[diesel(sql_type = Nullable<Text>)]
     sender: Option<String>,
     #[diesel(sql_type = Jsonb)]
@@ -333,24 +335,25 @@ pub fn load_projected_events_from_pg(
         return Ok(Vec::new());
     };
     let mut conn = pool.get()?;
+    let space_id_uuid = ids::typed_uuid_part_or_panic(space_id);
     let rows = sql_query(
-        "SELECT event_id, space_id, event_type AS event_kind, 'event' AS operation_type, operation_id, sender, payload, created_at \
+        "SELECT id AS event_id, space_id, event_type AS event_kind, 'event' AS operation_type, operation_id, sender, payload, created_at \
          FROM events WHERE space_id = $1 \
          UNION ALL \
-         SELECT event_id, space_id, event_type AS event_kind, 'state' AS operation_type, operation_id, sender, payload, created_at \
+         SELECT id AS event_id, space_id, event_type AS event_kind, 'state' AS operation_type, operation_id, sender, payload, created_at \
          FROM space_state_events WHERE space_id = $1 \
          ORDER BY created_at ASC, event_id ASC",
     )
-    .bind::<Text, _>(space_id)
+    .bind::<SqlUuid, _>(space_id_uuid)
     .load::<ProjectionEventRow>(&mut conn)?;
     Ok(rows
         .into_iter()
         .map(|row| ProjectionEventRecord {
-            event_id: row.event_id,
-            space_id: row.space_id,
+            event_id: ids::format_typed_uuid("event", &row.event_id),
+            space_id: ids::format_typed_uuid("space", &row.space_id),
             event_kind: row.event_kind,
             operation_type: row.operation_type,
-            operation_id: row.operation_id,
+            operation_id: row.operation_id.as_ref().map(|u| ids::format_typed_uuid("operation", u)),
             sender: row.sender,
             payload: row.payload,
             created_at: row.created_at,
@@ -528,10 +531,8 @@ pub fn persist_projected_operation(
             .and_then(|value| value.as_str())
             .map(ToOwned::to_owned)
             .unwrap_or_else(|| {
-                format!(
-                    "cx:event:{}",
-                    operation.operation_id.as_str().replace(':', "")
-                )
+                let op_uuid = ids::typed_uuid_part_or_panic(operation.operation_id.as_str());
+                ids::format_typed_uuid("event", &op_uuid)
             });
         let sender = operation
             .payload
@@ -542,17 +543,20 @@ pub fn persist_projected_operation(
             .payload
             .get("thread_id")
             .and_then(|value| value.as_str());
+        let event_id_uuid = ids::typed_uuid_part_or_panic(&event_id);
+        let space_id_uuid = ids::typed_uuid_part_or_panic(operation.space_id.as_str());
+        let operation_id_uuid = ids::typed_uuid_part_or_panic(operation.operation_id.as_str());
         sql_query(
-                "INSERT INTO events (event_id, space_id, event_type, sender, thread_id, operation_id, payload, created_at) \
+                "INSERT INTO events (id, space_id, event_type, sender, thread_id, operation_id, payload, created_at) \
                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
-                 ON CONFLICT (event_id) DO NOTHING",
+                 ON CONFLICT (id) DO NOTHING",
             )
-            .bind::<Text, _>(&event_id)
-            .bind::<Text, _>(operation.space_id.as_str())
+            .bind::<SqlUuid, _>(event_id_uuid)
+            .bind::<SqlUuid, _>(space_id_uuid)
             .bind::<Text, _>(&event_type)
             .bind::<Nullable<Text>, _>(Some(sender))
             .bind::<Nullable<Text>, _>(thread_id)
-            .bind::<Nullable<Text>, _>(Some(operation.operation_id.as_str()))
+            .bind::<Nullable<SqlUuid>, _>(Some(operation_id_uuid))
             .bind::<Jsonb, _>(&operation.payload)
             .bind::<Timestamptz, _>(operation.created_at)
             .execute(&mut conn)?;
@@ -586,12 +590,14 @@ pub fn persist_projected_operation(
                     "invite_only"
                 }
             });
+        let space_id_uuid = ids::typed_uuid_part_or_panic(operation.space_id.as_str());
+        let operation_id_uuid = ids::typed_uuid_part_or_panic(operation.operation_id.as_str());
         sql_query(
-                "INSERT INTO spaces (space_id, title, summary, owner, discoverability, payload, created_at, updated_at) \
+                "INSERT INTO spaces (id, title, summary, owner, discoverability, payload, created_at, updated_at) \
                  VALUES ($1, $2, $3, $4, $5, $6, $7, $7) \
-                 ON CONFLICT (space_id) DO UPDATE SET title = EXCLUDED.title, summary = EXCLUDED.summary, updated_at = EXCLUDED.updated_at",
+                 ON CONFLICT (id) DO UPDATE SET title = EXCLUDED.title, summary = EXCLUDED.summary, updated_at = EXCLUDED.updated_at",
             )
-            .bind::<Text, _>(operation.space_id.as_str())
+            .bind::<SqlUuid, _>(space_id_uuid)
             .bind::<Text, _>(title)
             .bind::<Nullable<Text>, _>(summary)
             .bind::<Nullable<Text>, _>(Some(origin))
@@ -615,7 +621,7 @@ pub fn persist_projected_operation(
                      VALUES ($1, $2, $3, $4, CASE WHEN $3 = 'join' THEN $5 ELSE NULL END, CASE WHEN $3 <> 'join' THEN $5 ELSE NULL END, $5) \
                      ON CONFLICT (space_id, actor) DO UPDATE SET membership = EXCLUDED.membership, payload = EXCLUDED.payload, left_at = EXCLUDED.left_at, updated_at = EXCLUDED.updated_at",
                 )
-                .bind::<Text, _>(operation.space_id.as_str())
+                .bind::<SqlUuid, _>(space_id_uuid)
                 .bind::<Text, _>(member)
                 .bind::<Text, _>(membership)
                 .bind::<Jsonb, _>(&operation.payload)
@@ -625,13 +631,15 @@ pub fn persist_projected_operation(
 
         // The DB column matches the canonical projection-cell key
         // model: `(space_id, event_type, subject)` identifies the cell.
+        // The space_state_events row reuses the operation_id as its primary
+        // key — same UUID, different typed wire form (operation vs event).
         sql_query(
-                "INSERT INTO space_state_events (event_id, space_id, event_type, subject, sender, operation_id, payload, created_at) \
+                "INSERT INTO space_state_events (id, space_id, event_type, subject, sender, operation_id, payload, created_at) \
                  VALUES ($1, $2, $3, $4, $5, $1, $6, $7) \
-                 ON CONFLICT (event_id) DO NOTHING",
+                 ON CONFLICT (id) DO NOTHING",
             )
-            .bind::<Text, _>(operation.operation_id.as_str())
-            .bind::<Text, _>(operation.space_id.as_str())
+            .bind::<SqlUuid, _>(operation_id_uuid)
+            .bind::<SqlUuid, _>(space_id_uuid)
             .bind::<Text, _>(&event_type)
             .bind::<Text, _>(
                 operation

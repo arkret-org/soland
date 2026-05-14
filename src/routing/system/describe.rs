@@ -113,7 +113,7 @@ pub(in crate::routing) async fn auth_bridge_describe() -> JsonResult<AuthBridgeD
         api_base_path: "/api/v1".to_owned(),
         auth: AuthBridgeAuthDescriptor {
             dev_login_path: "/api/v1/auth/dev-login".to_owned(),
-            session_grant_exchange_path: "legacy:/api/v1/auth/session-grant/exchange".to_owned(),
+            session_grant_exchange_path: "/api/v1/auth/session-grant/exchange".to_owned(),
             bearer_auth_scheme:
                 "Authorization: Bearer <coauth OAuth access token>; soland introspects it server-side"
                     .to_owned(),
