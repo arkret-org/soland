@@ -81,6 +81,9 @@ pub enum ErrorCode {
     ProjectionIncomplete,
     InternalError,
     TemporarilyUnavailable,
+    PolicyCombinationInvalid,
+    AnchorerRecoveryMissing,
+    UnsupportedLatticeType,
 }
 
 impl ErrorCode {
@@ -131,6 +134,9 @@ impl ErrorCode {
         Self::ProjectionIncomplete,
         Self::InternalError,
         Self::TemporarilyUnavailable,
+        Self::PolicyCombinationInvalid,
+        Self::AnchorerRecoveryMissing,
+        Self::UnsupportedLatticeType,
     ];
 
     /// Canonical wire-form code (snake_case string used in `ErrorEnvelope.errcode`).
@@ -182,6 +188,9 @@ impl ErrorCode {
             Self::ProjectionIncomplete => core_error::ERROR_CODE_PROJECTION_INCOMPLETE,
             Self::InternalError => core_error::ERROR_CODE_INTERNAL_ERROR,
             Self::TemporarilyUnavailable => core_error::ERROR_CODE_TEMPORARILY_UNAVAILABLE,
+            Self::PolicyCombinationInvalid => core_error::ERROR_CODE_POLICY_COMBINATION_INVALID,
+            Self::AnchorerRecoveryMissing => core_error::ERROR_CODE_ANCHORER_RECOVERY_MISSING,
+            Self::UnsupportedLatticeType => core_error::ERROR_CODE_UNSUPPORTED_LATTICE_TYPE,
         }
     }
 

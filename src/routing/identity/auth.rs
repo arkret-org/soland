@@ -62,7 +62,7 @@ async fn dev_login(
         return Err(AppError::not_found("endpoint not available"));
     }
     let body = body.into_inner();
-    if validate_did(&body.actor).is_err() || validate_device_id(&body.device_id).is_err() {
+    if validate_did(&body.actor).is_err() || body.device_id.trim().is_empty() {
         return Err(AppError::invalid_param(
             "actor must be a DID and device_id is required",
         ));
@@ -73,7 +73,29 @@ async fn dev_login(
         .get(&body.actor)
         .map_err(|error| AppError::internal(error.to_string()))?;
     if account.is_none() {
-        return Err(AppError::not_found("account is not registered"));
+        let synthetic_handle = handle_for_did(&body.actor);
+        let synthetic_display = body
+            .display_name
+            .clone()
+            .unwrap_or_else(|| synthetic_handle.trim_start_matches('@').to_owned());
+        let record = AccountRecord {
+            did: body.actor.clone(),
+            handle: normalize_handle(&synthetic_handle),
+            display_name: Some(synthetic_display),
+            created_at: now(),
+        };
+        state
+            .persistence
+            .accounts()
+            .put(&record)
+            .map_err(|error| AppError::internal(error.to_string()))?;
+        append_audit_log(
+            state,
+            Some(&body.actor),
+            "account.register",
+            json!({"handle": record.handle.clone(), "via": "dev_login"}),
+            "accepted",
+        );
     }
 
     let expires_at = now() + Duration::hours(12);

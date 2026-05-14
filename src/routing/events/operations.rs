@@ -61,9 +61,9 @@ const ENTITY_ID_FIELDS: &[&str] = &["entity_id", "id"];
 const ENTITY_TYPE_FIELDS: &[&str] = &["entity_type", "type"];
 const RELATION_ID_FIELDS: &[&str] = &["relation_id", "id"];
 const RELATION_KIND_FIELDS: &[&str] = &["relation_kind", "kind"];
-const RELATION_FROM_FIELDS: &[&str] = &["from", "from_entity_id"];
-const RELATION_TO_FIELDS: &[&str] = &["to", "to_entity_id"];
-const MEMBER_ACTOR_FIELDS: &[&str] = &["member", "actor", "sender"];
+const RELATION_FROM_FIELDS: &[&str] = &["from_ref", "from", "from_entity_id"];
+const RELATION_TO_FIELDS: &[&str] = &["to_ref", "to", "to_entity_id"];
+const MEMBER_ACTOR_FIELDS: &[&str] = &["actor_id", "member", "actor", "sender"];
 const READ_MARKER_ACTOR_FIELDS: &[&str] = &["actor", "sender"];
 
 const MESSAGE_CREATE_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::AnyOf(
