@@ -3,7 +3,7 @@
 //! Surfaces:
 //! - `POST /api/v1/auth/dev-login` — dev-mode bearer issue
 //! - direct OAuth bearer authentication — Matrix/Palpo-style validation through
-//!   coauth `/oauth2/introspect`
+//!   coauth `/oauth/introspect`
 //! - `POST /api/v1/auth/session-grant/exchange` — legacy coauth session-grant bridge
 //! - `POST /api/v1/auth/logout` — revoke the bearer + the bound device
 //!

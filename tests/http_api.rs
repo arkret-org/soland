@@ -249,7 +249,7 @@ async fn register_account(state: AppState, did: &str, handle: &str, device_id: &
 fn spawn_oauth_introspection_server() -> (String, std::thread::JoinHandle<String>) {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!(
-        "http://{}/oauth2/introspect",
+        "http://{}/oauth/introspect",
         listener.local_addr().unwrap()
     );
     let handle = std::thread::spawn(move || {

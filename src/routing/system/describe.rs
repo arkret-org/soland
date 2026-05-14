@@ -362,7 +362,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeResponse> {
                 service: "coauth".to_owned(),
                 purpose: "oauth_bearer_introspection".to_owned(),
                 required_contract: "oauth2.token_introspection.rfc7662".to_owned(),
-                discovery_path: "/oauth2/introspect".to_owned(),
+                discovery_path: "/oauth/introspect".to_owned(),
                 mode: "remote_service_contract".to_owned(),
             },
             IntegrationDependencyDescriptor {
@@ -441,7 +441,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeResponse> {
         ],
         examples: json!({
             "compose_flow": {
-                "step_1": {"service": "coauth", "path": "/oauth2/token", "method": "POST"},
+                "step_1": {"service": "coauth", "path": "/oauth/token", "method": "POST"},
                 "step_2": {"service": "soland", "path": "protected route", "method": "Authorization: Bearer <coauth access token>"},
                 "step_3": {"service": "soland", "path": "/api/v1/push/outbound/bridge/fetch", "method": "POST"},
                 "step_4": {"service": "soland", "path": "/api/v1/push/register-device", "method": "POST"}
