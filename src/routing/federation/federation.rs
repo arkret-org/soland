@@ -544,6 +544,7 @@ pub(super) async fn federation_anchors_push(
 /// Returns the list of peer URLs the broadcast targeted; the actual HTTP
 /// dispatch is fire-and-forget (best-effort) and runs on a background
 /// tokio task so the inbound write path never blocks on a slow peer.
+#[allow(dead_code)]
 pub fn broadcast_move_to_peers(state: &AppState, move_id: &str) -> Vec<String> {
     use crate::config::FederationPolicy;
     let peers: Vec<String> = match state.config.federation_policy {
@@ -573,6 +574,7 @@ pub fn broadcast_move_to_peers(state: &AppState, move_id: &str) -> Vec<String> {
 /// Symmetric helper for Anchor replication. The hub policy still pushes
 /// to a single upstream so the broadcast list is `[hub]`; mesh fans out
 /// to every peer.
+#[allow(dead_code)]
 pub fn broadcast_anchor_to_peers(state: &AppState, anchor_id: &str) -> Vec<String> {
     use crate::config::FederationPolicy;
     let peers: Vec<String> = match state.config.federation_policy {

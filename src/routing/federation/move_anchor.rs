@@ -40,17 +40,9 @@ pub(super) fn api_admin_router() -> Router {
     Router::with_path("admin/anchors/sign").post(admin_sign_anchor)
 }
 
-/// Public re-export of the shape-only verifier so the anchorer worker
-/// (`crate::anchorer`) can pass it to `apply_anchor` without duplicating
-/// the JWS shape rules.
-pub fn shape_only_jws_verifier_for_anchorer(
-    canonical_bytes: &[u8],
-    jws: &str,
-    verification_method: &str,
-    issuer: &str,
-) -> Result<(), String> {
-    verify_jws_shape(canonical_bytes, jws, verification_method, issuer)
-}
+// `shape_only_jws_verifier_for_anchorer` removed in round 7 — the anchorer
+// uses `select_jws_verifier` which switches between shape-only (dev mode)
+// and real ed25519 (production) based on `state.config.development_mode`.
 
 /// Pick the JWS verifier based on `config.development_mode`. Returns a
 /// closure of the exact type
