@@ -175,21 +175,7 @@ diesel::table! {
 }
 
 diesel::table! {
-    schemas (schema_id) {
-        schema_id -> Text,
-        kind -> Text,
-        version -> Text,
-        name -> Nullable<Text>,
-        owner -> Text,
-        definition -> Jsonb,
-        active -> Bool,
-        created_at -> Timestamptz,
-        updated_at -> Timestamptz,
-    }
-}
-
-diesel::table! {
-    identity_documents (did) {
+    webvh_documents (did) {
         did -> Text,
         did_document -> Jsonb,
         key_log_head -> Nullable<Text>,
@@ -200,7 +186,7 @@ diesel::table! {
 }
 
 diesel::table! {
-    identity_log_events (event_hash) {
+    webvh_log_events (event_hash) {
         event_hash -> Text,
         did -> Text,
         seq -> Int8,
@@ -354,9 +340,8 @@ diesel::allow_tables_to_appear_in_same_query!(
     moderation_reports,
     moderation_actions,
     presence,
-    schemas,
-    identity_documents,
-    identity_log_events,
+    webvh_documents,
+    webvh_log_events,
     space_invites,
     blobs,
     key_backups,

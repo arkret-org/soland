@@ -74,7 +74,7 @@ async fn send_device_messages(depot: &mut Depot, req: &mut Request, res: &mut Re
             return;
         }
         for (device_id, content) in devices {
-            if validate_device_id(device_id).is_err() {
+            if device_id.trim().is_empty() {
                 render_error(
                     res,
                     StatusCode::BAD_REQUEST,

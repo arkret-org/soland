@@ -402,7 +402,7 @@ pub fn sync_token_for_client_sync(
         "renderer": renderer,
         "facets": facets,
         "_filter_hash": sync_filter_hash(profile, filter, renderer, facets),
-        "_positions": {
+        "positions": {
             "spaces": spaces_positions,
             "devices": device_positions,
             "to_device": to_device_position
@@ -486,14 +486,14 @@ pub fn parse_and_validate_sync_cursor(
             "sync token filter hash does not match request filter",
         ));
     }
-    let positions_value = value.get("_positions").ok_or(SyncCursorError::Invalid(
-        "since cursor must contain _positions",
+    let positions_value = value.get("positions").ok_or(SyncCursorError::Invalid(
+        "since cursor must contain positions",
     ))?;
     let positions = positions_value
         .get("spaces")
         .and_then(|spaces| spaces.as_object())
         .ok_or(SyncCursorError::Invalid(
-            "since cursor must contain _positions.spaces",
+            "since cursor must contain positions.spaces",
         ))?
         .iter()
         .filter_map(|(space_id, position)| {
@@ -550,8 +550,13 @@ pub fn resolve_sync_cursor_to_event_id(
     let value = decode_sync_cursor_value(&cursor)
         .map_err(|_| "sync cursor is not a valid cx:cursor token")?;
     let checkpoint = value
-        .pointer("/_positions")
-        .and_then(|positions| positions.get(space_id))
+        .pointer("/positions")
+        .or_else(|| value.pointer("/_positions"))
+        .and_then(|positions| {
+            positions
+                .pointer(&format!("/spaces/{}", space_id))
+                .or_else(|| positions.get(space_id))
+        })
         .and_then(|position| position.as_i64());
     let Some(checkpoint) = checkpoint else {
         return Ok(None);
@@ -624,7 +629,7 @@ pub fn bound_cursor_with_positions(
         "_profile": profile,
         "_filter_hash": filter_hash,
         "_binding": binding,
-        "_positions": positions
+        "positions": positions
     });
     let bytes = contrix_sdk::canonical::canonical_json_bytes(&cursor)
         .unwrap_or_else(|_| cursor.to_string().into_bytes());

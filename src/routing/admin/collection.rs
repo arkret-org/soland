@@ -136,7 +136,7 @@ pub(super) async fn admin_collection(depot: &mut Depot, req: &mut Request, res: 
     body.insert("next_cursor".to_owned(), json!(next_cursor));
     body.insert(
         "production_gap".to_owned(),
-        json!("durable_cursor_pagination_and_high_risk_audit_signing"),
+        json!("admin_authorization_and_durable_pagination"),
     );
     res.render(Json(Value::Object(body)));
 }

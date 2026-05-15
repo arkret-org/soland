@@ -214,25 +214,7 @@ CREATE TABLE IF NOT EXISTS presence (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE TABLE IF NOT EXISTS schemas (
-    schema_id TEXT PRIMARY KEY,
-    kind TEXT NOT NULL,
-    version TEXT NOT NULL,
-    name TEXT,
-    owner TEXT NOT NULL,
-    definition JSONB NOT NULL,
-    active BOOLEAN NOT NULL DEFAULT TRUE,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE INDEX IF NOT EXISTS schemas_owner_idx
-    ON schemas (owner);
-
-CREATE INDEX IF NOT EXISTS schemas_kind_idx
-    ON schemas (kind);
-
-CREATE TABLE IF NOT EXISTS identity_documents (
+CREATE TABLE IF NOT EXISTS webvh_documents (
     did TEXT PRIMARY KEY,
     did_document JSONB NOT NULL,
     key_log_head TEXT,
@@ -241,7 +223,7 @@ CREATE TABLE IF NOT EXISTS identity_documents (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE TABLE IF NOT EXISTS identity_log_events (
+CREATE TABLE IF NOT EXISTS webvh_log_events (
     event_hash TEXT PRIMARY KEY,
     did TEXT NOT NULL,
     seq BIGINT NOT NULL,
@@ -250,8 +232,8 @@ CREATE TABLE IF NOT EXISTS identity_log_events (
     UNIQUE (did, seq)
 );
 
-CREATE INDEX IF NOT EXISTS identity_log_events_did_seq_idx
-    ON identity_log_events (did, seq);
+CREATE INDEX IF NOT EXISTS webvh_log_events_did_seq_idx
+    ON webvh_log_events (did, seq);
 
 CREATE TABLE IF NOT EXISTS space_invites (
     id UUID PRIMARY KEY,

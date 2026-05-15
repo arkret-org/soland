@@ -6,7 +6,6 @@ mod reaction;
 mod read_marker;
 mod relation;
 mod repo;
-mod schema;
 pub(super) mod space;
 
 use super::{
@@ -29,16 +28,6 @@ pub fn router() -> Router {
         )
         .push(Router::with_path("receipts/read").post(read_marker::send_read_receipt))
         .push(relation::router())
-        .push(
-            Router::with_path("schemas")
-                .get(schema::list_schemas)
-                .post(schema::register_schema),
-        )
-        .push(
-            Router::with_path("schemas/{schema_id}")
-                .get(schema::get_schema)
-                .delete(schema::delete_schema),
-        )
         .push(directory::router())
         .push(index::router())
         .push(repo::router())

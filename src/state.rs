@@ -6,11 +6,10 @@ use arc_swap::ArcSwap;
 use contrix_sdk::identity::CompositeDidResolver;
 use contrix_sdk::{Did, SpaceId, SpaceSearchEntry, SpaceSearchIndex};
 use ed25519_dalek::SigningKey;
-use serde_json::{Value, json};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 use tokio::sync::broadcast;
 
-use crate::artifacts;
 use crate::authz::AuthzEngine;
 use crate::config::{AnchorerSigningKeyOrigin, AppConfig};
 use crate::db::Db;
@@ -205,7 +204,7 @@ pub struct AccountRecord {
 }
 
 #[derive(Clone, Debug)]
-pub struct IdentityDocumentRecord {
+pub struct WebvhDocumentRecord {
     pub did: String,
     pub did_document: Value,
     pub key_log_head: Option<String>,
@@ -215,7 +214,7 @@ pub struct IdentityDocumentRecord {
 }
 
 #[derive(Clone, Debug)]
-pub struct IdentityLogRecord {
+pub struct WebvhLogRecord {
     pub event_hash: String,
     pub did: String,
     pub seq: u64,
@@ -250,19 +249,6 @@ pub struct SpaceMetaRecord {
     pub deleted: bool,
     pub discoverability: String,
     pub plaintext_visible_services: BTreeSet<String>,
-    pub created_at: chrono::DateTime<chrono::Utc>,
-    pub updated_at: chrono::DateTime<chrono::Utc>,
-}
-
-#[derive(Clone, Debug)]
-pub struct SchemaRecord {
-    pub schema_id: String,
-    pub kind: String,
-    pub version: String,
-    pub name: Option<String>,
-    pub owner: String,
-    pub definition: Value,
-    pub active: bool,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
@@ -556,12 +542,6 @@ impl AppState {
             tracing::warn!(%error, "failed to seed demo space metadata into persistence store");
         }
 
-        for record in core_schema_records(now, &service_did).into_values() {
-            if let Err(error) = persistence.schemas().put(record) {
-                tracing::warn!(%error, "failed to seed core schema into persistence store");
-            }
-        }
-
         // Build the production DID resolver chain before the struct literal
         // so we can still
         // borrow `&config` for the helper before `config` itself is
@@ -665,159 +645,6 @@ impl AppState {
             anchorer_signing_key_origin,
         }
     }
-}
-
-fn core_schema_records(
-    now: chrono::DateTime<chrono::Utc>,
-    service_did: &str,
-) -> BTreeMap<String, SchemaRecord> {
-    let mut records = artifacts::schema_entries()
-        .iter()
-        .map(|entry| {
-            let kind = schema_kind_from_id(&entry.schema_id);
-            (
-                entry.schema_id.clone(),
-                SchemaRecord {
-                    schema_id: entry.schema_id.clone(),
-                    kind,
-                    version: schema_version_from_id(&entry.schema_id),
-                    name: Some(schema_name_from_id(&entry.schema_id)),
-                    owner: service_did.to_owned(),
-                    definition: json!({
-                        "$id": entry.schema_id.clone(),
-                        "$schema": "https://json-schema.org/draft/2020-12/schema",
-                        "type": "object",
-                        "additionalProperties": true,
-                        "x-contrix-artifact": {
-                            "source": "contrix-spec/spec/v1/artifacts",
-                            "file": entry.file.clone()
-                        }
-                    }),
-                    active: true,
-                    created_at: now,
-                    updated_at: now,
-                },
-            )
-        })
-        .collect::<BTreeMap<_, _>>();
-
-    for (schema_id, kind, name) in [
-        ("cx.schema.space.v1", "space", "Space object"),
-        ("cx.schema.flow.v1", "flow", "Flow object"),
-        ("cx.schema.place.v1", "place", "Place object"),
-        ("cx.schema.morph.v1", "morph", "Morph object"),
-        ("cx.schema.relation.v1", "relation", "Relation object"),
-        ("cx.schema.view.v1", "view", "View object"),
-        ("cx.schema.event.message.v1", "event", "Message event"),
-        ("cx.schema.event.reaction.v1", "event", "Reaction event"),
-        ("cx.schema.event.redaction.v1", "event", "Redaction event"),
-        (
-            "cx.schema.operation.message_create.v1",
-            "operation",
-            "Message create operation",
-        ),
-        (
-            "cx.schema.operation.message_revise.v1",
-            "operation",
-            "Message revise operation",
-        ),
-        (
-            "cx.schema.operation.redaction.v1",
-            "operation",
-            "Redaction operation",
-        ),
-        (
-            "cx.schema.operation.reaction.v1",
-            "operation",
-            "Reaction operation",
-        ),
-        (
-            "cx.schema.operation.relation_create.v1",
-            "operation",
-            "Relation create operation",
-        ),
-        (
-            "cx.schema.operation.relation_mutation.v1",
-            "operation",
-            "Relation mutation operation",
-        ),
-        (
-            "cx.schema.operation.container_move_item.v1",
-            "operation",
-            "Container move item operation",
-        ),
-        (
-            "cx.schema.operation.container_rebalance.v1",
-            "operation",
-            "Container rebalance operation",
-        ),
-        (
-            "cx.schema.operation.membership.v1",
-            "operation",
-            "Membership operation",
-        ),
-        (
-            "cx.schema.operation.space_lifecycle.v1",
-            "operation",
-            "Space lifecycle operation",
-        ),
-        (
-            "cx.schema.operation.read_marker.v1",
-            "operation",
-            "Read marker operation",
-        ),
-        ("cx.schema.cursor.v1", "cursor", "Cursor envelope"),
-        ("cx.schema.grant.v1", "grant", "Capability grant"),
-        (
-            "cx.schema.encrypted_envelope.v1",
-            "envelope",
-            "Encrypted payload envelope",
-        ),
-    ] {
-        records
-            .entry(schema_id.to_owned())
-            .or_insert_with(|| SchemaRecord {
-                schema_id: schema_id.to_owned(),
-                kind: kind.to_owned(),
-                version: "1".to_owned(),
-                name: Some(name.to_owned()),
-                owner: service_did.to_owned(),
-                definition: json!({
-                    "$id": schema_id,
-                    "type": "object",
-                    "additionalProperties": true
-                }),
-                active: true,
-                created_at: now,
-                updated_at: now,
-            });
-    }
-
-    records
-}
-
-fn schema_kind_from_id(schema_id: &str) -> String {
-    schema_id
-        .strip_prefix("cx.schema.")
-        .and_then(|rest| rest.strip_suffix(".v1").or(Some(rest)))
-        .and_then(|rest| rest.split(['.', '_']).next())
-        .filter(|kind| !kind.is_empty())
-        .unwrap_or("schema")
-        .to_owned()
-}
-
-fn schema_version_from_id(schema_id: &str) -> String {
-    schema_id
-        .rsplit_once(".v")
-        .map(|(_, version)| version.to_owned())
-        .unwrap_or_else(|| "1".to_owned())
-}
-
-fn schema_name_from_id(schema_id: &str) -> String {
-    schema_id
-        .strip_prefix("cx.schema.")
-        .unwrap_or(schema_id)
-        .replace(['.', '_'], " ")
 }
 
 /// Fill `out` with cryptographically secure random bytes via

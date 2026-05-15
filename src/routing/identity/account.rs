@@ -61,7 +61,7 @@ async fn account_register(
         return Err(AppError::invalid_param("invalid handle"));
     }
     if let Some(device_id) = body.device_id.as_deref()
-        && validate_device_id(device_id).is_err()
+        && device_id.trim().is_empty()
     {
         return Err(AppError::invalid_param("invalid device_id"));
     }

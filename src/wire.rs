@@ -345,38 +345,6 @@ pub struct SetTypingResponse {
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct RegisterSchemaRequest {
-    pub schema_id: String,
-    pub kind: String,
-    pub version: String,
-    #[serde(default)]
-    pub name: Option<String>,
-    #[serde(default)]
-    pub definition: Value,
-    #[serde(default = "default_true")]
-    pub active: bool,
-}
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct SchemaResponse {
-    pub schema_id: String,
-    pub kind: String,
-    pub version: String,
-    pub name: Option<String>,
-    pub owner: String,
-    pub definition: Value,
-    pub active: bool,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct SchemasResponse {
-    pub schemas: Vec<SchemaResponse>,
-    pub next_cursor: Option<String>,
-}
-
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct SearchSpacesRequest {
     pub query: Option<String>,
     pub limit: Option<usize>,
@@ -1065,25 +1033,6 @@ pub struct IdentityResolveRequest {
     pub did: String,
     #[serde(default)]
     pub include: Vec<String>,
-}
-
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct SubmitDidOperationRequest {
-    pub did: String,
-    pub seq: u64,
-    #[serde(default)]
-    pub prev_event_hash: Option<String>,
-    pub patch: Value,
-    #[serde(default)]
-    pub proofs: Vec<Value>,
-}
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct SubmitDidOperationResponse {
-    pub status: String,
-    pub head_event_hash: String,
-    pub seq: u64,
-    pub receipts: Vec<Value>,
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]

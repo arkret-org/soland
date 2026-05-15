@@ -183,10 +183,9 @@ pub fn validate_no_removed_legacy_contracts(value: &serde_json::Value) -> Result
 }
 
 pub fn validate_operation_semantics(
-    state: &AppState,
+    _state: &AppState,
     operations: &[Operation],
 ) -> Result<(), &'static str> {
-    let schemas = state.persistence.schemas();
     for operation in operations {
         operation
             .validate_payload_object()
@@ -207,14 +206,6 @@ pub fn validate_operation_semantics(
         let Some(schema) = operation_schema_for_kind(kind) else {
             return Err("unregistered operation kind");
         };
-        let registered = schemas
-            .get(schema.schema_id)
-            .ok()
-            .flatten()
-            .is_some_and(|record| record.active && record.kind == "operation");
-        if !registered {
-            return Err("operation schema is not registered");
-        }
         validate_operation_schema(operation, schema)?;
     }
     Ok(())

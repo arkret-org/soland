@@ -89,7 +89,7 @@ impl LocalIdentityResolver {
         }
         let Some(record) = self
             .persistence
-            .identity()
+            .webvh()
             .get_document(did.as_str())
             .map_err(|e| Error::Protocol(format!("local DID store read failed: {e}")))?
         else {

@@ -45,10 +45,9 @@ async fn device_pairing_challenge(
     let device_id = body
         .get("device_id")
         .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
         .ok_or_else(|| AppError::missing_param("device_id is required"))?;
-    if validate_device_id(device_id).is_err() {
-        return Err(AppError::invalid_param("invalid device_id"));
-    }
     let challenge_id = ids::generate("device_pairing");
     let expires_at = now() + chrono::Duration::minutes(5);
     let nonce = ids::generate("nonce");
@@ -105,10 +104,9 @@ async fn device_authorize_pairing(
     let device_id = body
         .get("device_id")
         .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
         .ok_or_else(|| AppError::missing_param("device_id is required"))?;
-    if validate_device_id(device_id).is_err() {
-        return Err(AppError::invalid_param("invalid device_id"));
-    }
     let challenge_id = body
         .get("challenge_id")
         .and_then(|value| value.as_str())

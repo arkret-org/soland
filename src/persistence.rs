@@ -20,9 +20,9 @@ use crate::db::PgPool;
 use crate::ids;
 use crate::state::{
     AccountRecord, BlobRecord, CanonicalEventRecord, ContactRecord, DeviceInventoryRecord,
-    DeviceMessageRecord, FederationTransactionRecord, IdentityDocumentRecord, IdentityLogRecord,
+    DeviceMessageRecord, FederationTransactionRecord, WebvhDocumentRecord, WebvhLogRecord,
     MessageRecord, MultisigPendingRecord, OutboundPushBridgeCacheRecord, PolicyDocumentRecord,
-    PresenceRecord, ProjectionEventRecord, PushRuleRecord, SchemaRecord, SessionRecord,
+    PresenceRecord, ProjectionEventRecord, PushRuleRecord, SessionRecord,
     SpaceInviteRecord, SpaceMetaRecord, TypingRecord, WebrtcSessionRecord, WebrtcSignalRecord,
 };
 
@@ -285,26 +285,17 @@ pub struct WebrtcAppendSignal {
     pub seq: u64,
 }
 
-/// Schema registry. Wraps `cx.schema.*` definitions; today both seeded and
-/// owner-registered schemas live here.
-pub trait SchemaStore: Send + Sync {
-    fn get(&self, schema_id: &str) -> PersistenceResult<Option<SchemaRecord>>;
-    fn put(&self, record: SchemaRecord) -> PersistenceResult<()>;
-    fn delete(&self, schema_id: &str) -> PersistenceResult<bool>;
-    fn snapshot_all(&self) -> PersistenceResult<Vec<SchemaRecord>>;
-}
-
 /// DID documents + their key-log events. The two are coupled: every accepted
 /// `submit_did_operation` writes a document and appends a log entry.
-pub trait IdentityStore: Send + Sync {
-    fn get_document(&self, did: &str) -> PersistenceResult<Option<IdentityDocumentRecord>>;
+pub trait WebvhStore: Send + Sync {
+    fn get_document(&self, did: &str) -> PersistenceResult<Option<WebvhDocumentRecord>>;
     fn get_embedded_webvh_document_by_local_id(
         &self,
         local_id: &str,
-    ) -> PersistenceResult<Option<IdentityDocumentRecord>>;
-    fn put_document(&self, record: IdentityDocumentRecord) -> PersistenceResult<()>;
-    fn append_log_event(&self, event: IdentityLogRecord) -> PersistenceResult<()>;
-    fn list_log_events(&self, did: &str) -> PersistenceResult<Vec<IdentityLogRecord>>;
+    ) -> PersistenceResult<Option<WebvhDocumentRecord>>;
+    fn put_document(&self, record: WebvhDocumentRecord) -> PersistenceResult<()>;
+    fn append_log_event(&self, event: WebvhLogRecord) -> PersistenceResult<()>;
+    fn list_log_events(&self, did: &str) -> PersistenceResult<Vec<WebvhLogRecord>>;
 }
 
 /// Space invite tokens.
@@ -530,8 +521,7 @@ pub trait PersistenceStore: Send + Sync {
     fn push_bridge_cache(&self) -> &dyn PushBridgeCacheStore;
     fn webrtc(&self) -> &dyn WebrtcSessionStore;
     fn policy_documents(&self) -> &dyn PolicyDocumentStore;
-    fn schemas(&self) -> &dyn SchemaStore;
-    fn identity(&self) -> &dyn IdentityStore;
+    fn webvh(&self) -> &dyn WebvhStore;
     fn space_invites(&self) -> &dyn SpaceInviteStore;
     fn events(&self) -> &dyn EventStore;
     fn projection_events(&self) -> &dyn ProjectionEventStore;
@@ -562,8 +552,7 @@ pub struct MemoryPersistenceStore {
     push_bridge_cache: MemoryPushBridgeCacheStore,
     webrtc: MemoryWebrtcSessionStore,
     policy_documents: MemoryPolicyDocumentStore,
-    schemas: MemorySchemaStore,
-    identity: MemoryIdentityStore,
+    webvh: MemoryWebvhStore,
     space_invites: MemorySpaceInviteStore,
     events: MemoryEventStore,
     projection_events: MemoryProjectionEventStore,
@@ -595,8 +584,7 @@ impl MemoryPersistenceStore {
             push_bridge_cache: MemoryPushBridgeCacheStore::new(),
             webrtc: MemoryWebrtcSessionStore::new(),
             policy_documents: MemoryPolicyDocumentStore::new(),
-            schemas: MemorySchemaStore::new(),
-            identity: MemoryIdentityStore::new(),
+            webvh: MemoryWebvhStore::new(),
             space_invites: MemorySpaceInviteStore::new(),
             events: MemoryEventStore::new(),
             projection_events: MemoryProjectionEventStore::new(),
@@ -688,12 +676,8 @@ impl PersistenceStore for MemoryPersistenceStore {
         &self.policy_documents
     }
 
-    fn schemas(&self) -> &dyn SchemaStore {
-        &self.schemas
-    }
-
-    fn identity(&self) -> &dyn IdentityStore {
-        &self.identity
+    fn webvh(&self) -> &dyn WebvhStore {
+        &self.webvh
     }
 
     fn space_invites(&self) -> &dyn SpaceInviteStore {
@@ -1758,70 +1742,23 @@ impl PolicyDocumentStore for MemoryPolicyDocumentStore {
 // ── Phase 2 in-memory sub-stores ────────────────────────────────────────────
 
 #[derive(Default)]
-struct MemorySchemaStore {
-    data: Mutex<BTreeMap<String, SchemaRecord>>,
+struct MemoryWebvhStore {
+    documents: Mutex<BTreeMap<String, WebvhDocumentRecord>>,
+    log: Mutex<BTreeMap<String, Vec<WebvhLogRecord>>>,
 }
 
-impl MemorySchemaStore {
+impl MemoryWebvhStore {
     fn new() -> Self {
         Self::default()
     }
 }
 
-impl SchemaStore for MemorySchemaStore {
-    fn get(&self, schema_id: &str) -> PersistenceResult<Option<SchemaRecord>> {
-        Ok(self
-            .data
-            .lock()
-            .expect("schemas lock")
-            .get(schema_id)
-            .cloned())
-    }
-
-    fn put(&self, record: SchemaRecord) -> PersistenceResult<()> {
-        let id = record.schema_id.clone();
-        self.data.lock().expect("schemas lock").insert(id, record);
-        Ok(())
-    }
-
-    fn delete(&self, schema_id: &str) -> PersistenceResult<bool> {
-        Ok(self
-            .data
-            .lock()
-            .expect("schemas lock")
-            .remove(schema_id)
-            .is_some())
-    }
-
-    fn snapshot_all(&self) -> PersistenceResult<Vec<SchemaRecord>> {
-        Ok(self
-            .data
-            .lock()
-            .expect("schemas lock")
-            .values()
-            .cloned()
-            .collect())
-    }
-}
-
-#[derive(Default)]
-struct MemoryIdentityStore {
-    documents: Mutex<BTreeMap<String, IdentityDocumentRecord>>,
-    log: Mutex<BTreeMap<String, Vec<IdentityLogRecord>>>,
-}
-
-impl MemoryIdentityStore {
-    fn new() -> Self {
-        Self::default()
-    }
-}
-
-impl IdentityStore for MemoryIdentityStore {
-    fn get_document(&self, did: &str) -> PersistenceResult<Option<IdentityDocumentRecord>> {
+impl WebvhStore for MemoryWebvhStore {
+    fn get_document(&self, did: &str) -> PersistenceResult<Option<WebvhDocumentRecord>> {
         Ok(self
             .documents
             .lock()
-            .expect("identity documents lock")
+            .expect("webvh documents lock")
             .get(did)
             .cloned())
     }
@@ -1829,11 +1766,11 @@ impl IdentityStore for MemoryIdentityStore {
     fn get_embedded_webvh_document_by_local_id(
         &self,
         local_id: &str,
-    ) -> PersistenceResult<Option<IdentityDocumentRecord>> {
+    ) -> PersistenceResult<Option<WebvhDocumentRecord>> {
         Ok(self
             .documents
             .lock()
-            .expect("identity documents lock")
+            .expect("webvh documents lock")
             .values()
             .find(|record| {
                 record
@@ -1850,31 +1787,31 @@ impl IdentityStore for MemoryIdentityStore {
             .cloned())
     }
 
-    fn put_document(&self, record: IdentityDocumentRecord) -> PersistenceResult<()> {
+    fn put_document(&self, record: WebvhDocumentRecord) -> PersistenceResult<()> {
         let did = record.did.clone();
         self.documents
             .lock()
-            .expect("identity documents lock")
+            .expect("webvh documents lock")
             .insert(did, record);
         Ok(())
     }
 
-    fn append_log_event(&self, event: IdentityLogRecord) -> PersistenceResult<()> {
+    fn append_log_event(&self, event: WebvhLogRecord) -> PersistenceResult<()> {
         let did = event.did.clone();
         self.log
             .lock()
-            .expect("identity log lock")
+            .expect("webvh log lock")
             .entry(did)
             .or_default()
             .push(event);
         Ok(())
     }
 
-    fn list_log_events(&self, did: &str) -> PersistenceResult<Vec<IdentityLogRecord>> {
+    fn list_log_events(&self, did: &str) -> PersistenceResult<Vec<WebvhLogRecord>> {
         Ok(self
             .log
             .lock()
-            .expect("identity log lock")
+            .expect("webvh log lock")
             .get(did)
             .cloned()
             .unwrap_or_default())
@@ -2372,8 +2309,7 @@ pub struct PgPersistenceStore {
     federation_operations: PgFederationOperationsStore,
     moderation: PgModerationStore,
     presence: PgPresenceStore,
-    schemas: PgSchemaStore,
-    identity: PgIdentityStore,
+    webvh: PgWebvhStore,
     space_invites: PgSpaceInviteStore,
     key_backups: PgKeyBackupStore,
     webrtc: PgWebrtcSessionStore,
@@ -2396,8 +2332,7 @@ impl PgPersistenceStore {
             federation_operations: PgFederationOperationsStore { pool: pool.clone() },
             moderation: PgModerationStore { pool: pool.clone() },
             presence: PgPresenceStore { pool: pool.clone() },
-            schemas: PgSchemaStore { pool: pool.clone() },
-            identity: PgIdentityStore { pool: pool.clone() },
+            webvh: PgWebvhStore { pool: pool.clone() },
             space_invites: PgSpaceInviteStore { pool: pool.clone() },
             key_backups: PgKeyBackupStore { pool: pool.clone() },
             webrtc: PgWebrtcSessionStore { pool: pool.clone() },
@@ -2480,12 +2415,8 @@ impl PersistenceStore for PgPersistenceStore {
         &self.policy_documents
     }
 
-    fn schemas(&self) -> &dyn SchemaStore {
-        &self.schemas
-    }
-
-    fn identity(&self) -> &dyn IdentityStore {
-        &self.identity
+    fn webvh(&self) -> &dyn WebvhStore {
+        &self.webvh
     }
 
     fn space_invites(&self) -> &dyn SpaceInviteStore {
@@ -3574,7 +3505,7 @@ impl FederationOperationsStore for PgFederationOperationsStore {
 
 // ── Round 26 — Pg-backed wire-facing sub-stores ───────────────────────────
 //
-// ModerationStore / PresenceStore / SchemaStore / IdentityStore /
+// ModerationStore / PresenceStore / WebvhStore /
 // SpaceInviteStore. Each follows the same pattern as the round 24/25 stores:
 // a typed-column header (extracted from the JSON payload where applicable)
 // plus the full canonical envelope in a JSONB column. The trait surface
@@ -3735,118 +3666,12 @@ impl PresenceStore for PgPresenceStore {
     }
 }
 
-struct PgSchemaStore {
+struct PgWebvhStore {
     pool: PgPool,
 }
 
 #[derive(QueryableByName)]
-struct SchemaRow {
-    #[diesel(sql_type = Text)]
-    schema_id: String,
-    #[diesel(sql_type = Text)]
-    kind: String,
-    #[diesel(sql_type = Text)]
-    version: String,
-    #[diesel(sql_type = Nullable<Text>)]
-    name: Option<String>,
-    #[diesel(sql_type = Text)]
-    owner: String,
-    #[diesel(sql_type = Jsonb)]
-    definition: Value,
-    #[diesel(sql_type = Bool)]
-    active: bool,
-    #[diesel(sql_type = Timestamptz)]
-    created_at: chrono::DateTime<chrono::Utc>,
-    #[diesel(sql_type = Timestamptz)]
-    updated_at: chrono::DateTime<chrono::Utc>,
-}
-
-impl From<SchemaRow> for SchemaRecord {
-    fn from(row: SchemaRow) -> Self {
-        Self {
-            schema_id: row.schema_id,
-            kind: row.kind,
-            version: row.version,
-            name: row.name,
-            owner: row.owner,
-            definition: row.definition,
-            active: row.active,
-            created_at: row.created_at,
-            updated_at: row.updated_at,
-        }
-    }
-}
-
-impl SchemaStore for PgSchemaStore {
-    fn get(&self, schema_id: &str) -> PersistenceResult<Option<SchemaRecord>> {
-        let mut conn = pg_conn(&self.pool)?;
-        sql_query(
-            "SELECT schema_id, kind, version, name, owner, definition, active, created_at, updated_at \
-             FROM schemas WHERE schema_id = $1",
-        )
-        .bind::<Text, _>(schema_id)
-        .get_result::<SchemaRow>(&mut conn)
-        .optional()
-        .map(|row| row.map(SchemaRecord::from))
-        .map_err(PersistenceError::from)
-    }
-
-    fn put(&self, record: SchemaRecord) -> PersistenceResult<()> {
-        let mut conn = pg_conn(&self.pool)?;
-        sql_query(
-            "INSERT INTO schemas \
-             (schema_id, kind, version, name, owner, definition, active, created_at, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
-             ON CONFLICT (schema_id) DO UPDATE SET \
-                kind = EXCLUDED.kind, \
-                version = EXCLUDED.version, \
-                name = EXCLUDED.name, \
-                owner = EXCLUDED.owner, \
-                definition = EXCLUDED.definition, \
-                active = EXCLUDED.active, \
-                updated_at = EXCLUDED.updated_at",
-        )
-        .bind::<Text, _>(&record.schema_id)
-        .bind::<Text, _>(&record.kind)
-        .bind::<Text, _>(&record.version)
-        .bind::<Nullable<Text>, _>(&record.name)
-        .bind::<Text, _>(&record.owner)
-        .bind::<Jsonb, _>(&record.definition)
-        .bind::<Bool, _>(record.active)
-        .bind::<Timestamptz, _>(record.created_at)
-        .bind::<Timestamptz, _>(record.updated_at)
-        .execute(&mut conn)
-        .map(|_| ())
-        .map_err(PersistenceError::from)
-    }
-
-    fn delete(&self, schema_id: &str) -> PersistenceResult<bool> {
-        let mut conn = pg_conn(&self.pool)?;
-        sql_query("DELETE FROM schemas WHERE schema_id = $1")
-            .bind::<Text, _>(schema_id)
-            .execute(&mut conn)
-            .map(|affected| affected > 0)
-            .map_err(PersistenceError::from)
-    }
-
-    fn snapshot_all(&self) -> PersistenceResult<Vec<SchemaRecord>> {
-        let mut conn = pg_conn(&self.pool)?;
-        sql_query(
-            "SELECT schema_id, kind, version, name, owner, definition, active, created_at, updated_at \
-             FROM schemas ORDER BY schema_id ASC",
-        )
-        .load::<SchemaRow>(&mut conn)
-        .map(|rows| rows.into_iter().map(SchemaRecord::from).collect())
-        .map_err(PersistenceError::from)
-    }
-}
-
-struct PgIdentityStore {
-    pool: PgPool,
-}
-
-#[derive(QueryableByName)]
-struct IdentityDocumentRow {
+struct WebvhDocumentRow {
     #[diesel(sql_type = Text)]
     did: String,
     #[diesel(sql_type = Jsonb)]
@@ -3861,8 +3686,8 @@ struct IdentityDocumentRow {
     updated_at: chrono::DateTime<chrono::Utc>,
 }
 
-impl From<IdentityDocumentRow> for IdentityDocumentRecord {
-    fn from(row: IdentityDocumentRow) -> Self {
+impl From<WebvhDocumentRow> for WebvhDocumentRecord {
+    fn from(row: WebvhDocumentRow) -> Self {
         Self {
             did: row.did,
             did_document: row.did_document,
@@ -3875,7 +3700,7 @@ impl From<IdentityDocumentRow> for IdentityDocumentRecord {
 }
 
 #[derive(QueryableByName)]
-struct IdentityLogRow {
+struct WebvhLogRow {
     #[diesel(sql_type = Text)]
     event_hash: String,
     #[diesel(sql_type = Text)]
@@ -3888,8 +3713,8 @@ struct IdentityLogRow {
     created_at: chrono::DateTime<chrono::Utc>,
 }
 
-impl From<IdentityLogRow> for IdentityLogRecord {
-    fn from(row: IdentityLogRow) -> Self {
+impl From<WebvhLogRow> for WebvhLogRecord {
+    fn from(row: WebvhLogRow) -> Self {
         Self {
             event_hash: row.event_hash,
             did: row.did,
@@ -3900,44 +3725,44 @@ impl From<IdentityLogRow> for IdentityLogRecord {
     }
 }
 
-impl IdentityStore for PgIdentityStore {
-    fn get_document(&self, did: &str) -> PersistenceResult<Option<IdentityDocumentRecord>> {
+impl WebvhStore for PgWebvhStore {
+    fn get_document(&self, did: &str) -> PersistenceResult<Option<WebvhDocumentRecord>> {
         let mut conn = pg_conn(&self.pool)?;
         sql_query(
             "SELECT did, did_document, key_log_head, seq, method_evidence, updated_at \
-             FROM identity_documents WHERE did = $1",
+             FROM webvh_documents WHERE did = $1",
         )
         .bind::<Text, _>(did)
-        .get_result::<IdentityDocumentRow>(&mut conn)
+        .get_result::<WebvhDocumentRow>(&mut conn)
         .optional()
-        .map(|row| row.map(IdentityDocumentRecord::from))
+        .map(|row| row.map(WebvhDocumentRecord::from))
         .map_err(PersistenceError::from)
     }
 
     fn get_embedded_webvh_document_by_local_id(
         &self,
         local_id: &str,
-    ) -> PersistenceResult<Option<IdentityDocumentRecord>> {
+    ) -> PersistenceResult<Option<WebvhDocumentRecord>> {
         let mut conn = pg_conn(&self.pool)?;
         sql_query(
             "SELECT did, did_document, key_log_head, seq, method_evidence, updated_at \
-             FROM identity_documents \
+             FROM webvh_documents \
              WHERE method_evidence->>'mode' = 'embedded_webvh_provider' \
                AND method_evidence->>'local_id' = $1 \
              ORDER BY updated_at DESC \
              LIMIT 1",
         )
         .bind::<Text, _>(local_id)
-        .get_result::<IdentityDocumentRow>(&mut conn)
+        .get_result::<WebvhDocumentRow>(&mut conn)
         .optional()
-        .map(|row| row.map(IdentityDocumentRecord::from))
+        .map(|row| row.map(WebvhDocumentRecord::from))
         .map_err(PersistenceError::from)
     }
 
-    fn put_document(&self, record: IdentityDocumentRecord) -> PersistenceResult<()> {
+    fn put_document(&self, record: WebvhDocumentRecord) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool)?;
         sql_query(
-            "INSERT INTO identity_documents \
+            "INSERT INTO webvh_documents \
              (did, did_document, key_log_head, seq, method_evidence, updated_at) \
              VALUES ($1, $2, $3, $4, $5, $6) \
              ON CONFLICT (did) DO UPDATE SET \
@@ -3958,10 +3783,10 @@ impl IdentityStore for PgIdentityStore {
         .map_err(PersistenceError::from)
     }
 
-    fn append_log_event(&self, event: IdentityLogRecord) -> PersistenceResult<()> {
+    fn append_log_event(&self, event: WebvhLogRecord) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool)?;
         sql_query(
-            "INSERT INTO identity_log_events \
+            "INSERT INTO webvh_log_events \
              (event_hash, did, seq, operation, created_at) \
              VALUES ($1, $2, $3, $4, $5) \
              ON CONFLICT (event_hash) DO NOTHING",
@@ -3976,15 +3801,15 @@ impl IdentityStore for PgIdentityStore {
         .map_err(PersistenceError::from)
     }
 
-    fn list_log_events(&self, did: &str) -> PersistenceResult<Vec<IdentityLogRecord>> {
+    fn list_log_events(&self, did: &str) -> PersistenceResult<Vec<WebvhLogRecord>> {
         let mut conn = pg_conn(&self.pool)?;
         sql_query(
             "SELECT event_hash, did, seq, operation, created_at \
-             FROM identity_log_events WHERE did = $1 ORDER BY seq ASC, event_hash ASC",
+             FROM webvh_log_events WHERE did = $1 ORDER BY seq ASC, event_hash ASC",
         )
         .bind::<Text, _>(did)
-        .load::<IdentityLogRow>(&mut conn)
-        .map(|rows| rows.into_iter().map(IdentityLogRecord::from).collect())
+        .load::<WebvhLogRow>(&mut conn)
+        .map(|rows| rows.into_iter().map(WebvhLogRecord::from).collect())
         .map_err(PersistenceError::from)
     }
 }
@@ -5536,8 +5361,8 @@ mod tests {
         assert_eq!(store.snapshot_all().unwrap().len(), 1);
     }
 
-    // ── Round 26 — Memory parity tests for the five wire-facing T0-3
-    // sub-stores (moderation / presence / schemas / identity / invites).
+    // ── Round 26 — Memory parity tests for the wire-facing T0-3
+    // sub-stores (moderation / presence / webvh / invites).
     // Pg parity is enforced by the trait surface itself; the integration
     // tests in `tests/http_api.rs` exercise the Pg path when `DATABASE_URL`
     // is set.
@@ -5600,40 +5425,10 @@ mod tests {
     }
 
     #[test]
-    fn memory_schema_store_put_get_delete_matches_trait() {
-        let store = MemorySchemaStore::new();
+    fn memory_webvh_store_document_and_log_round_trip_matches_trait() {
+        let store = MemoryWebvhStore::new();
         let now = Utc::now();
-        let record = SchemaRecord {
-            schema_id: "cx.schema.event.message.v1".to_owned(),
-            kind: "event.message".to_owned(),
-            version: "1".to_owned(),
-            name: Some("message".to_owned()),
-            owner: "did:web:soland.local".to_owned(),
-            definition: serde_json::json!({"type": "object"}),
-            active: true,
-            created_at: now,
-            updated_at: now,
-        };
-        store.put(record.clone()).unwrap();
-
-        let fetched = store.get("cx.schema.event.message.v1").unwrap().unwrap();
-        assert_eq!(fetched.schema_id, "cx.schema.event.message.v1");
-        assert_eq!(fetched.kind, "event.message");
-        assert!(fetched.active);
-
-        let snapshot = store.snapshot_all().unwrap();
-        assert_eq!(snapshot.len(), 1);
-
-        assert!(store.delete("cx.schema.event.message.v1").unwrap());
-        assert!(!store.delete("cx.schema.event.message.v1").unwrap());
-        assert!(store.get("cx.schema.event.message.v1").unwrap().is_none());
-    }
-
-    #[test]
-    fn memory_identity_store_document_and_log_round_trip_matches_trait() {
-        let store = MemoryIdentityStore::new();
-        let now = Utc::now();
-        let doc = IdentityDocumentRecord {
+        let doc = WebvhDocumentRecord {
             did: "did:web:alice.example".to_owned(),
             did_document: serde_json::json!({
                 "id": "did:web:alice.example",
@@ -5655,14 +5450,14 @@ mod tests {
         assert_eq!(fetched.key_log_head.as_deref(), Some("sha256:head"));
 
         // Append two log events under same DID.
-        let log1 = IdentityLogRecord {
+        let log1 = WebvhLogRecord {
             event_hash: "sha256:event-1".to_owned(),
             did: "did:web:alice.example".to_owned(),
             seq: 1,
             operation: serde_json::json!({"op": "rotate", "n": 1}),
             created_at: now,
         };
-        let log2 = IdentityLogRecord {
+        let log2 = WebvhLogRecord {
             event_hash: "sha256:event-2".to_owned(),
             did: "did:web:alice.example".to_owned(),
             seq: 2,

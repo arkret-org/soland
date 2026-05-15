@@ -52,7 +52,7 @@ async fn keys_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
             return;
         }
     };
-    if validate_device_id(&body.device_id).is_err() {
+    if body.device_id.trim().is_empty() {
         render_error(
             res,
             StatusCode::BAD_REQUEST,
@@ -72,8 +72,26 @@ async fn keys_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     }
 
     let one_time_key_count = body.one_time_keys.len() as u64;
+    let mut one_time_key_alg_counts: std::collections::BTreeMap<String, u64> =
+        std::collections::BTreeMap::new();
+    for key in &body.one_time_keys {
+        let alg = key
+            .get("algorithm")
+            .and_then(|value| value.as_str())
+            .or_else(|| key.get("alg").and_then(|value| value.as_str()))
+            .unwrap_or("signed_curve25519")
+            .to_owned();
+        *one_time_key_alg_counts.entry(alg).or_insert(0) += 1;
+    }
     let key_payload = json!({
         "device_id": body.device_id.clone(),
+        "device_keys": body.device_keys.clone(),
+        "principal_signing_keys": body.principal_signing_keys.clone(),
+        "recovery_keys": body.recovery_keys.clone(),
+        "session_keys": body.session_keys.clone(),
+        "agent_keys": body.agent_keys.clone(),
+        "mls_key_packages": body.mls_key_packages.clone(),
+        "backup_restore_keys": body.backup_restore_keys.clone(),
         "fallback_keys": body.fallback_keys.clone(),
         "device_signature": body.device_signature.clone(),
         "updated_at": now(),
@@ -155,8 +173,13 @@ async fn keys_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         tracing::error!(%error, "failed to persist one-time keys");
     }
 
+    let mut counts_value = serde_json::Map::new();
+    counts_value.insert("total".to_owned(), json!(one_time_key_count));
+    for (alg, count) in one_time_key_alg_counts {
+        counts_value.insert(alg, json!(count));
+    }
     res.render(Json(KeysUploadResponse {
-        one_time_key_counts: json!({"total": one_time_key_count}),
+        one_time_key_counts: json!(counts_value),
         fallback_keys: body.fallback_keys,
     }));
 }

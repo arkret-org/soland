@@ -812,18 +812,8 @@ fn validate_event_critical_features(
     Ok(())
 }
 
-fn event_schema_is_active(state: &AppState, schema_id: &str) -> bool {
-    state
-        .persistence
-        .schemas()
-        .get(schema_id)
-        .ok()
-        .flatten()
-        .is_some_and(|schema| schema.active)
-}
-
 fn event_requirements_schema_id(
-    state: &AppState,
+    _state: &AppState,
     object: &serde_json::Map<String, Value>,
 ) -> Result<String, EventValidationError> {
     let schema_id = object
@@ -834,11 +824,11 @@ fn event_requirements_schema_id(
         .and_then(Value::as_str)
         .unwrap_or("cx.schema.event.v1")
         .to_owned();
-    if !schema_id.starts_with("cx.schema.") || !event_schema_is_active(state, &schema_id) {
+    if !schema_id.starts_with("cx.schema.") || !artifacts::schema_ids().contains(&schema_id) {
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
             "unknown_schema",
-            "event requirements.schema is not in the active schema registry",
+            "event requirements.schema is not in the contrix-spec schema registry",
         ));
     }
     Ok(schema_id)

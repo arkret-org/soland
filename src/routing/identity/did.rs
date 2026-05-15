@@ -11,7 +11,7 @@
 //! - `POST /api/v1/identity/did-operation`— submit a DID-operation (rotate/recover)
 //! - `GET  /api/v1/identity/receipts`     — issuer receipts for the local key log
 //!
-//! All long-term state lives behind `state.persistence.identity()`; the
+//! All long-term state lives behind `state.persistence.webvh()`; the
 //! `did_resolver` is still an in-process resolver chain. Production must move it onto a
 //! durable store (see todo F2) — currently in-memory.
 
@@ -26,11 +26,10 @@ use sha2::{Digest, Sha256};
 use super::{
     append_audit_log, bearer_token, now, query_param, render_error, sha256_hex, validate_did,
 };
-use crate::state::{AppState, IdentityDocumentRecord, IdentityLogRecord};
+use crate::state::{AppState, WebvhDocumentRecord, WebvhLogRecord};
 use crate::wire::{
     IdentityDescribeResponse, IdentityLogResponse, IdentityReceiptsResponse,
-    IdentityResolveRequest, IdentityResolveResponse, SubmitDidOperationRequest,
-    SubmitDidOperationResponse,
+    IdentityResolveRequest, IdentityResolveResponse,
 };
 
 const WEBVH_SCID_PLACEHOLDER: &str = "{SCID}";
@@ -232,7 +231,7 @@ pub(super) async fn embedded_webvh_register(
         };
     if state
         .persistence
-        .identity()
+        .webvh()
         .get_embedded_webvh_document_by_local_id(&local_id)
         .ok()
         .flatten()
@@ -306,8 +305,8 @@ pub(super) async fn embedded_webvh_register(
     }
     if let Err(error) = state
         .persistence
-        .identity()
-        .put_document(IdentityDocumentRecord {
+        .webvh()
+        .put_document(WebvhDocumentRecord {
             did: location.did.clone(),
             did_document: did_document.clone(),
             key_log_head: Some(version_id.clone()),
@@ -335,8 +334,8 @@ pub(super) async fn embedded_webvh_register(
     }
     if let Err(error) = state
         .persistence
-        .identity()
-        .append_log_event(IdentityLogRecord {
+        .webvh()
+        .append_log_event(WebvhLogRecord {
             event_hash: version_id.clone(),
             did: location.did.clone(),
             seq: 1,
@@ -408,7 +407,7 @@ pub(super) async fn embedded_webvh_log(depot: &mut Depot, req: &mut Request, res
     };
     let events = state
         .persistence
-        .identity()
+        .webvh()
         .list_log_events(&record.did)
         .unwrap_or_default();
     if events.is_empty() {
@@ -450,7 +449,7 @@ pub(super) async fn identity_resolve(depot: &mut Depot, req: &mut Request, res: 
         render_error(res, StatusCode::BAD_REQUEST, "invalid_param", "invalid did");
         return;
     }
-    if let Ok(Some(record)) = state.persistence.identity().get_document(&body.did) {
+    if let Ok(Some(record)) = state.persistence.webvh().get_document(&body.did) {
         res.render(Json(IdentityResolveResponse {
             did_document: record.did_document,
             key_log_head: record.key_log_head,
@@ -526,7 +525,7 @@ pub(super) async fn identity_log(depot: &mut Depot, req: &mut Request, res: &mut
     }
     let events = state
         .persistence
-        .identity()
+        .webvh()
         .list_log_events(&did)
         .unwrap_or_default()
         .into_iter()
@@ -548,184 +547,6 @@ pub(super) async fn identity_log(depot: &mut Depot, req: &mut Request, res: &mut
 }
 
 #[endpoint]
-pub(super) async fn submit_did_operation(depot: &mut Depot, req: &mut Request, res: &mut Response) {
-    let state = depot.obtain::<AppState>().expect("state injected");
-    let body = match req.parse_json::<SubmitDidOperationRequest>().await {
-        Ok(body) => body,
-        Err(_) => {
-            render_error(
-                res,
-                StatusCode::BAD_REQUEST,
-                "bad_json",
-                "invalid DID operation request",
-            );
-            return;
-        }
-    };
-    if validate_did(&body.did).is_err() {
-        render_error(res, StatusCode::BAD_REQUEST, "invalid_param", "invalid did");
-        return;
-    }
-    if body.proofs.is_empty() {
-        render_error(
-            res,
-            StatusCode::UNAUTHORIZED,
-            "invalid_signature",
-            "DID operation requires proof material",
-        );
-        return;
-    }
-    if !state.config.development_mode {
-        for proof in &body.proofs {
-            if proof.get("alg").and_then(|v| v.as_str()) == Some("none") {
-                render_error(
-                    res,
-                    StatusCode::UNAUTHORIZED,
-                    "invalid_signature",
-                    "production DID operations must not use alg:none",
-                );
-                return;
-            }
-            if proof.get("jws").and_then(|v| v.as_str()) == Some("dev-proof") {
-                render_error(
-                    res,
-                    StatusCode::UNAUTHORIZED,
-                    "invalid_signature",
-                    "production DID operations must not use dev-proof",
-                );
-                return;
-            }
-        }
-    }
-    if body.seq > 1 {
-        let prev_doc = state
-            .persistence
-            .identity()
-            .get_document(&body.did)
-            .ok()
-            .flatten()
-            .map(|r| r.did_document);
-        if let Some(doc) = prev_doc {
-            let verification_keys = did_document_verification_method_ids(&doc);
-            let recovery_keys: Vec<String> = doc
-                .get("recovery_keys")
-                .and_then(|v| v.as_object())
-                .map(|m| m.keys().cloned().collect())
-                .unwrap_or_default();
-            let all_active_keys: Vec<&str> = verification_keys
-                .iter()
-                .chain(recovery_keys.iter())
-                .map(|s| s.as_str())
-                .collect();
-            if !all_active_keys.is_empty() {
-                let proof_has_active_key = body.proofs.iter().any(|proof| {
-                    let vm = proof
-                        .get("verification_method")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("");
-                    let key_id = vm.rsplit('#').next().unwrap_or(vm);
-                    all_active_keys.contains(&key_id)
-                        || all_active_keys.iter().any(|k| k.ends_with(key_id))
-                });
-                if !proof_has_active_key {
-                    render_error(
-                        res,
-                        StatusCode::UNAUTHORIZED,
-                        "invalid_signature",
-                        "DID operation signer is not an active verification or recovery key",
-                    );
-                    return;
-                }
-            }
-        }
-    }
-    let previous = state
-        .persistence
-        .identity()
-        .get_document(&body.did)
-        .ok()
-        .flatten();
-    if let Some(previous) = &previous {
-        if body.seq != previous.seq + 1 {
-            render_error(
-                res,
-                StatusCode::CONFLICT,
-                "cas_conflict",
-                "DID operation seq must advance the current key log",
-            );
-            return;
-        }
-        if body.prev_event_hash.as_deref() != previous.key_log_head.as_deref() {
-            render_error(
-                res,
-                StatusCode::CONFLICT,
-                "cas_conflict",
-                "prev_event_hash does not match current key log head",
-            );
-            return;
-        }
-    } else if body.seq != 1 {
-        render_error(
-            res,
-            StatusCode::CONFLICT,
-            "cas_conflict",
-            "first DID operation seq must be 1",
-        );
-        return;
-    }
-    let head_event_hash = format!("sha256:{}", sha256_hex(body.patch.to_string().as_bytes()));
-    let did_document = did_document_from_patch(&body.did, &body.patch)
-        .unwrap_or_else(|| default_did_document(&body.did));
-    if let Err(message) =
-        validate_did_document_services(&body.did, &did_document, state.config.development_mode)
-    {
-        render_error(res, StatusCode::BAD_REQUEST, "invalid_param", message);
-        return;
-    }
-    let now = now();
-    if let Err(error) = state
-        .persistence
-        .identity()
-        .put_document(IdentityDocumentRecord {
-            did: body.did.clone(),
-            did_document,
-            key_log_head: Some(head_event_hash.clone()),
-            seq: body.seq,
-            method_evidence: json!({"mode": "development_local", "source": "did_operation"}),
-            updated_at: now,
-        })
-    {
-        tracing::error!(%error, "failed to persist identity document");
-    }
-    if let Err(error) = state
-        .persistence
-        .identity()
-        .append_log_event(IdentityLogRecord {
-            event_hash: head_event_hash.clone(),
-            did: body.did.clone(),
-            seq: body.seq,
-            operation: body.patch,
-            created_at: now,
-        })
-    {
-        tracing::error!(%error, "failed to append identity log event");
-    }
-    append_audit_log(
-        state,
-        Some(&body.did),
-        "identity.did_operation",
-        json!({"did": body.did, "seq": body.seq, "head_event_hash": head_event_hash.clone()}),
-        "accepted",
-    );
-    res.render(Json(SubmitDidOperationResponse {
-        status: "accepted".to_owned(),
-        head_event_hash,
-        seq: body.seq,
-        receipts: vec![json!({"service_did": state.config.service_did.clone(), "issued_at": now})],
-    }));
-}
-
-#[endpoint]
 pub(super) async fn identity_receipts(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     let Some(did) = query_param(req, "did") else {
@@ -743,7 +564,7 @@ pub(super) async fn identity_receipts(depot: &mut Depot, req: &mut Request, res:
     }
     let record = state
         .persistence
-        .identity()
+        .webvh()
         .get_document(&did)
         .ok()
         .flatten();
@@ -930,7 +751,7 @@ fn embedded_webvh_record_for_request(
     state: &AppState,
     req: &mut Request,
     res: &mut Response,
-) -> Option<IdentityDocumentRecord> {
+) -> Option<WebvhDocumentRecord> {
     if !state.config.embedded_webvh_provider_enabled {
         render_error(
             res,
@@ -960,7 +781,7 @@ fn embedded_webvh_record_for_request(
     };
     match state
         .persistence
-        .identity()
+        .webvh()
         .get_embedded_webvh_document_by_local_id(&local_id)
     {
         Ok(Some(record)) => Some(record),
@@ -1243,14 +1064,14 @@ fn render_identity_document(state: &AppState, res: &mut Response, did: String) {
     }));
 }
 
-fn identity_document_record(state: &AppState, did: &str) -> IdentityDocumentRecord {
+fn identity_document_record(state: &AppState, did: &str) -> WebvhDocumentRecord {
     state
         .persistence
-        .identity()
+        .webvh()
         .get_document(did)
         .ok()
         .flatten()
-        .unwrap_or_else(|| IdentityDocumentRecord {
+        .unwrap_or_else(|| WebvhDocumentRecord {
             did: did.to_owned(),
             did_document: default_did_document(did),
             key_log_head: None,
@@ -1267,38 +1088,6 @@ fn default_did_document(did: &str) -> Value {
         "authentication": [],
         "service": [{"id": "soland", "type": "ContrixPrincipalServer", "serviceEndpoint": "/api/v1"}]
     })
-}
-
-fn did_document_verification_methods(document: &Value) -> Option<&Value> {
-    document
-        .get("verificationMethod")
-        .or_else(|| document.get("verification_method"))
-}
-
-fn did_document_verification_method_ids(document: &Value) -> Vec<String> {
-    match did_document_verification_methods(document) {
-        Some(Value::Object(methods)) => methods.keys().cloned().collect(),
-        Some(Value::Array(methods)) => methods
-            .iter()
-            .filter_map(|method| match method {
-                Value::String(id) => Some(id.clone()),
-                Value::Object(object) => object
-                    .get("id")
-                    .and_then(|value| value.as_str())
-                    .map(ToOwned::to_owned),
-                _ => None,
-            })
-            .collect(),
-        _ => Vec::new(),
-    }
-}
-
-fn did_document_from_patch(did: &str, patch: &Value) -> Option<Value> {
-    let document = patch
-        .get("did_document")
-        .or_else(|| patch.get("document"))
-        .cloned()?;
-    (document.get("id").and_then(|value| value.as_str()) == Some(did)).then_some(document)
 }
 
 pub(in crate::routing) fn validate_did_document_services(

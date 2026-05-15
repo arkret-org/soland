@@ -2,6 +2,7 @@ use salvo::prelude::*;
 
 pub(super) mod event_log;
 pub(super) mod flow;
+pub(super) mod messages;
 pub(super) mod operations;
 pub(super) mod projection;
 pub(super) mod sync;
@@ -28,5 +29,8 @@ use super::{
 };
 
 pub fn router() -> Router {
-    Router::new().push(sync::router()).push(event_log::router())
+    Router::new()
+        .push(sync::router())
+        .push(event_log::router())
+        .push(messages::router())
 }
