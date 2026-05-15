@@ -4,12 +4,12 @@
 > spec 参考：`contrix-spec/spec/v1/`、`contrix-spec/spec/v1/artifacts/`。
 > 激进模式 — v1 未发布，发现 spec drift 直接 rip and replace，不留兼容垫片。
 
-## 当前测试状态 (2026-05-15 round 11 close — Place projection state + state-machine guards)
+## 当前测试状态 (2026-05-15 round 12 第一遍 — OpenAPI ToSchema 补 4 个 wire 类型)
 
-- `cargo test --lib` — **187 / 187** 全绿(round 10 baseline 184 + round 11 新增 3 条 Place projection / preflight tests)。
-- `cargo test --test http_api` — **40 / 40** 全绿,无退化。
+- `cargo test --lib` — **187 / 187** 全绿(round 10 baseline 184 + round 11 新增 3 条 Place projection / preflight tests;round 12 不涉及 lib 测试)。
+- `cargo test --test http_api` — **41 / 41** 全绿(round 11 新增 `place_lifecycle_state_machine_returns_412_for_illegal_transitions`,覆盖完整 wire path:create → archive → restore → tombstone happy path + 三处 412 拒绝:`place_not_archived`、`place_already_terminal`、`place_not_archived` on Tombstoned)。
 - `cargo test --test move_anchor_wire` — **28 / 28** 全绿。
-- `cargo test --test openapi_typed` — **1 / 1** 全绿。
+- `cargo test --test openapi_typed` — **1 / 1** 全绿(round 12 新增 forward-compat guard:4 个候选类型 currently NOT 出现在 yaml,因为 handler 还没 typed signature;guard 在 handler 转换后会翻转)。
 - `cargo build` — **0 warning**。
 
 ## Round 10：Place lifecycle 收敛（cx.place.restore + 同族 archive/tombstone)
@@ -55,7 +55,8 @@
 | H | [x] **R11-9** `pub fn check_place_lifecycle_transition(&self, &Operation) -> Result<(), &'static str>` —— 只读 preflight 助手,不改 projection。用于 `event_log::submit_event` 在 persist 前判定。 |  |
 | H | [x] **R11-10** `event_log::submit_event` 在 `validate_operation_policy` 后、`store.put` 前加一段 preflight:取 `state.projection.lock()`,调 `check_place_lifecycle_transition`,失败时 `render_error(StatusCode::PRECONDITION_FAILED, reason, reason)` 直接返 412 不进 store。 | spec failed_precondition → HTTP 412 直接 path。 |
 | H | [x] **R11-11** 三条新单测在 `reducer::tests`:`place_lifecycle_round_trip`(create → archive → restore → tombstone 完整状态机)、`place_lifecycle_preflight_rejects_illegal_transitions`(restore-on-Active / re-archive / restore-on-Tombstoned / tombstone-on-Tombstoned / update-on-Tombstoned 全部正确返 reason_code)、`place_lifecycle_preflight_tolerates_unknown_place`(causal 容忍)。 |  |
-| H | [x] **R11-12** `cargo build` / `cargo test --lib` / http_api / move_anchor_wire / openapi_typed 全绿。 | 187 + 40 + 28 + 1 = 256 tests pass,0 warnings。 |
+| H | [x] **R11-12** wire-level 集成测试 `tests/http_api.rs::place_lifecycle_state_machine_returns_412_for_illegal_transitions`:走真 `POST /api/v1/events` 提交 envelope,验 happy path(create / archive / restore / tombstone 各 200)+ 三处 412(restore-on-Active、tombstone-on-Tombstoned、restore-on-Tombstoned),`body["error"]["errcode"]` 匹配 spec reason_code。引入了一个 helper `signed_place_event` 镜像现有 `signed_event_envelope` 但允许自定义 kind/payload。 |  |
+| H | [x] **R11-13** `cargo build` / `cargo test --lib` / http_api / move_anchor_wire / openapi_typed 全绿。 | 187 + 41 + 28 + 1 = 257 tests pass,0 warnings。 |
 
 ### 范围外(round 12+ 候选)
 
@@ -73,7 +74,7 @@ Round 9 / 10 / 11 都已落地。后续候选:
 | M | Pg-backed `projection_events` | 独立 migration：`projection_events` trait 已经准备好，只缺一份 SQL schema + `PgProjectionEventStore` impl。 |
 | M | Flow / Morph projection state machine | round 11 给 Place 做了一遍,Flow / Morph 同款。等 SDK round 10 落了再做。 |
 | M | MAL-11 prune walk 自动化 | 当前 `anchor-dag/prune` 只支持显式 `{anchor_id}` 调用；后台 worker 周期性遍历 DAG 跑 `CompactionPolicy::is_eligible` 也可以做，但要先有运营痛点。 |
-| L | OpenAPI 完整 `ToSchema` 化 | salvo-oapi 自动派生覆盖更多 wire 类型；机械工作。 |
+| L | OpenAPI 完整 `ToSchema` 化(remaining) | 2026-05-15 round 12 第一遍:为 `FederationAnchorsResponse` / `FederationAnchorsPushRequest` / `FederationAnchorsPushResponse`(`src/routing/federation/federation.rs`)+ `EmbeddedWebvhRegisterRequest`(`src/routing/identity/did.rs`)加 `salvo::oapi::ToSchema` 派生。`tests/openapi_typed.rs` 加 forward-compat guard:这 4 个类型当前不出现在生成 YAML 中,因为对应 handler 仍走 `&mut Response` + `req.parse_json::<T>()` 的非 typed plumbing;guard 会在 handler 转 `JsonResult<T>` / `JsonBody<T>` typed signature 之后翻转。**剩余工作**:把 federation/anchors 三个 endpoint + embedded_webvh_register endpoint 转 typed signature,把 guard 翻成 positive assertion。继续 grep `&mut Response` + `req.parse_json` 找下一批 untyped handler 候选。 |
 | L | Snapshot v2 multi-chunk fixture | 当前 B4 跑的是 single-chunk case；构造一个大于 256 KiB 的测试 space 来真的走 audit_path 非空路径。 |
 
 ## 维护规则

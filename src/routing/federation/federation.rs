@@ -415,7 +415,7 @@ fn federation_request_digest(
 
 // ── MAL-12 round 25 — Anchor pull/push (federation/anchors) ──────────────
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct FederationAnchorsResponse {
     pub anchors: Vec<Anchor>,
     /// Echo of [`crate::config::FederationPolicy::as_str`] so the calling
@@ -424,13 +424,13 @@ pub struct FederationAnchorsResponse {
     pub next_cursor: Option<String>,
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct FederationAnchorsPushRequest {
     pub origin: String,
     pub anchors: Vec<Anchor>,
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct FederationAnchorsPushResponse {
     pub accepted: Vec<String>,
     pub rejected: Vec<serde_json::Value>,

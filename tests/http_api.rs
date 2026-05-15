@@ -4717,3 +4717,196 @@ async fn snapshot_v2_audit_path_verifies_against_merkle_root() {
     .await;
     assert_eq!(oob.status_code.unwrap().as_u16(), 404);
 }
+
+/// Build a signed `cx.place.*` event envelope for the Place state-machine
+/// integration test. Mirrors [`signed_event_envelope`] but with a custom
+/// `kind` + `payload` (Place events do not carry a message body).
+fn signed_place_event(
+    event_id: &str,
+    actor_seq: u64,
+    kind: &str,
+    payload: Value,
+    prev_refs: Vec<&str>,
+) -> Value {
+    let mut event = serde_json::json!({
+        "event_id": event_id,
+        "kind": kind,
+        "schema_id": "cx.schema.place.v1",
+        "actor_id": "did:web:alice.example",
+        "actor_seq": actor_seq,
+        "space_id": "cx:space:0196419b-0000-7000-8000-000000000000",
+        "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
+        "audience": "did:web:soland.local",
+        "domain": "did:web:soland.local",
+        "prev_refs": prev_refs,
+        "auth_refs": [],
+        "payload": payload.clone(),
+        "proofs": [{
+            "type": "dev-proof",
+            "verification_method": "did:web:alice.example#01904100-0000-7000-8000-a11ce0000001",
+            "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
+            "audience": "did:web:soland.local",
+            "domain": "did:web:soland.local",
+            "payload_hash": sha256_json(&payload)
+        }]
+    });
+    event["canonical_digest"] = Value::String(event_canonical_digest(&event));
+    event
+}
+
+/// End-to-end check that the server-side Place state-machine guard rejects
+/// illegal lifecycle transitions with HTTP 412 + the spec-canonical
+/// reason_code per `contrix-spec/v1/zh/models/common-fields.md §5.1`.
+/// Reducer-level unit coverage lives in `src/reducer.rs::tests`; this test
+/// verifies the wire mapping (`event_log::submit_event` →
+/// `check_place_lifecycle_transition` → `StatusCode::PRECONDITION_FAILED`).
+#[tokio::test]
+async fn place_lifecycle_state_machine_returns_412_for_illegal_transitions() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+    let place_id = "cx:place:01904100-0000-7000-8000-c10dc0000001";
+
+    // 1) cx.place.create — Active.
+    let create_event = signed_place_event(
+        "cx:event:01904100-0000-7000-8000-d10dc0000001",
+        1,
+        "cx.place.create",
+        serde_json::json!({
+            "object": {
+                "id": place_id,
+                "space_id": "cx:space:0196419b-0000-7000-8000-000000000000",
+                "kind": "list",
+                "title": "Roadmap",
+                "created_by": "did:web:alice.example",
+            }
+        }),
+        Vec::new(),
+    );
+    let create_response: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&create_event)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(create_response["status"], "accepted");
+
+    // 2) cx.place.restore on Active → 412 place_not_archived.
+    let bad_restore = signed_place_event(
+        "cx:event:01904100-0000-7000-8000-d10dc0000002",
+        2,
+        "cx.place.restore",
+        serde_json::json!({ "place_id": place_id }),
+        vec!["cx:event:01904100-0000-7000-8000-d10dc0000001"],
+    );
+    let mut bad_restore_response = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&bad_restore)
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(
+        bad_restore_response.status_code.unwrap().as_u16(),
+        412,
+        "restore on Active must yield HTTP 412 failed_precondition"
+    );
+    let body: Value = bad_restore_response.take_json().await.unwrap();
+    assert_eq!(body["error"]["errcode"], "place_not_archived");
+
+    // 3) cx.place.archive — legal (Active → Archived).
+    let archive_event = signed_place_event(
+        "cx:event:01904100-0000-7000-8000-d10dc0000003",
+        3,
+        "cx.place.archive",
+        serde_json::json!({ "place_id": place_id }),
+        vec!["cx:event:01904100-0000-7000-8000-d10dc0000001"],
+    );
+    let archive_response: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&archive_event)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(archive_response["status"], "accepted");
+
+    // 4) cx.place.restore — legal now (Archived → Active).
+    let good_restore = signed_place_event(
+        "cx:event:01904100-0000-7000-8000-d10dc0000004",
+        4,
+        "cx.place.restore",
+        serde_json::json!({ "place_id": place_id }),
+        vec!["cx:event:01904100-0000-7000-8000-d10dc0000003"],
+    );
+    let restore_response: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&good_restore)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(restore_response["status"], "accepted");
+
+    // 5) cx.place.tombstone — legal (Active → Tombstoned).
+    let tombstone_event = signed_place_event(
+        "cx:event:01904100-0000-7000-8000-d10dc0000005",
+        5,
+        "cx.place.tombstone",
+        serde_json::json!({ "place_id": place_id }),
+        vec!["cx:event:01904100-0000-7000-8000-d10dc0000004"],
+    );
+    let tombstone_response: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&tombstone_event)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(tombstone_response["status"], "accepted");
+
+    // 6) cx.place.tombstone again on Tombstoned → 412 place_already_terminal.
+    let bad_tombstone = signed_place_event(
+        "cx:event:01904100-0000-7000-8000-d10dc0000006",
+        6,
+        "cx.place.tombstone",
+        serde_json::json!({ "place_id": place_id }),
+        vec!["cx:event:01904100-0000-7000-8000-d10dc0000005"],
+    );
+    let mut bad_tombstone_response = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&bad_tombstone)
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(
+        bad_tombstone_response.status_code.unwrap().as_u16(),
+        412,
+        "tombstone-again on Tombstoned must yield HTTP 412 failed_precondition"
+    );
+    let body: Value = bad_tombstone_response.take_json().await.unwrap();
+    assert_eq!(body["error"]["errcode"], "place_already_terminal");
+
+    // 7) cx.place.restore on Tombstoned → 412 place_not_archived (terminal
+    // state cannot be revived even though tombstone-vs-restore are different
+    // transitions).
+    let bad_restore_terminal = signed_place_event(
+        "cx:event:01904100-0000-7000-8000-d10dc0000007",
+        7,
+        "cx.place.restore",
+        serde_json::json!({ "place_id": place_id }),
+        vec!["cx:event:01904100-0000-7000-8000-d10dc0000005"],
+    );
+    let mut bad_restore_terminal_response = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&bad_restore_terminal)
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(
+        bad_restore_terminal_response.status_code.unwrap().as_u16(),
+        412
+    );
+    let body: Value = bad_restore_terminal_response.take_json().await.unwrap();
+    assert_eq!(body["error"]["errcode"], "place_not_archived");
+}

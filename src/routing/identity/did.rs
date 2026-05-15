@@ -67,7 +67,7 @@ pub(super) async fn identity_describe(depot: &mut Depot, res: &mut Response) {
     }));
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct EmbeddedWebvhRegisterRequest {
     #[serde(default)]
     pub local_id: Option<String>,
