@@ -148,6 +148,24 @@ pub struct AppConfig {
     /// `pending` and have to be promoted manually via the live-fetch path.
     /// Env: `SOLAND_PUSH_BRIDGE_TRUSTED_SERVICE_DIDS` (comma-separated).
     pub push_bridge_trusted_service_dids: Vec<String>,
+    /// MAL-11 compaction: minimum age (seconds) before an Anchor is
+    /// prune-eligible. Younger Anchors must not be pruned even when a
+    /// compaction Anchor has witnessed them — gives slow federation peers
+    /// time to backfill before history is dropped.
+    /// Env: `SOLAND_COMPACTION_MIN_ANCHOR_AGE_SECS` (default 604_800 = 7 days).
+    pub compaction_min_anchor_age_seconds: u64,
+    /// MAL-11 compaction: minimum number of compaction Anchors between
+    /// the prune candidate and the current leaf set.
+    /// Env: `SOLAND_COMPACTION_MIN_WITNESSES` (default 1).
+    pub compaction_min_witnesses: u32,
+    /// MAL-11 compaction: refuse to prune the genesis Anchor when true.
+    /// Env: `SOLAND_COMPACTION_PRESERVE_GENESIS` (default true).
+    pub compaction_preserve_genesis: bool,
+    /// MAL-11 compaction: refuse to prune fork-point Anchors (more than
+    /// one direct successor) when true. Keeps the prune walk
+    /// conservative by default.
+    /// Env: `SOLAND_COMPACTION_PRUNE_ONLY_SINGLETON_SUCCESSORS` (default true).
+    pub compaction_prune_only_singleton_successors: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -368,6 +386,19 @@ impl AppConfig {
                         .collect::<Vec<_>>()
                 })
                 .unwrap_or_default();
+        let compaction_min_anchor_age_seconds =
+            std::env::var("SOLAND_COMPACTION_MIN_ANCHOR_AGE_SECS")
+                .ok()
+                .and_then(|value| value.trim().parse::<u64>().ok())
+                .unwrap_or(604_800);
+        let compaction_min_witnesses = std::env::var("SOLAND_COMPACTION_MIN_WITNESSES")
+            .ok()
+            .and_then(|value| value.trim().parse::<u32>().ok())
+            .unwrap_or(1);
+        let compaction_preserve_genesis =
+            env_bool("SOLAND_COMPACTION_PRESERVE_GENESIS")?.unwrap_or(true);
+        let compaction_prune_only_singleton_successors =
+            env_bool("SOLAND_COMPACTION_PRUNE_ONLY_SINGLETON_SUCCESSORS")?.unwrap_or(true);
 
         Ok(Self {
             bind,
@@ -402,6 +433,10 @@ impl AppConfig {
             admin_principal_dids,
             push_bridge_cache_ttl_seconds,
             push_bridge_trusted_service_dids,
+            compaction_min_anchor_age_seconds,
+            compaction_min_witnesses,
+            compaction_preserve_genesis,
+            compaction_prune_only_singleton_successors,
         })
     }
 
@@ -411,6 +446,18 @@ impl AppConfig {
         self.admin_principal_dids
             .iter()
             .any(|configured| configured == actor)
+    }
+
+    /// MAL-11 compaction policy assembled from the four env-driven config
+    /// fields. Callers use this when evaluating prune candidates via
+    /// [`contrix_sdk::CompactionPolicy::is_eligible`].
+    pub fn compaction_policy(&self) -> contrix_sdk::CompactionPolicy {
+        contrix_sdk::CompactionPolicy {
+            min_anchor_age_seconds: self.compaction_min_anchor_age_seconds,
+            min_compaction_witnesses: self.compaction_min_witnesses,
+            preserve_genesis: self.compaction_preserve_genesis,
+            prune_only_singleton_successors: self.compaction_prune_only_singleton_successors,
+        }
     }
 
     #[inline]

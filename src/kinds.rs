@@ -17,6 +17,12 @@ pub const CX_RELATION_DELETE: &str = "cx.relation.delete";
 pub const CX_VIEW_CREATE: &str = "cx.view.create";
 pub const CX_VIEW_UPDATE: &str = "cx.view.update";
 pub const CX_VIEW_RECONCILE: &str = "cx.view.reconcile";
+pub const CX_PLACE_CREATE: &str = "cx.place.create";
+pub const CX_PLACE_UPDATE: &str = "cx.place.update";
+pub const CX_PLACE_PARENT: &str = "cx.place.parent";
+pub const CX_PLACE_ARCHIVE: &str = "cx.place.archive";
+pub const CX_PLACE_RESTORE: &str = "cx.place.restore";
+pub const CX_PLACE_TOMBSTONE: &str = "cx.place.tombstone";
 pub const CX_FIELD_POSITION_MOVE: &str = "cx.field.position.move";
 pub const CX_FIELD_POSITION_REORDER: &str = "cx.field.position.reorder";
 pub const CX_CONTAINER_MOVE_ITEM: &str = "cx.container.move_item";
@@ -57,6 +63,12 @@ fn canonical_registered_kind(object_type: &str) -> Option<&'static str> {
         CX_VIEW_CREATE => Some(CX_VIEW_CREATE),
         CX_VIEW_UPDATE => Some(CX_VIEW_UPDATE),
         CX_VIEW_RECONCILE => Some(CX_VIEW_RECONCILE),
+        CX_PLACE_CREATE => Some(CX_PLACE_CREATE),
+        CX_PLACE_UPDATE => Some(CX_PLACE_UPDATE),
+        CX_PLACE_PARENT => Some(CX_PLACE_PARENT),
+        CX_PLACE_ARCHIVE => Some(CX_PLACE_ARCHIVE),
+        CX_PLACE_RESTORE => Some(CX_PLACE_RESTORE),
+        CX_PLACE_TOMBSTONE => Some(CX_PLACE_TOMBSTONE),
         CX_FIELD_POSITION_MOVE => Some(CX_FIELD_POSITION_MOVE),
         CX_FIELD_POSITION_REORDER => Some(CX_FIELD_POSITION_REORDER),
         CX_CONTAINER_MOVE_ITEM => Some(CX_CONTAINER_MOVE_ITEM),
@@ -101,4 +113,8 @@ pub fn is_membership_kind(kind: &str) -> bool {
 
 pub fn is_space_lifecycle_kind(kind: &str) -> bool {
     matches!(kind, CX_SPACE_CREATE | CX_SPACE_UPDATE | CX_SPACE_DESTROY)
+}
+
+pub fn is_place_lifecycle_kind(kind: &str) -> bool {
+    matches!(kind, CX_PLACE_ARCHIVE | CX_PLACE_RESTORE | CX_PLACE_TOMBSTONE)
 }

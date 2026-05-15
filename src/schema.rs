@@ -326,6 +326,26 @@ diesel::table! {
     }
 }
 
+// Server-side Place projection state for cx.place.* lifecycle events.
+// Spec: contrix-spec/v1/zh/models/space-and-place.md §4.4 +
+// common-fields.md §5.1 (canonical state-transition table).
+diesel::table! {
+    projection_places (place_id) {
+        place_id -> Text,
+        space_id -> Text,
+        kind -> Text,
+        title -> Text,
+        parent_ref -> Nullable<Text>,
+        rank -> Nullable<Text>,
+        state -> Text,
+        state_changed_at -> Nullable<Timestamptz>,
+        created_by -> Text,
+        created_at -> Timestamptz,
+        updated_by -> Nullable<Text>,
+        updated_at -> Nullable<Timestamptz>,
+    }
+}
+
 diesel::allow_tables_to_appear_in_same_query!(
     accounts,
     sessions,
@@ -352,4 +372,5 @@ diesel::allow_tables_to_appear_in_same_query!(
     events,
     space_state_events,
     account_datas,
+    projection_places,
 );

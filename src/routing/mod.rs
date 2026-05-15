@@ -874,16 +874,33 @@ fn cors_handler_for_origin(origin: String) -> CorsHandler {
 #[derive(Clone)]
 pub struct ContrixOpenApiDoc(pub OpenApi);
 
-struct SnapshotBundle {
-    snapshot_ref: String,
-    state_hash: String,
-    manifest: Value,
-    chunk_descriptor: Value,
-    frontier: Value,
-    chunk_bytes: Vec<u8>,
+/// Snapshot v2: in addition to the legacy `snapshot_ref` / `state_hash` /
+/// `chunk_bytes` (single-chunk fallback), we surface SDK-canonical
+/// [`contrix_sdk::SnapshotChunk`] partitions + a binary
+/// [`contrix_sdk::SnapshotMerkleTree`] over their digests + a signed
+/// [`contrix_sdk::GeneratorProof`]. Receivers verify the proof first, then
+/// fetch chunks lazily and check each one against `merkle_root` via
+/// `SnapshotMerkleTree::verify`.
+pub(crate) struct SnapshotBundle {
+    pub snapshot_ref: String,
+    /// `sha256:<hex>` digest over the full serialized state document.
+    /// Doubles as the snapshot's `state_root` until the
+    /// `effective_anchor_view`-driven state root is wired in.
+    pub state_hash: String,
+    pub manifest: Value,
+    pub frontier: Value,
+    /// Deterministic chunk partition (SDK
+    /// [`contrix_sdk::SnapshotChunker::default`] @ 256 KiB).
+    pub chunks: Vec<contrix_sdk::SnapshotChunk>,
+    /// Merkle tree over `chunks[*].digest`. `tree.root()` is the
+    /// `merkle_root` advertised in the snapshot head.
+    pub tree: contrix_sdk::SnapshotMerkleTree,
+    /// Signed generator-proof envelope; binds `(generator_did, space_id,
+    /// state_root, merkle_root, chunk_count, total_bytes, chunk_bytes)`.
+    pub generator_proof: contrix_sdk::GeneratorProof,
 }
 
-fn snapshot_bundle_for_space(state: &AppState, space_id: &str) -> Option<SnapshotBundle> {
+pub(crate) fn snapshot_bundle_for_space(state: &AppState, space_id: &str) -> Option<SnapshotBundle> {
     let space_id_value = SpaceId::new(space_id.to_owned()).ok()?;
     let (title, members, category, tags) = {
         let spaces = state.spaces.lock().expect("spaces lock");
@@ -927,17 +944,59 @@ fn snapshot_bundle_for_space(state: &AppState, space_id: &str) -> Option<Snapsho
     });
     let chunk_bytes = serde_json::to_vec(&state_document).ok()?;
     let state_hash = format!("sha256:{}", sha256_hex(&chunk_bytes));
-    let chunk_descriptor = json!({
-        "chunk_id": "0",
-        "media_type": "application/json",
-        "digest": state_hash,
-        "size": chunk_bytes.len(),
-    });
     let snapshot_ref = format!(
         "cx:snapshot:{}:{}",
         space_id,
         state_hash.trim_start_matches("sha256:")
     );
+
+    // Snapshot v2 (round 9): deterministically chunk the state-document
+    // bytes via the SDK chunker, build a Merkle tree over the chunk
+    // digests, and sign a GeneratorProof binding the tree root to
+    // (generator_did, space_id, state_root). Receivers verify the proof
+    // first, then fetch chunks lazily.
+    let chunker = contrix_sdk::SnapshotChunker::default();
+    let chunks = chunker.chunk(&chunk_bytes);
+    let tree = contrix_sdk::SnapshotMerkleTree::build(&chunks).ok()?;
+    let merkle_root = tree.root().clone();
+    let chunk_count = chunks.len() as u32;
+    let total_bytes: u64 = chunks.iter().map(|c| c.bytes.len() as u64).sum();
+    let chunk_target_bytes = chunker.target_chunk_bytes as u32;
+    let state_root_hash = contrix_sdk::Hash::new(state_hash.clone()).ok()?;
+    let space_id_value = SpaceId::new(space_id.to_owned()).ok()?;
+    let generator_did = contrix_sdk::Did::new(state.config.service_did.clone()).ok()?;
+
+    // Sign the canonical GeneratorProof body using the AnchorerWorker's
+    // Ed25519 key — the same key the admin endpoints use for compaction
+    // anchors and the snapshot generator are the same `service_did`.
+    let proof_body_bytes = contrix_sdk::GeneratorProof::body_bytes(
+        &generator_did,
+        &space_id_value,
+        &state_root_hash,
+        &merkle_root,
+        chunk_count,
+        total_bytes,
+        chunk_target_bytes,
+    )
+    .ok()?;
+    let signing_key = (*state.anchorer_signing_key()).clone();
+    let signer = contrix_sdk::Ed25519MoveSigner::new(
+        signing_key,
+        generator_did.clone(),
+        format!("{}#snapshot-key", state.config.service_did),
+    );
+    let signature = contrix_sdk::MoveSigner::sign_payload(&signer, &proof_body_bytes).ok()?;
+    let generator_proof = contrix_sdk::GeneratorProof {
+        generator_did: generator_did.clone(),
+        space_id: space_id_value.clone(),
+        state_root: state_root_hash.clone(),
+        merkle_root: merkle_root.clone(),
+        chunk_count,
+        total_bytes,
+        chunk_bytes: chunk_target_bytes,
+        signature,
+    };
+
     let frontier = json!({
         "space_id": space_id,
         "generated_at": generated_at,
@@ -949,8 +1008,9 @@ fn snapshot_bundle_for_space(state: &AppState, space_id: &str) -> Option<Snapsho
         "schema_profiles": ["cx.schema.core.v1"],
         "reducer_profile": "cx.reducer.v1",
         "covers_frontier": frontier,
-        "chunk_digests": [state_hash],
-        "chunks": [chunk_descriptor],
+        "chunk_digests": chunks.iter().map(|c| c.digest.as_str().to_owned()).collect::<Vec<_>>(),
+        "chunk_count": chunk_count,
+        "merkle_root": merkle_root.as_str(),
         "state_hash": state_hash,
         "signed_by": state.config.service_did,
         "generator": {
@@ -963,9 +1023,10 @@ fn snapshot_bundle_for_space(state: &AppState, space_id: &str) -> Option<Snapsho
         snapshot_ref,
         state_hash,
         manifest,
-        chunk_descriptor,
         frontier,
-        chunk_bytes,
+        chunks,
+        tree,
+        generator_proof,
     })
 }
 
@@ -1066,6 +1127,10 @@ mod operation_conformance_tests {
                 admin_principal_dids: Vec::new(),
                 push_bridge_cache_ttl_seconds: 900,
                 push_bridge_trusted_service_dids: Vec::new(),
+                compaction_min_anchor_age_seconds: 604_800,
+                compaction_min_witnesses: 1,
+                compaction_preserve_genesis: true,
+                compaction_prune_only_singleton_successors: true,
             },
             Db { pool: None },
         )
@@ -1189,6 +1254,30 @@ mod operation_conformance_tests {
                 kind: kinds::CX_SPACE_DESTROY,
                 payload: json!({"action": "destroy"}),
                 valid: true,
+            },
+            OperationVector {
+                name: "place archive",
+                kind: kinds::CX_PLACE_ARCHIVE,
+                payload: json!({"place_id": "cx:place:01904100-0000-7000-8000-1fb50799ad42"}),
+                valid: true,
+            },
+            OperationVector {
+                name: "place restore",
+                kind: kinds::CX_PLACE_RESTORE,
+                payload: json!({"place_id": "cx:place:01904100-0000-7000-8000-1fb50799ad42"}),
+                valid: true,
+            },
+            OperationVector {
+                name: "place tombstone",
+                kind: kinds::CX_PLACE_TOMBSTONE,
+                payload: json!({"place_id": "cx:place:01904100-0000-7000-8000-1fb50799ad42"}),
+                valid: true,
+            },
+            OperationVector {
+                name: "place restore missing place_id",
+                kind: kinds::CX_PLACE_RESTORE,
+                payload: json!({"reason": "release_reopened"}),
+                valid: false,
             },
             OperationVector {
                 name: "unknown kind",

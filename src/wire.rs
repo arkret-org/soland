@@ -615,6 +615,25 @@ pub struct SnapshotHeadResponse {
     pub chunks: Vec<Value>,
     pub frontier: Value,
     pub signature: Value,
+    /// Snapshot v2 (round 9): root of the binary Merkle tree built over
+    /// chunk digests. Receivers cross-check `chunks[i].digest` reaching
+    /// this root via the per-chunk `audit_path`.
+    pub merkle_root: String,
+    /// Snapshot v2: number of chunks in `chunks[]`. Equivalent to
+    /// `generator_proof.chunk_count` but surfaced explicitly so clients
+    /// don't have to parse the proof to plan fetches.
+    pub chunk_count: u32,
+    /// Snapshot v2: target per-chunk byte budget the chunker used. The
+    /// last chunk MAY be smaller; all others are exactly this size.
+    pub chunk_bytes: u32,
+    /// Snapshot v2: sum of per-chunk byte lengths. Lets receivers size
+    /// download buffers before fetching.
+    pub total_bytes: u64,
+    /// Snapshot v2: signed commitment from the snapshot generator
+    /// binding `(generator_did, space_id, state_root, merkle_root,
+    /// chunk_count, total_bytes, chunk_bytes)`. Wire shape matches
+    /// `contrix_sdk::GeneratorProof`.
+    pub generator_proof: Value,
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]

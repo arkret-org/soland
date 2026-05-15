@@ -210,6 +210,53 @@ pub struct CompactionResponse {
     pub move_count: u64,
 }
 
+/// `POST .../anchor-dag/prune` request body — names one Anchor candidate
+/// to evaluate + (optionally) prune. The server walks the DAG, computes
+/// the `PruneCandidate` inputs, consults `CompactionPolicy::is_eligible`,
+/// and either rewires the candidate's successors + removes it, or returns
+/// a diagnostic describing the rejection.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
+pub struct AnchorPruneRequestBody {
+    /// The Anchor id to evaluate for pruning. Must already exist in the
+    /// space's Anchor DAG.
+    pub anchor_id: String,
+}
+
+/// `POST .../anchor-dag/prune` response. `pruned` is `true` only when the
+/// store actually removed the candidate; otherwise the candidate failed
+/// policy or the store rejected the prune.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
+pub struct AnchorPruneResponse {
+    /// Echo the candidate id so clients don't need to remember it.
+    pub anchor_id: String,
+    /// `true` when the candidate was removed and its successors rewired.
+    /// `false` when policy rejected the candidate (see `eligibility`).
+    pub pruned: bool,
+    /// Wire-format eligibility verdict. One of `eligible|too_young|
+    /// insufficient_witnesses|preserved_genesis|fork_point|
+    /// compaction_itself`.
+    pub eligibility: String,
+    /// Successor anchor ids whose `predecessor_refs` were rewired from
+    /// the pruned candidate to the candidate's parents. Empty when
+    /// `pruned=false`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rewired: Vec<String>,
+    /// Diagnostic payload mirroring `PruneCandidate` fields. Useful for
+    /// auditing why a prune was rejected.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diagnostics: Option<AnchorPruneDiagnostics>,
+}
+
+/// Diagnostic payload echoed back when prune eligibility is rejected.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
+pub struct AnchorPruneDiagnostics {
+    pub age_seconds: u64,
+    pub compaction_witnesses: u32,
+    pub successor_count: usize,
+    pub is_genesis: bool,
+    pub kind: String,
+}
+
 // ── Helpers ──────────────────────────────────────────────────────────────
 
 /// Round 22: build the canonical [`MoveSigner`] for admin-issued Moves.
@@ -239,6 +286,49 @@ fn service_admin_signer(state: &AppState) -> Result<Ed25519MoveSigner, AppError>
     // `SigningKey` by value, so dereference + clone.
     let signing_key = (*state.anchorer_signing_key()).clone();
     Ok(Ed25519MoveSigner::new(signing_key, did, kid))
+}
+
+/// Round 9: build a per-admin [`Ed25519MoveSigner`] bound to the operator
+/// DID. Looks up the operator's signing seed in
+/// [`AppState::admin_keystore`]; falls back to [`service_admin_signer`]
+/// when no per-admin key is provisioned (logging a sticky-warn so the
+/// operator notices). The resulting signer's `verification_method` is
+/// `<admin_did>#admin-key`, giving Anchors / Moves admin attribution.
+fn admin_signer_for(
+    state: &AppState,
+    admin_did_str: &str,
+) -> Result<Ed25519MoveSigner, AppError> {
+    let admin_did = Did::new(admin_did_str.to_owned()).map_err(|e| {
+        AppError::new(
+            ErrorCode::InvalidParam,
+            format!("invalid admin DID `{admin_did_str}`: {e}"),
+        )
+    })?;
+    match state.admin_keystore.load_admin_key(&admin_did) {
+        Ok(bytes) if bytes.len() == 32 => {
+            let mut seed = [0u8; 32];
+            seed.copy_from_slice(&bytes);
+            let signing_key = ed25519_dalek::SigningKey::from_bytes(&seed);
+            let kid = format!("{}#admin-key", admin_did_str);
+            Ok(Ed25519MoveSigner::new(signing_key, admin_did, kid))
+        }
+        Ok(other) => {
+            tracing::warn!(
+                admin_did = %admin_did_str,
+                len = other.len(),
+                "admin keystore returned non-32-byte payload; falling back to service signer"
+            );
+            service_admin_signer(state)
+        }
+        Err(error) => {
+            tracing::warn!(
+                admin_did = %admin_did_str,
+                %error,
+                "no per-admin signing key provisioned; falling back to service signer"
+            );
+            service_admin_signer(state)
+        }
+    }
 }
 
 /// Round 21: convert an `AnchorerReconfigBody` into the canonical anchorer
@@ -618,6 +708,13 @@ pub(super) async fn admin_reconfigure_anchorer(
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req)?;
     let admin_session = super::require_admin_principal(state, session)?;
+    super::require_admin_scope(
+        state,
+        req,
+        &admin_session,
+        contrix_sdk::admin_scopes::ANCHORER_RECONFIGURE,
+    )
+    .await?;
     let space_id = space_id.into_inner();
     let space = SpaceId::new(space_id.clone()).map_err(|e| {
         AppError::new(ErrorCode::InvalidParam, format!("invalid space_id: {e}"))
@@ -679,13 +776,14 @@ pub(super) async fn admin_reconfigure_anchorer(
         },
     };
 
-    // Construct + sign the Move via Ed25519MoveSigner — round 22 binds
-    // this to the same key the AnchorerWorker uses (AppState::anchorer_signing_key).
-    // Operator/service DIDs are only used above as authorization guards; the
-    // signing key still comes from `service_admin_signer` until per-admin
-    // signing-key provisioning lands.
-    let _ = (&service_signer_did, &operator_did);
-    let signer = service_admin_signer(state)?;
+    // Round 9: per-admin signing. The Move is signed by the operator
+    // DID (`admin_signer_for`), giving operator attribution in the
+    // audit chain. When the operator has no provisioned key, the helper
+    // falls back to the service signer with a sticky-warn — keeps
+    // existing dev flows working while production deployments roll out
+    // per-admin keystores.
+    let _ = &service_signer_did;
+    let signer = admin_signer_for(state, &operator_did)?;
     let unsigned = UnsignedMove::new(
         signer.signer_did().clone(),
         space.clone(),
@@ -820,7 +918,14 @@ pub(super) async fn admin_repair_bottom(
 ) -> JsonResult<AdminSubmitMoveResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req)?;
-    let _session = super::require_admin_principal(state, session)?;
+    let admin_session = super::require_admin_principal(state, session)?;
+    super::require_admin_scope(
+        state,
+        req,
+        &admin_session,
+        contrix_sdk::admin_scopes::BOTTOM_REPAIR,
+    )
+    .await?;
     let space_id = space_id.into_inner();
     let cell_id_str = cell_id.into_inner();
     let space = SpaceId::new(space_id.clone()).map_err(|e| {
@@ -866,7 +971,10 @@ pub(super) async fn admin_repair_bottom(
                 role: "recovery_capability".to_owned(),
                 critical: true,
             };
-            let signer = service_admin_signer(state)?;
+            // Round 9: per-admin signing — Move's `verification_method`
+            // is the operator's `<did>#admin-key` when a per-admin key
+            // is provisioned, else falls back to the service signer.
+            let signer = admin_signer_for(state, &admin_session.actor)?;
             let unsigned = UnsignedMove::new(
                 signer.signer_did().clone(),
                 space.clone(),
@@ -1054,26 +1162,15 @@ pub(super) async fn admin_get_anchor_dag(
             frontier_union.insert(f.as_str().to_owned());
         }
         latest_state_root = Some(anchor.state_root.as_str().to_owned());
-        // Detect compaction: an Anchor whose frontier is exactly the union
-        // of its predecessor frontiers means it accepted zero new moves and
-        // merely re-stated the current view (MAL-11 compaction). True MAL-11
-        // also stamps `kind="compaction"` into Anchor metadata; we approximate
-        // that with the structural check until that field lands.
-        let mut predecessor_frontier_union: std::collections::BTreeSet<String> =
-            std::collections::BTreeSet::new();
-        for predecessor_id in &anchor.predecessor_refs {
-            if let Ok(Some(prev)) = anchor_store.get(predecessor_id) {
-                for f in &prev.frontier {
-                    predecessor_frontier_union.insert(f.as_str().to_owned());
-                }
-            }
-        }
-        let new_moves: usize = anchor
-            .frontier
-            .iter()
-            .filter(|f| !predecessor_frontier_union.contains(f.as_str()))
-            .count();
-        let is_compaction = !anchor.predecessor_refs.is_empty() && new_moves == 0;
+        // MAL-11 round 9: `is_compaction` reads the explicit
+        // `Anchor.kind == AnchorKind::Compaction` field directly. The
+        // round-7 structural heuristic ("zero new moves vs predecessor
+        // frontier") was a placeholder before the field existed; it
+        // could mis-flag a normal anchor whose moves all happened to
+        // appear in a predecessor's frontier (which never actually
+        // happens with a well-formed pipeline, but you don't want a
+        // structural heuristic where you can have a signed flag).
+        let is_compaction = anchor.kind.is_compaction();
         leaves.push(AnchorLeafResponse {
             anchor_id: anchor.id.as_str().to_owned(),
             state_root: Some(anchor.state_root.as_str().to_owned()),
@@ -1114,65 +1211,305 @@ pub(super) async fn admin_compact_anchor_dag(
 ) -> JsonResult<CompactionResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req)?;
-    let _session = super::require_admin_principal(state, session)?;
+    let admin_session = super::require_admin_principal(state, session)?;
+    super::require_admin_scope(
+        state,
+        req,
+        &admin_session,
+        contrix_sdk::admin_scopes::ANCHOR_COMPACT,
+    )
+    .await?;
     let space_id = space_id.into_inner();
     let space = SpaceId::new(space_id.clone()).map_err(|e| {
         AppError::new(ErrorCode::InvalidParam, format!("invalid space_id: {e}"))
             .with_status(StatusCode::BAD_REQUEST)
     })?;
-    let limit = body.into_inner().max_moves.unwrap_or(1000).min(10_000) as usize;
+    let max_pending = body.into_inner().max_moves.unwrap_or(1000).min(10_000) as usize;
 
-    // MAL-11 (real compaction) requires three SDK pieces that aren't in
-    // contrix-rust-sdk yet:
-    //   1. `Anchor.kind = "compaction"` field on the Anchor envelope —
-    //      so receivers can fail-closed on unrecognised compactions and
-    //      so `admin_get_anchor_dag.is_compaction` reads off a real flag
-    //      instead of the structural heuristic.
-    //   2. `AnchorStore::prune_predecessor(anchor_id)` that drops the
-    //      named historical Anchor and rewires its successors'
-    //      `predecessor_refs` through the compaction marker. Currently
-    //      the trait surface only exposes `get` / `put` / `list_leaves`.
-    //   3. A compaction policy (depth / age / frontier-cardinality) —
-    //      cross-repo spec item. soland could host the policy config but
-    //      the prune walk needs SDK semantics first.
-    // Until those land, this endpoint advances the DAG via the anchorer
-    // worker (the same fold pass the regular pipeline runs) so the wire
-    // shape (`anchor_id + state_root + move_count`) is populated against
-    // the latest leaf even when there's nothing pending to anchor —
-    // sodmin's H'9 panel keeps a stable response.
-    let outcome = crate::anchorer::run_one_signing_pass(state, &space, limit);
-    match outcome {
-        Ok(Some(o)) => json_ok(CompactionResponse {
-            anchor_id: o.anchor_id.as_str().to_owned(),
-            state_root: Some(o.post_state_root.as_str().to_owned()),
-            move_count: o.accepted_move_ids.len() as u64,
-        }),
-        Ok(None) => {
-            // Nothing pending — surface the latest leaf if any so the UI
-            // gets a stable anchor_id back rather than a 404.
-            let leaves = state.anchor_store.list_leaves(&space).unwrap_or_default();
-            let Some(leaf) = leaves.first() else {
-                return Err(AppError::new(
-                    ErrorCode::Conflict,
-                    "no pending moves and no existing anchor to compact".to_owned(),
-                )
-                .with_status(StatusCode::CONFLICT));
-            };
-            let anchor = state.anchor_store.get(leaf).unwrap_or(None);
-            json_ok(CompactionResponse {
-                anchor_id: leaf.as_str().to_owned(),
-                state_root: anchor.as_ref().map(|a| a.state_root.as_str().to_owned()),
-                move_count: 0,
-            })
-        }
-        Err(crate::anchorer::AnchorerError::NotAuthorized(_)) => Err(AppError::new(
+    // MAL-11 real compaction (round 9): first drain any pending Moves
+    // via the regular anchorer pass so the compaction Anchor witnesses
+    // an up-to-date frontier, then mint a `kind=Compaction` Anchor over
+    // the current leaves with the same `frontier` (no new moves —
+    // that's what makes it a compaction). The compaction Anchor is
+    // signed and applied just like a normal Anchor; downstream pruning
+    // walks consult `CompactionPolicy` per-candidate and call
+    // `AnchorStore::prune_predecessor`.
+    if let Err(crate::anchorer::AnchorerError::NotAuthorized(_)) =
+        crate::anchorer::run_one_signing_pass(state, &space, max_pending)
+    {
+        return Err(AppError::new(
             ErrorCode::CapabilityDenied,
             "not authorized to compact anchors for this space".to_owned(),
         )
-        .with_status(StatusCode::FORBIDDEN)),
-        Err(e) => Err(AppError::new(ErrorCode::InternalError, e.to_string())
-            .with_status(StatusCode::CONFLICT)),
+        .with_status(StatusCode::FORBIDDEN));
     }
+
+    // Step 1: snapshot the leaf set + recompute the effective anchor view
+    // at those leaves. The compaction Anchor's `predecessor_refs` are the
+    // current leaves; `frontier` is the union of their frontiers (no new
+    // moves); `state_root` is taken from the view.
+    let leaves = state.anchor_store.list_leaves(&space).map_err(|e| {
+        AppError::new(ErrorCode::InternalError, format!("list_leaves failed: {e}"))
+    })?;
+    if leaves.is_empty() {
+        return Err(AppError::new(
+            ErrorCode::Conflict,
+            "compaction requires at least one existing anchor".to_owned(),
+        )
+        .with_status(StatusCode::CONFLICT));
+    }
+    let view = contrix_sdk::effective_anchor_view(
+        &leaves,
+        &space,
+        state.anchor_store.as_ref(),
+        state.cell_store.as_ref(),
+        state.cell_registry.as_ref(),
+    )
+    .map_err(|e| {
+        AppError::new(
+            ErrorCode::InternalError,
+            format!("effective_anchor_view failed: {e}"),
+        )
+    })?;
+
+    // Step 2: sign + apply the compaction Anchor. Round 9: sign with
+    // the operator's per-admin key so the Anchor's `verification_method`
+    // carries operator attribution (falls back to the service signer
+    // when no per-admin key is provisioned).
+    let signer = admin_signer_for(state, &admin_session.actor)?;
+    let compaction = contrix_sdk::Anchor::sign_single_kind(
+        space.clone(),
+        view.predecessor_refs.clone(),
+        view.frontier.clone(),
+        view.state_root.clone(),
+        fresh_hlc(state)?,
+        contrix_sdk::AnchorKind::Compaction,
+        &signer,
+    )
+    .map_err(|e| {
+        AppError::new(ErrorCode::InternalError, format!("sign compaction anchor: {e}"))
+    })?;
+
+    let verifier = crate::routing::federation::move_anchor::select_jws_verifier(state);
+    let effect = contrix_sdk::apply_anchor(
+        &compaction,
+        state.move_store.as_ref(),
+        state.anchor_store.as_ref(),
+        state.cell_store.as_ref(),
+        state.cell_registry.as_ref(),
+        verifier,
+    )
+    .map_err(|e| {
+        AppError::new(ErrorCode::Conflict, format!("apply compaction anchor: {e}"))
+            .with_status(StatusCode::CONFLICT)
+    })?;
+
+    // Compaction Anchors accept zero new moves by definition; surface
+    // `move_count: 0`.
+    let _ = effect;
+    json_ok(CompactionResponse {
+        anchor_id: compaction.id.as_str().to_owned(),
+        state_root: Some(compaction.state_root.as_str().to_owned()),
+        move_count: 0,
+    })
+}
+
+/// `POST /api/admin/v1/spaces/{space_id}/anchor-dag/prune` — evaluate a
+/// historical Anchor for prune-eligibility against
+/// [`contrix_sdk::CompactionPolicy`] and, when eligible, remove it via
+/// [`AnchorStore::prune_predecessor`].
+///
+/// MAL-11 round 9: gates the structural prune walk on the operator's
+/// configured policy (env-driven `SOLAND_COMPACTION_*`). Successor anchors
+/// have their `predecessor_refs` rewired to the pruned candidate's parents;
+/// the store guarantees no leaf prune (returns 4xx instead).
+#[endpoint(
+    operation_id = "cx.admin.spaces.anchor_dag.prune",
+    tags("admin", "anchor-dag"),
+    summary = "Evaluate + prune a historical Anchor"
+)]
+pub(super) async fn admin_prune_anchor_dag(
+    aa: AuthArgs,
+    depot: &mut Depot,
+    req: &mut Request,
+    space_id: PathParam<String>,
+    body: JsonBody<AnchorPruneRequestBody>,
+) -> JsonResult<AnchorPruneResponse> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req)?;
+    let admin_session = super::require_admin_principal(state, session)?;
+    super::require_admin_scope(
+        state,
+        req,
+        &admin_session,
+        contrix_sdk::admin_scopes::ANCHOR_PRUNE,
+    )
+    .await?;
+    let space_id_str = space_id.into_inner();
+    let space = SpaceId::new(space_id_str.clone()).map_err(|e| {
+        AppError::new(ErrorCode::InvalidParam, format!("invalid space_id: {e}"))
+            .with_status(StatusCode::BAD_REQUEST)
+    })?;
+    let body = body.into_inner();
+    let candidate_id = AnchorId::new(body.anchor_id.clone()).map_err(|e| {
+        AppError::new(
+            ErrorCode::InvalidParam,
+            format!("invalid anchor_id `{}`: {e}", body.anchor_id),
+        )
+        .with_status(StatusCode::BAD_REQUEST)
+    })?;
+
+    let anchor_store = state.anchor_store.as_ref();
+
+    // Load the candidate Anchor.
+    let candidate = anchor_store
+        .get(&candidate_id)
+        .map_err(|e| {
+            AppError::new(
+                ErrorCode::InternalError,
+                format!("anchor_store.get failed: {e}"),
+            )
+        })?
+        .ok_or_else(|| {
+            AppError::new(
+                ErrorCode::NotFound,
+                format!("anchor `{}` not found in space `{}`", candidate_id, space_id_str),
+            )
+            .with_status(StatusCode::NOT_FOUND)
+        })?;
+    if candidate.space_id.as_str() != space.as_str() {
+        return Err(AppError::new(
+            ErrorCode::InvalidParam,
+            format!(
+                "anchor `{}` belongs to space `{}`, not `{}`",
+                candidate_id,
+                candidate.space_id.as_str(),
+                space_id_str
+            ),
+        )
+        .with_status(StatusCode::BAD_REQUEST));
+    }
+
+    // Successor count — direct successors in the DAG.
+    let successors = anchor_store.successors(&space, &candidate_id).map_err(|e| {
+        AppError::new(
+            ErrorCode::InternalError,
+            format!("anchor_store.successors failed: {e}"),
+        )
+    })?;
+    let successor_count = successors.len();
+
+    // Compaction-witness count: starting at each direct successor, count
+    // distinct [`AnchorKind::Compaction`] anchors reachable via forward DAG
+    // traversal (successor-of-successor ...). The candidate is witnessed
+    // when ≥ `min_compaction_witnesses` such compaction anchors exist on
+    // every forward path to the leaf set; we approximate that with a
+    // visited-set traversal which counts how many compaction anchors are
+    // reachable forward from the candidate. This matches the spec wording
+    // ("witnessed by ≥ N compaction Anchors") for the common singleton
+    // chain case A4 covers; richer DAG shapes can be refined later.
+    let mut compaction_witnesses: u32 = 0;
+    let mut visited: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut stack: Vec<AnchorId> = successors.clone();
+    while let Some(next_id) = stack.pop() {
+        if !visited.insert(next_id.as_str().to_owned()) {
+            continue;
+        }
+        if let Ok(Some(succ_anchor)) = anchor_store.get(&next_id) {
+            if succ_anchor.kind.is_compaction() {
+                compaction_witnesses = compaction_witnesses.saturating_add(1);
+            }
+            if let Ok(next_succs) = anchor_store.successors(&space, &next_id) {
+                stack.extend(next_succs);
+            }
+        }
+    }
+
+    // Genesis check — soland's `MemoryAnchorStore` tracks genesis via
+    // `set_genesis_if_absent`; the spec-canonical zero-anchor placeholder
+    // (`cx:anchor:sha256:000...`) used at `apply_anchor` genesis is also
+    // treated as genesis when present.
+    let is_genesis = match anchor_store.genesis(&space) {
+        Ok(Some(g)) => g.as_str() == candidate_id.as_str(),
+        _ => false,
+    };
+
+    // Age — derive from the candidate's HLC physical-millis prefix.
+    let age_seconds = match crate::jws_verify::physical_millis_from_hlc(candidate.hlc.as_str()) {
+        Some(ms) => {
+            let now_ms = chrono::Utc::now().timestamp_millis();
+            ((now_ms - ms).max(0) as u64) / 1000
+        }
+        None => 0,
+    };
+
+    let prune_candidate = contrix_sdk::PruneCandidate {
+        candidate: &candidate,
+        age_seconds,
+        compaction_witnesses,
+        successor_count,
+        is_genesis,
+    };
+
+    let policy = state.config.compaction_policy();
+    let eligibility = policy.is_eligible(&prune_candidate);
+    let eligibility_wire = match &eligibility {
+        contrix_sdk::PruneEligibility::Eligible => "eligible",
+        contrix_sdk::PruneEligibility::TooYoung { .. } => "too_young",
+        contrix_sdk::PruneEligibility::InsufficientWitnesses { .. } => "insufficient_witnesses",
+        contrix_sdk::PruneEligibility::PreservedGenesis => "preserved_genesis",
+        contrix_sdk::PruneEligibility::ForkPoint { .. } => "fork_point",
+        contrix_sdk::PruneEligibility::CompactionItself => "compaction_itself",
+    };
+    let kind_wire = if candidate.kind.is_compaction() {
+        "compaction"
+    } else {
+        "normal"
+    };
+    let diagnostics = AnchorPruneDiagnostics {
+        age_seconds,
+        compaction_witnesses,
+        successor_count,
+        is_genesis,
+        kind: kind_wire.to_owned(),
+    };
+
+    if !eligibility.is_eligible() {
+        // Policy rejection is a successful evaluation, not a request
+        // error — the caller asked us to evaluate prune-eligibility and
+        // we did. Surface the verdict with `pruned: false` + the
+        // diagnostics so callers can decide whether to relax the policy
+        // and retry.
+        return json_ok(AnchorPruneResponse {
+            anchor_id: candidate_id.as_str().to_owned(),
+            pruned: false,
+            eligibility: eligibility_wire.to_owned(),
+            rewired: Vec::new(),
+            diagnostics: Some(diagnostics),
+        });
+    }
+
+    // Policy passed — invoke the store. The store rewires successors and
+    // returns the candidate's parents (so callers can audit the new DAG
+    // shape if desired); we surface the *successor* ids that were
+    // rewired, which is what the prune actually touched.
+    let _parents = anchor_store
+        .prune_predecessor(&space, &candidate_id)
+        .map_err(|e| {
+            AppError::new(
+                ErrorCode::Conflict,
+                format!("prune_predecessor rejected by store: {e}"),
+            )
+            .with_status(StatusCode::CONFLICT)
+        })?;
+
+    json_ok(AnchorPruneResponse {
+        anchor_id: candidate_id.as_str().to_owned(),
+        pruned: true,
+        eligibility: eligibility_wire.to_owned(),
+        rewired: successors.iter().map(|s| s.as_str().to_owned()).collect(),
+        diagnostics: Some(diagnostics),
+    })
 }
 
 // ── Multi-sig coordinator (round 22) ─────────────────────────────────────
@@ -1435,7 +1772,14 @@ pub(super) async fn admin_rotate_signing_key(
 ) -> JsonResult<RotateSigningKeyResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req)?;
-    let _session = super::require_admin_principal(state, session)?;
+    let admin_session = super::require_admin_principal(state, session)?;
+    super::require_admin_scope(
+        state,
+        req,
+        &admin_session,
+        contrix_sdk::admin_scopes::ANCHORER_ROTATE_SIGNING_KEY,
+    )
+    .await?;
     // Validate space_id shape so the endpoint surfaces a clean 400 on a
     // bogus path; the rotation itself is process-wide.
     let space_id_str = space_id.into_inner();

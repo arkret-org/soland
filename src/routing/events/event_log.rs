@@ -265,6 +265,15 @@ async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Response) 
             render_error(res, StatusCode::FORBIDDEN, "policy_denied", message);
             return;
         }
+        // Server-side state-machine preflight for cx.place.* lifecycle
+        // events (round 11). Reject invalid transitions with HTTP 412
+        // before persisting per contrix-spec common-fields.md §5.1.
+        if let Ok(proj) = state.projection.lock() {
+            if let Err(reason) = proj.check_place_lifecycle_transition(operation) {
+                render_error(res, StatusCode::PRECONDITION_FAILED, reason, reason);
+                return;
+            }
+        }
     }
     if let Err(error) = store.put(CanonicalEventRecord {
         event_id: parsed.event_id.clone(),
@@ -1508,6 +1517,10 @@ mod proof_strictness_tests {
             admin_principal_dids: Vec::new(),
             push_bridge_cache_ttl_seconds: 900,
             push_bridge_trusted_service_dids: Vec::new(),
+            compaction_min_anchor_age_seconds: 604_800,
+            compaction_min_witnesses: 1,
+            compaction_preserve_genesis: true,
+            compaction_prune_only_singleton_successors: true,
         };
         AppState::new(config, Db { pool: None })
     }

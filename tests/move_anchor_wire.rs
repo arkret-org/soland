@@ -80,6 +80,10 @@ fn test_config() -> AppConfig {
         admin_principal_dids: Vec::new(),
         push_bridge_cache_ttl_seconds: 900,
         push_bridge_trusted_service_dids: Vec::new(),
+        compaction_min_anchor_age_seconds: 604_800,
+        compaction_min_witnesses: 1,
+        compaction_preserve_genesis: true,
+        compaction_prune_only_singleton_successors: true,
     }
 }
 
@@ -153,6 +157,7 @@ fn build_genesis_anchor(frontier: MoveId, state_root: Hash) -> Anchor {
         state_root,
         anchorer_sig: AnchorerSig::Single(sig),
         hlc: Hlc::new("0189c4d2af00-00000000-aabbccdd".to_owned()).unwrap(),
+        kind: contrix_sdk::AnchorKind::Normal,
     };
     a.id = a.derive_id().unwrap();
     a

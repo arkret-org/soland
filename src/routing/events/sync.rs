@@ -1347,6 +1347,26 @@ async fn snapshot_head(depot: &mut Depot, req: &mut Request, res: &mut Response)
         render_error(res, StatusCode::NOT_FOUND, "not_found", "not found");
         return;
     };
+    // Snapshot v2 (round 9): the manifest already lists per-chunk
+    // digests, so `chunks[]` becomes the per-chunk descriptor (id +
+    // size + digest) — receivers fetch each chunk via
+    // `/sync/snapshot-chunk?chunk_id=N` and check it against
+    // `merkle_root` using the chunk's `audit_path`.
+    let chunk_descriptors: Vec<serde_json::Value> = bundle
+        .chunks
+        .iter()
+        .map(|c| {
+            json!({
+                "chunk_id": c.chunk_id,
+                "media_type": "application/json",
+                "digest": c.digest.as_str(),
+                "size": c.bytes.len(),
+            })
+        })
+        .collect();
+    let merkle_root = bundle.tree.root().as_str().to_owned();
+    let generator_proof_value = serde_json::to_value(&bundle.generator_proof)
+        .unwrap_or(serde_json::Value::Null);
     let service_did = state.config.service_did.clone();
     let signature_payload = format!(
         "{}:{}:{}",
@@ -1356,13 +1376,18 @@ async fn snapshot_head(depot: &mut Depot, req: &mut Request, res: &mut Response)
         snapshot_ref: bundle.snapshot_ref,
         state_hash: bundle.state_hash,
         manifest: bundle.manifest,
-        chunks: vec![bundle.chunk_descriptor],
+        chunks: chunk_descriptors,
         frontier: bundle.frontier,
         signature: json!({
             "kid": format!("{service_did}#snapshot-dev"),
             "alg": "sha256-dev",
             "sig": sha256_hex(signature_payload.as_bytes())
         }),
+        merkle_root,
+        chunk_count: bundle.generator_proof.chunk_count,
+        chunk_bytes: bundle.generator_proof.chunk_bytes,
+        total_bytes: bundle.generator_proof.total_bytes,
+        generator_proof: generator_proof_value,
     }));
 }
 
@@ -1378,16 +1403,16 @@ async fn snapshot_chunk(depot: &mut Depot, req: &mut Request, res: &mut Response
         );
         return;
     };
-    let chunk_id = query_param(req, "chunk_id").unwrap_or_else(|| "0".to_owned());
-    if chunk_id != "0" {
+    let chunk_id_str = query_param(req, "chunk_id").unwrap_or_else(|| "0".to_owned());
+    let Ok(chunk_id) = chunk_id_str.parse::<u32>() else {
         render_error(
             res,
-            StatusCode::NOT_FOUND,
-            "not_found",
-            "snapshot chunk not found",
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            "chunk_id must be a non-negative integer",
         );
         return;
-    }
+    };
     let Some((space_id, expected_hash)) = parse_snapshot_ref(&snapshot_ref) else {
         render_error(
             res,
@@ -1414,27 +1439,35 @@ async fn snapshot_chunk(depot: &mut Depot, req: &mut Request, res: &mut Response
         );
         return;
     }
-
-    // Spec snapshot-frontier v2 (multi-chunk Merkle + signed generator
-    // proofs) requires SDK primitives that aren't in contrix-rust-sdk yet:
-    //   1. `SnapshotChunker` — deterministically partition the projection
-    //      state into fixed-size byte ranges with stable chunk_ids.
-    //   2. `SnapshotMerkleTree` — build a binary Merkle over chunk_id ⇒
-    //      sha256(chunk_bytes); top hash binds to `state_root`.
-    //   3. `GeneratorProof` — per-chunk generator signature so receivers
-    //      can verify a chunk without trusting the snapshot_ref source.
-    // Today we ship the entire snapshot as a single base64-url JSON chunk
-    // and verify the digest in-band — fine for small Spaces. The
-    // single-chunk envelope is forward-compatible with v2: callers that
-    // request `chunk_id != "0"` already see a 404, and the v2 enriched
-    // response shape can be added as additional optional fields.
+    // Snapshot v2 (round 9): chunks[N] is the SDK-canonical
+    // SnapshotChunk @ chunk_id=N. Out-of-range `chunk_id` returns 404.
+    let tree_size = bundle.tree.tree_size();
+    let Some(chunk) = bundle.chunks.get(chunk_id as usize) else {
+        render_error(
+            res,
+            StatusCode::NOT_FOUND,
+            "not_found",
+            "snapshot chunk not found",
+        );
+        return;
+    };
+    let audit_path = bundle
+        .tree
+        .audit_path(chunk_id as usize)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|h| h.as_str().to_owned())
+        .collect::<Vec<_>>();
     res.render(Json(json!({
         "snapshot_ref": snapshot_ref,
         "chunk_id": chunk_id,
         "media_type": "application/json",
         "encoding": "base64url",
-        "digest": bundle.state_hash,
-        "verified": format!("sha256:{}", sha256_hex(&bundle.chunk_bytes)) == bundle.state_hash,
-        "bytes_base64": URL_SAFE_NO_PAD.encode(&bundle.chunk_bytes),
+        "digest": chunk.digest.as_str(),
+        "verified": format!("sha256:{}", sha256_hex(&chunk.bytes)) == chunk.digest.as_str(),
+        "bytes_base64": URL_SAFE_NO_PAD.encode(&chunk.bytes),
+        "audit_path": audit_path,
+        "tree_size": tree_size,
+        "merkle_root": bundle.tree.root().as_str(),
     })));
 }

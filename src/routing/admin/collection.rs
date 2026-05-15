@@ -42,6 +42,32 @@ pub(super) async fn admin_collection(depot: &mut Depot, req: &mut Request, res: 
         );
         return;
     }
+    // Round 9: layer the per-scope check on top of the principal-DID
+    // allowlist. The ADMIN_READ scope is granted to every well-known
+    // admin DID in development_mode; production deployments require
+    // explicit grant via the upstream IdP.
+    match super::introspect_admin_scopes(state, req, &session).await {
+        Ok(grant) => {
+            if !grant.has_admin_scope(contrix_sdk::admin_scopes::ADMIN_READ) {
+                render_error(
+                    res,
+                    StatusCode::FORBIDDEN,
+                    "capability_denied",
+                    "admin collection API requires admin.read scope",
+                );
+                return;
+            }
+        }
+        Err(error) => {
+            render_error(
+                res,
+                error.http_status(),
+                "capability_denied",
+                &format!("admin scope check failed: {error}"),
+            );
+            return;
+        }
+    }
     let Some(resource) = req.param::<String>("resource") else {
         render_error(
             res,

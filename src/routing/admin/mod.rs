@@ -5,6 +5,9 @@ pub(crate) mod audit;
 mod cells;
 mod collection;
 mod control;
+mod introspect;
+
+pub(super) use introspect::{introspect_admin_scopes, require_admin_scope};
 
 use audit::append_audit_log;
 
@@ -71,6 +74,10 @@ pub fn admin_router() -> Router {
         .push(
             Router::with_path("spaces/{space_id}/anchor-dag/compact")
                 .post(anchor::admin_compact_anchor_dag),
+        )
+        .push(
+            Router::with_path("spaces/{space_id}/anchor-dag/prune")
+                .post(anchor::admin_prune_anchor_dag),
         )
         .push(
             Router::with_path("spaces/{space_id}/multisig/pending")

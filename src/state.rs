@@ -170,6 +170,16 @@ pub struct AppState {
     /// behind a [`Mutex`] (one-shot writes from the rotation path are not
     /// in the hot read path; the per-pass diagnostic helper just snapshots).
     pub anchorer_signing_key_origin: Arc<Mutex<AnchorerSigningKeyOrigin>>,
+    /// Round 9 (per-admin signing key): SDK
+    /// [`contrix_sdk::AdminKeyStore`] keyed by the `application_id`
+    /// `soland.<service_did>`. Each admin DID in
+    /// `config.admin_principal_dids` gets its own ed25519 signing seed
+    /// (provisioned at boot in `development_mode`; lazily loaded from the
+    /// platform keystore otherwise). The signer for an admin DID is
+    /// built via `admin_signer_for(state, admin_did)` — this replaces the
+    /// service-wide `service_admin_signer` shortcut for endpoints that
+    /// want operator attribution in the audit chain.
+    pub admin_keystore: Arc<contrix_sdk::AdminKeyStore>,
 }
 
 #[derive(Clone, Debug)]
@@ -618,6 +628,48 @@ impl AppState {
             Arc::new(ArcSwap::from_pointee(SigningKey::from_bytes(&signing_seed)));
         let anchorer_signing_key_origin = Arc::new(Mutex::new(anchorer_signing_key_origin));
 
+        // Round 9 (per-admin signing key): build a single
+        // [`AdminKeyStore`] for this principal. The application_id
+        // mirrors the AnchorerWorker pattern (`soland.<service_did>`) so
+        // operators only manage one secret-storage namespace.
+        //
+        // In `development_mode` we proactively mint an ephemeral seed
+        // for every DID listed in `admin_principal_dids` so smoke-tests
+        // can call admin endpoints under the operator DID without any
+        // out-of-band provisioning step. Production deployments must
+        // pre-populate the platform keystore explicitly — admin DIDs
+        // without a provisioned key fall back to
+        // `service_admin_signer` at signing time with a sticky-warn.
+        let admin_app_id = format!("soland.{}", config.service_did);
+        let admin_keystore_inner: Box<dyn contrix_sdk::KeyStore> = if config.use_keystore {
+            contrix_sdk::keystore::platform_default_keystore(&admin_app_id)
+        } else {
+            Box::new(contrix_sdk::keystore::InMemoryKeyStore::new())
+        };
+        let admin_keystore =
+            contrix_sdk::AdminKeyStore::new(admin_app_id.clone(), admin_keystore_inner);
+        if config.development_mode {
+            for did_str in &config.admin_principal_dids {
+                let Ok(did) = Did::new(did_str.clone()) else {
+                    tracing::warn!(%did_str, "skipping admin keystore provision: invalid DID shape");
+                    continue;
+                };
+                let has_key = admin_keystore.has_admin_key(&did).unwrap_or(false);
+                if !has_key {
+                    let mut seed = [0u8; 32];
+                    getrandom_seed(&mut seed);
+                    if let Err(error) = admin_keystore.store_admin_key(&did, &seed) {
+                        tracing::warn!(%error, %did_str,
+                            "failed to provision ephemeral admin signing key");
+                    } else {
+                        tracing::info!(%did_str,
+                            "provisioned ephemeral admin signing key (development_mode)");
+                    }
+                }
+            }
+        }
+        let admin_keystore = Arc::new(admin_keystore);
+
         Self {
             config,
             hlc: ServerHlc::new(&service_did),
@@ -643,6 +695,7 @@ impl AppState {
             event_broadcast: broadcast::channel::<EventNotification>(1024).0,
             anchorer_signing_key,
             anchorer_signing_key_origin,
+            admin_keystore,
         }
     }
 }

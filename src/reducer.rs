@@ -103,6 +103,49 @@ pub struct ProjectionState {
     /// / `relations` / `redactions`) stay structured per spec
     /// (those event kinds have no `cell_family` declaration).
     pub cells: BTreeMap<CellRef, CellState>,
+    /// Server-side Place projection — `place_id -> PlaceProjection`.
+    /// Maintains the canonical state-machine described in
+    /// `contrix-spec/v1/zh/models/common-fields.md §5.1` for cx.place.*
+    /// lifecycle events. Used by `event_log::submit_event` to reject
+    /// invalid transitions with HTTP 412 before persisting. Reducer
+    /// applies cx.place.create / update / parent / archive / restore /
+    /// tombstone; mirror table is `projection_places` (durable).
+    pub places: BTreeMap<String, PlaceProjection>,
+}
+
+/// Server-side Place state cache. Mirrors the `projection_places` table.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PlaceProjection {
+    pub place_id: String,
+    pub space_id: String,
+    pub kind: String,
+    pub title: String,
+    pub parent_ref: Option<String>,
+    pub rank: Option<String>,
+    pub state: PlaceLifecycleState,
+    pub state_changed_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub created_by: String,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub updated_by: Option<String>,
+    pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PlaceLifecycleState {
+    #[default]
+    Active,
+    Archived,
+    Tombstoned,
+}
+
+impl PlaceLifecycleState {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Archived => "archived",
+            Self::Tombstoned => "tombstoned",
+        }
+    }
 }
 
 /// Value of the parallel `redaction` cas-register
@@ -253,7 +296,29 @@ pub enum ProjectionEffect {
         space_id: String,
         action: String,
     },
+    /// Place lifecycle transition accepted; new state is reflected in
+    /// `ProjectionState::places` and (when persisted) `projection_places`.
+    PlaceLifecycle {
+        place_id: String,
+        new_state: PlaceLifecycleState,
+    },
+    /// State-machine rejected the operation per
+    /// `common-fields.md §5.1`. Routing layer maps this to HTTP 412
+    /// `failed_precondition` with the canonical reason_code.
+    Rejected {
+        reason: String,
+    },
     Ignored,
+}
+
+/// Which Place lifecycle transition is being attempted. Used by
+/// `apply_place_lifecycle` to share the state-machine guard across the
+/// three event kinds.
+#[derive(Clone, Copy, Debug)]
+enum PlaceLifecycleTransition {
+    Archive,
+    Restore,
+    Tombstone,
 }
 
 impl ProjectionState {
@@ -337,6 +402,24 @@ impl ProjectionState {
             Some(kind @ (CX_SPACE_CREATE | CX_SPACE_UPDATE | CX_SPACE_DESTROY)) => {
                 self.apply_space_lifecycle(operation, now, kind)
             }
+            Some(CX_PLACE_CREATE) => self.apply_place_create(operation, now),
+            Some(CX_PLACE_UPDATE) => self.apply_place_update(operation, now),
+            Some(CX_PLACE_PARENT) => self.apply_place_parent(operation, now),
+            Some(CX_PLACE_ARCHIVE) => self.apply_place_lifecycle(
+                operation,
+                now,
+                PlaceLifecycleTransition::Archive,
+            ),
+            Some(CX_PLACE_RESTORE) => self.apply_place_lifecycle(
+                operation,
+                now,
+                PlaceLifecycleTransition::Restore,
+            ),
+            Some(CX_PLACE_TOMBSTONE) => self.apply_place_lifecycle(
+                operation,
+                now,
+                PlaceLifecycleTransition::Tombstone,
+            ),
             // All cell-state events (cx.space.policy / cx.space.read_receipt_policy /
             // cx.consent.* / cx.member.state / cx.space.* facets) are routed via
             // the Move/Anchor pipeline through `LatticeKind` impls in
@@ -1097,6 +1180,307 @@ impl ProjectionState {
         }
 
         ProjectionEffect::SpaceLifecycle { space_id, action }
+    }
+
+    /// Read-only state-machine preflight for a `cx.place.*` lifecycle
+    /// operation. Returns `Err(reason_code)` if the projection's current
+    /// Place state forbids the transition per `common-fields.md §5.1`,
+    /// else `Ok(())`. Used by `event_log::submit_event` to short-circuit
+    /// HTTP admission with a 412 failed_precondition instead of letting
+    /// the reducer accept-then-reject after persistence. Unknown Place
+    /// (no prior cx.place.create projected) returns Ok — causal /
+    /// backfill ordering is allowed; the reducer also tolerates it.
+    pub fn check_place_lifecycle_transition(
+        &self,
+        operation: &Operation,
+    ) -> Result<(), &'static str> {
+        use crate::kinds::*;
+        let kind = match crate::kinds::canonical_kind_for_operation(operation) {
+            Some(k) => k,
+            None => return Ok(()),
+        };
+
+        // `cx.place.create` is unconditional (only constraint is that no
+        // existing place with the same id — but LWW overwrite is fine
+        // per the reducer's existing `insert`).
+        // `cx.place.update` / `cx.place.parent` require Active source.
+        // `cx.place.archive` requires Active.
+        // `cx.place.restore` requires Archived.
+        // `cx.place.tombstone` requires {Active, Archived}.
+        let (allowed_source, reason): (&[PlaceLifecycleState], &'static str) = match kind {
+            CX_PLACE_CREATE => return Ok(()),
+            CX_PLACE_UPDATE | CX_PLACE_PARENT => {
+                (&[PlaceLifecycleState::Active], "place_not_active")
+            }
+            CX_PLACE_ARCHIVE => (&[PlaceLifecycleState::Active], "place_not_active"),
+            CX_PLACE_RESTORE => (&[PlaceLifecycleState::Archived], "place_not_archived"),
+            CX_PLACE_TOMBSTONE => (
+                &[
+                    PlaceLifecycleState::Active,
+                    PlaceLifecycleState::Archived,
+                ],
+                "place_already_terminal",
+            ),
+            _ => return Ok(()),
+        };
+
+        let Some(place_id) = operation.payload.get("place_id").and_then(|v| v.as_str()) else {
+            // Missing place_id is a schema-validation problem caught
+            // upstream; preflight is not the right place to surface it.
+            return Ok(());
+        };
+        let Some(place) = self.places.get(place_id) else {
+            // Unknown — causal / backfill window. Don't block.
+            return Ok(());
+        };
+        if !allowed_source.contains(&place.state) {
+            return Err(reason);
+        }
+        Ok(())
+    }
+
+    /// Apply `cx.place.create` — populate the `places` projection from
+    /// the wire `object` field. Idempotent: re-create with the same id
+    /// overwrites the existing entry per LWW. Spec:
+    /// `space-and-place.md §4.2`.
+    fn apply_place_create(
+        &mut self,
+        operation: &Operation,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> ProjectionEffect {
+        let Some(object) = operation.payload.get("object").and_then(|v| v.as_object()) else {
+            return ProjectionEffect::Rejected {
+                reason: "place_create_missing_object".to_owned(),
+            };
+        };
+        let Some(place_id) = object.get("id").and_then(|v| v.as_str()).map(ToOwned::to_owned)
+        else {
+            return ProjectionEffect::Rejected {
+                reason: "place_create_missing_id".to_owned(),
+            };
+        };
+        let kind = object
+            .get("kind")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_owned();
+        let title = object
+            .get("title")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_owned();
+        let parent_ref = object
+            .get("parent_ref")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned);
+        let rank = object
+            .get("rank")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned);
+        let space_id = object
+            .get("space_id")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| operation.space_id.to_string());
+        let created_by = object
+            .get("created_by")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned)
+            .or_else(|| {
+                operation
+                    .payload
+                    .get("sender")
+                    .and_then(|v| v.as_str())
+                    .map(ToOwned::to_owned)
+            })
+            .unwrap_or_default();
+
+        let projection = PlaceProjection {
+            place_id: place_id.clone(),
+            space_id,
+            kind,
+            title,
+            parent_ref,
+            rank,
+            state: PlaceLifecycleState::Active,
+            state_changed_at: None,
+            created_by,
+            created_at: now,
+            updated_by: None,
+            updated_at: None,
+        };
+        self.places.insert(place_id.clone(), projection);
+
+        ProjectionEffect::PlaceLifecycle {
+            place_id,
+            new_state: PlaceLifecycleState::Active,
+        }
+    }
+
+    /// Apply `cx.place.update` — patch title / rank / fields on an
+    /// existing Place. Per common-fields.md §5.1 ("update on non-active
+    /// object MUST fail"): rejects with `place_not_active` if the target
+    /// is not in Active state. Unknown Place is tolerated.
+    fn apply_place_update(
+        &mut self,
+        operation: &Operation,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> ProjectionEffect {
+        let Some(place_id) = operation
+            .payload
+            .get("place_id")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned)
+        else {
+            return ProjectionEffect::Rejected {
+                reason: "place_update_missing_place_id".to_owned(),
+            };
+        };
+        let Some(place) = self.places.get_mut(&place_id) else {
+            return ProjectionEffect::Ignored;
+        };
+        if place.state != PlaceLifecycleState::Active {
+            return ProjectionEffect::Rejected {
+                reason: "place_not_active".to_owned(),
+            };
+        }
+        let patch = operation.payload.get("patch").and_then(|v| v.as_object());
+        if let Some(patch) = patch {
+            if let Some(title) = patch.get("title").and_then(|v| v.as_str()) {
+                place.title = title.to_owned();
+            }
+            if let Some(rank) = patch.get("rank").and_then(|v| v.as_str()) {
+                place.rank = Some(rank.to_owned());
+            }
+        }
+        place.updated_by = operation
+            .payload
+            .get("sender")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned);
+        place.updated_at = Some(now);
+        ProjectionEffect::PlaceLifecycle {
+            place_id,
+            new_state: place.state,
+        }
+    }
+
+    /// Apply `cx.place.parent` — update parent_ref. State-machine guard
+    /// (`parent on non-active MUST fail`) follows the same rule as
+    /// `apply_place_update`.
+    fn apply_place_parent(
+        &mut self,
+        operation: &Operation,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> ProjectionEffect {
+        let Some(place_id) = operation
+            .payload
+            .get("place_id")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned)
+        else {
+            return ProjectionEffect::Rejected {
+                reason: "place_parent_missing_place_id".to_owned(),
+            };
+        };
+        let parent_ref = operation
+            .payload
+            .get("parent_ref")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned);
+        let Some(place) = self.places.get_mut(&place_id) else {
+            return ProjectionEffect::Ignored;
+        };
+        if place.state != PlaceLifecycleState::Active {
+            return ProjectionEffect::Rejected {
+                reason: "place_not_active".to_owned(),
+            };
+        }
+        place.parent_ref = parent_ref;
+        place.updated_by = operation
+            .payload
+            .get("sender")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned);
+        place.updated_at = Some(now);
+        ProjectionEffect::PlaceLifecycle {
+            place_id,
+            new_state: place.state,
+        }
+    }
+
+    /// Apply a `cx.place.archive` / `cx.place.restore` / `cx.place.tombstone`
+    /// event with the canonical state-machine guard from
+    /// `common-fields.md §5.1`. Unknown Place (no prior cx.place.create in
+    /// the projection) is tolerated — returns `Ignored` so causal /
+    /// backfill ordering doesn't get flagged as invalid. Invalid source
+    /// state returns `Rejected { reason }` with the spec reason_code;
+    /// `event_log::submit_event` maps that to HTTP 412.
+    fn apply_place_lifecycle(
+        &mut self,
+        operation: &Operation,
+        now: chrono::DateTime<chrono::Utc>,
+        transition: PlaceLifecycleTransition,
+    ) -> ProjectionEffect {
+        let Some(place_id) = operation
+            .payload
+            .get("place_id")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned)
+        else {
+            return ProjectionEffect::Rejected {
+                reason: "missing_place_id".to_owned(),
+            };
+        };
+
+        let Some(place) = self.places.get_mut(&place_id) else {
+            // Unknown Place — likely the cx.place.create has not yet
+            // been projected (causal / backfill window). Tolerate
+            // silently per the spec convention (common-fields.md §5.1
+            // "未知对象容忍").
+            return ProjectionEffect::Ignored;
+        };
+
+        let (allowed_source, target_state, reason_on_invalid) = match transition {
+            PlaceLifecycleTransition::Archive => (
+                &[PlaceLifecycleState::Active][..],
+                PlaceLifecycleState::Archived,
+                "place_not_active",
+            ),
+            PlaceLifecycleTransition::Restore => (
+                &[PlaceLifecycleState::Archived][..],
+                PlaceLifecycleState::Active,
+                "place_not_archived",
+            ),
+            PlaceLifecycleTransition::Tombstone => (
+                &[
+                    PlaceLifecycleState::Active,
+                    PlaceLifecycleState::Archived,
+                ][..],
+                PlaceLifecycleState::Tombstoned,
+                "place_already_terminal",
+            ),
+        };
+
+        if !allowed_source.contains(&place.state) {
+            return ProjectionEffect::Rejected {
+                reason: reason_on_invalid.to_owned(),
+            };
+        }
+
+        place.state = target_state;
+        place.state_changed_at = Some(now);
+        place.updated_by = operation
+            .payload
+            .get("sender")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned);
+        place.updated_at = Some(now);
+
+        ProjectionEffect::PlaceLifecycle {
+            place_id,
+            new_state: target_state,
+        }
     }
 
     // ── Query helpers ──
@@ -2018,5 +2402,189 @@ mod tests {
                 .and_then(Value::as_bool),
             Some(false)
         );
+    }
+
+    /// End-to-end Place lifecycle through the dispatcher: create →
+    /// archive (active → archived) → restore (archived → active) →
+    /// tombstone (active → tombstoned). Verifies the projection's
+    /// `places` map tracks state transitions correctly and the
+    /// effects carry the new state.
+    #[test]
+    fn place_lifecycle_round_trip() {
+        let mut state = ProjectionState::new();
+        let hlc = ServerHlc::new("test");
+        let space_id = "cx:space:01904100-0000-7000-8000-cfc039892036";
+        let place_id = "cx:place:01904100-0000-7000-8000-1fb50799ad42";
+
+        // create
+        let create_effect = state.apply(
+            &make_operation(
+                crate::kinds::CX_PLACE_CREATE,
+                space_id,
+                serde_json::json!({
+                    "object": {
+                        "id": place_id,
+                        "space_id": space_id,
+                        "kind": "board",
+                        "title": "Roadmap",
+                        "created_by": "did:web:alice.example",
+                    }
+                }),
+            ),
+            &hlc,
+        );
+        assert!(matches!(create_effect, ProjectionEffect::PlaceLifecycle { new_state: PlaceLifecycleState::Active, .. }));
+        assert_eq!(state.places[place_id].state, PlaceLifecycleState::Active);
+
+        // archive
+        let archive_effect = state.apply(
+            &make_operation(
+                crate::kinds::CX_PLACE_ARCHIVE,
+                space_id,
+                serde_json::json!({ "place_id": place_id, "sender": "did:web:alice.example" }),
+            ),
+            &hlc,
+        );
+        assert!(matches!(archive_effect, ProjectionEffect::PlaceLifecycle { new_state: PlaceLifecycleState::Archived, .. }));
+        assert_eq!(state.places[place_id].state, PlaceLifecycleState::Archived);
+
+        // restore
+        let restore_effect = state.apply(
+            &make_operation(
+                crate::kinds::CX_PLACE_RESTORE,
+                space_id,
+                serde_json::json!({ "place_id": place_id, "sender": "did:web:alice.example" }),
+            ),
+            &hlc,
+        );
+        assert!(matches!(restore_effect, ProjectionEffect::PlaceLifecycle { new_state: PlaceLifecycleState::Active, .. }));
+        assert_eq!(state.places[place_id].state, PlaceLifecycleState::Active);
+
+        // tombstone
+        let tombstone_effect = state.apply(
+            &make_operation(
+                crate::kinds::CX_PLACE_TOMBSTONE,
+                space_id,
+                serde_json::json!({ "place_id": place_id, "sender": "did:web:alice.example" }),
+            ),
+            &hlc,
+        );
+        assert!(matches!(tombstone_effect, ProjectionEffect::PlaceLifecycle { new_state: PlaceLifecycleState::Tombstoned, .. }));
+        assert_eq!(state.places[place_id].state, PlaceLifecycleState::Tombstoned);
+    }
+
+    /// Preflight `check_place_lifecycle_transition` rejects each illegal
+    /// transition with the spec-canonical reason_code per
+    /// `contrix-spec/v1/zh/models/common-fields.md §5.1`.
+    #[test]
+    fn place_lifecycle_preflight_rejects_illegal_transitions() {
+        let mut state = ProjectionState::new();
+        let hlc = ServerHlc::new("test");
+        let space_id = "cx:space:01904100-0000-7000-8000-cfc039892036";
+        let place_id = "cx:place:01904100-0000-7000-8000-1fb50799ad43";
+
+        // Create the place (Active).
+        state.apply(
+            &make_operation(
+                crate::kinds::CX_PLACE_CREATE,
+                space_id,
+                serde_json::json!({
+                    "object": {
+                        "id": place_id,
+                        "space_id": space_id,
+                        "kind": "list",
+                        "title": "Todo",
+                        "created_by": "did:web:alice.example",
+                    }
+                }),
+            ),
+            &hlc,
+        );
+
+        // restore on Active → place_not_archived
+        let restore_op = make_operation(
+            crate::kinds::CX_PLACE_RESTORE,
+            space_id,
+            serde_json::json!({ "place_id": place_id }),
+        );
+        assert_eq!(
+            state.check_place_lifecycle_transition(&restore_op),
+            Err("place_not_archived")
+        );
+
+        // Archive then try archive again → place_not_active
+        state.apply(
+            &make_operation(
+                crate::kinds::CX_PLACE_ARCHIVE,
+                space_id,
+                serde_json::json!({ "place_id": place_id }),
+            ),
+            &hlc,
+        );
+        let archive_op = make_operation(
+            crate::kinds::CX_PLACE_ARCHIVE,
+            space_id,
+            serde_json::json!({ "place_id": place_id }),
+        );
+        assert_eq!(
+            state.check_place_lifecycle_transition(&archive_op),
+            Err("place_not_active")
+        );
+
+        // Tombstone (legal from Archived).
+        state.apply(
+            &make_operation(
+                crate::kinds::CX_PLACE_TOMBSTONE,
+                space_id,
+                serde_json::json!({ "place_id": place_id }),
+            ),
+            &hlc,
+        );
+        // Now restore on Tombstoned → still place_not_archived.
+        let restore_again = make_operation(
+            crate::kinds::CX_PLACE_RESTORE,
+            space_id,
+            serde_json::json!({ "place_id": place_id }),
+        );
+        assert_eq!(
+            state.check_place_lifecycle_transition(&restore_again),
+            Err("place_not_archived")
+        );
+        // Tombstone on Tombstoned → place_already_terminal.
+        let tombstone_again = make_operation(
+            crate::kinds::CX_PLACE_TOMBSTONE,
+            space_id,
+            serde_json::json!({ "place_id": place_id }),
+        );
+        assert_eq!(
+            state.check_place_lifecycle_transition(&tombstone_again),
+            Err("place_already_terminal")
+        );
+        // Update on Tombstoned → place_not_active.
+        let update_op = make_operation(
+            crate::kinds::CX_PLACE_UPDATE,
+            space_id,
+            serde_json::json!({
+                "place_id": place_id,
+                "patch": { "title": "Renamed while tombstoned" }
+            }),
+        );
+        assert_eq!(
+            state.check_place_lifecycle_transition(&update_op),
+            Err("place_not_active")
+        );
+    }
+
+    /// Preflight is permissive when the Place is unknown — causal /
+    /// backfill window. Spec: "未知对象容忍" rule in common-fields §5.1.
+    #[test]
+    fn place_lifecycle_preflight_tolerates_unknown_place() {
+        let state = ProjectionState::new();
+        let archive_unknown = make_operation(
+            crate::kinds::CX_PLACE_ARCHIVE,
+            "cx:space:01904100-0000-7000-8000-cfc039892036",
+            serde_json::json!({ "place_id": "cx:place:nope-not-here" }),
+        );
+        assert_eq!(state.check_place_lifecycle_transition(&archive_unknown), Ok(()));
     }
 }

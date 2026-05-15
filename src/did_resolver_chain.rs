@@ -197,6 +197,10 @@ mod tests {
             admin_principal_dids: Vec::new(),
             push_bridge_cache_ttl_seconds: 900,
             push_bridge_trusted_service_dids: Vec::new(),
+            compaction_min_anchor_age_seconds: 604_800,
+            compaction_min_witnesses: 1,
+            compaction_preserve_genesis: true,
+            compaction_prune_only_singleton_successors: true,
         }
     }
 

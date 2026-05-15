@@ -196,6 +196,10 @@ impl AnchorerWorker {
                 self.signature_for(state, &Sha256::digest(b"placeholder").as_slice().to_vec())?,
             ),
             hlc,
+            // Normal frontier-advance anchor. Compaction anchors (MAL-11)
+            // come through `admin_compact_anchor_dag`, not the regular
+            // anchorer pipeline.
+            kind: contrix_sdk::AnchorKind::Normal,
         };
 
         // canonical_bytes_for_id excludes anchorer_sig + id, so deriving id

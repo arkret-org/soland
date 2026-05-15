@@ -123,6 +123,31 @@ const SPACE_LIFECYCLE_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement
     "action",
     "space lifecycle operation requires action",
 )];
+// `cx.place.archive` / `cx.place.restore` / `cx.place.tombstone` share the same
+// shape: a single `place_id` field naming the target Place. The state-machine
+// guard (`place_not_archived` for restore) lives in both the SDK reducer
+// (`crates/sdk/src/resolver/state.rs::restore_place`) and soland round 11's
+// server-side guard (`event_log::ensure_place_state_machine_allows`).
+const PLACE_LIFECYCLE_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::Required(
+    "place_id",
+    "place lifecycle operation requires place_id",
+)];
+// `cx.place.create` carries a full Place object under `object`.
+const PLACE_CREATE_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::Required(
+    "object",
+    "place create operation requires object",
+)];
+// `cx.place.update` carries `place_id` + `patch`.
+const PLACE_UPDATE_REQUIREMENTS: &[PayloadRequirement] = &[
+    PayloadRequirement::Required("place_id", "place update operation requires place_id"),
+    PayloadRequirement::Required("patch", "place update operation requires patch"),
+];
+// `cx.place.parent` carries `place_id` + `parent_ref` (parent is cx:place: or
+// cx:space: within the same Space).
+const PLACE_PARENT_REQUIREMENTS: &[PayloadRequirement] = &[
+    PayloadRequirement::Required("place_id", "place parent operation requires place_id"),
+    PayloadRequirement::Required("parent_ref", "place parent operation requires parent_ref"),
+];
 const READ_MARKER_REQUIREMENTS: &[PayloadRequirement] = &[
     PayloadRequirement::AnyOf(
         READ_MARKER_ACTOR_FIELDS,
@@ -251,6 +276,22 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
         },
         kind if kinds::is_space_lifecycle_kind(kind) => OperationPayloadSchema {
             requirements: SPACE_LIFECYCLE_REQUIREMENTS,
+            validate: None,
+        },
+        kind if kinds::is_place_lifecycle_kind(kind) => OperationPayloadSchema {
+            requirements: PLACE_LIFECYCLE_REQUIREMENTS,
+            validate: None,
+        },
+        kinds::CX_PLACE_CREATE => OperationPayloadSchema {
+            requirements: PLACE_CREATE_REQUIREMENTS,
+            validate: None,
+        },
+        kinds::CX_PLACE_UPDATE => OperationPayloadSchema {
+            requirements: PLACE_UPDATE_REQUIREMENTS,
+            validate: None,
+        },
+        kinds::CX_PLACE_PARENT => OperationPayloadSchema {
+            requirements: PLACE_PARENT_REQUIREMENTS,
             validate: None,
         },
         kind if matches!(

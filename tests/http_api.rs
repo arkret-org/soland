@@ -49,6 +49,10 @@ fn test_config() -> AppConfig {
         admin_principal_dids: Vec::new(),
         push_bridge_cache_ttl_seconds: 900,
         push_bridge_trusted_service_dids: Vec::new(),
+        compaction_min_anchor_age_seconds: 604_800,
+        compaction_min_witnesses: 1,
+        compaction_preserve_genesis: true,
+        compaction_prune_only_singleton_successors: true,
     }
 }
 
@@ -2064,8 +2068,30 @@ async fn account_contacts_and_space_lifecycle_workflow() {
     );
     assert!(!snapshot["signature"]["sig"].as_str().unwrap().is_empty());
     assert_eq!(snapshot["manifest"]["reducer_profile"], "cx.reducer.v1");
-    assert_eq!(snapshot["chunks"][0]["chunk_id"], "0");
+    // Snapshot v2 (round 9): chunk_id is now a typed integer in the SDK
+    // shape; small test states fit in a single 256 KiB chunk so chunk[0]
+    // .digest is the state_hash and chunk_count == 1.
+    assert_eq!(snapshot["chunks"][0]["chunk_id"], 0);
     assert_eq!(snapshot["chunks"][0]["digest"], snapshot["state_hash"]);
+    assert_eq!(snapshot["chunk_count"], 1);
+    assert_eq!(
+        snapshot["merkle_root"].as_str().unwrap(),
+        snapshot["state_hash"].as_str().unwrap(),
+        "single-chunk Merkle root collapses to the leaf digest"
+    );
+    // GeneratorProof envelope is present + carries a non-empty signature.
+    let proof = &snapshot["generator_proof"];
+    assert!(proof.is_object(), "generator_proof must be present");
+    assert!(
+        !proof["signature"]["jws"].as_str().unwrap().is_empty(),
+        "generator_proof.signature.jws must be non-empty"
+    );
+    assert_eq!(proof["chunk_count"], 1);
+    assert_eq!(
+        proof["space_id"].as_str().unwrap(),
+        space_id,
+        "generator_proof.space_id matches the snapshot space"
+    );
 
     let snapshot_chunk: Value = TestClient::get(format!(
         "http://server/api/v1/sync/snapshot-chunk?snapshot_ref={}&chunk_id=0",
@@ -2079,6 +2105,19 @@ async fn account_contacts_and_space_lifecycle_workflow() {
     assert_eq!(snapshot_chunk["digest"], snapshot["state_hash"]);
     assert_eq!(snapshot_chunk["verified"], true);
     assert!(!snapshot_chunk["bytes_base64"].as_str().unwrap().is_empty());
+    // Snapshot v2: chunk responses surface the audit-path so receivers
+    // can verify the chunk against the head's merkle_root without
+    // trusting the chunk source.
+    assert!(snapshot_chunk["audit_path"].is_array());
+    assert_eq!(
+        snapshot_chunk["tree_size"], 1,
+        "single-chunk tree has tree_size == 1"
+    );
+    assert_eq!(
+        snapshot_chunk["merkle_root"].as_str().unwrap(),
+        snapshot["merkle_root"].as_str().unwrap(),
+        "chunk merkle_root matches head merkle_root"
+    );
 
     let kicked: Value = TestClient::delete(format!(
         "http://server/api/v1/spaces/{space_id}/members/did:web:bob.example"
@@ -4577,4 +4616,104 @@ async fn policy_check_and_validation_work() {
         .send(&app())
         .await;
     assert_eq!(invalid.status_code.unwrap().as_u16(), 400);
+}
+
+#[tokio::test]
+async fn snapshot_v2_audit_path_verifies_against_merkle_root() {
+    // B4: end-to-end snapshot v2 wire shape check. The single-chunk
+    // case is exercised inline in `account_contacts_and_space_lifecycle_workflow`
+    // — this test focuses on the SDK round-trip: head publishes a
+    // generator-proof + merkle_root; chunk returns a chunk-bytes +
+    // audit_path; `SnapshotMerkleTree::verify(root, leaf, idx, path, n)`
+    // accepts the result. For a single-chunk snapshot the audit path is
+    // empty and the leaf digest IS the root, so verify reduces to
+    // `leaf == root` — but the wire-shape contract is what matters here.
+    let state = AppState::new(test_config(), Db { pool: None });
+    let alice = dev_token(state.clone()).await;
+
+    let space: Value = TestClient::post("http://server/api/v1/spaces")
+        .add_header("authorization", format!("Bearer {alice}"), true)
+        .json(&serde_json::json!({
+            "title": "snapshot-v2-test",
+            "summary": "B4 snapshot v2 wire-shape test",
+            "public": true,
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    let space_id = space["space_id"].as_str().unwrap().to_owned();
+
+    let head: Value = TestClient::get(format!(
+        "http://server/api/v1/sync/snapshot-head?space_id={space_id}"
+    ))
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
+
+    // Wire shape — v2 fields all present.
+    assert!(head["merkle_root"].is_string());
+    assert!(head["chunk_count"].is_number());
+    assert!(head["chunk_bytes"].is_number());
+    assert!(head["total_bytes"].is_number());
+    let proof = &head["generator_proof"];
+    assert_eq!(
+        proof["space_id"].as_str().unwrap(),
+        space_id,
+        "generator_proof binds the snapshot to its space"
+    );
+    assert_eq!(
+        proof["merkle_root"].as_str().unwrap(),
+        head["merkle_root"].as_str().unwrap()
+    );
+    assert!(
+        !proof["signature"]["jws"].as_str().unwrap().is_empty(),
+        "generator_proof.signature.jws is populated"
+    );
+
+    // Walk every chunk: pull the chunk, verify the audit path round-trips
+    // through `SnapshotMerkleTree::verify`.
+    let chunk_count = head["chunk_count"].as_u64().unwrap();
+    let tree_size = chunk_count as usize;
+    let snapshot_ref = head["snapshot_ref"].as_str().unwrap();
+    let root = contrix_sdk::Hash::new(head["merkle_root"].as_str().unwrap().to_owned()).unwrap();
+    for chunk_id in 0..chunk_count {
+        let chunk: Value = TestClient::get(format!(
+            "http://server/api/v1/sync/snapshot-chunk?snapshot_ref={snapshot_ref}&chunk_id={chunk_id}"
+        ))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+        assert_eq!(chunk["chunk_id"], chunk_id);
+        let leaf = contrix_sdk::Hash::new(chunk["digest"].as_str().unwrap().to_owned()).unwrap();
+        let audit_path: Vec<contrix_sdk::Hash> = chunk["audit_path"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|h| contrix_sdk::Hash::new(h.as_str().unwrap().to_owned()).unwrap())
+            .collect();
+        assert!(
+            contrix_sdk::SnapshotMerkleTree::verify(
+                &root,
+                &leaf,
+                chunk_id as usize,
+                &audit_path,
+                tree_size,
+            ),
+            "audit_path for chunk {chunk_id} must reconstruct to merkle_root"
+        );
+    }
+
+    // Out-of-range chunk_id returns 404, not a placeholder.
+    let oob = TestClient::get(format!(
+        "http://server/api/v1/sync/snapshot-chunk?snapshot_ref={snapshot_ref}&chunk_id={chunk_count}"
+    ))
+    .send(&app_from_state(state.clone()))
+    .await;
+    assert_eq!(oob.status_code.unwrap().as_u16(), 404);
 }
