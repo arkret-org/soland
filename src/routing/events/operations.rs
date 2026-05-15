@@ -148,6 +148,36 @@ const PLACE_PARENT_REQUIREMENTS: &[PayloadRequirement] = &[
     PayloadRequirement::Required("place_id", "place parent operation requires place_id"),
     PayloadRequirement::Required("parent_ref", "place parent operation requires parent_ref"),
 ];
+// Round 13 — Flow / Morph lifecycle payload requirements. Spec
+// `common-fields.md §5.1` mandates the same `<kind>_id`-only payload for
+// archive / restore as Place uses for archive/restore/tombstone. Create
+// carries a full object; update carries `<kind>_id` + `patch`.
+// `cx.flow.archive` / `cx.flow.restore` payload: just `flow_id`.
+const FLOW_LIFECYCLE_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::Required(
+    "flow_id",
+    "flow lifecycle operation requires flow_id",
+)];
+const FLOW_CREATE_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::Required(
+    "object",
+    "flow create operation requires object",
+)];
+const FLOW_UPDATE_REQUIREMENTS: &[PayloadRequirement] = &[
+    PayloadRequirement::Required("flow_id", "flow update operation requires flow_id"),
+    PayloadRequirement::Required("patch", "flow update operation requires patch"),
+];
+// `cx.morph.archive` / `cx.morph.restore` payload: just `morph_id`.
+const MORPH_LIFECYCLE_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::Required(
+    "morph_id",
+    "morph lifecycle operation requires morph_id",
+)];
+const MORPH_CREATE_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::Required(
+    "object",
+    "morph create operation requires object",
+)];
+const MORPH_UPDATE_REQUIREMENTS: &[PayloadRequirement] = &[
+    PayloadRequirement::Required("morph_id", "morph update operation requires morph_id"),
+    PayloadRequirement::Required("patch", "morph update operation requires patch"),
+];
 const READ_MARKER_REQUIREMENTS: &[PayloadRequirement] = &[
     PayloadRequirement::AnyOf(
         READ_MARKER_ACTOR_FIELDS,
@@ -292,6 +322,30 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
         },
         kinds::CX_PLACE_PARENT => OperationPayloadSchema {
             requirements: PLACE_PARENT_REQUIREMENTS,
+            validate: None,
+        },
+        kind if kinds::is_flow_lifecycle_kind(kind) => OperationPayloadSchema {
+            requirements: FLOW_LIFECYCLE_REQUIREMENTS,
+            validate: None,
+        },
+        kinds::CX_FLOW_CREATE => OperationPayloadSchema {
+            requirements: FLOW_CREATE_REQUIREMENTS,
+            validate: None,
+        },
+        kinds::CX_FLOW_UPDATE => OperationPayloadSchema {
+            requirements: FLOW_UPDATE_REQUIREMENTS,
+            validate: None,
+        },
+        kind if kinds::is_morph_lifecycle_kind(kind) => OperationPayloadSchema {
+            requirements: MORPH_LIFECYCLE_REQUIREMENTS,
+            validate: None,
+        },
+        kinds::CX_MORPH_CREATE => OperationPayloadSchema {
+            requirements: MORPH_CREATE_REQUIREMENTS,
+            validate: None,
+        },
+        kinds::CX_MORPH_UPDATE => OperationPayloadSchema {
+            requirements: MORPH_UPDATE_REQUIREMENTS,
             validate: None,
         },
         kind if matches!(

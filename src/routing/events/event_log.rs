@@ -265,11 +265,23 @@ async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Response) 
             render_error(res, StatusCode::FORBIDDEN, "policy_denied", message);
             return;
         }
-        // Server-side state-machine preflight for cx.place.* lifecycle
-        // events (round 11). Reject invalid transitions with HTTP 412
-        // before persisting per contrix-spec common-fields.md §5.1.
+        // Server-side state-machine preflight for cx.place.* / cx.flow.* /
+        // cx.morph.* lifecycle events. Reject invalid transitions with
+        // HTTP 412 before persisting per contrix-spec common-fields.md §5.1.
+        //   - round 11: Place
+        //   - round 13: Flow + Morph (mirror Place pattern; Flow/Morph
+        //     have no tombstone, so only update/archive/restore reject
+        //     paths surface here as create is unconditional).
         if let Ok(proj) = state.projection.lock() {
             if let Err(reason) = proj.check_place_lifecycle_transition(operation) {
+                render_error(res, StatusCode::PRECONDITION_FAILED, reason, reason);
+                return;
+            }
+            if let Err(reason) = proj.check_flow_lifecycle_transition(operation) {
+                render_error(res, StatusCode::PRECONDITION_FAILED, reason, reason);
+                return;
+            }
+            if let Err(reason) = proj.check_morph_lifecycle_transition(operation) {
                 render_error(res, StatusCode::PRECONDITION_FAILED, reason, reason);
                 return;
             }
@@ -1242,14 +1254,15 @@ fn event_semantic_refs(
 }
 
 fn event_canonical_source(envelope: &Value) -> Value {
+    // Per contrix-spec conformance-vectors.md §1.6: both the event digest and
+    // every proof's `payload_hash` MUST be derived from canonical event bytes
+    // with `proofs` and `unsigned` removed. Stripping derived `canonical_*`
+    // slots as well keeps fixtures that round-trip them in the envelope from
+    // poisoning the digest.
     let mut value = envelope.clone();
     if let Value::Object(object) = &mut value {
-        // The canonical digest must round-trip with the client-side helper:
-        // the test fixture's `event_canonical_digest` removes only the derived
-        // `canonical_digest` / `canonical_hash` slots (so the digest is over
-        // the entire submitted envelope minus its own digest fields). We
-        // mirror that exactly. The spec's signature-only digest (proofs/unsigned
-        // stripped) lives on the proof object's `payload_hash` field — not here.
+        object.remove("proofs");
+        object.remove("unsigned");
         object.remove("canonical_digest");
         object.remove("canonical_hash");
     }

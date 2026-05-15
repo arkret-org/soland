@@ -346,6 +346,41 @@ diesel::table! {
     }
 }
 
+// Round 13 — Flow / Morph projection state for cx.flow.* / cx.morph.*
+// lifecycle events. Spec: contrix-spec/v1/zh/models/common-fields.md §5.1
+// (canonical state-transition table). State enum mirrors ObjectState
+// from contrix-sdk: active / archived / deleted / redacted (no
+// "tombstoned" — Flow / Morph have no dedicated tombstone event).
+diesel::table! {
+    projection_flows (flow_id) {
+        flow_id -> Text,
+        space_id -> Text,
+        title -> Text,
+        summary -> Nullable<Text>,
+        state -> Text,
+        state_changed_at -> Nullable<Timestamptz>,
+        created_by -> Text,
+        created_at -> Timestamptz,
+        updated_by -> Nullable<Text>,
+        updated_at -> Nullable<Timestamptz>,
+    }
+}
+
+diesel::table! {
+    projection_morphs (morph_id) {
+        morph_id -> Text,
+        space_id -> Text,
+        morph_type -> Text,
+        title -> Nullable<Text>,
+        state -> Text,
+        state_changed_at -> Nullable<Timestamptz>,
+        created_by -> Text,
+        created_at -> Timestamptz,
+        updated_by -> Nullable<Text>,
+        updated_at -> Nullable<Timestamptz>,
+    }
+}
+
 diesel::allow_tables_to_appear_in_same_query!(
     accounts,
     sessions,
@@ -373,4 +408,6 @@ diesel::allow_tables_to_appear_in_same_query!(
     space_state_events,
     account_datas,
     projection_places,
+    projection_flows,
+    projection_morphs,
 );

@@ -23,6 +23,20 @@ pub const CX_PLACE_PARENT: &str = "cx.place.parent";
 pub const CX_PLACE_ARCHIVE: &str = "cx.place.archive";
 pub const CX_PLACE_RESTORE: &str = "cx.place.restore";
 pub const CX_PLACE_TOMBSTONE: &str = "cx.place.tombstone";
+// Flow lifecycle (round 13 — Flow projection state machine). spec
+// `common-fields.md §5.1` Flow row: active / archived / redacted / deleted.
+// Flow has no dedicated `cx.flow.tombstone` event (terminal state reached
+// via `cx.redaction`); only archive/restore are state-machine transitions
+// here.
+pub const CX_FLOW_CREATE: &str = "cx.flow.create";
+pub const CX_FLOW_UPDATE: &str = "cx.flow.update";
+pub const CX_FLOW_ARCHIVE: &str = "cx.flow.archive";
+pub const CX_FLOW_RESTORE: &str = "cx.flow.restore";
+// Morph lifecycle (round 13). Same shape as Flow — no dedicated tombstone.
+pub const CX_MORPH_CREATE: &str = "cx.morph.create";
+pub const CX_MORPH_UPDATE: &str = "cx.morph.update";
+pub const CX_MORPH_ARCHIVE: &str = "cx.morph.archive";
+pub const CX_MORPH_RESTORE: &str = "cx.morph.restore";
 pub const CX_FIELD_POSITION_MOVE: &str = "cx.field.position.move";
 pub const CX_FIELD_POSITION_REORDER: &str = "cx.field.position.reorder";
 pub const CX_CONTAINER_MOVE_ITEM: &str = "cx.container.move_item";
@@ -69,6 +83,14 @@ fn canonical_registered_kind(object_type: &str) -> Option<&'static str> {
         CX_PLACE_ARCHIVE => Some(CX_PLACE_ARCHIVE),
         CX_PLACE_RESTORE => Some(CX_PLACE_RESTORE),
         CX_PLACE_TOMBSTONE => Some(CX_PLACE_TOMBSTONE),
+        CX_FLOW_CREATE => Some(CX_FLOW_CREATE),
+        CX_FLOW_UPDATE => Some(CX_FLOW_UPDATE),
+        CX_FLOW_ARCHIVE => Some(CX_FLOW_ARCHIVE),
+        CX_FLOW_RESTORE => Some(CX_FLOW_RESTORE),
+        CX_MORPH_CREATE => Some(CX_MORPH_CREATE),
+        CX_MORPH_UPDATE => Some(CX_MORPH_UPDATE),
+        CX_MORPH_ARCHIVE => Some(CX_MORPH_ARCHIVE),
+        CX_MORPH_RESTORE => Some(CX_MORPH_RESTORE),
         CX_FIELD_POSITION_MOVE => Some(CX_FIELD_POSITION_MOVE),
         CX_FIELD_POSITION_REORDER => Some(CX_FIELD_POSITION_REORDER),
         CX_CONTAINER_MOVE_ITEM => Some(CX_CONTAINER_MOVE_ITEM),
@@ -117,4 +139,16 @@ pub fn is_space_lifecycle_kind(kind: &str) -> bool {
 
 pub fn is_place_lifecycle_kind(kind: &str) -> bool {
     matches!(kind, CX_PLACE_ARCHIVE | CX_PLACE_RESTORE | CX_PLACE_TOMBSTONE)
+}
+
+/// Flow has no dedicated `cx.flow.tombstone` event in the spec event-kind
+/// registry — terminal state is reached via `cx.redaction`. Only archive /
+/// restore are lifecycle state-machine transitions here.
+pub fn is_flow_lifecycle_kind(kind: &str) -> bool {
+    matches!(kind, CX_FLOW_ARCHIVE | CX_FLOW_RESTORE)
+}
+
+/// Morph has no dedicated tombstone event for the same reason as Flow.
+pub fn is_morph_lifecycle_kind(kind: &str) -> bool {
+    matches!(kind, CX_MORPH_ARCHIVE | CX_MORPH_RESTORE)
 }

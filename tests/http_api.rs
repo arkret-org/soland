@@ -472,6 +472,19 @@ async fn events_describe_and_single_event_submit_work() {
         .unwrap();
     assert_eq!(second_submitted["status"], "accepted");
 
+    // Round 13: `cx.flow.create` now has a schema requirement (payload
+    // MUST carry `object`) because it's in the canonical-kind registry;
+    // prior to round 13 it passed as an opaque envelope. Use a real Flow
+    // object payload so this smoke test still exercises the cross-family
+    // accept path (kind/schema combo distinct from `cx.message.create`).
+    let artifact_kind_payload = serde_json::json!({
+        "object": {
+            "id": "cx:flow:01904100-0000-7000-8000-aa11ccff0001",
+            "space_id": "cx:space:0196419b-0000-7000-8000-000000000000",
+            "title": "Onboarding flow",
+            "created_by": "did:web:alice.example",
+        }
+    });
     let mut artifact_kind_event = signed_event_envelope(
         "cx:event:01904100-0000-7000-8000-df827a7269a3",
         3,
@@ -479,6 +492,9 @@ async fn events_describe_and_single_event_submit_work() {
     );
     artifact_kind_event["kind"] = Value::String("cx.flow.create".to_owned());
     artifact_kind_event["schema_id"] = Value::String("cx.schema.flow.v1".to_owned());
+    artifact_kind_event["payload"] = artifact_kind_payload.clone();
+    artifact_kind_event["proofs"][0]["payload_hash"] =
+        Value::String(sha256_json(&artifact_kind_payload));
     artifact_kind_event["canonical_digest"] =
         Value::String(event_canonical_digest(&artifact_kind_event));
     let artifact_kind_submitted: Value = TestClient::post("http://server/api/v1/events")
@@ -4909,4 +4925,279 @@ async fn place_lifecycle_state_machine_returns_412_for_illegal_transitions() {
     );
     let body: Value = bad_restore_terminal_response.take_json().await.unwrap();
     assert_eq!(body["error"]["errcode"], "place_not_archived");
+}
+
+/// Build a signed `cx.flow.*` event envelope for the Flow state-machine
+/// integration test. Mirror of `signed_place_event` with a Flow-specific
+/// schema_id.
+fn signed_flow_event(
+    event_id: &str,
+    actor_seq: u64,
+    kind: &str,
+    payload: Value,
+    prev_refs: Vec<&str>,
+) -> Value {
+    let mut event = serde_json::json!({
+        "event_id": event_id,
+        "kind": kind,
+        "schema_id": "cx.schema.flow.v1",
+        "actor_id": "did:web:alice.example",
+        "actor_seq": actor_seq,
+        "space_id": "cx:space:0196419b-0000-7000-8000-000000000000",
+        "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
+        "audience": "did:web:soland.local",
+        "domain": "did:web:soland.local",
+        "prev_refs": prev_refs,
+        "auth_refs": [],
+        "payload": payload.clone(),
+        "proofs": [{
+            "type": "dev-proof",
+            "verification_method": "did:web:alice.example#01904100-0000-7000-8000-a11ce0000001",
+            "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
+            "audience": "did:web:soland.local",
+            "domain": "did:web:soland.local",
+            "payload_hash": sha256_json(&payload)
+        }]
+    });
+    event["canonical_digest"] = Value::String(event_canonical_digest(&event));
+    event
+}
+
+/// Build a signed `cx.morph.*` event envelope.
+fn signed_morph_event(
+    event_id: &str,
+    actor_seq: u64,
+    kind: &str,
+    payload: Value,
+    prev_refs: Vec<&str>,
+) -> Value {
+    let mut event = serde_json::json!({
+        "event_id": event_id,
+        "kind": kind,
+        "schema_id": "cx.schema.morph.v1",
+        "actor_id": "did:web:alice.example",
+        "actor_seq": actor_seq,
+        "space_id": "cx:space:0196419b-0000-7000-8000-000000000000",
+        "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
+        "audience": "did:web:soland.local",
+        "domain": "did:web:soland.local",
+        "prev_refs": prev_refs,
+        "auth_refs": [],
+        "payload": payload.clone(),
+        "proofs": [{
+            "type": "dev-proof",
+            "verification_method": "did:web:alice.example#01904100-0000-7000-8000-a11ce0000001",
+            "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
+            "audience": "did:web:soland.local",
+            "domain": "did:web:soland.local",
+            "payload_hash": sha256_json(&payload)
+        }]
+    });
+    event["canonical_digest"] = Value::String(event_canonical_digest(&event));
+    event
+}
+
+/// Round 13 — end-to-end check that Flow / Morph lifecycle state-machine
+/// guards map to HTTP 412 + canonical reason_code per spec §5.1. Mirrors
+/// `place_lifecycle_state_machine_returns_412_for_illegal_transitions`
+/// from round 11. Combined Flow+Morph in one test to keep the suite small.
+#[tokio::test]
+async fn flow_morph_lifecycle_state_machine_returns_412_for_illegal_transitions() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+    let flow_id = "cx:flow:01904100-0000-7000-8000-e10dc0000001";
+    let morph_id = "cx:morph:01904100-0000-7000-8000-e20dc0000001";
+
+    // ── Flow path ────────────────────────────────────────────────────
+
+    // 1) flow create — Active.
+    let create_flow = signed_flow_event(
+        "cx:event:01904100-0000-7000-8000-e10ec0000001",
+        1,
+        "cx.flow.create",
+        serde_json::json!({
+            "object": {
+                "id": flow_id,
+                "space_id": "cx:space:0196419b-0000-7000-8000-000000000000",
+                "title": "Launch flow",
+                "created_by": "did:web:alice.example",
+            }
+        }),
+        Vec::new(),
+    );
+    let response: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&create_flow)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(response["status"], "accepted");
+
+    // 2) flow restore on Active → 412 flow_not_archived.
+    let bad_restore = signed_flow_event(
+        "cx:event:01904100-0000-7000-8000-e10ec0000002",
+        2,
+        "cx.flow.restore",
+        serde_json::json!({ "flow_id": flow_id }),
+        vec!["cx:event:01904100-0000-7000-8000-e10ec0000001"],
+    );
+    let mut resp = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&bad_restore)
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(resp.status_code.unwrap().as_u16(), 412);
+    let body: Value = resp.take_json().await.unwrap();
+    assert_eq!(body["error"]["errcode"], "flow_not_archived");
+
+    // 3) flow archive — legal.
+    let archive = signed_flow_event(
+        "cx:event:01904100-0000-7000-8000-e10ec0000003",
+        3,
+        "cx.flow.archive",
+        serde_json::json!({ "flow_id": flow_id }),
+        vec!["cx:event:01904100-0000-7000-8000-e10ec0000001"],
+    );
+    let resp: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&archive)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(resp["status"], "accepted");
+
+    // 4) flow archive again on Archived → 412 flow_not_active.
+    let bad_archive = signed_flow_event(
+        "cx:event:01904100-0000-7000-8000-e10ec0000004",
+        4,
+        "cx.flow.archive",
+        serde_json::json!({ "flow_id": flow_id }),
+        vec!["cx:event:01904100-0000-7000-8000-e10ec0000003"],
+    );
+    let mut resp = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&bad_archive)
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(resp.status_code.unwrap().as_u16(), 412);
+    let body: Value = resp.take_json().await.unwrap();
+    assert_eq!(body["error"]["errcode"], "flow_not_active");
+
+    // 5) flow update on Archived → 412 flow_not_active.
+    let bad_update = signed_flow_event(
+        "cx:event:01904100-0000-7000-8000-e10ec0000005",
+        5,
+        "cx.flow.update",
+        serde_json::json!({ "flow_id": flow_id, "patch": { "title": "Edit while archived" } }),
+        vec!["cx:event:01904100-0000-7000-8000-e10ec0000003"],
+    );
+    let mut resp = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&bad_update)
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(resp.status_code.unwrap().as_u16(), 412);
+    let body: Value = resp.take_json().await.unwrap();
+    assert_eq!(body["error"]["errcode"], "flow_not_active");
+
+    // 6) flow restore — legal now.
+    let good_restore = signed_flow_event(
+        "cx:event:01904100-0000-7000-8000-e10ec0000006",
+        6,
+        "cx.flow.restore",
+        serde_json::json!({ "flow_id": flow_id }),
+        vec!["cx:event:01904100-0000-7000-8000-e10ec0000003"],
+    );
+    let resp: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&good_restore)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(resp["status"], "accepted");
+
+    // ── Morph path ───────────────────────────────────────────────────
+
+    let create_morph = signed_morph_event(
+        "cx:event:01904100-0000-7000-8000-e20ec0000001",
+        7,
+        "cx.morph.create",
+        serde_json::json!({
+            "object": {
+                "id": morph_id,
+                "space_id": "cx:space:0196419b-0000-7000-8000-000000000000",
+                "morph_type": "task",
+                "title": "Backfill",
+                "created_by": "did:web:alice.example",
+            }
+        }),
+        Vec::new(),
+    );
+    let resp: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&create_morph)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(resp["status"], "accepted");
+
+    // morph restore on Active → 412 morph_not_archived.
+    let bad_morph_restore = signed_morph_event(
+        "cx:event:01904100-0000-7000-8000-e20ec0000002",
+        8,
+        "cx.morph.restore",
+        serde_json::json!({ "morph_id": morph_id }),
+        vec!["cx:event:01904100-0000-7000-8000-e20ec0000001"],
+    );
+    let mut resp = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&bad_morph_restore)
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(resp.status_code.unwrap().as_u16(), 412);
+    let body: Value = resp.take_json().await.unwrap();
+    assert_eq!(body["error"]["errcode"], "morph_not_archived");
+
+    // morph archive — legal.
+    let morph_archive = signed_morph_event(
+        "cx:event:01904100-0000-7000-8000-e20ec0000003",
+        9,
+        "cx.morph.archive",
+        serde_json::json!({ "morph_id": morph_id }),
+        vec!["cx:event:01904100-0000-7000-8000-e20ec0000001"],
+    );
+    let resp: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&morph_archive)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(resp["status"], "accepted");
+
+    // morph update on Archived → 412 morph_not_active.
+    let bad_morph_update = signed_morph_event(
+        "cx:event:01904100-0000-7000-8000-e20ec0000004",
+        10,
+        "cx.morph.update",
+        serde_json::json!({ "morph_id": morph_id, "patch": { "title": "Renamed" } }),
+        vec!["cx:event:01904100-0000-7000-8000-e20ec0000003"],
+    );
+    let mut resp = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&bad_morph_update)
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(resp.status_code.unwrap().as_u16(), 412);
+    let body: Value = resp.take_json().await.unwrap();
+    assert_eq!(body["error"]["errcode"], "morph_not_active");
 }

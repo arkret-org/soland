@@ -4,12 +4,12 @@
 > spec 参考：`contrix-spec/spec/v1/`、`contrix-spec/spec/v1/artifacts/`。
 > 激进模式 — v1 未发布，发现 spec drift 直接 rip and replace，不留兼容垫片。
 
-## 当前测试状态 (2026-05-15 round 12 第一遍 — OpenAPI ToSchema 补 4 个 wire 类型)
+## 当前测试状态 (2026-05-16 round 13 close — Flow / Morph projection state machine)
 
-- `cargo test --lib` — **187 / 187** 全绿(round 10 baseline 184 + round 11 新增 3 条 Place projection / preflight tests;round 12 不涉及 lib 测试)。
-- `cargo test --test http_api` — **41 / 41** 全绿(round 11 新增 `place_lifecycle_state_machine_returns_412_for_illegal_transitions`,覆盖完整 wire path:create → archive → restore → tombstone happy path + 三处 412 拒绝:`place_not_archived`、`place_already_terminal`、`place_not_archived` on Tombstoned)。
+- `cargo test --lib` — **193 / 193** 全绿(round 12 baseline 187 + round 13 新增 6 条 Flow/Morph projection / preflight tests:`flow_lifecycle_round_trip`、`flow_lifecycle_preflight_rejects_illegal_transitions`、`flow_lifecycle_preflight_tolerates_unknown_flow`、对应 3 条 morph)。
+- `cargo test --test http_api` — **42 / 42** 全绿(round 13 新增 `flow_morph_lifecycle_state_machine_returns_412_for_illegal_transitions`,覆盖 Flow + Morph 完整 wire path:create → restore-on-Active(412)→ archive → archive-again(412)→ update-on-Archived(412)→ restore,morph 同款;同时修正 `events_describe_and_single_event_submit_work` 用 cx.flow.create payload 现在必须含 `object` 字段)。
 - `cargo test --test move_anchor_wire` — **28 / 28** 全绿。
-- `cargo test --test openapi_typed` — **1 / 1** 全绿(round 12 新增 forward-compat guard:4 个候选类型 currently NOT 出现在 yaml,因为 handler 还没 typed signature;guard 在 handler 转换后会翻转)。
+- `cargo test --test openapi_typed` — **1 / 1** 全绿。
 - `cargo build` — **0 warning**。
 
 ## Round 10：Place lifecycle 收敛（cx.place.restore + 同族 archive/tombstone)
@@ -64,18 +64,48 @@
 - **Flow / Morph projection state + server-side guards** — Place 这套架构可以直接复用,只是字段不同。等 SDK 加 archive/tombstone 源状态校验(SDK round 10 候选)之后做。
 - **Capability check at submit_event for cx.place.\*** — 当前 admission path 没 inline capability check;`cx.place.restore` capability action 已在 contrix-spec 注册,但 soland 不消费。下个 round 加。
 
-## 续作（round 12：候选）
+## Round 13：Flow / Morph projection state machine(2026-05-16)
 
-Round 9 / 10 / 11 都已落地。后续候选:
+Round 11 给 Place 做了完整 server-side state machine 后,Flow / Morph 整族(SDK round 9/10 已经在 SDK reducer 层补齐了状态机 guard)在 soland 这一层还是 "opaque envelope" 透传。本轮把它们升到与 Place 同档:canonical-kind 注册 + operation schema validator + `ProjectionState` state map + reducer apply 分支 + state-machine preflight + HTTP 412 wire 映射 + unit/integration tests。**与 Place 唯一的结构差异**:spec event-kind 注册表里 `cx.flow.*` / `cx.morph.*` 都**没有** `tombstone` event(终态走 `cx.redaction`),所以 lifecycle dispatcher 只覆盖 archive / restore 两条路径。Terminal 状态 (`deleted` / `redacted`) 在状态机里仍然存在(因为 cx.redaction 可以把对象推到那里),但本轮不实现 redaction 入口——独立 round 处理。
+
+**SDK 配套**:本轮先把 SDK round 10 落了(`contrix-rust-sdk/_todos.md` round 10:archive_flow / archive_morph / archive_place 加 source-state guard、tombstone_place 加 terminal guard、update_flow / update_morph / update_place 加 non-active reject;SDK CHANGELOG Unreleased 顶部已记录,SDK lib +8 条新 resolver 测试全绿)。然后 soland 端镜像。
+
+| 优先级 | 任务 | 处置 |
+|---|---|---|
+| H | [x] **R13-1** SDK round 10:`crates/sdk/src/resolver/state.rs` 加 archive/tombstone/update 源状态守卫,8 条新测试,_todos.md + CHANGELOG 收尾 | 已落地,684 → 692 SDK tests(contrix=342,新增 8 条 round-10 guard tests)。 |
+| H | [x] **R13-2** `src/kinds.rs` 加 `CX_FLOW_CREATE/UPDATE/ARCHIVE/RESTORE`、`CX_MORPH_CREATE/UPDATE/ARCHIVE/RESTORE` 常量;canonical registry 接入;新增 `is_flow_lifecycle_kind` / `is_morph_lifecycle_kind` 助手 | move/reorder/track.* 不在本轮范围(留 round 14)。 |
+| H | [x] **R13-3** `src/routing/events/operations.rs` 加 6 个新 requirements(`FLOW_CREATE/UPDATE/LIFECYCLE`、`MORPH_CREATE/UPDATE/LIFECYCLE`)+ `operation_schema_for_kind` dispatcher 加 Flow/Morph arms;`routing/mod.rs::operation_conformance_tests` 加 10 条 vector(8 positive + 2 negative) | `builtin_operation_conformance_vectors_cover_registry` 全绿。 |
+| H | [x] **R13-4** SQL migration `migrations/20260516000000_flow_morph_projection/{up,down}.sql` 创建 `projection_flows` / `projection_morphs` 双表,state CHECK IN `('active','archived','deleted','redacted')`(注:不同于 Place 的 `'tombstoned'`);3+3 索引(space / state / morph_type) | `src/schema.rs` 同步加两个 `diesel::table!` 块。 |
+| H | [x] **R13-5** `src/reducer.rs::ProjectionState` 加 `flows: BTreeMap<String, FlowProjection>` + `morphs: BTreeMap<String, MorphProjection>`;`FlowProjection` / `MorphProjection` 字段镜像 Pg 表;新增 `ObjectLifecycleState` enum(Active/Archived/Deleted/Redacted,`is_terminal()` 返 `Deleted | Redacted`),Flow / Morph 共用(spec §5.1 同款) | Place 仍用 `PlaceLifecycleState`(独立 Tombstoned 终态)。 |
+| H | [x] **R13-6** `ProjectionEffect` 加 `FlowLifecycle { flow_id, new_state }` / `MorphLifecycle { morph_id, new_state }` variants;`ObjectLifecycleTransition` enum 私有(只 Archive / Restore)用于在两条路径间共享 guard 逻辑 | Reuse `Rejected { reason }` variant from round 11。 |
+| H | [x] **R13-7** `apply()` dispatcher 加 8 个 Flow/Morph arm:`CX_FLOW_CREATE → apply_flow_create`、`CX_FLOW_UPDATE → apply_flow_update`、`CX_FLOW_ARCHIVE/RESTORE → apply_flow_lifecycle(Archive/Restore)`,morph 4 个同款 | dispatcher 总分支数从 ~25 增加到 ~33。 |
+| H | [x] **R13-8** `apply_flow_create` 从 payload `object` 抽 id/title/summary/space_id/created_by,插 `flows` map 状态 Active;`apply_flow_update` / `apply_flow_lifecycle` 各做 spec §5.1 state-machine 校验;morph 三个 helper 镜像 | 所有 helper 对 unknown object 返 `Ignored`(causal 容忍)。 |
+| H | [x] **R13-9** `pub fn check_flow_lifecycle_transition` / `pub fn check_morph_lifecycle_transition` 只读 preflight,return `Result<(), &'static str>` 给 event_log 用 | 两个 helper 各覆盖 create(unconditional)+ update/archive(active source)+ restore(archived source)。 |
+| H | [x] **R13-10** `event_log::submit_event` preflight 段从单调 `check_place_lifecycle_transition` 扩展为依次 check Place / Flow / Morph;任一失败立刻 `render_error(StatusCode::PRECONDITION_FAILED, reason, reason)` 返 412 | spec failed_precondition → HTTP 412 直接 path,与 Place 同档。 |
+| H | [x] **R13-11** `reducer::tests` 新增 6 条 Flow/Morph 单测:`flow_lifecycle_round_trip`、`flow_lifecycle_preflight_rejects_illegal_transitions`(restore-on-Active / re-archive / update-on-Archived 三件)、`flow_lifecycle_preflight_tolerates_unknown_flow`,morph 3 个同款 |  |
+| H | [x] **R13-12** `tests/http_api.rs::flow_morph_lifecycle_state_machine_returns_412_for_illegal_transitions`:走真 `POST /api/v1/events` 提交 envelope,覆盖 Flow / Morph 各自的 happy path(create / archive / restore)+ 5 处 412(flow_not_archived / flow_not_active ×2 / morph_not_archived / morph_not_active);新增 `signed_flow_event` / `signed_morph_event` helper | Regression fix:`events_describe_and_single_event_submit_work` 用 `cx.flow.create` 必须现在带 `object` 字段(round 13 之前透传)。 |
+| H | [x] **R13-13** `cargo build` / `cargo test --lib`(193 / 193)/ http_api(42 / 42)/ move_anchor_wire(28 / 28)/ openapi_typed(1 / 1)全绿 | 总 264 tests pass,0 warnings。 |
+
+### 范围外(round 14+ 候选)
+
+- **`cx.flow.move` / `cx.flow.reorder` 接入** — 这两个事件不影响 state machine(都是 position-only),但目前还是 opaque envelope。加 canonical registry + operation requirements 即可,无需 reducer state machine 改动。
+- **`cx.flow.track.*` 接入** — 4 个 track 子事件(disable/enable/set_primary/update)是 Flow 内部嵌套结构,需要先在 reducer 加 `FlowProjection::tracks` 字段。范围较大独立处理。
+- **`cx.redaction` 对 Flow / Morph 状态机的影响** — spec §5.1 说 redaction 会把对象推到 `redacted` 终态;当前 soland 的 `apply_redaction` 只处理 message 路径,没消费 Flow / Morph 的 redaction 目标。下一轮加。
+- **Pg persistence for projection_flows / projection_morphs** — schema 已就绪,reducer apply 时还没 write-through 到 DB;同 Place 的 round 12 候选,独立 round。
+
+## 续作（round 14：候选）
+
+Round 9 / 10 / 11 / 12 / 13 都已落地。后续候选:
 
 | 优先级 | 主题 | 处置 |
 |---|---|---|
-| M | Pg-backed `projection_places` | 见 round 11 范围外。schema 已就绪,差 `PgPlaceProjectionStore` impl + reducer write-through + startup hydrate。 |
-| M | Pg-backed `projection_events` | 独立 migration：`projection_events` trait 已经准备好，只缺一份 SQL schema + `PgProjectionEventStore` impl。 |
-| M | Flow / Morph projection state machine | round 11 给 Place 做了一遍,Flow / Morph 同款。等 SDK round 10 落了再做。 |
-| M | MAL-11 prune walk 自动化 | 当前 `anchor-dag/prune` 只支持显式 `{anchor_id}` 调用；后台 worker 周期性遍历 DAG 跑 `CompactionPolicy::is_eligible` 也可以做，但要先有运营痛点。 |
-| L | OpenAPI 完整 `ToSchema` 化(remaining) | 2026-05-15 round 12 第一遍:为 `FederationAnchorsResponse` / `FederationAnchorsPushRequest` / `FederationAnchorsPushResponse`(`src/routing/federation/federation.rs`)+ `EmbeddedWebvhRegisterRequest`(`src/routing/identity/did.rs`)加 `salvo::oapi::ToSchema` 派生。`tests/openapi_typed.rs` 加 forward-compat guard:这 4 个类型当前不出现在生成 YAML 中,因为对应 handler 仍走 `&mut Response` + `req.parse_json::<T>()` 的非 typed plumbing;guard 会在 handler 转 `JsonResult<T>` / `JsonBody<T>` typed signature 之后翻转。**剩余工作**:把 federation/anchors 三个 endpoint + embedded_webvh_register endpoint 转 typed signature,把 guard 翻成 positive assertion。继续 grep `&mut Response` + `req.parse_json` 找下一批 untyped handler 候选。 |
-| L | Snapshot v2 multi-chunk fixture | 当前 B4 跑的是 single-chunk case；构造一个大于 256 KiB 的测试 space 来真的走 audit_path 非空路径。 |
+| M | Pg-backed `projection_places` / `projection_flows` / `projection_morphs` | 三张表 schema 都就绪,差 `PgPlaceProjectionStore` / `PgFlowProjectionStore` / `PgMorphProjectionStore` impl + reducer write-through + startup hydrate。 |
+| M | Pg-backed `projection_events` | 独立 migration:`projection_events` trait 已经准备好,只缺一份 SQL schema + `PgProjectionEventStore` impl。 |
+| M | `cx.flow.move` / `cx.flow.reorder` / `cx.flow.track.*` 接入 | 见 round 13 范围外。track.* 需要 reducer state 加 tracks 字段。 |
+| M | `cx.redaction` 对 Flow / Morph 状态机的影响 | 见 round 13 范围外。 |
+| M | MAL-11 prune walk 自动化 | 当前 `anchor-dag/prune` 只支持显式 `{anchor_id}` 调用;后台 worker 周期性遍历 DAG 跑 `CompactionPolicy::is_eligible` 也可以做,但要先有运营痛点。 |
+| L | OpenAPI 完整 `ToSchema` 化(remaining) | 2026-05-15 round 12 第一遍为 `FederationAnchorsResponse` / `FederationAnchorsPushRequest` / `FederationAnchorsPushResponse` / `EmbeddedWebvhRegisterRequest` 加了 derive。剩余工作:把对应 handler 转 typed signature(`JsonResult<T>` / `JsonBody<T>`),`tests/openapi_typed.rs` forward-compat guard 翻成 positive assertion。继续 grep `&mut Response` + `req.parse_json` 找下一批 untyped handler 候选。 |
+| L | Snapshot v2 multi-chunk fixture | 当前 B4 跑的是 single-chunk case;构造一个大于 256 KiB 的测试 space 来真的走 audit_path 非空路径。 |
 
 ## 维护规则
 

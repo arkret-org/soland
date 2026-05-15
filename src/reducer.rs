@@ -111,6 +111,15 @@ pub struct ProjectionState {
     /// applies cx.place.create / update / parent / archive / restore /
     /// tombstone; mirror table is `projection_places` (durable).
     pub places: BTreeMap<String, PlaceProjection>,
+    /// Round 13 — Server-side Flow projection. Mirrors the canonical
+    /// state-machine for cx.flow.create / update / archive / restore.
+    /// Unlike Place there is no dedicated `cx.flow.tombstone` event;
+    /// terminal state is reached via `cx.redaction`. Mirror table is
+    /// `projection_flows` (durable).
+    pub flows: BTreeMap<String, FlowProjection>,
+    /// Round 13 — Server-side Morph projection. Same shape as Flow.
+    /// Mirror table is `projection_morphs` (durable).
+    pub morphs: BTreeMap<String, MorphProjection>,
 }
 
 /// Server-side Place state cache. Mirrors the `projection_places` table.
@@ -145,6 +154,69 @@ impl PlaceLifecycleState {
             Self::Archived => "archived",
             Self::Tombstoned => "tombstoned",
         }
+    }
+}
+
+/// Server-side Flow state cache. Mirrors `projection_flows` table.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FlowProjection {
+    pub flow_id: String,
+    pub space_id: String,
+    pub title: String,
+    pub summary: Option<String>,
+    pub state: ObjectLifecycleState,
+    pub state_changed_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub created_by: String,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub updated_by: Option<String>,
+    pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+/// Server-side Morph state cache. Mirrors `projection_morphs` table.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MorphProjection {
+    pub morph_id: String,
+    pub space_id: String,
+    pub morph_type: String,
+    pub title: Option<String>,
+    pub state: ObjectLifecycleState,
+    pub state_changed_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub created_by: String,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub updated_by: Option<String>,
+    pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+/// State enum shared by Flow and Morph projections (mirrors SDK
+/// `contrix_sdk::ObjectState`). Unlike `PlaceLifecycleState` which has a
+/// single `Tombstoned` terminal, Flow / Morph distinguish the two terminal
+/// kinds `Deleted` (reached via cx.redaction with a delete intent) from
+/// `Redacted` (content cleared, audit envelope preserved). Per spec §5.1
+/// both are equivalent for state-machine purposes — neither admits any
+/// transition out, so the soland reducer reuses one enum.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ObjectLifecycleState {
+    #[default]
+    Active,
+    Archived,
+    Deleted,
+    Redacted,
+}
+
+impl ObjectLifecycleState {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Archived => "archived",
+            Self::Deleted => "deleted",
+            Self::Redacted => "redacted",
+        }
+    }
+
+    /// Terminal state per spec §5.1: `tombstoned / deleted / redacted` are
+    /// equivalent unrecoverable terminals.
+    pub fn is_terminal(&self) -> bool {
+        matches!(self, Self::Deleted | Self::Redacted)
     }
 }
 
@@ -302,6 +374,17 @@ pub enum ProjectionEffect {
         place_id: String,
         new_state: PlaceLifecycleState,
     },
+    /// Round 13 — Flow lifecycle transition accepted. Mirror of
+    /// `PlaceLifecycle` for `ProjectionState::flows`.
+    FlowLifecycle {
+        flow_id: String,
+        new_state: ObjectLifecycleState,
+    },
+    /// Round 13 — Morph lifecycle transition accepted. Same shape as Flow.
+    MorphLifecycle {
+        morph_id: String,
+        new_state: ObjectLifecycleState,
+    },
     /// State-machine rejected the operation per
     /// `common-fields.md §5.1`. Routing layer maps this to HTTP 412
     /// `failed_precondition` with the canonical reason_code.
@@ -319,6 +402,14 @@ enum PlaceLifecycleTransition {
     Archive,
     Restore,
     Tombstone,
+}
+
+/// Round 13 — Flow / Morph lifecycle transition picker. Mirror of
+/// `PlaceLifecycleTransition` but for the two-event family (no tombstone).
+#[derive(Clone, Copy, Debug)]
+enum ObjectLifecycleTransition {
+    Archive,
+    Restore,
 }
 
 impl ProjectionState {
@@ -419,6 +510,30 @@ impl ProjectionState {
                 operation,
                 now,
                 PlaceLifecycleTransition::Tombstone,
+            ),
+            Some(CX_FLOW_CREATE) => self.apply_flow_create(operation, now),
+            Some(CX_FLOW_UPDATE) => self.apply_flow_update(operation, now),
+            Some(CX_FLOW_ARCHIVE) => self.apply_flow_lifecycle(
+                operation,
+                now,
+                ObjectLifecycleTransition::Archive,
+            ),
+            Some(CX_FLOW_RESTORE) => self.apply_flow_lifecycle(
+                operation,
+                now,
+                ObjectLifecycleTransition::Restore,
+            ),
+            Some(CX_MORPH_CREATE) => self.apply_morph_create(operation, now),
+            Some(CX_MORPH_UPDATE) => self.apply_morph_update(operation, now),
+            Some(CX_MORPH_ARCHIVE) => self.apply_morph_lifecycle(
+                operation,
+                now,
+                ObjectLifecycleTransition::Archive,
+            ),
+            Some(CX_MORPH_RESTORE) => self.apply_morph_lifecycle(
+                operation,
+                now,
+                ObjectLifecycleTransition::Restore,
             ),
             // All cell-state events (cx.space.policy / cx.space.read_receipt_policy /
             // cx.consent.* / cx.member.state / cx.space.* facets) are routed via
@@ -1479,6 +1594,406 @@ impl ProjectionState {
 
         ProjectionEffect::PlaceLifecycle {
             place_id,
+            new_state: target_state,
+        }
+    }
+
+    // ── Round 13: Flow / Morph projection state machine ──
+
+    /// Read-only state-machine preflight for a `cx.flow.*` lifecycle event.
+    /// Mirror of `check_place_lifecycle_transition` — used by
+    /// `event_log::submit_event` to short-circuit HTTP admission with 412
+    /// failed_precondition. Unknown Flow returns `Ok` (causal/backfill
+    /// tolerance per common-fields.md §5.1).
+    pub fn check_flow_lifecycle_transition(
+        &self,
+        operation: &Operation,
+    ) -> Result<(), &'static str> {
+        use crate::kinds::*;
+        let kind = match crate::kinds::canonical_kind_for_operation(operation) {
+            Some(k) => k,
+            None => return Ok(()),
+        };
+        // `cx.flow.create` is unconditional (no current state to validate).
+        // `cx.flow.update` requires Active source.
+        // `cx.flow.archive` requires Active source.
+        // `cx.flow.restore` requires Archived source.
+        let (allowed_source, reason): (&[ObjectLifecycleState], &'static str) = match kind {
+            CX_FLOW_CREATE => return Ok(()),
+            CX_FLOW_UPDATE => (&[ObjectLifecycleState::Active], "flow_not_active"),
+            CX_FLOW_ARCHIVE => (&[ObjectLifecycleState::Active], "flow_not_active"),
+            CX_FLOW_RESTORE => (&[ObjectLifecycleState::Archived], "flow_not_archived"),
+            _ => return Ok(()),
+        };
+        let Some(flow_id) = operation.payload.get("flow_id").and_then(|v| v.as_str()) else {
+            // Missing flow_id is caught upstream by the operation-schema
+            // validator; preflight tolerates absence to keep responsibilities
+            // separate.
+            return Ok(());
+        };
+        let Some(flow) = self.flows.get(flow_id) else {
+            return Ok(());
+        };
+        if !allowed_source.contains(&flow.state) {
+            return Err(reason);
+        }
+        Ok(())
+    }
+
+    /// Read-only state-machine preflight for a `cx.morph.*` lifecycle event.
+    /// Same shape as `check_flow_lifecycle_transition`.
+    pub fn check_morph_lifecycle_transition(
+        &self,
+        operation: &Operation,
+    ) -> Result<(), &'static str> {
+        use crate::kinds::*;
+        let kind = match crate::kinds::canonical_kind_for_operation(operation) {
+            Some(k) => k,
+            None => return Ok(()),
+        };
+        let (allowed_source, reason): (&[ObjectLifecycleState], &'static str) = match kind {
+            CX_MORPH_CREATE => return Ok(()),
+            CX_MORPH_UPDATE => (&[ObjectLifecycleState::Active], "morph_not_active"),
+            CX_MORPH_ARCHIVE => (&[ObjectLifecycleState::Active], "morph_not_active"),
+            CX_MORPH_RESTORE => (&[ObjectLifecycleState::Archived], "morph_not_archived"),
+            _ => return Ok(()),
+        };
+        let Some(morph_id) = operation.payload.get("morph_id").and_then(|v| v.as_str()) else {
+            return Ok(());
+        };
+        let Some(morph) = self.morphs.get(morph_id) else {
+            return Ok(());
+        };
+        if !allowed_source.contains(&morph.state) {
+            return Err(reason);
+        }
+        Ok(())
+    }
+
+    /// Apply `cx.flow.create` — populate the `flows` projection from
+    /// the wire `object` field. Spec: common-fields.md §5 + flow schema.
+    /// Idempotent: re-create with same id overwrites the existing entry
+    /// (LWW), but the preflight will accept it since `cx.flow.create` has
+    /// no source-state guard.
+    fn apply_flow_create(
+        &mut self,
+        operation: &Operation,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> ProjectionEffect {
+        let Some(object) = operation.payload.get("object").and_then(|v| v.as_object()) else {
+            return ProjectionEffect::Rejected {
+                reason: "flow_create_missing_object".to_owned(),
+            };
+        };
+        let Some(flow_id) = object.get("id").and_then(|v| v.as_str()).map(ToOwned::to_owned)
+        else {
+            return ProjectionEffect::Rejected {
+                reason: "flow_create_missing_id".to_owned(),
+            };
+        };
+        let title = object
+            .get("title")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_owned();
+        let summary = object
+            .get("summary")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned);
+        let space_id = object
+            .get("space_id")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| operation.space_id.to_string());
+        let created_by = object
+            .get("created_by")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned)
+            .or_else(|| {
+                operation
+                    .payload
+                    .get("sender")
+                    .and_then(|v| v.as_str())
+                    .map(ToOwned::to_owned)
+            })
+            .unwrap_or_default();
+
+        let projection = FlowProjection {
+            flow_id: flow_id.clone(),
+            space_id,
+            title,
+            summary,
+            state: ObjectLifecycleState::Active,
+            state_changed_at: None,
+            created_by,
+            created_at: now,
+            updated_by: None,
+            updated_at: None,
+        };
+        self.flows.insert(flow_id.clone(), projection);
+
+        ProjectionEffect::FlowLifecycle {
+            flow_id,
+            new_state: ObjectLifecycleState::Active,
+        }
+    }
+
+    /// Apply `cx.flow.update` — patch title / summary on an existing Flow.
+    /// Spec common-fields.md §5.1: update on non-active object MUST fail
+    /// with `flow_not_active`. Unknown Flow tolerated.
+    fn apply_flow_update(
+        &mut self,
+        operation: &Operation,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> ProjectionEffect {
+        let Some(flow_id) = operation
+            .payload
+            .get("flow_id")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned)
+        else {
+            return ProjectionEffect::Rejected {
+                reason: "flow_update_missing_flow_id".to_owned(),
+            };
+        };
+        let Some(flow) = self.flows.get_mut(&flow_id) else {
+            return ProjectionEffect::Ignored;
+        };
+        if flow.state != ObjectLifecycleState::Active {
+            return ProjectionEffect::Rejected {
+                reason: "flow_not_active".to_owned(),
+            };
+        }
+        let patch = operation.payload.get("patch").and_then(|v| v.as_object());
+        if let Some(patch) = patch {
+            if let Some(title) = patch.get("title").and_then(|v| v.as_str()) {
+                flow.title = title.to_owned();
+            }
+            if let Some(summary) = patch.get("summary").and_then(|v| v.as_str()) {
+                flow.summary = Some(summary.to_owned());
+            }
+        }
+        flow.updated_by = operation
+            .payload
+            .get("sender")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned);
+        flow.updated_at = Some(now);
+        ProjectionEffect::FlowLifecycle {
+            flow_id,
+            new_state: flow.state,
+        }
+    }
+
+    /// Apply `cx.flow.archive` / `cx.flow.restore`. Spec
+    /// `common-fields.md §5.1`. Unknown Flow tolerated.
+    fn apply_flow_lifecycle(
+        &mut self,
+        operation: &Operation,
+        now: chrono::DateTime<chrono::Utc>,
+        transition: ObjectLifecycleTransition,
+    ) -> ProjectionEffect {
+        let Some(flow_id) = operation
+            .payload
+            .get("flow_id")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned)
+        else {
+            return ProjectionEffect::Rejected {
+                reason: "missing_flow_id".to_owned(),
+            };
+        };
+        let Some(flow) = self.flows.get_mut(&flow_id) else {
+            return ProjectionEffect::Ignored;
+        };
+        let (allowed_source, target_state, reason_on_invalid) = match transition {
+            ObjectLifecycleTransition::Archive => (
+                &[ObjectLifecycleState::Active][..],
+                ObjectLifecycleState::Archived,
+                "flow_not_active",
+            ),
+            ObjectLifecycleTransition::Restore => (
+                &[ObjectLifecycleState::Archived][..],
+                ObjectLifecycleState::Active,
+                "flow_not_archived",
+            ),
+        };
+        if !allowed_source.contains(&flow.state) {
+            return ProjectionEffect::Rejected {
+                reason: reason_on_invalid.to_owned(),
+            };
+        }
+        flow.state = target_state;
+        flow.state_changed_at = Some(now);
+        flow.updated_by = operation
+            .payload
+            .get("sender")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned);
+        flow.updated_at = Some(now);
+        ProjectionEffect::FlowLifecycle {
+            flow_id,
+            new_state: target_state,
+        }
+    }
+
+    /// Apply `cx.morph.create`. Mirror of `apply_flow_create`.
+    fn apply_morph_create(
+        &mut self,
+        operation: &Operation,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> ProjectionEffect {
+        let Some(object) = operation.payload.get("object").and_then(|v| v.as_object()) else {
+            return ProjectionEffect::Rejected {
+                reason: "morph_create_missing_object".to_owned(),
+            };
+        };
+        let Some(morph_id) = object.get("id").and_then(|v| v.as_str()).map(ToOwned::to_owned)
+        else {
+            return ProjectionEffect::Rejected {
+                reason: "morph_create_missing_id".to_owned(),
+            };
+        };
+        let morph_type = object
+            .get("morph_type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_owned();
+        let title = object
+            .get("title")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned);
+        let space_id = object
+            .get("space_id")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| operation.space_id.to_string());
+        let created_by = object
+            .get("created_by")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned)
+            .or_else(|| {
+                operation
+                    .payload
+                    .get("sender")
+                    .and_then(|v| v.as_str())
+                    .map(ToOwned::to_owned)
+            })
+            .unwrap_or_default();
+
+        let projection = MorphProjection {
+            morph_id: morph_id.clone(),
+            space_id,
+            morph_type,
+            title,
+            state: ObjectLifecycleState::Active,
+            state_changed_at: None,
+            created_by,
+            created_at: now,
+            updated_by: None,
+            updated_at: None,
+        };
+        self.morphs.insert(morph_id.clone(), projection);
+
+        ProjectionEffect::MorphLifecycle {
+            morph_id,
+            new_state: ObjectLifecycleState::Active,
+        }
+    }
+
+    /// Apply `cx.morph.update`. Mirror of `apply_flow_update`.
+    fn apply_morph_update(
+        &mut self,
+        operation: &Operation,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> ProjectionEffect {
+        let Some(morph_id) = operation
+            .payload
+            .get("morph_id")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned)
+        else {
+            return ProjectionEffect::Rejected {
+                reason: "morph_update_missing_morph_id".to_owned(),
+            };
+        };
+        let Some(morph) = self.morphs.get_mut(&morph_id) else {
+            return ProjectionEffect::Ignored;
+        };
+        if morph.state != ObjectLifecycleState::Active {
+            return ProjectionEffect::Rejected {
+                reason: "morph_not_active".to_owned(),
+            };
+        }
+        let patch = operation.payload.get("patch").and_then(|v| v.as_object());
+        if let Some(patch) = patch {
+            if let Some(title) = patch.get("title").and_then(|v| v.as_str()) {
+                morph.title = Some(title.to_owned());
+            }
+            if let Some(morph_type) = patch.get("morph_type").and_then(|v| v.as_str()) {
+                morph.morph_type = morph_type.to_owned();
+            }
+        }
+        morph.updated_by = operation
+            .payload
+            .get("sender")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned);
+        morph.updated_at = Some(now);
+        ProjectionEffect::MorphLifecycle {
+            morph_id,
+            new_state: morph.state,
+        }
+    }
+
+    /// Apply `cx.morph.archive` / `cx.morph.restore`. Mirror of
+    /// `apply_flow_lifecycle`.
+    fn apply_morph_lifecycle(
+        &mut self,
+        operation: &Operation,
+        now: chrono::DateTime<chrono::Utc>,
+        transition: ObjectLifecycleTransition,
+    ) -> ProjectionEffect {
+        let Some(morph_id) = operation
+            .payload
+            .get("morph_id")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned)
+        else {
+            return ProjectionEffect::Rejected {
+                reason: "missing_morph_id".to_owned(),
+            };
+        };
+        let Some(morph) = self.morphs.get_mut(&morph_id) else {
+            return ProjectionEffect::Ignored;
+        };
+        let (allowed_source, target_state, reason_on_invalid) = match transition {
+            ObjectLifecycleTransition::Archive => (
+                &[ObjectLifecycleState::Active][..],
+                ObjectLifecycleState::Archived,
+                "morph_not_active",
+            ),
+            ObjectLifecycleTransition::Restore => (
+                &[ObjectLifecycleState::Archived][..],
+                ObjectLifecycleState::Active,
+                "morph_not_archived",
+            ),
+        };
+        if !allowed_source.contains(&morph.state) {
+            return ProjectionEffect::Rejected {
+                reason: reason_on_invalid.to_owned(),
+            };
+        }
+        morph.state = target_state;
+        morph.state_changed_at = Some(now);
+        morph.updated_by = operation
+            .payload
+            .get("sender")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned);
+        morph.updated_at = Some(now);
+        ProjectionEffect::MorphLifecycle {
+            morph_id,
             new_state: target_state,
         }
     }
@@ -2586,5 +3101,286 @@ mod tests {
             serde_json::json!({ "place_id": "cx:place:nope-not-here" }),
         );
         assert_eq!(state.check_place_lifecycle_transition(&archive_unknown), Ok(()));
+    }
+
+    // ── Round 13: Flow lifecycle state-machine tests ──
+
+    /// End-to-end Flow lifecycle through the dispatcher: create → archive →
+    /// restore (no tombstone for Flow per spec). Verifies projection state
+    /// transitions correctly and effects carry the new state.
+    #[test]
+    fn flow_lifecycle_round_trip() {
+        let mut state = ProjectionState::new();
+        let hlc = ServerHlc::new("test");
+        let space_id = "cx:space:01904100-0000-7000-8000-cfc039892036";
+        let flow_id = "cx:flow:01904100-0000-7000-8000-1fb50799ad50";
+
+        let create_effect = state.apply(
+            &make_operation(
+                crate::kinds::CX_FLOW_CREATE,
+                space_id,
+                serde_json::json!({
+                    "object": {
+                        "id": flow_id,
+                        "space_id": space_id,
+                        "title": "Payment refactor",
+                        "created_by": "did:web:alice.example",
+                    }
+                }),
+            ),
+            &hlc,
+        );
+        assert!(matches!(
+            create_effect,
+            ProjectionEffect::FlowLifecycle { new_state: ObjectLifecycleState::Active, .. }
+        ));
+        assert_eq!(state.flows[flow_id].state, ObjectLifecycleState::Active);
+
+        let archive_effect = state.apply(
+            &make_operation(
+                crate::kinds::CX_FLOW_ARCHIVE,
+                space_id,
+                serde_json::json!({ "flow_id": flow_id, "sender": "did:web:alice.example" }),
+            ),
+            &hlc,
+        );
+        assert!(matches!(
+            archive_effect,
+            ProjectionEffect::FlowLifecycle { new_state: ObjectLifecycleState::Archived, .. }
+        ));
+        assert_eq!(state.flows[flow_id].state, ObjectLifecycleState::Archived);
+
+        let restore_effect = state.apply(
+            &make_operation(
+                crate::kinds::CX_FLOW_RESTORE,
+                space_id,
+                serde_json::json!({ "flow_id": flow_id, "sender": "did:web:alice.example" }),
+            ),
+            &hlc,
+        );
+        assert!(matches!(
+            restore_effect,
+            ProjectionEffect::FlowLifecycle { new_state: ObjectLifecycleState::Active, .. }
+        ));
+        assert_eq!(state.flows[flow_id].state, ObjectLifecycleState::Active);
+    }
+
+    /// Preflight `check_flow_lifecycle_transition` rejects illegal
+    /// transitions with the spec-canonical reason codes per
+    /// `common-fields.md §5.1`.
+    #[test]
+    fn flow_lifecycle_preflight_rejects_illegal_transitions() {
+        let mut state = ProjectionState::new();
+        let hlc = ServerHlc::new("test");
+        let space_id = "cx:space:01904100-0000-7000-8000-cfc039892036";
+        let flow_id = "cx:flow:01904100-0000-7000-8000-1fb50799ad51";
+
+        state.apply(
+            &make_operation(
+                crate::kinds::CX_FLOW_CREATE,
+                space_id,
+                serde_json::json!({
+                    "object": {
+                        "id": flow_id,
+                        "space_id": space_id,
+                        "title": "Refactor",
+                        "created_by": "did:web:alice.example",
+                    }
+                }),
+            ),
+            &hlc,
+        );
+
+        // restore on Active → flow_not_archived
+        let restore_op = make_operation(
+            crate::kinds::CX_FLOW_RESTORE,
+            space_id,
+            serde_json::json!({ "flow_id": flow_id }),
+        );
+        assert_eq!(
+            state.check_flow_lifecycle_transition(&restore_op),
+            Err("flow_not_archived")
+        );
+
+        // Archive then re-archive → flow_not_active
+        state.apply(
+            &make_operation(
+                crate::kinds::CX_FLOW_ARCHIVE,
+                space_id,
+                serde_json::json!({ "flow_id": flow_id }),
+            ),
+            &hlc,
+        );
+        let archive_again = make_operation(
+            crate::kinds::CX_FLOW_ARCHIVE,
+            space_id,
+            serde_json::json!({ "flow_id": flow_id }),
+        );
+        assert_eq!(
+            state.check_flow_lifecycle_transition(&archive_again),
+            Err("flow_not_active")
+        );
+
+        // Update on Archived → flow_not_active
+        let update_op = make_operation(
+            crate::kinds::CX_FLOW_UPDATE,
+            space_id,
+            serde_json::json!({
+                "flow_id": flow_id,
+                "patch": { "title": "Edit while archived" }
+            }),
+        );
+        assert_eq!(
+            state.check_flow_lifecycle_transition(&update_op),
+            Err("flow_not_active")
+        );
+    }
+
+    #[test]
+    fn flow_lifecycle_preflight_tolerates_unknown_flow() {
+        let state = ProjectionState::new();
+        let archive_unknown = make_operation(
+            crate::kinds::CX_FLOW_ARCHIVE,
+            "cx:space:01904100-0000-7000-8000-cfc039892036",
+            serde_json::json!({ "flow_id": "cx:flow:nope-not-here" }),
+        );
+        assert_eq!(
+            state.check_flow_lifecycle_transition(&archive_unknown),
+            Ok(())
+        );
+    }
+
+    // ── Round 13: Morph lifecycle state-machine tests ──
+
+    #[test]
+    fn morph_lifecycle_round_trip() {
+        let mut state = ProjectionState::new();
+        let hlc = ServerHlc::new("test");
+        let space_id = "cx:space:01904100-0000-7000-8000-cfc039892036";
+        let morph_id = "cx:morph:01904100-0000-7000-8000-1fb50799ad60";
+
+        let create_effect = state.apply(
+            &make_operation(
+                crate::kinds::CX_MORPH_CREATE,
+                space_id,
+                serde_json::json!({
+                    "object": {
+                        "id": morph_id,
+                        "space_id": space_id,
+                        "morph_type": "task",
+                        "title": "Backfill",
+                        "created_by": "did:web:alice.example",
+                    }
+                }),
+            ),
+            &hlc,
+        );
+        assert!(matches!(
+            create_effect,
+            ProjectionEffect::MorphLifecycle { new_state: ObjectLifecycleState::Active, .. }
+        ));
+        assert_eq!(state.morphs[morph_id].state, ObjectLifecycleState::Active);
+
+        state.apply(
+            &make_operation(
+                crate::kinds::CX_MORPH_ARCHIVE,
+                space_id,
+                serde_json::json!({ "morph_id": morph_id }),
+            ),
+            &hlc,
+        );
+        assert_eq!(state.morphs[morph_id].state, ObjectLifecycleState::Archived);
+
+        state.apply(
+            &make_operation(
+                crate::kinds::CX_MORPH_RESTORE,
+                space_id,
+                serde_json::json!({ "morph_id": morph_id }),
+            ),
+            &hlc,
+        );
+        assert_eq!(state.morphs[morph_id].state, ObjectLifecycleState::Active);
+    }
+
+    #[test]
+    fn morph_lifecycle_preflight_rejects_illegal_transitions() {
+        let mut state = ProjectionState::new();
+        let hlc = ServerHlc::new("test");
+        let space_id = "cx:space:01904100-0000-7000-8000-cfc039892036";
+        let morph_id = "cx:morph:01904100-0000-7000-8000-1fb50799ad61";
+
+        state.apply(
+            &make_operation(
+                crate::kinds::CX_MORPH_CREATE,
+                space_id,
+                serde_json::json!({
+                    "object": {
+                        "id": morph_id,
+                        "space_id": space_id,
+                        "morph_type": "task",
+                        "title": "Backfill",
+                        "created_by": "did:web:alice.example",
+                    }
+                }),
+            ),
+            &hlc,
+        );
+
+        // restore on Active → morph_not_archived
+        let restore_op = make_operation(
+            crate::kinds::CX_MORPH_RESTORE,
+            space_id,
+            serde_json::json!({ "morph_id": morph_id }),
+        );
+        assert_eq!(
+            state.check_morph_lifecycle_transition(&restore_op),
+            Err("morph_not_archived")
+        );
+
+        state.apply(
+            &make_operation(
+                crate::kinds::CX_MORPH_ARCHIVE,
+                space_id,
+                serde_json::json!({ "morph_id": morph_id }),
+            ),
+            &hlc,
+        );
+        let archive_again = make_operation(
+            crate::kinds::CX_MORPH_ARCHIVE,
+            space_id,
+            serde_json::json!({ "morph_id": morph_id }),
+        );
+        assert_eq!(
+            state.check_morph_lifecycle_transition(&archive_again),
+            Err("morph_not_active")
+        );
+
+        // Update on Archived → morph_not_active
+        let update_op = make_operation(
+            crate::kinds::CX_MORPH_UPDATE,
+            space_id,
+            serde_json::json!({
+                "morph_id": morph_id,
+                "patch": { "title": "Edit blocked" }
+            }),
+        );
+        assert_eq!(
+            state.check_morph_lifecycle_transition(&update_op),
+            Err("morph_not_active")
+        );
+    }
+
+    #[test]
+    fn morph_lifecycle_preflight_tolerates_unknown_morph() {
+        let state = ProjectionState::new();
+        let archive_unknown = make_operation(
+            crate::kinds::CX_MORPH_ARCHIVE,
+            "cx:space:01904100-0000-7000-8000-cfc039892036",
+            serde_json::json!({ "morph_id": "cx:morph:nope-not-here" }),
+        );
+        assert_eq!(
+            state.check_morph_lifecycle_transition(&archive_unknown),
+            Ok(())
+        );
     }
 }

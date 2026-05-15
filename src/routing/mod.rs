@@ -1279,6 +1279,67 @@ mod operation_conformance_tests {
                 payload: json!({"reason": "release_reopened"}),
                 valid: false,
             },
+            // Round 13 — Flow / Morph lifecycle conformance vectors.
+            OperationVector {
+                name: "flow create",
+                kind: kinds::CX_FLOW_CREATE,
+                payload: json!({"object": {"id": "cx:flow:01904100-0000-7000-8000-ca33616973bb", "kind": "room", "title": "Launch"}}),
+                valid: true,
+            },
+            OperationVector {
+                name: "flow update",
+                kind: kinds::CX_FLOW_UPDATE,
+                payload: json!({"flow_id": "cx:flow:01904100-0000-7000-8000-ca33616973bb", "patch": {"title": "Launch v2"}}),
+                valid: true,
+            },
+            OperationVector {
+                name: "flow archive",
+                kind: kinds::CX_FLOW_ARCHIVE,
+                payload: json!({"flow_id": "cx:flow:01904100-0000-7000-8000-ca33616973bb"}),
+                valid: true,
+            },
+            OperationVector {
+                name: "flow restore",
+                kind: kinds::CX_FLOW_RESTORE,
+                payload: json!({"flow_id": "cx:flow:01904100-0000-7000-8000-ca33616973bb"}),
+                valid: true,
+            },
+            OperationVector {
+                name: "flow archive missing flow_id",
+                kind: kinds::CX_FLOW_ARCHIVE,
+                payload: json!({"reason": "stale_room"}),
+                valid: false,
+            },
+            OperationVector {
+                name: "morph create",
+                kind: kinds::CX_MORPH_CREATE,
+                payload: json!({"object": {"id": "cx:morph:01904100-0000-7000-8000-7191ddd787e5", "morph_type": "task", "title": "Backfill"}}),
+                valid: true,
+            },
+            OperationVector {
+                name: "morph update",
+                kind: kinds::CX_MORPH_UPDATE,
+                payload: json!({"morph_id": "cx:morph:01904100-0000-7000-8000-7191ddd787e5", "patch": {"title": "Backfill v2"}}),
+                valid: true,
+            },
+            OperationVector {
+                name: "morph archive",
+                kind: kinds::CX_MORPH_ARCHIVE,
+                payload: json!({"morph_id": "cx:morph:01904100-0000-7000-8000-7191ddd787e5"}),
+                valid: true,
+            },
+            OperationVector {
+                name: "morph restore",
+                kind: kinds::CX_MORPH_RESTORE,
+                payload: json!({"morph_id": "cx:morph:01904100-0000-7000-8000-7191ddd787e5"}),
+                valid: true,
+            },
+            OperationVector {
+                name: "morph restore missing morph_id",
+                kind: kinds::CX_MORPH_RESTORE,
+                payload: json!({"reason": "reopen"}),
+                valid: false,
+            },
             OperationVector {
                 name: "unknown kind",
                 kind: "cx.unknown.operation",
