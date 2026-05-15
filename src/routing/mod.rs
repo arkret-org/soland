@@ -20,7 +20,7 @@ mod events;
 pub(crate) mod federation;
 mod identity;
 mod interop;
-mod spaces;
+pub(crate) mod spaces;
 pub(crate) mod system;
 
 use access::policy::{
@@ -163,7 +163,42 @@ fn contrix_openapi_doc(router: &Router) -> OpenApi {
             "x-contrix-artifacts",
             json!({
                 "registries": crate::artifacts::registry_summary(),
-                "openapi_source": "contrix-spec/spec/v1/artifacts/openapi/contrix-service-api.openapi.yaml"
+                "openapi_source": "contrix-spec/spec/v1/artifacts/openapi/contrix-service-api.openapi.yaml",
+                "FacetName": {
+                    "type": "string",
+                    "enum": [
+                        "container",
+                        "replyable",
+                        "schedulable",
+                        "assignable",
+                        "stateful",
+                        "rankable",
+                        "reviewable",
+                        "notifiable",
+                        "documentable",
+                        "renderable"
+                    ]
+                },
+                "ViewRenderer": {
+                    "type": "string",
+                    "enum": [
+                        "board",
+                        "list",
+                        "table",
+                        "calendar",
+                        "gantt",
+                        "timeline",
+                        "thread",
+                        "chat",
+                        "forum",
+                        "graph",
+                        "tree",
+                        "document",
+                        "dashboard",
+                        "custom"
+                    ]
+                },
+                "view_constraint_kinds": ["allowed_entity_facets"],
             }),
         )
         .merge_router(router);
@@ -351,6 +386,69 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "events",
         "cx.events.frontier",
         "get Event frontier",
+    ),
+    (
+        "/api/v1/messages/send",
+        PathItemType::Post,
+        "messages",
+        "cx.messages.send",
+        "deployment-local convenience to send a plain message",
+    ),
+    (
+        "/api/v1/index/describe",
+        PathItemType::Get,
+        "index",
+        "cx.index.describe",
+        "describe index profile",
+    ),
+    (
+        "/api/v1/index/query",
+        PathItemType::Post,
+        "index",
+        "cx.index.query",
+        "query the projection index",
+    ),
+    (
+        "/api/v1/index/debug/reducer",
+        PathItemType::Get,
+        "index",
+        "cx.index.debug_reducer",
+        "debug reducer frontier",
+    ),
+    (
+        "/api/v1/repo/describe",
+        PathItemType::Get,
+        "repo",
+        "cx.repo.describe",
+        "describe repository manifest",
+    ),
+    (
+        "/api/v1/repo/operations",
+        PathItemType::Post,
+        "repo",
+        "cx.repo.get_operations",
+        "fetch repo operations by id",
+    ),
+    (
+        "/api/v1/repo/list-commits",
+        PathItemType::Get,
+        "repo",
+        "cx.repo.list_commits",
+        "list recent commits",
+    ),
+    (
+        "/api/v1/repo/sync",
+        PathItemType::Post,
+        "repo",
+        "cx.repo.sync",
+        "repository sync sentinel",
+    ),
+    (
+        "/api/v1/repo/submit-commit",
+        PathItemType::Post,
+        "repo",
+        "cx.repo.submit_commit",
+        "submit a repository commit",
     ),
     (
         "/api/v1/authz/effective-grants",

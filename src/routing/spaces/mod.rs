@@ -1,12 +1,14 @@
 use salvo::prelude::*;
 
 pub(super) mod directory;
+pub mod entities;
 mod index;
 mod reaction;
 mod read_marker;
 mod relation;
 mod repo;
 pub(super) mod space;
+mod views;
 
 use super::{
     AuthArgs, accept_local_operations, append_audit_log, auth_or_render, authenticated_session,
@@ -31,4 +33,6 @@ pub fn router() -> Router {
         .push(directory::router())
         .push(index::router())
         .push(repo::router())
+        .push(entities::router())
+        .push(views::router())
 }

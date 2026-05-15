@@ -9,17 +9,43 @@
 //! projection layer and is governed by Space membership + plaintext
 //! visibility policy.
 
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::Utc;
 use salvo::http::StatusCode;
 use salvo::prelude::*;
 use serde_json::{Value, json};
 
+use super::operations::{
+    validate_content_blocks, validate_encrypted_payload_envelope, validate_mentions,
+};
 use super::{
     auth_or_render, flow_id_from_space_id, message_id_from_event_id, render_error,
     space_allows_plaintext_service, space_has_member, validate_space_id,
 };
 use crate::state::{AppState, MessageRecord};
 use crate::{ids, kinds};
+
+fn encode_send_cursor(
+    space_id: &str,
+    positions: &std::collections::BTreeMap<String, i64>,
+    issued_ms: i64,
+) -> String {
+    let cursor = json!({
+        "schema": "cx.schema.cursor.v1",
+        "version": 1,
+        "kind": "message_send",
+        "space_id": space_id,
+        "issued_at_ms": issued_ms,
+        "positions": {
+            "spaces": positions,
+            "to_device": 0,
+        }
+    });
+    let bytes = contrix_sdk::canonical::canonical_json_bytes(&cursor)
+        .unwrap_or_else(|_| cursor.to_string().into_bytes());
+    format!("cx:cursor:{}", URL_SAFE_NO_PAD.encode(bytes))
+}
 
 pub(super) fn router() -> Router {
     Router::with_path("messages/send").post(messages_send)
@@ -90,42 +116,34 @@ async fn messages_send(depot: &mut Depot, req: &mut Request, res: &mut Response)
         return;
     }
     if encrypted {
-        let scheme = content.get("scheme").and_then(Value::as_str);
-        let ciphertext = content.get("ciphertext").and_then(Value::as_str);
-        if scheme.is_none() || ciphertext.map(str::is_empty).unwrap_or(true) {
-            render_error(
-                res,
-                StatusCode::BAD_REQUEST,
-                "schema_violation",
-                "encrypted content must carry a non-empty scheme + ciphertext envelope",
-            );
+        if let Err(message) = validate_encrypted_payload_envelope(content) {
+            render_error(res, StatusCode::BAD_REQUEST, "schema_violation", message);
             return;
         }
     } else {
-        // Plaintext body MUST have either `body` (legacy) or canonical
-        // `blocks: []` content blocks; reject obviously-broken submissions
-        // before they sneak into the projection.
+        // Plaintext body MUST satisfy the same canonical content-block /
+        // mention validators that the signed Event Envelope path runs;
+        // delegating to them keeps the two write paths in lockstep.
         let has_body = content.get("body").and_then(Value::as_str).is_some();
         let has_blocks = content
             .get("blocks")
             .and_then(Value::as_array)
-            .map(|blocks| {
-                !blocks.is_empty()
-                    && blocks.iter().all(|block| {
-                        block
-                            .get("kind")
-                            .and_then(Value::as_str)
-                            .is_some_and(|kind| matches!(kind, "text" | "code"))
-                    })
-            })
-            .unwrap_or(false);
+            .is_some_and(|blocks| !blocks.is_empty());
         if !has_body && !has_blocks {
             render_error(
                 res,
                 StatusCode::BAD_REQUEST,
                 "schema_violation",
-                "plaintext content must include either `body` or a non-empty `blocks[]` array of text/code blocks",
+                "plaintext content must include either `body` or a non-empty `blocks[]` array",
             );
+            return;
+        }
+        if let Err(message) = validate_content_blocks(content) {
+            render_error(res, StatusCode::BAD_REQUEST, "schema_violation", message);
+            return;
+        }
+        if let Err(message) = validate_mentions(content) {
+            render_error(res, StatusCode::BAD_REQUEST, "invalid_param", message);
             return;
         }
     }
@@ -156,9 +174,45 @@ async fn messages_send(depot: &mut Depot, req: &mut Request, res: &mut Response)
         );
         return;
     }
+    // Mirror the message into the projection event log so it shows up in
+    // `GET /api/v1/events?space_id=…` (the projection-aware events query
+    // path reads from `projection_events`, not from the messages table).
+    let projection_record = crate::state::ProjectionEventRecord {
+        event_id: event_id.clone(),
+        space_id: space_id.to_owned(),
+        event_kind: kinds::CX_MESSAGE_CREATE.to_owned(),
+        operation_type: "event".to_owned(),
+        operation_id: Some(format!(
+            "cx:operation:{}",
+            event_id.strip_prefix("cx:event:").unwrap_or(&event_id)
+        )),
+        sender: Some(session.actor.clone()),
+        payload: json!({
+            "thread_id": thread_id.clone(),
+            "content": content.clone(),
+            "encrypted": encrypted,
+        }),
+        created_at: now,
+    };
+    if let Err(error) = state.persistence.projection_events().append(projection_record) {
+        tracing::error!(%error, "failed to mirror message into projection_events");
+    }
+
+    // The signed-Envelope path produces a separate `operation_id` and
+    // `commit_id`; for the deployment-local /messages/send shortcut we
+    // derive them deterministically from the event_id so downstream
+    // consumers see the same identifier shape.
+    let event_suffix = event_id.strip_prefix("cx:event:").unwrap_or(&event_id);
+    let operation_id = format!("cx:operation:{event_suffix}");
+    let commit_id = format!("cx:commit:{event_suffix}");
+    let mut positions = std::collections::BTreeMap::new();
+    positions.insert(space_id.to_owned(), now.timestamp_micros());
+    let sync_token = encode_send_cursor(space_id, &positions, now.timestamp_millis());
 
     res.render(Json(json!({
         "event_id": event_id,
+        "operation_id": operation_id,
+        "commit_id": commit_id,
         "kind": kinds::CX_MESSAGE_CREATE,
         "message_id": message_id_from_event_id(&event_id),
         "flow_id": flow_id,
@@ -167,5 +221,6 @@ async fn messages_send(depot: &mut Depot, req: &mut Request, res: &mut Response)
         "sender": session.actor.clone(),
         "encrypted": encrypted,
         "created_at": now,
+        "sync_token": sync_token,
     })));
 }

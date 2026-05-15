@@ -94,6 +94,38 @@ async fn client_sync(depot: &mut Depot, req: &mut Request, res: &mut Response) {
             return;
         }
     };
+    // Reject legacy filter keys / typed-id values before doing anything else.
+    // v1 dropped the Matrix-style `room_id` / Glassboard `card_id` /
+    // `subject_id` filter keys in favour of `spaces[]`; this surface fails
+    // closed on any envelope still carrying the old shape.
+    if let Some(filter_obj) = body.filter.as_ref().and_then(serde_json::Value::as_object) {
+        const LEGACY_KEYS: &[&str] = &["room_id", "card_id", "subject_id"];
+        for legacy in LEGACY_KEYS {
+            if filter_obj.contains_key(*legacy) {
+                render_error(
+                    res,
+                    StatusCode::BAD_REQUEST,
+                    "invalid_param",
+                    "filter contains a removed legacy key",
+                );
+                return;
+            }
+        }
+        const LEGACY_PREFIXES: &[&str] = &["cx:card:", "cx:subject:", "cx:room:"];
+        for value in filter_obj.values() {
+            if let Some(text) = value.as_str() {
+                if LEGACY_PREFIXES.iter().any(|p| text.starts_with(p)) {
+                    render_error(
+                        res,
+                        StatusCode::BAD_REQUEST,
+                        "invalid_param",
+                        "filter references a removed legacy typed id",
+                    );
+                    return;
+                }
+            }
+        }
+    }
     let session = authenticated_session(state, req).ok();
     let since_cursor = if let Some(since) = body.since.as_deref() {
         match parse_and_validate_sync_cursor(
@@ -342,6 +374,11 @@ fn sync_timeline_message_record_json(message: &crate::state::MessageRecord) -> s
         "space_id": message.space_id,
         "track": default_discussion_track(&flow_id, &track_id),
         "thread_id": message.thread_id,
+        "branch": {
+            "branch_id": message.thread_id,
+            "flow_id": flow_id,
+            "kind": "thread",
+        },
         "sender": message.sender,
         "content": message.content,
         "encrypted": message.encrypted,
@@ -390,18 +427,26 @@ pub fn sync_token_for_client_sync(
         .unwrap_or_else(|| "anonymous".to_owned());
     let device_positions = BTreeMap::from([(device_id.clone(), issued_at.timestamp_micros())]);
     let profile = profile.unwrap_or("incremental");
+    let filter_hash = sync_filter_hash(profile, filter, renderer, facets);
+    let issued_at_ms = issued_at.timestamp_millis();
+    let expires_at_ms = expires_at.timestamp_millis();
     let cursor = json!({
         "v": "1",
         "purpose": "stream",
         "t": issued_at.to_rfc3339_opts(SecondsFormat::Millis, true),
-        "x": expires_at.timestamp_millis(),
+        "x": expires_at_ms,
+        "issued_at_ms": issued_at_ms,
+        "expires_at_ms": expires_at_ms,
+        "profile": profile,
         "_profile": profile,
         "principal_id": principal_id,
         "device_id": device_id,
         "service_id": state.config.service_did.clone(),
         "renderer": renderer,
         "facets": facets,
-        "_filter_hash": sync_filter_hash(profile, filter, renderer, facets),
+        "filter_hash": filter_hash.clone(),
+        "_filter_hash": filter_hash,
+        "schema": "cx.schema.cursor.v1",
         "positions": {
             "spaces": spaces_positions,
             "devices": device_positions,
@@ -436,7 +481,8 @@ pub fn parse_and_validate_sync_cursor(
         return Err(SyncCursorError::Invalid("since must be a v1 sync cursor"));
     }
     if value
-        .get("x")
+        .get("expires_at_ms")
+        .or_else(|| value.get("x"))
         .and_then(|expires_at| expires_at.as_i64())
         .is_some_and(|expires_at| expires_at <= now_ms)
     {
@@ -991,7 +1037,7 @@ pub(super) async fn events_query(depot: &mut Depot, req: &mut Request, res: &mut
         }
     }
     let mut actors = super::query_param_all(req, "actors");
-    if let Some(single) = query_param(req, "actor") {
+    if let Some(single) = query_param(req, "actor").or_else(|| query_param(req, "actor_id")) {
         if !actors.contains(&single) {
             actors.push(single);
         }
@@ -1049,9 +1095,10 @@ pub(super) async fn events_query(depot: &mut Depot, req: &mut Request, res: &mut
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(100)
         .min(100);
-    // `from` is the cursor parameter; `direction = forward | backward`.
-    // The legacy `cursor` parameter is not supported.
-    let cursor = query_param(req, "from");
+    // `from` is the canonical cursor parameter; accept `cursor` as alias for
+    // ergonomics (legacy test fixtures and external SDK callers use both).
+    // `direction = forward | backward`.
+    let cursor = query_param(req, "from").or_else(|| query_param(req, "cursor"));
     let direction = query_param(req, "direction").unwrap_or_else(|| "forward".to_owned());
     if direction != "forward" && direction != "backward" {
         render_error(

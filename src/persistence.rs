@@ -1057,10 +1057,11 @@ impl MessageStore for MemoryMessageStore {
         limit: usize,
     ) -> PersistenceResult<Vec<MessageRecord>> {
         let data = self.data.lock().expect("lock");
+        // Return in chronological order (oldest first) so thread readers get a
+        // natural conversation timeline. The caller decides whether to reverse.
         let messages: Vec<_> = data
             .iter()
             .filter(|m| m.thread_id == thread_id)
-            .rev()
             .take(limit)
             .cloned()
             .collect();

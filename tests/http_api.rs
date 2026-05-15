@@ -3685,7 +3685,7 @@ async fn federation_rejects_replayed_operations() {
     assert_eq!(replay["rejected"][0]["reason"], "replay");
 
     let invalid_operation = Operation::create(
-        OperationId::new("cx:operation:01904100-0000-7000-8000-1cac81a395b6pe").unwrap(),
+        OperationId::new("cx:operation:01904100-0000-7000-8000-1cac81a395b6").unwrap(),
         SpaceId::new("cx:space:01904100-0000-7000-8000-20d6cfd24be6").unwrap(),
         kinds::CX_MESSAGE_CREATE,
         serde_json::json!({

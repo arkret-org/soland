@@ -161,9 +161,19 @@ fn admin_space_items(state: &AppState) -> Vec<Value> {
         .unwrap_or_default()
         .into_iter()
         .collect();
-    let spaces = state.spaces.lock().expect("spaces lock");
-    spaces
-        .search(Default::default())
+    // Snapshot the space registry under lock, then drop it: downstream
+    // helpers (`flow_projection_for_space` → `space_allows_plaintext_service`)
+    // reach back into `state.spaces`, and `Mutex` is non-reentrant — holding
+    // the guard across the map closure deadlocks on the second resource pass.
+    let space_snapshot: Vec<contrix_sdk::SpaceSearchEntry> = {
+        let spaces = state.spaces.lock().expect("spaces lock");
+        spaces
+            .search(Default::default())
+            .into_iter()
+            .cloned()
+            .collect()
+    };
+    space_snapshot
         .into_iter()
         .map(|space| {
             let space_id = space.space_id.as_str().to_owned();
@@ -233,9 +243,17 @@ fn admin_device_items(state: &AppState) -> Vec<Value> {
 }
 
 fn admin_capability_items(state: &AppState) -> Vec<Value> {
-    let spaces = state.spaces.lock().expect("spaces lock");
-    spaces
-        .search(Default::default())
+    // Same non-reentrant-lock concern as `admin_space_items` — snapshot the
+    // space list under lock, drop the guard, then call into authz.
+    let space_snapshot: Vec<contrix_sdk::SpaceSearchEntry> = {
+        let spaces = state.spaces.lock().expect("spaces lock");
+        spaces
+            .search(Default::default())
+            .into_iter()
+            .cloned()
+            .collect()
+    };
+    space_snapshot
         .into_iter()
         .flat_map(|space| state.authz.grants_in_space(space.space_id.as_str()))
         .map(|grant| json!(grant))

@@ -345,12 +345,13 @@ fn decision_from_constraint(constraint: &Constraint) -> Option<GrantDecision> {
     }
 }
 
-/// Evaluate a constraint. Returns true if the constraint is satisfied.
+/// Evaluate a constraint. Returns `None` when the constraint is satisfied,
+/// or `Some(reason_text)` when it fails.
 fn evaluate_constraint(
     constraint: &Constraint,
     _actor: &str,
     _resource: &str,
-    _resource_facets: &[String],
+    resource_facets: &[String],
 ) -> Option<String> {
     match constraint.constraint_type.as_str() {
         "temporal" => {
@@ -365,6 +366,35 @@ fn evaluate_constraint(
                 };
             }
             None
+        }
+        "allowed_entity_facets" => {
+            // Resource must carry at least one of the listed facets. When the
+            // resource itself reports no facets, fail-closed — the grant is
+            // facet-bound and an unfaceted target falls outside its scope.
+            let allowed: Vec<String> = constraint
+                .value
+                .get("facets")
+                .and_then(|value| value.as_array())
+                .map(|array| {
+                    array
+                        .iter()
+                        .filter_map(|value| value.as_str().map(ToOwned::to_owned))
+                        .collect()
+                })
+                .unwrap_or_default();
+            if allowed.is_empty() {
+                return None;
+            }
+            let satisfied = resource_facets
+                .iter()
+                .any(|facet| allowed.iter().any(|allow| allow == facet));
+            if satisfied {
+                None
+            } else {
+                Some(format!(
+                    "allowed_entity_facets constraint not satisfied: resource lacks any of {allowed:?}"
+                ))
+            }
         }
         "delegation_control" => {
             // Check delegation depth

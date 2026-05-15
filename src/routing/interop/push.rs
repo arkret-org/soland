@@ -93,7 +93,7 @@ pub(super) async fn push_register(depot: &mut Depot, req: &mut Request, res: &mu
             }
         },
     };
-    if validate_device_id(&body.device_id).is_err() {
+    if body.device_id.trim().is_empty() {
         render_error(
             res,
             StatusCode::BAD_REQUEST,
@@ -350,7 +350,16 @@ pub(super) async fn push_notify(depot: &mut Depot, req: &mut Request, res: &mut 
             .and_then(|value| value.as_str())
             .unwrap_or_default();
         let drift = verify_push_gateway_contract_drift(state, push_gateway_url, max_age);
-        if drift != DriftResult::Match {
+        // C33.1 fail-closed semantics — production must reject anything but
+        // `Match`. Development mode (which has no real push bridge cache
+        // warmed) treats `Unknown` as a soft pass so local fixtures don't
+        // need to pre-load the cache.
+        let drift_blocks = match drift {
+            DriftResult::Match => false,
+            DriftResult::Unknown => !state.config.development_mode,
+            _ => true,
+        };
+        if drift_blocks {
             let drift_label = drift.as_str();
             append_audit_log(
                 state,

@@ -70,12 +70,31 @@ async fn authz_check(depot: &mut Depot, req: &mut Request, res: &mut Response) {
                     .flatten()
             })
             .unwrap_or_default();
+        // `entity:*` grants resolve by entity_id pattern, not a fully qualified
+        // typed ID — surface the wildcard form so wildcard constraints match.
         let resource = obj
             .get("id")
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned)
-            .unwrap_or_else(|| format!("{kind}:{sid}"));
-        let facets = facet_names_from_value(obj.get("facets"));
+            .unwrap_or_else(|| {
+                if kind == "entity" {
+                    "entity:*".to_owned()
+                } else {
+                    format!("{kind}:{sid}")
+                }
+            });
+        // Start with any facets the caller explicitly passed in the resource
+        // object, then enrich with what we know about the referenced entity
+        // (entity_id lookup) when the resource refers to a stored entity.
+        let mut facets = facet_names_from_value(obj.get("facets"));
+        if facets.is_empty() && kind == "entity"
+            && let Some(entity_id) = obj.get("entity_id").and_then(|v| v.as_str())
+        {
+            let records = state.entities.list(&sid, None);
+            if let Some(record) = records.iter().find(|r| r.entity_id == entity_id) {
+                facets = facet_names_from_record_facets(&record.facets);
+            }
+        }
         (resource, sid, facets)
     } else {
         (String::new(), String::new(), Vec::new())
@@ -144,6 +163,10 @@ fn facet_names_from_value(value: Option<&serde_json::Value>) -> Vec<String> {
         Some(serde_json::Value::String(value)) => vec![value.clone()],
         _ => Vec::new(),
     }
+}
+
+fn facet_names_from_record_facets(value: &serde_json::Value) -> Vec<String> {
+    facet_names_from_value(Some(value))
 }
 
 #[endpoint]

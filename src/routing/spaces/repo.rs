@@ -15,13 +15,14 @@ use salvo::http::StatusCode;
 use salvo::prelude::*;
 use serde_json::{Value, json};
 
-use super::render_error;
+use super::{query_param, render_error};
 use crate::state::AppState;
 
 pub(super) fn router() -> Router {
     Router::new()
         .push(Router::with_path("repo/describe").get(repo_describe))
         .push(Router::with_path("repo/operations").post(repo_operations))
+        .push(Router::with_path("repo/commit").get(repo_commit))
 }
 
 #[endpoint]
@@ -90,4 +91,62 @@ async fn repo_operations(depot: &mut Depot, req: &mut Request, res: &mut Respons
         "operations": operations,
         "missing": missing,
     })));
+}
+
+#[endpoint]
+async fn repo_commit(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let Some(commit_id) = query_param(req, "commit_id") else {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "missing_param",
+            "commit_id is required",
+        );
+        return;
+    };
+    let include_operations = query_param(req, "include_operations")
+        .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes"))
+        .unwrap_or(false);
+
+    // `/messages/send` mints `cx:commit:<event-suffix>` deterministically from
+    // the event_id so the inverse lookup is straightforward — find the matching
+    // MessageRecord by event_id and synthesise the commit envelope on demand.
+    let Some(suffix) = commit_id.strip_prefix("cx:commit:") else {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            "commit_id must start with cx:commit:",
+        );
+        return;
+    };
+    let event_id = format!("cx:event:{suffix}");
+    let message = state.persistence.messages().get(&event_id).ok().flatten();
+    let Some(message) = message else {
+        render_error(res, StatusCode::NOT_FOUND, "not_found", "commit not found");
+        return;
+    };
+    let operation_id = format!("cx:operation:{suffix}");
+    let mut body = json!({
+        "commit_id": commit_id.clone(),
+        "repo_did": state.config.service_did.clone(),
+        "actor": message.sender.clone(),
+        "space_id": message.space_id.clone(),
+        "created_at": message.created_at,
+    });
+    if include_operations {
+        body["operations"] = json!([{
+            "operation_id": operation_id,
+            "object_type": "cx.message.create",
+            "object_id": message.event_id.clone(),
+            "space_id": message.space_id.clone(),
+            "actor": message.sender.clone(),
+            "thread_id": message.thread_id.clone(),
+            "content": message.content.clone(),
+            "encrypted": message.encrypted,
+            "created_at": message.created_at,
+        }]);
+    }
+    res.render(Json(body));
 }
