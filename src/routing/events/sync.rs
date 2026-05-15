@@ -977,15 +977,26 @@ fn ndjson_line(value: &serde_json::Value) -> Bytes {
 #[endpoint]
 pub(super) async fn events_query(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
-    // Collect all `spaces=` and `actors=` repeated args.
-    let spaces = super::query_param_all(req, "spaces");
-    let actors = super::query_param_all(req, "actors");
+    // Collect all `spaces=` / `actors=` repeated args. Also accept the
+    // singular `space_id=` / `actor=` aliases for ergonomics.
+    let mut spaces = super::query_param_all(req, "spaces");
+    if let Some(single) = query_param(req, "space_id") {
+        if !spaces.contains(&single) {
+            spaces.push(single);
+        }
+    }
+    let mut actors = super::query_param_all(req, "actors");
+    if let Some(single) = query_param(req, "actor") {
+        if !actors.contains(&single) {
+            actors.push(single);
+        }
+    }
     if spaces.is_empty() && actors.is_empty() {
         render_error(
             res,
             StatusCode::BAD_REQUEST,
             "missing_param",
-            "events.query requires at least one of spaces[] / actors[]",
+            "events.query requires at least one of spaces[] / actors[] (or singular space_id / actor)",
         );
         return;
     }
