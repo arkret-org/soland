@@ -416,34 +416,12 @@ async fn add_space_member(
     .map_err(|error| {
         AppError::new(ErrorCode::Conflict, error.to_string()).with_status(StatusCode::CONFLICT)
     })?;
-    // **Derived projection event** (NOT a spec event kind): the spec's
-    // event-kind-registry only ships `cx.member.state` for membership
-    // transitions; that's a CRDT state op the reducer applies to
-    // `cx.component.space.members.v1`. Analytics / audit consumers want a
-    // discrete `joined` / `left` series, so soland additionally writes a
-    // `cx.membership.join` projection event alongside the `cx.member.state`
-    // operation. This is a server-local view, NOT a signed Event Envelope —
-    // it never round-trips back to the durable Event store and federation
-    // never replays it. Marked as `operation_type="derived_projection"` so
-    // downstream filters can exclude it from spec-event-kind queries.
-    let join_event_id = crate::ids::generate_event_id();
-    let _ = state.persistence.projection_events().append(
-        crate::state::ProjectionEventRecord {
-            event_id: join_event_id.clone(),
-            space_id: space_id.clone(),
-            event_kind: "cx.membership.join".to_owned(),
-            operation_type: "derived_projection".to_owned(),
-            operation_id: Some(format!(
-                "cx:operation:{}",
-                join_event_id
-                    .strip_prefix("cx:event:")
-                    .unwrap_or(&join_event_id)
-            )),
-            sender: Some(session.actor.clone()),
-            payload: json!({"space_id": space_id.clone(), "member": body.member.clone()}),
-            created_at: now(),
-        },
-    );
+    // Round 7: `cx.membership.join` / `cx.membership.leave` derived
+    // projection events were removed. The spec's event-kind-registry only
+    // ships `cx.member.state` (a CRDT state op on `cx.component.space.members.v1`).
+    // Analytics / audit consumers derive join/leave transitions from the
+    // `cx.member.state` payload's `membership` field (`join` / `leave` /
+    // `invite`) — no separate event kind needed.
     append_audit_log(
         state,
         Some(&session.actor),
@@ -505,28 +483,9 @@ async fn remove_space_member(
     .map_err(|error| {
         AppError::new(ErrorCode::Conflict, error.to_string()).with_status(StatusCode::CONFLICT)
     })?;
-    // See `add_space_member` for the rationale — `cx.membership.leave` is a
-    // soland-derived projection event, NOT a spec event kind. `operation_type`
-    // is tagged `derived_projection` so spec-event-kind filters can exclude
-    // it.
-    let leave_event_id = crate::ids::generate_event_id();
-    let _ = state.persistence.projection_events().append(
-        crate::state::ProjectionEventRecord {
-            event_id: leave_event_id.clone(),
-            space_id: space_id.clone(),
-            event_kind: "cx.membership.leave".to_owned(),
-            operation_type: "derived_projection".to_owned(),
-            operation_id: Some(format!(
-                "cx:operation:{}",
-                leave_event_id
-                    .strip_prefix("cx:event:")
-                    .unwrap_or(&leave_event_id)
-            )),
-            sender: Some(session.actor.clone()),
-            payload: json!({"space_id": space_id.clone(), "member": member.to_string()}),
-            created_at: now(),
-        },
-    );
+    // Round 7: see `add_space_member` — the `cx.membership.leave` derived
+    // projection was removed. `cx.member.state` (already recorded above via
+    // `record_member_state_operation`) is the spec-correct membership signal.
     append_audit_log(
         state,
         Some(&session.actor),
@@ -835,24 +794,9 @@ pub fn space_search_discoverability(state: &AppState, space_id: &str) -> bool {
     )
 }
 
-pub fn space_id_visible_to(
-    state: &AppState,
-    space_id: &str,
-    session: Option<&SessionRecord>,
-) -> bool {
-    if is_space_deleted(state, space_id) {
-        return false;
-    }
-    let Ok(sid) = SpaceId::new(space_id.to_owned()) else {
-        return false;
-    };
-    state
-        .spaces
-        .lock()
-        .expect("spaces lock")
-        .get(&sid)
-        .is_some_and(|space| space_visible_to(state, space, session))
-}
+// `space_id_visible_to` removed in round 7 — `space_id_accessible` covers
+// the same visibility path with looser semantics for the backfill /
+// subscribe edge (delete-tolerant for members).
 
 /// Check if a space is accessible for backfill/subscribe (allows deleted spaces for members).
 pub fn space_id_accessible(

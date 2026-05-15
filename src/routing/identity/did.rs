@@ -1090,6 +1090,7 @@ fn default_did_document(did: &str) -> Value {
     })
 }
 
+#[allow(dead_code)] // used by routing::tests::did_*; production path runs through validate_did_document
 pub(in crate::routing) fn validate_did_document_services(
     did: &str,
     document: &Value,

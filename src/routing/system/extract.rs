@@ -10,7 +10,6 @@ use salvo::prelude::Request;
 use serde::Deserialize;
 
 use super::auth::authenticated_session as authenticated_session_inner;
-use super::util::bearer_token;
 use crate::error::AppError;
 use crate::state::{AppState, SessionRecord};
 
@@ -38,6 +37,7 @@ pub struct AuthArgs {
     /// but `ToParameters` does — so the OpenAPI doc carries the header
     /// requirement on every protected operation.
     #[salvo(parameter(parameter_in = Header))]
+    #[allow(dead_code)] // present for OpenAPI parameter generation only
     pub authorization: Option<String>,
 }
 
@@ -61,16 +61,9 @@ impl AuthArgs {
             .with_status(status)),
         }
     }
-
-    /// Pull the raw bearer token from the request without doing any session
-    /// lookup. Useful for endpoints that want to inspect the token before
-    /// engaging the persistence layer (e.g. logout when the session record
-    /// might be missing).
-    pub fn bearer_token<'r>(&self, req: &'r Request) -> Option<&'r str> {
-        bearer_token(req)
-    }
-
-    /// Header name carrying the bearer token. Use this in handlers that need
-    /// to mention `Authorization` explicitly (e.g. CORS allow-list).
-    pub const AUTHORIZATION_HEADER: &'static str = "authorization";
 }
+
+// `AuthArgs::bearer_token` / `AuthArgs::AUTHORIZATION_HEADER` were removed
+// in round 7 — every existing call site goes through `authenticated_session`,
+// and the standalone `super::util::bearer_token` helper is still available
+// for handlers that need to inspect the token directly (auth.rs, did.rs).

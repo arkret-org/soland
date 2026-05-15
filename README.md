@@ -34,7 +34,7 @@ Run `just` to see every available recipe.
 just start
 ```
 
-`DATABASE_URL` is optional. Without it, soland runs with an in-memory repository
+`DATABASE_URL` is optional. Without it, soland runs with an in-memory store
 and demo Space data while keeping the same HTTP API. `SOLAND_DEVELOPMENT_MODE`
 **defaults to `false`**; turn it on explicitly when you need `dev_login`,
 the admin snapshot endpoints, or the relaxed DID-document validation that
@@ -249,7 +249,7 @@ and reject plaintext blobs in private Spaces unless this service is listed in
 
 soland exposes the canonical Contrix v1 routes (~180 routes total). Highlights:
 
-- `GET  /health` — liveness + DB/repo health (used as the Docker healthcheck)
+- `GET  /health` — liveness + DB / persistence probe (used as the Docker healthcheck)
 - `GET  /.well-known/contrix/openapi.json` and `.../openapi.yaml` — the
   generated OpenAPI 3.1 document from soland's Salvo route wiring
 - `GET  /.well-known/mimi-protocol-directory`
@@ -287,10 +287,10 @@ entries for the known pre-existing test failures.
 
 ## Status & roadmap
 
-The current implementation has product-shaped auth/session, identity, repo
-adapter, device key, to-device, blob, directory, sync, and index surfaces.
-PostgreSQL migrations and the repo adapter are wired; in-memory mode is the
-development fallback. Remaining production work is tracked in
+The current implementation has product-shaped auth/session, identity, events
+log, device key, to-device, blob, directory, sync, and index surfaces.
+PostgreSQL migrations and the persistence adapters are wired; in-memory mode is
+the development fallback. Remaining production work is tracked in
 [`../_todos.md`](../_todos.md) — reducer-backed projections, full policy ordering,
 durable projection/device sub-stores, full E2EE client workflow, anti-enumeration, and
 the complete federation/media/recovery/key-backup surfaces.

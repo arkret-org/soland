@@ -98,7 +98,7 @@ fn build_invited_to_join_move() -> Move {
         "preconditions": [],
         "effects": [{
             "cell": member_cell().as_str(),
-            "op": { "type": "transition", "from": "invite", "to": "join" }
+            "op": { "kind": "transition", "from": "invite", "to": "join" }
         }],
         "anchor_ref": format!("cx:anchor:sha256:{}", "aa".repeat(32)),
         "refs": [],
@@ -167,7 +167,7 @@ async fn dev_token(state: AppState) -> String {
             "did": "did:web:admin.example",
             "handle": "@admin",
             "display_name": "Admin",
-            "device_id": "dev_admin"
+            "device_id": "cx:device:01904100-0000-7000-8000-ad11d0000008"
         }))
         .send(&app)
         .await
@@ -177,7 +177,7 @@ async fn dev_token(state: AppState) -> String {
     let login: Value = TestClient::post("http://server/api/v1/auth/dev-login")
         .json(&json!({
             "actor": "did:web:admin.example",
-            "device_id": "dev_admin",
+            "device_id": "cx:device:01904100-0000-7000-8000-ad11d0000008",
             "display_name": "Admin"
         }))
         .send(&app)
@@ -362,7 +362,7 @@ fn build_consent_grant_add_move() -> Move {
         "preconditions": [],
         "effects": [{
             "cell": consent_cell,
-            "op": { "type": "add", "tag": "consent_granted" }
+            "op": { "kind": "add", "tag": "consent_granted" }
         }],
         "anchor_ref": format!("cx:anchor:sha256:{}", "bb".repeat(32)),
         "refs": [],
@@ -591,7 +591,7 @@ async fn events_subscribe_streams_live_event_then_closes_at_deadline() {
                 json!({
                     "body": "hello live",
                     "content": {"body": "hello live"},
-                    "thread_id": "cx:thread:t1",
+                    "thread_id": "cx:flow:t1",
                 }),
             ))
             .send(&app_writer)
@@ -664,7 +664,7 @@ fn build_member_state_move_with_hlc(physical_ms: u64) -> Move {
         "preconditions": [],
         "effects": [{
             "cell": member_cell().as_str(),
-            "op": { "type": "transition", "from": "invite", "to": "join" }
+            "op": { "kind": "transition", "from": "invite", "to": "join" }
         }],
         "anchor_ref": format!("cx:anchor:sha256:{}", "aa".repeat(32)),
         "refs": [],

@@ -227,10 +227,6 @@ pub(in crate::routing) async fn authz_describe() -> JsonResult<Value> {
                 }
             ]
         },
-        "todos": [
-            "bind authz describe examples to durable grant/policy schema evolution instead of inline handler JSON.",
-            "add formal response schema examples for effective-grants and grant mutation workflows."
-        ]
     }))
 }
 
@@ -273,10 +269,6 @@ pub(in crate::routing) async fn policies_describe() -> JsonResult<Value> {
         },
         "get_path_example": "/api/v1/policies/policy-key-backup-read-01",
         "delete_path_example": "/api/v1/policies/policy-key-backup-read-01",
-        "todos": [
-            "bind policy describe examples to live policy validation and revision semantics.",
-            "add explicit query/filter examples once policy list pagination is stabilized."
-        ]
     }))
 }
 
@@ -317,10 +309,6 @@ pub(in crate::routing) async fn device_messages_describe() -> JsonResult<Value> 
                 }
             }
         },
-        "todos": [
-            "bind device-messages describe examples to generated schema artifacts instead of inline handler JSON.",
-            "add explicit receive/delete acknowledgement examples when device-message lifecycle semantics stabilize."
-        ]
     }))
 }
 

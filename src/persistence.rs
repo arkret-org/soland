@@ -5272,7 +5272,7 @@ mod tests {
             OperationId::new(operation_id.to_owned()).unwrap(),
             SpaceId::new(space_id.to_owned()).unwrap(),
             "cx.message.create",
-            serde_json::json!({"sender": "did:web:alice", "thread_id": "cx:thread:1"}),
+            serde_json::json!({"sender": "did:web:alice", "thread_id": "cx:flow:1"}),
         );
         op.created_at = Utc::now();
         op
@@ -5378,7 +5378,7 @@ mod tests {
             "reason": "spam"
         });
         let action = serde_json::json!({
-            "action_id": "cx:moderation:01",
+            "action_id": "cx:modq:01",
             "moderator": "did:web:mod.example",
             "target_actor": "did:web:bob.example",
             "action_kind": "warn"
@@ -5522,7 +5522,7 @@ mod tests {
     fn memory_key_backup_store_put_get_snapshot_matches_trait() {
         let store = MemoryKeyBackupStore::new();
         let envelope = serde_json::json!({
-            "backup_id": "cx:keybackup:01",
+            "backup_id": "cx:backup:01",
             "account_id": "did:web:alice.example",
             "device_id": "device-1",
             "scheme": "x25519-aead-ratchet",
@@ -5530,19 +5530,19 @@ mod tests {
             "key_material_encrypted_b64": "AAAA"
         });
         store
-            .put("cx:keybackup:01".to_owned(), envelope.clone())
+            .put("cx:backup:01".to_owned(), envelope.clone())
             .unwrap();
 
-        let fetched = store.get("cx:keybackup:01").unwrap().unwrap();
-        assert_eq!(fetched["backup_id"], "cx:keybackup:01");
+        let fetched = store.get("cx:backup:01").unwrap().unwrap();
+        assert_eq!(fetched["backup_id"], "cx:backup:01");
         assert_eq!(fetched["scheme"], "x25519-aead-ratchet");
 
         let snapshot = store.snapshot_all().unwrap();
         assert_eq!(snapshot.len(), 1);
 
-        assert!(store.delete("cx:keybackup:01").unwrap());
-        assert!(!store.delete("cx:keybackup:01").unwrap());
-        assert!(store.get("cx:keybackup:01").unwrap().is_none());
+        assert!(store.delete("cx:backup:01").unwrap());
+        assert!(!store.delete("cx:backup:01").unwrap());
+        assert!(store.get("cx:backup:01").unwrap().is_none());
     }
 
     #[test]

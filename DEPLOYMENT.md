@@ -153,7 +153,8 @@ Make sure the proxy passes the `Authorization`, `X-Contrix-Wait-For`,
 ## 5. Health checks
 
 The `/health` endpoint returns a small JSON envelope plus
-`200 OK` (or `503 Service Unavailable` when the database/repo probe fails).
+`200 OK` (or `503 Service Unavailable` when the database / persistence probe
+fails).
 
 Docker:
 

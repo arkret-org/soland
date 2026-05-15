@@ -4,7 +4,7 @@
 //! - `OperationPayloadSchema` / `PayloadRequirement` — per-kind required / optional / enum field
 //!   schemas.
 //! - `validate_operation_semantics` / `validate_operation_schema` — the entrypoint validators
-//!   called from `repo::submit_commit`, `projection::project_accepted_operations`, and the
+//!   called from `event_log::submit_event`, `projection::project_accepted_operations`, and the
 //!   federation ingest path.
 //! - `validate_operation_policy` — high-level policy gate (plaintext-Space gating + B-09 redact
 //!   constraints).
@@ -106,6 +106,11 @@ const RELATION_CREATE_REQUIREMENTS: &[PayloadRequirement] = &[
 const RELATION_ID_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::AnyOf(
     RELATION_ID_FIELDS,
     "relation operation requires relation_id",
+)];
+const VIEW_ID_FIELDS: &[&str] = &["view_id"];
+const VIEW_CREATE_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::AnyOf(
+    VIEW_ID_FIELDS,
+    "view operation requires view_id",
 )];
 const MEMBERSHIP_REQUIREMENTS: &[PayloadRequirement] = &[
     PayloadRequirement::AnyOf(MEMBER_ACTOR_FIELDS, "membership operation requires member"),
@@ -225,6 +230,17 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
             requirements: RELATION_ID_REQUIREMENTS,
             validate: None,
         },
+        kinds::CX_VIEW_CREATE | kinds::CX_VIEW_UPDATE | kinds::CX_VIEW_RECONCILE => {
+            // `cx.view.*` events route through the `cx.component.view.*.v1`
+            // cell families in the lattice registry (see
+            // `reducer::lattice_kinds::ViewCreate / ViewUpdate / ViewReconcile`).
+            // The validator just enforces a `view_id` payload key — the
+            // reducer / cell-family pipeline owns mv-register semantics.
+            OperationPayloadSchema {
+                requirements: VIEW_CREATE_REQUIREMENTS,
+                validate: None,
+            }
+        }
         kinds::CX_READ_MARKER => OperationPayloadSchema {
             requirements: READ_MARKER_REQUIREMENTS,
             validate: None,

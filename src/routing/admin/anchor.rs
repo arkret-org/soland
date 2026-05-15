@@ -1122,12 +1122,24 @@ pub(super) async fn admin_compact_anchor_dag(
     })?;
     let limit = body.into_inner().max_moves.unwrap_or(1000).min(10_000) as usize;
 
-    // FUTURE: replace this with a real MAL-11 compaction Anchor flow —
-    // fold pending Moves AND prune historical leaves into a single
-    // signed compaction Anchor. For now we just nudge the anchorer
-    // worker to advance the DAG so the wire shape ('anchor_id +
-    // state_root + move_count') is populated against the latest leaf
-    // even when there's nothing pending to anchor.
+    // MAL-11 (real compaction) requires three SDK pieces that aren't in
+    // contrix-rust-sdk yet:
+    //   1. `Anchor.kind = "compaction"` field on the Anchor envelope —
+    //      so receivers can fail-closed on unrecognised compactions and
+    //      so `admin_get_anchor_dag.is_compaction` reads off a real flag
+    //      instead of the structural heuristic.
+    //   2. `AnchorStore::prune_predecessor(anchor_id)` that drops the
+    //      named historical Anchor and rewires its successors'
+    //      `predecessor_refs` through the compaction marker. Currently
+    //      the trait surface only exposes `get` / `put` / `list_leaves`.
+    //   3. A compaction policy (depth / age / frontier-cardinality) —
+    //      cross-repo spec item. soland could host the policy config but
+    //      the prune walk needs SDK semantics first.
+    // Until those land, this endpoint advances the DAG via the anchorer
+    // worker (the same fold pass the regular pipeline runs) so the wire
+    // shape (`anchor_id + state_root + move_count`) is populated against
+    // the latest leaf even when there's nothing pending to anchor —
+    // sodmin's H'9 panel keeps a stable response.
     let outcome = crate::anchorer::run_one_signing_pass(state, &space, limit);
     match outcome {
         Ok(Some(o)) => json_ok(CompactionResponse {

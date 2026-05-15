@@ -119,7 +119,7 @@ async fn create_webrtc_session(depot: &mut Depot, req: &mut Request, res: &mut R
     let created_at = now();
     let ttl_ms = body.ttl_ms.unwrap_or(600_000).clamp(60_000, 3_600_000);
     let expires_at = created_at + Duration::milliseconds(ttl_ms as i64);
-    let session_id = ids::generate("webrtc");
+    let session_id = ids::generate("call");
     let participant_list = participants.iter().cloned().collect::<Vec<_>>();
     let record = WebrtcSessionRecord {
         session_id: session_id.clone(),
@@ -376,10 +376,11 @@ fn prune_expired_webrtc_sessions(state: &AppState) {
 }
 
 fn is_valid_webrtc_session_id(value: &str) -> bool {
-    // v1 wire ID: `cx:<kind>:<uuidv7-36-char-lowercase-hex>`
-    // (RFC 9562 v7, version=7, variant ∈ {8,9,a,b}). See
-    // contrix-spec/spec/v1/zh/conformance/encoding.md §4.
-    let Some(rest) = value.strip_prefix("cx:webrtc:") else {
+    // v1 wire ID: `cx:call:<uuidv7-36-char-lowercase-hex>` (RFC 9562 v7,
+    // version=7, variant ∈ {8,9,a,b}) — per
+    // `contrix-spec/v1/artifacts/registry/id-kind-registry.json` the WebRTC
+    // call surface uses `cx:call:` (round 7 renamed from `cx:webrtc:`).
+    let Some(rest) = value.strip_prefix("cx:call:") else {
         return false;
     };
     let Ok(parsed) = uuid::Uuid::parse_str(rest) else {

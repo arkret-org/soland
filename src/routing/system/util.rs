@@ -54,19 +54,9 @@ pub fn query_param(req: &Request, key: &str) -> Option<String> {
     })
 }
 
-/// Pull a comma-separated query value as a `Vec<String>`, dropping empties.
-pub fn query_list(req: &Request, key: &str) -> Vec<String> {
-    query_param(req, key)
-        .map(|value| {
-            value
-                .split(',')
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(ToOwned::to_owned)
-                .collect()
-        })
-        .unwrap_or_default()
-}
+// `query_list` removed in round 7 — never called. The repeated-arg form
+// (`?spaces=A&spaces=B`) is what every selector path uses; comma-separated
+// values were never standardized.
 
 /// Pull **every** occurrence of `key` from the query string as repeated args
 /// (e.g. `?spaces=A&spaces=B&spaces=C`) — required for spec C17

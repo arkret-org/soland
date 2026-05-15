@@ -481,21 +481,9 @@ pub fn query_matches(value: &Value, query: Option<&str>) -> bool {
         .contains(&query.to_ascii_lowercase())
 }
 
-pub fn facets_match(value: &Value, required: &[String]) -> bool {
-    if required.is_empty() {
-        return true;
-    }
-    let facets = value
-        .get("facets")
-        .and_then(|value| value.as_array())
-        .into_iter()
-        .flatten()
-        .filter_map(|value| value.as_str())
-        .collect::<Vec<_>>();
-    required
-        .iter()
-        .all(|required| facets.iter().any(|facet| facet == required))
-}
+// `facets_match` removed in round 7 — only callsites were the round-4
+// entity/view scaffold (already deleted). Facet predicates now live on
+// the spec-typed `cx.view.*` cell families through the reducer.
 
 pub fn checked_limit(res: &mut Response, limit: Option<usize>) -> Option<usize> {
     let limit = limit.unwrap_or(20);

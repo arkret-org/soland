@@ -5,7 +5,6 @@ mod index;
 mod reaction;
 mod read_marker;
 mod relation;
-mod repo;
 pub(super) mod space;
 
 use super::{
@@ -30,5 +29,4 @@ pub fn router() -> Router {
         .push(relation::router())
         .push(directory::router())
         .push(index::router())
-        .push(repo::router())
 }

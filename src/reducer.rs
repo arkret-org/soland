@@ -1315,7 +1315,7 @@ mod tests {
             serde_json::json!({
                 "event_id": "cx:event:01904100-0000-7000-8000-caaa6a15bce1",
                 "sender": "did:web:alice",
-                "thread_id": "cx:thread:1",
+                "thread_id": "cx:flow:1",
                 "content": {"body": "hello"}
             }),
         );
@@ -1342,7 +1342,7 @@ mod tests {
                 serde_json::json!({
                     "event_id": "cx:event:01904100-0000-7000-8000-caaa6a15bce1",
                     "sender": "did:web:alice",
-                    "thread_id": "cx:thread:1",
+                    "thread_id": "cx:flow:1",
                     "content": {"body": "hello"}
                 }),
             ),
@@ -1398,7 +1398,7 @@ mod tests {
                 serde_json::json!({
                     "event_id": event_id,
                     "sender": "did:web:alice",
-                    "thread_id": "cx:thread:1",
+                    "thread_id": "cx:flow:1",
                     "content": {"body": "hello"}
                 }),
             ),
@@ -1635,7 +1635,7 @@ mod tests {
                 serde_json::json!({
                     "event_id": "cx:event:01904100-0000-7000-8000-caaa6a15bce1",
                     "sender": "did:web:alice",
-                    "thread_id": "cx:thread:1",
+                    "thread_id": "cx:flow:1",
                     "content": {"body": "original"}
                 }),
             ),

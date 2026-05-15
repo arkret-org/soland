@@ -617,74 +617,6 @@ pub struct SnapshotHeadResponse {
     pub signature: Value,
 }
 
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct RepoDescribeResponse {
-    pub repo_did: String,
-    pub head_commit: Option<String>,
-    pub supported_signatures: Vec<String>,
-    pub limits: Value,
-}
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct ListCommitsResponse {
-    pub commits: Vec<Value>,
-    pub next_cursor: Option<String>,
-    pub has_more: bool,
-}
-
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct GetOperationsRequest {
-    #[serde(default)]
-    pub operation_ids: Vec<String>,
-    #[serde(default = "default_include_payload")]
-    pub include_payload: bool,
-}
-
-fn default_include_payload() -> bool {
-    true
-}
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct GetOperationsResponse {
-    pub operations: Vec<Value>,
-    pub missing: Vec<String>,
-    pub unauthorized: Vec<String>,
-}
-
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct RepoSyncRequest {
-    pub repo_id: String,
-    pub since: Option<String>,
-    pub limit: Option<usize>,
-    #[serde(default)]
-    pub filters: Option<Value>,
-}
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct RepoSyncResponse {
-    pub operations: Vec<Value>,
-    pub next_cursor: Option<String>,
-    pub has_more: bool,
-}
-
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct SubmitCommitRequest {
-    pub repo_id: String,
-    pub commit: Value,
-    #[serde(default)]
-    pub operations: Vec<Value>,
-    pub expected_head: Option<String>,
-    pub idempotency_key: Option<String>,
-}
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct SubmitCommitResponse {
-    pub status: String,
-    pub commit_id: String,
-    pub head_commit: Option<String>,
-    pub sync_token: String,
-}
-
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct AuthzCheckRequest {
     pub actor: String,
@@ -1032,14 +964,12 @@ pub struct SendMessageRequest {
     pub encrypted: bool,
 }
 
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct SendMessageResponse {
-    pub event_id: String,
-    pub operation_id: String,
-    pub commit_id: String,
-    pub head_commit: Option<String>,
-    pub sync_token: String,
-}
+// `SendMessageResponse` was removed in round 7 — `/api/v1/messages/send`
+// renders the response as a raw `serde_json::Value` (see
+// `routing/events/messages.rs::messages_send`). The DTO never had a real
+// callsite, and the spec has no `commit_id` / `head_commit` companion
+// (repo / cx:commit: scaffold was deleted with the rest of the repo
+// surface).
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct IdentityDescribeResponse {
@@ -1279,8 +1209,6 @@ pub fn describe(
             "events.describe".to_owned(),
             "events.submit".to_owned(),
             "events.read".to_owned(),
-            "repo.submit_commit".to_owned(),
-            "repo.read".to_owned(),
             "federation.transaction".to_owned(),
             "federation.operations".to_owned(),
             "sync.client_sync".to_owned(),
@@ -1312,7 +1240,6 @@ pub fn describe(
             "plaintext_visible_services".to_owned(),
         ],
         supported_operations: vec![
-            "cx.repo.describe".to_owned(),
             "cx.account.register".to_owned(),
             "cx.account.me".to_owned(),
             "cx.auth.logout".to_owned(),
@@ -1335,10 +1262,6 @@ pub fn describe(
             "cx.events.query".to_owned(),
             "cx.events.subscribe".to_owned(),
             "cx.events.frontier".to_owned(),
-            "cx.repo.list_commits".to_owned(),
-            "cx.repo.get_operations".to_owned(),
-            "cx.repo.sync".to_owned(),
-            "cx.repo.submit_commit".to_owned(),
             "cx.federation.transaction".to_owned(),
             "cx.federation.push_operations".to_owned(),
             "cx.federation.pull_operations".to_owned(),
@@ -1394,7 +1317,6 @@ pub fn describe(
                 "supported": true,
                 "service_did": service_did,
                 "enforced_on": [
-                    "repo.submit_commit",
                     "federation.push_operations",
                     "federation.transaction",
                     "blob.upload"
@@ -1419,7 +1341,6 @@ pub fn describe(
                 "conformance": "limited_reference",
                 "full_profiles_not_claimed": [
                     "cx.profile.principal_server.v1",
-                    "cx.profile.principal_server_repo_api.v1",
                     "cx.profile.index_node.v1",
                     "cx.profile.identity_registry.v1",
                     "cx.profile.blob_node.v1"
@@ -1427,7 +1348,6 @@ pub fn describe(
                 "implemented_surfaces": [
                     "principal_server",
                     "events_api_minimal",
-                    "repo_api",
                     "sync",
                     "index",
                     "identity_registry_local_dev",
@@ -1473,8 +1393,7 @@ pub fn sync_token() -> String {
         "issued_at_ms": now.timestamp_millis(),
         "positions": {
             "spaces": {},
-            "devices": {},
-            "repo": null
+            "devices": {}
         }
     });
     format!("cx:cursor:{}", URL_SAFE_NO_PAD.encode(cursor.to_string()))
@@ -1497,7 +1416,6 @@ pub struct ReviseMessageResponse {
     pub event_id: String,
     pub revision_of: String,
     pub operation_id: String,
-    pub commit_id: String,
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]

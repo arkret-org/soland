@@ -59,9 +59,8 @@ use system::extract::AuthArgs;
 use system::util::{
     bearer_token, handle_for_did, is_json_integer, is_valid_discoverability, is_valid_handle,
     is_valid_sha256_digest, is_valid_sha256_hex, is_valid_sync_token, normalize_handle,
-    query_flag,
-    query_param, query_param_all, render_error, sha256_hex, validate_device_id, validate_did,
-    validate_space_id,
+    query_flag, query_param, query_param_all, render_error, sha256_hex, validate_device_id,
+    validate_did, validate_space_id,
 };
 
 pub fn router(state: AppState) -> Router {
@@ -364,41 +363,6 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "index",
         "cx.index.debug_reducer",
         "debug reducer frontier",
-    ),
-    (
-        "/api/v1/repo/describe",
-        PathItemType::Get,
-        "repo",
-        "cx.repo.describe",
-        "describe repository manifest",
-    ),
-    (
-        "/api/v1/repo/operations",
-        PathItemType::Post,
-        "repo",
-        "cx.repo.get_operations",
-        "fetch repo operations by id",
-    ),
-    (
-        "/api/v1/repo/list-commits",
-        PathItemType::Get,
-        "repo",
-        "cx.repo.list_commits",
-        "list recent commits",
-    ),
-    (
-        "/api/v1/repo/sync",
-        PathItemType::Post,
-        "repo",
-        "cx.repo.sync",
-        "repository sync sentinel",
-    ),
-    (
-        "/api/v1/repo/submit-commit",
-        PathItemType::Post,
-        "repo",
-        "cx.repo.submit_commit",
-        "submit a repository commit",
     ),
     (
         "/api/v1/authz/effective-grants",

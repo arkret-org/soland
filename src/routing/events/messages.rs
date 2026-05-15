@@ -198,13 +198,15 @@ async fn messages_send(depot: &mut Depot, req: &mut Request, res: &mut Response)
         tracing::error!(%error, "failed to mirror message into projection_events");
     }
 
-    // The signed-Envelope path produces a separate `operation_id` and
-    // `commit_id`; for the deployment-local /messages/send shortcut we
-    // derive them deterministically from the event_id so downstream
-    // consumers see the same identifier shape.
+    // The signed-Envelope path produces an `operation_id`; we derive the
+    // same shape deterministically from the event_id for the
+    // deployment-local /messages/send shortcut so downstream consumers see
+    // the spec-aligned identifier set. (Round 7: the `commit_id` /
+    // `cx:commit:` companion was removed alongside the rest of the repo
+    // scaffold — spec v1 has no `cx:commit:` typed id and no `/repo/*`
+    // surface; soland mirrors that.)
     let event_suffix = event_id.strip_prefix("cx:event:").unwrap_or(&event_id);
     let operation_id = format!("cx:operation:{event_suffix}");
-    let commit_id = format!("cx:commit:{event_suffix}");
     let mut positions = std::collections::BTreeMap::new();
     positions.insert(space_id.to_owned(), now.timestamp_micros());
     let sync_token = encode_send_cursor(space_id, &positions, now.timestamp_millis());
@@ -212,7 +214,6 @@ async fn messages_send(depot: &mut Depot, req: &mut Request, res: &mut Response)
     res.render(Json(json!({
         "event_id": event_id,
         "operation_id": operation_id,
-        "commit_id": commit_id,
         "kind": kinds::CX_MESSAGE_CREATE,
         "message_id": message_id_from_event_id(&event_id),
         "flow_id": flow_id,

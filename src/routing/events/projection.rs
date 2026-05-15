@@ -141,11 +141,11 @@ pub fn operation_type_string(operation: &Operation) -> String {
 }
 
 pub fn sync_timeline_message_json(message: &crate::reducer::MessageState) -> serde_json::Value {
-    let flow_id = if message.thread_id.starts_with("cx:flow:") {
-        message.thread_id.clone()
-    } else {
-        flow_id_from_space_id(&message.space_id)
-    };
+    // Round 7: flow_id is always derived from space_id; thread_id is a
+    // branch within the flow, not the flow itself. See
+    // `sync_timeline_message_record_json` for the matching MessageRecord
+    // path.
+    let flow_id = flow_id_from_space_id(&message.space_id);
     let track_id = message.thread_id.clone();
     json!({
         "kind": "cx.message.create",

@@ -1530,7 +1530,7 @@ mod proof_strictness_tests {
         SessionRecord {
             token_hash: "hash".to_owned(),
             actor: "did:web:alice.example".to_owned(),
-            device_id: "dev_alice".to_owned(),
+            device_id: "cx:device:01904100-0000-7000-8000-a11ce0000001".to_owned(),
             audience: "did:web:soland.local".to_owned(),
             expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
             created_at: chrono::Utc::now(),

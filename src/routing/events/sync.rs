@@ -360,11 +360,11 @@ fn timeline_events_for_space(
 }
 
 fn sync_timeline_message_record_json(message: &crate::state::MessageRecord) -> serde_json::Value {
-    let flow_id = if message.thread_id.starts_with("cx:flow:") {
-        message.thread_id.clone()
-    } else {
-        flow_id_from_space_id(&message.space_id)
-    };
+    // Round 7: flow_id is always derived from space_id (one flow per space
+    // for the message timeline) — thread_id is a discussion branch *within*
+    // that flow, NOT the flow itself. The pre-round-7 conflation
+    // (treat thread_id as flow_id when its prefix matched) was incorrect.
+    let flow_id = flow_id_from_space_id(&message.space_id);
     let track_id = message.thread_id.clone();
     json!({
         "kind": "cx.message.create",
@@ -432,11 +432,12 @@ pub fn sync_token_for_client_sync(
     let expires_at_ms = expires_at.timestamp_millis();
     // Canonical cursor schema: `cx.schema.cursor.v1`. Round 4 cycled out the
     // underscore-prefixed legacy field names (`_profile`, `_filter_hash`, `t`,
-    // `x`). Round 5 drops the dual-write; only the canonical names remain.
+    // `x`); round 5 dropped that dual-write; round 7 drops the
+    // string-typed `v: "1"` shim — only `version: 1` (u64) remains, matching
+    // what `is_valid_sync_token` checks for.
     let cursor = json!({
         "schema": "cx.schema.cursor.v1",
         "version": 1,
-        "v": "1",
         "purpose": "stream",
         "issued_at": issued_at.to_rfc3339_opts(SecondsFormat::Millis, true),
         "issued_at_ms": issued_at_ms,
@@ -471,9 +472,9 @@ pub fn parse_and_validate_sync_cursor(
 ) -> Result<SyncCursor, SyncCursorError> {
     let value = decode_sync_cursor_value(token)?;
     if value
-        .get("v")
-        .and_then(|v| v.as_str())
-        .is_none_or(|v| v != "1")
+        .get("version")
+        .and_then(|v| v.as_u64())
+        .is_none_or(|v| v != 1)
         || value
             .get("purpose")
             .and_then(|purpose| purpose.as_str())
@@ -1414,11 +1415,19 @@ async fn snapshot_chunk(depot: &mut Depot, req: &mut Request, res: &mut Response
         return;
     }
 
-    // FUTURE: replace the single JSON chunk with deterministic multi-chunk
-    // Merkle output and signed generator proofs (spec snapshot-frontier
-    // v2). Today we ship the entire snapshot as a single base64-url JSON
-    // chunk and verify the digest in-band — fine for small Spaces, not for
-    // production-scale archives.
+    // Spec snapshot-frontier v2 (multi-chunk Merkle + signed generator
+    // proofs) requires SDK primitives that aren't in contrix-rust-sdk yet:
+    //   1. `SnapshotChunker` — deterministically partition the projection
+    //      state into fixed-size byte ranges with stable chunk_ids.
+    //   2. `SnapshotMerkleTree` — build a binary Merkle over chunk_id ⇒
+    //      sha256(chunk_bytes); top hash binds to `state_root`.
+    //   3. `GeneratorProof` — per-chunk generator signature so receivers
+    //      can verify a chunk without trusting the snapshot_ref source.
+    // Today we ship the entire snapshot as a single base64-url JSON chunk
+    // and verify the digest in-band — fine for small Spaces. The
+    // single-chunk envelope is forward-compatible with v2: callers that
+    // request `chunk_id != "0"` already see a 404, and the v2 enriched
+    // response shape can be added as additional optional fields.
     res.render(Json(json!({
         "snapshot_ref": snapshot_ref,
         "chunk_id": chunk_id,
