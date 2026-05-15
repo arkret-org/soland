@@ -195,6 +195,8 @@ mod tests {
             admin_default_page_limit: 100,
             admin_max_page_limit: 1000,
             admin_principal_dids: Vec::new(),
+            push_bridge_cache_ttl_seconds: 900,
+            push_bridge_trusted_service_dids: Vec::new(),
         }
     }
 

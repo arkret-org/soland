@@ -23,65 +23,43 @@ mod interop;
 pub(crate) mod spaces;
 pub(crate) mod system;
 
-use access::policy::{
-    is_supported_policy_effect, is_valid_generated_or_custom_id, is_valid_policy_scope,
-    is_valid_policy_type, policy_document_to_response,
-};
+use access::policy::policy_document_to_response;
 use admin::audit::append_audit_log;
 use events::event_log::effective_read_receipt_policy_for_space;
 use events::flow::{
-    default_discussion_track, derived_flow_id, discussion_track_for_projection_event,
-    flow_history_visibility_for_space, flow_id_for_projection_event, flow_id_from_space_id,
-    flow_projection_for_space, message_id_from_event_id, retag_typed_id,
+    default_discussion_track, discussion_track_for_projection_event, flow_id_for_projection_event, flow_id_from_space_id,
+    flow_projection_for_space,
 };
 use events::operations::{
-    OperationPayloadSchema, PayloadRequirement, canonical_json_digest,
-    known_space_denies_plaintext_service, message_operation_is_encrypted,
-    operation_schema_for_kind, payload_field_present, validate_canonical_json_value,
-    validate_canonical_json_value_inner, validate_content_block, validate_content_blocks,
-    validate_device_message_payload, validate_encrypted_payload_envelope, validate_mentions,
-    validate_message_operation_payload, validate_no_removed_legacy_contracts,
-    validate_operation_policy, validate_operation_schema, validate_operation_semantics,
-    validate_rfc3339_utc_z,
+    validate_canonical_json_value, validate_device_message_payload,
+    validate_no_removed_legacy_contracts,
 };
+#[cfg(test)]
+use events::operations::validate_operation_semantics;
+#[cfg(test)]
+use identity::did::validate_did_document_services;
 use events::projection::{
-    FederationIngestResult, ProjectedEventPage, accept_local_operations, append_projection_event,
-    backfill_gap_events, ensure_projected_space, event_is_visible, ingest_federation_operations,
-    load_projected_events_from_pg, operation_event_id, operation_is_visible,
-    operation_kind_records, operation_type_string, persist_projected_operation,
-    project_accepted_operations, project_federated_message, project_federation_operation,
-    project_membership_operation, projected_event_page, projection_event_from_operation,
-    projection_event_json, redaction_targets_from_events, redaction_targets_from_operations,
-    sync_timeline_message_json, truncate_gap_events,
+    accept_local_operations, ingest_federation_operations, operation_is_visible, projection_event_from_operation, redaction_targets_from_operations,
 };
 use events::sync::{
-    SyncCursor, SyncCursorError, bound_cursor, bound_cursor_with_positions,
-    decode_sync_cursor_value, normalized_strings, parse_and_validate_sync_cursor, sync_filter_hash,
+    SyncCursorError, parse_and_validate_sync_cursor,
     sync_token_for_client_sync,
 };
-use identity::account::principal_space_for_did;
 use identity::auth::{
-    auth_or_render, authenticated_session, is_device_revoked, revoke_device_record,
-    session_token_hash, token_for,
+    auth_or_render, authenticated_session, is_device_revoked,
 };
 use identity::device_messages::{device_message_events_after, prune_acked_device_messages};
-use identity::did::validate_did_document_services;
-use spaces::directory::{
-    actor_visible_to, checked_limit, demo_actors, demo_organization, facets_match,
-    has_accepted_contact, query_limit, query_matches,
-};
+use spaces::directory::demo_actors;
 use spaces::space::{
-    invite_token_matches_space, invite_token_space_id, is_space_deleted, prune_expired_typing,
-    record_space_lifecycle_operation, space_allows_plaintext_service, space_discoverability,
-    space_has_member, space_id_accessible, space_id_visible_to, space_lifecycle_response,
-    space_owner_matches, space_resolvable_to, space_search_discoverability,
+    invite_token_space_id, is_space_deleted, prune_expired_typing, space_allows_plaintext_service, space_discoverability,
+    space_has_member, space_id_accessible, space_resolvable_to, space_search_discoverability,
     space_search_visible_to, space_visible_to, touch_space, typing_ephemeral_for_space,
 };
 use system::extract::AuthArgs;
 use system::util::{
-    bearer_token, handle_for_did, is_json_integer, is_supported_cx_entity_type,
-    is_valid_discoverability, is_valid_entity_type, is_valid_handle, is_valid_sha256_digest,
-    is_valid_sha256_hex, is_valid_sync_token, normalize_handle, query_flag, query_list,
+    bearer_token, handle_for_did, is_json_integer, is_valid_discoverability, is_valid_handle,
+    is_valid_sha256_digest, is_valid_sha256_hex, is_valid_sync_token, normalize_handle,
+    query_flag,
     query_param, query_param_all, render_error, sha256_hex, validate_device_id, validate_did,
     validate_space_id,
 };
@@ -164,41 +142,13 @@ fn contrix_openapi_doc(router: &Router) -> OpenApi {
             json!({
                 "registries": crate::artifacts::registry_summary(),
                 "openapi_source": "contrix-spec/spec/v1/artifacts/openapi/contrix-service-api.openapi.yaml",
-                "FacetName": {
-                    "type": "string",
-                    "enum": [
-                        "container",
-                        "replyable",
-                        "schedulable",
-                        "assignable",
-                        "stateful",
-                        "rankable",
-                        "reviewable",
-                        "notifiable",
-                        "documentable",
-                        "renderable"
-                    ]
-                },
-                "ViewRenderer": {
-                    "type": "string",
-                    "enum": [
-                        "board",
-                        "list",
-                        "table",
-                        "calendar",
-                        "gantt",
-                        "timeline",
-                        "thread",
-                        "chat",
-                        "forum",
-                        "graph",
-                        "tree",
-                        "document",
-                        "dashboard",
-                        "custom"
-                    ]
-                },
-                "view_constraint_kinds": ["allowed_entity_facets"],
+                // Round-6: the round-4 entity/view scaffold (FacetName /
+                // ViewRenderer / AllowedEntityFacetsConstraint /
+                // allowed_entity_facets) was removed alongside the entity
+                // abstraction. View facets are now declared by individual
+                // spec event kinds (`cx.view.*` / `cx.flow.*` / `cx.place.*`)
+                // and bound through cell-family registry mappings.
+                "authz_constraint_kinds": ["allowed_object_facets"],
             }),
         )
         .merge_router(router);
@@ -1150,6 +1100,8 @@ mod operation_conformance_tests {
                 admin_default_page_limit: 100,
                 admin_max_page_limit: 1000,
                 admin_principal_dids: Vec::new(),
+                push_bridge_cache_ttl_seconds: 900,
+                push_bridge_trusted_service_dids: Vec::new(),
             },
             Db { pool: None },
         )

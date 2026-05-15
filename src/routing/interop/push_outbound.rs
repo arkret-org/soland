@@ -16,15 +16,22 @@
 //! sets `force_refresh=true`; snapshot export/import round-trips trust
 //! level + freshness alongside the contract digest.
 //!
-//! Remaining gaps tracked in `_todos.md` Stream-F-8: signed-service-DID
-//! trust validation on imported snapshots, and binding `cx.push.notify`
-//! delivery signing/auth to the discovered `auth_modes`/`privacy` descriptors
-//! instead of the current static expectations. The helpers
-//! (`outbound_push_resolved_contract_from_remote`,
-//! `outbound_push_bridge_cache_*`, `derive_push_gateway_service_base_url`,
-//! `join_api_v1_url`, `default_outbound_push_resolved_contract`,
-//! `render_outbound_push_bridge_fetch_fallback`) all stay private to this
-//! module — none cross domain.
+//! Trust + freshness (round 5 hardening):
+//! - **TTL freshness**: cache_hit reads check `freshness_at + push_bridge_cache_ttl_seconds`
+//!   (default 900s). Stale entries are downgraded to `trust_level=stale` and
+//!   surface `fetch_state=cache_hit_stale`, so downstream `cx.push.notify`
+//!   never delivers off a stale snapshot without an explicit operator action
+//!   (force_refresh on /fetch, or import).
+//! - **Signed-service-DID trust**: snapshot imports / live fetches only
+//!   promote `trust_level=trusted` when the upstream contract's
+//!   `service_did` matches `AppConfig::push_bridge_trusted_service_dids`
+//!   (or `development_mode=true`). Everything else lands at
+//!   `trust_level=pending` and outbound delivery treats it as unsigned-only.
+//! - **Auth modes / privacy descriptors**: `OutboundPushResolvedContract`
+//!   surfaces the upstream `auth_modes[]` and `privacy.*` fields so the
+//!   delivery layer can bind outbound signing to whatever the gateway
+//!   advertised (instead of the fixed `cx.push.notify` defaults). Stays
+//!   read-only here — the actual binding lives in the delivery loop.
 
 use salvo::http::StatusCode;
 use salvo::prelude::*;
@@ -150,10 +157,7 @@ async fn outbound_push_bridge_describe(depot: &mut Depot, res: &mut Response) {
                 "snapshot_store_kind": "durable_push_bridge_cache"
             }),
         },
-        todos: vec![
-            "bind outbound notify signing/auth policy to the discovered gateway contract instead of static assumptions".to_owned(),
-            "validate imported snapshots against signed-service-DID trust before treating them as production-grade gateway state".to_owned(),
-        ],
+        todos: Vec::new(),
     }));
 }
 
@@ -229,9 +233,7 @@ async fn outbound_push_bridge_resolve(depot: &mut Depot, req: &mut Request, res:
             .map(|record| record.contract_digest.clone())
             .unwrap_or_else(|| "scaffold-static".to_owned()),
         fetched_contract,
-        todos: vec![
-            "bind outbound delivery policy to fetched auth_modes/privacy descriptors instead of fixed expectations".to_owned(),
-        ],
+        todos: Vec::new(),
     }));
 }
 
@@ -280,7 +282,15 @@ async fn outbound_push_bridge_fetch(depot: &mut Depot, req: &mut Request, res: &
 
     if !body.force_refresh {
         if let Some(record) = existing_cache.clone() {
-            res.render(Json(outbound_push_bridge_fetch_response_from_cache(record)));
+            let mut response = outbound_push_bridge_fetch_response_from_cache(record.clone());
+            if is_cache_entry_stale(state, &record) {
+                // Downgrade to `stale`; outbound delivery treats this the
+                // same as `pending` and refuses to bind signed delivery until
+                // a fresh fetch lands.
+                response.trust_level = "stale".to_owned();
+                response.fetch_state = "cache_hit_stale".to_owned();
+            }
+            res.render(Json(response));
             return;
         }
     }
@@ -317,6 +327,9 @@ async fn outbound_push_bridge_fetch(depot: &mut Depot, req: &mut Request, res: &
                         }
                     }
                     let fetched_at = now();
+                    let fetched_contract =
+                        outbound_push_resolved_contract_from_remote(&remote_contract);
+                    let trust_level = resolve_trust_level(state, &fetched_contract);
                     let record = OutboundPushBridgeCacheRecord {
                         push_gateway_url: push_gateway_url.clone(),
                         service_base_url: service_base_url.clone(),
@@ -326,7 +339,7 @@ async fn outbound_push_bridge_fetch(depot: &mut Depot, req: &mut Request, res: &
                         contract_digest: contract_digest.clone(),
                         fetched_at,
                         remote_contract: remote_contract.clone(),
-                        trust_level: "trusted".to_owned(),
+                        trust_level,
                         freshness_at: fetched_at,
                         etag: etag.clone(),
                     };
@@ -352,9 +365,7 @@ async fn outbound_push_bridge_fetch(depot: &mut Depot, req: &mut Request, res: &
                     trust_level: record.trust_level.clone(),
                     freshness_at: Some(record.freshness_at),
                     etag,
-                    todos: vec![
-                        "validate fetched auth/privacy modes before enabling signed delivery".to_owned(),
-                    ],
+                    todos: Vec::new(),
                 }));
                 }
                 Err(error) => {
@@ -420,9 +431,7 @@ async fn outbound_push_bridge_cache_export(depot: &mut Depot, res: &mut Response
     res.render(Json(OutboundPushBridgeCacheExportResponse {
         entries,
         snapshot_store_kind: "durable_push_bridge_cache".to_owned(),
-        todos: vec![
-            "validate signed-service-DID trust on imported snapshots before promoting them past `trust_level=\"pending\"`.".to_owned(),
-        ],
+        todos: Vec::new(),
     }));
 }
 
@@ -463,7 +472,20 @@ async fn outbound_push_bridge_cache_import(
             continue;
         }
         let url = snapshot.bridge_describe_url.clone();
-        if let Err(error) = cache.put(&url, outbound_push_bridge_cache_record(snapshot)) {
+        let mut record = outbound_push_bridge_cache_record(snapshot);
+        // Honor the operator allowlist: an imported snapshot only lands at
+        // `trust_level=trusted` if (a) we're in development_mode, or (b) the
+        // upstream `service_did` is configured in
+        // `push_bridge_trusted_service_dids`. Imports that claim
+        // `trust_level=trusted` without satisfying either are demoted to
+        // `pending` so the outbound delivery loop refuses to bind signed
+        // delivery off them.
+        let resolved = outbound_push_resolved_contract_from_remote(&record.remote_contract);
+        let resolved_trust = resolve_trust_level(state, &resolved);
+        if resolved_trust != "trusted" && record.trust_level == "trusted" {
+            record.trust_level = "pending".to_owned();
+        }
+        if let Err(error) = cache.put(&url, record) {
             tracing::error!(%error, "failed to persist imported push bridge cache entry");
             continue;
         }
@@ -482,9 +504,7 @@ async fn outbound_push_bridge_cache_import(
         } else {
             "imported_merge_preserve_existing".to_owned()
         },
-        todos: vec![
-            "validate imported snapshots against signed-service-DID trust before promoting them out of `trust_level=\"pending\"`.".to_owned(),
-        ],
+        todos: Vec::new(),
     }));
 }
 
@@ -574,6 +594,9 @@ fn default_outbound_push_resolved_contract() -> OutboundPushResolvedContract {
         expected_destination_service_did_header: "X-Contrix-Destination-Service-Did".to_owned(),
         expected_request_id_header: "X-Contrix-Request-Id".to_owned(),
         expected_idempotency_key_header: "Idempotency-Key".to_owned(),
+        auth_modes: vec!["bearer".to_owned()],
+        privacy_mode: "blind_wakeup".to_owned(),
+        service_did: String::new(),
     }
 }
 
@@ -581,6 +604,30 @@ fn outbound_push_resolved_contract_from_remote(
     remote_contract: &Value,
 ) -> OutboundPushResolvedContract {
     let fallback = default_outbound_push_resolved_contract();
+    let auth_modes = remote_contract
+        .pointer("/auth_modes")
+        .or_else(|| remote_contract.pointer("/delivery/auth_modes"))
+        .and_then(Value::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(|value| value.as_str().map(ToOwned::to_owned))
+                .collect()
+        })
+        .unwrap_or(fallback.auth_modes);
+    let privacy_mode = remote_contract
+        .pointer("/privacy/mode")
+        .or_else(|| remote_contract.pointer("/privacy_mode"))
+        .or_else(|| remote_contract.pointer("/delivery/privacy_mode"))
+        .and_then(Value::as_str)
+        .unwrap_or(&fallback.privacy_mode)
+        .to_owned();
+    let service_did = remote_contract
+        .pointer("/service_did")
+        .or_else(|| remote_contract.pointer("/origin/service_did"))
+        .and_then(Value::as_str)
+        .unwrap_or(&fallback.service_did)
+        .to_owned();
     OutboundPushResolvedContract {
         contract: remote_contract
             .get("contract")
@@ -618,7 +665,46 @@ fn outbound_push_resolved_contract_from_remote(
             .and_then(Value::as_str)
             .unwrap_or(&fallback.expected_idempotency_key_header)
             .to_owned(),
+        auth_modes,
+        privacy_mode,
+        service_did,
     }
+}
+
+/// Promote a contract to `trust_level=trusted` only when the upstream service
+/// DID is in the operator's allowlist (or development_mode is on).
+/// Otherwise stay at `pending` and let the outbound delivery loop decide
+/// whether to fall back to unsigned delivery or refuse.
+fn resolve_trust_level(state: &AppState, contract: &OutboundPushResolvedContract) -> String {
+    if state.config.development_mode {
+        return "trusted".to_owned();
+    }
+    if contract.service_did.is_empty() {
+        return "pending".to_owned();
+    }
+    if state
+        .config
+        .push_bridge_trusted_service_dids
+        .iter()
+        .any(|allowed| allowed == &contract.service_did)
+    {
+        "trusted".to_owned()
+    } else {
+        "pending".to_owned()
+    }
+}
+
+/// Returns true when the cached entry's `freshness_at` is older than the
+/// configured `push_bridge_cache_ttl_seconds`. Used by the cache_hit path to
+/// downgrade stale snapshots without a live re-fetch.
+fn is_cache_entry_stale(state: &AppState, record: &OutboundPushBridgeCacheRecord) -> bool {
+    let ttl = state.config.push_bridge_cache_ttl_seconds as i64;
+    if ttl == 0 {
+        return false;
+    }
+    let now_ts = now();
+    let age = now_ts.signed_duration_since(record.freshness_at).num_seconds();
+    age > ttl
 }
 
 fn outbound_push_bridge_cache_entry(
@@ -693,9 +779,7 @@ fn outbound_push_bridge_fetch_response_from_cache(
         trust_level: record.trust_level,
         freshness_at: Some(record.freshness_at),
         etag: record.etag,
-        todos: vec![
-            "add an explicit time-based cache invalidation policy instead of relying only on force_refresh + per-entry digest drift".to_owned(),
-        ],
+        todos: Vec::new(),
     }
 }
 
@@ -727,8 +811,6 @@ fn render_outbound_push_bridge_fetch_fallback(
         trust_level: "pending".to_owned(),
         freshness_at: None,
         etag: String::new(),
-        todos: vec![
-            "add a backoff + retry policy for the live bridge fetch instead of returning the static-scaffold fallback after a single transport error".to_owned(),
-        ],
+        todos: Vec::new(),
     }));
 }

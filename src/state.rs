@@ -170,11 +170,6 @@ pub struct AppState {
     /// behind a [`Mutex`] (one-shot writes from the rotation path are not
     /// in the hot read path; the per-pass diagnostic helper just snapshots).
     pub anchorer_signing_key_origin: Arc<Mutex<AnchorerSigningKeyOrigin>>,
-    /// In-memory entity store for `/api/v1/entities` (standard `cx.*` types and
-    /// reverse-domain custom types). Not yet backed by Pg — a deployment-local
-    /// projection scaffold that lets the entity surface contract pass while
-    /// the durable projection lands.
-    pub entities: Arc<crate::routing::spaces::entities::EntityStore>,
 }
 
 #[derive(Clone, Debug)]
@@ -648,7 +643,6 @@ impl AppState {
             event_broadcast: broadcast::channel::<EventNotification>(1024).0,
             anchorer_signing_key,
             anchorer_signing_key_origin,
-            entities: Arc::new(crate::routing::spaces::entities::EntityStore::default()),
         }
     }
 }

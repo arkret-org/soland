@@ -969,13 +969,17 @@ fn validate_event_proofs(
             "proofs must contain at least one proof",
         ));
     }
-    // In development mode (single-tenant test deployments) accept the
-    // shorter dev-proof shape produced by `signed_event_envelope`:
-    // `{type: "dev-proof", verification_method, payload_hash, …}`. Production
-    // mode still requires the full detached-JWS proof. The development_mode
-    // toggle flips between them so the test fixture round-trips while
-    // production servers fail-closed on weak proofs.
-    let dev_proof_ok = state.config.development_mode;
+    // Proof validation forks on `state.config.development_mode`:
+    // - **Production** (`development_mode=false`): EVERY proof MUST be a full
+    //   detached-JWS proof with `kind`/`alg`/`verification_method`/
+    //   `payload_hash`/`created_at`/`jws`, hashing the full canonical envelope.
+    //   The `type=="dev-proof"` and payload-only hash forms are NOT accepted
+    //   under any circumstance — a malicious client claiming
+    //   `type="dev-proof"` in production fails-closed here.
+    // - **Development** (`development_mode=true`): the minimal dev-proof shape
+    //   (`type="dev-proof"`, `verification_method`, `payload_hash`-of-payload)
+    //   is also accepted so integration fixtures round-trip without keying.
+    let is_production = !state.config.development_mode;
     for proof in proofs {
         let Some(proof_object) = proof.as_object() else {
             return Err(event_validation_error(
@@ -984,11 +988,11 @@ fn validate_event_proofs(
                 "event proofs must be JSON objects",
             ));
         };
-        // `type` is the test fixture's discriminator field; treat its presence
-        // as the dev-mode opt-in even when `state.config.development_mode`
-        // happens to be off (e.g. integration tests that toggle it later).
-        let is_dev_proof = dev_proof_ok
-            || event_string_field(proof_object, &["type"]).as_deref() == Some("dev-proof");
+        // Production NEVER falls into the dev-proof branch, even if the client
+        // claims `type="dev-proof"`. That stops a downgrade attack where a
+        // production server is tricked into accepting a weak proof.
+        let is_dev_proof = !is_production
+            && event_string_field(proof_object, &["type"]).as_deref() == Some("dev-proof");
         let required_fields: &[&str] = if is_dev_proof {
             &["verification_method", "payload_hash"]
         } else {
@@ -1027,17 +1031,19 @@ fn validate_event_proofs(
                     "proof payload_hash is required",
                 )
             })?;
-        // Dev proofs hash the payload only; production proofs hash the full
-        // canonical envelope minus proofs/unsigned. Accept either match so the
-        // dev/test path round-trips and production stays strict.
-        let dev_payload_only_hash = object
-            .get("payload")
-            .map(|payload| {
+        // Production: the proof's payload_hash MUST match the canonical
+        // envelope digest. Dev-only: also accept the payload-only sha256 form
+        // so test fixtures keep round-tripping. Production never falls back.
+        let payload_only_hash_accept = if is_dev_proof {
+            object.get("payload").map(|payload| {
                 let bytes = serde_json::to_vec(payload).unwrap_or_default();
                 format!("sha256:{}", sha256_hex(&bytes))
-            });
+            })
+        } else {
+            None
+        };
         if payload_hash != expected_payload_hash
-            && dev_payload_only_hash.as_deref() != Some(&payload_hash)
+            && payload_only_hash_accept.as_deref() != Some(&payload_hash)
         {
             return Err(event_validation_error(
                 StatusCode::BAD_REQUEST,
@@ -1071,19 +1077,6 @@ fn event_string_field(object: &serde_json::Map<String, Value>, keys: &[&str]) ->
     keys.iter()
         .find_map(|key| object.get(*key).and_then(Value::as_str))
         .map(ToOwned::to_owned)
-}
-
-fn require_string_field(
-    object: &serde_json::Map<String, Value>,
-    key: &'static str,
-) -> Result<String, EventValidationError> {
-    event_string_field(object, &[key]).ok_or_else(|| {
-        event_validation_error(
-            StatusCode::BAD_REQUEST,
-            "missing_param",
-            "string field is required",
-        )
-    })
 }
 
 fn require_object_field(
@@ -1474,4 +1467,117 @@ pub fn effective_read_receipt_policy_for_space(
         .and_then(Value::as_bool)
         .unwrap_or(true);
     Some((disclosure, visibility, scope_overrides_allowed))
+}
+
+#[cfg(test)]
+mod proof_strictness_tests {
+    use super::*;
+    use crate::config::{AppConfig, FederationPolicy, ObjectStorageConfig};
+    use crate::db::Db;
+
+    fn make_state(development_mode: bool) -> AppState {
+        let config = AppConfig {
+            bind: "127.0.0.1:0".parse().unwrap(),
+            public_base_url: "http://server".to_owned(),
+            service_did: "did:web:soland.local".to_owned(),
+            tls_cert_path: None,
+            tls_key_path: None,
+            database_url: None,
+            object_storage: ObjectStorageConfig::local(std::env::temp_dir().join("soland-test")),
+            cors_allow_origin: None,
+            auth_server_url: None,
+            development_mode,
+            oauth_introspection_url: None,
+            oauth_introspection_bearer: None,
+            session_grant_introspection_url: None,
+            session_grant_introspection_bearer: None,
+            did_resolver_allow_methods: vec!["web".to_owned()],
+            embedded_webvh_provider_enabled: false,
+            embedded_webvh_registration_bearer: None,
+            external_webvh_provider_url: None,
+            external_webvh_provider_active: false,
+            default_webvh_provider_id: None,
+            jws_replay_window_seconds: 0,
+            jws_replay_window_per_family: std::collections::BTreeMap::new(),
+            anchorer_signing_key_seed: None,
+            use_keystore: false,
+            federation_policy: FederationPolicy::Mesh,
+            federation_peers: Vec::new(),
+            admin_default_page_limit: 100,
+            admin_max_page_limit: 1000,
+            admin_principal_dids: Vec::new(),
+            push_bridge_cache_ttl_seconds: 900,
+            push_bridge_trusted_service_dids: Vec::new(),
+        };
+        AppState::new(config, Db { pool: None })
+    }
+
+    fn dev_proof_envelope() -> serde_json::Map<String, Value> {
+        let mut object = serde_json::Map::new();
+        object.insert(
+            "proofs".to_owned(),
+            json!([{
+                "type": "dev-proof",
+                "verification_method": "did:web:alice.example#dev_alice",
+                "payload_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+            }]),
+        );
+        object.insert("payload".to_owned(), json!({"body": "hello"}));
+        object
+    }
+
+    fn session() -> SessionRecord {
+        SessionRecord {
+            token_hash: "hash".to_owned(),
+            actor: "did:web:alice.example".to_owned(),
+            device_id: "dev_alice".to_owned(),
+            audience: "did:web:soland.local".to_owned(),
+            expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
+            created_at: chrono::Utc::now(),
+            revoked_at: None,
+        }
+    }
+
+    #[test]
+    fn production_rejects_dev_proof_type_field() {
+        let state = make_state(false);
+        let session = session();
+        let object = dev_proof_envelope();
+        let err = validate_event_proofs(
+            &object,
+            &state,
+            &session,
+            "did:web:alice.example",
+            "sha256:dead",
+        )
+        .expect_err("production must reject dev-proof shape");
+        // Missing strict-JWS fields trips `invalid_proof` first.
+        assert_eq!(err.code, "invalid_proof");
+    }
+
+    #[test]
+    fn development_accepts_dev_proof_type_field_when_hash_matches() {
+        let state = make_state(true);
+        let session = session();
+        let mut object = dev_proof_envelope();
+        // Use payload-only hash so the dev path's `payload_only_hash_accept`
+        // matches; production would still reject this even with the correct
+        // payload hash because the proof lacks a JWS.
+        let payload_bytes = serde_json::to_vec(&object["payload"]).unwrap();
+        let payload_hash = format!("sha256:{}", sha256_hex(&payload_bytes));
+        if let Some(proofs) = object.get_mut("proofs").and_then(Value::as_array_mut)
+            && let Some(proof) = proofs.first_mut()
+            && let Some(map) = proof.as_object_mut()
+        {
+            map.insert("payload_hash".to_owned(), json!(payload_hash));
+        }
+        let result = validate_event_proofs(
+            &object,
+            &state,
+            &session,
+            "did:web:alice.example",
+            "sha256:dead",
+        );
+        assert!(result.is_ok(), "development mode should accept matching dev-proof: {result:?}");
+    }
 }

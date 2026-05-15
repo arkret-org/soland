@@ -163,20 +163,6 @@ pub fn sync_timeline_message_json(message: &crate::reducer::MessageState) -> ser
     })
 }
 
-pub fn operation_kind_records(operations: &[Operation]) -> Vec<serde_json::Value> {
-    operations
-        .iter()
-        .map(|operation| {
-            json!({
-                "operation_id": operation.operation_id.to_string(),
-                "input_kind": &operation.object_type,
-                "canonical_kind": kinds::canonical_kind_for_operation(operation)
-                    .unwrap_or(operation.object_type.as_str()),
-            })
-        })
-        .collect()
-}
-
 pub fn projection_event_from_operation(
     operation: &Operation,
     sender_fallback: Option<&str>,

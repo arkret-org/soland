@@ -49,8 +49,11 @@ pub fn generate_report_id() -> String {
     generate("report")
 }
 
+/// Notification id helper. Spec uses `cx:notif:` (id-kind-registry), not
+/// `cx:notification:`. Round 6 aligned the prefix; callers haven't landed
+/// yet but the helper is the spec-correct shape.
 pub fn generate_notification_id() -> String {
-    generate("notification")
+    generate("notif")
 }
 
 pub fn generate_view_id() -> String {
@@ -173,7 +176,7 @@ mod tests {
         assert!(generate_invite_id().starts_with("cx:invite:"));
         assert!(generate_snapshot_id().starts_with("cx:snapshot:"));
         assert!(generate_report_id().starts_with("cx:report:"));
-        assert!(generate_notification_id().starts_with("cx:notification:"));
+        assert!(generate_notification_id().starts_with("cx:notif:"));
         assert!(generate_view_id().starts_with("cx:view:"));
         assert!(generate_request_id().starts_with("cx:req:"));
     }

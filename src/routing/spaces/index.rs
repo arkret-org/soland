@@ -2,7 +2,7 @@
 //!
 //! Surfaces:
 //! - `GET  /api/v1/index/describe`
-//! - `GET  /api/v1/index/entity`
+//! - `GET  /api/v1/index/object`
 //! - `GET  /api/v1/index/thread`
 //! - `GET  /api/v1/index/notifications`
 //! - `GET  /api/v1/index/inbox`
@@ -35,7 +35,7 @@ const DEMO_SPACE_ID: &str = "cx:space:0196419b-0000-7000-8000-000000000000";
 pub(super) fn router() -> Router {
     Router::new()
         .push(Router::with_path("index/describe").get(index_describe))
-        .push(Router::with_path("index/entity").get(index_entity))
+        .push(Router::with_path("index/object").get(index_object))
         .push(Router::with_path("index/thread").get(index_thread))
         .push(Router::with_path("index/notifications").get(index_notifications))
         .push(Router::with_path("index/inbox").get(index_inbox))
@@ -60,20 +60,26 @@ async fn index_describe(depot: &mut Depot, res: &mut Response) {
     })));
 }
 
-fn entity_kind_for(entity_id: &str) -> Option<&'static str> {
-    if entity_id.starts_with("cx:space:") {
+/// Map a `cx:<kind>:...` typed id to the spec id-kind it belongs to. Used by
+/// `/api/v1/index/object` to surface a polymorphic typed-id describe; this
+/// is **not** the soland-local entity concept (removed in round 6) — it's
+/// just a tiny lookup over the spec-registered prefixes.
+fn object_kind_for(object_id: &str) -> Option<&'static str> {
+    if object_id.starts_with("cx:space:") {
         Some("space")
-    } else if entity_id.starts_with("cx:flow:") {
+    } else if object_id.starts_with("cx:flow:") {
         Some("flow")
-    } else if entity_id.starts_with("cx:morph:") {
+    } else if object_id.starts_with("cx:morph:") {
         Some("morph")
-    } else if entity_id.starts_with("cx:place:") {
+    } else if object_id.starts_with("cx:place:") {
         Some("place")
-    } else if entity_id.starts_with("cx:actor_profile:") {
+    } else if object_id.starts_with("cx:actor_profile:") {
         Some("actor_profile")
-    } else if entity_id.starts_with("cx:view:") {
+    } else if object_id.starts_with("cx:view:") {
         Some("view")
-    } else if entity_id.starts_with("did:") {
+    } else if object_id.starts_with("cx:relation:") {
+        Some("relation")
+    } else if object_id.starts_with("did:") {
         Some("did")
     } else {
         None
@@ -81,32 +87,31 @@ fn entity_kind_for(entity_id: &str) -> Option<&'static str> {
 }
 
 #[endpoint]
-async fn index_entity(_depot: &mut Depot, req: &mut Request, res: &mut Response) {
-    let Some(entity_id) = query_param(req, "entity_id") else {
+async fn index_object(_depot: &mut Depot, req: &mut Request, res: &mut Response) {
+    let Some(object_id) = query_param(req, "object_id") else {
         render_error(
             res,
             StatusCode::BAD_REQUEST,
             "missing_param",
-            "entity_id is required",
+            "object_id is required",
         );
         return;
     };
-    let Some(kind) = entity_kind_for(&entity_id) else {
+    let Some(kind) = object_kind_for(&object_id) else {
         render_error(
             res,
             StatusCode::BAD_REQUEST,
             "invalid_param",
-            "entity_id has no recognised typed prefix",
+            "object_id has no recognised typed prefix",
         );
         return;
     };
     res.render(Json(json!({
-        "entity": {
-            "entity_id": entity_id,
+        "object": {
+            "object_id": object_id,
             "kind": kind,
             "schema": format!("cx.schema.{kind}.v1"),
         },
-        "facets": [],
     })));
 }
 
@@ -257,8 +262,11 @@ async fn index_search(depot: &mut Depot, req: &mut Request, res: &mut Response) 
         .and_then(Value::as_u64)
         .unwrap_or(20)
         .min(100) as usize;
-    let entity_types = body
-        .get("entity_types")
+    // `object_kinds[]` filters by spec id-kind ("space", "message", "flow", …).
+    // The round-5 `entity_types[]` alias was dropped in round 6 along with
+    // the rest of the entity scaffold — callers MUST send `object_kinds[]`.
+    let object_kinds = body
+        .get("object_kinds")
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
@@ -273,11 +281,11 @@ async fn index_search(depot: &mut Depot, req: &mut Request, res: &mut Response) 
                 .collect()
         })
         .unwrap_or_default();
-    let include_space = entity_types.is_empty()
-        || entity_types
+    let include_space = object_kinds.is_empty()
+        || object_kinds
             .iter()
             .any(|kind| kind.as_str() == Some("space"));
-    let include_message = entity_types
+    let include_message = object_kinds
         .iter()
         .any(|kind| kind.as_str() == Some("message"));
     let lower = query.to_lowercase();
@@ -287,7 +295,7 @@ async fn index_search(depot: &mut Depot, req: &mut Request, res: &mut Response) 
     // entries whose plaintext body matches the query string. This is enough
     // for the workflow / index_search contract test; production search will
     // back this with a real tokenized index.
-    if include_message || entity_types.is_empty() {
+    if include_message || object_kinds.is_empty() {
         // Pull a generous slice from each requested space (or DEMO_SPACE_ID
         // when no filter is provided) and filter in-process.
         let candidate_spaces: Vec<String> = if space_id_filter.is_empty() {
@@ -316,7 +324,7 @@ async fn index_search(depot: &mut Depot, req: &mut Request, res: &mut Response) 
                 }
                 results.push(json!({
                     "kind": "message",
-                    "entity_id": message.event_id.clone(),
+                    "object_id": message.event_id.clone(),
                     "event_id": message.event_id.clone(),
                     "space_id": message.space_id,
                     "thread_id": message.thread_id,
@@ -336,7 +344,7 @@ async fn index_search(depot: &mut Depot, req: &mut Request, res: &mut Response) 
     if include_space && results.len() < limit {
         results.push(json!({
             "kind": "space",
-            "entity_id": DEMO_SPACE_ID,
+            "object_id": DEMO_SPACE_ID,
             "title": "Demo Space",
             "summary": format!("matched query `{query}`"),
             "score": 1.0,
@@ -496,7 +504,7 @@ async fn index_query(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         .map(|space| {
             json!({
                 "kind": "space",
-                "entity_id": space.space_id.as_str(),
+                "object_id": space.space_id.as_str(),
                 "space_id": space.space_id.as_str(),
                 "title": space.name,
                 "summary": space.description,
@@ -535,7 +543,7 @@ async fn index_query(depot: &mut Depot, req: &mut Request, res: &mut Response) {
             }
             results.push(json!({
                 "kind": "space",
-                "entity_id": space_id,
+                "object_id": space_id,
                 "space_id": space_id,
                 "title": format!("Space {}", &space_id[..space_id.len().min(24)]),
                 "renderer": renderer,
@@ -549,7 +557,7 @@ async fn index_query(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     if results.is_empty() && space_id_filter.is_empty() && filter_text.is_none() {
         results.push(json!({
             "kind": "space",
-            "entity_id": DEMO_SPACE_ID,
+            "object_id": DEMO_SPACE_ID,
             "space_id": DEMO_SPACE_ID,
             "title": "Demo Space",
             "renderer": renderer,

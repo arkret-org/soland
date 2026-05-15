@@ -17,7 +17,7 @@ use serde_json::{Value, json};
 
 use super::{
     SyncCursorError, auth_or_render, now, parse_and_validate_sync_cursor, query_param,
-    render_error, sync_token_for_client_sync, validate_device_id, validate_device_message_payload,
+    render_error, sync_token_for_client_sync, validate_device_message_payload,
     validate_did,
 };
 use crate::state::{AppState, DeviceMessageRecord, SessionRecord};

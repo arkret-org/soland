@@ -170,8 +170,8 @@ pub trait LatticeKind: Send + Sync {
     /// projection feeds **this** cell family. Empty by default — only the
     /// cell families that have a 1:N event-kind → cell-family mapping
     /// declare it (mostly the `cx.space.<facet>` lifecycle cells, the
-    /// `cx.message.*` / `cx.reaction.*` / `cx.entity.*` projection cells,
-    /// and the `cx.consent.*` / `cx.member.*` state cells). The
+    /// `cx.message.*` / `cx.reaction.*` projection cells, and the
+    /// `cx.consent.*` / `cx.member.*` state cells). The
     /// [`LatticeRegistry`] inverts this declaration into a global event-kind
     /// → `LatticeKind` index used by [`LatticeRegistry::lookup_for_event_kind`]
     /// to drive `ProjectionState::apply_via_lattice_registry`.

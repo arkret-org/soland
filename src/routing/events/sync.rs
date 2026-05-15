@@ -18,7 +18,7 @@
 //!
 //! `SyncCursor`, `SyncCursorError`, `parse_and_validate_sync_cursor`,
 //! `decode_sync_cursor_value`, `sync_token_for_client_sync`, `sync_filter_hash`,
-//! `bound_cursor`, `bound_cursor_with_positions`, `normalized_strings` are all
+//! `normalized_strings` is
 //! `pub` because sibling routing modules reuse them. They
 //! live here because the cursor lifecycle is anchored to `client_sync`.
 
@@ -430,23 +430,24 @@ pub fn sync_token_for_client_sync(
     let filter_hash = sync_filter_hash(profile, filter, renderer, facets);
     let issued_at_ms = issued_at.timestamp_millis();
     let expires_at_ms = expires_at.timestamp_millis();
+    // Canonical cursor schema: `cx.schema.cursor.v1`. Round 4 cycled out the
+    // underscore-prefixed legacy field names (`_profile`, `_filter_hash`, `t`,
+    // `x`). Round 5 drops the dual-write; only the canonical names remain.
     let cursor = json!({
+        "schema": "cx.schema.cursor.v1",
+        "version": 1,
         "v": "1",
         "purpose": "stream",
-        "t": issued_at.to_rfc3339_opts(SecondsFormat::Millis, true),
-        "x": expires_at_ms,
+        "issued_at": issued_at.to_rfc3339_opts(SecondsFormat::Millis, true),
         "issued_at_ms": issued_at_ms,
         "expires_at_ms": expires_at_ms,
         "profile": profile,
-        "_profile": profile,
         "principal_id": principal_id,
         "device_id": device_id,
         "service_id": state.config.service_did.clone(),
         "renderer": renderer,
         "facets": facets,
-        "filter_hash": filter_hash.clone(),
-        "_filter_hash": filter_hash,
-        "schema": "cx.schema.cursor.v1",
+        "filter_hash": filter_hash,
         "positions": {
             "spaces": spaces_positions,
             "devices": device_positions,
@@ -524,7 +525,7 @@ pub fn parse_and_validate_sync_cursor(
     let expected_filter_hash =
         sync_filter_hash(profile.unwrap_or("incremental"), filter, renderer, facets);
     if value
-        .get("_filter_hash")
+        .get("filter_hash")
         .and_then(|filter_hash| filter_hash.as_str())
         .is_some_and(|filter_hash| filter_hash != expected_filter_hash)
     {
@@ -654,33 +655,10 @@ pub fn sync_filter_hash(
         .unwrap_or_else(|_| format!("sha256:{}", sha256_hex(binding.to_string().as_bytes())))
 }
 
-pub fn bound_cursor(profile: &str, binding: serde_json::Value) -> String {
-    bound_cursor_with_positions(profile, binding, json!({}))
-}
-
-pub fn bound_cursor_with_positions(
-    profile: &str,
-    binding: serde_json::Value,
-    positions: serde_json::Value,
-) -> String {
-    let now = chrono::Utc::now();
-    let expires_at = now + ChronoDuration::days(7);
-    let filter_hash = contrix_sdk::canonical::canonical_sha256(&binding)
-        .unwrap_or_else(|_| format!("sha256:{}", sha256_hex(binding.to_string().as_bytes())));
-    let cursor = json!({
-        "v": "1",
-        "purpose": "stream",
-        "t": now.to_rfc3339_opts(SecondsFormat::Millis, true),
-        "x": expires_at.timestamp_millis(),
-        "_profile": profile,
-        "_filter_hash": filter_hash,
-        "_binding": binding,
-        "positions": positions
-    });
-    let bytes = contrix_sdk::canonical::canonical_json_bytes(&cursor)
-        .unwrap_or_else(|_| cursor.to_string().into_bytes());
-    format!("cx:cursor:{}", URL_SAFE_NO_PAD.encode(bytes))
-}
+// `bound_cursor` / `bound_cursor_with_positions` were removed in round 7 —
+// they generated cursors with the round-4 `_profile` / `_filter_hash`
+// underscore-prefixed fields that the parser dropped in round 5. The
+// canonical builder is `sync_token_for_client_sync`.
 
 pub fn normalized_strings(values: &[String]) -> Vec<String> {
     let mut values = values.to_vec();

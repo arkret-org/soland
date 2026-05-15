@@ -102,6 +102,8 @@ fn test_config() -> AppConfig {
         admin_default_page_limit: 100,
         admin_max_page_limit: 1000,
         admin_principal_dids: Vec::new(),
+        push_bridge_cache_ttl_seconds: 900,
+        push_bridge_trusted_service_dids: Vec::new(),
     }
 }
 
@@ -721,11 +723,13 @@ async fn contrix_openapi_spec_contains_facet_projection_contracts() {
     assert!(content_type.contains("application/yaml"));
     let body = response.take_string().await.unwrap();
     assert!(body.contains("openapi: 3.1.0"));
-    assert!(body.contains("FacetName"));
-    assert!(body.contains("ViewRenderer"));
-    assert!(body.contains("allowed_entity_facets"));
+    // `FacetName` / `ViewRenderer` / `allowed_entity_facets` were removed
+    // alongside the entity/view scaffold in round 6 (no spec counterpart).
+    // The renamed cell-family-bound constraint surfaces as
+    // `allowed_object_facets` in the `x-contrix-artifacts` extension.
     assert!(body.contains("x-operation-aliases"));
     assert!(body.contains("x-contrix-artifacts"));
+    assert!(body.contains("allowed_object_facets"));
     let expected_operation_ids = [
         "cx.system.health",
         "cx.account.register",
@@ -1837,7 +1841,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
             "content": {
                 "mentions": [
                     "did:web:bob.example",
-                    {"type": "entity", "entity_id": "cx:entity:01904100-0000-7000-8000-170d4f3bfc7b"}
+                    {"type": "flow", "flow_id": "cx:flow:01904100-0000-7000-8000-170d4f3bfc7b"}
                 ],
                 "blocks": [
                     {"kind": "text", "text": "structured hello"},
@@ -1874,7 +1878,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         .json(&serde_json::json!({
             "query": "workflow",
             "space_ids": [space_id],
-            "entity_types": ["message"]
+            "object_kinds": ["message"]
         }))
         .send(&app_from_state(state.clone()))
         .await
@@ -2921,302 +2925,29 @@ async fn directory_product_endpoints_return_demo_projection_shapes() {
     assert_eq!(invalid.status_code.unwrap().as_u16(), 400);
 }
 
-#[tokio::test]
-async fn standard_entity_types_and_reverse_domain_custom_types_work() {
-    let state = AppState::new(test_config(), Db { pool: None });
-    let token = dev_token(state.clone()).await;
-    let space_id = "cx:space:0196419b-0000-7000-8000-000000000000";
-
-    let invalid = TestClient::post("http://server/api/v1/entities")
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({
-            "space_id": space_id,
-            "entity_type": "todo",
-            "title": "Invalid"
-        }))
-        .send(&app_from_state(state.clone()))
-        .await;
-    assert_eq!(invalid.status_code.unwrap().as_u16(), 400);
-
-    let unsupported_standard = TestClient::post("http://server/api/v1/entities")
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({
-            "space_id": space_id,
-            "entity_type": "cx.unsupported.object",
-            "title": "Unsupported"
-        }))
-        .send(&app_from_state(state.clone()))
-        .await;
-    assert_eq!(unsupported_standard.status_code.unwrap().as_u16(), 400);
-
-    for (entity_type, title) in [
-        ("cx.task", "Task"),
-        ("cx.channel", "Support"),
-        ("cx.topic", "Roadmap"),
-        ("cx.memory.semantic", "Decision memory"),
-        ("cx.agent.run", "Agent run"),
-        ("com.example.widget", "Custom widget"),
-    ] {
-        let entity: Value = TestClient::post("http://server/api/v1/entities")
-            .add_header("authorization", format!("Bearer {token}"), true)
-            .json(&serde_json::json!({
-                "space_id": space_id,
-                "entity_type": entity_type,
-                "title": title,
-                "content": {"status": "active"},
-                "fields": {"kind": entity_type}
-            }))
-            .send(&app_from_state(state.clone()))
-            .await
-            .take_json()
-            .await
-            .unwrap();
-        assert_eq!(entity["entity_type"], entity_type);
-    }
-
-    let channels: Value = TestClient::get(format!(
-        "http://server/api/v1/entities?space_id={space_id}&entity_type=cx.channel"
-    ))
-    .add_header("authorization", format!("Bearer {token}"), true)
-    .send(&app_from_state(state.clone()))
-    .await
-    .take_json()
-    .await
-    .unwrap();
-    assert_eq!(channels["entities"].as_array().unwrap().len(), 1);
-}
-
-#[tokio::test]
-async fn view_endpoints_project_common_presentation_shapes() {
-    let state = AppState::new(test_config(), Db { pool: None });
-    let token = dev_token(state.clone()).await;
-    let space_id = "cx:space:0196419b-0000-7000-8000-000000000000";
-
-    let mut entities = Vec::new();
-    for (title, status, due_at, priority, facets) in [
-        (
-            "Draft spec",
-            "todo",
-            "2026-05-01T00:00:00Z",
-            2,
-            serde_json::json!({"rankable": {"rank_field": "priority"}, "stateful": {"field": "status"}}),
-        ),
-        (
-            "Ship reducer",
-            "done",
-            "2026-05-02T00:00:00Z",
-            1,
-            serde_json::json!(["renderable", "stateful"]),
-        ),
-    ] {
-        let entity: Value = TestClient::post("http://server/api/v1/entities")
-            .add_header("authorization", format!("Bearer {token}"), true)
-            .json(&serde_json::json!({
-                "space_id": space_id,
-                "entity_type": "cx.task",
-                "facets": facets,
-                "title": title,
-                "content": {"description": title},
-                "fields": {
-                    "status": status,
-                    "due_at": due_at,
-                    "priority": priority
-                }
-            }))
-            .send(&app_from_state(state.clone()))
-            .await
-            .take_json()
-            .await
-            .unwrap();
-        assert_eq!(entity["entity_type"], "cx.task");
-        entities.push(entity);
-    }
-
-    let kanban: Value = TestClient::post("http://server/api/v1/views")
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({
-            "space_id": space_id,
-            "kind": "kanban",
-            "title": "Task board",
-            "entity_type": "cx.task",
-            "options": {"group_by": "status"}
-        }))
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    assert_eq!(kanban["projection"]["kind"], "kanban");
-    assert_eq!(kanban["projection"]["group_by"], "status");
-    assert_eq!(kanban["projection"]["columns"].as_array().unwrap().len(), 2);
-
-    let table: Value = TestClient::post("http://server/api/v1/views")
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({
-            "space_id": space_id,
-            "kind": "table",
-            "entity_type": "cx.task"
-        }))
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    assert_eq!(table["projection"]["kind"], "table");
-    assert_eq!(table["projection"]["rows"].as_array().unwrap().len(), 2);
-    assert!(
-        table["projection"]["columns"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|column| column["key"] == "status")
-    );
-
-    let calendar: Value = TestClient::post("http://server/api/v1/views")
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({
-            "space_id": space_id,
-            "kind": "calendar",
-            "entity_type": "cx.task",
-            "options": {"date_field": "due_at"}
-        }))
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    assert_eq!(calendar["projection"]["kind"], "calendar");
-    assert_eq!(
-        calendar["projection"]["events"].as_array().unwrap().len(),
-        2
-    );
-    assert_eq!(
-        calendar["projection"]["events"][0]["start"],
-        "2026-05-01T00:00:00Z"
-    );
-
-    let collection: Value = TestClient::post("http://server/api/v1/views")
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({
-            "space_id": space_id,
-            "kind": "collection",
-            "entity_type": "cx.task",
-            "options": {"item_facets": {"stateful": {"field": "status"}}}
-        }))
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    assert_eq!(collection["projection"]["kind"], "collection");
-    assert_eq!(
-        collection["projection"]["item_facets"],
-        serde_json::json!(["stateful"])
-    );
-    assert_eq!(
-        collection["projection"]["items"].as_array().unwrap().len(),
-        2
-    );
-
-    let graph: Value = TestClient::post("http://server/api/v1/views")
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({
-            "space_id": space_id,
-            "kind": "graph",
-            "entity_type": "cx.task",
-            "options": {"node_facets": ["rankable"]}
-        }))
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    assert_eq!(graph["projection"]["kind"], "graph");
-    assert_eq!(graph["projection"]["nodes"].as_array().unwrap().len(), 1);
-
-    let facet_grant: Value = TestClient::post("http://server/api/v1/authz/grants")
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({
-            "space_id": space_id,
-            "subject": "did:web:bob.example",
-            "resource": "entity:*",
-            "actions": ["entity.update"],
-            "constraints": [{"type": "allowed_entity_facets", "facets": ["rankable"]}]
-        }))
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    assert_eq!(facet_grant["subject"], "did:web:bob.example");
-
-    let rankable_authz: Value = TestClient::post("http://server/api/v1/authz/check")
-        .json(&serde_json::json!({
-            "actor": "did:web:bob.example",
-            "action": "entity.update",
-            "resource": {
-                "kind": "entity",
-                "space_id": space_id,
-                "entity_id": entities[0]["entity_id"]
-            }
-        }))
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    assert_eq!(rankable_authz["allowed"], true);
-
-    let non_rankable_authz: Value = TestClient::post("http://server/api/v1/authz/check")
-        .json(&serde_json::json!({
-            "actor": "did:web:bob.example",
-            "action": "entity.update",
-            "resource": {
-                "kind": "entity",
-                "space_id": space_id,
-                "entity_id": entities[1]["entity_id"]
-            }
-        }))
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    assert_eq!(non_rankable_authz["allowed"], false);
-    assert_eq!(
-        non_rankable_authz["reason_code"].as_str().unwrap(),
-        "constraints_not_satisfied"
-    );
-    assert!(
-        non_rankable_authz["reason"]
-            .as_str()
-            .is_some_and(|reason| reason.contains("allowed_entity_facets"))
-    );
-
-    let timeline: Value = TestClient::get(format!(
-        "http://server/api/v1/views/virtual-timeline?space_id={space_id}&entity_type=cx.task&kind=timeline"
-    ))
-    .add_header("authorization", format!("Bearer {token}"), true)
-    .send(&app_from_state(state))
-    .await
-    .take_json()
-    .await
-    .unwrap();
-    assert_eq!(timeline["projection"]["kind"], "timeline");
-    assert_eq!(timeline["projection"]["items"].as_array().unwrap().len(), 2);
-}
+// `standard_entity_types_and_reverse_domain_custom_types_work` and
+// `view_endpoints_project_common_presentation_shapes` were deleted in
+// round 6: the `entity` / `view` abstraction they exercised never landed in
+// `contrix-spec/v1`. Typed objects in the protocol are `cx:flow:` / `cx:place:`
+// / `cx:morph:` / `cx:relation:` / `cx:view:`, each with its own dedicated
+// event kind; presentation concerns belong on `cx.view.*` events going
+// through the reducer, not on a free-form `/api/v1/entities` /
+// `/api/v1/views` scaffold.
 
 #[tokio::test]
 async fn index_product_endpoints_return_demo_projection_shapes() {
-    let entity: Value = TestClient::get(
-        "http://server/api/v1/index/entity?entity_id=cx:space:0196419b-0000-7000-8000-000000000000",
+    // `/api/v1/index/object` is the polymorphic typed-id describe (renamed
+    // from `/index/entity` in round 6); it returns `{object: {object_id,
+    // kind, schema}}` for any spec-registered `cx:<kind>:` prefix.
+    let object: Value = TestClient::get(
+        "http://server/api/v1/index/object?object_id=cx:space:0196419b-0000-7000-8000-000000000000",
     )
     .send(&app())
     .await
     .take_json()
     .await
     .unwrap();
-    assert_eq!(entity["entity"]["kind"], "space");
+    assert_eq!(object["object"]["kind"], "space");
 
     let thread: Value =
         TestClient::get("http://server/api/v1/index/thread?thread_id=cx:thread:demo")
@@ -3247,7 +2978,7 @@ async fn index_product_endpoints_return_demo_projection_shapes() {
     assert_eq!(inbox["flows"][0]["flow"]["schema"], "cx.schema.flow.v1");
 
     let search: Value = TestClient::post("http://server/api/v1/index/search")
-        .json(&serde_json::json!({"query": "demo", "entity_types": ["space"], "limit": 5}))
+        .json(&serde_json::json!({"query": "demo", "object_kinds": ["space"], "limit": 5}))
         .send(&app())
         .await
         .take_json()

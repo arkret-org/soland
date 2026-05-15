@@ -32,7 +32,7 @@ use super::auth::{SessionGrantValidationInput, validate_session_grant_binding};
 use super::push_outbound::{derive_push_gateway_service_base_url, join_api_v1_url};
 use super::{
     auth_or_render, authenticated_session, now, render_error, sha256_hex,
-    validate_canonical_json_value, validate_device_id, validate_no_removed_legacy_contracts,
+    validate_canonical_json_value, validate_no_removed_legacy_contracts,
 };
 use crate::persistence::DriftResult;
 use crate::state::{AppState, PushRuleRecord, SessionRecord};

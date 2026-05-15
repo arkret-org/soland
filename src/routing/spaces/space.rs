@@ -416,16 +416,23 @@ async fn add_space_member(
     .map_err(|error| {
         AppError::new(ErrorCode::Conflict, error.to_string()).with_status(StatusCode::CONFLICT)
     })?;
-    // Surface a dedicated lifecycle projection event so timeline/audit readers
-    // can filter by `cx.membership.join` directly without re-deriving
-    // membership transitions from `cx.member.state` payloads.
+    // **Derived projection event** (NOT a spec event kind): the spec's
+    // event-kind-registry only ships `cx.member.state` for membership
+    // transitions; that's a CRDT state op the reducer applies to
+    // `cx.component.space.members.v1`. Analytics / audit consumers want a
+    // discrete `joined` / `left` series, so soland additionally writes a
+    // `cx.membership.join` projection event alongside the `cx.member.state`
+    // operation. This is a server-local view, NOT a signed Event Envelope —
+    // it never round-trips back to the durable Event store and federation
+    // never replays it. Marked as `operation_type="derived_projection"` so
+    // downstream filters can exclude it from spec-event-kind queries.
     let join_event_id = crate::ids::generate_event_id();
     let _ = state.persistence.projection_events().append(
         crate::state::ProjectionEventRecord {
             event_id: join_event_id.clone(),
             space_id: space_id.clone(),
             event_kind: "cx.membership.join".to_owned(),
-            operation_type: "event".to_owned(),
+            operation_type: "derived_projection".to_owned(),
             operation_id: Some(format!(
                 "cx:operation:{}",
                 join_event_id
@@ -498,16 +505,17 @@ async fn remove_space_member(
     .map_err(|error| {
         AppError::new(ErrorCode::Conflict, error.to_string()).with_status(StatusCode::CONFLICT)
     })?;
-    // Mirror `cx.membership.leave` into the projection log for the same reason
-    // we mirror `cx.membership.join` — timeline/audit consumers index off the
-    // surface event kinds without a custom decoder for `cx.member.state`.
+    // See `add_space_member` for the rationale — `cx.membership.leave` is a
+    // soland-derived projection event, NOT a spec event kind. `operation_type`
+    // is tagged `derived_projection` so spec-event-kind filters can exclude
+    // it.
     let leave_event_id = crate::ids::generate_event_id();
     let _ = state.persistence.projection_events().append(
         crate::state::ProjectionEventRecord {
             event_id: leave_event_id.clone(),
             space_id: space_id.clone(),
             event_kind: "cx.membership.leave".to_owned(),
-            operation_type: "event".to_owned(),
+            operation_type: "derived_projection".to_owned(),
             operation_id: Some(format!(
                 "cx:operation:{}",
                 leave_event_id

@@ -209,43 +209,12 @@ pub fn handle_for_did(did: &str) -> String {
         .unwrap_or_else(|| "@user".to_owned())
 }
 
-// ── Entity-type / discoverability validators ────────────────────────────────
-
-/// Either a built-in `cx.<known>` type or a 3+ label reverse-domain custom type.
-pub fn is_valid_entity_type(value: &str) -> bool {
-    if let Some(rest) = value.strip_prefix("cx.") {
-        return is_supported_cx_entity_type(value)
-            && !rest.is_empty()
-            && rest.bytes().all(|byte| {
-                byte.is_ascii_lowercase()
-                    || byte.is_ascii_digit()
-                    || byte == b'.'
-                    || byte == b'_'
-                    || byte == b'-'
-            });
-    }
-    let labels: Vec<_> = value.split('.').collect();
-    labels.len() >= 3
-        && labels.iter().all(|label| {
-            !label.is_empty()
-                && label
-                    .bytes()
-                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
-        })
-}
-
-/// Allow-list of `cx.*` entity types this server understands.
-pub fn is_supported_cx_entity_type(value: &str) -> bool {
-    matches!(
-        value,
-        "cx.generic"
-            | "cx.task"
-            | "cx.channel"
-            | "cx.topic"
-            | "cx.memory.semantic"
-            | "cx.agent.run"
-    )
-}
+// ── Discoverability validator ───────────────────────────────────────────────
+//
+// (`is_valid_entity_type` / `is_supported_cx_entity_type` were removed in
+// round 6 — the `entity` abstraction never landed in `contrix-spec/v1`; typed
+// objects in the protocol are `cx:flow:` / `cx:place:` / `cx:morph:` /
+// `cx:relation:` / `cx:view:`, each driven by its own dedicated event kind.)
 
 /// Allow-list of space-discoverability values.
 pub fn is_valid_discoverability(value: &str) -> bool {

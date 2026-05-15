@@ -26,15 +26,13 @@
 //! around the 100+ event kinds the reducer doesn't cover yet).
 
 use contrix_sdk::{Hash, Operation};
-use serde_json::Value;
 
-use super::{is_json_integer, is_valid_entity_type, is_valid_sha256_digest, validate_did};
+use super::{is_json_integer, is_valid_sha256_digest, validate_did};
 use crate::kinds;
 use crate::state::AppState;
 
 #[derive(Clone, Copy)]
 pub struct OperationPayloadSchema {
-    schema_id: &'static str,
     requirements: &'static [PayloadRequirement],
     validate: Option<fn(&Operation) -> Result<(), &'static str>>,
 }
@@ -57,12 +55,10 @@ const REACTION_TARGET_FIELDS: &[&str] = &[
 ];
 const REACTION_ACTOR_FIELDS: &[&str] = &["actor", "sender"];
 const REACTION_KEY_FIELDS: &[&str] = &["key", "reaction", "reaction_key"];
-const ENTITY_ID_FIELDS: &[&str] = &["entity_id", "id"];
-const ENTITY_TYPE_FIELDS: &[&str] = &["entity_type", "type"];
 const RELATION_ID_FIELDS: &[&str] = &["relation_id", "id"];
 const RELATION_KIND_FIELDS: &[&str] = &["relation_kind", "kind"];
-const RELATION_FROM_FIELDS: &[&str] = &["from_ref", "from", "from_entity_id"];
-const RELATION_TO_FIELDS: &[&str] = &["to_ref", "to", "to_entity_id"];
+const RELATION_FROM_FIELDS: &[&str] = &["from_ref", "from"];
+const RELATION_TO_FIELDS: &[&str] = &["to_ref", "to"];
 const MEMBER_ACTOR_FIELDS: &[&str] = &["actor_id", "member", "actor", "sender"];
 const READ_MARKER_ACTOR_FIELDS: &[&str] = &["actor", "sender"];
 
@@ -95,14 +91,6 @@ const REACTION_REQUIREMENTS: &[PayloadRequirement] = &[
         "reaction operation requires reaction key",
     ),
 ];
-const ENTITY_CREATE_REQUIREMENTS: &[PayloadRequirement] = &[
-    PayloadRequirement::AnyOf(ENTITY_ID_FIELDS, "entity operation requires entity_id"),
-    PayloadRequirement::AnyOf(ENTITY_TYPE_FIELDS, "entity create requires entity_type"),
-];
-const ENTITY_ID_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::AnyOf(
-    ENTITY_ID_FIELDS,
-    "entity operation requires entity_id",
-)];
 const RELATION_CREATE_REQUIREMENTS: &[PayloadRequirement] = &[
     PayloadRequirement::AnyOf(
         RELATION_ID_FIELDS,
@@ -214,57 +202,38 @@ pub fn validate_operation_semantics(
 pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
     let schema = match kind {
         kinds::CX_MESSAGE_CREATE => OperationPayloadSchema {
-            schema_id: "cx.schema.operation.message_create.v1",
             requirements: MESSAGE_CREATE_REQUIREMENTS,
             validate: Some(validate_message_operation_payload),
         },
         kinds::CX_MESSAGE_REVISE => OperationPayloadSchema {
-            schema_id: "cx.schema.operation.message_revise.v1",
             requirements: MESSAGE_REVISE_REQUIREMENTS,
             validate: Some(validate_message_operation_payload),
         },
         kinds::CX_MESSAGE_REDACT | kinds::CX_REDACTION => OperationPayloadSchema {
-            schema_id: "cx.schema.operation.redaction.v1",
             requirements: REDACTION_REQUIREMENTS,
             validate: None,
         },
         kinds::CX_REACTION_ADD | kinds::CX_REACTION_REMOVE => OperationPayloadSchema {
-            schema_id: "cx.schema.operation.reaction.v1",
             requirements: REACTION_REQUIREMENTS,
             validate: None,
         },
-        kinds::CX_ENTITY_CREATE => OperationPayloadSchema {
-            schema_id: "cx.schema.operation.entity_create.v1",
-            requirements: ENTITY_CREATE_REQUIREMENTS,
-            validate: Some(validate_entity_create_operation_payload),
-        },
-        kinds::CX_ENTITY_UPDATE | kinds::CX_ENTITY_DELETE => OperationPayloadSchema {
-            schema_id: "cx.schema.operation.entity_mutation.v1",
-            requirements: ENTITY_ID_REQUIREMENTS,
-            validate: None,
-        },
         kinds::CX_RELATION_CREATE => OperationPayloadSchema {
-            schema_id: "cx.schema.operation.relation_create.v1",
             requirements: RELATION_CREATE_REQUIREMENTS,
             validate: None,
         },
         kinds::CX_RELATION_UPDATE | kinds::CX_RELATION_DELETE => OperationPayloadSchema {
-            schema_id: "cx.schema.operation.relation_mutation.v1",
             requirements: RELATION_ID_REQUIREMENTS,
             validate: None,
         },
         kinds::CX_READ_MARKER => OperationPayloadSchema {
-            schema_id: "cx.schema.operation.read_marker.v1",
             requirements: READ_MARKER_REQUIREMENTS,
             validate: None,
         },
         kind if kinds::is_membership_kind(kind) => OperationPayloadSchema {
-            schema_id: "cx.schema.operation.membership.v1",
             requirements: MEMBERSHIP_REQUIREMENTS,
             validate: None,
         },
         kind if kinds::is_space_lifecycle_kind(kind) => OperationPayloadSchema {
-            schema_id: "cx.schema.operation.space_lifecycle.v1",
             requirements: SPACE_LIFECYCLE_REQUIREMENTS,
             validate: None,
         },
@@ -273,9 +242,11 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
             kinds::CX_FIELD_POSITION_MOVE | kinds::CX_FIELD_POSITION_REORDER
         ) =>
         {
+            // Flow / place position ops carry a `flow_id` or `place_id`
+            // payload — relation_id requirements cover both because every
+            // positional op runs through `cx.relation.position.*` cells.
             OperationPayloadSchema {
-                schema_id: "cx.schema.operation.entity_mutation.v1",
-                requirements: ENTITY_ID_REQUIREMENTS,
+                requirements: RELATION_ID_REQUIREMENTS,
                 validate: None,
             }
         }
@@ -285,7 +256,6 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
         ) =>
         {
             OperationPayloadSchema {
-                schema_id: "cx.schema.operation.relation_mutation.v1",
                 requirements: RELATION_ID_REQUIREMENTS,
                 validate: None,
             }
@@ -342,22 +312,6 @@ pub fn validate_message_operation_payload(operation: &Operation) -> Result<(), &
         validate_mentions(content)?;
     }
     Ok(())
-}
-
-pub fn validate_entity_create_operation_payload(operation: &Operation) -> Result<(), &'static str> {
-    let Some(entity_type) = operation
-        .payload
-        .get("entity_type")
-        .or_else(|| operation.payload.get("type"))
-        .and_then(Value::as_str)
-    else {
-        return Err("entity create requires string entity_type");
-    };
-    if is_valid_entity_type(entity_type) {
-        Ok(())
-    } else {
-        Err("entity_type must be a supported cx.* object type or a reverse-domain custom type")
-    }
 }
 
 pub fn validate_operation_policy(
@@ -455,16 +409,16 @@ pub fn validate_mentions(content: &serde_json::Value) -> Result<(), &'static str
                 };
                 validate_did(did).map_err(|_| "mention DID is invalid")?;
             }
-            Some("entity") => {
+            Some("flow") => {
                 if !mention
-                    .get("entity_id")
+                    .get("flow_id")
                     .and_then(|value| value.as_str())
-                    .is_some_and(|value| value.starts_with("cx:entity:"))
+                    .is_some_and(|value| value.starts_with("cx:flow:"))
                 {
-                    return Err("entity mention requires entity_id");
+                    return Err("flow mention requires flow_id");
                 }
             }
-            _ => return Err("mention type must be actor or entity"),
+            _ => return Err("mention type must be actor or flow"),
         }
     }
     Ok(())

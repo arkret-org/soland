@@ -10,7 +10,7 @@ use salvo::http::StatusCode;
 use salvo::prelude::*;
 use serde_json::json;
 
-use super::{auth_or_render, is_device_revoked, now, render_error, validate_device_id};
+use super::{auth_or_render, is_device_revoked, now, render_error};
 use crate::state::{AppState, DeviceInventoryRecord};
 use crate::wire::{
     KeysClaimRequest, KeysClaimResponse, KeysQueryRequest, KeysQueryResponse, KeysUploadRequest,

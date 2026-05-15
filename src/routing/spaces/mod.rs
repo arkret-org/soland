@@ -1,22 +1,20 @@
 use salvo::prelude::*;
 
 pub(super) mod directory;
-pub mod entities;
 mod index;
 mod reaction;
 mod read_marker;
 mod relation;
 mod repo;
 pub(super) mod space;
-mod views;
 
 use super::{
     AuthArgs, accept_local_operations, append_audit_log, auth_or_render, authenticated_session,
     default_discussion_track, device_inventory_to_json, effective_read_receipt_policy_for_space,
     flow_id_from_space_id, generate_invite_token, handle_for_did, invite_token_space_id,
-    is_space_deleted, is_valid_discoverability, normalize_handle, now, query_flag, query_param,
+    is_space_deleted, is_valid_discoverability, normalize_handle, now, query_param,
     render_error, space_discoverability, space_resolvable_to, space_search_discoverability,
-    space_search_visible_to, validate_canonical_json_value, validate_did, validate_space_id,
+    space_search_visible_to, validate_did, validate_space_id,
 };
 
 pub fn router() -> Router {
@@ -33,6 +31,4 @@ pub fn router() -> Router {
         .push(directory::router())
         .push(index::router())
         .push(repo::router())
-        .push(entities::router())
-        .push(views::router())
 }

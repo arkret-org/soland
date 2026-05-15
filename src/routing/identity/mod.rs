@@ -11,9 +11,9 @@ mod profile;
 
 use super::system::describe;
 use super::{
-    AuthArgs, SyncCursorError, append_audit_log, auth_or_render, authenticated_session,
+    AuthArgs, SyncCursorError, append_audit_log, auth_or_render,
     bearer_token, device_inventory_to_json, handle_for_did, is_device_revoked, is_valid_handle,
-    normalize_handle, now, parse_and_validate_sync_cursor, prune_acked_device_messages,
+    normalize_handle, now, parse_and_validate_sync_cursor,
     query_param, render_error, sha256_hex, sync_token_for_client_sync, validate_device_id,
     validate_device_message_payload, validate_did,
 };

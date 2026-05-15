@@ -1011,7 +1011,6 @@ mod tests {
                 .is_none()
         );
         assert!(registry.lookup_for_event_kind("cx.reaction.add").is_none());
-        assert!(registry.lookup_for_event_kind("cx.entity.update").is_none());
     }
 
     #[test]

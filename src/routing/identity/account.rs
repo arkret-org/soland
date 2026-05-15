@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use super::{
-    AuthArgs, append_audit_log, is_valid_handle, normalize_handle, now, validate_device_id,
+    AuthArgs, append_audit_log, is_valid_handle, normalize_handle, now,
     validate_did,
 };
 use crate::error::AppError;

@@ -16,7 +16,7 @@ use salvo::prelude::*;
 use serde_json::{Value, json};
 
 use super::{
-    AuthArgs, append_audit_log, device_inventory_to_json, now, sha256_hex, validate_device_id,
+    AuthArgs, append_audit_log, device_inventory_to_json, now, sha256_hex,
 };
 use crate::error::AppError;
 use crate::state::{AppState, DeviceInventoryRecord};

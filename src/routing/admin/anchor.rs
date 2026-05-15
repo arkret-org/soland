@@ -617,7 +617,7 @@ pub(super) async fn admin_reconfigure_anchorer(
 ) -> JsonResult<AdminSubmitMoveResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req)?;
-    let _session = super::require_admin_principal(state, session)?;
+    let admin_session = super::require_admin_principal(state, session)?;
     let space_id = space_id.into_inner();
     let space = SpaceId::new(space_id.clone()).map_err(|e| {
         AppError::new(ErrorCode::InvalidParam, format!("invalid space_id: {e}"))
@@ -629,11 +629,14 @@ pub(super) async fn admin_reconfigure_anchorer(
     // request shape per spec before we burn signing cycles.
     let new_value = anchorer_value_object_from_body(&body)?;
 
-    // Privilege-escalation guard: the admin DID submitting the reconfig
-    // MUST NOT appear as a member of the proposed anchorer set. The admin
-    // DID is the service signer DID (round 21 dev-mode shortcut); once the
-    // session-grant introspection lands, swap to the actual admin's DID.
-    let admin_did = state.config.service_did.clone();
+    // Privilege-escalation guard: the proposed anchorer set MUST NOT include
+    // either the service signing DID (the key that signs Moves) OR the admin
+    // operator's session DID. Both belong to the trust boundary above the
+    // anchorer set; landing either inside the set is a self-authentication
+    // primitive. Once per-admin signing keys land (KeyStore-backed) the
+    // signer DID and operator DID converge for that admin.
+    let service_signer_did = state.config.service_did.clone();
+    let operator_did = admin_session.actor.clone();
     let proposed_members: Vec<&str> = match body.kind.as_str() {
         "single_did" => body
             .single_did
@@ -648,10 +651,14 @@ pub(super) async fn admin_reconfigure_anchorer(
             .collect(),
         _ => Vec::new(),
     };
-    if proposed_members.iter().any(|d| *d == admin_did) {
+    if proposed_members
+        .iter()
+        .any(|d| *d == service_signer_did || *d == operator_did)
+    {
         return Err(AppError::new(
             ErrorCode::CapabilityDenied,
-            "admin DID must not appear in the proposed anchorer set".to_owned(),
+            "service signer DID and admin operator DID must not appear in the proposed anchorer set"
+                .to_owned(),
         )
         .with_status(StatusCode::FORBIDDEN));
     }
@@ -674,7 +681,10 @@ pub(super) async fn admin_reconfigure_anchorer(
 
     // Construct + sign the Move via Ed25519MoveSigner — round 22 binds
     // this to the same key the AnchorerWorker uses (AppState::anchorer_signing_key).
-    let _ = admin_did;
+    // Operator/service DIDs are only used above as authorization guards; the
+    // signing key still comes from `service_admin_signer` until per-admin
+    // signing-key provisioning lands.
+    let _ = (&service_signer_did, &operator_did);
     let signer = service_admin_signer(state)?;
     let unsigned = UnsignedMove::new(
         signer.signer_did().clone(),
@@ -914,10 +924,57 @@ pub(super) async fn admin_repair_bottom(
                 }
             }
         }
-        BottomRepairStrategyBody::Manual { .. } => {
-            // Manual free-form effects need a richer scope-enforcement
-            // pass (admin can't repair arbitrary cells beyond the bottom
-            // they're targeting). Tracked under MAL-15 follow-up.
+        BottomRepairStrategyBody::Manual { effects, .. } => {
+            // Admin-scope check: a manual repair Move MUST only touch the
+            // bottom cell the operator named in the path. Any effect whose
+            // `cell` field references a different cell id is rejected with
+            // `capability_denied` so a compromised admin session can't
+            // wrap a repair envelope around arbitrary lattice writes.
+            for effect in effects {
+                let touched = effect
+                    .get("cell")
+                    .and_then(serde_json::Value::as_str)
+                    .or_else(|| {
+                        effect
+                            .pointer("/cell/cell_ref")
+                            .and_then(serde_json::Value::as_str)
+                    })
+                    .or_else(|| {
+                        effect
+                            .pointer("/cell/id")
+                            .and_then(serde_json::Value::as_str)
+                    })
+                    .unwrap_or_default();
+                if touched.is_empty() {
+                    return Err(AppError::new(
+                        ErrorCode::InvalidParam,
+                        "manual repair effects must declare a `cell` (cx:cell:* id)".to_owned(),
+                    )
+                    .with_status(StatusCode::BAD_REQUEST));
+                }
+                if touched != cell_id_str {
+                    return Err(AppError::new(
+                        ErrorCode::CapabilityDenied,
+                        format!(
+                            "manual repair effects must only touch the targeted cell ({cell_id_str}); rejected effect on {touched}"
+                        ),
+                    )
+                    .with_status(StatusCode::FORBIDDEN));
+                }
+            }
+            if effects.is_empty() {
+                return Err(AppError::new(
+                    ErrorCode::InvalidParam,
+                    "manual repair strategy requires at least one effect".to_owned(),
+                )
+                .with_status(StatusCode::BAD_REQUEST));
+            }
+            // After scope-enforcement we still don't have a typed Move
+            // builder for arbitrary lattice effects (head_in_winner uses a
+            // dedicated builder); deliver a deterministic placeholder id so
+            // the audit trail records that the operator's intent was
+            // scoped-validated, even though the signing path lands later
+            // (MAL-15).
             let canonical_request = serde_json::json!({
                 "space_id": space_id,
                 "cell_id": cell_id_str,
@@ -929,10 +986,10 @@ pub(super) async fn admin_repair_bottom(
                 move_id: placeholder_id,
                 accepted: false,
                 reason: Some(
-                    "manual repair placeholder: free-form effects validation is a FUTURE admin-scope enforcement task".to_owned(),
+                    "manual repair effects validated against admin scope; signing path lands in MAL-15".to_owned(),
                 ),
                 anchor_id: None,
-                status: "placeholder".to_owned(),
+                status: "scope_validated".to_owned(),
             })
         }
     }
@@ -997,17 +1054,33 @@ pub(super) async fn admin_get_anchor_dag(
             frontier_union.insert(f.as_str().to_owned());
         }
         latest_state_root = Some(anchor.state_root.as_str().to_owned());
+        // Detect compaction: an Anchor whose frontier is exactly the union
+        // of its predecessor frontiers means it accepted zero new moves and
+        // merely re-stated the current view (MAL-11 compaction). True MAL-11
+        // also stamps `kind="compaction"` into Anchor metadata; we approximate
+        // that with the structural check until that field lands.
+        let mut predecessor_frontier_union: std::collections::BTreeSet<String> =
+            std::collections::BTreeSet::new();
+        for predecessor_id in &anchor.predecessor_refs {
+            if let Ok(Some(prev)) = anchor_store.get(predecessor_id) {
+                for f in &prev.frontier {
+                    predecessor_frontier_union.insert(f.as_str().to_owned());
+                }
+            }
+        }
+        let new_moves: usize = anchor
+            .frontier
+            .iter()
+            .filter(|f| !predecessor_frontier_union.contains(f.as_str()))
+            .count();
+        let is_compaction = !anchor.predecessor_refs.is_empty() && new_moves == 0;
         leaves.push(AnchorLeafResponse {
             anchor_id: anchor.id.as_str().to_owned(),
             state_root: Some(anchor.state_root.as_str().to_owned()),
             move_count: anchor.frontier.len() as u64,
             created_at: Some(anchor.hlc.as_str().to_owned()),
             signers,
-            // FUTURE: drive `is_compaction` off a dedicated marker
-            // (MAL-11 compaction marker on the Anchor itself). Heuristic
-            // for now: zero accepted moves means the Anchor merely
-            // re-stated the current view.
-            is_compaction: false,
+            is_compaction,
         });
     }
     json_ok(AnchorDagSnapshotResponse {

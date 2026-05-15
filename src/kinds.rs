@@ -6,9 +6,11 @@ pub const CX_MESSAGE_REVISE: &str = "cx.message.revise";
 pub const CX_MESSAGE_REDACT: &str = "cx.message.redact";
 pub const CX_REACTION_ADD: &str = "cx.reaction.add";
 pub const CX_REACTION_REMOVE: &str = "cx.reaction.remove";
-pub const CX_ENTITY_CREATE: &str = "cx.entity.create";
-pub const CX_ENTITY_UPDATE: &str = "cx.entity.update";
-pub const CX_ENTITY_DELETE: &str = "cx.entity.delete";
+// `cx.entity.*` was a soland-local abstraction that never landed in
+// `contrix-spec/v1`. Typed objects in the protocol are `cx:flow:` /
+// `cx:place:` / `cx:morph:` / `cx:relation:` / `cx:view:`, each with its
+// own dedicated event kind (`cx.flow.create`, `cx.morph.create`, …). The
+// `cx.entity.*` constants and operation schemas were removed in round 6.
 pub const CX_RELATION_CREATE: &str = "cx.relation.create";
 pub const CX_RELATION_UPDATE: &str = "cx.relation.update";
 pub const CX_RELATION_DELETE: &str = "cx.relation.delete";
@@ -46,9 +48,6 @@ fn canonical_registered_kind(object_type: &str) -> Option<&'static str> {
         CX_REDACTION => Some(CX_REDACTION),
         CX_REACTION_ADD => Some(CX_REACTION_ADD),
         CX_REACTION_REMOVE => Some(CX_REACTION_REMOVE),
-        CX_ENTITY_CREATE => Some(CX_ENTITY_CREATE),
-        CX_ENTITY_UPDATE => Some(CX_ENTITY_UPDATE),
-        CX_ENTITY_DELETE => Some(CX_ENTITY_DELETE),
         CX_RELATION_CREATE => Some(CX_RELATION_CREATE),
         CX_RELATION_UPDATE => Some(CX_RELATION_UPDATE),
         CX_RELATION_DELETE => Some(CX_RELATION_DELETE),

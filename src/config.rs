@@ -136,6 +136,18 @@ pub struct AppConfig {
     /// false. Empty (default) keeps the previous "dev-mode only" posture for
     /// these endpoints. Env: `SOLAND_ADMIN_PRINCIPAL_DIDS` (comma-separated).
     pub admin_principal_dids: Vec<String>,
+    /// Max age (in seconds) a cached outbound push bridge contract is allowed
+    /// to keep its trusted state without re-verification. Snapshots whose
+    /// `freshness_at` is older than this are treated as stale on cache_hit and
+    /// trigger a fresh remote fetch (and downgrade to `trust_level=stale` if
+    /// the upstream is unreachable). Default 900s (15 min).
+    /// Env: `SOLAND_PUSH_BRIDGE_CACHE_TTL_SECS`.
+    pub push_bridge_cache_ttl_seconds: u64,
+    /// Service DIDs allowed to be promoted from `trust_level=pending` to
+    /// `trusted` on snapshot import. Empty (default) means imports stay at
+    /// `pending` and have to be promoted manually via the live-fetch path.
+    /// Env: `SOLAND_PUSH_BRIDGE_TRUSTED_SERVICE_DIDS` (comma-separated).
+    pub push_bridge_trusted_service_dids: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -341,6 +353,21 @@ impl AppConfig {
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
+        let push_bridge_cache_ttl_seconds = std::env::var("SOLAND_PUSH_BRIDGE_CACHE_TTL_SECS")
+            .ok()
+            .and_then(|value| value.trim().parse::<u64>().ok())
+            .unwrap_or(900);
+        let push_bridge_trusted_service_dids =
+            std::env::var("SOLAND_PUSH_BRIDGE_TRUSTED_SERVICE_DIDS")
+                .ok()
+                .map(|value| {
+                    value
+                        .split(',')
+                        .map(|v| v.trim().to_owned())
+                        .filter(|v| !v.is_empty())
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
 
         Ok(Self {
             bind,
@@ -373,6 +400,8 @@ impl AppConfig {
             admin_default_page_limit,
             admin_max_page_limit,
             admin_principal_dids,
+            push_bridge_cache_ttl_seconds,
+            push_bridge_trusted_service_dids,
         })
     }
 

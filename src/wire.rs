@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, Utc};
-use contrix_sdk::{ErrorEnvelope, ServerDescription, SpaceSearchEntry};
+use contrix_sdk::{ServerDescription, SpaceSearchEntry};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -16,6 +16,13 @@ pub struct HealthResponse {
     pub storage: &'static str,
     pub checks: Value,
 }
+
+// `FacetName` / `ViewRenderer` / `AllowedEntityFacetsConstraint` were
+// removed in round 6 along with the entity/view scaffold. The "view facet"
+// model never landed in `contrix-spec/v1`; presentation concerns live in
+// `cx.view.*` events (`cx.view.create` / `.update` / `.reconcile`) and bind
+// to spec-typed objects (`cx:flow:` / `cx:place:` / `cx:morph:`) directly,
+// without an `entity` indirection layer.
 
 #[derive(Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct AuthBridgeDescribeResponse {
@@ -230,6 +237,21 @@ pub struct OutboundPushResolvedContract {
     pub expected_destination_service_did_header: String,
     pub expected_request_id_header: String,
     pub expected_idempotency_key_header: String,
+    /// Upstream-advertised authentication modes (`bearer`, `signed_request`,
+    /// `mtls`, …). Outbound delivery binds its signing posture to this list
+    /// instead of assuming a fixed mode.
+    #[serde(default)]
+    pub auth_modes: Vec<String>,
+    /// Upstream-advertised privacy mode for the notify payload (`blind_wakeup`,
+    /// `event_summary`, …). Used by the delivery loop to know whether the
+    /// payload must remain opaque.
+    #[serde(default)]
+    pub privacy_mode: String,
+    /// The upstream service DID. Required for trust-level promotion: imports
+    /// only land at `trust_level=trusted` if this DID is in the operator's
+    /// `push_bridge_trusted_service_dids` allowlist.
+    #[serde(default)]
+    pub service_did: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
@@ -429,8 +451,11 @@ pub struct ResolveHandleResponse {
 pub struct IndexQueryRequest {
     #[serde(default)]
     pub space_ids: Vec<String>,
+    /// Filter by typed-id kinds (`space`, `flow`, `message`, …) drawn from the
+    /// spec id-kind-registry. Replaces the round-5 `entity_types[]` field that
+    /// referenced the soland-local entity scaffold.
     #[serde(default)]
-    pub entity_types: Vec<String>,
+    pub object_kinds: Vec<String>,
     #[serde(default)]
     pub facets: Vec<String>,
     pub renderer: Option<String>,
@@ -464,8 +489,10 @@ pub struct IndexSearchRequest {
     pub query: String,
     #[serde(default)]
     pub space_ids: Vec<String>,
+    /// Filter by typed-id kinds drawn from the spec id-kind-registry. Replaces
+    /// the round-5 `entity_types[]` alias.
     #[serde(default)]
-    pub entity_types: Vec<String>,
+    pub object_kinds: Vec<String>,
     #[serde(default)]
     pub facets: Vec<String>,
     pub renderer: Option<String>,
@@ -479,11 +506,9 @@ pub struct IndexSearchResponse {
     pub frontier: Value,
 }
 
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct IndexEntityResponse {
-    pub entity: Value,
-    pub frontier: Value,
-}
+// `IndexEntityResponse` was dropped in round 6 alongside the entity scaffold.
+// `/api/v1/index/object` (renamed from `/index/entity`) is handler-driven and
+// returns a raw `serde_json::Value`; no DTO needed.
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct IndexThreadResponse {
@@ -1558,49 +1583,13 @@ pub struct GetReadMarkersRequest {
     pub space_id: String,
 }
 
-// ── Entity/Relation/View DTOs ──
-
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct CreateEntityRequest {
-    pub space_id: String,
-    pub entity_type: String,
-    #[serde(default)]
-    pub facets: Value,
-    pub title: Option<String>,
-    pub content: Option<Value>,
-    #[serde(default)]
-    pub fields: BTreeMap<String, Value>,
-}
-
-#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct EntityResponse {
-    pub entity_id: String,
-    pub space_id: String,
-    pub entity_type: String,
-    pub facets: Vec<String>,
-    pub title: Option<String>,
-    pub content: Option<Value>,
-    pub fields: BTreeMap<String, Value>,
-    pub deleted: bool,
-    pub created_at: String,
-    pub updated_at: String,
-}
-
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct UpdateEntityRequest {
-    pub title: Option<String>,
-    pub content: Option<Value>,
-    #[serde(default)]
-    pub facets: Option<Value>,
-    #[serde(default)]
-    pub fields: BTreeMap<String, Value>,
-}
-
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct ListEntitiesRequest {
-    pub space_id: String,
-    pub entity_type: Option<String>,
-}
+// ── Relation DTOs ──
+//
+// The `CreateEntityRequest` / `EntityResponse` / `UpdateEntityRequest` /
+// `ListEntitiesRequest` / `CreateViewRequest` DTOs were removed in round 6
+// along with the rest of the entity/view scaffold (no spec counterpart).
+// Relation DTOs stay — `cx:relation:` is a registered typed-id in
+// `contrix-spec/v1/artifacts/registry/id-kind-registry.json`.
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct CreateRelationRequest {
@@ -1631,16 +1620,6 @@ pub struct ListRelationsRequest {
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct CreateViewRequest {
-    pub space_id: String,
-    pub kind: String,
-    pub title: Option<String>,
-    pub entity_type: Option<String>,
-    #[serde(default)]
-    pub options: Value,
-}
-
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct CreateGrantRequest {
     pub space_id: String,
     pub subject: String,
@@ -1650,13 +1629,6 @@ pub struct CreateGrantRequest {
     pub constraints: Vec<serde_json::Value>,
 }
 
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct ViewResponse {
-    pub view_id: String,
-    pub space_id: String,
-    pub kind: String,
-    pub title: Option<String>,
-    pub entities: Vec<EntityResponse>,
-    pub projection: Value,
-    pub created_at: String,
-}
+// `ViewResponse` was removed in round 6 along with the rest of the
+// entity/view scaffold. `cx.view.*` event materialization will surface
+// through the spec-aligned reducer path when that lands.
