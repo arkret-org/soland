@@ -1,5 +1,6 @@
 use salvo::prelude::*;
 
+pub(crate) mod agent_bridge;
 pub(super) mod applet_bridge;
 pub(super) mod event_log;
 pub(super) mod flow;

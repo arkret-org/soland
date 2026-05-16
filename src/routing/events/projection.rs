@@ -455,6 +455,221 @@ fn apply_via_lattice_registry(
     proj.apply_via_lattice_registry(operation, &state.hlc, &registry);
 }
 
+/// Round 15h — after the deterministic reducer mutates the in-memory
+/// `ProjectionState::{places,flows,morphs}` maps for a Place / Flow /
+/// Morph lifecycle event, snapshot the affected entry (under
+/// projection lock) and upsert it to the corresponding
+/// `PlaceProjectionStore` / `FlowProjectionStore` / `MorphProjectionStore`
+/// in persistence. Lock is released BEFORE the persistence write so
+/// any backend latency doesn't stall other reducer paths.
+///
+/// Unknown / unrelated kinds are no-ops. Lookup misses (e.g. archive
+/// for an unknown object — reducer tolerates this for causal /
+/// backfill ordering) also produce no write.
+fn write_through_projection(state: &AppState, operation: &Operation) {
+    use crate::kinds;
+    use crate::persistence::{
+        FlowProjectionRecord, MorphProjectionRecord, PlaceProjectionRecord,
+    };
+    use crate::reducer::{
+        ObjectLifecycleState, PlaceLifecycleState,
+    };
+
+    enum Snapshot {
+        Place(PlaceProjectionRecord),
+        Flow(FlowProjectionRecord),
+        Morph(MorphProjectionRecord),
+    }
+
+    let Some(kind) = kinds::canonical_kind_for_operation(operation) else {
+        return;
+    };
+    // Place lifecycle: 6 event kinds → places map.
+    let is_place_kind = matches!(
+        kind,
+        kinds::CX_PLACE_CREATE
+            | kinds::CX_PLACE_UPDATE
+            | kinds::CX_PLACE_PARENT
+            | kinds::CX_PLACE_ARCHIVE
+            | kinds::CX_PLACE_RESTORE
+            | kinds::CX_PLACE_TOMBSTONE
+    );
+    // Flow lifecycle (state-affecting + position-touching).
+    let is_flow_kind = matches!(
+        kind,
+        kinds::CX_FLOW_CREATE
+            | kinds::CX_FLOW_UPDATE
+            | kinds::CX_FLOW_ARCHIVE
+            | kinds::CX_FLOW_RESTORE
+            | kinds::CX_FLOW_MOVE
+            | kinds::CX_FLOW_REORDER
+            | kinds::CX_FLOW_TRACK_DISABLE
+            | kinds::CX_FLOW_TRACK_ENABLE
+            | kinds::CX_FLOW_TRACK_SET_PRIMARY
+            | kinds::CX_FLOW_TRACK_UPDATE
+    );
+    let is_morph_kind = matches!(
+        kind,
+        kinds::CX_MORPH_CREATE
+            | kinds::CX_MORPH_UPDATE
+            | kinds::CX_MORPH_ARCHIVE
+            | kinds::CX_MORPH_RESTORE
+    );
+    // cx.redaction with an `object_ref` may have flipped a Flow or
+    // Morph to Redacted (round 14b). Pick up either by attempting both.
+    let is_redaction = kind == kinds::CX_REDACTION;
+    if !(is_place_kind || is_flow_kind || is_morph_kind || is_redaction) {
+        return;
+    }
+
+    let snapshot = {
+        let Ok(proj) = state.projection.lock() else {
+            return;
+        };
+        let place_id_from_payload =
+            operation.payload.get("place_id").and_then(|v| v.as_str()).map(ToOwned::to_owned);
+        let place_id_from_object = operation
+            .payload
+            .get("object")
+            .and_then(|v| v.get("id"))
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned);
+        let flow_id_from_payload =
+            operation.payload.get("flow_id").and_then(|v| v.as_str()).map(ToOwned::to_owned);
+        let flow_id_from_object = operation
+            .payload
+            .get("object")
+            .and_then(|v| v.get("id"))
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned);
+        let morph_id_from_payload =
+            operation.payload.get("morph_id").and_then(|v| v.as_str()).map(ToOwned::to_owned);
+        let morph_id_from_object = operation
+            .payload
+            .get("object")
+            .and_then(|v| v.get("id"))
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned);
+        let object_ref = operation
+            .payload
+            .get("object_ref")
+            .or_else(|| operation.payload.get("target_object_ref"))
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned);
+
+        // Place candidates.
+        if is_place_kind {
+            let id = place_id_from_payload.or(place_id_from_object);
+            if let Some(place) = id.and_then(|i| proj.places.get(&i)) {
+                return_snapshot_place(place)
+            } else {
+                None
+            }
+        } else if is_flow_kind {
+            let id = flow_id_from_payload.or(flow_id_from_object);
+            id.and_then(|i| proj.flows.get(&i)).map(return_snapshot_flow)
+        } else if is_morph_kind {
+            let id = morph_id_from_payload.or(morph_id_from_object);
+            id.and_then(|i| proj.morphs.get(&i)).map(return_snapshot_morph)
+        } else if is_redaction {
+            // object_ref may be cx:flow: or cx:morph:; try both.
+            if let Some(ref obj_ref) = object_ref {
+                if let Some(flow) = proj.flows.get(obj_ref) {
+                    Some(return_snapshot_flow(flow))
+                } else if let Some(morph) = proj.morphs.get(obj_ref) {
+                    Some(return_snapshot_morph(morph))
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    };
+
+    let Some(snapshot) = snapshot else {
+        return;
+    };
+
+    fn return_snapshot_place(
+        p: &crate::reducer::PlaceProjection,
+    ) -> Option<Snapshot> {
+        Some(Snapshot::Place(PlaceProjectionRecord {
+            place_id: p.place_id.clone(),
+            space_id: p.space_id.clone(),
+            kind: p.kind.clone(),
+            title: p.title.clone(),
+            parent_ref: p.parent_ref.clone(),
+            rank: p.rank.clone(),
+            state: match p.state {
+                PlaceLifecycleState::Active => "active",
+                PlaceLifecycleState::Archived => "archived",
+                PlaceLifecycleState::Tombstoned => "tombstoned",
+            }
+            .to_owned(),
+            state_changed_at: p.state_changed_at,
+            created_by: p.created_by.clone(),
+            created_at: p.created_at,
+            updated_by: p.updated_by.clone(),
+            updated_at: p.updated_at,
+        }))
+    }
+
+    fn return_snapshot_flow(f: &crate::reducer::FlowProjection) -> Snapshot {
+        Snapshot::Flow(FlowProjectionRecord {
+            flow_id: f.flow_id.clone(),
+            space_id: f.space_id.clone(),
+            title: f.title.clone(),
+            summary: f.summary.clone(),
+            state: object_state_str(f.state).to_owned(),
+            state_changed_at: f.state_changed_at,
+            created_by: f.created_by.clone(),
+            created_at: f.created_at,
+            updated_by: f.updated_by.clone(),
+            updated_at: f.updated_at,
+        })
+    }
+
+    fn return_snapshot_morph(m: &crate::reducer::MorphProjection) -> Snapshot {
+        Snapshot::Morph(MorphProjectionRecord {
+            morph_id: m.morph_id.clone(),
+            space_id: m.space_id.clone(),
+            morph_type: m.morph_type.clone(),
+            title: m.title.clone(),
+            state: object_state_str(m.state).to_owned(),
+            state_changed_at: m.state_changed_at,
+            created_by: m.created_by.clone(),
+            created_at: m.created_at,
+            updated_by: m.updated_by.clone(),
+            updated_at: m.updated_at,
+        })
+    }
+
+    fn object_state_str(s: ObjectLifecycleState) -> &'static str {
+        match s {
+            ObjectLifecycleState::Active => "active",
+            ObjectLifecycleState::Archived => "archived",
+            ObjectLifecycleState::Deleted => "deleted",
+            ObjectLifecycleState::Redacted => "redacted",
+        }
+    }
+
+    let result = match snapshot {
+        Snapshot::Place(r) => state.persistence.place_projections().put(&r),
+        Snapshot::Flow(r) => state.persistence.flow_projections().put(&r),
+        Snapshot::Morph(r) => state.persistence.morph_projections().put(&r),
+    };
+    if let Err(error) = result {
+        tracing::warn!(
+            %error,
+            operation_id = %operation.operation_id,
+            "projection write-through to persistence failed; in-memory state stays authoritative"
+        );
+    }
+}
+
 pub fn project_accepted_operations(state: &AppState, origin: &str, operations: &[Operation]) {
     for operation in operations {
         ensure_projected_space(state, origin, operation);
@@ -475,6 +690,13 @@ pub fn project_accepted_operations(state: &AppState, origin: &str, operations: &
         if let Ok(mut proj) = state.projection.lock() {
             apply_via_lattice_registry(state, &mut proj, operation);
         }
+        // Round 15h — write through Place/Flow/Morph projection changes
+        // to durable persistence. Captures the in-memory projection snapshot
+        // (under lock), then upserts to persistence after releasing the
+        // lock so any backend latency doesn't block other reducer paths.
+        // Mirrors the canonical wire kinds the reducer dispatches into
+        // `ProjectionState::{places,flows,morphs}`.
+        write_through_projection(state, operation);
         let projected = projection_event_from_operation(operation, Some(origin));
         // Broadcast every accepted projection
         // event to live subscribers on cx.events.subscribe. Subscribers
@@ -506,6 +728,15 @@ pub fn project_accepted_operations(state: &AppState, origin: &str, operations: &
         // `routing::events::applet_bridge::maybe_emit_echo_status_for_session_start`
         // for the body shape contract.
         super::applet_bridge::maybe_emit_echo_status_for_session_start(state, origin, operation);
+        // Sprint Q1 第十八增量 (B4): reference agent runtime — if the
+        // accepted operation is `cx.agent.protocol_session.start`,
+        // fan out a synthetic `cx.agent.protocol_session.status`
+        // (running) followed by a terminal
+        // `cx.agent.protocol_session.result` (completed) with an
+        // `audit_binding` placeholder so the lifecycle is observable
+        // end-to-end. See
+        // `routing::events::agent_bridge::maybe_emit_echo_result_for_session_start`.
+        super::agent_bridge::maybe_emit_echo_result_for_session_start(state, origin, operation);
     }
 }
 

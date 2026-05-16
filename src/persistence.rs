@@ -91,6 +91,91 @@ pub trait SpaceMetaStore: Send + Sync {
     fn delete(&self, space_id: &str) -> PersistenceResult<()>;
 }
 
+// ── Round 15h (2026-05-16): Projection persistence traits ──
+// Mirror the in-memory `reducer::ProjectionState::{places,flows,morphs}`
+// maps onto durable storage. The reducer continues to own the in-memory
+// authoritative state; routing layers write through to these stores
+// after each accepted state-changing event, and `AppState::new` hydrates
+// from them on startup so restart doesn't lose Place/Flow/Morph
+// lifecycle state.
+
+/// Durable Place projection store (mirror of `projection_places` table).
+pub trait PlaceProjectionStore: Send + Sync {
+    fn get(&self, place_id: &str) -> PersistenceResult<Option<PlaceProjectionRecord>>;
+    fn put(&self, record: &PlaceProjectionRecord) -> PersistenceResult<()>;
+    fn list_for_space(&self, space_id: &str) -> PersistenceResult<Vec<PlaceProjectionRecord>>;
+    fn snapshot_all(&self) -> PersistenceResult<Vec<PlaceProjectionRecord>>;
+    fn delete(&self, place_id: &str) -> PersistenceResult<()>;
+}
+
+/// Durable Flow projection store (mirror of `projection_flows` table).
+pub trait FlowProjectionStore: Send + Sync {
+    fn get(&self, flow_id: &str) -> PersistenceResult<Option<FlowProjectionRecord>>;
+    fn put(&self, record: &FlowProjectionRecord) -> PersistenceResult<()>;
+    fn list_for_space(&self, space_id: &str) -> PersistenceResult<Vec<FlowProjectionRecord>>;
+    fn snapshot_all(&self) -> PersistenceResult<Vec<FlowProjectionRecord>>;
+    fn delete(&self, flow_id: &str) -> PersistenceResult<()>;
+}
+
+/// Durable Morph projection store (mirror of `projection_morphs` table).
+pub trait MorphProjectionStore: Send + Sync {
+    fn get(&self, morph_id: &str) -> PersistenceResult<Option<MorphProjectionRecord>>;
+    fn put(&self, record: &MorphProjectionRecord) -> PersistenceResult<()>;
+    fn list_for_space(&self, space_id: &str) -> PersistenceResult<Vec<MorphProjectionRecord>>;
+    fn snapshot_all(&self) -> PersistenceResult<Vec<MorphProjectionRecord>>;
+    fn delete(&self, morph_id: &str) -> PersistenceResult<()>;
+}
+
+/// Wire / persistence record for a Place projection. Mirrors fields on
+/// `reducer::PlaceProjection` (state stored as the canonical `&str` form
+/// of `PlaceLifecycleState`) so callers can convert without pulling the
+/// reducer enum into the persistence layer.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PlaceProjectionRecord {
+    pub place_id: String,
+    pub space_id: String,
+    pub kind: String,
+    pub title: String,
+    pub parent_ref: Option<String>,
+    pub rank: Option<String>,
+    /// One of `active` / `archived` / `tombstoned` per spec.
+    pub state: String,
+    pub state_changed_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub created_by: String,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub updated_by: Option<String>,
+    pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FlowProjectionRecord {
+    pub flow_id: String,
+    pub space_id: String,
+    pub title: String,
+    pub summary: Option<String>,
+    /// One of `active` / `archived` / `deleted` / `redacted` per spec.
+    pub state: String,
+    pub state_changed_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub created_by: String,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub updated_by: Option<String>,
+    pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MorphProjectionRecord {
+    pub morph_id: String,
+    pub space_id: String,
+    pub morph_type: String,
+    pub title: Option<String>,
+    pub state: String,
+    pub state_changed_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub created_by: String,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub updated_by: Option<String>,
+    pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
 /// Trait for message storage operations.
 pub trait MessageStore: Send + Sync {
     fn get(&self, event_id: &str) -> PersistenceResult<Option<MessageRecord>>;
@@ -547,6 +632,9 @@ pub trait PersistenceStore: Send + Sync {
     fn one_time_keys(&self) -> &dyn OneTimeKeyStore;
     fn key_backups(&self) -> &dyn KeyBackupStore;
     fn multisig_pending(&self) -> &dyn MultisigPendingStore;
+    fn place_projections(&self) -> &dyn PlaceProjectionStore;
+    fn flow_projections(&self) -> &dyn FlowProjectionStore;
+    fn morph_projections(&self) -> &dyn MorphProjectionStore;
 }
 
 /// In-memory implementation of persistence store.
@@ -579,6 +667,9 @@ pub struct MemoryPersistenceStore {
     one_time_keys: MemoryOneTimeKeyStore,
     key_backups: MemoryKeyBackupStore,
     multisig_pending: MemoryMultisigPendingStore,
+    place_projections: MemoryPlaceProjectionStore,
+    flow_projections: MemoryFlowProjectionStore,
+    morph_projections: MemoryMorphProjectionStore,
 }
 
 impl MemoryPersistenceStore {
@@ -612,6 +703,9 @@ impl MemoryPersistenceStore {
             one_time_keys: MemoryOneTimeKeyStore::new(),
             key_backups: MemoryKeyBackupStore::new(),
             multisig_pending: MemoryMultisigPendingStore::new(),
+            place_projections: MemoryPlaceProjectionStore::new(),
+            flow_projections: MemoryFlowProjectionStore::new(),
+            morph_projections: MemoryMorphProjectionStore::new(),
         }
     }
 }
@@ -733,6 +827,18 @@ impl PersistenceStore for MemoryPersistenceStore {
 
     fn multisig_pending(&self) -> &dyn MultisigPendingStore {
         &self.multisig_pending
+    }
+
+    fn place_projections(&self) -> &dyn PlaceProjectionStore {
+        &self.place_projections
+    }
+
+    fn flow_projections(&self) -> &dyn FlowProjectionStore {
+        &self.flow_projections
+    }
+
+    fn morph_projections(&self) -> &dyn MorphProjectionStore {
+        &self.morph_projections
     }
 }
 
@@ -1076,6 +1182,143 @@ impl SpaceMetaStore for MemorySpaceMetaStore {
     fn delete(&self, space_id: &str) -> PersistenceResult<()> {
         let mut data = self.data.lock().expect("lock");
         data.remove(space_id);
+        Ok(())
+    }
+}
+
+// ── Round 15h: Memory impls for Place/Flow/Morph projection stores ──
+
+struct MemoryPlaceProjectionStore {
+    data: Arc<Mutex<BTreeMap<String, PlaceProjectionRecord>>>,
+}
+
+impl MemoryPlaceProjectionStore {
+    fn new() -> Self {
+        Self {
+            data: Arc::new(Mutex::new(BTreeMap::new())),
+        }
+    }
+}
+
+impl PlaceProjectionStore for MemoryPlaceProjectionStore {
+    fn get(&self, place_id: &str) -> PersistenceResult<Option<PlaceProjectionRecord>> {
+        let data = self.data.lock().expect("lock");
+        Ok(data.get(place_id).cloned())
+    }
+
+    fn put(&self, record: &PlaceProjectionRecord) -> PersistenceResult<()> {
+        let mut data = self.data.lock().expect("lock");
+        data.insert(record.place_id.clone(), record.clone());
+        Ok(())
+    }
+
+    fn list_for_space(&self, space_id: &str) -> PersistenceResult<Vec<PlaceProjectionRecord>> {
+        let data = self.data.lock().expect("lock");
+        Ok(data
+            .values()
+            .filter(|r| r.space_id == space_id)
+            .cloned()
+            .collect())
+    }
+
+    fn snapshot_all(&self) -> PersistenceResult<Vec<PlaceProjectionRecord>> {
+        let data = self.data.lock().expect("lock");
+        Ok(data.values().cloned().collect())
+    }
+
+    fn delete(&self, place_id: &str) -> PersistenceResult<()> {
+        let mut data = self.data.lock().expect("lock");
+        data.remove(place_id);
+        Ok(())
+    }
+}
+
+struct MemoryFlowProjectionStore {
+    data: Arc<Mutex<BTreeMap<String, FlowProjectionRecord>>>,
+}
+
+impl MemoryFlowProjectionStore {
+    fn new() -> Self {
+        Self {
+            data: Arc::new(Mutex::new(BTreeMap::new())),
+        }
+    }
+}
+
+impl FlowProjectionStore for MemoryFlowProjectionStore {
+    fn get(&self, flow_id: &str) -> PersistenceResult<Option<FlowProjectionRecord>> {
+        let data = self.data.lock().expect("lock");
+        Ok(data.get(flow_id).cloned())
+    }
+
+    fn put(&self, record: &FlowProjectionRecord) -> PersistenceResult<()> {
+        let mut data = self.data.lock().expect("lock");
+        data.insert(record.flow_id.clone(), record.clone());
+        Ok(())
+    }
+
+    fn list_for_space(&self, space_id: &str) -> PersistenceResult<Vec<FlowProjectionRecord>> {
+        let data = self.data.lock().expect("lock");
+        Ok(data
+            .values()
+            .filter(|r| r.space_id == space_id)
+            .cloned()
+            .collect())
+    }
+
+    fn snapshot_all(&self) -> PersistenceResult<Vec<FlowProjectionRecord>> {
+        let data = self.data.lock().expect("lock");
+        Ok(data.values().cloned().collect())
+    }
+
+    fn delete(&self, flow_id: &str) -> PersistenceResult<()> {
+        let mut data = self.data.lock().expect("lock");
+        data.remove(flow_id);
+        Ok(())
+    }
+}
+
+struct MemoryMorphProjectionStore {
+    data: Arc<Mutex<BTreeMap<String, MorphProjectionRecord>>>,
+}
+
+impl MemoryMorphProjectionStore {
+    fn new() -> Self {
+        Self {
+            data: Arc::new(Mutex::new(BTreeMap::new())),
+        }
+    }
+}
+
+impl MorphProjectionStore for MemoryMorphProjectionStore {
+    fn get(&self, morph_id: &str) -> PersistenceResult<Option<MorphProjectionRecord>> {
+        let data = self.data.lock().expect("lock");
+        Ok(data.get(morph_id).cloned())
+    }
+
+    fn put(&self, record: &MorphProjectionRecord) -> PersistenceResult<()> {
+        let mut data = self.data.lock().expect("lock");
+        data.insert(record.morph_id.clone(), record.clone());
+        Ok(())
+    }
+
+    fn list_for_space(&self, space_id: &str) -> PersistenceResult<Vec<MorphProjectionRecord>> {
+        let data = self.data.lock().expect("lock");
+        Ok(data
+            .values()
+            .filter(|r| r.space_id == space_id)
+            .cloned()
+            .collect())
+    }
+
+    fn snapshot_all(&self) -> PersistenceResult<Vec<MorphProjectionRecord>> {
+        let data = self.data.lock().expect("lock");
+        Ok(data.values().cloned().collect())
+    }
+
+    fn delete(&self, morph_id: &str) -> PersistenceResult<()> {
+        let mut data = self.data.lock().expect("lock");
+        data.remove(morph_id);
         Ok(())
     }
 }
@@ -2386,6 +2629,9 @@ pub struct PgPersistenceStore {
     key_backups: PgKeyBackupStore,
     webrtc: PgWebrtcSessionStore,
     policy_documents: PgPolicyDocumentStore,
+    place_projections: PgPlaceProjectionStore,
+    flow_projections: PgFlowProjectionStore,
+    morph_projections: PgMorphProjectionStore,
     fallback: MemoryPersistenceStore,
 }
 
@@ -2409,7 +2655,10 @@ impl PgPersistenceStore {
             space_invites: PgSpaceInviteStore { pool: pool.clone() },
             key_backups: PgKeyBackupStore { pool: pool.clone() },
             webrtc: PgWebrtcSessionStore { pool: pool.clone() },
-            policy_documents: PgPolicyDocumentStore { pool },
+            policy_documents: PgPolicyDocumentStore { pool: pool.clone() },
+            place_projections: PgPlaceProjectionStore { pool: pool.clone() },
+            flow_projections: PgFlowProjectionStore { pool: pool.clone() },
+            morph_projections: PgMorphProjectionStore { pool },
             fallback: MemoryPersistenceStore::new(),
         }
     }
@@ -2526,6 +2775,18 @@ impl PersistenceStore for PgPersistenceStore {
 
     fn multisig_pending(&self) -> &dyn MultisigPendingStore {
         &self.multisig_pending
+    }
+
+    fn place_projections(&self) -> &dyn PlaceProjectionStore {
+        &self.place_projections
+    }
+
+    fn flow_projections(&self) -> &dyn FlowProjectionStore {
+        &self.flow_projections
+    }
+
+    fn morph_projections(&self) -> &dyn MorphProjectionStore {
+        &self.morph_projections
     }
 }
 
@@ -4984,6 +5245,394 @@ fn pg_conn(
 > {
     pool.get()
         .map_err(|error| PersistenceError::Internal(format!("database pool error: {error}")))
+}
+
+// ── Round 15h (2026-05-16): Pg-backed Place/Flow/Morph projection stores ──
+// Mirror the in-memory `ProjectionState::{places,flows,morphs}` onto
+// the `projection_places` / `projection_flows` / `projection_morphs`
+// tables created in migrations 20260515 / 20260516. Same upsert
+// shape as PgPolicyDocumentStore.
+
+struct PgPlaceProjectionStore {
+    pool: PgPool,
+}
+
+#[derive(QueryableByName)]
+struct PlaceProjectionRow {
+    #[diesel(sql_type = Text)]
+    place_id: String,
+    #[diesel(sql_type = Text)]
+    space_id: String,
+    #[diesel(sql_type = Text)]
+    kind: String,
+    #[diesel(sql_type = Text)]
+    title: String,
+    #[diesel(sql_type = Nullable<Text>)]
+    parent_ref: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
+    rank: Option<String>,
+    #[diesel(sql_type = Text)]
+    state: String,
+    #[diesel(sql_type = Nullable<Timestamptz>)]
+    state_changed_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[diesel(sql_type = Text)]
+    created_by: String,
+    #[diesel(sql_type = Timestamptz)]
+    created_at: chrono::DateTime<chrono::Utc>,
+    #[diesel(sql_type = Nullable<Text>)]
+    updated_by: Option<String>,
+    #[diesel(sql_type = Nullable<Timestamptz>)]
+    updated_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+impl From<PlaceProjectionRow> for PlaceProjectionRecord {
+    fn from(row: PlaceProjectionRow) -> Self {
+        Self {
+            place_id: row.place_id,
+            space_id: row.space_id,
+            kind: row.kind,
+            title: row.title,
+            parent_ref: row.parent_ref,
+            rank: row.rank,
+            state: row.state,
+            state_changed_at: row.state_changed_at,
+            created_by: row.created_by,
+            created_at: row.created_at,
+            updated_by: row.updated_by,
+            updated_at: row.updated_at,
+        }
+    }
+}
+
+const PLACE_PROJECTION_COLUMNS: &str = "place_id, space_id, kind, title, parent_ref, rank, state, \
+     state_changed_at, created_by, created_at, updated_by, updated_at";
+
+impl PlaceProjectionStore for PgPlaceProjectionStore {
+    fn get(&self, place_id: &str) -> PersistenceResult<Option<PlaceProjectionRecord>> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query(format!(
+            "SELECT {PLACE_PROJECTION_COLUMNS} FROM projection_places WHERE place_id = $1"
+        ))
+        .bind::<Text, _>(place_id)
+        .get_result::<PlaceProjectionRow>(&mut conn)
+        .optional()
+        .map(|row| row.map(PlaceProjectionRecord::from))
+        .map_err(PersistenceError::from)
+    }
+
+    fn put(&self, record: &PlaceProjectionRecord) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query(
+            "INSERT INTO projection_places \
+             (place_id, space_id, kind, title, parent_ref, rank, state, \
+              state_changed_at, created_by, created_at, updated_by, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) \
+             ON CONFLICT (place_id) DO UPDATE SET \
+                space_id = EXCLUDED.space_id, \
+                kind = EXCLUDED.kind, \
+                title = EXCLUDED.title, \
+                parent_ref = EXCLUDED.parent_ref, \
+                rank = EXCLUDED.rank, \
+                state = EXCLUDED.state, \
+                state_changed_at = EXCLUDED.state_changed_at, \
+                updated_by = EXCLUDED.updated_by, \
+                updated_at = EXCLUDED.updated_at",
+        )
+        .bind::<Text, _>(&record.place_id)
+        .bind::<Text, _>(&record.space_id)
+        .bind::<Text, _>(&record.kind)
+        .bind::<Text, _>(&record.title)
+        .bind::<Nullable<Text>, _>(&record.parent_ref)
+        .bind::<Nullable<Text>, _>(&record.rank)
+        .bind::<Text, _>(&record.state)
+        .bind::<Nullable<Timestamptz>, _>(record.state_changed_at)
+        .bind::<Text, _>(&record.created_by)
+        .bind::<Timestamptz, _>(record.created_at)
+        .bind::<Nullable<Text>, _>(&record.updated_by)
+        .bind::<Nullable<Timestamptz>, _>(record.updated_at)
+        .execute(&mut conn)
+        .map(|_| ())
+        .map_err(PersistenceError::from)
+    }
+
+    fn list_for_space(&self, space_id: &str) -> PersistenceResult<Vec<PlaceProjectionRecord>> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query(format!(
+            "SELECT {PLACE_PROJECTION_COLUMNS} FROM projection_places \
+             WHERE space_id = $1 ORDER BY place_id"
+        ))
+        .bind::<Text, _>(space_id)
+        .load::<PlaceProjectionRow>(&mut conn)
+        .map(|rows| rows.into_iter().map(PlaceProjectionRecord::from).collect())
+        .map_err(PersistenceError::from)
+    }
+
+    fn snapshot_all(&self) -> PersistenceResult<Vec<PlaceProjectionRecord>> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query(format!(
+            "SELECT {PLACE_PROJECTION_COLUMNS} FROM projection_places ORDER BY place_id"
+        ))
+        .load::<PlaceProjectionRow>(&mut conn)
+        .map(|rows| rows.into_iter().map(PlaceProjectionRecord::from).collect())
+        .map_err(PersistenceError::from)
+    }
+
+    fn delete(&self, place_id: &str) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query("DELETE FROM projection_places WHERE place_id = $1")
+            .bind::<Text, _>(place_id)
+            .execute(&mut conn)
+            .map(|_| ())
+            .map_err(PersistenceError::from)
+    }
+}
+
+struct PgFlowProjectionStore {
+    pool: PgPool,
+}
+
+#[derive(QueryableByName)]
+struct FlowProjectionRow {
+    #[diesel(sql_type = Text)]
+    flow_id: String,
+    #[diesel(sql_type = Text)]
+    space_id: String,
+    #[diesel(sql_type = Text)]
+    title: String,
+    #[diesel(sql_type = Nullable<Text>)]
+    summary: Option<String>,
+    #[diesel(sql_type = Text)]
+    state: String,
+    #[diesel(sql_type = Nullable<Timestamptz>)]
+    state_changed_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[diesel(sql_type = Text)]
+    created_by: String,
+    #[diesel(sql_type = Timestamptz)]
+    created_at: chrono::DateTime<chrono::Utc>,
+    #[diesel(sql_type = Nullable<Text>)]
+    updated_by: Option<String>,
+    #[diesel(sql_type = Nullable<Timestamptz>)]
+    updated_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+impl From<FlowProjectionRow> for FlowProjectionRecord {
+    fn from(row: FlowProjectionRow) -> Self {
+        Self {
+            flow_id: row.flow_id,
+            space_id: row.space_id,
+            title: row.title,
+            summary: row.summary,
+            state: row.state,
+            state_changed_at: row.state_changed_at,
+            created_by: row.created_by,
+            created_at: row.created_at,
+            updated_by: row.updated_by,
+            updated_at: row.updated_at,
+        }
+    }
+}
+
+const FLOW_PROJECTION_COLUMNS: &str = "flow_id, space_id, title, summary, state, \
+     state_changed_at, created_by, created_at, updated_by, updated_at";
+
+impl FlowProjectionStore for PgFlowProjectionStore {
+    fn get(&self, flow_id: &str) -> PersistenceResult<Option<FlowProjectionRecord>> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query(format!(
+            "SELECT {FLOW_PROJECTION_COLUMNS} FROM projection_flows WHERE flow_id = $1"
+        ))
+        .bind::<Text, _>(flow_id)
+        .get_result::<FlowProjectionRow>(&mut conn)
+        .optional()
+        .map(|row| row.map(FlowProjectionRecord::from))
+        .map_err(PersistenceError::from)
+    }
+
+    fn put(&self, record: &FlowProjectionRecord) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query(
+            "INSERT INTO projection_flows \
+             (flow_id, space_id, title, summary, state, state_changed_at, \
+              created_by, created_at, updated_by, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) \
+             ON CONFLICT (flow_id) DO UPDATE SET \
+                space_id = EXCLUDED.space_id, \
+                title = EXCLUDED.title, \
+                summary = EXCLUDED.summary, \
+                state = EXCLUDED.state, \
+                state_changed_at = EXCLUDED.state_changed_at, \
+                updated_by = EXCLUDED.updated_by, \
+                updated_at = EXCLUDED.updated_at",
+        )
+        .bind::<Text, _>(&record.flow_id)
+        .bind::<Text, _>(&record.space_id)
+        .bind::<Text, _>(&record.title)
+        .bind::<Nullable<Text>, _>(&record.summary)
+        .bind::<Text, _>(&record.state)
+        .bind::<Nullable<Timestamptz>, _>(record.state_changed_at)
+        .bind::<Text, _>(&record.created_by)
+        .bind::<Timestamptz, _>(record.created_at)
+        .bind::<Nullable<Text>, _>(&record.updated_by)
+        .bind::<Nullable<Timestamptz>, _>(record.updated_at)
+        .execute(&mut conn)
+        .map(|_| ())
+        .map_err(PersistenceError::from)
+    }
+
+    fn list_for_space(&self, space_id: &str) -> PersistenceResult<Vec<FlowProjectionRecord>> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query(format!(
+            "SELECT {FLOW_PROJECTION_COLUMNS} FROM projection_flows \
+             WHERE space_id = $1 ORDER BY flow_id"
+        ))
+        .bind::<Text, _>(space_id)
+        .load::<FlowProjectionRow>(&mut conn)
+        .map(|rows| rows.into_iter().map(FlowProjectionRecord::from).collect())
+        .map_err(PersistenceError::from)
+    }
+
+    fn snapshot_all(&self) -> PersistenceResult<Vec<FlowProjectionRecord>> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query(format!(
+            "SELECT {FLOW_PROJECTION_COLUMNS} FROM projection_flows ORDER BY flow_id"
+        ))
+        .load::<FlowProjectionRow>(&mut conn)
+        .map(|rows| rows.into_iter().map(FlowProjectionRecord::from).collect())
+        .map_err(PersistenceError::from)
+    }
+
+    fn delete(&self, flow_id: &str) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query("DELETE FROM projection_flows WHERE flow_id = $1")
+            .bind::<Text, _>(flow_id)
+            .execute(&mut conn)
+            .map(|_| ())
+            .map_err(PersistenceError::from)
+    }
+}
+
+struct PgMorphProjectionStore {
+    pool: PgPool,
+}
+
+#[derive(QueryableByName)]
+struct MorphProjectionRow {
+    #[diesel(sql_type = Text)]
+    morph_id: String,
+    #[diesel(sql_type = Text)]
+    space_id: String,
+    #[diesel(sql_type = Text)]
+    morph_type: String,
+    #[diesel(sql_type = Nullable<Text>)]
+    title: Option<String>,
+    #[diesel(sql_type = Text)]
+    state: String,
+    #[diesel(sql_type = Nullable<Timestamptz>)]
+    state_changed_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[diesel(sql_type = Text)]
+    created_by: String,
+    #[diesel(sql_type = Timestamptz)]
+    created_at: chrono::DateTime<chrono::Utc>,
+    #[diesel(sql_type = Nullable<Text>)]
+    updated_by: Option<String>,
+    #[diesel(sql_type = Nullable<Timestamptz>)]
+    updated_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+impl From<MorphProjectionRow> for MorphProjectionRecord {
+    fn from(row: MorphProjectionRow) -> Self {
+        Self {
+            morph_id: row.morph_id,
+            space_id: row.space_id,
+            morph_type: row.morph_type,
+            title: row.title,
+            state: row.state,
+            state_changed_at: row.state_changed_at,
+            created_by: row.created_by,
+            created_at: row.created_at,
+            updated_by: row.updated_by,
+            updated_at: row.updated_at,
+        }
+    }
+}
+
+const MORPH_PROJECTION_COLUMNS: &str = "morph_id, space_id, morph_type, title, state, \
+     state_changed_at, created_by, created_at, updated_by, updated_at";
+
+impl MorphProjectionStore for PgMorphProjectionStore {
+    fn get(&self, morph_id: &str) -> PersistenceResult<Option<MorphProjectionRecord>> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query(format!(
+            "SELECT {MORPH_PROJECTION_COLUMNS} FROM projection_morphs WHERE morph_id = $1"
+        ))
+        .bind::<Text, _>(morph_id)
+        .get_result::<MorphProjectionRow>(&mut conn)
+        .optional()
+        .map(|row| row.map(MorphProjectionRecord::from))
+        .map_err(PersistenceError::from)
+    }
+
+    fn put(&self, record: &MorphProjectionRecord) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query(
+            "INSERT INTO projection_morphs \
+             (morph_id, space_id, morph_type, title, state, state_changed_at, \
+              created_by, created_at, updated_by, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) \
+             ON CONFLICT (morph_id) DO UPDATE SET \
+                space_id = EXCLUDED.space_id, \
+                morph_type = EXCLUDED.morph_type, \
+                title = EXCLUDED.title, \
+                state = EXCLUDED.state, \
+                state_changed_at = EXCLUDED.state_changed_at, \
+                updated_by = EXCLUDED.updated_by, \
+                updated_at = EXCLUDED.updated_at",
+        )
+        .bind::<Text, _>(&record.morph_id)
+        .bind::<Text, _>(&record.space_id)
+        .bind::<Text, _>(&record.morph_type)
+        .bind::<Nullable<Text>, _>(&record.title)
+        .bind::<Text, _>(&record.state)
+        .bind::<Nullable<Timestamptz>, _>(record.state_changed_at)
+        .bind::<Text, _>(&record.created_by)
+        .bind::<Timestamptz, _>(record.created_at)
+        .bind::<Nullable<Text>, _>(&record.updated_by)
+        .bind::<Nullable<Timestamptz>, _>(record.updated_at)
+        .execute(&mut conn)
+        .map(|_| ())
+        .map_err(PersistenceError::from)
+    }
+
+    fn list_for_space(&self, space_id: &str) -> PersistenceResult<Vec<MorphProjectionRecord>> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query(format!(
+            "SELECT {MORPH_PROJECTION_COLUMNS} FROM projection_morphs \
+             WHERE space_id = $1 ORDER BY morph_id"
+        ))
+        .bind::<Text, _>(space_id)
+        .load::<MorphProjectionRow>(&mut conn)
+        .map(|rows| rows.into_iter().map(MorphProjectionRecord::from).collect())
+        .map_err(PersistenceError::from)
+    }
+
+    fn snapshot_all(&self) -> PersistenceResult<Vec<MorphProjectionRecord>> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query(format!(
+            "SELECT {MORPH_PROJECTION_COLUMNS} FROM projection_morphs ORDER BY morph_id"
+        ))
+        .load::<MorphProjectionRow>(&mut conn)
+        .map(|rows| rows.into_iter().map(MorphProjectionRecord::from).collect())
+        .map_err(PersistenceError::from)
+    }
+
+    fn delete(&self, morph_id: &str) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query("DELETE FROM projection_morphs WHERE morph_id = $1")
+            .bind::<Text, _>(morph_id)
+            .execute(&mut conn)
+            .map(|_| ())
+            .map_err(PersistenceError::from)
+    }
 }
 
 #[cfg(test)]

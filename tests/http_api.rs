@@ -6371,10 +6371,7 @@ async fn applet_bridge_emits_synthetic_status_for_session_start() {
     let mut start_event = serde_json::json!({
         "event_id": "cx:event:01904100-0000-7000-8000-d3d3d3d3d3d3",
         "kind": "cx.applet.protocol_session.start",
-        // `cx.schema.applet.v1` isn't in contrix-spec's schema
-        // registry yet, so we ride on the generic event envelope
-        // schema until the spec adds a dedicated applet schema_id.
-        "schema_id": "cx.schema.event.v1",
+        "schema_id": "cx.schema.applet.v1",
         "actor_id": "did:web:alice.example",
         "actor_seq": 1u64,
         "space_id": space_id,
@@ -6438,6 +6435,293 @@ async fn applet_bridge_emits_synthetic_status_for_session_start() {
     assert_eq!(
         status_event["payload"]["detail"]["bridge"],
         "soland.reference.echo"
+    );
+}
+
+/// Sprint Q1 第十八增量 (B4) + 第十九增量 (B4b/B4c): submitting a
+/// `cx.agent.protocol_session.start` event against a registered agent
+/// MUST trigger the reference agent runtime to emit both a
+/// `cx.agent.protocol_session.status` (running) and a terminal
+/// `cx.agent.protocol_session.result` (completed) event with a real
+/// HMAC-SHA256 `audit_binding.signature` that round-trips through the
+/// SDK verify helper. The agent must be registered first via
+/// `cx.agent.endpoint` — otherwise B4c's dispatch lookup fails closed
+/// (covered by the sibling `agent_bridge_fails_closed_on_unknown_agent`
+/// test below).
+#[tokio::test]
+async fn agent_bridge_emits_status_and_result_for_session_start() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+    // Use the seeded demo space — dev_token's actor is a member of
+    // `cx:space:0196419b-0000-7000-8000-000000000000` so the events
+    // surface accepts writes against it (mirror of the B3 test).
+    let space_id = "cx:space:0196419b-0000-7000-8000-000000000000";
+    let session_id = "cx:session:01904100-0000-7000-8000-b4b4b4b4b4b4";
+    let agent_did = "did:web:agent.example";
+
+    // Register the agent first so B4c's dispatch lookup succeeds.
+    let endpoint_payload = serde_json::json!({
+        "agent_did": agent_did,
+        "protocol": "echo",
+    });
+    let mut endpoint_event = serde_json::json!({
+        "event_id": "cx:event:01904100-0000-7000-8000-e4e4e4e4e4e4",
+        "kind": "cx.agent.endpoint",
+        "schema_id": "cx.schema.agent.v1",
+        "actor_id": "did:web:alice.example",
+        "actor_seq": 1u64,
+        "space_id": space_id,
+        "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
+        "audience": "did:web:soland.local",
+        "domain": "did:web:soland.local",
+        "prev_refs": Vec::<String>::new(),
+        "auth_refs": Vec::<String>::new(),
+        "payload": endpoint_payload.clone(),
+        "proofs": [{
+            "type": "dev-proof",
+            "verification_method": "did:web:alice.example#01904100-0000-7000-8000-a11ce0000001",
+            "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
+            "audience": "did:web:soland.local",
+            "domain": "did:web:soland.local",
+            "payload_hash": sha256_json(&endpoint_payload),
+        }],
+    });
+    endpoint_event["canonical_digest"] = Value::String(event_canonical_digest(&endpoint_event));
+    let endpoint_resp: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&endpoint_event)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(
+        endpoint_resp["status"], "accepted",
+        "endpoint submit response: {endpoint_resp}"
+    );
+
+    let echo_params = serde_json::json!({"op": "summarize", "doc": "b4-e2e"});
+    let mut payload = serde_json::json!({
+        "agent_did": agent_did,
+        "session_id": session_id,
+        "params": echo_params,
+        "capability_proof": {
+            "grant_ref": "cx:grant:01904100-0000-7000-8000-000000000099",
+            "note": "B4 e2e placeholder — reference echo runtime does not verify the proof",
+        },
+    });
+    let mut start_event = serde_json::json!({
+        "event_id": "cx:event:01904100-0000-7000-8000-d4d4d4d4d4d4",
+        "kind": "cx.agent.protocol_session.start",
+        "schema_id": "cx.schema.agent.v1",
+        "actor_id": "did:web:alice.example",
+        "actor_seq": 2u64,
+        "space_id": space_id,
+        "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
+        "audience": "did:web:soland.local",
+        "domain": "did:web:soland.local",
+        "prev_refs": Vec::<String>::new(),
+        "auth_refs": Vec::<String>::new(),
+        "payload": payload.clone(),
+        "proofs": [{
+            "type": "dev-proof",
+            "verification_method": "did:web:alice.example#01904100-0000-7000-8000-a11ce0000001",
+            "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
+            "audience": "did:web:soland.local",
+            "domain": "did:web:soland.local",
+            "payload_hash": sha256_json(&payload),
+        }],
+    });
+    start_event["canonical_digest"] = Value::String(event_canonical_digest(&start_event));
+    let _ = &mut payload;
+
+    let resp: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&start_event)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(resp["status"], "accepted", "submit response: {resp}");
+
+    let events: Value = TestClient::get(format!(
+        "http://server/api/v1/events?space_id={space_id}"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    let list = events["events"].as_array().expect("events array");
+
+    let status_event = list
+        .iter()
+        .find(|e| {
+            e["event_kind"] == "cx.agent.protocol_session.status"
+                && e["payload"]["session_id"] == session_id
+        })
+        .expect("synthetic agent status event missing from projection log");
+    assert_eq!(status_event["payload"]["status"], "running");
+    assert_eq!(
+        status_event["payload"]["detail"]["bridge"],
+        "soland.reference.agent_echo"
+    );
+
+    let result_event = list
+        .iter()
+        .find(|e| {
+            e["event_kind"] == "cx.agent.protocol_session.result"
+                && e["payload"]["session_id"] == session_id
+        })
+        .expect("synthetic agent result event missing from projection log");
+    assert_eq!(result_event["payload"]["status"], "completed");
+    assert_eq!(
+        result_event["payload"]["result"]["echo"]["op"],
+        "summarize"
+    );
+    assert_eq!(
+        result_event["payload"]["result"]["echo"]["doc"],
+        "b4-e2e"
+    );
+    assert_eq!(
+        result_event["payload"]["result"]["agent_did"],
+        agent_did
+    );
+    let binding = &result_event["payload"]["audit_binding"];
+    assert_eq!(binding["binding_kind"], "hmac_sha256_v1");
+    assert_eq!(binding["actor"], "did:web:alice.example");
+    assert_eq!(binding["key_id"], "soland.reference.agent_echo.v1");
+
+    // Sprint Q1 第十九增量 (B4b): verify the HMAC-SHA256 signature
+    // recomputes against the reference key via the SDK helper. Pulls
+    // both `signature` + `canonical_subject` from the envelope and
+    // confirms the runtime committed to the same (session_id,
+    // agent_did, echo, actor) tuple a real verifier would check.
+    let sig_hex = binding["signature"].as_str().expect("signature hex");
+    let canonical_subject = binding["canonical_subject"]
+        .as_str()
+        .expect("canonical_subject");
+    let echo_value = result_event["payload"]["result"]["echo"].clone();
+    let outcome = contrix_sdk::agent_binding::verify_reference_audit_binding(
+        soland::REFERENCE_AGENT_AUDIT_HMAC_KEY,
+        session_id,
+        agent_did,
+        &echo_value,
+        "did:web:alice.example",
+        sig_hex,
+        canonical_subject,
+    );
+    assert_eq!(
+        outcome,
+        contrix_sdk::agent_binding::AuditBindingVerifyOutcome::Valid,
+        "audit_binding signature must verify under the soland reference HMAC key"
+    );
+}
+
+/// Sprint Q1 第十九增量 (B4c): when `cx.agent.protocol_session.start`
+/// names an agent_did that has not been registered via
+/// `cx.agent.endpoint`, the bridge MUST emit exactly one
+/// `cx.agent.protocol_session.result` carrying `status=failed` +
+/// `error.code=unknown_agent`, and NO `status(running)` event.
+#[tokio::test]
+async fn agent_bridge_fails_closed_on_unknown_agent() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+    let space_id = "cx:space:0196419b-0000-7000-8000-000000000000";
+    let session_id = "cx:session:01904100-0000-7000-8000-deaddeaddead";
+    let agent_did = "did:web:unregistered-agent.example";
+
+    // Intentionally skip the cx.agent.endpoint step — this is the
+    // dispatch-failure path.
+    let echo_params = serde_json::json!({"op": "ping"});
+    let mut payload = serde_json::json!({
+        "agent_did": agent_did,
+        "session_id": session_id,
+        "params": echo_params,
+        "capability_proof": {
+            "grant_ref": "cx:grant:01904100-0000-7000-8000-000000000099",
+            "note": "B4c e2e placeholder",
+        },
+    });
+    let mut start_event = serde_json::json!({
+        "event_id": "cx:event:01904100-0000-7000-8000-deadbeefdead",
+        "kind": "cx.agent.protocol_session.start",
+        "schema_id": "cx.schema.agent.v1",
+        "actor_id": "did:web:alice.example",
+        "actor_seq": 1u64,
+        "space_id": space_id,
+        "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
+        "audience": "did:web:soland.local",
+        "domain": "did:web:soland.local",
+        "prev_refs": Vec::<String>::new(),
+        "auth_refs": Vec::<String>::new(),
+        "payload": payload.clone(),
+        "proofs": [{
+            "type": "dev-proof",
+            "verification_method": "did:web:alice.example#01904100-0000-7000-8000-a11ce0000001",
+            "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
+            "audience": "did:web:soland.local",
+            "domain": "did:web:soland.local",
+            "payload_hash": sha256_json(&payload),
+        }],
+    });
+    start_event["canonical_digest"] = Value::String(event_canonical_digest(&start_event));
+    let _ = &mut payload;
+
+    let resp: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&start_event)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(resp["status"], "accepted", "submit response: {resp}");
+
+    let events: Value = TestClient::get(format!(
+        "http://server/api/v1/events?space_id={space_id}"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    let list = events["events"].as_array().expect("events array");
+
+    // No status(running) event should be present.
+    assert!(
+        !list.iter().any(|e| {
+            e["event_kind"] == "cx.agent.protocol_session.status"
+                && e["payload"]["session_id"] == session_id
+        }),
+        "B4c failed-closed dispatch must skip the status(running) event"
+    );
+
+    let result_event = list
+        .iter()
+        .find(|e| {
+            e["event_kind"] == "cx.agent.protocol_session.result"
+                && e["payload"]["session_id"] == session_id
+        })
+        .expect("error result event missing from projection log");
+    assert_eq!(result_event["payload"]["status"], "failed");
+    assert_eq!(
+        result_event["payload"]["error"]["code"],
+        "unknown_agent"
+    );
+    assert!(
+        result_event["payload"]["error"]["message"]
+            .as_str()
+            .unwrap_or("")
+            .contains(agent_did),
+        "error message should mention the missing agent_did"
+    );
+    assert!(
+        result_event["payload"].get("audit_binding").is_none(),
+        "failure path must not carry an audit_binding"
     );
 }
 
@@ -6567,6 +6851,201 @@ async fn snapshot_v2_multi_chunk_fixture_verifies_non_empty_audit_path() {
          (this is the codepath single-chunk fixtures don't exercise)"
     );
 }
+
+/// Round 15h (2026-05-16) — Place / Flow / Morph projection write-through
+/// to durable persistence. After each accepted lifecycle event, the
+/// in-memory `ProjectionState::{places,flows,morphs}` mutation is
+/// mirrored to `state.persistence.{place,flow,morph}_projections()` so
+/// process restart (via `AppState::new` hydrate path) can rebuild the
+/// projection cache. This test exercises the write-through; hydrate is
+/// the symmetric read of the same trait so it's covered indirectly.
+#[tokio::test]
+async fn projection_persistence_write_through_mirrors_lifecycle_events() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+    let place_id = "cx:place:01904100-0000-7000-8000-15a15a000001";
+    let flow_id = "cx:flow:01904100-0000-7000-8000-15a15a000002";
+    let morph_id = "cx:morph:01904100-0000-7000-8000-15a15a000003";
+
+    // Place: create + archive → persistence has state=archived.
+    let create_place = signed_place_event(
+        "cx:event:01904100-0000-7000-8000-15a15ae00001",
+        1,
+        "cx.place.create",
+        serde_json::json!({
+            "object": {
+                "id": place_id,
+                "space_id": "cx:space:0196419b-0000-7000-8000-000000000000",
+                "kind": "list",
+                "title": "Persistent Place",
+                "created_by": "did:web:alice.example",
+            }
+        }),
+        Vec::new(),
+    );
+    let r: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&create_place)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(r["status"], "accepted");
+
+    let archive_place = signed_place_event(
+        "cx:event:01904100-0000-7000-8000-15a15ae00002",
+        2,
+        "cx.place.archive",
+        serde_json::json!({ "place_id": place_id }),
+        vec!["cx:event:01904100-0000-7000-8000-15a15ae00001"],
+    );
+    let r: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&archive_place)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(r["status"], "accepted");
+
+    let place_row = state
+        .persistence
+        .place_projections()
+        .get(place_id)
+        .unwrap()
+        .expect("place projection MUST be mirrored to persistence after create+archive");
+    assert_eq!(place_row.state, "archived");
+    assert_eq!(place_row.title, "Persistent Place");
+
+    // list_for_space + snapshot_all reach the same row.
+    let by_space = state
+        .persistence
+        .place_projections()
+        .list_for_space("cx:space:0196419b-0000-7000-8000-000000000000")
+        .unwrap();
+    assert!(
+        by_space.iter().any(|p| p.place_id == place_id),
+        "list_for_space MUST surface the persisted place"
+    );
+    let snapshot = state.persistence.place_projections().snapshot_all().unwrap();
+    assert!(snapshot.iter().any(|p| p.place_id == place_id));
+
+    // Flow: create + redact → persistence has state=redacted.
+    let create_flow = signed_flow_event(
+        "cx:event:01904100-0000-7000-8000-15a15af00001",
+        3,
+        "cx.flow.create",
+        serde_json::json!({
+            "object": {
+                "id": flow_id,
+                "space_id": "cx:space:0196419b-0000-7000-8000-000000000000",
+                "title": "Persistent Flow",
+                "created_by": "did:web:alice.example",
+            }
+        }),
+        vec!["cx:event:01904100-0000-7000-8000-15a15ae00002"],
+    );
+    let r: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&create_flow)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(r["status"], "accepted");
+    let flow_row = state
+        .persistence
+        .flow_projections()
+        .get(flow_id)
+        .unwrap()
+        .expect("flow projection MUST be mirrored to persistence after create");
+    assert_eq!(flow_row.state, "active");
+    assert_eq!(flow_row.title, "Persistent Flow");
+
+    let redact_flow = signed_redaction_event(
+        "cx:event:01904100-0000-7000-8000-15a15af00002",
+        4,
+        serde_json::json!({
+            "target_event_id": "cx:event:01904100-0000-7000-8000-15a15af00001",
+            "object_ref": flow_id,
+        }),
+        vec!["cx:event:01904100-0000-7000-8000-15a15af00001"],
+    );
+    let r: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&redact_flow)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(r["status"], "accepted");
+    let flow_row = state
+        .persistence
+        .flow_projections()
+        .get(flow_id)
+        .unwrap()
+        .expect("flow projection MUST still exist after redaction");
+    assert_eq!(
+        flow_row.state, "redacted",
+        "cx.redaction with object_ref MUST flip flow projection in persistence too"
+    );
+
+    // Morph: create + archive → persistence has state=archived.
+    let create_morph = signed_morph_event(
+        "cx:event:01904100-0000-7000-8000-15a15a000004",
+        5,
+        "cx.morph.create",
+        serde_json::json!({
+            "object": {
+                "id": morph_id,
+                "space_id": "cx:space:0196419b-0000-7000-8000-000000000000",
+                "morph_type": "task",
+                "title": "Persistent Morph",
+                "created_by": "did:web:alice.example",
+            }
+        }),
+        vec!["cx:event:01904100-0000-7000-8000-15a15af00002"],
+    );
+    let r: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&create_morph)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(r["status"], "accepted");
+
+    let archive_morph = signed_morph_event(
+        "cx:event:01904100-0000-7000-8000-15a15a000005",
+        6,
+        "cx.morph.archive",
+        serde_json::json!({ "morph_id": morph_id }),
+        vec!["cx:event:01904100-0000-7000-8000-15a15a000004"],
+    );
+    let r: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&archive_morph)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(r["status"], "accepted");
+    let morph_row = state
+        .persistence
+        .morph_projections()
+        .get(morph_id)
+        .unwrap()
+        .expect("morph projection MUST be mirrored to persistence");
+    assert_eq!(morph_row.state, "archived");
+    assert_eq!(morph_row.morph_type, "task");
+}
+
 
 
 

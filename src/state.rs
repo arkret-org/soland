@@ -688,10 +688,18 @@ impl AppState {
         }
         let admin_keystore = Arc::new(admin_keystore);
 
+        // Round 15h — hydrate Place/Flow/Morph projections from durable
+        // persistence so process restart doesn't lose lifecycle state.
+        // The write-through path in `routing::events::projection.rs::
+        // write_through_projection` keeps these tables in sync as
+        // reducer apply mutates the in-memory state.
+        let mut hydrated = ProjectionState::new();
+        hydrate_projections_from_persistence(persistence.as_ref(), &mut hydrated);
+
         Self {
             config,
             hlc: ServerHlc::new(&service_did),
-            projection: Arc::new(Mutex::new(ProjectionState::new())),
+            projection: Arc::new(Mutex::new(hydrated)),
             authz: AuthzEngine::new(),
             db,
             persistence,
@@ -724,4 +732,122 @@ impl AppState {
 pub(crate) fn getrandom_seed(out: &mut [u8; 32]) {
     use rand::RngCore;
     rand::rngs::OsRng.fill_bytes(out);
+}
+
+/// Round 15h — Read Place / Flow / Morph projection rows from durable
+/// persistence into the supplied `ProjectionState`. Called at
+/// `AppState::new` so restart picks up the lifecycle state the
+/// write-through path stamped down on the way in. Unknown state
+/// strings or invalid rows are silently skipped (logged at warn) —
+/// the in-memory state stays authoritative.
+fn hydrate_projections_from_persistence(
+    persistence: &dyn crate::persistence::PersistenceStore,
+    proj: &mut ProjectionState,
+) {
+    use crate::reducer::{
+        FlowProjection, MorphProjection, ObjectLifecycleState, PlaceLifecycleState,
+        PlaceProjection,
+    };
+
+    fn parse_place_state(value: &str) -> Option<PlaceLifecycleState> {
+        match value {
+            "active" => Some(PlaceLifecycleState::Active),
+            "archived" => Some(PlaceLifecycleState::Archived),
+            "tombstoned" => Some(PlaceLifecycleState::Tombstoned),
+            _ => None,
+        }
+    }
+    fn parse_object_state(value: &str) -> Option<ObjectLifecycleState> {
+        match value {
+            "active" => Some(ObjectLifecycleState::Active),
+            "archived" => Some(ObjectLifecycleState::Archived),
+            "deleted" => Some(ObjectLifecycleState::Deleted),
+            "redacted" => Some(ObjectLifecycleState::Redacted),
+            _ => None,
+        }
+    }
+
+    if let Ok(rows) = persistence.place_projections().snapshot_all() {
+        for record in rows {
+            let Some(state) = parse_place_state(&record.state) else {
+                tracing::warn!(
+                    place_id = %record.place_id,
+                    state = %record.state,
+                    "skipping place projection row with unknown state during hydrate"
+                );
+                continue;
+            };
+            proj.places.insert(
+                record.place_id.clone(),
+                PlaceProjection {
+                    place_id: record.place_id,
+                    space_id: record.space_id,
+                    kind: record.kind,
+                    title: record.title,
+                    parent_ref: record.parent_ref,
+                    rank: record.rank,
+                    state,
+                    state_changed_at: record.state_changed_at,
+                    created_by: record.created_by,
+                    created_at: record.created_at,
+                    updated_by: record.updated_by,
+                    updated_at: record.updated_at,
+                },
+            );
+        }
+    }
+    if let Ok(rows) = persistence.flow_projections().snapshot_all() {
+        for record in rows {
+            let Some(state) = parse_object_state(&record.state) else {
+                tracing::warn!(
+                    flow_id = %record.flow_id,
+                    state = %record.state,
+                    "skipping flow projection row with unknown state during hydrate"
+                );
+                continue;
+            };
+            proj.flows.insert(
+                record.flow_id.clone(),
+                FlowProjection {
+                    flow_id: record.flow_id,
+                    space_id: record.space_id,
+                    title: record.title,
+                    summary: record.summary,
+                    state,
+                    state_changed_at: record.state_changed_at,
+                    created_by: record.created_by,
+                    created_at: record.created_at,
+                    updated_by: record.updated_by,
+                    updated_at: record.updated_at,
+                },
+            );
+        }
+    }
+    if let Ok(rows) = persistence.morph_projections().snapshot_all() {
+        for record in rows {
+            let Some(state) = parse_object_state(&record.state) else {
+                tracing::warn!(
+                    morph_id = %record.morph_id,
+                    state = %record.state,
+                    "skipping morph projection row with unknown state during hydrate"
+                );
+                continue;
+            };
+            proj.morphs.insert(
+                record.morph_id.clone(),
+                MorphProjection {
+                    morph_id: record.morph_id,
+                    space_id: record.space_id,
+                    morph_type: record.morph_type,
+                    title: record.title,
+                    state,
+                    state_changed_at: record.state_changed_at,
+                    created_by: record.created_by,
+                    created_at: record.created_at,
+                    updated_by: record.updated_by,
+                    updated_at: record.updated_at,
+                },
+            );
+        }
+    }
 }

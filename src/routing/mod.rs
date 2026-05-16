@@ -16,7 +16,7 @@ use crate::wire::{now, sync_token};
 
 mod access;
 mod admin;
-mod events;
+pub(crate) mod events;
 pub(crate) mod federation;
 mod identity;
 mod interop;

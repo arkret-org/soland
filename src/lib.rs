@@ -27,6 +27,14 @@ pub mod wire;
 pub use error::AppError;
 pub use result::{AppResult, EmptyResponse, EmptyResult, JsonResult, empty_ok, json_ok};
 pub use routing::{router, router_with_rate_limiter_config};
+
+/// Re-export the reference agent audit HMAC key so out-of-crate
+/// verifiers (e.g. e2e tests in `tests/`, future yougen-side audit
+/// surfaces) can recompute the signature without duplicating the
+/// constant. Production deployments inject their own key material via
+/// configuration and never touch this fallback.
+pub const REFERENCE_AGENT_AUDIT_HMAC_KEY: &[u8] =
+    routing::events::agent_bridge::REFERENCE_AGENT_AUDIT_HMAC_KEY;
 use salvo::catcher::Catcher;
 use salvo::prelude::Service;
 
