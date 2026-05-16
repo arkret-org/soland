@@ -152,4 +152,22 @@ async fn typed_describe_handlers_publish_response_schemas() {
             "{typed_now} missing — handler's typed signature did not publish its schema"
         );
     }
+
+    // Round 15c — projection_query.rs (`GET /api/v1/projection/{places,flows,morphs}`)
+    // converted from `&mut Response` + `res.render(Json(json!{...}))` to typed
+    // `JsonResult<T>` signatures. Each handler's response wrapper +
+    // row struct must now appear in the generated YAML.
+    for typed_now in [
+        "PlaceProjectionListResponse",
+        "PlaceProjectionRow",
+        "FlowProjectionListResponse",
+        "FlowProjectionRow",
+        "MorphProjectionListResponse",
+        "MorphProjectionRow",
+    ] {
+        assert!(
+            body.contains(typed_now),
+            "{typed_now} missing — projection_query handler's typed signature did not publish its schema"
+        );
+    }
 }
