@@ -7,11 +7,11 @@
 ## 当前测试状态 (2026-05-16)
 
 - `cargo test --lib` — **202 / 202** 全绿
-- `cargo test --test http_api` — **50 / 50** 全绿
+- `cargo test --test http_api` — **51 / 51** 全绿
 - `cargo test --test move_anchor_wire` — **28 / 28** 全绿
 - `cargo test --test openapi_typed` — **1 / 1** 全绿
 - `cargo build` — **0 warning**
-- 总 **281 tests pass**
+- 总 **282 tests pass**
 
 ## 已完成历史(详情查 git log + `CHANGELOG.md`,本文件不重复)
 
@@ -26,12 +26,13 @@
 - **round 14e**(2026-05-16)— `cx.flow.track.*` wire validator + state guard;SDK round 12 配套(`OP_FLOW_TRACK_*` + 4 reducer helpers)
 - **round 14f**(2026-05-16)— Applet / Agent protocol family wire validators(5 applet + 4 agent sub-events)+ admin snapshot 端口注册;SDK round 13 配套(9 个 `OP_*` 别名 + operation registry 条目,**不**进 BUILT_IN_OPERATION_KINDS)
 - **round 15a**(2026-05-16)— Morph projection 读端(`GET /api/v1/projection/morphs?space_id=...`),完成 round 14d 的 Place/Flow/Morph 三人组
+- **round 15b**(2026-05-16)— Applet / Agent 服务端 admin snapshot 实际数据填充。`ProjectionState::{applets,agents}` 双新 map + `AppletProjection` / `AgentProjection` struct + reducer 处理 `cx.applet.{registration,discovery}` / `cx.agent.endpoint`(session-scoped 事件依然不进 projection,见 round 14f);`admin_applet_items` / `admin_agent_items` 从 in-memory projection 读,取代之前的 `Vec::new()` stub。Bonus:修了 user 上游 SDK `key_verification.rs::EphemeralX25519Keypair` 缺 `Clone` derive 的 build break。
 
 ## 续作(round 15+ 候选)
 
 | 优先级 | 主题 | 处置 |
 |---|---|---|
-| M | Applet / Agent 集成测试 + 服务端 admin snapshot 实际数据填充 | round 14f 加了 admin collection 列表条目,但 snapshot 体里 `applets` / `agents` 数组当前是空 stub。需要(a)定义 server-side AppletProjection / AgentProjection,(b)reducer apply 把已 submit 的 applet/agent 事件聚合进投影,(c)admin snapshot 端读这两个投影。 |
+| M | ~~Applet / Agent 集成测试 + 服务端 admin snapshot 实际数据填充~~ | ✅ 2026-05-16 已落地(round 15b)。 |
 | M | Pg-backed `projection_places` / `projection_flows` / `projection_morphs` | 三张表 schema 都就绪,差 `PgPlaceProjectionStore` / `PgFlowProjectionStore` / `PgMorphProjectionStore` impl + reducer write-through + startup hydrate。 |
 | M | Pg-backed `projection_events` | 独立 migration:`projection_events` trait 已经准备好,只缺一份 SQL schema + `PgProjectionEventStore` impl。 |
 | M | MAL-11 prune walk 自动化 | 当前 `anchor-dag/prune` 只支持显式 `{anchor_id}` 调用;后台 worker 周期性遍历 DAG 跑 `CompactionPolicy::is_eligible` 也可以做,但要先有运营痛点。 |

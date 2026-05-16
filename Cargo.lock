@@ -544,6 +544,7 @@ dependencies = [
  "tokio",
  "ulid",
  "uuid",
+ "x25519-dalek",
 ]
 
 [[package]]

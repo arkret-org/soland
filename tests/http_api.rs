@@ -6040,3 +6040,135 @@ async fn projection_morphs_endpoint_reports_lifecycle_state() {
     assert_eq!(unauth.status_code, Some(StatusCode::UNAUTHORIZED));
 }
 
+/// Round 15b (2026-05-16) — `cx.applet.registration` + `cx.applet.discovery`
+/// populate `ProjectionState::applets`, exposed via `GET /api/v1/admin/applets`.
+/// Same for `cx.agent.endpoint` → `ProjectionState::agents` → `admin/agents`.
+/// Replaces the round 14f stub that returned an empty array.
+#[tokio::test]
+async fn admin_applets_agents_endpoints_reflect_submitted_registry_events() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+    let service_did = "did:web:applet.example";
+    let agent_did = "did:web:agent.example";
+
+    // Build an applet registration event. cx.applet.registration uses
+    // cx.schema.event_payload.v1 since there's no dedicated applet
+    // schema in the spec registry (applet payload is free-form per
+    // spec extensions/applet-integration.md).
+    let registration_payload = serde_json::json!({
+        "service_did": service_did,
+        "namespace": "com.example.applet",
+        "capabilities": ["read", "write"],
+    });
+    let mut registration_event = signed_event_envelope(
+        "cx:event:01904100-0000-7000-8000-ab10de000001",
+        1,
+        Vec::new(),
+    );
+    registration_event["kind"] = Value::String("cx.applet.registration".to_owned());
+    registration_event["schema_id"] = Value::String("cx.schema.event_payload.v1".to_owned());
+    registration_event["payload"] = registration_payload.clone();
+    registration_event["proofs"][0]["payload_hash"] =
+        Value::String(sha256_json(&registration_payload));
+    registration_event["canonical_digest"] =
+        Value::String(event_canonical_digest(&registration_event));
+    let resp: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&registration_event)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(resp["status"], "accepted");
+
+    // Discovery — adds a manifest to the same applet.
+    let discovery_payload = serde_json::json!({
+        "service_did": service_did,
+        "manifest": {"protocol": "http", "endpoint": "https://applet.example"},
+    });
+    let mut discovery_event = signed_event_envelope(
+        "cx:event:01904100-0000-7000-8000-ab10de000002",
+        2,
+        vec!["cx:event:01904100-0000-7000-8000-ab10de000001"],
+    );
+    discovery_event["kind"] = Value::String("cx.applet.discovery".to_owned());
+    discovery_event["schema_id"] = Value::String("cx.schema.event_payload.v1".to_owned());
+    discovery_event["payload"] = discovery_payload.clone();
+    discovery_event["proofs"][0]["payload_hash"] = Value::String(sha256_json(&discovery_payload));
+    discovery_event["canonical_digest"] =
+        Value::String(event_canonical_digest(&discovery_event));
+    let resp: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&discovery_event)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(resp["status"], "accepted");
+
+    // Agent endpoint event.
+    let agent_payload = serde_json::json!({
+        "agent_did": agent_did,
+        "protocol": "mcp",
+    });
+    let mut agent_event = signed_event_envelope(
+        "cx:event:01904100-0000-7000-8000-ab10de000003",
+        3,
+        vec!["cx:event:01904100-0000-7000-8000-ab10de000002"],
+    );
+    agent_event["kind"] = Value::String("cx.agent.endpoint".to_owned());
+    agent_event["schema_id"] = Value::String("cx.schema.event_payload.v1".to_owned());
+    agent_event["payload"] = agent_payload.clone();
+    agent_event["proofs"][0]["payload_hash"] = Value::String(sha256_json(&agent_payload));
+    agent_event["canonical_digest"] = Value::String(event_canonical_digest(&agent_event));
+    let resp: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&agent_event)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(resp["status"], "accepted");
+
+    // `admin/applets` now reports the registered applet with the manifest.
+    let applets_body: Value = TestClient::get("http://server/api/v1/admin/applets?limit=10")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    let applet_row = applets_body["applets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["service_did"] == service_did)
+        .expect("registered applet missing from admin/applets");
+    assert_eq!(applet_row["namespace"], "com.example.applet");
+    assert_eq!(applet_row["capabilities"][0], "read");
+    assert_eq!(
+        applet_row["manifest"]["endpoint"], "https://applet.example",
+        "discovery manifest must be merged into the applet projection"
+    );
+
+    // `admin/agents` reports the registered agent.
+    let agents_body: Value = TestClient::get("http://server/api/v1/admin/agents?limit=10")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    let agent_row = agents_body["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["agent_did"] == agent_did)
+        .expect("registered agent missing from admin/agents");
+    assert_eq!(agent_row["protocol"], "mcp");
+}
+
+

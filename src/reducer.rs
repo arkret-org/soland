@@ -120,6 +120,22 @@ pub struct ProjectionState {
     /// Round 13 — Server-side Morph projection. Same shape as Flow.
     /// Mirror table is `projection_morphs` (durable).
     pub morphs: BTreeMap<String, MorphProjection>,
+    /// Round 15b (2026-05-16) — Server-side Applet registry projection,
+    /// keyed by `service_did` (the canonical applet identity per spec
+    /// `extensions/applet-integration.md`). Populated by
+    /// `cx.applet.registration` (initial registration / re-registration)
+    /// and updated by `cx.applet.discovery` (manifest refresh). Used by
+    /// `GET /api/v1/admin/applets` admin snapshot. Protocol-session
+    /// events (`cx.applet.protocol_session.{start,status}`,
+    /// `cx.applet.bridge_error`) are NOT mirrored here — sessions are
+    /// ephemeral and the applet bridge state machine lives client-side.
+    pub applets: BTreeMap<String, AppletProjection>,
+    /// Round 15b — Server-side Agent registry projection, keyed by
+    /// `agent_did`. Same shape as `applets`. Populated by
+    /// `cx.agent.endpoint`. Protocol-session events for agents
+    /// (`cx.agent.protocol_session.{start,status,result}`) are also not
+    /// mirrored — see `applets` rationale.
+    pub agents: BTreeMap<String, AgentProjection>,
 }
 
 /// Server-side Place state cache. Mirrors the `projection_places` table.
@@ -185,6 +201,41 @@ pub struct MorphProjection {
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_by: Option<String>,
     pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+/// Round 15b — Server-side Applet registry entry. Populated by
+/// `cx.applet.registration` (creates) and `cx.applet.discovery` (refreshes
+/// the manifest). Spec `extensions/applet-integration.md` doesn't pin
+/// down a state-machine for applet entries themselves (the bridge state
+/// machine is per-session and lives client-side), so this is a simple
+/// last-write-wins projection.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AppletProjection {
+    /// `service_did` of the applet — canonical identity per spec.
+    pub service_did: String,
+    pub namespace: String,
+    /// Optional snapshot of the most recent `manifest` (from the latest
+    /// `cx.applet.discovery` event). `None` if only registration has
+    /// landed.
+    pub manifest: Option<Value>,
+    /// Optional capability list from the latest `cx.applet.registration`.
+    pub capabilities: Option<Value>,
+    pub registered_at: chrono::DateTime<chrono::Utc>,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// Round 15b — Server-side Agent registry entry. Populated by
+/// `cx.agent.endpoint`. Spec `extensions/agent-integration.md` mirrors
+/// the applet family shape; same simple last-write-wins semantics.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AgentProjection {
+    /// `agent_did` — canonical agent identity per spec.
+    pub agent_did: String,
+    /// Protocol the agent speaks (free-form string per spec event-kind-registry
+    /// payload description; no enum enforcement at this layer).
+    pub protocol: String,
+    pub registered_at: chrono::DateTime<chrono::Utc>,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
 /// State enum shared by Flow and Morph projections (mirrors SDK
@@ -385,6 +436,16 @@ pub enum ProjectionEffect {
         morph_id: String,
         new_state: ObjectLifecycleState,
     },
+    /// Round 15b — Applet registry projection updated (registration or
+    /// discovery). Keyed by the applet's `service_did`.
+    AppletProjectionUpdated {
+        service_did: String,
+    },
+    /// Round 15b — Agent registry projection updated (endpoint). Keyed
+    /// by the agent's `agent_did`.
+    AgentProjectionUpdated {
+        agent_did: String,
+    },
     /// State-machine rejected the operation per
     /// `common-fields.md §5.1`. Routing layer maps this to HTTP 412
     /// `failed_precondition` with the canonical reason_code.
@@ -561,6 +622,9 @@ impl ProjectionState {
                 now,
                 ObjectLifecycleTransition::Restore,
             ),
+            Some(CX_APPLET_REGISTRATION) => self.apply_applet_registration(operation, now),
+            Some(CX_APPLET_DISCOVERY) => self.apply_applet_discovery(operation, now),
+            Some(CX_AGENT_ENDPOINT) => self.apply_agent_endpoint(operation, now),
             // All cell-state events (cx.space.policy / cx.space.read_receipt_policy /
             // cx.consent.* / cx.member.state / cx.space.* facets) are routed via
             // the Move/Anchor pipeline through `LatticeKind` impls in
@@ -2216,6 +2280,129 @@ impl ProjectionState {
             morph_id,
             new_state: target_state,
         }
+    }
+
+    /// Round 15b — Apply `cx.applet.registration`. Upserts the
+    /// AppletProjection keyed by `service_did`. Re-registration with
+    /// the same DID is allowed (replace capabilities + bump
+    /// updated_at), matching the spec convention that registration is
+    /// idempotent for the same identity.
+    fn apply_applet_registration(
+        &mut self,
+        operation: &Operation,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> ProjectionEffect {
+        let Some(service_did) = operation
+            .payload
+            .get("service_did")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned)
+        else {
+            return ProjectionEffect::Rejected {
+                reason: "applet_registration_missing_service_did".to_owned(),
+            };
+        };
+        let namespace = operation
+            .payload
+            .get("namespace")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_owned();
+        let capabilities = operation.payload.get("capabilities").cloned();
+        let existing_manifest = self
+            .applets
+            .get(&service_did)
+            .and_then(|p| p.manifest.clone());
+        let registered_at = self
+            .applets
+            .get(&service_did)
+            .map(|p| p.registered_at)
+            .unwrap_or(now);
+        let projection = AppletProjection {
+            service_did: service_did.clone(),
+            namespace,
+            manifest: existing_manifest,
+            capabilities,
+            registered_at,
+            updated_at: now,
+        };
+        self.applets.insert(service_did.clone(), projection);
+        ProjectionEffect::AppletProjectionUpdated { service_did }
+    }
+
+    /// Round 15b — Apply `cx.applet.discovery`. Updates the manifest
+    /// on an existing AppletProjection. If the applet hasn't registered
+    /// yet (causal / backfill window), creates a stub entry with the
+    /// manifest and empty namespace; subsequent registration will fill
+    /// in the namespace + capabilities.
+    fn apply_applet_discovery(
+        &mut self,
+        operation: &Operation,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> ProjectionEffect {
+        let Some(service_did) = operation
+            .payload
+            .get("service_did")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned)
+        else {
+            return ProjectionEffect::Rejected {
+                reason: "applet_discovery_missing_service_did".to_owned(),
+            };
+        };
+        let manifest = operation.payload.get("manifest").cloned();
+        let entry = self
+            .applets
+            .entry(service_did.clone())
+            .or_insert_with(|| AppletProjection {
+                service_did: service_did.clone(),
+                namespace: String::new(),
+                manifest: None,
+                capabilities: None,
+                registered_at: now,
+                updated_at: now,
+            });
+        entry.manifest = manifest;
+        entry.updated_at = now;
+        ProjectionEffect::AppletProjectionUpdated { service_did }
+    }
+
+    /// Round 15b — Apply `cx.agent.endpoint`. Upserts the
+    /// AgentProjection keyed by `agent_did`.
+    fn apply_agent_endpoint(
+        &mut self,
+        operation: &Operation,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> ProjectionEffect {
+        let Some(agent_did) = operation
+            .payload
+            .get("agent_did")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned)
+        else {
+            return ProjectionEffect::Rejected {
+                reason: "agent_endpoint_missing_agent_did".to_owned(),
+            };
+        };
+        let protocol = operation
+            .payload
+            .get("protocol")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_owned();
+        let registered_at = self
+            .agents
+            .get(&agent_did)
+            .map(|p| p.registered_at)
+            .unwrap_or(now);
+        let projection = AgentProjection {
+            agent_did: agent_did.clone(),
+            protocol,
+            registered_at,
+            updated_at: now,
+        };
+        self.agents.insert(agent_did.clone(), projection);
+        ProjectionEffect::AgentProjectionUpdated { agent_did }
     }
 
     // ── Query helpers ──

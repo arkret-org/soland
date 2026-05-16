@@ -91,8 +91,8 @@ pub(super) async fn admin_collection(depot: &mut Depot, req: &mut Request, res: 
         "devices" => ("devices", admin_device_items(state)),
         "capabilities" => ("capabilities", admin_capability_items(state)),
         "federation" => ("federation", admin_federation_items(state)),
-        "applets" => ("applets", Vec::new()),
-        "agents" => ("agents", Vec::new()),
+        "applets" => ("applets", admin_applet_items(state)),
+        "agents" => ("agents", admin_agent_items(state)),
         "reports" => (
             "reports",
             state
@@ -308,6 +308,53 @@ fn admin_federation_items(state: &AppState) -> Vec<Value> {
                 ),
                 "digest": operation.operation_digest().ok(),
                 "created_at": operation.created_at,
+            })
+        })
+        .collect()
+}
+
+/// Round 15b — Snapshot of the in-memory applet registry maintained
+/// by `reducer::ProjectionState::applets`. Each row is one applet
+/// identified by `service_did`, with the latest registration metadata
+/// (namespace, capabilities) and the most recent manifest (from
+/// `cx.applet.discovery`). Empty until a `cx.applet.registration` or
+/// `cx.applet.discovery` event has been accepted.
+fn admin_applet_items(state: &AppState) -> Vec<Value> {
+    let proj = match state.projection.lock() {
+        Ok(guard) => guard,
+        Err(_) => return Vec::new(),
+    };
+    proj.applets
+        .values()
+        .map(|applet| {
+            json!({
+                "service_did": applet.service_did,
+                "namespace": applet.namespace,
+                "manifest": applet.manifest,
+                "capabilities": applet.capabilities,
+                "registered_at": applet.registered_at.to_rfc3339(),
+                "updated_at": applet.updated_at.to_rfc3339(),
+            })
+        })
+        .collect()
+}
+
+/// Round 15b — Snapshot of the in-memory agent registry maintained
+/// by `reducer::ProjectionState::agents`. One row per agent_did, with
+/// the latest `cx.agent.endpoint` metadata.
+fn admin_agent_items(state: &AppState) -> Vec<Value> {
+    let proj = match state.projection.lock() {
+        Ok(guard) => guard,
+        Err(_) => return Vec::new(),
+    };
+    proj.agents
+        .values()
+        .map(|agent| {
+            json!({
+                "agent_did": agent.agent_did,
+                "protocol": agent.protocol,
+                "registered_at": agent.registered_at.to_rfc3339(),
+                "updated_at": agent.updated_at.to_rfc3339(),
             })
         })
         .collect()
