@@ -12,7 +12,7 @@
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::Utc;
-use salvo::http::StatusCode;
+use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde_json::{Value, json};
 
@@ -20,9 +20,12 @@ use super::operations::{
     validate_content_blocks, validate_encrypted_payload_envelope, validate_mentions,
 };
 use super::{
-    auth_or_render, flow_id_from_space_id, message_id_from_event_id, render_error,
-    space_allows_plaintext_service, space_has_member, validate_space_id,
+    flow_id_from_space_id, message_id_from_event_id, space_allows_plaintext_service,
+    space_has_member, validate_space_id,
 };
+use crate::error::{AppError, ErrorCode};
+use crate::result::{JsonResult, json_ok};
+use crate::routing::system::extract::AuthArgs;
 use crate::state::{AppState, MessageRecord};
 use crate::{ids, kinds};
 
@@ -51,100 +54,62 @@ pub(super) fn router() -> Router {
     Router::with_path("messages/send").post(messages_send)
 }
 
-#[endpoint]
-async fn messages_send(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+#[endpoint(
+    operation_id = "cx.messages.send",
+    tags("messages"),
+    summary = "Soland-local simplified send-message surface (mirrors into projection_events)"
+)]
+async fn messages_send(
+    aa: AuthArgs,
+    body: JsonBody<Value>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let Some(session) = auth_or_render(state, req, res) else {
-        return;
-    };
-    let body = match req.parse_json::<Value>().await {
-        Ok(body) => body,
-        Err(_) => {
-            render_error(
-                res,
-                StatusCode::BAD_REQUEST,
-                "bad_json",
-                "invalid message send request",
-            );
-            return;
-        }
-    };
-    let Some(space_id) = body.get("space_id").and_then(Value::as_str) else {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "missing_param",
-            "space_id is required",
-        );
-        return;
-    };
+    let session = aa.authenticated_session(state, req)?;
+    let body = body.into_inner();
+    let space_id = body
+        .get("space_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| AppError::missing_param("space_id is required"))?;
     if validate_space_id(space_id).is_err() {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "invalid_param",
-            "invalid space_id",
-        );
-        return;
+        return Err(AppError::invalid_param("invalid space_id"));
     }
     if !space_has_member(state, space_id, &session.actor) {
-        render_error(
-            res,
-            StatusCode::FORBIDDEN,
-            "capability_denied",
+        return Err(AppError::capability_denied(
             "actor is not a joined member of the space",
-        );
-        return;
+        ));
     }
     let encrypted = body.get("encrypted").and_then(Value::as_bool).unwrap_or(false);
-    let Some(content) = body.get("content") else {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "missing_param",
-            "content is required",
-        );
-        return;
-    };
+    let content = body
+        .get("content")
+        .ok_or_else(|| AppError::missing_param("content is required"))?;
     if !encrypted && !space_allows_plaintext_service(state, space_id) {
-        render_error(
-            res,
-            StatusCode::FORBIDDEN,
-            "policy_violation",
+        return Err(AppError::capability_denied(
             "space policy denies plaintext writes from this service",
-        );
-        return;
+        ));
     }
     if encrypted {
         if let Err(message) = validate_encrypted_payload_envelope(content) {
-            render_error(res, StatusCode::BAD_REQUEST, "schema_violation", message);
-            return;
+            return Err(AppError::new(ErrorCode::SchemaViolation, message));
         }
     } else {
-        // Plaintext body MUST satisfy the same canonical content-block /
-        // mention validators that the signed Event Envelope path runs;
-        // delegating to them keeps the two write paths in lockstep.
         let has_body = content.get("body").and_then(Value::as_str).is_some();
         let has_blocks = content
             .get("blocks")
             .and_then(Value::as_array)
             .is_some_and(|blocks| !blocks.is_empty());
         if !has_body && !has_blocks {
-            render_error(
-                res,
-                StatusCode::BAD_REQUEST,
-                "schema_violation",
+            return Err(AppError::new(
+                ErrorCode::SchemaViolation,
                 "plaintext content must include either `body` or a non-empty `blocks[]` array",
-            );
-            return;
+            ));
         }
         if let Err(message) = validate_content_blocks(content) {
-            render_error(res, StatusCode::BAD_REQUEST, "schema_violation", message);
-            return;
+            return Err(AppError::new(ErrorCode::SchemaViolation, message));
         }
         if let Err(message) = validate_mentions(content) {
-            render_error(res, StatusCode::BAD_REQUEST, "invalid_param", message);
-            return;
+            return Err(AppError::invalid_param(message));
         }
     }
 
@@ -165,18 +130,11 @@ async fn messages_send(depot: &mut Depot, req: &mut Request, res: &mut Response)
         encrypted,
         created_at: now,
     };
-    if let Err(error) = state.persistence.messages().put(&record) {
-        render_error(
-            res,
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "internal_error",
-            &format!("message store unavailable: {error}"),
-        );
-        return;
-    }
-    // Mirror the message into the projection event log so it shows up in
-    // `GET /api/v1/events?space_id=…` (the projection-aware events query
-    // path reads from `projection_events`, not from the messages table).
+    state
+        .persistence
+        .messages()
+        .put(&record)
+        .map_err(|error| AppError::internal(format!("message store unavailable: {error}")))?;
     let projection_record = crate::state::ProjectionEventRecord {
         event_id: event_id.clone(),
         space_id: space_id.to_owned(),
@@ -198,20 +156,13 @@ async fn messages_send(depot: &mut Depot, req: &mut Request, res: &mut Response)
         tracing::error!(%error, "failed to mirror message into projection_events");
     }
 
-    // The signed-Envelope path produces an `operation_id`; we derive the
-    // same shape deterministically from the event_id for the
-    // deployment-local /messages/send shortcut so downstream consumers see
-    // the spec-aligned identifier set. (Round 7: the `commit_id` /
-    // `cx:commit:` companion was removed alongside the rest of the repo
-    // scaffold — spec v1 has no `cx:commit:` typed id and no `/repo/*`
-    // surface; soland mirrors that.)
     let event_suffix = event_id.strip_prefix("cx:event:").unwrap_or(&event_id);
     let operation_id = format!("cx:operation:{event_suffix}");
     let mut positions = std::collections::BTreeMap::new();
     positions.insert(space_id.to_owned(), now.timestamp_micros());
     let sync_token = encode_send_cursor(space_id, &positions, now.timestamp_millis());
 
-    res.render(Json(json!({
+    json_ok(json!({
         "event_id": event_id,
         "operation_id": operation_id,
         "kind": kinds::CX_MESSAGE_CREATE,
@@ -223,5 +174,5 @@ async fn messages_send(depot: &mut Depot, req: &mut Request, res: &mut Response)
         "encrypted": encrypted,
         "created_at": now,
         "sync_token": sync_token,
-    })));
+    }))
 }

@@ -16,15 +16,17 @@
 
 use std::collections::BTreeMap;
 
-use salvo::http::StatusCode;
+use salvo::oapi::extract::{JsonBody, QueryParam};
 use salvo::prelude::*;
 use serde_json::{Value, json};
 
 use super::{
     authenticated_session, device_inventory_to_json, handle_for_did, invite_token_space_id,
-    is_space_deleted, normalize_handle, now, query_param, render_error, space_discoverability,
-    space_resolvable_to, space_search_discoverability, space_search_visible_to,
+    is_space_deleted, normalize_handle, now, space_discoverability, space_resolvable_to,
+    space_search_discoverability, space_search_visible_to,
 };
+use crate::error::AppError;
+use crate::result::{JsonResult, json_ok};
 use crate::state::{AppState, SessionRecord};
 use crate::wire::{
     DirectoryDescribeResponse, DirectoryValueSearchResponse, ResolveHandleRequest,
@@ -60,16 +62,18 @@ async fn directory_describe(depot: &mut Depot, res: &mut Response) {
     }));
 }
 
-#[endpoint]
-async fn search_spaces(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+#[endpoint(
+    operation_id = "cx.directory.search_spaces",
+    tags("directory"),
+    summary = "Fuzzy-text + visibility-filtered space search"
+)]
+async fn search_spaces(
+    body: JsonBody<SearchSpacesRequest>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<SearchSpacesResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let body = req
-        .parse_json::<SearchSpacesRequest>()
-        .await
-        .unwrap_or(SearchSpacesRequest {
-            query: None,
-            limit: Some(20),
-        });
+    let body = body.into_inner();
     let query = contrix_sdk::SpaceSearchQuery {
         text: body.query,
         public_only: false,
@@ -84,39 +88,32 @@ async fn search_spaces(depot: &mut Depot, req: &mut Request, res: &mut Response)
         .filter(|space| space_search_visible_to(state, space, session.as_ref()))
         .cloned()
         .collect();
-    res.render(Json(SearchSpacesResponse {
+    json_ok(SearchSpacesResponse {
         results,
         next_cursor: None,
-    }));
+    })
 }
 
-#[endpoint]
-async fn resolve_space(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+#[endpoint(
+    operation_id = "cx.directory.resolve_space",
+    tags("directory"),
+    summary = "Resolve a space by id / alias / invite_token / signed_link"
+)]
+async fn resolve_space(
+    body: JsonBody<ResolveSpaceRequest>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<ResolveSpaceResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let body = match req.parse_json::<ResolveSpaceRequest>().await {
-        Ok(body) => body,
-        Err(_) => {
-            render_error(
-                res,
-                StatusCode::BAD_REQUEST,
-                "bad_json",
-                "invalid resolve space request",
-            );
-            return;
-        }
-    };
+    let body = body.into_inner();
     if body.space_id.is_none()
         && body.alias.is_none()
         && body.invite_token.is_none()
         && body.signed_link.is_none()
     {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "missing_param",
+        return Err(AppError::missing_param(
             "one of space_id, alias, invite_token, or signed_link is required",
-        );
-        return;
+        ));
     }
 
     let session = authenticated_session(state, req).ok();
@@ -145,12 +142,10 @@ async fn resolve_space(depot: &mut Depot, req: &mut Request, res: &mut Response)
                 .is_some_and(|alias| alias.eq_ignore_ascii_case(&entry.name)))
     });
     match space {
-        Some(space) => res.render(Json(ResolveSpaceResponse {
+        Some(space) => json_ok(ResolveSpaceResponse {
             space_preview: space.clone(),
             stripped_state: vec![json!({
                 "type": "cx.space.discovery",
-                // `cx.space.discovery` is a singleton cell keyed by
-                // `(space_id, kind)` only — no subject on the wire.
                 "subject": "",
                 "content": {
                     "discoverability": space_discoverability(state, space.space_id.as_str()),
@@ -165,24 +160,23 @@ async fn resolve_space(depot: &mut Depot, req: &mut Request, res: &mut Response)
                 "invite_or_request".to_owned()
             },
             via_services: vec![state.config.service_did.clone()],
-        })),
-        None => render_error(res, StatusCode::NOT_FOUND, "not_found", "not found"),
+        }),
+        None => Err(AppError::not_found("not found")),
     }
 }
 
-#[endpoint]
-async fn search_organizations(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+#[endpoint(
+    operation_id = "cx.directory.search_organizations",
+    tags("directory"),
+    summary = "Fuzzy-text search across known organizations (demo data for now)"
+)]
+async fn search_organizations(
+    body: JsonBody<SearchOrganizationsRequest>,
+    depot: &mut Depot,
+) -> JsonResult<DirectoryValueSearchResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let body = req
-        .parse_json::<SearchOrganizationsRequest>()
-        .await
-        .unwrap_or(SearchOrganizationsRequest {
-            query: None,
-            limit: Some(20),
-        });
-    let Some(limit) = checked_limit(res, body.limit) else {
-        return;
-    };
+    let body = body.into_inner();
+    let limit = checked_limit(body.limit)?;
     let spaces = state.spaces.lock().expect("spaces lock");
     let space_entries: Vec<_> = spaces
         .search(Default::default())
@@ -195,35 +189,27 @@ async fn search_organizations(depot: &mut Depot, req: &mut Request, res: &mut Re
     } else {
         Vec::new()
     };
-    res.render(Json(DirectoryValueSearchResponse {
+    json_ok(DirectoryValueSearchResponse {
         results: results.into_iter().take(limit).collect(),
         next_cursor: None,
-    }));
+    })
 }
 
-#[endpoint]
-async fn resolve_organization(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+#[endpoint(
+    operation_id = "cx.directory.resolve_organization",
+    tags("directory"),
+    summary = "Resolve an organization by organization_id or handle"
+)]
+async fn resolve_organization(
+    body: JsonBody<ResolveOrganizationRequest>,
+    depot: &mut Depot,
+) -> JsonResult<ResolveOrganizationResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let body = match req.parse_json::<ResolveOrganizationRequest>().await {
-        Ok(body) => body,
-        Err(_) => {
-            render_error(
-                res,
-                StatusCode::BAD_REQUEST,
-                "bad_json",
-                "invalid resolve organization request",
-            );
-            return;
-        }
-    };
+    let body = body.into_inner();
     if body.organization_id.is_none() && body.handle.is_none() {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "missing_param",
+        return Err(AppError::missing_param(
             "organization_id or handle is required",
-        );
-        return;
+        ));
     }
 
     let spaces = state.spaces.lock().expect("spaces lock");
@@ -242,8 +228,7 @@ async fn resolve_organization(depot: &mut Depot, req: &mut Request, res: &mut Re
         .as_deref()
         .is_some_and(|handle| handle.eq_ignore_ascii_case("@contrix-demo"));
     if !matches_id && !matches_handle {
-        render_error(res, StatusCode::NOT_FOUND, "not_found", "not found");
-        return;
+        return Err(AppError::not_found("not found"));
     }
 
     let spaces = space_entries
@@ -257,34 +242,32 @@ async fn resolve_organization(depot: &mut Depot, req: &mut Request, res: &mut Re
             })
         })
         .collect();
-    res.render(Json(ResolveOrganizationResponse {
+    json_ok(ResolveOrganizationResponse {
         organization,
         spaces,
-    }));
+    })
 }
 
-#[endpoint]
-async fn search_actors(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+#[endpoint(
+    operation_id = "cx.directory.search_actors",
+    tags("directory"),
+    summary = "Search actors visible to the calling session"
+)]
+async fn search_actors(
+    body: JsonBody<SearchActorsRequest>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<DirectoryValueSearchResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let body = req
-        .parse_json::<SearchActorsRequest>()
-        .await
-        .unwrap_or(SearchActorsRequest {
-            query: None,
-            organization_id: None,
-            limit: Some(20),
-        });
-    let Some(limit) = checked_limit(res, body.limit) else {
-        return;
-    };
+    let body = body.into_inner();
+    let limit = checked_limit(body.limit)?;
     if let Some(organization_id) = body.organization_id.as_deref()
         && organization_id != "cx:org:demo"
     {
-        res.render(Json(DirectoryValueSearchResponse {
+        return json_ok(DirectoryValueSearchResponse {
             results: Vec::new(),
             next_cursor: None,
-        }));
-        return;
+        });
     }
 
     let session = authenticated_session(state, req).ok();
@@ -294,19 +277,27 @@ async fn search_actors(depot: &mut Depot, req: &mut Request, res: &mut Response)
         .filter(|actor| query_matches(actor, body.query.as_deref()))
         .take(limit)
         .collect();
-    res.render(Json(DirectoryValueSearchResponse {
+    json_ok(DirectoryValueSearchResponse {
         results,
         next_cursor: None,
-    }));
+    })
 }
 
-#[endpoint]
-async fn search_users(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+#[endpoint(
+    operation_id = "cx.directory.search_users",
+    tags("directory"),
+    summary = "Search actors via the `?query` GET shortcut"
+)]
+async fn search_users(
+    query: QueryParam<String, false>,
+    q: QueryParam<String, false>,
+    limit: QueryParam<usize, false>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<DirectoryValueSearchResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let Some(limit) = query_limit(req, res) else {
-        return;
-    };
-    let query = query_param(req, "query").or_else(|| query_param(req, "q"));
+    let limit = checked_limit(limit.into_inner())?;
+    let query = query.into_inner().or_else(|| q.into_inner());
     let session = authenticated_session(state, req).ok();
     let results: Vec<_> = demo_actors(state)
         .into_iter()
@@ -314,35 +305,26 @@ async fn search_users(depot: &mut Depot, req: &mut Request, res: &mut Response) 
         .filter(|actor| query_matches(actor, query.as_deref()))
         .take(limit)
         .collect();
-    res.render(Json(DirectoryValueSearchResponse {
+    json_ok(DirectoryValueSearchResponse {
         results,
         next_cursor: None,
-    }));
+    })
 }
 
-#[endpoint]
-async fn resolve_handle(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+#[endpoint(
+    operation_id = "cx.directory.resolve_handle",
+    tags("directory"),
+    summary = "Resolve a normalized actor handle (e.g. `@alice`) to a DID"
+)]
+async fn resolve_handle(
+    body: JsonBody<ResolveHandleRequest>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<ResolveHandleResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let body = match req.parse_json::<ResolveHandleRequest>().await {
-        Ok(body) => body,
-        Err(_) => {
-            render_error(
-                res,
-                StatusCode::BAD_REQUEST,
-                "bad_json",
-                "invalid resolve handle request",
-            );
-            return;
-        }
-    };
+    let body = body.into_inner();
     if body.handle.trim().is_empty() {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "missing_param",
-            "handle is required",
-        );
-        return;
+        return Err(AppError::missing_param("handle is required"));
     }
     let normalized = normalize_handle(&body.handle);
     let session = authenticated_session(state, req).ok();
@@ -353,12 +335,12 @@ async fn resolve_handle(depot: &mut Depot, req: &mut Request, res: &mut Response
                 .is_some_and(|handle| handle == normalized)
     });
     match actor {
-        Some(actor) => res.render(Json(ResolveHandleResponse {
+        Some(actor) => json_ok(ResolveHandleResponse {
             handle: normalized,
             did: actor["did"].as_str().unwrap_or_default().to_owned(),
             actor,
-        })),
-        None => render_error(res, StatusCode::NOT_FOUND, "not_found", "not found"),
+        }),
+        None => Err(AppError::not_found("not found")),
     }
 }
 
@@ -481,38 +463,10 @@ pub fn query_matches(value: &Value, query: Option<&str>) -> bool {
         .contains(&query.to_ascii_lowercase())
 }
 
-// `facets_match` removed in round 7 — only callsites were the round-4
-// entity/view scaffold (already deleted). Facet predicates now live on
-// the spec-typed `cx.view.*` cell families through the reducer.
-
-pub fn checked_limit(res: &mut Response, limit: Option<usize>) -> Option<usize> {
+pub fn checked_limit(limit: Option<usize>) -> Result<usize, AppError> {
     let limit = limit.unwrap_or(20);
     if !(1..=100).contains(&limit) {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "invalid_param",
-            "limit must be between 1 and 100",
-        );
-        return None;
+        return Err(AppError::invalid_param("limit must be between 1 and 100"));
     }
-    Some(limit)
-}
-
-pub fn query_limit(req: &Request, res: &mut Response) -> Option<usize> {
-    match query_param(req, "limit") {
-        Some(raw) => match raw.parse::<usize>() {
-            Ok(limit) => checked_limit(res, Some(limit)),
-            Err(_) => {
-                render_error(
-                    res,
-                    StatusCode::BAD_REQUEST,
-                    "invalid_param",
-                    "limit must be an integer",
-                );
-                None
-            }
-        },
-        None => Some(20),
-    }
+    Ok(limit)
 }

@@ -6,12 +6,12 @@
 
 ## 当前测试状态 (2026-05-16)
 
-- `cargo test --lib` — **211 / 211** 全绿
-- `cargo test --test http_api` — **58 / 58** 全绿
+- `cargo test --lib` — **212 / 212** 全绿
+- `cargo test --test http_api` — **59 / 59** 全绿
 - `cargo test --test move_anchor_wire` — **28 / 28** 全绿
 - `cargo test --test openapi_typed` — **1 / 1** 全绿
 - `cargo build` — **0 warning**
-- 总 **298 tests pass**
+- 总 **300 tests pass**
 
 ## 已完成历史(详情查 git log + `CHANGELOG.md`,本文件不重复)
 
@@ -41,6 +41,7 @@
 - **round 15n**(2026-05-16)— OpenAPI typed signature batch #5:2 个 handler 转 typed。`identity/device_messages.rs::{send_device_messages, get_device_messages}`。两 handler 都用 `AuthArgs::authenticated_session`,`Idempotency-Key` header 走 `req.headers()`(没法做 typed extract,Salvo 还没暴露 typed header)。`get_device_messages` 两个 `QueryParam<String, false>`(`ack`、`since`)合一。`SyncCursorError::Mismatch` 没有 canonical errcode,映射为 `invalid_param`(原 sync_token_mismatch 不是 spec errcode)。Operation ids `cx.device_messages.{send,receive}` 与既有 `cx.device_messages.describe` 同 family。`openapi_typed.rs` 加 5 条 positive assertion(3 个 schema + 2 个 operationId)。
 - **round 15o**(2026-05-16)— OpenAPI typed signature batch #6:3 个 handler 转 typed。`identity/keys.rs::{keys_upload, keys_query, keys_claim}`。`keys_upload` 多个 fallible 持久化路径全部用 `?` 串起来(`map_err` → `AppError::internal`)。`keys_query`/`keys_claim` 不再用 `parse_json().await.unwrap_or(Default)`,直接 `JsonBody<T>` —— bad json 现在返 400 而不是 silently 走 default。改了语义但更对(原版是 dev convenience hack)。`identity/mod.rs` 顺手清掉 unused `auth_or_render` re-export。Operation ids `cx.keys.{upload,query,claim}`。`openapi_typed.rs` 加 9 条 positive assertion(6 个 schema + 3 个 operationId)。
 - **round 15p**(2026-05-16)— OpenAPI typed signature batch #7:4 个 handler 转 typed。`identity/did.rs::{identity_resolve, identity_document, identity_log, identity_receipts}`。`identity_document`/`log`/`receipts` 三个都用 `QueryParam<String, true>`(`did=` 必填)直接做 schema-level validation。死代码清理:`render_identity_document` helper 没用了,删。`embedded_webvh_log` 跳过 —— 它流 `application/jsonl` 不是 JSON,没法走 typed signature。Operation ids `cx.identity.{resolve,document,log,receipts}` —— registry 没条目,自取。`openapi_typed.rs` 加 8 条 positive assertion(4 个 schema + 4 个 operationId)。
+- **round 15q-15ab**(2026-05-16)— 大批量 typed signature 收尾:**~46 个 handler 转 typed** 跨 13 个文件。  `spaces/{directory.rs(7), relation.rs(3), index.rs(7)}`;`events/{messages.rs(1), sync.rs::set_typing}`;`interop/{moderation.rs (already 15k), push.rs::{push_register, push_rules, upsert_push_rule}, push_outbound.rs::{resolve, fetch, cache_import, cache_invalidate}, mimi.rs(10 handlers, kept directory probes as Value)}`;`admin/{audit.rs(2), collection.rs(1)}`;`access/authz.rs::{create_grant, revoke_grant}`。新增 wire 类型:`ListRelationsResponse` / `DeleteRelationResponse` / `PushRulesResponse` / `UpsertPushRuleResponse` / `CreateGrantResponse` / `RevokeGrantResponse`(`relation.rs` 之前返 `json!()` Value,转换时引入 typed wrapper)。Mimi 10 个 handler 都返 `JsonResult<serde_json::Value>` —— 各 handler shape 差异太大,用 typed wrapper 收益不大,operation_id + AppError envelope 才是核心。`error.rs` 给 `AppError` 加 `wire_code_override` 字段 + `with_wire_code()` setter + `legacy(status, code, msg)` 构造器 —— 让 typed handler 保留 pre-typed `render_error` 的非 canonical errcode 字符串(`unsupported_draft`、`batch_not_supported`、Place/Flow lifecycle 的 `<kind>_not_active` 等)。死代码清理:`auth_or_render`、`render_error`、`query_param` 多个 re-export 没有 caller,从 spaces/admin/identity mod.rs 删。`tests/http_api.rs` 三个 assertion 更新(mimi 报 200 而不是 202;两个 messages_send 报 422 而不是 400 —— canonical errcode→status 映射纠正)。`event_log.rs::submit_event` **跳过** —— typed extractor 改变了 `req.parse_json` 时机,`agent_bridge_plumbs_endpoint_url_through_session_envelopes` 测试依赖 spawn 完成于 GET 之前的窄窗口,转换后竞态 100% 失败。`events_subscribe`(SSE 流)、`embedded_webvh_log`(JSONL 流)、`mimi_provider_directory`(无错误路径的纯 Value)、sync.rs 的其余 handler(过深的 cursor/stream 助手,scope creep)同跳过。`openapi_typed.rs` 加 50+ 条 positive assertion。共 300 tests pass。
 
 ## 续作(round 15+ 候选)
 

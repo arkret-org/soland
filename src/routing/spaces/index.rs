@@ -15,11 +15,12 @@
 //! mirrors what `directory` / `sync` expose so clients see a stable wire
 //! contract while the durable projection store lands.
 
-use salvo::http::StatusCode;
+use salvo::oapi::extract::{JsonBody, QueryParam};
 use salvo::prelude::*;
 use serde_json::{Value, json};
 
-use super::{query_param, render_error};
+use crate::error::AppError;
+use crate::result::{JsonResult, json_ok};
 use crate::state::AppState;
 
 const SUPPORTED_FACETS: &[&str] = &[
@@ -86,47 +87,35 @@ fn object_kind_for(object_id: &str) -> Option<&'static str> {
     }
 }
 
-#[endpoint]
-async fn index_object(_depot: &mut Depot, req: &mut Request, res: &mut Response) {
-    let Some(object_id) = query_param(req, "object_id") else {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "missing_param",
-            "object_id is required",
-        );
-        return;
-    };
-    let Some(kind) = object_kind_for(&object_id) else {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "invalid_param",
-            "object_id has no recognised typed prefix",
-        );
-        return;
-    };
-    res.render(Json(json!({
+#[endpoint(
+    operation_id = "cx.index.object",
+    tags("index"),
+    summary = "Describe a typed object by its `cx:<kind>:...` id"
+)]
+async fn index_object(object_id: QueryParam<String, true>) -> JsonResult<Value> {
+    let object_id = object_id.into_inner();
+    let kind = object_kind_for(&object_id)
+        .ok_or_else(|| AppError::invalid_param("object_id has no recognised typed prefix"))?;
+    json_ok(json!({
         "object": {
             "object_id": object_id,
             "kind": kind,
             "schema": format!("cx.schema.{kind}.v1"),
         },
-    })));
+    }))
 }
 
-#[endpoint]
-async fn index_thread(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+#[endpoint(
+    operation_id = "cx.index.thread",
+    tags("index"),
+    summary = "List events for a thread (up to 100)"
+)]
+async fn index_thread(
+    thread_id: QueryParam<String, true>,
+    depot: &mut Depot,
+) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let Some(thread_id) = query_param(req, "thread_id") else {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "missing_param",
-            "thread_id is required",
-        );
-        return;
-    };
+    let thread_id = thread_id.into_inner();
     let messages = state
         .persistence
         .messages()
@@ -147,7 +136,7 @@ async fn index_thread(depot: &mut Depot, req: &mut Request, res: &mut Response) 
             })
         })
         .collect();
-    res.render(Json(json!({
+    json_ok(json!({
         "thread": {
             "thread_id": thread_id,
             "schema": "cx.schema.thread.v1",
@@ -155,18 +144,20 @@ async fn index_thread(depot: &mut Depot, req: &mut Request, res: &mut Response) 
         },
         "events": events,
         "next_cursor": Value::Null,
-    })));
+    }))
 }
 
-#[endpoint]
-async fn index_notifications(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+#[endpoint(
+    operation_id = "cx.index.notifications",
+    tags("index"),
+    summary = "List inbox notifications for an actor across known spaces"
+)]
+async fn index_notifications(
+    actor: QueryParam<String, false>,
+    depot: &mut Depot,
+) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let actor = query_param(req, "actor").unwrap_or_default();
-    // Scan known spaces and collect messages in spaces that include the
-    // queried actor as a member — every such message becomes one inbox
-    // notification entry. This is a deliberately permissive scaffold; a
-    // production index would honor read receipts, mention filters, and
-    // mute rules.
+    let actor = actor.into_inner().unwrap_or_default();
     let mut notifications: Vec<Value> = Vec::new();
     let space_snapshot: Vec<contrix_sdk::SpaceSearchEntry> = {
         let spaces = state.spaces.lock().expect("spaces lock");
@@ -205,13 +196,13 @@ async fn index_notifications(depot: &mut Depot, req: &mut Request, res: &mut Res
             }));
         }
     }
-    res.render(Json(json!({
+    json_ok(json!({
         "actor": actor,
         "notifications": notifications,
         "items": notifications,
         "unread_count": notifications.len(),
         "next_cursor": Value::Null,
-    })));
+    }))
 }
 
 #[endpoint]
@@ -232,39 +223,23 @@ async fn index_inbox(depot: &mut Depot, res: &mut Response) {
     })));
 }
 
-#[endpoint]
-async fn index_search(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+#[endpoint(
+    operation_id = "cx.index.search",
+    tags("index"),
+    summary = "Substring-search messages + spaces for a query string"
+)]
+async fn index_search(body: JsonBody<Value>, depot: &mut Depot) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let body = match req.parse_json::<Value>().await {
-        Ok(value) => value,
-        Err(_) => {
-            render_error(
-                res,
-                StatusCode::BAD_REQUEST,
-                "bad_json",
-                "invalid search request",
-            );
-            return;
-        }
-    };
+    let body = body.into_inner();
     let query = body.get("query").and_then(Value::as_str).unwrap_or_default();
     if query.trim().is_empty() {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "missing_param",
-            "query is required",
-        );
-        return;
+        return Err(AppError::missing_param("query is required"));
     }
     let limit = body
         .get("limit")
         .and_then(Value::as_u64)
         .unwrap_or(20)
         .min(100) as usize;
-    // `object_kinds[]` filters by spec id-kind ("space", "message", "flow", …).
-    // The round-5 `entity_types[]` alias was dropped in round 6 along with
-    // the rest of the entity scaffold — callers MUST send `object_kinds[]`.
     let object_kinds = body
         .get("object_kinds")
         .and_then(Value::as_array)
@@ -291,13 +266,7 @@ async fn index_search(depot: &mut Depot, req: &mut Request, res: &mut Response) 
     let lower = query.to_lowercase();
     let mut results: Vec<Value> = Vec::new();
 
-    // Live-message search: scan the in-memory messages store and surface
-    // entries whose plaintext body matches the query string. This is enough
-    // for the workflow / index_search contract test; production search will
-    // back this with a real tokenized index.
     if include_message || object_kinds.is_empty() {
-        // Pull a generous slice from each requested space (or DEMO_SPACE_ID
-        // when no filter is provided) and filter in-process.
         let candidate_spaces: Vec<String> = if space_id_filter.is_empty() {
             vec![DEMO_SPACE_ID.to_owned()]
         } else {
@@ -351,46 +320,37 @@ async fn index_search(depot: &mut Depot, req: &mut Request, res: &mut Response) 
         }));
     }
     results.truncate(limit);
-    res.render(Json(json!({
+    json_ok(json!({
         "query": query,
         "results": results,
         "next_cursor": Value::Null,
-    })));
+    }))
 }
 
-#[endpoint]
-async fn index_space_hierarchy(_depot: &mut Depot, req: &mut Request, res: &mut Response) {
-    let Some(root_space_id) = query_param(req, "root_space_id") else {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "missing_param",
-            "root_space_id is required",
-        );
-        return;
-    };
-    res.render(Json(json!({
+#[endpoint(
+    operation_id = "cx.index.space_hierarchy",
+    tags("index"),
+    summary = "Walk the space hierarchy below a root space id"
+)]
+async fn index_space_hierarchy(
+    root_space_id: QueryParam<String, true>,
+) -> JsonResult<Value> {
+    let root_space_id = root_space_id.into_inner();
+    json_ok(json!({
         "root_space_id": root_space_id,
         "children": [],
         "next_cursor": Value::Null,
-    })));
+    }))
 }
 
-#[endpoint]
-async fn index_query(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+#[endpoint(
+    operation_id = "cx.index.query",
+    tags("index"),
+    summary = "Faceted projection query (renderer + filters + sort + cursor)"
+)]
+async fn index_query(body: JsonBody<Value>, depot: &mut Depot) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let body = match req.parse_json::<Value>().await {
-        Ok(value) => value,
-        Err(_) => {
-            render_error(
-                res,
-                StatusCode::BAD_REQUEST,
-                "bad_json",
-                "invalid index query request",
-            );
-            return;
-        }
-    };
+    let body = body.into_inner();
     let space_ids = body
         .get("space_ids")
         .and_then(Value::as_array)
@@ -415,15 +375,12 @@ async fn index_query(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let sort_value = body.get("sort").cloned().unwrap_or_else(|| json!("title_asc"));
     let filters = body.get("filters").cloned().unwrap_or_else(|| json!({}));
 
-    // Reject queries that ask for unknown facets — the renderer/facet contract
-    // is closed-set today; unknown facets surface as an empty result rather
-    // than a half-matched projection.
     let unsupported = facets
         .iter()
         .filter_map(Value::as_str)
         .any(|facet| !SUPPORTED_FACETS.contains(&facet));
     if unsupported {
-        res.render(Json(json!({
+        return json_ok(json!({
             "results": [],
             "next_cursor": Value::Null,
             "renderer": renderer,
@@ -432,30 +389,17 @@ async fn index_query(depot: &mut Depot, req: &mut Request, res: &mut Response) {
             "filters": filters,
             "frontier": {"limited": false, "result_count": 0},
             "production_gap": "facet_registry_lookup_and_projection_replay",
-        })));
-        return;
+        }));
     }
 
-    // Build a fingerprint of filters + sort so cursors are pinned to a query —
-    // a cursor obtained from one query must not be reused with a different
-    // filter/sort combo. We surface that as `invalid_cursor` (HTTP 400).
     let fingerprint = index_query_fingerprint(&filters, &sort_value, &facets, &renderer);
 
     let cursor_offset = if let Some(token) = cursor.as_deref() {
-        match parse_index_cursor(token, &fingerprint) {
-            Ok(offset) => offset,
-            Err(message) => {
-                render_error(res, StatusCode::BAD_REQUEST, "invalid_cursor", message);
-                return;
-            }
-        }
+        parse_index_cursor(token, &fingerprint).map_err(AppError::invalid_param)?
     } else {
         0
     };
 
-    // Snapshot the live space registry — the query operates over actual
-    // create-space results, not a static demo row, so structured filters and
-    // alphabetical sort can be exercised end-to-end.
     let space_snapshot: Vec<contrix_sdk::SpaceSearchEntry> = {
         let spaces = state.spaces.lock().expect("spaces lock");
         spaces
@@ -465,8 +409,6 @@ async fn index_query(depot: &mut Depot, req: &mut Request, res: &mut Response) {
             .collect()
     };
 
-    // Apply structured text filter when provided. `filters.text` does a
-    // case-insensitive substring match against title + description.
     let filter_text = filters
         .get("text")
         .and_then(Value::as_str)
@@ -479,10 +421,6 @@ async fn index_query(depot: &mut Depot, req: &mut Request, res: &mut Response) {
 
     let mut results: Vec<Value> = space_snapshot
         .into_iter()
-        // Soft-deleted spaces stay in the in-memory registry as tombstones so
-        // the lifecycle audit chain still resolves, but they MUST not show up
-        // in the index/query projection — the contract is that index probes
-        // observe only live entities.
         .filter(|space| !super::is_space_deleted(state, space.space_id.as_str()))
         .filter(|space| {
             if space_id_filter.is_empty() {
@@ -517,20 +455,11 @@ async fn index_query(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         })
         .collect();
 
-    // If we have no live rows (e.g. brand-new server) and the caller passed
-    // explicit `space_ids`, still surface a result row per requested id so
-    // the projection-binding test contract continues to work. Skip ids that
-    // refer to soft-deleted spaces — those MUST surface as empty results.
     if results.is_empty() && !space_id_filter.is_empty() {
         for space_id in &space_id_filter {
             if super::is_space_deleted(state, space_id) {
                 continue;
             }
-            // Treat ids referring to spaces that are missing from the live
-            // registry the same as soft-deleted ones when at least one space
-            // exists overall (so a freshly-launched server still gets the
-            // legacy scaffold row, but a server that has deleted the only
-            // matching space returns the empty set the test expects).
             let registry_known = {
                 let registry = state.spaces.lock().expect("spaces lock");
                 contrix_sdk::SpaceId::new(space_id.clone())
@@ -552,8 +481,6 @@ async fn index_query(depot: &mut Depot, req: &mut Request, res: &mut Response) {
             }));
         }
     }
-    // Demo-space fallback for the legacy projection-binding probe (only when
-    // no filters, no space_ids, and no real spaces exist).
     if results.is_empty() && space_id_filter.is_empty() && filter_text.is_none() {
         results.push(json!({
             "kind": "space",
@@ -577,7 +504,7 @@ async fn index_query(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     } else {
         None
     };
-    res.render(Json(json!({
+    json_ok(json!({
         "results": page,
         "next_cursor": next_cursor,
         "renderer": renderer,
@@ -588,7 +515,7 @@ async fn index_query(depot: &mut Depot, req: &mut Request, res: &mut Response) {
             "limited": has_more,
             "result_count": total,
         },
-    })));
+    }))
 }
 
 fn index_query_fingerprint(
@@ -629,9 +556,6 @@ fn parse_index_cursor(token: &str, expected_fingerprint: &str) -> Result<usize, 
 }
 
 fn apply_index_sort(results: &mut [Value], sort: &Value) {
-    // Accept three shapes: legacy string ("title_asc" / "title_desc"), a single
-    // {field, direction} object, or an array of those objects (only the first
-    // entry drives ordering for the scaffold).
     let (field, direction) = match sort {
         Value::String(s) => {
             if let Some(field) = s.strip_suffix("_asc") {
@@ -678,31 +602,22 @@ fn apply_index_sort(results: &mut [Value], sort: &Value) {
     });
 }
 
-#[endpoint]
-async fn index_debug_reducer(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+#[endpoint(
+    operation_id = "cx.index.debug_reducer",
+    tags("index"),
+    summary = "Debug: dump recent reducer events for a Space"
+)]
+async fn index_debug_reducer(
+    space_id: QueryParam<String, true>,
+    limit: QueryParam<usize, false>,
+    depot: &mut Depot,
+) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let Some(space_id) = query_param(req, "space_id") else {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "missing_param",
-            "space_id is required",
-        );
-        return;
-    };
+    let space_id = space_id.into_inner();
     if super::validate_space_id(&space_id).is_err() {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "invalid_param",
-            "invalid space_id",
-        );
-        return;
+        return Err(AppError::invalid_param("invalid space_id"));
     }
-    let limit = query_param(req, "limit")
-        .and_then(|value| value.parse::<usize>().ok())
-        .unwrap_or(20)
-        .clamp(1, 200);
+    let limit = limit.into_inner().unwrap_or(20).clamp(1, 200);
 
     let messages = state
         .persistence
@@ -723,7 +638,7 @@ async fn index_debug_reducer(depot: &mut Depot, req: &mut Request, res: &mut Res
         .collect();
     let latest_event_id = messages.last().map(|message| message.event_id.clone());
 
-    res.render(Json(json!({
+    json_ok(json!({
         "service_did": state.config.service_did.clone(),
         "space_id": space_id,
         "reducer_profile": "cx.reducer.v1",
@@ -735,5 +650,5 @@ async fn index_debug_reducer(depot: &mut Depot, req: &mut Request, res: &mut Res
         },
         "recent_events": projection_events,
         "production_gap": "durable_reducer_replay_and_conflict_records",
-    })));
+    }))
 }

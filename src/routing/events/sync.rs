@@ -37,7 +37,7 @@ use serde_json::json;
 use tokio::sync::broadcast::error::RecvError;
 
 use super::{
-    auth_or_render, authenticated_session, backfill_gap_events, default_discussion_track,
+    authenticated_session, backfill_gap_events, default_discussion_track,
     device_message_events_after, flow_id_from_space_id, flow_projection_for_space,
     is_space_deleted, now, parse_snapshot_ref, projected_event_page, projection_event_json,
     prune_acked_device_messages, prune_expired_typing, query_param, render_error, sha256_hex,
@@ -693,41 +693,27 @@ pub fn normalized_strings(values: &[String]) -> Vec<String> {
     values
 }
 
-#[endpoint]
-async fn set_typing(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+#[endpoint(
+    operation_id = "cx.sync.typing",
+    tags("sync"),
+    summary = "Set / clear the actor's typing-indicator ephemeral for a Space"
+)]
+async fn set_typing(
+    aa: crate::routing::system::extract::AuthArgs,
+    body: salvo::oapi::extract::JsonBody<SetTypingRequest>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> crate::result::JsonResult<SetTypingResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let Some(session) = auth_or_render(state, req, res) else {
-        return;
-    };
-    let body = match req.parse_json::<SetTypingRequest>().await {
-        Ok(body) => body,
-        Err(_) => {
-            render_error(
-                res,
-                StatusCode::BAD_REQUEST,
-                "bad_json",
-                "invalid typing request",
-            );
-            return;
-        }
-    };
+    let session = aa.authenticated_session(state, req)?;
+    let body = body.into_inner();
     if validate_space_id(&body.space_id).is_err() {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "invalid_param",
-            "invalid space_id",
-        );
-        return;
+        return Err(crate::error::AppError::invalid_param("invalid space_id"));
     }
     if !space_has_member(state, &body.space_id, &session.actor) {
-        render_error(
-            res,
-            StatusCode::FORBIDDEN,
-            "capability_denied",
+        return Err(crate::error::AppError::capability_denied(
             "actor is not a joined member of the space",
-        );
-        return;
+        ));
     }
 
     let expires_at = if body.typing {
@@ -752,13 +738,13 @@ async fn set_typing(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         None
     };
 
-    res.render(Json(SetTypingResponse {
+    crate::result::json_ok(SetTypingResponse {
         ok: true,
         space_id: body.space_id,
         actor: session.actor,
         typing: body.typing,
         expires_at,
-    }));
+    })
 }
 
 /// `cx.events.subscribe` at `GET /api/v1/events/subscribe`. NDJSON

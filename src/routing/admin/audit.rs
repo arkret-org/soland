@@ -7,12 +7,15 @@
 //!
 //! Both back onto `state.persistence.audit()` (see Tier 0 in `_todos.md`).
 
-use salvo::http::StatusCode;
+use salvo::oapi::extract::{JsonBody, QueryParam};
 use salvo::prelude::*;
 use serde_json::{Value, json};
 
-use super::{auth_or_render, now, query_param, render_error};
+use super::now;
+use crate::error::AppError;
 use crate::ids;
+use crate::result::{JsonResult, json_ok};
+use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
 
 pub(super) fn router() -> Router {
@@ -36,46 +39,32 @@ pub(super) fn router() -> Router {
 /// session actor (no cross-actor writes). The audit entry is appended
 /// via `append_audit_log` so it shows up in the same `audit/events`
 /// query a sodmin operator already runs.
-#[endpoint]
-async fn post_user_action(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+#[endpoint(
+    operation_id = "cx.audit.user_action",
+    tags("audit"),
+    summary = "Append a client-side user-action audit entry (Sprint Q1 P1)"
+)]
+async fn post_user_action(
+    aa: AuthArgs,
+    body: JsonBody<Value>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let Some(session) = auth_or_render(state, req, res) else {
-        return;
-    };
-    let body = match req.parse_json::<Value>().await {
-        Ok(body) => body,
-        Err(_) => {
-            render_error(
-                res,
-                StatusCode::BAD_REQUEST,
-                "bad_json",
-                "invalid user-action audit body",
-            );
-            return;
-        }
-    };
+    let session = aa.authenticated_session(state, req)?;
+    let body = body.into_inner();
     let actor = body
         .get("actor")
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_owned();
     if actor.is_empty() {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "invalid_param",
-            "actor is required",
-        );
-        return;
+        return Err(AppError::invalid_param("actor is required"));
     }
     if actor != session.actor {
-        render_error(
-            res,
-            StatusCode::FORBIDDEN,
-            "capability_denied",
+        return Err(AppError::capability_denied(
             "audit posts are limited to the authenticated actor",
-        );
-        return;
+        ));
     }
     let action = body
         .get("action")
@@ -83,13 +72,7 @@ async fn post_user_action(depot: &mut Depot, req: &mut Request, res: &mut Respon
         .unwrap_or("")
         .to_owned();
     if action.is_empty() {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "invalid_param",
-            "action is required",
-        );
-        return;
+        return Err(AppError::invalid_param("action is required"));
     }
     let outcome = body
         .get("outcome")
@@ -105,43 +88,40 @@ async fn post_user_action(depot: &mut Depot, req: &mut Request, res: &mut Respon
         "recorded_at": body.get("recorded_at").cloned().unwrap_or(Value::Null),
     });
     append_audit_log(state, Some(&actor), &action, target, outcome);
-    res.render(Json(json!({"ok": true})));
+    json_ok(json!({"ok": true}))
 }
 
-#[endpoint]
-async fn audit_events(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+#[endpoint(
+    operation_id = "cx.audit.events",
+    tags("audit"),
+    summary = "Actor-scoped audit query (cursor-paginated; actor MUST match session)"
+)]
+async fn audit_events(
+    aa: AuthArgs,
+    actor: QueryParam<String, false>,
+    limit: QueryParam<usize, false>,
+    cursor: QueryParam<String, false>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let Some(session) = auth_or_render(state, req, res) else {
-        return;
-    };
-    let actor = query_param(req, "actor").unwrap_or_else(|| session.actor.clone());
+    let session = aa.authenticated_session(state, req)?;
+    let actor = actor.into_inner().unwrap_or_else(|| session.actor.clone());
     if actor != session.actor {
-        render_error(
-            res,
-            StatusCode::FORBIDDEN,
-            "capability_denied",
+        return Err(AppError::capability_denied(
             "audit queries are limited to the authenticated actor",
-        );
-        return;
+        ));
     }
-    let limit = query_param(req, "limit")
-        .and_then(|value| value.parse::<usize>().ok())
-        .unwrap_or(100)
-        .clamp(1, 500);
-    let cursor = query_param(req, "cursor");
-    let mut events = match state.persistence.audit().list_for_actor(&actor) {
-        Ok(events) => events,
-        Err(error) => {
+    let limit = limit.into_inner().unwrap_or(100).clamp(1, 500);
+    let cursor = cursor.into_inner();
+    let mut events = state
+        .persistence
+        .audit()
+        .list_for_actor(&actor)
+        .map_err(|error| {
             tracing::error!(%error, "failed to read audit log");
-            render_error(
-                res,
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal_error",
-                "audit store unavailable",
-            );
-            return;
-        }
-    };
+            AppError::internal("audit store unavailable")
+        })?;
     let start = cursor
         .as_deref()
         .and_then(|cursor| {
@@ -166,10 +146,10 @@ async fn audit_events(depot: &mut Depot, req: &mut Request, res: &mut Response) 
                 .map(ToOwned::to_owned)
         })
         .flatten();
-    res.render(Json(json!({
+    json_ok(json!({
         "events": events,
         "next_cursor": next_cursor,
-    })));
+    }))
 }
 
 pub fn append_audit_log(

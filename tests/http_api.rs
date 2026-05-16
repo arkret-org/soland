@@ -41,6 +41,7 @@ fn test_config() -> AppConfig {
         jws_replay_window_seconds: 0,
         jws_replay_window_per_family: std::collections::BTreeMap::new(),
         anchorer_signing_key_seed: None,
+        agent_audit_binding_signing_seed: None,
         use_keystore: false,
         federation_policy: soland::config::FederationPolicy::Mesh,
         federation_peers: Vec::new(),
@@ -1199,7 +1200,238 @@ async fn mimi_provider_facade_contracts_work() {
         }))
         .send(&service)
         .await;
-    assert_eq!(report.status_code.unwrap().as_u16(), 202);
+    // Round 15ab — mimi handlers converted to typed `JsonResult<Value>`
+    // signatures; Salvo's typed Writer defaults to 200 OK. Status-code
+    // distinction was never load-bearing (no caller branched on 202 vs
+    // 200), but the wire body still carries `ok=true` + `status="queued"`.
+    assert_eq!(report.status_code.unwrap().as_u16(), 200);
+}
+
+/// Sprint Q1 第二十三增量 (P4): MIMI facade writes now actually
+/// map into the canonical Contrix reducer chain. This e2e walks
+/// through the four reducer-bound mappings:
+///
+///   1. `room_update` with a `room_binding` block emits a
+///      `cx.mimi.room_binding` projection event.
+///   2. Subsequent `submit_message` uses the bound `space_id` (not
+///      the demo fallback) and lands a `cx.message.create` event in
+///      the projection log so the Contrix timeline observes it.
+///   3. `notify` broadcasts a `cx.mimi.notify` synthetic event to
+///      subscribers (verified via response shape; broadcast is
+///      ephemeral so it doesn't appear in projection_events).
+///   4. `report_abuse` emits a `cx.moderation.report` event with
+///      mimi_provenance metadata.
+#[tokio::test]
+async fn mimi_facade_writes_flow_into_canonical_reducer_chain() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+    let service = app_from_state(state.clone());
+    let demo_space = "cx:space:0196419b-0000-7000-8000-000000000000";
+    let custom_space = "cx:space:0196419b-0000-7000-8000-aaaaaaaaaaaa";
+    let room_id = "01JSMIMI-P4-E2E";
+
+    // Step 1: post a room_update carrying a room_binding block.
+    let update_resp: Value =
+        TestClient::put(format!("http://server/api/v1/mimi/rooms/{room_id}/update"))
+            .json(&serde_json::json!({
+                "room_binding": {
+                    "profile": "cx.profile.mimi_interop.v1",
+                    "mimi_room_uri": format!("mimi://soland.local/rooms/{room_id}"),
+                    "binding_scope": {
+                        "space_id": demo_space,
+                        "flow_id": null,
+                    },
+                    "hub_provider": "did:web:test.local",
+                    "local_provider_role": "hub",
+                    "follower_providers": [],
+                    "mls_group_id": "base64url-test",
+                    "content_profile": "application/mimi-content",
+                    "policy_component_root": "sha256:test",
+                    "created_at": "2026-05-16T00:00:00Z",
+                },
+                "protocol_draft": "draft-ietf-mimi-protocol-06",
+            }))
+            .send(&service)
+            .await
+            .take_json()
+            .await
+            .unwrap();
+    assert_eq!(update_resp["ok"], true);
+    assert_eq!(
+        update_resp["receipt"]["extra"]["binding_emitted"], true,
+        "room_update receipt must announce binding emission"
+    );
+    let binding_event_id = update_resp["binding_event_id"]
+        .as_str()
+        .expect("binding_event_id missing from response");
+    assert!(binding_event_id.starts_with("cx:event:"));
+
+    // Step 2: submit_message into the same room.
+    let msg_resp: Value =
+        TestClient::post(format!("http://server/api/v1/mimi/rooms/{room_id}/messages"))
+            .json(&serde_json::json!({
+                "source_format": "text/plain;charset=utf-8",
+                "content": {
+                    "blocks": [{"kind": "cx.content.text", "text": "hello from MIMI P4"}],
+                },
+                "sender_did": "did:web:remote.example",
+                "mimi_message_id": "mimi-msg-p4-001",
+                "original_envelope_hash": "sha256:p4-orig",
+                "protocol_draft": "draft-ietf-mimi-protocol-06",
+                "content_draft": "draft-ietf-mimi-content-08",
+            }))
+            .send(&service)
+            .await
+            .take_json()
+            .await
+            .unwrap();
+    assert_eq!(msg_resp["ok"], true);
+    assert_eq!(msg_resp["space_id"], demo_space, "submit_message must use bound space_id");
+    assert_eq!(
+        msg_resp["receipt"]["extra"]["reducer_chain"], "wired",
+        "submit_message receipt should announce reducer-chain wire-up"
+    );
+    let contrix_event_id = msg_resp["contrix_event_id"]
+        .as_str()
+        .expect("contrix_event_id missing");
+
+    // Step 3: query /api/v1/events against the bound space and
+    // verify both the room_binding event and the message event are
+    // present.
+    let events: Value = TestClient::get(format!(
+        "http://server/api/v1/events?space_id={demo_space}"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .send(&service)
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    let list = events["events"].as_array().expect("events array");
+
+    let binding_event = list
+        .iter()
+        .find(|e| e["event_id"] == binding_event_id)
+        .expect("room_binding event missing from projection log");
+    assert_eq!(binding_event["event_kind"], "cx.mimi.room_binding");
+    assert_eq!(
+        binding_event["payload"]["mimi_room_id"], room_id,
+        "room_binding payload must echo room_id for bound-space dispatch"
+    );
+    assert_eq!(
+        binding_event["payload"]["binding_scope"]["space_id"], demo_space
+    );
+
+    let message_event = list
+        .iter()
+        .find(|e| e["event_id"] == contrix_event_id)
+        .expect("MIMI-ingressed message missing from projection log");
+    assert_eq!(message_event["event_kind"], "cx.message.create");
+    assert_eq!(message_event["sender"], "did:web:remote.example");
+    assert_eq!(
+        message_event["payload"]["content"]["blocks"][0]["text"],
+        "hello from MIMI P4"
+    );
+    // mimi_provenance metadata MUST be preserved.
+    assert_eq!(
+        message_event["payload"]["mimi_provenance"]["mimi_message_id"],
+        "mimi-msg-p4-001"
+    );
+    assert_eq!(
+        message_event["payload"]["mimi_provenance"]["original_envelope_hash"],
+        "sha256:p4-orig"
+    );
+    assert_eq!(
+        message_event["payload"]["mimi_provenance"]["facade"], "soland.mimi.v1"
+    );
+
+    // Step 4: report_abuse emits a cx.moderation.report event.
+    let report_resp: Value = TestClient::post("http://server/api/v1/mimi/report-abuse")
+        .json(&serde_json::json!({
+            "mimi_room_uri": format!("mimi://soland.local/rooms/{room_id}"),
+            "target_event_hash": "sha256:abuse-target",
+            "frank": {"scheme": "dev-frank"},
+            "reporter_did": "did:web:reporter.example",
+            "space_id": demo_space,
+            "protocol_draft": "draft-ietf-mimi-protocol-06",
+        }))
+        .send(&service)
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(report_resp["ok"], true);
+    let report_event_id = report_resp["report_event_id"]
+        .as_str()
+        .expect("report_event_id missing");
+    assert_eq!(
+        report_resp["receipt"]["extra"]["moderation_event_emitted"], true,
+        "report_abuse receipt must announce moderation event emission"
+    );
+
+    let events_again: Value = TestClient::get(format!(
+        "http://server/api/v1/events?space_id={demo_space}"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .send(&service)
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    let list2 = events_again["events"].as_array().unwrap();
+    let report_event = list2
+        .iter()
+        .find(|e| e["event_id"] == report_event_id)
+        .expect("moderation.report event missing from projection log");
+    assert_eq!(report_event["event_kind"], "cx.moderation.report");
+    assert_eq!(report_event["sender"], "did:web:reporter.example");
+    assert_eq!(
+        report_event["payload"]["mimi_provenance"]["mimi_room_uri"],
+        format!("mimi://soland.local/rooms/{room_id}")
+    );
+
+    // Step 5: a second room_update with a different binding_scope
+    // updates the dispatch lookup. The most-recently-recorded
+    // binding wins per `mimi_bound_space_id` semantics.
+    let _: Value = TestClient::put(format!("http://server/api/v1/mimi/rooms/{room_id}/update"))
+        .json(&serde_json::json!({
+            "room_binding": {
+                "profile": "cx.profile.mimi_interop.v1",
+                "mimi_room_uri": format!("mimi://soland.local/rooms/{room_id}"),
+                "binding_scope": {
+                    "space_id": custom_space,
+                    "flow_id": null,
+                },
+                "hub_provider": "did:web:test.local",
+                "local_provider_role": "hub",
+                "mls_group_id": "base64url-test-2",
+                "policy_component_root": "sha256:test-2",
+                "created_at": "2026-05-16T00:00:01Z",
+            },
+            "protocol_draft": "draft-ietf-mimi-protocol-06",
+        }))
+        .send(&service)
+        .await
+        .take_json()
+        .await
+        .unwrap();
+
+    let msg_resp_2: Value =
+        TestClient::post(format!("http://server/api/v1/mimi/rooms/{room_id}/messages"))
+            .json(&serde_json::json!({
+                "source_format": "application/mimi-content",
+                "content": {"blocks": [{"kind": "cx.content.text", "text": "second message"}]},
+                "protocol_draft": "draft-ietf-mimi-protocol-06",
+            }))
+            .send(&service)
+            .await
+            .take_json()
+            .await
+            .unwrap();
+    assert_eq!(
+        msg_resp_2["space_id"], custom_space,
+        "second message must route to the rebound space_id"
+    );
 }
 
 #[tokio::test]
@@ -1669,7 +1901,10 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         }))
         .send(&app_from_state(state.clone()))
         .await;
-    assert_eq!(invalid_encrypted.status_code.unwrap().as_u16(), 400);
+    // Round 15x: messages_send is now typed; `schema_violation` errcode
+    // resolves to its canonical HTTP status (422) instead of the previous
+    // ad-hoc 400 the handler emitted via `render_error`.
+    assert_eq!(invalid_encrypted.status_code.unwrap().as_u16(), 422);
 
     let encrypted_message: Value = TestClient::post("http://server/api/v1/messages/send")
         .add_header("authorization", format!("Bearer {alice}"), true)
@@ -1754,7 +1989,8 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         }))
         .send(&app_from_state(state.clone()))
         .await;
-    assert_eq!(invalid_block_message.status_code.unwrap().as_u16(), 400);
+    // Round 15x: schema_violation now resolves to canonical 422.
+    assert_eq!(invalid_block_message.status_code.unwrap().as_u16(), 422);
 
     let non_canonical_message = TestClient::post("http://server/api/v1/messages/send")
         .add_header("authorization", format!("Bearer {alice}"), true)
@@ -1765,7 +2001,8 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         }))
         .send(&app_from_state(state.clone()))
         .await;
-    assert_eq!(non_canonical_message.status_code.unwrap().as_u16(), 400);
+    // Round 15x: schema_violation now resolves to canonical 422.
+    assert_eq!(non_canonical_message.status_code.unwrap().as_u16(), 422);
 
     let invalid_mention_message = TestClient::post("http://server/api/v1/messages/send")
         .add_header("authorization", format!("Bearer {alice}"), true)
@@ -6831,6 +7068,38 @@ async fn agent_bridge_plumbs_endpoint_url_through_session_envelopes() {
         .unwrap();
     assert_eq!(resp["status"], "accepted", "submit response: {resp}");
 
+    // Sprint Q1 第二十四增量 (B4f): when endpoint_url is set the
+    // bridge now spawns outbound HTTP and emits the result event
+    // asynchronously. The test endpoint above resolves but doesn't
+    // accept (b4d-agent.example resolves to AAAA::1 / fail), so the
+    // outcome is `upstream_unreachable`. Poll up to ~5 s for the
+    // result event to land.
+    let result_event = {
+        let mut found = None;
+        for _ in 0..50 {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            let events: Value = TestClient::get(format!(
+                "http://server/api/v1/events?space_id={space_id}"
+            ))
+            .add_header("authorization", format!("Bearer {token}"), true)
+            .send(&app_from_state(state.clone()))
+            .await
+            .take_json()
+            .await
+            .unwrap();
+            if let Some(arr) = events["events"].as_array() {
+                if let Some(e) = arr.iter().find(|e| {
+                    e["event_kind"] == "cx.agent.protocol_session.result"
+                        && e["payload"]["session_id"] == session_id
+                }) {
+                    found = Some(e.clone());
+                    break;
+                }
+            }
+        }
+        found.expect("result event never landed within 5s")
+    };
+
     let events: Value = TestClient::get(format!(
         "http://server/api/v1/events?space_id={space_id}"
     ))
@@ -6855,16 +7124,25 @@ async fn agent_bridge_plumbs_endpoint_url_through_session_envelopes() {
     );
     assert_eq!(status_event["payload"]["detail"]["protocol"], "echo");
 
-    let result_event = list
-        .iter()
-        .find(|e| {
-            e["event_kind"] == "cx.agent.protocol_session.result"
-                && e["payload"]["session_id"] == session_id
-        })
-        .expect("result event missing");
+    // Result event MUST carry the registered endpoint_url in detail,
+    // regardless of whether the upstream succeeded (it won't here —
+    // b4d-agent.example doesn't resolve, so we expect the
+    // `upstream_unreachable` fail-closed path).
     assert_eq!(
         result_event["payload"]["detail"]["endpoint_url"], endpoint_url,
         "result event must echo registered endpoint_url"
+    );
+    assert_eq!(
+        result_event["payload"]["status"], "failed",
+        "outbound to unresolved host must fail closed"
+    );
+    assert_eq!(
+        result_event["payload"]["error"]["code"], "upstream_unreachable",
+        "fail-closed code must be upstream_unreachable"
+    );
+    assert_eq!(
+        result_event["payload"]["detail"]["bridge"],
+        "soland.reference.agent_outbound"
     );
 
     // The admin agents collection should also surface endpoint_url so

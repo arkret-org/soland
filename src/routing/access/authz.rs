@@ -13,17 +13,18 @@
 //! the 10 condition.kind types, the capability lattice, and grant/invite/policy
 //! lifecycle integration.
 
-use salvo::http::StatusCode;
-use salvo::oapi::extract::JsonBody;
+use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde_json::json;
 
-use super::{append_audit_log, auth_or_render, now, query_param, render_error};
+use super::{append_audit_log, now, query_param};
+use crate::error::AppError;
 use crate::result::{JsonResult, json_ok};
+use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
 use crate::wire::{
-    AuthzCheckRequest, AuthzCheckResponse, CreateGrantRequest, EffectiveGrantsResponse,
-    InvitesResponse,
+    AuthzCheckRequest, AuthzCheckResponse, CreateGrantRequest, CreateGrantResponse,
+    EffectiveGrantsResponse, InvitesResponse, RevokeGrantResponse,
 };
 
 pub(super) fn router() -> Router {
@@ -208,24 +209,20 @@ async fn effective_grants(
 
 // ── Grant CRUD ──
 
-#[endpoint]
-async fn create_grant(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+#[endpoint(
+    operation_id = "cx.authz.create_grant",
+    tags("authz"),
+    summary = "Create an owner-issued authorization grant"
+)]
+async fn create_grant(
+    aa: AuthArgs,
+    body: JsonBody<CreateGrantRequest>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<CreateGrantResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let Some(session) = auth_or_render(state, req, res) else {
-        return;
-    };
-    let body = match req.parse_json::<CreateGrantRequest>().await {
-        Ok(body) => body,
-        Err(_) => {
-            render_error(
-                res,
-                StatusCode::BAD_REQUEST,
-                "bad_json",
-                "invalid grant request",
-            );
-            return;
-        }
-    };
+    let session = aa.authenticated_session(state, req)?;
+    let body = body.into_inner();
     let constraints = body
         .constraints
         .into_iter()
@@ -253,30 +250,29 @@ async fn create_grant(depot: &mut Depot, req: &mut Request, res: &mut Response) 
         json!({"grant_id": grant.grant_id.clone(), "subject": grant.subject.clone()}),
         "accepted",
     );
-    res.render(Json(json!({
-        "grant_id": grant.grant_id,
-        "subject": grant.subject,
-        "actions": grant.actions,
-        "resource": grant.resource,
-        "created_at": grant.created_at.to_rfc3339()
-    })));
+    json_ok(CreateGrantResponse {
+        grant_id: grant.grant_id,
+        subject: grant.subject,
+        actions: grant.actions,
+        resource: grant.resource,
+        created_at: grant.created_at.to_rfc3339(),
+    })
 }
 
-#[endpoint]
-async fn revoke_grant(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+#[endpoint(
+    operation_id = "cx.authz.revoke_grant",
+    tags("authz"),
+    summary = "Revoke an existing authorization grant by id"
+)]
+async fn revoke_grant(
+    aa: AuthArgs,
+    grant_id: PathParam<String>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<RevokeGrantResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let Some(session) = auth_or_render(state, req, res) else {
-        return;
-    };
-    let Some(grant_id) = req.param::<String>("grant_id") else {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "missing_param",
-            "grant_id is required",
-        );
-        return;
-    };
+    let session = aa.authenticated_session(state, req)?;
+    let grant_id = grant_id.into_inner();
     if state.authz.revoke_grant(&grant_id) {
         append_audit_log(
             state,
@@ -285,9 +281,12 @@ async fn revoke_grant(depot: &mut Depot, req: &mut Request, res: &mut Response) 
             json!({"grant_id": grant_id.clone()}),
             "accepted",
         );
-        res.render(Json(json!({ "revoked": true, "grant_id": grant_id })));
+        json_ok(RevokeGrantResponse {
+            revoked: true,
+            grant_id,
+        })
     } else {
-        render_error(res, StatusCode::NOT_FOUND, "not_found", "grant not found");
+        Err(AppError::not_found("grant not found"))
     }
 }
 

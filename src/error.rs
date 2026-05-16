@@ -343,6 +343,13 @@ pub struct AppError {
     /// (`401` on missing token vs `403` on capability denial) sometimes need
     /// the override.
     pub status: Option<StatusCode>,
+    /// When set, overrides the wire-form `errcode` string. Use sparingly —
+    /// only for handlers whose pre-typed `render_error` path emitted a
+    /// non-canonical errcode that downstream clients (or tests) already
+    /// depend on (e.g. `unknown_schema`, `<kind>_not_active`,
+    /// `batch_not_supported`). New code should prefer a canonical
+    /// `ErrorCode` variant.
+    pub wire_code_override: Option<String>,
 }
 
 impl AppError {
@@ -351,6 +358,7 @@ impl AppError {
             code,
             message: message.into(),
             status: None,
+            wire_code_override: None,
         }
     }
 
@@ -359,10 +367,25 @@ impl AppError {
         self
     }
 
+    /// Override the on-wire `errcode` string. See `wire_code_override` for
+    /// the rationale + caveats.
+    pub fn with_wire_code(mut self, wire_code: impl Into<String>) -> Self {
+        self.wire_code_override = Some(wire_code.into());
+        self
+    }
+
     /// Resolve the HTTP status to use when rendering this error: explicit
     /// override first, then the registry binding.
     pub fn http_status(&self) -> StatusCode {
         self.status.unwrap_or_else(|| self.code.http_status())
+    }
+
+    /// Resolve the on-wire errcode string: explicit override first, then the
+    /// canonical mapping from the registry.
+    pub fn wire_errcode(&self) -> &str {
+        self.wire_code_override
+            .as_deref()
+            .unwrap_or_else(|| self.code.as_str())
     }
 
     // ── Convenience constructors for the most-used codes. The full
@@ -411,11 +434,24 @@ impl From<ErrorCode> for AppError {
     }
 }
 
+impl AppError {
+    /// Convenience: build an `AppError` with both an explicit HTTP status and
+    /// a non-canonical wire `errcode` override, for lifecycle paths whose
+    /// pre-typed `render_error` shape downstream clients already depend on.
+    pub fn legacy(status: StatusCode, wire_code: impl Into<String>, message: impl Into<String>) -> Self {
+        let wire_code = wire_code.into();
+        Self::new(ErrorCode::InvalidParam, message)
+            .with_status(status)
+            .with_wire_code(wire_code)
+    }
+}
+
 #[async_trait]
 impl Writer for AppError {
     async fn write(self, _req: &mut Request, _depot: &mut Depot, res: &mut Response) {
         let status = self.http_status();
-        render_error(res, status, self.code.as_str(), &self.message);
+        let wire = self.wire_errcode().to_owned();
+        render_error(res, status, &wire, &self.message);
     }
 }
 

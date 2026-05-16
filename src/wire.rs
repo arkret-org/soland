@@ -713,6 +713,18 @@ fn default_true() -> bool {
     true
 }
 
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
+pub struct PushRulesResponse {
+    pub rules: Vec<Value>,
+    pub next_cursor: Option<String>,
+}
+
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
+pub struct UpsertPushRuleResponse {
+    pub ok: bool,
+    pub rule: Value,
+}
+
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct UpsertPushRuleRequest {
     pub rule_id: String,
@@ -1575,6 +1587,32 @@ pub struct RelationResponse {
 pub struct ListRelationsRequest {
     pub space_id: String,
     pub relation_kind: Option<String>,
+}
+
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
+pub struct ListRelationsResponse {
+    pub relations: Vec<RelationResponse>,
+}
+
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
+pub struct DeleteRelationResponse {
+    pub deleted: bool,
+    pub relation_id: String,
+}
+
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
+pub struct CreateGrantResponse {
+    pub grant_id: String,
+    pub subject: String,
+    pub actions: Vec<String>,
+    pub resource: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
+pub struct RevokeGrantResponse {
+    pub revoked: bool,
+    pub grant_id: String,
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]

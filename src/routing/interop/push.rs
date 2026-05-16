@@ -32,8 +32,8 @@ use super::audit::append_audit_log;
 use super::auth::{SessionGrantValidationInput, validate_session_grant_binding};
 use super::push_outbound::{derive_push_gateway_service_base_url, join_api_v1_url};
 use super::{
-    auth_or_render, authenticated_session, now, render_error, sha256_hex,
-    validate_canonical_json_value, validate_no_removed_legacy_contracts,
+    authenticated_session, now, sha256_hex, validate_canonical_json_value,
+    validate_no_removed_legacy_contracts,
 };
 use crate::error::AppError;
 use crate::result::{JsonResult, json_ok};
@@ -42,7 +42,8 @@ use crate::persistence::DriftResult;
 use crate::state::{AppState, PushRuleRecord, SessionRecord};
 use crate::wire::{
     OkResponse, PushNotifyRequest, PushNotifyResponse, PushRegisterRequest, PushRegisterResponse,
-    PushUnregisterRequest, SessionGrantIntrospectionProof, UpsertPushRuleRequest,
+    PushRulesResponse, PushUnregisterRequest, SessionGrantIntrospectionProof,
+    UpsertPushRuleRequest, UpsertPushRuleResponse,
 };
 
 /// C33.1 (T0-3a): freshness budget for the persisted gateway-contract
@@ -52,29 +53,19 @@ use crate::wire::{
 /// no operator knob yet — bump here when the refresh worker lands.
 const PUSH_GATEWAY_CONTRACT_MAX_AGE_HOURS: i64 = 24;
 
-#[endpoint]
-pub(super) async fn push_register(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+#[endpoint(
+    operation_id = "cx.push.register_device",
+    tags("push"),
+    summary = "Register a device + push gateway token (bearer or session-grant bridge)"
+)]
+pub(super) async fn push_register(
+    body: JsonBody<PushRegisterRequest>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<PushRegisterResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let auth_result = authenticated_session(state, req);
-    let has_session_grant_header = req.headers().contains_key("x-contrix-session-grant");
-    if let Err((status, code, message)) = auth_result.as_ref()
-        && !has_session_grant_header
-    {
-        render_error(res, *status, code, message);
-        return;
-    }
-    let body = match req.parse_json::<PushRegisterRequest>().await {
-        Ok(body) => body,
-        Err(_) => {
-            render_error(
-                res,
-                StatusCode::BAD_REQUEST,
-                "bad_json",
-                "invalid push register request",
-            );
-            return;
-        }
-    };
+    let body = body.into_inner();
     let (session, auth_warning) = match auth_result {
         Ok(session) => (session, None),
         Err((status, code, message)) => match push_register_session_grant_bridge(state, req, &body)
@@ -88,23 +79,19 @@ pub(super) async fn push_register(depot: &mut Depot, req: &mut Request, res: &mu
                 ),
             ),
             Ok(None) => {
-                render_error(res, status, code, message);
-                return;
+                return Err(
+                    AppError::new(canonical_errcode(code), message).with_status(status),
+                );
             }
             Err((status, code, message)) => {
-                render_error(res, status, code, message);
-                return;
+                return Err(
+                    AppError::new(canonical_errcode(code), message).with_status(status),
+                );
             }
         },
     };
     if body.device_id.trim().is_empty() {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "invalid_param",
-            "invalid device_id",
-        );
-        return;
+        return Err(AppError::invalid_param("invalid device_id"));
     }
     let registration_id = format!("cx:push:{}", body.device_id);
     let principal_did = body.principal_did.clone();
@@ -138,14 +125,28 @@ pub(super) async fn push_register(depot: &mut Depot, req: &mut Request, res: &mu
     })) {
         tracing::error!(%error, "failed to persist push device registration");
     }
-    res.render(Json(PushRegisterResponse {
+    json_ok(PushRegisterResponse {
         ok: true,
         registration_id: Some(registration_id),
         expires_at: None,
         accepted_gateway: Some(body.push_gateway),
         request_id: body.request_id,
         warnings,
-    }));
+    })
+}
+
+/// Map the legacy `(status, code, message)` triplet produced by
+/// `authenticated_session` + `push_register_session_grant_bridge` to a
+/// canonical `ErrorCode`. The lookup is fast and lossless because both call
+/// sites only emit a small closed set.
+fn canonical_errcode(wire: &str) -> crate::error::ErrorCode {
+    use crate::error::ErrorCode;
+    match wire {
+        "missing_auth" | "unauthenticated" => ErrorCode::Unauthenticated,
+        "invalid_header" | "invalid_param" | "missing_param" => ErrorCode::InvalidParam,
+        "session_expired" => ErrorCode::SyncTokenExpired,
+        _ => ErrorCode::InternalError,
+    }
 }
 
 #[endpoint(
@@ -159,12 +160,18 @@ pub(super) async fn push_unregister(
     json_ok(OkResponse { ok: true })
 }
 
-#[endpoint]
-pub(super) async fn push_rules(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+#[endpoint(
+    operation_id = "cx.push.rules",
+    tags("push"),
+    summary = "List push notification rules for the authenticated actor"
+)]
+pub(super) async fn push_rules(
+    aa: AuthArgs,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<PushRulesResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let Some(session) = auth_or_render(state, req, res) else {
-        return;
-    };
+    let session = aa.authenticated_session(state, req)?;
     let rules = state
         .persistence
         .push_rules()
@@ -173,42 +180,31 @@ pub(super) async fn push_rules(depot: &mut Depot, req: &mut Request, res: &mut R
         .iter()
         .map(push_rule_to_json)
         .collect::<Vec<_>>();
-    res.render(Json(json!({
-        "rules": rules,
-        "next_cursor": null,
-    })));
+    json_ok(PushRulesResponse {
+        rules,
+        next_cursor: None,
+    })
 }
 
-#[endpoint]
-pub(super) async fn upsert_push_rule(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+#[endpoint(
+    operation_id = "cx.push.upsert_rule",
+    tags("push"),
+    summary = "Idempotently create or update a push notification rule"
+)]
+pub(super) async fn upsert_push_rule(
+    aa: AuthArgs,
+    body: JsonBody<UpsertPushRuleRequest>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<UpsertPushRuleResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let Some(session) = auth_or_render(state, req, res) else {
-        return;
-    };
-    let body = match req.parse_json::<UpsertPushRuleRequest>().await {
-        Ok(body) => body,
-        Err(_) => {
-            render_error(
-                res,
-                StatusCode::BAD_REQUEST,
-                "bad_json",
-                "invalid push rule request",
-            );
-            return;
-        }
-    };
+    let session = aa.authenticated_session(state, req)?;
+    let body = body.into_inner();
     if !is_valid_push_rule_id(&body.rule_id) {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "invalid_param",
-            "invalid push rule id",
-        );
-        return;
+        return Err(AppError::invalid_param("invalid push rule id"));
     }
     if let Err(message) = validate_canonical_json_value(&body.conditions) {
-        render_error(res, StatusCode::BAD_REQUEST, "invalid_param", message);
-        return;
+        return Err(AppError::invalid_param(message));
     }
     let actions = if body.actions.is_empty() {
         vec!["notify".to_owned()]
@@ -217,13 +213,7 @@ pub(super) async fn upsert_push_rule(depot: &mut Depot, req: &mut Request, res: 
         for action in body.actions {
             let action = action.trim().to_owned();
             if !is_supported_push_action(&action) {
-                render_error(
-                    res,
-                    StatusCode::BAD_REQUEST,
-                    "invalid_param",
-                    "unsupported push rule action",
-                );
-                return;
+                return Err(AppError::invalid_param("unsupported push rule action"));
             }
             actions.push(action);
         }
@@ -237,20 +227,15 @@ pub(super) async fn upsert_push_rule(depot: &mut Depot, req: &mut Request, res: 
         conditions: body.conditions,
         updated_at: now(),
     };
-    if let Err(error) = state.persistence.push_rules().put(rule.clone()) {
-        tracing::error!(%error, "failed to persist push rule");
-        render_error(
-            res,
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "internal_error",
-            "push rules store unavailable",
-        );
-        return;
-    }
-    res.render(Json(json!({
-        "ok": true,
-        "rule": push_rule_to_json(&rule),
-    })));
+    state
+        .persistence
+        .push_rules()
+        .put(rule.clone())
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    json_ok(UpsertPushRuleResponse {
+        ok: true,
+        rule: push_rule_to_json(&rule),
+    })
 }
 
 #[endpoint(

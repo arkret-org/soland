@@ -5,7 +5,7 @@ pub(super) mod policy;
 
 use super::system::describe;
 use super::{
-    append_audit_log, auth_or_render, is_valid_sha256_digest, now, query_param, render_error,
+    append_audit_log, is_valid_sha256_digest, now, query_param,
     sha256_hex, validate_canonical_json_value, validate_did, validate_space_id,
 };
 

@@ -33,11 +33,13 @@
 //!   advertised (instead of the fixed `cx.push.notify` defaults). Stays
 //!   read-only here — the actual binding lives in the delivery loop.
 
-use salvo::http::StatusCode;
+use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde_json::{Value, json};
 
-use super::{now, render_error, sha256_hex};
+use super::{now, sha256_hex};
+use crate::error::AppError;
+use crate::result::{JsonResult, json_ok};
 use crate::state::{AppState, OutboundPushBridgeCacheRecord};
 use crate::wire::{
     OutboundPushBridgeCacheEntry, OutboundPushBridgeCacheExportResponse,
@@ -161,42 +163,27 @@ async fn outbound_push_bridge_describe(depot: &mut Depot, res: &mut Response) {
     }));
 }
 
-#[endpoint]
-async fn outbound_push_bridge_resolve(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+#[endpoint(
+    operation_id = "cx.push.outbound_bridge_resolve",
+    tags("push"),
+    summary = "Resolve a push gateway URL to a cached contract snapshot"
+)]
+async fn outbound_push_bridge_resolve(
+    body: JsonBody<OutboundPushBridgeResolveRequest>,
+    depot: &mut Depot,
+) -> JsonResult<OutboundPushBridgeResolveResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let body = match req.parse_json::<OutboundPushBridgeResolveRequest>().await {
-        Ok(body) => body,
-        Err(_) => {
-            render_error(
-                res,
-                StatusCode::BAD_REQUEST,
-                "bad_json",
-                "invalid outbound push bridge resolve request",
-            );
-            return;
-        }
-    };
+    let body = body.into_inner();
 
     let push_gateway_url = body.push_gateway_url.trim().to_owned();
     if push_gateway_url.is_empty() {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "invalid_param",
-            "push_gateway_url is required",
-        );
-        return;
+        return Err(AppError::invalid_param("push_gateway_url is required"));
     }
 
-    let Some(service_base_url) = derive_push_gateway_service_base_url(&push_gateway_url) else {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "invalid_param",
-            "push_gateway_url must be an absolute push gateway URL",
-        );
-        return;
-    };
+    let service_base_url = derive_push_gateway_service_base_url(&push_gateway_url)
+        .ok_or_else(|| {
+            AppError::invalid_param("push_gateway_url must be an absolute push gateway URL")
+        })?;
     let bridge_describe_url = join_api_v1_url(&service_base_url, "/api/v1/push/bridge/describe");
     let cached = state
         .persistence
@@ -209,7 +196,7 @@ async fn outbound_push_bridge_resolve(depot: &mut Depot, req: &mut Request, res:
         .map(|record| outbound_push_resolved_contract_from_remote(&record.remote_contract))
         .unwrap_or_else(default_outbound_push_resolved_contract);
 
-    res.render(Json(OutboundPushBridgeResolveResponse {
+    json_ok(OutboundPushBridgeResolveResponse {
         push_gateway_url,
         service_base_url,
         bridge_describe_url,
@@ -234,44 +221,29 @@ async fn outbound_push_bridge_resolve(depot: &mut Depot, req: &mut Request, res:
             .unwrap_or_else(|| "scaffold-static".to_owned()),
         fetched_contract,
         todos: Vec::new(),
-    }));
+    })
 }
 
-#[endpoint]
-async fn outbound_push_bridge_fetch(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+#[endpoint(
+    operation_id = "cx.push.outbound_bridge_fetch",
+    tags("push"),
+    summary = "Live-fetch the upstream push bridge contract + populate the durable cache"
+)]
+async fn outbound_push_bridge_fetch(
+    body: JsonBody<OutboundPushBridgeFetchRequest>,
+    depot: &mut Depot,
+) -> JsonResult<OutboundPushBridgeFetchResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let body = match req.parse_json::<OutboundPushBridgeFetchRequest>().await {
-        Ok(body) => body,
-        Err(_) => {
-            render_error(
-                res,
-                StatusCode::BAD_REQUEST,
-                "bad_json",
-                "invalid outbound push bridge fetch request",
-            );
-            return;
-        }
-    };
+    let body = body.into_inner();
 
     let push_gateway_url = body.push_gateway_url.trim().to_owned();
     if push_gateway_url.is_empty() {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "invalid_param",
-            "push_gateway_url is required",
-        );
-        return;
+        return Err(AppError::invalid_param("push_gateway_url is required"));
     }
-    let Some(service_base_url) = derive_push_gateway_service_base_url(&push_gateway_url) else {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "invalid_param",
-            "push_gateway_url must be an absolute push gateway URL",
-        );
-        return;
-    };
+    let service_base_url = derive_push_gateway_service_base_url(&push_gateway_url)
+        .ok_or_else(|| {
+            AppError::invalid_param("push_gateway_url must be an absolute push gateway URL")
+        })?;
     let bridge_describe_url = join_api_v1_url(&service_base_url, "/api/v1/push/bridge/describe");
     let existing_cache = state
         .persistence
@@ -284,14 +256,10 @@ async fn outbound_push_bridge_fetch(depot: &mut Depot, req: &mut Request, res: &
         if let Some(record) = existing_cache.clone() {
             let mut response = outbound_push_bridge_fetch_response_from_cache(record.clone());
             if is_cache_entry_stale(state, &record) {
-                // Downgrade to `stale`; outbound delivery treats this the
-                // same as `pending` and refuses to bind signed delivery until
-                // a fresh fetch lands.
                 response.trust_level = "stale".to_owned();
                 response.fetch_state = "cache_hit_stale".to_owned();
             }
-            res.render(Json(response));
-            return;
+            return json_ok(response);
         }
     }
 
@@ -315,15 +283,13 @@ async fn outbound_push_bridge_fetch(depot: &mut Depot, req: &mut Request, res: &
                     );
                     if let Some(existing) = existing_cache.clone() {
                         if existing.contract_digest != contract_digest && !body.force_refresh {
-                            render_outbound_push_bridge_fetch_fallback(
+                            return json_ok(outbound_push_bridge_fetch_fallback(
                                 Some(existing),
                                 push_gateway_url,
                                 service_base_url,
                                 bridge_describe_url,
                                 "contract_drift_detected_force_refresh_required".to_owned(),
-                                res,
-                            );
-                            return;
+                            ));
                         }
                     }
                     let fetched_at = now();
@@ -350,56 +316,47 @@ async fn outbound_push_bridge_fetch(depot: &mut Depot, req: &mut Request, res: &
                     {
                         tracing::error!(%error, "failed to persist push bridge cache entry");
                     }
-                    res.render(Json(OutboundPushBridgeFetchResponse {
-                    push_gateway_url,
-                    service_base_url,
-                    bridge_describe_url,
-                    fetch_state: record.fetch_state.clone(),
-                    cache_state: record.cache_state.clone(),
-                    contract_digest,
-                    fetched_at: Some(record.fetched_at),
-                    fetched_contract: outbound_push_resolved_contract_from_remote(
-                        &record.remote_contract,
-                    ),
-                    remote_contract: Some(remote_contract),
-                    trust_level: record.trust_level.clone(),
-                    freshness_at: Some(record.freshness_at),
-                    etag,
-                    todos: Vec::new(),
-                }));
-                }
-                Err(error) => {
-                    render_outbound_push_bridge_fetch_fallback(
-                        existing_cache,
+                    json_ok(OutboundPushBridgeFetchResponse {
                         push_gateway_url,
                         service_base_url,
                         bridge_describe_url,
-                        format!("live_remote_fetch_bad_json:{error}"),
-                        res,
-                    );
+                        fetch_state: record.fetch_state.clone(),
+                        cache_state: record.cache_state.clone(),
+                        contract_digest,
+                        fetched_at: Some(record.fetched_at),
+                        fetched_contract: outbound_push_resolved_contract_from_remote(
+                            &record.remote_contract,
+                        ),
+                        remote_contract: Some(remote_contract),
+                        trust_level: record.trust_level.clone(),
+                        freshness_at: Some(record.freshness_at),
+                        etag,
+                        todos: Vec::new(),
+                    })
                 }
+                Err(error) => json_ok(outbound_push_bridge_fetch_fallback(
+                    existing_cache,
+                    push_gateway_url,
+                    service_base_url,
+                    bridge_describe_url,
+                    format!("live_remote_fetch_bad_json:{error}"),
+                )),
             }
         }
-        Ok(response) => {
-            render_outbound_push_bridge_fetch_fallback(
-                existing_cache,
-                push_gateway_url,
-                service_base_url,
-                bridge_describe_url,
-                format!("live_remote_fetch_http_error:{}", response.status()),
-                res,
-            );
-        }
-        Err(error) => {
-            render_outbound_push_bridge_fetch_fallback(
-                existing_cache,
-                push_gateway_url,
-                service_base_url,
-                bridge_describe_url,
-                format!("live_remote_fetch_transport_error:{error}"),
-                res,
-            );
-        }
+        Ok(response) => json_ok(outbound_push_bridge_fetch_fallback(
+            existing_cache,
+            push_gateway_url,
+            service_base_url,
+            bridge_describe_url,
+            format!("live_remote_fetch_http_error:{}", response.status()),
+        )),
+        Err(error) => json_ok(outbound_push_bridge_fetch_fallback(
+            existing_cache,
+            push_gateway_url,
+            service_base_url,
+            bridge_describe_url,
+            format!("live_remote_fetch_transport_error:{error}"),
+        )),
     }
 }
 
@@ -435,28 +392,17 @@ async fn outbound_push_bridge_cache_export(depot: &mut Depot, res: &mut Response
     }));
 }
 
-#[endpoint]
+#[endpoint(
+    operation_id = "cx.push.outbound_bridge_cache_import",
+    tags("push"),
+    summary = "Import push bridge cache snapshots (replace_existing toggle)"
+)]
 async fn outbound_push_bridge_cache_import(
+    body: JsonBody<OutboundPushBridgeCacheImportRequest>,
     depot: &mut Depot,
-    req: &mut Request,
-    res: &mut Response,
-) {
+) -> JsonResult<OutboundPushBridgeCacheImportResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let body = match req
-        .parse_json::<OutboundPushBridgeCacheImportRequest>()
-        .await
-    {
-        Ok(body) => body,
-        Err(_) => {
-            render_error(
-                res,
-                StatusCode::BAD_REQUEST,
-                "bad_json",
-                "invalid outbound push bridge cache import request",
-            );
-            return;
-        }
-    };
+    let body = body.into_inner();
     let replace_existing = body.replace_existing;
     let cache = state.persistence.push_bridge_cache();
     let mut imported_count = 0usize;
@@ -492,7 +438,7 @@ async fn outbound_push_bridge_cache_import(
         imported_count += 1;
     }
     let total_entries = cache.len().unwrap_or(0);
-    res.render(Json(OutboundPushBridgeCacheImportResponse {
+    json_ok(OutboundPushBridgeCacheImportResponse {
         imported_count,
         skipped_count,
         total_entries,
@@ -505,22 +451,20 @@ async fn outbound_push_bridge_cache_import(
             "imported_merge_preserve_existing".to_owned()
         },
         todos: Vec::new(),
-    }));
+    })
 }
 
-#[endpoint]
+#[endpoint(
+    operation_id = "cx.push.outbound_bridge_cache_invalidate",
+    tags("push"),
+    summary = "Invalidate one or all push bridge cache entries"
+)]
 async fn outbound_push_bridge_cache_invalidate(
+    body: JsonBody<OutboundPushBridgeCacheInvalidateRequest>,
     depot: &mut Depot,
-    req: &mut Request,
-    res: &mut Response,
-) {
+) -> JsonResult<OutboundPushBridgeCacheInvalidateResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let body = req
-        .parse_json::<OutboundPushBridgeCacheInvalidateRequest>()
-        .await
-        .unwrap_or(OutboundPushBridgeCacheInvalidateRequest {
-            push_gateway_url: None,
-        });
+    let body = body.into_inner();
     let cache = state.persistence.push_bridge_cache();
     let removed_count = if let Some(push_gateway_url) = body
         .push_gateway_url
@@ -539,7 +483,7 @@ async fn outbound_push_bridge_cache_invalidate(
         cache.clear().unwrap_or(0)
     };
     let remaining_entries = cache.len().unwrap_or(0);
-    res.render(Json(OutboundPushBridgeCacheInvalidateResponse {
+    json_ok(OutboundPushBridgeCacheInvalidateResponse {
         removed_count,
         remaining_entries,
         cache_state: if remaining_entries == 0 {
@@ -547,7 +491,7 @@ async fn outbound_push_bridge_cache_invalidate(
         } else {
             "partially_retained".to_owned()
         },
-    }));
+    })
 }
 
 pub(super) fn derive_push_gateway_service_base_url(push_gateway_url: &str) -> Option<String> {
@@ -783,22 +727,20 @@ fn outbound_push_bridge_fetch_response_from_cache(
     }
 }
 
-fn render_outbound_push_bridge_fetch_fallback(
+fn outbound_push_bridge_fetch_fallback(
     existing_cache: Option<OutboundPushBridgeCacheRecord>,
     push_gateway_url: String,
     service_base_url: String,
     bridge_describe_url: String,
     fetch_state: String,
-    res: &mut Response,
-) {
+) -> OutboundPushBridgeFetchResponse {
     if let Some(record) = existing_cache {
         let mut response = outbound_push_bridge_fetch_response_from_cache(record);
         response.fetch_state = format!("{fetch_state}:stale_cache_returned");
-        res.render(Json(response));
-        return;
+        return response;
     }
 
-    res.render(Json(OutboundPushBridgeFetchResponse {
+    OutboundPushBridgeFetchResponse {
         push_gateway_url,
         service_base_url,
         bridge_describe_url,
@@ -812,5 +754,5 @@ fn render_outbound_push_bridge_fetch_fallback(
         freshness_at: None,
         etag: String::new(),
         todos: Vec::new(),
-    }));
+    }
 }

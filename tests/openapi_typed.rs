@@ -38,6 +38,7 @@ fn test_config() -> AppConfig {
         jws_replay_window_seconds: 0,
         jws_replay_window_per_family: std::collections::BTreeMap::new(),
         anchorer_signing_key_seed: None,
+        agent_audit_binding_signing_seed: None,
         use_keystore: false,
         federation_policy: soland::config::FederationPolicy::Mesh,
         federation_peers: Vec::new(),
@@ -394,6 +395,111 @@ async fn typed_describe_handlers_publish_response_schemas() {
         assert!(
             body.contains(&format!("operationId: {operation_id}")),
             "missing operationId {operation_id} from round 15p typed conversion"
+        );
+    }
+
+    // Round 15q-15x — bulk batch covering spaces/{directory,relation,index},
+    // events/messages, interop/{push,push_outbound,moderation}, admin/{audit,collection}.
+    // Schema assertions: only the brand-new wire types (existing ones were
+    // already asserted in earlier rounds, or are publicly stable enough
+    // through their handler tags).
+    for typed_now in [
+        "ListRelationsResponse",
+        "DeleteRelationResponse",
+        "PushRulesResponse",
+        "UpsertPushRuleResponse",
+    ] {
+        assert!(
+            body.contains(typed_now),
+            "{typed_now} missing — round 15q-15x typed signature did not publish its schema"
+        );
+    }
+    for operation_id in [
+        "cx.directory.search_spaces",
+        "cx.directory.resolve_space",
+        "cx.directory.search_organizations",
+        "cx.directory.resolve_organization",
+        "cx.directory.search_actors",
+        "cx.directory.search_users",
+        "cx.directory.resolve_handle",
+        "cx.relation.create",
+        "cx.relation.delete",
+        "cx.relation.list",
+        "cx.index.object",
+        "cx.index.thread",
+        "cx.index.notifications",
+        "cx.index.search",
+        "cx.index.space_hierarchy",
+        "cx.index.query",
+        "cx.index.debug_reducer",
+        "cx.messages.send",
+        "cx.push.register_device",
+        "cx.push.rules",
+        "cx.push.upsert_rule",
+        "cx.push.outbound_bridge_resolve",
+        "cx.push.outbound_bridge_fetch",
+        "cx.push.outbound_bridge_cache_import",
+        "cx.push.outbound_bridge_cache_invalidate",
+        "cx.audit.user_action",
+        "cx.audit.events",
+        "cx.admin.collection",
+    ] {
+        assert!(
+            body.contains(&format!("operationId: {operation_id}")),
+            "missing operationId {operation_id} from round 15q-15x typed conversion"
+        );
+    }
+
+    // Round 15z — events/sync.rs::set_typing (only sync.rs handler converted
+    // in this slice; rest of sync.rs is too entangled with cursor/stream
+    // helpers to migrate without scope creep).
+    assert!(
+        body.contains("operationId: cx.sync.typing"),
+        "missing operationId cx.sync.typing from round 15z typed conversion"
+    );
+    assert!(
+        body.contains("SetTypingRequest"),
+        "SetTypingRequest missing — round 15z typed signature did not publish its schema"
+    );
+    assert!(
+        body.contains("SetTypingResponse"),
+        "SetTypingResponse missing — round 15z typed signature did not publish its schema"
+    );
+
+    // Round 15ab — interop/mimi.rs typed batch (10 handlers; mimi_protocol_directory
+    // + mimi_provider_directory kept as-is — they return a static JSON Value with
+    // no error paths). All response shapes are `Value` so no schema names assert;
+    // we lock the operation_ids instead.
+    for operation_id in [
+        "cx.mimi.key_material",
+        "cx.mimi.room_update",
+        "cx.mimi.notify",
+        "cx.mimi.submit_message",
+        "cx.mimi.group_info",
+        "cx.mimi.request_consent",
+        "cx.mimi.update_consent",
+        "cx.mimi.identifier_query",
+        "cx.mimi.report_abuse",
+        "cx.mimi.proxy_download",
+    ] {
+        assert!(
+            body.contains(&format!("operationId: {operation_id}")),
+            "missing operationId {operation_id} from round 15ab typed conversion"
+        );
+    }
+
+    // Round 15aa — access/authz.rs::{create_grant, revoke_grant} typed.
+    // New CreateGrantResponse + RevokeGrantResponse wire types.
+    for typed_now in ["CreateGrantResponse", "RevokeGrantResponse"] {
+        assert!(
+            body.contains(typed_now),
+            "{typed_now} missing — round 15aa typed signature did not publish its schema"
+        );
+    }
+    for operation_id in ["cx.authz.create_grant", "cx.authz.revoke_grant"] {
+        assert!(
+            body.contains(&format!("operationId: {operation_id}")),
+            "missing operationId {operation_id} from round 15aa typed conversion"
         );
     }
 }

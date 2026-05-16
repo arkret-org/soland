@@ -14,76 +14,59 @@
 
 use std::collections::BTreeMap;
 
-use salvo::http::StatusCode;
+use salvo::oapi::extract::{PathParam, QueryParam};
 use salvo::prelude::*;
 use serde_json::{Value, json};
 
 use super::{
-    append_audit_log, auth_or_render, demo_actors, device_inventory_to_json,
+    append_audit_log, demo_actors, device_inventory_to_json,
     discussion_track_for_projection_event, flow_id_for_projection_event, flow_id_from_space_id,
     flow_projection_for_space, policy_document_to_response, projection_event_from_operation,
-    query_param, render_error, sha256_hex,
+    sha256_hex,
 };
+use crate::error::AppError;
 use crate::kinds;
+use crate::result::{JsonResult, json_ok};
+use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
 
-#[endpoint]
-pub(super) async fn admin_collection(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+#[endpoint(
+    operation_id = "cx.admin.collection",
+    tags("admin"),
+    summary = "Dev-only paginated admin snapshot of a named collection"
+)]
+pub(super) async fn admin_collection(
+    aa: AuthArgs,
+    resource: PathParam<String>,
+    limit: QueryParam<usize, false>,
+    cursor: QueryParam<String, false>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let Some(session) = auth_or_render(state, req, res) else {
-        return;
-    };
+    let session = aa.authenticated_session(state, req)?;
     if !state.config.development_mode && !state.config.is_admin_principal(&session.actor) {
-        render_error(
-            res,
-            StatusCode::FORBIDDEN,
-            "capability_denied",
+        return Err(AppError::capability_denied(
             "admin collection API requires the caller DID to be listed in SOLAND_ADMIN_PRINCIPAL_DIDS",
-        );
-        return;
+        ));
     }
-    // Round 9: layer the per-scope check on top of the principal-DID
-    // allowlist. The ADMIN_READ scope is granted to every well-known
-    // admin DID in development_mode; production deployments require
-    // explicit grant via the upstream IdP.
-    match super::introspect_admin_scopes(state, req, &session).await {
-        Ok(grant) => {
-            if !grant.has_admin_scope(contrix_sdk::admin_scopes::ADMIN_READ) {
-                render_error(
-                    res,
-                    StatusCode::FORBIDDEN,
-                    "capability_denied",
-                    "admin collection API requires admin.read scope",
-                );
-                return;
-            }
-        }
-        Err(error) => {
-            render_error(
-                res,
-                error.http_status(),
-                "capability_denied",
-                &format!("admin scope check failed: {error}"),
-            );
-            return;
-        }
+    let grant = super::introspect_admin_scopes(state, req, &session)
+        .await
+        .map_err(|error| {
+            let http = error.http_status();
+            AppError::capability_denied(format!("admin scope check failed: {error}"))
+                .with_status(http)
+        })?;
+    if !grant.has_admin_scope(contrix_sdk::admin_scopes::ADMIN_READ) {
+        return Err(AppError::capability_denied(
+            "admin collection API requires admin.read scope",
+        ));
     }
-    let Some(resource) = req.param::<String>("resource") else {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "missing_param",
-            "admin resource is required",
-        );
-        return;
-    };
+    let resource = resource.into_inner();
     let default_limit = state.config.admin_default_page_limit;
     let max_limit = state.config.admin_max_page_limit;
-    let limit = query_param(req, "limit")
-        .and_then(|value| value.parse::<usize>().ok())
-        .unwrap_or(default_limit)
-        .clamp(1, max_limit);
-    let cursor = query_param(req, "cursor");
+    let limit = limit.into_inner().unwrap_or(default_limit).clamp(1, max_limit);
+    let cursor = cursor.into_inner();
 
     let (field, mut items) = match resource.as_str() {
         "actors" => ("actors", admin_actor_items(state)),
@@ -109,29 +92,14 @@ pub(super) async fn admin_collection(depot: &mut Depot, req: &mut Request, res: 
         "policy" => ("policy", admin_policy_items(state)),
         "media" => ("media", admin_media_items(state)),
         _ => {
-            render_error(
-                res,
-                StatusCode::NOT_FOUND,
-                "not_found",
-                "admin resource not found",
-            );
-            return;
+            return Err(AppError::not_found("admin resource not found"));
         }
     };
     items.sort_by(|left, right| left.to_string().cmp(&right.to_string()));
     let start = match cursor.as_deref() {
-        Some(raw) => match raw.parse::<usize>() {
-            Ok(offset) => offset,
-            Err(_) => {
-                render_error(
-                    res,
-                    StatusCode::BAD_REQUEST,
-                    "invalid_param",
-                    "invalid cursor",
-                );
-                return;
-            }
-        },
+        Some(raw) => raw
+            .parse::<usize>()
+            .map_err(|_| AppError::invalid_param("invalid cursor"))?,
         None => 0,
     };
     let total = items.len();
@@ -164,7 +132,7 @@ pub(super) async fn admin_collection(depot: &mut Depot, req: &mut Request, res: 
         "production_gap".to_owned(),
         json!("admin_authorization_and_durable_pagination"),
     );
-    res.render(Json(Value::Object(body)));
+    json_ok(Value::Object(body))
 }
 
 fn admin_actor_items(state: &AppState) -> Vec<Value> {

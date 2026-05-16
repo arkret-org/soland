@@ -11,15 +11,18 @@
 //! submit endpoint instead.
 
 use contrix_sdk::{Operation, OperationId, SpaceId};
-use salvo::http::StatusCode;
+use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;
 use serde_json::json;
 
-use super::{
-    accept_local_operations, auth_or_render, query_param, render_error, validate_space_id,
-};
+use super::{accept_local_operations, validate_space_id};
+use crate::error::{AppError, ErrorCode};
+use crate::result::{JsonResult, json_ok};
+use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
-use crate::wire::{CreateRelationRequest, RelationResponse};
+use crate::wire::{
+    CreateRelationRequest, DeleteRelationResponse, ListRelationsResponse, RelationResponse,
+};
 use crate::{ids, kinds};
 
 pub(super) fn router() -> Router {
@@ -32,32 +35,22 @@ pub(super) fn router() -> Router {
         .push(Router::with_path("relations/{relation_id}").delete(delete_relation))
 }
 
-#[endpoint]
-async fn create_relation(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+#[endpoint(
+    operation_id = "cx.relation.create",
+    tags("relations"),
+    summary = "Create a relation between two refs in a Space"
+)]
+async fn create_relation(
+    aa: AuthArgs,
+    body: JsonBody<CreateRelationRequest>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<RelationResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let Some(session) = auth_or_render(state, req, res) else {
-        return;
-    };
-    let body = match req.parse_json::<CreateRelationRequest>().await {
-        Ok(body) => body,
-        Err(_) => {
-            render_error(
-                res,
-                StatusCode::BAD_REQUEST,
-                "bad_json",
-                "invalid relation request",
-            );
-            return;
-        }
-    };
+    let session = aa.authenticated_session(state, req)?;
+    let body = body.into_inner();
     if validate_space_id(&body.space_id).is_err() {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "invalid_param",
-            "invalid space_id",
-        );
-        return;
+        return Err(AppError::invalid_param("invalid space_id"));
     }
     let relation_id = ids::generate_relation_id();
     let operation_id = ids::generate_operation_id();
@@ -74,71 +67,44 @@ async fn create_relation(depot: &mut Depot, req: &mut Request, res: &mut Respons
         kinds::CX_RELATION_CREATE,
         payload,
     );
-    match accept_local_operations(state, &session.actor, std::slice::from_ref(&operation)) {
-        Ok(()) => {
-            let relation = {
-                let proj = state.projection.lock().expect("projection lock");
-                proj.relations.get(&relation_id).cloned()
-            };
-            if let Some(r) = relation {
-                res.render(Json(RelationResponse {
-                    relation_id: r.relation_id,
-                    space_id: r.space_id,
-                    relation_kind: r.relation_kind,
-                    from: r.from_ref,
-                    to: r.to_ref,
-                    fields: r.fields,
-                    deleted: r.deleted,
-                    created_at: r.created_at.to_rfc3339(),
-                }));
-            } else {
-                render_error(
-                    res,
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "internal_error",
-                    "relation not found after creation",
-                );
-            }
-        }
-        Err(error) => {
-            render_error(
-                res,
-                StatusCode::CONFLICT,
-                "operation_conflict",
-                &error.to_string(),
-            );
-        }
-    }
+    accept_local_operations(state, &session.actor, std::slice::from_ref(&operation))
+        .map_err(|error| AppError::new(ErrorCode::Conflict, error.to_string()))?;
+    let relation = {
+        let proj = state.projection.lock().expect("projection lock");
+        proj.relations.get(&relation_id).cloned()
+    };
+    let r = relation.ok_or_else(|| AppError::internal("relation not found after creation"))?;
+    json_ok(RelationResponse {
+        relation_id: r.relation_id,
+        space_id: r.space_id,
+        relation_kind: r.relation_kind,
+        from: r.from_ref,
+        to: r.to_ref,
+        fields: r.fields,
+        deleted: r.deleted,
+        created_at: r.created_at.to_rfc3339(),
+    })
 }
 
-#[endpoint]
-async fn delete_relation(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+#[endpoint(
+    operation_id = "cx.relation.delete",
+    tags("relations"),
+    summary = "Soft-delete a relation by relation_id"
+)]
+async fn delete_relation(
+    aa: AuthArgs,
+    relation_id: PathParam<String>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<DeleteRelationResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let Some(session) = auth_or_render(state, req, res) else {
-        return;
-    };
-    let Some(relation_id) = req.param::<String>("relation_id") else {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "missing_param",
-            "relation_id is required",
-        );
-        return;
-    };
+    let session = aa.authenticated_session(state, req)?;
+    let relation_id = relation_id.into_inner();
     let space_id = {
         let proj = state.projection.lock().expect("projection lock");
         proj.relations.get(&relation_id).map(|r| r.space_id.clone())
     };
-    let Some(space_id) = space_id else {
-        render_error(
-            res,
-            StatusCode::NOT_FOUND,
-            "not_found",
-            "relation not found",
-        );
-        return;
-    };
+    let space_id = space_id.ok_or_else(|| AppError::not_found("relation not found"))?;
     let operation_id = ids::generate_operation_id();
     let operation = Operation::create(
         OperationId::new(operation_id.clone()).unwrap(),
@@ -146,29 +112,30 @@ async fn delete_relation(depot: &mut Depot, req: &mut Request, res: &mut Respons
         kinds::CX_RELATION_DELETE,
         json!({ "relation_id": relation_id }),
     );
-    match accept_local_operations(state, &session.actor, std::slice::from_ref(&operation)) {
-        Ok(()) => {
-            res.render(Json(json!({ "deleted": true, "relation_id": relation_id })));
-        }
-        Err(error) => {
-            render_error(
-                res,
-                StatusCode::CONFLICT,
-                "operation_conflict",
-                &error.to_string(),
-            );
-        }
-    }
+    accept_local_operations(state, &session.actor, std::slice::from_ref(&operation))
+        .map_err(|error| AppError::new(ErrorCode::Conflict, error.to_string()))?;
+    json_ok(DeleteRelationResponse {
+        deleted: true,
+        relation_id,
+    })
 }
 
-#[endpoint]
-async fn list_relations(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+#[endpoint(
+    operation_id = "cx.relation.list",
+    tags("relations"),
+    summary = "List relations for a space, optionally filtered by `kind`"
+)]
+async fn list_relations(
+    aa: AuthArgs,
+    space_id: QueryParam<String, false>,
+    kind: QueryParam<String, false>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<ListRelationsResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let Some(_session) = auth_or_render(state, req, res) else {
-        return;
-    };
-    let space_id = query_param(req, "space_id").unwrap_or_default();
-    let kind = query_param(req, "kind");
+    let _ = aa.authenticated_session(state, req)?;
+    let space_id = space_id.into_inner().unwrap_or_default();
+    let kind = kind.into_inner();
     let relations = {
         let proj = state.projection.lock().expect("projection lock");
         proj.relations_for_space(&space_id, kind.as_deref())
@@ -185,5 +152,5 @@ async fn list_relations(depot: &mut Depot, req: &mut Request, res: &mut Response
             })
             .collect::<Vec<_>>()
     };
-    res.render(Json(json!({ "relations": relations })));
+    json_ok(ListRelationsResponse { relations })
 }
