@@ -24,6 +24,17 @@
 //! (PlaceProjectionListResponse / FlowProjectionListResponse /
 //! MorphProjectionListResponse + row structs). Mirrors the round 14c
 //! conversion pattern (federation_anchors_pull/push + embedded_webvh_register).
+//!
+//! Round 15d (2026-05-16) — terminal-state visibility filter. Each
+//! endpoint accepts an optional `include_terminal=true|false` query
+//! parameter. Default is `false`:
+//!   - Place: tombstoned rows excluded.
+//!   - Flow / Morph: deleted + redacted rows excluded.
+//! Spec rationale: tombstoned / deleted / redacted are unrecoverable
+//! terminals per common-fields.md §5.1; clients hydrating a kanban
+//! view shouldn't see them by default (would be a UX bug to render
+//! "deleted" cards). Explicit `include_terminal=true` returns the full
+//! set for audit / debugging / undelete UIs.
 
 use salvo::http::StatusCode;
 use salvo::oapi::extract::QueryParam;
@@ -32,6 +43,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{space_id_accessible, validate_space_id};
 use crate::error::{AppError, ErrorCode};
+use crate::reducer::{ObjectLifecycleState, PlaceLifecycleState};
 use crate::result::{JsonResult, json_ok};
 use crate::state::AppState;
 use crate::routing::system::extract::AuthArgs;
@@ -41,6 +53,17 @@ pub(super) fn router() -> Router {
         .push(Router::with_path("projection/places").get(list_place_projections))
         .push(Router::with_path("projection/flows").get(list_flow_projections))
         .push(Router::with_path("projection/morphs").get(list_morph_projections))
+}
+
+// ── Helpers ────────────────────────────────────────────────────────────
+
+/// Round 15d — terminal-state check for Flow / Morph. Mirror of
+/// `ObjectLifecycleState::is_terminal` but inlined here so the
+/// `filter` chain in the handlers reads as
+/// `!is_object_terminal(f.state)` for symmetry with the Place check
+/// (`state != PlaceLifecycleState::Tombstoned`).
+fn is_object_terminal(state: ObjectLifecycleState) -> bool {
+    state.is_terminal()
 }
 
 // ── Typed response shapes ──────────────────────────────────────────────
@@ -124,10 +147,12 @@ async fn list_place_projections(
     depot: &mut Depot,
     req: &mut Request,
     space_id: QueryParam<String, true>,
+    include_terminal: QueryParam<bool, false>,
 ) -> JsonResult<PlaceProjectionListResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req)?;
     let space_id = space_id.into_inner();
+    let include_terminal = include_terminal.into_inner().unwrap_or(false);
     if validate_space_id(&space_id).is_err() {
         return Err(AppError::invalid_param("invalid space_id format"));
     }
@@ -149,6 +174,7 @@ async fn list_place_projections(
         .places
         .values()
         .filter(|p| p.space_id == space_id)
+        .filter(|p| include_terminal || p.state != PlaceLifecycleState::Tombstoned)
         .map(|p| PlaceProjectionRow {
             place_id: p.place_id.clone(),
             space_id: p.space_id.clone(),
@@ -181,10 +207,12 @@ async fn list_flow_projections(
     depot: &mut Depot,
     req: &mut Request,
     space_id: QueryParam<String, true>,
+    include_terminal: QueryParam<bool, false>,
 ) -> JsonResult<FlowProjectionListResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req)?;
     let space_id = space_id.into_inner();
+    let include_terminal = include_terminal.into_inner().unwrap_or(false);
     if validate_space_id(&space_id).is_err() {
         return Err(AppError::invalid_param("invalid space_id format"));
     }
@@ -206,6 +234,7 @@ async fn list_flow_projections(
         .flows
         .values()
         .filter(|f| f.space_id == space_id)
+        .filter(|f| include_terminal || !is_object_terminal(f.state))
         .map(|f| FlowProjectionRow {
             flow_id: f.flow_id.clone(),
             space_id: f.space_id.clone(),
@@ -236,10 +265,12 @@ async fn list_morph_projections(
     depot: &mut Depot,
     req: &mut Request,
     space_id: QueryParam<String, true>,
+    include_terminal: QueryParam<bool, false>,
 ) -> JsonResult<MorphProjectionListResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req)?;
     let space_id = space_id.into_inner();
+    let include_terminal = include_terminal.into_inner().unwrap_or(false);
     if validate_space_id(&space_id).is_err() {
         return Err(AppError::invalid_param("invalid space_id format"));
     }
@@ -261,6 +292,7 @@ async fn list_morph_projections(
         .morphs
         .values()
         .filter(|m| m.space_id == space_id)
+        .filter(|m| include_terminal || !is_object_terminal(m.state))
         .map(|m| MorphProjectionRow {
             morph_id: m.morph_id.clone(),
             space_id: m.space_id.clone(),

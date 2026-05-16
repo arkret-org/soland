@@ -6171,4 +6171,181 @@ async fn admin_applets_agents_endpoints_reflect_submitted_registry_events() {
     assert_eq!(agent_row["protocol"], "mcp");
 }
 
+/// Round 15d (2026-05-16) — projection_query endpoints filter out
+/// terminal-state rows by default (tombstoned for Place; deleted /
+/// redacted for Flow / Morph). Explicit `include_terminal=true` returns
+/// the full set. Spec: terminal states are unrecoverable per
+/// `common-fields.md §5.1`; clients hydrating a kanban view shouldn't
+/// see them unless explicitly opting in.
+#[tokio::test]
+async fn projection_endpoints_hide_terminal_state_by_default() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+    let space_id = "cx:space:0196419b-0000-7000-8000-000000000000";
+    let place_id = "cx:place:01904100-0000-7000-8000-c15d70000001";
+    let flow_id = "cx:flow:01904100-0000-7000-8000-c15d70000002";
+
+    // Create + tombstone a Place.
+    let create_place = signed_place_event(
+        "cx:event:01904100-0000-7000-8000-c15d70010001",
+        1,
+        "cx.place.create",
+        serde_json::json!({
+            "object": {
+                "id": place_id,
+                "space_id": space_id,
+                "kind": "list",
+                "title": "Doomed Place",
+                "created_by": "did:web:alice.example",
+            }
+        }),
+        Vec::new(),
+    );
+    let r: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&create_place)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(r["status"], "accepted");
+
+    let tombstone_place = signed_place_event(
+        "cx:event:01904100-0000-7000-8000-c15d70010002",
+        2,
+        "cx.place.tombstone",
+        serde_json::json!({ "place_id": place_id }),
+        vec!["cx:event:01904100-0000-7000-8000-c15d70010001"],
+    );
+    let r: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&tombstone_place)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(r["status"], "accepted");
+
+    // Default `GET /projection/places` — tombstoned Place is hidden.
+    let body: Value = TestClient::get(format!(
+        "http://server/api/v1/projection/places?space_id={space_id}"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    assert!(
+        body["places"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|p| p["place_id"] != place_id),
+        "tombstoned Place MUST be hidden from default projection listing"
+    );
+
+    // Explicit include_terminal=true — tombstoned Place is visible.
+    let body: Value = TestClient::get(format!(
+        "http://server/api/v1/projection/places?space_id={space_id}&include_terminal=true"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    let row = body["places"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["place_id"] == place_id)
+        .expect("tombstoned Place MUST appear when include_terminal=true");
+    assert_eq!(row["state"], "tombstoned");
+
+    // Create a Flow + redact it.
+    let create_flow = signed_flow_event(
+        "cx:event:01904100-0000-7000-8000-c15d70020001",
+        3,
+        "cx.flow.create",
+        serde_json::json!({
+            "object": {
+                "id": flow_id,
+                "space_id": space_id,
+                "title": "Doomed Flow",
+                "created_by": "did:web:alice.example",
+            }
+        }),
+        vec!["cx:event:01904100-0000-7000-8000-c15d70010002"],
+    );
+    let r: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&create_flow)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(r["status"], "accepted");
+
+    let redact_flow = signed_redaction_event(
+        "cx:event:01904100-0000-7000-8000-c15d70020002",
+        4,
+        serde_json::json!({
+            "target_event_id": "cx:event:01904100-0000-7000-8000-c15d70020001",
+            "object_ref": flow_id,
+        }),
+        vec!["cx:event:01904100-0000-7000-8000-c15d70020001"],
+    );
+    let r: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&redact_flow)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(r["status"], "accepted");
+
+    // Default Flow listing — redacted Flow hidden.
+    let body: Value = TestClient::get(format!(
+        "http://server/api/v1/projection/flows?space_id={space_id}"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    assert!(
+        body["flows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|f| f["flow_id"] != flow_id),
+        "redacted Flow MUST be hidden from default projection listing"
+    );
+
+    // Explicit include_terminal=true — redacted Flow visible.
+    let body: Value = TestClient::get(format!(
+        "http://server/api/v1/projection/flows?space_id={space_id}&include_terminal=true"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    let row = body["flows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["flow_id"] == flow_id)
+        .expect("redacted Flow MUST appear when include_terminal=true");
+    assert_eq!(row["state"], "redacted");
+}
+
+
 
