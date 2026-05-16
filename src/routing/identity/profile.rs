@@ -7,37 +7,49 @@
 //! Production note: presence is currently in-memory (see `AppState.presence`).
 //! Durable presence + ephemeral/durable channel split is tracked under `_todos.md` F-11.
 
-use salvo::http::StatusCode;
+use salvo::oapi::extract::QueryParam;
 use salvo::prelude::*;
-use serde_json::json;
+use serde::Serialize;
+use serde_json::{Value, json};
 
-use super::{now, query_param, render_error, validate_did};
+use super::{now, validate_did};
+use crate::error::AppError;
+use crate::result::{JsonResult, json_ok};
 use crate::state::AppState;
 
 pub(super) fn router() -> Router {
     Router::with_path("profile/presence").get(profile_presence)
 }
 
-#[endpoint]
-async fn profile_presence(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
+pub struct ProfilePresenceResponse {
+    pub actor: String,
+    pub display_name: String,
+    pub avatar_url: Option<String>,
+    pub presence: Value,
+}
+
+#[endpoint(
+    operation_id = "cx.profile.presence",
+    tags("profile"),
+    summary = "Read an actor's presence record + display name"
+)]
+async fn profile_presence(
+    did: QueryParam<String, false>,
+    depot: &mut Depot,
+) -> JsonResult<ProfilePresenceResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let did = query_param(req, "did").unwrap_or_else(|| "did:web:alice.example".to_owned());
+    let did = did
+        .into_inner()
+        .unwrap_or_else(|| "did:web:alice.example".to_owned());
     if validate_did(&did).is_err() {
-        render_error(res, StatusCode::BAD_REQUEST, "invalid_param", "invalid did");
-        return;
+        return Err(AppError::invalid_param("invalid did"));
     }
-    let account = match state.persistence.accounts().get(&did) {
-        Ok(account) => account,
-        Err(error) => {
-            render_error(
-                res,
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal_error",
-                &error.to_string(),
-            );
-            return;
-        }
-    };
+    let account = state
+        .persistence
+        .accounts()
+        .get(&did)
+        .map_err(|error| AppError::internal(error.to_string()))?;
     let presence = state.persistence.presence().get(&did).ok().flatten();
     let presence_json = presence
         .map(|record| {
@@ -47,12 +59,12 @@ async fn profile_presence(depot: &mut Depot, req: &mut Request, res: &mut Respon
             })
         })
         .unwrap_or_else(|| json!({"status": "offline", "updated_at": now()}));
-    res.render(Json(json!({
-        "actor": did,
-        "display_name": account
+    json_ok(ProfilePresenceResponse {
+        actor: did.clone(),
+        display_name: account
             .and_then(|account| account.display_name)
             .unwrap_or_else(|| did.clone()),
-        "avatar_url": null,
-        "presence": presence_json
-    })));
+        avatar_url: None,
+        presence: presence_json,
+    })
 }

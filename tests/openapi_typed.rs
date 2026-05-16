@@ -297,4 +297,34 @@ async fn typed_describe_handlers_publish_response_schemas() {
             "missing operationId {operation_id} from round 15l typed conversion"
         );
     }
+
+    // Round 15m — identity/key_backup.rs + identity/profile.rs typed batch.
+    // - identity/key_backup.rs::{put_key_backup, list_key_backups,
+    //   get_key_backup, delete_key_backup}
+    // - identity/profile.rs::profile_presence
+    // Note: profile_presence's response wrapper `ProfilePresenceResponse`
+    // is newly added in profile.rs (no upstream wire type existed).
+    for typed_now in [
+        "KeysBackupsPutResponse",
+        "KeysBackupsListResponse",
+        "KeysBackupsDeleteResponse",
+        "ProfilePresenceResponse",
+    ] {
+        assert!(
+            body.contains(typed_now),
+            "{typed_now} missing — round 15m typed signature did not publish its schema"
+        );
+    }
+    for operation_id in [
+        "cx.keys.backups.put",
+        "cx.keys.backups.list",
+        "cx.keys.backups.get",
+        "cx.keys.backups.delete",
+        "cx.profile.presence",
+    ] {
+        assert!(
+            body.contains(&format!("operationId: {operation_id}")),
+            "missing operationId {operation_id} from round 15m typed conversion"
+        );
+    }
 }
