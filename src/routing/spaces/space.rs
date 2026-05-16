@@ -28,9 +28,9 @@ use super::{
 use crate::error::{AppError, ErrorCode};
 use crate::state::{AppState, SessionRecord, SpaceInviteRecord, SpaceMetaRecord};
 use crate::wire::{
-    AcceptSpaceInviteRequest, AddSpaceMemberRequest, CreateSpaceRequest, SetSpacePolicyRequest,
-    SpaceInviteResponse, SpaceLifecycleResponse, SpacePolicyResponse, UpdateSpaceRequest,
-    UpdateSpaceResponse,
+    AcceptSpaceInviteRequest, AddSpaceMemberRequest, CreateSpaceInviteRequest, CreateSpaceRequest,
+    SetSpacePolicyRequest, SpaceInviteResponse, SpaceLifecycleResponse, SpacePolicyResponse,
+    UpdateSpaceRequest, UpdateSpaceResponse,
 };
 use crate::{JsonResult, ids, json_ok, kinds};
 
@@ -47,6 +47,7 @@ pub(super) fn router() -> Router {
         .push(Router::with_path("{space_id}/export").get(export_space))
         .push(Router::with_path("{space_id}/members").post(add_space_member))
         .push(Router::with_path("{space_id}/members/{member_did}").delete(remove_space_member))
+        .push(Router::with_path("{space_id}/invite").post(create_space_invite))
         .push(Router::with_path("{space_id}/invite/accept").post(accept_space_invite))
 }
 
@@ -544,6 +545,90 @@ async fn accept_space_invite(
         space_id,
         target,
         state: "accepted".to_owned(),
+    })
+}
+
+#[endpoint(
+    operation_id = "cx.spaces.create_invite",
+    tags("spaces"),
+    summary = "Owner creates an invite to a Space for a target DID"
+)]
+async fn create_space_invite(
+    aa: AuthArgs,
+    depot: &mut Depot,
+    req: &mut Request,
+    space_id: PathParam<String>,
+    body: JsonBody<CreateSpaceInviteRequest>,
+) -> JsonResult<SpaceInviteResponse> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req)?;
+    let space_id = space_id.into_inner();
+    let body = body.into_inner();
+    let target = body.target.trim().to_owned();
+    if validate_did(&target).is_err() {
+        return Err(AppError::invalid_param("invalid target did"));
+    }
+    if !space_owner_matches(state, &space_id, &session.actor) {
+        return Err(AppError::capability_denied(
+            "only the space owner can create invites",
+        ));
+    }
+
+    let invites_store = state.persistence.space_invites();
+    // Idempotent: if a pending invite already exists for this (space, target),
+    // return it unchanged rather than duplicating.
+    if let Some(existing) = invites_store
+        .snapshot_all()
+        .unwrap_or_default()
+        .into_iter()
+        .find(|r| {
+            r.space_id == space_id
+                && r.status == "pending"
+                && r.invitee.as_deref() == Some(target.as_str())
+        })
+    {
+        return json_ok(SpaceInviteResponse {
+            ok: true,
+            invite_id: existing.invite_id,
+            space_id: existing.space_id,
+            target: existing.invitee.unwrap_or(target),
+            state: existing.status,
+        });
+    }
+
+    let invite_id = ids::generate_invite_id();
+    let invite_token = generate_invite_token(&invite_id, &space_id, &target);
+    let invite = SpaceInviteRecord {
+        invite_id: invite_id.clone(),
+        space_id: space_id.clone(),
+        inviter: session.actor.clone(),
+        invitee: Some(target.clone()),
+        invite_token,
+        status: "pending".to_owned(),
+        expires_at: Some(now() + Duration::days(7)),
+        created_at: now(),
+    };
+    if let Err(error) = invites_store.put(invite.clone()) {
+        tracing::error!(%error, "failed to persist space invite");
+        return Err(AppError::new(
+            ErrorCode::Conflict,
+            "failed to persist invite",
+        ));
+    }
+    append_audit_log(
+        state,
+        Some(&session.actor),
+        "space.invite.create",
+        json!({"space_id": space_id.clone(), "invite_id": invite_id.clone(), "target": target.clone()}),
+        "accepted",
+    );
+
+    json_ok(SpaceInviteResponse {
+        ok: true,
+        invite_id,
+        space_id,
+        target,
+        state: "pending".to_owned(),
     })
 }
 

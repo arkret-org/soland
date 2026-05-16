@@ -21,6 +21,7 @@ use chrono::Duration;
 use contrix_sdk::state_res::AnchorStore;
 use contrix_sdk::{Anchor, SpaceId};
 use salvo::http::StatusCode;
+use salvo::oapi::extract::{JsonBody, QueryParam};
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -29,7 +30,9 @@ use super::{
     ingest_federation_operations, now, operation_is_visible, query_flag, query_param,
     redaction_targets_from_operations, render_error, sha256_hex, sync_token, validate_space_id,
 };
+use crate::error::AppError;
 use crate::ids;
+use crate::result::{JsonResult, json_ok};
 use crate::state::{AppState, FederationTransactionRecord};
 
 #[endpoint]
@@ -436,40 +439,22 @@ pub struct FederationAnchorsPushResponse {
     pub rejected: Vec<serde_json::Value>,
 }
 
-#[endpoint]
+#[endpoint(
+    operation_id = "cx.federation.anchors.pull",
+    tags("federation"),
+    summary = "Pull locally-held Anchors for a Space (federation peer-pull)"
+)]
 pub(super) async fn federation_anchors_pull(
     depot: &mut Depot,
-    req: &mut Request,
-    res: &mut Response,
-) {
+    space_id: QueryParam<String, true>,
+) -> JsonResult<FederationAnchorsResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let Some(space_id) = query_param(req, "space_id") else {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "missing_param",
-            "space_id is required",
-        );
-        return;
-    };
+    let space_id = space_id.into_inner();
     if validate_space_id(&space_id).is_err() {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "invalid_param",
-            "invalid space_id",
-        );
-        return;
+        return Err(AppError::invalid_param("invalid space_id"));
     }
-    let Ok(space) = SpaceId::new(space_id) else {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "invalid_param",
-            "invalid space_id",
-        );
-        return;
-    };
+    let space =
+        SpaceId::new(space_id).map_err(|_| AppError::invalid_param("invalid space_id"))?;
     let leaves = state.anchor_store.list_leaves(&space).unwrap_or_default();
     let mut anchors: Vec<Anchor> = Vec::with_capacity(leaves.len());
     for leaf in &leaves {
@@ -477,40 +462,30 @@ pub(super) async fn federation_anchors_pull(
             anchors.push(a);
         }
     }
-    res.render(Json(FederationAnchorsResponse {
+    json_ok(FederationAnchorsResponse {
         anchors,
         policy: state.config.federation_policy.as_str().to_owned(),
         next_cursor: None,
-    }));
+    })
 }
 
-#[endpoint]
+#[endpoint(
+    operation_id = "cx.federation.anchors.push",
+    tags("federation"),
+    summary = "Accept Anchor envelopes from a federation peer (peer-push)"
+)]
 pub(super) async fn federation_anchors_push(
     depot: &mut Depot,
-    req: &mut Request,
-    res: &mut Response,
-) {
+    body: JsonBody<FederationAnchorsPushRequest>,
+) -> JsonResult<FederationAnchorsPushResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let body = match req.parse_json::<FederationAnchorsPushRequest>().await {
-        Ok(body) => body,
-        Err(_) => {
-            render_error(
-                res,
-                StatusCode::BAD_REQUEST,
-                "bad_json",
-                "invalid federation anchors push request",
-            );
-            return;
-        }
-    };
+    let body = body.into_inner();
     if !verify_federation_origin(&body.origin) {
-        render_error(
-            res,
-            StatusCode::UNAUTHORIZED,
-            "invalid_origin",
+        return Err(AppError::new(
+            crate::error::ErrorCode::Unauthenticated,
             "federation origin must be a valid DID",
-        );
-        return;
+        )
+        .with_status(StatusCode::UNAUTHORIZED));
     }
     let mut accepted: Vec<String> = Vec::new();
     let mut rejected: Vec<serde_json::Value> = Vec::new();
@@ -533,7 +508,7 @@ pub(super) async fn federation_anchors_push(
         }
         accepted.push(id_str);
     }
-    res.render(Json(FederationAnchorsPushResponse { accepted, rejected }));
+    json_ok(FederationAnchorsPushResponse { accepted, rejected })
 }
 
 /// MAL-12 round 25 — outbound Move broadcast helper. Each accepted Move

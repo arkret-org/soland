@@ -955,6 +955,13 @@ pub struct AcceptSpaceInviteRequest {
     pub invite_id: String,
 }
 
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
+pub struct CreateSpaceInviteRequest {
+    pub target: String,
+    #[serde(default)]
+    pub role: Option<String>,
+}
+
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct SpaceInviteResponse {
     pub ok: bool,
