@@ -14,15 +14,18 @@
 //! Production note: see `_todos.md` B9 (merge `policy_check` and `authz_check`
 //! into a single evaluator), B10 (obligation execution), B12 (cache TTL).
 
-use salvo::http::StatusCode;
+use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;
 use serde_json::{Value, json};
 
 use super::{
-    auth_or_render, is_valid_sha256_digest, now, query_flag, query_param, render_error, sha256_hex,
-    validate_canonical_json_value, validate_did, validate_space_id,
+    is_valid_sha256_digest, now, sha256_hex, validate_canonical_json_value, validate_did,
+    validate_space_id,
 };
+use crate::error::AppError;
 use crate::ids;
+use crate::result::{JsonResult, json_ok};
+use crate::routing::system::extract::AuthArgs;
 use crate::state::{AppState, PolicyDocumentRecord};
 use crate::wire::{
     OkResponse, PolicyCheckRequest, PolicyCheckResponse, PolicyDocumentResponse,
@@ -48,15 +51,24 @@ pub(super) fn contrix_router() -> Router {
     Router::with_path("contrix/v1/check").post(policy_check)
 }
 
-#[endpoint]
-async fn list_policy_documents(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+#[endpoint(
+    operation_id = "cx.policies.list",
+    tags("policy"),
+    summary = "List policy documents owned by the authenticated actor"
+)]
+async fn list_policy_documents(
+    aa: AuthArgs,
+    scope: QueryParam<String, false>,
+    subject_ref: QueryParam<String, false>,
+    include_inactive: QueryParam<bool, false>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<PolicyDocumentsResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let Some(session) = auth_or_render(state, req, res) else {
-        return;
-    };
-    let scope = query_param(req, "scope");
-    let subject_ref = query_param(req, "subject_ref");
-    let include_inactive = query_flag(req, "include_inactive");
+    let session = aa.authenticated_session(state, req)?;
+    let scope = scope.into_inner();
+    let subject_ref = subject_ref.into_inner();
+    let include_inactive = include_inactive.into_inner().unwrap_or(false);
     let policies = state
         .persistence
         .policy_documents()
@@ -72,94 +84,66 @@ async fn list_policy_documents(depot: &mut Depot, req: &mut Request, res: &mut R
         })
         .map(|policy| policy_document_to_response(&policy))
         .collect::<Vec<_>>();
-    res.render(Json(PolicyDocumentsResponse {
+    json_ok(PolicyDocumentsResponse {
         policies,
         next_cursor: None,
-    }));
+    })
 }
 
-#[endpoint]
-async fn get_policy_document(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+#[endpoint(
+    operation_id = "cx.policies.get",
+    tags("policy"),
+    summary = "Read a single policy document by id"
+)]
+async fn get_policy_document(
+    aa: AuthArgs,
+    policy_id: PathParam<String>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<PolicyDocumentResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let Some(session) = auth_or_render(state, req, res) else {
-        return;
-    };
-    let Some(policy_id) = req.param::<String>("policy_id") else {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "missing_param",
-            "policy_id is required",
-        );
-        return;
-    };
-    let policy = state
+    let session = aa.authenticated_session(state, req)?;
+    let policy_id = policy_id.into_inner();
+    state
         .persistence
         .policy_documents()
         .get(&policy_id)
         .ok()
         .flatten()
         .filter(|policy| policy.owner == session.actor)
-        .map(|policy| policy_document_to_response(&policy));
-    match policy {
-        Some(policy) => res.render(Json(policy)),
-        None => render_error(res, StatusCode::NOT_FOUND, "not_found", "policy not found"),
-    }
+        .map(|policy| json_ok(policy_document_to_response(&policy)))
+        .unwrap_or_else(|| Err(AppError::not_found("policy not found")))
 }
 
-#[endpoint]
-async fn upsert_policy_document(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+#[endpoint(
+    operation_id = "cx.policies.upsert",
+    tags("policy"),
+    summary = "Idempotently create or replace a policy document"
+)]
+async fn upsert_policy_document(
+    aa: AuthArgs,
+    body: JsonBody<UpsertPolicyDocumentRequest>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<PolicyDocumentResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let Some(session) = auth_or_render(state, req, res) else {
-        return;
-    };
-    let body = match req.parse_json::<UpsertPolicyDocumentRequest>().await {
-        Ok(body) => body,
-        Err(_) => {
-            render_error(
-                res,
-                StatusCode::BAD_REQUEST,
-                "bad_json",
-                "invalid policy document request",
-            );
-            return;
-        }
-    };
+    let session = aa.authenticated_session(state, req)?;
+    let body = body.into_inner();
     if !is_valid_policy_scope(&body.scope) {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "invalid_param",
-            "invalid policy scope",
-        );
-        return;
+        return Err(AppError::invalid_param("invalid policy scope"));
     }
     if body.subject_ref != "*" && validate_did(&body.subject_ref).is_err() {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "invalid_param",
-            "invalid policy subject_ref",
-        );
-        return;
+        return Err(AppError::invalid_param("invalid policy subject_ref"));
     }
     if !is_valid_policy_type(&body.policy_type) || !is_supported_policy_effect(&body.effect) {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "invalid_param",
-            "invalid policy type or effect",
-        );
-        return;
+        return Err(AppError::invalid_param("invalid policy type or effect"));
     }
     if let Err(message) = validate_canonical_json_value(&body.resource) {
-        render_error(res, StatusCode::BAD_REQUEST, "invalid_param", message);
-        return;
+        return Err(AppError::invalid_param(message));
     }
     for obligation in &body.obligations {
         if let Err(message) = validate_canonical_json_value(obligation) {
-            render_error(res, StatusCode::BAD_REQUEST, "invalid_param", message);
-            return;
+            return Err(AppError::invalid_param(message));
         }
     }
     let actions = if body.actions.is_empty() {
@@ -171,35 +155,19 @@ async fn upsert_policy_document(depot: &mut Depot, req: &mut Request, res: &mut 
         .iter()
         .any(|action| action.trim().is_empty() || action.len() > 128)
     {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "invalid_param",
-            "invalid policy action",
-        );
-        return;
+        return Err(AppError::invalid_param("invalid policy action"));
     }
     let policy_id = body.policy_id.unwrap_or_else(|| ids::generate("policy"));
     if !is_valid_generated_or_custom_id(&policy_id, "policy") {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "invalid_param",
-            "invalid policy_id",
-        );
-        return;
+        return Err(AppError::invalid_param("invalid policy_id"));
     }
     let store = state.persistence.policy_documents();
-    if let Ok(Some(existing)) = store.get(&policy_id) {
-        if existing.owner != session.actor {
-            render_error(
-                res,
-                StatusCode::FORBIDDEN,
-                "capability_denied",
-                "policy is owned by another actor",
-            );
-            return;
-        }
+    if let Ok(Some(existing)) = store.get(&policy_id)
+        && existing.owner != session.actor
+    {
+        return Err(AppError::capability_denied(
+            "policy is owned by another actor",
+        ));
     }
     let record = PolicyDocumentRecord {
         policy_id: policy_id.clone(),
@@ -216,95 +184,62 @@ async fn upsert_policy_document(depot: &mut Depot, req: &mut Request, res: &mut 
         active: body.active,
         updated_at: now(),
     };
-    if let Err(error) = store.put(record.clone()) {
-        tracing::error!(%error, "failed to persist policy document");
-        render_error(
-            res,
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "internal_error",
-            "policy store unavailable",
-        );
-        return;
-    }
-    res.render(Json(policy_document_to_response(&record)));
+    store
+        .put(record.clone())
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    json_ok(policy_document_to_response(&record))
 }
 
-#[endpoint]
-async fn delete_policy_document(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+#[endpoint(
+    operation_id = "cx.policies.delete",
+    tags("policy"),
+    summary = "Delete a policy document by id"
+)]
+async fn delete_policy_document(
+    aa: AuthArgs,
+    policy_id: PathParam<String>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<OkResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let Some(session) = auth_or_render(state, req, res) else {
-        return;
-    };
-    let Some(policy_id) = req.param::<String>("policy_id") else {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "missing_param",
-            "policy_id is required",
-        );
-        return;
-    };
+    let session = aa.authenticated_session(state, req)?;
+    let policy_id = policy_id.into_inner();
     let store = state.persistence.policy_documents();
     let Ok(Some(policy)) = store.get(&policy_id) else {
-        render_error(res, StatusCode::NOT_FOUND, "not_found", "policy not found");
-        return;
+        return Err(AppError::not_found("policy not found"));
     };
     if policy.owner != session.actor {
-        render_error(
-            res,
-            StatusCode::FORBIDDEN,
-            "capability_denied",
+        return Err(AppError::capability_denied(
             "policy is owned by another actor",
-        );
-        return;
+        ));
     }
     let _ = store.delete(&policy_id);
-    res.render(Json(OkResponse { ok: true }));
+    json_ok(OkResponse { ok: true })
 }
 
-#[endpoint]
-async fn policy_check(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+#[endpoint(
+    operation_id = "cx.policy.check",
+    tags("policy"),
+    summary = "Evaluate a policy decision for an actor + action + resource tuple"
+)]
+async fn policy_check(
+    body: JsonBody<PolicyCheckRequest>,
+    depot: &mut Depot,
+) -> JsonResult<PolicyCheckResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let body = match req.parse_json::<PolicyCheckRequest>().await {
-        Ok(body) => body,
-        Err(_) => {
-            render_error(
-                res,
-                StatusCode::BAD_REQUEST,
-                "bad_json",
-                "invalid policy check request",
-            );
-            return;
-        }
-    };
+    let body = body.into_inner();
     if validate_did(&body.actor).is_err() {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "invalid_param",
-            "invalid actor",
-        );
-        return;
+        return Err(AppError::invalid_param("invalid actor"));
     }
     if let Some(space_id) = &body.space_id
         && validate_space_id(space_id).is_err()
     {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "invalid_param",
-            "invalid space_id",
-        );
-        return;
+        return Err(AppError::invalid_param("invalid space_id"));
     }
     if !is_valid_sha256_digest(&body.request_canonical_hash) {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "invalid_param",
+        return Err(AppError::invalid_param(
             "request_canonical_hash must be sha256:<64 lowercase hex>",
-        );
-        return;
+        ));
     }
     let policy_decision = matching_policy_decision(state, &body);
     let (decision, reason_code, policy_id, obligations) =
@@ -325,7 +260,7 @@ async fn policy_check(depot: &mut Depot, req: &mut Request, res: &mut Response) 
         } else {
             ("allow".to_owned(), "ok".to_owned(), None, Vec::new())
         };
-    res.render(Json(PolicyCheckResponse {
+    json_ok(PolicyCheckResponse {
         decision,
         reason_code,
         policy_id,
@@ -336,7 +271,7 @@ async fn policy_check(depot: &mut Depot, req: &mut Request, res: &mut Response) 
             "alg": "none",
             "sig": sha256_hex(body.request_canonical_hash.as_bytes())
         }),
-    }));
+    })
 }
 
 pub fn policy_document_to_response(policy: &PolicyDocumentRecord) -> PolicyDocumentResponse {

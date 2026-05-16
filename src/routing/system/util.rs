@@ -79,13 +79,6 @@ pub fn query_param_all(req: &Request, key: &str) -> Vec<String> {
         .collect()
 }
 
-/// Treat the query value `1 / true / yes` as a boolean true; anything else is false.
-pub fn query_flag(req: &Request, key: &str) -> bool {
-    query_param(req, key)
-        .as_deref()
-        .is_some_and(|value| matches!(value, "1" | "true" | "yes"))
-}
-
 /// Extract the `Bearer ...` token from the `Authorization` header.
 pub fn bearer_token(req: &Request) -> Option<&str> {
     req.headers()

@@ -263,4 +263,38 @@ async fn typed_describe_handlers_publish_response_schemas() {
             "missing operationId {operation_id} from round 15k typed conversion"
         );
     }
+
+    // Round 15l — access/policy.rs + access/authz.rs::authz_check typed batch.
+    // - access/policy.rs::{list_policy_documents, get_policy_document,
+    //   upsert_policy_document, delete_policy_document, policy_check}
+    // - access/authz.rs::authz_check
+    // Wire types already carry ToSchema; canonical operation_ids come
+    // from the SOLAND_EXTENSION_OPERATIONS registry in routing/mod.rs.
+    for typed_now in [
+        "UpsertPolicyDocumentRequest",
+        "PolicyDocumentResponse",
+        "PolicyDocumentsResponse",
+        "PolicyCheckRequest",
+        "PolicyCheckResponse",
+        "AuthzCheckRequest",
+        "AuthzCheckResponse",
+    ] {
+        assert!(
+            body.contains(typed_now),
+            "{typed_now} missing — round 15l typed signature did not publish its schema"
+        );
+    }
+    for operation_id in [
+        "cx.policies.list",
+        "cx.policies.get",
+        "cx.policies.upsert",
+        "cx.policies.delete",
+        "cx.policy.check",
+        "cx.authz.check",
+    ] {
+        assert!(
+            body.contains(&format!("operationId: {operation_id}")),
+            "missing operationId {operation_id} from round 15l typed conversion"
+        );
+    }
 }

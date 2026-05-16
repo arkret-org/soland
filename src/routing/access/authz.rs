@@ -14,10 +14,12 @@
 //! lifecycle integration.
 
 use salvo::http::StatusCode;
+use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde_json::json;
 
 use super::{append_audit_log, auth_or_render, now, query_param, render_error};
+use crate::result::{JsonResult, json_ok};
 use crate::state::AppState;
 use crate::wire::{
     AuthzCheckRequest, AuthzCheckResponse, CreateGrantRequest, EffectiveGrantsResponse,
@@ -34,26 +36,17 @@ pub(super) fn router() -> Router {
         .push(Router::with_path("authz/invites").get(invites))
 }
 
-#[endpoint]
-async fn authz_check(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+#[endpoint(
+    operation_id = "cx.authz.check",
+    tags("authz"),
+    summary = "Evaluate one (actor, action, resource) authorization decision"
+)]
+async fn authz_check(
+    body: JsonBody<AuthzCheckRequest>,
+    depot: &mut Depot,
+) -> JsonResult<AuthzCheckResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let body = match req.parse_json::<AuthzCheckRequest>().await {
-        Ok(body) => body,
-        Err(_) => {
-            render_error(
-                res,
-                StatusCode::BAD_REQUEST,
-                "bad_json",
-                "invalid authz check request",
-            );
-            return;
-        }
-    };
-    // Extract space_id from resource. Per spec M-15 the resource is either a
-    // typed `cx:<kind>:<uuid>` string OR an object
-    // `{kind, space_id, [id], [facets]}`. Facets pass through to the authz
-    // engine — they're still useful for cell-family constraints — but the
-    // round-6 `entity:*` lookup branch was removed alongside the entity scaffold.
+    let body = body.into_inner();
     let (resource_str, space_id, resource_facets) = if let Some(s) = body.resource.as_str() {
         (s.to_owned(), s.to_owned(), Vec::new())
     } else if let Some(obj) = body.resource.as_object() {
@@ -112,7 +105,7 @@ async fn authz_check(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         &members,
         &resource_facets,
     );
-    res.render(Json(AuthzCheckResponse {
+    json_ok(AuthzCheckResponse {
         allowed: result.allowed,
         reason_code: (!result.allowed).then(|| result.reason.clone()),
         reason: if result.allowed {
@@ -133,7 +126,7 @@ async fn authz_check(depot: &mut Depot, req: &mut Request, res: &mut Response) {
             })
             .collect(),
         obligations: Vec::new(),
-    }));
+    })
 }
 
 fn facet_names_from_value(value: Option<&serde_json::Value>) -> Vec<String> {
