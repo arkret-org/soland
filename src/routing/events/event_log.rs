@@ -555,12 +555,18 @@ async fn events_query_durable_scope(depot: &mut Depot, req: &mut Request, res: &
     events_query_durable_scope_impl(depot, req, res).await
 }
 
-#[endpoint]
-async fn events_frontier(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+#[endpoint(
+    operation_id = "cx.events.frontier",
+    tags("events"),
+    summary = "Per-actor + per-space frontier (highest accepted actor_seq / latest event)"
+)]
+async fn events_frontier(
+    aa: crate::routing::system::extract::AuthArgs,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> crate::result::JsonResult<EventsFrontierResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let Some(session) = auth_or_render(state, req, res) else {
-        return;
-    };
+    let session = aa.authenticated_session(state, req)?;
     let actor_id = query_param(req, "actor_id");
     let space_id = query_param(req, "space_id");
     let events = state
@@ -598,11 +604,11 @@ async fn events_frontier(depot: &mut Depot, req: &mut Request, res: &mut Respons
             );
         }
     }
-    res.render(Json(EventsFrontierResponse {
+    crate::result::json_ok(EventsFrontierResponse {
         actor_frontier,
         space_frontier,
         frontier: json!({"storage": state.db.mode(), "generated_at": now()}),
-    }));
+    })
 }
 
 // ── Validator block ─────────────────────────────────────────────────────────

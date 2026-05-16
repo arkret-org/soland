@@ -4,8 +4,8 @@ mod federation;
 pub(crate) mod move_anchor;
 
 use super::{
-    AuthArgs, ingest_federation_operations, now, operation_is_visible, query_flag, query_param,
-    redaction_targets_from_operations, render_error, sha256_hex, sync_token, validate_space_id,
+    AuthArgs, ingest_federation_operations, now, operation_is_visible,
+    redaction_targets_from_operations, sha256_hex, sync_token, validate_space_id,
 };
 
 pub fn router() -> Router {

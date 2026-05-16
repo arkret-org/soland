@@ -6,12 +6,12 @@
 
 ## 当前测试状态 (2026-05-16)
 
-- `cargo test --lib` — **209 / 209** 全绿
-- `cargo test --test http_api` — **57 / 57** 全绿
+- `cargo test --lib` — **211 / 211** 全绿
+- `cargo test --test http_api` — **58 / 58** 全绿
 - `cargo test --test move_anchor_wire` — **28 / 28** 全绿
 - `cargo test --test openapi_typed` — **1 / 1** 全绿
-- `cargo build` — **0 warning**(单条 `agent_bridge::REFERENCE_AGENT_AUDIT_HMAC_KEY` dead_code 是 user 在做的 Sprint Q1 19,跨我们的范围)
-- 总 **295 tests pass**
+- `cargo build` — **0 warning**
+- 总 **298 tests pass**
 
 ## 已完成历史(详情查 git log + `CHANGELOG.md`,本文件不重复)
 
@@ -34,6 +34,7 @@
 - **round 15g**(2026-05-16)— OpenAPI typed signature for `access/authz.rs::invites` + `effective_grants`(下一批 untyped handler 转 typed 的第一步,延续 round 12 / 14c / 15c 的工作)。两 handler 都改 `JsonResult<T>` 签名(`InvitesResponse` / `EffectiveGrantsResponse` 早就有 ToSchema),`invites` 用 `AuthArgs`;operation_id 保留 spec 既定的 `cx.authz.get_invites` / `cx.authz.get_effective_grants`(与 SOLAND_EXTENSION_OPERATIONS 表对齐)。`openapi_typed.rs` 加 2 个 schema + 2 个 operationId 断言。后续 batch 还有 ~94 个 untyped handler 候选(grep `req: &mut Request.*res: &mut Response` 找)。
 - **round 15h**(2026-05-16)— Pg-backed `projection_places` / `projection_flows` / `projection_morphs` 全套持久化(round 15+ 候选里最大的一项)。`persistence.rs` 加 3 个 store trait + 3 个 `PlaceProjectionRecord` / `FlowProjectionRecord` / `MorphProjectionRecord` 类型 + 3 个 Memory impl + 3 个 Pg impl(diesel `sql_query` + upsert,sql 与 migrations 20260515/20260516 schema 一一对齐)+ `PersistenceStore` trait 加 `place_projections()` / `flow_projections()` / `morph_projections()` accessor。`routing/events/projection.rs::write_through_projection` 在 reducer apply 后(锁释放外)snapshot 投影并 upsert 到持久化,覆盖 Place/Flow/Morph 的全部 lifecycle / position / track 事件 + `cx.redaction` 的 `object_ref` 路径。`state.rs::hydrate_projections_from_persistence` 在 `AppState::new` 时把三张表回读入 in-memory `ProjectionState`,所以进程重启不丢 lifecycle 状态。新 integration test `projection_persistence_write_through_mirrors_lifecycle_events` 走真 wire 验 Place create+archive、Flow create+redact、Morph create+archive 都写穿透到 persistence。Pg backend 没专门跑通测试(测试用 MemoryPersistenceStore),但 SQL shape 走 `sql_query` 对齐既有 schema —— 部署到 Pg 时验。
 - **round 15i**(2026-05-16)— Pg-backed `projection_events`(append-only mirror of in-memory `ProjectionEventRecord` stream)。新 migration `migrations/20260516010000_projection_events/{up,down}.sql`:`projection_events` 表(BIGSERIAL `ordinal` 主键 + event_id/space_id/event_kind/operation_type/operation_id/sender/payload/created_at);两个索引(space_id / created_at)。`schema.rs` 加 diesel `table!` 块。`PgProjectionEventStore`(`sql_query` INSERT + SELECT ORDER BY ordinal)接入 `PgPersistenceStore`,删掉先前的 `fallback.projection_events()` 委托。Memory mode 测试链路无 regression(295 tests pass)。Pg backend 没专门 CI(需要 Postgres);schema + diesel shape 与既有 PgPolicyDocumentStore / PgPlaceProjectionStore 同款,部署时验。
+- **round 15j**(2026-05-16)— OpenAPI typed signature batch:6 个 handler 转 typed 签名。`events/event_log.rs::events_frontier`(`AuthArgs` + `JsonResult<EventsFrontierResponse>` + `operation_id="cx.events.frontier"`),`federation/federation.rs` 全部 5 个 handler:`federation_transaction`(`PathParam<txn_id>` + `JsonBody<FederationTransactionRequest>` + `JsonResult<FederationTransactionResponse>`)、`federation_push_operations`、`federation_pull_operations`(4 个 `QueryParam`)、`federation_space_members`、`federation_verify_actor`。`render_error(...)` + `res.render(Json(...))` 都改为 `Err(AppError::*)` + `json_ok(...)`。SDK 端 wire 类型本来就有 `#[cfg_attr(feature="salvo", derive(salvo::oapi::ToSchema))]`,所以 conversion 不需要改 SDK。`openapi_typed.rs` 加 14 条 positive assertion(8 个 schema + 6 个 operationId)。继续 round 12 / 14c / 15c / 15g 的 OpenAPI 完整度工作。
 
 ## 续作(round 15+ 候选)
 

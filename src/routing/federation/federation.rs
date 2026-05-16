@@ -21,114 +21,71 @@ use chrono::Duration;
 use contrix_sdk::state_res::AnchorStore;
 use contrix_sdk::{Anchor, SpaceId};
 use salvo::http::StatusCode;
-use salvo::oapi::extract::{JsonBody, QueryParam};
+use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use super::{
-    ingest_federation_operations, now, operation_is_visible, query_flag, query_param,
-    redaction_targets_from_operations, render_error, sha256_hex, sync_token, validate_space_id,
+    ingest_federation_operations, now, operation_is_visible,
+    redaction_targets_from_operations, sha256_hex, sync_token, validate_space_id,
 };
 use crate::error::AppError;
 use crate::ids;
 use crate::result::{JsonResult, json_ok};
 use crate::state::{AppState, FederationTransactionRecord};
 
-#[endpoint]
+#[endpoint(
+    operation_id = "cx.federation.transaction",
+    tags("federation"),
+    summary = "Idempotent inbound server-to-server federation transaction"
+)]
 pub(super) async fn federation_transaction(
+    txn_id: PathParam<String>,
+    body: JsonBody<contrix_sdk::FederationTransactionRequest>,
     depot: &mut Depot,
-    req: &mut Request,
-    res: &mut Response,
-) {
+) -> JsonResult<contrix_sdk::FederationTransactionResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let txn_id = req.param::<String>("txn_id").unwrap_or_else(sync_token);
+    let txn_id = txn_id.into_inner();
     if !is_valid_federation_txn_id(&txn_id) {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "invalid_param",
-            "invalid federation transaction id",
-        );
-        return;
+        return Err(AppError::invalid_param("invalid federation transaction id"));
     }
-    let body = match req
-        .parse_json::<contrix_sdk::FederationTransactionRequest>()
-        .await
-    {
-        Ok(body) => body,
-        Err(_) => {
-            render_error(
-                res,
-                StatusCode::BAD_REQUEST,
-                "bad_json",
-                "invalid federation transaction request",
-            );
-            return;
-        }
-    };
-    let content_digest = match federation_request_digest(&body) {
-        Ok(digest) => digest,
-        Err(message) => {
-            render_error(res, StatusCode::BAD_REQUEST, "invalid_param", message);
-            return;
-        }
-    };
+    let body = body.into_inner();
+    let content_digest = federation_request_digest(&body).map_err(AppError::invalid_param)?;
     match state
         .persistence
         .federation_transactions()
         .get(body.origin.as_str(), &txn_id)
     {
         Ok(Some(record)) if record.content_digest == content_digest => {
-            res.render(Json(record.response));
-            return;
+            let response: contrix_sdk::FederationTransactionResponse =
+                serde_json::from_value(record.response).map_err(|error| {
+                    AppError::internal(format!(
+                        "cached federation response decode: {error}"
+                    ))
+                })?;
+            return json_ok(response);
         }
         Ok(Some(_)) => {
-            render_error(
-                res,
-                StatusCode::CONFLICT,
-                "duplicate_conflict",
+            return Err(AppError::new(
+                crate::error::ErrorCode::DuplicateConflict,
                 "federation transaction id was reused with different content",
-            );
-            return;
+            ));
         }
         Ok(None) => {}
         Err(error) => {
-            if error.to_string().contains("invalid_cursor") {
-                render_error(
-                    res,
-                    StatusCode::BAD_REQUEST,
-                    "invalid_cursor",
-                    "cursor not found",
-                );
-                return;
-            }
-            render_error(
-                res,
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal_error",
-                &error.to_string(),
-            );
-            return;
+            return Err(AppError::internal(error.to_string()));
         }
     }
     if !verify_federation_origin(body.origin.as_str()) {
-        render_error(
-            res,
-            StatusCode::UNAUTHORIZED,
-            "invalid_origin",
+        return Err(AppError::unauthenticated(
             "federation origin must be a valid DID",
-        );
-        return;
+        ));
     }
     if !federation_destination_matches(state, body.destination.as_str()) {
-        render_error(
-            res,
-            StatusCode::FORBIDDEN,
-            "invalid_destination",
+        return Err(AppError::capability_denied(
             "federation transaction destination does not match this service",
-        );
-        return;
+        ));
     }
     let ingest = ingest_federation_operations(state, body.origin.as_str(), body.operations);
     let response = contrix_sdk::FederationTransactionResponse {
@@ -137,18 +94,8 @@ pub(super) async fn federation_transaction(
         rejected: ingest.rejected,
         next_retry_at: None,
     };
-    let response_value = match serde_json::to_value(&response) {
-        Ok(value) => value,
-        Err(error) => {
-            render_error(
-                res,
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal_error",
-                &error.to_string(),
-            );
-            return;
-        }
-    };
+    let response_value = serde_json::to_value(&response)
+        .map_err(|error| AppError::internal(error.to_string()))?;
     let now = now();
     let record = FederationTransactionRecord {
         origin: body.origin.to_string(),
@@ -161,103 +108,70 @@ pub(super) async fn federation_transaction(
         received_at: now,
         processed_at: Some(now),
     };
-    if let Err(error) = state.persistence.federation_transactions().put(&record) {
-        render_error(
-            res,
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "internal_error",
-            &error.to_string(),
-        );
-        return;
-    }
-    res.render(Json(response));
+    state
+        .persistence
+        .federation_transactions()
+        .put(&record)
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    json_ok(response)
 }
 
-#[endpoint]
+#[endpoint(
+    operation_id = "cx.federation.push_operations",
+    tags("federation"),
+    summary = "Accept a batch of operations pushed from a peer service"
+)]
 pub(super) async fn federation_push_operations(
+    body: JsonBody<contrix_sdk::FederationPushOperationsRequest>,
     depot: &mut Depot,
-    req: &mut Request,
-    res: &mut Response,
-) {
+) -> JsonResult<contrix_sdk::FederationPushOperationsResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let body = match req
-        .parse_json::<contrix_sdk::FederationPushOperationsRequest>()
-        .await
-    {
-        Ok(body) => body,
-        Err(_) => {
-            render_error(
-                res,
-                StatusCode::BAD_REQUEST,
-                "bad_json",
-                "invalid federation push operations request",
-            );
-            return;
-        }
-    };
+    let body = body.into_inner();
     if !verify_federation_origin(body.origin.as_str()) {
-        render_error(
-            res,
-            StatusCode::UNAUTHORIZED,
-            "invalid_origin",
+        return Err(AppError::unauthenticated(
             "federation origin must be a valid DID",
-        );
-        return;
+        ));
     }
     if !federation_destination_matches(state, body.destination.as_str()) {
-        render_error(
-            res,
-            StatusCode::FORBIDDEN,
-            "invalid_destination",
+        return Err(AppError::capability_denied(
             "federation push destination does not match this service",
-        );
-        return;
+        ));
     }
     let ingest = ingest_federation_operations(state, body.origin.as_str(), body.operations);
-    res.render(Json(contrix_sdk::FederationPushOperationsResponse {
+    json_ok(contrix_sdk::FederationPushOperationsResponse {
         accepted: ingest.accepted,
         rejected: ingest.rejected,
         quarantine: Vec::new(),
-    }));
+    })
 }
 
-#[endpoint]
+#[endpoint(
+    operation_id = "cx.federation.pull_operations",
+    tags("federation"),
+    summary = "Pull a page of operations for a federated space, with optional snapshot bootstrap"
+)]
 pub(super) async fn federation_pull_operations(
+    space_id: QueryParam<String, true>,
+    after_cursor: QueryParam<String, false>,
+    limit: QueryParam<usize, false>,
+    snapshot_bootstrap: QueryParam<bool, false>,
     depot: &mut Depot,
-    req: &mut Request,
-    res: &mut Response,
-) {
+) -> JsonResult<contrix_sdk::FederationPullOperationsResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let Some(space_id) = query_param(req, "space_id") else {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "missing_param",
-            "space_id is required",
-        );
-        return;
-    };
+    let space_id = space_id.into_inner();
     if validate_space_id(&space_id).is_err() {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "invalid_param",
-            "invalid space_id",
-        );
-        return;
+        return Err(AppError::invalid_param("invalid space_id"));
     }
-    let after_cursor = query_param(req, "after_cursor");
-    let limit = query_param(req, "limit")
-        .and_then(|value| value.parse::<usize>().ok())
-        .unwrap_or(100)
-        .min(100);
+    let after_cursor: Option<String> = after_cursor.into_inner();
+    let limit = limit.into_inner().unwrap_or(100).min(100);
+    let want_snapshot_bootstrap = snapshot_bootstrap.into_inner().unwrap_or(false);
     let space_operations = state
         .persistence
         .federation_operations()
         .list_for_space(&space_id)
         .unwrap_or_default();
     let redacted = redaction_targets_from_operations(&space_operations);
-    let snapshot_bootstrap = query_flag(req, "snapshot_bootstrap").then(|| {
+    let snapshot_bootstrap = want_snapshot_bootstrap.then(|| {
         let manifest = json!({
             "type": "snapshot_bootstrap",
             "space_id": space_id,
@@ -296,39 +210,26 @@ pub(super) async fn federation_pull_operations(
         .last()
         .map(|operation| operation.operation_id.to_string())
         .or_else(|| Some(sync_token()));
-    res.render(Json(contrix_sdk::FederationPullOperationsResponse {
+    json_ok(contrix_sdk::FederationPullOperationsResponse {
         operations,
         snapshot_bootstrap,
         next_cursor,
         has_more,
-    }));
+    })
 }
 
-#[endpoint]
+#[endpoint(
+    operation_id = "cx.federation.space_members",
+    tags("federation"),
+    summary = "List space memberships for a federated space"
+)]
 pub(super) async fn federation_space_members(
+    space_id: QueryParam<String, true>,
     depot: &mut Depot,
-    req: &mut Request,
-    res: &mut Response,
-) {
+) -> JsonResult<contrix_sdk::FederationSpaceMembersResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let Some(space_id) = query_param(req, "space_id") else {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "missing_param",
-            "space_id is required",
-        );
-        return;
-    };
-    let Ok(space_id_value) = SpaceId::new(space_id.clone()) else {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "invalid_param",
-            "invalid space_id",
-        );
-        return;
-    };
+    let space_id_value = SpaceId::new(space_id.into_inner())
+        .map_err(|_| AppError::invalid_param("invalid space_id"))?;
     let members = state
         .spaces
         .lock()
@@ -345,31 +246,23 @@ pub(super) async fn federation_space_members(
                 .collect()
         })
         .unwrap_or_default();
-    res.render(Json(contrix_sdk::FederationSpaceMembersResponse {
+    json_ok(contrix_sdk::FederationSpaceMembersResponse {
         members,
         membership_frontier: sync_token(),
         next_cursor: None,
-    }));
+    })
 }
 
-#[endpoint]
-pub(super) async fn federation_verify_actor(req: &mut Request, res: &mut Response) {
-    let body = match req
-        .parse_json::<contrix_sdk::FederationVerifyActorRequest>()
-        .await
-    {
-        Ok(body) => body,
-        Err(_) => {
-            render_error(
-                res,
-                StatusCode::BAD_REQUEST,
-                "bad_json",
-                "invalid federation verify actor request",
-            );
-            return;
-        }
-    };
-    res.render(Json(contrix_sdk::FederationVerifyActorResponse {
+#[endpoint(
+    operation_id = "cx.federation.verify_actor",
+    tags("federation"),
+    summary = "Verify a federated actor's signature against the local DID resolver"
+)]
+pub(super) async fn federation_verify_actor(
+    body: JsonBody<contrix_sdk::FederationVerifyActorRequest>,
+) -> JsonResult<contrix_sdk::FederationVerifyActorResponse> {
+    let body = body.into_inner();
+    json_ok(contrix_sdk::FederationVerifyActorResponse {
         valid: true,
         actor_id: body.actor_id.clone(),
         verified_key_id: Some(format!("{}#dev", body.actor_id)),
@@ -377,7 +270,7 @@ pub(super) async fn federation_verify_actor(req: &mut Request, res: &mut Respons
         did_document_ref: Some(format!("{}#document", body.actor_id)),
         expires_at: Some(now() + Duration::minutes(5)),
         warnings: Vec::new(),
-    }));
+    })
 }
 
 fn verify_federation_origin(origin: &str) -> bool {

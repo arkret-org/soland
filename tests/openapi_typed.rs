@@ -186,4 +186,41 @@ async fn typed_describe_handlers_publish_response_schemas() {
             "missing operationId {operation_id} from round 15g typed conversion"
         );
     }
+
+    // Round 15j — all 5 federation/federation.rs handlers converted
+    // (federation_transaction, federation_push_operations,
+    // federation_pull_operations, federation_space_members,
+    // federation_verify_actor) plus events/event_log.rs::events_frontier.
+    // SDK wire types are already ToSchema (under the `salvo` feature);
+    // the conversion attaches the typed operation_id + request/response
+    // schemas (and the typed query param schemas where applicable) to
+    // the OpenAPI doc.
+    for typed_now in [
+        "FederationTransactionRequest",
+        "FederationTransactionResponse",
+        "FederationPushOperationsRequest",
+        "FederationPushOperationsResponse",
+        "FederationPullOperationsResponse",
+        "FederationSpaceMembersResponse",
+        "FederationVerifyActorRequest",
+        "FederationVerifyActorResponse",
+    ] {
+        assert!(
+            body.contains(typed_now),
+            "{typed_now} missing — federation typed signature did not publish its schema"
+        );
+    }
+    for operation_id in [
+        "cx.federation.transaction",
+        "cx.federation.push_operations",
+        "cx.federation.pull_operations",
+        "cx.federation.space_members",
+        "cx.federation.verify_actor",
+        "cx.events.frontier",
+    ] {
+        assert!(
+            body.contains(&format!("operationId: {operation_id}")),
+            "missing operationId {operation_id} from round 15j typed conversion"
+        );
+    }
 }
