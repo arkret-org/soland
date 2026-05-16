@@ -227,6 +227,14 @@ pub struct AppletProjection {
 /// Round 15b — Server-side Agent registry entry. Populated by
 /// `cx.agent.endpoint`. Spec `extensions/agent-integration.md` mirrors
 /// the applet family shape; same simple last-write-wins semantics.
+///
+/// Sprint Q1 第二十增量 (B4d): `endpoint_url` is the HTTPS URL the
+/// agent runtime listens on. It is OPTIONAL on the wire (older
+/// clients + DID-only agents that resolve via did:web service entry
+/// won't set it), but when present the reference bridge echoes it
+/// back in the `cx.agent.protocol_session.result` envelope's
+/// `detail.endpoint_url` so timeline consumers see which endpoint
+/// answered the invocation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AgentProjection {
     /// `agent_did` — canonical agent identity per spec.
@@ -234,6 +242,11 @@ pub struct AgentProjection {
     /// Protocol the agent speaks (free-form string per spec event-kind-registry
     /// payload description; no enum enforcement at this layer).
     pub protocol: String,
+    /// HTTPS endpoint URL — optional. Reference bridge currently
+    /// uses this only as an observability field. Production runtimes
+    /// will follow it for outbound dispatch (tracked as B4f in
+    /// `_todos.md`).
+    pub endpoint_url: Option<String>,
     pub registered_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
@@ -2369,6 +2382,10 @@ impl ProjectionState {
 
     /// Round 15b — Apply `cx.agent.endpoint`. Upserts the
     /// AgentProjection keyed by `agent_did`.
+    ///
+    /// Sprint Q1 第二十增量 (B4d): if the payload carries an
+    /// `endpoint_url` field it is captured into the projection so the
+    /// bridge can echo it back on `protocol_session.result`.
     fn apply_agent_endpoint(
         &mut self,
         operation: &Operation,
@@ -2390,6 +2407,11 @@ impl ProjectionState {
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_owned();
+        let endpoint_url = operation
+            .payload
+            .get("endpoint_url")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned);
         let registered_at = self
             .agents
             .get(&agent_did)
@@ -2398,6 +2420,7 @@ impl ProjectionState {
         let projection = AgentProjection {
             agent_did: agent_did.clone(),
             protocol,
+            endpoint_url,
             registered_at,
             updated_at: now,
         };

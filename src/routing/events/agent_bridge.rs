@@ -48,16 +48,40 @@ use crate::state::{AppState, EventNotification, ProjectionEventRecord};
 
 use super::projection::append_projection_event;
 
-/// Reference HMAC key used by the in-process echo runtime to sign
-/// `audit_binding` blocks. Real deployments MUST inject a per-runtime
-/// key from configuration (or derive from `anchorer_signing_key_seed`).
-/// The key bytes are intentionally public here — this is the
-/// **reference** runtime, not a production signer. Audit verification
-/// against a different runtime requires injecting that runtime's key
-/// material; until then the SDK helper rejects the binding with
-/// `signature_mismatch`.
+/// Reference HMAC key used by the (legacy) in-process echo runtime
+/// to sign `audit_binding` blocks. Kept exported so deployments and
+/// tests that want symmetric `binding_kind=hmac_sha256_v1`
+/// verification can still reach the same key the bridge used through
+/// Sprint Q1 第十九增量.
+///
+/// **As of Sprint Q1 第二十一增量 (B4g) the reference bridge no
+/// longer writes HMAC bindings** — it writes Ed25519 (see
+/// `REFERENCE_AGENT_AUDIT_ED25519_SEED`). The HMAC key remains for
+/// crates/binaries that produce HMAC bindings under their own
+/// signer paths.
 pub const REFERENCE_AGENT_AUDIT_HMAC_KEY: &[u8] =
     b"soland.reference.agent_echo.audit_binding.v1";
+
+/// Sprint Q1 第二十一增量 (B4g): reference Ed25519 signing seed used
+/// by the in-process echo runtime to sign `audit_binding` blocks.
+/// The 32-byte seed produces a deterministic Ed25519 keypair so
+/// out-of-crate verifiers can pin the public key without an
+/// out-of-band fetch. Production deployments MUST inject their own
+/// seed via configuration; this is a **reference** value, intentionally
+/// public, and provides no real authentication against an attacker
+/// that can read this file.
+pub const REFERENCE_AGENT_AUDIT_ED25519_SEED: [u8; 32] = [
+    0x73, 0x6f, 0x6c, 0x61, 0x6e, 0x64, 0x2e, 0x72, // "soland.r"
+    0x65, 0x66, 0x65, 0x72, 0x65, 0x6e, 0x63, 0x65, // "eference"
+    0x2e, 0x61, 0x67, 0x65, 0x6e, 0x74, 0x5f, 0x65, // ".agent_e"
+    0x63, 0x68, 0x6f, 0x2e, 0x65, 0x64, 0x32, 0x35, // "cho.ed25"
+];
+
+/// Stable `key_id` string surfaced on the `audit_binding` block so
+/// verifiers can dispatch by it (and so the wire-shape matches what
+/// a real DID-document `verificationMethod` reference would carry).
+pub const REFERENCE_AGENT_AUDIT_ED25519_KEY_ID: &str =
+    "soland.reference.agent_echo.ed25519_v1";
 
 /// Inspect `operation` and, when it carries a
 /// `cx.agent.protocol_session.start` payload, emit synthetic
@@ -98,18 +122,23 @@ pub fn maybe_emit_echo_result_for_session_start(
         .to_owned();
     let params = body.get("params").cloned().unwrap_or(Value::Null);
 
-    // Sprint Q1 第十九增量 (B4c): dispatch by agent_did. Look up the
-    // AgentProjection; if absent the runtime cannot route the
-    // invocation, so fail closed with an error result. We snapshot
-    // the boolean inside the lock and drop the guard immediately so
-    // the subsequent broadcast/append paths can re-acquire it.
-    let agent_known = state
+    // Sprint Q1 第十九增量 (B4c) + 第二十增量 (B4d): dispatch by
+    // agent_did. Look up the AgentProjection; if absent the runtime
+    // cannot route the invocation, so fail closed with an error
+    // result. When present, capture the `endpoint_url` (if any) so
+    // the result envelope can report it. We snapshot the lookup
+    // inside the lock and drop the guard immediately so the
+    // subsequent broadcast/append paths can re-acquire it.
+    let agent_snapshot: Option<(String, Option<String>)> = state
         .projection
         .lock()
         .ok()
-        .map(|proj| proj.agents.contains_key(&agent_did))
-        .unwrap_or(false);
-    if !agent_known {
+        .and_then(|proj| {
+            proj.agents.get(&agent_did).map(|p| {
+                (p.protocol.clone(), p.endpoint_url.clone())
+            })
+        });
+    let Some((agent_protocol, agent_endpoint_url)) = agent_snapshot else {
         let error_payload = json!({
             "session_id": session_id,
             "status": "failed",
@@ -142,16 +171,23 @@ pub fn maybe_emit_echo_result_for_session_start(
         ));
         append_projection_event(state, error_record);
         return;
-    }
+    };
 
     // Intermediate status event: the runtime acknowledges the
     // invocation. Real runtimes would emit progress updates from
     // here; the reference echo emits exactly one transition.
+    //
+    // Sprint Q1 第二十增量 (B4d): include `protocol` + (optional)
+    // `endpoint_url` in the detail block so observers see which
+    // registered agent answered (and where production runtimes
+    // would dispatch to once B4f lands real outbound forwarding).
     let status_payload = json!({
         "session_id": session_id,
         "status": "running",
         "detail": {
             "agent_did": agent_did,
+            "protocol": agent_protocol,
+            "endpoint_url": agent_endpoint_url,
             "bridge": "soland.reference.agent_echo",
         },
     });
@@ -172,14 +208,17 @@ pub fn maybe_emit_echo_result_for_session_start(
     ));
     append_projection_event(state, status_record);
 
-    // Terminal result event: carries the echoed params plus a
-    // real HMAC-SHA256 audit_binding signature (Sprint Q1 第十九
-    // 增量 B4b). The signature commits to (session_id, agent_did,
-    // echo, actor) so a verifier can prove the result envelope was
-    // produced by a runtime that holds the reference HMAC key.
+    // Terminal result event: carries the echoed params plus a real
+    // Ed25519 audit_binding signature (Sprint Q1 第二十一增量 B4g,
+    // upgraded from the HMAC-SHA256 path in 第十九增量 B4b). The
+    // signature commits to (session_id, agent_did, echo, actor) so
+    // a verifier holding the reference public key can prove the
+    // result envelope was produced by a runtime that holds the
+    // reference Ed25519 seed — asymmetric, so verifiers no longer
+    // need access to the signing seed itself.
     let echo_value = params.clone();
-    let signed = contrix_sdk::agent_binding::sign_reference_audit_binding(
-        REFERENCE_AGENT_AUDIT_HMAC_KEY,
+    let signed = contrix_sdk::agent_binding::sign_ed25519_audit_binding(
+        &REFERENCE_AGENT_AUDIT_ED25519_SEED,
         &session_id,
         &agent_did,
         &echo_value,
@@ -193,14 +232,17 @@ pub fn maybe_emit_echo_result_for_session_start(
             "agent_did": agent_did,
         },
         "audit_binding": {
-            "binding_kind": "hmac_sha256_v1",
+            "binding_kind": "ed25519_v1",
             "actor": origin,
-            "key_id": "soland.reference.agent_echo.v1",
-            "signature": signed.signature_hex,
+            "key_id": REFERENCE_AGENT_AUDIT_ED25519_KEY_ID,
+            "signature": signed.signature_b64,
+            "public_key_b64": signed.public_key_b64,
             "canonical_subject": signed.canonical_subject,
         },
         "detail": {
             "agent_did": agent_did,
+            "protocol": agent_protocol,
+            "endpoint_url": agent_endpoint_url,
             "bridge": "soland.reference.agent_echo",
         },
     });
@@ -305,12 +347,21 @@ mod tests {
     /// reducer; the tests need it because they hand-build operations
     /// and bypass the full reducer pipeline.
     fn register_agent(state: &AppState, agent_did: &str) {
+        register_agent_with_endpoint(state, agent_did, None);
+    }
+
+    fn register_agent_with_endpoint(
+        state: &AppState,
+        agent_did: &str,
+        endpoint_url: Option<&str>,
+    ) {
         let mut proj = state.projection.lock().expect("projection lock");
         proj.agents.insert(
             agent_did.to_owned(),
             crate::reducer::AgentProjection {
                 agent_did: agent_did.to_owned(),
                 protocol: "echo".to_owned(),
+                endpoint_url: endpoint_url.map(ToOwned::to_owned),
                 registered_at: chrono::Utc::now(),
                 updated_at: chrono::Utc::now(),
             },
@@ -358,31 +409,35 @@ mod tests {
         assert_eq!(result_entry.payload["result"]["echo"]["doc"], "hello");
         assert_eq!(result_entry.payload["result"]["agent_did"], agent_did);
 
-        // Sprint Q1 第十九增量 (B4b): audit_binding is now a real
-        // HMAC-SHA256 signature. Verify it round-trips against the
-        // SDK helper using the same reference HMAC key the bridge
-        // signed with.
+        // Sprint Q1 第二十一增量 (B4g): audit_binding is now a real
+        // Ed25519 signature (upgraded from HMAC-SHA256 in 第十九
+        // 增量). Verify it round-trips against the SDK Ed25519
+        // helper using the public key the envelope carries — the
+        // verifier needs no access to the signing seed.
         let binding = &result_entry.payload["audit_binding"];
-        assert_eq!(binding["binding_kind"], "hmac_sha256_v1");
+        assert_eq!(binding["binding_kind"], "ed25519_v1");
         assert_eq!(binding["actor"], actor);
-        assert_eq!(binding["key_id"], "soland.reference.agent_echo.v1");
-        let sig_hex = binding["signature"].as_str().expect("signature hex");
+        assert_eq!(binding["key_id"], REFERENCE_AGENT_AUDIT_ED25519_KEY_ID);
+        let sig_b64 = binding["signature"].as_str().expect("signature base64");
+        let public_key_b64 = binding["public_key_b64"]
+            .as_str()
+            .expect("public_key_b64");
         let canonical_subject = binding["canonical_subject"]
             .as_str()
             .expect("canonical_subject");
-        let outcome = contrix_sdk::agent_binding::verify_reference_audit_binding(
-            REFERENCE_AGENT_AUDIT_HMAC_KEY,
+        let outcome = contrix_sdk::agent_binding::verify_ed25519_audit_binding(
+            public_key_b64,
             session,
             agent_did,
             &echo_params,
             actor,
-            sig_hex,
+            sig_b64,
             canonical_subject,
         );
         assert_eq!(
             outcome,
-            contrix_sdk::agent_binding::AuditBindingVerifyOutcome::Valid,
-            "audit_binding signature must verify under the reference HMAC key"
+            contrix_sdk::agent_binding::Ed25519AuditBindingVerifyOutcome::Valid,
+            "audit_binding signature must verify under the reference Ed25519 public key"
         );
     }
 
@@ -439,6 +494,83 @@ mod tests {
         assert!(
             result_entry.payload.get("audit_binding").is_none(),
             "failure path must not carry an audit_binding"
+        );
+    }
+
+    /// Sprint Q1 第二十增量 (B4d): when the registered AgentProjection
+    /// carries an `endpoint_url`, the bridge MUST surface it in both
+    /// the status(running) and result(completed) envelope's
+    /// `detail.endpoint_url` so observers can see which endpoint
+    /// answered. When `endpoint_url` is absent the field renders as
+    /// JSON null (still present so deserializers have a stable
+    /// shape).
+    #[test]
+    fn agent_echo_bridge_plumbs_endpoint_url_into_envelopes() {
+        let state = test_state();
+        let session = "cx:session:01904100-0000-7000-8000-eeeeeeeeeeee";
+        let agent_did = "did:web:agent-with-endpoint.example";
+        let endpoint_url = "https://agent-with-endpoint.example/api/v1/agent";
+        register_agent_with_endpoint(&state, agent_did, Some(endpoint_url));
+        let op = build_agent_session_start(
+            session,
+            agent_did,
+            json!({"op": "ping"}),
+        );
+        maybe_emit_echo_result_for_session_start(&state, "did:web:alice.example", &op);
+        let projections = state
+            .persistence
+            .projection_events()
+            .snapshot_all()
+            .expect("snapshot");
+        let status_entry = projections
+            .iter()
+            .find(|e| {
+                e.event_kind == kinds::CX_AGENT_PROTOCOL_SESSION_STATUS
+                    && e.payload["session_id"] == session
+            })
+            .expect("status event missing");
+        assert_eq!(status_entry.payload["detail"]["endpoint_url"], endpoint_url);
+        assert_eq!(status_entry.payload["detail"]["protocol"], "echo");
+        let result_entry = projections
+            .iter()
+            .find(|e| {
+                e.event_kind == kinds::CX_AGENT_PROTOCOL_SESSION_RESULT
+                    && e.payload["session_id"] == session
+            })
+            .expect("result event missing");
+        assert_eq!(result_entry.payload["detail"]["endpoint_url"], endpoint_url);
+        assert_eq!(result_entry.payload["detail"]["protocol"], "echo");
+    }
+
+    /// When an agent is registered without an `endpoint_url` (the
+    /// historical wire shape, still supported), the envelope detail
+    /// renders the field as JSON null rather than omitting it. This
+    /// keeps the wire shape stable so consumers can rely on a single
+    /// path instead of probing for missing keys.
+    #[test]
+    fn agent_echo_bridge_renders_null_endpoint_url_when_not_registered() {
+        let state = test_state();
+        let session = "cx:session:01904100-0000-7000-8000-ffffffffffff";
+        let agent_did = "did:web:agent-no-endpoint.example";
+        register_agent_with_endpoint(&state, agent_did, None);
+        let op = build_agent_session_start(session, agent_did, json!({}));
+        maybe_emit_echo_result_for_session_start(&state, "did:web:alice.example", &op);
+        let projections = state
+            .persistence
+            .projection_events()
+            .snapshot_all()
+            .expect("snapshot");
+        let result_entry = projections
+            .iter()
+            .find(|e| {
+                e.event_kind == kinds::CX_AGENT_PROTOCOL_SESSION_RESULT
+                    && e.payload["session_id"] == session
+            })
+            .expect("result event missing");
+        assert!(
+            result_entry.payload["detail"]["endpoint_url"].is_null(),
+            "endpoint_url should render as JSON null when not registered, got: {}",
+            result_entry.payload["detail"]["endpoint_url"]
         );
     }
 

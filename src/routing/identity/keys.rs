@@ -6,11 +6,14 @@
 //! - `POST /api/v1/keys/query` - fetch device key bundles for a peer set.
 //! - `POST /api/v1/keys/claim` - claim one-time keys, draining the per-device pool.
 
-use salvo::http::StatusCode;
+use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde_json::json;
 
-use super::{auth_or_render, is_device_revoked, now, render_error};
+use super::{is_device_revoked, now};
+use crate::error::AppError;
+use crate::result::{JsonResult, json_ok};
+use crate::routing::system::extract::AuthArgs;
 use crate::state::{AppState, DeviceInventoryRecord};
 use crate::wire::{
     KeysClaimRequest, KeysClaimResponse, KeysQueryRequest, KeysQueryResponse, KeysUploadRequest,
@@ -24,51 +27,31 @@ pub(super) fn router() -> Router {
         .push(Router::with_path("keys/claim").post(keys_claim))
 }
 
-#[endpoint]
-async fn keys_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+#[endpoint(
+    operation_id = "cx.keys.upload",
+    tags("keys"),
+    summary = "Upload device + one-time keys for the current session device"
+)]
+async fn keys_upload(
+    aa: AuthArgs,
+    body: JsonBody<KeysUploadRequest>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<KeysUploadResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let Some(session) = auth_or_render(state, req, res) else {
-        return;
-    };
+    let session = aa.authenticated_session(state, req)?;
     if is_device_revoked(state, &session.actor, &session.device_id) {
-        render_error(
-            res,
-            StatusCode::UNAUTHORIZED,
-            "unauthenticated",
-            "device revoked",
-        );
-        return;
+        return Err(AppError::unauthenticated("device revoked"));
     }
 
-    let body = match req.parse_json::<KeysUploadRequest>().await {
-        Ok(body) => body,
-        Err(_) => {
-            render_error(
-                res,
-                StatusCode::BAD_REQUEST,
-                "bad_json",
-                "invalid keys upload request",
-            );
-            return;
-        }
-    };
+    let body = body.into_inner();
     if body.device_id.trim().is_empty() {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "invalid_param",
-            "invalid device_id",
-        );
-        return;
+        return Err(AppError::invalid_param("invalid device_id"));
     }
     if body.device_id != session.device_id {
-        render_error(
-            res,
-            StatusCode::FORBIDDEN,
-            "capability_denied",
+        return Err(AppError::capability_denied(
             "session device does not match upload device",
-        );
-        return;
+        ));
     }
 
     let one_time_key_count = body.one_time_keys.len() as u64;
@@ -104,22 +87,11 @@ async fn keys_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         tracing::error!(%error, "failed to persist device keys");
     }
 
-    let current_device = match state
+    let current_device = state
         .persistence
         .devices()
         .get(&session.actor, &body.device_id)
-    {
-        Ok(device) => device,
-        Err(error) => {
-            render_error(
-                res,
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal_error",
-                &error.to_string(),
-            );
-            return;
-        }
-    };
+        .map_err(|error| AppError::internal(error.to_string()))?;
     let updated_at = now();
     let previous_payload = current_device
         .as_ref()
@@ -154,15 +126,11 @@ async fn keys_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         updated_at,
         revoked_at: None,
     };
-    if let Err(error) = state.persistence.devices().put(&device) {
-        render_error(
-            res,
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "internal_error",
-            &error.to_string(),
-        );
-        return;
-    }
+    state
+        .persistence
+        .devices()
+        .put(&device)
+        .map_err(|error| AppError::internal(error.to_string()))?;
 
     if let Err(error) =
         state
@@ -178,26 +146,27 @@ async fn keys_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     for (alg, count) in one_time_key_alg_counts {
         counts_value.insert(alg, json!(count));
     }
-    res.render(Json(KeysUploadResponse {
+    json_ok(KeysUploadResponse {
         one_time_key_counts: json!(counts_value),
         fallback_keys: body.fallback_keys,
-    }));
+    })
 }
 
-#[endpoint]
-async fn keys_query(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+#[endpoint(
+    operation_id = "cx.keys.query",
+    tags("keys"),
+    summary = "Fetch device key bundles for a peer set"
+)]
+async fn keys_query(
+    aa: AuthArgs,
+    body: JsonBody<KeysQueryRequest>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<KeysQueryResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    if auth_or_render(state, req, res).is_none() {
-        return;
-    }
+    let _ = aa.authenticated_session(state, req)?;
 
-    let body = req
-        .parse_json::<KeysQueryRequest>()
-        .await
-        .unwrap_or(KeysQueryRequest {
-            device_keys: Default::default(),
-            timeout_ms: None,
-        });
+    let body = body.into_inner();
     let store = state.persistence.device_keys();
     let mut result = serde_json::Map::new();
     for (actor, devices) in body.device_keys {
@@ -212,25 +181,27 @@ async fn keys_query(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         }
         result.insert(actor, json!(actor_keys));
     }
-    res.render(Json(KeysQueryResponse {
+    json_ok(KeysQueryResponse {
         device_keys: json!(result),
         failures: json!({}),
-    }));
+    })
 }
 
-#[endpoint]
-async fn keys_claim(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+#[endpoint(
+    operation_id = "cx.keys.claim",
+    tags("keys"),
+    summary = "Claim one-time keys, draining the per-device pool"
+)]
+async fn keys_claim(
+    aa: AuthArgs,
+    body: JsonBody<KeysClaimRequest>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<KeysClaimResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    if auth_or_render(state, req, res).is_none() {
-        return;
-    }
+    let _ = aa.authenticated_session(state, req)?;
 
-    let body = req
-        .parse_json::<KeysClaimRequest>()
-        .await
-        .unwrap_or(KeysClaimRequest {
-            one_time_keys: Default::default(),
-        });
+    let body = body.into_inner();
     let store = state.persistence.one_time_keys();
     let mut claimed = serde_json::Map::new();
     for (actor, devices) in body.one_time_keys {
@@ -242,8 +213,8 @@ async fn keys_claim(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         }
         claimed.insert(actor, json!(device_map));
     }
-    res.render(Json(KeysClaimResponse {
+    json_ok(KeysClaimResponse {
         one_time_keys: json!(claimed),
         failures: json!({}),
-    }));
+    })
 }

@@ -529,6 +529,7 @@ dependencies = [
  "contrix-server",
  "contrix-signatures",
  "contrix-testing",
+ "ed25519-dalek",
  "getrandom 0.3.4",
  "openmls",
  "openmls_basic_credential",

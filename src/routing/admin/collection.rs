@@ -353,6 +353,7 @@ fn admin_agent_items(state: &AppState) -> Vec<Value> {
             json!({
                 "agent_did": agent.agent_did,
                 "protocol": agent.protocol,
+                "endpoint_url": agent.endpoint_url,
                 "registered_at": agent.registered_at.to_rfc3339(),
                 "updated_at": agent.updated_at.to_rfc3339(),
             })

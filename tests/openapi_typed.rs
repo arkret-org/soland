@@ -349,4 +349,25 @@ async fn typed_describe_handlers_publish_response_schemas() {
             "missing operationId {operation_id} from round 15n typed conversion"
         );
     }
+
+    // Round 15o — identity/keys.rs typed batch (3 handlers).
+    for typed_now in [
+        "KeysUploadRequest",
+        "KeysUploadResponse",
+        "KeysQueryRequest",
+        "KeysQueryResponse",
+        "KeysClaimRequest",
+        "KeysClaimResponse",
+    ] {
+        assert!(
+            body.contains(typed_now),
+            "{typed_now} missing — round 15o typed signature did not publish its schema"
+        );
+    }
+    for operation_id in ["cx.keys.upload", "cx.keys.query", "cx.keys.claim"] {
+        assert!(
+            body.contains(&format!("operationId: {operation_id}")),
+            "missing operationId {operation_id} from round 15o typed conversion"
+        );
+    }
 }

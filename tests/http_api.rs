@@ -6590,33 +6590,38 @@ async fn agent_bridge_emits_status_and_result_for_session_start() {
         agent_did
     );
     let binding = &result_event["payload"]["audit_binding"];
-    assert_eq!(binding["binding_kind"], "hmac_sha256_v1");
+    assert_eq!(binding["binding_kind"], "ed25519_v1");
     assert_eq!(binding["actor"], "did:web:alice.example");
-    assert_eq!(binding["key_id"], "soland.reference.agent_echo.v1");
+    assert_eq!(
+        binding["key_id"],
+        soland::REFERENCE_AGENT_AUDIT_ED25519_KEY_ID
+    );
 
-    // Sprint Q1 第十九增量 (B4b): verify the HMAC-SHA256 signature
-    // recomputes against the reference key via the SDK helper. Pulls
-    // both `signature` + `canonical_subject` from the envelope and
-    // confirms the runtime committed to the same (session_id,
-    // agent_did, echo, actor) tuple a real verifier would check.
-    let sig_hex = binding["signature"].as_str().expect("signature hex");
+    // Sprint Q1 第二十一增量 (B4g): verify the Ed25519 signature
+    // round-trips against the SDK helper using the public key the
+    // envelope carries. The verifier needs no access to the signing
+    // seed — that's the whole point of moving off HMAC.
+    let sig_b64 = binding["signature"].as_str().expect("signature base64");
+    let public_key_b64 = binding["public_key_b64"]
+        .as_str()
+        .expect("public_key_b64");
     let canonical_subject = binding["canonical_subject"]
         .as_str()
         .expect("canonical_subject");
     let echo_value = result_event["payload"]["result"]["echo"].clone();
-    let outcome = contrix_sdk::agent_binding::verify_reference_audit_binding(
-        soland::REFERENCE_AGENT_AUDIT_HMAC_KEY,
+    let outcome = contrix_sdk::agent_binding::verify_ed25519_audit_binding(
+        public_key_b64,
         session_id,
         agent_did,
         &echo_value,
         "did:web:alice.example",
-        sig_hex,
+        sig_b64,
         canonical_subject,
     );
     assert_eq!(
         outcome,
-        contrix_sdk::agent_binding::AuditBindingVerifyOutcome::Valid,
-        "audit_binding signature must verify under the soland reference HMAC key"
+        contrix_sdk::agent_binding::Ed25519AuditBindingVerifyOutcome::Valid,
+        "audit_binding Ed25519 signature must verify under the carried public key"
     );
 }
 
@@ -6722,6 +6727,166 @@ async fn agent_bridge_fails_closed_on_unknown_agent() {
     assert!(
         result_event["payload"].get("audit_binding").is_none(),
         "failure path must not carry an audit_binding"
+    );
+}
+
+/// Sprint Q1 第二十增量 (B4d): when `cx.agent.endpoint` carries an
+/// `endpoint_url`, the bridge MUST surface it on both the
+/// status(running) and result(completed) envelopes' `detail.endpoint_url`.
+/// Future-proofs the wire path for B4f real outbound dispatch — the
+/// runtime needs to know where to forward, and observers need to see
+/// where the answer came from.
+#[tokio::test]
+async fn agent_bridge_plumbs_endpoint_url_through_session_envelopes() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+    let space_id = "cx:space:0196419b-0000-7000-8000-000000000000";
+    let session_id = "cx:session:01904100-0000-7000-8000-c0c0c0c0c0c0";
+    let agent_did = "did:web:b4d-agent.example";
+    let endpoint_url = "https://b4d-agent.example/api/v1/agent";
+
+    let endpoint_payload = serde_json::json!({
+        "agent_did": agent_did,
+        "protocol": "echo",
+        "endpoint_url": endpoint_url,
+    });
+    let mut endpoint_event = serde_json::json!({
+        "event_id": "cx:event:01904100-0000-7000-8000-c1c1c1c1c1c1",
+        "kind": "cx.agent.endpoint",
+        "schema_id": "cx.schema.agent.v1",
+        "actor_id": "did:web:alice.example",
+        "actor_seq": 1u64,
+        "space_id": space_id,
+        "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
+        "audience": "did:web:soland.local",
+        "domain": "did:web:soland.local",
+        "prev_refs": Vec::<String>::new(),
+        "auth_refs": Vec::<String>::new(),
+        "payload": endpoint_payload.clone(),
+        "proofs": [{
+            "type": "dev-proof",
+            "verification_method": "did:web:alice.example#01904100-0000-7000-8000-a11ce0000001",
+            "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
+            "audience": "did:web:soland.local",
+            "domain": "did:web:soland.local",
+            "payload_hash": sha256_json(&endpoint_payload),
+        }],
+    });
+    endpoint_event["canonical_digest"] = Value::String(event_canonical_digest(&endpoint_event));
+    let endpoint_resp: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&endpoint_event)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(
+        endpoint_resp["status"], "accepted",
+        "endpoint submit response: {endpoint_resp}"
+    );
+
+    let echo_params = serde_json::json!({"op": "ping"});
+    let mut payload = serde_json::json!({
+        "agent_did": agent_did,
+        "session_id": session_id,
+        "params": echo_params,
+        "capability_proof": {
+            "grant_ref": "cx:grant:01904100-0000-7000-8000-000000000099",
+            "note": "B4d e2e placeholder",
+        },
+    });
+    let mut start_event = serde_json::json!({
+        "event_id": "cx:event:01904100-0000-7000-8000-c2c2c2c2c2c2",
+        "kind": "cx.agent.protocol_session.start",
+        "schema_id": "cx.schema.agent.v1",
+        "actor_id": "did:web:alice.example",
+        "actor_seq": 2u64,
+        "space_id": space_id,
+        "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
+        "audience": "did:web:soland.local",
+        "domain": "did:web:soland.local",
+        "prev_refs": Vec::<String>::new(),
+        "auth_refs": Vec::<String>::new(),
+        "payload": payload.clone(),
+        "proofs": [{
+            "type": "dev-proof",
+            "verification_method": "did:web:alice.example#01904100-0000-7000-8000-a11ce0000001",
+            "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
+            "audience": "did:web:soland.local",
+            "domain": "did:web:soland.local",
+            "payload_hash": sha256_json(&payload),
+        }],
+    });
+    start_event["canonical_digest"] = Value::String(event_canonical_digest(&start_event));
+    let _ = &mut payload;
+
+    let resp: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&start_event)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(resp["status"], "accepted", "submit response: {resp}");
+
+    let events: Value = TestClient::get(format!(
+        "http://server/api/v1/events?space_id={space_id}"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    let list = events["events"].as_array().expect("events array");
+
+    let status_event = list
+        .iter()
+        .find(|e| {
+            e["event_kind"] == "cx.agent.protocol_session.status"
+                && e["payload"]["session_id"] == session_id
+        })
+        .expect("status event missing");
+    assert_eq!(
+        status_event["payload"]["detail"]["endpoint_url"], endpoint_url,
+        "status event must echo registered endpoint_url"
+    );
+    assert_eq!(status_event["payload"]["detail"]["protocol"], "echo");
+
+    let result_event = list
+        .iter()
+        .find(|e| {
+            e["event_kind"] == "cx.agent.protocol_session.result"
+                && e["payload"]["session_id"] == session_id
+        })
+        .expect("result event missing");
+    assert_eq!(
+        result_event["payload"]["detail"]["endpoint_url"], endpoint_url,
+        "result event must echo registered endpoint_url"
+    );
+
+    // The admin agents collection should also surface endpoint_url so
+    // sodmin operators see it.
+    let admin_agents: Value = TestClient::get("http://server/api/v1/admin/agents")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    let agents_list = admin_agents["items"]
+        .as_array()
+        .or_else(|| admin_agents["agents"].as_array())
+        .expect("admin agents list shape");
+    let entry = agents_list
+        .iter()
+        .find(|a| a["agent_did"] == agent_did)
+        .expect("admin agents missing freshly-registered agent");
+    assert_eq!(
+        entry["endpoint_url"], endpoint_url,
+        "admin agents row must surface endpoint_url"
     );
 }
 

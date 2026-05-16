@@ -35,6 +35,16 @@ pub use routing::{router, router_with_rate_limiter_config};
 /// configuration and never touch this fallback.
 pub const REFERENCE_AGENT_AUDIT_HMAC_KEY: &[u8] =
     routing::events::agent_bridge::REFERENCE_AGENT_AUDIT_HMAC_KEY;
+
+/// Sprint Q1 第二十一增量 (B4g): re-export the reference Ed25519
+/// signing seed + key_id so out-of-crate verifiers can recompute the
+/// signer's public key without recompiling soland. The reference
+/// runtime now writes Ed25519 bindings by default; HMAC remains
+/// available for deployments that prefer symmetric verification.
+pub const REFERENCE_AGENT_AUDIT_ED25519_SEED: [u8; 32] =
+    routing::events::agent_bridge::REFERENCE_AGENT_AUDIT_ED25519_SEED;
+pub const REFERENCE_AGENT_AUDIT_ED25519_KEY_ID: &str =
+    routing::events::agent_bridge::REFERENCE_AGENT_AUDIT_ED25519_KEY_ID;
 use salvo::catcher::Catcher;
 use salvo::prelude::Service;
 
