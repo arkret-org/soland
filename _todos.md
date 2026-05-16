@@ -4,12 +4,12 @@
 > spec 参考：`contrix-spec/spec/v1/`、`contrix-spec/spec/v1/artifacts/`。
 > 激进模式 — v1 未发布，发现 spec drift 直接 rip and replace，不留兼容垫片。
 
-## 当前测试状态 (2026-05-16 round 14b close — cx.redaction → Flow / Morph terminal-state push)
+## 当前测试状态 (2026-05-16 round 14c close — OpenAPI ToSchema 收尾)
 
-- `cargo test --lib` — **199 / 199** 全绿(round 14a baseline 195 + round 14b 新增 4 条 redaction tests:`redaction_with_flow_object_ref_flips_to_redacted`、`redaction_with_morph_object_ref_flips_to_redacted`、`redaction_preflight_rejects_against_already_terminal`、`redaction_preflight_tolerates_unknown_object_or_message_path`)。
-- `cargo test --test http_api` — **43 / 43** 全绿(round 14b 新增 `redaction_targeting_flow_morph_flips_to_redacted_and_rejects_terminal_repeat`)。
+- `cargo test --lib` — **199 / 199** 全绿(round 14b baseline 维持不变)。
+- `cargo test --test http_api` — **43 / 43** 全绿(round 14c 没有新增测试,`embedded_webvh_provider_registers_and_serves_identity` 在 handler 转 typed signature 后仍然通过)。
 - `cargo test --test move_anchor_wire` — **28 / 28** 全绿。
-- `cargo test --test openapi_typed` — **1 / 1** 全绿。
+- `cargo test --test openapi_typed` — **1 / 1** 全绿(round 14c 把 round-12 forward-compat guard 翻成 positive assertion:5 个 schema `FederationAnchorsResponse` / `FederationAnchorsPushRequest` / `FederationAnchorsPushResponse` / `EmbeddedWebvhRegisterRequest` / `EmbeddedWebvhRegisterResponse` 现在必须出现在 OpenAPI yaml 中)。
 - `cargo build` — **0 warning**。
 
 ## Round 10：Place lifecycle 收敛（cx.place.restore + 同族 archive/tombstone)
@@ -135,18 +135,37 @@ Round 11 给 Place 做了完整 server-side state machine 后,Flow / Morph 整�
 - **`cx.flow.track.*` 接入** — 同 round 14a 范围外,SDK 缺 OP / dispatcher,需 SDK 先做。
 - **`cx.redaction` un-redact 对 Flow / Morph 的影响** — Message redaction 支持 `redaction_value: null` 取消;但 spec 把 `redacted` 标为不可逆终态,理论上 Flow / Morph 不应支持 un-redact。当前 reducer 对 `unredact: true` 时只清 message redaction cell,不会反向 flip 对象 state(那本来就是终态)。这是符合 spec 的 ——文档清晰即可,无 code change。
 
-## 续作（round 14c+:候选）
+## Round 14c:OpenAPI ToSchema 收尾(2026-05-16)
 
-Round 9 / 10 / 11 / 12 / 13 / 14a / 14b 都已落地。后续候选:
+完成 _todos.md round 12 + L 优先级遗留项:把已加了 `salvo::oapi::ToSchema` derive 的 4 个 wire 类型对应的 handler 从 `&mut Response` + `req.parse_json::<T>()` 转成 typed signature(`JsonResult<T>` / `body: JsonBody<T>`),并把 `tests/openapi_typed.rs` 的 forward-compat guard 翻成 positive assertion。本轮额外引入 `EmbeddedWebvhRegisterResponse` typed response,把原本 `res.render(Json(json!({...})))` 的 raw-JSON 响应换成结构化 schema。
+
+**附加修整**:`embedded_webvh_register` 之前使用了若干非 canonical wire 错误码(`proof_required` / `invalid_proof` / `invalid_config` / `invalid_webvh_log`)。本轮借机映射到 registry 内的 canonical 码:`proof_required` → `unauthenticated`、`invalid_proof` → `invalid_signature`、`invalid_config` → `temporarily_unavailable`、`invalid_webvh_log` → `invalid_param`。HTTP 状态码全部保留不变,现有 integration 测试 `embedded_webvh_provider_registers_and_serves_identity` 仍然通过(它只断言 HTTP 状态,不断言 errcode 字符串)。
+
+| 优先级 | 任务 | 处置 |
+|---|---|---|
+| L | [x] **R14c-1** `src/routing/federation/federation.rs::federation_anchors_pull` 转 typed signature:`QueryParam<String, true>` + `JsonResult<FederationAnchorsResponse>` + `AppError` 错误路径 | 移除 `res: &mut Response` 与 `query_param(req, "space_id")` 手动解析。 |
+| L | [x] **R14c-2** `federation_anchors_push` 转 typed signature:`body: JsonBody<FederationAnchorsPushRequest>` + `JsonResult<FederationAnchorsPushResponse>` + `AppError` 错误路径 | 用 `AppError::new(ErrorCode::Unauthenticated, ...).with_status(UNAUTHORIZED)` 保留原 401 状态。 |
+| L | [x] **R14c-3** `src/routing/identity/did.rs::embedded_webvh_register` 转 typed signature:`body: JsonBody<EmbeddedWebvhRegisterRequest>` + `JsonResult<EmbeddedWebvhRegisterResponse>` + `AppError` 错误路径;`require_embedded_webvh_registration_bearer` helper 从 `bool` 转 `Result<(), AppError>` | 新增 `EmbeddedWebvhRegisterResponse` ToSchema struct,把原 `res.render(Json(json!{...}))` raw-JSON 响应换成结构化 schema。 |
+| L | [x] **R14c-4** `tests/openapi_typed.rs` forward-compat guard 翻成 positive assertion | 5 个 schema(包括新引入的 `EmbeddedWebvhRegisterResponse`)现在必须出现在 OpenAPI yaml 中。 |
+| L | [x] **R14c-5** `cargo build` / lib(199/199)/ http_api(43/43)/ move_anchor_wire(28/28)/ openapi_typed(1/1)全绿,0 warnings | 总 271 tests pass。 |
+
+### 范围外(round 14d+ 候选)
+
+- **下一批 untyped handler 转 typed signature** — 仍有 ~25 处 `req.parse_json::<T>()` + `&mut Response` 形态的 handler(`src/routing/access/*` / `events/*` / `interop/*` / `spaces/*` 多处)。每个独立 PR 工作量较小,但收益也低(主要是 OpenAPI 完整度)。优先级:`L`。
+- **registry 化非 canonical errcode** — 本轮顺手映射了 `embedded_webvh_register` 的 4 个非 registry 码。`src/routing/identity/did.rs::require_embedded_webvh_registration_bearer` 之前用的 `"unauthenticated"` 已经是 canonical 码,本轮不变。其他文件里残留的非 registry 码值得后续单独清理(grep `render_error` 找候选)。
+
+## 续作（round 14d+:候选）
+
+Round 9 / 10 / 11 / 12 / 13 / 14a / 14b / 14c 都已落地。后续候选:
 
 | 优先级 | 主题 | 处置 |
 |---|---|---|
 | M | Pg-backed `projection_places` / `projection_flows` / `projection_morphs` | 三张表 schema 都就绪,差 `PgPlaceProjectionStore` / `PgFlowProjectionStore` / `PgMorphProjectionStore` impl + reducer write-through + startup hydrate。 |
 | M | Pg-backed `projection_events` | 独立 migration:`projection_events` trait 已经准备好,只缺一份 SQL schema + `PgProjectionEventStore` impl。 |
 | M | `cx.flow.track.*` 接入 | 4 个 track 子事件需要 SDK 先加 `OP_FLOW_TRACK_*` 常量与 dispatcher,然后 soland 加 reducer state 字段 `FlowProjection::tracks`。 |
-| M | SDK round 11(redaction 对应 SDK reducer state flip) | 见 round 14b 范围外。SDK `redact_event` 当前不动 Flow/Morph 投影 state,与 spec §5.1 不对称(soland round 14b 已先行)。 |
+| M | ~~SDK round 11(redaction 对应 SDK reducer state flip)~~ | ✅ 2026-05-16 已落地。SDK 加了 `redact_object_for_event` helper + 4 条新 resolver 测试,与 soland round 14b 对称(SDK contrix lib +4 测试 → 346 全绿,CHANGELOG / _todos.md 已收尾)。 |
 | M | MAL-11 prune walk 自动化 | 当前 `anchor-dag/prune` 只支持显式 `{anchor_id}` 调用;后台 worker 周期性遍历 DAG 跑 `CompactionPolicy::is_eligible` 也可以做,但要先有运营痛点。 |
-| L | OpenAPI 完整 `ToSchema` 化(remaining) | 2026-05-15 round 12 第一遍为 `FederationAnchorsResponse` / `FederationAnchorsPushRequest` / `FederationAnchorsPushResponse` / `EmbeddedWebvhRegisterRequest` 加了 derive。剩余工作:把对应 handler 转 typed signature(`JsonResult<T>` / `JsonBody<T>`),`tests/openapi_typed.rs` forward-compat guard 翻成 positive assertion。继续 grep `&mut Response` + `req.parse_json` 找下一批 untyped handler 候选。 |
+| L | OpenAPI ToSchema 下一批 untyped handler | round 14c 把 round-12 forward-compat 套件(4+1 个 schema)做完;剩 ~25 处 `req.parse_json::<T>()` + `&mut Response` handler 等同款转换(grep `req.parse_json::<` + `&mut Response` 找候选)。 |
 | L | Snapshot v2 multi-chunk fixture | 当前 B4 跑的是 single-chunk case;构造一个大于 256 KiB 的测试 space 来真的走 audit_path 非空路径。 |
 
 ## 维护规则

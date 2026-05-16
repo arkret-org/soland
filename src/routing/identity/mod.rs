@@ -1,6 +1,7 @@
 use salvo::prelude::*;
 
 pub(super) mod account;
+pub(super) mod account_data;
 pub(crate) mod auth;
 mod device;
 pub(super) mod device_messages;
@@ -22,6 +23,7 @@ pub fn router() -> Router {
     Router::new()
         .push(auth::router())
         .push(account::router())
+        .push(account_data::router())
         .push(
             Router::with_path("identity")
                 .push(Router::with_path("describe").get(did::identity_describe))

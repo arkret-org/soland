@@ -298,6 +298,31 @@ async fn client_sync(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         })
         .unwrap_or_default();
 
+    // Actor-private account data: hydrate every `(actor, data_type)` row
+    // owned by the authenticated session so the client can join e.g.
+    // `cx.contacts.space.<space_id>` Space remarks against the public
+    // Space `title` during render. Spec: discovery/client-preferences.md
+    // §2 (storage model) / §3.7 (Space remarks).
+    let account_data = session
+        .as_ref()
+        .map(|session| {
+            state
+                .persistence
+                .account_data()
+                .list_for_actor(&session.actor)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|record| {
+                    json!({
+                        "data_type": record.data_type,
+                        "content": record.payload,
+                        "updated_at": record.updated_at,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
     res.render(Json(ClientSyncResponse {
         next_batch: sync_token_for_client_sync(
             state,
@@ -311,7 +336,7 @@ async fn client_sync(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         ),
         spaces: sync_spaces,
         to_device,
-        account_data: Vec::new(),
+        account_data,
         device_lists: json!({"changed": [], "left": []}),
     }));
 }

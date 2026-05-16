@@ -241,6 +241,24 @@ pub struct ContactRecord {
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
+/// Actor-private account data row (`cx.account_data.set` storage).
+///
+/// One row per `(actor, data_type)`. `data_type` is the canonical wire key
+/// (e.g. `cx.read_receipt.preferences`, `cx.contacts.actor.did:web:alice.example`,
+/// `cx.contacts.space.cx:space:0196419b-0000-7000-8000-000000000000`). Soland
+/// treats the `payload` as an opaque encrypted blob — no schema validation
+/// happens server-side; clients are responsible for canonical encoding.
+///
+/// Spec: `discovery/client-preferences.md` §2 (storage model) and §3.7
+/// (Space remarks, `cx.contacts.space.<space_id>`).
+#[derive(Clone, Debug)]
+pub struct AccountDataRecord {
+    pub actor: String,
+    pub data_type: String,
+    pub payload: Value,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
 #[derive(Clone, Debug)]
 pub struct SpaceInviteRecord {
     pub invite_id: String,

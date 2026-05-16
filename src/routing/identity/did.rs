@@ -18,14 +18,17 @@
 use contrix_sdk::identity::DidResolver;
 use ed25519_dalek::{PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH, Signature, Verifier, VerifyingKey};
 use salvo::http::{StatusCode, header};
+use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use super::{
     append_audit_log, bearer_token, now, query_param, render_error, sha256_hex, validate_did,
 };
+use crate::error::{AppError, ErrorCode};
+use crate::result::{JsonResult, json_ok};
 use crate::state::{AppState, WebvhDocumentRecord, WebvhLogRecord};
 use crate::wire::{
     IdentityDescribeResponse, IdentityLogResponse, IdentityReceiptsResponse,
@@ -85,150 +88,100 @@ pub struct EmbeddedWebvhRegisterRequest {
     pub proof: Option<Value>,
 }
 
-#[endpoint]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
+pub struct EmbeddedWebvhRegisterResponse {
+    pub status: String,
+    pub provider_id: String,
+    pub did: String,
+    pub did_key_id: String,
+    pub update_key_id: String,
+    pub did_public_key_multibase: String,
+    pub update_public_key_multibase: String,
+    pub seq: u64,
+    pub key_log_head: String,
+    pub document_url: String,
+    pub log_url: String,
+    pub did_document: Value,
+    pub did_log: Vec<Value>,
+}
+
+#[endpoint(
+    operation_id = "cx.identity.webvh.register",
+    tags("identity"),
+    summary = "Register through the embedded did:webvh provider",
+    status_codes(201, 400, 401, 404, 409, 500, 503)
+)]
 pub(super) async fn embedded_webvh_register(
     depot: &mut Depot,
     req: &mut Request,
     res: &mut Response,
-) {
+    body: JsonBody<EmbeddedWebvhRegisterRequest>,
+) -> JsonResult<EmbeddedWebvhRegisterResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
     if !state.config.embedded_webvh_provider_enabled {
-        render_error(
-            res,
-            StatusCode::NOT_FOUND,
-            "not_found",
+        return Err(AppError::not_found(
             "embedded did:webvh provider is disabled",
-        );
-        return;
+        ));
     }
-    if !require_embedded_webvh_registration_bearer(state, req, res) {
-        return;
-    }
-    let body = match req.parse_json::<EmbeddedWebvhRegisterRequest>().await {
-        Ok(body) => body,
-        Err(_) => {
-            render_error(
-                res,
-                StatusCode::BAD_REQUEST,
-                "bad_json",
-                "invalid embedded webvh register request",
-            );
-            return;
-        }
-    };
+    require_embedded_webvh_registration_bearer(state, req)?;
+    let body = body.into_inner();
     if !valid_multibase_key(&body.did_public_key_multibase) {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "invalid_param",
+        return Err(AppError::invalid_param(
             "did_public_key_multibase must be a non-empty multibase value",
-        );
-        return;
+        ));
     }
     if !valid_multibase_key(&body.update_public_key_multibase) {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "invalid_param",
+        return Err(AppError::invalid_param(
             "update_public_key_multibase must be a non-empty multibase value",
-        );
-        return;
+        ));
     }
     if body.did_public_key_multibase == body.update_public_key_multibase {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "invalid_param",
+        return Err(AppError::invalid_param(
             "did_public_key_multibase and update_public_key_multibase must be separate keys",
-        );
-        return;
+        ));
     }
     let version_time = match body.version_time.as_deref().map(str::trim) {
         Some(value) if !value.is_empty() => {
             if chrono::DateTime::parse_from_rfc3339(value).is_err() {
-                render_error(
-                    res,
-                    StatusCode::BAD_REQUEST,
-                    "invalid_param",
+                return Err(AppError::invalid_param(
                     "version_time must be an RFC3339 timestamp",
-                );
-                return;
+                ));
             }
             value.to_owned()
         }
         _ => {
-            render_error(
-                res,
-                StatusCode::BAD_REQUEST,
-                "invalid_param",
+            return Err(AppError::invalid_param(
                 "version_time is required so the client can sign the webvh log entry",
-            );
-            return;
+            ));
         }
     };
     let Some(proof) = body.proof.clone() else {
-        render_error(
-            res,
-            StatusCode::UNAUTHORIZED,
-            "proof_required",
+        return Err(AppError::unauthenticated(
             "embedded did:webvh registration requires a client-signed log proof",
-        );
-        return;
+        ));
     };
-    let local_id = match body
+    let local_id = body
         .local_id
         .as_deref()
         .and_then(normalize_webvh_local_id)
         .or_else(|| {
             let digest = sha256_hex(body.did_public_key_multibase.as_bytes());
             normalize_webvh_local_id(&format!("user-{}", &digest[..12]))
-        }) {
-        Some(local_id) => local_id,
-        None => {
-            render_error(
-                res,
-                StatusCode::BAD_REQUEST,
-                "invalid_param",
-                "invalid local_id",
-            );
-            return;
-        }
-    };
+        })
+        .ok_or_else(|| AppError::invalid_param("invalid local_id"))?;
     let did_key_fragment =
-        normalize_webvh_key_fragment(body.did_key_id.as_deref().unwrap_or("did-key-1"));
-    let Some(did_key_fragment) = did_key_fragment else {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "invalid_param",
-            "invalid did_key_id",
-        );
-        return;
-    };
+        normalize_webvh_key_fragment(body.did_key_id.as_deref().unwrap_or("did-key-1"))
+            .ok_or_else(|| AppError::invalid_param("invalid did_key_id"))?;
     let update_key_fragment =
-        normalize_webvh_key_fragment(body.update_key_id.as_deref().unwrap_or("update-key-1"));
-    let Some(update_key_fragment) = update_key_fragment else {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "invalid_param",
-            "invalid update_key_id",
-        );
-        return;
-    };
-    let (method_authority, https_authority) =
-        match embedded_webvh_authority(&state.config.public_base_url) {
-            Ok(parts) => parts,
-            Err(message) => {
-                render_error(
-                    res,
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    "invalid_config",
-                    &message,
-                );
-                return;
-            }
-        };
+        normalize_webvh_key_fragment(body.update_key_id.as_deref().unwrap_or("update-key-1"))
+            .ok_or_else(|| AppError::invalid_param("invalid update_key_id"))?;
+    let (method_authority, https_authority) = embedded_webvh_authority(
+        &state.config.public_base_url,
+    )
+    .map_err(|message| {
+        AppError::new(ErrorCode::TemporarilyUnavailable, message)
+            .with_status(StatusCode::SERVICE_UNAVAILABLE)
+    })?;
     if state
         .persistence
         .webvh()
@@ -237,13 +190,10 @@ pub(super) async fn embedded_webvh_register(
         .flatten()
         .is_some()
     {
-        render_error(
-            res,
-            StatusCode::CONFLICT,
-            "cas_conflict",
+        return Err(AppError::new(
+            ErrorCode::CasConflict,
             "embedded did:webvh local_id is already registered",
-        );
-        return;
+        ));
     }
 
     let now = now();
@@ -271,25 +221,15 @@ pub(super) async fn embedded_webvh_register(
         },
         "state": did_document_skeleton,
     });
-    let scid = match derive_webvh_scid(&entry_skeleton) {
-        Ok(scid) => scid,
-        Err(message) => {
-            render_error(res, StatusCode::BAD_REQUEST, "invalid_webvh_log", &message);
-            return;
-        }
-    };
+    let scid = derive_webvh_scid(&entry_skeleton)
+        .map_err(|message| AppError::invalid_param(message))?;
     let location =
         embedded_webvh_location_with_scid(&method_authority, &https_authority, &local_id, &scid);
     let did_key_id = format!("{}#{}", location.did, did_key_fragment);
     let update_key_id = format!("{}#{}", location.did, update_key_fragment);
     let mut log_entry = substitute_webvh_scid(entry_skeleton, &scid);
-    let version_hash = match webvh_entry_hash_multibase(&log_entry) {
-        Ok(hash) => hash,
-        Err(message) => {
-            render_error(res, StatusCode::BAD_REQUEST, "invalid_webvh_log", &message);
-            return;
-        }
-    };
+    let version_hash = webvh_entry_hash_multibase(&log_entry)
+        .map_err(|message| AppError::invalid_param(message))?;
     let version_id = format!("1-{version_hash}");
     if let Value::Object(map) = &mut log_entry {
         map.insert("versionId".to_owned(), Value::String(version_id.clone()));
@@ -300,8 +240,8 @@ pub(super) async fn embedded_webvh_register(
         .cloned()
         .unwrap_or_else(|| json!({"id": location.did}));
     if let Err(message) = verify_webvh_log_proof(&log_entry) {
-        render_error(res, StatusCode::UNAUTHORIZED, "invalid_proof", &message);
-        return;
+        return Err(AppError::new(ErrorCode::InvalidSignature, message)
+            .with_status(StatusCode::UNAUTHORIZED));
     }
     if let Err(error) = state
         .persistence
@@ -324,13 +264,9 @@ pub(super) async fn embedded_webvh_register(
         })
     {
         tracing::error!(%error, "failed to persist embedded webvh document");
-        render_error(
-            res,
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "internal_error",
+        return Err(AppError::internal(
             "failed to persist embedded webvh document",
-        );
-        return;
+        ));
     }
     if let Err(error) = state
         .persistence
@@ -344,13 +280,9 @@ pub(super) async fn embedded_webvh_register(
         })
     {
         tracing::error!(%error, "failed to append embedded webvh log entry");
-        render_error(
-            res,
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "internal_error",
+        return Err(AppError::internal(
             "failed to append embedded webvh log entry",
-        );
-        return;
+        ));
     }
     append_audit_log(
         state,
@@ -365,21 +297,21 @@ pub(super) async fn embedded_webvh_register(
         "accepted",
     );
     res.status_code(StatusCode::CREATED);
-    res.render(Json(json!({
-        "status": "created",
-        "provider_id": "soland.embedded",
-        "did": location.did,
-        "did_key_id": did_key_id,
-        "update_key_id": update_key_id,
-        "did_public_key_multibase": body.did_public_key_multibase,
-        "update_public_key_multibase": body.update_public_key_multibase,
-        "seq": 1,
-        "key_log_head": version_id,
-        "document_url": location.document_url,
-        "log_url": location.log_url,
-        "did_document": did_document,
-        "did_log": [log_entry],
-    })));
+    json_ok(EmbeddedWebvhRegisterResponse {
+        status: "created".to_owned(),
+        provider_id: "soland.embedded".to_owned(),
+        did: location.did,
+        did_key_id,
+        update_key_id,
+        did_public_key_multibase: body.did_public_key_multibase,
+        update_public_key_multibase: body.update_public_key_multibase,
+        seq: 1,
+        key_log_head: version_id,
+        document_url: location.document_url,
+        log_url: location.log_url,
+        did_document,
+        did_log: vec![log_entry],
+    })
 }
 
 #[endpoint]
@@ -706,8 +638,7 @@ fn did_webvh_descriptor(state: &AppState) -> Value {
 fn require_embedded_webvh_registration_bearer(
     state: &AppState,
     req: &Request,
-    res: &mut Response,
-) -> bool {
+) -> Result<(), AppError> {
     let Some(expected) = state
         .config
         .embedded_webvh_registration_bearer
@@ -715,36 +646,26 @@ fn require_embedded_webvh_registration_bearer(
         .map(str::trim)
         .filter(|value| !value.is_empty())
     else {
-        render_error(
-            res,
-            StatusCode::SERVICE_UNAVAILABLE,
-            "invalid_config",
+        return Err(AppError::new(
+            ErrorCode::TemporarilyUnavailable,
             "embedded did:webvh registration requires SOLAND_EMBEDDED_WEBVH_REGISTRATION_BEARER",
-        );
-        return false;
+        )
+        .with_status(StatusCode::SERVICE_UNAVAILABLE));
     };
     let Some(provided) = bearer_token(req)
         .map(str::trim)
         .filter(|value| !value.is_empty())
     else {
-        render_error(
-            res,
-            StatusCode::UNAUTHORIZED,
-            "unauthenticated",
+        return Err(AppError::unauthenticated(
             "embedded did:webvh registration requires Authorization: Bearer <token>",
-        );
-        return false;
+        ));
     };
     if sha256_hex(provided.as_bytes()) != sha256_hex(expected.as_bytes()) {
-        render_error(
-            res,
-            StatusCode::UNAUTHORIZED,
-            "unauthenticated",
+        return Err(AppError::unauthenticated(
             "invalid embedded did:webvh registration bearer",
-        );
-        return false;
+        ));
     }
-    true
+    Ok(())
 }
 
 fn embedded_webvh_record_for_request(

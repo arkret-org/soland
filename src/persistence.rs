@@ -19,10 +19,10 @@ use uuid::Uuid;
 use crate::db::PgPool;
 use crate::ids;
 use crate::state::{
-    AccountRecord, BlobRecord, CanonicalEventRecord, ContactRecord, DeviceInventoryRecord,
-    DeviceMessageRecord, FederationTransactionRecord, WebvhDocumentRecord, WebvhLogRecord,
-    MessageRecord, MultisigPendingRecord, OutboundPushBridgeCacheRecord, PolicyDocumentRecord,
-    PresenceRecord, ProjectionEventRecord, PushRuleRecord, SessionRecord,
+    AccountDataRecord, AccountRecord, BlobRecord, CanonicalEventRecord, ContactRecord,
+    DeviceInventoryRecord, DeviceMessageRecord, FederationTransactionRecord, WebvhDocumentRecord,
+    WebvhLogRecord, MessageRecord, MultisigPendingRecord, OutboundPushBridgeCacheRecord,
+    PolicyDocumentRecord, PresenceRecord, ProjectionEventRecord, PushRuleRecord, SessionRecord,
     SpaceInviteRecord, SpaceMetaRecord, TypingRecord, WebrtcSessionRecord, WebrtcSignalRecord,
 };
 
@@ -57,6 +57,22 @@ pub trait SessionStore: Send + Sync {
     fn delete(&self, token: &str) -> PersistenceResult<()>;
     fn cleanup_expired(&self) -> PersistenceResult<usize>;
     fn snapshot_all(&self) -> PersistenceResult<Vec<SessionRecord>>;
+}
+
+/// Trait for actor-private account data storage.
+///
+/// `data_type` is the canonical wire key (e.g. `cx.contacts.actor.<did>`,
+/// `cx.contacts.space.<space_id>`, `cx.read_receipt.preferences`). The
+/// payload is opaque to the server — no schema validation runs here; the
+/// client owns canonical encoding and (where applicable) encryption.
+///
+/// Spec: `discovery/client-preferences.md` §2 (storage model), §3.6
+/// (actor remarks), §3.7 (Space remarks).
+pub trait AccountDataStore: Send + Sync {
+    fn get(&self, actor: &str, data_type: &str) -> PersistenceResult<Option<AccountDataRecord>>;
+    fn put(&self, record: &AccountDataRecord) -> PersistenceResult<()>;
+    fn delete(&self, actor: &str, data_type: &str) -> PersistenceResult<()>;
+    fn list_for_actor(&self, actor: &str) -> PersistenceResult<Vec<AccountDataRecord>>;
 }
 
 /// Trait for contact storage operations.
@@ -505,6 +521,7 @@ pub trait PolicyDocumentStore: Send + Sync {
 pub trait PersistenceStore: Send + Sync {
     fn accounts(&self) -> &dyn AccountStore;
     fn sessions(&self) -> &dyn SessionStore;
+    fn account_data(&self) -> &dyn AccountDataStore;
     fn contacts(&self) -> &dyn ContactStore;
     fn space_meta(&self) -> &dyn SpaceMetaStore;
     fn messages(&self) -> &dyn MessageStore;
@@ -536,6 +553,7 @@ pub trait PersistenceStore: Send + Sync {
 pub struct MemoryPersistenceStore {
     accounts: MemoryAccountStore,
     sessions: MemorySessionStore,
+    account_data: MemoryAccountDataStore,
     contacts: MemoryContactStore,
     space_meta: MemorySpaceMetaStore,
     messages: MemoryMessageStore,
@@ -568,6 +586,7 @@ impl MemoryPersistenceStore {
         Self {
             accounts: MemoryAccountStore::new(),
             sessions: MemorySessionStore::new(),
+            account_data: MemoryAccountDataStore::new(),
             contacts: MemoryContactStore::new(),
             space_meta: MemorySpaceMetaStore::new(),
             messages: MemoryMessageStore::new(),
@@ -610,6 +629,10 @@ impl PersistenceStore for MemoryPersistenceStore {
 
     fn sessions(&self) -> &dyn SessionStore {
         &self.sessions
+    }
+
+    fn account_data(&self) -> &dyn AccountDataStore {
+        &self.account_data
     }
 
     fn contacts(&self) -> &dyn ContactStore {
@@ -928,6 +951,53 @@ impl SessionStore for MemorySessionStore {
 }
 
 // In-memory contact store
+/// In-memory `(actor, data_type) -> AccountDataRecord` table. Mirrors the
+/// `account_datas` Pg table on the same composite key.
+struct MemoryAccountDataStore {
+    data: Arc<Mutex<BTreeMap<(String, String), AccountDataRecord>>>,
+}
+
+impl MemoryAccountDataStore {
+    fn new() -> Self {
+        Self {
+            data: Arc::new(Mutex::new(BTreeMap::new())),
+        }
+    }
+}
+
+impl AccountDataStore for MemoryAccountDataStore {
+    fn get(&self, actor: &str, data_type: &str) -> PersistenceResult<Option<AccountDataRecord>> {
+        let data = self.data.lock().expect("lock");
+        Ok(data
+            .get(&(actor.to_owned(), data_type.to_owned()))
+            .cloned())
+    }
+
+    fn put(&self, record: &AccountDataRecord) -> PersistenceResult<()> {
+        let mut data = self.data.lock().expect("lock");
+        data.insert(
+            (record.actor.clone(), record.data_type.clone()),
+            record.clone(),
+        );
+        Ok(())
+    }
+
+    fn delete(&self, actor: &str, data_type: &str) -> PersistenceResult<()> {
+        let mut data = self.data.lock().expect("lock");
+        data.remove(&(actor.to_owned(), data_type.to_owned()));
+        Ok(())
+    }
+
+    fn list_for_actor(&self, actor: &str) -> PersistenceResult<Vec<AccountDataRecord>> {
+        let data = self.data.lock().expect("lock");
+        Ok(data
+            .iter()
+            .filter(|((row_actor, _), _)| row_actor == actor)
+            .map(|(_, record)| record.clone())
+            .collect())
+    }
+}
+
 struct MemoryContactStore {
     data: Arc<Mutex<BTreeMap<(String, String), ContactRecord>>>,
 }
@@ -2300,6 +2370,7 @@ impl KeyBackupStore for MemoryKeyBackupStore {
 pub struct PgPersistenceStore {
     accounts: PgAccountStore,
     sessions: PgSessionStore,
+    account_data: PgAccountDataStore,
     devices: PgDeviceInventoryStore,
     federation_transactions: PgFederationTransactionStore,
     push_bridge_cache: PgPushBridgeCacheStore,
@@ -2323,6 +2394,7 @@ impl PgPersistenceStore {
         Self {
             accounts: PgAccountStore { pool: pool.clone() },
             sessions: PgSessionStore { pool: pool.clone() },
+            account_data: PgAccountDataStore { pool: pool.clone() },
             devices: PgDeviceInventoryStore { pool: pool.clone() },
             federation_transactions: PgFederationTransactionStore { pool: pool.clone() },
             push_bridge_cache: PgPushBridgeCacheStore { pool: pool.clone() },
@@ -2350,6 +2422,10 @@ impl PersistenceStore for PgPersistenceStore {
 
     fn sessions(&self) -> &dyn SessionStore {
         &self.sessions
+    }
+
+    fn account_data(&self) -> &dyn AccountDataStore {
+        &self.account_data
     }
 
     fn contacts(&self) -> &dyn ContactStore {
@@ -2569,6 +2645,65 @@ impl SessionStore for PgSessionStore {
         )
         .load::<SessionRow>(&mut conn)
         .map(|rows| rows.into_iter().map(SessionRecord::from).collect())
+        .map_err(PersistenceError::from)
+    }
+}
+
+struct PgAccountDataStore {
+    pool: PgPool,
+}
+
+impl AccountDataStore for PgAccountDataStore {
+    fn get(&self, actor: &str, data_type: &str) -> PersistenceResult<Option<AccountDataRecord>> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query(
+            "SELECT actor, data_type, payload, updated_at \
+             FROM account_datas WHERE actor = $1 AND data_type = $2",
+        )
+        .bind::<Text, _>(actor)
+        .bind::<Text, _>(data_type)
+        .get_result::<AccountDataRow>(&mut conn)
+        .optional()
+        .map(|row| row.map(AccountDataRecord::from))
+        .map_err(PersistenceError::from)
+    }
+
+    fn put(&self, record: &AccountDataRecord) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query(
+            "INSERT INTO account_datas (actor, data_type, payload, updated_at) \
+             VALUES ($1, $2, $3, $4) \
+             ON CONFLICT (actor, data_type) DO UPDATE SET payload = EXCLUDED.payload, \
+             updated_at = EXCLUDED.updated_at",
+        )
+        .bind::<Text, _>(&record.actor)
+        .bind::<Text, _>(&record.data_type)
+        .bind::<Jsonb, _>(&record.payload)
+        .bind::<Timestamptz, _>(record.updated_at)
+        .execute(&mut conn)
+        .map(|_| ())
+        .map_err(PersistenceError::from)
+    }
+
+    fn delete(&self, actor: &str, data_type: &str) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query("DELETE FROM account_datas WHERE actor = $1 AND data_type = $2")
+            .bind::<Text, _>(actor)
+            .bind::<Text, _>(data_type)
+            .execute(&mut conn)
+            .map(|_| ())
+            .map_err(PersistenceError::from)
+    }
+
+    fn list_for_actor(&self, actor: &str) -> PersistenceResult<Vec<AccountDataRecord>> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query(
+            "SELECT actor, data_type, payload, updated_at \
+             FROM account_datas WHERE actor = $1 ORDER BY data_type",
+        )
+        .bind::<Text, _>(actor)
+        .load::<AccountDataRow>(&mut conn)
+        .map(|rows| rows.into_iter().map(AccountDataRecord::from).collect())
         .map_err(PersistenceError::from)
     }
 }
@@ -4695,6 +4830,29 @@ impl From<SessionRow> for SessionRecord {
             expires_at: row.expires_at,
             created_at: row.created_at,
             revoked_at: row.revoked_at,
+        }
+    }
+}
+
+#[derive(QueryableByName)]
+struct AccountDataRow {
+    #[diesel(sql_type = Text)]
+    actor: String,
+    #[diesel(sql_type = Text)]
+    data_type: String,
+    #[diesel(sql_type = Jsonb)]
+    payload: Value,
+    #[diesel(sql_type = Timestamptz)]
+    updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl From<AccountDataRow> for AccountDataRecord {
+    fn from(row: AccountDataRow) -> Self {
+        Self {
+            actor: row.actor,
+            data_type: row.data_type,
+            payload: row.payload,
+            updated_at: row.updated_at,
         }
     }
 }

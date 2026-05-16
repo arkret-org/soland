@@ -134,27 +134,22 @@ async fn typed_describe_handlers_publish_response_schemas() {
         );
     }
 
-    // Round 12 ToSchema audit — these wire types now derive
-    // `salvo::oapi::ToSchema`. They appear in the generated YAML only when
-    // referenced from a typed `#[endpoint]` signature (return
-    // `JsonResult<T>` or take `body: JsonBody<T>`). The current federation
-    // anchors + embedded-webvh handlers still use untyped `&mut Response`
-    // / `req.parse_json::<T>()` plumbing, so the ToSchema derive is a
-    // forward-compatibility hook only and intentionally NOT asserted here
-    // — a follow-up round flipping those handlers to typed signatures
-    // would add the assertions.
-    for forward_compat_only in [
+    // Round 14c ToSchema audit — federation anchors pull/push and the
+    // embedded did:webvh register handler now use typed `#[endpoint]`
+    // signatures (`JsonResult<T>` / `body: JsonBody<T>`), so their wire
+    // types must appear in the generated YAML. The new
+    // `EmbeddedWebvhRegisterResponse` is asserted alongside the originally
+    // forward-compat-only set.
+    for typed_now in [
         "FederationAnchorsResponse",
         "FederationAnchorsPushRequest",
         "FederationAnchorsPushResponse",
         "EmbeddedWebvhRegisterRequest",
+        "EmbeddedWebvhRegisterResponse",
     ] {
-        // Sanity: not yet published — flip when handlers get typed signatures.
         assert!(
-            !body.contains(forward_compat_only),
-            "{forward_compat_only} appeared in OpenAPI yaml — handler likely \
-             got typed signatures; update tests/openapi_typed.rs to assert \
-             presence and remove this guard"
+            body.contains(typed_now),
+            "{typed_now} missing — handler's typed signature did not publish its schema"
         );
     }
 }
