@@ -32,6 +32,14 @@ pub const CX_FLOW_CREATE: &str = "cx.flow.create";
 pub const CX_FLOW_UPDATE: &str = "cx.flow.update";
 pub const CX_FLOW_ARCHIVE: &str = "cx.flow.archive";
 pub const CX_FLOW_RESTORE: &str = "cx.flow.restore";
+// Round 14 — Flow position events. Not state-machine transitions; they
+// write to the `cx.component.flow.position.v1` cell family keyed by
+// (board_place_id, flow_id). The Event-Envelope path only validates
+// payload shape and bumps the Flow's updated_at/by; the cell write
+// happens on the Move/Anchor pipeline (out of scope for the reducer's
+// structured cache).
+pub const CX_FLOW_MOVE: &str = "cx.flow.move";
+pub const CX_FLOW_REORDER: &str = "cx.flow.reorder";
 // Morph lifecycle (round 13). Same shape as Flow — no dedicated tombstone.
 pub const CX_MORPH_CREATE: &str = "cx.morph.create";
 pub const CX_MORPH_UPDATE: &str = "cx.morph.update";
@@ -87,6 +95,8 @@ fn canonical_registered_kind(object_type: &str) -> Option<&'static str> {
         CX_FLOW_UPDATE => Some(CX_FLOW_UPDATE),
         CX_FLOW_ARCHIVE => Some(CX_FLOW_ARCHIVE),
         CX_FLOW_RESTORE => Some(CX_FLOW_RESTORE),
+        CX_FLOW_MOVE => Some(CX_FLOW_MOVE),
+        CX_FLOW_REORDER => Some(CX_FLOW_REORDER),
         CX_MORPH_CREATE => Some(CX_MORPH_CREATE),
         CX_MORPH_UPDATE => Some(CX_MORPH_UPDATE),
         CX_MORPH_ARCHIVE => Some(CX_MORPH_ARCHIVE),

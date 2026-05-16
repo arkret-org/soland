@@ -950,6 +950,20 @@ pub struct AddSpaceMemberRequest {
     pub member: String,
 }
 
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
+pub struct AcceptSpaceInviteRequest {
+    pub invite_id: String,
+}
+
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
+pub struct SpaceInviteResponse {
+    pub ok: bool,
+    pub invite_id: String,
+    pub space_id: String,
+    pub target: String,
+    pub state: String,
+}
+
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct UpdateSpaceResponse {
     pub ok: bool,

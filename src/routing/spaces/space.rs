@@ -28,8 +28,9 @@ use super::{
 use crate::error::{AppError, ErrorCode};
 use crate::state::{AppState, SessionRecord, SpaceInviteRecord, SpaceMetaRecord};
 use crate::wire::{
-    AddSpaceMemberRequest, CreateSpaceRequest, SetSpacePolicyRequest, SpaceLifecycleResponse,
-    SpacePolicyResponse, UpdateSpaceRequest, UpdateSpaceResponse,
+    AcceptSpaceInviteRequest, AddSpaceMemberRequest, CreateSpaceRequest, SetSpacePolicyRequest,
+    SpaceInviteResponse, SpaceLifecycleResponse, SpacePolicyResponse, UpdateSpaceRequest,
+    UpdateSpaceResponse,
 };
 use crate::{JsonResult, ids, json_ok, kinds};
 
@@ -38,6 +39,7 @@ pub(super) fn router() -> Router {
         .post(create_space)
         .push(
             Router::with_path("{space_id}")
+                .get(get_space)
                 .patch(update_space)
                 .delete(delete_space),
         )
@@ -45,6 +47,24 @@ pub(super) fn router() -> Router {
         .push(Router::with_path("{space_id}/export").get(export_space))
         .push(Router::with_path("{space_id}/members").post(add_space_member))
         .push(Router::with_path("{space_id}/members/{member_did}").delete(remove_space_member))
+        .push(Router::with_path("{space_id}/invite/accept").post(accept_space_invite))
+}
+
+#[endpoint(
+    operation_id = "cx.spaces.get",
+    tags("spaces"),
+    summary = "Get a Space's lifecycle response (owner + members)"
+)]
+async fn get_space(
+    aa: AuthArgs,
+    depot: &mut Depot,
+    req: &mut Request,
+    space_id: PathParam<String>,
+) -> JsonResult<SpaceLifecycleResponse> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let _session = aa.authenticated_session(state, req)?;
+    let space_id = space_id.into_inner();
+    space_lifecycle_response(state, &space_id).map(salvo::prelude::Json)
 }
 
 #[endpoint(
@@ -433,6 +453,101 @@ async fn add_space_member(
 }
 
 #[endpoint(
+    operation_id = "cx.spaces.accept_invite",
+    tags("spaces"),
+    summary = "Invitee accepts a pending space invite and becomes a member"
+)]
+async fn accept_space_invite(
+    aa: AuthArgs,
+    depot: &mut Depot,
+    req: &mut Request,
+    space_id: PathParam<String>,
+    body: JsonBody<AcceptSpaceInviteRequest>,
+) -> JsonResult<SpaceInviteResponse> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req)?;
+    let space_id = space_id.into_inner();
+    let body = body.into_inner();
+    let invite_id = body.invite_id;
+
+    // Locate the invite. invitee must match the session actor; not already
+    // consumed; not expired.
+    let invites_store = state.persistence.space_invites();
+    let now_ts = now();
+    let mut invite = invites_store
+        .snapshot_all()
+        .unwrap_or_default()
+        .into_iter()
+        .find(|r| r.invite_id == invite_id && r.space_id == space_id)
+        .ok_or_else(|| AppError::not_found("invite not found"))?;
+    if invite.status != "pending" {
+        return Err(AppError::new(ErrorCode::Conflict, "invite already consumed")
+            .with_status(StatusCode::CONFLICT));
+    }
+    if invite
+        .invitee
+        .as_deref()
+        .is_none_or(|invitee| invitee != session.actor)
+    {
+        return Err(AppError::capability_denied(
+            "only the invitee can accept this invite",
+        ));
+    }
+    if invite.expires_at.is_some_and(|exp| exp < now_ts) {
+        return Err(AppError::new(ErrorCode::Conflict, "invite expired")
+            .with_status(StatusCode::CONFLICT));
+    }
+
+    invite.status = "accepted".to_owned();
+    if let Err(error) = invites_store.put(invite.clone()) {
+        tracing::error!(%error, "failed to mark invite accepted");
+    }
+
+    // Add invitee to space members.
+    let space_id_value =
+        SpaceId::new(space_id.clone()).map_err(|_| AppError::invalid_param("invalid space_id"))?;
+    {
+        let mut spaces = state.spaces.lock().expect("spaces lock");
+        let mut entry = spaces
+            .get(&space_id_value)
+            .cloned()
+            .ok_or_else(|| AppError::not_found("space not found"))?;
+        entry
+            .members
+            .insert(Did::new(session.actor.clone()).expect("session did is valid"));
+        spaces.upsert(entry);
+    }
+    touch_space(state, &space_id);
+    record_member_state_operation(
+        state,
+        &session.actor,
+        &space_id,
+        &session.actor,
+        "join",
+        json!({"via": "invite", "invite_id": invite_id.clone()}),
+    )
+    .map_err(|error| {
+        AppError::new(ErrorCode::Conflict, error.to_string()).with_status(StatusCode::CONFLICT)
+    })?;
+    append_audit_log(
+        state,
+        Some(&session.actor),
+        "space.invite.accept",
+        json!({"space_id": space_id.clone(), "invite_id": invite_id.clone()}),
+        "accepted",
+    );
+
+    let target = invite.invitee.unwrap_or_else(|| session.actor.clone());
+    json_ok(SpaceInviteResponse {
+        ok: true,
+        invite_id,
+        space_id,
+        target,
+        state: "accepted".to_owned(),
+    })
+}
+
+#[endpoint(
     operation_id = "cx.spaces.remove_member",
     tags("spaces"),
     summary = "Owner removes a member from a Space"
@@ -687,20 +802,52 @@ pub fn space_discoverability(state: &AppState, space_id: &str) -> String {
 
 pub fn space_has_member(state: &AppState, space_id: &str, actor: &str) -> bool {
     if is_space_deleted(state, space_id) {
+        tracing::warn!(%space_id, %actor, "space_has_member: space marked deleted");
         return false;
     }
-    let Ok(space_id) = SpaceId::new(space_id.to_owned()) else {
+    let Ok(space_id_typed) = SpaceId::new(space_id.to_owned()) else {
+        tracing::warn!(%space_id, %actor, "space_has_member: invalid space_id shape");
         return false;
     };
-    let Ok(actor) = Did::new(actor.to_owned()) else {
+    let Ok(actor_typed) = Did::new(actor.to_owned()) else {
+        tracing::warn!(%space_id, %actor, "space_has_member: invalid actor DID shape");
         return false;
     };
-    state
-        .spaces
-        .lock()
-        .expect("spaces lock")
-        .get(&space_id)
-        .is_some_and(|space| space.members.contains(&actor))
+    let spaces = state.spaces.lock().expect("spaces lock");
+    match spaces.get(&space_id_typed) {
+        None => {
+            let known: Vec<String> = spaces
+                .search_by_text("")
+                .into_iter()
+                .map(|entry| entry.space_id.as_str().to_owned())
+                .collect();
+            tracing::warn!(
+                %space_id,
+                %actor,
+                known_spaces = ?known,
+                "space_has_member: space not present in in-memory index"
+            );
+            false
+        }
+        Some(space) => {
+            if space.members.contains(&actor_typed) {
+                true
+            } else {
+                let members: Vec<String> = space
+                    .members
+                    .iter()
+                    .map(|did| did.as_str().to_owned())
+                    .collect();
+                tracing::warn!(
+                    %space_id,
+                    %actor,
+                    space_members = ?members,
+                    "space_has_member: actor not in space members"
+                );
+                false
+            }
+        }
+    }
 }
 
 pub fn space_visible_to(

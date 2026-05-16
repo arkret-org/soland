@@ -132,8 +132,14 @@ fn sha256_json(value: &Value) -> String {
 }
 
 fn event_canonical_digest(event: &Value) -> String {
+    // Mirror server-side `event_canonical_source` (contrix-spec
+    // conformance-vectors.md §1.6): canonical digest is sha256 over the
+    // event envelope JSON with `proofs`, `unsigned`, and the derived
+    // `canonical_digest` / `canonical_hash` slots removed.
     let mut canonical = event.clone();
     if let Value::Object(object) = &mut canonical {
+        object.remove("proofs");
+        object.remove("unsigned");
         object.remove("canonical_digest");
         object.remove("canonical_hash");
     }
@@ -5200,4 +5206,203 @@ async fn flow_morph_lifecycle_state_machine_returns_412_for_illegal_transitions(
     assert_eq!(resp.status_code.unwrap().as_u16(), 412);
     let body: Value = resp.take_json().await.unwrap();
     assert_eq!(body["error"]["errcode"], "morph_not_active");
+}
+
+/// Build a signed `cx.redaction` event envelope, used by round 14b to
+/// test object-level redaction (Flow / Morph). Mirror of
+/// `signed_event_envelope` for the redaction kind. The spec schema
+/// registry doesn't carry a dedicated `cx.schema.redaction.v1` —
+/// `cx.redaction` is `category=message` per event-kind-registry, so
+/// reuses `cx.schema.message.v1`.
+fn signed_redaction_event(
+    event_id: &str,
+    actor_seq: u64,
+    payload: Value,
+    prev_refs: Vec<&str>,
+) -> Value {
+    let mut event = serde_json::json!({
+        "event_id": event_id,
+        "kind": "cx.redaction",
+        "schema_id": "cx.schema.message.v1",
+        "actor_id": "did:web:alice.example",
+        "actor_seq": actor_seq,
+        "space_id": "cx:space:0196419b-0000-7000-8000-000000000000",
+        "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
+        "audience": "did:web:soland.local",
+        "domain": "did:web:soland.local",
+        "prev_refs": prev_refs,
+        "auth_refs": [],
+        "payload": payload.clone(),
+        "proofs": [{
+            "type": "dev-proof",
+            "verification_method": "did:web:alice.example#01904100-0000-7000-8000-a11ce0000001",
+            "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
+            "audience": "did:web:soland.local",
+            "domain": "did:web:soland.local",
+            "payload_hash": sha256_json(&payload)
+        }]
+    });
+    event["canonical_digest"] = Value::String(event_canonical_digest(&event));
+    event
+}
+
+/// Round 14b — end-to-end check that `cx.redaction` events with an
+/// `object_ref` pointing at a Flow / Morph successfully flip the
+/// projection state to Redacted, and that a second redaction against
+/// the same (now terminal) object is rejected with HTTP 412 +
+/// `<kind>_already_terminal` per spec common-fields.md §5.1.
+#[tokio::test]
+async fn redaction_targeting_flow_morph_flips_to_redacted_and_rejects_terminal_repeat() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+    let flow_id = "cx:flow:01904100-0000-7000-8000-f10dc0000001";
+    let morph_id = "cx:morph:01904100-0000-7000-8000-f20dc0000001";
+
+    // ── Flow path ────────────────────────────────────────────────────
+
+    let create_flow = signed_flow_event(
+        "cx:event:01904100-0000-7000-8000-f10ec0000001",
+        1,
+        "cx.flow.create",
+        serde_json::json!({
+            "object": {
+                "id": flow_id,
+                "space_id": "cx:space:0196419b-0000-7000-8000-000000000000",
+                "title": "Sensitive flow",
+                "created_by": "did:web:alice.example",
+            }
+        }),
+        Vec::new(),
+    );
+    let resp: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&create_flow)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(resp["status"], "accepted");
+
+    // First redaction — legal (Active source).
+    let redact1 = signed_redaction_event(
+        "cx:event:01904100-0000-7000-8000-f10ec0000002",
+        2,
+        serde_json::json!({
+            "target_event_id": "cx:event:01904100-0000-7000-8000-f10ec0000001",
+            "object_ref": flow_id,
+            "by": "did:web:alice.example",
+            "reason": "policy",
+        }),
+        vec!["cx:event:01904100-0000-7000-8000-f10ec0000001"],
+    );
+    let resp: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&redact1)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(resp["status"], "accepted");
+
+    // Confirm projection flipped to Redacted.
+    {
+        let proj = state.projection.lock().unwrap();
+        let flow = proj.flows.get(flow_id).expect("flow projection");
+        assert_eq!(
+            flow.state.as_str(),
+            "redacted",
+            "Flow MUST be in Redacted terminal state after cx.redaction with object_ref"
+        );
+    }
+
+    // Second redaction against terminal Flow → 412 flow_already_terminal.
+    let redact2 = signed_redaction_event(
+        "cx:event:01904100-0000-7000-8000-f10ec0000003",
+        3,
+        serde_json::json!({
+            "target_event_id": "cx:event:01904100-0000-7000-8000-f10ec0000001",
+            "object_ref": flow_id,
+        }),
+        vec!["cx:event:01904100-0000-7000-8000-f10ec0000002"],
+    );
+    let mut resp = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&redact2)
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(resp.status_code.unwrap().as_u16(), 412);
+    let body: Value = resp.take_json().await.unwrap();
+    assert_eq!(body["error"]["errcode"], "flow_already_terminal");
+
+    // ── Morph path ───────────────────────────────────────────────────
+
+    let create_morph = signed_morph_event(
+        "cx:event:01904100-0000-7000-8000-f20ec0000001",
+        4,
+        "cx.morph.create",
+        serde_json::json!({
+            "object": {
+                "id": morph_id,
+                "space_id": "cx:space:0196419b-0000-7000-8000-000000000000",
+                "morph_type": "task",
+                "title": "Sensitive task",
+                "created_by": "did:web:alice.example",
+            }
+        }),
+        Vec::new(),
+    );
+    let resp: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&create_morph)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(resp["status"], "accepted");
+
+    let morph_redact = signed_redaction_event(
+        "cx:event:01904100-0000-7000-8000-f20ec0000002",
+        5,
+        serde_json::json!({
+            "target_event_id": "cx:event:01904100-0000-7000-8000-f20ec0000001",
+            "object_ref": morph_id,
+        }),
+        vec!["cx:event:01904100-0000-7000-8000-f20ec0000001"],
+    );
+    let resp: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&morph_redact)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(resp["status"], "accepted");
+    {
+        let proj = state.projection.lock().unwrap();
+        let morph = proj.morphs.get(morph_id).expect("morph projection");
+        assert_eq!(morph.state.as_str(), "redacted");
+    }
+
+    // Second morph redaction → 412 morph_already_terminal.
+    let bad_morph_redact = signed_redaction_event(
+        "cx:event:01904100-0000-7000-8000-f20ec0000003",
+        6,
+        serde_json::json!({
+            "target_event_id": "cx:event:01904100-0000-7000-8000-f20ec0000001",
+            "object_ref": morph_id,
+        }),
+        vec!["cx:event:01904100-0000-7000-8000-f20ec0000002"],
+    );
+    let mut resp = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&bad_morph_redact)
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(resp.status_code.unwrap().as_u16(), 412);
+    let body: Value = resp.take_json().await.unwrap();
+    assert_eq!(body["error"]["errcode"], "morph_already_terminal");
 }

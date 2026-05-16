@@ -178,6 +178,18 @@ const MORPH_UPDATE_REQUIREMENTS: &[PayloadRequirement] = &[
     PayloadRequirement::Required("morph_id", "morph update operation requires morph_id"),
     PayloadRequirement::Required("patch", "morph update operation requires patch"),
 ];
+// Round 14 — Flow position events (cx.flow.move / cx.flow.reorder).
+// Spec event-kind-registry sets `cell_subject` = (board_place_id, flow_id);
+// both fields are MUST-present in the payload. Additional optional fields
+// (target_place_id for move, rank for reorder) carry the actual position
+// change but are policed at the cell-family layer, not here.
+const FLOW_POSITION_REQUIREMENTS: &[PayloadRequirement] = &[
+    PayloadRequirement::Required("flow_id", "flow position operation requires flow_id"),
+    PayloadRequirement::Required(
+        "board_place_id",
+        "flow position operation requires board_place_id",
+    ),
+];
 const READ_MARKER_REQUIREMENTS: &[PayloadRequirement] = &[
     PayloadRequirement::AnyOf(
         READ_MARKER_ACTOR_FIELDS,
@@ -334,6 +346,10 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
         },
         kinds::CX_FLOW_UPDATE => OperationPayloadSchema {
             requirements: FLOW_UPDATE_REQUIREMENTS,
+            validate: None,
+        },
+        kinds::CX_FLOW_MOVE | kinds::CX_FLOW_REORDER => OperationPayloadSchema {
+            requirements: FLOW_POSITION_REQUIREMENTS,
             validate: None,
         },
         kind if kinds::is_morph_lifecycle_kind(kind) => OperationPayloadSchema {

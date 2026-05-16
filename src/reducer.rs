@@ -412,6 +412,23 @@ enum ObjectLifecycleTransition {
     Restore,
 }
 
+/// Round 14b — Extract the typed-id object reference from a
+/// `cx.redaction` event payload, used by both the reducer
+/// (`apply_redaction`) and the preflight
+/// (`check_redaction_target_transition`). Returns `None` for redactions
+/// that only carry a `target_event_id` (message redaction path), or
+/// when no recognised object-ref field is present. The fallbacks
+/// `target_object_ref` / `object_ref` mirror SDK `extract_place_id`'s
+/// convention for object-level event payloads.
+fn redaction_object_ref(operation: &Operation) -> Option<String> {
+    operation
+        .payload
+        .get("object_ref")
+        .or_else(|| operation.payload.get("target_object_ref"))
+        .and_then(|v| v.as_str())
+        .map(ToOwned::to_owned)
+}
+
 impl ProjectionState {
     pub fn new() -> Self {
         Self::default()
@@ -523,6 +540,9 @@ impl ProjectionState {
                 now,
                 ObjectLifecycleTransition::Restore,
             ),
+            Some(CX_FLOW_MOVE) | Some(CX_FLOW_REORDER) => {
+                self.apply_flow_position_touch(operation, now)
+            }
             Some(CX_MORPH_CREATE) => self.apply_morph_create(operation, now),
             Some(CX_MORPH_UPDATE) => self.apply_morph_update(operation, now),
             Some(CX_MORPH_ARCHIVE) => self.apply_morph_lifecycle(
@@ -706,6 +726,13 @@ impl ProjectionState {
     /// Un-redaction: an `apply_redaction` call whose payload sets
     /// `redaction_value: null` (or the equivalent `unredact: true` flag)
     /// resets the cas-register and removes the tombstone.
+    ///
+    /// Round 14b: when the payload also carries `object_ref` /
+    /// `target_object_ref` naming a `cx:flow:` or `cx:morph:` typed-id,
+    /// the redaction additionally flips the corresponding projection's
+    /// state to `ObjectLifecycleState::Redacted` per spec common-fields.md
+    /// §5.1. Place is intentionally excluded — spec note "Place 没有
+    /// redacted" routes Place removal through `cx.place.tombstone` only.
     fn apply_redaction(&mut self, operation: &Operation) -> ProjectionEffect {
         let target = operation
             .payload
@@ -720,7 +747,8 @@ impl ProjectionState {
         }
 
         // Cas-register set-null path: clears the parallel cell and removes
-        // the tombstone. The original MessageState stays intact.
+        // the tombstone. The original MessageState stays intact. Object-ref
+        // redactions don't have an un-redact path (terminal state by spec).
         let unredact = operation
             .payload
             .get("redaction_value")
@@ -755,7 +783,7 @@ impl ProjectionState {
         let cell = RedactionCellValue {
             redacted_at: operation.created_at,
             by,
-            reason,
+            reason: reason.clone(),
         };
         self.redaction_cells
             .insert(target.clone(), Some(cell.clone()));
@@ -763,6 +791,43 @@ impl ProjectionState {
         if let Some(msg) = self.messages.get_mut(&target) {
             msg.redacted_at = Some(operation.created_at);
         }
+
+        // Round 14b — Flow / Morph object-level redaction. If payload
+        // carries an `object_ref` (or fallback `target_object_ref`)
+        // naming a typed-id, push the projection to the Redacted terminal
+        // state. State-machine guard against terminal source is policed
+        // by `check_redaction_target_transition` preflight — by the time
+        // the reducer runs here, the source state is known-permissible.
+        let updated_by = operation
+            .payload
+            .get("by")
+            .or_else(|| operation.payload.get("redacted_by"))
+            .or_else(|| operation.payload.get("sender"))
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned);
+        if let Some(object_ref) = redaction_object_ref(operation) {
+            if let Some(flow) = self.flows.get_mut(&object_ref) {
+                flow.state = ObjectLifecycleState::Redacted;
+                flow.state_changed_at = Some(operation.created_at);
+                flow.updated_by.clone_from(&updated_by);
+                flow.updated_at = Some(operation.created_at);
+                return ProjectionEffect::FlowLifecycle {
+                    flow_id: object_ref,
+                    new_state: ObjectLifecycleState::Redacted,
+                };
+            }
+            if let Some(morph) = self.morphs.get_mut(&object_ref) {
+                morph.state = ObjectLifecycleState::Redacted;
+                morph.state_changed_at = Some(operation.created_at);
+                morph.updated_by.clone_from(&updated_by);
+                morph.updated_at = Some(operation.created_at);
+                return ProjectionEffect::MorphLifecycle {
+                    morph_id: object_ref,
+                    new_state: ObjectLifecycleState::Redacted,
+                };
+            }
+        }
+
         ProjectionEffect::MessageRedacted { event_id: target }
     }
 
@@ -1640,6 +1705,39 @@ impl ProjectionState {
         Ok(())
     }
 
+    /// Round 14b — Read-only preflight for `cx.redaction` events that
+    /// target a Flow / Morph via `object_ref`. Per spec common-fields.md
+    /// §5.1, redaction is legal only from `active` or `archived` source;
+    /// terminal source MUST `failed_precondition` with
+    /// `<kind>_already_terminal`. Unknown object tolerated (causal /
+    /// backfill window). Place is excluded — spec routes Place removal
+    /// through `cx.place.tombstone` only.
+    pub fn check_redaction_target_transition(
+        &self,
+        operation: &Operation,
+    ) -> Result<(), &'static str> {
+        if crate::kinds::canonical_kind_for_operation(operation) != Some(crate::kinds::CX_REDACTION)
+        {
+            return Ok(());
+        }
+        let Some(object_ref) = redaction_object_ref(operation) else {
+            return Ok(());
+        };
+        if let Some(flow) = self.flows.get(&object_ref) {
+            if flow.state.is_terminal() {
+                return Err("flow_already_terminal");
+            }
+            return Ok(());
+        }
+        if let Some(morph) = self.morphs.get(&object_ref) {
+            if morph.state.is_terminal() {
+                return Err("morph_already_terminal");
+            }
+            return Ok(());
+        }
+        Ok(())
+    }
+
     /// Read-only state-machine preflight for a `cx.morph.*` lifecycle event.
     /// Same shape as `check_flow_lifecycle_transition`.
     pub fn check_morph_lifecycle_transition(
@@ -1834,6 +1932,42 @@ impl ProjectionState {
         ProjectionEffect::FlowLifecycle {
             flow_id,
             new_state: target_state,
+        }
+    }
+
+    /// Apply `cx.flow.move` / `cx.flow.reorder` (round 14). These events
+    /// don't affect Flow lifecycle state — they write to the
+    /// `cx.component.flow.position.v1` cell family on the Move/Anchor
+    /// pipeline. The Event-Envelope reducer just bumps `updated_at` /
+    /// `updated_by` on the Flow projection so read-after-write sees the
+    /// touch. Unknown Flow is tolerated (causal / backfill).
+    fn apply_flow_position_touch(
+        &mut self,
+        operation: &Operation,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> ProjectionEffect {
+        let Some(flow_id) = operation
+            .payload
+            .get("flow_id")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned)
+        else {
+            return ProjectionEffect::Rejected {
+                reason: "missing_flow_id".to_owned(),
+            };
+        };
+        let Some(flow) = self.flows.get_mut(&flow_id) else {
+            return ProjectionEffect::Ignored;
+        };
+        flow.updated_by = operation
+            .payload
+            .get("sender")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned);
+        flow.updated_at = Some(now);
+        ProjectionEffect::FlowLifecycle {
+            flow_id,
+            new_state: flow.state,
         }
     }
 
@@ -3380,6 +3514,324 @@ mod tests {
         );
         assert_eq!(
             state.check_morph_lifecycle_transition(&archive_unknown),
+            Ok(())
+        );
+    }
+
+    // ── Round 14: Flow position events (move / reorder) ──
+
+    /// `cx.flow.move` / `cx.flow.reorder` touch the Flow projection's
+    /// `updated_at` / `updated_by` but do NOT change state. Cell-write
+    /// happens on the Move/Anchor pipeline (out of scope here).
+    #[test]
+    fn flow_position_events_touch_projection_without_changing_state() {
+        let mut state = ProjectionState::new();
+        let hlc = ServerHlc::new("test");
+        let space_id = "cx:space:01904100-0000-7000-8000-cfc039892036";
+        let flow_id = "cx:flow:01904100-0000-7000-8000-2fb50799ad50";
+        let board_place_id = "cx:place:01904100-0000-7000-8000-c10dc0000001";
+
+        state.apply(
+            &make_operation(
+                crate::kinds::CX_FLOW_CREATE,
+                space_id,
+                serde_json::json!({
+                    "object": {
+                        "id": flow_id,
+                        "space_id": space_id,
+                        "title": "Launch",
+                        "created_by": "did:web:alice.example",
+                    }
+                }),
+            ),
+            &hlc,
+        );
+        let created_state = state.flows[flow_id].state;
+        let created_updated_at = state.flows[flow_id].updated_at;
+        assert_eq!(created_state, ObjectLifecycleState::Active);
+        assert!(created_updated_at.is_none(), "create does not set updated_at");
+
+        // cx.flow.move — state unchanged, updated_at advances.
+        let move_effect = state.apply(
+            &make_operation(
+                crate::kinds::CX_FLOW_MOVE,
+                space_id,
+                serde_json::json!({
+                    "flow_id": flow_id,
+                    "board_place_id": board_place_id,
+                    "target_place_id": "cx:place:01904100-0000-7000-8000-c10dc0000002",
+                    "sender": "did:web:alice.example",
+                }),
+            ),
+            &hlc,
+        );
+        assert!(matches!(
+            move_effect,
+            ProjectionEffect::FlowLifecycle { new_state: ObjectLifecycleState::Active, .. }
+        ));
+        assert_eq!(state.flows[flow_id].state, ObjectLifecycleState::Active);
+        assert!(state.flows[flow_id].updated_at.is_some(), "move bumps updated_at");
+        assert_eq!(
+            state.flows[flow_id].updated_by.as_deref(),
+            Some("did:web:alice.example")
+        );
+
+        // cx.flow.reorder — same family, same effect.
+        let reorder_effect = state.apply(
+            &make_operation(
+                crate::kinds::CX_FLOW_REORDER,
+                space_id,
+                serde_json::json!({
+                    "flow_id": flow_id,
+                    "board_place_id": board_place_id,
+                    "rank": "a1",
+                    "sender": "did:web:alice.example",
+                }),
+            ),
+            &hlc,
+        );
+        assert!(matches!(
+            reorder_effect,
+            ProjectionEffect::FlowLifecycle { new_state: ObjectLifecycleState::Active, .. }
+        ));
+        assert_eq!(state.flows[flow_id].state, ObjectLifecycleState::Active);
+    }
+
+    /// Unknown Flow tolerated by the position-touch helper, same convention
+    /// as the lifecycle helpers (causal / backfill ordering).
+    #[test]
+    fn flow_position_events_tolerate_unknown_flow() {
+        let mut state = ProjectionState::new();
+        let hlc = ServerHlc::new("test");
+        let effect = state.apply(
+            &make_operation(
+                crate::kinds::CX_FLOW_MOVE,
+                "cx:space:01904100-0000-7000-8000-cfc039892036",
+                serde_json::json!({
+                    "flow_id": "cx:flow:nope-not-here",
+                    "board_place_id": "cx:place:01904100-0000-7000-8000-c10dc0000001",
+                }),
+            ),
+            &hlc,
+        );
+        assert!(matches!(effect, ProjectionEffect::Ignored));
+    }
+
+    // ── Round 14b: cx.redaction → Flow / Morph terminal-state push ──
+
+    /// `cx.redaction` carrying `object_ref: cx:flow:...` flips the
+    /// FlowProjection state to Redacted (terminal) per spec
+    /// common-fields.md §5.1.
+    #[test]
+    fn redaction_with_flow_object_ref_flips_to_redacted() {
+        let mut state = ProjectionState::new();
+        let hlc = ServerHlc::new("test");
+        let space_id = "cx:space:01904100-0000-7000-8000-cfc039892036";
+        let flow_id = "cx:flow:01904100-0000-7000-8000-3fb50799ad50";
+
+        state.apply(
+            &make_operation(
+                crate::kinds::CX_FLOW_CREATE,
+                space_id,
+                serde_json::json!({
+                    "object": {
+                        "id": flow_id,
+                        "space_id": space_id,
+                        "title": "Sensitive flow",
+                        "created_by": "did:web:alice.example",
+                    }
+                }),
+            ),
+            &hlc,
+        );
+        assert_eq!(state.flows[flow_id].state, ObjectLifecycleState::Active);
+
+        let effect = state.apply(
+            &make_operation(
+                crate::kinds::CX_REDACTION,
+                space_id,
+                serde_json::json!({
+                    "target_event_id": "cx:event:01904100-0000-7000-8000-1d10dc000001",
+                    "object_ref": flow_id,
+                    "by": "did:web:alice.example",
+                    "reason": "policy violation",
+                }),
+            ),
+            &hlc,
+        );
+        assert!(matches!(
+            effect,
+            ProjectionEffect::FlowLifecycle { new_state: ObjectLifecycleState::Redacted, .. }
+        ));
+        assert_eq!(state.flows[flow_id].state, ObjectLifecycleState::Redacted);
+        assert!(state.flows[flow_id].state.is_terminal());
+    }
+
+    /// Same for Morph via `object_ref: cx:morph:...`.
+    #[test]
+    fn redaction_with_morph_object_ref_flips_to_redacted() {
+        let mut state = ProjectionState::new();
+        let hlc = ServerHlc::new("test");
+        let space_id = "cx:space:01904100-0000-7000-8000-cfc039892036";
+        let morph_id = "cx:morph:01904100-0000-7000-8000-3fb50799ad60";
+
+        state.apply(
+            &make_operation(
+                crate::kinds::CX_MORPH_CREATE,
+                space_id,
+                serde_json::json!({
+                    "object": {
+                        "id": morph_id,
+                        "space_id": space_id,
+                        "morph_type": "task",
+                        "title": "Sensitive task",
+                        "created_by": "did:web:alice.example",
+                    }
+                }),
+            ),
+            &hlc,
+        );
+        let effect = state.apply(
+            &make_operation(
+                crate::kinds::CX_REDACTION,
+                space_id,
+                serde_json::json!({
+                    "target_event_id": "cx:event:01904100-0000-7000-8000-1d10dc000002",
+                    "object_ref": morph_id,
+                    "sender": "did:web:alice.example",
+                }),
+            ),
+            &hlc,
+        );
+        assert!(matches!(
+            effect,
+            ProjectionEffect::MorphLifecycle { new_state: ObjectLifecycleState::Redacted, .. }
+        ));
+        assert_eq!(state.morphs[morph_id].state, ObjectLifecycleState::Redacted);
+    }
+
+    /// Preflight rejects `cx.redaction` against an already-terminal
+    /// Flow with `flow_already_terminal`. Mirror for Morph also covered.
+    #[test]
+    fn redaction_preflight_rejects_against_already_terminal() {
+        let mut state = ProjectionState::new();
+        let hlc = ServerHlc::new("test");
+        let space_id = "cx:space:01904100-0000-7000-8000-cfc039892036";
+        let flow_id = "cx:flow:01904100-0000-7000-8000-3fb50799ad51";
+        let morph_id = "cx:morph:01904100-0000-7000-8000-3fb50799ad61";
+
+        // Materialise + redact a Flow once (legal first redaction).
+        state.apply(
+            &make_operation(
+                crate::kinds::CX_FLOW_CREATE,
+                space_id,
+                serde_json::json!({
+                    "object": {
+                        "id": flow_id,
+                        "space_id": space_id,
+                        "title": "Flow",
+                        "created_by": "did:web:alice.example",
+                    }
+                }),
+            ),
+            &hlc,
+        );
+        state.apply(
+            &make_operation(
+                crate::kinds::CX_REDACTION,
+                space_id,
+                serde_json::json!({
+                    "target_event_id": "cx:event:01904100-0000-7000-8000-1d10dc000003",
+                    "object_ref": flow_id,
+                }),
+            ),
+            &hlc,
+        );
+        assert_eq!(state.flows[flow_id].state, ObjectLifecycleState::Redacted);
+
+        // Second redaction against the now-Redacted Flow → preflight rejects.
+        let second_redact = make_operation(
+            crate::kinds::CX_REDACTION,
+            space_id,
+            serde_json::json!({
+                "target_event_id": "cx:event:01904100-0000-7000-8000-1d10dc000004",
+                "object_ref": flow_id,
+            }),
+        );
+        assert_eq!(
+            state.check_redaction_target_transition(&second_redact),
+            Err("flow_already_terminal")
+        );
+
+        // Same path for Morph.
+        state.apply(
+            &make_operation(
+                crate::kinds::CX_MORPH_CREATE,
+                space_id,
+                serde_json::json!({
+                    "object": {
+                        "id": morph_id,
+                        "space_id": space_id,
+                        "morph_type": "task",
+                        "title": "Task",
+                        "created_by": "did:web:alice.example",
+                    }
+                }),
+            ),
+            &hlc,
+        );
+        state.apply(
+            &make_operation(
+                crate::kinds::CX_REDACTION,
+                space_id,
+                serde_json::json!({
+                    "target_event_id": "cx:event:01904100-0000-7000-8000-1d10dc000005",
+                    "object_ref": morph_id,
+                }),
+            ),
+            &hlc,
+        );
+        let second_morph_redact = make_operation(
+            crate::kinds::CX_REDACTION,
+            space_id,
+            serde_json::json!({
+                "target_event_id": "cx:event:01904100-0000-7000-8000-1d10dc000006",
+                "object_ref": morph_id,
+            }),
+        );
+        assert_eq!(
+            state.check_redaction_target_transition(&second_morph_redact),
+            Err("morph_already_terminal")
+        );
+    }
+
+    /// Preflight tolerates redactions against unknown objects (causal /
+    /// backfill window) and against missing `object_ref` (message
+    /// redaction path).
+    #[test]
+    fn redaction_preflight_tolerates_unknown_object_or_message_path() {
+        let state = ProjectionState::new();
+        let space_id = "cx:space:01904100-0000-7000-8000-cfc039892036";
+        // Unknown object_ref.
+        let unknown = make_operation(
+            crate::kinds::CX_REDACTION,
+            space_id,
+            serde_json::json!({
+                "target_event_id": "cx:event:01904100-0000-7000-8000-1d10dc000007",
+                "object_ref": "cx:flow:nope-not-here",
+            }),
+        );
+        assert_eq!(state.check_redaction_target_transition(&unknown), Ok(()));
+        // Missing object_ref (message redaction path).
+        let message_redact = make_operation(
+            crate::kinds::CX_REDACTION,
+            space_id,
+            serde_json::json!({
+                "target_event_id": "cx:event:01904100-0000-7000-8000-1d10dc000008",
+            }),
+        );
+        assert_eq!(
+            state.check_redaction_target_transition(&message_redact),
             Ok(())
         );
     }

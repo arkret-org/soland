@@ -285,6 +285,13 @@ async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Response) 
                 render_error(res, StatusCode::PRECONDITION_FAILED, reason, reason);
                 return;
             }
+            // Round 14b — `cx.redaction` targeting a Flow / Morph via
+            // `object_ref` is rejected if the target is already terminal
+            // per spec common-fields.md §5.1 (`<kind>_already_terminal`).
+            if let Err(reason) = proj.check_redaction_target_transition(operation) {
+                render_error(res, StatusCode::PRECONDITION_FAILED, reason, reason);
+                return;
+            }
         }
     }
     if let Err(error) = store.put(CanonicalEventRecord {

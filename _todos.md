@@ -4,10 +4,10 @@
 > spec 参考：`contrix-spec/spec/v1/`、`contrix-spec/spec/v1/artifacts/`。
 > 激进模式 — v1 未发布，发现 spec drift 直接 rip and replace，不留兼容垫片。
 
-## 当前测试状态 (2026-05-16 round 13 close — Flow / Morph projection state machine)
+## 当前测试状态 (2026-05-16 round 14b close — cx.redaction → Flow / Morph terminal-state push)
 
-- `cargo test --lib` — **193 / 193** 全绿(round 12 baseline 187 + round 13 新增 6 条 Flow/Morph projection / preflight tests:`flow_lifecycle_round_trip`、`flow_lifecycle_preflight_rejects_illegal_transitions`、`flow_lifecycle_preflight_tolerates_unknown_flow`、对应 3 条 morph)。
-- `cargo test --test http_api` — **42 / 42** 全绿(round 13 新增 `flow_morph_lifecycle_state_machine_returns_412_for_illegal_transitions`,覆盖 Flow + Morph 完整 wire path:create → restore-on-Active(412)→ archive → archive-again(412)→ update-on-Archived(412)→ restore,morph 同款;同时修正 `events_describe_and_single_event_submit_work` 用 cx.flow.create payload 现在必须含 `object` 字段)。
+- `cargo test --lib` — **199 / 199** 全绿(round 14a baseline 195 + round 14b 新增 4 条 redaction tests:`redaction_with_flow_object_ref_flips_to_redacted`、`redaction_with_morph_object_ref_flips_to_redacted`、`redaction_preflight_rejects_against_already_terminal`、`redaction_preflight_tolerates_unknown_object_or_message_path`)。
+- `cargo test --test http_api` — **43 / 43** 全绿(round 14b 新增 `redaction_targeting_flow_morph_flips_to_redacted_and_rejects_terminal_repeat`)。
 - `cargo test --test move_anchor_wire` — **28 / 28** 全绿。
 - `cargo test --test openapi_typed` — **1 / 1** 全绿。
 - `cargo build` — **0 warning**。
@@ -93,16 +93,58 @@ Round 11 给 Place 做了完整 server-side state machine 后,Flow / Morph 整�
 - **`cx.redaction` 对 Flow / Morph 状态机的影响** — spec §5.1 说 redaction 会把对象推到 `redacted` 终态;当前 soland 的 `apply_redaction` 只处理 message 路径,没消费 Flow / Morph 的 redaction 目标。下一轮加。
 - **Pg persistence for projection_flows / projection_morphs** — schema 已就绪,reducer apply 时还没 write-through 到 DB;同 Place 的 round 12 候选,独立 round。
 
-## 续作（round 14：候选）
+## Round 14a:Flow position events(2026-05-16)
 
-Round 9 / 10 / 11 / 12 / 13 都已落地。后续候选:
+补 round 13 范围外条目 #1:`cx.flow.move` / `cx.flow.reorder` 接入 canonical-kind 注册表 + operation schema validator + 一个轻量 reducer dispatcher arm。这两个事件**不**影响 lifecycle state machine —— 它们的真正写入目标是 `cx.component.flow.position.v1` cell family(走 Move/Anchor pipeline),所以本轮的反应器 helper(`apply_flow_position_touch`)只在 Flow 物化的情况下 bump `updated_at` / `updated_by`,不动 state。SDK 已经实现:`OP_FLOW_MOVE | OP_FLOW_REORDER => self.touch_flow(event)?` 在 round 9 之前就已存在,本轮只补 server-side wire validator + 投影 touch。
+
+| 优先级 | 任务 | 处置 |
+|---|---|---|
+| H | [x] **R14a-1** `src/kinds.rs` 加 `CX_FLOW_MOVE` / `CX_FLOW_REORDER` 常量 + canonical registry | 不加 `is_flow_lifecycle_kind`(它专给 archive/restore 用,position 是另一族)。 |
+| H | [x] **R14a-2** `src/routing/events/operations.rs` 加 `FLOW_POSITION_REQUIREMENTS`(`flow_id` + `board_place_id`,与 spec event-kind-registry `cell_subject` 对齐)+ `operation_schema_for_kind` dispatch arm | `target_place_id` / `rank` 是 spec 可选字段,policed 在 cell-family 层。 |
+| H | [x] **R14a-3** `src/routing/mod.rs::operation_conformance_tests` 加 4 条 vector(flow move happy / flow reorder happy / flow move missing board_place_id / flow reorder missing flow_id) | `builtin_operation_conformance_vectors_cover_registry` 全绿。 |
+| H | [x] **R14a-4** `src/reducer.rs` 加 dispatch arm `Some(CX_FLOW_MOVE) | Some(CX_FLOW_REORDER) => self.apply_flow_position_touch(operation, now)` + 新 `apply_flow_position_touch` helper:取 `flow_id`,缺失返 `Rejected { reason: "missing_flow_id" }`,unknown Flow 返 `Ignored`,已知 Flow 仅 bump `updated_at`/`updated_by` 且返 `FlowLifecycle { new_state: 当前 state }`(state 不变) | 不加 cell-write —— cell 由 Move/Anchor pipeline 在另一条路径上写入。 |
+| H | [x] **R14a-5** `reducer::tests` 加 2 条单测:`flow_position_events_touch_projection_without_changing_state`(create → move(state=Active 不变,updated_at 出现)→ reorder(同样))、`flow_position_events_tolerate_unknown_flow`(unknown Flow 返 `Ignored`) |  |
+| H | [x] **R14a-6** Regression fix:`tests/http_api.rs::event_canonical_digest` helper 同步 commit `54a348a` 中服务端 `event_canonical_source` 的修正:剥离 `proofs` / `unsigned`。`events_describe_and_single_event_submit_work` 之前在 baseline 失败因为客户端 / 服务端 canonical digest 算法不一致 | spec conformance-vectors.md §1.6:canonical digest = sha256 over envelope JSON minus proofs/unsigned/canonical_*。 |
+| H | [x] **R14a-7** `cargo build` 干净;`cargo test --lib`(195/195)/ http_api(42/42)/ move_anchor_wire(28/28)/ openapi_typed(1/1)全绿 | 总 266 tests pass,0 warnings。 |
+
+### 范围外(round 14b+ 仍待完成)
+
+- **`cx.flow.track.*` 接入** — 4 个 track 子事件(disable/enable/set_primary/update)需要先在 reducer `FlowProjection` 加 `tracks: BTreeMap<String, TrackConfig>` 字段;SDK 也只有 FLOW_TRACK_* event-kind 常量,`OP_FLOW_TRACK_*` operation 常量与 dispatcher 处理函数还未落地。SDK 先做。
+
+## Round 14b:cx.redaction → Flow / Morph terminal-state push(2026-05-16)
+
+完成 round 13 范围外条目 #2:`cx.redaction` 对 Flow / Morph 状态机的影响。Spec common-fields.md §5.1 状态转换表把 `cx.<kind>.redact` / `cx.redaction` 与 archive/tombstone 同档处理:source state 必须是 `active` 或 `archived`,terminal source 返 `<kind>_already_terminal`;target state 是 `redacted`。本轮通过 `object_ref` payload 字段(沿用 SDK `extract_place_id` 的 `target_ref` / `object_ref` 约定)区分对象级 redaction 与 message-level redaction:有 `object_ref` → 走对象状态机;否则走原 message redaction cell 路径(round 11 行为不变)。
+
+**Place 不在本轮范围**:spec note "Place 没有 redacted",Place 删除走 `cx.place.tombstone`;`PlaceLifecycleState` 也没 `Redacted` variant。
+
+**SDK 不需要本轮修改**:soland 这一层只在投影 + admission 层加 guard,SDK reducer 仍按现有 `redact_event` 行为运行(只清 event content,不动对象 state)。SDK 同款的对象状态 flip 是 follow-up SDK round。
+
+| 优先级 | 任务 | 处置 |
+|---|---|---|
+| H | [x] **R14b-1** `src/reducer.rs` 加 module-level helper `redaction_object_ref(operation: &Operation) -> Option<String>`,从 payload 抽 `object_ref` (fallback `target_object_ref`),供 reducer + preflight 共用。 |  |
+| H | [x] **R14b-2** `apply_redaction` 扩展:在写入 message redaction cell 之后,如果 payload 有 `object_ref` 且能匹配到 `flows[id]` 或 `morphs[id]`,则 flip 投影 state 到 `Redacted`、bump `state_changed_at` / `updated_at` / `updated_by`,并返 `FlowLifecycle` / `MorphLifecycle` effect(覆盖默认的 `MessageRedacted`)。 | 走过 preflight 的事件保证 source state 不是 terminal。 |
+| H | [x] **R14b-3** `pub fn check_redaction_target_transition(&self, &Operation) -> Result<(), &'static str>` —— preflight:仅当 kind == `cx.redaction` 且 payload 有 `object_ref` 时执行;`flow.state.is_terminal()` → `flow_already_terminal`;morph 同款。未知对象返 `Ok` (causal 容忍);message redaction(无 object_ref)返 `Ok` (走原路径,无对象 guard)。 |  |
+| H | [x] **R14b-4** `event_log::submit_event` preflight 段在 Place / Flow / Morph lifecycle 三 check 之后追加 `check_redaction_target_transition`;失败时同款 `render_error(StatusCode::PRECONDITION_FAILED, reason, reason)` 返 412。 |  |
+| H | [x] **R14b-5** `reducer::tests` 新增 4 条单测:`redaction_with_flow_object_ref_flips_to_redacted`(create → redact-with-object_ref,assert state == Redacted、`is_terminal()` true)、`redaction_with_morph_object_ref_flips_to_redacted`、`redaction_preflight_rejects_against_already_terminal`(双 redact,第二条返 `flow_already_terminal` / `morph_already_terminal`)、`redaction_preflight_tolerates_unknown_object_or_message_path`(unknown object_ref 与无 object_ref 都返 `Ok`)。 |  |
+| H | [x] **R14b-6** `tests/http_api.rs` 新增 `redaction_targeting_flow_morph_flips_to_redacted_and_rejects_terminal_repeat` 集成测试 + `signed_redaction_event` helper(schema_id 用 `cx.schema.message.v1` —— spec 没注册 `cx.schema.redaction.v1`,`cx.redaction` event-kind-registry category=message)。覆盖 Flow + Morph 各自的 happy path(create → redact 200,assert projection.state=="redacted")+ 双 redact 各 412(flow_already_terminal / morph_already_terminal)。 |  |
+| H | [x] **R14b-7** `cargo build` / lib(199/199)/ http_api(43/43)/ move_anchor_wire(28/28)/ openapi_typed(1/1)全绿,0 warnings,总 271 tests pass。 |  |
+
+### 范围外(round 14c+ 仍待完成)
+
+- **SDK round 11(redaction 对应 SDK reducer state flip)** — 当前 SDK `redact_event` 只清 event content,不动 Flow/Morph 投影 state。spec §5.1 同样要求 SDK reducer 把对象 state 推到 Redacted。SDK 的实现需要在 `redact_event` 路径上检测被 redact 的 event 的 kind / object_ref,然后在对应的 subjects / morphs 投影里 flip state。可独立 SDK round 完成。
+- **`cx.flow.track.*` 接入** — 同 round 14a 范围外,SDK 缺 OP / dispatcher,需 SDK 先做。
+- **`cx.redaction` un-redact 对 Flow / Morph 的影响** — Message redaction 支持 `redaction_value: null` 取消;但 spec 把 `redacted` 标为不可逆终态,理论上 Flow / Morph 不应支持 un-redact。当前 reducer 对 `unredact: true` 时只清 message redaction cell,不会反向 flip 对象 state(那本来就是终态)。这是符合 spec 的 ——文档清晰即可,无 code change。
+
+## 续作（round 14c+:候选）
+
+Round 9 / 10 / 11 / 12 / 13 / 14a / 14b 都已落地。后续候选:
 
 | 优先级 | 主题 | 处置 |
 |---|---|---|
 | M | Pg-backed `projection_places` / `projection_flows` / `projection_morphs` | 三张表 schema 都就绪,差 `PgPlaceProjectionStore` / `PgFlowProjectionStore` / `PgMorphProjectionStore` impl + reducer write-through + startup hydrate。 |
 | M | Pg-backed `projection_events` | 独立 migration:`projection_events` trait 已经准备好,只缺一份 SQL schema + `PgProjectionEventStore` impl。 |
-| M | `cx.flow.move` / `cx.flow.reorder` / `cx.flow.track.*` 接入 | 见 round 13 范围外。track.* 需要 reducer state 加 tracks 字段。 |
-| M | `cx.redaction` 对 Flow / Morph 状态机的影响 | 见 round 13 范围外。 |
+| M | `cx.flow.track.*` 接入 | 4 个 track 子事件需要 SDK 先加 `OP_FLOW_TRACK_*` 常量与 dispatcher,然后 soland 加 reducer state 字段 `FlowProjection::tracks`。 |
+| M | SDK round 11(redaction 对应 SDK reducer state flip) | 见 round 14b 范围外。SDK `redact_event` 当前不动 Flow/Morph 投影 state,与 spec §5.1 不对称(soland round 14b 已先行)。 |
 | M | MAL-11 prune walk 自动化 | 当前 `anchor-dag/prune` 只支持显式 `{anchor_id}` 调用;后台 worker 周期性遍历 DAG 跑 `CompactionPolicy::is_eligible` 也可以做,但要先有运营痛点。 |
 | L | OpenAPI 完整 `ToSchema` 化(remaining) | 2026-05-15 round 12 第一遍为 `FederationAnchorsResponse` / `FederationAnchorsPushRequest` / `FederationAnchorsPushResponse` / `EmbeddedWebvhRegisterRequest` 加了 derive。剩余工作:把对应 handler 转 typed signature(`JsonResult<T>` / `JsonBody<T>`),`tests/openapi_typed.rs` forward-compat guard 翻成 positive assertion。继续 grep `&mut Response` + `req.parse_json` 找下一批 untyped handler 候选。 |
 | L | Snapshot v2 multi-chunk fixture | 当前 B4 跑的是 single-chunk case;构造一个大于 256 KiB 的测试 space 来真的走 audit_path 非空路径。 |

@@ -1310,6 +1310,39 @@ mod operation_conformance_tests {
                 payload: json!({"reason": "stale_room"}),
                 valid: false,
             },
+            // Round 14 — flow position event vectors.
+            OperationVector {
+                name: "flow move",
+                kind: kinds::CX_FLOW_MOVE,
+                payload: json!({
+                    "flow_id": "cx:flow:01904100-0000-7000-8000-ca33616973bb",
+                    "board_place_id": "cx:place:01904100-0000-7000-8000-c10dc0000001",
+                    "target_place_id": "cx:place:01904100-0000-7000-8000-c10dc0000002",
+                }),
+                valid: true,
+            },
+            OperationVector {
+                name: "flow reorder",
+                kind: kinds::CX_FLOW_REORDER,
+                payload: json!({
+                    "flow_id": "cx:flow:01904100-0000-7000-8000-ca33616973bb",
+                    "board_place_id": "cx:place:01904100-0000-7000-8000-c10dc0000001",
+                    "rank": "a1",
+                }),
+                valid: true,
+            },
+            OperationVector {
+                name: "flow move missing board_place_id",
+                kind: kinds::CX_FLOW_MOVE,
+                payload: json!({"flow_id": "cx:flow:01904100-0000-7000-8000-ca33616973bb"}),
+                valid: false,
+            },
+            OperationVector {
+                name: "flow reorder missing flow_id",
+                kind: kinds::CX_FLOW_REORDER,
+                payload: json!({"board_place_id": "cx:place:01904100-0000-7000-8000-c10dc0000001", "rank": "a1"}),
+                valid: false,
+            },
             OperationVector {
                 name: "morph create",
                 kind: kinds::CX_MORPH_CREATE,
