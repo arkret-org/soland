@@ -497,6 +497,15 @@ pub fn project_accepted_operations(state: &AppState, origin: &str, operations: &
                 "failed to persist accepted operation projection"
             );
         }
+        // Sprint Q1 第十七增量 (B3): reference applet bridge — if the
+        // accepted operation is `cx.applet.protocol_session.start`,
+        // emit a synthetic `cx.applet.protocol_session.status`
+        // (echo response) immediately afterwards so the timeline
+        // observes the full round trip without a real applet
+        // service plugged in. See
+        // `routing::events::applet_bridge::maybe_emit_echo_status_for_session_start`
+        // for the body shape contract.
+        super::applet_bridge::maybe_emit_echo_status_for_session_start(state, origin, operation);
     }
 }
 

@@ -6347,5 +6347,99 @@ async fn projection_endpoints_hide_terminal_state_by_default() {
     assert_eq!(row["state"], "redacted");
 }
 
+/// Sprint Q1 第十七增量 (B3): submitting a `cx.applet.protocol_session.start`
+/// event MUST trigger the reference applet bridge runtime to emit a
+/// matching `cx.applet.protocol_session.status` event into the same
+/// projection log. The synthetic status carries `bridge =
+/// soland.reference.echo` and echoes the original `params` under
+/// `detail.echo` so the timeline observes the full round trip
+/// without a real applet service plugged in.
+#[tokio::test]
+async fn applet_bridge_emits_synthetic_status_for_session_start() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+    let space_id = "cx:space:0196419b-0000-7000-8000-000000000000";
+    let session_id = "cx:session:01904100-0000-7000-8000-b3b3b3b3b3b3";
+    let applet_id = "cx:applet:01904100-0000-7000-8000-c3c3c3c3c3c3";
+
+    // Submit the start event via the canonical events surface.
+    let mut payload = serde_json::json!({
+        "applet_id": applet_id,
+        "session_id": session_id,
+        "params": {"op": "ping", "tag": "b3-e2e"},
+    });
+    let mut start_event = serde_json::json!({
+        "event_id": "cx:event:01904100-0000-7000-8000-d3d3d3d3d3d3",
+        "kind": "cx.applet.protocol_session.start",
+        // `cx.schema.applet.v1` isn't in contrix-spec's schema
+        // registry yet, so we ride on the generic event envelope
+        // schema until the spec adds a dedicated applet schema_id.
+        "schema_id": "cx.schema.event.v1",
+        "actor_id": "did:web:alice.example",
+        "actor_seq": 1u64,
+        "space_id": space_id,
+        "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
+        "audience": "did:web:soland.local",
+        "domain": "did:web:soland.local",
+        "prev_refs": Vec::<String>::new(),
+        "auth_refs": Vec::<String>::new(),
+        "payload": payload.clone(),
+        "proofs": [{
+            "type": "dev-proof",
+            "verification_method": "did:web:alice.example#01904100-0000-7000-8000-a11ce0000001",
+            "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
+            "audience": "did:web:soland.local",
+            "domain": "did:web:soland.local",
+            "payload_hash": sha256_json(&payload),
+        }],
+    });
+    start_event["canonical_digest"] = Value::String(event_canonical_digest(&start_event));
+    let _ = &mut payload;
+
+    let resp: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&start_event)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(resp["status"], "accepted", "submit response: {resp}");
+
+    // The reference bridge should have appended a synthetic status
+    // event for the same session_id. Pull it out of the projection
+    // log via the events list endpoint.
+    let events: Value = TestClient::get(format!(
+        "http://server/api/v1/events?space_id={space_id}"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    let list = events["events"].as_array().expect("events array");
+    let status_event = list
+        .iter()
+        .find(|e| {
+            e["event_kind"] == "cx.applet.protocol_session.status"
+                && e["payload"]["session_id"] == session_id
+        })
+        .expect("synthetic status event missing from projection log");
+    assert_eq!(status_event["payload"]["status"], "completed");
+    assert_eq!(
+        status_event["payload"]["detail"]["echo"]["op"],
+        "ping"
+    );
+    assert_eq!(
+        status_event["payload"]["detail"]["echo"]["tag"],
+        "b3-e2e"
+    );
+    assert_eq!(
+        status_event["payload"]["detail"]["bridge"],
+        "soland.reference.echo"
+    );
+}
+
 
 
