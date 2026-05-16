@@ -122,7 +122,7 @@ async fn put_key_backup(depot: &mut Depot, req: &mut Request, res: &mut Response
         render_error(
             res,
             StatusCode::INTERNAL_SERVER_ERROR,
-            "persistence_error",
+            "internal_error",
             "failed to persist key backup",
         );
         return;

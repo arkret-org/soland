@@ -136,7 +136,7 @@ async fn audit_events(depot: &mut Depot, req: &mut Request, res: &mut Response) 
             render_error(
                 res,
                 StatusCode::INTERNAL_SERVER_ERROR,
-                "persistence_error",
+                "internal_error",
                 "audit store unavailable",
             );
             return;

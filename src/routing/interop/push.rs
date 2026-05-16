@@ -241,7 +241,7 @@ pub(super) async fn upsert_push_rule(depot: &mut Depot, req: &mut Request, res: 
         render_error(
             res,
             StatusCode::INTERNAL_SERVER_ERROR,
-            "persistence_error",
+            "internal_error",
             "push rules store unavailable",
         );
         return;

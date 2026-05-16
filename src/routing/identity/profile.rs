@@ -32,7 +32,7 @@ async fn profile_presence(depot: &mut Depot, req: &mut Request, res: &mut Respon
             render_error(
                 res,
                 StatusCode::INTERNAL_SERVER_ERROR,
-                "persistence_error",
+                "internal_error",
                 &error.to_string(),
             );
             return;

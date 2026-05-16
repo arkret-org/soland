@@ -202,7 +202,7 @@ async fn client_sync(depot: &mut Depot, req: &mut Request, res: &mut Response) {
             render_error(
                 res,
                 StatusCode::UNAUTHORIZED,
-                "unauthorized",
+                "unauthenticated",
                 "set_presence requires authentication",
             );
             return;
@@ -1148,7 +1148,7 @@ pub(super) async fn events_query(depot: &mut Depot, req: &mut Request, res: &mut
                 render_error(
                     res,
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    "projection_error",
+                    "internal_error",
                     &error.to_string(),
                 );
                 return;
@@ -1304,7 +1304,7 @@ async fn sync_gap_backfill(depot: &mut Depot, req: &mut Request, res: &mut Respo
                 render_error(
                     res,
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    "backfill_error",
+                    "internal_error",
                     &error.to_string(),
                 );
                 return;
@@ -1459,7 +1459,7 @@ async fn snapshot_chunk(depot: &mut Depot, req: &mut Request, res: &mut Response
         render_error(
             res,
             StatusCode::CONFLICT,
-            "snapshot_stale",
+            "stale_frontier",
             "snapshot_ref no longer matches the current snapshot frontier",
         );
         return;

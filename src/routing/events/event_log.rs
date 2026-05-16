@@ -173,7 +173,7 @@ async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Response) 
         render_error(
             res,
             StatusCode::PAYLOAD_TOO_LARGE,
-            "event_too_large",
+            "payload_too_large",
             "event envelope exceeds max_event_bytes",
         );
         return;
@@ -227,7 +227,7 @@ async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Response) 
         render_error(
             res,
             StatusCode::CONFLICT,
-            "actor_seq_conflict",
+            "cas_conflict",
             "actor_seq must be strictly increasing for the actor",
         );
         return;
@@ -237,7 +237,7 @@ async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Response) 
             render_error(
                 res,
                 StatusCode::CONFLICT,
-                "missing_dependency",
+                "dependency_missing",
                 "prev_refs must reference accepted events",
             );
             return;
@@ -248,7 +248,7 @@ async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Response) 
             render_error(
                 res,
                 StatusCode::CONFLICT,
-                "missing_auth_ref",
+                "dependency_missing",
                 "refs[role=authorized_by] must reference accepted authorization events",
             );
             return;
@@ -258,11 +258,11 @@ async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Response) 
     let projection_operation = projection_operation_from_event(&parsed, &envelope);
     if let Some(operation) = projection_operation.as_ref() {
         if let Err(message) = validate_operation_semantics(state, std::slice::from_ref(operation)) {
-            render_error(res, StatusCode::BAD_REQUEST, "invalid_semantics", message);
+            render_error(res, StatusCode::BAD_REQUEST, "schema_violation", message);
             return;
         }
         if let Err(message) = validate_operation_policy(state, std::slice::from_ref(operation)) {
-            render_error(res, StatusCode::FORBIDDEN, "policy_denied", message);
+            render_error(res, StatusCode::FORBIDDEN, "capability_denied", message);
             return;
         }
         // Server-side state-machine preflight for cx.place.* / cx.flow.* /
@@ -318,7 +318,7 @@ async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Response) 
         render_error(
             res,
             StatusCode::INTERNAL_SERVER_ERROR,
-            "persistence_error",
+            "internal_error",
             "events store unavailable",
         );
         return;
@@ -396,7 +396,7 @@ async fn batch_get_events(depot: &mut Depot, req: &mut Request, res: &mut Respon
         render_error(
             res,
             StatusCode::BAD_REQUEST,
-            "limit_exceeded",
+            "quota_exceeded",
             "too many event_ids requested",
         );
         return;
@@ -762,7 +762,7 @@ fn validate_event_envelope(
     if !space_has_member(state, &space_id, &session.actor) {
         return Err(event_validation_error(
             StatusCode::FORBIDDEN,
-            "policy_denied",
+            "capability_denied",
             "actor is not a member of the event Space",
         ));
     }
@@ -1156,7 +1156,7 @@ fn event_ref_list(
     if values.len() > max_len {
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
-            "limit_exceeded",
+            "quota_exceeded",
             "event reference list exceeds the active profile limit",
         ));
     }
@@ -1227,7 +1227,7 @@ fn event_semantic_refs(
     if values.len() > max_len {
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
-            "limit_exceeded",
+            "quota_exceeded",
             "refs exceeds the active profile limit",
         ));
     }

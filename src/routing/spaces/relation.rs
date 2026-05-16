@@ -95,7 +95,7 @@ async fn create_relation(depot: &mut Depot, req: &mut Request, res: &mut Respons
                 render_error(
                     res,
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    "projection_error",
+                    "internal_error",
                     "relation not found after creation",
                 );
             }

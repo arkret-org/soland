@@ -114,7 +114,7 @@ async fn keys_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
             render_error(
                 res,
                 StatusCode::INTERNAL_SERVER_ERROR,
-                "persistence_error",
+                "internal_error",
                 &error.to_string(),
             );
             return;
@@ -158,7 +158,7 @@ async fn keys_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         render_error(
             res,
             StatusCode::INTERNAL_SERVER_ERROR,
-            "persistence_error",
+            "internal_error",
             &error.to_string(),
         );
         return;

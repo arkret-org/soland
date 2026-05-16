@@ -160,7 +160,7 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
             render_error(
                 res,
                 StatusCode::CONFLICT,
-                "hash_mismatch",
+                "digest_mismatch",
                 "provided sha256 does not match blob content",
             );
             return;
@@ -177,7 +177,7 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         render_error(
             res,
             StatusCode::INTERNAL_SERVER_ERROR,
-            "blob_store_error",
+            "internal_error",
             &error.to_string(),
         );
         return;
@@ -202,7 +202,7 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         render_error(
             res,
             StatusCode::INTERNAL_SERVER_ERROR,
-            "blob_store_error",
+            "internal_error",
             &error.to_string(),
         );
         return;
@@ -274,7 +274,7 @@ async fn blob_get(depot: &mut Depot, req: &mut Request, res: &mut Response) {
                     render_error(
                         res,
                         StatusCode::INTERNAL_SERVER_ERROR,
-                        "blob_store_error",
+                        "internal_error",
                         "invalid blob size metadata",
                     );
                     return;
@@ -349,7 +349,7 @@ async fn blob_get(depot: &mut Depot, req: &mut Request, res: &mut Response) {
                         render_error(
                             res,
                             StatusCode::INTERNAL_SERVER_ERROR,
-                            "blob_store_error",
+                            "internal_error",
                             "blob object unavailable",
                         );
                         return;
@@ -365,7 +365,7 @@ async fn blob_get(depot: &mut Depot, req: &mut Request, res: &mut Response) {
                     render_error(
                         res,
                         StatusCode::INTERNAL_SERVER_ERROR,
-                        "blob_store_error",
+                        "internal_error",
                         "blob object size metadata mismatch",
                     );
                     return;

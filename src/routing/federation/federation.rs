@@ -106,7 +106,7 @@ pub(super) async fn federation_transaction(
             render_error(
                 res,
                 StatusCode::INTERNAL_SERVER_ERROR,
-                "persistence_error",
+                "internal_error",
                 &error.to_string(),
             );
             return;
@@ -143,7 +143,7 @@ pub(super) async fn federation_transaction(
             render_error(
                 res,
                 StatusCode::INTERNAL_SERVER_ERROR,
-                "serialization_error",
+                "internal_error",
                 &error.to_string(),
             );
             return;
@@ -165,7 +165,7 @@ pub(super) async fn federation_transaction(
         render_error(
             res,
             StatusCode::INTERNAL_SERVER_ERROR,
-            "persistence_error",
+            "internal_error",
             &error.to_string(),
         );
         return;

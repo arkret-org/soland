@@ -221,7 +221,7 @@ async fn upsert_policy_document(depot: &mut Depot, req: &mut Request, res: &mut 
         render_error(
             res,
             StatusCode::INTERNAL_SERVER_ERROR,
-            "persistence_error",
+            "internal_error",
             "policy store unavailable",
         );
         return;

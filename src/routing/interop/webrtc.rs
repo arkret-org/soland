@@ -136,7 +136,7 @@ async fn create_webrtc_session(depot: &mut Depot, req: &mut Request, res: &mut R
         render_error(
             res,
             StatusCode::INTERNAL_SERVER_ERROR,
-            "persistence_error",
+            "internal_error",
             "webrtc session store unavailable",
         );
         return;
@@ -250,7 +250,7 @@ async fn put_webrtc_signal(depot: &mut Depot, req: &mut Request, res: &mut Respo
             render_error(
                 res,
                 StatusCode::INTERNAL_SERVER_ERROR,
-                "persistence_error",
+                "internal_error",
                 "webrtc signal store unavailable",
             );
         }

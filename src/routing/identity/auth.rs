@@ -512,7 +512,7 @@ pub fn authenticated_session(
     let session = state.persistence.sessions().get(&token_hash).map_err(|_| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
-            "persistence_error",
+            "internal_error",
             "session store unavailable",
         )
     })?;
@@ -712,7 +712,7 @@ fn ensure_oauth_account(
         .map_err(|_| {
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                "persistence_error",
+                "internal_error",
                 "account store unavailable",
             )
         })?
@@ -729,7 +729,7 @@ fn ensure_oauth_account(
     let existing = accounts.list().map_err(|_| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
-            "persistence_error",
+            "internal_error",
             "account store unavailable",
         )
     })?;
@@ -748,7 +748,7 @@ fn ensure_oauth_account(
     accounts.put(&account).map_err(|_| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
-            "persistence_error",
+            "internal_error",
             "account store unavailable",
         )
     })?;
@@ -770,7 +770,7 @@ fn ensure_oauth_device(
     match devices.get(&oauth.actor, &oauth.device_id).map_err(|_| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
-            "persistence_error",
+            "internal_error",
             "device store unavailable",
         )
     })? {
@@ -806,7 +806,7 @@ fn ensure_oauth_device(
     devices.put(&device).map_err(|_| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
-            "persistence_error",
+            "internal_error",
             "device store unavailable",
         )
     })
