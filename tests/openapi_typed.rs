@@ -327,4 +327,26 @@ async fn typed_describe_handlers_publish_response_schemas() {
             "missing operationId {operation_id} from round 15m typed conversion"
         );
     }
+
+    // Round 15n — identity/device_messages.rs typed batch (2 handlers).
+    // - send_device_messages → cx.device_messages.send
+    // - get_device_messages → cx.device_messages.receive
+    // Wire types already had ToSchema; new operation_ids match the
+    // existing `cx.device_messages.describe` family.
+    for typed_now in [
+        "DeviceMessagesSendRequest",
+        "DeviceMessagesSendResponse",
+        "DeviceMessagesReceiveResponse",
+    ] {
+        assert!(
+            body.contains(typed_now),
+            "{typed_now} missing — round 15n typed signature did not publish its schema"
+        );
+    }
+    for operation_id in ["cx.device_messages.send", "cx.device_messages.receive"] {
+        assert!(
+            body.contains(&format!("operationId: {operation_id}")),
+            "missing operationId {operation_id} from round 15n typed conversion"
+        );
+    }
 }

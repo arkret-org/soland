@@ -11,15 +11,17 @@
 
 use std::collections::BTreeMap;
 
-use salvo::http::StatusCode;
+use salvo::oapi::extract::{JsonBody, QueryParam};
 use salvo::prelude::*;
 use serde_json::{Value, json};
 
 use super::{
-    SyncCursorError, auth_or_render, now, parse_and_validate_sync_cursor, query_param,
-    render_error, sync_token_for_client_sync, validate_device_message_payload,
-    validate_did,
+    SyncCursorError, now, parse_and_validate_sync_cursor, sync_token_for_client_sync,
+    validate_device_message_payload, validate_did,
 };
+use crate::error::{AppError, ErrorCode};
+use crate::result::{JsonResult, json_ok};
+use crate::routing::system::extract::AuthArgs;
 use crate::state::{AppState, DeviceMessageRecord, SessionRecord};
 use crate::wire::{
     DeviceMessagesReceiveResponse, DeviceMessagesSendRequest, DeviceMessagesSendResponse,
@@ -39,53 +41,36 @@ pub(super) fn router() -> Router {
         )
 }
 
-#[endpoint]
-async fn send_device_messages(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+#[endpoint(
+    operation_id = "cx.device_messages.send",
+    tags("device_messages"),
+    summary = "Send to-device messages (idempotent on Idempotency-Key + sender actor)"
+)]
+async fn send_device_messages(
+    aa: AuthArgs,
+    body: JsonBody<DeviceMessagesSendRequest>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<DeviceMessagesSendResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let Some(session) = auth_or_render(state, req, res) else {
-        return;
-    };
+    let session = aa.authenticated_session(state, req)?;
     let idempotency_key = req
         .headers()
         .get("Idempotency-Key")
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_owned())
         .unwrap_or_else(sync_token);
-    let body = match req.parse_json::<DeviceMessagesSendRequest>().await {
-        Ok(body) => body,
-        Err(_) => {
-            render_error(
-                res,
-                StatusCode::BAD_REQUEST,
-                "bad_json",
-                "invalid device messages request",
-            );
-            return;
-        }
-    };
+    let body = body.into_inner();
     for (recipient, devices) in &body.messages {
         if validate_did(recipient).is_err() {
-            render_error(
-                res,
-                StatusCode::BAD_REQUEST,
-                "invalid_param",
-                "invalid device message recipient",
-            );
-            return;
+            return Err(AppError::invalid_param("invalid device message recipient"));
         }
         for (device_id, content) in devices {
             if device_id.trim().is_empty() {
-                render_error(
-                    res,
-                    StatusCode::BAD_REQUEST,
-                    "invalid_param",
-                    "invalid device_id",
-                );
-                return;
+                return Err(AppError::invalid_param("invalid device_id"));
             }
             if let Err(message) = validate_device_message_payload(content) {
-                render_error(res, StatusCode::BAD_REQUEST, "invalid_param", message);
-                return;
+                return Err(AppError::invalid_param(message));
             }
         }
     }
@@ -94,12 +79,11 @@ async fn send_device_messages(depot: &mut Depot, req: &mut Request, res: &mut Re
         .try_register_txn(format!("{}:{idempotency_key}", session.actor))
         .unwrap_or(false);
     if !registered {
-        res.render(Json(DeviceMessagesSendResponse {
+        return json_ok(DeviceMessagesSendResponse {
             ok: true,
             delivered: json!({}),
             unknown_devices: json!({}),
-        }));
-        return;
+        });
     }
     let mut delivered = serde_json::Map::new();
     for (recipient, devices) in body.messages {
@@ -121,20 +105,29 @@ async fn send_device_messages(depot: &mut Depot, req: &mut Request, res: &mut Re
         }
         delivered.insert(recipient, json!(delivered_devices));
     }
-    res.render(Json(DeviceMessagesSendResponse {
+    json_ok(DeviceMessagesSendResponse {
         ok: true,
         delivered: json!(delivered),
         unknown_devices: json!({}),
-    }));
+    })
 }
 
-#[endpoint]
-async fn get_device_messages(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+#[endpoint(
+    operation_id = "cx.device_messages.receive",
+    tags("device_messages"),
+    summary = "Pull pending to-device messages for the bound session/device"
+)]
+async fn get_device_messages(
+    aa: AuthArgs,
+    ack: QueryParam<String, false>,
+    since: QueryParam<String, false>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<DeviceMessagesReceiveResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let Some(session) = auth_or_render(state, req, res) else {
-        return;
-    };
-    let ack_position = match query_param(req, "ack").or_else(|| query_param(req, "since")) {
+    let session = aa.authenticated_session(state, req)?;
+    let cursor = ack.into_inner().or_else(|| since.into_inner());
+    let ack_position = match cursor {
         Some(cursor) => match parse_and_validate_sync_cursor(
             &cursor,
             state,
@@ -147,21 +140,16 @@ async fn get_device_messages(depot: &mut Depot, req: &mut Request, res: &mut Res
         ) {
             Ok(cursor) => cursor.to_device_position,
             Err(SyncCursorError::Expired) => {
-                render_error(
-                    res,
-                    StatusCode::UNAUTHORIZED,
-                    "sync_token_expired",
+                return Err(AppError::new(
+                    ErrorCode::SyncTokenExpired,
                     "sync token has expired",
-                );
-                return;
+                ));
             }
             Err(SyncCursorError::Invalid(message)) => {
-                render_error(res, StatusCode::BAD_REQUEST, "invalid_param", message);
-                return;
+                return Err(AppError::invalid_param(message));
             }
             Err(SyncCursorError::Mismatch(message)) => {
-                render_error(res, StatusCode::BAD_REQUEST, "sync_token_mismatch", message);
-                return;
+                return Err(AppError::invalid_param(message));
             }
         },
         None => 0,
@@ -182,7 +170,7 @@ async fn get_device_messages(depot: &mut Depot, req: &mut Request, res: &mut Res
         .filter_map(|event| event.get("position").and_then(|position| position.as_i64()))
         .max()
         .unwrap_or(ack_position);
-    res.render(Json(DeviceMessagesReceiveResponse {
+    json_ok(DeviceMessagesReceiveResponse {
         events,
         next_batch: Some(sync_token_for_client_sync(
             state,
@@ -195,7 +183,7 @@ async fn get_device_messages(depot: &mut Depot, req: &mut Request, res: &mut Res
             to_device_position,
         )),
         limited: false,
-    }));
+    })
 }
 
 pub fn prune_acked_device_messages(state: &AppState, session: &SessionRecord, ack_position: i64) {
