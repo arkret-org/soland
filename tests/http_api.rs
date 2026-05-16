@@ -6441,5 +6441,132 @@ async fn applet_bridge_emits_synthetic_status_for_session_start() {
     );
 }
 
+/// Round 15f (2026-05-16) — multi-chunk snapshot fixture. The single-chunk
+/// case is covered by `snapshot_v2_audit_path_verifies_against_merkle_root`,
+/// but for single-chunk snapshots the audit path is empty (the root IS the
+/// leaf) so the `SnapshotMerkleTree::verify` codepath never exercises a
+/// real Merkle sibling chain. This test pumps a Space full of large
+/// messages until the canonical snapshot bytes exceed the chunker's
+/// default 256 KiB target, then verifies every chunk's non-empty audit
+/// path reconstructs to the head's merkle_root.
+#[tokio::test]
+async fn snapshot_v2_multi_chunk_fixture_verifies_non_empty_audit_path() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+
+    let space: Value = TestClient::post("http://server/api/v1/spaces")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({
+            "title": "snapshot-v2-multi-chunk-test",
+            "summary": "B4 follow-up: ensure multi-chunk audit_path verifies",
+            "public": true,
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    let space_id = space["space_id"].as_str().unwrap().to_owned();
+
+    // 64 messages × ~4 KB body each ≈ 256 KB serialized — should land
+    // ≥ 2 chunks once the snapshot wrapper + per-message JSON overhead
+    // is included. Body is a deterministic ASCII pattern so the test is
+    // reproducible run-to-run.
+    //
+    // Note: snapshot's `messages` array comes from the legacy
+    // `persistence.messages()` MessageRecord store, populated by
+    // `POST /api/v1/messages/send`. Submitting events via
+    // `POST /api/v1/events` writes to the `canonical_events` store but
+    // doesn't populate MessageRecord, so it wouldn't grow the snapshot.
+    let body_text: String = (0..40)
+        .map(|i| {
+            format!(
+                "para{:02}: lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor.\n",
+                i
+            )
+        })
+        .collect();
+    let messages_to_submit = 80u64;
+    for seq in 1..=messages_to_submit {
+        let resp: Value = TestClient::post("http://server/api/v1/messages/send")
+            .add_header("authorization", format!("Bearer {token}"), true)
+            .json(&serde_json::json!({
+                "space_id": space_id,
+                "thread_id": format!("cx:flow:multi-chunk-{:02}", seq % 4),
+                "content": {"body": body_text, "msgtype": "m.text", "seq": seq},
+                "encrypted": false,
+            }))
+            .send(&app_from_state(state.clone()))
+            .await
+            .take_json()
+            .await
+            .unwrap();
+        assert!(resp["event_id"].is_string(), "send failed at seq {seq}: {resp:?}");
+    }
+
+    let head: Value = TestClient::get(format!(
+        "http://server/api/v1/sync/snapshot-head?space_id={space_id}"
+    ))
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    let chunk_count = head["chunk_count"].as_u64().unwrap();
+    let total_bytes = head["total_bytes"].as_u64().unwrap();
+    assert!(
+        chunk_count >= 2,
+        "expected multi-chunk snapshot but got chunk_count={chunk_count} \
+         (total_bytes={total_bytes}); bump message count + body size if \
+         this regresses"
+    );
+    assert!(
+        total_bytes > 256 * 1024,
+        "expected total_bytes > 256 KiB to force the chunker but got {total_bytes}"
+    );
+
+    // For each chunk, audit_path MUST be non-empty (multi-chunk case)
+    // AND reconstruct to merkle_root via SnapshotMerkleTree::verify.
+    let snapshot_ref = head["snapshot_ref"].as_str().unwrap();
+    let root = contrix_sdk::Hash::new(head["merkle_root"].as_str().unwrap().to_owned()).unwrap();
+    let tree_size = chunk_count as usize;
+    let mut any_non_empty_path = false;
+    for chunk_id in 0..chunk_count {
+        let chunk: Value = TestClient::get(format!(
+            "http://server/api/v1/sync/snapshot-chunk?snapshot_ref={snapshot_ref}&chunk_id={chunk_id}"
+        ))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+        let leaf = contrix_sdk::Hash::new(chunk["digest"].as_str().unwrap().to_owned()).unwrap();
+        let audit_path: Vec<contrix_sdk::Hash> = chunk["audit_path"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|h| contrix_sdk::Hash::new(h.as_str().unwrap().to_owned()).unwrap())
+            .collect();
+        if !audit_path.is_empty() {
+            any_non_empty_path = true;
+        }
+        assert!(
+            contrix_sdk::SnapshotMerkleTree::verify(
+                &root,
+                &leaf,
+                chunk_id as usize,
+                &audit_path,
+                tree_size,
+            ),
+            "audit_path for chunk {chunk_id}/{chunk_count} must reconstruct to merkle_root"
+        );
+    }
+    assert!(
+        any_non_empty_path,
+        "at least one chunk MUST have a non-empty audit_path in a multi-chunk snapshot \
+         (this is the codepath single-chunk fixtures don't exercise)"
+    );
+}
+
 
 

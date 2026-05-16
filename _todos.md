@@ -7,11 +7,11 @@
 ## 当前测试状态 (2026-05-16)
 
 - `cargo test --lib` — **205 / 205** 全绿
-- `cargo test --test http_api` — **53 / 53** 全绿
+- `cargo test --test http_api` — **54 / 54** 全绿
 - `cargo test --test move_anchor_wire` — **28 / 28** 全绿
 - `cargo test --test openapi_typed` — **1 / 1** 全绿
 - `cargo build` — **0 warning**
-- 总 **287 tests pass**
+- 总 **288 tests pass**
 
 ## 已完成历史(详情查 git log + `CHANGELOG.md`,本文件不重复)
 
@@ -30,6 +30,7 @@
 - **round 15c**(2026-05-16)— OpenAPI typed signature for projection_query handlers(`places` / `flows` / `morphs` 三个 handler 全部转 `JsonResult<T>` + 6 个 ToSchema response/row struct + `QueryParam<String, true>` + `AuthArgs`)。`openapi_typed.rs` 加 6 条 positive assertion。继续 round 12 / 14c 的 OpenAPI 完整度工作。
 - **round 15d**(2026-05-16)— Terminal-state visibility filter for projection_query handlers。三个 handler 加 `include_terminal: QueryParam<bool, false>` 可选参数;默认 `false` → 隐藏 tombstoned(Place)/ deleted+redacted(Flow/Morph)。spec rationale:终态 unrecoverable,客户端 hydrate kanban 视图不应看到。 explicit `?include_terminal=true` 返完整集供 audit / undelete UI。
 - **round 15e**(2026-05-16)— Non-canonical errcode 清理。把 18 处 `"persistence_error"` + 5 处 `"blob_store_error"` + 1 处 `"serialization_error"` + 2 处 `"projection_error"` + 1 处 `"backfill_error"` 都映射成 `"internal_error"`;`"event_too_large" → "payload_too_large"`、`"actor_seq_conflict" → "cas_conflict"`、`"missing_dependency"/"missing_auth_ref" → "dependency_missing"`、`"limit_exceeded" → "quota_exceeded"`、`"unauthorized" → "unauthenticated"`、`"snapshot_stale" → "stale_frontier"`、`"hash_mismatch" → "digest_mismatch"`、`"policy_denied" → "capability_denied"`、`"invalid_semantics" → "schema_violation"`。HTTP status code 保留,只换 errcode 字符串;federation peer rejection JSON literal(`json!({"reason": "persistence_error"})`)与 SDK enum-to-string 转换表(`admin/anchor.rs`)不动 —— 它们不是 HTTP errcode。
+- **round 15f**(2026-05-16)— Snapshot v2 multi-chunk fixture(round B4 留下的覆盖盲点)。新测试 `snapshot_v2_multi_chunk_fixture_verifies_non_empty_audit_path`:塞 80 条 ~4 KB body 的 message 让快照 total_bytes >256 KiB,验 `chunk_count ≥ 2` + 每个 chunk 的 `audit_path` 非空 + `SnapshotMerkleTree::verify` 重建到 `merkle_root`。补的是单 chunk 测试不走的 sibling chain 路径。 |
 
 ## 续作(round 15+ 候选)
 
@@ -43,7 +44,7 @@
 | L | ~~Registry 化非 canonical errcode~~ | ✅ 2026-05-16 已落地(round 15e)。 |
 | L | ~~Tombstoned / terminal Place 是否对外可见~~ | ✅ 2026-05-16 已落地(round 15d)。三个 projection endpoint 都加了 `include_terminal=true|false` query param;默认 hide。 |
 | L | ~~OpenAPI typed signature for projection_query handlers~~ | ✅ 2026-05-16 已落地(round 15c)。 |
-| L | Snapshot v2 multi-chunk fixture | 当前 B4 跑的是 single-chunk case;构造一个大于 256 KiB 的测试 space 来真的走 audit_path 非空路径。 |
+| L | ~~Snapshot v2 multi-chunk fixture~~ | ✅ 2026-05-16 已落地(round 15f)。 |
 
 ## 维护规则
 
