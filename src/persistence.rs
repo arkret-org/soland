@@ -2632,6 +2632,7 @@ pub struct PgPersistenceStore {
     place_projections: PgPlaceProjectionStore,
     flow_projections: PgFlowProjectionStore,
     morph_projections: PgMorphProjectionStore,
+    projection_events: PgProjectionEventStore,
     fallback: MemoryPersistenceStore,
 }
 
@@ -2658,7 +2659,8 @@ impl PgPersistenceStore {
             policy_documents: PgPolicyDocumentStore { pool: pool.clone() },
             place_projections: PgPlaceProjectionStore { pool: pool.clone() },
             flow_projections: PgFlowProjectionStore { pool: pool.clone() },
-            morph_projections: PgMorphProjectionStore { pool },
+            morph_projections: PgMorphProjectionStore { pool: pool.clone() },
+            projection_events: PgProjectionEventStore { pool },
             fallback: MemoryPersistenceStore::new(),
         }
     }
@@ -2754,7 +2756,7 @@ impl PersistenceStore for PgPersistenceStore {
     }
 
     fn projection_events(&self) -> &dyn ProjectionEventStore {
-        self.fallback.projection_events()
+        &self.projection_events
     }
 
     fn device_messages(&self) -> &dyn DeviceMessageStore {
@@ -5632,6 +5634,85 @@ impl MorphProjectionStore for PgMorphProjectionStore {
             .execute(&mut conn)
             .map(|_| ())
             .map_err(PersistenceError::from)
+    }
+}
+
+// ── Round 15i (2026-05-16): Pg-backed projection_events store ──
+// Append-only mirror of the in-memory ProjectionEventRecord stream
+// stamped down by `routing::events::projection::append_projection_event`.
+// Surrogate `ordinal` BIGSERIAL handles retry collisions; the
+// canonical_events table is where the `(actor_id, actor_seq)` uniqueness
+// invariant lives.
+
+struct PgProjectionEventStore {
+    pool: PgPool,
+}
+
+#[derive(QueryableByName)]
+struct ProjectionEventRow {
+    #[diesel(sql_type = Text)]
+    event_id: String,
+    #[diesel(sql_type = Text)]
+    space_id: String,
+    #[diesel(sql_type = Text)]
+    event_kind: String,
+    #[diesel(sql_type = Text)]
+    operation_type: String,
+    #[diesel(sql_type = Nullable<Text>)]
+    operation_id: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
+    sender: Option<String>,
+    #[diesel(sql_type = Jsonb)]
+    payload: Value,
+    #[diesel(sql_type = Timestamptz)]
+    created_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl From<ProjectionEventRow> for ProjectionEventRecord {
+    fn from(row: ProjectionEventRow) -> Self {
+        Self {
+            event_id: row.event_id,
+            space_id: row.space_id,
+            event_kind: row.event_kind,
+            operation_type: row.operation_type,
+            operation_id: row.operation_id,
+            sender: row.sender,
+            payload: row.payload,
+            created_at: row.created_at,
+        }
+    }
+}
+
+impl ProjectionEventStore for PgProjectionEventStore {
+    fn append(&self, record: ProjectionEventRecord) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query(
+            "INSERT INTO projection_events \
+             (event_id, space_id, event_kind, operation_type, operation_id, sender, payload, created_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+        )
+        .bind::<Text, _>(&record.event_id)
+        .bind::<Text, _>(&record.space_id)
+        .bind::<Text, _>(&record.event_kind)
+        .bind::<Text, _>(&record.operation_type)
+        .bind::<Nullable<Text>, _>(&record.operation_id)
+        .bind::<Nullable<Text>, _>(&record.sender)
+        .bind::<Jsonb, _>(&record.payload)
+        .bind::<Timestamptz, _>(record.created_at)
+        .execute(&mut conn)
+        .map(|_| ())
+        .map_err(PersistenceError::from)
+    }
+
+    fn snapshot_all(&self) -> PersistenceResult<Vec<ProjectionEventRecord>> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query(
+            "SELECT event_id, space_id, event_kind, operation_type, operation_id, sender, payload, created_at \
+             FROM projection_events ORDER BY ordinal",
+        )
+        .load::<ProjectionEventRow>(&mut conn)
+        .map(|rows| rows.into_iter().map(ProjectionEventRecord::from).collect())
+        .map_err(PersistenceError::from)
     }
 }
 

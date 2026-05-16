@@ -381,6 +381,27 @@ diesel::table! {
     }
 }
 
+// Round 15i — append-only projection event log. Mirror of the
+// in-memory `ProjectionEventRecord` stream stamped down via
+// `state.persistence.projection_events().append(...)` from the
+// routing `project_accepted_operations` path. Surrogate `ordinal`
+// primary key (BIGSERIAL) so retries don't collide on event_id;
+// canonical_events table is where the (actor_id, actor_seq) uniqueness
+// invariant lives.
+diesel::table! {
+    projection_events (ordinal) {
+        ordinal -> BigInt,
+        event_id -> Text,
+        space_id -> Text,
+        event_kind -> Text,
+        operation_type -> Text,
+        operation_id -> Nullable<Text>,
+        sender -> Nullable<Text>,
+        payload -> Jsonb,
+        created_at -> Timestamptz,
+    }
+}
+
 diesel::allow_tables_to_appear_in_same_query!(
     accounts,
     sessions,
@@ -410,4 +431,5 @@ diesel::allow_tables_to_appear_in_same_query!(
     projection_places,
     projection_flows,
     projection_morphs,
+    projection_events,
 );
