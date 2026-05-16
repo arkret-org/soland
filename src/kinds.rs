@@ -40,6 +40,17 @@ pub const CX_FLOW_RESTORE: &str = "cx.flow.restore";
 // structured cache).
 pub const CX_FLOW_MOVE: &str = "cx.flow.move";
 pub const CX_FLOW_REORDER: &str = "cx.flow.reorder";
+// Round 14d (2026-05-16) — Flow track sub-events. Manage individual
+// entries in `Flow.tracks: BTreeMap<String, FlowTrackConfig>` (SDK has
+// the reducer for these as of SDK round 12). soland's wire validator
+// enforces payload shape (flow_id + track_id [+ patch for update]) and
+// the spec common-fields.md §5.1 update-on-non-active state guard.
+// FlowProjection still doesn't carry `tracks` server-side; the touch
+// just bumps `updated_at` (mirror of cx.flow.move/reorder pattern).
+pub const CX_FLOW_TRACK_DISABLE: &str = "cx.flow.track.disable";
+pub const CX_FLOW_TRACK_ENABLE: &str = "cx.flow.track.enable";
+pub const CX_FLOW_TRACK_SET_PRIMARY: &str = "cx.flow.track.set_primary";
+pub const CX_FLOW_TRACK_UPDATE: &str = "cx.flow.track.update";
 // Morph lifecycle (round 13). Same shape as Flow — no dedicated tombstone.
 pub const CX_MORPH_CREATE: &str = "cx.morph.create";
 pub const CX_MORPH_UPDATE: &str = "cx.morph.update";
@@ -55,6 +66,22 @@ pub const CX_SPACE_CREATE: &str = "cx.space.create";
 pub const CX_SPACE_UPDATE: &str = "cx.space.update";
 pub const CX_SPACE_DESTROY: &str = "cx.space.destroy";
 pub const CX_REDACTION: &str = "cx.redaction";
+// Round 14e+ (2026-05-16) — Applet protocol family. Spec
+// `extensions/applet-integration.md`. soland's role at this layer is to
+// validate wire shape + persist + dispatch; applet bridge state machine
+// lives client-side (yougen) and at the applet service itself.
+pub const CX_APPLET_REGISTRATION: &str = "cx.applet.registration";
+pub const CX_APPLET_DISCOVERY: &str = "cx.applet.discovery";
+pub const CX_APPLET_PROTOCOL_SESSION_START: &str = "cx.applet.protocol_session.start";
+pub const CX_APPLET_PROTOCOL_SESSION_STATUS: &str = "cx.applet.protocol_session.status";
+pub const CX_APPLET_BRIDGE_ERROR: &str = "cx.applet.bridge_error";
+// Round 14e+ (2026-05-16) — Agent protocol family. Spec
+// `extensions/agent-integration.md`. Mirror of applet but with a
+// terminal `*.result` event that carries the signed audit binding.
+pub const CX_AGENT_ENDPOINT: &str = "cx.agent.endpoint";
+pub const CX_AGENT_PROTOCOL_SESSION_START: &str = "cx.agent.protocol_session.start";
+pub const CX_AGENT_PROTOCOL_SESSION_STATUS: &str = "cx.agent.protocol_session.status";
+pub const CX_AGENT_PROTOCOL_SESSION_RESULT: &str = "cx.agent.protocol_session.result";
 pub const LEGACY_KIND_MIGRATION_PROFILE: &str = "cx.profile.legacy_kind_migration.v1";
 
 pub fn canonical_kind_for_operation(operation: &Operation) -> Option<&'static str> {
@@ -97,6 +124,10 @@ fn canonical_registered_kind(object_type: &str) -> Option<&'static str> {
         CX_FLOW_RESTORE => Some(CX_FLOW_RESTORE),
         CX_FLOW_MOVE => Some(CX_FLOW_MOVE),
         CX_FLOW_REORDER => Some(CX_FLOW_REORDER),
+        CX_FLOW_TRACK_DISABLE => Some(CX_FLOW_TRACK_DISABLE),
+        CX_FLOW_TRACK_ENABLE => Some(CX_FLOW_TRACK_ENABLE),
+        CX_FLOW_TRACK_SET_PRIMARY => Some(CX_FLOW_TRACK_SET_PRIMARY),
+        CX_FLOW_TRACK_UPDATE => Some(CX_FLOW_TRACK_UPDATE),
         CX_MORPH_CREATE => Some(CX_MORPH_CREATE),
         CX_MORPH_UPDATE => Some(CX_MORPH_UPDATE),
         CX_MORPH_ARCHIVE => Some(CX_MORPH_ARCHIVE),
@@ -112,8 +143,43 @@ fn canonical_registered_kind(object_type: &str) -> Option<&'static str> {
             _ => CX_SPACE_UPDATE,
         }),
         CX_MEMBER_STATE => Some(CX_MEMBER_STATE),
+        // Applet protocol family (round 14e+).
+        CX_APPLET_REGISTRATION => Some(CX_APPLET_REGISTRATION),
+        CX_APPLET_DISCOVERY => Some(CX_APPLET_DISCOVERY),
+        CX_APPLET_PROTOCOL_SESSION_START => Some(CX_APPLET_PROTOCOL_SESSION_START),
+        CX_APPLET_PROTOCOL_SESSION_STATUS => Some(CX_APPLET_PROTOCOL_SESSION_STATUS),
+        CX_APPLET_BRIDGE_ERROR => Some(CX_APPLET_BRIDGE_ERROR),
+        // Agent protocol family (round 14e+).
+        CX_AGENT_ENDPOINT => Some(CX_AGENT_ENDPOINT),
+        CX_AGENT_PROTOCOL_SESSION_START => Some(CX_AGENT_PROTOCOL_SESSION_START),
+        CX_AGENT_PROTOCOL_SESSION_STATUS => Some(CX_AGENT_PROTOCOL_SESSION_STATUS),
+        CX_AGENT_PROTOCOL_SESSION_RESULT => Some(CX_AGENT_PROTOCOL_SESSION_RESULT),
         _ => None,
     }
+}
+
+/// Sprint Q1 第十四增量 — applet + agent family classifiers used by
+/// projection/audit dispatchers that want to fan out the whole family
+/// without listing every kind individually.
+pub fn is_applet_kind(kind: &str) -> bool {
+    matches!(
+        kind,
+        CX_APPLET_REGISTRATION
+            | CX_APPLET_DISCOVERY
+            | CX_APPLET_PROTOCOL_SESSION_START
+            | CX_APPLET_PROTOCOL_SESSION_STATUS
+            | CX_APPLET_BRIDGE_ERROR
+    )
+}
+
+pub fn is_agent_kind(kind: &str) -> bool {
+    matches!(
+        kind,
+        CX_AGENT_ENDPOINT
+            | CX_AGENT_PROTOCOL_SESSION_START
+            | CX_AGENT_PROTOCOL_SESSION_STATUS
+            | CX_AGENT_PROTOCOL_SESSION_RESULT
+    )
 }
 
 pub fn operation_is_message_create(operation: &Operation) -> bool {
@@ -161,4 +227,19 @@ pub fn is_flow_lifecycle_kind(kind: &str) -> bool {
 /// Morph has no dedicated tombstone event for the same reason as Flow.
 pub fn is_morph_lifecycle_kind(kind: &str) -> bool {
     matches!(kind, CX_MORPH_ARCHIVE | CX_MORPH_RESTORE)
+}
+
+/// Flow track sub-events (round 14d). Distinct from lifecycle events
+/// (`is_flow_lifecycle_kind`) because tracks don't transition Flow.state;
+/// they manage entries in `Flow.tracks` per SDK round 12. The state
+/// guard for these is "parent Flow MUST be Active" (spec §5.1 update
+/// rule), enforced via `check_flow_track_transition`.
+pub fn is_flow_track_kind(kind: &str) -> bool {
+    matches!(
+        kind,
+        CX_FLOW_TRACK_DISABLE
+            | CX_FLOW_TRACK_ENABLE
+            | CX_FLOW_TRACK_SET_PRIMARY
+            | CX_FLOW_TRACK_UPDATE
+    )
 }

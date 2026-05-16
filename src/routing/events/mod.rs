@@ -5,6 +5,7 @@ pub(super) mod flow;
 pub(super) mod messages;
 pub(super) mod operations;
 pub(super) mod projection;
+pub(super) mod projection_query;
 pub(super) mod sync;
 
 use event_log::events_query_durable_scope_impl;
@@ -32,4 +33,5 @@ pub fn router() -> Router {
         .push(sync::router())
         .push(event_log::router())
         .push(messages::router())
+        .push(projection_query::router())
 }

@@ -543,6 +543,12 @@ impl ProjectionState {
             Some(CX_FLOW_MOVE) | Some(CX_FLOW_REORDER) => {
                 self.apply_flow_position_touch(operation, now)
             }
+            Some(
+                CX_FLOW_TRACK_DISABLE
+                | CX_FLOW_TRACK_ENABLE
+                | CX_FLOW_TRACK_SET_PRIMARY
+                | CX_FLOW_TRACK_UPDATE,
+            ) => self.apply_flow_track_touch(operation, now),
             Some(CX_MORPH_CREATE) => self.apply_morph_create(operation, now),
             Some(CX_MORPH_UPDATE) => self.apply_morph_update(operation, now),
             Some(CX_MORPH_ARCHIVE) => self.apply_morph_lifecycle(
@@ -1935,6 +1941,40 @@ impl ProjectionState {
         }
     }
 
+    /// Round 14d (2026-05-16) — read-only preflight for `cx.flow.track.*`
+    /// sub-events. Spec common-fields.md §5.1 update-on-non-active rule:
+    /// track mutations are a kind of update; parent Flow MUST be Active
+    /// or the admission MUST `failed_precondition` with `flow_not_active`
+    /// before persistence. Unknown Flow tolerated (causal / backfill —
+    /// matches the lifecycle preflight family). soland's projection
+    /// doesn't carry track-level state (FlowProjection has no `tracks`
+    /// field by design — SDK is the source of truth client-side); only
+    /// the parent Flow's lifecycle state matters here.
+    pub fn check_flow_track_transition(
+        &self,
+        operation: &Operation,
+    ) -> Result<(), &'static str> {
+        let kind = match crate::kinds::canonical_kind_for_operation(operation) {
+            Some(k) => k,
+            None => return Ok(()),
+        };
+        if !crate::kinds::is_flow_track_kind(kind) {
+            return Ok(());
+        }
+        let Some(flow_id) = operation.payload.get("flow_id").and_then(|v| v.as_str()) else {
+            // Missing flow_id is caught by operation-schema validator
+            // upstream; preflight tolerates absence (responsibilities split).
+            return Ok(());
+        };
+        let Some(flow) = self.flows.get(flow_id) else {
+            return Ok(());
+        };
+        if flow.state != ObjectLifecycleState::Active {
+            return Err("flow_not_active");
+        }
+        Ok(())
+    }
+
     /// Apply `cx.flow.move` / `cx.flow.reorder` (round 14). These events
     /// don't affect Flow lifecycle state — they write to the
     /// `cx.component.flow.position.v1` cell family on the Move/Anchor
@@ -1959,6 +1999,52 @@ impl ProjectionState {
         let Some(flow) = self.flows.get_mut(&flow_id) else {
             return ProjectionEffect::Ignored;
         };
+        flow.updated_by = operation
+            .payload
+            .get("sender")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned);
+        flow.updated_at = Some(now);
+        ProjectionEffect::FlowLifecycle {
+            flow_id,
+            new_state: flow.state,
+        }
+    }
+
+    /// Round 14d (2026-05-16) — Apply `cx.flow.track.*` sub-events
+    /// server-side. State guard runs in `check_flow_track_transition`
+    /// preflight; by the time this reducer fires, the parent Flow is
+    /// known to be Active (or unknown, in which case the touch is a
+    /// no-op). The actual track membership lives in SDK reducer's
+    /// Flow.tracks; soland's projection just bumps `updated_at` so
+    /// read-after-write sees the change. Unknown Flow tolerated.
+    fn apply_flow_track_touch(
+        &mut self,
+        operation: &Operation,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> ProjectionEffect {
+        let Some(flow_id) = operation
+            .payload
+            .get("flow_id")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned)
+        else {
+            return ProjectionEffect::Rejected {
+                reason: "missing_flow_id".to_owned(),
+            };
+        };
+        let Some(flow) = self.flows.get_mut(&flow_id) else {
+            return ProjectionEffect::Ignored;
+        };
+        // Defence-in-depth: even though check_flow_track_transition
+        // gated this at the admission layer, re-check here so direct
+        // reducer callers (tests / replay paths that bypass HTTP) still
+        // see the spec invariant enforced.
+        if flow.state != ObjectLifecycleState::Active {
+            return ProjectionEffect::Rejected {
+                reason: "flow_not_active".to_owned(),
+            };
+        }
         flow.updated_by = operation
             .payload
             .get("sender")
@@ -3803,6 +3889,138 @@ mod tests {
             state.check_redaction_target_transition(&second_morph_redact),
             Err("morph_already_terminal")
         );
+    }
+
+    // ── Round 14d: Flow track sub-events ──
+
+    /// `cx.flow.track.*` sub-events touch Flow.updated_at but never
+    /// flip lifecycle state. Parent Flow must be Active or the touch is
+    /// rejected with `flow_not_active` (defence-in-depth in the reducer,
+    /// mirroring the admission preflight).
+    #[test]
+    fn flow_track_events_touch_active_flow_only() {
+        let mut state = ProjectionState::new();
+        let hlc = ServerHlc::new("test");
+        let space_id = "cx:space:01904100-0000-7000-8000-cfc039892036";
+        let flow_id = "cx:flow:01904100-0000-7000-8000-4fb50799ad50";
+
+        state.apply(
+            &make_operation(
+                crate::kinds::CX_FLOW_CREATE,
+                space_id,
+                serde_json::json!({
+                    "object": {
+                        "id": flow_id,
+                        "space_id": space_id,
+                        "title": "Launch",
+                        "created_by": "did:web:alice.example",
+                    }
+                }),
+            ),
+            &hlc,
+        );
+
+        for kind in [
+            crate::kinds::CX_FLOW_TRACK_ENABLE,
+            crate::kinds::CX_FLOW_TRACK_DISABLE,
+            crate::kinds::CX_FLOW_TRACK_UPDATE,
+            crate::kinds::CX_FLOW_TRACK_SET_PRIMARY,
+        ] {
+            let effect = state.apply(
+                &make_operation(
+                    kind,
+                    space_id,
+                    serde_json::json!({
+                        "flow_id": flow_id,
+                        "track_id": "synthesis",
+                        "patch": {"profile": "synthesis"},
+                        "sender": "did:web:alice.example",
+                    }),
+                ),
+                &hlc,
+            );
+            assert!(
+                matches!(
+                    effect,
+                    ProjectionEffect::FlowLifecycle {
+                        new_state: ObjectLifecycleState::Active,
+                        ..
+                    }
+                ),
+                "kind {kind} should touch Active Flow without flipping state"
+            );
+        }
+        assert_eq!(state.flows[flow_id].state, ObjectLifecycleState::Active);
+        assert!(state.flows[flow_id].updated_at.is_some());
+    }
+
+    /// Preflight returns `flow_not_active` when parent Flow is archived
+    /// (or any non-Active state). Reducer-level enforcement is also
+    /// present as defence-in-depth — both verified here.
+    #[test]
+    fn flow_track_preflight_rejects_when_flow_archived() {
+        let mut state = ProjectionState::new();
+        let hlc = ServerHlc::new("test");
+        let space_id = "cx:space:01904100-0000-7000-8000-cfc039892036";
+        let flow_id = "cx:flow:01904100-0000-7000-8000-4fb50799ad51";
+
+        state.apply(
+            &make_operation(
+                crate::kinds::CX_FLOW_CREATE,
+                space_id,
+                serde_json::json!({
+                    "object": {
+                        "id": flow_id,
+                        "space_id": space_id,
+                        "title": "Refactor",
+                        "created_by": "did:web:alice.example",
+                    }
+                }),
+            ),
+            &hlc,
+        );
+        state.apply(
+            &make_operation(
+                crate::kinds::CX_FLOW_ARCHIVE,
+                space_id,
+                serde_json::json!({ "flow_id": flow_id }),
+            ),
+            &hlc,
+        );
+        assert_eq!(state.flows[flow_id].state, ObjectLifecycleState::Archived);
+
+        // Preflight: enable on archived Flow → flow_not_active.
+        let enable_op = make_operation(
+            crate::kinds::CX_FLOW_TRACK_ENABLE,
+            space_id,
+            serde_json::json!({ "flow_id": flow_id, "track_id": "synthesis" }),
+        );
+        assert_eq!(
+            state.check_flow_track_transition(&enable_op),
+            Err("flow_not_active")
+        );
+
+        // Reducer-level defence: also rejects directly.
+        let effect = state.apply(&enable_op, &hlc);
+        assert!(matches!(
+            effect,
+            ProjectionEffect::Rejected { ref reason } if reason == "flow_not_active"
+        ));
+    }
+
+    /// Unknown Flow tolerated at the preflight (causal / backfill).
+    #[test]
+    fn flow_track_preflight_tolerates_unknown_flow() {
+        let state = ProjectionState::new();
+        let enable_op = make_operation(
+            crate::kinds::CX_FLOW_TRACK_ENABLE,
+            "cx:space:01904100-0000-7000-8000-cfc039892036",
+            serde_json::json!({
+                "flow_id": "cx:flow:nope-not-here",
+                "track_id": "synthesis",
+            }),
+        );
+        assert_eq!(state.check_flow_track_transition(&enable_op), Ok(()));
     }
 
     /// Preflight tolerates redactions against unknown objects (causal /

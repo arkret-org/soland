@@ -190,6 +190,120 @@ const FLOW_POSITION_REQUIREMENTS: &[PayloadRequirement] = &[
         "flow position operation requires board_place_id",
     ),
 ];
+// Round 14d (2026-05-16) — Flow track sub-events. SDK round 12
+// required-fields:
+//   `cx.flow.track.{disable,enable,set_primary}` → flow_id + track_id
+//   `cx.flow.track.update`                      → flow_id + track_id + patch
+const FLOW_TRACK_REQUIREMENTS: &[PayloadRequirement] = &[
+    PayloadRequirement::Required("flow_id", "flow track operation requires flow_id"),
+    PayloadRequirement::Required("track_id", "flow track operation requires track_id"),
+];
+const FLOW_TRACK_UPDATE_REQUIREMENTS: &[PayloadRequirement] = &[
+    PayloadRequirement::Required("flow_id", "flow track update requires flow_id"),
+    PayloadRequirement::Required("track_id", "flow track update requires track_id"),
+    PayloadRequirement::Required("patch", "flow track update requires patch"),
+];
+// Round 14e+ (2026-05-16) — Applet protocol family.
+//
+// Spec `extensions/applet-integration.md` + event-kind-registry rows:
+//   `cx.applet.registration` → service_did + namespace + capabilities
+//   `cx.applet.discovery`    → service_did + manifest
+//   `cx.applet.protocol_session.start`  → applet_id + session_id + params
+//   `cx.applet.protocol_session.status` → session_id + status + detail
+//   `cx.applet.bridge_error`            → session_id + errcode + message
+//
+// We require the structurally-identifying fields; richer policy
+// (capability gating, manifest schema, signed bundles) is enforced by
+// the applet bridge layer + per-applet contract validators that read
+// the payload after admission.
+const APPLET_REGISTRATION_REQUIREMENTS: &[PayloadRequirement] = &[
+    PayloadRequirement::Required(
+        "service_did",
+        "applet registration requires service_did",
+    ),
+    PayloadRequirement::Required(
+        "namespace",
+        "applet registration requires namespace",
+    ),
+];
+const APPLET_DISCOVERY_REQUIREMENTS: &[PayloadRequirement] = &[
+    PayloadRequirement::Required(
+        "service_did",
+        "applet discovery requires service_did",
+    ),
+    PayloadRequirement::Required("manifest", "applet discovery requires manifest"),
+];
+const APPLET_SESSION_START_REQUIREMENTS: &[PayloadRequirement] = &[
+    PayloadRequirement::Required(
+        "applet_id",
+        "applet protocol_session.start requires applet_id",
+    ),
+    PayloadRequirement::Required(
+        "session_id",
+        "applet protocol_session.start requires session_id",
+    ),
+];
+const APPLET_SESSION_STATUS_REQUIREMENTS: &[PayloadRequirement] = &[
+    PayloadRequirement::Required(
+        "session_id",
+        "applet protocol_session.status requires session_id",
+    ),
+    PayloadRequirement::Required(
+        "status",
+        "applet protocol_session.status requires status",
+    ),
+];
+const APPLET_BRIDGE_ERROR_REQUIREMENTS: &[PayloadRequirement] = &[
+    PayloadRequirement::Required("session_id", "applet bridge_error requires session_id"),
+    PayloadRequirement::Required("errcode", "applet bridge_error requires errcode"),
+];
+
+// Round 14e+ (2026-05-16) — Agent protocol family. Mirror of applet
+// but with a terminal `*.result` event that carries the audit-binding
+// proof + signed agent result.
+const AGENT_ENDPOINT_REQUIREMENTS: &[PayloadRequirement] = &[
+    PayloadRequirement::Required("agent_did", "agent endpoint requires agent_did"),
+    PayloadRequirement::Required("protocol", "agent endpoint requires protocol"),
+];
+const AGENT_SESSION_START_REQUIREMENTS: &[PayloadRequirement] = &[
+    PayloadRequirement::Required(
+        "agent_did",
+        "agent protocol_session.start requires agent_did",
+    ),
+    PayloadRequirement::Required(
+        "session_id",
+        "agent protocol_session.start requires session_id",
+    ),
+    PayloadRequirement::Required(
+        "capability_proof",
+        "agent protocol_session.start requires capability_proof",
+    ),
+];
+const AGENT_SESSION_STATUS_REQUIREMENTS: &[PayloadRequirement] = &[
+    PayloadRequirement::Required(
+        "session_id",
+        "agent protocol_session.status requires session_id",
+    ),
+    PayloadRequirement::Required(
+        "status",
+        "agent protocol_session.status requires status",
+    ),
+];
+const AGENT_SESSION_RESULT_REQUIREMENTS: &[PayloadRequirement] = &[
+    PayloadRequirement::Required(
+        "session_id",
+        "agent protocol_session.result requires session_id",
+    ),
+    PayloadRequirement::Required(
+        "result",
+        "agent protocol_session.result requires result",
+    ),
+    PayloadRequirement::Required(
+        "audit_binding",
+        "agent protocol_session.result requires audit_binding",
+    ),
+];
+
 const READ_MARKER_REQUIREMENTS: &[PayloadRequirement] = &[
     PayloadRequirement::AnyOf(
         READ_MARKER_ACTOR_FIELDS,
@@ -352,6 +466,16 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
             requirements: FLOW_POSITION_REQUIREMENTS,
             validate: None,
         },
+        kinds::CX_FLOW_TRACK_DISABLE
+        | kinds::CX_FLOW_TRACK_ENABLE
+        | kinds::CX_FLOW_TRACK_SET_PRIMARY => OperationPayloadSchema {
+            requirements: FLOW_TRACK_REQUIREMENTS,
+            validate: None,
+        },
+        kinds::CX_FLOW_TRACK_UPDATE => OperationPayloadSchema {
+            requirements: FLOW_TRACK_UPDATE_REQUIREMENTS,
+            validate: None,
+        },
         kind if kinds::is_morph_lifecycle_kind(kind) => OperationPayloadSchema {
             requirements: MORPH_LIFECYCLE_REQUIREMENTS,
             validate: None,
@@ -387,6 +511,44 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
                 validate: None,
             }
         }
+        // Round 14e+ — Applet protocol family.
+        kinds::CX_APPLET_REGISTRATION => OperationPayloadSchema {
+            requirements: APPLET_REGISTRATION_REQUIREMENTS,
+            validate: None,
+        },
+        kinds::CX_APPLET_DISCOVERY => OperationPayloadSchema {
+            requirements: APPLET_DISCOVERY_REQUIREMENTS,
+            validate: None,
+        },
+        kinds::CX_APPLET_PROTOCOL_SESSION_START => OperationPayloadSchema {
+            requirements: APPLET_SESSION_START_REQUIREMENTS,
+            validate: None,
+        },
+        kinds::CX_APPLET_PROTOCOL_SESSION_STATUS => OperationPayloadSchema {
+            requirements: APPLET_SESSION_STATUS_REQUIREMENTS,
+            validate: None,
+        },
+        kinds::CX_APPLET_BRIDGE_ERROR => OperationPayloadSchema {
+            requirements: APPLET_BRIDGE_ERROR_REQUIREMENTS,
+            validate: None,
+        },
+        // Round 14e+ — Agent protocol family.
+        kinds::CX_AGENT_ENDPOINT => OperationPayloadSchema {
+            requirements: AGENT_ENDPOINT_REQUIREMENTS,
+            validate: None,
+        },
+        kinds::CX_AGENT_PROTOCOL_SESSION_START => OperationPayloadSchema {
+            requirements: AGENT_SESSION_START_REQUIREMENTS,
+            validate: None,
+        },
+        kinds::CX_AGENT_PROTOCOL_SESSION_STATUS => OperationPayloadSchema {
+            requirements: AGENT_SESSION_STATUS_REQUIREMENTS,
+            validate: None,
+        },
+        kinds::CX_AGENT_PROTOCOL_SESSION_RESULT => OperationPayloadSchema {
+            requirements: AGENT_SESSION_RESULT_REQUIREMENTS,
+            validate: None,
+        },
         _ => return None,
     };
     Some(schema)

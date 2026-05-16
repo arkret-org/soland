@@ -5535,3 +5535,508 @@ async fn account_data_requires_auth() {
         .await;
     assert_eq!(resp.status_code.unwrap().as_u16(), 401);
 }
+
+/// Q1 第十增量 (yougen) / soland Round 14d:
+/// `GET /api/v1/projection/places?space_id=...` returns the canonical
+/// `state` for every Place in a Space so a client can re-hydrate the
+/// archived-vs-active split after a refresh. After a happy archive the
+/// projection MUST report `"archived"`; after restore it MUST report
+/// `"active"`. The endpoint MUST also fail closed without a session.
+#[tokio::test]
+async fn projection_places_endpoint_reports_lifecycle_state() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+    let space_id = "cx:space:0196419b-0000-7000-8000-000000000000";
+    let place_id = "cx:place:01904100-0000-7000-8000-f10dc0000001";
+
+    // ── auth required ──────────────────────────────────────────────────
+    let unauth = TestClient::get(format!(
+        "http://server/api/v1/projection/places?space_id={space_id}"
+    ))
+    .send(&app_from_state(state.clone()))
+    .await;
+    assert_eq!(unauth.status_code.unwrap().as_u16(), 401);
+
+    // ── seed: create + archive a place ─────────────────────────────────
+    let create_event = signed_place_event(
+        "cx:event:01904100-0000-7000-8000-f10ec0000001",
+        1,
+        "cx.place.create",
+        serde_json::json!({
+            "object": {
+                "id": place_id,
+                "space_id": space_id,
+                "kind": "list",
+                "title": "Hydration target",
+                "created_by": "did:web:alice.example",
+            }
+        }),
+        Vec::new(),
+    );
+    let r: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&create_event)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(r["status"], "accepted");
+
+    let archive_event = signed_place_event(
+        "cx:event:01904100-0000-7000-8000-f10ec0000002",
+        2,
+        "cx.place.archive",
+        serde_json::json!({ "place_id": place_id }),
+        vec!["cx:event:01904100-0000-7000-8000-f10ec0000001"],
+    );
+    let r: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&archive_event)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(r["status"], "accepted");
+
+    // ── projection now reports archived ───────────────────────────────
+    let body: Value = TestClient::get(format!(
+        "http://server/api/v1/projection/places?space_id={space_id}"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    assert_eq!(body["space_id"], space_id);
+    let places = body["places"].as_array().unwrap();
+    let row = places
+        .iter()
+        .find(|p| p["place_id"] == place_id)
+        .expect("place not in projection response");
+    assert_eq!(row["state"], "archived");
+    assert_eq!(row["title"], "Hydration target");
+
+    // ── restore + re-fetch → active ───────────────────────────────────
+    let restore_event = signed_place_event(
+        "cx:event:01904100-0000-7000-8000-f10ec0000003",
+        3,
+        "cx.place.restore",
+        serde_json::json!({ "place_id": place_id }),
+        vec!["cx:event:01904100-0000-7000-8000-f10ec0000002"],
+    );
+    let r: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&restore_event)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(r["status"], "accepted");
+
+    let body: Value = TestClient::get(format!(
+        "http://server/api/v1/projection/places?space_id={space_id}"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    let row = body["places"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["place_id"] == place_id)
+        .expect("place still missing post-restore");
+    assert_eq!(row["state"], "active");
+}
+
+/// Q1 第十增量 (yougen) / soland Round 14d:
+/// `GET /api/v1/projection/flows?space_id=...` mirrors the Place test
+/// at the Flow object layer. After archive → state is `archived`;
+/// after redaction `object_ref` → state is `redacted` (terminal).
+#[tokio::test]
+async fn projection_flows_endpoint_reports_lifecycle_state() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+    let space_id = "cx:space:0196419b-0000-7000-8000-000000000000";
+    let flow_id = "cx:flow:01904100-0000-7000-8000-f20dc0000001";
+
+    let create_event = signed_flow_event(
+        "cx:event:01904100-0000-7000-8000-f20ec0000001",
+        1,
+        "cx.flow.create",
+        serde_json::json!({
+            "object": {
+                "id": flow_id,
+                "space_id": space_id,
+                "title": "Hydration flow",
+                "created_by": "did:web:alice.example",
+            }
+        }),
+        Vec::new(),
+    );
+    let r: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&create_event)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(r["status"], "accepted");
+
+    let archive_event = signed_flow_event(
+        "cx:event:01904100-0000-7000-8000-f20ec0000002",
+        2,
+        "cx.flow.archive",
+        serde_json::json!({ "flow_id": flow_id }),
+        vec!["cx:event:01904100-0000-7000-8000-f20ec0000001"],
+    );
+    let r: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&archive_event)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(r["status"], "accepted");
+
+    let body: Value = TestClient::get(format!(
+        "http://server/api/v1/projection/flows?space_id={space_id}"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    let row = body["flows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["flow_id"] == flow_id)
+        .expect("flow not in projection response");
+    assert_eq!(row["state"], "archived");
+}
+
+/// Round 14d (2026-05-16) — `cx.flow.track.*` sub-events are accepted
+/// against an Active Flow (server-side touch bumps Flow.updated_at; the
+/// per-track state lives in SDK reducer's Flow.tracks map) but MUST be
+/// rejected with HTTP 412 + `flow_not_active` once the parent Flow is
+/// archived, per spec common-fields.md §5.1 update-on-non-active rule.
+#[tokio::test]
+async fn flow_track_events_rejected_when_parent_flow_archived() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+    let flow_id = "cx:flow:01904100-0000-7000-8000-aabbccdd0001";
+
+    let create_flow = signed_flow_event(
+        "cx:event:01904100-0000-7000-8000-aabbcc000001",
+        1,
+        "cx.flow.create",
+        serde_json::json!({
+            "object": {
+                "id": flow_id,
+                "space_id": "cx:space:0196419b-0000-7000-8000-000000000000",
+                "title": "Launch flow",
+                "created_by": "did:web:alice.example",
+            }
+        }),
+        Vec::new(),
+    );
+    let resp: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&create_flow)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(resp["status"], "accepted");
+
+    // 1) Track enable while Active — accepted; touches Flow.updated_at.
+    let enable = signed_flow_event(
+        "cx:event:01904100-0000-7000-8000-aabbcc000002",
+        2,
+        "cx.flow.track.enable",
+        serde_json::json!({ "flow_id": flow_id, "track_id": "discussion" }),
+        vec!["cx:event:01904100-0000-7000-8000-aabbcc000001"],
+    );
+    let resp: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&enable)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(resp["status"], "accepted");
+
+    // 2) Archive the Flow.
+    let archive = signed_flow_event(
+        "cx:event:01904100-0000-7000-8000-aabbcc000003",
+        3,
+        "cx.flow.archive",
+        serde_json::json!({ "flow_id": flow_id }),
+        vec!["cx:event:01904100-0000-7000-8000-aabbcc000002"],
+    );
+    let resp: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&archive)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(resp["status"], "accepted");
+
+    // 3) Each of the four track sub-events on archived Flow → 412
+    //    flow_not_active. Same prev_refs (archive event) for each since
+    //    they're independent attempts.
+    let cases: &[(&str, &str, u64, Value)] = &[
+        (
+            "cx.flow.track.enable",
+            "cx:event:01904100-0000-7000-8000-aabbcc000004",
+            4,
+            serde_json::json!({ "flow_id": flow_id, "track_id": "synthesis" }),
+        ),
+        (
+            "cx.flow.track.update",
+            "cx:event:01904100-0000-7000-8000-aabbcc000005",
+            5,
+            serde_json::json!({
+                "flow_id": flow_id,
+                "track_id": "discussion",
+                "patch": {"template": "Q&A"},
+            }),
+        ),
+        (
+            "cx.flow.track.set_primary",
+            "cx:event:01904100-0000-7000-8000-aabbcc000006",
+            6,
+            serde_json::json!({ "flow_id": flow_id, "track_id": "discussion" }),
+        ),
+        (
+            "cx.flow.track.disable",
+            "cx:event:01904100-0000-7000-8000-aabbcc000007",
+            7,
+            serde_json::json!({ "flow_id": flow_id, "track_id": "discussion" }),
+        ),
+    ];
+    for (kind, ev_id, seq, payload) in cases {
+        let evt = signed_flow_event(
+            ev_id,
+            *seq,
+            kind,
+            payload.clone(),
+            vec!["cx:event:01904100-0000-7000-8000-aabbcc000003"],
+        );
+        let mut resp = TestClient::post("http://server/api/v1/events")
+            .add_header("authorization", format!("Bearer {token}"), true)
+            .json(&evt)
+            .send(&app_from_state(state.clone()))
+            .await;
+        assert_eq!(
+            resp.status_code.unwrap().as_u16(),
+            412,
+            "track event {kind} on archived Flow must return 412"
+        );
+        let body: Value = resp.take_json().await.unwrap();
+        assert_eq!(
+            body["error"]["errcode"], "flow_not_active",
+            "track event {kind} on archived Flow must return flow_not_active"
+        );
+    }
+}
+
+/// Sprint Q1 第十四增量 (P1): `POST /api/v1/audit/user-action` accepts
+/// client-side user-action telemetry posts and appends them to the
+/// session-actor's audit log. Yougen's `flush_telemetry_to_server` has
+/// been posting against this URL since Round 28; the 404-tolerant
+/// caller buffered every entry until this route shipped.
+#[tokio::test]
+async fn audit_user_action_endpoint_persists_session_actor_entries_and_rejects_cross_actor() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+    // ── 1. auth required ──────────────────────────────────────────────
+    let unauth = TestClient::post("http://server/api/v1/audit/user-action")
+        .json(&serde_json::json!({
+            "actor": "did:web:alice.example",
+            "action": "ui.button.click",
+            "outcome": "ok",
+        }))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(unauth.status_code.unwrap().as_u16(), 401);
+
+    // ── 2. happy path: session actor posts ────────────────────────────
+    let ok: Value = TestClient::post("http://server/api/v1/audit/user-action")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({
+            "actor": "did:web:alice.example",
+            "action": "ui.kanban.archive_list",
+            "outcome": "ok",
+            "note": "user clicked Archive on list cx:place:demo",
+            "recorded_at": "2026-05-16T12:34:56Z",
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(ok["ok"], true);
+
+    // ── 3. cross-actor post → 403 ─────────────────────────────────────
+    let mut bad = TestClient::post("http://server/api/v1/audit/user-action")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({
+            "actor": "did:web:eve.example",
+            "action": "ui.button.click",
+            "outcome": "ok",
+        }))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(bad.status_code.unwrap().as_u16(), 403);
+    let body: Value = bad.take_json().await.unwrap();
+    assert_eq!(body["error"]["errcode"], "capability_denied");
+
+    // ── 4. missing actor / action → 400 ──────────────────────────────
+    let mut missing_actor = TestClient::post("http://server/api/v1/audit/user-action")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({"action": "ui.click"}))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(missing_actor.status_code.unwrap().as_u16(), 400);
+    let body: Value = missing_actor.take_json().await.unwrap();
+    assert_eq!(body["error"]["errcode"], "invalid_param");
+
+    let missing_action = TestClient::post("http://server/api/v1/audit/user-action")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({"actor": "did:web:alice.example"}))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(missing_action.status_code.unwrap().as_u16(), 400);
+
+    // ── 5. entry shows up in GET /audit/events for the same actor ────
+    let events: Value = TestClient::get("http://server/api/v1/audit/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    let rows = events["events"].as_array().unwrap();
+    let posted = rows
+        .iter()
+        .find(|e| e["action"] == "ui.kanban.archive_list")
+        .expect("user-action entry not surfaced through audit/events");
+    assert_eq!(posted["outcome"], "ok");
+    assert_eq!(posted["actor"], "did:web:alice.example");
+}
+
+/// Round 15a (2026-05-16) — `GET /api/v1/projection/morphs?space_id=...`
+/// completes the read-side trifecta started in round 14d (places + flows).
+/// After create → state == `active`; after archive → `archived`; after
+/// `cx.redaction` with object_ref → `redacted` (terminal). Same shape
+/// guarantees as the flow / place endpoints.
+#[tokio::test]
+async fn projection_morphs_endpoint_reports_lifecycle_state() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+    let space_id = "cx:space:0196419b-0000-7000-8000-000000000000";
+    let morph_id = "cx:morph:01904100-0000-7000-8000-d20dc0000001";
+
+    let create_event = signed_morph_event(
+        "cx:event:01904100-0000-7000-8000-d20ec0000001",
+        1,
+        "cx.morph.create",
+        serde_json::json!({
+            "object": {
+                "id": morph_id,
+                "space_id": space_id,
+                "morph_type": "task",
+                "title": "Hydration morph",
+                "created_by": "did:web:alice.example",
+            }
+        }),
+        Vec::new(),
+    );
+    let r: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&create_event)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(r["status"], "accepted");
+
+    // Initial state — Active.
+    let body: Value = TestClient::get(format!(
+        "http://server/api/v1/projection/morphs?space_id={space_id}"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    let row = body["morphs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["morph_id"] == morph_id)
+        .expect("morph not in projection response");
+    assert_eq!(row["state"], "active");
+    assert_eq!(row["morph_type"], "task");
+
+    // Archive → state flips to `archived`.
+    let archive_event = signed_morph_event(
+        "cx:event:01904100-0000-7000-8000-d20ec0000002",
+        2,
+        "cx.morph.archive",
+        serde_json::json!({ "morph_id": morph_id }),
+        vec!["cx:event:01904100-0000-7000-8000-d20ec0000001"],
+    );
+    let r: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&archive_event)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(r["status"], "accepted");
+
+    let body: Value = TestClient::get(format!(
+        "http://server/api/v1/projection/morphs?space_id={space_id}"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    let row = body["morphs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["morph_id"] == morph_id)
+        .expect("morph not in projection response");
+    assert_eq!(row["state"], "archived");
+
+    // Unauthenticated → 401, no body leak.
+    let unauth = TestClient::get(format!(
+        "http://server/api/v1/projection/morphs?space_id={space_id}"
+    ))
+    .send(&app_from_state(state.clone()))
+    .await;
+    assert_eq!(unauth.status_code, Some(StatusCode::UNAUTHORIZED));
+}
+

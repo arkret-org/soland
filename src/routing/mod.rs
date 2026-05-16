@@ -1343,6 +1343,59 @@ mod operation_conformance_tests {
                 payload: json!({"board_place_id": "cx:place:01904100-0000-7000-8000-c10dc0000001", "rank": "a1"}),
                 valid: false,
             },
+            // Round 14d — Flow track sub-event vectors.
+            OperationVector {
+                name: "flow track enable",
+                kind: kinds::CX_FLOW_TRACK_ENABLE,
+                payload: json!({
+                    "flow_id": "cx:flow:01904100-0000-7000-8000-ca33616973bb",
+                    "track_id": "synthesis",
+                }),
+                valid: true,
+            },
+            OperationVector {
+                name: "flow track disable",
+                kind: kinds::CX_FLOW_TRACK_DISABLE,
+                payload: json!({
+                    "flow_id": "cx:flow:01904100-0000-7000-8000-ca33616973bb",
+                    "track_id": "synthesis",
+                }),
+                valid: true,
+            },
+            OperationVector {
+                name: "flow track update",
+                kind: kinds::CX_FLOW_TRACK_UPDATE,
+                payload: json!({
+                    "flow_id": "cx:flow:01904100-0000-7000-8000-ca33616973bb",
+                    "track_id": "discussion",
+                    "patch": {"profile": "discussion"},
+                }),
+                valid: true,
+            },
+            OperationVector {
+                name: "flow track set_primary",
+                kind: kinds::CX_FLOW_TRACK_SET_PRIMARY,
+                payload: json!({
+                    "flow_id": "cx:flow:01904100-0000-7000-8000-ca33616973bb",
+                    "track_id": "discussion",
+                }),
+                valid: true,
+            },
+            OperationVector {
+                name: "flow track enable missing track_id",
+                kind: kinds::CX_FLOW_TRACK_ENABLE,
+                payload: json!({"flow_id": "cx:flow:01904100-0000-7000-8000-ca33616973bb"}),
+                valid: false,
+            },
+            OperationVector {
+                name: "flow track update missing patch",
+                kind: kinds::CX_FLOW_TRACK_UPDATE,
+                payload: json!({
+                    "flow_id": "cx:flow:01904100-0000-7000-8000-ca33616973bb",
+                    "track_id": "discussion",
+                }),
+                valid: false,
+            },
             OperationVector {
                 name: "morph create",
                 kind: kinds::CX_MORPH_CREATE,
@@ -1371,6 +1424,129 @@ mod operation_conformance_tests {
                 name: "morph restore missing morph_id",
                 kind: kinds::CX_MORPH_RESTORE,
                 payload: json!({"reason": "reopen"}),
+                valid: false,
+            },
+            // Round 14e+ — Applet protocol family conformance vectors.
+            OperationVector {
+                name: "applet registration",
+                kind: kinds::CX_APPLET_REGISTRATION,
+                payload: json!({
+                    "service_did": "did:web:applet.example",
+                    "namespace": "extensions",
+                    "capabilities": ["read"],
+                }),
+                valid: true,
+            },
+            OperationVector {
+                name: "applet registration missing namespace",
+                kind: kinds::CX_APPLET_REGISTRATION,
+                payload: json!({"service_did": "did:web:applet.example"}),
+                valid: false,
+            },
+            OperationVector {
+                name: "applet discovery",
+                kind: kinds::CX_APPLET_DISCOVERY,
+                payload: json!({
+                    "service_did": "did:web:applet.example",
+                    "manifest": {"version": 1},
+                }),
+                valid: true,
+            },
+            OperationVector {
+                name: "applet session start",
+                kind: kinds::CX_APPLET_PROTOCOL_SESSION_START,
+                payload: json!({
+                    "applet_id": "cx:applet:01904100-0000-7000-8000-aa55aa55aa55",
+                    "session_id": "cx:session:01904100-0000-7000-8000-aa55aa55aa55",
+                    "params": {},
+                }),
+                valid: true,
+            },
+            OperationVector {
+                name: "applet session status",
+                kind: kinds::CX_APPLET_PROTOCOL_SESSION_STATUS,
+                payload: json!({
+                    "session_id": "cx:session:01904100-0000-7000-8000-aa55aa55aa55",
+                    "status": "running",
+                    "detail": {},
+                }),
+                valid: true,
+            },
+            OperationVector {
+                name: "applet bridge error",
+                kind: kinds::CX_APPLET_BRIDGE_ERROR,
+                payload: json!({
+                    "session_id": "cx:session:01904100-0000-7000-8000-aa55aa55aa55",
+                    "errcode": "bridge_unavailable",
+                    "message": "no upstream",
+                }),
+                valid: true,
+            },
+            // Round 14e+ — Agent protocol family conformance vectors.
+            OperationVector {
+                name: "agent endpoint",
+                kind: kinds::CX_AGENT_ENDPOINT,
+                payload: json!({
+                    "agent_did": "did:web:agent.example",
+                    "protocol": "cx.agent.v1",
+                    "capabilities": ["flow.read"],
+                }),
+                valid: true,
+            },
+            OperationVector {
+                name: "agent endpoint missing protocol",
+                kind: kinds::CX_AGENT_ENDPOINT,
+                payload: json!({"agent_did": "did:web:agent.example"}),
+                valid: false,
+            },
+            OperationVector {
+                name: "agent session start",
+                kind: kinds::CX_AGENT_PROTOCOL_SESSION_START,
+                payload: json!({
+                    "agent_did": "did:web:agent.example",
+                    "session_id": "cx:session:01904100-0000-7000-8000-bb66bb66bb66",
+                    "params": {},
+                    "capability_proof": {"grant_id": "cap-1"},
+                }),
+                valid: true,
+            },
+            OperationVector {
+                name: "agent session start missing capability_proof",
+                kind: kinds::CX_AGENT_PROTOCOL_SESSION_START,
+                payload: json!({
+                    "agent_did": "did:web:agent.example",
+                    "session_id": "cx:session:01904100-0000-7000-8000-bb66bb66bb66",
+                    "params": {},
+                }),
+                valid: false,
+            },
+            OperationVector {
+                name: "agent session status",
+                kind: kinds::CX_AGENT_PROTOCOL_SESSION_STATUS,
+                payload: json!({
+                    "session_id": "cx:session:01904100-0000-7000-8000-bb66bb66bb66",
+                    "status": "running",
+                    "detail": {},
+                }),
+                valid: true,
+            },
+            OperationVector {
+                name: "agent session result",
+                kind: kinds::CX_AGENT_PROTOCOL_SESSION_RESULT,
+                payload: json!({
+                    "session_id": "cx:session:01904100-0000-7000-8000-bb66bb66bb66",
+                    "result": {"summary": "ok"},
+                    "audit_binding": {"merkle_root": "sha256:abc"},
+                }),
+                valid: true,
+            },
+            OperationVector {
+                name: "agent session result missing audit_binding",
+                kind: kinds::CX_AGENT_PROTOCOL_SESSION_RESULT,
+                payload: json!({
+                    "session_id": "cx:session:01904100-0000-7000-8000-bb66bb66bb66",
+                    "result": {"summary": "ok"},
+                }),
                 valid: false,
             },
             OperationVector {

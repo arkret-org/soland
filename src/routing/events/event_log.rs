@@ -292,6 +292,14 @@ async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Response) 
                 render_error(res, StatusCode::PRECONDITION_FAILED, reason, reason);
                 return;
             }
+            // Round 14d — `cx.flow.track.*` sub-events follow the spec
+            // §5.1 update-on-non-active rule: parent Flow MUST be Active
+            // or the admission rejects with `flow_not_active` (mirrors
+            // SDK round 12 reducer guard so client + server agree).
+            if let Err(reason) = proj.check_flow_track_transition(operation) {
+                render_error(res, StatusCode::PRECONDITION_FAILED, reason, reason);
+                return;
+            }
         }
     }
     if let Err(error) = store.put(CanonicalEventRecord {
