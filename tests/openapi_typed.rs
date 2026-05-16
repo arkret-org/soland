@@ -370,4 +370,30 @@ async fn typed_describe_handlers_publish_response_schemas() {
             "missing operationId {operation_id} from round 15o typed conversion"
         );
     }
+
+    // Round 15p — identity/did.rs typed batch (4 handlers).
+    // identity_resolve, identity_document, identity_log, identity_receipts.
+    // embedded_webvh_log is skipped — it streams `application/jsonl` not JSON.
+    for typed_now in [
+        "IdentityResolveRequest",
+        "IdentityResolveResponse",
+        "IdentityLogResponse",
+        "IdentityReceiptsResponse",
+    ] {
+        assert!(
+            body.contains(typed_now),
+            "{typed_now} missing — round 15p typed signature did not publish its schema"
+        );
+    }
+    for operation_id in [
+        "cx.identity.resolve",
+        "cx.identity.document",
+        "cx.identity.log",
+        "cx.identity.receipts",
+    ] {
+        assert!(
+            body.contains(&format!("operationId: {operation_id}")),
+            "missing operationId {operation_id} from round 15p typed conversion"
+        );
+    }
 }

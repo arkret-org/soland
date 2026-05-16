@@ -25,7 +25,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use super::{
-    append_audit_log, bearer_token, now, query_param, render_error, sha256_hex, validate_did,
+    append_audit_log, bearer_token, now, render_error, sha256_hex, validate_did,
 };
 use crate::error::{AppError, ErrorCode};
 use crate::result::{JsonResult, json_ok};
@@ -362,34 +362,28 @@ pub(super) async fn embedded_webvh_log(depot: &mut Depot, req: &mut Request, res
     res.write_body(body.into_bytes()).ok();
 }
 
-#[endpoint]
-pub(super) async fn identity_resolve(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+#[endpoint(
+    operation_id = "cx.identity.resolve",
+    tags("identity"),
+    summary = "Resolve a DID via local webvh store + SDK resolver chain"
+)]
+pub(super) async fn identity_resolve(
+    body: JsonBody<IdentityResolveRequest>,
+    depot: &mut Depot,
+) -> JsonResult<IdentityResolveResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let body = match req.parse_json::<IdentityResolveRequest>().await {
-        Ok(body) => body,
-        Err(_) => {
-            render_error(
-                res,
-                StatusCode::BAD_REQUEST,
-                "bad_json",
-                "invalid identity resolve request",
-            );
-            return;
-        }
-    };
+    let body = body.into_inner();
     if validate_did(&body.did).is_err() {
-        render_error(res, StatusCode::BAD_REQUEST, "invalid_param", "invalid did");
-        return;
+        return Err(AppError::invalid_param("invalid did"));
     }
     if let Ok(Some(record)) = state.persistence.webvh().get_document(&body.did) {
-        res.render(Json(IdentityResolveResponse {
+        return json_ok(IdentityResolveResponse {
             did_document: record.did_document,
             key_log_head: record.key_log_head,
             seq: record.seq,
             receipts: Vec::new(),
             method_evidence: record.method_evidence,
-        }));
-        return;
+        });
     }
     let sdk_did = contrix_sdk::Did::new(body.did.clone());
     let sdk_document = sdk_did.ok().and_then(|did| {
@@ -401,7 +395,7 @@ pub(super) async fn identity_resolve(depot: &mut Depot, req: &mut Request, res: 
             .ok()
     });
     if let Some(doc) = sdk_document {
-        res.render(Json(IdentityResolveResponse {
+        return json_ok(IdentityResolveResponse {
             did_document: json!({
                 "id": doc.id.as_str(),
                 "verificationMethod": doc.verification_methods,
@@ -411,49 +405,55 @@ pub(super) async fn identity_resolve(depot: &mut Depot, req: &mut Request, res: 
             seq: 0,
             receipts: Vec::new(),
             method_evidence: json!({"mode": "sdk_resolver", "source": "did_resolver"}),
-        }));
-        return;
+        });
     }
     let record = identity_document_record(state, &body.did);
-    res.render(Json(IdentityResolveResponse {
+    json_ok(IdentityResolveResponse {
         did_document: record.did_document,
         key_log_head: record.key_log_head,
         seq: record.seq,
         receipts: Vec::new(),
         method_evidence: record.method_evidence,
-    }));
+    })
 }
 
-#[endpoint]
-pub(super) async fn identity_document(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+#[endpoint(
+    operation_id = "cx.identity.document",
+    tags("identity"),
+    summary = "Fetch the locally-cached DID document for a DID"
+)]
+pub(super) async fn identity_document(
+    did: salvo::oapi::extract::QueryParam<String, true>,
+    depot: &mut Depot,
+) -> JsonResult<IdentityResolveResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let Some(did) = query_param(req, "did") else {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "missing_param",
-            "did is required",
-        );
-        return;
-    };
-    render_identity_document(state, res, did);
-}
-
-#[endpoint]
-pub(super) async fn identity_log(depot: &mut Depot, req: &mut Request, res: &mut Response) {
-    let state = depot.obtain::<AppState>().expect("state injected");
-    let Some(did) = query_param(req, "did") else {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "missing_param",
-            "did is required",
-        );
-        return;
-    };
+    let did = did.into_inner();
     if validate_did(&did).is_err() {
-        render_error(res, StatusCode::BAD_REQUEST, "invalid_param", "invalid did");
-        return;
+        return Err(AppError::invalid_param("invalid did"));
+    }
+    let record = identity_document_record(state, &did);
+    json_ok(IdentityResolveResponse {
+        did_document: record.did_document,
+        key_log_head: record.key_log_head,
+        seq: record.seq,
+        receipts: Vec::new(),
+        method_evidence: record.method_evidence,
+    })
+}
+
+#[endpoint(
+    operation_id = "cx.identity.log",
+    tags("identity"),
+    summary = "Return the local webvh key-log events for a DID"
+)]
+pub(super) async fn identity_log(
+    did: salvo::oapi::extract::QueryParam<String, true>,
+    depot: &mut Depot,
+) -> JsonResult<IdentityLogResponse> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let did = did.into_inner();
+    if validate_did(&did).is_err() {
+        return Err(AppError::invalid_param("invalid did"));
     }
     let events = state
         .persistence
@@ -471,28 +471,26 @@ pub(super) async fn identity_log(depot: &mut Depot, req: &mut Request, res: &mut
             })
         })
         .collect();
-    res.render(Json(IdentityLogResponse {
+    json_ok(IdentityLogResponse {
         events,
         next_cursor: None,
         has_more: false,
-    }));
+    })
 }
 
-#[endpoint]
-pub(super) async fn identity_receipts(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+#[endpoint(
+    operation_id = "cx.identity.receipts",
+    tags("identity"),
+    summary = "Read issuer receipts for the local webvh key-log of a DID"
+)]
+pub(super) async fn identity_receipts(
+    did: salvo::oapi::extract::QueryParam<String, true>,
+    depot: &mut Depot,
+) -> JsonResult<IdentityReceiptsResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let Some(did) = query_param(req, "did") else {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "missing_param",
-            "did is required",
-        );
-        return;
-    };
+    let did = did.into_inner();
     if validate_did(&did).is_err() {
-        render_error(res, StatusCode::BAD_REQUEST, "invalid_param", "invalid did");
-        return;
+        return Err(AppError::invalid_param("invalid did"));
     }
     let record = state
         .persistence
@@ -500,7 +498,7 @@ pub(super) async fn identity_receipts(depot: &mut Depot, req: &mut Request, res:
         .get_document(&did)
         .ok()
         .flatten();
-    res.render(Json(IdentityReceiptsResponse {
+    json_ok(IdentityReceiptsResponse {
         receipts: record
             .map(|record| {
                 vec![json!({
@@ -513,7 +511,7 @@ pub(super) async fn identity_receipts(depot: &mut Depot, req: &mut Request, res:
             })
             .unwrap_or_default(),
         threshold_met: true,
-    }));
+    })
 }
 
 #[derive(Clone, Debug)]
@@ -968,21 +966,6 @@ fn render_json_bytes(res: &mut Response, content_type: &str, value: &Value) {
         body.len().to_string().parse().unwrap(),
     );
     res.write_body(body).ok();
-}
-
-fn render_identity_document(state: &AppState, res: &mut Response, did: String) {
-    if validate_did(&did).is_err() {
-        render_error(res, StatusCode::BAD_REQUEST, "invalid_param", "invalid did");
-        return;
-    }
-    let record = identity_document_record(state, &did);
-    res.render(Json(IdentityResolveResponse {
-        did_document: record.did_document,
-        key_log_head: record.key_log_head,
-        seq: record.seq,
-        receipts: Vec::new(),
-        method_evidence: record.method_evidence,
-    }));
 }
 
 fn identity_document_record(state: &AppState, did: &str) -> WebvhDocumentRecord {
