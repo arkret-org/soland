@@ -24,6 +24,7 @@
 //! round 6 and re-anchored here.
 
 use salvo::http::StatusCode;
+use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde_json::{Value, json};
 
@@ -34,6 +35,9 @@ use super::{
     auth_or_render, authenticated_session, now, render_error, sha256_hex,
     validate_canonical_json_value, validate_no_removed_legacy_contracts,
 };
+use crate::error::AppError;
+use crate::result::{JsonResult, json_ok};
+use crate::routing::system::extract::AuthArgs;
 use crate::persistence::DriftResult;
 use crate::state::{AppState, PushRuleRecord, SessionRecord};
 use crate::wire::{
@@ -144,18 +148,15 @@ pub(super) async fn push_register(depot: &mut Depot, req: &mut Request, res: &mu
     }));
 }
 
-#[endpoint]
-pub(super) async fn push_unregister(_depot: &mut Depot, req: &mut Request, res: &mut Response) {
-    if req.parse_json::<PushUnregisterRequest>().await.is_err() {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "bad_json",
-            "invalid push unregister request",
-        );
-        return;
-    }
-    res.render(Json(OkResponse { ok: true }));
+#[endpoint(
+    operation_id = "cx.push.unregister_device",
+    tags("push"),
+    summary = "Unregister a push device (opaque ack scaffold; spec F-1)"
+)]
+pub(super) async fn push_unregister(
+    _body: JsonBody<PushUnregisterRequest>,
+) -> JsonResult<OkResponse> {
+    json_ok(OkResponse { ok: true })
 }
 
 #[endpoint]
@@ -252,64 +253,48 @@ pub(super) async fn upsert_push_rule(depot: &mut Depot, req: &mut Request, res: 
     })));
 }
 
-#[endpoint]
-pub(super) async fn delete_push_rule(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+#[endpoint(
+    operation_id = "cx.push.delete_rule",
+    tags("push"),
+    summary = "Delete a push notification rule"
+)]
+pub(super) async fn delete_push_rule(
+    aa: AuthArgs,
+    rule_id: PathParam<String>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<OkResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let Some(session) = auth_or_render(state, req, res) else {
-        return;
-    };
-    let Some(rule_id) = req.param::<String>("rule_id") else {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "invalid_param",
-            "missing push rule id",
-        );
-        return;
-    };
+    let session = aa.authenticated_session(state, req)?;
+    let rule_id = rule_id.into_inner();
     if !is_valid_push_rule_id(&rule_id) {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "invalid_param",
-            "invalid push rule id",
-        );
-        return;
+        return Err(AppError::invalid_param("invalid push rule id"));
     }
     let _ = state
         .persistence
         .push_rules()
         .delete(&session.actor, &rule_id);
-    res.render(Json(OkResponse { ok: true }));
+    json_ok(OkResponse { ok: true })
 }
 
-#[endpoint]
-pub(super) async fn push_notify(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+#[endpoint(
+    operation_id = "cx.push.notify",
+    tags("push"),
+    summary = "Fan out a push notification through the rule engine"
+)]
+pub(super) async fn push_notify(
+    body: JsonBody<PushNotifyRequest>,
+    depot: &mut Depot,
+) -> JsonResult<PushNotifyResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let body = match req.parse_json::<PushNotifyRequest>().await {
-        Ok(body) => body,
-        Err(_) => {
-            render_error(
-                res,
-                StatusCode::BAD_REQUEST,
-                "bad_json",
-                "invalid push notify request",
-            );
-            return;
-        }
-    };
+    let body = body.into_inner();
     if let Err(message) = validate_no_removed_legacy_contracts(&body.notification) {
-        render_error(res, StatusCode::BAD_REQUEST, "invalid_param", message);
-        return;
+        return Err(AppError::invalid_param(message));
     }
     if push_notification_leaks_plaintext(&body.notification) {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "invalid_param",
+        return Err(AppError::invalid_param(
             "push notification must not include plaintext content",
-        );
-        return;
+        ));
     }
     let devices = body
         .notification
@@ -386,7 +371,7 @@ pub(super) async fn push_notify(depot: &mut Depot, req: &mut Request, res: &mut 
             rejected.push(push_rejection(device, "push_rule", Some(rule_id)));
         }
     }
-    res.render(Json(PushNotifyResponse { rejected }));
+    json_ok(PushNotifyResponse { rejected })
 }
 
 /// Resolve the gateway URL of a registered device into a `bridge_describe_url`

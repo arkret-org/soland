@@ -13,15 +13,17 @@
 use std::collections::BTreeSet;
 
 use chrono::Duration;
-use salvo::http::StatusCode;
+use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;
 use serde_json::{Value, json};
 
 use super::{
-    auth_or_render, now, query_param, render_error, space_has_member,
-    validate_canonical_json_value, validate_did, validate_space_id,
+    now, space_has_member, validate_canonical_json_value, validate_did, validate_space_id,
 };
+use crate::error::AppError;
 use crate::ids;
+use crate::result::{JsonResult, json_ok};
+use crate::routing::system::extract::AuthArgs;
 use crate::state::{AppState, WebrtcSessionRecord, WebrtcSignalRecord};
 use crate::wire::{
     CreateWebrtcSessionRequest, CreateWebrtcSessionResponse, OkResponse, WebrtcSignalRequest,
@@ -54,63 +56,39 @@ async fn ice_config(depot: &mut Depot, res: &mut Response) {
     })));
 }
 
-#[endpoint]
-async fn create_webrtc_session(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+#[endpoint(
+    operation_id = "cx.webrtc.create_session",
+    tags("webrtc"),
+    summary = "Create a WebRTC signaling session bound to a Space"
+)]
+async fn create_webrtc_session(
+    aa: AuthArgs,
+    body: JsonBody<CreateWebrtcSessionRequest>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<CreateWebrtcSessionResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let Some(session) = auth_or_render(state, req, res) else {
-        return;
-    };
-    let body = match req.parse_json::<CreateWebrtcSessionRequest>().await {
-        Ok(body) => body,
-        Err(_) => {
-            render_error(
-                res,
-                StatusCode::BAD_REQUEST,
-                "bad_json",
-                "invalid webrtc session request",
-            );
-            return;
-        }
-    };
+    let session = aa.authenticated_session(state, req)?;
+    let body = body.into_inner();
     if validate_space_id(&body.space_id).is_err() {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "invalid_param",
-            "invalid space_id",
-        );
-        return;
+        return Err(AppError::invalid_param("invalid space_id"));
     }
     if !space_has_member(state, &body.space_id, &session.actor) {
-        render_error(
-            res,
-            StatusCode::FORBIDDEN,
-            "capability_denied",
+        return Err(AppError::capability_denied(
             "actor is not a joined member of the space",
-        );
-        return;
+        ));
     }
 
     let mut participants = BTreeSet::new();
     participants.insert(session.actor.clone());
     for participant in body.participants {
         if validate_did(&participant).is_err() {
-            render_error(
-                res,
-                StatusCode::BAD_REQUEST,
-                "invalid_param",
-                "invalid participant did",
-            );
-            return;
+            return Err(AppError::invalid_param("invalid participant did"));
         }
         if !space_has_member(state, &body.space_id, &participant) {
-            render_error(
-                res,
-                StatusCode::FORBIDDEN,
-                "capability_denied",
+            return Err(AppError::capability_denied(
                 "participant is not a joined member of the space",
-            );
-            return;
+            ));
         }
         participants.insert(participant);
     }
@@ -131,82 +109,49 @@ async fn create_webrtc_session(depot: &mut Depot, req: &mut Request, res: &mut R
         next_seq: 1,
         signals: Vec::new(),
     };
-    if let Err(error) = state.persistence.webrtc().put(record) {
-        tracing::error!(%error, "failed to persist webrtc session");
-        render_error(
-            res,
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "internal_error",
-            "webrtc session store unavailable",
-        );
-        return;
-    }
-    res.render(Json(CreateWebrtcSessionResponse {
+    state
+        .persistence
+        .webrtc()
+        .put(record)
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    json_ok(CreateWebrtcSessionResponse {
         session_id,
         space_id: body.space_id,
         participants: participant_list,
         expires_at,
         created_at,
-    }));
+    })
 }
 
-#[endpoint]
-async fn put_webrtc_signal(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+#[endpoint(
+    operation_id = "cx.webrtc.send_signal",
+    tags("webrtc"),
+    summary = "Append a WebRTC signaling message (offer/answer/candidate/...) to a session"
+)]
+async fn put_webrtc_signal(
+    aa: AuthArgs,
+    session_id: PathParam<String>,
+    body: JsonBody<WebrtcSignalRequest>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<WebrtcSignalResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let Some(session) = auth_or_render(state, req, res) else {
-        return;
-    };
-    let Some(session_id) = req.param::<String>("session_id") else {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "invalid_param",
-            "missing webrtc session id",
-        );
-        return;
-    };
+    let session = aa.authenticated_session(state, req)?;
+    let session_id = session_id.into_inner();
     if !is_valid_webrtc_session_id(&session_id) {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "invalid_param",
-            "invalid webrtc session id",
-        );
-        return;
+        return Err(AppError::invalid_param("invalid webrtc session id"));
     }
-    let body = match req.parse_json::<WebrtcSignalRequest>().await {
-        Ok(body) => body,
-        Err(_) => {
-            render_error(
-                res,
-                StatusCode::BAD_REQUEST,
-                "bad_json",
-                "invalid webrtc signal request",
-            );
-            return;
-        }
-    };
+    let body = body.into_inner();
     if !is_supported_webrtc_signal_type(&body.message_type) {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "invalid_param",
-            "unsupported webrtc signal type",
-        );
-        return;
+        return Err(AppError::invalid_param("unsupported webrtc signal type"));
     }
     if let Err(message) = validate_canonical_json_value(&body.payload) {
-        render_error(res, StatusCode::BAD_REQUEST, "invalid_param", message);
-        return;
+        return Err(AppError::invalid_param(message));
     }
     if !webrtc_signal_proof_matches_actor(&body.proofs, &session.actor) {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "invalid_param",
+        return Err(AppError::invalid_param(
             "webrtc signal requires a proof bound to the actor",
-        );
-        return;
+        ));
     }
 
     prune_expired_webrtc_sessions(state);
@@ -228,80 +173,54 @@ async fn put_webrtc_signal(depot: &mut Depot, req: &mut Request, res: &mut Respo
         .webrtc()
         .append_signal(&session_id, &session.actor, builder)
     {
-        Ok(appended) => res.render(Json(WebrtcSignalResponse {
+        Ok(appended) => json_ok(WebrtcSignalResponse {
             ok: true,
             session_id: session_id.clone(),
             seq: appended.seq,
             next_cursor: appended.seq.to_string(),
-        })),
+        }),
         Err(crate::persistence::PersistenceError::NotFound(_)) => {
-            render_error(res, StatusCode::NOT_FOUND, "not_found", "session not found");
+            Err(AppError::not_found("session not found"))
         }
         Err(crate::persistence::PersistenceError::Conflict(_)) => {
-            render_error(
-                res,
-                StatusCode::FORBIDDEN,
-                "capability_denied",
+            Err(AppError::capability_denied(
                 "actor is not a participant of the webrtc session",
-            );
+            ))
         }
-        Err(error) => {
-            tracing::error!(%error, "failed to append webrtc signal");
-            render_error(
-                res,
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal_error",
-                "webrtc signal store unavailable",
-            );
-        }
+        Err(error) => Err(AppError::internal(error.to_string())),
     }
 }
 
-#[endpoint]
-async fn get_webrtc_signals(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+#[endpoint(
+    operation_id = "cx.webrtc.get_signals",
+    tags("webrtc"),
+    summary = "Page through WebRTC signaling events for a session"
+)]
+async fn get_webrtc_signals(
+    aa: AuthArgs,
+    session_id: PathParam<String>,
+    since: QueryParam<u64, false>,
+    limit: QueryParam<usize, false>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<WebrtcSignalsResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let Some(session) = auth_or_render(state, req, res) else {
-        return;
-    };
-    let Some(session_id) = req.param::<String>("session_id") else {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "invalid_param",
-            "missing webrtc session id",
-        );
-        return;
-    };
+    let session = aa.authenticated_session(state, req)?;
+    let session_id = session_id.into_inner();
     if !is_valid_webrtc_session_id(&session_id) {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "invalid_param",
-            "invalid webrtc session id",
-        );
-        return;
+        return Err(AppError::invalid_param("invalid webrtc session id"));
     }
-    let since = query_param(req, "since")
-        .and_then(|value| value.parse::<u64>().ok())
-        .unwrap_or(0);
-    let limit = query_param(req, "limit")
-        .and_then(|value| value.parse::<usize>().ok())
-        .unwrap_or(50)
-        .clamp(1, 100);
+    let since = since.into_inner().unwrap_or(0);
+    let limit = limit.into_inner().unwrap_or(50).clamp(1, 100);
 
     prune_expired_webrtc_sessions(state);
     let Some(record) = state.persistence.webrtc().get(&session_id).ok().flatten() else {
-        render_error(res, StatusCode::NOT_FOUND, "not_found", "session not found");
-        return;
+        return Err(AppError::not_found("session not found"));
     };
     if !record.participants.contains(&session.actor) {
-        render_error(
-            res,
-            StatusCode::FORBIDDEN,
-            "capability_denied",
+        return Err(AppError::capability_denied(
             "actor is not a participant of the webrtc session",
-        );
-        return;
+        ));
     }
     let mut events = record
         .signals
@@ -318,55 +237,43 @@ async fn get_webrtc_signals(depot: &mut Depot, req: &mut Request, res: &mut Resp
         .and_then(|event| event["seq"].as_u64())
         .unwrap_or(since)
         .to_string();
-    res.render(Json(WebrtcSignalsResponse {
+    json_ok(WebrtcSignalsResponse {
         session_id,
         events,
         next_cursor,
         limited,
-    }));
+    })
 }
 
-#[endpoint]
-async fn delete_webrtc_session(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+#[endpoint(
+    operation_id = "cx.webrtc.close_session",
+    tags("webrtc"),
+    summary = "Close (delete) a WebRTC signaling session"
+)]
+async fn delete_webrtc_session(
+    aa: AuthArgs,
+    session_id: PathParam<String>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<OkResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let Some(session) = auth_or_render(state, req, res) else {
-        return;
-    };
-    let Some(session_id) = req.param::<String>("session_id") else {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "invalid_param",
-            "missing webrtc session id",
-        );
-        return;
-    };
+    let session = aa.authenticated_session(state, req)?;
+    let session_id = session_id.into_inner();
     if !is_valid_webrtc_session_id(&session_id) {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "invalid_param",
-            "invalid webrtc session id",
-        );
-        return;
+        return Err(AppError::invalid_param("invalid webrtc session id"));
     }
 
     prune_expired_webrtc_sessions(state);
     let Some(record) = state.persistence.webrtc().get(&session_id).ok().flatten() else {
-        render_error(res, StatusCode::NOT_FOUND, "not_found", "session not found");
-        return;
+        return Err(AppError::not_found("session not found"));
     };
     if !record.participants.contains(&session.actor) {
-        render_error(
-            res,
-            StatusCode::FORBIDDEN,
-            "capability_denied",
+        return Err(AppError::capability_denied(
             "actor is not a participant of the webrtc session",
-        );
-        return;
+        ));
     }
     let _ = state.persistence.webrtc().delete(&session_id);
-    res.render(Json(OkResponse { ok: true }));
+    json_ok(OkResponse { ok: true })
 }
 
 fn prune_expired_webrtc_sessions(state: &AppState) {

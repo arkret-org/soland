@@ -4,15 +4,15 @@
 //! `state.persistence.moderation()`. Tier 6-D in `_todos.md` covers the async
 //! review workflow + reducer linkage.
 
-use salvo::http::StatusCode;
+use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde_json::json;
 
-use super::{
-    append_audit_log, auth_or_render, now, render_error, space_has_member, validate_did,
-    validate_space_id,
-};
+use super::{append_audit_log, now, space_has_member, validate_did, validate_space_id};
+use crate::error::AppError;
 use crate::ids;
+use crate::result::{JsonResult, json_ok};
+use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
 use crate::wire::{ModerationReportRequest, ModerationReportResponse};
 
@@ -20,50 +20,32 @@ pub(super) fn router() -> Router {
     Router::with_path("moderation/report").post(moderation_report)
 }
 
-#[endpoint]
-async fn moderation_report(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+#[endpoint(
+    operation_id = "cx.moderation.report",
+    tags("moderation"),
+    summary = "File a moderation report for content in a federated space"
+)]
+async fn moderation_report(
+    aa: AuthArgs,
+    body: JsonBody<ModerationReportRequest>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<ModerationReportResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let Some(session) = auth_or_render(state, req, res) else {
-        return;
-    };
-    let body = match req.parse_json::<ModerationReportRequest>().await {
-        Ok(body) => body,
-        Err(_) => {
-            render_error(
-                res,
-                StatusCode::BAD_REQUEST,
-                "bad_json",
-                "invalid moderation report request",
-            );
-            return;
-        }
-    };
+    let session = aa.authenticated_session(state, req)?;
+    let body = body.into_inner();
     if validate_space_id(&body.space_id).is_err() || validate_did(&body.reporter).is_err() {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "invalid_param",
-            "invalid space_id or reporter",
-        );
-        return;
+        return Err(AppError::invalid_param("invalid space_id or reporter"));
     }
     if body.reporter != session.actor {
-        render_error(
-            res,
-            StatusCode::FORBIDDEN,
-            "capability_denied",
+        return Err(AppError::capability_denied(
             "reporter must match authenticated actor",
-        );
-        return;
+        ));
     }
     if !space_has_member(state, &body.space_id, &session.actor) {
-        render_error(
-            res,
-            StatusCode::FORBIDDEN,
-            "capability_denied",
+        return Err(AppError::capability_denied(
             "reporter cannot see the target space",
-        );
-        return;
+        ));
     }
     let report_id = ids::generate_report_id();
     let moderation_service = format!("{}#moderation", state.config.service_did);
@@ -94,9 +76,9 @@ async fn moderation_report(depot: &mut Depot, req: &mut Request, res: &mut Respo
         json!({"report_id": report_id.clone()}),
         "queued",
     );
-    res.render(Json(ModerationReportResponse {
+    json_ok(ModerationReportResponse {
         report_id,
         status: "queued".to_owned(),
         routed_to: vec![moderation_service],
-    }));
+    })
 }

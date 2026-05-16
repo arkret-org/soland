@@ -223,4 +223,44 @@ async fn typed_describe_handlers_publish_response_schemas() {
             "missing operationId {operation_id} from round 15j typed conversion"
         );
     }
+
+    // Round 15k — moderation, push, webrtc handler batch.
+    // - moderation/moderation.rs::moderation_report
+    // - interop/push.rs::{push_unregister, delete_push_rule, push_notify}
+    // - interop/webrtc.rs::{create_webrtc_session, put_webrtc_signal,
+    //   get_webrtc_signals, delete_webrtc_session}
+    // All wire types already carry `ToSchema`; the conversions attach
+    // operation_id + typed request/response/path/query schemas.
+    for typed_now in [
+        "ModerationReportRequest",
+        "ModerationReportResponse",
+        "PushUnregisterRequest",
+        "PushNotifyRequest",
+        "PushNotifyResponse",
+        "CreateWebrtcSessionRequest",
+        "CreateWebrtcSessionResponse",
+        "WebrtcSignalRequest",
+        "WebrtcSignalResponse",
+        "WebrtcSignalsResponse",
+    ] {
+        assert!(
+            body.contains(typed_now),
+            "{typed_now} missing — round 15k typed signature did not publish its schema"
+        );
+    }
+    for operation_id in [
+        "cx.moderation.report",
+        "cx.push.unregister_device",
+        "cx.push.delete_rule",
+        "cx.push.notify",
+        "cx.webrtc.create_session",
+        "cx.webrtc.send_signal",
+        "cx.webrtc.get_signals",
+        "cx.webrtc.close_session",
+    ] {
+        assert!(
+            body.contains(&format!("operationId: {operation_id}")),
+            "missing operationId {operation_id} from round 15k typed conversion"
+        );
+    }
 }
