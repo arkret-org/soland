@@ -50,8 +50,8 @@
 | M | ~~Applet / Agent 集成测试 + 服务端 admin snapshot 实际数据填充~~ | ✅ 2026-05-16 已落地(round 15b)。 |
 | M | ~~Pg-backed `projection_places` / `projection_flows` / `projection_morphs`~~ | ✅ 2026-05-16 已落地(round 15h)。 |
 | M | ~~Pg-backed `projection_events`~~ | ✅ 2026-05-16 已落地(round 15i)。 |
-| M | MAL-11 prune walk 自动化 | 当前 `anchor-dag/prune` 只支持显式 `{anchor_id}` 调用;后台 worker 周期性遍历 DAG 跑 `CompactionPolicy::is_eligible` 也可以做,但要先有运营痛点。 |
-| L | OpenAPI ToSchema 下一批 untyped handler(剩余) | round 15g 转了 access/authz 的 invites + effective_grants 两个。grep `req: &mut Request[^)]*res: &mut Response` 还能找到 ~94 个 GET/POST handler 候选;每个独立 PR 工作量小但累加大。优先级 L。 |
+| M | MAL-11 prune walk 自动化 | **延后,等运营信号**。现有 `POST /api/admin/v1/spaces/{space_id}/anchor-dag/prune?anchor_id=...` 显式接口 operator 可以精确触发;后台 worker 三个关键决定(扫描节奏、per-space 范围、Pg I/O 背压)在没有 staging anchor-dag size / churn rate / Pg profile 的情况下闭门拍脑袋容易选错(过激进炸 IO,过保守等于没做)。**unblock 条件**:实际部署上 DAG 增长超过 N 节点 / Pg pg_stat_user_tables 的 anchor 表 dead tuples 触发 autovacuum 拖累,或者 operator 反馈"prune 调用频繁手动操作"。届时再做并对齐运营节奏。|
+| L | OpenAPI ToSchema 下一批 untyped handler(剩余) | **大部分已落地**。round 15g + 15j-15p + 15q-15ab 转了 ~79 个 handler。grep 当前剩 13 个:**4 个无法 typed**(`blob_upload` multipart、`blob_get` binary、`embedded_webvh_log` application/jsonl、`events_subscribe` SSE);**1 个已知 regression**(`submit_event` — typed extractor 改变 await 时机,炸 agent_bridge spawn 测试,撤回);**8 个故意跳过避免 scope creep**(event_log 读路径 + sync.rs 核心 — 纠缠 cursor/dispatch 助手跨模块,转一个触发一长串重构)。这 8 个真要做需要先把 cursor 助手模块独立出来,作单独 round。 |
 | L | ~~Registry 化非 canonical errcode~~ | ✅ 2026-05-16 已落地(round 15e)。 |
 | L | ~~Tombstoned / terminal Place 是否对外可见~~ | ✅ 2026-05-16 已落地(round 15d)。三个 projection endpoint 都加了 `include_terminal=true|false` query param;默认 hide。 |
 | L | ~~OpenAPI typed signature for projection_query handlers~~ | ✅ 2026-05-16 已落地(round 15c)。 |
