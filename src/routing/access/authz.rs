@@ -148,8 +148,15 @@ fn facet_names_from_value(value: Option<&serde_json::Value>) -> Vec<String> {
     }
 }
 
-#[endpoint]
-async fn effective_grants(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+#[endpoint(
+    operation_id = "cx.authz.get_effective_grants",
+    tags("authz"),
+    summary = "List effective authorization grants for a subject"
+)]
+async fn effective_grants(
+    depot: &mut Depot,
+    req: &mut Request,
+) -> crate::result::JsonResult<EffectiveGrantsResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let subject = query_param(req, "subject").unwrap_or_else(|| "did:web:alice.example".to_owned());
     let space_id = query_param(req, "space_id").unwrap_or_else(|| "*".to_owned());
@@ -197,13 +204,13 @@ async fn effective_grants(depot: &mut Depot, req: &mut Request, res: &mut Respon
         Vec::new()
     };
     let all_grants = [grants, default_grants].concat();
-    res.render(Json(EffectiveGrantsResponse {
+    crate::result::json_ok(EffectiveGrantsResponse {
         grants: all_grants,
         state_hash: Some(
             "sha256:0000000000000000000000000000000000000000000000000000000000000000".to_owned(),
         ),
         evaluated_at: now(),
-    }));
+    })
 }
 
 // ── Grant CRUD ──
@@ -291,12 +298,18 @@ async fn revoke_grant(depot: &mut Depot, req: &mut Request, res: &mut Response) 
     }
 }
 
-#[endpoint]
-async fn invites(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+#[endpoint(
+    operation_id = "cx.authz.get_invites",
+    tags("authz"),
+    summary = "List pending invites for the authenticated actor"
+)]
+async fn invites(
+    aa: crate::routing::system::extract::AuthArgs,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> crate::result::JsonResult<InvitesResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let Some(session) = auth_or_render(state, req, res) else {
-        return;
-    };
+    let session = aa.authenticated_session(state, req)?;
     let now = now();
     let invite_list = state
         .persistence
@@ -325,8 +338,8 @@ async fn invites(depot: &mut Depot, req: &mut Request, res: &mut Response) {
             })
         })
         .collect();
-    res.render(Json(InvitesResponse {
+    crate::result::json_ok(InvitesResponse {
         invites: invite_list,
         next_cursor: None,
-    }));
+    })
 }

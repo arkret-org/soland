@@ -170,4 +170,20 @@ async fn typed_describe_handlers_publish_response_schemas() {
             "{typed_now} missing — projection_query handler's typed signature did not publish its schema"
         );
     }
+
+    // Round 15g — access/authz.rs invites + effective_grants converted.
+    // Their wire response types are already ToSchema; the conversion
+    // adds them to the typed-handler output set.
+    for typed_now in ["InvitesResponse", "EffectiveGrantsResponse"] {
+        assert!(
+            body.contains(typed_now),
+            "{typed_now} missing — access/authz typed signature did not publish its schema"
+        );
+    }
+    for operation_id in ["cx.authz.get_invites", "cx.authz.get_effective_grants"] {
+        assert!(
+            body.contains(&format!("operationId: {operation_id}")),
+            "missing operationId {operation_id} from round 15g typed conversion"
+        );
+    }
 }
