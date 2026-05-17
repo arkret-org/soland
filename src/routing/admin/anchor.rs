@@ -47,6 +47,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::AuthArgs;
+use crate::app_error;
 use crate::error::{AppError, ErrorCode};
 use crate::state::AppState;
 use crate::{JsonResult, json_ok};
@@ -274,12 +275,8 @@ pub struct AnchorPruneDiagnostics {
 /// covers both the worker and the admin endpoints.
 fn service_admin_signer(state: &AppState) -> Result<Ed25519MoveSigner, AppError> {
     let service_did = state.config.service_did.as_str();
-    let did = Did::new(service_did.to_owned()).map_err(|e| {
-        AppError::new(
-            ErrorCode::InternalError,
-            format!("invalid service DID `{service_did}`: {e}"),
-        )
-    })?;
+    let did = Did::new(service_did.to_owned())
+        .map_err(|e| app_error!(InternalError, "invalid service DID `{service_did}`: {e}"))?;
     let kid = format!("{service_did}#anchorer-key");
     // `state.anchorer_signing_key()` returns `Arc<SigningKey>` (lock-free
     // `ArcSwap` snapshot). `Ed25519MoveSigner::new` takes a `SigningKey`
@@ -295,12 +292,8 @@ fn service_admin_signer(state: &AppState) -> Result<Ed25519MoveSigner, AppError>
 /// operator notices). The resulting signer's `verification_method` is
 /// `<admin_did>#admin-key`, giving Anchors / Moves admin attribution.
 fn admin_signer_for(state: &AppState, admin_did_str: &str) -> Result<Ed25519MoveSigner, AppError> {
-    let admin_did = Did::new(admin_did_str.to_owned()).map_err(|e| {
-        AppError::new(
-            ErrorCode::InvalidParam,
-            format!("invalid admin DID `{admin_did_str}`: {e}"),
-        )
-    })?;
+    let admin_did = Did::new(admin_did_str.to_owned())
+        .map_err(|e| app_error!(InvalidParam, "invalid admin DID `{admin_did_str}`: {e}"))?;
     match state.admin_keystore.load_admin_key(&admin_did) {
         Ok(bytes) if bytes.len() == 32 => {
             let mut seed = [0u8; 32];
@@ -335,8 +328,7 @@ fn admin_signer_for(state: &AppState, admin_did_str: &str) -> Result<Ed25519Move
 /// extra envelope fields (`max_anchor_staleness_ms`, `paused`) survive.
 fn anchorer_value_object_from_body(body: &AnchorerReconfigBody) -> Result<Value, AppError> {
     let invalid = |reason: &str| {
-        AppError::new(ErrorCode::InvalidParam, reason.to_owned())
-            .with_status(StatusCode::BAD_REQUEST)
+        app_error!(InvalidParam, "{}", reason).with_status(StatusCode::BAD_REQUEST)
     };
     let mut v = serde_json::Map::new();
     v.insert("kind".to_owned(), Value::String(body.kind.clone()));
@@ -434,22 +426,15 @@ fn pick_admin_anchor_ref(state: &AppState, space_id: &SpaceId) -> AnchorId {
 /// Build a fresh Hlc for an admin-issued Move using the server's
 /// own ServerHlc clock.
 fn fresh_hlc(state: &AppState) -> Result<Hlc, AppError> {
-    Hlc::new(state.hlc.now()).map_err(|e| {
-        AppError::new(
-            ErrorCode::InternalError,
-            format!("failed to mint HLC for admin Move: {e}"),
-        )
-    })
+    Hlc::new(state.hlc.now())
+        .map_err(|e| app_error!(InternalError, "failed to mint HLC for admin Move: {e}"))
 }
 
 /// Build the canonical anchorer cell ref for a Space.
 fn anchorer_cell_for(space_id: &str) -> Result<CellRef, AppError> {
     CellRef::new(format!("cx:cell:cx.component.anchorer.v1:{space_id}")).map_err(|e| {
-        AppError::new(
-            ErrorCode::InvalidParam,
-            format!("invalid space_id `{space_id}`: {e}"),
-        )
-        .with_status(StatusCode::BAD_REQUEST)
+        app_error!(InvalidParam, "invalid space_id `{space_id}`: {e}")
+            .with_status(StatusCode::BAD_REQUEST)
     })
 }
 
@@ -714,8 +699,7 @@ pub(super) async fn admin_reconfigure_anchorer(
     .await?;
     let space_id = space_id.into_inner();
     let space = SpaceId::new(space_id.clone()).map_err(|e| {
-        AppError::new(ErrorCode::InvalidParam, format!("invalid space_id: {e}"))
-            .with_status(StatusCode::BAD_REQUEST)
+        app_error!(InvalidParam, "invalid space_id: {e}").with_status(StatusCode::BAD_REQUEST)
     })?;
     let body = body.into_inner();
 
@@ -749,10 +733,9 @@ pub(super) async fn admin_reconfigure_anchorer(
         .iter()
         .any(|d| *d == service_signer_did || *d == operator_did)
     {
-        return Err(AppError::new(
-            ErrorCode::CapabilityDenied,
+        return Err(app_error!(
+            CapabilityDenied,
             "service signer DID and admin operator DID must not appear in the proposed anchorer set"
-                .to_owned(),
         )
         .with_status(StatusCode::FORBIDDEN));
     }
@@ -789,16 +772,14 @@ pub(super) async fn admin_reconfigure_anchorer(
         fresh_hlc(state)?,
     );
     let signed_move = Move::sign(&unsigned, &signer)
-        .map_err(|e| AppError::new(ErrorCode::InternalError, format!("Move::sign failed: {e}")))?;
+        .map_err(|e| app_error!(InternalError, "Move::sign failed: {e}"))?;
     let move_id = signed_move.id.as_str().to_owned();
 
     // Stash pending; if put_pending fails, that's a hard 500.
-    state.move_store.put_pending(&signed_move).map_err(|e| {
-        AppError::new(
-            ErrorCode::InternalError,
-            format!("move_store.put_pending failed: {e}"),
-        )
-    })?;
+    state
+        .move_store
+        .put_pending(&signed_move)
+        .map_err(|e| app_error!(InternalError, "move_store.put_pending failed: {e}"))?;
 
     // Best-effort: trigger one signing pass on this admin's Space — if
     // we're the round leader, this folds the Move into a fresh Anchor
@@ -854,8 +835,7 @@ pub(super) async fn admin_list_space_bottom(
     let _session = aa.authenticated_session(state, req)?;
     let space_id = space_id.into_inner();
     let _ = SpaceId::new(space_id.clone()).map_err(|e| {
-        AppError::new(ErrorCode::InvalidParam, format!("invalid space_id: {e}"))
-            .with_status(StatusCode::BAD_REQUEST)
+        app_error!(InvalidParam, "invalid space_id: {e}").with_status(StatusCode::BAD_REQUEST)
     })?;
     json_ok(collect_bottom_entries_for_space(state, &space_id))
 }
@@ -925,23 +905,18 @@ pub(super) async fn admin_repair_bottom(
     let space_id = space_id.into_inner();
     let cell_id_str = cell_id.into_inner();
     let space = SpaceId::new(space_id.clone()).map_err(|e| {
-        AppError::new(ErrorCode::InvalidParam, format!("invalid space_id: {e}"))
-            .with_status(StatusCode::BAD_REQUEST)
+        app_error!(InvalidParam, "invalid space_id: {e}").with_status(StatusCode::BAD_REQUEST)
     })?;
     let cell = CellRef::new(cell_id_str.clone()).map_err(|e| {
-        AppError::new(ErrorCode::InvalidParam, format!("invalid cell_id: {e}"))
-            .with_status(StatusCode::BAD_REQUEST)
+        app_error!(InvalidParam, "invalid cell_id: {e}").with_status(StatusCode::BAD_REQUEST)
     })?;
     let body = body.into_inner();
 
     match &body {
         BottomRepairStrategyBody::HeadInWinner { head } => {
             if head.move_id.is_empty() {
-                return Err(AppError::new(
-                    ErrorCode::InvalidParam,
-                    "winning head must carry a move_id".to_owned(),
-                )
-                .with_status(StatusCode::BAD_REQUEST));
+                return Err(app_error!(InvalidParam, "winning head must carry a move_id")
+                    .with_status(StatusCode::BAD_REQUEST));
             }
             // Build the head_in Effect. The `tag` carries the winning
             // Move id; `value` carries a placeholder (the canonical
@@ -979,17 +954,14 @@ pub(super) async fn admin_repair_bottom(
                 fresh_hlc(state)?,
             )
             .with_refs(vec![recovery_ref]);
-            let signed_move = Move::sign(&unsigned, &signer).map_err(|e| {
-                AppError::new(ErrorCode::InternalError, format!("Move::sign failed: {e}"))
-            })?;
+            let signed_move = Move::sign(&unsigned, &signer)
+                .map_err(|e| app_error!(InternalError, "Move::sign failed: {e}"))?;
             let move_id = signed_move.id.as_str().to_owned();
 
-            state.move_store.put_pending(&signed_move).map_err(|e| {
-                AppError::new(
-                    ErrorCode::InternalError,
-                    format!("move_store.put_pending failed: {e}"),
-                )
-            })?;
+            state
+                .move_store
+                .put_pending(&signed_move)
+                .map_err(|e| app_error!(InternalError, "move_store.put_pending failed: {e}"))?;
 
             let outcome = crate::anchorer::run_one_signing_pass(state, &space, 1024);
             match outcome {

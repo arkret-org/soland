@@ -21,10 +21,13 @@
 //!     only after the leaf-Anchor frontier has gone stale beyond `max_anchor_staleness_ms` (default
 //!     60_000ms when unset). Among recovery members the lex-smallest reachable DID owns the round
 //!     (same election as threshold).
-//! - **Placeholder JWS** under dev mode and **real Ed25519** under prod mode — handled by
-//!   `select_jws_verifier` in `routing/move_anchor.rs`. The signing side here still emits a
-//!   placeholder JWS payload (real Ed25519 *signing* needs HSM/keystore integration; verify already
-//!   lands in jws_verify.rs).
+//! - **Real Ed25519** signing on both verify *and* sign sides. The signing side delegates the
+//!   detached-JWS construction to `contrix_sdk::jws::sign_jws_ed25519` (symmetric counterpart of
+//!   `verify_jws_ed25519` — the SDK's verify path round-trips against the JWS this worker emits).
+//!   The signing key is sourced from `AppState::anchorer_signing_key()`, which loads from
+//!   `SOLAND_ANCHORER_SIGNING_KEY` (configured) or mints an in-process ephemeral seed at boot
+//!   (dev/test, sticky-warn). Dev mode's shape-only verifier (`select_jws_verifier` in
+//!   `routing/move_anchor.rs`) still accepts both real and shape-only JWSes for local fixtures.
 //! - **Manual / on-demand only**. Trigger via the admin endpoint `POST /api/admin/v1/anchors/sign`.
 //!   A periodic ticker / push-loop is left to future production work (needs lease coordination +
 //!   shutdown handling under tokio).
@@ -43,7 +46,7 @@ use contrix_sdk::state_res::{
 use contrix_sdk::{
     Anchor, AnchorId, AnchorerSig, CellRef, Hash, Hlc, Move, MoveId, MoveSignature, SpaceId,
 };
-use ed25519_dalek::{Signer as _, SigningKey};
+use ed25519_dalek::SigningKey;
 use sha2::{Digest, Sha256};
 
 use crate::config::AnchorerSigningKeyOrigin;
@@ -186,25 +189,30 @@ impl AnchorerWorker {
         let hlc = Hlc::new(state.hlc.now())
             .map_err(|e| AnchorerError::Construction(format!("invalid HLC: {e}")))?;
 
+        // canonical_bytes_for_id excludes `id` + `anchorer_sig` (see
+        // `Anchor::canonical_bytes_for_id` in contrix-core/src/anchor.rs).
+        // We therefore compute canonical bytes from an Anchor whose `id`
+        // is the well-known zero sentinel and whose `anchorer_sig` is a
+        // zero-byte-signature placeholder — both fields are EXCLUDED from
+        // the canonical body so the sentinels never influence the signing
+        // target. Then we derive the real id and sign over those same
+        // canonical bytes, keeping the signature byte-stable.
+        let zero_anchor_id = AnchorId::new(format!("cx:anchor:sha256:{}", "00".repeat(32)))
+            .expect("zero AnchorId is well-formed");
+        let zero_sig = zero_anchorer_sig_placeholder()?;
         let mut anchor = Anchor {
-            id: AnchorId::new(format!("cx:anchor:sha256:{}", "00".repeat(32))).unwrap(),
+            id: zero_anchor_id,
             space_id: space_id.clone(),
             predecessor_refs: leaves,
             frontier,
             state_root: predicted_state_root.clone(),
-            anchorer_sig: AnchorerSig::Single(
-                self.signature_for(state, &Sha256::digest(b"placeholder").as_slice().to_vec())?,
-            ),
+            anchorer_sig: AnchorerSig::Single(zero_sig),
             hlc,
             // Normal frontier-advance anchor. Compaction anchors come
             // through `admin_compact_anchor_dag`, not the regular
             // anchorer pipeline.
             kind: contrix_sdk::AnchorKind::Normal,
         };
-
-        // canonical_bytes_for_id excludes anchorer_sig + id, so deriving id
-        // first then signing the SAME bytes-for-id produces a stable
-        // signature target.
         let canonical_bytes = anchor
             .canonical_bytes_for_id()
             .map_err(|e| AnchorerError::Construction(format!("canonical bytes: {e}")))?;
@@ -509,12 +517,11 @@ impl AnchorerWorker {
     /// deployments fall back to an in-process random ephemeral key with a
     /// sticky-warn log line on every signing pass.
     ///
-    /// The JWS shape matches the SDK's `Ed25519MoveSigner::sign_payload`
-    /// (RFC 7515 §3.2 detached form):
-    ///   `BASE64URL({"alg":"EdDSA"}) || ".." || BASE64URL(signature_bytes)`
-    /// where `signature` is `Ed25519(BASE64URL(header) || "." || BASE64URL(canonical_bytes))`.
-    /// This passes both `verify_jws_shape` (dev) and `verify_jws_ed25519`
-    /// (production) when the verifier resolves the matching public key.
+    /// The JWS is constructed by `contrix_sdk::jws::sign_jws_ed25519`,
+    /// the symmetric counterpart of `verify_jws_ed25519`. Both sides of
+    /// the wire therefore agree on the protected header (`{"alg":"EdDSA"}`)
+    /// and the RFC 7515 §5.2 signing input shape (`BASE64URL(header) ||
+    /// '.' || BASE64URL(canonical_bytes)`) byte-for-byte.
     ///
     /// The verification_method id is `<service_did>#anchorer-key`; the
     /// matching DID Document MUST publish that key for the production
@@ -541,16 +548,8 @@ impl AnchorerWorker {
             warn_once_about_ephemeral_anchorer_key();
         }
 
-        // RFC 7515 §5.2 signing input: BASE64URL(header) || '.' || BASE64URL(payload).
-        let protected_header_json = br#"{"alg":"EdDSA"}"#;
-        let protected_b64u = URL_SAFE_NO_PAD.encode(protected_header_json);
-        let payload_b64u = URL_SAFE_NO_PAD.encode(canonical_bytes);
-        let signing_input = format!("{protected_b64u}.{payload_b64u}");
-        let signature = signing_key.sign(signing_input.as_bytes());
-        let signature_b64u = URL_SAFE_NO_PAD.encode(signature.to_bytes());
-
-        // Detached JWS: header || ".." || signature  (payload segment empty).
-        let jws = format!("{protected_b64u}..{signature_b64u}");
+        let jws = contrix_sdk::jws::sign_jws_ed25519(canonical_bytes, signing_key.as_ref())
+            .map_err(|e| AnchorerError::Construction(format!("sign_jws_ed25519: {e}")))?;
 
         Ok(MoveSignature {
             alg: "EdDSA".to_owned(),
@@ -560,6 +559,32 @@ impl AnchorerWorker {
             jws,
         })
     }
+}
+
+/// Build a 64-zero-byte signature placeholder used purely as a typed
+/// stand-in for `Anchor.anchorer_sig` while we compute
+/// `canonical_bytes_for_id` (which excludes `anchorer_sig` entirely).
+/// The value never reaches the wire — `sign_pending_for_space` overwrites
+/// `anchor.anchorer_sig` with the real signature after deriving the
+/// canonical bytes and the id.
+fn zero_anchorer_sig_placeholder() -> Result<MoveSignature, AnchorerError> {
+    let payload_hash = Hash::new(format!("sha256:{}", "00".repeat(32)))
+        .map_err(|e| AnchorerError::Construction(format!("zero payload hash: {e}")))?;
+    // 64 zero bytes -> 86-char base64url-no-pad zero string. The detached
+    // JWS shape is `header..signature`, with the SDK-canonical EdDSA
+    // header so the placeholder is at least well-typed for the
+    // `MoveSignature` field. `verify_jws_ed25519` would reject the
+    // all-zero signature as a sentinel — that's intended; this value
+    // must not survive past the overwrite at the end of step 7.
+    let header_b64 = URL_SAFE_NO_PAD.encode(br#"{"alg":"EdDSA"}"#);
+    let zero_sig_b64 = URL_SAFE_NO_PAD.encode([0u8; 64]);
+    Ok(MoveSignature {
+        alg: "EdDSA".to_owned(),
+        verification_method: String::new(),
+        payload_hash,
+        created_at: chrono::Utc::now(),
+        jws: format!("{header_b64}..{zero_sig_b64}"),
+    })
 }
 
 /// Log a sticky warning the first time we sign with an ephemeral

@@ -18,7 +18,7 @@
 //! Ed25519 verification runs against the public key resolved from the
 //! `verification_method` DID URL.
 
-use contrix_sdk::state_res::{apply_anchor, verify_move};
+use contrix_sdk::state_res::{AnchorReject, apply_anchor, verify_move};
 use contrix_sdk::{Anchor, Move, SpaceId};
 use salvo::http::StatusCode;
 use salvo::oapi::extract::JsonBody;
@@ -29,6 +29,36 @@ use super::AuthArgs;
 use crate::error::{AppError, ErrorCode};
 use crate::state::AppState;
 use crate::{JsonResult, json_ok};
+
+/// Map an SDK [`AnchorReject`] onto an [`AppError`].
+///
+/// Every reject reason routes through the canonical Contrix error
+/// registry:
+///
+/// - `UnknownPredecessor`, `FrontierNotMonotonic`, `Structural`, `MissingMove`,
+///   `StateRootMismatch` → [`ErrorCode::SchemaViolation`] (handler-level rejects of a structurally
+///   invalid anchor envelope).
+/// - `Store` → [`ErrorCode::InternalError`] (durable-store IO failure).
+///
+/// The resulting `AppError` is rendered with HTTP `409 Conflict` to match
+/// the prior in-handler mapping at `submit_anchor` — the registry default
+/// for `SchemaViolation` is `422`, but anchor-rejects are conceptually a
+/// causal / state-machine conflict so `409` is the historical wire status
+/// here. Call sites that need a different status can override after
+/// conversion via `.with_status(...)`.
+impl From<AnchorReject> for AppError {
+    fn from(reject: AnchorReject) -> Self {
+        let code = match &reject {
+            AnchorReject::UnknownPredecessor
+            | AnchorReject::FrontierNotMonotonic
+            | AnchorReject::Structural(_)
+            | AnchorReject::MissingMove { .. }
+            | AnchorReject::StateRootMismatch { .. } => ErrorCode::SchemaViolation,
+            AnchorReject::Store(_) => ErrorCode::InternalError,
+        };
+        AppError::new(code, reject.to_string()).with_status(StatusCode::CONFLICT)
+    }
+}
 
 pub(super) fn router() -> Router {
     Router::new()
@@ -274,6 +304,9 @@ async fn submit_anchor(
         .with_status(StatusCode::CONFLICT));
     }
     let verifier = select_jws_verifier(state);
+    // `AnchorReject` → `AppError` mapping lives in the `From` impl above;
+    // `?` propagates with the canonical (registry-bound) error code and
+    // the spec-compliant 409 wire status.
     let effect = apply_anchor(
         &anchor,
         move_store,
@@ -281,20 +314,7 @@ async fn submit_anchor(
         cell_store,
         registry,
         verifier,
-    )
-    .map_err(|e| {
-        let code = match &e {
-            contrix_sdk::state_res::AnchorReject::UnknownPredecessor
-            | contrix_sdk::state_res::AnchorReject::FrontierNotMonotonic
-            | contrix_sdk::state_res::AnchorReject::Structural(_)
-            | contrix_sdk::state_res::AnchorReject::MissingMove { .. }
-            | contrix_sdk::state_res::AnchorReject::StateRootMismatch { .. } => {
-                ErrorCode::SchemaViolation
-            }
-            contrix_sdk::state_res::AnchorReject::Store(_) => ErrorCode::InternalError,
-        };
-        AppError::new(code, e.to_string()).with_status(StatusCode::CONFLICT)
-    })?;
+    )?;
 
     let rejected = effect
         .rejected_moves

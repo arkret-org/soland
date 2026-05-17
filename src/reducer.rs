@@ -501,6 +501,313 @@ fn redaction_object_ref(operation: &Operation) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
+// ────────────────────────── apply() dispatch registry ──────────────────────────
+//
+// `ProjectionState::apply()` used to be a 30-arm `match` on
+// `canonical_kind_for_operation`. Each arm delegated to a `self.apply_*`
+// helper, sometimes with extra carrier args (the lifecycle enums, the
+// raw kind string for `apply_space_lifecycle`, the HLC for relations).
+//
+// This registry keeps the dispatch table out of the match: every
+// canonical event_kind maps to a single `ApplyFn` adapter that calls
+// the corresponding `apply_*` helper with the per-kind extra args
+// baked in. `apply()` becomes a HashMap lookup + indirect call, with
+// the "unknown kind → ProjectionEffect::Ignored" tolerance preserved
+// in the fallthrough.
+//
+// The adapter free functions exist solely to turn the per-kind
+// `(now, hlc, lifecycle_enum_variant, ...)` arg signatures into the
+// uniform `(state, op, hlc) -> ProjectionEffect` shape the registry
+// needs. They contain no projection logic — that all stays in the
+// `apply_*` methods on `ProjectionState`.
+
+/// Adapter signature for entries in [`default_apply_registry`].
+pub type ApplyFn = fn(&mut ProjectionState, &Operation, &ServerHlc) -> ProjectionEffect;
+
+fn apply_message_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_message(op, op.created_at)
+}
+fn apply_message_revise_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_message_revise(op, op.created_at)
+}
+fn apply_redaction_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_redaction(op)
+}
+fn apply_reaction_add_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_reaction_add(op, op.created_at)
+}
+fn apply_reaction_remove_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_reaction_remove(op)
+}
+fn apply_read_marker_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_read_marker(op, op.created_at)
+}
+fn apply_relation_create_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_relation_create(op, op.created_at)
+}
+fn apply_relation_update_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_relation_update(op, op.created_at, hlc)
+}
+fn apply_relation_delete_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_relation_delete(op)
+}
+fn apply_container_position_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_container_position(op, op.created_at)
+}
+fn apply_membership_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_membership(op, op.created_at)
+}
+fn apply_space_create_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_space_lifecycle(op, op.created_at, crate::kinds::CX_SPACE_CREATE)
+}
+fn apply_space_update_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_space_lifecycle(op, op.created_at, crate::kinds::CX_SPACE_UPDATE)
+}
+fn apply_space_destroy_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_space_lifecycle(op, op.created_at, crate::kinds::CX_SPACE_DESTROY)
+}
+fn apply_place_create_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_place_create(op, op.created_at)
+}
+fn apply_place_update_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_place_update(op, op.created_at)
+}
+fn apply_place_parent_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_place_parent(op, op.created_at)
+}
+fn apply_place_archive_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_place_lifecycle(op, op.created_at, PlaceLifecycleTransition::Archive)
+}
+fn apply_place_restore_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_place_lifecycle(op, op.created_at, PlaceLifecycleTransition::Restore)
+}
+fn apply_place_tombstone_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_place_lifecycle(op, op.created_at, PlaceLifecycleTransition::Tombstone)
+}
+fn apply_flow_create_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_flow_create(op, op.created_at)
+}
+fn apply_flow_update_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_flow_update(op, op.created_at)
+}
+fn apply_flow_archive_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_flow_lifecycle(op, op.created_at, ObjectLifecycleTransition::Archive)
+}
+fn apply_flow_restore_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_flow_lifecycle(op, op.created_at, ObjectLifecycleTransition::Restore)
+}
+fn apply_flow_position_touch_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_flow_position_touch(op, op.created_at)
+}
+fn apply_flow_track_touch_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_flow_track_touch(op, op.created_at)
+}
+fn apply_morph_create_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_morph_create(op, op.created_at)
+}
+fn apply_morph_update_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_morph_update(op, op.created_at)
+}
+fn apply_morph_archive_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_morph_lifecycle(op, op.created_at, ObjectLifecycleTransition::Archive)
+}
+fn apply_morph_restore_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_morph_lifecycle(op, op.created_at, ObjectLifecycleTransition::Restore)
+}
+fn apply_applet_registration_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_applet_registration(op, op.created_at)
+}
+fn apply_applet_discovery_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_applet_discovery(op, op.created_at)
+}
+fn apply_agent_endpoint_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_agent_endpoint(op, op.created_at)
+}
+
+/// Build the canonical `event_kind → ApplyFn` registry consumed by
+/// [`ProjectionState::apply`]. Public so out-of-crate tests can assert
+/// the registry covers every canonical kind they care about.
+pub fn default_apply_registry() -> std::collections::HashMap<&'static str, ApplyFn> {
+    use crate::kinds::*;
+    let mut m: std::collections::HashMap<&'static str, ApplyFn> =
+        std::collections::HashMap::with_capacity(40);
+    m.insert(CX_MESSAGE_CREATE, apply_message_dispatch as ApplyFn);
+    m.insert(CX_MESSAGE_REVISE, apply_message_revise_dispatch);
+    m.insert(CX_MESSAGE_REDACT, apply_redaction_dispatch);
+    m.insert(CX_REDACTION, apply_redaction_dispatch);
+    m.insert(CX_REACTION_ADD, apply_reaction_add_dispatch);
+    m.insert(CX_REACTION_REMOVE, apply_reaction_remove_dispatch);
+    m.insert(CX_READ_MARKER, apply_read_marker_dispatch);
+    m.insert(CX_RELATION_CREATE, apply_relation_create_dispatch);
+    m.insert(CX_RELATION_UPDATE, apply_relation_update_dispatch);
+    m.insert(CX_RELATION_DELETE, apply_relation_delete_dispatch);
+    m.insert(CX_CONTAINER_MOVE_ITEM, apply_container_position_dispatch);
+    m.insert(CX_CONTAINER_REBALANCE, apply_container_position_dispatch);
+    m.insert(CX_MEMBER_STATE, apply_membership_dispatch);
+    m.insert(CX_SPACE_CREATE, apply_space_create_dispatch);
+    m.insert(CX_SPACE_UPDATE, apply_space_update_dispatch);
+    m.insert(CX_SPACE_DESTROY, apply_space_destroy_dispatch);
+    m.insert(CX_PLACE_CREATE, apply_place_create_dispatch);
+    m.insert(CX_PLACE_UPDATE, apply_place_update_dispatch);
+    m.insert(CX_PLACE_PARENT, apply_place_parent_dispatch);
+    m.insert(CX_PLACE_ARCHIVE, apply_place_archive_dispatch);
+    m.insert(CX_PLACE_RESTORE, apply_place_restore_dispatch);
+    m.insert(CX_PLACE_TOMBSTONE, apply_place_tombstone_dispatch);
+    m.insert(CX_FLOW_CREATE, apply_flow_create_dispatch);
+    m.insert(CX_FLOW_UPDATE, apply_flow_update_dispatch);
+    m.insert(CX_FLOW_ARCHIVE, apply_flow_archive_dispatch);
+    m.insert(CX_FLOW_RESTORE, apply_flow_restore_dispatch);
+    m.insert(CX_FLOW_MOVE, apply_flow_position_touch_dispatch);
+    m.insert(CX_FLOW_REORDER, apply_flow_position_touch_dispatch);
+    m.insert(CX_FLOW_TRACK_DISABLE, apply_flow_track_touch_dispatch);
+    m.insert(CX_FLOW_TRACK_ENABLE, apply_flow_track_touch_dispatch);
+    m.insert(CX_FLOW_TRACK_SET_PRIMARY, apply_flow_track_touch_dispatch);
+    m.insert(CX_FLOW_TRACK_UPDATE, apply_flow_track_touch_dispatch);
+    m.insert(CX_MORPH_CREATE, apply_morph_create_dispatch);
+    m.insert(CX_MORPH_UPDATE, apply_morph_update_dispatch);
+    m.insert(CX_MORPH_ARCHIVE, apply_morph_archive_dispatch);
+    m.insert(CX_MORPH_RESTORE, apply_morph_restore_dispatch);
+    m.insert(CX_APPLET_REGISTRATION, apply_applet_registration_dispatch);
+    m.insert(CX_APPLET_DISCOVERY, apply_applet_discovery_dispatch);
+    m.insert(CX_AGENT_ENDPOINT, apply_agent_endpoint_dispatch);
+    m
+}
+
+static APPLY_REGISTRY: std::sync::LazyLock<std::collections::HashMap<&'static str, ApplyFn>> =
+    std::sync::LazyLock::new(default_apply_registry);
+
 impl ProjectionState {
     pub fn new() -> Self {
         Self::default()
@@ -554,81 +861,34 @@ impl ProjectionState {
 
     /// Apply a single operation and return the effect.
     ///
-    /// Direct match-on-canonical-kind dispatch to per-domain helpers. This
-    /// replaced the per-kind
-    /// `ReducerKind` trait + `ReducerRegistry` apparatus, which added
-    /// zero value over inline match dispatch (every per-kind stub was a
-    /// thin delegate to a `ProjectionState::apply_*` helper).
+    /// Per-kind dispatch flows through [`APPLY_REGISTRY`] — a static
+    /// `HashMap<canonical_kind, ApplyFn>` built by
+    /// [`default_apply_registry`]. This replaced a 30-arm `match` that
+    /// directly delegated to `ProjectionState::apply_*` helpers; the
+    /// dispatch table is now data, the helpers are the same, and adding
+    /// a new event_kind only touches the registry builder + one adapter.
     ///
-    /// Durable-event projection now probes the lattice registry before
-    /// applying these inline caches, so unknown event kinds fail closed.
-    pub fn apply(&mut self, operation: &Operation, _hlc: &ServerHlc) -> ProjectionEffect {
-        use crate::kinds::*;
-        let now = operation.created_at;
-        match crate::kinds::canonical_kind_for_operation(operation) {
-            Some(CX_MESSAGE_CREATE) => self.apply_message(operation, now),
-            Some(CX_MESSAGE_REVISE) => self.apply_message_revise(operation, now),
-            Some(CX_MESSAGE_REDACT) | Some(CX_REDACTION) => self.apply_redaction(operation),
-            Some(CX_REACTION_ADD) => self.apply_reaction_add(operation, now),
-            Some(CX_REACTION_REMOVE) => self.apply_reaction_remove(operation),
-            Some(CX_READ_MARKER) => self.apply_read_marker(operation, now),
-            Some(CX_RELATION_CREATE) => self.apply_relation_create(operation, now),
-            Some(CX_RELATION_UPDATE) => self.apply_relation_update(operation, now, _hlc),
-            Some(CX_RELATION_DELETE) => self.apply_relation_delete(operation),
-            Some(CX_CONTAINER_MOVE_ITEM) | Some(CX_CONTAINER_REBALANCE) => {
-                self.apply_container_position(operation, now)
-            }
-            Some(CX_MEMBER_STATE) => self.apply_membership(operation, now),
-            Some(kind @ (CX_SPACE_CREATE | CX_SPACE_UPDATE | CX_SPACE_DESTROY)) => {
-                self.apply_space_lifecycle(operation, now, kind)
-            }
-            Some(CX_PLACE_CREATE) => self.apply_place_create(operation, now),
-            Some(CX_PLACE_UPDATE) => self.apply_place_update(operation, now),
-            Some(CX_PLACE_PARENT) => self.apply_place_parent(operation, now),
-            Some(CX_PLACE_ARCHIVE) => {
-                self.apply_place_lifecycle(operation, now, PlaceLifecycleTransition::Archive)
-            }
-            Some(CX_PLACE_RESTORE) => {
-                self.apply_place_lifecycle(operation, now, PlaceLifecycleTransition::Restore)
-            }
-            Some(CX_PLACE_TOMBSTONE) => {
-                self.apply_place_lifecycle(operation, now, PlaceLifecycleTransition::Tombstone)
-            }
-            Some(CX_FLOW_CREATE) => self.apply_flow_create(operation, now),
-            Some(CX_FLOW_UPDATE) => self.apply_flow_update(operation, now),
-            Some(CX_FLOW_ARCHIVE) => {
-                self.apply_flow_lifecycle(operation, now, ObjectLifecycleTransition::Archive)
-            }
-            Some(CX_FLOW_RESTORE) => {
-                self.apply_flow_lifecycle(operation, now, ObjectLifecycleTransition::Restore)
-            }
-            Some(CX_FLOW_MOVE) | Some(CX_FLOW_REORDER) => {
-                self.apply_flow_position_touch(operation, now)
-            }
-            Some(
-                CX_FLOW_TRACK_DISABLE
-                | CX_FLOW_TRACK_ENABLE
-                | CX_FLOW_TRACK_SET_PRIMARY
-                | CX_FLOW_TRACK_UPDATE,
-            ) => self.apply_flow_track_touch(operation, now),
-            Some(CX_MORPH_CREATE) => self.apply_morph_create(operation, now),
-            Some(CX_MORPH_UPDATE) => self.apply_morph_update(operation, now),
-            Some(CX_MORPH_ARCHIVE) => {
-                self.apply_morph_lifecycle(operation, now, ObjectLifecycleTransition::Archive)
-            }
-            Some(CX_MORPH_RESTORE) => {
-                self.apply_morph_lifecycle(operation, now, ObjectLifecycleTransition::Restore)
-            }
-            Some(CX_APPLET_REGISTRATION) => self.apply_applet_registration(operation, now),
-            Some(CX_APPLET_DISCOVERY) => self.apply_applet_discovery(operation, now),
-            Some(CX_AGENT_ENDPOINT) => self.apply_agent_endpoint(operation, now),
-            // All cell-state events (cx.space.policy / cx.space.read_receipt_policy /
-            // cx.consent.* / cx.member.state / cx.space.* facets) are routed via
-            // the Move/Anchor pipeline through `LatticeKind` impls in
-            // `lattice_kinds.rs`; the structured ProjectionState fields don't
-            // mirror them. `routing/projection.rs::project_read_receipt_policy`
-            // handles the read-receipt cache fast path explicitly.
-            _ => ProjectionEffect::Ignored,
+    /// Tolerance for unknown kinds is preserved: a miss in the registry
+    /// returns `ProjectionEffect::Ignored` (same as the old wildcard
+    /// arm). Durable-event projection's lattice-registry probe
+    /// (`apply_via_lattice_registry`) still fails closed for unknown
+    /// canonical kinds — the registry miss path here is the
+    /// "cell-state-only event reached the inline cache by mistake"
+    /// branch.
+    ///
+    /// All cell-state events (cx.space.policy / cx.space.read_receipt_policy /
+    /// cx.consent.* / cx.member.state / cx.space.* facets) are routed via
+    /// the Move/Anchor pipeline through `LatticeKind` impls in
+    /// `lattice_kinds.rs`; the structured ProjectionState fields don't
+    /// mirror them. `routing/projection.rs::project_read_receipt_policy`
+    /// handles the read-receipt cache fast path explicitly.
+    pub fn apply(&mut self, operation: &Operation, hlc: &ServerHlc) -> ProjectionEffect {
+        let Some(kind) = crate::kinds::canonical_kind_for_operation(operation) else {
+            return ProjectionEffect::Ignored;
+        };
+        match APPLY_REGISTRY.get(kind) {
+            Some(dispatch) => dispatch(self, operation, hlc),
+            None => ProjectionEffect::Ignored,
         }
     }
 

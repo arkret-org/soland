@@ -366,7 +366,14 @@ fn delegation_error_to_app_error(err: crate::authz::DelegationError) -> AppError
         }
         DelegationError::ActionsNotHeld { offending } => AppError::new(
             state_mismatch,
-            format!("delegator does not hold action `{offending}`"),
+            format!(
+                "delegator does not hold action(s) {}",
+                offending
+                    .iter()
+                    .map(|a| format!("`{a}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
         )
         .with_status(StatusCode::PRECONDITION_FAILED)
         .with_wire_code("capability_not_held"),

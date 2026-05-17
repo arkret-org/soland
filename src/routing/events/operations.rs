@@ -1268,6 +1268,12 @@ pub fn validate_content_block(block: &serde_json::Value) -> Result<(), &'static 
 /// Returns the canonical critical_extension feature ID a payload's
 /// `requirements.critical_extensions[]` MUST contain. None when no
 /// agent_workspace-gated content block is present.
+//
+// SO-4: not worth refactoring at current arm count (1 named arm + wildcard);
+// revisit when it grows. A HashMap-keyed dispatcher (one free
+// `fn(&Value) -> Result<(), AppError>` per content kind) only pays off once
+// the match has ~10+ arms — at that point every new content kind ought to
+// land as its own helper rather than a one-line arm here.
 pub fn agent_workspace_required_feature_id(content: &serde_json::Value) -> Option<&'static str> {
     match content.get("kind").and_then(|v| v.as_str()) {
         Some("cx.content.mention_redirect") => Some("cx.feature.mention_redirect.v1"),
