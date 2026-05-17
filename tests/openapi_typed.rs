@@ -55,6 +55,7 @@ fn test_config() -> AppConfig {
         compaction_prune_walk_interval_seconds: 0,
 
         compaction_prune_walk_per_space_limit: 50,
+        seed_demo_data: true,
     }
 }
 
@@ -216,11 +217,11 @@ async fn typed_describe_handlers_publish_response_schemas() {
         );
     }
     for operation_id in [
-        "cx.federation.transaction",
-        "cx.federation.push_operations",
-        "cx.federation.pull_operations",
-        "cx.federation.space_members",
-        "cx.federation.verify_actor",
+        "cx.extension.soland.federation.transaction",
+        "cx.extension.soland.federation.push_operations",
+        "cx.extension.soland.federation.pull_operations",
+        "cx.extension.soland.federation.space_members",
+        "cx.extension.soland.federation.verify_actor",
         "cx.events.frontier",
     ] {
         assert!(
@@ -258,10 +259,10 @@ async fn typed_describe_handlers_publish_response_schemas() {
         "cx.push.unregister_device",
         "cx.push.delete_rule",
         "cx.push.notify",
-        "cx.webrtc.create_session",
-        "cx.webrtc.send_signal",
-        "cx.webrtc.get_signals",
-        "cx.webrtc.close_session",
+        "cx.extension.soland.webrtc.create_session",
+        "cx.extension.soland.webrtc.send_signal",
+        "cx.extension.soland.webrtc.get_signals",
+        "cx.extension.soland.webrtc.close_session",
     ] {
         assert!(
             body.contains(&format!("operationId: {operation_id}")),
@@ -290,10 +291,10 @@ async fn typed_describe_handlers_publish_response_schemas() {
         );
     }
     for operation_id in [
-        "cx.policies.list",
-        "cx.policies.get",
-        "cx.policies.upsert",
-        "cx.policies.delete",
+        "cx.extension.soland.policies.list",
+        "cx.extension.soland.policies.get",
+        "cx.extension.soland.policies.upsert",
+        "cx.extension.soland.policies.delete",
         "cx.policy.check",
         "cx.authz.check",
     ] {
@@ -429,24 +430,24 @@ async fn typed_describe_handlers_publish_response_schemas() {
         "cx.relation.create",
         "cx.relation.delete",
         "cx.relation.list",
-        "cx.index.object",
-        "cx.index.thread",
-        "cx.index.notifications",
-        "cx.index.search",
-        "cx.index.space_hierarchy",
-        "cx.index.query",
-        "cx.index.debug_reducer",
-        "cx.messages.send",
+        "cx.extension.soland.index.object",
+        "cx.extension.soland.index.thread",
+        "cx.extension.soland.index.notifications",
+        "cx.extension.soland.index.search",
+        "cx.extension.soland.index.space_hierarchy",
+        "cx.extension.soland.index.query",
+        "cx.extension.soland.index.debug_reducer",
+        "cx.extension.soland.messages.send",
         "cx.push.register_device",
-        "cx.push.rules",
+        "cx.extension.soland.push.rules",
         "cx.push.upsert_rule",
-        "cx.push.outbound_bridge_resolve",
-        "cx.push.outbound_bridge_fetch",
-        "cx.push.outbound_bridge_cache_import",
-        "cx.push.outbound_bridge_cache_invalidate",
-        "cx.audit.user_action",
-        "cx.audit.events",
-        "cx.admin.collection",
+        "cx.extension.soland.push.outbound_bridge_resolve",
+        "cx.extension.soland.push.outbound_bridge_fetch",
+        "cx.extension.soland.push.outbound_bridge_cache_import",
+        "cx.extension.soland.push.outbound_bridge_cache_invalidate",
+        "cx.extension.soland.audit.user_action",
+        "cx.extension.soland.audit.events",
+        "cx.extension.soland.admin.collection",
     ] {
         assert!(
             body.contains(&format!("operationId: {operation_id}")),
@@ -458,8 +459,8 @@ async fn typed_describe_handlers_publish_response_schemas() {
     // in this slice; rest of sync.rs is too entangled with cursor/stream
     // helpers to migrate without scope creep).
     assert!(
-        body.contains("operationId: cx.sync.typing"),
-        "missing operationId cx.sync.typing from round 15z typed conversion"
+        body.contains("operationId: cx.extension.soland.sync.typing"),
+        "missing operationId cx.extension.soland.sync.typing from round 15z typed conversion"
     );
     assert!(
         body.contains("SetTypingRequest"),
@@ -526,9 +527,9 @@ async fn typed_describe_handlers_publish_response_schemas() {
         "cx.events.batch_get",
         "cx.sync.account",
         "cx.events.query",
-        "cx.sync.backfill_gap",
+        "cx.extension.soland.sync.backfill_gap",
         "cx.sync.get_snapshot_head",
-        "cx.sync.get_snapshot_chunk",
+        "cx.extension.soland.sync.get_snapshot_chunk",
     ] {
         assert!(
             body.contains(&format!("operationId: {operation_id}")),

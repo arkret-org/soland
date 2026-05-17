@@ -193,6 +193,14 @@ pub struct AppConfig {
     /// DAGs; further candidates are picked up on subsequent ticks.
     /// Env: `SOLAND_COMPACTION_PRUNE_WALK_PER_SPACE_LIMIT` (default 50).
     pub compaction_prune_walk_per_space_limit: usize,
+    /// When true, `AppState::new` seeds a deterministic demo Space
+    /// (`cx:space:0196419b-...`), demo account (`did:web:alice.example`),
+    /// and matching space_meta record on boot. Off by default so
+    /// production deployments don't ship a globally-shared "demo" Space
+    /// that collides across federated peers. Test harnesses opt in via
+    /// `test_config()` to keep their fixture IDs stable.
+    /// Env: `SOLAND_SEED_DEMO_DATA` (default false).
+    pub seed_demo_data: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -438,6 +446,7 @@ impl AppConfig {
                 .and_then(|value| value.trim().parse::<usize>().ok())
                 .unwrap_or(50)
                 .max(1);
+        let seed_demo_data = env_bool("SOLAND_SEED_DEMO_DATA")?.unwrap_or(false);
 
         Ok(Self {
             bind,
@@ -479,6 +488,7 @@ impl AppConfig {
             compaction_prune_only_singleton_successors,
             compaction_prune_walk_interval_seconds,
             compaction_prune_walk_per_space_limit,
+            seed_demo_data,
         })
     }
 

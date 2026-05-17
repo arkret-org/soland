@@ -9,8 +9,7 @@ use std::sync::{Arc, Mutex};
 use chrono::Utc;
 use contrix_sdk::Operation;
 use diesel::sql_types::{
-    Array, BigInt, Binary, Bool, Integer, Jsonb, Nullable, Text, Timestamptz,
-    Uuid as SqlUuid,
+    Array, BigInt, Binary, Bool, Integer, Jsonb, Nullable, Text, Timestamptz, Uuid as SqlUuid,
 };
 use diesel::{OptionalExtension, QueryableByName, RunQueryDsl, sql_query};
 use serde_json::Value;
@@ -20,10 +19,10 @@ use crate::db::PgPool;
 use crate::ids;
 use crate::state::{
     AccountDataRecord, AccountRecord, BlobRecord, CanonicalEventRecord, ContactRecord,
-    DeviceInventoryRecord, DeviceMessageRecord, FederationTransactionRecord, WebvhDocumentRecord,
-    WebvhLogRecord, MessageRecord, MultisigPendingRecord, OutboundPushBridgeCacheRecord,
-    PolicyDocumentRecord, PresenceRecord, ProjectionEventRecord, PushRuleRecord, SessionRecord,
-    SpaceInviteRecord, SpaceMetaRecord, TypingRecord, WebrtcSessionRecord, WebrtcSignalRecord,
+    DeviceInventoryRecord, DeviceMessageRecord, FederationTransactionRecord, MessageRecord,
+    MultisigPendingRecord, OutboundPushBridgeCacheRecord, PolicyDocumentRecord, PresenceRecord,
+    ProjectionEventRecord, PushRuleRecord, SessionRecord, SpaceInviteRecord, SpaceMetaRecord,
+    TypingRecord, WebrtcSessionRecord, WebrtcSignalRecord, WebvhDocumentRecord, WebvhLogRecord,
 };
 
 /// Error type for persistence operations.
@@ -215,6 +214,7 @@ pub trait FederationTransactionStore: Send + Sync {
         txn_id: &str,
     ) -> PersistenceResult<Option<FederationTransactionRecord>>;
     fn put(&self, record: &FederationTransactionRecord) -> PersistenceResult<()>;
+    fn snapshot_all(&self) -> PersistenceResult<Vec<FederationTransactionRecord>>;
 }
 
 /// Append-only audit log. Reads are always actor-scoped; the cursor is the
@@ -248,6 +248,13 @@ pub trait FederationOperationsStore: Send + Sync {
 /// flux; the trait gives us a single point to upgrade later.
 pub trait PushDeviceStore: Send + Sync {
     fn register(&self, device: Value) -> PersistenceResult<()>;
+    fn unregister(
+        &self,
+        actor: &str,
+        device_id: &str,
+        push_key: Option<&str>,
+        app_id: Option<&str>,
+    ) -> PersistenceResult<usize>;
     fn snapshot_all(&self) -> PersistenceResult<Vec<Value>>;
 }
 
@@ -1074,9 +1081,7 @@ impl MemoryAccountDataStore {
 impl AccountDataStore for MemoryAccountDataStore {
     fn get(&self, actor: &str, data_type: &str) -> PersistenceResult<Option<AccountDataRecord>> {
         let data = self.data.lock().expect("lock");
-        Ok(data
-            .get(&(actor.to_owned(), data_type.to_owned()))
-            .cloned())
+        Ok(data.get(&(actor.to_owned(), data_type.to_owned())).cloned())
     }
 
     fn put(&self, record: &AccountDataRecord) -> PersistenceResult<()> {
@@ -1506,6 +1511,11 @@ impl FederationTransactionStore for MemoryFederationTransactionStore {
         );
         Ok(())
     }
+
+    fn snapshot_all(&self) -> PersistenceResult<Vec<FederationTransactionRecord>> {
+        let data = self.data.lock().expect("lock");
+        Ok(data.values().cloned().collect())
+    }
 }
 
 // ── New in-memory sub-stores ────────────────────────────────────────────────
@@ -1639,6 +1649,29 @@ impl PushDeviceStore for MemoryPushDeviceStore {
     fn register(&self, device: Value) -> PersistenceResult<()> {
         self.data.lock().expect("push devices lock").push(device);
         Ok(())
+    }
+
+    fn unregister(
+        &self,
+        actor: &str,
+        device_id: &str,
+        push_key: Option<&str>,
+        app_id: Option<&str>,
+    ) -> PersistenceResult<usize> {
+        let mut data = self.data.lock().expect("push devices lock");
+        let before = data.len();
+        data.retain(|device| {
+            let actor_matches = device.get("actor").and_then(Value::as_str) == Some(actor);
+            let device_matches = device.get("device_id").and_then(Value::as_str) == Some(device_id);
+            let push_key_matches = push_key.is_none_or(|expected| {
+                device.get("push_key").and_then(Value::as_str) == Some(expected)
+            });
+            let app_id_matches = app_id.is_none_or(|expected| {
+                device.get("app_id").and_then(Value::as_str) == Some(expected)
+            });
+            !(actor_matches && device_matches && push_key_matches && app_id_matches)
+        });
+        Ok(before.saturating_sub(data.len()))
     }
 
     fn snapshot_all(&self) -> PersistenceResult<Vec<Value>> {
@@ -3064,13 +3097,22 @@ impl FederationTransactionStore for PgFederationTransactionStore {
 
     fn put(&self, record: &FederationTransactionRecord) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool)?;
-        let space_id_uuid: Option<Uuid> =
-            record.space_id.as_deref().map(ids::typed_uuid_part_or_panic);
+        let space_id_uuid: Option<Uuid> = record
+            .space_id
+            .as_deref()
+            .map(ids::typed_uuid_part_or_panic);
         sql_query(
             "INSERT INTO federation_transactions \
              (txn_id, source_service, destination_service, space_id, status, content_digest, payload, received_at, processed_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
-             ON CONFLICT (source_service, txn_id) DO NOTHING",
+             ON CONFLICT (source_service, txn_id) DO UPDATE SET \
+             destination_service = EXCLUDED.destination_service, \
+             space_id = EXCLUDED.space_id, \
+             status = EXCLUDED.status, \
+             content_digest = EXCLUDED.content_digest, \
+             payload = EXCLUDED.payload, \
+             received_at = EXCLUDED.received_at, \
+             processed_at = EXCLUDED.processed_at",
         )
         .bind::<Text, _>(&record.txn_id)
         .bind::<Text, _>(&record.origin)
@@ -3084,6 +3126,21 @@ impl FederationTransactionStore for PgFederationTransactionStore {
         .execute(&mut conn)
         .map(|_| ())
         .map_err(PersistenceError::from)
+    }
+
+    fn snapshot_all(&self) -> PersistenceResult<Vec<FederationTransactionRecord>> {
+        let mut conn = pg_conn(&self.pool)?;
+        let rows = sql_query(
+            "SELECT source_service AS origin, txn_id, destination_service AS destination, \
+             space_id, content_digest, status, payload AS response, received_at, processed_at \
+             FROM federation_transactions ORDER BY received_at ASC, txn_id ASC",
+        )
+        .load::<FederationTransactionRow>(&mut conn)
+        .map_err(PersistenceError::from)?;
+        Ok(rows
+            .into_iter()
+            .map(FederationTransactionRecord::from)
+            .collect())
     }
 }
 
@@ -3566,8 +3623,7 @@ impl AuditStore for PgAuditStore {
         let audit_id_uuid = ids::typed_uuid_part_or_panic(&audit_id);
         let request_id_uuid: Option<Uuid> =
             request_id.as_deref().map(ids::typed_uuid_part_or_panic);
-        let space_id_uuid: Option<Uuid> =
-            space_id.as_deref().map(ids::typed_uuid_part_or_panic);
+        let space_id_uuid: Option<Uuid> = space_id.as_deref().map(ids::typed_uuid_part_or_panic);
         let operation_id_uuid: Option<Uuid> =
             operation_id.as_deref().map(ids::typed_uuid_part_or_panic);
         sql_query(
@@ -3592,13 +3648,11 @@ impl AuditStore for PgAuditStore {
 
     fn list_for_actor(&self, actor: &str) -> PersistenceResult<Vec<Value>> {
         let mut conn = pg_conn(&self.pool)?;
-        sql_query(
-            "SELECT payload FROM audit_logs WHERE actor = $1 ORDER BY created_at ASC, id ASC",
-        )
-        .bind::<Text, _>(actor)
-        .load::<AuditPayloadRow>(&mut conn)
-        .map(|rows| rows.into_iter().map(|row| row.payload).collect())
-        .map_err(PersistenceError::from)
+        sql_query("SELECT payload FROM audit_logs WHERE actor = $1 ORDER BY created_at ASC, id ASC")
+            .bind::<Text, _>(actor)
+            .load::<AuditPayloadRow>(&mut conn)
+            .map(|rows| rows.into_iter().map(|row| row.payload).collect())
+            .map_err(PersistenceError::from)
     }
 
     fn snapshot_all(&self) -> PersistenceResult<Vec<Value>> {
@@ -3669,6 +3723,29 @@ impl PushDeviceStore for PgPushDeviceStore {
         .map_err(PersistenceError::from)
     }
 
+    fn unregister(
+        &self,
+        actor: &str,
+        device_id: &str,
+        push_key: Option<&str>,
+        app_id: Option<&str>,
+    ) -> PersistenceResult<usize> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query(
+            "DELETE FROM push_devices \
+             WHERE actor = $1 \
+               AND device_id = $2 \
+               AND ($3 IS NULL OR push_key = $3) \
+               AND ($4 IS NULL OR app_id = $4)",
+        )
+        .bind::<Text, _>(actor)
+        .bind::<Text, _>(device_id)
+        .bind::<Nullable<Text>, _>(push_key)
+        .bind::<Nullable<Text>, _>(app_id)
+        .execute(&mut conn)
+        .map_err(PersistenceError::from)
+    }
+
     fn snapshot_all(&self) -> PersistenceResult<Vec<Value>> {
         let mut conn = pg_conn(&self.pool)?;
         sql_query("SELECT payload FROM push_devices ORDER BY updated_at ASC, registration_id ASC")
@@ -3712,7 +3789,10 @@ impl From<CanonicalEventRow> for CanonicalEventRecord {
             event_id: ids::format_typed_uuid("event", &row.id),
             actor_id: row.actor_id,
             actor_seq: row.actor_seq.max(0) as u64,
-            space_id: row.space_id.as_ref().map(|u| ids::format_typed_uuid("space", u)),
+            space_id: row
+                .space_id
+                .as_ref()
+                .map(|u| ids::format_typed_uuid("space", u)),
             kind: row.kind,
             schema_id: row.schema_id,
             canonical_digest: row.canonical_digest,
@@ -3727,8 +3807,10 @@ impl EventStore for PgEventStore {
     fn put(&self, record: CanonicalEventRecord) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool)?;
         let event_id_uuid = ids::typed_uuid_part_or_panic(&record.event_id);
-        let space_id_uuid: Option<Uuid> =
-            record.space_id.as_deref().map(ids::typed_uuid_part_or_panic);
+        let space_id_uuid: Option<Uuid> = record
+            .space_id
+            .as_deref()
+            .map(ids::typed_uuid_part_or_panic);
         sql_query(
             "INSERT INTO canonical_events \
              (id, actor_id, actor_seq, space_id, kind, schema_id, canonical_digest, canonical_bytes, envelope, received_at) \
@@ -3856,13 +3938,11 @@ impl FederationOperationsStore for PgFederationOperationsStore {
             present: bool,
         }
         let operation_id_uuid = ids::typed_uuid_part_or_panic(operation_id);
-        sql_query(
-            "SELECT EXISTS(SELECT 1 FROM federation_operations WHERE id = $1) AS present",
-        )
-        .bind::<SqlUuid, _>(operation_id_uuid)
-        .get_result::<ExistsRow>(&mut conn)
-        .map(|row| row.present)
-        .map_err(PersistenceError::from)
+        sql_query("SELECT EXISTS(SELECT 1 FROM federation_operations WHERE id = $1) AS present")
+            .bind::<SqlUuid, _>(operation_id_uuid)
+            .get_result::<ExistsRow>(&mut conn)
+            .map(|row| row.present)
+            .map_err(PersistenceError::from)
     }
 
     fn list_for_space(&self, space_id: &str) -> PersistenceResult<Vec<Operation>> {
@@ -3940,8 +4020,7 @@ impl ModerationStore for PgModerationStore {
         let target_event_id_uuid: Option<Uuid> = target_event_id
             .as_deref()
             .map(ids::typed_uuid_part_or_panic);
-        let space_id_uuid: Option<Uuid> =
-            space_id.as_deref().map(ids::typed_uuid_part_or_panic);
+        let space_id_uuid: Option<Uuid> = space_id.as_deref().map(ids::typed_uuid_part_or_panic);
         sql_query(
             "INSERT INTO moderation_reports \
              (id, reporter, target_actor, target_event_id, space_id, payload, created_at) \
@@ -3975,8 +4054,7 @@ impl ModerationStore for PgModerationStore {
         let action_kind = extract("action_kind");
         let space_id = extract("space_id");
         let action_id_uuid = ids::typed_uuid_part_or_panic(&action_id);
-        let space_id_uuid: Option<Uuid> =
-            space_id.as_deref().map(ids::typed_uuid_part_or_panic);
+        let space_id_uuid: Option<Uuid> = space_id.as_deref().map(ids::typed_uuid_part_or_panic);
         sql_query(
             "INSERT INTO moderation_actions \
              (id, moderator, target_actor, action_kind, space_id, payload, created_at) \
@@ -5059,6 +5137,11 @@ impl From<AccountRow> for AccountRecord {
             did: row.did,
             handle: row.handle,
             display_name: row.display_name,
+            // Pg backend doesn't carry bio / avatar_url yet — the Memory
+            // store does. When the Pg projection lands, extend AccountRow
+            // + this hydrate.
+            bio: None,
+            avatar_url: None,
             created_at: row.created_at,
         }
     }
@@ -5185,7 +5268,10 @@ impl From<FederationTransactionRow> for FederationTransactionRecord {
             origin: row.origin,
             txn_id: row.txn_id,
             destination: row.destination,
-            space_id: row.space_id.as_ref().map(|u| ids::format_typed_uuid("space", u)),
+            space_id: row
+                .space_id
+                .as_ref()
+                .map(|u| ids::format_typed_uuid("space", u)),
             content_digest: row.content_digest,
             status: row.status,
             response: row.response,
@@ -5725,6 +5811,8 @@ mod tests {
             did: "did:web:test".to_owned(),
             handle: "@test".to_owned(),
             display_name: Some("Test".to_owned()),
+            bio: None,
+            avatar_url: None,
             created_at: Utc::now(),
         };
 
@@ -6097,26 +6185,51 @@ mod tests {
     }
 
     #[test]
-    fn memory_push_device_store_register_and_snapshot() {
+    fn memory_push_device_store_register_unregister_and_snapshot() {
         let store = MemoryPushDeviceStore::new();
         let dev1 = serde_json::json!({
             "registration_id": "cx:push:dev-1",
             "actor": "did:web:alice.example",
             "device_id": "dev-1",
             "push_gateway": "https://floria.example",
-            "push_key": "k1"
+            "push_key": "k1",
+            "app_id": "clientx"
         });
         let dev2 = serde_json::json!({
             "registration_id": "cx:push:dev-2",
             "actor": "did:web:bob.example",
             "device_id": "dev-2",
             "push_gateway": "https://floria.example",
-            "push_key": "k2"
+            "push_key": "k2",
+            "app_id": "clientx"
         });
         store.register(dev1.clone()).unwrap();
         store.register(dev2.clone()).unwrap();
         let snap = store.snapshot_all().unwrap();
         assert_eq!(snap.len(), 2);
+
+        let removed = store
+            .unregister(
+                "did:web:alice.example",
+                "dev-1",
+                Some("k1"),
+                Some("clientx"),
+            )
+            .unwrap();
+        assert_eq!(removed, 1);
+        let after = store.snapshot_all().unwrap();
+        assert_eq!(after.len(), 1);
+        assert_eq!(after[0]["actor"], "did:web:bob.example");
+
+        let no_match = store
+            .unregister(
+                "did:web:alice.example",
+                "dev-1",
+                Some("k1"),
+                Some("clientx"),
+            )
+            .unwrap();
+        assert_eq!(no_match, 0);
     }
 
     #[test]

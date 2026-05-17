@@ -28,33 +28,30 @@ use access::policy::policy_document_to_response;
 use admin::audit::append_audit_log;
 use events::event_log::effective_read_receipt_policy_for_space;
 use events::flow::{
-    default_discussion_track, discussion_track_for_projection_event, flow_id_for_projection_event, flow_id_from_space_id,
-    flow_projection_for_space,
+    default_discussion_track, discussion_track_for_projection_event, flow_id_for_projection_event,
+    flow_id_from_space_id, flow_projection_for_space,
 };
+#[cfg(test)]
+use events::operations::validate_operation_semantics;
 use events::operations::{
     validate_canonical_json_value, validate_device_message_payload,
     validate_no_removed_legacy_contracts,
 };
-#[cfg(test)]
-use events::operations::validate_operation_semantics;
+use events::projection::{
+    accept_local_operations, ingest_federation_operations, operation_is_visible,
+    projection_event_from_operation, redaction_targets_from_operations,
+};
+use events::sync::{SyncCursorError, parse_and_validate_sync_cursor, sync_token_for_client_sync};
+use identity::auth::{auth_or_render, authenticated_session, is_device_revoked};
+use identity::device_messages::{device_message_events_after, prune_acked_device_messages};
 #[cfg(test)]
 use identity::did::validate_did_document_services;
-use events::projection::{
-    accept_local_operations, ingest_federation_operations, operation_is_visible, projection_event_from_operation, redaction_targets_from_operations,
-};
-use events::sync::{
-    SyncCursorError, parse_and_validate_sync_cursor,
-    sync_token_for_client_sync,
-};
-use identity::auth::{
-    auth_or_render, authenticated_session, is_device_revoked,
-};
-use identity::device_messages::{device_message_events_after, prune_acked_device_messages};
 use spaces::directory::demo_actors;
 use spaces::space::{
-    invite_token_space_id, is_space_deleted, prune_expired_typing, space_allows_plaintext_service, space_discoverability,
-    space_has_member, space_id_accessible, space_resolvable_to, space_search_discoverability,
-    space_search_visible_to, space_visible_to, touch_space, typing_ephemeral_for_space,
+    invite_token_space_id, is_space_deleted, prune_expired_typing, space_allows_plaintext_service,
+    space_discoverability, space_has_member, space_id_accessible, space_resolvable_to,
+    space_search_discoverability, space_search_visible_to, space_visible_to, touch_space,
+    typing_ephemeral_for_space,
 };
 use system::extract::AuthArgs;
 use system::util::{
@@ -158,13 +155,24 @@ fn contrix_openapi_doc(router: &Router) -> OpenApi {
 }
 
 fn register_soland_extension_operations(doc: &mut OpenApi) {
-    // Stable, spec-aligned operation IDs for the soland-specific surface. The
+    // Stable, namespaced operation IDs for the soland-specific surface. The
     // table covers operations that soland exposes on top of the canonical
     // protocol - auth/account/admin/policy/etc. - until each `#[endpoint]`
     // grows its own typed extractors and operation_id annotation.
     for (path, method, tag, operation_id, summary) in SOLAND_EXTENSION_OPERATIONS {
         add_contract_operation(doc, path, *method, tag, operation_id, summary);
     }
+}
+
+pub(crate) fn soland_extension_operation_ids() -> Vec<String> {
+    let mut seen = std::collections::BTreeSet::new();
+    SOLAND_EXTENSION_OPERATIONS
+        .iter()
+        .map(|(_, _, _, operation_id, _)| *operation_id)
+        .filter(|operation_id| operation_id.starts_with("cx.extension.soland."))
+        .filter(|operation_id| seen.insert((*operation_id).to_owned()))
+        .map(ToOwned::to_owned)
+        .collect()
 }
 
 fn add_contract_operation(
@@ -180,7 +188,11 @@ fn add_contract_operation(
         .summary(summary)
         .operation_id(operation_id)
         .add_response("200", OapiResponse::new("ok"));
-    doc.paths.insert(path, PathItem::new(method, operation));
+    if let Some(path_item) = doc.paths.get_mut(path) {
+        path_item.operations.insert(method, operation);
+    } else {
+        doc.paths.insert(path, PathItem::new(method, operation));
+    }
 }
 
 const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &[
@@ -195,77 +207,77 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "/api/v1/account/register",
         PathItemType::Post,
         "account",
-        "cx.account.register",
+        "cx.extension.soland.account.register",
         "register account",
     ),
     (
         "/api/v1/account/me",
         PathItemType::Get,
         "account",
-        "cx.account.me",
+        "cx.extension.soland.account.me",
         "get current account",
     ),
     (
         "/api/v1/auth/session-grant/exchange",
         PathItemType::Post,
         "auth",
-        "cx.auth.exchange_session_grant",
+        "cx.extension.soland.auth.exchange_session_grant",
         "exchange coauth session grant for principal bearer session",
     ),
     (
         "/api/v1/auth/logout",
         PathItemType::Post,
         "auth",
-        "cx.auth.logout",
+        "cx.extension.soland.auth.logout",
         "logout active session",
     ),
     (
         "/api/v1/contacts/request",
         PathItemType::Post,
         "contacts",
-        "cx.contacts.request",
+        "cx.extension.soland.contacts.request",
         "request contact",
     ),
     (
         "/api/v1/contacts/respond",
         PathItemType::Post,
         "contacts",
-        "cx.contacts.respond",
+        "cx.extension.soland.contacts.respond",
         "respond to contact request",
     ),
     (
         "/api/v1/contacts",
         PathItemType::Get,
         "contacts",
-        "cx.contacts.list",
+        "cx.extension.soland.contacts.list",
         "list contacts",
     ),
     (
         "/api/v1/spaces",
         PathItemType::Post,
         "spaces",
-        "cx.spaces.create",
+        "cx.extension.soland.spaces.create",
         "create space",
     ),
     (
         "/api/v1/spaces/{space_id}",
         PathItemType::Patch,
         "spaces",
-        "cx.spaces.update",
+        "cx.extension.soland.spaces.update",
         "update space",
     ),
     (
         "/api/v1/spaces/{space_id}/policy",
         PathItemType::Put,
         "spaces",
-        "cx.spaces.set_policy",
+        "cx.extension.soland.spaces.set_policy",
         "set space policy",
     ),
     (
         "/api/v1/spaces/{space_id}",
         PathItemType::Delete,
         "spaces",
-        "cx.spaces.delete",
+        "cx.extension.soland.spaces.delete",
         "delete space",
     ),
     (
@@ -279,14 +291,14 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "/api/v1/spaces/{space_id}/members",
         PathItemType::Post,
         "spaces",
-        "cx.spaces.add_member",
+        "cx.extension.soland.spaces.add_member",
         "add space member",
     ),
     (
         "/api/v1/spaces/{space_id}/members/{member_did}",
         PathItemType::Delete,
         "spaces",
-        "cx.spaces.remove_member",
+        "cx.extension.soland.spaces.remove_member",
         "remove space member",
     ),
     (
@@ -342,28 +354,28 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "/api/v1/messages/send",
         PathItemType::Post,
         "messages",
-        "cx.messages.send",
+        "cx.extension.soland.messages.send",
         "deployment-local convenience to send a plain message",
     ),
     (
         "/api/v1/index/describe",
         PathItemType::Get,
         "index",
-        "cx.index.describe",
+        "cx.extension.soland.index.describe",
         "describe index profile",
     ),
     (
         "/api/v1/index/query",
         PathItemType::Post,
         "index",
-        "cx.index.query",
+        "cx.extension.soland.index.query",
         "query the projection index",
     ),
     (
         "/api/v1/index/debug/reducer",
         PathItemType::Get,
         "index",
-        "cx.index.debug_reducer",
+        "cx.extension.soland.index.debug_reducer",
         "debug reducer frontier",
     ),
     (
@@ -384,35 +396,35 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "/api/v1/federation/transactions/{txn_id}",
         PathItemType::Put,
         "federation",
-        "cx.federation.transaction",
+        "cx.extension.soland.federation.transaction",
         "submit federation transaction",
     ),
     (
         "/api/v1/federation/push-operations",
         PathItemType::Post,
         "federation",
-        "cx.federation.push_operations",
+        "cx.extension.soland.federation.push_operations",
         "push federation operations",
     ),
     (
         "/api/v1/federation/pull-operations",
         PathItemType::Get,
         "federation",
-        "cx.federation.pull_operations",
+        "cx.extension.soland.federation.pull_operations",
         "pull federation operations",
     ),
     (
         "/api/v1/federation/space-members",
         PathItemType::Get,
         "federation",
-        "cx.federation.space_members",
+        "cx.extension.soland.federation.space_members",
         "list space memberships",
     ),
     (
         "/api/v1/federation/verify-actor",
         PathItemType::Post,
         "federation",
-        "cx.federation.verify_actor",
+        "cx.extension.soland.federation.verify_actor",
         "verify federation actor",
     ),
     (
@@ -426,14 +438,14 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "/api/v1/sync/typing",
         PathItemType::Post,
         "sync",
-        "cx.sync.typing",
+        "cx.extension.soland.sync.typing",
         "set typing state",
     ),
     (
         "/api/v1/sync/backfill/gap",
         PathItemType::Get,
         "sync",
-        "cx.sync.backfill_gap",
+        "cx.extension.soland.sync.backfill_gap",
         "sync gap backfill (deployment-local)",
     ),
     (
@@ -447,7 +459,7 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "/api/v1/sync/snapshot-chunk",
         PathItemType::Get,
         "sync",
-        "cx.sync.get_snapshot_chunk",
+        "cx.extension.soland.sync.get_snapshot_chunk",
         "snapshot chunk",
     ),
     (
@@ -475,84 +487,84 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "/api/v1/admin/actors",
         PathItemType::Get,
         "admin",
-        "cx.admin.actors",
+        "cx.extension.soland.admin.actors",
         "admin actor snapshot",
     ),
     (
         "/api/v1/admin/spaces",
         PathItemType::Get,
         "admin",
-        "cx.admin.spaces",
+        "cx.extension.soland.admin.spaces",
         "admin space snapshot",
     ),
     (
         "/api/v1/admin/devices",
         PathItemType::Get,
         "admin",
-        "cx.admin.devices",
+        "cx.extension.soland.admin.devices",
         "admin device snapshot",
     ),
     (
         "/api/v1/admin/capabilities",
         PathItemType::Get,
         "admin",
-        "cx.admin.capabilities",
+        "cx.extension.soland.admin.capabilities",
         "admin capability snapshot",
     ),
     (
         "/api/v1/admin/federation",
         PathItemType::Get,
         "admin",
-        "cx.admin.federation",
+        "cx.extension.soland.admin.federation",
         "admin federation snapshot",
     ),
     (
         "/api/v1/admin/applets",
         PathItemType::Get,
         "admin",
-        "cx.admin.applets",
+        "cx.extension.soland.admin.applets",
         "admin applet snapshot",
     ),
     (
         "/api/v1/admin/agents",
         PathItemType::Get,
         "admin",
-        "cx.admin.agents",
+        "cx.extension.soland.admin.agents",
         "admin agent snapshot",
     ),
     (
         "/api/v1/admin/reports",
         PathItemType::Get,
         "admin",
-        "cx.admin.reports",
+        "cx.extension.soland.admin.reports",
         "admin report snapshot",
     ),
     (
         "/api/v1/admin/invite-tokens",
         PathItemType::Get,
         "admin",
-        "cx.admin.invite_tokens",
+        "cx.extension.soland.admin.invite_tokens",
         "admin invite token snapshot",
     ),
     (
         "/api/v1/admin/audit",
         PathItemType::Get,
         "admin",
-        "cx.admin.audit",
+        "cx.extension.soland.admin.audit",
         "admin audit snapshot",
     ),
     (
         "/api/v1/admin/policy",
         PathItemType::Get,
         "admin",
-        "cx.admin.policy",
+        "cx.extension.soland.admin.policy",
         "admin policy snapshot",
     ),
     (
         "/api/v1/admin/media",
         PathItemType::Get,
         "admin",
-        "cx.admin.media",
+        "cx.extension.soland.admin.media",
         "admin media snapshot",
     ),
     (
@@ -566,28 +578,28 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "/api/v1/policies",
         PathItemType::Get,
         "policy",
-        "cx.policies.list",
+        "cx.extension.soland.policies.list",
         "list policies",
     ),
     (
         "/api/v1/policies/{policy_id}",
         PathItemType::Get,
         "policy",
-        "cx.policies.get",
+        "cx.extension.soland.policies.get",
         "get policy",
     ),
     (
         "/api/v1/policies",
         PathItemType::Post,
         "policy",
-        "cx.policies.upsert",
+        "cx.extension.soland.policies.upsert",
         "upsert policy",
     ),
     (
         "/api/v1/policies/{policy_id}",
         PathItemType::Delete,
         "policy",
-        "cx.policies.delete",
+        "cx.extension.soland.policies.delete",
         "delete policy",
     ),
     (
@@ -601,14 +613,14 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "/api/v1/push/outbound/bridge/cache/export",
         PathItemType::Get,
         "push",
-        "cx.push.outbound_bridge_cache_export",
+        "cx.extension.soland.push.outbound_bridge_cache_export",
         "export outbound push bridge cache snapshots",
     ),
     (
         "/api/v1/push/outbound/bridge/cache/import",
         PathItemType::Post,
         "push",
-        "cx.push.outbound_bridge_cache_import",
+        "cx.extension.soland.push.outbound_bridge_cache_import",
         "import outbound push bridge cache snapshots",
     ),
     (
@@ -643,14 +655,14 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "/api/v1/devices/pairing-challenge",
         PathItemType::Post,
         "devices",
-        "cx.devices.pairing_challenge",
+        "cx.extension.soland.devices.pairing_challenge",
         "create device pairing challenge",
     ),
     (
         "/api/v1/devices/authorize-pairing",
         PathItemType::Post,
         "devices",
-        "cx.devices.authorize_pairing",
+        "cx.extension.soland.devices.authorize_pairing",
         "authorize device pairing",
     ),
     (
@@ -664,7 +676,7 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "/api/v1/push/rules",
         PathItemType::Get,
         "push",
-        "cx.push.rules",
+        "cx.extension.soland.push.rules",
         "list push rules",
     ),
     (
@@ -675,24 +687,45 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "send push notification",
     ),
     (
+        "/api/v1/blob/upload",
+        PathItemType::Post,
+        "blob",
+        "cx.blob.upload",
+        "upload blob bytes",
+    ),
+    (
+        "/api/v1/blob/get",
+        PathItemType::Head,
+        "blob",
+        "cx.blob.head",
+        "inspect blob metadata",
+    ),
+    (
+        "/api/v1/blob/get",
+        PathItemType::Get,
+        "blob",
+        "cx.blob.get",
+        "download blob bytes",
+    ),
+    (
         "/api/v1/webrtc/sessions",
         PathItemType::Post,
         "webrtc",
-        "cx.webrtc.create_session",
+        "cx.extension.soland.webrtc.create_session",
         "create WebRTC session",
     ),
     (
         "/api/v1/webrtc/sessions/{session_id}/signals",
         PathItemType::Post,
         "webrtc",
-        "cx.webrtc.send_signal",
+        "cx.extension.soland.webrtc.send_signal",
         "send WebRTC signal",
     ),
     (
         "/api/v1/webrtc/sessions/{session_id}",
         PathItemType::Delete,
         "webrtc",
-        "cx.webrtc.close_session",
+        "cx.extension.soland.webrtc.close_session",
         "close WebRTC session",
     ),
     (
@@ -902,7 +935,10 @@ pub(crate) struct SnapshotBundle {
     pub generator_proof: contrix_sdk::GeneratorProof,
 }
 
-pub(crate) fn snapshot_bundle_for_space(state: &AppState, space_id: &str) -> Option<SnapshotBundle> {
+pub(crate) fn snapshot_bundle_for_space(
+    state: &AppState,
+    space_id: &str,
+) -> Option<SnapshotBundle> {
     let space_id_value = SpaceId::new(space_id.to_owned()).ok()?;
     let (title, members, category, tags) = {
         let spaces = state.spaces.lock().expect("spaces lock");
@@ -1138,6 +1174,7 @@ mod operation_conformance_tests {
                 compaction_prune_walk_interval_seconds: 0,
 
                 compaction_prune_walk_per_space_limit: 50,
+                seed_demo_data: true,
             },
             Db { pool: None },
         )

@@ -60,8 +60,7 @@ pub const REFERENCE_AGENT_AUDIT_ED25519_SEED: [u8; 32] = [
 /// Stable `key_id` string surfaced on the `audit_binding` block so
 /// verifiers can dispatch by it (and so the wire-shape matches what
 /// a real DID-document `verificationMethod` reference would carry).
-pub const REFERENCE_AGENT_AUDIT_ED25519_KEY_ID: &str =
-    "soland.reference.agent_echo.ed25519_v1";
+pub const REFERENCE_AGENT_AUDIT_ED25519_KEY_ID: &str = "soland.reference.agent_echo.ed25519_v1";
 
 /// Inspect `operation` and, when it carries a
 /// `cx.agent.protocol_session.start` payload, emit synthetic
@@ -106,14 +105,11 @@ pub fn maybe_emit_echo_result_for_session_start(
     // any) so the result envelope can report it. We snapshot the
     // lookup inside the lock and drop the guard immediately so the
     // subsequent broadcast/append paths can re-acquire it.
-    let agent_snapshot: Option<(String, Option<String>)> = state
-        .projection
-        .lock()
-        .ok()
-        .and_then(|proj| {
-            proj.agents.get(&agent_did).map(|p| {
-                (p.protocol.clone(), p.endpoint_url.clone())
-            })
+    let agent_snapshot: Option<(String, Option<String>)> =
+        state.projection.lock().ok().and_then(|proj| {
+            proj.agents
+                .get(&agent_did)
+                .map(|p| (p.protocol.clone(), p.endpoint_url.clone()))
         });
     let Some((agent_protocol, agent_endpoint_url)) = agent_snapshot else {
         let error_payload = json!({
@@ -230,9 +226,7 @@ pub fn maybe_emit_echo_result_for_session_start(
         &agent_protocol,
         None,
         origin,
-        AgentInvocationOutcome::Echo {
-            echo: echo_value,
-        },
+        AgentInvocationOutcome::Echo { echo: echo_value },
     );
 }
 
@@ -474,22 +468,16 @@ mod tests {
             compaction_prune_walk_interval_seconds: 0,
 
             compaction_prune_walk_per_space_limit: 50,
+            seed_demo_data: true,
         };
         AppState::new(config, Db { pool: None })
     }
 
-    fn build_agent_session_start(
-        session_id: &str,
-        agent_did: &str,
-        params: Value,
-    ) -> Operation {
+    fn build_agent_session_start(session_id: &str, agent_did: &str, params: Value) -> Operation {
         let mut op = Operation::create(
-            OperationId::new(
-                "cx:operation:01904100-0000-7bbb-8bbb-000000000001".to_owned(),
-            )
-            .unwrap(),
-            SpaceId::new("cx:space:01904100-0000-7000-8000-bbbbbbbbbbbb".to_owned())
+            OperationId::new("cx:operation:01904100-0000-7bbb-8bbb-000000000001".to_owned())
                 .unwrap(),
+            SpaceId::new("cx:space:01904100-0000-7000-8000-bbbbbbbbbbbb".to_owned()).unwrap(),
             kinds::CX_AGENT_PROTOCOL_SESSION_START,
             json!({
                 "agent_did": agent_did,
@@ -513,11 +501,7 @@ mod tests {
         register_agent_with_endpoint(state, agent_did, None);
     }
 
-    fn register_agent_with_endpoint(
-        state: &AppState,
-        agent_did: &str,
-        endpoint_url: Option<&str>,
-    ) {
+    fn register_agent_with_endpoint(state: &AppState, agent_did: &str, endpoint_url: Option<&str>) {
         let mut proj = state.projection.lock().expect("projection lock");
         proj.agents.insert(
             agent_did.to_owned(),
@@ -580,9 +564,7 @@ mod tests {
         assert_eq!(binding["actor"], actor);
         assert_eq!(binding["key_id"], REFERENCE_AGENT_AUDIT_ED25519_KEY_ID);
         let sig_b64 = binding["signature"].as_str().expect("signature base64");
-        let public_key_b64 = binding["public_key_b64"]
-            .as_str()
-            .expect("public_key_b64");
+        let public_key_b64 = binding["public_key_b64"].as_str().expect("public_key_b64");
         let canonical_subject = binding["canonical_subject"]
             .as_str()
             .expect("canonical_subject");
@@ -614,11 +596,7 @@ mod tests {
         let agent_did = "did:web:unregistered-agent.example";
         // Intentionally do NOT call register_agent — this is the
         // dispatch-failure path we want to exercise.
-        let op = build_agent_session_start(
-            session,
-            agent_did,
-            json!({"op": "ping"}),
-        );
+        let op = build_agent_session_start(session, agent_did, json!({"op": "ping"}));
         maybe_emit_echo_result_for_session_start(&state, "did:web:alice.example", &op);
         let projections = state
             .persistence
@@ -717,7 +695,8 @@ mod tests {
                 .encode(reference_signing.verifying_key().as_bytes())
         };
         assert_ne!(
-            pk, reference_pk_b64.as_str(),
+            pk,
+            reference_pk_b64.as_str(),
             "deployment public key MUST differ from reference public key"
         );
     }
@@ -737,11 +716,7 @@ mod tests {
         // 127.0.0.1:1 is reserved + nothing listens → fast ECONNREFUSED.
         let endpoint_url = "http://127.0.0.1:1/agent-runtime";
         register_agent_with_endpoint(&state, agent_did, Some(endpoint_url));
-        let op = build_agent_session_start(
-            session,
-            agent_did,
-            json!({"op": "ping"}),
-        );
+        let op = build_agent_session_start(session, agent_did, json!({"op": "ping"}));
         maybe_emit_echo_result_for_session_start(&state, "did:web:alice.example", &op);
         // The status(running) event fires synchronously, then the
         // tokio task does the HTTP. Wait for the result event up
@@ -767,7 +742,8 @@ mod tests {
         };
         assert_eq!(result_entry.payload["status"], "failed");
         assert_eq!(
-            result_entry.payload["error"]["code"], "upstream_unreachable"
+            result_entry.payload["error"]["code"],
+            "upstream_unreachable"
         );
         assert_eq!(result_entry.payload["detail"]["endpoint_url"], endpoint_url);
         assert_eq!(
@@ -828,12 +804,9 @@ mod tests {
     fn agent_echo_bridge_ignores_non_session_start_operations() {
         let state = test_state();
         let mut op = Operation::create(
-            OperationId::new(
-                "cx:operation:01904100-0000-7bbb-8bbb-000000000002".to_owned(),
-            )
-            .unwrap(),
-            SpaceId::new("cx:space:01904100-0000-7000-8000-bbbbbbbbbbbb".to_owned())
+            OperationId::new("cx:operation:01904100-0000-7bbb-8bbb-000000000002".to_owned())
                 .unwrap(),
+            SpaceId::new("cx:space:01904100-0000-7000-8000-bbbbbbbbbbbb".to_owned()).unwrap(),
             kinds::CX_AGENT_ENDPOINT,
             json!({"endpoint_url": "https://agent.example/api"}),
         );
@@ -857,12 +830,9 @@ mod tests {
     fn agent_echo_bridge_ignores_session_start_without_session_id() {
         let state = test_state();
         let mut op = Operation::create(
-            OperationId::new(
-                "cx:operation:01904100-0000-7bbb-8bbb-000000000003".to_owned(),
-            )
-            .unwrap(),
-            SpaceId::new("cx:space:01904100-0000-7000-8000-bbbbbbbbbbbb".to_owned())
+            OperationId::new("cx:operation:01904100-0000-7bbb-8bbb-000000000003".to_owned())
                 .unwrap(),
+            SpaceId::new("cx:space:01904100-0000-7000-8000-bbbbbbbbbbbb".to_owned()).unwrap(),
             kinds::CX_AGENT_PROTOCOL_SESSION_START,
             json!({"agent_did": "did:web:agent.example"}),
         );

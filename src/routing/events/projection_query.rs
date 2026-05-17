@@ -42,8 +42,8 @@ use super::{space_id_accessible, validate_space_id};
 use crate::error::{AppError, ErrorCode};
 use crate::reducer::{ObjectLifecycleState, PlaceLifecycleState};
 use crate::result::{JsonResult, json_ok};
-use crate::state::AppState;
 use crate::routing::system::extract::AuthArgs;
+use crate::state::AppState;
 
 pub(super) fn router() -> Router {
     Router::new()

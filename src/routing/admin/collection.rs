@@ -19,10 +19,9 @@ use salvo::prelude::*;
 use serde_json::{Value, json};
 
 use super::{
-    append_audit_log, demo_actors, device_inventory_to_json,
-    discussion_track_for_projection_event, flow_id_for_projection_event, flow_id_from_space_id,
-    flow_projection_for_space, policy_document_to_response, projection_event_from_operation,
-    sha256_hex,
+    append_audit_log, demo_actors, device_inventory_to_json, discussion_track_for_projection_event,
+    flow_id_for_projection_event, flow_id_from_space_id, flow_projection_for_space,
+    policy_document_to_response, projection_event_from_operation, sha256_hex,
 };
 use crate::error::AppError;
 use crate::kinds;
@@ -31,7 +30,7 @@ use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
 
 #[endpoint(
-    operation_id = "cx.admin.collection",
+    operation_id = "cx.extension.soland.admin.collection",
     tags("admin"),
     summary = "Dev-only paginated admin snapshot of a named collection"
 )]
@@ -65,7 +64,10 @@ pub(super) async fn admin_collection(
     let resource = resource.into_inner();
     let default_limit = state.config.admin_default_page_limit;
     let max_limit = state.config.admin_max_page_limit;
-    let limit = limit.into_inner().unwrap_or(default_limit).clamp(1, max_limit);
+    let limit = limit
+        .into_inner()
+        .unwrap_or(default_limit)
+        .clamp(1, max_limit);
     let cursor = cursor.into_inner();
 
     let (field, mut items) = match resource.as_str() {

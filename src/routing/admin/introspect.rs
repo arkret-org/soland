@@ -68,7 +68,9 @@ fn cache_grant(token_hash: String, grant: SessionGrantIntrospection) {
 fn bearer_token_from_request(req: &Request) -> Option<String> {
     let header = req.headers().get(salvo::http::header::AUTHORIZATION)?;
     let value = header.to_str().ok()?;
-    let token = value.strip_prefix("Bearer ").or_else(|| value.strip_prefix("bearer "))?;
+    let token = value
+        .strip_prefix("Bearer ")
+        .or_else(|| value.strip_prefix("bearer "))?;
     Some(token.trim().to_owned())
 }
 
@@ -85,15 +87,14 @@ fn synthetic_dev_grant(state: &AppState, session: &SessionRecord) -> SessionGran
         BOTTOM_REPAIR.to_owned(),
         ADMIN_READ.to_owned(),
     ];
-    let principal_did = contrix_sdk::Did::new(session.actor.clone())
-        .unwrap_or_else(|_| {
-            // Fallback: synthesize a stable did:key when the actor isn't
-            // a valid DID. This only kicks in for dev-login tokens whose
-            // actor field is a handle, not a DID — production sessions
-            // always carry a DID.
-            contrix_sdk::Did::new(format!("did:web:{}", state.config.service_did))
-                .expect("service_did is a valid DID")
-        });
+    let principal_did = contrix_sdk::Did::new(session.actor.clone()).unwrap_or_else(|_| {
+        // Fallback: synthesize a stable did:key when the actor isn't
+        // a valid DID. This only kicks in for dev-login tokens whose
+        // actor field is a handle, not a DID — production sessions
+        // always carry a DID.
+        contrix_sdk::Did::new(format!("did:web:{}", state.config.service_did))
+            .expect("service_did is a valid DID")
+    });
     SessionGrantIntrospection {
         active: true,
         principal_did,
@@ -209,7 +210,10 @@ pub(crate) async fn require_admin_scope(
     if !grant.has_admin_scope(scope) {
         return Err(AppError::new(
             ErrorCode::CapabilityDenied,
-            format!("admin scope `{scope}` not granted to {}", grant.principal_did),
+            format!(
+                "admin scope `{scope}` not granted to {}",
+                grant.principal_did
+            ),
         )
         .with_status(StatusCode::FORBIDDEN));
     }

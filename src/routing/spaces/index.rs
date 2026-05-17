@@ -31,6 +31,14 @@ const SUPPORTED_FACETS: &[&str] = &[
     "discussion",
     "presentation",
 ];
+const QUERY_FEATURES: &[&str] = &[
+    "object_lookup",
+    "thread_projection",
+    "notification_projection",
+    "faceted_search",
+    "space_hierarchy",
+    "debug_reducer_snapshot",
+];
 const DEMO_SPACE_ID: &str = "cx:space:0196419b-0000-7000-8000-000000000000";
 
 pub(super) fn router() -> Router {
@@ -51,13 +59,21 @@ async fn index_describe(depot: &mut Depot, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     res.render(Json(json!({
         "contract": "contrix.rest.index_describe.v1",
-        "version": "2026-05-15-scaffold",
+        "version": "2026-05-17-limited-projection",
+        "stability": "limited_projection",
+        "profile_claim": "not_claimed",
         "service_did": state.config.service_did.clone(),
         "reducer_profile": "cx.reducer.v1",
         "schema_profiles": ["cx.schema.core.v1"],
+        "query_features": QUERY_FEATURES,
         "supported_facets": SUPPORTED_FACETS,
         "supported_renderers": ["collection", "thread", "feed", "board"],
         "production_gap": "durable_reducer_replay_and_conflict_records",
+        "limitations": [
+            "query results are derived from local materialized projection state",
+            "empty local projections may return demo fallback rows in development/test fixtures",
+            "facet registry lookup and durable replay indexes are not complete index-node profile surfaces"
+        ],
     })));
 }
 
@@ -87,7 +103,7 @@ fn object_kind_for(object_id: &str) -> Option<&'static str> {
 }
 
 #[endpoint(
-    operation_id = "cx.index.object",
+    operation_id = "cx.extension.soland.index.object",
     tags("index"),
     summary = "Describe a typed object by its `cx:<kind>:...` id"
 )]
@@ -105,14 +121,11 @@ async fn index_object(object_id: QueryParam<String, true>) -> JsonResult<Value> 
 }
 
 #[endpoint(
-    operation_id = "cx.index.thread",
+    operation_id = "cx.extension.soland.index.thread",
     tags("index"),
     summary = "List events for a thread (up to 100)"
 )]
-async fn index_thread(
-    thread_id: QueryParam<String, true>,
-    depot: &mut Depot,
-) -> JsonResult<Value> {
+async fn index_thread(thread_id: QueryParam<String, true>, depot: &mut Depot) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let thread_id = thread_id.into_inner();
     let messages = state
@@ -147,7 +160,7 @@ async fn index_thread(
 }
 
 #[endpoint(
-    operation_id = "cx.index.notifications",
+    operation_id = "cx.extension.soland.index.notifications",
     tags("index"),
     summary = "List inbox notifications for an actor across known spaces"
 )]
@@ -167,12 +180,7 @@ async fn index_notifications(
             .collect()
     };
     for space in &space_snapshot {
-        if !actor.is_empty()
-            && !space
-                .members
-                .iter()
-                .any(|member| member.as_str() == actor)
-        {
+        if !actor.is_empty() && !space.members.iter().any(|member| member.as_str() == actor) {
             continue;
         }
         let messages = state
@@ -223,14 +231,17 @@ async fn index_inbox(depot: &mut Depot, res: &mut Response) {
 }
 
 #[endpoint(
-    operation_id = "cx.index.search",
+    operation_id = "cx.extension.soland.index.search",
     tags("index"),
     summary = "Substring-search messages + spaces for a query string"
 )]
 async fn index_search(body: JsonBody<Value>, depot: &mut Depot) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
-    let query = body.get("query").and_then(Value::as_str).unwrap_or_default();
+    let query = body
+        .get("query")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
     if query.trim().is_empty() {
         return Err(AppError::missing_param("query is required"));
     }
@@ -327,13 +338,11 @@ async fn index_search(body: JsonBody<Value>, depot: &mut Depot) -> JsonResult<Va
 }
 
 #[endpoint(
-    operation_id = "cx.index.space_hierarchy",
+    operation_id = "cx.extension.soland.index.space_hierarchy",
     tags("index"),
     summary = "Walk the space hierarchy below a root space id"
 )]
-async fn index_space_hierarchy(
-    root_space_id: QueryParam<String, true>,
-) -> JsonResult<Value> {
+async fn index_space_hierarchy(root_space_id: QueryParam<String, true>) -> JsonResult<Value> {
     let root_space_id = root_space_id.into_inner();
     json_ok(json!({
         "root_space_id": root_space_id,
@@ -343,7 +352,7 @@ async fn index_space_hierarchy(
 }
 
 #[endpoint(
-    operation_id = "cx.index.query",
+    operation_id = "cx.extension.soland.index.query",
     tags("index"),
     summary = "Faceted projection query (renderer + filters + sort + cursor)"
 )]
@@ -370,8 +379,14 @@ async fn index_query(body: JsonBody<Value>, depot: &mut Depot) -> JsonResult<Val
         .and_then(Value::as_u64)
         .unwrap_or(20)
         .min(200) as usize;
-    let cursor = body.get("cursor").and_then(Value::as_str).map(str::to_owned);
-    let sort_value = body.get("sort").cloned().unwrap_or_else(|| json!("title_asc"));
+    let cursor = body
+        .get("cursor")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let sort_value = body
+        .get("sort")
+        .cloned()
+        .unwrap_or_else(|| json!("title_asc"));
     let filters = body.get("filters").cloned().unwrap_or_else(|| json!({}));
 
     let unsupported = facets
@@ -388,6 +403,7 @@ async fn index_query(body: JsonBody<Value>, depot: &mut Depot) -> JsonResult<Val
             "filters": filters,
             "frontier": {"limited": false, "result_count": 0},
             "production_gap": "facet_registry_lookup_and_projection_replay",
+            "limitation": "unsupported facet rejected by limited_projection index query",
         }));
     }
 
@@ -495,7 +511,11 @@ async fn index_query(body: JsonBody<Value>, depot: &mut Depot) -> JsonResult<Val
     apply_index_sort(&mut results, &sort_value);
 
     let total = results.len();
-    let page: Vec<Value> = results.into_iter().skip(cursor_offset).take(limit).collect();
+    let page: Vec<Value> = results
+        .into_iter()
+        .skip(cursor_offset)
+        .take(limit)
+        .collect();
     let consumed = cursor_offset + page.len();
     let has_more = consumed < total;
     let next_cursor = if has_more {
@@ -510,6 +530,7 @@ async fn index_query(body: JsonBody<Value>, depot: &mut Depot) -> JsonResult<Val
         "facets": facets,
         "sort": sort_value,
         "filters": filters,
+        "stability": "limited_projection",
         "frontier": {
             "limited": has_more,
             "result_count": total,
@@ -602,7 +623,7 @@ fn apply_index_sort(results: &mut [Value], sort: &Value) {
 }
 
 #[endpoint(
-    operation_id = "cx.index.debug_reducer",
+    operation_id = "cx.extension.soland.index.debug_reducer",
     tags("index"),
     summary = "Debug: dump recent reducer events for a Space"
 )]

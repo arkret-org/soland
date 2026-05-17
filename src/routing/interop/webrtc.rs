@@ -57,7 +57,7 @@ async fn ice_config(depot: &mut Depot, res: &mut Response) {
 }
 
 #[endpoint(
-    operation_id = "cx.webrtc.create_session",
+    operation_id = "cx.extension.soland.webrtc.create_session",
     tags("webrtc"),
     summary = "Create a WebRTC signaling session bound to a Space"
 )]
@@ -124,7 +124,7 @@ async fn create_webrtc_session(
 }
 
 #[endpoint(
-    operation_id = "cx.webrtc.send_signal",
+    operation_id = "cx.extension.soland.webrtc.send_signal",
     tags("webrtc"),
     summary = "Append a WebRTC signaling message (offer/answer/candidate/...) to a session"
 )]
@@ -182,17 +182,15 @@ async fn put_webrtc_signal(
         Err(crate::persistence::PersistenceError::NotFound(_)) => {
             Err(AppError::not_found("session not found"))
         }
-        Err(crate::persistence::PersistenceError::Conflict(_)) => {
-            Err(AppError::capability_denied(
-                "actor is not a participant of the webrtc session",
-            ))
-        }
+        Err(crate::persistence::PersistenceError::Conflict(_)) => Err(AppError::capability_denied(
+            "actor is not a participant of the webrtc session",
+        )),
         Err(error) => Err(AppError::internal(error.to_string())),
     }
 }
 
 #[endpoint(
-    operation_id = "cx.webrtc.get_signals",
+    operation_id = "cx.extension.soland.webrtc.get_signals",
     tags("webrtc"),
     summary = "Page through WebRTC signaling events for a session"
 )]
@@ -246,7 +244,7 @@ async fn get_webrtc_signals(
 }
 
 #[endpoint(
-    operation_id = "cx.webrtc.close_session",
+    operation_id = "cx.extension.soland.webrtc.close_session",
     tags("webrtc"),
     summary = "Close (delete) a WebRTC signaling session"
 )]

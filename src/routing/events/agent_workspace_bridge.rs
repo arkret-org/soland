@@ -100,7 +100,9 @@ pub fn maybe_emit_agent_membership_change(
 
 /// Returns (change_kind, subject_did, source_flow_id_or_none) for an
 /// accepted `cx.member.state` operation.
-fn membership_change(op: &contrix_sdk::Operation) -> Option<(&'static str, String, Option<String>)> {
+fn membership_change(
+    op: &contrix_sdk::Operation,
+) -> Option<(&'static str, String, Option<String>)> {
     let body = op.payload.as_object()?;
     let actor = body
         .get("actor_id")
@@ -119,13 +121,18 @@ fn membership_change(op: &contrix_sdk::Operation) -> Option<(&'static str, Strin
         "removed" | "left" | "leave" | "ban" | "banned" => "remove",
         _ => return None,
     };
-    let flow_id = body.get("flow_id").and_then(Value::as_str).map(str::to_owned);
+    let flow_id = body
+        .get("flow_id")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
     Some((change_kind, actor, flow_id))
 }
 
 /// Returns (change_kind="add", grant.subject, None) for an accepted
 /// `cx.capability.grant` operation.
-fn capability_grant_change(op: &contrix_sdk::Operation) -> Option<(&'static str, String, Option<String>)> {
+fn capability_grant_change(
+    op: &contrix_sdk::Operation,
+) -> Option<(&'static str, String, Option<String>)> {
     let body = op.payload.as_object()?;
     let subject = body
         .get("subject")
@@ -145,7 +152,9 @@ fn capability_grant_change(op: &contrix_sdk::Operation) -> Option<(&'static str,
 /// `grant_id` rather than subject directly, so callers may need to
 /// resolve grant_id → subject from the cell projection; here we surface
 /// whatever DID we can find. Real client-side filtering handles this.
-fn capability_revoke_change(op: &contrix_sdk::Operation) -> Option<(&'static str, String, Option<String>)> {
+fn capability_revoke_change(
+    op: &contrix_sdk::Operation,
+) -> Option<(&'static str, String, Option<String>)> {
     let body = op.payload.as_object()?;
     // Prefer an explicit subject if the payload carries one; otherwise
     // fall back to `revoked_by` (which is the issuer, not subject, but

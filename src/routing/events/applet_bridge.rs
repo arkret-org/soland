@@ -144,26 +144,20 @@ mod tests {
             compaction_prune_walk_interval_seconds: 0,
 
             compaction_prune_walk_per_space_limit: 50,
+            seed_demo_data: true,
         };
         AppState::new(config, Db { pool: None })
     }
 
-    fn build_session_start(
-        session_id: &str,
-        applet_id: &str,
-        params: Value,
-    ) -> Operation {
+    fn build_session_start(session_id: &str, applet_id: &str, params: Value) -> Operation {
         // OperationId enforces `cx:operation:<lowercase-uuidv7>` so we
         // use a fixed valid stamp here. The session_id we ship in the
         // payload is what the bridge keys by, not the wrapping
         // operation_id.
         let mut op = Operation::create(
-            OperationId::new(
-                "cx:operation:01904100-0000-7aaa-8aaa-000000000001".to_owned(),
-            )
-            .unwrap(),
-            SpaceId::new("cx:space:01904100-0000-7000-8000-aaaaaaaaaaaa".to_owned())
+            OperationId::new("cx:operation:01904100-0000-7aaa-8aaa-000000000001".to_owned())
                 .unwrap(),
+            SpaceId::new("cx:space:01904100-0000-7000-8000-aaaaaaaaaaaa".to_owned()).unwrap(),
             kinds::CX_APPLET_PROTOCOL_SESSION_START,
             json!({
                 "applet_id": applet_id,
@@ -201,11 +195,11 @@ mod tests {
             .expect("synthetic status event missing");
         assert_eq!(status_entry.payload["status"], "completed");
         assert_eq!(status_entry.payload["detail"]["echo"]["op"], "ping");
+        assert_eq!(status_entry.payload["detail"]["echo"]["payload"], "hello");
         assert_eq!(
-            status_entry.payload["detail"]["echo"]["payload"],
-            "hello"
+            status_entry.payload["detail"]["applet_id"],
+            "cx:applet:demo"
         );
-        assert_eq!(status_entry.payload["detail"]["applet_id"], "cx:applet:demo");
         assert_eq!(
             status_entry.payload["detail"]["bridge"],
             "soland.reference.echo"
@@ -216,12 +210,9 @@ mod tests {
     fn echo_bridge_ignores_non_session_start_operations() {
         let state = test_state();
         let mut op = Operation::create(
-            OperationId::new(
-                "cx:operation:01904100-0000-7aaa-8aaa-000000000002".to_owned(),
-            )
-            .unwrap(),
-            SpaceId::new("cx:space:01904100-0000-7000-8000-aaaaaaaaaaaa".to_owned())
+            OperationId::new("cx:operation:01904100-0000-7aaa-8aaa-000000000002".to_owned())
                 .unwrap(),
+            SpaceId::new("cx:space:01904100-0000-7000-8000-aaaaaaaaaaaa".to_owned()).unwrap(),
             kinds::CX_APPLET_REGISTRATION,
             json!({"service_did": "did:web:applet.example"}),
         );
@@ -245,12 +236,9 @@ mod tests {
     fn echo_bridge_ignores_session_start_without_session_id() {
         let state = test_state();
         let mut op = Operation::create(
-            OperationId::new(
-                "cx:operation:01904100-0000-7aaa-8aaa-000000000003".to_owned(),
-            )
-            .unwrap(),
-            SpaceId::new("cx:space:01904100-0000-7000-8000-aaaaaaaaaaaa".to_owned())
+            OperationId::new("cx:operation:01904100-0000-7aaa-8aaa-000000000003".to_owned())
                 .unwrap(),
+            SpaceId::new("cx:space:01904100-0000-7000-8000-aaaaaaaaaaaa".to_owned()).unwrap(),
             kinds::CX_APPLET_PROTOCOL_SESSION_START,
             json!({"applet_id": "cx:applet:demo"}),
         );

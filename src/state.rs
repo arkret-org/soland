@@ -129,6 +129,23 @@ pub struct AppState {
     pub projection: Arc<Mutex<ProjectionState>>,
     pub authz: AuthzEngine,
     pub spaces: Arc<Mutex<SpaceSearchIndex>>,
+    /// In-memory handle release ledger. Records `released_handle → released_at`
+    /// for every handle vacated by `claim_handle` / `transfer_handle`; new
+    /// claims for a handle still inside `HANDLE_GRACE_PERIOD_SECONDS` are
+    /// rejected with `handle_in_grace_period`. Spec: identity-handles.md
+    /// (handle release cooldown). The map is server-process-local; persistent
+    /// storage lands when the handle CRDT projection ships.
+    pub handle_releases: Arc<Mutex<BTreeMap<String, chrono::DateTime<chrono::Utc>>>>,
+    /// Erased actors — DID set. Once an actor `erase`s itself, every
+    /// subsequent authenticated request from that bearer returns 401
+    /// `account_erased` (and directory hits skip the row). Same in-memory
+    /// trade-off as `handle_releases`: persistent ledger lands with the
+    /// account-state projection.
+    pub erased_actors: Arc<Mutex<BTreeSet<String>>>,
+    /// Per-actor notifications read marker. `mark_all_read(actor)` writes
+    /// `Utc::now()`; the notifications read-side filter uses it to flag
+    /// rows as read. Same in-memory shape as the other two.
+    pub notification_read_markers: Arc<Mutex<BTreeMap<String, chrono::DateTime<chrono::Utc>>>>,
     pub did_resolver: Arc<Mutex<CompositeDidResolver>>,
     /// Move/Anchor/Lattice runtime stores.
     /// In-memory backends from the SDK; production deployments will
@@ -210,6 +227,13 @@ pub struct AccountRecord {
     pub did: String,
     pub handle: String,
     pub display_name: Option<String>,
+    /// Free-form short description for directory rendering. Updated via
+    /// `POST /api/v1/account/profile` (operationId `cx.account.update_profile`);
+    /// rendered by `demo_actors` in directory search results.
+    pub bio: Option<String>,
+    /// HTTPS URL pointing at the actor's avatar image. Server holds the
+    /// link verbatim — no transcoding or caching.
+    pub avatar_url: Option<String>,
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
@@ -276,6 +300,15 @@ pub struct SpaceMetaRecord {
     pub owner: String,
     pub deleted: bool,
     pub discoverability: String,
+    /// One of `shared` / `joined` / `invited` / `world_readable`. Owner can
+    /// flip this via `PUT /api/v1/spaces/{id}/policy`; `world_readable` opens
+    /// the event-stream read endpoints to non-members and anonymous callers
+    /// (space-and-place.md §3.4 + §3.7).
+    pub history_visibility: String,
+    /// Optional encryption profile (`mls_rfc9420` / `plaintext`). Cross-checked
+    /// against `history_visibility` at create time — `mls_rfc9420` is
+    /// incompatible with `world_readable` (space-and-place.md §3.1.3).
+    pub encryption_profile: Option<String>,
     pub plaintext_visible_services: BTreeSet<String>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
@@ -518,18 +551,6 @@ impl AppState {
 
     pub fn new(config: AppConfig, db: Db) -> Self {
         let mut spaces = SpaceSearchIndex::new();
-        let mut demo = SpaceSearchEntry::new(
-            SpaceId::new("cx:space:0196419b-0000-7000-8000-000000000000")
-                .expect("valid demo space id"),
-            "Contrix Demo Space",
-        );
-        demo.description = Some("Shared demo Space served by soland".to_owned());
-        demo.public = true;
-        demo.members
-            .insert(Did::new("did:web:alice.example").expect("valid did"));
-        demo.tags.insert("demo".to_owned());
-        demo.category = Some("collaboration".to_owned());
-        spaces.upsert(demo);
         let now = chrono::Utc::now();
 
         let service_did = config.service_did.clone();
@@ -545,29 +566,52 @@ impl AppState {
             })
             .unwrap_or_else(|| Arc::new(MemoryPersistenceStore::new()));
 
-        let demo_account = AccountRecord {
-            did: "did:web:alice.example".to_owned(),
-            handle: "@alice".to_owned(),
-            display_name: Some("Alice Example".to_owned()),
-            created_at: now,
-        };
-        if let Err(error) = persistence.accounts().put(&demo_account) {
-            tracing::warn!(%error, "failed to seed demo account into persistence store");
-        }
+        // Seed deterministic demo data only when explicitly opted in (tests via
+        // `test_config()`, dev harnesses via `SOLAND_SEED_DEMO_DATA=true`). In
+        // production this stays off so soland deployments don't all advertise
+        // the same hard-coded "Contrix Demo Space" id across federation peers.
+        if config.seed_demo_data {
+            let mut demo = SpaceSearchEntry::new(
+                SpaceId::new("cx:space:0196419b-0000-7000-8000-000000000000")
+                    .expect("valid demo space id"),
+                "Contrix Demo Space",
+            );
+            demo.description = Some("Shared demo Space served by soland".to_owned());
+            demo.public = true;
+            demo.members
+                .insert(Did::new("did:web:alice.example").expect("valid did"));
+            demo.tags.insert("demo".to_owned());
+            demo.category = Some("collaboration".to_owned());
+            spaces.upsert(demo);
 
-        let demo_space_meta = SpaceMetaRecord {
-            owner: "did:web:alice.example".to_owned(),
-            deleted: false,
-            discoverability: "public".to_owned(),
-            plaintext_visible_services: BTreeSet::new(),
-            created_at: now,
-            updated_at: now,
-        };
-        if let Err(error) = persistence.space_meta().put(
-            "cx:space:0196419b-0000-7000-8000-000000000000",
-            &demo_space_meta,
-        ) {
-            tracing::warn!(%error, "failed to seed demo space metadata into persistence store");
+            let demo_account = AccountRecord {
+                did: "did:web:alice.example".to_owned(),
+                handle: "@alice".to_owned(),
+                display_name: Some("Alice Example".to_owned()),
+                bio: None,
+                avatar_url: None,
+                created_at: now,
+            };
+            if let Err(error) = persistence.accounts().put(&demo_account) {
+                tracing::warn!(%error, "failed to seed demo account into persistence store");
+            }
+
+            let demo_space_meta = SpaceMetaRecord {
+                owner: "did:web:alice.example".to_owned(),
+                deleted: false,
+                discoverability: "public".to_owned(),
+                history_visibility: "shared".to_owned(),
+                encryption_profile: None,
+                plaintext_visible_services: BTreeSet::new(),
+                created_at: now,
+                updated_at: now,
+            };
+            if let Err(error) = persistence.space_meta().put(
+                "cx:space:0196419b-0000-7000-8000-000000000000",
+                &demo_space_meta,
+            ) {
+                tracing::warn!(%error, "failed to seed demo space metadata into persistence store");
+            }
         }
 
         // Build the production DID resolver chain before the struct literal
@@ -705,6 +749,9 @@ impl AppState {
             persistence,
             object_storage,
             spaces: Arc::new(Mutex::new(spaces)),
+            handle_releases: Arc::new(Mutex::new(BTreeMap::new())),
+            erased_actors: Arc::new(Mutex::new(BTreeSet::new())),
+            notification_read_markers: Arc::new(Mutex::new(BTreeMap::new())),
             did_resolver,
             move_store: Arc::new(contrix_sdk::state_res::MemoryMoveStore::default()),
             anchor_store: Arc::new(contrix_sdk::state_res::MemoryAnchorStore::default()),
@@ -745,8 +792,7 @@ fn hydrate_projections_from_persistence(
     proj: &mut ProjectionState,
 ) {
     use crate::reducer::{
-        FlowProjection, MorphProjection, ObjectLifecycleState, PlaceLifecycleState,
-        PlaceProjection,
+        FlowProjection, MorphProjection, ObjectLifecycleState, PlaceLifecycleState, PlaceProjection,
     };
 
     fn parse_place_state(value: &str) -> Option<PlaceLifecycleState> {

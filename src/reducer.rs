@@ -585,33 +585,23 @@ impl ProjectionState {
             Some(CX_PLACE_CREATE) => self.apply_place_create(operation, now),
             Some(CX_PLACE_UPDATE) => self.apply_place_update(operation, now),
             Some(CX_PLACE_PARENT) => self.apply_place_parent(operation, now),
-            Some(CX_PLACE_ARCHIVE) => self.apply_place_lifecycle(
-                operation,
-                now,
-                PlaceLifecycleTransition::Archive,
-            ),
-            Some(CX_PLACE_RESTORE) => self.apply_place_lifecycle(
-                operation,
-                now,
-                PlaceLifecycleTransition::Restore,
-            ),
-            Some(CX_PLACE_TOMBSTONE) => self.apply_place_lifecycle(
-                operation,
-                now,
-                PlaceLifecycleTransition::Tombstone,
-            ),
+            Some(CX_PLACE_ARCHIVE) => {
+                self.apply_place_lifecycle(operation, now, PlaceLifecycleTransition::Archive)
+            }
+            Some(CX_PLACE_RESTORE) => {
+                self.apply_place_lifecycle(operation, now, PlaceLifecycleTransition::Restore)
+            }
+            Some(CX_PLACE_TOMBSTONE) => {
+                self.apply_place_lifecycle(operation, now, PlaceLifecycleTransition::Tombstone)
+            }
             Some(CX_FLOW_CREATE) => self.apply_flow_create(operation, now),
             Some(CX_FLOW_UPDATE) => self.apply_flow_update(operation, now),
-            Some(CX_FLOW_ARCHIVE) => self.apply_flow_lifecycle(
-                operation,
-                now,
-                ObjectLifecycleTransition::Archive,
-            ),
-            Some(CX_FLOW_RESTORE) => self.apply_flow_lifecycle(
-                operation,
-                now,
-                ObjectLifecycleTransition::Restore,
-            ),
+            Some(CX_FLOW_ARCHIVE) => {
+                self.apply_flow_lifecycle(operation, now, ObjectLifecycleTransition::Archive)
+            }
+            Some(CX_FLOW_RESTORE) => {
+                self.apply_flow_lifecycle(operation, now, ObjectLifecycleTransition::Restore)
+            }
             Some(CX_FLOW_MOVE) | Some(CX_FLOW_REORDER) => {
                 self.apply_flow_position_touch(operation, now)
             }
@@ -623,16 +613,12 @@ impl ProjectionState {
             ) => self.apply_flow_track_touch(operation, now),
             Some(CX_MORPH_CREATE) => self.apply_morph_create(operation, now),
             Some(CX_MORPH_UPDATE) => self.apply_morph_update(operation, now),
-            Some(CX_MORPH_ARCHIVE) => self.apply_morph_lifecycle(
-                operation,
-                now,
-                ObjectLifecycleTransition::Archive,
-            ),
-            Some(CX_MORPH_RESTORE) => self.apply_morph_lifecycle(
-                operation,
-                now,
-                ObjectLifecycleTransition::Restore,
-            ),
+            Some(CX_MORPH_ARCHIVE) => {
+                self.apply_morph_lifecycle(operation, now, ObjectLifecycleTransition::Archive)
+            }
+            Some(CX_MORPH_RESTORE) => {
+                self.apply_morph_lifecycle(operation, now, ObjectLifecycleTransition::Restore)
+            }
             Some(CX_APPLET_REGISTRATION) => self.apply_applet_registration(operation, now),
             Some(CX_APPLET_DISCOVERY) => self.apply_applet_discovery(operation, now),
             Some(CX_AGENT_ENDPOINT) => self.apply_agent_endpoint(operation, now),
@@ -1476,10 +1462,7 @@ impl ProjectionState {
             CX_PLACE_ARCHIVE => (&[PlaceLifecycleState::Active], "place_not_active"),
             CX_PLACE_RESTORE => (&[PlaceLifecycleState::Archived], "place_not_archived"),
             CX_PLACE_TOMBSTONE => (
-                &[
-                    PlaceLifecycleState::Active,
-                    PlaceLifecycleState::Archived,
-                ],
+                &[PlaceLifecycleState::Active, PlaceLifecycleState::Archived],
                 "place_already_terminal",
             ),
             _ => return Ok(()),
@@ -1514,7 +1497,10 @@ impl ProjectionState {
                 reason: "place_create_missing_object".to_owned(),
             };
         };
-        let Some(place_id) = object.get("id").and_then(|v| v.as_str()).map(ToOwned::to_owned)
+        let Some(place_id) = object
+            .get("id")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned)
         else {
             return ProjectionEffect::Rejected {
                 reason: "place_create_missing_id".to_owned(),
@@ -1714,10 +1700,7 @@ impl ProjectionState {
                 "place_not_archived",
             ),
             PlaceLifecycleTransition::Tombstone => (
-                &[
-                    PlaceLifecycleState::Active,
-                    PlaceLifecycleState::Archived,
-                ][..],
+                &[PlaceLifecycleState::Active, PlaceLifecycleState::Archived][..],
                 PlaceLifecycleState::Tombstoned,
                 "place_already_terminal",
             ),
@@ -1864,7 +1847,10 @@ impl ProjectionState {
                 reason: "flow_create_missing_object".to_owned(),
             };
         };
-        let Some(flow_id) = object.get("id").and_then(|v| v.as_str()).map(ToOwned::to_owned)
+        let Some(flow_id) = object
+            .get("id")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned)
         else {
             return ProjectionEffect::Rejected {
                 reason: "flow_create_missing_id".to_owned(),
@@ -2025,10 +2011,7 @@ impl ProjectionState {
     /// doesn't carry track-level state (FlowProjection has no `tracks`
     /// field by design — SDK is the source of truth client-side); only
     /// the parent Flow's lifecycle state matters here.
-    pub fn check_flow_track_transition(
-        &self,
-        operation: &Operation,
-    ) -> Result<(), &'static str> {
+    pub fn check_flow_track_transition(&self, operation: &Operation) -> Result<(), &'static str> {
         let kind = match crate::kinds::canonical_kind_for_operation(operation) {
             Some(k) => k,
             None => return Ok(()),
@@ -2143,7 +2126,10 @@ impl ProjectionState {
                 reason: "morph_create_missing_object".to_owned(),
             };
         };
-        let Some(morph_id) = object.get("id").and_then(|v| v.as_str()).map(ToOwned::to_owned)
+        let Some(morph_id) = object
+            .get("id")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned)
         else {
             return ProjectionEffect::Rejected {
                 reason: "morph_create_missing_id".to_owned(),
@@ -3374,7 +3360,13 @@ mod tests {
             ),
             &hlc,
         );
-        assert!(matches!(create_effect, ProjectionEffect::PlaceLifecycle { new_state: PlaceLifecycleState::Active, .. }));
+        assert!(matches!(
+            create_effect,
+            ProjectionEffect::PlaceLifecycle {
+                new_state: PlaceLifecycleState::Active,
+                ..
+            }
+        ));
         assert_eq!(state.places[place_id].state, PlaceLifecycleState::Active);
 
         // archive
@@ -3386,7 +3378,13 @@ mod tests {
             ),
             &hlc,
         );
-        assert!(matches!(archive_effect, ProjectionEffect::PlaceLifecycle { new_state: PlaceLifecycleState::Archived, .. }));
+        assert!(matches!(
+            archive_effect,
+            ProjectionEffect::PlaceLifecycle {
+                new_state: PlaceLifecycleState::Archived,
+                ..
+            }
+        ));
         assert_eq!(state.places[place_id].state, PlaceLifecycleState::Archived);
 
         // restore
@@ -3398,7 +3396,13 @@ mod tests {
             ),
             &hlc,
         );
-        assert!(matches!(restore_effect, ProjectionEffect::PlaceLifecycle { new_state: PlaceLifecycleState::Active, .. }));
+        assert!(matches!(
+            restore_effect,
+            ProjectionEffect::PlaceLifecycle {
+                new_state: PlaceLifecycleState::Active,
+                ..
+            }
+        ));
         assert_eq!(state.places[place_id].state, PlaceLifecycleState::Active);
 
         // tombstone
@@ -3410,8 +3414,17 @@ mod tests {
             ),
             &hlc,
         );
-        assert!(matches!(tombstone_effect, ProjectionEffect::PlaceLifecycle { new_state: PlaceLifecycleState::Tombstoned, .. }));
-        assert_eq!(state.places[place_id].state, PlaceLifecycleState::Tombstoned);
+        assert!(matches!(
+            tombstone_effect,
+            ProjectionEffect::PlaceLifecycle {
+                new_state: PlaceLifecycleState::Tombstoned,
+                ..
+            }
+        ));
+        assert_eq!(
+            state.places[place_id].state,
+            PlaceLifecycleState::Tombstoned
+        );
     }
 
     /// Preflight `check_place_lifecycle_transition` rejects each illegal
@@ -3527,7 +3540,10 @@ mod tests {
             "cx:space:01904100-0000-7000-8000-cfc039892036",
             serde_json::json!({ "place_id": "cx:place:nope-not-here" }),
         );
-        assert_eq!(state.check_place_lifecycle_transition(&archive_unknown), Ok(()));
+        assert_eq!(
+            state.check_place_lifecycle_transition(&archive_unknown),
+            Ok(())
+        );
     }
 
     // ── Flow lifecycle state-machine tests ──
@@ -3559,7 +3575,10 @@ mod tests {
         );
         assert!(matches!(
             create_effect,
-            ProjectionEffect::FlowLifecycle { new_state: ObjectLifecycleState::Active, .. }
+            ProjectionEffect::FlowLifecycle {
+                new_state: ObjectLifecycleState::Active,
+                ..
+            }
         ));
         assert_eq!(state.flows[flow_id].state, ObjectLifecycleState::Active);
 
@@ -3573,7 +3592,10 @@ mod tests {
         );
         assert!(matches!(
             archive_effect,
-            ProjectionEffect::FlowLifecycle { new_state: ObjectLifecycleState::Archived, .. }
+            ProjectionEffect::FlowLifecycle {
+                new_state: ObjectLifecycleState::Archived,
+                ..
+            }
         ));
         assert_eq!(state.flows[flow_id].state, ObjectLifecycleState::Archived);
 
@@ -3587,7 +3609,10 @@ mod tests {
         );
         assert!(matches!(
             restore_effect,
-            ProjectionEffect::FlowLifecycle { new_state: ObjectLifecycleState::Active, .. }
+            ProjectionEffect::FlowLifecycle {
+                new_state: ObjectLifecycleState::Active,
+                ..
+            }
         ));
         assert_eq!(state.flows[flow_id].state, ObjectLifecycleState::Active);
     }
@@ -3704,7 +3729,10 @@ mod tests {
         );
         assert!(matches!(
             create_effect,
-            ProjectionEffect::MorphLifecycle { new_state: ObjectLifecycleState::Active, .. }
+            ProjectionEffect::MorphLifecycle {
+                new_state: ObjectLifecycleState::Active,
+                ..
+            }
         ));
         assert_eq!(state.morphs[morph_id].state, ObjectLifecycleState::Active);
 
@@ -3842,7 +3870,10 @@ mod tests {
         let created_state = state.flows[flow_id].state;
         let created_updated_at = state.flows[flow_id].updated_at;
         assert_eq!(created_state, ObjectLifecycleState::Active);
-        assert!(created_updated_at.is_none(), "create does not set updated_at");
+        assert!(
+            created_updated_at.is_none(),
+            "create does not set updated_at"
+        );
 
         // cx.flow.move — state unchanged, updated_at advances.
         let move_effect = state.apply(
@@ -3860,10 +3891,16 @@ mod tests {
         );
         assert!(matches!(
             move_effect,
-            ProjectionEffect::FlowLifecycle { new_state: ObjectLifecycleState::Active, .. }
+            ProjectionEffect::FlowLifecycle {
+                new_state: ObjectLifecycleState::Active,
+                ..
+            }
         ));
         assert_eq!(state.flows[flow_id].state, ObjectLifecycleState::Active);
-        assert!(state.flows[flow_id].updated_at.is_some(), "move bumps updated_at");
+        assert!(
+            state.flows[flow_id].updated_at.is_some(),
+            "move bumps updated_at"
+        );
         assert_eq!(
             state.flows[flow_id].updated_by.as_deref(),
             Some("did:web:alice.example")
@@ -3885,7 +3922,10 @@ mod tests {
         );
         assert!(matches!(
             reorder_effect,
-            ProjectionEffect::FlowLifecycle { new_state: ObjectLifecycleState::Active, .. }
+            ProjectionEffect::FlowLifecycle {
+                new_state: ObjectLifecycleState::Active,
+                ..
+            }
         ));
         assert_eq!(state.flows[flow_id].state, ObjectLifecycleState::Active);
     }
@@ -3954,7 +3994,10 @@ mod tests {
         );
         assert!(matches!(
             effect,
-            ProjectionEffect::FlowLifecycle { new_state: ObjectLifecycleState::Redacted, .. }
+            ProjectionEffect::FlowLifecycle {
+                new_state: ObjectLifecycleState::Redacted,
+                ..
+            }
         ));
         assert_eq!(state.flows[flow_id].state, ObjectLifecycleState::Redacted);
         assert!(state.flows[flow_id].state.is_terminal());
@@ -3998,7 +4041,10 @@ mod tests {
         );
         assert!(matches!(
             effect,
-            ProjectionEffect::MorphLifecycle { new_state: ObjectLifecycleState::Redacted, .. }
+            ProjectionEffect::MorphLifecycle {
+                new_state: ObjectLifecycleState::Redacted,
+                ..
+            }
         ));
         assert_eq!(state.morphs[morph_id].state, ObjectLifecycleState::Redacted);
     }

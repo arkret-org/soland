@@ -14,6 +14,15 @@ use serde::{Deserialize, Serialize};
 use crate::ids;
 
 /// A capability grant.
+///
+/// `delegated_from` carries the parent grant_id when this grant was issued
+/// by a non-owner via delegation (capabilities.md §10). Revoking the parent
+/// cascade-revokes the child via [`AuthzEngine::revoke_grant`].
+///
+/// `expires_at` is an optional top-level convenience denormalization of the
+/// temporal constraint inside `constraints[]`. When both forms are present
+/// the stricter of the two wins. Spec source: capabilities.md §3 +
+/// `cx.schema.capability.v1`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Grant {
     pub grant_id: String,
@@ -26,6 +35,10 @@ pub struct Grant {
     pub constraints: Vec<Constraint>,
     pub revoked: bool,
     pub created_at: chrono::DateTime<chrono::Utc>,
+    #[serde(default)]
+    pub delegated_from: Option<String>,
+    #[serde(default)]
+    pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -57,6 +70,34 @@ enum GrantDecision {
     RequireReview,
 }
 
+/// Why a delegation request was rejected. Surfaced through HTTP as
+/// `capability_not_held` / `capability_over_expire` / `parent_revoked` /
+/// `not_grant_holder` / `grant_not_found`. See capabilities.md §10.
+#[derive(Clone, Debug)]
+pub enum DelegationError {
+    /// Parent grant_id is unknown to this engine.
+    ParentNotFound,
+    /// Parent grant exists but is revoked (directly or via cascade).
+    ParentRevoked,
+    /// Parent grant exists but its `expires_at` is already in the past.
+    ParentExpired,
+    /// Caller is not the subject of the parent grant — only the holder of a
+    /// capability MAY further delegate it.
+    NotGrantHolder,
+    /// Delegated `actions[]` carries an action the parent doesn't hold.
+    /// capabilities.md §10 (再授权不得扩大动作范围) — `capability_not_held`.
+    ActionsNotHeld { offending: String },
+    /// Child `expires_at` is later than parent `expires_at` (or child unset
+    /// while parent is set). capabilities.md §10 (再授权不得扩大资源范围) +
+    /// `cx.schema.capability.v1` temporal constraint — `capability_over_expire`.
+    OverExpire,
+    /// Delegated `resource` falls outside parent's `resource` scope.
+    /// Returned today for documentation symmetry; v1 only enforces exact
+    /// match or parent="*" pattern; richer subsumption lands when typed
+    /// resource selectors arrive (see authz/resource-selector-grammar.md).
+    ResourceOutOfScope,
+}
+
 impl AuthzEngine {
     pub fn new() -> Self {
         Self {
@@ -64,7 +105,8 @@ impl AuthzEngine {
         }
     }
 
-    /// Create a new grant.
+    /// Create a new owner-issued (root) grant. Use [`Self::create_delegated_grant`]
+    /// when the issuer is a non-owner re-delegating a capability they hold.
     pub fn create_grant(
         &self,
         space_id: String,
@@ -73,6 +115,34 @@ impl AuthzEngine {
         resource: String,
         actions: Vec<String>,
         constraints: Vec<Constraint>,
+    ) -> Grant {
+        self.create_grant_with_options(
+            space_id,
+            issuer,
+            subject,
+            resource,
+            actions,
+            constraints,
+            None,
+            None,
+        )
+    }
+
+    /// Full-form constructor used by both root and delegated paths.
+    /// `expires_at` here is the top-level convenience denormalization; the
+    /// constraints[] temporal entry, if present, still wins on the stricter
+    /// side at check time.
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_grant_with_options(
+        &self,
+        space_id: String,
+        issuer: String,
+        subject: String,
+        resource: String,
+        actions: Vec<String>,
+        constraints: Vec<Constraint>,
+        delegated_from: Option<String>,
+        expires_at: Option<chrono::DateTime<chrono::Utc>>,
     ) -> Grant {
         let grant = Grant {
             grant_id: ids::generate_grant_id(),
@@ -84,6 +154,8 @@ impl AuthzEngine {
             constraints,
             revoked: false,
             created_at: chrono::Utc::now(),
+            delegated_from,
+            expires_at,
         };
         self.grants
             .lock()
@@ -92,35 +164,160 @@ impl AuthzEngine {
         grant
     }
 
-    /// Revoke a grant.
-    pub fn revoke_grant(&self, grant_id: &str) -> bool {
-        let mut grants = self.grants.lock().expect("grants lock");
-        if let Some(grant) = grants.get_mut(grant_id) {
-            grant.revoked = true;
-            true
-        } else {
-            false
+    /// Issue a delegated grant. capabilities.md §10:
+    /// - caller MUST be the subject of `parent_grant_id`
+    /// - delegated actions MUST be a subset of the parent's
+    /// - delegated expiry MUST NOT exceed the parent's
+    /// - resource MUST NOT widen the parent's scope
+    pub fn create_delegated_grant(
+        &self,
+        parent_grant_id: &str,
+        issuer: String,
+        subject: String,
+        resource: String,
+        actions: Vec<String>,
+        constraints: Vec<Constraint>,
+        expires_at: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Result<Grant, DelegationError> {
+        let parent = {
+            let grants = self.grants.lock().expect("grants lock");
+            grants
+                .get(parent_grant_id)
+                .cloned()
+                .ok_or(DelegationError::ParentNotFound)?
+        };
+        if parent.revoked {
+            return Err(DelegationError::ParentRevoked);
         }
+        if parent.subject != issuer {
+            return Err(DelegationError::NotGrantHolder);
+        }
+        let parent_effective_expiry = grant_effective_expiry(&parent);
+        if let Some(parent_expiry) = parent_effective_expiry
+            && parent_expiry <= chrono::Utc::now()
+        {
+            return Err(DelegationError::ParentExpired);
+        }
+        let parent_actions_wildcard = parent.actions.iter().any(|action| action == "*");
+        if !parent_actions_wildcard {
+            for action in &actions {
+                if action != "*" && !parent.actions.contains(action) {
+                    return Err(DelegationError::ActionsNotHeld {
+                        offending: action.clone(),
+                    });
+                }
+            }
+            if actions.iter().any(|action| action == "*") {
+                // child requesting wildcard while parent is not wildcard
+                return Err(DelegationError::ActionsNotHeld {
+                    offending: "*".to_owned(),
+                });
+            }
+        }
+        if !resource_within(&parent.resource, &resource) {
+            return Err(DelegationError::ResourceOutOfScope);
+        }
+        if let Some(parent_expiry) = parent_effective_expiry {
+            match expires_at {
+                None => return Err(DelegationError::OverExpire),
+                Some(child_expiry) if child_expiry > parent_expiry => {
+                    return Err(DelegationError::OverExpire);
+                }
+                _ => {}
+            }
+        }
+        Ok(self.create_grant_with_options(
+            parent.space_id.clone(),
+            issuer,
+            subject,
+            resource,
+            actions,
+            constraints,
+            Some(parent_grant_id.to_owned()),
+            expires_at,
+        ))
     }
 
-    /// Get all grants for a subject in a space.
-    pub fn grants_for_subject(&self, subject: &str, space_id: &str) -> Vec<Grant> {
+    /// Revoke a grant and cascade to every delegated descendant.
+    /// Returns `(true, cascade_ids)` when the named grant existed, where
+    /// `cascade_ids` enumerates all descendants whose state flipped to
+    /// `revoked` as part of this call (does NOT include `grant_id` itself).
+    pub fn revoke_grant_with_cascade(&self, grant_id: &str) -> (bool, Vec<String>) {
+        let mut grants = self.grants.lock().expect("grants lock");
+        if !grants.contains_key(grant_id) {
+            return (false, Vec::new());
+        }
+        // Mark target revoked first.
+        if let Some(grant) = grants.get_mut(grant_id) {
+            grant.revoked = true;
+        }
+        // BFS through delegated children, collecting + marking.
+        let mut cascade = Vec::new();
+        let mut frontier: Vec<String> = vec![grant_id.to_owned()];
+        while let Some(parent_id) = frontier.pop() {
+            let children: Vec<String> = grants
+                .values()
+                .filter(|g| g.delegated_from.as_deref() == Some(parent_id.as_str()))
+                .map(|g| g.grant_id.clone())
+                .collect();
+            for child_id in children {
+                if let Some(child) = grants.get_mut(&child_id)
+                    && !child.revoked
+                {
+                    child.revoked = true;
+                    cascade.push(child_id.clone());
+                    frontier.push(child_id);
+                }
+            }
+        }
+        (true, cascade)
+    }
+
+    /// Backwards-compatible wrapper around [`Self::revoke_grant_with_cascade`].
+    pub fn revoke_grant(&self, grant_id: &str) -> bool {
+        self.revoke_grant_with_cascade(grant_id).0
+    }
+
+    /// Look up a grant by id. Returns `None` if unknown.
+    pub fn get_grant(&self, grant_id: &str) -> Option<Grant> {
         self.grants
             .lock()
             .expect("grants lock")
+            .get(grant_id)
+            .cloned()
+    }
+
+    /// Get all grants for a subject in a space. Filters out revoked,
+    /// expired, and cascade-broken grants so callers see only the
+    /// *effective* set (capabilities.md §11).
+    pub fn grants_for_subject(&self, subject: &str, space_id: &str) -> Vec<Grant> {
+        let snapshot = self.grants.lock().expect("grants lock").clone();
+        let now = chrono::Utc::now();
+        snapshot
             .values()
-            .filter(|g| g.subject == subject && g.space_id == space_id && !g.revoked)
+            .filter(|g| {
+                g.subject == subject
+                    && g.space_id == space_id
+                    && !g.revoked
+                    && !is_grant_expired(g, now)
+                    && delegation_chain_intact(&snapshot, &g.grant_id, now)
+            })
             .cloned()
             .collect()
     }
 
-    /// Get all grants in a space.
+    /// Get all (non-revoked, non-expired, chain-intact) grants in a space.
     pub fn grants_in_space(&self, space_id: &str) -> Vec<Grant> {
-        self.grants
-            .lock()
-            .expect("grants lock")
+        let snapshot = self.grants.lock().expect("grants lock").clone();
+        let now = chrono::Utc::now();
+        snapshot
             .values()
-            .filter(|g| g.space_id == space_id && !g.revoked)
+            .filter(|g| {
+                g.space_id == space_id
+                    && !g.revoked
+                    && !is_grant_expired(g, now)
+                    && delegation_chain_intact(&snapshot, &g.grant_id, now)
+            })
             .cloned()
             .collect()
     }
@@ -141,11 +338,12 @@ impl AuthzEngine {
         members: &[String],
         resource_facets: &[String],
     ) -> AuthzResult {
-        // Check explicit grants first
-        let matching_grants: Vec<Grant> = self
-            .grants
-            .lock()
-            .expect("grants lock")
+        // Check explicit grants first. Delegated grants drop out if any
+        // ancestor in the chain is revoked or expired (capabilities.md §3.3
+        // cascade + §10 delegation chain integrity).
+        let snapshot = self.grants.lock().expect("grants lock").clone();
+        let now = chrono::Utc::now();
+        let matching_grants: Vec<Grant> = snapshot
             .values()
             .filter(|g| {
                 !g.revoked
@@ -153,6 +351,8 @@ impl AuthzEngine {
                     && g.subject == actor
                     && g.actions.iter().any(|a| a == action || a == "*")
                     && resource_matches(&g.resource, resource)
+                    && !is_grant_expired(g, now)
+                    && delegation_chain_intact(&snapshot, &g.grant_id, now)
             })
             .cloned()
             .collect();
@@ -259,6 +459,64 @@ impl Default for AuthzEngine {
     }
 }
 
+/// Returns the effective expiry for a grant, taking the stricter of the
+/// top-level `expires_at` and any `constraint_type=temporal` entry inside
+/// `constraints[]`. `None` means the grant never expires.
+fn grant_effective_expiry(grant: &Grant) -> Option<chrono::DateTime<chrono::Utc>> {
+    let top_level = grant.expires_at;
+    let from_constraint = grant.constraints.iter().find_map(|constraint| {
+        if constraint.constraint_type == "temporal" {
+            constraint
+                .value
+                .get("expires_at")
+                .and_then(|value| value.as_str())
+                .and_then(|raw| chrono::DateTime::parse_from_rfc3339(raw).ok())
+                .map(|dt| dt.with_timezone(&chrono::Utc))
+        } else {
+            None
+        }
+    });
+    match (top_level, from_constraint) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        (Some(a), None) => Some(a),
+        (None, Some(b)) => Some(b),
+        (None, None) => None,
+    }
+}
+
+fn is_grant_expired(grant: &Grant, now: chrono::DateTime<chrono::Utc>) -> bool {
+    grant_effective_expiry(grant).is_some_and(|expiry| now >= expiry)
+}
+
+/// Returns `true` iff every ancestor in the delegation chain rooted at
+/// `grant_id` is still active (not revoked, not expired). A grant with no
+/// `delegated_from` is trivially chain-intact. Cycles defended by a visit
+/// budget(should never occur in practice — `delegated_from` is set at
+/// creation time and the engine has no edit API).
+fn delegation_chain_intact(
+    snapshot: &BTreeMap<String, Grant>,
+    grant_id: &str,
+    now: chrono::DateTime<chrono::Utc>,
+) -> bool {
+    let mut current = grant_id;
+    let mut visited: usize = 0;
+    while let Some(grant) = snapshot.get(current) {
+        if visited > 64 {
+            return false;
+        }
+        visited += 1;
+        if grant.revoked || is_grant_expired(grant, now) {
+            return false;
+        }
+        match &grant.delegated_from {
+            Some(parent) => current = parent.as_str(),
+            None => return true,
+        }
+    }
+    // Parent_grant_id pointed at an unknown grant — broken chain.
+    false
+}
+
 /// Check if a grant resource pattern matches the requested resource.
 fn resource_matches(pattern: &str, resource: &str) -> bool {
     if pattern == "*" {
@@ -271,6 +529,23 @@ fn resource_matches(pattern: &str, resource: &str) -> bool {
     // Prefix match with wildcard: "space:cx:space:123:*"
     if let Some(prefix) = pattern.strip_suffix('*') {
         return resource.starts_with(prefix);
+    }
+    false
+}
+
+/// Check whether `child` resource is within the scope `parent` permits.
+/// v1 only supports exact match and `parent="*"`; prefix-wildcard parents
+/// (`pattern="...:*"`) accept any child sharing the prefix. Richer typed
+/// resource selectors land later (authz/resource-selector-grammar.md).
+fn resource_within(parent: &str, child: &str) -> bool {
+    if parent == "*" {
+        return true;
+    }
+    if parent == child {
+        return true;
+    }
+    if let Some(prefix) = parent.strip_suffix('*') {
+        return child.starts_with(prefix);
     }
     false
 }

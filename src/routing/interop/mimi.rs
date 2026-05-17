@@ -71,10 +71,7 @@ async fn mimi_provider_directory(depot: &mut Depot, res: &mut Response) {
     tags("mimi"),
     summary = "Claim MIMI/MLS key material for a target identifier"
 )]
-async fn mimi_key_material(
-    body: JsonBody<Value>,
-    depot: &mut Depot,
-) -> JsonResult<Value> {
+async fn mimi_key_material(body: JsonBody<Value>, depot: &mut Depot) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
     if let Some(message) = unsupported_mimi_draft(&body) {
@@ -119,11 +116,20 @@ async fn mimi_room_update(
     // If the update carries a `room_binding` block, persist it as a
     // `cx.mimi.room_binding` projection event so the Contrix
     // timeline observes the binding. Updates without a binding block
-    // fall through to the receipt-only response.
+    // fall through to the receipt-only response. A binding block that
+    // omits both `binding_scope.space_id` and a top-level `space_id`
+    // is rejected — we never implicitly route to a default Space.
     let binding_event_id = match body.get("room_binding") {
-        Some(binding) if binding.is_object() => Some(emit_mimi_room_binding_event(
-            state, &room_id, binding,
-        )),
+        Some(binding) if binding.is_object() => {
+            let event_id =
+                emit_mimi_room_binding_event(state, &room_id, binding).ok_or_else(|| {
+                    AppError::invalid_param(
+                        "room_binding requires `binding_scope.space_id` or a top-level `space_id`",
+                    )
+                    .with_wire_code("missing_space_binding")
+                })?;
+            Some(event_id)
+        }
         _ => None,
     };
 
@@ -164,7 +170,10 @@ async fn mimi_room_notify(
     // notification. The notify event is an ephemeral signal in the
     // spec's wire_scope taxonomy - we broadcast but don't persist
     // into projection_events so it doesn't pollute durable history.
-    let space_id = mimi_bound_space_id(state, &room_id);
+    let space_id = mimi_bound_space_id(state, &room_id).ok_or_else(|| {
+        AppError::not_found("MIMI room is not bound to any Contrix Space")
+            .with_wire_code("mimi_room_unbound")
+    })?;
     let event_id = ids::generate_event_id();
     let notify_record = ProjectionEventRecord {
         event_id: event_id.clone(),
@@ -255,7 +264,10 @@ async fn mimi_room_message(
     // MIMI provenance metadata is preserved verbatim under
     // `payload.mimi_provenance` so audit consumers can verify the
     // message arrived through the facade.
-    let space_id = mimi_bound_space_id(state, &room_id);
+    let space_id = mimi_bound_space_id(state, &room_id).ok_or_else(|| {
+        AppError::not_found("MIMI room is not bound to any Contrix Space")
+            .with_wire_code("mimi_room_unbound")
+    })?;
     let sender = body
         .get("sender_did")
         .or_else(|| body.get("from_did"))
@@ -266,22 +278,16 @@ async fn mimi_room_message(
             // id + message id when the envelope omits one. Real
             // deployments will normalise this via the identifier
             // mapping layer per spec §10.
-            format!(
-                "{}#mimi-anonymous",
-                state.config.service_did,
-            )
+            format!("{}#mimi-anonymous", state.config.service_did,)
         });
-    let content = body
-        .get("content")
-        .cloned()
-        .unwrap_or_else(|| {
-            // MIMI text/plain fallback so a minimal body still
-            // renders something in the Contrix timeline.
-            json!({
-                "blocks": [{"kind": "cx.content.text", "text": ""}],
-                "raw_mimi_source_format": source_format,
-            })
-        });
+    let content = body.get("content").cloned().unwrap_or_else(|| {
+        // MIMI text/plain fallback so a minimal body still
+        // renders something in the Contrix timeline.
+        json!({
+            "blocks": [{"kind": "cx.content.text", "text": ""}],
+            "raw_mimi_source_format": source_format,
+        })
+    });
     let thread_id = body
         .get("thread_id")
         .and_then(Value::as_str)
@@ -385,21 +391,22 @@ async fn mimi_room_message(
     tags("mimi"),
     summary = "Read a MIMI room's group info / projection"
 )]
-async fn mimi_group_info(
-    room_id: PathParam<String>,
-    depot: &mut Depot,
-) -> JsonResult<Value> {
+async fn mimi_group_info(room_id: PathParam<String>, depot: &mut Depot) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let room_id = room_id.into_inner();
     if !valid_mimi_room_id(&room_id) {
         return Err(AppError::invalid_param("invalid MIMI room id"));
     }
-    let projection = mimi_room_projection(state, &room_id);
+    let space_id = mimi_bound_space_id(state, &room_id).ok_or_else(|| {
+        AppError::not_found("MIMI room is not bound to any Contrix Space")
+            .with_wire_code("mimi_room_unbound")
+    })?;
+    let projection = mimi_room_projection(state, &room_id, &space_id);
     json_ok(json!({
         "room_id": room_id,
         "mimi_room_uri": projection["mimi_room_uri"].clone(),
         "group_info": projection,
-        "participants": mimi_demo_participants(state),
+        "participants": mimi_room_participants(state, &space_id),
         "receipt": mimi_receipt(state, "cx.mimi.group_info", &json!({"room_id": room_id}), json!({
             "truth_source": "contrix_signed_event_reducer",
             "projection_only": true
@@ -412,10 +419,7 @@ async fn mimi_group_info(
     tags("mimi"),
     summary = "Open a MIMI consent request"
 )]
-async fn mimi_consent_request(
-    body: JsonBody<Value>,
-    depot: &mut Depot,
-) -> JsonResult<Value> {
+async fn mimi_consent_request(body: JsonBody<Value>, depot: &mut Depot) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
     if let Some(message) = unsupported_mimi_draft(&body) {
@@ -438,10 +442,7 @@ async fn mimi_consent_request(
     tags("mimi"),
     summary = "Update a MIMI consent state"
 )]
-async fn mimi_consent_update(
-    body: JsonBody<Value>,
-    depot: &mut Depot,
-) -> JsonResult<Value> {
+async fn mimi_consent_update(body: JsonBody<Value>, depot: &mut Depot) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
     if let Some(message) = unsupported_mimi_draft(&body) {
@@ -472,10 +473,7 @@ async fn mimi_consent_update(
     tags("mimi"),
     summary = "Resolve a MIMI / DID identifier to a reachable Contrix actor"
 )]
-async fn mimi_identifiers_query(
-    body: JsonBody<Value>,
-    depot: &mut Depot,
-) -> JsonResult<Value> {
+async fn mimi_identifiers_query(body: JsonBody<Value>, depot: &mut Depot) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
     if let Some(message) = unsupported_mimi_draft(&body) {
@@ -517,10 +515,7 @@ async fn mimi_identifiers_query(
     tags("mimi"),
     summary = "File a MIMI abuse report (mirrors as cx.moderation.report projection event)"
 )]
-async fn mimi_report_abuse(
-    body: JsonBody<Value>,
-    depot: &mut Depot,
-) -> JsonResult<Value> {
+async fn mimi_report_abuse(body: JsonBody<Value>, depot: &mut Depot) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
     if let Some(message) = unsupported_mimi_draft(&body) {
@@ -543,23 +538,24 @@ async fn mimi_report_abuse(
     // audit timeline observes the report in the same shape native
     // Contrix reports use. The MIMI provenance is preserved under
     // `payload.mimi_provenance`.
-    let space_id = body
-        .get("space_id")
+    let space_id = if let Some(s) = body.get("space_id").and_then(Value::as_str) {
+        s.to_owned()
+    } else if let Some(bound) = body
+        .get("mimi_room_uri")
         .and_then(Value::as_str)
-        .map(str::to_owned)
-        .unwrap_or_else(|| {
-            body.get("mimi_room_uri")
-                .and_then(Value::as_str)
-                .and_then(|uri| {
-                    // Extract room_id segment from MIMI URI
-                    // `mimi://provider/rooms/<id>` so we can look up
-                    // a bound space if any.
-                    uri.rsplit('/').next().map(|id| mimi_bound_space_id(state, id))
-                })
-                .unwrap_or_else(|| {
-                    "cx:space:0196419b-0000-7000-8000-000000000000".to_owned()
-                })
-        });
+        // Extract room_id segment from MIMI URI
+        // `mimi://provider/rooms/<id>` so we can look up a bound
+        // space if any.
+        .and_then(|uri| uri.rsplit('/').next())
+        .and_then(|id| mimi_bound_space_id(state, id))
+    {
+        bound
+    } else {
+        return Err(AppError::invalid_param(
+            "mimi report requires `space_id` or a `mimi_room_uri` that resolves to a bound Contrix Space",
+        )
+        .with_wire_code("missing_space_binding"));
+    };
     let report_event_id = ids::generate_event_id();
     let report_record = ProjectionEventRecord {
         event_id: report_event_id.clone(),
@@ -590,11 +586,7 @@ async fn mimi_report_abuse(
         report_record.event_id.clone(),
         crate::routing::events::projection::projection_event_json(&report_record),
     ));
-    if let Err(error) = state
-        .persistence
-        .projection_events()
-        .append(report_record)
-    {
+    if let Err(error) = state.persistence.projection_events().append(report_record) {
         tracing::error!(%error, "mimi: failed to mirror report into projection_events");
     }
 
@@ -618,10 +610,7 @@ async fn mimi_report_abuse(
     tags("mimi"),
     summary = "Issue a proxy-download token for a MIMI blob (asset privacy policy honored)"
 )]
-async fn mimi_proxy_download(
-    body: JsonBody<Value>,
-    depot: &mut Depot,
-) -> JsonResult<Value> {
+async fn mimi_proxy_download(body: JsonBody<Value>, depot: &mut Depot) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
     if let Some(message) = unsupported_mimi_draft(&body) {
@@ -746,13 +735,11 @@ fn mimi_receipt(state: &AppState, operation_id: &str, body: &Value, extra: Value
 /// bound to. Scans the persistence projection event log for the
 /// most recent `cx.mimi.room_binding` event whose
 /// `payload.mimi_room_id` (or trailing segment of `mimi_room_uri`)
-/// matches `room_id`. Falls back to the demo space when no binding
-/// has been recorded yet.
-fn mimi_bound_space_id(state: &AppState, room_id: &str) -> String {
-    const DEMO_SPACE: &str = "cx:space:0196419b-0000-7000-8000-000000000000";
-    let Ok(entries) = state.persistence.projection_events().snapshot_all() else {
-        return DEMO_SPACE.to_owned();
-    };
+/// matches `room_id`. Returns `None` when no binding has been
+/// recorded; callers translate that into a 404/400 rather than
+/// silently routing the request at a hard-coded demo Space.
+fn mimi_bound_space_id(state: &AppState, room_id: &str) -> Option<String> {
+    let entries = state.persistence.projection_events().snapshot_all().ok()?;
     // Walk in reverse so the most-recently-recorded binding wins.
     for entry in entries.iter().rev() {
         if entry.event_kind != "cx.mimi.room_binding" {
@@ -777,14 +764,14 @@ fn mimi_bound_space_id(state: &AppState, room_id: &str) -> String {
                 .and_then(|s| s.get("space_id"))
                 .and_then(Value::as_str)
             {
-                return bound.to_owned();
+                return Some(bound.to_owned());
             }
             if let Some(bound) = entry.payload.get("space_id").and_then(Value::as_str) {
-                return bound.to_owned();
+                return Some(bound.to_owned());
             }
         }
     }
-    DEMO_SPACE.to_owned()
+    None
 }
 
 /// Emit a `cx.mimi.room_binding` projection event capturing the
@@ -793,19 +780,23 @@ fn mimi_bound_space_id(state: &AppState, room_id: &str) -> String {
 /// verbatim under `payload.binding` and `mimi_room_id` is hoisted to
 /// the top level so [`mimi_bound_space_id`] can dispatch lookups
 /// efficiently.
+///
+/// Returns `None` when the binding payload declares no Contrix
+/// `space_id` (neither under `binding_scope.space_id` nor at the top
+/// level). The caller is expected to surface that to the client as a
+/// 400 rather than implicitly bind the room to some default Space.
 fn emit_mimi_room_binding_event(
     state: &AppState,
     room_id: &str,
     binding: &Value,
-) -> String {
+) -> Option<String> {
     let event_id = ids::generate_event_id();
     let space_id = binding
         .get("binding_scope")
         .and_then(|s| s.get("space_id"))
         .and_then(Value::as_str)
         .or_else(|| binding.get("space_id").and_then(Value::as_str))
-        .map(str::to_owned)
-        .unwrap_or_else(|| "cx:space:0196419b-0000-7000-8000-000000000000".to_owned());
+        .map(str::to_owned)?;
     let mimi_room_uri_value = binding
         .get("mimi_room_uri")
         .and_then(Value::as_str)
@@ -847,11 +838,10 @@ fn emit_mimi_room_binding_event(
     if let Err(error) = state.persistence.projection_events().append(record) {
         tracing::error!(%error, "mimi: failed to append room_binding to projection_events");
     }
-    event_id
+    Some(event_id)
 }
 
-fn mimi_room_projection(state: &AppState, room_id: &str) -> Value {
-    let space_id = "cx:space:0196419b-0000-7000-8000-000000000000";
+fn mimi_room_projection(state: &AppState, room_id: &str, space_id: &str) -> Value {
     json!({
         "kind": "cx.mimi.room_binding",
         "profile": "cx.profile.mimi_interop.v1",
@@ -869,9 +859,10 @@ fn mimi_room_projection(state: &AppState, room_id: &str) -> Value {
     })
 }
 
-fn mimi_demo_participants(state: &AppState) -> Vec<Value> {
-    let space_id = SpaceId::new("cx:space:0196419b-0000-7000-8000-000000000000".to_owned())
-        .expect("demo space id is valid");
+fn mimi_room_participants(state: &AppState, space_id: &str) -> Vec<Value> {
+    let Ok(space_id) = SpaceId::new(space_id.to_owned()) else {
+        return Vec::new();
+    };
     state
         .spaces
         .lock()

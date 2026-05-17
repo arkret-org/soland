@@ -263,9 +263,23 @@ async fn policy_check(
     json_ok(PolicyCheckResponse {
         decision,
         reason_code,
-        policy_id,
+        policy_id: policy_id.clone(),
         expires_at: now() + chrono::Duration::minutes(5),
-        obligations,
+        obligations: obligations.clone(),
+        decision_trace: json!({
+            "request_id": body.request_id,
+            "actor": body.actor,
+            "action": body.action,
+            "space_id": body.space_id,
+            "matched_policy": policy_id,
+            "constraints": [],
+            "obligations": obligations,
+            "missing_proofs": [],
+            "cache": {
+                "mode": "in_memory",
+                "frontier": Value::Null
+            }
+        }),
         signature: json!({
             "kid": format!("{}#policy-dev", state.config.service_did),
             "alg": "none",

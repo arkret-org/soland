@@ -164,7 +164,7 @@ async fn outbound_push_bridge_describe(depot: &mut Depot, res: &mut Response) {
 }
 
 #[endpoint(
-    operation_id = "cx.push.outbound_bridge_resolve",
+    operation_id = "cx.extension.soland.push.outbound_bridge_resolve",
     tags("push"),
     summary = "Resolve a push gateway URL to a cached contract snapshot"
 )]
@@ -180,8 +180,8 @@ async fn outbound_push_bridge_resolve(
         return Err(AppError::invalid_param("push_gateway_url is required"));
     }
 
-    let service_base_url = derive_push_gateway_service_base_url(&push_gateway_url)
-        .ok_or_else(|| {
+    let service_base_url =
+        derive_push_gateway_service_base_url(&push_gateway_url).ok_or_else(|| {
             AppError::invalid_param("push_gateway_url must be an absolute push gateway URL")
         })?;
     let bridge_describe_url = join_api_v1_url(&service_base_url, "/api/v1/push/bridge/describe");
@@ -202,7 +202,10 @@ async fn outbound_push_bridge_resolve(
         bridge_describe_url,
         fetch_state: if let Some(record) = &cached {
             if body.refresh {
-                format!("refresh_requested_cached_snapshot_present:{}", record.fetch_state)
+                format!(
+                    "refresh_requested_cached_snapshot_present:{}",
+                    record.fetch_state
+                )
             } else {
                 "resolved_with_cached_snapshot".to_owned()
             }
@@ -225,7 +228,7 @@ async fn outbound_push_bridge_resolve(
 }
 
 #[endpoint(
-    operation_id = "cx.push.outbound_bridge_fetch",
+    operation_id = "cx.extension.soland.push.outbound_bridge_fetch",
     tags("push"),
     summary = "Live-fetch the upstream push bridge contract + populate the durable cache"
 )]
@@ -240,8 +243,8 @@ async fn outbound_push_bridge_fetch(
     if push_gateway_url.is_empty() {
         return Err(AppError::invalid_param("push_gateway_url is required"));
     }
-    let service_base_url = derive_push_gateway_service_base_url(&push_gateway_url)
-        .ok_or_else(|| {
+    let service_base_url =
+        derive_push_gateway_service_base_url(&push_gateway_url).ok_or_else(|| {
             AppError::invalid_param("push_gateway_url must be an absolute push gateway URL")
         })?;
     let bridge_describe_url = join_api_v1_url(&service_base_url, "/api/v1/push/bridge/describe");
@@ -393,7 +396,7 @@ async fn outbound_push_bridge_cache_export(depot: &mut Depot, res: &mut Response
 }
 
 #[endpoint(
-    operation_id = "cx.push.outbound_bridge_cache_import",
+    operation_id = "cx.extension.soland.push.outbound_bridge_cache_import",
     tags("push"),
     summary = "Import push bridge cache snapshots (replace_existing toggle)"
 )]
@@ -455,7 +458,7 @@ async fn outbound_push_bridge_cache_import(
 }
 
 #[endpoint(
-    operation_id = "cx.push.outbound_bridge_cache_invalidate",
+    operation_id = "cx.extension.soland.push.outbound_bridge_cache_invalidate",
     tags("push"),
     summary = "Invalidate one or all push bridge cache entries"
 )]
@@ -647,7 +650,9 @@ fn is_cache_entry_stale(state: &AppState, record: &OutboundPushBridgeCacheRecord
         return false;
     }
     let now_ts = now();
-    let age = now_ts.signed_duration_since(record.freshness_at).num_seconds();
+    let age = now_ts
+        .signed_duration_since(record.freshness_at)
+        .num_seconds();
     age > ttl
 }
 

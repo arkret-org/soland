@@ -69,10 +69,9 @@ fn validate_data_type(data_type: &str) -> Result<(), AppError> {
     // Reject control chars / whitespace / path separators to keep them URL- and
     // log-safe; everything else (including the `:` in `cx:space:<uuid>`) is
     // permitted so the canonical wire keys round-trip.
-    if data_type
-        .chars()
-        .any(|c| c.is_control() || c.is_whitespace() || c == '/' || c == '\\' || c == '?' || c == '#')
-    {
+    if data_type.chars().any(|c| {
+        c.is_control() || c.is_whitespace() || c == '/' || c == '\\' || c == '?' || c == '#'
+    }) {
         return Err(AppError::invalid_param(
             "data_type contains forbidden character",
         ));

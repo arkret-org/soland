@@ -36,7 +36,7 @@ pub(super) fn router() -> Router {
 /// via `append_audit_log` so it shows up in the same `audit/events`
 /// query a sodmin operator already runs.
 #[endpoint(
-    operation_id = "cx.audit.user_action",
+    operation_id = "cx.extension.soland.audit.user_action",
     tags("audit"),
     summary = "Append a client-side user-action audit entry"
 )]
@@ -70,10 +70,7 @@ async fn post_user_action(
     if action.is_empty() {
         return Err(AppError::invalid_param("action is required"));
     }
-    let outcome = body
-        .get("outcome")
-        .and_then(|v| v.as_str())
-        .unwrap_or("ok");
+    let outcome = body.get("outcome").and_then(|v| v.as_str()).unwrap_or("ok");
     let note = body
         .get("note")
         .and_then(|v| v.as_str())
@@ -88,7 +85,7 @@ async fn post_user_action(
 }
 
 #[endpoint(
-    operation_id = "cx.audit.events",
+    operation_id = "cx.extension.soland.audit.events",
     tags("audit"),
     summary = "Actor-scoped audit query (cursor-paginated; actor MUST match session)"
 )]

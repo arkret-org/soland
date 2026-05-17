@@ -14,7 +14,7 @@
 
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
-use serde_json::json;
+use serde_json::{Value, json};
 
 use super::{append_audit_log, now, query_param};
 use crate::error::AppError;
@@ -105,6 +105,18 @@ async fn authz_check(
         &members,
         &resource_facets,
     );
+    let matched_grants = result
+        .grants
+        .iter()
+        .map(|g| {
+            json!({
+                "grant_id": g.grant_id,
+                "subject": g.subject,
+                "actions": g.actions,
+                "resource": g.resource
+            })
+        })
+        .collect::<Vec<_>>();
     json_ok(AuthzCheckResponse {
         allowed: result.allowed,
         reason_code: (!result.allowed).then(|| result.reason.clone()),
@@ -113,19 +125,21 @@ async fn authz_check(
         } else {
             result.reason_detail.clone()
         },
-        grants: result
-            .grants
-            .iter()
-            .map(|g| {
-                json!({
-                    "grant_id": g.grant_id,
-                    "subject": g.subject,
-                    "actions": g.actions,
-                    "resource": g.resource
-                })
-            })
-            .collect(),
+        grants: matched_grants.clone(),
         obligations: Vec::new(),
+        decision_trace: json!({
+            "actor": body.actor,
+            "action": body.action,
+            "resource": resource_str,
+            "space_id": space_id,
+            "matched_grants": matched_grants,
+            "constraints": [],
+            "missing_proofs": [],
+            "cache": {
+                "mode": "in_memory",
+                "frontier": Value::Null
+            }
+        }),
     })
 }
 
@@ -211,7 +225,7 @@ async fn effective_grants(
 #[endpoint(
     operation_id = "cx.authz.create_grant",
     tags("authz"),
-    summary = "Create an owner-issued authorization grant"
+    summary = "Create an owner-issued or delegated authorization grant"
 )]
 async fn create_grant(
     aa: AuthArgs,
@@ -222,7 +236,7 @@ async fn create_grant(
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req)?;
     let body = body.into_inner();
-    let constraints = body
+    let constraints: Vec<crate::authz::Constraint> = body
         .constraints
         .into_iter()
         .map(|v| crate::authz::Constraint {
@@ -234,19 +248,53 @@ async fn create_grant(
             value: v,
         })
         .collect();
-    let grant = state.authz.create_grant(
-        body.space_id,
-        session.actor.clone(),
-        body.subject,
-        body.resource,
-        body.actions,
-        constraints,
-    );
+    let expires_at = parse_expires_at(body.expires_at.as_deref())?;
+    let grant = if let Some(parent_grant_id) = body.delegated_from.as_deref() {
+        match state.authz.create_delegated_grant(
+            parent_grant_id,
+            session.actor.clone(),
+            body.subject,
+            body.resource,
+            body.actions,
+            constraints,
+            expires_at,
+        ) {
+            Ok(grant) => grant,
+            Err(err) => return Err(delegation_error_to_app_error(err)),
+        }
+    } else {
+        // Root grant: only the space owner MAY issue. capabilities.md §3
+        // (Grant 由 issuer 持有,且 issuer MUST hold the action — owner does).
+        require_space_owner(state, &body.space_id, &session.actor)?;
+        state.authz.create_grant_with_options(
+            body.space_id,
+            session.actor.clone(),
+            body.subject,
+            body.resource,
+            body.actions,
+            constraints,
+            None,
+            expires_at,
+        )
+    };
+    let action_label = if grant.delegated_from.is_some() {
+        "authz.grant.delegate"
+    } else {
+        "authz.grant.create"
+    };
     append_audit_log(
         state,
         Some(&session.actor),
-        "authz.grant.create",
-        json!({"grant_id": grant.grant_id.clone(), "subject": grant.subject.clone()}),
+        action_label,
+        json!({
+            "grant_id": grant.grant_id.clone(),
+            "issuer": grant.issuer.clone(),
+            "subject": grant.subject.clone(),
+            "actions": grant.actions.clone(),
+            "resource": grant.resource.clone(),
+            "expires_at": grant.expires_at.map(|dt| dt.to_rfc3339()),
+            "delegated_from": grant.delegated_from.clone(),
+        }),
         "accepted",
     );
     json_ok(CreateGrantResponse {
@@ -255,7 +303,86 @@ async fn create_grant(
         actions: grant.actions,
         resource: grant.resource,
         created_at: grant.created_at.to_rfc3339(),
+        expires_at: grant.expires_at.map(|dt| dt.to_rfc3339()),
+        delegated_from: grant.delegated_from,
     })
+}
+
+fn parse_expires_at(
+    value: Option<&str>,
+) -> Result<Option<chrono::DateTime<chrono::Utc>>, AppError> {
+    let Some(raw) = value else {
+        return Ok(None);
+    };
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    chrono::DateTime::parse_from_rfc3339(trimmed)
+        .map(|dt| Some(dt.with_timezone(&chrono::Utc)))
+        .map_err(|_| AppError::invalid_param("expires_at must be RFC 3339"))
+}
+
+fn require_space_owner(state: &AppState, space_id: &str, actor: &str) -> Result<(), AppError> {
+    let owner = state
+        .persistence
+        .space_meta()
+        .get(space_id)
+        .ok()
+        .flatten()
+        .map(|meta| meta.owner);
+    match owner.as_deref() {
+        Some(value) if value == actor => Ok(()),
+        Some(_) => Err(AppError::capability_denied(
+            "only the space owner may issue root grants",
+        )),
+        None => Err(AppError::not_found("space not found")),
+    }
+}
+
+fn delegation_error_to_app_error(err: crate::authz::DelegationError) -> AppError {
+    use crate::authz::DelegationError;
+    use salvo::http::StatusCode;
+    // We don't have a canonical `failed_precondition` ErrorCode in the
+    // registry; reuse `StateMismatch` as the base (semantically close — a
+    // precondition on parent grant state failed) and override the wire
+    // string so the test can assert the spec-canonical errcode.
+    let state_mismatch = crate::error::ErrorCode::StateMismatch;
+    match err {
+        DelegationError::ParentNotFound => AppError::not_found("delegated_from grant not found"),
+        DelegationError::ParentRevoked => {
+            AppError::new(state_mismatch, "delegated_from grant is revoked")
+                .with_status(StatusCode::PRECONDITION_FAILED)
+                .with_wire_code("parent_revoked")
+        }
+        DelegationError::ParentExpired => {
+            AppError::new(state_mismatch, "delegated_from grant has already expired")
+                .with_status(StatusCode::PRECONDITION_FAILED)
+                .with_wire_code("parent_expired")
+        }
+        DelegationError::NotGrantHolder => {
+            AppError::capability_denied("delegator is not the subject of the parent grant")
+                .with_wire_code("not_grant_holder")
+        }
+        DelegationError::ActionsNotHeld { offending } => AppError::new(
+            state_mismatch,
+            format!("delegator does not hold action `{offending}`"),
+        )
+        .with_status(StatusCode::PRECONDITION_FAILED)
+        .with_wire_code("capability_not_held"),
+        DelegationError::OverExpire => AppError::new(
+            state_mismatch,
+            "delegated expires_at must be ≤ parent expires_at",
+        )
+        .with_status(StatusCode::PRECONDITION_FAILED)
+        .with_wire_code("capability_over_expire"),
+        DelegationError::ResourceOutOfScope => AppError::new(
+            state_mismatch,
+            "delegated resource is outside the parent's scope",
+        )
+        .with_status(StatusCode::PRECONDITION_FAILED)
+        .with_wire_code("resource_out_of_scope"),
+    }
 }
 
 #[endpoint(
@@ -272,17 +399,45 @@ async fn revoke_grant(
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req)?;
     let grant_id = grant_id.into_inner();
-    if state.authz.revoke_grant(&grant_id) {
+    // Only the grant's issuer OR the space owner may revoke. capabilities.md
+    // §12 — revocation is explicit, but limited to the chain of trust that
+    // produced it.
+    let Some(grant) = state.authz.get_grant(&grant_id) else {
+        return Err(AppError::not_found("grant not found"));
+    };
+    if grant.issuer != session.actor {
+        let owner = state
+            .persistence
+            .space_meta()
+            .get(&grant.space_id)
+            .ok()
+            .flatten()
+            .map(|meta| meta.owner);
+        if owner.as_deref() != Some(session.actor.as_str()) {
+            return Err(AppError::capability_denied(
+                "only the grant issuer or space owner may revoke this grant",
+            ));
+        }
+    }
+    let (revoked, cascade_revoked) = state.authz.revoke_grant_with_cascade(&grant_id);
+    if revoked {
         append_audit_log(
             state,
             Some(&session.actor),
             "authz.grant.revoke",
-            json!({"grant_id": grant_id.clone()}),
+            json!({
+                "grant_id": grant_id.clone(),
+                "issuer": grant.issuer,
+                "subject": grant.subject,
+                "actions": grant.actions,
+                "cascade_revoked": cascade_revoked.clone(),
+            }),
             "accepted",
         );
         json_ok(RevokeGrantResponse {
             revoked: true,
             grant_id,
+            cascade_revoked,
         })
     } else {
         Err(AppError::not_found("grant not found"))

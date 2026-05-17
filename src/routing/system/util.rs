@@ -44,14 +44,51 @@ pub fn render_error(res: &mut Response, status: StatusCode, code: &str, message:
     }));
 }
 
-/// Pull a single query-string value, decoding `+` to space.
+/// Pull a single query-string value, decoding `+` to space and any
+/// `%XX` percent-escapes back to their raw byte form. Required for
+/// typed-id query args like `?space_id=cx:space:...` where browsers
+/// (and `encodeURIComponent`) emit `cx%3Aspace%3A...` — without
+/// decoding the downstream typed-id validator rejects the literal.
 pub fn query_param(req: &Request, key: &str) -> Option<String> {
     req.uri().query().and_then(|query| {
         query.split('&').find_map(|pair| {
             let (name, value) = pair.split_once('=').unwrap_or((pair, ""));
-            (name == key).then(|| value.replace('+', " "))
+            (name == key).then(|| percent_decode_query_value(value))
         })
     })
+}
+
+fn percent_decode_query_value(value: &str) -> String {
+    // Replace `+` → space, then percent-decode bytes. Fall back to the
+    // raw value if decoding produces invalid UTF-8 — caller-side
+    // validators surface the typed-id error in that case.
+    let with_spaces = value.replace('+', " ");
+    let bytes = with_spaces.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let hi = hex_digit(bytes[i + 1]);
+            let lo = hex_digit(bytes[i + 2]);
+            if let (Some(hi), Some(lo)) = (hi, lo) {
+                out.push((hi << 4) | lo);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8(out).unwrap_or(with_spaces)
+}
+
+fn hex_digit(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
 }
 
 // The repeated-arg form (`?spaces=A&spaces=B`) is what every selector
@@ -70,7 +107,7 @@ pub fn query_param_all(req: &Request, key: &str) -> Vec<String> {
         .filter_map(|pair| {
             let (name, value) = pair.split_once('=').unwrap_or((pair, ""));
             if name == key && !value.is_empty() {
-                Some(value.replace('+', " "))
+                Some(percent_decode_query_value(value))
             } else {
                 None
             }

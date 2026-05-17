@@ -16,18 +16,18 @@
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
-use contrix_sdk::{Operation, OperationId, SpaceId};
+use contrix_sdk::{Hlc, Operation, OperationId, SpaceId, canonical};
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde_json::{Value, json};
 
+use super::operations as events_operations;
 use super::{
     append_audit_log, auth_or_render, now, project_accepted_operations, query_param,
     query_param_all, render_error, sha256_hex, space_has_member, validate_did,
     validate_operation_policy, validate_operation_semantics, validate_space_id,
 };
-use super::operations as events_operations;
 use crate::artifacts;
 use crate::error::{AppError, ErrorCode};
 use crate::result::{JsonResult, json_ok};
@@ -187,7 +187,7 @@ async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Response) 
     let parsed = match validate_event_envelope(state, &session, &envelope) {
         Ok(parsed) => parsed,
         Err(error) => {
-            render_error(res, error.status, error.code, error.message);
+            render_error(res, error.status, error.code, &error.message);
             return;
         }
     };
@@ -274,10 +274,7 @@ async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Response) 
         // carry a critical_extensions[] declaration with feature id
         // `cx.feature.mention_redirect.v1` and fail_closed=true.
         // Spec: agent-workspace-profile.md §8.1.
-        if let Some(content) = operation
-            .payload
-            .get("content")
-        {
+        if let Some(content) = operation.payload.get("content") {
             if let Some(feature_id) =
                 events_operations::agent_workspace_required_feature_id(content)
             {
@@ -656,18 +653,18 @@ struct ValidatedEventEnvelope {
 struct EventValidationError {
     status: StatusCode,
     code: &'static str,
-    message: &'static str,
+    message: String,
 }
 
 fn event_validation_error(
     status: StatusCode,
     code: &'static str,
-    message: &'static str,
+    message: impl Into<String>,
 ) -> EventValidationError {
     EventValidationError {
         status,
         code,
-        message,
+        message: message.into(),
     }
 }
 
@@ -753,28 +750,7 @@ fn validate_event_envelope(
             "actor_seq must be greater than zero",
         ));
     }
-    // `created_at` is part of the canonical envelope but historical fixtures
-    // mint events without setting it (server fills in `received_at` at the
-    // accept boundary). Accept absence and let the receipt's `received_at`
-    // carry the timestamp.
-    if let Some(value) = object.get("created_at")
-        && !value.is_string()
-    {
-        return Err(event_validation_error(
-            StatusCode::BAD_REQUEST,
-            "invalid_param",
-            "created_at must be a string when present",
-        ));
-    }
-    if let Some(hlc) = object.get("hlc")
-        && !hlc.is_string()
-    {
-        return Err(event_validation_error(
-            StatusCode::BAD_REQUEST,
-            "invalid_param",
-            "hlc must be a string when present",
-        ));
-    }
+    validate_event_time_fields(state, object)?;
 
     let space_id = event_string_field(object, &["space_id"]).ok_or_else(|| {
         event_validation_error(
@@ -798,19 +774,20 @@ fn validate_event_envelope(
         ));
     }
     require_object_field(object, "payload")?;
+    validate_event_schema_and_payload(state, &kind, &schema_id, envelope, object)?;
 
     let prev_refs = event_ref_list(object, "prev_refs", MAX_EVENT_PREV_REFS)?;
-    let authorized_refs = event_semantic_refs(object, MAX_EVENT_REFS)?;
-    let canonical_source = event_canonical_source(envelope);
-    let canonical_bytes = serde_json::to_vec(&canonical_source).map_err(|_| {
-        event_validation_error(
-            StatusCode::BAD_REQUEST,
-            "invalid_event_envelope",
-            "event envelope cannot be canonicalized",
-        )
-    })?;
+    let authorized_refs = event_semantic_refs(object, state, MAX_EVENT_REFS)?;
+    let canonical_bytes = event_canonical_bytes(envelope)?;
     let canonical_digest = event_digest(&canonical_bytes);
-    validate_event_proofs(object, state, session, &actor_id, &canonical_digest)?;
+    validate_event_proofs(
+        object,
+        state,
+        session,
+        &actor_id,
+        &canonical_digest,
+        &canonical_bytes,
+    )?;
 
     Ok(ValidatedEventEnvelope {
         event_id,
@@ -878,7 +855,10 @@ fn validate_removed_event_envelope_fields(
 }
 
 fn is_legacy_event_kind(kind: &str) -> bool {
-    matches!(kind, "cx.room.message" | "cx.room.create" | "cx.subject.create")
+    matches!(
+        kind,
+        "cx.room.message" | "cx.room.create" | "cx.subject.create"
+    )
 }
 
 fn is_legacy_schema_id(schema_id: &str) -> bool {
@@ -946,23 +926,151 @@ fn validate_event_critical_features(
     Ok(())
 }
 
+fn validate_event_time_fields(
+    state: &AppState,
+    object: &serde_json::Map<String, Value>,
+) -> Result<(), EventValidationError> {
+    let created_at_value = object.get("created_at");
+    if created_at_value.is_some_and(|value| !value.is_string()) {
+        return Err(event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            "created_at must be a string",
+        ));
+    }
+    match created_at_value.and_then(Value::as_str) {
+        Some(value) => canonical::validate_timestamp_canonical(value).map_err(|_| {
+            event_validation_error(
+                StatusCode::BAD_REQUEST,
+                "invalid_param",
+                "created_at must use canonical RFC3339 UTC form",
+            )
+        })?,
+        None if !state.config.development_mode => {
+            return Err(event_validation_error(
+                StatusCode::BAD_REQUEST,
+                "missing_param",
+                "created_at is required in production mode",
+            ));
+        }
+        None => {}
+    }
+
+    let hlc_value = object.get("hlc");
+    if hlc_value.is_some_and(|value| !value.is_string()) {
+        return Err(event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            "hlc must be a string",
+        ));
+    }
+    match hlc_value.and_then(Value::as_str) {
+        Some(value) => {
+            Hlc::new(value).map_err(|_| {
+                event_validation_error(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_param",
+                    "hlc must use canonical lower-hex HLC form",
+                )
+            })?;
+        }
+        None if !state.config.development_mode => {
+            return Err(event_validation_error(
+                StatusCode::BAD_REQUEST,
+                "missing_param",
+                "hlc is required in production mode",
+            ));
+        }
+        None => {}
+    }
+
+    Ok(())
+}
+
+fn validate_event_schema_and_payload(
+    state: &AppState,
+    kind: &str,
+    _schema_id: &str,
+    envelope: &Value,
+    object: &serde_json::Map<String, Value>,
+) -> Result<(), EventValidationError> {
+    if !state.config.development_mode {
+        let registry = contrix_sdk::schema::schema_registry_from_default_spec_artifacts()
+            .map_err(|_| {
+                event_validation_error(
+                    StatusCode::BAD_REQUEST,
+                    "schema_violation",
+                    "event schema registry could not be loaded",
+                )
+            })?
+            .ok_or_else(|| {
+                event_validation_error(
+                    StatusCode::BAD_REQUEST,
+                    "schema_violation",
+                    "event schema registry is unavailable",
+                )
+            })?;
+        registry
+            .validate_value("cx.schema.event.v1", envelope)
+            .map_err(|_| {
+                event_validation_error(
+                    StatusCode::BAD_REQUEST,
+                    "schema_violation",
+                    "event envelope violates cx.schema.event.v1",
+                )
+            })?;
+    }
+
+    let payload = object.get("payload").ok_or_else(|| {
+        event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "missing_param",
+            "event payload is required",
+        )
+    })?;
+    contrix_sdk::schema::event_payload_validator_catalog()
+        .validate_payload(kind, payload)
+        .map_err(|error| {
+            event_validation_error(
+                StatusCode::BAD_REQUEST,
+                "schema_violation",
+                format!("event payload violates the registered payload schema: {error}"),
+            )
+        })?;
+    Ok(())
+}
+
 fn event_requirements_schema_id(
-    _state: &AppState,
+    state: &AppState,
     object: &serde_json::Map<String, Value>,
 ) -> Result<String, EventValidationError> {
-    // Read schema_id from either the canonical `requirements.schema[0]` slot
-    // (spec form) or the legacy top-level `schema_id` (dev/test fixture form);
-    // both are accepted for the v1 transition.
-    let schema_id = object
-        .get("schema_id")
+    let canonical_schema_id = object
+        .get("requirements")
+        .and_then(|requirements| requirements.get("schema"))
+        .and_then(Value::as_array)
+        .and_then(|schemas| schemas.first())
         .and_then(Value::as_str)
-        .map(ToOwned::to_owned)
+        .map(ToOwned::to_owned);
+    if !state.config.development_mode {
+        if object.contains_key("schema_id") {
+            return Err(event_validation_error(
+                StatusCode::BAD_REQUEST,
+                "legacy_contract_removed",
+                "schema_id is legacy; use requirements.schema[]",
+            ));
+        }
+        if canonical_schema_id.is_none() {
+            return Err(event_validation_error(
+                StatusCode::BAD_REQUEST,
+                "missing_param",
+                "requirements.schema[] is required in production mode",
+            ));
+        }
+    }
+    let schema_id = canonical_schema_id
         .or_else(|| {
             object
-                .get("requirements")
-                .and_then(|requirements| requirements.get("schema"))
-                .and_then(Value::as_array)
-                .and_then(|schemas| schemas.first())
+                .get("schema_id")
                 .and_then(Value::as_str)
                 .map(ToOwned::to_owned)
         })
@@ -1018,6 +1126,7 @@ fn validate_event_proofs(
     session: &SessionRecord,
     actor_id: &str,
     expected_payload_hash: &str,
+    canonical_bytes: &[u8],
 ) -> Result<(), EventValidationError> {
     let proofs = object
         .get("proofs")
@@ -1090,6 +1199,13 @@ fn validate_event_proofs(
                 "event proof kind must be detached_jws",
             ));
         }
+        if !is_dev_proof && event_string_field(proof_object, &["alg"]).as_deref() != Some("EdDSA") {
+            return Err(event_validation_error(
+                StatusCode::BAD_REQUEST,
+                "invalid_proof",
+                "event proof alg must be EdDSA",
+            ));
+        }
         let payload_hash =
             event_string_field(proof_object, &["payload_hash"]).ok_or_else(|| {
                 event_validation_error(
@@ -1103,7 +1219,7 @@ fn validate_event_proofs(
         // so test fixtures keep round-tripping. Production never falls back.
         let payload_only_hash_accept = if is_dev_proof {
             object.get("payload").map(|payload| {
-                let bytes = serde_json::to_vec(payload).unwrap_or_default();
+                let bytes = canonical::canonical_json_bytes(payload).unwrap_or_default();
                 format!("sha256:{}", sha256_hex(&bytes))
             })
         } else {
@@ -1135,6 +1251,30 @@ fn validate_event_proofs(
                 "invalid_proof",
                 "proof verification method must be rooted in actor_id",
             ));
+        }
+        if is_production {
+            let jws = event_string_field(proof_object, &["jws"]).ok_or_else(|| {
+                event_validation_error(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_proof",
+                    "proof jws is required",
+                )
+            })?;
+            crate::jws_verify::verify_jws_ed25519(
+                canonical_bytes,
+                &jws,
+                &verification_method,
+                actor_id,
+                state,
+            )
+            .map_err(|reason| {
+                tracing::debug!(%reason, "event proof JWS verification failed");
+                event_validation_error(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_proof",
+                    "event proof JWS verification failed",
+                )
+            })?;
         }
     }
     Ok(())
@@ -1215,11 +1355,18 @@ fn event_ref_list(
 
 fn event_semantic_refs(
     object: &serde_json::Map<String, Value>,
+    state: &AppState,
     max_len: usize,
 ) -> Result<Vec<String>, EventValidationError> {
-    // Accept the canonical `refs[]` and the legacy `auth_refs[]` alias — the
-    // alias carries the same authorized-by relationship but as a flat list of
-    // event ids. We coalesce both into the authorized_refs collection.
+    if !state.config.development_mode && object.contains_key("auth_refs") {
+        return Err(event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "legacy_contract_removed",
+            "auth_refs is legacy; use refs[] with role=authorized_by",
+        ));
+    }
+    // Development fixtures may still use the legacy `auth_refs[]` alias. We
+    // coalesce it into the authorized_refs collection only outside production.
     let value = object.get("refs");
     if value.is_none() {
         // Legacy `auth_refs[]` form: parse the strings as authorized-by refs.
@@ -1313,6 +1460,16 @@ fn event_canonical_source(envelope: &Value) -> Value {
         object.remove("canonical_hash");
     }
     value
+}
+
+fn event_canonical_bytes(envelope: &Value) -> Result<Vec<u8>, EventValidationError> {
+    canonical::canonical_json_bytes(&event_canonical_source(envelope)).map_err(|_| {
+        event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_event_envelope",
+            "event envelope cannot be canonicalized",
+        )
+    })
 }
 
 fn event_digest(bytes: &[u8]) -> String {
@@ -1585,6 +1742,7 @@ mod proof_strictness_tests {
             compaction_prune_walk_interval_seconds: 0,
 
             compaction_prune_walk_per_space_limit: 50,
+            seed_demo_data: true,
         };
         AppState::new(config, Db { pool: None })
     }
@@ -1616,6 +1774,125 @@ mod proof_strictness_tests {
     }
 
     #[test]
+    fn production_requires_canonical_event_time_fields() {
+        let state = make_state(false);
+        let mut object = serde_json::Map::new();
+
+        let err = validate_event_time_fields(&state, &object)
+            .expect_err("production requires created_at");
+        assert_eq!(err.code, "missing_param");
+        assert!(err.message.contains("created_at"));
+
+        object.insert("created_at".to_owned(), json!("2026-05-17T00:00:00Z"));
+        let err = validate_event_time_fields(&state, &object).expect_err("production requires hlc");
+        assert_eq!(err.code, "missing_param");
+        assert!(err.message.contains("hlc"));
+
+        object.insert("hlc".to_owned(), json!("019041000000-00000000-AABBCCDD"));
+        let err = validate_event_time_fields(&state, &object)
+            .expect_err("uppercase HLC is not canonical");
+        assert_eq!(err.code, "invalid_param");
+
+        object.insert("hlc".to_owned(), json!("019041000000-00000000-aabbccdd"));
+        validate_event_time_fields(&state, &object).expect("canonical timestamps accepted");
+    }
+
+    #[test]
+    fn development_keeps_fixture_time_field_compatibility() {
+        let state = make_state(true);
+        let object = serde_json::Map::new();
+        validate_event_time_fields(&state, &object)
+            .expect("development fixtures may omit event time fields");
+    }
+
+    #[test]
+    fn production_requires_requirements_schema_and_rejects_legacy_schema_id() {
+        let state = make_state(false);
+        let mut object = serde_json::Map::new();
+
+        let err = event_requirements_schema_id(&state, &object)
+            .expect_err("production requires requirements.schema[]");
+        assert_eq!(err.code, "missing_param");
+
+        object.insert("schema_id".to_owned(), json!("cx.schema.event.v1"));
+        let err = event_requirements_schema_id(&state, &object)
+            .expect_err("production rejects top-level schema_id");
+        assert_eq!(err.code, "legacy_contract_removed");
+
+        object.remove("schema_id");
+        object.insert(
+            "requirements".to_owned(),
+            json!({ "schema": ["cx.schema.event.v1"] }),
+        );
+        assert_eq!(
+            event_requirements_schema_id(&state, &object).unwrap(),
+            "cx.schema.event.v1"
+        );
+    }
+
+    #[test]
+    fn production_rejects_legacy_auth_refs_alias() {
+        let state = make_state(false);
+        let mut object = serde_json::Map::new();
+        object.insert(
+            "auth_refs".to_owned(),
+            json!(["cx:event:01904100-0000-7000-8000-a11ce0000001"]),
+        );
+        let err = event_semantic_refs(&object, &state, MAX_EVENT_REFS)
+            .expect_err("production rejects auth_refs alias");
+        assert_eq!(err.code, "legacy_contract_removed");
+
+        let dev_state = make_state(true);
+        let refs = event_semantic_refs(&object, &dev_state, MAX_EVENT_REFS)
+            .expect("development still accepts legacy fixture alias");
+        assert_eq!(refs, vec!["cx:event:01904100-0000-7000-8000-a11ce0000001"]);
+    }
+
+    #[test]
+    fn event_canonical_bytes_use_sdk_canonical_json() {
+        let envelope = json!({
+            "z": 1,
+            "a": {"b": 2, "a": 1},
+            "unsigned": {"age_ms": 10},
+            "proofs": [{"type": "dev-proof"}],
+            "canonical_digest": "sha256:old"
+        });
+        let bytes = event_canonical_bytes(&envelope).unwrap();
+        let text = String::from_utf8(bytes).unwrap();
+        assert_eq!(text, r#"{"a":{"a":1,"b":2},"z":1}"#);
+    }
+
+    #[test]
+    fn event_canonical_bytes_reject_non_canonical_numbers() {
+        let envelope = json!({
+            "payload": {"rank": 1.5},
+            "proofs": [{"type": "dev-proof"}]
+        });
+        let err = event_canonical_bytes(&envelope).expect_err("floats are not canonical JSON");
+        assert_eq!(err.code, "invalid_event_envelope");
+    }
+
+    #[test]
+    fn event_payload_validator_rejects_registered_payload_shape_errors() {
+        let state = make_state(true);
+        let envelope = json!({
+            "payload": {
+                "flow_id": "cx:flow:01904100-0000-7000-8000-f10dc0000001"
+            }
+        });
+        let object = envelope.as_object().unwrap();
+        let err = validate_event_schema_and_payload(
+            &state,
+            "cx.flow.move",
+            "cx.schema.event.v1",
+            &envelope,
+            object,
+        )
+        .expect_err("flow.move without target/rank must fail payload validation");
+        assert_eq!(err.code, "schema_violation");
+    }
+
+    #[test]
     fn production_rejects_dev_proof_type_field() {
         let state = make_state(false);
         let session = session();
@@ -1626,6 +1903,7 @@ mod proof_strictness_tests {
             &session,
             "did:web:alice.example",
             "sha256:dead",
+            b"canonical-event",
         )
         .expect_err("production must reject dev-proof shape");
         // Missing strict-JWS fields trips `invalid_proof` first.
@@ -1640,7 +1918,7 @@ mod proof_strictness_tests {
         // Use payload-only hash so the dev path's `payload_only_hash_accept`
         // matches; production would still reject this even with the correct
         // payload hash because the proof lacks a JWS.
-        let payload_bytes = serde_json::to_vec(&object["payload"]).unwrap();
+        let payload_bytes = canonical::canonical_json_bytes(&object["payload"]).unwrap();
         let payload_hash = format!("sha256:{}", sha256_hex(&payload_bytes));
         if let Some(proofs) = object.get_mut("proofs").and_then(Value::as_array_mut)
             && let Some(proof) = proofs.first_mut()
@@ -1654,7 +1932,48 @@ mod proof_strictness_tests {
             &session,
             "did:web:alice.example",
             "sha256:dead",
+            b"canonical-event",
         );
-        assert!(result.is_ok(), "development mode should accept matching dev-proof: {result:?}");
+        assert!(
+            result.is_ok(),
+            "development mode should accept matching dev-proof: {result:?}"
+        );
+    }
+
+    #[test]
+    fn production_rejects_full_proof_without_valid_jws_signature() {
+        let state = make_state(false);
+        let session = session();
+        let canonical_bytes = br#"{"actor_id":"did:web:alice.example","event_id":"cx:event:test"}"#;
+        let payload_hash = format!("sha256:{}", sha256_hex(canonical_bytes));
+        let mut object = serde_json::Map::new();
+        object.insert(
+            "proofs".to_owned(),
+            json!([{
+                "kind": "detached_jws",
+                "alg": "EdDSA",
+                "verification_method": "did:web:alice.example#k1",
+                "payload_hash": payload_hash,
+                "created_at": "2026-05-17T00:00:00Z",
+                "jws": "eyJhbGciOiJFZERTQSJ9..AAAAAAAA"
+            }]),
+        );
+        object.insert("payload".to_owned(), json!({"body": "hello"}));
+
+        let err = validate_event_proofs(
+            &object,
+            &state,
+            &session,
+            "did:web:alice.example",
+            &format!("sha256:{}", sha256_hex(canonical_bytes)),
+            canonical_bytes,
+        )
+        .expect_err("production must reject unsigned/fake JWS proofs");
+        assert_eq!(err.code, "invalid_proof");
+        assert!(
+            err.message.contains("JWS verification failed"),
+            "unexpected message: {}",
+            err.message
+        );
     }
 }

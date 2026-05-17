@@ -18,7 +18,6 @@
 //! `events_describe` lives in `routing/events.rs` (it carries the registry version pull).
 //! `sync_describe` is still in `mod.rs` pending sync-module extraction.
 
-use contrix_sdk::ServerDescription;
 use diesel::sql_types::Integer;
 use diesel::{QueryableByName, RunQueryDsl, sql_query};
 use salvo::http::StatusCode;
@@ -90,15 +89,24 @@ struct HealthCheckRow {
     tags("server"),
     summary = "Server capability description"
 )]
-async fn server_describe(depot: &mut Depot) -> JsonResult<ServerDescription> {
+async fn server_describe(depot: &mut Depot) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    json_ok(describe(
+    let description = describe(
         &state.config.service_did,
         state.db.mode(),
         state.config.development_mode,
         state.config.oauth_introspection_url.is_some(),
         state.config.auth_server_url.as_deref(),
-    ))
+    );
+    let mut value = serde_json::to_value(description).expect("server description serializes");
+    value["unsupported_profiles"] = json!([
+        {
+            "profile": "cx.profile.soland_limited_server.v1",
+            "status": "unsupported",
+            "reason": "limited profile is a limitation descriptor, not a conformance claim"
+        }
+    ]);
+    json_ok(value)
 }
 
 #[endpoint(
@@ -165,7 +173,14 @@ pub(in crate::routing) async fn auth_bridge_describe() -> JsonResult<AuthBridgeD
 pub(in crate::routing) async fn authz_describe() -> JsonResult<Value> {
     json_ok(json!({
         "contract": "contrix.rest.authz_describe.v1",
-        "version": "2026-05-04-scaffold",
+        "version": "2026-05-17-limited-contract",
+        "stability": "scaffold_contract",
+        "profile_claim": "not_claimed",
+        "limitations": [
+            "examples are maintained inline, not generated from a normative artifact bundle",
+            "effective-grants and check are backed by the local AuthzEngine only",
+            "condition lattice, obligation execution, and cross-service policy lifecycle are not complete profile surfaces"
+        ],
         "check_path": "/api/v1/authz/check",
         "effective_grants_path": "/api/v1/authz/effective-grants",
         "grants_path": "/api/v1/authz/grants",
@@ -238,7 +253,14 @@ pub(in crate::routing) async fn authz_describe() -> JsonResult<Value> {
 pub(in crate::routing) async fn policies_describe() -> JsonResult<Value> {
     json_ok(json!({
         "contract": "contrix.rest.policies_describe.v1",
-        "version": "2026-05-04-scaffold",
+        "version": "2026-05-17-limited-contract",
+        "stability": "scaffold_contract",
+        "profile_claim": "not_claimed",
+        "limitations": [
+            "collection CRUD is backed by soland policy_documents persistence",
+            "describe JSON is not generated from a normative policy-profile artifact",
+            "obligation execution and distributed policy lifecycle are not implemented"
+        ],
         "collection_path": "/api/v1/policies",
         "item_path": "/api/v1/policies/{policy_id}",
         "authz_describe_path": "/api/v1/authz/describe",
@@ -383,15 +405,15 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeResponse> {
                 method: "GET".to_owned(),
                 path: "/api/v1/push/outbound/bridge/describe".to_owned(),
                 contract: "contrix.rest.outbound_push_bridge.v1".to_owned(),
-                stability: "scaffold".to_owned(),
-                todo: "persist fetched gateway snapshots and replace in-memory drift cache with durable state.".to_owned(),
+                stability: "limited".to_owned(),
+                todo: "snapshots are durable and participate in notify drift checks; signed delivery binding to the gateway contract is still not claimed.".to_owned(),
             },
             IntegrationSurfaceDescriptor {
                 name: "push_register_device".to_owned(),
                 method: "POST".to_owned(),
                 path: "/api/v1/push/register-device".to_owned(),
                 contract: "contrix.rest.principal_push_register.v1".to_owned(),
-                stability: "scaffold".to_owned(),
+                stability: "limited".to_owned(),
                 todo: "unify bearer and session-grant registration paths behind one capability-checked flow.".to_owned(),
             },
             IntegrationSurfaceDescriptor {
@@ -415,16 +437,32 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeResponse> {
                 method: "GET".to_owned(),
                 path: "/api/v1/authz/describe".to_owned(),
                 contract: "contrix.rest.authz_describe.v1".to_owned(),
-                stability: "scaffold".to_owned(),
-                todo: "replace inline authz describe examples with generated contract artifacts shared with SDKs and admin tooling.".to_owned(),
+                stability: "scaffold_contract".to_owned(),
+                todo: "inline examples only; server/describe limitations explicitly mark this as not a full authz profile surface.".to_owned(),
             },
             IntegrationSurfaceDescriptor {
                 name: "policies_describe".to_owned(),
                 method: "GET".to_owned(),
                 path: "/api/v1/policies/describe".to_owned(),
                 contract: "contrix.rest.policies_describe.v1".to_owned(),
-                stability: "scaffold".to_owned(),
-                todo: "publish policy collection/query/update semantics as generated artifacts instead of inline scaffold JSON.".to_owned(),
+                stability: "scaffold_contract".to_owned(),
+                todo: "policy document CRUD is implemented locally; describe is not a generated full-profile artifact.".to_owned(),
+            },
+            IntegrationSurfaceDescriptor {
+                name: "admin_bottom_manual_repair".to_owned(),
+                method: "POST".to_owned(),
+                path: "/api/admin/v1/spaces/{space_id}/bottom/{cell_id}/repair".to_owned(),
+                contract: "contrix.rest.admin.bottom_repair.v1".to_owned(),
+                stability: "unsupported_signing_path".to_owned(),
+                todo: "manual effects are scope-validated only and are not submitted as signed Moves.".to_owned(),
+            },
+            IntegrationSurfaceDescriptor {
+                name: "index_query".to_owned(),
+                method: "POST".to_owned(),
+                path: "/api/v1/index/query".to_owned(),
+                contract: "contrix.rest.index_query.v1".to_owned(),
+                stability: "limited_projection".to_owned(),
+                todo: "backed by local projection state and demo fallback, not a full index-node profile.".to_owned(),
             },
         ],
         examples: json!({
@@ -437,7 +475,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeResponse> {
         }),
         todos: vec![
             "replace legacy session-grant and push bridge scaffolds with the direct OAuth bearer path.".to_owned(),
-            "persist outbound push gateway snapshots and use them in notification fan-out.".to_owned(),
+            "bind outbound push notify delivery to the fetched gateway contract's advertised auth modes.".to_owned(),
             "publish the same integration manifest fields in the OpenAPI surface.".to_owned(),
         ],
     })

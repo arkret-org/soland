@@ -98,10 +98,8 @@ pub const CX_AGENT_TASK_CANCEL: &str = "cx.agent_task.cancel";
 // `cx.profile.agent_workspace.v1` — reservation Moves on mirror_*_by_source
 // cells (cas-register + empty sentinel pattern). Spec §6.2 / §6.3 / §6.4.
 pub const CX_AGENT_WORKSPACE_RESERVATION_SET: &str = "cx.agent_workspace.reservation.set";
-pub const CX_AGENT_WORKSPACE_RESERVATION_RECOVER: &str =
-    "cx.agent_workspace.reservation.recover";
-pub const CX_AGENT_WORKSPACE_RESERVATION_CLEANUP: &str =
-    "cx.agent_workspace.reservation.cleanup";
+pub const CX_AGENT_WORKSPACE_RESERVATION_RECOVER: &str = "cx.agent_workspace.reservation.recover";
+pub const CX_AGENT_WORKSPACE_RESERVATION_CLEANUP: &str = "cx.agent_workspace.reservation.cleanup";
 
 pub fn canonical_kind_for_operation(operation: &Operation) -> Option<&'static str> {
     canonical_kind_for_payload(&operation.object_type, &operation.payload)
@@ -233,7 +231,10 @@ pub fn is_space_lifecycle_kind(kind: &str) -> bool {
 }
 
 pub fn is_place_lifecycle_kind(kind: &str) -> bool {
-    matches!(kind, CX_PLACE_ARCHIVE | CX_PLACE_RESTORE | CX_PLACE_TOMBSTONE)
+    matches!(
+        kind,
+        CX_PLACE_ARCHIVE | CX_PLACE_RESTORE | CX_PLACE_TOMBSTONE
+    )
 }
 
 /// Flow has no dedicated `cx.flow.tombstone` event in the spec event-kind

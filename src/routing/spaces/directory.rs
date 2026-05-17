@@ -398,6 +398,11 @@ pub fn demo_actors(state: &AppState) -> Vec<Value> {
     })];
 
     let accounts = state.persistence.accounts().list().unwrap_or_default();
+    let erased = state
+        .erased_actors
+        .lock()
+        .expect("erased_actors lock")
+        .clone();
     for account in accounts {
         if actors
             .iter()
@@ -405,12 +410,18 @@ pub fn demo_actors(state: &AppState) -> Vec<Value> {
         {
             continue;
         }
+        // GDPR erasure (account-lifecycle.md §3): erased actors MUST NOT
+        // surface in directory results.
+        if erased.contains(&account.did) {
+            continue;
+        }
         actors.push(json!({
             "did": account.did,
             "handle": account.handle,
             "display_name": account.display_name.as_deref().unwrap_or(account.did.as_str()),
+            "bio": account.bio,
             "organization_id": "cx:org:demo",
-            "avatar_url": null,
+            "avatar_url": account.avatar_url,
             "presence": {"status": "offline", "updated_at": now()},
         }));
     }

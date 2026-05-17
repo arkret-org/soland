@@ -15,9 +15,7 @@ use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde_json::{Value, json};
 
-use super::{
-    AuthArgs, append_audit_log, device_inventory_to_json, now, sha256_hex,
-};
+use super::{AuthArgs, append_audit_log, device_inventory_to_json, now, sha256_hex};
 use crate::error::AppError;
 use crate::state::{AppState, DeviceInventoryRecord};
 use crate::{JsonResult, ids, json_ok};
@@ -26,6 +24,57 @@ pub(super) fn router() -> Router {
     Router::new()
         .push(Router::with_path("devices/pairing-challenge").post(device_pairing_challenge))
         .push(Router::with_path("devices/authorize-pairing").post(device_authorize_pairing))
+        .push(Router::with_path("devices/{device_id}/revoke").post(device_revoke))
+}
+
+#[endpoint(
+    operation_id = "cx.devices.revoke",
+    tags("devices"),
+    summary = "Revoke a sibling device. Self-revoke (revoking the calling session's own device) is rejected with cannot_self_revoke",
+    status_codes(200, 400, 401, 404, 500)
+)]
+async fn device_revoke(
+    aa: AuthArgs,
+    depot: &mut Depot,
+    req: &mut Request,
+    device_id: salvo::oapi::extract::PathParam<String>,
+) -> JsonResult<Value> {
+    // Spec: identity/device-lifecycle.md §7 — a device MUST NOT revoke
+    // itself (avoids self-lockout); revocation MUST be issued from a
+    // peer / sibling device that is still controlled by the principal.
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req)?;
+    let target_device_id = device_id.into_inner();
+    if target_device_id == session.device_id {
+        return Err(AppError::invalid_param(
+            "a device cannot revoke itself; revoke from a peer device",
+        )
+        .with_wire_code("cannot_self_revoke"));
+    }
+    let existing = state
+        .persistence
+        .devices()
+        .get(&session.actor, &target_device_id)
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let Some(_record) = existing else {
+        return Err(AppError::not_found("device not found"));
+    };
+    super::auth::revoke_device_record(state, &session.actor, &target_device_id)
+        .map_err(AppError::internal)?;
+    append_audit_log(
+        state,
+        Some(&session.actor),
+        "device.revoke",
+        json!({
+            "revoked_device_id": target_device_id.clone(),
+            "by_device_id": session.device_id,
+        }),
+        "accepted",
+    );
+    json_ok(json!({
+        "revoked_device_id": target_device_id,
+        "revoked_at": now().to_rfc3339(),
+    }))
 }
 
 #[endpoint(

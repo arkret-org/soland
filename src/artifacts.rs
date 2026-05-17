@@ -32,7 +32,10 @@ static SCHEMA_REGISTRY: OnceLock<Value> = OnceLock::new();
 static OPERATION_REGISTRY: OnceLock<Value> = OnceLock::new();
 static ID_KIND_REGISTRY: OnceLock<Value> = OnceLock::new();
 static ACTIVE_DURABLE_EVENT_KINDS: OnceLock<BTreeSet<String>> = OnceLock::new();
+static ACTIVE_DURABLE_CELL_BINDINGS: OnceLock<Vec<EventKindCellBinding>> = OnceLock::new();
+static CELL_FAMILY_BINDINGS: OnceLock<Vec<CellFamilyBinding>> = OnceLock::new();
 static SCHEMA_ENTRIES: OnceLock<Vec<SchemaRegistryEntry>> = OnceLock::new();
+static OPERATION_SURFACE_GROUPS: OnceLock<Vec<OperationSurfaceGroup>> = OnceLock::new();
 static OPERATION_IDS: OnceLock<BTreeSet<String>> = OnceLock::new();
 static ID_KIND_FORMS: OnceLock<HashMap<String, String>> = OnceLock::new();
 
@@ -40,6 +43,30 @@ static ID_KIND_FORMS: OnceLock<HashMap<String, String>> = OnceLock::new();
 pub struct SchemaRegistryEntry {
     pub schema_id: String,
     pub file: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EventKindCellBinding {
+    pub event_kind: String,
+    pub cell_family: String,
+    pub lattice: String,
+    pub bottom: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CellFamilyBinding {
+    pub cell_family: String,
+    pub lattice: String,
+    pub bottom: String,
+    pub event_kinds: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OperationSurfaceGroup {
+    pub surface: String,
+    pub tier: String,
+    pub profile: Option<String>,
+    pub operations: Vec<String>,
 }
 
 pub fn event_kind_registry() -> &'static Value {
@@ -76,6 +103,57 @@ pub fn active_durable_event_kinds() -> &'static BTreeSet<String> {
     })
 }
 
+pub fn active_durable_cell_bindings() -> &'static [EventKindCellBinding] {
+    ACTIVE_DURABLE_CELL_BINDINGS
+        .get_or_init(|| {
+            event_kind_registry()
+                .get("event_kinds")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter(|entry| entry.get("status").and_then(Value::as_str) == Some("active"))
+                .filter(|entry| {
+                    entry.get("wire_scope").and_then(Value::as_str) == Some("durable_event")
+                })
+                .filter_map(|entry| {
+                    let event_kind = entry.get("event_kind").and_then(Value::as_str)?;
+                    let cell_family = entry.get("cell_family").and_then(Value::as_str)?;
+                    let lattice = entry.get("lattice").and_then(Value::as_str)?;
+                    let bottom = entry.get("bottom").and_then(Value::as_str)?;
+                    Some(EventKindCellBinding {
+                        event_kind: event_kind.to_owned(),
+                        cell_family: cell_family.to_owned(),
+                        lattice: lattice.to_owned(),
+                        bottom: bottom.to_owned(),
+                    })
+                })
+                .collect()
+        })
+        .as_slice()
+}
+
+pub fn cell_family_bindings() -> &'static [CellFamilyBinding] {
+    CELL_FAMILY_BINDINGS
+        .get_or_init(|| {
+            let mut by_family: HashMap<String, CellFamilyBinding> = HashMap::new();
+            for binding in active_durable_cell_bindings() {
+                let entry = by_family
+                    .entry(binding.cell_family.clone())
+                    .or_insert_with(|| CellFamilyBinding {
+                        cell_family: binding.cell_family.clone(),
+                        lattice: binding.lattice.clone(),
+                        bottom: binding.bottom.clone(),
+                        event_kinds: Vec::new(),
+                    });
+                entry.event_kinds.push(binding.event_kind.clone());
+            }
+            let mut bindings = by_family.into_values().collect::<Vec<_>>();
+            bindings.sort_by(|a, b| a.cell_family.cmp(&b.cell_family));
+            bindings
+        })
+        .as_slice()
+}
+
 pub fn schema_entries() -> &'static [SchemaRegistryEntry] {
     SCHEMA_ENTRIES
         .get_or_init(|| {
@@ -104,6 +182,40 @@ pub fn schema_ids() -> BTreeSet<String> {
         .collect()
 }
 
+pub fn operation_surface_groups() -> &'static [OperationSurfaceGroup] {
+    OPERATION_SURFACE_GROUPS
+        .get_or_init(|| {
+            operation_registry()
+                .get("surface_groups")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|entry| {
+                    let surface = entry.get("surface").and_then(Value::as_str)?;
+                    let tier = entry.get("tier").and_then(Value::as_str)?;
+                    let profile = entry
+                        .get("profile")
+                        .and_then(Value::as_str)
+                        .map(ToOwned::to_owned);
+                    let operations = entry
+                        .get("operations")
+                        .and_then(Value::as_array)?
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(ToOwned::to_owned)
+                        .collect::<Vec<_>>();
+                    Some(OperationSurfaceGroup {
+                        surface: surface.to_owned(),
+                        tier: tier.to_owned(),
+                        profile,
+                        operations,
+                    })
+                })
+                .collect()
+        })
+        .as_slice()
+}
+
 pub fn operation_ids() -> &'static BTreeSet<String> {
     OPERATION_IDS.get_or_init(|| {
         operation_registry()
@@ -115,6 +227,42 @@ pub fn operation_ids() -> &'static BTreeSet<String> {
             .map(ToOwned::to_owned)
             .collect()
     })
+}
+
+pub fn operation_ids_for_surface_groups(surfaces: &[&str]) -> Vec<String> {
+    let wanted = surfaces.iter().copied().collect::<BTreeSet<_>>();
+    let catalog = operation_ids();
+    let mut seen = BTreeSet::new();
+    operation_surface_groups()
+        .iter()
+        .filter(|group| wanted.contains(group.surface.as_str()))
+        .flat_map(|group| group.operations.iter())
+        .filter(|operation_id| catalog.contains(*operation_id))
+        .filter(|operation_id| seen.insert((*operation_id).clone()))
+        .cloned()
+        .collect()
+}
+
+pub fn registered_operation_ids(candidate_operation_ids: &[&str]) -> Vec<String> {
+    let catalog = operation_ids();
+    let mut seen = BTreeSet::new();
+    candidate_operation_ids
+        .iter()
+        .copied()
+        .filter(|operation_id| catalog.contains(*operation_id))
+        .filter(|operation_id| seen.insert((*operation_id).to_owned()))
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+pub fn missing_operation_ids(candidate_operation_ids: &[&str]) -> Vec<String> {
+    let catalog = operation_ids();
+    candidate_operation_ids
+        .iter()
+        .copied()
+        .filter(|operation_id| !catalog.contains(*operation_id))
+        .map(ToOwned::to_owned)
+        .collect()
 }
 
 pub fn id_kind_forms() -> &'static HashMap<String, String> {
@@ -148,7 +296,10 @@ pub fn registry_summary() -> Value {
         "versions": registry_versions(),
         "counts": {
             "active_durable_event_kinds": active_durable_event_kinds().len(),
+            "active_durable_cell_bindings": active_durable_cell_bindings().len(),
+            "cell_families": cell_family_bindings().len(),
             "schemas": schema_entries().len(),
+            "operation_surface_groups": operation_surface_groups().len(),
             "operations": operation_ids().len(),
             "id_kinds": id_kind_forms().len()
         }
@@ -188,4 +339,57 @@ fn registry_version(registry: &Value) -> String {
         .and_then(Value::as_str)
         .unwrap_or("unknown")
         .to_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn operation_surface_helper_reads_catalog_groups() {
+        let groups = operation_surface_groups();
+        assert!(
+            groups.iter().any(|group| {
+                group.surface == "events_sync"
+                    && group.tier == "core"
+                    && group.operations.iter().any(|op| op == "cx.events.submit")
+            }),
+            "events_sync operation surface group should come from operation-registry.json"
+        );
+
+        let operations = operation_ids_for_surface_groups(&["events_sync", "push"]);
+        assert!(operations.iter().any(|op| op == "cx.events.submit"));
+        assert!(operations.iter().any(|op| op == "cx.push.notify"));
+        assert!(operations.iter().all(|op| operation_ids().contains(op)));
+    }
+
+    #[test]
+    fn event_cell_binding_helper_reads_lattice_metadata() {
+        let bindings = active_durable_cell_bindings();
+        let member = bindings
+            .iter()
+            .find(|binding| binding.event_kind == "cx.member.state")
+            .expect("member state binding should come from event-kind registry");
+        assert_eq!(member.cell_family, "cx.component.member.state.v1");
+        assert_eq!(member.lattice, "fsm");
+        assert_eq!(member.bottom, "reject");
+
+        let families = cell_family_bindings();
+        let consent = families
+            .iter()
+            .find(|binding| binding.cell_family == "cx.component.consent.grant.v1")
+            .expect("consent grant family should be grouped");
+        assert!(
+            consent
+                .event_kinds
+                .iter()
+                .any(|kind| kind == "cx.consent.grant")
+        );
+        assert!(
+            consent
+                .event_kinds
+                .iter()
+                .any(|kind| kind == "cx.consent.revoke")
+        );
+    }
 }

@@ -217,6 +217,7 @@ async fn submit_move(
             AppError::new(ErrorCode::InternalError, e.to_string())
                 .with_status(StatusCode::INTERNAL_SERVER_ERROR)
         })?;
+    super::federation::broadcast_move_to_peers(state, move_obj.id.as_str());
 
     json_ok(SubmitMoveResponse {
         move_id: move_obj.id.as_str().to_owned(),
@@ -358,6 +359,8 @@ async fn submit_anchor(
         }
     }
 
+    super::federation::broadcast_anchor_to_peers(state, effect.anchor.as_str());
+
     json_ok(SubmitAnchorResponse {
         anchor_id: effect.anchor.as_str().to_owned(),
         accepted_move_ids: effect
@@ -427,6 +430,7 @@ async fn admin_sign_anchor(
 
     match crate::anchorer::run_one_signing_pass(state, &space, limit) {
         Ok(Some(outcome)) => {
+            super::federation::broadcast_anchor_to_peers(state, outcome.anchor_id.as_str());
             let rejected = outcome
                 .rejected_moves
                 .into_iter()

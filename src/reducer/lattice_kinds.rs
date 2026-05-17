@@ -240,20 +240,6 @@ per_subject_lattice!(
     &["cx.device.list_update"]
 );
 
-// Cross-signing publish / reset — spec `crypto-media/device-lifecycle.md`
-// §5.1 / §14.1. The cell key is the principal_id; later publishes MUST
-// monotonically advance `generation` and a `cx.cross_signing.reset.v1`
-// MUST precede any publish whose generation > previous_accepted.
-per_subject_lattice!(
-    CrossSigningPublish,
-    "cx.component.cross_signing.publish.v1",
-    SdkLatticeKind::OrSet,
-    BottomPolicy::Reject,
-    Criticality::Required,
-    "principal_id",
-    &["cx.cross_signing.publish.v1", "cx.cross_signing.reset.v1"]
-);
-
 // MLS covered_frontier cell — `or-set` of governance-frontier event refs
 // each MLS commit attests to. Empty / missing covered_frontier blocks E2EE
 // message Moves but not governance Moves (per spec §MLS).
@@ -472,6 +458,19 @@ per_subject_lattice!(
     &["cx.place.parent"]
 );
 
+// Cross-signing publish — spec `crypto-media/device-lifecycle.md` §5.1.
+// The cell key is the principal_id; later publishes MUST monotonically
+// advance `generation`.
+per_subject_lattice!(
+    CrossSigningPublish,
+    "cx.component.cross_signing.publish.v1",
+    SdkLatticeKind::CasRegister,
+    BottomPolicy::Reject,
+    Criticality::Required,
+    "principal_id",
+    &["cx.cross_signing.publish"]
+);
+
 // Anchorer cell — singleton `(space_id) → AnchorerValue`. Cas-register so
 // concurrent anchorer reconfig from two admins → Bottom (admins MUST coordinate).
 singleton_lattice!(
@@ -520,7 +519,11 @@ per_subject_lattice!(
     BottomPolicy::Reject,
     Criticality::Required,
     "task_id",
-    &["cx.agent_task.create", "cx.agent_task.execution.transition", "cx.agent_task.cancel"]
+    &[
+        "cx.agent_task.create",
+        "cx.agent_task.execution.transition",
+        "cx.agent_task.cancel"
+    ]
 );
 
 per_subject_lattice!(
@@ -530,7 +533,10 @@ per_subject_lattice!(
     BottomPolicy::Reject,
     Criticality::Required,
     "task_id",
-    &["cx.agent_task.create", "cx.agent_task.transparency.transition"]
+    &[
+        "cx.agent_task.create",
+        "cx.agent_task.transparency.transition"
+    ]
 );
 
 per_subject_lattice!(
@@ -540,53 +546,81 @@ per_subject_lattice!(
     BottomPolicy::Reject,
     Criticality::Required,
     "task_id",
-    &["cx.agent_task.create", "cx.agent_task.source_authority.transition"]
+    &[
+        "cx.agent_task.create",
+        "cx.agent_task.source_authority.transition"
+    ]
 );
 
 // `cx.profile.agent_workspace.v1` — reservation cells (cas-register).
 // Schema declares initial_value="__unset__" (spec PR 1.1, see
-// event-auth-state-resolution.md §5.3.3). cas-register + bottom=reject
-// + empty sentinel pattern = singleton-once-set semantics.
+// event-auth-state-resolution.md §5.3.3). The spec registry exposes one
+// family and multiplexes mirror_space_by_source / mirror_flow_by_source
+// through a composite subject: (cell_namespace, cell_namespace_subject).
+pub struct AgentWorkspaceReservation;
+impl LatticeKind for AgentWorkspaceReservation {
+    fn cell_family(&self) -> &'static str {
+        "cx.component.agent_workspace.reservation.v1"
+    }
 
-per_subject_lattice!(
-    MirrorSpaceBySource,
-    "cx.component.agent_workspace.mirror_space_by_source.v1",
-    SdkLatticeKind::CasRegister,
-    BottomPolicy::Reject,
-    Criticality::Required,
-    "cell_namespace_subject",
-    &[
-        "cx.agent_workspace.reservation.set",
-        "cx.agent_workspace.reservation.recover",
-        "cx.agent_workspace.reservation.cleanup"
-    ]
-);
+    fn lattice(&self) -> SdkLatticeKind {
+        SdkLatticeKind::CasRegister
+    }
 
-per_subject_lattice!(
-    MirrorFlowBySource,
-    "cx.component.agent_workspace.mirror_flow_by_source.v1",
-    SdkLatticeKind::CasRegister,
-    BottomPolicy::Reject,
-    Criticality::Required,
-    "cell_namespace_subject",
-    &[
-        "cx.agent_workspace.reservation.set",
-        "cx.agent_workspace.reservation.recover",
-        "cx.agent_workspace.reservation.cleanup"
-    ]
-);
+    fn bottom_policy(&self) -> BottomPolicy {
+        BottomPolicy::Reject
+    }
+
+    fn component(&self) -> ComponentDescriptor {
+        ComponentDescriptor {
+            component_type: self.cell_family(),
+            component_version: 1,
+            criticality: Criticality::Required,
+        }
+    }
+
+    fn subject_for_effect(
+        &self,
+        effect_payload: &Value,
+    ) -> Result<Option<String>, LatticeKindError> {
+        let cell_namespace = effect_payload
+            .get("cell_namespace")
+            .and_then(Value::as_str)
+            .ok_or(LatticeKindError::MissingSubjectField {
+                cell_family: self.cell_family(),
+                field: "cell_namespace",
+            })?;
+        let cell_namespace_subject = effect_payload
+            .get("cell_namespace_subject")
+            .and_then(Value::as_str)
+            .ok_or(LatticeKindError::MissingSubjectField {
+                cell_family: self.cell_family(),
+                field: "cell_namespace_subject",
+            })?;
+        Ok(Some(format!("{cell_namespace}:{cell_namespace_subject}")))
+    }
+
+    fn event_kinds(&self) -> &'static [&'static str] {
+        &[
+            "cx.agent_workspace.reservation.set",
+            "cx.agent_workspace.reservation.recover",
+            "cx.agent_workspace.reservation.cleanup",
+        ]
+    }
+}
 
 // ────────────────────────── OrderedLog families ──────────────────────────
 //
-// Per-issuer monotonic append (issuer_seq). `bottom = reject` — an
-// `OrderedLog` rarely surfaces bottom outside replay-protection (duplicate
-// issuer_seq).
+// Per-issuer monotonic append (issuer_seq). The artifact registry marks
+// ordinary ordered logs as `bottom = expose`; replay/supersession mistakes
+// stay visible to operators instead of silently picking a winner. The
+// cross-signing reset authority log is the one reject-on-bottom exception.
 
 singleton_lattice!(
     SpaceCreate,
     "cx.component.space.create.v1",
     SdkLatticeKind::OrderedLog,
-    BottomPolicy::Reject,
+    BottomPolicy::Expose,
     Criticality::Required,
     &["cx.space.create"]
 );
@@ -595,7 +629,7 @@ singleton_lattice!(
     SpaceChild,
     "cx.component.space.child.v1",
     SdkLatticeKind::OrderedLog,
-    BottomPolicy::Reject,
+    BottomPolicy::Expose,
     Criticality::Required,
     &["cx.space.child"]
 );
@@ -604,7 +638,7 @@ singleton_lattice!(
     SpaceParent,
     "cx.component.space.parent.v1",
     SdkLatticeKind::OrderedLog,
-    BottomPolicy::Reject,
+    BottomPolicy::Expose,
     Criticality::Required,
     &["cx.space.parent"]
 );
@@ -613,7 +647,7 @@ per_subject_lattice!(
     AccountStatus,
     "cx.component.account.status.v1",
     SdkLatticeKind::OrderedLog,
-    BottomPolicy::Reject,
+    BottomPolicy::Expose,
     Criticality::Required,
     "account_id",
     &["cx.account.status"]
@@ -623,10 +657,22 @@ per_subject_lattice!(
     PolicyRule,
     "cx.component.policy.rule.v1",
     SdkLatticeKind::OrderedLog,
-    BottomPolicy::Reject,
+    BottomPolicy::Expose,
     Criticality::Required,
     "rule_id",
     &["cx.policy.rule"]
+);
+
+// Cross-signing reset — spec `crypto-media/device-lifecycle.md` §14.1.
+// Ordered log preserves the principal control-stream reset sequence.
+per_subject_lattice!(
+    CrossSigningReset,
+    "cx.component.cross_signing.reset.v1",
+    SdkLatticeKind::OrderedLog,
+    BottomPolicy::Reject,
+    Criticality::Required,
+    "principal_id",
+    &["cx.cross_signing.reset"]
 );
 
 // ────────────────────────── MvRegister families ──────────────────────────
@@ -704,7 +750,6 @@ pub fn default_lattice_registry() -> LatticeRegistry {
     registry.register(SessionGrant);
     registry.register(DeviceAuthorized);
     registry.register(DeviceListUpdate);
-    registry.register(CrossSigningPublish);
     registry.register(CoveredFrontier);
 
     // CasRegister
@@ -730,13 +775,13 @@ pub fn default_lattice_registry() -> LatticeRegistry {
     registry.register(SpaceInheritancePolicy);
     registry.register(FlowPosition);
     registry.register(PlaceParent);
+    registry.register(CrossSigningPublish);
     registry.register(AnchorerCell);
     registry.register(MlsEpoch);
 
     // `cx.profile.agent_workspace.v1` — reservation cells (cas-register
     // singleton-once-set via empty sentinel "__unset__").
-    registry.register(MirrorSpaceBySource);
-    registry.register(MirrorFlowBySource);
+    registry.register(AgentWorkspaceReservation);
 
     // Fsm
     registry.register(MemberState);
@@ -752,6 +797,7 @@ pub fn default_lattice_registry() -> LatticeRegistry {
     registry.register(SpaceParent);
     registry.register(AccountStatus);
     registry.register(PolicyRule);
+    registry.register(CrossSigningReset);
 
     // MvRegister
     registry.register(ProfileCreate);
@@ -812,16 +858,22 @@ pub fn lattice_bindings_for_sdk_registry() -> Vec<(&'static str, SdkLatticeKind,
         "cx.component.space.inheritance_policy.v1",
         "cx.component.flow.position.v1",
         "cx.component.place.parent.v1",
+        "cx.component.cross_signing.publish.v1",
         "cx.component.anchorer.v1",
         "cx.component.mls.epoch.v1",
+        "cx.component.agent_workspace.reservation.v1",
         // Fsm
         "cx.component.member.state.v1",
+        "cx.component.agent_task.execution_state.v1",
+        "cx.component.agent_task.transparency.v1",
+        "cx.component.agent_task.source_authority.v1",
         // OrderedLog
         "cx.component.space.create.v1",
         "cx.component.space.child.v1",
         "cx.component.space.parent.v1",
         "cx.component.account.status.v1",
         "cx.component.policy.rule.v1",
+        "cx.component.cross_signing.reset.v1",
         // MvRegister (bottom=expose)
         "cx.component.profile.create.v1",
         "cx.component.view.create.v1",
@@ -848,9 +900,9 @@ pub fn lattice_bindings_for_sdk_registry() -> Vec<(&'static str, SdkLatticeKind,
 /// cell family. Move/Anchor receive pipeline (`verify_move` / `apply_anchor`)
 /// uses this to resolve `(family → Lattice)` for every effect.
 ///
-/// FSM families (currently just `cx.component.member.state.v1`) need their
-/// transition table set via `register_fsm`; the spec-normative membership
-/// FSM is encoded inline below.
+/// FSM families need their transition tables set via `register_fsm`; the
+/// spec-normative membership and agent-task FSM tables are encoded inline
+/// below.
 pub fn build_sdk_cell_registry() -> MemoryCellRegistry {
     use serde_json::json;
 
@@ -889,11 +941,50 @@ pub fn build_sdk_cell_registry() -> MemoryCellRegistry {
         ],
         BottomMode::Reject,
     );
+    sdk_registry.register_fsm(
+        "cx.component.agent_task.execution_state.v1",
+        None,
+        vec![
+            (json!("pending_source_stub"), json!("active")),
+            (
+                json!("pending_source_stub"),
+                json!("cancelled_stub_rejected"),
+            ),
+            (json!("pending_source_stub"), json!("cancelled_orphan")),
+            (
+                json!("pending_source_stub"),
+                json!("cancelled_by_controller"),
+            ),
+            (json!("active"), json!("completed")),
+            (json!("active"), json!("cancelled_by_controller")),
+        ],
+        BottomMode::Reject,
+    );
+    sdk_registry.register_fsm(
+        "cx.component.agent_task.transparency.v1",
+        None,
+        vec![
+            (json!("ok"), json!("lost")),
+            (json!("lost"), json!("reconfirmed_after_loss")),
+        ],
+        BottomMode::Reject,
+    );
+    sdk_registry.register_fsm(
+        "cx.component.agent_task.source_authority.v1",
+        None,
+        vec![
+            (json!("ok"), json!("revoked")),
+            (json!("revoked"), json!("reconfirmed_after_revoke")),
+        ],
+        BottomMode::Reject,
+    );
     sdk_registry
 }
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use serde_json::json;
 
     use super::*;
@@ -1000,6 +1091,129 @@ mod tests {
     }
 
     #[test]
+    fn cross_signing_registry_matches_spec_families_and_lattices() {
+        let registry = default_lattice_registry();
+
+        let publish = registry
+            .lookup("cx.component.cross_signing.publish.v1")
+            .expect("cross-signing publish family should be registered");
+        assert_eq!(publish.lattice(), SdkLatticeKind::CasRegister);
+        let subject = publish
+            .subject_for_effect(&json!({"principal_id": "did:example:alice"}))
+            .unwrap();
+        assert_eq!(subject.as_deref(), Some("did:example:alice"));
+        assert_eq!(
+            registry
+                .lookup_for_event_kind("cx.cross_signing.publish")
+                .unwrap()
+                .cell_family(),
+            "cx.component.cross_signing.publish.v1"
+        );
+
+        let reset = registry
+            .lookup("cx.component.cross_signing.reset.v1")
+            .expect("cross-signing reset family should be registered");
+        assert_eq!(reset.lattice(), SdkLatticeKind::OrderedLog);
+        assert_eq!(
+            registry
+                .lookup_for_event_kind("cx.cross_signing.reset")
+                .unwrap()
+                .cell_family(),
+            "cx.component.cross_signing.reset.v1"
+        );
+
+        assert!(
+            registry
+                .lookup_for_event_kind("cx.cross_signing.publish.v1")
+                .is_none()
+        );
+        assert!(
+            registry
+                .lookup_for_event_kind("cx.cross_signing.reset.v1")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn agent_workspace_reservation_uses_unified_family() {
+        let registry = default_lattice_registry();
+        let kind = registry
+            .lookup("cx.component.agent_workspace.reservation.v1")
+            .expect("unified agent workspace reservation family should be registered");
+        assert_eq!(kind.lattice(), SdkLatticeKind::CasRegister);
+        assert_eq!(kind.bottom_policy(), BottomPolicy::Reject);
+        let subject = kind
+            .subject_for_effect(&json!({
+                "cell_namespace": "mirror_space_by_source",
+                "cell_namespace_subject": "cx:space:source"
+            }))
+            .unwrap();
+        assert_eq!(
+            subject.as_deref(),
+            Some("mirror_space_by_source:cx:space:source")
+        );
+
+        for event_kind in [
+            "cx.agent_workspace.reservation.set",
+            "cx.agent_workspace.reservation.recover",
+            "cx.agent_workspace.reservation.cleanup",
+        ] {
+            assert_eq!(
+                registry
+                    .lookup_for_event_kind(event_kind)
+                    .unwrap()
+                    .cell_family(),
+                "cx.component.agent_workspace.reservation.v1"
+            );
+        }
+
+        assert!(
+            registry
+                .lookup("cx.component.agent_workspace.mirror_space_by_source.v1")
+                .is_none()
+        );
+        assert!(
+            registry
+                .lookup("cx.component.agent_workspace.mirror_flow_by_source.v1")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn sdk_lattice_bindings_include_registry_fix_families() {
+        let bindings = lattice_bindings_for_sdk_registry();
+        let binding_for = |family: &str| {
+            bindings
+                .iter()
+                .find(|(registered_family, _, _)| *registered_family == family)
+                .copied()
+                .unwrap_or_else(|| panic!("missing SDK lattice binding for {family}"))
+        };
+
+        let (_, publish_kind, publish_bottom) =
+            binding_for("cx.component.cross_signing.publish.v1");
+        assert_eq!(publish_kind, SdkLatticeKind::CasRegister);
+        assert_eq!(publish_bottom, BottomMode::Reject);
+
+        let (_, reset_kind, reset_bottom) = binding_for("cx.component.cross_signing.reset.v1");
+        assert_eq!(reset_kind, SdkLatticeKind::OrderedLog);
+        assert_eq!(reset_bottom, BottomMode::Reject);
+
+        let (_, reservation_kind, reservation_bottom) =
+            binding_for("cx.component.agent_workspace.reservation.v1");
+        assert_eq!(reservation_kind, SdkLatticeKind::CasRegister);
+        assert_eq!(reservation_bottom, BottomMode::Reject);
+
+        assert!(!bindings.iter().any(|(family, _, _)| {
+            matches!(
+                *family,
+                "cx.component.agent_workspace.mirror_space_by_source.v1"
+                    | "cx.component.agent_workspace.mirror_flow_by_source.v1"
+            )
+        }));
+    }
+
+    #[test]
     fn missing_subject_field_surfaces_typed_error() {
         let registry = default_lattice_registry();
         let kind = registry.lookup("cx.component.flow.position.v1").unwrap();
@@ -1101,5 +1315,69 @@ mod tests {
             "expected ≥12 event_kind mappings, got {}",
             registry.event_kind_mappings()
         );
+    }
+
+    #[test]
+    fn artifact_cell_family_lattice_and_bottom_drift_test() {
+        let registry = default_lattice_registry();
+        for binding in crate::artifacts::cell_family_bindings() {
+            let kind = registry
+                .lookup(&binding.cell_family)
+                .unwrap_or_else(|| panic!("missing artifact cell family {}", binding.cell_family));
+            assert_eq!(
+                kind.lattice().as_wire_str(),
+                binding.lattice,
+                "{} lattice drifted from event-kind registry",
+                binding.cell_family
+            );
+            assert_eq!(
+                kind.bottom_policy().as_str(),
+                binding.bottom,
+                "{} bottom policy drifted from event-kind registry",
+                binding.cell_family
+            );
+        }
+    }
+
+    #[test]
+    fn artifact_event_kind_to_family_drift_test() {
+        let registry = default_lattice_registry();
+        for binding in crate::artifacts::active_durable_cell_bindings() {
+            let kind = registry
+                .lookup_for_event_kind(&binding.event_kind)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "missing artifact event_kind mapping {} -> {}",
+                        binding.event_kind, binding.cell_family
+                    )
+                });
+            assert_eq!(
+                kind.cell_family(),
+                binding.cell_family,
+                "{} event_kind mapped to wrong cell family",
+                binding.event_kind
+            );
+        }
+    }
+
+    #[test]
+    fn sdk_lattice_binding_table_covers_artifact_families() {
+        let bindings = lattice_bindings_for_sdk_registry()
+            .into_iter()
+            .map(|(family, lattice, bottom)| (family, (lattice.as_wire_str(), bottom)))
+            .collect::<BTreeMap<_, _>>();
+        for binding in crate::artifacts::cell_family_bindings() {
+            let (lattice, bottom) = bindings
+                .get(binding.cell_family.as_str())
+                .unwrap_or_else(|| panic!("missing SDK binding for {}", binding.cell_family));
+            assert_eq!(*lattice, binding.lattice);
+            assert_eq!(
+                match bottom {
+                    BottomMode::Reject => "reject",
+                    BottomMode::Expose => "expose",
+                },
+                binding.bottom
+            );
+        }
     }
 }

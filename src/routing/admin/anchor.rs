@@ -294,10 +294,7 @@ fn service_admin_signer(state: &AppState) -> Result<Ed25519MoveSigner, AppError>
 /// when no per-admin key is provisioned (logging a sticky-warn so the
 /// operator notices). The resulting signer's `verification_method` is
 /// `<admin_did>#admin-key`, giving Anchors / Moves admin attribution.
-fn admin_signer_for(
-    state: &AppState,
-    admin_did_str: &str,
-) -> Result<Ed25519MoveSigner, AppError> {
+fn admin_signer_for(state: &AppState, admin_did_str: &str) -> Result<Ed25519MoveSigner, AppError> {
     let admin_did = Did::new(admin_did_str.to_owned()).map_err(|e| {
         AppError::new(
             ErrorCode::InvalidParam,
@@ -1241,9 +1238,10 @@ pub(super) async fn admin_compact_anchor_dag(
     // at those leaves. The compaction Anchor's `predecessor_refs` are the
     // current leaves; `frontier` is the union of their frontiers (no new
     // moves); `state_root` is taken from the view.
-    let leaves = state.anchor_store.list_leaves(&space).map_err(|e| {
-        AppError::new(ErrorCode::InternalError, format!("list_leaves failed: {e}"))
-    })?;
+    let leaves = state
+        .anchor_store
+        .list_leaves(&space)
+        .map_err(|e| AppError::new(ErrorCode::InternalError, format!("list_leaves failed: {e}")))?;
     if leaves.is_empty() {
         return Err(AppError::new(
             ErrorCode::Conflict,
@@ -1280,7 +1278,10 @@ pub(super) async fn admin_compact_anchor_dag(
         &signer,
     )
     .map_err(|e| {
-        AppError::new(ErrorCode::InternalError, format!("sign compaction anchor: {e}"))
+        AppError::new(
+            ErrorCode::InternalError,
+            format!("sign compaction anchor: {e}"),
+        )
     })?;
 
     let verifier = crate::routing::federation::move_anchor::select_jws_verifier(state);
@@ -1366,7 +1367,10 @@ pub(super) async fn admin_prune_anchor_dag(
         .ok_or_else(|| {
             AppError::new(
                 ErrorCode::NotFound,
-                format!("anchor `{}` not found in space `{}`", candidate_id, space_id_str),
+                format!(
+                    "anchor `{}` not found in space `{}`",
+                    candidate_id, space_id_str
+                ),
             )
             .with_status(StatusCode::NOT_FOUND)
         })?;
@@ -1384,12 +1388,14 @@ pub(super) async fn admin_prune_anchor_dag(
     }
 
     // Successor count — direct successors in the DAG.
-    let successors = anchor_store.successors(&space, &candidate_id).map_err(|e| {
-        AppError::new(
-            ErrorCode::InternalError,
-            format!("anchor_store.successors failed: {e}"),
-        )
-    })?;
+    let successors = anchor_store
+        .successors(&space, &candidate_id)
+        .map_err(|e| {
+            AppError::new(
+                ErrorCode::InternalError,
+                format!("anchor_store.successors failed: {e}"),
+            )
+        })?;
     let successor_count = successors.len();
 
     // Compaction-witness count: starting at each direct successor, count

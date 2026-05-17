@@ -2,7 +2,7 @@
 //!
 //! Surfaces:
 //! - `POST /api/v1/push/register-device` — register a device token + push gateway
-//! - `POST /api/v1/push/unregister-device` — opaque ack scaffold
+//! - `POST /api/v1/push/unregister-device` — remove an authenticated actor's device token
 //! - `GET / POST /api/v1/push/rules` — list / upsert push rules
 //! - `DELETE /api/v1/push/rules/{rule_id}` — drop one
 //! - `POST /api/v1/push/notify` — fan-out a notification through the rule engine (see the 12-fn
@@ -34,9 +34,9 @@ use super::{
     validate_no_removed_legacy_contracts,
 };
 use crate::error::AppError;
+use crate::persistence::DriftResult;
 use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
-use crate::persistence::DriftResult;
 use crate::state::{AppState, PushRuleRecord, SessionRecord};
 use crate::wire::{
     OkResponse, PushNotifyRequest, PushNotifyResponse, PushRegisterRequest, PushRegisterResponse,
@@ -77,14 +77,10 @@ pub(super) async fn push_register(
                 ),
             ),
             Ok(None) => {
-                return Err(
-                    AppError::new(canonical_errcode(code), message).with_status(status),
-                );
+                return Err(AppError::new(canonical_errcode(code), message).with_status(status));
             }
             Err((status, code, message)) => {
-                return Err(
-                    AppError::new(canonical_errcode(code), message).with_status(status),
-                );
+                return Err(AppError::new(canonical_errcode(code), message).with_status(status));
             }
         },
     };
@@ -150,11 +146,41 @@ fn canonical_errcode(wire: &str) -> crate::error::ErrorCode {
 #[endpoint(
     operation_id = "cx.push.unregister_device",
     tags("push"),
-    summary = "Unregister a push device (opaque ack scaffold)"
+    summary = "Unregister a push device for the authenticated actor"
 )]
 pub(super) async fn push_unregister(
-    _body: JsonBody<PushUnregisterRequest>,
+    aa: AuthArgs,
+    body: JsonBody<PushUnregisterRequest>,
+    depot: &mut Depot,
+    req: &mut Request,
 ) -> JsonResult<OkResponse> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req)?;
+    let body = body.into_inner();
+    if body.device_id.trim().is_empty() {
+        return Err(AppError::invalid_param("invalid device_id"));
+    }
+    let removed = state
+        .persistence
+        .push_devices()
+        .unregister(
+            &session.actor,
+            &body.device_id,
+            body.push_key.as_deref(),
+            body.app_id.as_deref(),
+        )
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    append_audit_log(
+        state,
+        Some(&session.actor),
+        "push.unregister_device",
+        json!({
+            "device_id": body.device_id,
+            "app_id": body.app_id,
+            "removed_count": removed,
+        }),
+        if removed == 0 { "no_match" } else { "accepted" },
+    );
     json_ok(OkResponse { ok: true })
 }
 

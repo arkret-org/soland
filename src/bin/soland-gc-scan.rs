@@ -15,9 +15,7 @@ fn main() -> anyhow::Result<()> {
     let dry_run = args.iter().any(|a| a == "--dry-run");
 
     if !dry_run {
-        eprintln!(
-            "soland-gc-scan: only --dry-run is supported (deletion is a follow-up)"
-        );
+        eprintln!("soland-gc-scan: only --dry-run is supported (deletion is a follow-up)");
         std::process::exit(2);
     }
 

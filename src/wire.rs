@@ -641,6 +641,7 @@ pub struct AuthzCheckResponse {
     pub reason: Option<String>,
     pub grants: Vec<Value>,
     pub obligations: Vec<Value>,
+    pub decision_trace: Value,
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
@@ -806,6 +807,7 @@ pub struct PolicyCheckResponse {
     pub policy_id: Option<String>,
     pub expires_at: DateTime<Utc>,
     pub obligations: Vec<Value>,
+    pub decision_trace: Value,
     pub signature: Value,
 }
 
@@ -888,6 +890,59 @@ pub struct AccountResponse {
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
+pub struct ClaimHandleRequest {
+    /// New handle (with or without leading `@`). Normalized server-side
+    /// to lowercase + `@`-prefixed form per identity-handles.md §2.
+    pub handle: String,
+}
+
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
+pub struct ClaimHandleResponse {
+    pub did: String,
+    pub handle: String,
+    pub previous_handle: Option<String>,
+}
+
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
+pub struct TransferHandleRequest {
+    /// DID of the recipient. MUST be a registered account; otherwise
+    /// the request fails with `target_did_unknown`.
+    pub target_did: String,
+}
+
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
+pub struct TransferHandleResponse {
+    /// The handle string that was moved between accounts.
+    pub handle: String,
+    pub from_did: String,
+    /// Synthetic placeholder handle that now belongs to the source actor.
+    pub from_handle: String,
+    pub to_did: String,
+}
+
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
+pub struct UpdateProfileRequest {
+    /// Each field updates the corresponding `AccountRecord` slot.
+    /// Send `null` / omit to leave the field unchanged; send `""` to
+    /// explicitly clear it (server stores `None`).
+    #[serde(default)]
+    pub display_name: Option<String>,
+    #[serde(default)]
+    pub bio: Option<String>,
+    #[serde(default)]
+    pub avatar_url: Option<String>,
+}
+
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
+pub struct UpdateProfileResponse {
+    pub did: String,
+    pub handle: String,
+    pub display_name: Option<String>,
+    pub bio: Option<String>,
+    pub avatar_url: Option<String>,
+}
+
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct ContactRequestRequest {
     pub target: String,
 }
@@ -920,6 +975,14 @@ pub struct CreateSpaceRequest {
     pub public: bool,
     #[serde(default)]
     pub discoverability: Option<String>,
+    /// One of `shared` / `joined` / `invited` / `world_readable`. Defaults to
+    /// `shared` for public spaces, `joined` otherwise.
+    #[serde(default)]
+    pub history_visibility: Option<String>,
+    /// One of `plaintext` / `mls_rfc9420`. When `mls_rfc9420` the space
+    /// CANNOT be `world_readable` (space-and-place.md §3.1.3).
+    #[serde(default)]
+    pub encryption_profile: Option<String>,
     #[serde(default)]
     pub plaintext_visible_services: Vec<String>,
     #[serde(default)]
@@ -1201,6 +1264,118 @@ pub struct BlobUploadResponse {
     pub upload_receipt: Value,
 }
 
+const SUPPORTED_OPERATION_SURFACES: &[&str] = &[
+    "service_discovery",
+    "events_sync",
+    "realtime_media",
+    "authz_policy",
+    "moderation_reports",
+    "push",
+    "mimi_interop",
+];
+
+const SUPPORTED_STANDALONE_OPERATION_IDS: &[&str] = &[
+    "cx.directory.describe",
+    "cx.directory.search_spaces",
+    "cx.directory.resolve_space",
+    "cx.blob.upload",
+    "cx.blob.head",
+    "cx.blob.get",
+    "cx.keys.backups.put",
+    "cx.keys.backups.list",
+    "cx.keys.backups.get",
+    "cx.keys.backups.delete",
+];
+
+fn canonical_supported_operations() -> Vec<String> {
+    let missing = artifacts::missing_operation_ids(SUPPORTED_STANDALONE_OPERATION_IDS);
+    debug_assert!(
+        missing.is_empty(),
+        "standalone supported operation ids missing from artifact registry: {missing:?}"
+    );
+    let mut supported = artifacts::operation_ids_for_surface_groups(SUPPORTED_OPERATION_SURFACES);
+    for operation_id in artifacts::registered_operation_ids(SUPPORTED_STANDALONE_OPERATION_IDS) {
+        if !supported.contains(&operation_id) {
+            supported.push(operation_id);
+        }
+    }
+    debug_assert!(
+        supported
+            .iter()
+            .all(|operation_id| artifacts::operation_ids().contains(operation_id)),
+        "canonical_supported_operations must only contain spec operation ids"
+    );
+    supported
+}
+
+fn local_extension_operations() -> Vec<String> {
+    crate::routing::soland_extension_operation_ids()
+}
+
+fn profile_limitations() -> Vec<Value> {
+    vec![
+        json!({
+            "area": "federation.outbound_push",
+            "status": "partial",
+            "landed": [
+                "per-peer durable fanout transcript",
+                "signed fanout intent evidence",
+                "retry/durability metadata"
+            ],
+            "remaining": [
+                "network HTTP dispatch",
+                "RFC 9421 HTTP Message Signatures header emission",
+                "automatic retry worker"
+            ],
+            "reason": "outbound Move/Anchor fanout persists a signed intent and retry boundary per peer; actual RFC 9421 HTTP delivery is still not claimed"
+        }),
+        json!({
+            "area": "authz.describe",
+            "status": "scaffold_contract",
+            "reason": "authz/describe publishes examples and current local evaluator boundaries; it is not a complete generated authorization profile"
+        }),
+        json!({
+            "area": "policies.describe",
+            "status": "scaffold_contract",
+            "reason": "policy collection describe is artifact-shaped metadata for the local policy document store; it is not a complete policy profile claim"
+        }),
+        json!({
+            "area": "admin.bottom.manual_repair",
+            "status": "unsupported_signing_path",
+            "reason": "manual Bottom repair validates effect scope but does not submit or sign arbitrary manual effects"
+        }),
+        json!({
+            "area": "index.query",
+            "status": "limited_projection",
+            "reason": "index query is backed by the local materialized projection and demo fallback, not a full durable index-node profile"
+        }),
+        json!({
+            "area": "event_submit.batch_receipt",
+            "status": "unsupported",
+            "reason": "current profile accepts one Event Envelope per request"
+        }),
+    ]
+}
+
+fn full_principal_server_gap_summary() -> Vec<Value> {
+    vec![json!({
+        "profile": "cx.profile.principal_server.v1",
+        "status": "not_claimed",
+        "first_batch_landed": [
+            "artifact-derived supported operation advertisement",
+            "artifact drift tests for lattice family/kind/bottom mappings",
+            "outbound Move/Anchor fanout signed intent evidence",
+            "per-peer retry/durability transcript metadata"
+        ],
+        "remaining_gaps": [
+            "RFC 9421 HTTP Message Signatures on outbound and inbound federation HTTP",
+            "automatic retry dispatcher with durable backoff lease",
+            "full identity registry, directory service, blob node, and authorization profile coverage",
+            "complete full-profile conformance matrix generated from artifacts"
+        ]
+    })]
+}
+
 pub fn describe(
     service_did: &str,
     storage: &'static str,
@@ -1222,15 +1397,14 @@ pub fn describe(
     if let Some(auth_server_url) = auth_server_url.filter(|value| !value.trim().is_empty()) {
         auth_metadata["auth_server_url"] = json!(auth_server_url);
     }
+    let supported_operations = canonical_supported_operations();
+    let local_extension_operations = local_extension_operations();
 
     ServerDescription {
         service_did: service_did.parse().expect("valid service DID"),
         service_type: "principal_server".to_owned(),
         protocol_version: "1.0".to_owned(),
-        supported_profiles: vec![
-            "cx.profile.soland_limited_server.v1".to_owned(),
-            "cx.profile.mimi_interop.v1".to_owned(),
-        ],
+        supported_profiles: vec!["cx.profile.mimi_interop.v1".to_owned()],
         supported_features: vec![
             "account.register".to_owned(),
             "account.me".to_owned(),
@@ -1273,72 +1447,7 @@ pub fn describe(
             "registry.artifacts".to_owned(),
             "plaintext_visible_services".to_owned(),
         ],
-        supported_operations: vec![
-            "cx.account.register".to_owned(),
-            "cx.account.me".to_owned(),
-            "cx.auth.logout".to_owned(),
-            "cx.contacts.request".to_owned(),
-            "cx.contacts.respond".to_owned(),
-            "cx.contacts.list".to_owned(),
-            "cx.spaces.create".to_owned(),
-            "cx.spaces.add_member".to_owned(),
-            "cx.spaces.remove_member".to_owned(),
-            "cx.spaces.delete".to_owned(),
-            "cx.messages.send".to_owned(),
-            "cx.schemas.list".to_owned(),
-            "cx.schemas.get".to_owned(),
-            "cx.schemas.register".to_owned(),
-            "cx.schemas.delete".to_owned(),
-            "cx.events.describe".to_owned(),
-            "cx.events.submit".to_owned(),
-            "cx.events.get".to_owned(),
-            "cx.events.batch_get".to_owned(),
-            "cx.events.query".to_owned(),
-            "cx.events.subscribe".to_owned(),
-            "cx.events.frontier".to_owned(),
-            "cx.federation.transaction".to_owned(),
-            "cx.federation.push_operations".to_owned(),
-            "cx.federation.pull_operations".to_owned(),
-            "cx.federation.space_members".to_owned(),
-            "cx.federation.verify_actor".to_owned(),
-            "cx.sync.account".to_owned(),
-            "cx.sync.typing".to_owned(),
-            "cx.sync.get_snapshot_head".to_owned(),
-            "cx.directory.describe".to_owned(),
-            "cx.directory.search_spaces".to_owned(),
-            "cx.directory.resolve_space".to_owned(),
-            "cx.index.describe".to_owned(),
-            "cx.index.query".to_owned(),
-            "cx.authz.check".to_owned(),
-            "cx.authz.get_effective_grants".to_owned(),
-            "cx.authz.get_invites".to_owned(),
-            "cx.push.register_device".to_owned(),
-            "cx.push.unregister_device".to_owned(),
-            "cx.push.rules".to_owned(),
-            "cx.push.notify".to_owned(),
-            "cx.webrtc.create_session".to_owned(),
-            "cx.webrtc.send_signal".to_owned(),
-            "cx.webrtc.get_signals".to_owned(),
-            "cx.webrtc.close_session".to_owned(),
-            "cx.policies.list".to_owned(),
-            "cx.policies.get".to_owned(),
-            "cx.policies.upsert".to_owned(),
-            "cx.policies.delete".to_owned(),
-            "cx.policy.check".to_owned(),
-            "cx.receipt.read".to_owned(),
-            "cx.moderation.report".to_owned(),
-            "cx.mimi.provider_directory".to_owned(),
-            "cx.mimi.key_material".to_owned(),
-            "cx.mimi.room_update".to_owned(),
-            "cx.mimi.notify".to_owned(),
-            "cx.mimi.submit_message".to_owned(),
-            "cx.mimi.group_info".to_owned(),
-            "cx.mimi.request_consent".to_owned(),
-            "cx.mimi.update_consent".to_owned(),
-            "cx.mimi.identifier_query".to_owned(),
-            "cx.mimi.report_abuse".to_owned(),
-            "cx.mimi.proxy_download".to_owned(),
-        ],
+        supported_operations,
         supported_bindings: vec![serde_json::json!({"kind": "http_json", "base_path": "/api/v1"})],
         supported_reducer_profiles: vec!["cx.reducer.v1".to_owned()],
         supported_schema_profiles: vec!["cx.schema.core.v1".to_owned()],
@@ -1373,12 +1482,27 @@ pub fn describe(
             },
             "profile_status": {
                 "conformance": "limited_reference",
+                "unsupported_profiles": [
+                    {
+                        "profile": "cx.profile.soland_limited_server.v1",
+                        "status": "unsupported",
+                        "reason": "limited profile is a limitation descriptor, not a conformance claim"
+                    }
+                ],
                 "full_profiles_not_claimed": [
                     "cx.profile.principal_server.v1",
-                    "cx.profile.index_node.v1",
+                    "cx.profile.directory_service.v1",
                     "cx.profile.identity_registry.v1",
                     "cx.profile.blob_node.v1"
                 ],
+                "principal_server_full_profile_gaps": full_principal_server_gap_summary(),
+                "supported_operation_catalog": {
+                    "source": "contrix-spec/spec/v1/artifacts/registry/operation-registry.json",
+                    "derived_surface_groups": SUPPORTED_OPERATION_SURFACES,
+                    "standalone_operations": SUPPORTED_STANDALONE_OPERATION_IDS
+                },
+                "local_extension_operations": local_extension_operations,
+                "local_extension_operation_source": "routing::SOLAND_EXTENSION_OPERATIONS",
                 "implemented_surfaces": [
                     "principal_server",
                     "events_api_minimal",
@@ -1389,6 +1513,7 @@ pub fn describe(
                     "directory_service",
                     "mimi_provider_facade"
                 ],
+                "limitations": profile_limitations(),
                 "mimi_interop": {
                     "status": "provider_facade_first_round",
                     "drafts": {
@@ -1586,12 +1711,26 @@ pub struct CreateGrantResponse {
     pub actions: Vec<String>,
     pub resource: String,
     pub created_at: String,
+    /// Effective expiry of this grant (RFC 3339). `None` means never expires.
+    /// capabilities.md §3 — denormalized from `constraints[temporal].expires_at`
+    /// when only the constraint form was supplied.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<String>,
+    /// `delegated_from` is set when this grant was issued via delegation
+    /// (capabilities.md §10). Revoking the named parent cascades through
+    /// every descendant including this one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delegated_from: Option<String>,
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct RevokeGrantResponse {
     pub revoked: bool,
     pub grant_id: String,
+    /// Grant ids that flipped to revoked as part of this call's delegation
+    /// cascade (does NOT include `grant_id` itself). capabilities.md §3.3.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cascade_revoked: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
@@ -1602,5 +1741,13 @@ pub struct CreateGrantRequest {
     pub actions: Vec<String>,
     #[serde(default)]
     pub constraints: Vec<serde_json::Value>,
+    /// Optional top-level expiry (RFC 3339). When set, server cross-checks
+    /// against `constraints[temporal].expires_at` (stricter wins).
+    #[serde(default)]
+    pub expires_at: Option<String>,
+    /// Parent grant_id when this request is a delegation. caller MUST be
+    /// the subject of the parent grant; delegated actions/resource/expiry
+    /// MUST fit within the parent's scope (capabilities.md §10).
+    #[serde(default)]
+    pub delegated_from: Option<String>,
 }
-

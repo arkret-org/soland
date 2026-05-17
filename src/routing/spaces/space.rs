@@ -109,6 +109,36 @@ async fn create_space(
     if !is_valid_discoverability(&discoverability) {
         return Err(AppError::invalid_param("invalid discoverability"));
     }
+    let history_visibility = body.history_visibility.clone().unwrap_or_else(|| {
+        if discoverability == "public" {
+            "shared".to_owned()
+        } else {
+            "joined".to_owned()
+        }
+    });
+    if !matches!(
+        history_visibility.as_str(),
+        "shared" | "joined" | "invited" | "world_readable"
+    ) {
+        return Err(AppError::invalid_param("invalid history_visibility"));
+    }
+    let encryption_profile = body
+        .encryption_profile
+        .clone()
+        .filter(|value| !value.trim().is_empty());
+    if let Some(profile) = encryption_profile.as_deref() {
+        if !matches!(profile, "plaintext" | "mls_rfc9420") {
+            return Err(AppError::invalid_param("invalid encryption_profile"));
+        }
+        if profile == "mls_rfc9420" && history_visibility == "world_readable" {
+            // space-and-place.md §3.1.3 — MLS-encrypted Spaces cannot be
+            // world_readable because non-members lack the group key.
+            return Err(AppError::invalid_param(
+                "encryption_profile=mls_rfc9420 is incompatible with history_visibility=world_readable",
+            )
+            .with_wire_code("incompatible_history_with_encryption"));
+        }
+    }
     let invitees = body.invitees.clone();
     let plaintext_visible_services = body.plaintext_visible_services.clone();
     let space_id = ids::generate_space_id();
@@ -127,6 +157,8 @@ async fn create_space(
         owner: session.actor.clone(),
         deleted: false,
         discoverability: discoverability.clone(),
+        history_visibility: history_visibility.clone(),
+        encryption_profile: encryption_profile.clone(),
         plaintext_visible_services: plaintext_visible_services.iter().cloned().collect(),
         created_at: now(),
         updated_at: now(),
@@ -171,6 +203,8 @@ async fn create_space(
                 .collect::<Vec<_>>(),
             "public": discoverability == "public",
             "discoverability": discoverability,
+            "history_visibility": history_visibility,
+            "encryption_profile": encryption_profile,
             "plaintext_visible_services": plaintext_visible_services,
         }),
     )
@@ -342,7 +376,18 @@ async fn set_space_policy(
             .get(&space_id)
             .map_err(|error| AppError::internal(error.to_string()))?
             .ok_or_else(|| AppError::not_found("not found"))?;
+        // space-and-place.md §3.1.3 — MLS-encrypted Spaces MUST NOT be flipped
+        // to world_readable; reject the policy update fail-closed.
+        if record.encryption_profile.as_deref() == Some("mls_rfc9420")
+            && history_visibility == "world_readable"
+        {
+            return Err(AppError::invalid_param(
+                "encryption_profile=mls_rfc9420 is incompatible with history_visibility=world_readable",
+            )
+            .with_wire_code("incompatible_history_with_encryption"));
+        }
         record.discoverability = discoverability.to_owned();
+        record.history_visibility = history_visibility.clone();
         record.updated_at = now();
         store
             .put(&space_id, &record)
@@ -481,8 +526,10 @@ async fn accept_space_invite(
         .find(|r| r.invite_id == invite_id && r.space_id == space_id)
         .ok_or_else(|| AppError::not_found("invite not found"))?;
     if invite.status != "pending" {
-        return Err(AppError::new(ErrorCode::Conflict, "invite already consumed")
-            .with_status(StatusCode::CONFLICT));
+        return Err(
+            AppError::new(ErrorCode::Conflict, "invite already consumed")
+                .with_status(StatusCode::CONFLICT),
+        );
     }
     if invite
         .invitee
@@ -494,8 +541,9 @@ async fn accept_space_invite(
         ));
     }
     if invite.expires_at.is_some_and(|exp| exp < now_ts) {
-        return Err(AppError::new(ErrorCode::Conflict, "invite expired")
-            .with_status(StatusCode::CONFLICT));
+        return Err(
+            AppError::new(ErrorCode::Conflict, "invite expired").with_status(StatusCode::CONFLICT)
+        );
     }
 
     invite.status = "accepted".to_owned();
@@ -1029,6 +1077,13 @@ pub fn space_search_discoverability(state: &AppState, space_id: &str) -> bool {
 // for the backfill / subscribe edge (delete-tolerant for members).
 
 /// Check if a space is accessible for backfill/subscribe (allows deleted spaces for members).
+///
+/// Read-side authorization rules (space-and-place.md §3.4 + §3.7):
+/// 1. `discoverability=public` → anyone.
+/// 2. `history_visibility=world_readable` → anyone (including anonymous /
+///    non-member registered actors). MLS-encrypted Spaces are explicitly
+///    forbidden from this state (`incompatible_history_with_encryption`).
+/// 3. Otherwise → caller MUST be an authenticated member.
 pub fn space_id_accessible(
     state: &AppState,
     space_id: &str,
@@ -1044,9 +1099,25 @@ pub fn space_id_accessible(
     if space_discoverability(state, space.space_id.as_str()) == "public" {
         return true;
     }
+    if space_history_visibility(state, space.space_id.as_str()) == "world_readable" {
+        return true;
+    }
     session.is_some_and(|session| {
         Did::new(session.actor.clone()).is_ok_and(|actor| space.members.contains(&actor))
     })
+}
+
+/// Look up the persisted `history_visibility` for a Space, defaulting to
+/// `joined` when no meta record exists (matches the spec default).
+pub fn space_history_visibility(state: &AppState, space_id: &str) -> String {
+    state
+        .persistence
+        .space_meta()
+        .get(space_id)
+        .ok()
+        .flatten()
+        .map(|record| record.history_visibility.clone())
+        .unwrap_or_else(|| "joined".to_owned())
 }
 
 pub fn space_allows_plaintext_service(state: &AppState, space_id: &str) -> bool {

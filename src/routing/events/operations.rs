@@ -216,20 +216,11 @@ const FLOW_TRACK_UPDATE_REQUIREMENTS: &[PayloadRequirement] = &[
 // the applet bridge layer + per-applet contract validators that read
 // the payload after admission.
 const APPLET_REGISTRATION_REQUIREMENTS: &[PayloadRequirement] = &[
-    PayloadRequirement::Required(
-        "service_did",
-        "applet registration requires service_did",
-    ),
-    PayloadRequirement::Required(
-        "namespace",
-        "applet registration requires namespace",
-    ),
+    PayloadRequirement::Required("service_did", "applet registration requires service_did"),
+    PayloadRequirement::Required("namespace", "applet registration requires namespace"),
 ];
 const APPLET_DISCOVERY_REQUIREMENTS: &[PayloadRequirement] = &[
-    PayloadRequirement::Required(
-        "service_did",
-        "applet discovery requires service_did",
-    ),
+    PayloadRequirement::Required("service_did", "applet discovery requires service_did"),
     PayloadRequirement::Required("manifest", "applet discovery requires manifest"),
 ];
 const APPLET_SESSION_START_REQUIREMENTS: &[PayloadRequirement] = &[
@@ -247,10 +238,7 @@ const APPLET_SESSION_STATUS_REQUIREMENTS: &[PayloadRequirement] = &[
         "session_id",
         "applet protocol_session.status requires session_id",
     ),
-    PayloadRequirement::Required(
-        "status",
-        "applet protocol_session.status requires status",
-    ),
+    PayloadRequirement::Required("status", "applet protocol_session.status requires status"),
 ];
 const APPLET_BRIDGE_ERROR_REQUIREMENTS: &[PayloadRequirement] = &[
     PayloadRequirement::Required("session_id", "applet bridge_error requires session_id"),
@@ -283,20 +271,14 @@ const AGENT_SESSION_STATUS_REQUIREMENTS: &[PayloadRequirement] = &[
         "session_id",
         "agent protocol_session.status requires session_id",
     ),
-    PayloadRequirement::Required(
-        "status",
-        "agent protocol_session.status requires status",
-    ),
+    PayloadRequirement::Required("status", "agent protocol_session.status requires status"),
 ];
 const AGENT_SESSION_RESULT_REQUIREMENTS: &[PayloadRequirement] = &[
     PayloadRequirement::Required(
         "session_id",
         "agent protocol_session.result requires session_id",
     ),
-    PayloadRequirement::Required(
-        "result",
-        "agent protocol_session.result requires result",
-    ),
+    PayloadRequirement::Required("result", "agent protocol_session.result requires result"),
     PayloadRequirement::Required(
         "audit_binding",
         "agent protocol_session.result requires audit_binding",
@@ -668,7 +650,7 @@ fn validate_agent_task_create_payload(op: &Operation) -> Result<(), &'static str
         .and_then(|v| v.as_str())
         .ok_or("agent_task.create task_id must be a string")?;
     if !task_id.starts_with("cx:agent_task:") {
-        return Err("agent_task.create task_id MUST be cx:agent_task:<uuidv7>");
+        return Err("agent_task.create task_id MUST be cx:agent_task:<uuid>");
     }
     let target = payload
         .get("target_agent_id")
@@ -724,9 +706,7 @@ fn validate_cell_namespace(value: &str) -> Result<(), &'static str> {
     }
 }
 
-fn validate_agent_workspace_reservation_set_payload(
-    op: &Operation,
-) -> Result<(), &'static str> {
+fn validate_agent_workspace_reservation_set_payload(op: &Operation) -> Result<(), &'static str> {
     let payload = &op.payload;
     let namespace = payload
         .get("cell_namespace")
@@ -824,10 +804,7 @@ fn validate_agent_workspace_reservation_cleanup_payload(
         .get("ttl_evidence")
         .and_then(|v| v.as_object())
         .ok_or("reservation.cleanup ttl_evidence must be an object")?;
-    for required in [
-        "reservation_anchor_ref",
-        "current_anchor_ref",
-    ] {
+    for required in ["reservation_anchor_ref", "current_anchor_ref"] {
         if !ttl.contains_key(required) {
             return Err(
                 "reservation.cleanup ttl_evidence requires reservation_anchor_ref + current_anchor_ref",
@@ -843,10 +820,7 @@ fn validate_agent_workspace_reservation_cleanup_payload(
     let ttl_dist = ttl
         .get("ttl_anchor_distance")
         .ok_or("ttl_evidence.ttl_anchor_distance required")?;
-    if !is_json_integer(res_idx)
-        || !is_json_integer(cur_idx)
-        || !is_json_integer(ttl_dist)
-    {
+    if !is_json_integer(res_idx) || !is_json_integer(cur_idx) || !is_json_integer(ttl_dist) {
         return Err("ttl_evidence indices and distance MUST be integers");
     }
     let res_idx = res_idx.as_i64().unwrap_or(-1);
@@ -1208,11 +1182,7 @@ pub fn validate_content_block(block: &serde_json::Value) -> Result<(), &'static 
             // Privacy invariant: source-side stub MUST NOT leak mirror IDs.
             // body / target_actor_id / authority_grant_ref / redirect_pair_id
             // are required (per content-mention-redirect.schema.json).
-            if block
-                .get("body")
-                .and_then(|v| v.as_str())
-                .is_none()
-            {
+            if block.get("body").and_then(|v| v.as_str()).is_none() {
                 return Err("mention_redirect requires body (Content Block fallback)");
             }
             let target = block
@@ -1252,18 +1222,20 @@ pub fn validate_content_block(block: &serde_json::Value) -> Result<(), &'static 
             }
         }
         "cx.content.import_attestation" => {
-            if block
-                .get("body")
-                .and_then(|v| v.as_str())
-                .is_none()
-            {
+            if block.get("body").and_then(|v| v.as_str()).is_none() {
                 return Err("import_attestation requires body (Content Block fallback)");
             }
             let claimed = block
                 .get("claimed_origin")
                 .and_then(|v| v.as_object())
                 .ok_or("import_attestation requires claimed_origin object")?;
-            for field in ["space_id", "flow_id", "message_id", "actor_id", "created_at"] {
+            for field in [
+                "space_id",
+                "flow_id",
+                "message_id",
+                "actor_id",
+                "created_at",
+            ] {
                 if !claimed.contains_key(field) {
                     return Err(
                         "import_attestation claimed_origin requires space_id / flow_id / message_id / actor_id / created_at",
@@ -1296,9 +1268,7 @@ pub fn validate_content_block(block: &serde_json::Value) -> Result<(), &'static 
 /// Returns the canonical critical_extension feature ID a payload's
 /// `requirements.critical_extensions[]` MUST contain. None when no
 /// agent_workspace-gated content block is present.
-pub fn agent_workspace_required_feature_id(
-    content: &serde_json::Value,
-) -> Option<&'static str> {
+pub fn agent_workspace_required_feature_id(content: &serde_json::Value) -> Option<&'static str> {
     match content.get("kind").and_then(|v| v.as_str()) {
         Some("cx.content.mention_redirect") => Some("cx.feature.mention_redirect.v1"),
         _ => None,

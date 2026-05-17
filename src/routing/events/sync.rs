@@ -144,10 +144,8 @@ async fn client_sync(
                 return Err(crate::error::AppError::invalid_param(message));
             }
             Err(SyncCursorError::Mismatch(message)) => {
-                return Err(
-                    crate::error::AppError::invalid_param(message)
-                        .with_wire_code("sync_token_mismatch"),
-                );
+                return Err(crate::error::AppError::invalid_param(message)
+                    .with_wire_code("sync_token_mismatch"));
             }
         }
     } else {
@@ -179,9 +177,9 @@ async fn client_sync(
     }
 
     if let Some(presence) = body.set_presence.as_deref() {
-        let session = session
-            .as_ref()
-            .ok_or_else(|| crate::error::AppError::unauthenticated("set_presence requires authentication"))?;
+        let session = session.as_ref().ok_or_else(|| {
+            crate::error::AppError::unauthenticated("set_presence requires authentication")
+        })?;
         if let Err(error) = state.persistence.presence().put(PresenceRecord {
             actor: session.actor.clone(),
             status: presence.to_owned(),
@@ -1028,12 +1026,11 @@ pub(super) async fn events_query(
     // Event-store reader in routing/events.rs which builds an actor-keyed
     // `frontier.actors` map. The projection-aware path below is space-keyed.
     if spaces.is_empty() {
-        let session = authenticated_session(state, req)
-            .map_err(|(status, code, message)| {
-                crate::error::AppError::invalid_param(message)
-                    .with_status(status)
-                    .with_wire_code(code)
-            })?;
+        let session = authenticated_session(state, req).map_err(|(status, code, message)| {
+            crate::error::AppError::invalid_param(message)
+                .with_status(status)
+                .with_wire_code(code)
+        })?;
         let response = super::events_query_durable_scope_impl(state, &session, req).await?;
         return crate::result::json_ok(serde_json::to_value(response).unwrap_or(json!({})));
     }
@@ -1277,8 +1274,8 @@ async fn snapshot_head(
         })
         .collect();
     let merkle_root = bundle.tree.root().as_str().to_owned();
-    let generator_proof_value = serde_json::to_value(&bundle.generator_proof)
-        .unwrap_or(serde_json::Value::Null);
+    let generator_proof_value =
+        serde_json::to_value(&bundle.generator_proof).unwrap_or(serde_json::Value::Null);
     let service_did = state.config.service_did.clone();
     let signature_payload = format!(
         "{}:{}:{}",

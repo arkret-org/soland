@@ -51,7 +51,7 @@ struct Args {
     service_did: String,
     target_url: Option<String>,
     bearer: Option<String>,
-    space_id: String,
+    space_id: Option<String>,
     output: Option<String>,
     input: Option<String>,
 }
@@ -67,7 +67,7 @@ fn parse_args() -> anyhow::Result<Args> {
     let mut bearer = std::env::var("PASION_SESSION_TOKEN")
         .ok()
         .or_else(|| std::env::var("SERVERX_ADMIN_BEARER").ok());
-    let mut space_id = "cx:space:0196419b-0000-7000-8000-000000000000".to_owned();
+    let mut space_id: Option<String> = None;
     let mut output = None;
     let mut input = None;
     let mut explicit_mode = false;
@@ -113,10 +113,11 @@ fn parse_args() -> anyhow::Result<Args> {
             }
             "--space-id" => {
                 i += 1;
-                space_id = raw
-                    .get(i)
-                    .cloned()
-                    .ok_or_else(|| anyhow::anyhow!("--space-id needs a value"))?;
+                space_id = Some(
+                    raw.get(i)
+                        .cloned()
+                        .ok_or_else(|| anyhow::anyhow!("--space-id needs a value"))?,
+                );
             }
             "--output" => {
                 i += 1;
@@ -147,7 +148,7 @@ fn parse_args() -> anyhow::Result<Args> {
                        --service-did <did>     SERVERX_SERVICE_DID (default: did:web:soland.local)\n\
                        --target <url>          base URL of running soland (rotate-drill mode)\n\
                        --bearer <token>        admin session token (rotate-drill mode)\n\
-                       --space-id <id>         space id for the rotate endpoint path\n\
+                       --space-id <id>         space id for the rotate endpoint path (required in rotate-drill mode)\n\
                        --output <path>         destination JSON for --export-only\n\
                        --input <path>          source JSON for --import-only\n\
                     "
@@ -305,6 +306,12 @@ async fn run_rotate_drill(args: &Args) -> Result<(), DrillError> {
                 .to_owned(),
         )
     })?;
+    let space_id = args.space_id.as_deref().ok_or_else(|| {
+        DrillError::Io(
+            "rotate-drill requires --space-id (the Space whose anchorer key is being rotated)"
+                .to_owned(),
+        )
+    })?;
 
     eprintln!(
         "[rotate-drill] target={target} service_did={}",
@@ -333,7 +340,7 @@ async fn run_rotate_drill(args: &Args) -> Result<(), DrillError> {
     let url = format!(
         "{}/api/admin/v1/spaces/{}/anchorer/rotate-signing-key",
         target.trim_end_matches('/'),
-        args.space_id
+        space_id
     );
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))

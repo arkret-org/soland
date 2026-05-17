@@ -82,6 +82,8 @@ async fn dev_login(
             did: body.actor.clone(),
             handle: normalize_handle(&synthetic_handle),
             display_name: Some(synthetic_display),
+            bio: None,
+            avatar_url: None,
             created_at: now(),
         };
         state
@@ -533,6 +535,22 @@ pub fn authenticated_session(
             "session revoked",
         ));
     }
+    // GDPR erasure surfaces ahead of device-revocation so callers get the
+    // spec-precise `account_erased` errcode rather than the generic
+    // `unauthenticated`/`device revoked` fallback that erase() triggers
+    // as a side effect.
+    if state
+        .erased_actors
+        .lock()
+        .expect("erased_actors lock")
+        .contains(&session.actor)
+    {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            "account_erased",
+            "account has been erased",
+        ));
+    }
     if is_device_revoked(state, &session.actor, &session.device_id) {
         return Err((
             StatusCode::UNAUTHORIZED,
@@ -743,6 +761,8 @@ fn ensure_oauth_account(
         did: oauth.actor.clone(),
         handle,
         display_name: oauth.display_name.clone(),
+        bio: None,
+        avatar_url: None,
         created_at: now(),
     };
     accounts.put(&account).map_err(|_| {

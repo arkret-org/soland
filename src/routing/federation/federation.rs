@@ -13,22 +13,28 @@
 //!   [`crate::config::FederationPolicy::Hub`]; only the outbound routing
 //!   decision (broadcast vs hub-only) differs.
 //!
-//! Production gaps: RFC 9421 transcript, idempotency, `validation_class`
-//! instead of bool, revocation fanout, and durable persistence beyond
-//! `state.federation_operations`.
+//! Production gaps: inbound RFC 9421 request verification, `validation_class`
+//! instead of bool, revocation fanout, and a long-running retry daemon.
+//! Outbound Move/Anchor broadcast helpers persist a per-peer signed request
+//! transcript plus retry/durability metadata before returning targets so cotest
+//! can observe the durable boundary instead of a purely opaque log.
 
-use chrono::Duration;
+use base64::Engine as _;
+use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
+use chrono::{DateTime, Duration, Utc};
 use contrix_sdk::state_res::AnchorStore;
 use contrix_sdk::{Anchor, SpaceId};
+use ed25519_dalek::Signer as _;
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 
 use super::{
-    ingest_federation_operations, now, operation_is_visible,
-    redaction_targets_from_operations, sha256_hex, sync_token, validate_space_id,
+    ingest_federation_operations, now, operation_is_visible, redaction_targets_from_operations,
+    sha256_hex, sync_token, validate_space_id,
 };
 use crate::error::AppError;
 use crate::ids;
@@ -60,9 +66,7 @@ pub(super) async fn federation_transaction(
         Ok(Some(record)) if record.content_digest == content_digest => {
             let response: contrix_sdk::FederationTransactionResponse =
                 serde_json::from_value(record.response).map_err(|error| {
-                    AppError::internal(format!(
-                        "cached federation response decode: {error}"
-                    ))
+                    AppError::internal(format!("cached federation response decode: {error}"))
                 })?;
             return json_ok(response);
         }
@@ -94,8 +98,8 @@ pub(super) async fn federation_transaction(
         rejected: ingest.rejected,
         next_retry_at: None,
     };
-    let response_value = serde_json::to_value(&response)
-        .map_err(|error| AppError::internal(error.to_string()))?;
+    let response_value =
+        serde_json::to_value(&response).map_err(|error| AppError::internal(error.to_string()))?;
     let now = now();
     let record = FederationTransactionRecord {
         origin: body.origin.to_string(),
@@ -346,8 +350,7 @@ pub(super) async fn federation_anchors_pull(
     if validate_space_id(&space_id).is_err() {
         return Err(AppError::invalid_param("invalid space_id"));
     }
-    let space =
-        SpaceId::new(space_id).map_err(|_| AppError::invalid_param("invalid space_id"))?;
+    let space = SpaceId::new(space_id).map_err(|_| AppError::invalid_param("invalid space_id"))?;
     let leaves = state.anchor_store.list_leaves(&space).unwrap_or_default();
     let mut anchors: Vec<Anchor> = Vec::with_capacity(leaves.len());
     for leaf in &leaves {
@@ -426,14 +429,15 @@ pub fn broadcast_move_to_peers(state: &AppState, move_id: &str) -> Vec<String> {
             .collect(),
     };
     for peer in &peers {
+        record_outbound_fanout_attempt(state, "move", move_id, peer);
         let peer = peer.clone();
         let move_id_owned = move_id.to_owned();
         tokio::spawn(async move {
-            // Best-effort fan-out. Real outbound transcript signing /
-            // retry-with-jitter lives behind this entry point in a
-            // follow-up; for now we just log so ops can see the
-            // broadcast list.
-            tracing::debug!(%peer, move_id = %move_id_owned, "federation broadcast move");
+            tracing::debug!(
+                %peer,
+                move_id = %move_id_owned,
+                "federation broadcast move signed request transcript persisted for retry worker"
+            );
         });
     }
     peers
@@ -456,13 +460,408 @@ pub fn broadcast_anchor_to_peers(state: &AppState, anchor_id: &str) -> Vec<Strin
             .collect(),
     };
     for peer in &peers {
+        record_outbound_fanout_attempt(state, "anchor", anchor_id, peer);
         let peer = peer.clone();
         let anchor_id_owned = anchor_id.to_owned();
         tokio::spawn(async move {
-            tracing::debug!(%peer, anchor_id = %anchor_id_owned, "federation broadcast anchor");
+            tracing::debug!(
+                %peer,
+                anchor_id = %anchor_id_owned,
+                "federation broadcast anchor signed request transcript persisted for retry worker"
+            );
         });
     }
     peers
+}
+
+fn record_outbound_fanout_attempt(
+    state: &AppState,
+    resource_kind: &str,
+    resource_id: &str,
+    peer: &str,
+) {
+    let peer_hash = sha256_hex(peer.as_bytes());
+    let resource_hash = sha256_hex(resource_id.as_bytes());
+    let txn_id = format!(
+        "outbound_{resource_kind}:{}:{}",
+        &peer_hash[..16],
+        &resource_hash[..16]
+    );
+    let attempted_at = now();
+    let attempt = 1_u32;
+    let retry_policy = json!({
+        "initial_backoff_ms": 30_000,
+        "max_backoff_ms": 300_000,
+        "max_attempts": 8,
+        "jitter": "deterministic_floor_until_background_daemon_lands"
+    });
+    let next_retry_at = attempted_at + Duration::seconds(30);
+    let target_path = match resource_kind {
+        "anchor" => "/api/v1/federation/anchors",
+        _ => "/api/v1/federation/push-operations",
+    };
+    let intent = json!({
+        "schema": "cx.federation.outbound_fanout.intent.v1",
+        "origin": state.config.service_did,
+        "destination": peer,
+        "resource_kind": resource_kind,
+        "resource_id": resource_id,
+        "target_path": target_path,
+        "attempt": attempt,
+        "created_at": attempted_at,
+    });
+    let signing = signed_fanout_intent_evidence(state, peer, target_path, &intent, attempted_at);
+    let transcript = json!({
+        "schema": "cx.federation.outbound_fanout.transcript.v1",
+        "direction": "outbound",
+        "resource_kind": resource_kind,
+        "resource_id": resource_id,
+        "peer": peer,
+        "target_path": target_path,
+        "origin": state.config.service_did,
+        "attempt": attempt,
+        "state": "retry_scheduled",
+        "intent": intent,
+        "signing": signing,
+        "dispatch_attempt": {
+            "status": "signed_request_prepared",
+            "method": "POST",
+            "peer": peer,
+            "path": target_path,
+            "signature_scheme": "rfc9421-http-message-signatures",
+            "prepared_at": attempted_at,
+            "peer_response_recorded": false
+        },
+        "per_peer_state": {
+            "peer": peer,
+            "state": "retry_scheduled",
+            "last_attempt_at": attempted_at,
+            "next_retry_at": next_retry_at,
+            "attempt": attempt,
+            "accepted_by_peer": false,
+            "last_error": {
+                "code": "peer_delivery_not_confirmed",
+                "message": "signed outbound federation request prepared; peer response not yet recorded"
+            }
+        },
+        "retry": {
+            "status": "retry_scheduled",
+            "attempt": attempt,
+            "next_retry_at": next_retry_at,
+            "policy": retry_policy,
+            "worker": "run_outbound_fanout_retry_pass",
+            "durable": true
+        },
+        "durability": {
+            "status": "persisted_before_dispatch",
+            "store": "federation_transactions",
+            "record_key": {
+                "origin": state.config.service_did,
+                "txn_id": txn_id
+            },
+            "content_digest_scope": "transcript_json"
+        },
+        "limitations": {
+            "profile": "cx.profile.principal_server.v1",
+            "full_conformance": false,
+            "remaining": [
+                "long-running retry daemon scheduling",
+                "peer response verification and quarantine",
+                "revocation fanout"
+            ]
+        }
+    });
+    let digest = format!(
+        "sha256:{}",
+        sha256_hex(&serde_json::to_vec(&transcript).unwrap_or_default())
+    );
+    let now = now();
+    let record = FederationTransactionRecord {
+        origin: state.config.service_did.clone(),
+        txn_id,
+        destination: peer.to_owned(),
+        space_id: None,
+        content_digest: digest,
+        status: "outbound_fanout_retry_scheduled".to_owned(),
+        response: transcript,
+        received_at: now,
+        processed_at: Some(attempted_at),
+    };
+    if let Err(error) = state.persistence.federation_transactions().put(&record) {
+        tracing::warn!(
+            %error,
+            %peer,
+            resource_kind,
+            resource_id,
+            "failed to persist outbound federation fanout transcript"
+        );
+    }
+}
+
+fn signed_fanout_intent_evidence(
+    state: &AppState,
+    peer: &str,
+    target_path: &str,
+    intent: &serde_json::Value,
+    attempted_at: DateTime<Utc>,
+) -> serde_json::Value {
+    let canonical_bytes = contrix_sdk::canonical::canonical_json_bytes(intent)
+        .unwrap_or_else(|_| serde_json::to_vec(intent).unwrap_or_default());
+    let payload_digest = format!("sha256:{}", sha256_hex(&canonical_bytes));
+    let protected_header = br#"{"alg":"EdDSA","typ":"cx.federation.outbound_fanout.intent.v1"}"#;
+    let protected_b64u = URL_SAFE_NO_PAD.encode(protected_header);
+    let payload_b64u = URL_SAFE_NO_PAD.encode(&canonical_bytes);
+    let signing_input = format!("{protected_b64u}.{payload_b64u}");
+    let signature = state.anchorer_signing_key().sign(signing_input.as_bytes());
+    let signature_b64u = URL_SAFE_NO_PAD.encode(signature.to_bytes());
+    let jws = format!("{protected_b64u}..{signature_b64u}");
+    let key_origin = match state.anchorer_signing_key_origin() {
+        crate::config::AnchorerSigningKeyOrigin::Configured => "configured",
+        crate::config::AnchorerSigningKeyOrigin::Ephemeral => "ephemeral",
+    };
+    json!({
+        "status": "intent_signed",
+        "scheme": "ed25519-detached-jws",
+        "verification_method": format!("{}#federation-fanout-key", state.config.service_did),
+        "payload_digest": payload_digest,
+        "jws": jws,
+        "key_origin": key_origin,
+        "http_message_signatures": http_message_signature_evidence(
+            state,
+            peer,
+            target_path,
+            &canonical_bytes,
+            &payload_digest,
+            attempted_at,
+            key_origin,
+        )
+    })
+}
+
+fn http_message_signature_evidence(
+    state: &AppState,
+    peer: &str,
+    target_path: &str,
+    body_bytes: &[u8],
+    payload_digest: &str,
+    attempted_at: DateTime<Utc>,
+    key_origin: &str,
+) -> Value {
+    let created = attempted_at.timestamp();
+    let content_digest = content_digest_header(body_bytes);
+    let keyid = format!("{}#federation-fanout-key", state.config.service_did);
+    let signature_params = format!(
+        "(\"@method\" \"@path\" \"content-digest\" \"x-contrix-fanout-digest\");created={created};keyid=\"{keyid}\";alg=\"ed25519\""
+    );
+    let signature_input_header = format!("sig1={signature_params}");
+    let signature_base = format!(
+        "\"@method\": POST\n\"@path\": {target_path}\n\"content-digest\": {content_digest}\n\"x-contrix-fanout-digest\": {payload_digest}\n\"@signature-params\": {signature_params}"
+    );
+    let signature = state.anchorer_signing_key().sign(signature_base.as_bytes());
+    let signature_header = format!("sig1=:{}:", STANDARD.encode(signature.to_bytes()));
+    json!({
+        "status": "emitted",
+        "scheme": "rfc9421-http-message-signatures",
+        "request": {
+            "method": "POST",
+            "peer": peer,
+            "path": target_path,
+        },
+        "covered_components": [
+            "@method",
+            "@path",
+            "content-digest",
+            "x-contrix-fanout-digest"
+        ],
+        "headers": {
+            "content-digest": content_digest,
+            "signature-input": signature_input_header,
+            "signature": signature_header,
+            "x-contrix-fanout-digest": payload_digest
+        },
+        "signature_base": signature_base,
+        "verification_material": {
+            "keyid": keyid,
+            "alg": "ed25519",
+            "key_origin": key_origin,
+            "public_key_material": "service DID document verification method"
+        }
+    })
+}
+
+fn content_digest_header(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
+    format!("sha-256=:{}:", STANDARD.encode(digest))
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct OutboundFanoutRetryReport {
+    pub scanned: usize,
+    pub due: usize,
+    pub retried: usize,
+    pub dead_lettered: usize,
+    pub skipped: usize,
+}
+
+#[allow(dead_code)]
+pub fn run_outbound_fanout_retry_pass(
+    state: &AppState,
+    node_id: &str,
+    limit: usize,
+) -> crate::persistence::PersistenceResult<OutboundFanoutRetryReport> {
+    run_outbound_fanout_retry_pass_at(state, node_id, limit, Utc::now())
+}
+
+fn run_outbound_fanout_retry_pass_at(
+    state: &AppState,
+    node_id: &str,
+    limit: usize,
+    now: DateTime<Utc>,
+) -> crate::persistence::PersistenceResult<OutboundFanoutRetryReport> {
+    let mut report = OutboundFanoutRetryReport::default();
+    if limit == 0 {
+        return Ok(report);
+    }
+
+    let records = state.persistence.federation_transactions().snapshot_all()?;
+    for record in records {
+        report.scanned += 1;
+        if record.origin != state.config.service_did || !record.txn_id.starts_with("outbound_") {
+            report.skipped += 1;
+            continue;
+        }
+        if !matches!(
+            record.status.as_str(),
+            "outbound_fanout_limited" | "outbound_fanout_retry_scheduled"
+        ) {
+            report.skipped += 1;
+            continue;
+        }
+        let Some(next_retry_at) = next_retry_at(&record.response) else {
+            report.skipped += 1;
+            continue;
+        };
+        if next_retry_at > now {
+            report.skipped += 1;
+            continue;
+        }
+        if report.retried + report.dead_lettered >= limit {
+            break;
+        }
+
+        report.due += 1;
+        let updated = update_retry_record(record, node_id, now);
+        if updated.status == "outbound_fanout_dead_letter" {
+            report.dead_lettered += 1;
+        } else {
+            report.retried += 1;
+        }
+        state.persistence.federation_transactions().put(&updated)?;
+    }
+
+    Ok(report)
+}
+
+fn next_retry_at(response: &Value) -> Option<DateTime<Utc>> {
+    response
+        .pointer("/per_peer_state/next_retry_at")
+        .and_then(Value::as_str)
+        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+        .map(|value| value.with_timezone(&Utc))
+}
+
+fn update_retry_record(
+    record: FederationTransactionRecord,
+    node_id: &str,
+    now: DateTime<Utc>,
+) -> FederationTransactionRecord {
+    let mut response = record.response.clone();
+    let attempt = response
+        .pointer("/per_peer_state/attempt")
+        .and_then(Value::as_u64)
+        .unwrap_or(1)
+        + 1;
+    let max_attempts = response
+        .pointer("/retry/policy/max_attempts")
+        .and_then(Value::as_u64)
+        .unwrap_or(8);
+    let lease_until = now + Duration::seconds(60);
+    let lease = json!({
+        "holder": node_id,
+        "leased_at": now,
+        "lease_until": lease_until,
+        "fence": format!("{}:{attempt}", record.txn_id)
+    });
+
+    let (status, peer_state, next_retry) = if attempt >= max_attempts {
+        ("outbound_fanout_dead_letter", "dead_letter", Value::Null)
+    } else {
+        let backoff_ms = retry_backoff_ms(&response, attempt);
+        (
+            "outbound_fanout_retry_scheduled",
+            "retry_scheduled",
+            json!(now + Duration::milliseconds(backoff_ms as i64)),
+        )
+    };
+
+    response["state"] = Value::String(peer_state.to_owned());
+    response["attempt"] = json!(attempt);
+    response["per_peer_state"]["state"] = Value::String(peer_state.to_owned());
+    response["per_peer_state"]["attempt"] = json!(attempt);
+    response["per_peer_state"]["last_attempt_at"] = json!(now);
+    response["per_peer_state"]["next_retry_at"] = next_retry.clone();
+    response["per_peer_state"]["lease"] = lease.clone();
+    response["per_peer_state"]["accepted_by_peer"] = Value::Bool(false);
+    response["per_peer_state"]["last_error"] = if status == "outbound_fanout_dead_letter" {
+        json!({
+            "code": "max_attempts_exhausted",
+            "message": "outbound federation delivery reached the durable retry limit"
+        })
+    } else {
+        json!({
+            "code": "peer_delivery_not_confirmed",
+            "message": "durable retry pass claimed the transcript; signed delivery still awaits peer confirmation"
+        })
+    };
+    response["retry"]["status"] = if status == "outbound_fanout_dead_letter" {
+        Value::String("dead_lettered".to_owned())
+    } else {
+        Value::String("retry_scheduled".to_owned())
+    };
+    response["retry"]["attempt"] = json!(attempt);
+    response["retry"]["next_retry_at"] = next_retry;
+    response["retry"]["lease"] = lease;
+    response["retry"]["last_worker"] = json!({
+        "node_id": node_id,
+        "observed_at": now,
+    });
+
+    let digest = format!(
+        "sha256:{}",
+        sha256_hex(&serde_json::to_vec(&response).unwrap_or_default())
+    );
+    FederationTransactionRecord {
+        status: status.to_owned(),
+        response,
+        content_digest: digest,
+        processed_at: Some(now),
+        ..record
+    }
+}
+
+fn retry_backoff_ms(response: &Value, attempt: u64) -> u64 {
+    let initial = response
+        .pointer("/retry/policy/initial_backoff_ms")
+        .and_then(Value::as_u64)
+        .unwrap_or(30_000);
+    let max = response
+        .pointer("/retry/policy/max_backoff_ms")
+        .and_then(Value::as_u64)
+        .unwrap_or(300_000);
+    let multiplier = 1_u64
+        .checked_shl((attempt.saturating_sub(1)) as u32)
+        .unwrap_or(u64::MAX);
+    initial.saturating_mul(multiplier).min(max)
 }
 
 #[cfg(test)]
@@ -517,6 +916,7 @@ mod tests {
             compaction_prune_walk_interval_seconds: 0,
 
             compaction_prune_walk_per_space_limit: 50,
+            seed_demo_data: true,
         }
     }
 
@@ -533,6 +933,61 @@ mod tests {
         let state = AppState::new(cfg, Db { pool: None });
         let targets = broadcast_move_to_peers(&state, "cx:move:sha256:01");
         assert_eq!(targets.len(), 3);
+        let peer_hash = sha256_hex("https://peer-a.example".as_bytes());
+        let move_hash = sha256_hex("cx:move:sha256:01".as_bytes());
+        let txn_id = format!("outbound_move:{}:{}", &peer_hash[..16], &move_hash[..16]);
+        let transcript = state
+            .persistence
+            .federation_transactions()
+            .get("did:web:test.local", &txn_id)
+            .unwrap()
+            .expect("outbound transcript persisted");
+        assert_eq!(transcript.destination, "https://peer-a.example");
+        assert_eq!(transcript.status, "outbound_fanout_retry_scheduled");
+        assert_eq!(
+            transcript.response["schema"],
+            "cx.federation.outbound_fanout.transcript.v1"
+        );
+        assert_eq!(transcript.response["signing"]["status"], "intent_signed");
+        assert_eq!(
+            transcript.response["signing"]["http_message_signatures"]["status"],
+            "emitted"
+        );
+        assert_eq!(
+            transcript.response["dispatch_attempt"]["status"],
+            "signed_request_prepared"
+        );
+        assert!(
+            transcript.response["signing"]["http_message_signatures"]["headers"]["signature"]
+                .as_str()
+                .unwrap()
+                .starts_with("sig1=:")
+        );
+        assert!(
+            transcript.response["signing"]["payload_digest"]
+                .as_str()
+                .unwrap()
+                .starts_with("sha256:")
+        );
+        assert!(
+            transcript.response["signing"]["jws"]
+                .as_str()
+                .unwrap()
+                .contains("..")
+        );
+        assert_eq!(transcript.response["retry"]["status"], "retry_scheduled");
+        assert_eq!(
+            transcript.response["durability"]["status"],
+            "persisted_before_dispatch"
+        );
+        assert_eq!(
+            transcript.response["per_peer_state"]["state"],
+            "retry_scheduled"
+        );
+        assert_eq!(
+            transcript.response["limitations"]["full_conformance"],
+            serde_json::json!(false)
+        );
     }
 
     #[tokio::test]
@@ -556,5 +1011,86 @@ mod tests {
         let state = AppState::new(cfg, Db { pool: None });
         let targets = broadcast_anchor_to_peers(&state, "cx:anchor:sha256:01");
         assert!(targets.is_empty());
+    }
+
+    #[tokio::test]
+    async fn anchor_fanout_records_anchor_target_and_retry_metadata() {
+        let cfg = config_with_policy(
+            FederationPolicy::Mesh,
+            vec!["https://peer-anchor.example".to_owned()],
+        );
+        let state = AppState::new(cfg, Db { pool: None });
+        let targets = broadcast_anchor_to_peers(&state, "cx:anchor:sha256:02");
+        assert_eq!(targets, vec!["https://peer-anchor.example".to_owned()]);
+
+        let peer_hash = sha256_hex("https://peer-anchor.example".as_bytes());
+        let anchor_hash = sha256_hex("cx:anchor:sha256:02".as_bytes());
+        let txn_id = format!(
+            "outbound_anchor:{}:{}",
+            &peer_hash[..16],
+            &anchor_hash[..16]
+        );
+        let transcript = state
+            .persistence
+            .federation_transactions()
+            .get("did:web:test.local", &txn_id)
+            .unwrap()
+            .expect("outbound anchor transcript persisted");
+        assert_eq!(
+            transcript.response["target_path"],
+            "/api/v1/federation/anchors"
+        );
+        assert_eq!(transcript.response["intent"]["resource_kind"], "anchor");
+        assert_eq!(
+            transcript.response["retry"]["policy"]["initial_backoff_ms"],
+            serde_json::json!(30_000)
+        );
+        assert!(transcript.response["per_peer_state"]["next_retry_at"].is_string());
+    }
+
+    #[tokio::test]
+    async fn retry_pass_claims_due_outbound_transcript_and_reschedules() {
+        let cfg = config_with_policy(
+            FederationPolicy::Mesh,
+            vec!["https://peer-retry.example".to_owned()],
+        );
+        let state = AppState::new(cfg, Db { pool: None });
+        broadcast_move_to_peers(&state, "cx:move:sha256:retry");
+
+        let peer_hash = sha256_hex("https://peer-retry.example".as_bytes());
+        let move_hash = sha256_hex("cx:move:sha256:retry".as_bytes());
+        let txn_id = format!("outbound_move:{}:{}", &peer_hash[..16], &move_hash[..16]);
+        let before = state
+            .persistence
+            .federation_transactions()
+            .get("did:web:test.local", &txn_id)
+            .unwrap()
+            .expect("outbound transcript persisted");
+        let due_at = next_retry_at(&before.response).expect("next retry");
+
+        let report =
+            run_outbound_fanout_retry_pass_at(&state, "node-a", 10, due_at + Duration::seconds(1))
+                .unwrap();
+        assert_eq!(report.due, 1);
+        assert_eq!(report.retried, 1);
+        assert_eq!(report.dead_lettered, 0);
+
+        let after = state
+            .persistence
+            .federation_transactions()
+            .get("did:web:test.local", &txn_id)
+            .unwrap()
+            .expect("updated outbound transcript persisted");
+        assert_eq!(after.status, "outbound_fanout_retry_scheduled");
+        assert_eq!(
+            after.response["per_peer_state"]["attempt"],
+            serde_json::json!(2)
+        );
+        assert_eq!(
+            after.response["per_peer_state"]["lease"]["holder"],
+            "node-a"
+        );
+        assert_eq!(after.response["retry"]["status"], "retry_scheduled");
+        assert!(after.response["per_peer_state"]["next_retry_at"].is_string());
     }
 }

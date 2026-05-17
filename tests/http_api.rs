@@ -58,6 +58,7 @@ fn test_config() -> AppConfig {
         compaction_prune_walk_interval_seconds: 0,
 
         compaction_prune_walk_per_space_limit: 50,
+        seed_demo_data: true,
     }
 }
 
@@ -89,7 +90,13 @@ fn encode_cursor(cursor: &Value) -> String {
 }
 
 async fn dev_token(state: AppState) -> String {
-    dev_token_for_device(state, "did:web:alice.example", "cx:device:01904100-0000-7000-8000-a11ce0000001", "Alice Desktop").await
+    dev_token_for_device(
+        state,
+        "did:web:alice.example",
+        "cx:device:01904100-0000-7000-8000-a11ce0000001",
+        "Alice Desktop",
+    )
+    .await
 }
 
 async fn dev_token_for_device(
@@ -130,7 +137,7 @@ fn encrypted_envelope(content_type: &str, ciphertext: &str) -> Value {
 }
 
 fn sha256_json(value: &Value) -> String {
-    let bytes = serde_json::to_vec(value).expect("json serializes");
+    let bytes = contrix_sdk::canonical::canonical_json_bytes(value).expect("json canonicalizes");
     let mut hasher = Sha256::new();
     hasher.update(bytes);
     format!("sha256:{:x}", hasher.finalize())
@@ -153,8 +160,13 @@ fn event_canonical_digest(event: &Value) -> String {
 
 fn signed_event_envelope(event_id: &str, actor_seq: u64, prev_refs: Vec<&str>) -> Value {
     let payload = serde_json::json!({
-        "body": format!("event body {actor_seq}"),
-        "msgtype": "m.text"
+        "flow_id": "cx:flow:01904100-0000-7000-8000-f10dc0000001",
+        "track": "discussion",
+        "content": {
+            "kind": "cx.content.text",
+            "body": format!("event body {actor_seq}"),
+            "format": "plain"
+        }
     });
     let mut event = serde_json::json!({
         "event_id": event_id,
@@ -213,10 +225,7 @@ async fn register_account(state: AppState, did: &str, handle: &str, device_id: &
 
 fn spawn_oauth_introspection_server() -> (String, std::thread::JoinHandle<String>) {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let url = format!(
-        "http://{}/oauth/introspect",
-        listener.local_addr().unwrap()
-    );
+    let url = format!("http://{}/oauth/introspect", listener.local_addr().unwrap());
     let handle = std::thread::spawn(move || {
         use std::io::{Read, Write};
 
@@ -286,7 +295,9 @@ async fn oauth_bearer_introspection_authenticates_directly() {
         .unwrap();
     let oauth_device = devices
         .iter()
-        .find(|device| device.payload["raw_device_id"] == "cx:device:01904100-0000-7000-8000-0a4a40000006")
+        .find(|device| {
+            device.payload["raw_device_id"] == "cx:device:01904100-0000-7000-8000-0a4a40000006"
+        })
         .expect("OAuth device auto-provisioned");
     assert!(oauth_device.device_id.starts_with("cx:device:"));
 }
@@ -317,11 +328,21 @@ async fn health_and_describe_work() {
     assert_eq!(describe["protocol_version"], "1.0");
     assert_eq!(describe["service_type"], "principal_server");
     assert!(
-        describe["supported_profiles"]
+        !describe["supported_profiles"]
             .as_array()
             .unwrap()
             .iter()
             .any(|profile| profile == "cx.profile.soland_limited_server.v1")
+    );
+    assert!(
+        describe["unsupported_profiles"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(
+                |profile| profile["profile"] == "cx.profile.soland_limited_server.v1"
+                    && profile["status"] == "unsupported"
+            )
     );
     assert!(
         !describe["supported_profiles"]
@@ -381,6 +402,105 @@ async fn health_and_describe_work() {
             .iter()
             .any(|operation| operation == "cx.events.submit")
     );
+    assert!(
+        describe["supported_operations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|operation| operation == "cx.blob.upload")
+    );
+    assert!(
+        describe["supported_operations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|operation| operation == "cx.keys.backups.put")
+    );
+    for operation in describe["supported_operations"].as_array().unwrap() {
+        let operation = operation.as_str().expect("operation id string");
+        assert!(
+            artifacts::operation_ids().contains(operation),
+            "supported_operations must only advertise spec operation ids, got {operation}"
+        );
+    }
+    assert!(
+        !describe["supported_operations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|operation| operation == "cx.extension.soland.messages.send")
+    );
+    assert!(
+        describe["limits"]["profile_status"]["local_extension_operations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|operation| operation == "cx.extension.soland.messages.send")
+    );
+    assert_eq!(
+        describe["limits"]["profile_status"]["local_extension_operation_source"],
+        "routing::SOLAND_EXTENSION_OPERATIONS"
+    );
+    assert!(
+        describe["limits"]["profile_status"]["local_extension_operations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|operation| operation == "cx.extension.soland.admin.actors")
+    );
+    assert!(
+        describe["limits"]["profile_status"]["supported_operation_catalog"]["derived_surface_groups"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|surface| surface == "events_sync")
+    );
+    assert!(
+        !describe["limits"]["profile_status"]["full_profiles_not_claimed"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|profile| profile == "cx.profile.index_node.v1")
+    );
+    assert!(
+        describe["limits"]["profile_status"]["full_profiles_not_claimed"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|profile| profile == "cx.profile.directory_service.v1")
+    );
+    let limitation_areas = describe["limits"]["profile_status"]["limitations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|limitation| limitation["area"].as_str())
+        .collect::<Vec<_>>();
+    assert!(limitation_areas.contains(&"authz.describe"));
+    assert!(limitation_areas.contains(&"policies.describe"));
+    assert!(limitation_areas.contains(&"admin.bottom.manual_repair"));
+    assert!(limitation_areas.contains(&"index.query"));
+    assert!(limitation_areas.contains(&"federation.outbound_push"));
+    let federation_limitation = describe["limits"]["profile_status"]["limitations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|limitation| limitation["area"] == "federation.outbound_push")
+        .expect("federation outbound limitation should remain described");
+    assert_eq!(federation_limitation["status"], "partial");
+    assert!(
+        federation_limitation["remaining"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|gap| gap == "RFC 9421 HTTP Message Signatures header emission")
+    );
+    let full_gap = describe["limits"]["profile_status"]["principal_server_full_profile_gaps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|gap| gap["profile"] == "cx.profile.principal_server.v1")
+        .expect("principal server full-profile gap summary should be visible");
+    assert_eq!(full_gap["status"], "not_claimed");
 }
 
 #[tokio::test]
@@ -491,9 +611,17 @@ async fn events_describe_and_single_event_submit_work() {
     let artifact_kind_payload = serde_json::json!({
         "object": {
             "id": "cx:flow:01904100-0000-7000-8000-aa11ccff0001",
+            "schema": "cx.schema.flow.v1",
             "space_id": "cx:space:0196419b-0000-7000-8000-000000000000",
             "title": "Onboarding flow",
+            "tracks": {
+                "discussion": {
+                    "is_primary": true,
+                    "profile": "discussion"
+                }
+            },
             "created_by": "did:web:alice.example",
+            "created_at": "2026-05-17T00:00:00Z"
         }
     });
     let mut artifact_kind_event = signed_event_envelope(
@@ -686,6 +814,59 @@ async fn events_describe_and_single_event_submit_work() {
 }
 
 #[tokio::test]
+async fn scaffold_describe_surfaces_are_marked_limited_not_profile_claims() {
+    let service = app();
+    let authz: Value = TestClient::get("http://server/api/v1/authz/describe")
+        .send(&service)
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(authz["stability"], "scaffold_contract");
+    assert_eq!(authz["profile_claim"], "not_claimed");
+    assert!(
+        authz["limitations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item.as_str().unwrap().contains("not complete profile"))
+    );
+
+    let policies: Value = TestClient::get("http://server/api/v1/policies/describe")
+        .send(&service)
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(policies["stability"], "scaffold_contract");
+    assert_eq!(policies["profile_claim"], "not_claimed");
+
+    let index: Value = TestClient::get("http://server/api/v1/index/describe")
+        .send(&service)
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(index["stability"], "limited_projection");
+    assert_eq!(index["profile_claim"], "not_claimed");
+
+    let integration: Value = TestClient::get("http://server/api/v1/integration/describe")
+        .send(&service)
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    let surfaces = integration["surfaces"].as_array().unwrap();
+    assert!(surfaces.iter().any(|surface| {
+        surface["name"] == "admin_bottom_manual_repair"
+            && surface["stability"] == "unsupported_signing_path"
+    }));
+    assert!(surfaces.iter().any(|surface| {
+        surface["name"] == "index_query" && surface["stability"] == "limited_projection"
+    }));
+}
+
+#[tokio::test]
 async fn contrix_openapi_spec_contains_facet_projection_contracts() {
     let mut response = TestClient::get("http://server/.well-known/contrix/openapi.yaml")
         .send(&app())
@@ -708,18 +889,18 @@ async fn contrix_openapi_spec_contains_facet_projection_contracts() {
     assert!(body.contains("allowed_object_facets"));
     let expected_operation_ids = [
         "cx.system.health",
-        "cx.account.register",
-        "cx.account.me",
-        "cx.auth.logout",
-        "cx.contacts.request",
-        "cx.contacts.respond",
-        "cx.contacts.list",
-        "cx.spaces.create",
-        "cx.spaces.delete",
+        "cx.extension.soland.account.register",
+        "cx.extension.soland.account.me",
+        "cx.extension.soland.auth.logout",
+        "cx.extension.soland.contacts.request",
+        "cx.extension.soland.contacts.respond",
+        "cx.extension.soland.contacts.list",
+        "cx.extension.soland.spaces.create",
+        "cx.extension.soland.spaces.delete",
         "cx.server.describe",
-        "cx.spaces.add_member",
-        "cx.spaces.remove_member",
-        "cx.messages.send",
+        "cx.extension.soland.spaces.add_member",
+        "cx.extension.soland.spaces.remove_member",
+        "cx.extension.soland.messages.send",
         "cx.events.describe",
         "cx.events.submit",
         "cx.events.get",
@@ -727,50 +908,53 @@ async fn contrix_openapi_spec_contains_facet_projection_contracts() {
         "cx.events.query",
         "cx.events.subscribe",
         "cx.events.frontier",
-        "cx.index.query",
+        "cx.extension.soland.index.query",
         "cx.authz.get_effective_grants",
         "cx.authz.get_invites",
-        "cx.federation.transaction",
-        "cx.federation.push_operations",
-        "cx.federation.pull_operations",
-        "cx.federation.space_members",
-        "cx.federation.verify_actor",
+        "cx.extension.soland.federation.transaction",
+        "cx.extension.soland.federation.push_operations",
+        "cx.extension.soland.federation.pull_operations",
+        "cx.extension.soland.federation.space_members",
+        "cx.extension.soland.federation.verify_actor",
         "cx.sync.account",
-        "cx.sync.typing",
-        "cx.sync.backfill_gap",
+        "cx.extension.soland.sync.typing",
+        "cx.extension.soland.sync.backfill_gap",
         "cx.sync.get_snapshot_head",
-        "cx.sync.get_snapshot_chunk",
+        "cx.extension.soland.sync.get_snapshot_chunk",
         "cx.directory.describe",
         "cx.directory.search_spaces",
         "cx.directory.resolve_space",
-        "cx.index.describe",
-        "cx.index.debug_reducer",
-        "cx.admin.actors",
-        "cx.admin.spaces",
-        "cx.admin.devices",
-        "cx.admin.capabilities",
-        "cx.admin.federation",
-        "cx.admin.applets",
-        "cx.admin.agents",
-        "cx.admin.reports",
-        "cx.admin.invite_tokens",
-        "cx.admin.audit",
-        "cx.admin.policy",
-        "cx.admin.media",
+        "cx.extension.soland.index.describe",
+        "cx.extension.soland.index.debug_reducer",
+        "cx.extension.soland.admin.actors",
+        "cx.extension.soland.admin.spaces",
+        "cx.extension.soland.admin.devices",
+        "cx.extension.soland.admin.capabilities",
+        "cx.extension.soland.admin.federation",
+        "cx.extension.soland.admin.applets",
+        "cx.extension.soland.admin.agents",
+        "cx.extension.soland.admin.reports",
+        "cx.extension.soland.admin.invite_tokens",
+        "cx.extension.soland.admin.audit",
+        "cx.extension.soland.admin.policy",
+        "cx.extension.soland.admin.media",
         "cx.authz.check",
-        "cx.policies.list",
-        "cx.policies.get",
-        "cx.policies.upsert",
-        "cx.policies.delete",
+        "cx.extension.soland.policies.list",
+        "cx.extension.soland.policies.get",
+        "cx.extension.soland.policies.upsert",
+        "cx.extension.soland.policies.delete",
         "cx.push.register_device",
-        "cx.devices.pairing_challenge",
-        "cx.devices.authorize_pairing",
+        "cx.extension.soland.devices.pairing_challenge",
+        "cx.extension.soland.devices.authorize_pairing",
         "cx.push.unregister_device",
-        "cx.push.rules",
+        "cx.extension.soland.push.rules",
         "cx.push.notify",
-        "cx.webrtc.create_session",
-        "cx.webrtc.send_signal",
-        "cx.webrtc.close_session",
+        "cx.blob.upload",
+        "cx.blob.head",
+        "cx.blob.get",
+        "cx.extension.soland.webrtc.create_session",
+        "cx.extension.soland.webrtc.send_signal",
+        "cx.extension.soland.webrtc.close_session",
         "cx.policy.check",
         "cx.moderation.report",
         "cx.mimi.provider_directory",
@@ -1128,13 +1312,32 @@ async fn mimi_provider_facade_contracts_work() {
         "cx.mimi.key_material"
     );
 
+    let room_binding: Value = TestClient::put("http://server/api/v1/mimi/rooms/01JSMIMI/update")
+        .json(&serde_json::json!({
+            "room_binding": {
+                "mimi_room_uri": "mimi://soland.local/rooms/01JSMIMI",
+                "binding_scope": {
+                    "space_id": "cx:space:0196419b-0000-7000-8000-000000000000"
+                }
+            }
+        }))
+        .send(&service)
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(room_binding["ok"], true);
+
     let group_info: Value = TestClient::get("http://server/api/v1/mimi/rooms/01JSMIMI/group-info")
         .send(&service)
         .await
         .take_json()
         .await
         .unwrap();
-    assert_eq!(group_info["room_id"], "01JSMIMI");
+    assert_eq!(
+        group_info["room_id"], "01JSMIMI",
+        "group_info response: {group_info}"
+    );
     assert_eq!(
         group_info["group_info"]["canonical_truth"],
         "contrix_signed_event_reducer"
@@ -1270,26 +1473,30 @@ async fn mimi_facade_writes_flow_into_canonical_reducer_chain() {
     assert!(binding_event_id.starts_with("cx:event:"));
 
     // Step 2: submit_message into the same room.
-    let msg_resp: Value =
-        TestClient::post(format!("http://server/api/v1/mimi/rooms/{room_id}/messages"))
-            .json(&serde_json::json!({
-                "source_format": "text/plain;charset=utf-8",
-                "content": {
-                    "blocks": [{"kind": "cx.content.text", "text": "hello from MIMI P4"}],
-                },
-                "sender_did": "did:web:remote.example",
-                "mimi_message_id": "mimi-msg-p4-001",
-                "original_envelope_hash": "sha256:p4-orig",
-                "protocol_draft": "draft-ietf-mimi-protocol-06",
-                "content_draft": "draft-ietf-mimi-content-08",
-            }))
-            .send(&service)
-            .await
-            .take_json()
-            .await
-            .unwrap();
+    let msg_resp: Value = TestClient::post(format!(
+        "http://server/api/v1/mimi/rooms/{room_id}/messages"
+    ))
+    .json(&serde_json::json!({
+        "source_format": "text/plain;charset=utf-8",
+        "content": {
+            "blocks": [{"kind": "cx.content.text", "text": "hello from MIMI P4"}],
+        },
+        "sender_did": "did:web:remote.example",
+        "mimi_message_id": "mimi-msg-p4-001",
+        "original_envelope_hash": "sha256:p4-orig",
+        "protocol_draft": "draft-ietf-mimi-protocol-06",
+        "content_draft": "draft-ietf-mimi-content-08",
+    }))
+    .send(&service)
+    .await
+    .take_json()
+    .await
+    .unwrap();
     assert_eq!(msg_resp["ok"], true);
-    assert_eq!(msg_resp["space_id"], demo_space, "submit_message must use bound space_id");
+    assert_eq!(
+        msg_resp["space_id"], demo_space,
+        "submit_message must use bound space_id"
+    );
     assert_eq!(
         msg_resp["receipt"]["extra"]["reducer_chain"], "wired",
         "submit_message receipt should announce reducer-chain wire-up"
@@ -1301,15 +1508,14 @@ async fn mimi_facade_writes_flow_into_canonical_reducer_chain() {
     // Step 3: query /api/v1/events against the bound space and
     // verify both the room_binding event and the message event are
     // present.
-    let events: Value = TestClient::get(format!(
-        "http://server/api/v1/events?space_id={demo_space}"
-    ))
-    .add_header("authorization", format!("Bearer {token}"), true)
-    .send(&service)
-    .await
-    .take_json()
-    .await
-    .unwrap();
+    let events: Value =
+        TestClient::get(format!("http://server/api/v1/events?space_id={demo_space}"))
+            .add_header("authorization", format!("Bearer {token}"), true)
+            .send(&service)
+            .await
+            .take_json()
+            .await
+            .unwrap();
     let list = events["events"].as_array().expect("events array");
 
     let binding_event = list
@@ -1322,7 +1528,8 @@ async fn mimi_facade_writes_flow_into_canonical_reducer_chain() {
         "room_binding payload must echo room_id for bound-space dispatch"
     );
     assert_eq!(
-        binding_event["payload"]["binding_scope"]["space_id"], demo_space
+        binding_event["payload"]["binding_scope"]["space_id"],
+        demo_space
     );
 
     let message_event = list
@@ -1345,7 +1552,8 @@ async fn mimi_facade_writes_flow_into_canonical_reducer_chain() {
         "sha256:p4-orig"
     );
     assert_eq!(
-        message_event["payload"]["mimi_provenance"]["facade"], "soland.mimi.v1"
+        message_event["payload"]["mimi_provenance"]["facade"],
+        "soland.mimi.v1"
     );
 
     // Step 4: report_abuse emits a cx.moderation.report event.
@@ -1372,15 +1580,14 @@ async fn mimi_facade_writes_flow_into_canonical_reducer_chain() {
         "report_abuse receipt must announce moderation event emission"
     );
 
-    let events_again: Value = TestClient::get(format!(
-        "http://server/api/v1/events?space_id={demo_space}"
-    ))
-    .add_header("authorization", format!("Bearer {token}"), true)
-    .send(&service)
-    .await
-    .take_json()
-    .await
-    .unwrap();
+    let events_again: Value =
+        TestClient::get(format!("http://server/api/v1/events?space_id={demo_space}"))
+            .add_header("authorization", format!("Bearer {token}"), true)
+            .send(&service)
+            .await
+            .take_json()
+            .await
+            .unwrap();
     let list2 = events_again["events"].as_array().unwrap();
     let report_event = list2
         .iter()
@@ -1419,18 +1626,19 @@ async fn mimi_facade_writes_flow_into_canonical_reducer_chain() {
         .await
         .unwrap();
 
-    let msg_resp_2: Value =
-        TestClient::post(format!("http://server/api/v1/mimi/rooms/{room_id}/messages"))
-            .json(&serde_json::json!({
-                "source_format": "application/mimi-content",
-                "content": {"blocks": [{"kind": "cx.content.text", "text": "second message"}]},
-                "protocol_draft": "draft-ietf-mimi-protocol-06",
-            }))
-            .send(&service)
-            .await
-            .take_json()
-            .await
-            .unwrap();
+    let msg_resp_2: Value = TestClient::post(format!(
+        "http://server/api/v1/mimi/rooms/{room_id}/messages"
+    ))
+    .json(&serde_json::json!({
+        "source_format": "application/mimi-content",
+        "content": {"blocks": [{"kind": "cx.content.text", "text": "second message"}]},
+        "protocol_draft": "draft-ietf-mimi-protocol-06",
+    }))
+    .send(&service)
+    .await
+    .take_json()
+    .await
+    .unwrap();
     assert_eq!(
         msg_resp_2["space_id"], custom_space,
         "second message must route to the rebound space_id"
@@ -1618,7 +1826,13 @@ async fn rate_limit_errors_use_standard_envelope_with_retry_after() {
 async fn account_contacts_and_space_lifecycle_workflow() {
     let state = AppState::new(test_config(), Db { pool: None });
     let alice = dev_token(state.clone()).await;
-    let bob = register_account(state.clone(), "did:web:bob.example", "@bob", "cx:device:01904100-0000-7000-8000-b0b0b0000002").await;
+    let bob = register_account(
+        state.clone(),
+        "did:web:bob.example",
+        "@bob",
+        "cx:device:01904100-0000-7000-8000-b0b0b0000002",
+    )
+    .await;
 
     let duplicate = TestClient::post("http://server/api/v1/account/register")
         .json(&serde_json::json!({
@@ -2102,7 +2316,10 @@ async fn account_contacts_and_space_lifecycle_workflow() {
     let next_batch = decode_cursor(sync_with_message["next_batch"].as_str().unwrap());
     assert_eq!(next_batch["profile"], "incremental");
     assert_eq!(next_batch["principal_id"], "did:web:alice.example");
-    assert_eq!(next_batch["device_id"], "cx:device:01904100-0000-7000-8000-a11ce0000001");
+    assert_eq!(
+        next_batch["device_id"],
+        "cx:device:01904100-0000-7000-8000-a11ce0000001"
+    );
     assert_eq!(next_batch["service_id"], "did:web:soland.local");
     assert!(
         next_batch["filter_hash"]
@@ -3182,13 +3399,12 @@ async fn index_product_endpoints_return_demo_projection_shapes() {
     .unwrap();
     assert_eq!(object["object"]["kind"], "space");
 
-    let thread: Value =
-        TestClient::get("http://server/api/v1/index/thread?thread_id=cx:flow:demo")
-            .send(&app())
-            .await
-            .take_json()
-            .await
-            .unwrap();
+    let thread: Value = TestClient::get("http://server/api/v1/index/thread?thread_id=cx:flow:demo")
+        .send(&app())
+        .await
+        .take_json()
+        .await
+        .unwrap();
     assert_eq!(thread["thread"]["thread_id"], "cx:flow:demo");
     assert!(thread["events"].as_array().unwrap().is_empty());
 
@@ -3283,6 +3499,14 @@ async fn broader_protocol_surface_returns_contract_shapes() {
         .await
         .unwrap();
     assert_eq!(authz["allowed"], true);
+    assert_eq!(authz["decision_trace"]["actor"], "did:web:alice.example");
+    assert_eq!(authz["decision_trace"]["action"], "space.read");
+    assert_eq!(
+        authz["decision_trace"]["space_id"],
+        "cx:space:0196419b-0000-7000-8000-000000000000"
+    );
+    assert!(authz["decision_trace"]["matched_grants"].is_array());
+    assert_eq!(authz["decision_trace"]["cache"]["mode"], "in_memory");
 
     let ice: Value = TestClient::post("http://server/contrix/v1/ice-config")
         .json(&serde_json::json!({}))
@@ -3362,7 +3586,8 @@ async fn admin_collection_surfaces_return_sodmin_shapes() {
         .await
         .unwrap();
     assert!(devices["devices"].as_array().unwrap().iter().any(|device| {
-        device["actor"] == "did:web:alice.example" && device["device_id"] == "cx:device:01904100-0000-7000-8000-a11ce0000001"
+        device["actor"] == "did:web:alice.example"
+            && device["device_id"] == "cx:device:01904100-0000-7000-8000-a11ce0000001"
     }));
 
     let unknown = TestClient::get("http://server/api/v1/admin/not-real")
@@ -3397,7 +3622,10 @@ async fn device_pairing_challenge_and_authorization_surface_work() {
             .unwrap()
             .starts_with("cx:device_pairing:")
     );
-    assert_eq!(challenge["device_id"], "cx:device:01904100-0000-7000-8000-9b04e0000007");
+    assert_eq!(
+        challenge["device_id"],
+        "cx:device:01904100-0000-7000-8000-9b04e0000007"
+    );
     assert_eq!(
         challenge["production_gap"],
         "device_pairing_proof_verification"
@@ -3417,7 +3645,10 @@ async fn device_pairing_challenge_and_authorization_surface_work() {
         .await
         .unwrap();
     assert_eq!(authorized["status"], "authorized");
-    assert_eq!(authorized["device"]["device_id"], "cx:device:01904100-0000-7000-8000-9b04e0000007");
+    assert_eq!(
+        authorized["device"]["device_id"],
+        "cx:device:01904100-0000-7000-8000-9b04e0000007"
+    );
     assert_eq!(
         authorized["authorization_event"]["event_kind"],
         "cx.device.pairing.authorized"
@@ -3436,7 +3667,8 @@ async fn device_pairing_challenge_and_authorization_surface_work() {
             .any(|event| {
                 event["action"] == "device.authorize_pairing"
                     && event["outcome"] == "accepted"
-                    && event["target"]["target_device_id"] == "cx:device:01904100-0000-7000-8000-9b04e0000007"
+                    && event["target"]["target_device_id"]
+                        == "cx:device:01904100-0000-7000-8000-9b04e0000007"
             })
     );
 }
@@ -4015,7 +4247,8 @@ async fn push_profile_and_moderation_contracts_work() {
             && device["rule_id"] == "mute-device"
     }));
     assert!(rejected.iter().any(|device| {
-        device["device_id"] == "cx:device:01904100-0000-7000-8000-71551c000004" && device["reason"] == "unknown_device"
+        device["device_id"] == "cx:device:01904100-0000-7000-8000-71551c000004"
+            && device["reason"] == "unknown_device"
     }));
 
     let deleted_rule: Value = TestClient::delete("http://server/api/v1/push/rules/mute-device")
@@ -4127,41 +4360,87 @@ async fn auth_keys_device_messages_and_blobs_work() {
         .unwrap();
     assert!(query["device_keys"].is_object());
     assert_eq!(
-        query["device_keys"]["did:web:alice.example"]["cx:device:01904100-0000-7000-8000-a11ce0000001"]["device_keys"]["key"],
+        query["device_keys"]["did:web:alice.example"]["cx:device:01904100-0000-7000-8000-a11ce0000001"]
+            ["device_keys"]["key"],
         "alice-device-key"
     );
     assert_eq!(
-        query["device_keys"]["did:web:alice.example"]["cx:device:01904100-0000-7000-8000-a11ce0000001"]["device_signature"]["alg"],
+        query["device_keys"]["did:web:alice.example"]["cx:device:01904100-0000-7000-8000-a11ce0000001"]
+            ["device_signature"]["alg"],
         "none"
     );
     assert_eq!(
-        query["device_keys"]["did:web:alice.example"]["cx:device:01904100-0000-7000-8000-a11ce0000001"]["fallback_keys"]["signed_curve25519:fallback"]
-            ["key"],
+        query["device_keys"]["did:web:alice.example"]["cx:device:01904100-0000-7000-8000-a11ce0000001"]
+            ["fallback_keys"]["signed_curve25519:fallback"]["key"],
         "fallback-key"
     );
     assert_eq!(
-        query["device_keys"]["did:web:alice.example"]["cx:device:01904100-0000-7000-8000-a11ce0000001"]["mls_key_packages"][0]["package_id"],
+        query["device_keys"]["did:web:alice.example"]["cx:device:01904100-0000-7000-8000-a11ce0000001"]
+            ["mls_key_packages"][0]["package_id"],
         "mls-package-1"
     );
     assert_eq!(
-        query["device_keys"]["did:web:alice.example"]["cx:device:01904100-0000-7000-8000-a11ce0000001"]["principal_signing_keys"][0]["key"],
+        query["device_keys"]["did:web:alice.example"]["cx:device:01904100-0000-7000-8000-a11ce0000001"]
+            ["principal_signing_keys"][0]["key"],
         "principal-key"
     );
     assert_eq!(
-        query["device_keys"]["did:web:alice.example"]["cx:device:01904100-0000-7000-8000-a11ce0000001"]["recovery_keys"][0]["key"],
+        query["device_keys"]["did:web:alice.example"]["cx:device:01904100-0000-7000-8000-a11ce0000001"]
+            ["recovery_keys"][0]["key"],
         "recovery-key"
     );
     assert_eq!(
-        query["device_keys"]["did:web:alice.example"]["cx:device:01904100-0000-7000-8000-a11ce0000001"]["session_keys"][0]["key"],
+        query["device_keys"]["did:web:alice.example"]["cx:device:01904100-0000-7000-8000-a11ce0000001"]
+            ["session_keys"][0]["key"],
         "session-key"
     );
     assert_eq!(
-        query["device_keys"]["did:web:alice.example"]["cx:device:01904100-0000-7000-8000-a11ce0000001"]["agent_keys"][0]["key"],
+        query["device_keys"]["did:web:alice.example"]["cx:device:01904100-0000-7000-8000-a11ce0000001"]
+            ["agent_keys"][0]["key"],
         "agent-key"
     );
     assert_eq!(
-        query["device_keys"]["did:web:alice.example"]["cx:device:01904100-0000-7000-8000-a11ce0000001"]["backup_restore_keys"][0]["key"],
+        query["device_keys"]["did:web:alice.example"]["cx:device:01904100-0000-7000-8000-a11ce0000001"]
+            ["backup_restore_keys"][0]["key"],
         "backup-key"
+    );
+
+    let claimed_once: Value = TestClient::post("http://server/api/v1/keys/claim")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({
+            "one_time_keys": {
+                "did:web:alice.example": {
+                    "cx:device:01904100-0000-7000-8000-a11ce0000001": "signed_curve25519"
+                }
+            }
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(
+        claimed_once["one_time_keys"]["did:web:alice.example"]["cx:device:01904100-0000-7000-8000-a11ce0000001"]
+            ["key_id"],
+        "otk1"
+    );
+    let claimed_replay: Value = TestClient::post("http://server/api/v1/keys/claim")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({
+            "one_time_keys": {
+                "did:web:alice.example": {
+                    "cx:device:01904100-0000-7000-8000-a11ce0000001": "signed_curve25519"
+                }
+            }
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert!(
+        claimed_replay["one_time_keys"]["did:web:alice.example"]["cx:device:01904100-0000-7000-8000-a11ce0000001"].is_null(),
+        "one-time key claim must be single-use"
     );
 
     let invalid_device_message = TestClient::post("http://server/api/v1/device_messages")
@@ -4455,6 +4734,151 @@ async fn auth_keys_device_messages_and_blobs_work() {
 }
 
 #[tokio::test]
+async fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+    let service = app_from_state(state.clone());
+    let device_id = "cx:device:01904100-0000-7000-8000-a11ce0000001";
+    let push_gateway = "https://push.example/api/v1/push/notify";
+    let bridge_describe = "https://push.example/api/v1/push/bridge/describe";
+    let stale_at = chrono::Utc::now() - chrono::Duration::hours(25);
+
+    let stale_import: Value = TestClient::post(
+        "http://server/api/v1/push/outbound/bridge/cache/import",
+    )
+    .json(&serde_json::json!({
+        "replace_existing": true,
+        "entries": [{
+            "push_gateway_url": push_gateway,
+            "service_base_url": "https://push.example",
+            "bridge_describe_url": bridge_describe,
+            "fetch_state": "cotest_seed",
+            "cache_state": "imported_replace_existing",
+            "contract_digest": "sha256:stale",
+            "fetched_at": stale_at,
+            "remote_contract": {
+                "contract": "cx.push.bridge.describe",
+                "service_did": "did:web:push.example",
+                "delivery": {"notify_path": "/api/v1/push/notify", "operation_id": "cx.push.notify"}
+            },
+            "trust_level": "trusted",
+            "freshness_at": stale_at,
+            "etag": "stale"
+        }]
+    }))
+    .send(&service)
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    assert_eq!(stale_import["imported_count"], 1);
+
+    let registered: Value = TestClient::post("http://server/api/v1/push/register-device")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({
+            "device_id": device_id,
+            "push_gateway": push_gateway,
+            "push_key": "opaque-token",
+            "platform": "desktop",
+            "app_id": "clientx"
+        }))
+        .send(&service)
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(registered["ok"], true);
+
+    let stale_notify: Value = TestClient::post("http://server/api/v1/push/notify")
+        .json(&serde_json::json!({
+            "notification": {
+                "type": "blind_wakeup",
+                "devices": [{"device_id": device_id}]
+            }
+        }))
+        .send(&service)
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(stale_notify["rejected"][0]["reason"], "contract_drift");
+    assert_eq!(stale_notify["rejected"][0]["drift_result"], "stale");
+
+    let now = chrono::Utc::now();
+    let fresh_import: Value = TestClient::post(
+        "http://server/api/v1/push/outbound/bridge/cache/import",
+    )
+    .json(&serde_json::json!({
+        "replace_existing": true,
+        "entries": [{
+            "push_gateway_url": push_gateway,
+            "service_base_url": "https://push.example",
+            "bridge_describe_url": bridge_describe,
+            "fetch_state": "cotest_seed",
+            "cache_state": "imported_replace_existing",
+            "contract_digest": "sha256:fresh",
+            "fetched_at": now,
+            "remote_contract": {
+                "contract": "cx.push.bridge.describe",
+                "service_did": "did:web:push.example",
+                "delivery": {"notify_path": "/api/v1/push/notify", "operation_id": "cx.push.notify"}
+            },
+            "trust_level": "trusted",
+            "freshness_at": now,
+            "etag": "fresh"
+        }]
+    }))
+    .send(&service)
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    assert_eq!(fresh_import["total_entries"], 1);
+
+    let fresh_notify: Value = TestClient::post("http://server/api/v1/push/notify")
+        .json(&serde_json::json!({
+            "notification": {
+                "type": "blind_wakeup",
+                "devices": [{"device_id": device_id}]
+            }
+        }))
+        .send(&service)
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert!(fresh_notify["rejected"].as_array().unwrap().is_empty());
+
+    let unregistered: Value = TestClient::post("http://server/api/v1/push/unregister-device")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({
+            "device_id": device_id,
+            "push_key": "opaque-token",
+            "app_id": "clientx"
+        }))
+        .send(&service)
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(unregistered["ok"], true);
+
+    let after_unregister: Value = TestClient::post("http://server/api/v1/push/notify")
+        .json(&serde_json::json!({
+            "notification": {
+                "type": "blind_wakeup",
+                "devices": [{"device_id": device_id}]
+            }
+        }))
+        .send(&service)
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(after_unregister["rejected"][0]["reason"], "unknown_device");
+}
+
+#[tokio::test]
 async fn keys_query_hides_revoked_device() {
     let state = AppState::new(test_config(), Db { pool: None });
     let desktop = dev_token_for_device(
@@ -4525,11 +4949,13 @@ async fn keys_query_hides_revoked_device() {
         .await
         .unwrap();
     assert_eq!(
-        pre_revoke_query["device_keys"]["did:web:alice.example"]["cx:device:01904100-0000-7000-8000-a11ce0000001"]["device_keys"]["key"],
+        pre_revoke_query["device_keys"]["did:web:alice.example"]["cx:device:01904100-0000-7000-8000-a11ce0000001"]
+            ["device_keys"]["key"],
         "desktop-device-key"
     );
     assert_eq!(
-        pre_revoke_query["device_keys"]["did:web:alice.example"]["cx:device:01904100-0000-7000-8000-9b04e0000007"]["device_keys"]["key"],
+        pre_revoke_query["device_keys"]["did:web:alice.example"]["cx:device:01904100-0000-7000-8000-9b04e0000007"]
+            ["device_keys"]["key"],
         "phone-device-key"
     );
 
@@ -4554,7 +4980,8 @@ async fn keys_query_hides_revoked_device() {
         .unwrap();
     assert!(post_revoke_query["device_keys"]["did:web:alice.example"]["cx:device:01904100-0000-7000-8000-9b04e0000007"].is_null());
     assert_eq!(
-        post_revoke_query["device_keys"]["did:web:alice.example"]["cx:device:01904100-0000-7000-8000-a11ce0000001"]["device_keys"]["key"],
+        post_revoke_query["device_keys"]["did:web:alice.example"]["cx:device:01904100-0000-7000-8000-a11ce0000001"]
+            ["device_keys"]["key"],
         "desktop-device-key"
     );
 }
@@ -4783,6 +5210,10 @@ async fn policy_check_and_validation_work() {
         .await
         .unwrap();
     assert_eq!(policy["decision"], "allow");
+    assert_eq!(policy["decision_trace"]["request_id"], "req1");
+    assert_eq!(policy["decision_trace"]["actor"], "did:web:alice.example");
+    assert_eq!(policy["decision_trace"]["action"], "message.send");
+    assert_eq!(policy["decision_trace"]["cache"]["mode"], "in_memory");
 
     let unauthenticated_policy = TestClient::post("http://server/api/v1/policies")
         .json(&serde_json::json!({
@@ -4844,6 +5275,10 @@ async fn policy_check_and_validation_work() {
     assert_eq!(denied["reason_code"], "policy_denied");
     assert_eq!(denied["policy_id"], policy_id);
     assert_eq!(denied["obligations"][0]["type"], "audit");
+    assert_eq!(denied["decision_trace"]["request_id"], "req2");
+    assert_eq!(denied["decision_trace"]["matched_policy"], policy_id);
+    assert_eq!(denied["decision_trace"]["obligations"][0]["level"], "high");
+    assert!(denied["decision_trace"]["missing_proofs"].is_array());
 
     let deleted: Value = TestClient::delete(format!("http://server/api/v1/policies/{policy_id}"))
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -5180,9 +5615,10 @@ fn signed_flow_event(
     event_id: &str,
     actor_seq: u64,
     kind: &str,
-    payload: Value,
+    mut payload: Value,
     prev_refs: Vec<&str>,
 ) -> Value {
+    normalize_flow_payload(kind, &mut payload);
     let mut event = serde_json::json!({
         "event_id": event_id,
         "kind": kind,
@@ -5209,14 +5645,46 @@ fn signed_flow_event(
     event
 }
 
+fn normalize_flow_payload(kind: &str, payload: &mut Value) {
+    let Some(object) = payload.as_object_mut() else {
+        return;
+    };
+    if kind == "cx.flow.create" {
+        if let Some(flow) = object.get_mut("object").and_then(Value::as_object_mut) {
+            flow.entry("schema".to_owned())
+                .or_insert_with(|| Value::String("cx.schema.flow.v1".to_owned()));
+            flow.entry("created_at".to_owned())
+                .or_insert_with(|| Value::String("2026-05-17T00:00:00Z".to_owned()));
+            flow.entry("tracks".to_owned()).or_insert_with(|| {
+                serde_json::json!({
+                    "discussion": {
+                        "is_primary": true,
+                        "profile": "discussion"
+                    }
+                })
+            });
+        }
+    }
+    if matches!(
+        kind,
+        "cx.flow.archive" | "cx.flow.restore" | "cx.flow.tombstone"
+    ) && !object.contains_key("target_ref")
+        && !object.contains_key("object_ref")
+        && let Some(flow_id) = object.get("flow_id").and_then(Value::as_str)
+    {
+        object.insert("target_ref".to_owned(), Value::String(flow_id.to_owned()));
+    }
+}
+
 /// Build a signed `cx.morph.*` event envelope.
 fn signed_morph_event(
     event_id: &str,
     actor_seq: u64,
     kind: &str,
-    payload: Value,
+    mut payload: Value,
     prev_refs: Vec<&str>,
 ) -> Value {
+    normalize_morph_payload(kind, &mut payload);
     let mut event = serde_json::json!({
         "event_id": event_id,
         "kind": kind,
@@ -5241,6 +5709,31 @@ fn signed_morph_event(
     });
     event["canonical_digest"] = Value::String(event_canonical_digest(&event));
     event
+}
+
+fn normalize_morph_payload(kind: &str, payload: &mut Value) {
+    let Some(object) = payload.as_object_mut() else {
+        return;
+    };
+    if kind == "cx.morph.create" {
+        if let Some(morph) = object.get_mut("object").and_then(Value::as_object_mut) {
+            morph
+                .entry("schema".to_owned())
+                .or_insert_with(|| Value::String("cx.schema.morph.v1".to_owned()));
+            morph
+                .entry("created_at".to_owned())
+                .or_insert_with(|| Value::String("2026-05-17T00:00:00Z".to_owned()));
+        }
+    }
+    if matches!(
+        kind,
+        "cx.morph.archive" | "cx.morph.restore" | "cx.morph.tombstone"
+    ) && !object.contains_key("target_ref")
+        && !object.contains_key("object_ref")
+        && let Some(morph_id) = object.get("morph_id").and_then(Value::as_str)
+    {
+        object.insert("target_ref".to_owned(), Value::String(morph_id.to_owned()));
+    }
 }
 
 /// Round 13 — end-to-end check that Flow / Morph lifecycle state-machine
@@ -5314,7 +5807,7 @@ async fn flow_morph_lifecycle_state_machine_returns_412_for_illegal_transitions(
         .take_json()
         .await
         .unwrap();
-    assert_eq!(resp["status"], "accepted");
+    assert_eq!(resp["status"], "accepted", "redact flow response: {resp}");
 
     // 4) flow archive again on Archived → 412 flow_not_active.
     let bad_archive = signed_flow_event(
@@ -5366,7 +5859,7 @@ async fn flow_morph_lifecycle_state_machine_returns_412_for_illegal_transitions(
         .take_json()
         .await
         .unwrap();
-    assert_eq!(resp["status"], "accepted");
+    assert_eq!(resp["status"], "accepted", "redact flow response: {resp}");
 
     // ── Morph path ───────────────────────────────────────────────────
 
@@ -5457,9 +5950,15 @@ async fn flow_morph_lifecycle_state_machine_returns_412_for_illegal_transitions(
 fn signed_redaction_event(
     event_id: &str,
     actor_seq: u64,
-    payload: Value,
+    mut payload: Value,
     prev_refs: Vec<&str>,
 ) -> Value {
+    if let Some(object) = payload.as_object_mut()
+        && !object.contains_key("target_ref")
+        && let Some(object_ref) = object.get("object_ref").cloned()
+    {
+        object.insert("target_ref".to_owned(), object_ref);
+    }
     let mut event = serde_json::json!({
         "event_id": event_id,
         "kind": "cx.redaction",
@@ -5544,7 +6043,7 @@ async fn redaction_targeting_flow_morph_flips_to_redacted_and_rejects_terminal_r
         .take_json()
         .await
         .unwrap();
-    assert_eq!(resp["status"], "accepted");
+    assert_eq!(resp["status"], "accepted", "redact flow response: {resp}");
 
     // Confirm projection flipped to Redacted.
     {
@@ -5662,13 +6161,8 @@ async fn account_data_space_remark_round_trip() {
         "Alice",
     )
     .await;
-    let bob = dev_token_for_device(
-        state.clone(),
-        "did:web:bob.example",
-        "device-bob-1",
-        "Bob",
-    )
-    .await;
+    let bob =
+        dev_token_for_device(state.clone(), "did:web:bob.example", "device-bob-1", "Bob").await;
 
     let space_id = "cx:space:0196419b-0000-7000-8000-000000000000";
     let key = format!("cx.contacts.space.{space_id}");
@@ -6336,8 +6830,7 @@ async fn admin_applets_agents_endpoints_reflect_submitted_registry_events() {
     discovery_event["schema_id"] = Value::String("cx.schema.event_payload.v1".to_owned());
     discovery_event["payload"] = discovery_payload.clone();
     discovery_event["proofs"][0]["payload_hash"] = Value::String(sha256_json(&discovery_payload));
-    discovery_event["canonical_digest"] =
-        Value::String(event_canonical_digest(&discovery_event));
+    discovery_event["canonical_digest"] = Value::String(event_canonical_digest(&discovery_event));
     let resp: Value = TestClient::post("http://server/api/v1/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&discovery_event)
@@ -6351,7 +6844,11 @@ async fn admin_applets_agents_endpoints_reflect_submitted_registry_events() {
     // Agent endpoint event.
     let agent_payload = serde_json::json!({
         "agent_did": agent_did,
+        "agent_id": agent_did,
         "protocol": "mcp",
+        "endpoints": [{
+            "protocol": "mcp"
+        }],
     });
     let mut agent_event = signed_event_envelope(
         "cx:event:01904100-0000-7000-8000-ab10de000003",
@@ -6646,15 +7143,13 @@ async fn applet_bridge_emits_synthetic_status_for_session_start() {
     // The reference bridge should have appended a synthetic status
     // event for the same session_id. Pull it out of the projection
     // log via the events list endpoint.
-    let events: Value = TestClient::get(format!(
-        "http://server/api/v1/events?space_id={space_id}"
-    ))
-    .add_header("authorization", format!("Bearer {token}"), true)
-    .send(&app_from_state(state.clone()))
-    .await
-    .take_json()
-    .await
-    .unwrap();
+    let events: Value = TestClient::get(format!("http://server/api/v1/events?space_id={space_id}"))
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
     let list = events["events"].as_array().expect("events array");
     let status_event = list
         .iter()
@@ -6664,14 +7159,8 @@ async fn applet_bridge_emits_synthetic_status_for_session_start() {
         })
         .expect("synthetic status event missing from projection log");
     assert_eq!(status_event["payload"]["status"], "completed");
-    assert_eq!(
-        status_event["payload"]["detail"]["echo"]["op"],
-        "ping"
-    );
-    assert_eq!(
-        status_event["payload"]["detail"]["echo"]["tag"],
-        "b3-e2e"
-    );
+    assert_eq!(status_event["payload"]["detail"]["echo"]["op"], "ping");
+    assert_eq!(status_event["payload"]["detail"]["echo"]["tag"], "b3-e2e");
     assert_eq!(
         status_event["payload"]["detail"]["bridge"],
         "soland.reference.echo"
@@ -6695,13 +7184,17 @@ async fn agent_bridge_emits_status_and_result_for_session_start() {
     // `cx:space:0196419b-0000-7000-8000-000000000000` so the events
     // surface accepts writes against it (mirror of the B3 test).
     let space_id = "cx:space:0196419b-0000-7000-8000-000000000000";
-    let session_id = "cx:session:01904100-0000-7000-8000-b4b4b4b4b4b4";
+    let session_id = "cx:agent_session:01904100-0000-7000-8000-b4b4b4b4b4b4";
     let agent_did = "did:web:agent.example";
 
     // Register the agent first so B4c's dispatch lookup succeeds.
     let endpoint_payload = serde_json::json!({
         "agent_did": agent_did,
+        "agent_id": agent_did,
         "protocol": "echo",
+        "endpoints": [{
+            "protocol": "echo"
+        }],
     });
     let mut endpoint_event = serde_json::json!({
         "event_id": "cx:event:01904100-0000-7000-8000-e4e4e4e4e4e4",
@@ -6742,8 +7235,11 @@ async fn agent_bridge_emits_status_and_result_for_session_start() {
     let echo_params = serde_json::json!({"op": "summarize", "doc": "b4-e2e"});
     let mut payload = serde_json::json!({
         "agent_did": agent_did,
+        "counterparty_agent": agent_did,
         "session_id": session_id,
+        "protocol": "http_custom",
         "params": echo_params,
+        "capability_grant": "cx:grant:01904100-0000-7000-8000-000000000099",
         "capability_proof": {
             "grant_ref": "cx:grant:01904100-0000-7000-8000-000000000099",
             "note": "B4 e2e placeholder — reference echo runtime does not verify the proof",
@@ -6784,15 +7280,13 @@ async fn agent_bridge_emits_status_and_result_for_session_start() {
         .unwrap();
     assert_eq!(resp["status"], "accepted", "submit response: {resp}");
 
-    let events: Value = TestClient::get(format!(
-        "http://server/api/v1/events?space_id={space_id}"
-    ))
-    .add_header("authorization", format!("Bearer {token}"), true)
-    .send(&app_from_state(state.clone()))
-    .await
-    .take_json()
-    .await
-    .unwrap();
+    let events: Value = TestClient::get(format!("http://server/api/v1/events?space_id={space_id}"))
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
     let list = events["events"].as_array().expect("events array");
 
     let status_event = list
@@ -6816,18 +7310,9 @@ async fn agent_bridge_emits_status_and_result_for_session_start() {
         })
         .expect("synthetic agent result event missing from projection log");
     assert_eq!(result_event["payload"]["status"], "completed");
-    assert_eq!(
-        result_event["payload"]["result"]["echo"]["op"],
-        "summarize"
-    );
-    assert_eq!(
-        result_event["payload"]["result"]["echo"]["doc"],
-        "b4-e2e"
-    );
-    assert_eq!(
-        result_event["payload"]["result"]["agent_did"],
-        agent_did
-    );
+    assert_eq!(result_event["payload"]["result"]["echo"]["op"], "summarize");
+    assert_eq!(result_event["payload"]["result"]["echo"]["doc"], "b4-e2e");
+    assert_eq!(result_event["payload"]["result"]["agent_did"], agent_did);
     let binding = &result_event["payload"]["audit_binding"];
     assert_eq!(binding["binding_kind"], "ed25519_v1");
     assert_eq!(binding["actor"], "did:web:alice.example");
@@ -6840,9 +7325,7 @@ async fn agent_bridge_emits_status_and_result_for_session_start() {
     // helper using the public key the envelope carries. The
     // verifier needs no access to the signing seed.
     let sig_b64 = binding["signature"].as_str().expect("signature base64");
-    let public_key_b64 = binding["public_key_b64"]
-        .as_str()
-        .expect("public_key_b64");
+    let public_key_b64 = binding["public_key_b64"].as_str().expect("public_key_b64");
     let canonical_subject = binding["canonical_subject"]
         .as_str()
         .expect("canonical_subject");
@@ -6873,7 +7356,7 @@ async fn agent_bridge_fails_closed_on_unknown_agent() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
     let space_id = "cx:space:0196419b-0000-7000-8000-000000000000";
-    let session_id = "cx:session:01904100-0000-7000-8000-deaddeaddead";
+    let session_id = "cx:agent_session:01904100-0000-7000-8000-deaddeaddead";
     let agent_did = "did:web:unregistered-agent.example";
 
     // Intentionally skip the cx.agent.endpoint step — this is the
@@ -6881,8 +7364,11 @@ async fn agent_bridge_fails_closed_on_unknown_agent() {
     let echo_params = serde_json::json!({"op": "ping"});
     let mut payload = serde_json::json!({
         "agent_did": agent_did,
+        "counterparty_agent": agent_did,
         "session_id": session_id,
+        "protocol": "http_custom",
         "params": echo_params,
+        "capability_grant": "cx:grant:01904100-0000-7000-8000-000000000099",
         "capability_proof": {
             "grant_ref": "cx:grant:01904100-0000-7000-8000-000000000099",
             "note": "B4c e2e placeholder",
@@ -6923,15 +7409,13 @@ async fn agent_bridge_fails_closed_on_unknown_agent() {
         .unwrap();
     assert_eq!(resp["status"], "accepted", "submit response: {resp}");
 
-    let events: Value = TestClient::get(format!(
-        "http://server/api/v1/events?space_id={space_id}"
-    ))
-    .add_header("authorization", format!("Bearer {token}"), true)
-    .send(&app_from_state(state.clone()))
-    .await
-    .take_json()
-    .await
-    .unwrap();
+    let events: Value = TestClient::get(format!("http://server/api/v1/events?space_id={space_id}"))
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
     let list = events["events"].as_array().expect("events array");
 
     // No status(running) event should be present.
@@ -6951,10 +7435,7 @@ async fn agent_bridge_fails_closed_on_unknown_agent() {
         })
         .expect("error result event missing from projection log");
     assert_eq!(result_event["payload"]["status"], "failed");
-    assert_eq!(
-        result_event["payload"]["error"]["code"],
-        "unknown_agent"
-    );
+    assert_eq!(result_event["payload"]["error"]["code"], "unknown_agent");
     assert!(
         result_event["payload"]["error"]["message"]
             .as_str()
@@ -6977,14 +7458,19 @@ async fn agent_bridge_plumbs_endpoint_url_through_session_envelopes() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
     let space_id = "cx:space:0196419b-0000-7000-8000-000000000000";
-    let session_id = "cx:session:01904100-0000-7000-8000-c0c0c0c0c0c0";
+    let session_id = "cx:agent_session:01904100-0000-7000-8000-c0c0c0c0c0c0";
     let agent_did = "did:web:b4d-agent.example";
     let endpoint_url = "https://b4d-agent.example/api/v1/agent";
 
     let endpoint_payload = serde_json::json!({
         "agent_did": agent_did,
+        "agent_id": agent_did,
         "protocol": "echo",
         "endpoint_url": endpoint_url,
+        "endpoints": [{
+            "protocol": "echo",
+            "url": endpoint_url
+        }],
     });
     let mut endpoint_event = serde_json::json!({
         "event_id": "cx:event:01904100-0000-7000-8000-c1c1c1c1c1c1",
@@ -7025,8 +7511,11 @@ async fn agent_bridge_plumbs_endpoint_url_through_session_envelopes() {
     let echo_params = serde_json::json!({"op": "ping"});
     let mut payload = serde_json::json!({
         "agent_did": agent_did,
+        "counterparty_agent": agent_did,
         "session_id": session_id,
+        "protocol": "http_custom",
         "params": echo_params,
+        "capability_grant": "cx:grant:01904100-0000-7000-8000-000000000099",
         "capability_proof": {
             "grant_ref": "cx:grant:01904100-0000-7000-8000-000000000099",
             "note": "B4d e2e placeholder",
@@ -7076,15 +7565,14 @@ async fn agent_bridge_plumbs_endpoint_url_through_session_envelopes() {
         let mut found = None;
         for _ in 0..50 {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-            let events: Value = TestClient::get(format!(
-                "http://server/api/v1/events?space_id={space_id}"
-            ))
-            .add_header("authorization", format!("Bearer {token}"), true)
-            .send(&app_from_state(state.clone()))
-            .await
-            .take_json()
-            .await
-            .unwrap();
+            let events: Value =
+                TestClient::get(format!("http://server/api/v1/events?space_id={space_id}"))
+                    .add_header("authorization", format!("Bearer {token}"), true)
+                    .send(&app_from_state(state.clone()))
+                    .await
+                    .take_json()
+                    .await
+                    .unwrap();
             if let Some(arr) = events["events"].as_array() {
                 if let Some(e) = arr.iter().find(|e| {
                     e["event_kind"] == "cx.agent.protocol_session.result"
@@ -7098,15 +7586,13 @@ async fn agent_bridge_plumbs_endpoint_url_through_session_envelopes() {
         found.expect("result event never landed within 5s")
     };
 
-    let events: Value = TestClient::get(format!(
-        "http://server/api/v1/events?space_id={space_id}"
-    ))
-    .add_header("authorization", format!("Bearer {token}"), true)
-    .send(&app_from_state(state.clone()))
-    .await
-    .take_json()
-    .await
-    .unwrap();
+    let events: Value = TestClient::get(format!("http://server/api/v1/events?space_id={space_id}"))
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
     let list = events["events"].as_array().expect("events array");
 
     let status_event = list
@@ -7226,7 +7712,10 @@ async fn snapshot_v2_multi_chunk_fixture_verifies_non_empty_audit_path() {
             .take_json()
             .await
             .unwrap();
-        assert!(resp["event_id"].is_string(), "send failed at seq {seq}: {resp:?}");
+        assert!(
+            resp["event_id"].is_string(),
+            "send failed at seq {seq}: {resp:?}"
+        );
     }
 
     let head: Value = TestClient::get(format!(
@@ -7370,7 +7859,11 @@ async fn projection_persistence_write_through_mirrors_lifecycle_events() {
         by_space.iter().any(|p| p.place_id == place_id),
         "list_for_space MUST surface the persisted place"
     );
-    let snapshot = state.persistence.place_projections().snapshot_all().unwrap();
+    let snapshot = state
+        .persistence
+        .place_projections()
+        .snapshot_all()
+        .unwrap();
     assert!(snapshot.iter().any(|p| p.place_id == place_id));
 
     // Flow: create + redact → persistence has state=redacted.
@@ -7486,7 +7979,3 @@ async fn projection_persistence_write_through_mirrors_lifecycle_events() {
     assert_eq!(morph_row.state, "archived");
     assert_eq!(morph_row.morph_type, "task");
 }
-
-
-
-

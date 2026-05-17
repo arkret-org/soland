@@ -52,6 +52,28 @@ async fn create_relation(
     if validate_space_id(&body.space_id).is_err() {
         return Err(AppError::invalid_param("invalid space_id"));
     }
+    // Spec: models/relation.md §3.2 — structural relations (`contains`,
+    // `parent_of`) MUST stay within a single Space. When `from` / `to`
+    // refs resolve to known Flow projections from a *different* space
+    // than the relation's `space_id`, reject up front.
+    let structural_kinds: &[&str] = &["contains", "parent_of", "child_of"];
+    if structural_kinds.contains(&body.relation_kind.as_str()) {
+        let proj = state.projection.lock().expect("projection lock");
+        for ref_opt in [&body.from, &body.to] {
+            let Some(ref_id) = ref_opt.as_deref() else {
+                continue;
+            };
+            if ref_id.starts_with("cx:flow:")
+                && let Some(flow) = proj.flows.get(ref_id)
+                && flow.space_id != body.space_id
+            {
+                return Err(AppError::invalid_param(
+                    "structural relation refs MUST belong to the same Space as the relation",
+                )
+                .with_wire_code("cross_space_structural_relation"));
+            }
+        }
+    }
     let relation_id = ids::generate_relation_id();
     let operation_id = ids::generate_operation_id();
     let payload = json!({

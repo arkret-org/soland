@@ -55,7 +55,7 @@ pub(super) fn router() -> Router {
 }
 
 #[endpoint(
-    operation_id = "cx.messages.send",
+    operation_id = "cx.extension.soland.messages.send",
     tags("messages"),
     summary = "Soland-local simplified send-message surface (mirrors into projection_events)"
 )]
@@ -80,7 +80,10 @@ async fn messages_send(
             "actor is not a joined member of the space",
         ));
     }
-    let encrypted = body.get("encrypted").and_then(Value::as_bool).unwrap_or(false);
+    let encrypted = body
+        .get("encrypted")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let content = body
         .get("content")
         .ok_or_else(|| AppError::missing_param("content is required"))?;
@@ -152,7 +155,11 @@ async fn messages_send(
         }),
         created_at: now,
     };
-    if let Err(error) = state.persistence.projection_events().append(projection_record) {
+    if let Err(error) = state
+        .persistence
+        .projection_events()
+        .append(projection_record)
+    {
         tracing::error!(%error, "failed to mirror message into projection_events");
     }
 

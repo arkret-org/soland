@@ -337,7 +337,10 @@ pub fn load_projected_events_from_pg(
             space_id: ids::format_typed_uuid("space", &row.space_id),
             event_kind: row.event_kind,
             operation_type: row.operation_type,
-            operation_id: row.operation_id.as_ref().map(|u| ids::format_typed_uuid("operation", u)),
+            operation_id: row
+                .operation_id
+                .as_ref()
+                .map(|u| ids::format_typed_uuid("operation", u)),
             sender: row.sender,
             payload: row.payload,
             created_at: row.created_at,
@@ -466,12 +469,8 @@ fn apply_via_lattice_registry(
 /// backfill ordering) also produce no write.
 fn write_through_projection(state: &AppState, operation: &Operation) {
     use crate::kinds;
-    use crate::persistence::{
-        FlowProjectionRecord, MorphProjectionRecord, PlaceProjectionRecord,
-    };
-    use crate::reducer::{
-        ObjectLifecycleState, PlaceLifecycleState,
-    };
+    use crate::persistence::{FlowProjectionRecord, MorphProjectionRecord, PlaceProjectionRecord};
+    use crate::reducer::{ObjectLifecycleState, PlaceLifecycleState};
 
     enum Snapshot {
         Place(PlaceProjectionRecord),
@@ -524,24 +523,33 @@ fn write_through_projection(state: &AppState, operation: &Operation) {
         let Ok(proj) = state.projection.lock() else {
             return;
         };
-        let place_id_from_payload =
-            operation.payload.get("place_id").and_then(|v| v.as_str()).map(ToOwned::to_owned);
+        let place_id_from_payload = operation
+            .payload
+            .get("place_id")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned);
         let place_id_from_object = operation
             .payload
             .get("object")
             .and_then(|v| v.get("id"))
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned);
-        let flow_id_from_payload =
-            operation.payload.get("flow_id").and_then(|v| v.as_str()).map(ToOwned::to_owned);
+        let flow_id_from_payload = operation
+            .payload
+            .get("flow_id")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned);
         let flow_id_from_object = operation
             .payload
             .get("object")
             .and_then(|v| v.get("id"))
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned);
-        let morph_id_from_payload =
-            operation.payload.get("morph_id").and_then(|v| v.as_str()).map(ToOwned::to_owned);
+        let morph_id_from_payload = operation
+            .payload
+            .get("morph_id")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned);
         let morph_id_from_object = operation
             .payload
             .get("object")
@@ -565,10 +573,12 @@ fn write_through_projection(state: &AppState, operation: &Operation) {
             }
         } else if is_flow_kind {
             let id = flow_id_from_payload.or(flow_id_from_object);
-            id.and_then(|i| proj.flows.get(&i)).map(return_snapshot_flow)
+            id.and_then(|i| proj.flows.get(&i))
+                .map(return_snapshot_flow)
         } else if is_morph_kind {
             let id = morph_id_from_payload.or(morph_id_from_object);
-            id.and_then(|i| proj.morphs.get(&i)).map(return_snapshot_morph)
+            id.and_then(|i| proj.morphs.get(&i))
+                .map(return_snapshot_morph)
         } else if is_redaction {
             // object_ref may be cx:flow: or cx:morph:; try both.
             if let Some(ref obj_ref) = object_ref {
@@ -591,9 +601,7 @@ fn write_through_projection(state: &AppState, operation: &Operation) {
         return;
     };
 
-    fn return_snapshot_place(
-        p: &crate::reducer::PlaceProjection,
-    ) -> Option<Snapshot> {
+    fn return_snapshot_place(p: &crate::reducer::PlaceProjection) -> Option<Snapshot> {
         Some(Snapshot::Place(PlaceProjectionRecord {
             place_id: p.place_id.clone(),
             space_id: p.space_id.clone(),
@@ -1000,6 +1008,20 @@ pub fn ensure_projected_space(state: &AppState, origin: &str, operation: &Operat
                     }
                 })
                 .to_owned(),
+            history_visibility: operation
+                .payload
+                .get("history_visibility")
+                .and_then(|value| value.as_str())
+                .filter(|value| {
+                    matches!(*value, "shared" | "joined" | "invited" | "world_readable")
+                })
+                .unwrap_or("joined")
+                .to_owned(),
+            encryption_profile: operation
+                .payload
+                .get("encryption_profile")
+                .and_then(|value| value.as_str())
+                .map(ToOwned::to_owned),
             plaintext_visible_services: operation
                 .payload
                 .get("plaintext_visible_services")

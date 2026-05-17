@@ -53,12 +53,24 @@ impl AuthArgs {
     ) -> Result<SessionRecord, AppError> {
         match authenticated_session_inner(state, req) {
             Ok(session) => Ok(session),
-            Err((status, code, message)) => Err(AppError::new(
-                crate::error::ErrorCode::from_wire(code)
-                    .unwrap_or(crate::error::ErrorCode::Unauthenticated),
-                message,
-            )
-            .with_status(status)),
+            Err((status, code, message)) => {
+                // The auth inner returns a wire-code string. Map it to a
+                // registered ErrorCode when possible; for non-canonical
+                // codes (e.g. `account_erased`) attach the literal wire
+                // string via `wire_code_override` so the response carries
+                // the spec-precise errcode rather than the registered
+                // fallback.
+                let typed = crate::error::ErrorCode::from_wire(code);
+                let mut err = AppError::new(
+                    typed.unwrap_or(crate::error::ErrorCode::Unauthenticated),
+                    message,
+                )
+                .with_status(status);
+                if typed.is_none() {
+                    err = err.with_wire_code(code);
+                }
+                Err(err)
+            }
         }
     }
 }

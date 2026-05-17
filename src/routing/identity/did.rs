@@ -24,9 +24,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use super::{
-    append_audit_log, bearer_token, now, render_error, sha256_hex, validate_did,
-};
+use super::{append_audit_log, bearer_token, now, render_error, sha256_hex, validate_did};
 use crate::error::{AppError, ErrorCode};
 use crate::result::{JsonResult, json_ok};
 use crate::state::{AppState, WebvhDocumentRecord, WebvhLogRecord};
@@ -175,13 +173,11 @@ pub(super) async fn embedded_webvh_register(
     let update_key_fragment =
         normalize_webvh_key_fragment(body.update_key_id.as_deref().unwrap_or("update-key-1"))
             .ok_or_else(|| AppError::invalid_param("invalid update_key_id"))?;
-    let (method_authority, https_authority) = embedded_webvh_authority(
-        &state.config.public_base_url,
-    )
-    .map_err(|message| {
-        AppError::new(ErrorCode::TemporarilyUnavailable, message)
-            .with_status(StatusCode::SERVICE_UNAVAILABLE)
-    })?;
+    let (method_authority, https_authority) =
+        embedded_webvh_authority(&state.config.public_base_url).map_err(|message| {
+            AppError::new(ErrorCode::TemporarilyUnavailable, message)
+                .with_status(StatusCode::SERVICE_UNAVAILABLE)
+        })?;
     if state
         .persistence
         .webvh()
@@ -221,8 +217,8 @@ pub(super) async fn embedded_webvh_register(
         },
         "state": did_document_skeleton,
     });
-    let scid = derive_webvh_scid(&entry_skeleton)
-        .map_err(|message| AppError::invalid_param(message))?;
+    let scid =
+        derive_webvh_scid(&entry_skeleton).map_err(|message| AppError::invalid_param(message))?;
     let location =
         embedded_webvh_location_with_scid(&method_authority, &https_authority, &local_id, &scid);
     let did_key_id = format!("{}#{}", location.did, did_key_fragment);
@@ -243,42 +239,34 @@ pub(super) async fn embedded_webvh_register(
         return Err(AppError::new(ErrorCode::InvalidSignature, message)
             .with_status(StatusCode::UNAUTHORIZED));
     }
-    if let Err(error) = state
-        .persistence
-        .webvh()
-        .put_document(WebvhDocumentRecord {
-            did: location.did.clone(),
-            did_document: did_document.clone(),
-            key_log_head: Some(version_id.clone()),
-            seq: 1,
-            method_evidence: json!({
-                "mode": "embedded_webvh_provider",
-                "provider_id": "soland.embedded",
-                "local_id": local_id,
-                "document_url": location.document_url,
-                "log_url": location.log_url,
-                "scid": location.scid,
-                "updateKeys": [body.update_public_key_multibase.clone()],
-            }),
-            updated_at: now,
-        })
-    {
+    if let Err(error) = state.persistence.webvh().put_document(WebvhDocumentRecord {
+        did: location.did.clone(),
+        did_document: did_document.clone(),
+        key_log_head: Some(version_id.clone()),
+        seq: 1,
+        method_evidence: json!({
+            "mode": "embedded_webvh_provider",
+            "provider_id": "soland.embedded",
+            "local_id": local_id,
+            "document_url": location.document_url,
+            "log_url": location.log_url,
+            "scid": location.scid,
+            "updateKeys": [body.update_public_key_multibase.clone()],
+        }),
+        updated_at: now,
+    }) {
         tracing::error!(%error, "failed to persist embedded webvh document");
         return Err(AppError::internal(
             "failed to persist embedded webvh document",
         ));
     }
-    if let Err(error) = state
-        .persistence
-        .webvh()
-        .append_log_event(WebvhLogRecord {
-            event_hash: version_id.clone(),
-            did: location.did.clone(),
-            seq: 1,
-            operation: log_entry.clone(),
-            created_at: now,
-        })
-    {
+    if let Err(error) = state.persistence.webvh().append_log_event(WebvhLogRecord {
+        event_hash: version_id.clone(),
+        did: location.did.clone(),
+        seq: 1,
+        operation: log_entry.clone(),
+        created_at: now,
+    }) {
         tracing::error!(%error, "failed to append embedded webvh log entry");
         return Err(AppError::internal(
             "failed to append embedded webvh log entry",
@@ -492,12 +480,7 @@ pub(super) async fn identity_receipts(
     if validate_did(&did).is_err() {
         return Err(AppError::invalid_param("invalid did"));
     }
-    let record = state
-        .persistence
-        .webvh()
-        .get_document(&did)
-        .ok()
-        .flatten();
+    let record = state.persistence.webvh().get_document(&did).ok().flatten();
     json_ok(IdentityReceiptsResponse {
         receipts: record
             .map(|record| {
