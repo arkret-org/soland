@@ -17,13 +17,6 @@ pub struct HealthResponse {
     pub checks: Value,
 }
 
-// `FacetName` / `ViewRenderer` / `AllowedEntityFacetsConstraint` were
-// removed in round 6 along with the entity/view scaffold. The "view facet"
-// model never landed in `contrix-spec/v1`; presentation concerns live in
-// `cx.view.*` events (`cx.view.create` / `.update` / `.reconcile`) and bind
-// to spec-typed objects (`cx:flow:` / `cx:place:` / `cx:morph:`) directly,
-// without an `entity` indirection layer.
-
 #[derive(Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct AuthBridgeDescribeResponse {
     pub contract: String,
@@ -506,10 +499,6 @@ pub struct IndexSearchResponse {
     pub frontier: Value,
 }
 
-// `IndexEntityResponse` was dropped in round 6 alongside the entity scaffold.
-// `/api/v1/index/object` (renamed from `/index/entity`) is handler-driven and
-// returns a raw `serde_json::Value`; no DTO needed.
-
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct IndexThreadResponse {
     pub thread: Value,
@@ -615,9 +604,9 @@ pub struct SnapshotHeadResponse {
     pub chunks: Vec<Value>,
     pub frontier: Value,
     pub signature: Value,
-    /// Snapshot v2 (round 9): root of the binary Merkle tree built over
-    /// chunk digests. Receivers cross-check `chunks[i].digest` reaching
-    /// this root via the per-chunk `audit_path`.
+    /// Snapshot v2: root of the binary Merkle tree built over chunk
+    /// digests. Receivers cross-check `chunks[i].digest` reaching this
+    /// root via the per-chunk `audit_path`.
     pub merkle_root: String,
     /// Snapshot v2: number of chunks in `chunks[]`. Equivalent to
     /// `generator_proof.chunk_count` but surfaced explicitly so clients
@@ -1015,13 +1004,6 @@ pub struct SendMessageRequest {
     #[serde(default)]
     pub encrypted: bool,
 }
-
-// `SendMessageResponse` was removed in round 7 — `/api/v1/messages/send`
-// renders the response as a raw `serde_json::Value` (see
-// `routing/events/messages.rs::messages_send`). The DTO never had a real
-// callsite, and the spec has no `commit_id` / `head_commit` companion
-// (repo / cx:commit: scaffold was deleted with the rest of the repo
-// surface).
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct IdentityDescribeResponse {
@@ -1555,10 +1537,7 @@ pub struct GetReadMarkersRequest {
 
 // ── Relation DTOs ──
 //
-// The `CreateEntityRequest` / `EntityResponse` / `UpdateEntityRequest` /
-// `ListEntitiesRequest` / `CreateViewRequest` DTOs were removed in round 6
-// along with the rest of the entity/view scaffold (no spec counterpart).
-// Relation DTOs stay — `cx:relation:` is a registered typed-id in
+// Relation DTOs — `cx:relation:` is a registered typed-id in
 // `contrix-spec/v1/artifacts/registry/id-kind-registry.json`.
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
@@ -1625,6 +1604,3 @@ pub struct CreateGrantRequest {
     pub constraints: Vec<serde_json::Value>,
 }
 
-// `ViewResponse` was removed in round 6 along with the rest of the
-// entity/view scaffold. `cx.view.*` event materialization will surface
-// through the spec-aligned reducer path when that lands.

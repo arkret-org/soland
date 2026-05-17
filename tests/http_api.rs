@@ -54,6 +54,10 @@ fn test_config() -> AppConfig {
         compaction_min_witnesses: 1,
         compaction_preserve_genesis: true,
         compaction_prune_only_singleton_successors: true,
+
+        compaction_prune_walk_interval_seconds: 0,
+
+        compaction_prune_walk_per_space_limit: 50,
     }
 }
 
@@ -1207,9 +1211,8 @@ async fn mimi_provider_facade_contracts_work() {
     assert_eq!(report.status_code.unwrap().as_u16(), 200);
 }
 
-/// Sprint Q1 第二十三增量 (P4): MIMI facade writes now actually
-/// map into the canonical Contrix reducer chain. This e2e walks
-/// through the four reducer-bound mappings:
+/// MIMI facade writes map into the canonical Contrix reducer
+/// chain. This e2e walks through the four reducer-bound mappings:
 ///
 ///   1. `room_update` with a `room_binding` block emits a
 ///      `cx.mimi.room_binding` projection event.
@@ -5773,11 +5776,11 @@ async fn account_data_requires_auth() {
     assert_eq!(resp.status_code.unwrap().as_u16(), 401);
 }
 
-/// Q1 第十增量 (yougen) / soland Round 14d:
-/// `GET /api/v1/projection/places?space_id=...` returns the canonical
-/// `state` for every Place in a Space so a client can re-hydrate the
-/// archived-vs-active split after a refresh. After a happy archive the
-/// projection MUST report `"archived"`; after restore it MUST report
+/// `GET /api/v1/projection/places?space_id=...` returns the
+/// canonical `state` for every Place in a Space so a client can
+/// re-hydrate the archived-vs-active split after a refresh. After a
+/// happy archive the projection MUST report `"archived"`; after
+/// restore it MUST report
 /// `"active"`. The endpoint MUST also fail closed without a session.
 #[tokio::test]
 async fn projection_places_endpoint_reports_lifecycle_state() {
@@ -5892,10 +5895,10 @@ async fn projection_places_endpoint_reports_lifecycle_state() {
     assert_eq!(row["state"], "active");
 }
 
-/// Q1 第十增量 (yougen) / soland Round 14d:
-/// `GET /api/v1/projection/flows?space_id=...` mirrors the Place test
-/// at the Flow object layer. After archive → state is `archived`;
-/// after redaction `object_ref` → state is `redacted` (terminal).
+/// `GET /api/v1/projection/flows?space_id=...` mirrors the Place
+/// test at the Flow object layer. After archive -> state is
+/// `archived`; after redaction `object_ref` -> state is `redacted`
+/// (terminal).
 #[tokio::test]
 async fn projection_flows_endpoint_reports_lifecycle_state() {
     let state = AppState::new(test_config(), Db { pool: None });
@@ -6092,11 +6095,11 @@ async fn flow_track_events_rejected_when_parent_flow_archived() {
     }
 }
 
-/// Sprint Q1 第十四增量 (P1): `POST /api/v1/audit/user-action` accepts
-/// client-side user-action telemetry posts and appends them to the
-/// session-actor's audit log. Yougen's `flush_telemetry_to_server` has
-/// been posting against this URL since Round 28; the 404-tolerant
-/// caller buffered every entry until this route shipped.
+/// `POST /api/v1/audit/user-action` accepts client-side user-action
+/// telemetry posts and appends them to the session-actor's audit
+/// log. Yougen's `flush_telemetry_to_server` posts against this URL;
+/// the 404-tolerant caller buffers entries when the route is
+/// unavailable.
 #[tokio::test]
 async fn audit_user_action_endpoint_persists_session_actor_entries_and_rejects_cross_actor() {
     let state = AppState::new(test_config(), Db { pool: None });
@@ -6584,12 +6587,12 @@ async fn projection_endpoints_hide_terminal_state_by_default() {
     assert_eq!(row["state"], "redacted");
 }
 
-/// Sprint Q1 第十七增量 (B3): submitting a `cx.applet.protocol_session.start`
-/// event MUST trigger the reference applet bridge runtime to emit a
-/// matching `cx.applet.protocol_session.status` event into the same
-/// projection log. The synthetic status carries `bridge =
-/// soland.reference.echo` and echoes the original `params` under
-/// `detail.echo` so the timeline observes the full round trip
+/// Submitting a `cx.applet.protocol_session.start` event MUST
+/// trigger the reference applet bridge runtime to emit a matching
+/// `cx.applet.protocol_session.status` event into the same
+/// projection log. The synthetic status carries
+/// `bridge = soland.reference.echo` and echoes the original `params`
+/// under `detail.echo` so the timeline observes the full round trip
 /// without a real applet service plugged in.
 #[tokio::test]
 async fn applet_bridge_emits_synthetic_status_for_session_start() {
@@ -6675,16 +6678,15 @@ async fn applet_bridge_emits_synthetic_status_for_session_start() {
     );
 }
 
-/// Sprint Q1 第十八增量 (B4) + 第十九增量 (B4b/B4c): submitting a
-/// `cx.agent.protocol_session.start` event against a registered agent
-/// MUST trigger the reference agent runtime to emit both a
-/// `cx.agent.protocol_session.status` (running) and a terminal
-/// `cx.agent.protocol_session.result` (completed) event with a real
-/// HMAC-SHA256 `audit_binding.signature` that round-trips through the
-/// SDK verify helper. The agent must be registered first via
-/// `cx.agent.endpoint` — otherwise B4c's dispatch lookup fails closed
-/// (covered by the sibling `agent_bridge_fails_closed_on_unknown_agent`
-/// test below).
+/// Submitting a `cx.agent.protocol_session.start` event against a
+/// registered agent MUST trigger the reference agent runtime to
+/// emit both a `cx.agent.protocol_session.status` (running) and a
+/// terminal `cx.agent.protocol_session.result` (completed) event
+/// with an Ed25519 `audit_binding.signature` that round-trips
+/// through the SDK verify helper. The agent must be registered
+/// first via `cx.agent.endpoint` - otherwise the dispatch lookup
+/// fails closed (covered by the sibling
+/// `agent_bridge_fails_closed_on_unknown_agent` test below).
 #[tokio::test]
 async fn agent_bridge_emits_status_and_result_for_session_start() {
     let state = AppState::new(test_config(), Db { pool: None });
@@ -6834,10 +6836,9 @@ async fn agent_bridge_emits_status_and_result_for_session_start() {
         soland::REFERENCE_AGENT_AUDIT_ED25519_KEY_ID
     );
 
-    // Sprint Q1 第二十一增量 (B4g): verify the Ed25519 signature
-    // round-trips against the SDK helper using the public key the
-    // envelope carries. The verifier needs no access to the signing
-    // seed — that's the whole point of moving off HMAC.
+    // Verify the Ed25519 signature round-trips against the SDK
+    // helper using the public key the envelope carries. The
+    // verifier needs no access to the signing seed.
     let sig_b64 = binding["signature"].as_str().expect("signature base64");
     let public_key_b64 = binding["public_key_b64"]
         .as_str()
@@ -6862,11 +6863,11 @@ async fn agent_bridge_emits_status_and_result_for_session_start() {
     );
 }
 
-/// Sprint Q1 第十九增量 (B4c): when `cx.agent.protocol_session.start`
-/// names an agent_did that has not been registered via
-/// `cx.agent.endpoint`, the bridge MUST emit exactly one
-/// `cx.agent.protocol_session.result` carrying `status=failed` +
-/// `error.code=unknown_agent`, and NO `status(running)` event.
+/// When `cx.agent.protocol_session.start` names an agent_did that
+/// has not been registered via `cx.agent.endpoint`, the bridge MUST
+/// emit exactly one `cx.agent.protocol_session.result` carrying
+/// `status=failed` + `error.code=unknown_agent`, and NO
+/// `status(running)` event.
 #[tokio::test]
 async fn agent_bridge_fails_closed_on_unknown_agent() {
     let state = AppState::new(test_config(), Db { pool: None });
@@ -6967,12 +6968,10 @@ async fn agent_bridge_fails_closed_on_unknown_agent() {
     );
 }
 
-/// Sprint Q1 第二十增量 (B4d): when `cx.agent.endpoint` carries an
-/// `endpoint_url`, the bridge MUST surface it on both the
-/// status(running) and result(completed) envelopes' `detail.endpoint_url`.
-/// Future-proofs the wire path for B4f real outbound dispatch — the
-/// runtime needs to know where to forward, and observers need to see
-/// where the answer came from.
+/// When `cx.agent.endpoint` carries an `endpoint_url`, the bridge
+/// MUST surface it on both the status(running) and result envelopes'
+/// `detail.endpoint_url`. The runtime needs to know where to
+/// forward, and observers need to see where the answer came from.
 #[tokio::test]
 async fn agent_bridge_plumbs_endpoint_url_through_session_envelopes() {
     let state = AppState::new(test_config(), Db { pool: None });
@@ -7068,12 +7067,11 @@ async fn agent_bridge_plumbs_endpoint_url_through_session_envelopes() {
         .unwrap();
     assert_eq!(resp["status"], "accepted", "submit response: {resp}");
 
-    // Sprint Q1 第二十四增量 (B4f): when endpoint_url is set the
-    // bridge now spawns outbound HTTP and emits the result event
-    // asynchronously. The test endpoint above resolves but doesn't
-    // accept (b4d-agent.example resolves to AAAA::1 / fail), so the
-    // outcome is `upstream_unreachable`. Poll up to ~5 s for the
-    // result event to land.
+    // When endpoint_url is set the bridge spawns outbound HTTP and
+    // emits the result event asynchronously. The test endpoint
+    // above resolves but doesn't accept (b4d-agent.example resolves
+    // to AAAA::1 / fail), so the outcome is `upstream_unreachable`.
+    // Poll up to ~5 s for the result event to land.
     let result_event = {
         let mut found = None;
         for _ in 0..50 {

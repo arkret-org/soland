@@ -5,6 +5,7 @@
 pub mod anchorer;
 pub mod artifacts;
 pub mod authz;
+pub mod compactor;
 pub mod config;
 pub mod db;
 pub mod error;
@@ -28,19 +29,9 @@ pub use error::AppError;
 pub use result::{AppResult, EmptyResponse, EmptyResult, JsonResult, empty_ok, json_ok};
 pub use routing::{router, router_with_rate_limiter_config};
 
-/// Re-export the reference agent audit HMAC key so out-of-crate
-/// verifiers (e.g. e2e tests in `tests/`, future yougen-side audit
-/// surfaces) can recompute the signature without duplicating the
-/// constant. Production deployments inject their own key material via
-/// configuration and never touch this fallback.
-pub const REFERENCE_AGENT_AUDIT_HMAC_KEY: &[u8] =
-    routing::events::agent_bridge::REFERENCE_AGENT_AUDIT_HMAC_KEY;
-
-/// Sprint Q1 第二十一增量 (B4g): re-export the reference Ed25519
-/// signing seed + key_id so out-of-crate verifiers can recompute the
-/// signer's public key without recompiling soland. The reference
-/// runtime now writes Ed25519 bindings by default; HMAC remains
-/// available for deployments that prefer symmetric verification.
+/// Re-export the reference Ed25519 signing seed + key_id so
+/// out-of-crate verifiers can recompute the signer's public key
+/// without recompiling soland.
 pub const REFERENCE_AGENT_AUDIT_ED25519_SEED: [u8; 32] =
     routing::events::agent_bridge::REFERENCE_AGENT_AUDIT_ED25519_SEED;
 pub const REFERENCE_AGENT_AUDIT_ED25519_KEY_ID: &str =

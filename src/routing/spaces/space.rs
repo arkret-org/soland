@@ -437,12 +437,11 @@ async fn add_space_member(
     .map_err(|error| {
         AppError::new(ErrorCode::Conflict, error.to_string()).with_status(StatusCode::CONFLICT)
     })?;
-    // Round 7: `cx.membership.join` / `cx.membership.leave` derived
-    // projection events were removed. The spec's event-kind-registry only
-    // ships `cx.member.state` (a CRDT state op on `cx.component.space.members.v1`).
-    // Analytics / audit consumers derive join/leave transitions from the
-    // `cx.member.state` payload's `membership` field (`join` / `leave` /
-    // `invite`) — no separate event kind needed.
+    // The spec's event-kind-registry ships `cx.member.state` (a CRDT
+    // state op on `cx.component.space.members.v1`). Analytics / audit
+    // consumers derive join/leave transitions from the `cx.member.state`
+    // payload's `membership` field (`join` / `leave` / `invite`) — no
+    // separate `cx.membership.*` event kind exists.
     append_audit_log(
         state,
         Some(&session.actor),
@@ -683,9 +682,9 @@ async fn remove_space_member(
     .map_err(|error| {
         AppError::new(ErrorCode::Conflict, error.to_string()).with_status(StatusCode::CONFLICT)
     })?;
-    // Round 7: see `add_space_member` — the `cx.membership.leave` derived
-    // projection was removed. `cx.member.state` (already recorded above via
-    // `record_member_state_operation`) is the spec-correct membership signal.
+    // See `add_space_member`: `cx.member.state` (already recorded above
+    // via `record_member_state_operation`) is the spec-correct
+    // membership signal; no separate `cx.membership.leave` event exists.
     append_audit_log(
         state,
         Some(&session.actor),
@@ -1026,9 +1025,8 @@ pub fn space_search_discoverability(state: &AppState, space_id: &str) -> bool {
     )
 }
 
-// `space_id_visible_to` removed in round 7 — `space_id_accessible` covers
-// the same visibility path with looser semantics for the backfill /
-// subscribe edge (delete-tolerant for members).
+// `space_id_accessible` is the visibility path with looser semantics
+// for the backfill / subscribe edge (delete-tolerant for members).
 
 /// Check if a space is accessible for backfill/subscribe (allows deleted spaces for members).
 pub fn space_id_accessible(

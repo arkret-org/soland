@@ -12,16 +12,14 @@
 //! `X-Contrix-Session-Grant` header for clients that haven't yet picked up a
 //! bearer session. When coauth introspection is configured, the bridge uses
 //! the same audience/scope/proof validation as `auth/session-grant/exchange`.
-//! Spec B-14 (no DID in push payload / TURN username) is tracked as F-1 in
-//! the same.
+//! Spec rule: no DID in push payload / TURN username.
 //!
 //! Push-rule matching uses the helpers at the bottom: `push_rule_matches`
 //! / `push_condition_matches` / `push_field_matches` / `value_at_path` /
 //! `value_matches_expected` / `push_value_for_condition` / `push_rejection`
 //! / `push_device_suppressed_by_rule` / `is_valid_push_rule_id` /
 //! `is_supported_push_action` / `push_notification_leaks_plaintext` /
-//! `push_rule_to_json`. They were quietly mis-attributed to blob during
-//! round 6 and re-anchored here.
+//! `push_rule_to_json`.
 
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam};
@@ -152,7 +150,7 @@ fn canonical_errcode(wire: &str) -> crate::error::ErrorCode {
 #[endpoint(
     operation_id = "cx.push.unregister_device",
     tags("push"),
-    summary = "Unregister a push device (opaque ack scaffold; spec F-1)"
+    summary = "Unregister a push device (opaque ack scaffold)"
 )]
 pub(super) async fn push_unregister(
     _body: JsonBody<PushUnregisterRequest>,

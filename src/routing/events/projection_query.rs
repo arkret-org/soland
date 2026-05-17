@@ -12,22 +12,19 @@
 //! - `GET /api/v1/projection/flows?space_id=...` — same for Flows
 //!   (state ∈ {active, archived, deleted, redacted}).
 //! - `GET /api/v1/projection/morphs?space_id=...` — same for Morphs
-//!   (same enum as Flows; round 15a added for parity with the other two).
+//!   (same enum as Flows).
 //!
 //! All three endpoints are authenticated. Resource visibility check
 //! piggy-backs on `space_id_accessible` so a non-member can't probe
 //! Place / Flow / Morph lifecycle state via this surface.
 //!
-//! Round 15c (2026-05-16) — converted from `&mut Response` +
-//! `res.render(Json(json!{...}))` to typed `JsonResult<T>` signatures
-//! so the generated OpenAPI document carries proper schema components
+//! Handlers use typed `JsonResult<T>` signatures so the generated
+//! OpenAPI document carries proper schema components
 //! (PlaceProjectionListResponse / FlowProjectionListResponse /
-//! MorphProjectionListResponse + row structs). Mirrors the round 14c
-//! conversion pattern (federation_anchors_pull/push + embedded_webvh_register).
+//! MorphProjectionListResponse + row structs).
 //!
-//! Round 15d (2026-05-16) — terminal-state visibility filter. Each
-//! endpoint accepts an optional `include_terminal=true|false` query
-//! parameter. Default is `false`:
+//! Terminal-state visibility filter: each endpoint accepts an optional
+//! `include_terminal=true|false` query parameter. Default is `false`:
 //!   - Place: tombstoned rows excluded.
 //!   - Flow / Morph: deleted + redacted rows excluded.
 //! Spec rationale: tombstoned / deleted / redacted are unrecoverable
@@ -57,7 +54,7 @@ pub(super) fn router() -> Router {
 
 // ── Helpers ────────────────────────────────────────────────────────────
 
-/// Round 15d — terminal-state check for Flow / Morph. Mirror of
+/// Terminal-state check for Flow / Morph. Mirror of
 /// `ObjectLifecycleState::is_terminal` but inlined here so the
 /// `filter` chain in the handlers reads as
 /// `!is_object_terminal(f.state)` for symmetry with the Place check

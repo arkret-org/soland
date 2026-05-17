@@ -5,7 +5,7 @@
 //! - `append_audit_log` — internal helper used everywhere a side-effect needs to be recorded (auth,
 //!   space lifecycle, message send, federation, etc.).
 //!
-//! Both back onto `state.persistence.audit()` (see Tier 0 in `_todos.md`).
+//! Both back onto `state.persistence.audit()`.
 
 use salvo::oapi::extract::{JsonBody, QueryParam};
 use salvo::prelude::*;
@@ -24,16 +24,12 @@ pub(super) fn router() -> Router {
         .push(Router::with_path("audit/user-action").post(post_user_action))
 }
 
-/// Sprint Q1 第十四增量 (P1): client-side telemetry sink.
+/// Client-side telemetry sink.
 ///
 /// `POST /api/v1/audit/user-action` accepts a batched user-action audit
 /// envelope shape (`actor`, `action`, `outcome`, `note?`, `recorded_at`)
-/// — the same shape that sodmin emits internally and that yougen
-/// already speculatively posts via `ContrixApi::post_audit_user_action`.
-/// Until this route landed yougen treated the 404 as
-/// `AuditPostError::NotWired` and locally re-buffered every entry;
-/// shipping the route turns the buffered pipeline into a real telemetry
-/// channel.
+/// — the same shape that sodmin emits internally and that yougen posts
+/// via `ContrixApi::post_audit_user_action`.
 ///
 /// The endpoint is authenticated; the posted `actor` MUST match the
 /// session actor (no cross-actor writes). The audit entry is appended
@@ -42,7 +38,7 @@ pub(super) fn router() -> Router {
 #[endpoint(
     operation_id = "cx.audit.user_action",
     tags("audit"),
-    summary = "Append a client-side user-action audit entry (Sprint Q1 P1)"
+    summary = "Append a client-side user-action audit entry"
 )]
 async fn post_user_action(
     aa: AuthArgs,

@@ -94,6 +94,18 @@ pub struct AppConfig {
     /// — the env var holds the raw seed, base64-standard-padded; bad shape
     /// fails fast at startup with a clear error.
     pub anchorer_signing_key_seed: Option<[u8; 32]>,
+    /// Per-deployment Ed25519 seed used by the reference agent runtime
+    /// to sign `audit_binding` blocks on `cx.agent.protocol_session.result`
+    /// events. When `None` (default), the bridge falls back to
+    /// `REFERENCE_AGENT_AUDIT_ED25519_SEED` — fine for dev / reference
+    /// deployments but provides no real authentication because every
+    /// other soland deployment can recompute the same signature.
+    ///
+    /// Env var `SOLAND_AGENT_AUDIT_BINDING_SIGNING_SEED` accepts a
+    /// 32-byte seed base64-standard-padded; bad shape fails fast at
+    /// startup. Production deployments SHOULD set this so the agent
+    /// service's verifying key is uniquely bound to the runtime.
+    pub agent_audit_binding_signing_seed: Option<[u8; 32]>,
     /// When true, the AnchorerWorker loads its signing seed
     /// from the SDK platform `KeyStore` (`platform_default_keystore("soland.<service_did>")`)
     /// at boot and stores rotated keys back into the same KeyStore. When
@@ -106,7 +118,7 @@ pub struct AppConfig {
     ///   `KeyStore::store(...)` (one-shot init).
     /// - `rotate-signing-key` endpoint: mint, persist via KeyStore, hot-swap.
     ///
-    /// Behavior when `use_keystore=false`: identical to round 22.
+    /// Behavior when `use_keystore=false`: only the env-loaded seed is honored.
     pub use_keystore: bool,
     /// Federation routing policy. The on-the-wire
     /// shape is identical for both variants (Move broadcast push / Anchor
@@ -166,6 +178,21 @@ pub struct AppConfig {
     /// conservative by default.
     /// Env: `SOLAND_COMPACTION_PRUNE_ONLY_SINGLETON_SUCCESSORS` (default true).
     pub compaction_prune_only_singleton_successors: bool,
+    /// MAL-11 compaction prune walk: interval between background prune
+    /// passes, in seconds. Zero (or unset) disables the worker entirely —
+    /// MAL-11 prune then runs only via the explicit
+    /// `POST /api/admin/v1/spaces/{space_id}/anchor-dag/prune?anchor_id=...`
+    /// endpoint. When enabled, the worker walks every live Space's
+    /// anchor DAG, evaluates each candidate against
+    /// [`compaction_policy`], and prunes eligible Anchors up to
+    /// `compaction_prune_walk_per_space_limit` per Space per pass.
+    /// Env: `SOLAND_COMPACTION_PRUNE_WALK_INTERVAL_SECS` (default 0 = disabled).
+    pub compaction_prune_walk_interval_seconds: u64,
+    /// MAL-11 compaction prune walk: maximum number of prunes the worker
+    /// will perform per Space per pass. Bounds I/O against very large
+    /// DAGs; further candidates are picked up on subsequent ticks.
+    /// Env: `SOLAND_COMPACTION_PRUNE_WALK_PER_SPACE_LIMIT` (default 50).
+    pub compaction_prune_walk_per_space_limit: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -333,6 +360,7 @@ impl AppConfig {
             .and_then(|value| value.trim().parse::<u64>().ok())
             .unwrap_or(300);
         let anchorer_signing_key_seed = load_anchorer_signing_key_seed()?;
+        let agent_audit_binding_signing_seed = load_agent_audit_binding_signing_seed()?;
         let use_keystore = std::env::var("SOLAND_USE_KEYSTORE")
             .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes"))
             .unwrap_or(false);
@@ -399,6 +427,17 @@ impl AppConfig {
             env_bool("SOLAND_COMPACTION_PRESERVE_GENESIS")?.unwrap_or(true);
         let compaction_prune_only_singleton_successors =
             env_bool("SOLAND_COMPACTION_PRUNE_ONLY_SINGLETON_SUCCESSORS")?.unwrap_or(true);
+        let compaction_prune_walk_interval_seconds =
+            std::env::var("SOLAND_COMPACTION_PRUNE_WALK_INTERVAL_SECS")
+                .ok()
+                .and_then(|value| value.trim().parse::<u64>().ok())
+                .unwrap_or(0);
+        let compaction_prune_walk_per_space_limit =
+            std::env::var("SOLAND_COMPACTION_PRUNE_WALK_PER_SPACE_LIMIT")
+                .ok()
+                .and_then(|value| value.trim().parse::<usize>().ok())
+                .unwrap_or(50)
+                .max(1);
 
         Ok(Self {
             bind,
@@ -425,6 +464,7 @@ impl AppConfig {
             jws_replay_window_seconds,
             jws_replay_window_per_family: Self::default_replay_overrides(),
             anchorer_signing_key_seed,
+            agent_audit_binding_signing_seed,
             use_keystore,
             federation_policy,
             federation_peers,
@@ -437,6 +477,8 @@ impl AppConfig {
             compaction_min_witnesses,
             compaction_preserve_genesis,
             compaction_prune_only_singleton_successors,
+            compaction_prune_walk_interval_seconds,
+            compaction_prune_walk_per_space_limit,
         })
     }
 
@@ -550,6 +592,38 @@ fn load_anchorer_signing_key_seed() -> anyhow::Result<Option<[u8; 32]>> {
     if bytes.len() != 32 {
         anyhow::bail!(
             "SOLAND_ANCHORER_SIGNING_KEY must decode to exactly 32 bytes (got {})",
+            bytes.len()
+        );
+    }
+    let mut seed = [0u8; 32];
+    seed.copy_from_slice(&bytes);
+    Ok(Some(seed))
+}
+
+/// Env-loaded Ed25519 seed for the reference agent runtime's
+/// `audit_binding` signer. Same shape rules as
+/// [`load_anchorer_signing_key_seed`] — base64-standard or
+/// url-safe-no-pad, MUST decode to exactly 32 bytes.
+fn load_agent_audit_binding_signing_seed() -> anyhow::Result<Option<[u8; 32]>> {
+    let raw = match std::env::var("SOLAND_AGENT_AUDIT_BINDING_SIGNING_SEED") {
+        Ok(value) => value.trim().to_owned(),
+        Err(_) => return Ok(None),
+    };
+    if raw.is_empty() {
+        return Ok(None);
+    }
+    use base64::Engine as _;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(raw.as_bytes())
+        .or_else(|_| base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(raw.as_bytes()))
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "SOLAND_AGENT_AUDIT_BINDING_SIGNING_SEED must be base64 (standard or url-safe-no-pad): {e}"
+            )
+        })?;
+    if bytes.len() != 32 {
+        anyhow::bail!(
+            "SOLAND_AGENT_AUDIT_BINDING_SIGNING_SEED must decode to exactly 32 bytes (got {})",
             bytes.len()
         );
     }

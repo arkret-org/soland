@@ -91,7 +91,7 @@ pub trait SpaceMetaStore: Send + Sync {
     fn delete(&self, space_id: &str) -> PersistenceResult<()>;
 }
 
-// ── Round 15h (2026-05-16): Projection persistence traits ──
+// ── Projection persistence traits ─────────────────────────────────────────
 // Mirror the in-memory `reducer::ProjectionState::{places,flows,morphs}`
 // maps onto durable storage. The reducer continues to own the in-memory
 // authoritative state; routing layers write through to these stores
@@ -454,9 +454,9 @@ pub trait OneTimeKeyStore: Send + Sync {
 
 /// Encrypted key backups + the restore-ticket FSM tables.
 ///
-/// C32.5 — round 28 (2026-05-10): the restore-ticket trio (ticket envelope +
-/// `executor_state` + `approval_state`) is now durable behind the same row
-/// per `ticket_id` in the `restore_tickets` table. The FSM is
+/// The restore-ticket trio (ticket envelope + `executor_state` +
+/// `approval_state`) is durable behind a row per `ticket_id` in the
+/// `restore_tickets` table. The FSM is
 /// `pending → approved → executed → revoked` (with `rejected` and
 /// `cancelled` as terminals); transitions live in
 /// [`crate::routing::key_backup_restore::ticket_status_transition`] and bump
@@ -508,7 +508,7 @@ pub trait KeyBackupStore: Send + Sync {
     ) -> PersistenceResult<Option<i64>>;
 }
 
-/// MAL-11 (round 23) — persistent multisig partial-signature buffer.
+/// MAL-11 — persistent multisig partial-signature buffer.
 ///
 /// The coordinator endpoints (`POST .../multisig/{anchor_id}/partial` and
 /// `GET .../multisig/pending`) operate against this store so partials
@@ -527,18 +527,18 @@ pub trait MultisigPendingStore: Send + Sync {
     fn list_for_space(&self, space_id: &str) -> PersistenceResult<Vec<MultisigPendingRecord>>;
     fn delete(&self, anchor_id: &str) -> PersistenceResult<bool>;
 
-    /// MAL-11 round 25 — list every row across all spaces. Used by the
-    /// leader-election watchdog to scan for threshold-met rows that need
-    /// aggregation + publication.
+    /// List every row across all spaces. Used by the leader-election
+    /// watchdog to scan for threshold-met rows that need aggregation +
+    /// publication.
     fn snapshot_all(&self) -> PersistenceResult<Vec<MultisigPendingRecord>>;
 
-    /// MAL-11 round 25 — atomically claim a row for `node_id` until
-    /// `claimed_until` if (a) the row exists, (b) it is currently unclaimed
-    /// or its existing lease has expired (relative to `now`).
+    /// Atomically claim a row for `node_id` until `claimed_until` if (a)
+    /// the row exists, (b) it is currently unclaimed or its existing lease
+    /// has expired (relative to `now`).
     ///
-    /// Round 28 — on success the row's monotonic `claim_seq` is bumped by
-    /// 1 and the new value is returned alongside the success flag. The
-    /// watchdog snapshots this value as its **fencing token**: any
+    /// On success the row's monotonic `claim_seq` is bumped by 1 and the
+    /// new value is returned alongside the success flag. The watchdog
+    /// snapshots this value as its **fencing token**: any
     /// follow-up `delete_with_fence` / `renew_claim` it issues against
     /// the row carries the same `claim_seq`, and a stale leader (whose
     /// lease was silently re-issued to another node after a partition
@@ -553,15 +553,15 @@ pub trait MultisigPendingStore: Send + Sync {
         claimed_until: chrono::DateTime<chrono::Utc>,
     ) -> PersistenceResult<(bool, i64)>;
 
-    /// MAL-11 round 25 — release a held lease (called after the row was
-    /// successfully aggregated + deleted, or when the caller decided to
-    /// give up early). Idempotent — safe to call on a row that was already
+    /// Release a held lease (called after the row was successfully
+    /// aggregated + deleted, or when the caller decided to give up
+    /// early). Idempotent — safe to call on a row that was already
     /// deleted.
     fn release_claim(&self, anchor_id: &str, node_id: &str) -> PersistenceResult<()>;
 
-    /// Round 28 — fenced delete. Only deletes the row when both the lease
-    /// holder *and* the fencing token match. A stale leader (one whose
-    /// lease was superseded after a partition heal) carries the pre-bump
+    /// Fenced delete. Only deletes the row when both the lease holder
+    /// *and* the fencing token match. A stale leader (one whose lease
+    /// was superseded after a partition heal) carries a mismatched
     /// `claim_seq`, so this returns `Ok(false)` and the row stays intact
     /// for the live leader to publish. Returns `Ok(true)` iff the delete
     /// happened.
@@ -572,8 +572,8 @@ pub trait MultisigPendingStore: Send + Sync {
         claim_seq: i64,
     ) -> PersistenceResult<bool>;
 
-    /// Round 28 — happy-path lease renewal during long aggregation.
-    /// Pushes `claimed_until` forward without bumping `claim_seq` (so the
+    /// Happy-path lease renewal during long aggregation. Pushes
+    /// `claimed_until` forward without bumping `claim_seq` (so the
     /// watchdog's snapshotted fencing token stays valid). Only succeeds
     /// when the lease is still held by `node_id` AND the supplied
     /// `claim_seq` matches the row — a stale leader's renewal is
@@ -1186,7 +1186,7 @@ impl SpaceMetaStore for MemorySpaceMetaStore {
     }
 }
 
-// ── Round 15h: Memory impls for Place/Flow/Morph projection stores ──
+// ── Memory impls for Place/Flow/Morph projection stores ──────────────────
 
 struct MemoryPlaceProjectionStore {
     data: Arc<Mutex<BTreeMap<String, PlaceProjectionRecord>>>,
@@ -3427,7 +3427,7 @@ impl MultisigPendingStore for PgMultisigPendingStore {
     ) -> PersistenceResult<(bool, i64)> {
         let mut conn = pg_conn(&self.pool)?;
         // Atomic claim: only succeed when the row is unclaimed or its
-        // existing lease has expired. Round 28 — bump `claim_seq` on every
+        // existing lease has expired. Bumps `claim_seq` on every
         // successful claim and `RETURNING` the new value so the watchdog
         // can use it as a fencing token for the subsequent
         // `delete_with_fence` / `renew_claim`.
@@ -3531,7 +3531,7 @@ impl MultisigPendingStore for PgMultisigPendingStore {
     }
 }
 
-// ── Round 24 — Pg-backed AuditStore / PushDeviceStore / EventStore ─────────
+// ── Pg-backed AuditStore / PushDeviceStore / EventStore ──────────────────
 
 struct PgAuditStore {
     pool: PgPool,
@@ -3805,7 +3805,7 @@ impl EventStore for PgEventStore {
     }
 }
 
-// ── Round 25 — Pg-backed FederationOperationsStore ────────────────────────
+// ── Pg-backed FederationOperationsStore ──────────────────────────────────
 
 struct PgFederationOperationsStore {
     pool: PgPool,
@@ -3902,14 +3902,13 @@ impl FederationOperationsStore for PgFederationOperationsStore {
     }
 }
 
-// ── Round 26 — Pg-backed wire-facing sub-stores ───────────────────────────
+// ── Pg-backed wire-facing sub-stores ─────────────────────────────────────
 //
-// ModerationStore / PresenceStore / WebvhStore /
-// SpaceInviteStore. Each follows the same pattern as the round 24/25 stores:
-// a typed-column header (extracted from the JSON payload where applicable)
-// plus the full canonical envelope in a JSONB column. The trait surface
-// itself is the architectural contract; the Pg + Memory backends both
-// implement it identically.
+// ModerationStore / PresenceStore / WebvhStore / SpaceInviteStore. Each
+// follows the same pattern: a typed-column header (extracted from the JSON
+// payload where applicable) plus the full canonical envelope in a JSONB
+// column. The trait surface itself is the architectural contract; the
+// Pg + Memory backends both implement it identically.
 
 struct PgModerationStore {
     pool: PgPool,
@@ -4308,7 +4307,7 @@ impl SpaceInviteStore for PgSpaceInviteStore {
     }
 }
 
-// ── Round 27 — Pg-backed recovery / realtime sub-stores ───────────────────
+// ── Pg-backed recovery / realtime sub-stores ─────────────────────────────
 //
 // `PgKeyBackupStore` covers both the encrypted-key-backup envelopes and
 // the restore-ticket scaffold (executor / approval runs). The trait
@@ -5249,11 +5248,10 @@ fn pg_conn(
         .map_err(|error| PersistenceError::Internal(format!("database pool error: {error}")))
 }
 
-// ── Round 15h (2026-05-16): Pg-backed Place/Flow/Morph projection stores ──
+// ── Pg-backed Place/Flow/Morph projection stores ─────────────────────────
 // Mirror the in-memory `ProjectionState::{places,flows,morphs}` onto
 // the `projection_places` / `projection_flows` / `projection_morphs`
-// tables created in migrations 20260515 / 20260516. Same upsert
-// shape as PgPolicyDocumentStore.
+// tables. Same upsert shape as PgPolicyDocumentStore.
 
 struct PgPlaceProjectionStore {
     pool: PgPool,
@@ -5637,7 +5635,7 @@ impl MorphProjectionStore for PgMorphProjectionStore {
     }
 }
 
-// ── Round 15i (2026-05-16): Pg-backed projection_events store ──
+// ── Pg-backed projection_events store ────────────────────────────────────
 // Append-only mirror of the in-memory ProjectionEventRecord stream
 // stamped down by `routing::events::projection::append_projection_event`.
 // Surrogate `ordinal` BIGSERIAL handles retry collisions; the
@@ -6064,7 +6062,7 @@ mod tests {
         assert_eq!(DriftResult::Unknown.as_str(), "unknown");
     }
 
-    // ── Round 24 — Memory parity tests for the new sub-stores. ────────────
+    // ── Memory parity tests for AuditStore / PushDeviceStore / EventStore.
     //
     // Pg parity is enforced by the trait surface itself (Memory + Pg
     // implement the same trait methods); the integration tests in
@@ -6150,7 +6148,7 @@ mod tests {
         assert_eq!(store.snapshot_all().unwrap().len(), 3);
     }
 
-    // ── Round 25 — Memory parity tests for the new T0-3 sub-store + the
+    // ── Memory parity tests for the FederationOperationsStore + the
     // MAL-11 leader-election columns. Pg parity is enforced by the trait
     // surface itself.
 
@@ -6250,11 +6248,10 @@ mod tests {
         assert_eq!(store.snapshot_all().unwrap().len(), 1);
     }
 
-    // ── Round 26 — Memory parity tests for the wire-facing T0-3
-    // sub-stores (moderation / presence / webvh / invites).
-    // Pg parity is enforced by the trait surface itself; the integration
-    // tests in `tests/http_api.rs` exercise the Pg path when `DATABASE_URL`
-    // is set.
+    // ── Memory parity tests for the wire-facing sub-stores
+    // (moderation / presence / webvh / invites). Pg parity is enforced
+    // by the trait surface itself; the integration tests in
+    // `tests/http_api.rs` exercise the Pg path when `DATABASE_URL` is set.
 
     #[test]
     fn memory_moderation_store_append_and_list_matches_trait() {
@@ -6401,9 +6398,9 @@ mod tests {
         assert!(store.get("cx:invite:missing").unwrap().is_none());
     }
 
-    // ── Round 27 — Memory parity tests for the four recovery / realtime
-    // sub-stores (key_backup / webrtc / policy / restore). Pg parity is
-    // enforced by the shared trait surface; the integration tests in
+    // ── Memory parity tests for the recovery / realtime sub-stores
+    // (key_backup / webrtc / policy / restore). Pg parity is enforced by
+    // the shared trait surface; the integration tests in
     // `tests/http_api.rs` exercise the Pg path when `DATABASE_URL` is set.
 
     #[test]

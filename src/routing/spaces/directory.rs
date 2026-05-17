@@ -11,8 +11,8 @@
 //! - `POST /api/v1/directory/resolve-handle`
 //!
 //! Demo data lives here too — `demo_organization` / `demo_actors` are
-//! placeholders until E1/E2/E3 (Stream-E in `_todos.md`) lands a real
-//! `actors` / `organizations` / `handles` PgStore.
+//! placeholders until a real `actors` / `organizations` / `handles`
+//! PgStore lands.
 
 use std::collections::BTreeMap;
 

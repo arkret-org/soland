@@ -1,4 +1,4 @@
-//! MAL-11 (round 25) — multisig leader-election watchdog.
+//! Multisig leader-election watchdog.
 //!
 //! A tokio background task that wakes every `tick_interval` seconds, scans
 //! `multisig_pending` for rows where:
@@ -32,10 +32,9 @@ use crate::state::{AppState, MultisigPendingRecord};
 /// [`MultisigWatchdog::with_tick_interval`].
 pub const DEFAULT_TICK_INTERVAL_SECS: u64 = 30;
 
-/// Lease duration acquired against each claimable row. 60s matches the
-/// round 25 spec — long enough to perform aggregate + publish on a busy
-/// node, short enough that crash-recovery picks up dropped rows on the
-/// next tick.
+/// Lease duration acquired against each claimable row. 60s is long
+/// enough to perform aggregate + publish on a busy node, short enough
+/// that crash-recovery picks up dropped rows on the next tick.
 pub const LEASE_DURATION_SECS: u64 = 60;
 
 /// Configuration knobs for the watchdog loop.
@@ -67,14 +66,13 @@ pub struct WatchdogPassReport {
     pub claimed: Vec<String>,
     pub aggregated: Vec<String>,
     pub failed: Vec<(String, String)>,
-    /// Round 28 — anchors whose fenced delete was rejected because the
-    /// row's `claim_seq` no longer matched the snapshot we held (i.e. a
-    /// stale leader's publish landed against a re-leased row).
+    /// Anchors whose fenced delete was rejected because the row's
+    /// `claim_seq` no longer matched the snapshot we held (i.e. a stale
+    /// leader's publish landed against a re-leased row).
     pub fenced_rejections: Vec<String>,
-    /// Round 28 — happy-path lease renewals that landed successfully
-    /// during this pass (only happens if `aggregate_and_publish`
-    /// installs a renewer; the periodic loop renews every
-    /// `lease_duration / 3`).
+    /// Happy-path lease renewals that landed successfully during this
+    /// pass (only happens if `aggregate_and_publish` installs a renewer;
+    /// the periodic loop renews every `lease_duration / 3`).
     pub renewed: Vec<String>,
 }
 
@@ -167,7 +165,7 @@ pub fn run_watchdog_pass(state: &AppState, config: &MultisigWatchdogConfig) -> W
 
         match aggregate_and_publish(state, &record) {
             Ok(_anchor) => {
-                // Round 28 — fenced delete: the row only goes away when our
+                // Fenced delete: the row only goes away when our
                 // snapshotted `claim_seq` still matches. If a stale leader
                 // (whose lease was silently re-issued after a partition
                 // heal) tries to publish here, its `delete_with_fence`
@@ -201,7 +199,7 @@ pub fn run_watchdog_pass(state: &AppState, config: &MultisigWatchdogConfig) -> W
     report
 }
 
-/// Round 28 — best-effort lease renewal helper. Pushes `claimed_until`
+/// Best-effort lease renewal helper. Pushes `claimed_until`
 /// out by `lease_duration` without bumping `claim_seq` so an in-flight
 /// aggregation that out-runs the original lease keeps its fencing
 /// token. Returns the renewal outcome:
@@ -401,6 +399,7 @@ mod tests {
             jws_replay_window_seconds: 0,
             jws_replay_window_per_family: AppConfig::default_replay_overrides(),
             anchorer_signing_key_seed: None,
+            agent_audit_binding_signing_seed: None,
             use_keystore: false,
             federation_policy: crate::config::FederationPolicy::Mesh,
             federation_peers: Vec::new(),
@@ -413,6 +412,10 @@ mod tests {
             compaction_min_witnesses: 1,
             compaction_preserve_genesis: true,
             compaction_prune_only_singleton_successors: true,
+
+            compaction_prune_walk_interval_seconds: 0,
+
+            compaction_prune_walk_per_space_limit: 50,
         };
         AppState::new(config, Db { pool: None })
     }
@@ -504,7 +507,7 @@ mod tests {
         assert!(report.claimed.is_empty());
     }
 
-    // ── Round 28 — partition-tolerance tests ─────────────────────────────
+    // ── Partition-tolerance tests ─────────────────────────────
     //
     // Three partition-recovery scenarios + one happy-path lease-renewal test.
     // The fencing token (`claim_seq`) makes (a) and (c) reject deterministically

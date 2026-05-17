@@ -7,9 +7,9 @@
 //!   it in the device inventory
 //!
 //! Both routes are scaffolds: the proof at `body.proof` is accepted as
-//! `{"alg":"dev-none"}` by default and the authorization event is built but
-//! NOT yet pushed into the canonical operation stream (Stream-F-2 in
-//! `_todos.md` covers durable persistence + revocation propagation).
+//! `{"alg":"dev-none"}` by default and the authorization event is built
+//! but NOT yet pushed into the canonical operation stream (durable
+//! persistence + revocation propagation are future work).
 
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;

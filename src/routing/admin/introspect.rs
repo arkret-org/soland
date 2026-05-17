@@ -1,4 +1,4 @@
-//! Round 9: per-scope admin gating via SDK
+//! Per-scope admin gating via SDK
 //! [`contrix_sdk::SessionGrantIntrospection`].
 //!
 //! The SDK provides a typed view of an OAuth-style introspection

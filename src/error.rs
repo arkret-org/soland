@@ -1,24 +1,19 @@
 //! Canonical Contrix error codes (spec error-code-registry.json v2026-05-03).
 //!
-//! Spec B-08 requires that every wire-form error code on `/api/v1/*` belongs
-//! to the registry of 42 canonical codes; today the soland handlers pass raw
-//! string literals to `util::render_error`, so it is easy to ship a typo or a
-//! drifted spelling. This module gives the rest of the crate a typed
+//! Every wire-form error code on `/api/v1/*` must belong to the registry of
+//! 42 canonical codes. This module gives the rest of the crate a typed
 //! [`ErrorCode`] enum that:
 //!
 //! 1. enumerates exactly the 42 codes from the active registry,
 //! 2. round-trips with `contrix_core::error::KNOWN_ERROR_CODES` (asserted in
 //!    [`tests::variant_count_matches_registry`] / [`tests::wire_codes_round_trip`]),
-//! 3. carries the canonical HTTP status binding so handlers can stop hand-picking it (a frequent
-//!    source of B-08 drift), and
+//! 3. carries the canonical HTTP status binding so handlers don't hand-pick it, and
 //! 4. exposes a [`ErrorCode::render`] convenience that funnels through the existing
 //!    `crate::routing::util::render_error` so call-site rewrites are mechanical (`render_error(res,
-//!    StatusCode::CONFLICT, "cas_conflict", "...")` → `ErrorCode::CasConflict.render(res, "...")`).
+//!    StatusCode::CONFLICT, "cas_conflict", "...")` -> `ErrorCode::CasConflict.render(res, "...")`).
 //!
-//! Migrating every existing call site is tracked in `_todos.md` (F3
-//! incremental rewrite); for now this module is the structured path that new
-//! code MUST use, and the typed-vs-string parity is locked in by the registry
-//! round-trip test below.
+//! This module is the structured path that new code MUST use; the
+//! typed-vs-string parity is locked in by the registry round-trip test below.
 
 use contrix_sdk::error as core_error;
 use salvo::async_trait;
@@ -231,7 +226,7 @@ mod tests {
 
     /// The enum and the registry MUST contain the same number of codes.
     /// Failing this means either a code was added to the registry without
-    /// updating the enum or vice-versa — spec B-08 lock.
+    /// updating the enum or vice-versa.
     #[test]
     fn variant_count_matches_registry() {
         assert_eq!(
@@ -326,12 +321,10 @@ mod tests {
 // ── AppError + typed-endpoint integration ────────────────────────────────
 //
 // `AppError` is the typed error returned by `#[endpoint]` handlers. It carries
-// a canonical [`ErrorCode`] (registry-locked, see spec B-08), a human-readable
-// message, and an optional HTTP status override. Both `Writer` and
-// `EndpointOutRegister` are implemented so the same value drives both runtime
-// rendering and OpenAPI doc generation.
-//
-// Migration template (palpo-style): see `_oapi.md` for the per-handler shape.
+// a canonical [`ErrorCode`] (registry-locked), a human-readable message, and
+// an optional HTTP status override. Both `Writer` and `EndpointOutRegister`
+// are implemented so the same value drives both runtime rendering and
+// OpenAPI doc generation.
 
 /// Typed error returned by `#[endpoint]` handlers.
 #[derive(Debug, Clone)]
@@ -344,11 +337,10 @@ pub struct AppError {
     /// the override.
     pub status: Option<StatusCode>,
     /// When set, overrides the wire-form `errcode` string. Use sparingly —
-    /// only for handlers whose pre-typed `render_error` path emitted a
-    /// non-canonical errcode that downstream clients (or tests) already
-    /// depend on (e.g. `unknown_schema`, `<kind>_not_active`,
-    /// `batch_not_supported`). New code should prefer a canonical
-    /// `ErrorCode` variant.
+    /// only for handlers that emit a non-canonical errcode downstream
+    /// clients (or tests) already depend on (e.g. `unknown_schema`,
+    /// `<kind>_not_active`, `batch_not_supported`). New code should prefer
+    /// a canonical `ErrorCode` variant.
     pub wire_code_override: Option<String>,
 }
 
@@ -431,18 +423,6 @@ impl std::error::Error for AppError {}
 impl From<ErrorCode> for AppError {
     fn from(code: ErrorCode) -> Self {
         Self::new(code, "")
-    }
-}
-
-impl AppError {
-    /// Convenience: build an `AppError` with both an explicit HTTP status and
-    /// a non-canonical wire `errcode` override, for lifecycle paths whose
-    /// pre-typed `render_error` shape downstream clients already depend on.
-    pub fn legacy(status: StatusCode, wire_code: impl Into<String>, message: impl Into<String>) -> Self {
-        let wire_code = wire_code.into();
-        Self::new(ErrorCode::InvalidParam, message)
-            .with_status(status)
-            .with_wire_code(wire_code)
     }
 }
 

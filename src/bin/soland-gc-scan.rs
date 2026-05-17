@@ -1,8 +1,8 @@
 //! `cargo run --bin soland-gc-scan -- --space-id <id> [--dry-run]`
 //!
-//! MAL-13 (round 25) — walk the durable Move + Anchor stores and emit the
-//! list of GC-eligible Moves as JSON on stdout. The `--dry-run` flag is
-//! the only mode currently supported (deletion is a follow-up).
+//! Walks the durable Move + Anchor stores and emits the list of
+//! GC-eligible Moves as JSON on stdout. The `--dry-run` flag is the
+//! only mode currently supported (deletion is a follow-up).
 
 use soland::config::AppConfig;
 use soland::db::Db;
@@ -16,7 +16,7 @@ fn main() -> anyhow::Result<()> {
 
     if !dry_run {
         eprintln!(
-            "soland-gc-scan: only --dry-run is supported in round 25 (deletion is a follow-up)"
+            "soland-gc-scan: only --dry-run is supported (deletion is a follow-up)"
         );
         std::process::exit(2);
     }

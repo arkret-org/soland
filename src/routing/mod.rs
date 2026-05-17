@@ -16,6 +16,7 @@ use crate::wire::{now, sync_token};
 
 mod access;
 mod admin;
+mod agent_workspace;
 pub(crate) mod events;
 pub(crate) mod federation;
 mod identity;
@@ -110,6 +111,7 @@ fn api_v1_router() -> Router {
         .push(access::router())
         .push(admin::router())
         .push(interop::router())
+        .push(agent_workspace::router())
         .push(
             Router::with_path("{**rest}")
                 .options(cors_preflight)
@@ -950,7 +952,7 @@ pub(crate) fn snapshot_bundle_for_space(state: &AppState, space_id: &str) -> Opt
         state_hash.trim_start_matches("sha256:")
     );
 
-    // Snapshot v2 (round 9): deterministically chunk the state-document
+    // Snapshot v2: deterministically chunk the state-document
     // bytes via the SDK chunker, build a Merkle tree over the chunk
     // digests, and sign a GeneratorProof binding the tree root to
     // (generator_did, space_id, state_root). Receivers verify the proof
@@ -1119,6 +1121,7 @@ mod operation_conformance_tests {
                 jws_replay_window_seconds: 0,
                 jws_replay_window_per_family: std::collections::BTreeMap::new(),
                 anchorer_signing_key_seed: None,
+                agent_audit_binding_signing_seed: None,
                 use_keystore: false,
                 federation_policy: crate::config::FederationPolicy::Mesh,
                 federation_peers: Vec::new(),
@@ -1131,6 +1134,10 @@ mod operation_conformance_tests {
                 compaction_min_witnesses: 1,
                 compaction_preserve_genesis: true,
                 compaction_prune_only_singleton_successors: true,
+
+                compaction_prune_walk_interval_seconds: 0,
+
+                compaction_prune_walk_per_space_limit: 50,
             },
             Db { pool: None },
         )
@@ -1279,7 +1286,7 @@ mod operation_conformance_tests {
                 payload: json!({"reason": "release_reopened"}),
                 valid: false,
             },
-            // Round 13 — Flow / Morph lifecycle conformance vectors.
+            // Flow / Morph lifecycle conformance vectors.
             OperationVector {
                 name: "flow create",
                 kind: kinds::CX_FLOW_CREATE,
@@ -1310,7 +1317,7 @@ mod operation_conformance_tests {
                 payload: json!({"reason": "stale_room"}),
                 valid: false,
             },
-            // Round 14 — flow position event vectors.
+            // Flow position event vectors.
             OperationVector {
                 name: "flow move",
                 kind: kinds::CX_FLOW_MOVE,
@@ -1343,7 +1350,7 @@ mod operation_conformance_tests {
                 payload: json!({"board_place_id": "cx:place:01904100-0000-7000-8000-c10dc0000001", "rank": "a1"}),
                 valid: false,
             },
-            // Round 14d — Flow track sub-event vectors.
+            // Flow track sub-event vectors.
             OperationVector {
                 name: "flow track enable",
                 kind: kinds::CX_FLOW_TRACK_ENABLE,
@@ -1426,7 +1433,7 @@ mod operation_conformance_tests {
                 payload: json!({"reason": "reopen"}),
                 valid: false,
             },
-            // Round 14e+ — Applet protocol family conformance vectors.
+            // Applet protocol family conformance vectors.
             OperationVector {
                 name: "applet registration",
                 kind: kinds::CX_APPLET_REGISTRATION,
@@ -1482,7 +1489,7 @@ mod operation_conformance_tests {
                 }),
                 valid: true,
             },
-            // Round 14e+ — Agent protocol family conformance vectors.
+            // Agent protocol family conformance vectors.
             OperationVector {
                 name: "agent endpoint",
                 kind: kinds::CX_AGENT_ENDPOINT,

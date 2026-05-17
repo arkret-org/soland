@@ -1,12 +1,16 @@
 use salvo::prelude::*;
 
 pub(crate) mod agent_bridge;
+pub(super) mod agent_workspace_bridge;
 pub(super) mod applet_bridge;
 pub(super) mod event_log;
-pub(super) mod flow;
+// Flow + projection helpers are `pub(crate)` so the MIMI interop
+// facade can reuse the canonical space→flow mapping + projection-event
+// JSON shape when ingesting MIMI traffic into the Contrix timeline.
+pub(crate) mod flow;
 pub(super) mod messages;
 pub(super) mod operations;
-pub(super) mod projection;
+pub(crate) mod projection;
 pub(super) mod projection_query;
 pub(super) mod sync;
 

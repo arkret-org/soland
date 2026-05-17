@@ -170,7 +170,7 @@ pub struct AppState {
     /// behind a [`Mutex`] (one-shot writes from the rotation path are not
     /// in the hot read path; the per-pass diagnostic helper just snapshots).
     pub anchorer_signing_key_origin: Arc<Mutex<AnchorerSigningKeyOrigin>>,
-    /// Round 9 (per-admin signing key): SDK
+    /// Per-admin signing keys: SDK
     /// [`contrix_sdk::AdminKeyStore`] keyed by the `application_id`
     /// `soland.<service_did>`. Each admin DID in
     /// `config.admin_principal_dids` gets its own ed25519 signing seed
@@ -646,7 +646,7 @@ impl AppState {
             Arc::new(ArcSwap::from_pointee(SigningKey::from_bytes(&signing_seed)));
         let anchorer_signing_key_origin = Arc::new(Mutex::new(anchorer_signing_key_origin));
 
-        // Round 9 (per-admin signing key): build a single
+        // Per-admin signing keys: build a single
         // [`AdminKeyStore`] for this principal. The application_id
         // mirrors the AnchorerWorker pattern (`soland.<service_did>`) so
         // operators only manage one secret-storage namespace.
@@ -688,7 +688,7 @@ impl AppState {
         }
         let admin_keystore = Arc::new(admin_keystore);
 
-        // Round 15h — hydrate Place/Flow/Morph projections from durable
+        // Hydrate Place/Flow/Morph projections from durable
         // persistence so process restart doesn't lose lifecycle state.
         // The write-through path in `routing::events::projection.rs::
         // write_through_projection` keeps these tables in sync as
@@ -734,7 +734,7 @@ pub(crate) fn getrandom_seed(out: &mut [u8; 32]) {
     rand::rngs::OsRng.fill_bytes(out);
 }
 
-/// Round 15h — Read Place / Flow / Morph projection rows from durable
+/// Read Place / Flow / Morph projection rows from durable
 /// persistence into the supplied `ProjectionState`. Called at
 /// `AppState::new` so restart picks up the lifecycle state the
 /// write-through path stamped down on the way in. Unknown state

@@ -259,15 +259,15 @@ pub struct AnchorPruneDiagnostics {
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
-/// Round 22: build the canonical [`MoveSigner`] for admin-issued Moves.
+/// Build the canonical [`MoveSigner`] for admin-issued Moves.
 ///
-/// **Identity unification (round 22)**: the admin endpoints
-/// (`admin_reconfigure_anchorer`, `admin_repair_bottom`) and the in-process
-/// `AnchorerWorker` now bind to the **same** Ed25519 key — held on
-/// `AppState::anchorer_signing_key`. That key is sourced from
-/// `SOLAND_ANCHORER_SIGNING_KEY` (production) or minted ephemerally at
-/// boot (dev/test). Wrapping it in an `Ed25519MoveSigner` here gives the
-/// admin path a SDK-canonical signer with no key duplication.
+/// The admin endpoints (`admin_reconfigure_anchorer`,
+/// `admin_repair_bottom`) and the in-process `AnchorerWorker` bind to the
+/// **same** Ed25519 key — held on `AppState::anchorer_signing_key`. That
+/// key is sourced from `SOLAND_ANCHORER_SIGNING_KEY` (production) or
+/// minted ephemerally at boot (dev/test). Wrapping it in an
+/// `Ed25519MoveSigner` here gives the admin path a SDK-canonical signer
+/// with no key duplication.
 ///
 /// The verification_method id is `<service_did>#anchorer-key`, matching
 /// the JWS the AnchorerWorker emits — so a single DID-document publication
@@ -281,15 +281,15 @@ fn service_admin_signer(state: &AppState) -> Result<Ed25519MoveSigner, AppError>
         )
     })?;
     let kid = format!("{service_did}#anchorer-key");
-    // Round 24: `state.anchorer_signing_key()` returns `Arc<SigningKey>`
-    // (lock-free `ArcSwap` snapshot). `Ed25519MoveSigner::new` takes a
-    // `SigningKey` by value, so dereference + clone.
+    // `state.anchorer_signing_key()` returns `Arc<SigningKey>` (lock-free
+    // `ArcSwap` snapshot). `Ed25519MoveSigner::new` takes a `SigningKey`
+    // by value, so dereference + clone.
     let signing_key = (*state.anchorer_signing_key()).clone();
     Ok(Ed25519MoveSigner::new(signing_key, did, kid))
 }
 
-/// Round 9: build a per-admin [`Ed25519MoveSigner`] bound to the operator
-/// DID. Looks up the operator's signing seed in
+/// Build a per-admin [`Ed25519MoveSigner`] bound to the operator DID.
+/// Looks up the operator's signing seed in
 /// [`AppState::admin_keystore`]; falls back to [`service_admin_signer`]
 /// when no per-admin key is provisioned (logging a sticky-warn so the
 /// operator notices). The resulting signer's `verification_method` is
@@ -331,7 +331,7 @@ fn admin_signer_for(
     }
 }
 
-/// Round 21: convert an `AnchorerReconfigBody` into the canonical anchorer
+/// Convert an `AnchorerReconfigBody` into the canonical anchorer
 /// cell value object (per spec `cell-anchorer-v1.schema.json`). Returns
 /// `Err` for shape violations the SDK's `AnchorerValue::validate()` would
 /// reject — we don't actually round-trip through `AnchorerValue` here so
@@ -422,7 +422,7 @@ fn anchorer_value_object_from_body(body: &AnchorerReconfigBody) -> Result<Value,
     Ok(Value::Object(v))
 }
 
-/// Round 21: choose a fresh `anchor_ref` for a brand-new admin Move. If
+/// Choose a fresh `anchor_ref` for a brand-new admin Move. If
 /// the Space has at least one Anchor leaf, that's the issuer's view; if
 /// it's a true genesis Space, we use the spec-canonical zero AnchorId
 /// (matching SDK fixtures and `state-res::apply_anchor` genesis path).
@@ -434,7 +434,7 @@ fn pick_admin_anchor_ref(state: &AppState, space_id: &SpaceId) -> AnchorId {
     AnchorId::new(format!("cx:anchor:sha256:{}", "00".repeat(32))).expect("valid genesis anchor id")
 }
 
-/// Round 21: build a fresh Hlc for an admin-issued Move using the server's
+/// Build a fresh Hlc for an admin-issued Move using the server's
 /// own ServerHlc clock.
 fn fresh_hlc(state: &AppState) -> Result<Hlc, AppError> {
     Hlc::new(state.hlc.now()).map_err(|e| {
@@ -679,7 +679,7 @@ pub(super) async fn admin_get_anchorer(
 /// `POST /api/admin/v1/spaces/{space_id}/anchorer/reconfigure` —
 /// submit a reconfig Move that writes the new anchorer cell value.
 ///
-/// Round 21: builds a real Move signing with the service admin signer
+/// Builds a Move signed by the service admin signer
 /// (`service_admin_signer`), submits via `state.move_store.put_pending`,
 /// and triggers one signing pass via `crate::anchorer::run_one_signing_pass`
 /// so the Move folds into a fresh Anchor immediately when the server is
@@ -776,9 +776,9 @@ pub(super) async fn admin_reconfigure_anchorer(
         },
     };
 
-    // Round 9: per-admin signing. The Move is signed by the operator
-    // DID (`admin_signer_for`), giving operator attribution in the
-    // audit chain. When the operator has no provisioned key, the helper
+    // Per-admin signing. The Move is signed by the operator DID
+    // (`admin_signer_for`), giving operator attribution in the audit
+    // chain. When the operator has no provisioned key, the helper
     // falls back to the service signer with a sticky-warn — keeps
     // existing dev flows working while production deployments roll out
     // per-admin keystores.
@@ -894,7 +894,6 @@ pub(super) async fn admin_list_bottom_global(
 /// `POST /api/admin/v1/spaces/{space_id}/bottom/{cell_id}/repair` —
 /// submit a repair Move.
 ///
-/// Round 21:
 /// - `HeadInWinner` builds a real Move with one effect: `head_in` op that selects the winning head,
 ///   plus a `recovery_capability` `SemanticRef` so the verifier knows this is an authorized repair.
 ///   Note: `head_in` is a `LatticeOpType::Set`-shaped op in the SDK (the op semantics are spec-§5.3
@@ -971,9 +970,9 @@ pub(super) async fn admin_repair_bottom(
                 role: "recovery_capability".to_owned(),
                 critical: true,
             };
-            // Round 9: per-admin signing — Move's `verification_method`
-            // is the operator's `<did>#admin-key` when a per-admin key
-            // is provisioned, else falls back to the service signer.
+            // Per-admin signing — Move's `verification_method` is the
+            // operator's `<did>#admin-key` when a per-admin key is
+            // provisioned, else falls back to the service signer.
             let signer = admin_signer_for(state, &admin_session.actor)?;
             let unsigned = UnsignedMove::new(
                 signer.signer_did().clone(),
@@ -1162,14 +1161,8 @@ pub(super) async fn admin_get_anchor_dag(
             frontier_union.insert(f.as_str().to_owned());
         }
         latest_state_root = Some(anchor.state_root.as_str().to_owned());
-        // MAL-11 round 9: `is_compaction` reads the explicit
-        // `Anchor.kind == AnchorKind::Compaction` field directly. The
-        // round-7 structural heuristic ("zero new moves vs predecessor
-        // frontier") was a placeholder before the field existed; it
-        // could mis-flag a normal anchor whose moves all happened to
-        // appear in a predecessor's frontier (which never actually
-        // happens with a well-formed pipeline, but you don't want a
-        // structural heuristic where you can have a signed flag).
+        // `is_compaction` reads the explicit
+        // `Anchor.kind == AnchorKind::Compaction` field directly.
         let is_compaction = anchor.kind.is_compaction();
         leaves.push(AnchorLeafResponse {
             anchor_id: anchor.id.as_str().to_owned(),
@@ -1226,13 +1219,13 @@ pub(super) async fn admin_compact_anchor_dag(
     })?;
     let max_pending = body.into_inner().max_moves.unwrap_or(1000).min(10_000) as usize;
 
-    // MAL-11 real compaction (round 9): first drain any pending Moves
-    // via the regular anchorer pass so the compaction Anchor witnesses
-    // an up-to-date frontier, then mint a `kind=Compaction` Anchor over
-    // the current leaves with the same `frontier` (no new moves —
-    // that's what makes it a compaction). The compaction Anchor is
-    // signed and applied just like a normal Anchor; downstream pruning
-    // walks consult `CompactionPolicy` per-candidate and call
+    // MAL-11 compaction: first drain any pending Moves via the regular
+    // anchorer pass so the compaction Anchor witnesses an up-to-date
+    // frontier, then mint a `kind=Compaction` Anchor over the current
+    // leaves with the same `frontier` (no new moves — that's what makes
+    // it a compaction). The compaction Anchor is signed and applied
+    // just like a normal Anchor; downstream pruning walks consult
+    // `CompactionPolicy` per-candidate and call
     // `AnchorStore::prune_predecessor`.
     if let Err(crate::anchorer::AnchorerError::NotAuthorized(_)) =
         crate::anchorer::run_one_signing_pass(state, &space, max_pending)
@@ -1272,10 +1265,10 @@ pub(super) async fn admin_compact_anchor_dag(
         )
     })?;
 
-    // Step 2: sign + apply the compaction Anchor. Round 9: sign with
-    // the operator's per-admin key so the Anchor's `verification_method`
-    // carries operator attribution (falls back to the service signer
-    // when no per-admin key is provisioned).
+    // Step 2: sign + apply the compaction Anchor with the operator's
+    // per-admin key so the Anchor's `verification_method` carries
+    // operator attribution (falls back to the service signer when no
+    // per-admin key is provisioned).
     let signer = admin_signer_for(state, &admin_session.actor)?;
     let compaction = contrix_sdk::Anchor::sign_single_kind(
         space.clone(),
@@ -1319,10 +1312,10 @@ pub(super) async fn admin_compact_anchor_dag(
 /// [`contrix_sdk::CompactionPolicy`] and, when eligible, remove it via
 /// [`AnchorStore::prune_predecessor`].
 ///
-/// MAL-11 round 9: gates the structural prune walk on the operator's
-/// configured policy (env-driven `SOLAND_COMPACTION_*`). Successor anchors
-/// have their `predecessor_refs` rewired to the pruned candidate's parents;
-/// the store guarantees no leaf prune (returns 4xx instead).
+/// Gates the structural prune walk on the operator's configured policy
+/// (env-driven `SOLAND_COMPACTION_*`). Successor anchors have their
+/// `predecessor_refs` rewired to the pruned candidate's parents; the
+/// store guarantees no leaf prune (returns 4xx instead).
 #[endpoint(
     operation_id = "cx.admin.spaces.anchor_dag.prune",
     tags("admin", "anchor-dag"),
@@ -1512,16 +1505,14 @@ pub(super) async fn admin_prune_anchor_dag(
     })
 }
 
-// ── Multi-sig coordinator (round 22) ─────────────────────────────────────
+// ── Multi-sig coordinator ────────────────────────────────────────────────
 //
 // `POST /api/admin/v1/spaces/{space_id}/multisig/{anchor_id}/partial` accepts
 // partial Anchor signatures from peer anchorers; once the threshold is
-// reached, the aggregated `Anchor` is published. Round 22 lands the wire
-// shape + the in-memory accumulator; production-grade persistence (a Postgres
-// `multisig_pending` table + leader-election watchdog) is a follow-up.
+// reached, the aggregated `Anchor` is published.
 //
 // `GET /api/admin/v1/spaces/{space_id}/multisig/pending` lists the in-flight
-// anchors awaiting threshold so sodmin's H'9 panel can render them.
+// anchors awaiting threshold so the admin UI can render them.
 
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct PartialSignatureBody {
@@ -1732,12 +1723,12 @@ pub(super) async fn admin_list_multisig_pending(
 ///   "rotated_at": "2026-05-09T12:00:00Z" }
 /// ```
 ///
-/// Round 24 wire-up: when `use_keystore=true`, the new seed is also stored
-/// under `contrix:signer:soland-anchorer:<service_did>` so it survives
-/// process restart. When `use_keystore=false`, the rotation lives only in
-/// the running process's `ArcSwap` (suitable for dev/test, not production
-/// — the next restart re-loads the env-supplied seed). The space_id path
-/// param is required by the H'8 contract for symmetry with the other
+/// When `use_keystore=true`, the new seed is also stored under
+/// `contrix:signer:soland-anchorer:<service_did>` so it survives
+/// process restart. When `use_keystore=false`, the rotation lives only
+/// in the running process's `ArcSwap` (suitable for dev/test, not
+/// production — the next restart re-loads the env-supplied seed). The
+/// space_id path param is required for symmetry with the other
 /// per-space anchorer endpoints; the signing key itself is process-wide,
 /// not Space-scoped.
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]

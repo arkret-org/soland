@@ -346,8 +346,8 @@ diesel::table! {
     }
 }
 
-// Round 13 — Flow / Morph projection state for cx.flow.* / cx.morph.*
-// lifecycle events. Spec: contrix-spec/v1/zh/models/common-fields.md §5.1
+// Flow / Morph projection state for cx.flow.* / cx.morph.* lifecycle
+// events. Spec: contrix-spec/v1/zh/models/common-fields.md §5.1
 // (canonical state-transition table). State enum mirrors ObjectState
 // from contrix-sdk: active / archived / deleted / redacted (no
 // "tombstoned" — Flow / Morph have no dedicated tombstone event).
@@ -381,7 +381,7 @@ diesel::table! {
     }
 }
 
-// Round 15i — append-only projection event log. Mirror of the
+// Append-only projection event log. Mirror of the
 // in-memory `ProjectionEventRecord` stream stamped down via
 // `state.persistence.projection_events().append(...)` from the
 // routing `project_accepted_operations` path. Surrogate `ordinal`

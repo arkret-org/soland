@@ -72,6 +72,7 @@ fn test_config() -> AppConfig {
         jws_replay_window_seconds: 0,
         jws_replay_window_per_family: std::collections::BTreeMap::new(),
         anchorer_signing_key_seed: None,
+        agent_audit_binding_signing_seed: None,
         use_keystore: false,
         federation_policy: soland::config::FederationPolicy::Mesh,
         federation_peers: Vec::new(),
@@ -84,6 +85,10 @@ fn test_config() -> AppConfig {
         compaction_min_witnesses: 1,
         compaction_preserve_genesis: true,
         compaction_prune_only_singleton_successors: true,
+
+        compaction_prune_walk_interval_seconds: 0,
+
+        compaction_prune_walk_per_space_limit: 50,
     }
 }
 

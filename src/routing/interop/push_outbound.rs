@@ -16,7 +16,7 @@
 //! sets `force_refresh=true`; snapshot export/import round-trips trust
 //! level + freshness alongside the contract digest.
 //!
-//! Trust + freshness (round 5 hardening):
+//! Trust + freshness:
 //! - **TTL freshness**: cache_hit reads check `freshness_at + push_bridge_cache_ttl_seconds`
 //!   (default 900s). Stale entries are downgraded to `trust_level=stale` and
 //!   surface `fetch_state=cache_hit_stale`, so downstream `cx.push.notify`

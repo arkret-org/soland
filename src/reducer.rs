@@ -111,17 +111,17 @@ pub struct ProjectionState {
     /// applies cx.place.create / update / parent / archive / restore /
     /// tombstone; mirror table is `projection_places` (durable).
     pub places: BTreeMap<String, PlaceProjection>,
-    /// Round 13 — Server-side Flow projection. Mirrors the canonical
-    /// state-machine for cx.flow.create / update / archive / restore.
-    /// Unlike Place there is no dedicated `cx.flow.tombstone` event;
-    /// terminal state is reached via `cx.redaction`. Mirror table is
-    /// `projection_flows` (durable).
+    /// Server-side Flow projection. Mirrors the canonical state-machine
+    /// for cx.flow.create / update / archive / restore. Unlike Place
+    /// there is no dedicated `cx.flow.tombstone` event; terminal state
+    /// is reached via `cx.redaction`. Mirror table is `projection_flows`
+    /// (durable).
     pub flows: BTreeMap<String, FlowProjection>,
-    /// Round 13 — Server-side Morph projection. Same shape as Flow.
-    /// Mirror table is `projection_morphs` (durable).
+    /// Server-side Morph projection. Same shape as Flow. Mirror table
+    /// is `projection_morphs` (durable).
     pub morphs: BTreeMap<String, MorphProjection>,
-    /// Round 15b (2026-05-16) — Server-side Applet registry projection,
-    /// keyed by `service_did` (the canonical applet identity per spec
+    /// Server-side Applet registry projection, keyed by `service_did`
+    /// (the canonical applet identity per spec
     /// `extensions/applet-integration.md`). Populated by
     /// `cx.applet.registration` (initial registration / re-registration)
     /// and updated by `cx.applet.discovery` (manifest refresh). Used by
@@ -130,9 +130,9 @@ pub struct ProjectionState {
     /// `cx.applet.bridge_error`) are NOT mirrored here — sessions are
     /// ephemeral and the applet bridge state machine lives client-side.
     pub applets: BTreeMap<String, AppletProjection>,
-    /// Round 15b — Server-side Agent registry projection, keyed by
-    /// `agent_did`. Same shape as `applets`. Populated by
-    /// `cx.agent.endpoint`. Protocol-session events for agents
+    /// Server-side Agent registry projection, keyed by `agent_did`.
+    /// Same shape as `applets`. Populated by `cx.agent.endpoint`.
+    /// Protocol-session events for agents
     /// (`cx.agent.protocol_session.{start,status,result}`) are also not
     /// mirrored — see `applets` rationale.
     pub agents: BTreeMap<String, AgentProjection>,
@@ -203,7 +203,7 @@ pub struct MorphProjection {
     pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
-/// Round 15b — Server-side Applet registry entry. Populated by
+/// Server-side Applet registry entry. Populated by
 /// `cx.applet.registration` (creates) and `cx.applet.discovery` (refreshes
 /// the manifest). Spec `extensions/applet-integration.md` doesn't pin
 /// down a state-machine for applet entries themselves (the bridge state
@@ -224,17 +224,16 @@ pub struct AppletProjection {
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
-/// Round 15b — Server-side Agent registry entry. Populated by
+/// Server-side Agent registry entry. Populated by
 /// `cx.agent.endpoint`. Spec `extensions/agent-integration.md` mirrors
 /// the applet family shape; same simple last-write-wins semantics.
 ///
-/// Sprint Q1 第二十增量 (B4d): `endpoint_url` is the HTTPS URL the
-/// agent runtime listens on. It is OPTIONAL on the wire (older
-/// clients + DID-only agents that resolve via did:web service entry
-/// won't set it), but when present the reference bridge echoes it
-/// back in the `cx.agent.protocol_session.result` envelope's
-/// `detail.endpoint_url` so timeline consumers see which endpoint
-/// answered the invocation.
+/// `endpoint_url` is the HTTPS URL the agent runtime listens on. It is
+/// OPTIONAL on the wire (older clients + DID-only agents that resolve
+/// via did:web service entry won't set it), but when present the
+/// reference bridge echoes it back in the
+/// `cx.agent.protocol_session.result` envelope's `detail.endpoint_url`
+/// so timeline consumers see which endpoint answered the invocation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AgentProjection {
     /// `agent_did` — canonical agent identity per spec.
@@ -243,9 +242,8 @@ pub struct AgentProjection {
     /// payload description; no enum enforcement at this layer).
     pub protocol: String,
     /// HTTPS endpoint URL — optional. Reference bridge currently
-    /// uses this only as an observability field. Production runtimes
-    /// will follow it for outbound dispatch (tracked as B4f in
-    /// `_todos.md`).
+    /// uses this only as an observability field; production runtimes
+    /// will follow it for outbound dispatch.
     pub endpoint_url: Option<String>,
     pub registered_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
@@ -438,24 +436,24 @@ pub enum ProjectionEffect {
         place_id: String,
         new_state: PlaceLifecycleState,
     },
-    /// Round 13 — Flow lifecycle transition accepted. Mirror of
-    /// `PlaceLifecycle` for `ProjectionState::flows`.
+    /// Flow lifecycle transition accepted. Mirror of `PlaceLifecycle`
+    /// for `ProjectionState::flows`.
     FlowLifecycle {
         flow_id: String,
         new_state: ObjectLifecycleState,
     },
-    /// Round 13 — Morph lifecycle transition accepted. Same shape as Flow.
+    /// Morph lifecycle transition accepted. Same shape as Flow.
     MorphLifecycle {
         morph_id: String,
         new_state: ObjectLifecycleState,
     },
-    /// Round 15b — Applet registry projection updated (registration or
-    /// discovery). Keyed by the applet's `service_did`.
+    /// Applet registry projection updated (registration or discovery).
+    /// Keyed by the applet's `service_did`.
     AppletProjectionUpdated {
         service_did: String,
     },
-    /// Round 15b — Agent registry projection updated (endpoint). Keyed
-    /// by the agent's `agent_did`.
+    /// Agent registry projection updated (endpoint). Keyed by the
+    /// agent's `agent_did`.
     AgentProjectionUpdated {
         agent_did: String,
     },
@@ -478,7 +476,7 @@ enum PlaceLifecycleTransition {
     Tombstone,
 }
 
-/// Round 13 — Flow / Morph lifecycle transition picker. Mirror of
+/// Flow / Morph lifecycle transition picker. Mirror of
 /// `PlaceLifecycleTransition` but for the two-event family (no tombstone).
 #[derive(Clone, Copy, Debug)]
 enum ObjectLifecycleTransition {
@@ -486,8 +484,8 @@ enum ObjectLifecycleTransition {
     Restore,
 }
 
-/// Round 14b — Extract the typed-id object reference from a
-/// `cx.redaction` event payload, used by both the reducer
+/// Extract the typed-id object reference from a `cx.redaction` event
+/// payload, used by both the reducer
 /// (`apply_redaction`) and the preflight
 /// (`check_redaction_target_transition`). Returns `None` for redactions
 /// that only carry a `target_event_id` (message redaction path), or
@@ -810,12 +808,12 @@ impl ProjectionState {
     /// `redaction_value: null` (or the equivalent `unredact: true` flag)
     /// resets the cas-register and removes the tombstone.
     ///
-    /// Round 14b: when the payload also carries `object_ref` /
-    /// `target_object_ref` naming a `cx:flow:` or `cx:morph:` typed-id,
-    /// the redaction additionally flips the corresponding projection's
-    /// state to `ObjectLifecycleState::Redacted` per spec common-fields.md
-    /// §5.1. Place is intentionally excluded — spec note "Place 没有
-    /// redacted" routes Place removal through `cx.place.tombstone` only.
+    /// When the payload also carries `object_ref` / `target_object_ref`
+    /// naming a `cx:flow:` or `cx:morph:` typed-id, the redaction
+    /// additionally flips the corresponding projection's state to
+    /// `ObjectLifecycleState::Redacted` per spec common-fields.md §5.1.
+    /// Place is intentionally excluded — Place has no Redacted terminal,
+    /// and Place removal routes through `cx.place.tombstone` only.
     fn apply_redaction(&mut self, operation: &Operation) -> ProjectionEffect {
         let target = operation
             .payload
@@ -875,7 +873,7 @@ impl ProjectionState {
             msg.redacted_at = Some(operation.created_at);
         }
 
-        // Round 14b — Flow / Morph object-level redaction. If payload
+        // Flow / Morph object-level redaction. If payload
         // carries an `object_ref` (or fallback `target_object_ref`)
         // naming a typed-id, push the projection to the Redacted terminal
         // state. State-machine guard against terminal source is policed
@@ -1700,7 +1698,7 @@ impl ProjectionState {
             // Unknown Place — likely the cx.place.create has not yet
             // been projected (causal / backfill window). Tolerate
             // silently per the spec convention (common-fields.md §5.1
-            // "未知对象容忍").
+            // unknown-object tolerance).
             return ProjectionEffect::Ignored;
         };
 
@@ -1746,7 +1744,7 @@ impl ProjectionState {
         }
     }
 
-    // ── Round 13: Flow / Morph projection state machine ──
+    // ── Flow / Morph projection state machine ──
 
     /// Read-only state-machine preflight for a `cx.flow.*` lifecycle event.
     /// Mirror of `check_place_lifecycle_transition` — used by
@@ -1788,7 +1786,7 @@ impl ProjectionState {
         Ok(())
     }
 
-    /// Round 14b — Read-only preflight for `cx.redaction` events that
+    /// Read-only preflight for `cx.redaction` events that
     /// target a Flow / Morph via `object_ref`. Per spec common-fields.md
     /// §5.1, redaction is legal only from `active` or `archived` source;
     /// terminal source MUST `failed_precondition` with
@@ -2018,7 +2016,7 @@ impl ProjectionState {
         }
     }
 
-    /// Round 14d (2026-05-16) — read-only preflight for `cx.flow.track.*`
+    /// Read-only preflight for `cx.flow.track.*`
     /// sub-events. Spec common-fields.md §5.1 update-on-non-active rule:
     /// track mutations are a kind of update; parent Flow MUST be Active
     /// or the admission MUST `failed_precondition` with `flow_not_active`
@@ -2052,7 +2050,7 @@ impl ProjectionState {
         Ok(())
     }
 
-    /// Apply `cx.flow.move` / `cx.flow.reorder` (round 14). These events
+    /// Apply `cx.flow.move` / `cx.flow.reorder`. These events
     /// don't affect Flow lifecycle state — they write to the
     /// `cx.component.flow.position.v1` cell family on the Move/Anchor
     /// pipeline. The Event-Envelope reducer just bumps `updated_at` /
@@ -2088,7 +2086,7 @@ impl ProjectionState {
         }
     }
 
-    /// Round 14d (2026-05-16) — Apply `cx.flow.track.*` sub-events
+    /// Apply `cx.flow.track.*` sub-events
     /// server-side. State guard runs in `check_flow_track_transition`
     /// preflight; by the time this reducer fires, the parent Flow is
     /// known to be Active (or unknown, in which case the touch is a
@@ -2295,7 +2293,7 @@ impl ProjectionState {
         }
     }
 
-    /// Round 15b — Apply `cx.applet.registration`. Upserts the
+    /// Apply `cx.applet.registration`. Upserts the
     /// AppletProjection keyed by `service_did`. Re-registration with
     /// the same DID is allowed (replace capabilities + bump
     /// updated_at), matching the spec convention that registration is
@@ -2343,7 +2341,7 @@ impl ProjectionState {
         ProjectionEffect::AppletProjectionUpdated { service_did }
     }
 
-    /// Round 15b — Apply `cx.applet.discovery`. Updates the manifest
+    /// Apply `cx.applet.discovery`. Updates the manifest
     /// on an existing AppletProjection. If the applet hasn't registered
     /// yet (causal / backfill window), creates a stub entry with the
     /// manifest and empty namespace; subsequent registration will fill
@@ -2380,12 +2378,10 @@ impl ProjectionState {
         ProjectionEffect::AppletProjectionUpdated { service_did }
     }
 
-    /// Round 15b — Apply `cx.agent.endpoint`. Upserts the
-    /// AgentProjection keyed by `agent_did`.
-    ///
-    /// Sprint Q1 第二十增量 (B4d): if the payload carries an
-    /// `endpoint_url` field it is captured into the projection so the
-    /// bridge can echo it back on `protocol_session.result`.
+    /// Apply `cx.agent.endpoint`. Upserts the AgentProjection keyed by
+    /// `agent_did`. If the payload carries an `endpoint_url` field it
+    /// is captured into the projection so the bridge can echo it back
+    /// on `protocol_session.result`.
     fn apply_agent_endpoint(
         &mut self,
         operation: &Operation,
@@ -3521,7 +3517,8 @@ mod tests {
     }
 
     /// Preflight is permissive when the Place is unknown — causal /
-    /// backfill window. Spec: "未知对象容忍" rule in common-fields §5.1.
+    /// backfill window. Spec: unknown-object tolerance rule in
+    /// common-fields §5.1.
     #[test]
     fn place_lifecycle_preflight_tolerates_unknown_place() {
         let state = ProjectionState::new();
@@ -3533,7 +3530,7 @@ mod tests {
         assert_eq!(state.check_place_lifecycle_transition(&archive_unknown), Ok(()));
     }
 
-    // ── Round 13: Flow lifecycle state-machine tests ──
+    // ── Flow lifecycle state-machine tests ──
 
     /// End-to-end Flow lifecycle through the dispatcher: create → archive →
     /// restore (no tombstone for Flow per spec). Verifies projection state
@@ -3680,7 +3677,7 @@ mod tests {
         );
     }
 
-    // ── Round 13: Morph lifecycle state-machine tests ──
+    // ── Morph lifecycle state-machine tests ──
 
     #[test]
     fn morph_lifecycle_round_trip() {
@@ -3814,7 +3811,7 @@ mod tests {
         );
     }
 
-    // ── Round 14: Flow position events (move / reorder) ──
+    // ── Flow position events (move / reorder) ──
 
     /// `cx.flow.move` / `cx.flow.reorder` touch the Flow projection's
     /// `updated_at` / `updated_by` but do NOT change state. Cell-write
@@ -3913,7 +3910,7 @@ mod tests {
         assert!(matches!(effect, ProjectionEffect::Ignored));
     }
 
-    // ── Round 14b: cx.redaction → Flow / Morph terminal-state push ──
+    // ── cx.redaction -> Flow / Morph terminal-state push ──
 
     /// `cx.redaction` carrying `object_ref: cx:flow:...` flips the
     /// FlowProjection state to Redacted (terminal) per spec
@@ -4101,7 +4098,7 @@ mod tests {
         );
     }
 
-    // ── Round 14d: Flow track sub-events ──
+    // ── Flow track sub-events ──
 
     /// `cx.flow.track.*` sub-events touch Flow.updated_at but never
     /// flip lifecycle state. Parent Flow must be Active or the touch is

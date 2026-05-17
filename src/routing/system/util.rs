@@ -54,9 +54,8 @@ pub fn query_param(req: &Request, key: &str) -> Option<String> {
     })
 }
 
-// `query_list` removed in round 7 — never called. The repeated-arg form
-// (`?spaces=A&spaces=B`) is what every selector path uses; comma-separated
-// values were never standardized.
+// The repeated-arg form (`?spaces=A&spaces=B`) is what every selector
+// path uses; comma-separated values are not standardized.
 
 /// Pull **every** occurrence of `key` from the query string as repeated args
 /// (e.g. `?spaces=A&spaces=B&spaces=C`) — required for spec C17
@@ -194,10 +193,10 @@ pub fn handle_for_did(did: &str) -> String {
 
 // ── Discoverability validator ───────────────────────────────────────────────
 //
-// (`is_valid_entity_type` / `is_supported_cx_entity_type` were removed in
-// round 6 — the `entity` abstraction never landed in `contrix-spec/v1`; typed
+// (The `entity` abstraction never landed in `contrix-spec/v1`; typed
 // objects in the protocol are `cx:flow:` / `cx:place:` / `cx:morph:` /
-// `cx:relation:` / `cx:view:`, each driven by its own dedicated event kind.)
+// `cx:relation:` / `cx:view:`, each driven by its own dedicated event
+// kind.)
 
 /// Allow-list of space-discoverability values.
 pub fn is_valid_discoverability(value: &str) -> bool {

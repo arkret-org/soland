@@ -40,9 +40,9 @@ pub(super) fn api_admin_router() -> Router {
     Router::with_path("admin/anchors/sign").post(admin_sign_anchor)
 }
 
-// `shape_only_jws_verifier_for_anchorer` removed in round 7 — the anchorer
-// uses `select_jws_verifier` which switches between shape-only (dev mode)
-// and real ed25519 (production) based on `state.config.development_mode`.
+// The anchorer uses `select_jws_verifier` which switches between
+// shape-only (dev mode) and real ed25519 (production) based on
+// `state.config.development_mode`.
 
 /// Pick the JWS verifier based on `config.development_mode`. Returns a
 /// closure of the exact type

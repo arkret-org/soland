@@ -1,12 +1,12 @@
-//! Sprint Q1 第十七增量 (B3): reference applet bridge runtime.
+//! Reference applet bridge runtime.
 //!
 //! When a client emits `cx.applet.protocol_session.start` against an
 //! applet that has registered a `cx.applet.registration` row, the
-//! bridge layer (this module) MUST surface a corresponding
+//! bridge layer surfaces a corresponding
 //! `cx.applet.protocol_session.status` event so the caller observes
-//! the lifecycle. Production deployments will route this through real
-//! applet services; the reference implementation here is an in-process
-//! **echo bridge** that:
+//! the lifecycle. Production deployments will route this through
+//! real applet services; the reference implementation here is an
+//! in-process **echo bridge** that:
 //!
 //! 1. Recognises `cx.applet.protocol_session.start` events as they
 //!    flow through `project_accepted_operations`.
@@ -17,15 +17,12 @@
 //!    `start` event lives in, so the timeline + audit surfaces see
 //!    both ends of the round trip without any client-side change.
 //!
-//! This proves the wire shape end-to-end and gives applet authors a
-//! known-good handler to compare against. The echo behaviour is
-//! deliberately stateless — when a real applet bridge ships it will
-//! dispatch by `applet_id` to a registered handler that consults the
-//! applet's manifest + capability grants.
+//! The echo behaviour is deliberately stateless - when a real applet
+//! bridge ships it will dispatch by `applet_id` to a registered
+//! handler that consults the applet's manifest + capability grants.
 
 use serde_json::{Value, json};
 
-use super::projection::projection_event_from_operation;
 use crate::ids;
 use crate::kinds;
 use crate::state::{AppState, EventNotification, ProjectionEventRecord};
@@ -92,9 +89,6 @@ pub fn maybe_emit_echo_status_for_session_start(
         record.event_id.clone(),
         super::projection::projection_event_json(&record),
     ));
-    // Also persist via the same path `projection_event_from_operation`
-    // uses so the audit log captures both halves.
-    let _ = projection_event_from_operation; // keep the import warm
     append_projection_event(state, record);
 }
 
@@ -133,6 +127,7 @@ mod tests {
             jws_replay_window_seconds: 0,
             jws_replay_window_per_family: AppConfig::default_replay_overrides(),
             anchorer_signing_key_seed: None,
+            agent_audit_binding_signing_seed: None,
             use_keystore: false,
             federation_policy: crate::config::FederationPolicy::Mesh,
             federation_peers: Vec::new(),
@@ -145,6 +140,10 @@ mod tests {
             compaction_min_witnesses: 1,
             compaction_preserve_genesis: true,
             compaction_prune_only_singleton_successors: true,
+
+            compaction_prune_walk_interval_seconds: 0,
+
+            compaction_prune_walk_per_space_limit: 50,
         };
         AppState::new(config, Db { pool: None })
     }

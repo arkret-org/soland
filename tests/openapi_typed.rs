@@ -51,6 +51,10 @@ fn test_config() -> AppConfig {
         compaction_min_witnesses: 1,
         compaction_preserve_genesis: true,
         compaction_prune_only_singleton_successors: true,
+
+        compaction_prune_walk_interval_seconds: 0,
+
+        compaction_prune_walk_per_space_limit: 50,
     }
 }
 
@@ -500,6 +504,35 @@ async fn typed_describe_handlers_publish_response_schemas() {
         assert!(
             body.contains(&format!("operationId: {operation_id}")),
             "missing operationId {operation_id} from round 15aa typed conversion"
+        );
+    }
+
+    // Round 15ac-15ag — final batch of typed conversions covering
+    // event_log read paths + sync.rs core handlers (snapshot, gap
+    // backfill, client_sync, events_query, events_query_durable_scope).
+    // Most reuse existing wire types already asserted earlier; we lock
+    // the new operation_ids here.
+    // Note: `events_query_durable_scope` is the typed wrapper around the
+    // dispatched `_impl` helper; the original `#[endpoint]` wrapper had
+    // no route registered (it's only called from sync.rs::events_query
+    // when the selector has no `spaces[]`), so OpenAPI doesn't emit it.
+    // Skip its operation_id assertion accordingly.
+    //
+    // Note: snapshot_head / snapshot_chunk get their operation_ids from
+    // the SOLAND_EXTENSION_OPERATIONS registry (`cx.sync.get_snapshot_head`
+    // / `cx.sync.get_snapshot_chunk`), not from my handler annotation.
+    for operation_id in [
+        "cx.events.get",
+        "cx.events.batch_get",
+        "cx.sync.account",
+        "cx.events.query",
+        "cx.sync.backfill_gap",
+        "cx.sync.get_snapshot_head",
+        "cx.sync.get_snapshot_chunk",
+    ] {
+        assert!(
+            body.contains(&format!("operationId: {operation_id}")),
+            "missing operationId {operation_id} from round 15ac-15ag typed conversion"
         );
     }
 }

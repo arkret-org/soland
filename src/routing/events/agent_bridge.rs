@@ -1,39 +1,33 @@
-//! Sprint Q1 第十八增量 (B4): reference agent invocation runtime.
+//! Reference agent invocation runtime.
 //!
 //! When a client emits `cx.agent.protocol_session.start` against an
-//! agent that has registered a `cx.agent.endpoint` row, the agent
-//! runtime layer (this module) MUST surface the lifecycle as two
-//! events:
+//! agent registered via `cx.agent.endpoint`, this module fans out the
+//! lifecycle as projection events:
 //!
-//! 1. `cx.agent.protocol_session.status` with `status="running"` so
-//!    the caller observes that the runtime picked up the invocation.
+//! 1. `cx.agent.protocol_session.status` with `status="running"` once
+//!    the runtime acknowledges the invocation.
 //! 2. `cx.agent.protocol_session.result` carrying the terminal payload
-//!    plus a placeholder `audit_binding` block so the wire shape
-//!    matches what a real signing runtime would emit.
+//!    plus an Ed25519-signed `audit_binding` block (signature is
+//!    computed by `contrix_sdk::agent_binding::sign_ed25519_audit_binding`
+//!    over the canonical subject `{session_id, agent_did, result.echo,
+//!    actor}`).
 //!
-//! Production deployments will dispatch by `agent_did` to a registered
-//! agent service that consults the agent's authority panel + grant
-//! refs; the reference implementation here is an in-process **echo
-//! runtime** that mirrors the input back under `result.echo` so the
-//! end-to-end wire path is exercised without a real agent process.
+//! Dispatch rules:
 //!
-//! **Sprint Q1 第十九增量 (B4c)** — dispatch by `agent_did`. Before
-//! emitting the status/result pair the bridge consults
-//! `state.projection.lock().agents`; when no AgentProjection row is
-//! present for the `agent_did` (no `cx.agent.endpoint` was ever
-//! accepted), the bridge **fails closed** with a single
-//! `cx.agent.protocol_session.result` carrying `status="failed"` +
-//! `error.code="unknown_agent"`. This mirrors how real DID-resolution
-//! dispatch fails when the agent's endpoint cannot be located.
-//!
-//! **Sprint Q1 第十九增量 (B4b)** — real-signed `audit_binding`. The
-//! placeholder `binding_kind: reference_echo` from第十八增量 is
-//! replaced with an HMAC-SHA256 signature computed via
-//! `contrix_sdk::agent_binding::sign_reference_audit_binding` over the
-//! canonical bind subject `{session_id, agent_did, result.echo,
-//! actor}`. Verifiers can call the matching `verify_reference_audit_binding`
-//! helper to confirm a result envelope was produced by this runtime
-//! (or a peer that shares the same reference HMAC key).
+//! - The runtime first looks up `agent_did` in
+//!   `state.projection.lock().agents`. When no AgentProjection is
+//!   present the bridge fails closed with a single
+//!   `cx.agent.protocol_session.result` (`status="failed"` +
+//!   `error.code="unknown_agent"`) and emits no status(running).
+//! - When the registered agent carries an `endpoint_url`, the runtime
+//!   POSTs the invocation to it via reqwest on a tokio task and
+//!   emits the result event when the upstream replies. Failures
+//!   (timeout, non-2xx, connection refused) surface as
+//!   `status="failed"` + `error.code="upstream_unreachable"`.
+//! - When no `endpoint_url` is registered the runtime emits an
+//!   in-process echo result that mirrors `params` back into
+//!   `result.echo` so the wire path is exercised without a real
+//!   agent service.
 //!
 //! Distinct from the applet echo bridge (`applet_bridge.rs`) in two
 //! ways: (a) two events fan out instead of one, and (b) the terminal
@@ -48,28 +42,14 @@ use crate::state::{AppState, EventNotification, ProjectionEventRecord};
 
 use super::projection::append_projection_event;
 
-/// Reference HMAC key used by the (legacy) in-process echo runtime
-/// to sign `audit_binding` blocks. Kept exported so deployments and
-/// tests that want symmetric `binding_kind=hmac_sha256_v1`
-/// verification can still reach the same key the bridge used through
-/// Sprint Q1 第十九增量.
-///
-/// **As of Sprint Q1 第二十一增量 (B4g) the reference bridge no
-/// longer writes HMAC bindings** — it writes Ed25519 (see
-/// `REFERENCE_AGENT_AUDIT_ED25519_SEED`). The HMAC key remains for
-/// crates/binaries that produce HMAC bindings under their own
-/// signer paths.
-pub const REFERENCE_AGENT_AUDIT_HMAC_KEY: &[u8] =
-    b"soland.reference.agent_echo.audit_binding.v1";
-
-/// Sprint Q1 第二十一增量 (B4g): reference Ed25519 signing seed used
-/// by the in-process echo runtime to sign `audit_binding` blocks.
-/// The 32-byte seed produces a deterministic Ed25519 keypair so
-/// out-of-crate verifiers can pin the public key without an
-/// out-of-band fetch. Production deployments MUST inject their own
-/// seed via configuration; this is a **reference** value, intentionally
-/// public, and provides no real authentication against an attacker
-/// that can read this file.
+/// Reference Ed25519 signing seed used by the in-process echo
+/// runtime to sign `audit_binding` blocks. The 32-byte seed produces
+/// a deterministic Ed25519 keypair so out-of-crate verifiers can pin
+/// the public key without an out-of-band fetch. Production
+/// deployments MUST inject their own seed via configuration
+/// (`AppConfig::agent_audit_binding_signing_seed`); this is a
+/// **reference** value, intentionally public, and provides no real
+/// authentication against an attacker that can read this file.
 pub const REFERENCE_AGENT_AUDIT_ED25519_SEED: [u8; 32] = [
     0x73, 0x6f, 0x6c, 0x61, 0x6e, 0x64, 0x2e, 0x72, // "soland.r"
     0x65, 0x66, 0x65, 0x72, 0x65, 0x6e, 0x63, 0x65, // "eference"
@@ -86,18 +66,16 @@ pub const REFERENCE_AGENT_AUDIT_ED25519_KEY_ID: &str =
 /// Inspect `operation` and, when it carries a
 /// `cx.agent.protocol_session.start` payload, emit synthetic
 /// `cx.agent.protocol_session.status` + `cx.agent.protocol_session.result`
-/// projection events capturing a stateless echo response. Idempotent
-/// (no-ops for any other kind).
+/// projection events. Idempotent (no-ops for any other kind).
 ///
 /// Called from `project_accepted_operations` AFTER the `start` event
 /// itself has been broadcast + persisted, so a subscriber sees them
-/// in causal order: start → status(running) → result(completed).
+/// in causal order: start -> status(running) -> result(completed).
 ///
-/// Sprint Q1 第十九增量 (B4c): the runtime first verifies that
-/// `agent_did` resolves to a registered AgentProjection. Unknown
-/// agents fail closed with a single result(`status=failed`,
-/// `error.code=unknown_agent`); no status(running) event is emitted
-/// in that path.
+/// When `agent_did` does not resolve to a registered AgentProjection
+/// the bridge fails closed with a single result
+/// (`status=failed`, `error.code=unknown_agent`) and emits no
+/// status(running) event.
 pub fn maybe_emit_echo_result_for_session_start(
     state: &AppState,
     origin: &str,
@@ -122,12 +100,11 @@ pub fn maybe_emit_echo_result_for_session_start(
         .to_owned();
     let params = body.get("params").cloned().unwrap_or(Value::Null);
 
-    // Sprint Q1 第十九增量 (B4c) + 第二十增量 (B4d): dispatch by
-    // agent_did. Look up the AgentProjection; if absent the runtime
-    // cannot route the invocation, so fail closed with an error
-    // result. When present, capture the `endpoint_url` (if any) so
-    // the result envelope can report it. We snapshot the lookup
-    // inside the lock and drop the guard immediately so the
+    // Dispatch by agent_did. Look up the AgentProjection; if absent
+    // the runtime cannot route the invocation, so fail closed with
+    // an error result. When present, capture the `endpoint_url` (if
+    // any) so the result envelope can report it. We snapshot the
+    // lookup inside the lock and drop the guard immediately so the
     // subsequent broadcast/append paths can re-acquire it.
     let agent_snapshot: Option<(String, Option<String>)> = state
         .projection
@@ -175,12 +152,9 @@ pub fn maybe_emit_echo_result_for_session_start(
 
     // Intermediate status event: the runtime acknowledges the
     // invocation. Real runtimes would emit progress updates from
-    // here; the reference echo emits exactly one transition.
-    //
-    // Sprint Q1 第二十增量 (B4d): include `protocol` + (optional)
-    // `endpoint_url` in the detail block so observers see which
-    // registered agent answered (and where production runtimes
-    // would dispatch to once B4f lands real outbound forwarding).
+    // here; the reference echo emits exactly one transition. Include
+    // `protocol` + (optional) `endpoint_url` in the detail block so
+    // observers see which registered agent answered.
     let status_payload = json!({
         "session_id": session_id,
         "status": "running",
@@ -208,60 +182,244 @@ pub fn maybe_emit_echo_result_for_session_start(
     ));
     append_projection_event(state, status_record);
 
-    // Terminal result event: carries the echoed params plus a real
-    // Ed25519 audit_binding signature (Sprint Q1 第二十一增量 B4g,
-    // upgraded from the HMAC-SHA256 path in 第十九增量 B4b). The
-    // signature commits to (session_id, agent_did, echo, actor) so
-    // a verifier holding the reference public key can prove the
-    // result envelope was produced by a runtime that holds the
-    // reference Ed25519 seed — asymmetric, so verifiers no longer
-    // need access to the signing seed itself.
+    // If the registered agent carries a real endpoint_url, spawn an
+    // async tokio task that POSTs to that URL and emits the result
+    // event when the upstream replies (or fails). When no
+    // endpoint_url is registered, fall back to the in-process echo
+    // path.
+    let space_id_str = operation.space_id.to_string();
     let echo_value = params.clone();
-    let signed = contrix_sdk::agent_binding::sign_ed25519_audit_binding(
-        &REFERENCE_AGENT_AUDIT_ED25519_SEED,
+    if let Some(endpoint_url) = agent_endpoint_url.clone() {
+        // Outbound HTTP path. Clone what the spawned task needs and
+        // let `project_accepted_operations` return immediately.
+        let state_clone = state.clone();
+        let session_id_clone = session_id.clone();
+        let agent_did_clone = agent_did.clone();
+        let origin_clone = origin.to_owned();
+        let space_clone = space_id_str.clone();
+        let agent_protocol_clone = agent_protocol.clone();
+        let endpoint_url_for_detail = endpoint_url.clone();
+        tokio::spawn(async move {
+            let outcome = forward_to_agent_endpoint(
+                &endpoint_url,
+                &session_id_clone,
+                &agent_did_clone,
+                &echo_value,
+            )
+            .await;
+            emit_agent_result_envelope(
+                &state_clone,
+                &space_clone,
+                &session_id_clone,
+                &agent_did_clone,
+                &agent_protocol_clone,
+                Some(&endpoint_url_for_detail),
+                &origin_clone,
+                outcome,
+            );
+        });
+        return;
+    }
+
+    // No endpoint_url -> in-process echo synchronous path.
+    emit_agent_result_envelope(
+        state,
+        &space_id_str,
         &session_id,
         &agent_did,
-        &echo_value,
+        &agent_protocol,
+        None,
         origin,
+        AgentInvocationOutcome::Echo {
+            echo: echo_value,
+        },
     );
-    let result_payload = json!({
+}
+
+/// Outcome of an agent invocation as surfaced into the
+/// `cx.agent.protocol_session.result` envelope.
+enum AgentInvocationOutcome {
+    /// In-process reference echo — `result.echo` mirrors the
+    /// caller's `params`.
+    Echo { echo: Value },
+    /// Upstream HTTP call returned a 2xx with a parseable JSON body
+    /// - `result.echo` carries the response body verbatim.
+    UpstreamSuccess { response_body: Value },
+    /// Upstream HTTP call failed (timeout, non-2xx, unparseable
+    /// body). Emitted as `status=failed` + `error.code=upstream_unreachable`.
+    UpstreamFailure { code: String, message: String },
+}
+
+/// POST the agent invocation to the configured `endpoint_url`. Body
+/// shape:
+///
+/// ```jsonc
+/// {
+///   "session_id": "cx:session:...",
+///   "agent_did": "did:web:...",
+///   "params": <verbatim caller params>
+/// }
+/// ```
+///
+/// Successful 2xx responses MUST return a JSON body; that body is
+/// echoed into `result.echo`. Anything else (4xx/5xx, connection
+/// error, JSON parse error, timeout) becomes a fail-closed
+/// `UpstreamFailure`.
+async fn forward_to_agent_endpoint(
+    endpoint_url: &str,
+    session_id: &str,
+    agent_did: &str,
+    params: &Value,
+) -> AgentInvocationOutcome {
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+    {
+        Ok(c) => c,
+        Err(err) => {
+            return AgentInvocationOutcome::UpstreamFailure {
+                code: "client_init_failed".to_owned(),
+                message: format!("reqwest client init: {err}"),
+            };
+        }
+    };
+    let body = json!({
         "session_id": session_id,
-        "status": "completed",
-        "result": {
-            "echo": echo_value,
-            "agent_did": agent_did,
-        },
-        "audit_binding": {
-            "binding_kind": "ed25519_v1",
-            "actor": origin,
-            "key_id": REFERENCE_AGENT_AUDIT_ED25519_KEY_ID,
-            "signature": signed.signature_b64,
-            "public_key_b64": signed.public_key_b64,
-            "canonical_subject": signed.canonical_subject,
-        },
-        "detail": {
-            "agent_did": agent_did,
-            "protocol": agent_protocol,
-            "endpoint_url": agent_endpoint_url,
-            "bridge": "soland.reference.agent_echo",
-        },
+        "agent_did": agent_did,
+        "params": params,
     });
-    let result_record = ProjectionEventRecord {
+    let response = match client.post(endpoint_url).json(&body).send().await {
+        Ok(r) => r,
+        Err(err) => {
+            return AgentInvocationOutcome::UpstreamFailure {
+                code: "upstream_unreachable".to_owned(),
+                message: format!("POST {endpoint_url}: {err}"),
+            };
+        }
+    };
+    let status = response.status();
+    if !status.is_success() {
+        return AgentInvocationOutcome::UpstreamFailure {
+            code: "upstream_http_error".to_owned(),
+            message: format!("POST {endpoint_url} returned {status}"),
+        };
+    }
+    match response.json::<Value>().await {
+        Ok(parsed) => AgentInvocationOutcome::UpstreamSuccess {
+            response_body: parsed,
+        },
+        Err(err) => AgentInvocationOutcome::UpstreamFailure {
+            code: "upstream_invalid_json".to_owned(),
+            message: format!("response body parse: {err}"),
+        },
+    }
+}
+
+/// Build the result envelope for the supplied outcome and broadcast
+/// + persist it through the standard projection path.
+fn emit_agent_result_envelope(
+    state: &AppState,
+    space_id: &str,
+    session_id: &str,
+    agent_did: &str,
+    agent_protocol: &str,
+    agent_endpoint_url: Option<&str>,
+    origin: &str,
+    outcome: AgentInvocationOutcome,
+) {
+    let (signing_seed, key_id): (&[u8; 32], &str) =
+        match state.config.agent_audit_binding_signing_seed.as_ref() {
+            Some(deployment_seed) => (deployment_seed, "soland.deployment.agent_echo.ed25519_v1"),
+            None => (
+                &REFERENCE_AGENT_AUDIT_ED25519_SEED,
+                REFERENCE_AGENT_AUDIT_ED25519_KEY_ID,
+            ),
+        };
+
+    let (status, echo_value, error_block) = match outcome {
+        AgentInvocationOutcome::Echo { echo } => ("completed", echo, None),
+        AgentInvocationOutcome::UpstreamSuccess { response_body } => {
+            ("completed", response_body, None)
+        }
+        AgentInvocationOutcome::UpstreamFailure { code, message } => {
+            ("failed", Value::Null, Some((code, message)))
+        }
+    };
+
+    let result_payload = match error_block {
+        None => {
+            // Sign + emit the success/echo envelope.
+            let signed = contrix_sdk::agent_binding::sign_ed25519_audit_binding(
+                signing_seed,
+                session_id,
+                agent_did,
+                &echo_value,
+                origin,
+            );
+            json!({
+                "session_id": session_id,
+                "status": status,
+                "result": {
+                    "echo": echo_value,
+                    "agent_did": agent_did,
+                },
+                "audit_binding": {
+                    "binding_kind": "ed25519_v1",
+                    "actor": origin,
+                    "key_id": key_id,
+                    "signature": signed.signature_b64,
+                    "public_key_b64": signed.public_key_b64,
+                    "canonical_subject": signed.canonical_subject,
+                },
+                "detail": {
+                    "agent_did": agent_did,
+                    "protocol": agent_protocol,
+                    "endpoint_url": agent_endpoint_url,
+                    "bridge": match agent_endpoint_url {
+                        Some(_) => "soland.reference.agent_outbound",
+                        None => "soland.reference.agent_echo",
+                    },
+                },
+            })
+        }
+        Some((code, message)) => json!({
+            "session_id": session_id,
+            "status": status,
+            "result": Value::Null,
+            "error": {
+                "code": code,
+                "message": message,
+            },
+            "detail": {
+                "agent_did": agent_did,
+                "protocol": agent_protocol,
+                "endpoint_url": agent_endpoint_url,
+                "bridge": "soland.reference.agent_outbound",
+            },
+        }),
+    };
+
+    let operation_type = match status {
+        "failed" => "agent_outbound_bridge_failed",
+        _ if agent_endpoint_url.is_some() => "agent_outbound_bridge_result",
+        _ => "agent_echo_bridge_result",
+    };
+    let record = ProjectionEventRecord {
         event_id: ids::generate("event"),
-        space_id: operation.space_id.to_string(),
+        space_id: space_id.to_owned(),
         event_kind: kinds::CX_AGENT_PROTOCOL_SESSION_RESULT.to_owned(),
-        operation_type: "agent_echo_bridge_result".to_owned(),
+        operation_type: operation_type.to_owned(),
         operation_id: None,
         sender: Some(origin.to_owned()),
         payload: result_payload,
         created_at: chrono::Utc::now(),
     };
     let _ = state.event_broadcast.send(EventNotification::event(
-        result_record.space_id.clone(),
-        result_record.event_id.clone(),
-        super::projection::projection_event_json(&result_record),
+        record.space_id.clone(),
+        record.event_id.clone(),
+        super::projection::projection_event_json(&record),
     ));
-    append_projection_event(state, result_record);
+    append_projection_event(state, record);
 }
 
 #[cfg(test)]
@@ -299,6 +457,7 @@ mod tests {
             jws_replay_window_seconds: 0,
             jws_replay_window_per_family: AppConfig::default_replay_overrides(),
             anchorer_signing_key_seed: None,
+            agent_audit_binding_signing_seed: None,
             use_keystore: false,
             federation_policy: crate::config::FederationPolicy::Mesh,
             federation_peers: Vec::new(),
@@ -311,6 +470,10 @@ mod tests {
             compaction_min_witnesses: 1,
             compaction_preserve_genesis: true,
             compaction_prune_only_singleton_successors: true,
+
+            compaction_prune_walk_interval_seconds: 0,
+
+            compaction_prune_walk_per_space_limit: 50,
         };
         AppState::new(config, Db { pool: None })
     }
@@ -409,10 +572,8 @@ mod tests {
         assert_eq!(result_entry.payload["result"]["echo"]["doc"], "hello");
         assert_eq!(result_entry.payload["result"]["agent_did"], agent_did);
 
-        // Sprint Q1 第二十一增量 (B4g): audit_binding is now a real
-        // Ed25519 signature (upgraded from HMAC-SHA256 in 第十九
-        // 增量). Verify it round-trips against the SDK Ed25519
-        // helper using the public key the envelope carries — the
+        // Verify the Ed25519 signature round-trips against the SDK
+        // helper using the public key the envelope carries - the
         // verifier needs no access to the signing seed.
         let binding = &result_entry.payload["audit_binding"];
         assert_eq!(binding["binding_kind"], "ed25519_v1");
@@ -441,11 +602,11 @@ mod tests {
         );
     }
 
-    /// Sprint Q1 第十九增量 (B4c): when the agent_did is not
-    /// registered (no `cx.agent.endpoint` accepted), the bridge MUST
-    /// emit a single `cx.agent.protocol_session.result` with
-    /// `status=failed` + `error.code=unknown_agent` instead of the
-    /// status/result success pair.
+    /// When the agent_did is not registered (no `cx.agent.endpoint`
+    /// accepted), the bridge MUST emit a single
+    /// `cx.agent.protocol_session.result` with `status=failed` +
+    /// `error.code=unknown_agent` instead of the status/result
+    /// success pair.
     #[test]
     fn agent_echo_bridge_fails_closed_for_unknown_agent() {
         let state = test_state();
@@ -497,19 +658,84 @@ mod tests {
         );
     }
 
-    /// Sprint Q1 第二十增量 (B4d): when the registered AgentProjection
-    /// carries an `endpoint_url`, the bridge MUST surface it in both
-    /// the status(running) and result(completed) envelope's
-    /// `detail.endpoint_url` so observers can see which endpoint
-    /// answered. When `endpoint_url` is absent the field renders as
-    /// JSON null (still present so deserializers have a stable
-    /// shape).
+    /// When the AppConfig carries a deployment-specific Ed25519
+    /// seed, the bridge MUST sign with that seed (not the public
+    /// reference seed) and stamp the envelope's `key_id` as
+    /// `soland.deployment.agent_echo.ed25519_v1` so verifiers can
+    /// tell deployment-keyed signatures apart from reference-keyed
+    /// ones.
     #[test]
-    fn agent_echo_bridge_plumbs_endpoint_url_into_envelopes() {
+    fn agent_echo_bridge_uses_config_signing_seed_when_set() {
+        let mut state = test_state();
+        let deployment_seed = [0x99u8; 32];
+        // Replace the AppConfig with a copy that carries the
+        // deployment seed. AppState lets us mutate this in tests
+        // because the field is owned.
+        state.config.agent_audit_binding_signing_seed = Some(deployment_seed);
+        let session = "cx:session:01904100-0000-7000-8000-b4b4b4b4b4b4";
+        let agent_did = "did:web:agent-deployment.example";
+        register_agent(&state, agent_did);
+        let echo = json!({"op": "ping"});
+        let op = build_agent_session_start(session, agent_did, echo.clone());
+        let actor = "did:web:alice.example";
+        maybe_emit_echo_result_for_session_start(&state, actor, &op);
+        let projections = state
+            .persistence
+            .projection_events()
+            .snapshot_all()
+            .expect("snapshot");
+        let result_entry = projections
+            .iter()
+            .find(|e| {
+                e.event_kind == kinds::CX_AGENT_PROTOCOL_SESSION_RESULT
+                    && e.payload["session_id"] == session
+            })
+            .expect("result event missing");
+        let binding = &result_entry.payload["audit_binding"];
+        assert_eq!(
+            binding["key_id"], "soland.deployment.agent_echo.ed25519_v1",
+            "deployment-keyed result must stamp the deployment key_id"
+        );
+        // The signature MUST verify under the deployment public key,
+        // and MUST NOT verify under the reference public key — this
+        // is the whole point of B4h.
+        let sig = binding["signature"].as_str().expect("sig");
+        let pk = binding["public_key_b64"].as_str().expect("pk");
+        let subject = binding["canonical_subject"].as_str().expect("subj");
+        assert_eq!(
+            contrix_sdk::agent_binding::verify_ed25519_audit_binding(
+                pk, session, agent_did, &echo, actor, sig, subject,
+            ),
+            contrix_sdk::agent_binding::Ed25519AuditBindingVerifyOutcome::Valid
+        );
+        // Reference public key MUST NOT verify the deployment signature.
+        use ed25519_dalek::SigningKey;
+        let reference_signing = SigningKey::from_bytes(&REFERENCE_AGENT_AUDIT_ED25519_SEED);
+        let reference_pk_b64 = {
+            use base64::Engine;
+            base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .encode(reference_signing.verifying_key().as_bytes())
+        };
+        assert_ne!(
+            pk, reference_pk_b64.as_str(),
+            "deployment public key MUST differ from reference public key"
+        );
+    }
+
+    /// When the registered AgentProjection carries an `endpoint_url`,
+    /// the bridge MUST attempt outbound HTTP to that URL. When the
+    /// upstream is unreachable (the standard test condition -
+    /// localhost:1 is reserved and immediately refuses), the result
+    /// event MUST carry `status=failed` +
+    /// `error.code=upstream_unreachable` + `detail.endpoint_url`
+    /// pointing at the registered URL.
+    #[tokio::test]
+    async fn agent_outbound_bridge_emits_upstream_unreachable_on_connection_failure() {
         let state = test_state();
         let session = "cx:session:01904100-0000-7000-8000-eeeeeeeeeeee";
         let agent_did = "did:web:agent-with-endpoint.example";
-        let endpoint_url = "https://agent-with-endpoint.example/api/v1/agent";
+        // 127.0.0.1:1 is reserved + nothing listens → fast ECONNREFUSED.
+        let endpoint_url = "http://127.0.0.1:1/agent-runtime";
         register_agent_with_endpoint(&state, agent_did, Some(endpoint_url));
         let op = build_agent_session_start(
             session,
@@ -517,6 +743,40 @@ mod tests {
             json!({"op": "ping"}),
         );
         maybe_emit_echo_result_for_session_start(&state, "did:web:alice.example", &op);
+        // The status(running) event fires synchronously, then the
+        // tokio task does the HTTP. Wait for the result event up
+        // to ~3 s.
+        let result_entry = {
+            let mut found = None;
+            for _ in 0..30 {
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                let projections = state
+                    .persistence
+                    .projection_events()
+                    .snapshot_all()
+                    .expect("snapshot");
+                if let Some(e) = projections.into_iter().find(|e| {
+                    e.event_kind == kinds::CX_AGENT_PROTOCOL_SESSION_RESULT
+                        && e.payload["session_id"] == session
+                }) {
+                    found = Some(e);
+                    break;
+                }
+            }
+            found.expect("outbound result event never landed within 3s")
+        };
+        assert_eq!(result_entry.payload["status"], "failed");
+        assert_eq!(
+            result_entry.payload["error"]["code"], "upstream_unreachable"
+        );
+        assert_eq!(result_entry.payload["detail"]["endpoint_url"], endpoint_url);
+        assert_eq!(
+            result_entry.payload["detail"]["bridge"],
+            "soland.reference.agent_outbound"
+        );
+        // No audit_binding on failure path.
+        assert!(result_entry.payload.get("audit_binding").is_none());
+        // status(running) must also have endpoint_url plumbed.
         let projections = state
             .persistence
             .projection_events()
@@ -528,18 +788,8 @@ mod tests {
                 e.event_kind == kinds::CX_AGENT_PROTOCOL_SESSION_STATUS
                     && e.payload["session_id"] == session
             })
-            .expect("status event missing");
+            .expect("status(running) event missing");
         assert_eq!(status_entry.payload["detail"]["endpoint_url"], endpoint_url);
-        assert_eq!(status_entry.payload["detail"]["protocol"], "echo");
-        let result_entry = projections
-            .iter()
-            .find(|e| {
-                e.event_kind == kinds::CX_AGENT_PROTOCOL_SESSION_RESULT
-                    && e.payload["session_id"] == session
-            })
-            .expect("result event missing");
-        assert_eq!(result_entry.payload["detail"]["endpoint_url"], endpoint_url);
-        assert_eq!(result_entry.payload["detail"]["protocol"], "echo");
     }
 
     /// When an agent is registered without an `endpoint_url` (the

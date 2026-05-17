@@ -507,6 +507,75 @@ per_subject_lattice!(
     &["cx.member.state"]
 );
 
+// `cx.profile.agent_workspace.v1` — three orthogonal FSM cells per
+// agent_task. Spec: contrix-spec/spec/v1/zh/extensions/agent-workspace-profile.md §7.
+// Reducer transitions are enforced per the agent-workspace FSM table
+// (execution_state has 6 states, transparency / source_authority 3 each).
+// Bottom = reject; illegal transitions surface as failed_precondition.
+
+per_subject_lattice!(
+    AgentTaskExecutionState,
+    "cx.component.agent_task.execution_state.v1",
+    SdkLatticeKind::Fsm,
+    BottomPolicy::Reject,
+    Criticality::Required,
+    "task_id",
+    &["cx.agent_task.create", "cx.agent_task.execution.transition", "cx.agent_task.cancel"]
+);
+
+per_subject_lattice!(
+    AgentTaskTransparency,
+    "cx.component.agent_task.transparency.v1",
+    SdkLatticeKind::Fsm,
+    BottomPolicy::Reject,
+    Criticality::Required,
+    "task_id",
+    &["cx.agent_task.create", "cx.agent_task.transparency.transition"]
+);
+
+per_subject_lattice!(
+    AgentTaskSourceAuthority,
+    "cx.component.agent_task.source_authority.v1",
+    SdkLatticeKind::Fsm,
+    BottomPolicy::Reject,
+    Criticality::Required,
+    "task_id",
+    &["cx.agent_task.create", "cx.agent_task.source_authority.transition"]
+);
+
+// `cx.profile.agent_workspace.v1` — reservation cells (cas-register).
+// Schema declares initial_value="__unset__" (spec PR 1.1, see
+// event-auth-state-resolution.md §5.3.3). cas-register + bottom=reject
+// + empty sentinel pattern = singleton-once-set semantics.
+
+per_subject_lattice!(
+    MirrorSpaceBySource,
+    "cx.component.agent_workspace.mirror_space_by_source.v1",
+    SdkLatticeKind::CasRegister,
+    BottomPolicy::Reject,
+    Criticality::Required,
+    "cell_namespace_subject",
+    &[
+        "cx.agent_workspace.reservation.set",
+        "cx.agent_workspace.reservation.recover",
+        "cx.agent_workspace.reservation.cleanup"
+    ]
+);
+
+per_subject_lattice!(
+    MirrorFlowBySource,
+    "cx.component.agent_workspace.mirror_flow_by_source.v1",
+    SdkLatticeKind::CasRegister,
+    BottomPolicy::Reject,
+    Criticality::Required,
+    "cell_namespace_subject",
+    &[
+        "cx.agent_workspace.reservation.set",
+        "cx.agent_workspace.reservation.recover",
+        "cx.agent_workspace.reservation.cleanup"
+    ]
+);
+
 // ────────────────────────── OrderedLog families ──────────────────────────
 //
 // Per-issuer monotonic append (issuer_seq). `bottom = reject` — an
@@ -664,8 +733,18 @@ pub fn default_lattice_registry() -> LatticeRegistry {
     registry.register(AnchorerCell);
     registry.register(MlsEpoch);
 
+    // `cx.profile.agent_workspace.v1` — reservation cells (cas-register
+    // singleton-once-set via empty sentinel "__unset__").
+    registry.register(MirrorSpaceBySource);
+    registry.register(MirrorFlowBySource);
+
     // Fsm
     registry.register(MemberState);
+
+    // `cx.profile.agent_workspace.v1` — agent_task three orthogonal FSM cells.
+    registry.register(AgentTaskExecutionState);
+    registry.register(AgentTaskTransparency);
+    registry.register(AgentTaskSourceAuthority);
 
     // OrderedLog
     registry.register(SpaceCreate);

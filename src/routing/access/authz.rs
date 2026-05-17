@@ -7,11 +7,10 @@
 //! - `DELETE /api/v1/authz/grants/{grant_id}` — revoke
 //! - `GET  /api/v1/authz/invites`           — pending invites visible to the actor
 //!
-//! The actual authorisation engine lives in `src/authz.rs` (the `state.authz`
-//! field is shared). Stream-B in `_todos.md` covers the still-open work:
-//! schema alignment (B-02 / B-04 / B-05), the 11 missing constraint types,
-//! the 10 condition.kind types, the capability lattice, and grant/invite/policy
-//! lifecycle integration.
+//! The actual authorisation engine lives in `src/authz.rs` (the
+//! `state.authz` field is shared). Still-open work: schema alignment,
+//! the missing constraint types, the condition.kind types, the
+//! capability lattice, and grant/invite/policy lifecycle integration.
 
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;

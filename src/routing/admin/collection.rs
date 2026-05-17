@@ -281,7 +281,7 @@ fn admin_federation_items(state: &AppState) -> Vec<Value> {
         .collect()
 }
 
-/// Round 15b — Snapshot of the in-memory applet registry maintained
+/// Snapshot of the in-memory applet registry maintained
 /// by `reducer::ProjectionState::applets`. Each row is one applet
 /// identified by `service_did`, with the latest registration metadata
 /// (namespace, capabilities) and the most recent manifest (from
@@ -307,7 +307,7 @@ fn admin_applet_items(state: &AppState) -> Vec<Value> {
         .collect()
 }
 
-/// Round 15b — Snapshot of the in-memory agent registry maintained
+/// Snapshot of the in-memory agent registry maintained
 /// by `reducer::ProjectionState::agents`. One row per agent_did, with
 /// the latest `cx.agent.endpoint` metadata.
 fn admin_agent_items(state: &AppState) -> Vec<Value> {

@@ -6,9 +6,9 @@
 //! account sync and admin snapshots.
 //!
 //! All fns are `pub` because sync/projection writers consume them.
-//! Stream-A5 in `_todos.md` will lift this into a real `cx.flow.*` reducer
-//! state once the wire schema lands; for now it's a derivation layer the
-//! server fakes for clients that already speak the flow protocol.
+//! This is a derivation layer the server fakes for clients that already
+//! speak the flow protocol; a future real `cx.flow.*` reducer state
+//! will replace it once the wire schema lands.
 
 use serde_json::json;
 

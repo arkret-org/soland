@@ -8,9 +8,8 @@
 //! - `GET  /api/v1/blob/get`            — content (supports `Range` and the `?purpose=`
 //!   discriminator)
 //!
-//! Stream-F-7 (`_todos.md`): blob metadata still misses the spec B-23
-//! `space_id` association, and plaintext-visibility is enforced at write
-//! time but not at GC.
+//! Blob metadata still misses the spec `space_id` association, and
+//! plaintext-visibility is enforced at write time but not at GC.
 
 use salvo::http::{Method, StatusCode};
 use salvo::prelude::*;

@@ -13,12 +13,11 @@
 //!   `backfill_gap_events`, `truncate_gap_events`, and `sync_timeline_message_json` to render
 //!   timeline-shaped responses.
 //!
-//! Stream-A (`_todos.md`) is the umbrella for the missing reducer kinds —
-//! today this layer only fans out `cx.message.*` / `cx.member.state` /
+//! Today this layer only fans out `cx.message.*` / `cx.member.state` /
 //! `cx.space.*` lifecycle events; everything else is dropped on the floor
 //! (`project_accepted_operations` only routes message+membership+lifecycle).
-//! P0 F2 covers persistence: `projection_events` is in-memory plus a Pg
-//! mirror via `space_state_events` + `space_members`.
+//! Persistence: `projection_events` is in-memory plus a Pg mirror via
+//! `space_state_events` + `space_members`.
 
 use std::collections::HashSet;
 
@@ -50,10 +49,9 @@ struct ProjectionEventRow {
     event_id: Uuid,
     #[diesel(sql_type = SqlUuid)]
     space_id: Uuid,
-    /// DB column is still `event_type` (M-01 schema rename is a separate
-    /// migration tracked in `_todos.md` "DB schema follow-up"); SQL
-    /// queries alias it as `event_kind` so the in-memory struct uses the
-    /// canonical name.
+    /// DB column is still `event_type` (a rename to `event_kind` is a
+    /// future schema migration); SQL queries alias it as `event_kind` so
+    /// the in-memory struct uses the canonical name.
     #[diesel(sql_type = Text)]
     event_kind: String,
     #[diesel(sql_type = Text)]
@@ -141,8 +139,8 @@ pub fn operation_type_string(operation: &Operation) -> String {
 }
 
 pub fn sync_timeline_message_json(message: &crate::reducer::MessageState) -> serde_json::Value {
-    // Round 7: flow_id is always derived from space_id; thread_id is a
-    // branch within the flow, not the flow itself. See
+    // flow_id is always derived from space_id; thread_id is a branch
+    // within the flow, not the flow itself. See
     // `sync_timeline_message_record_json` for the matching MessageRecord
     // path.
     let flow_id = flow_id_from_space_id(&message.space_id);
@@ -455,7 +453,7 @@ fn apply_via_lattice_registry(
     proj.apply_via_lattice_registry(operation, &state.hlc, &registry);
 }
 
-/// Round 15h — after the deterministic reducer mutates the in-memory
+/// After the deterministic reducer mutates the in-memory
 /// `ProjectionState::{places,flows,morphs}` maps for a Place / Flow /
 /// Morph lifecycle event, snapshot the affected entry (under
 /// projection lock) and upsert it to the corresponding
@@ -516,7 +514,7 @@ fn write_through_projection(state: &AppState, operation: &Operation) {
             | kinds::CX_MORPH_RESTORE
     );
     // cx.redaction with an `object_ref` may have flipped a Flow or
-    // Morph to Redacted (round 14b). Pick up either by attempting both.
+    // Morph to Redacted. Pick up either by attempting both.
     let is_redaction = kind == kinds::CX_REDACTION;
     if !(is_place_kind || is_flow_kind || is_morph_kind || is_redaction) {
         return;
@@ -690,8 +688,8 @@ pub fn project_accepted_operations(state: &AppState, origin: &str, operations: &
         if let Ok(mut proj) = state.projection.lock() {
             apply_via_lattice_registry(state, &mut proj, operation);
         }
-        // Round 15h — write through Place/Flow/Morph projection changes
-        // to durable persistence. Captures the in-memory projection snapshot
+        // Write through Place/Flow/Morph projection changes to durable
+        // persistence. Captures the in-memory projection snapshot
         // (under lock), then upserts to persistence after releasing the
         // lock so any backend latency doesn't block other reducer paths.
         // Mirrors the canonical wire kinds the reducer dispatches into
@@ -719,21 +717,25 @@ pub fn project_accepted_operations(state: &AppState, origin: &str, operations: &
                 "failed to persist accepted operation projection"
             );
         }
-        // Sprint Q1 第十七增量 (B3): reference applet bridge — if the
-        // accepted operation is `cx.applet.protocol_session.start`,
-        // emit a synthetic `cx.applet.protocol_session.status`
-        // (echo response) immediately afterwards so the timeline
-        // observes the full round trip without a real applet
-        // service plugged in. See
+        // Reference applet bridge: if the accepted operation is
+        // `cx.applet.protocol_session.start`, emit a synthetic
+        // `cx.applet.protocol_session.status` (echo response)
+        // immediately afterwards so the timeline observes the full
+        // round trip without a real applet service plugged in. See
         // `routing::events::applet_bridge::maybe_emit_echo_status_for_session_start`
         // for the body shape contract.
         super::applet_bridge::maybe_emit_echo_status_for_session_start(state, origin, operation);
-        // Sprint Q1 第十八增量 (B4): reference agent runtime — if the
-        // accepted operation is `cx.agent.protocol_session.start`,
-        // fan out a synthetic `cx.agent.protocol_session.status`
-        // (running) followed by a terminal
-        // `cx.agent.protocol_session.result` (completed) with an
-        // `audit_binding` placeholder so the lifecycle is observable
+        // `cx.profile.agent_workspace.v1`: when membership / capability
+        // events target an agent DID, fan out a synthetic
+        // `agent_membership_change` notification so controller-side
+        // workspaces observe source membership lifecycle.
+        // See agent-workspace-profile.md §14.
+        super::agent_workspace_bridge::maybe_emit_agent_membership_change(state, origin, operation);
+        // Reference agent runtime: if the accepted operation is
+        // `cx.agent.protocol_session.start`, fan out a synthetic
+        // `cx.agent.protocol_session.status` (running) followed by a
+        // terminal `cx.agent.protocol_session.result` (completed) with
+        // an `audit_binding` placeholder so the lifecycle is observable
         // end-to-end. See
         // `routing::events::agent_bridge::maybe_emit_echo_result_for_session_start`.
         super::agent_bridge::maybe_emit_echo_result_for_session_start(state, origin, operation);

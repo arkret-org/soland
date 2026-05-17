@@ -176,11 +176,10 @@ pub trait LatticeKind: Send + Sync {
     /// → `LatticeKind` index used by [`LatticeRegistry::lookup_for_event_kind`]
     /// to drive `ProjectionState::apply_via_lattice_registry`.
     ///
-    /// SDK gap (round 22): the parallel contrix-rust-sdk round 22 agent is
-    /// adding a sibling `event_kinds()` directly on `contrix_sdk::lattice::
-    /// LatticeKind`. Once that lands we can collapse this declaration with
-    /// the SDK side; until then this method shadows the spec mapping inside
-    /// soland.
+    /// SDK gap: a sibling `event_kinds()` is planned directly on
+    /// `contrix_sdk::lattice::LatticeKind`. Once that lands we can
+    /// collapse this declaration with the SDK side; until then this
+    /// method shadows the spec mapping inside soland.
     fn event_kinds(&self) -> &'static [&'static str] {
         &[]
     }

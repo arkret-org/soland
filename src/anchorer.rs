@@ -196,8 +196,8 @@ impl AnchorerWorker {
                 self.signature_for(state, &Sha256::digest(b"placeholder").as_slice().to_vec())?,
             ),
             hlc,
-            // Normal frontier-advance anchor. Compaction anchors (MAL-11)
-            // come through `admin_compact_anchor_dag`, not the regular
+            // Normal frontier-advance anchor. Compaction anchors come
+            // through `admin_compact_anchor_dag`, not the regular
             // anchorer pipeline.
             kind: contrix_sdk::AnchorKind::Normal,
         };
@@ -519,8 +519,8 @@ impl AnchorerWorker {
     /// The verification_method id is `<service_did>#anchorer-key`; the
     /// matching DID Document MUST publish that key for the production
     /// JWS verifier to round-trip the signature. Until the DID document
-    /// publishing pipeline lands (out-of-scope for round 22), production
-    /// deployments rely on `select_jws_verifier`'s shape-only path under
+    /// publishing pipeline lands, production deployments rely on
+    /// `select_jws_verifier`'s shape-only path under
     /// `development_mode=true`.
     fn signature_for(
         &self,

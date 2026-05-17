@@ -59,14 +59,22 @@ async fn main() -> anyhow::Result<()> {
     }
     let state = AppState::new(config.clone(), Db::from_env()?);
 
-    // MAL-11 round 25 — spawn the multisig leader-election watchdog. The
-    // task wakes every 30s by default, scans `multisig_pending` for rows
+    // Spawn the multisig leader-election watchdog. The task wakes every
+    // 30s by default, scans `multisig_pending` for rows
     // whose threshold is met + canonical_b64 is non-empty, claims an
     // unleased row, and aggregates via SDK `ThresholdAggregator`. Returns
     // a JoinHandle we drop on the floor — the task lives for the process
     // lifetime and shutdown_signal teardown closes the runtime.
     let watchdog_config = MultisigWatchdogConfig::for_service(&state.config.service_did);
     let _watchdog = MultisigWatchdog::new(state.clone(), watchdog_config).spawn();
+
+    // MAL-11 compaction prune walk worker. No-op when
+    // `SOLAND_COMPACTION_PRUNE_WALK_INTERVAL_SECS=0` (the default) — the
+    // explicit `POST /api/admin/v1/spaces/{space_id}/anchor-dag/prune`
+    // endpoint stays operator-driven. Set the env var to enable periodic
+    // walking; see `compactor.rs` for the policy and "when to enable"
+    // rationale.
+    let _compactor = soland::compactor::spawn(state.clone());
 
     tracing::info!(
         bind = %config.bind,

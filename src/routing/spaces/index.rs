@@ -63,8 +63,7 @@ async fn index_describe(depot: &mut Depot, res: &mut Response) {
 
 /// Map a `cx:<kind>:...` typed id to the spec id-kind it belongs to. Used by
 /// `/api/v1/index/object` to surface a polymorphic typed-id describe; this
-/// is **not** the soland-local entity concept (removed in round 6) — it's
-/// just a tiny lookup over the spec-registered prefixes.
+/// is just a tiny lookup over the spec-registered prefixes.
 fn object_kind_for(object_id: &str) -> Option<&'static str> {
     if object_id.starts_with("cx:space:") {
         Some("space")

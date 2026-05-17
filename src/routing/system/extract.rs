@@ -63,7 +63,6 @@ impl AuthArgs {
     }
 }
 
-// `AuthArgs::bearer_token` / `AuthArgs::AUTHORIZATION_HEADER` were removed
-// in round 7 — every existing call site goes through `authenticated_session`,
-// and the standalone `super::util::bearer_token` helper is still available
-// for handlers that need to inspect the token directly (auth.rs, did.rs).
+// Every call site goes through `authenticated_session`; the standalone
+// `super::util::bearer_token` helper is available for handlers that need
+// to inspect the token directly (auth.rs, did.rs).

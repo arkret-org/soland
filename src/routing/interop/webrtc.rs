@@ -6,9 +6,9 @@
 //! - `PUT/GET /api/v1/webrtc/sessions/{session_id}/signals`
 //! - `DELETE /api/v1/webrtc/sessions/{session_id}` close
 //!
-//! Sessions are persisted through `state.persistence.webrtc()`. Tier 6-P-4
-//! covers the durable Pg backing + TURN policy + spec B-14 (no DID in TURN
-//! username / push payload).
+//! Sessions are persisted through `state.persistence.webrtc()`. Durable
+//! Pg backing + TURN policy + spec rule (no DID in TURN username / push
+//! payload) are future work.
 
 use std::collections::BTreeSet;
 
@@ -286,7 +286,7 @@ fn is_valid_webrtc_session_id(value: &str) -> bool {
     // v1 wire ID: `cx:call:<uuidv7-36-char-lowercase-hex>` (RFC 9562 v7,
     // version=7, variant ∈ {8,9,a,b}) — per
     // `contrix-spec/v1/artifacts/registry/id-kind-registry.json` the WebRTC
-    // call surface uses `cx:call:` (round 7 renamed from `cx:webrtc:`).
+    // call surface uses `cx:call:`.
     let Some(rest) = value.strip_prefix("cx:call:") else {
         return false;
     };

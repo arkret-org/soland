@@ -1,8 +1,8 @@
 //! Moderation report handler.
 //!
 //! Surface: `POST /api/v1/moderation/report`. Backed by
-//! `state.persistence.moderation()`. Tier 6-D in `_todos.md` covers the async
-//! review workflow + reducer linkage.
+//! `state.persistence.moderation()`. Async review workflow + reducer
+//! linkage are future work.
 
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;

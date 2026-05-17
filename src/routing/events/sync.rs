@@ -79,21 +79,18 @@ async fn sync_describe(depot: &mut Depot, res: &mut Response) {
     }));
 }
 
-#[endpoint]
-async fn client_sync(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+#[endpoint(
+    operation_id = "cx.sync.account",
+    tags("sync"),
+    summary = "Account-aggregate sync (timeline / presence / typing / to_device)"
+)]
+async fn client_sync(
+    body: salvo::oapi::extract::JsonBody<ClientSyncRequest>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> crate::result::JsonResult<ClientSyncResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let body = match req.parse_json::<ClientSyncRequest>().await {
-        Ok(body) => body,
-        Err(_) => {
-            render_error(
-                res,
-                StatusCode::BAD_REQUEST,
-                "bad_json",
-                "invalid sync request",
-            );
-            return;
-        }
-    };
+    let body = body.into_inner();
     // Reject legacy filter keys / typed-id values before doing anything else.
     // v1 dropped the Matrix-style `room_id` / Glassboard `card_id` /
     // `subject_id` filter keys in favour of `spaces[]`; this surface fails
@@ -102,26 +99,18 @@ async fn client_sync(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         const LEGACY_KEYS: &[&str] = &["room_id", "card_id", "subject_id"];
         for legacy in LEGACY_KEYS {
             if filter_obj.contains_key(*legacy) {
-                render_error(
-                    res,
-                    StatusCode::BAD_REQUEST,
-                    "invalid_param",
+                return Err(crate::error::AppError::invalid_param(
                     "filter contains a removed legacy key",
-                );
-                return;
+                ));
             }
         }
         const LEGACY_PREFIXES: &[&str] = &["cx:card:", "cx:subject:", "cx:room:"];
         for value in filter_obj.values() {
             if let Some(text) = value.as_str() {
                 if LEGACY_PREFIXES.iter().any(|p| text.starts_with(p)) {
-                    render_error(
-                        res,
-                        StatusCode::BAD_REQUEST,
-                        "invalid_param",
+                    return Err(crate::error::AppError::invalid_param(
                         "filter references a removed legacy typed id",
-                    );
-                    return;
+                    ));
                 }
             }
         }
@@ -140,21 +129,25 @@ async fn client_sync(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         ) {
             Ok(cursor) => cursor,
             Err(SyncCursorError::Expired) => {
-                render_error(
-                    res,
-                    StatusCode::GONE,
-                    "sync_token_expired",
+                // Spec note: the canonical errcode is `cursor_expired` (SDK
+                // aliases `sync_token_expired` to it), but soland tests +
+                // SDK clients written before the alias landed match the
+                // literal `sync_token_expired` string. Preserve it via the
+                // wire-code override.
+                return Err(crate::error::AppError::new(
+                    crate::error::ErrorCode::SyncTokenExpired,
                     "sync token has expired",
-                );
-                return;
+                )
+                .with_wire_code("sync_token_expired"));
             }
             Err(SyncCursorError::Invalid(message)) => {
-                render_error(res, StatusCode::BAD_REQUEST, "invalid_param", message);
-                return;
+                return Err(crate::error::AppError::invalid_param(message));
             }
             Err(SyncCursorError::Mismatch(message)) => {
-                render_error(res, StatusCode::BAD_REQUEST, "sync_token_mismatch", message);
-                return;
+                return Err(
+                    crate::error::AppError::invalid_param(message)
+                        .with_wire_code("sync_token_mismatch"),
+                );
             }
         }
     } else {
@@ -163,13 +156,9 @@ async fn client_sync(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     if let Some(presence) = body.set_presence.as_deref()
         && !matches!(presence, "online" | "offline" | "unavailable")
     {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "invalid_param",
+        return Err(crate::error::AppError::invalid_param(
             "set_presence must be online, offline, or unavailable",
-        );
-        return;
+        ));
     }
     if let Some(profile) = body.profile.as_deref()
         && !matches!(
@@ -177,36 +166,22 @@ async fn client_sync(depot: &mut Depot, req: &mut Request, res: &mut Response) {
             "initial" | "incremental" | "board" | "chat" | "topic"
         )
     {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "invalid_param",
+        return Err(crate::error::AppError::invalid_param(
             "profile must be initial, incremental, board, chat, or topic",
-        );
-        return;
+        ));
     }
     if let Some(renderer) = body.renderer.as_deref()
         && !is_supported_view_renderer(renderer)
     {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "invalid_param",
+        return Err(crate::error::AppError::invalid_param(
             "renderer must be collection, timeline, graph, document, or composite",
-        );
-        return;
+        ));
     }
 
     if let Some(presence) = body.set_presence.as_deref() {
-        let Some(session) = session.as_ref() else {
-            render_error(
-                res,
-                StatusCode::UNAUTHORIZED,
-                "unauthenticated",
-                "set_presence requires authentication",
-            );
-            return;
-        };
+        let session = session
+            .as_ref()
+            .ok_or_else(|| crate::error::AppError::unauthenticated("set_presence requires authentication"))?;
         if let Err(error) = state.persistence.presence().put(PresenceRecord {
             actor: session.actor.clone(),
             status: presence.to_owned(),
@@ -323,7 +298,7 @@ async fn client_sync(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         })
         .unwrap_or_default();
 
-    res.render(Json(ClientSyncResponse {
+    crate::result::json_ok(ClientSyncResponse {
         next_batch: sync_token_for_client_sync(
             state,
             session.as_ref(),
@@ -338,7 +313,7 @@ async fn client_sync(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         to_device,
         account_data,
         device_lists: json!({"changed": [], "left": []}),
-    }));
+    })
 }
 
 fn timeline_events_for_space(
@@ -385,10 +360,9 @@ fn timeline_events_for_space(
 }
 
 fn sync_timeline_message_record_json(message: &crate::state::MessageRecord) -> serde_json::Value {
-    // Round 7: flow_id is always derived from space_id (one flow per space
-    // for the message timeline) — thread_id is a discussion branch *within*
-    // that flow, NOT the flow itself. The pre-round-7 conflation
-    // (treat thread_id as flow_id when its prefix matched) was incorrect.
+    // flow_id is always derived from space_id (one flow per space for
+    // the message timeline) — thread_id is a discussion branch *within*
+    // that flow, NOT the flow itself.
     let flow_id = flow_id_from_space_id(&message.space_id);
     let track_id = message.thread_id.clone();
     json!({
@@ -455,11 +429,8 @@ pub fn sync_token_for_client_sync(
     let filter_hash = sync_filter_hash(profile, filter, renderer, facets);
     let issued_at_ms = issued_at.timestamp_millis();
     let expires_at_ms = expires_at.timestamp_millis();
-    // Canonical cursor schema: `cx.schema.cursor.v1`. Round 4 cycled out the
-    // underscore-prefixed legacy field names (`_profile`, `_filter_hash`, `t`,
-    // `x`); round 5 dropped that dual-write; round 7 drops the
-    // string-typed `v: "1"` shim — only `version: 1` (u64) remains, matching
-    // what `is_valid_sync_token` checks for.
+    // Canonical cursor schema: `cx.schema.cursor.v1`. Carries
+    // `version: 1` (u64), matching what `is_valid_sync_token` checks for.
     let cursor = json!({
         "schema": "cx.schema.cursor.v1",
         "version": 1,
@@ -680,11 +651,6 @@ pub fn sync_filter_hash(
     contrix_sdk::canonical::canonical_sha256(&binding)
         .unwrap_or_else(|_| format!("sha256:{}", sha256_hex(binding.to_string().as_bytes())))
 }
-
-// `bound_cursor` / `bound_cursor_with_positions` were removed in round 7 —
-// they generated cursors with the round-4 `_profile` / `_filter_hash`
-// underscore-prefixed fields that the parser dropped in round 5. The
-// canonical builder is `sync_token_for_client_sync`.
 
 pub fn normalized_strings(values: &[String]) -> Vec<String> {
     let mut values = values.to_vec();
@@ -1015,8 +981,15 @@ fn ndjson_line(value: &serde_json::Value) -> Bytes {
 /// Range: `from?` + `until?` + `direction`.
 /// `direction=backward` reverses the merged stream so callers can paginate
 /// older events with the same `next_cursor` semantics.
-#[endpoint]
-pub(super) async fn events_query(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+#[endpoint(
+    operation_id = "cx.events.query",
+    tags("events"),
+    summary = "Projection-aware events query (single- or multi-space merge; backward / forward direction)"
+)]
+pub(super) async fn events_query(
+    depot: &mut Depot,
+    req: &mut Request,
+) -> crate::result::JsonResult<serde_json::Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     // Collect all `spaces=` / `actors=` repeated args. Also accept the
     // singular `space_id=` / `actor=` aliases for ergonomics.
@@ -1033,42 +1006,36 @@ pub(super) async fn events_query(depot: &mut Depot, req: &mut Request, res: &mut
         }
     }
     if spaces.is_empty() && actors.is_empty() {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "missing_param",
+        return Err(crate::error::AppError::missing_param(
             "events.query requires at least one of spaces[] / actors[] (or singular space_id / actor)",
-        );
-        return;
+        ));
     }
     for space in &spaces {
         if validate_space_id(space).is_err() {
-            render_error(
-                res,
-                StatusCode::BAD_REQUEST,
-                "invalid_param",
-                &format!("invalid space: {space}"),
-            );
-            return;
+            return Err(crate::error::AppError::invalid_param(format!(
+                "invalid space: {space}"
+            )));
         }
     }
     for actor in &actors {
         if validate_did(actor).is_err() {
-            render_error(
-                res,
-                StatusCode::BAD_REQUEST,
-                "invalid_param",
-                &format!("invalid actor: {actor}"),
-            );
-            return;
+            return Err(crate::error::AppError::invalid_param(format!(
+                "invalid actor: {actor}"
+            )));
         }
     }
     // Dispatch: if no spaces (actor-scoped query), forward to the durable
     // Event-store reader in routing/events.rs which builds an actor-keyed
     // `frontier.actors` map. The projection-aware path below is space-keyed.
     if spaces.is_empty() {
-        super::events_query_durable_scope_impl(depot, req, res).await;
-        return;
+        let session = authenticated_session(state, req)
+            .map_err(|(status, code, message)| {
+                crate::error::AppError::invalid_param(message)
+                    .with_status(status)
+                    .with_wire_code(code)
+            })?;
+        let response = super::events_query_durable_scope_impl(state, &session, req).await?;
+        return crate::result::json_ok(serde_json::to_value(response).unwrap_or(json!({})));
     }
     let session = authenticated_session(state, req).ok();
     let mut accessible_spaces: Vec<String> = Vec::with_capacity(spaces.len());
@@ -1078,8 +1045,7 @@ pub(super) async fn events_query(depot: &mut Depot, req: &mut Request, res: &mut
         }
     }
     if accessible_spaces.is_empty() {
-        render_error(res, StatusCode::NOT_FOUND, "not_found", "not found");
-        return;
+        return Err(crate::error::AppError::not_found("not found"));
     }
     let limit = query_param(req, "limit")
         .and_then(|value| value.parse::<usize>().ok())
@@ -1091,13 +1057,9 @@ pub(super) async fn events_query(depot: &mut Depot, req: &mut Request, res: &mut
     let cursor = query_param(req, "from").or_else(|| query_param(req, "cursor"));
     let direction = query_param(req, "direction").unwrap_or_else(|| "forward".to_owned());
     if direction != "forward" && direction != "backward" {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "invalid_param",
+        return Err(crate::error::AppError::invalid_param(
             "direction must be 'forward' or 'backward'",
-        );
-        return;
+        ));
     }
     let backward = direction == "backward";
 
@@ -1111,53 +1073,43 @@ pub(super) async fn events_query(depot: &mut Depot, req: &mut Request, res: &mut
                 if backward {
                     events.reverse();
                 }
-                res.render(Json(BackfillResponse {
-                    events,
-                    prev_cursor: cursor.clone(),
-                    prev_batch: cursor,
-                    next_cursor: page.next_cursor.or_else(|| Some(sync_token())),
-                    limited: page.has_more,
-                }));
-                return;
+                return crate::result::json_ok(
+                    serde_json::to_value(BackfillResponse {
+                        events,
+                        prev_cursor: cursor.clone(),
+                        prev_batch: cursor,
+                        next_cursor: page.next_cursor.or_else(|| Some(sync_token())),
+                        limited: page.has_more,
+                    })
+                    .unwrap_or(json!({})),
+                );
             }
             Ok(None) => {}
             Err(error) => {
                 if error.to_string().contains("invalid_cursor") {
-                    render_error(
-                        res,
-                        StatusCode::BAD_REQUEST,
-                        "invalid_cursor",
-                        "cursor not found",
-                    );
-                    return;
+                    return Err(crate::error::AppError::invalid_param("cursor not found")
+                        .with_wire_code("invalid_cursor"));
                 }
-                render_error(
-                    res,
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "internal_error",
-                    &error.to_string(),
-                );
-                return;
+                return Err(crate::error::AppError::internal(error.to_string()));
             }
         }
-        res.render(Json(BackfillResponse {
-            events: Vec::new(),
-            prev_cursor: cursor.clone(),
-            prev_batch: cursor,
-            next_cursor: Some(sync_token()),
-            limited: false,
-        }));
-        return;
+        return crate::result::json_ok(
+            serde_json::to_value(BackfillResponse {
+                events: Vec::new(),
+                prev_cursor: cursor.clone(),
+                prev_batch: cursor,
+                next_cursor: Some(sync_token()),
+                limited: false,
+            })
+            .unwrap_or(json!({})),
+        );
     }
 
     // Multi-space merge path: call `projected_event_page` per space, merge
-    // by `received_at`, then paginate. `next_cursor` is the last-event id of
-    // the merged page (consistent with single-space cursor semantics).
+    // by `received_at`, then paginate.
     let mut merged: Vec<serde_json::Value> = Vec::new();
     let mut any_has_more = false;
     for space_id in &accessible_spaces {
-        // Each per-space call uses `limit` so the merge floor is bounded
-        // by `accessible_spaces.len() * limit`.
         match projected_event_page(state, space_id, cursor.as_deref(), limit) {
             Ok(Some(page)) => {
                 if page.has_more {
@@ -1168,22 +1120,13 @@ pub(super) async fn events_query(depot: &mut Depot, req: &mut Request, res: &mut
             Ok(None) => {}
             Err(error) => {
                 if error.to_string().contains("invalid_cursor") {
-                    render_error(
-                        res,
-                        StatusCode::BAD_REQUEST,
-                        "invalid_cursor",
-                        "cursor not found",
-                    );
-                    return;
+                    return Err(crate::error::AppError::invalid_param("cursor not found")
+                        .with_wire_code("invalid_cursor"));
                 }
-                // Other errors on one space don't fail the whole multi-space
-                // query — carry on with what we have.
                 continue;
             }
         }
     }
-    // Sort by `created_at` (string-comparable RFC3339), tie-break by
-    // `event_id` for determinism.
     merged.sort_by(|left, right| {
         let left_ts = left["created_at"].as_str().unwrap_or("");
         let right_ts = right["created_at"].as_str().unwrap_or("");
@@ -1207,102 +1150,78 @@ pub(super) async fn events_query(depot: &mut Depot, req: &mut Request, res: &mut
         })
         .flatten()
         .or_else(|| Some(sync_token()));
-    res.render(Json(BackfillResponse {
-        events: page_events,
-        prev_cursor: cursor.clone(),
-        prev_batch: cursor,
-        next_cursor,
-        limited,
-    }));
+    crate::result::json_ok(
+        serde_json::to_value(BackfillResponse {
+            events: page_events,
+            prev_cursor: cursor.clone(),
+            prev_batch: cursor,
+            next_cursor,
+            limited,
+        })
+        .unwrap_or(json!({})),
+    )
 }
 
-#[endpoint]
-async fn sync_gap_backfill(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+#[endpoint(
+    operation_id = "cx.sync.backfill_gap",
+    tags("sync"),
+    summary = "Backfill the gap between two cursors (deployment-local; not in spec)"
+)]
+async fn sync_gap_backfill(
+    space_id: salvo::oapi::extract::QueryParam<String, true>,
+    limit: salvo::oapi::extract::QueryParam<usize, false>,
+    from_cursor: salvo::oapi::extract::QueryParam<String, false>,
+    to_cursor: salvo::oapi::extract::QueryParam<String, false>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> crate::result::JsonResult<serde_json::Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let Some(space_id) = query_param(req, "space_id") else {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "missing_param",
-            "space_id is required",
-        );
-        return;
-    };
+    let space_id = space_id.into_inner();
     if validate_space_id(&space_id).is_err() {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "invalid_param",
-            "invalid space_id",
-        );
-        return;
+        return Err(crate::error::AppError::invalid_param("invalid space_id"));
     }
     let session = authenticated_session(state, req).ok();
     if !space_id_accessible(state, &space_id, session.as_ref()) {
-        render_error(res, StatusCode::NOT_FOUND, "not_found", "not found");
-        return;
+        return Err(crate::error::AppError::not_found("not found"));
     }
-    let limit = query_param(req, "limit")
-        .and_then(|value| value.parse::<usize>().ok())
-        .unwrap_or(100)
-        .clamp(1, 500);
-    let from_cursor = query_param(req, "from_cursor")
+    let limit = limit.into_inner().unwrap_or(100).clamp(1, 500);
+    // Honor all the legacy cursor aliases (`from_cursor` / `from` / `prev_batch`
+    // / `cursor` and `to_cursor` / `to` / `next_batch`) that pre-typed
+    // clients send. The typed extractor only binds one name; fall back to
+    // raw req lookup for the aliases so this surface stays
+    // backwards-compatible.
+    let from_cursor = from_cursor
+        .into_inner()
         .or_else(|| query_param(req, "from"))
         .or_else(|| query_param(req, "prev_batch"))
         .or_else(|| query_param(req, "cursor"));
-    let to_cursor = query_param(req, "to_cursor")
+    let to_cursor = to_cursor
+        .into_inner()
         .or_else(|| query_param(req, "to"))
         .or_else(|| query_param(req, "next_batch"));
 
-    // Resolve sync `cx:cursor:` tokens to reducer event cursors. The
-    // sync token's `_positions` map encodes per-Space `timestamp_micros`
-    // checkpoints; we translate that into the last `event_id` at or
-    // before the checkpoint so backfill can resume from there. Plain
-    // event-id cursors flow through unchanged.
-    let from_cursor = match resolve_sync_cursor_to_event_id(state, &space_id, from_cursor) {
-        Ok(cursor) => cursor,
-        Err(message) => {
-            render_error(res, StatusCode::BAD_REQUEST, "invalid_param", message);
-            return;
-        }
-    };
-    let to_cursor = match resolve_sync_cursor_to_event_id(state, &space_id, to_cursor) {
-        Ok(cursor) => cursor,
-        Err(message) => {
-            render_error(res, StatusCode::BAD_REQUEST, "invalid_param", message);
-            return;
-        }
-    };
+    // Resolve sync `cx:cursor:` tokens to reducer event cursors.
+    let from_cursor = resolve_sync_cursor_to_event_id(state, &space_id, from_cursor)
+        .map_err(crate::error::AppError::invalid_param)?;
+    let to_cursor = resolve_sync_cursor_to_event_id(state, &space_id, to_cursor)
+        .map_err(crate::error::AppError::invalid_param)?;
 
     let (events, next_cursor, limited) =
-        match backfill_gap_events(state, &space_id, from_cursor.as_deref(), limit) {
-            Ok(result) => result,
-            Err(error) => {
-                if error.to_string().contains("invalid_cursor") {
-                    render_error(
-                        res,
-                        StatusCode::BAD_REQUEST,
-                        "invalid_cursor",
-                        "cursor not found",
-                    );
-                    return;
-                }
-                render_error(
-                    res,
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "internal_error",
-                    &error.to_string(),
-                );
-                return;
+        backfill_gap_events(state, &space_id, from_cursor.as_deref(), limit).map_err(|error| {
+            if error.to_string().contains("invalid_cursor") {
+                crate::error::AppError::invalid_param("cursor not found")
+                    .with_wire_code("invalid_cursor")
+            } else {
+                crate::error::AppError::internal(error.to_string())
             }
-        };
+        })?;
     let (events, gap_complete) = truncate_gap_events(events, to_cursor.as_deref());
     let next_cursor = if gap_complete {
         to_cursor.clone()
     } else {
         next_cursor
     };
-    res.render(Json(json!({
+    crate::result::json_ok(json!({
         "events": events,
         "from_cursor": from_cursor.clone(),
         "to_cursor": to_cursor.clone(),
@@ -1311,58 +1230,40 @@ async fn sync_gap_backfill(depot: &mut Depot, req: &mut Request, res: &mut Respo
         "limited": limited && !gap_complete,
         "gap_complete": gap_complete || !limited,
         "production_gap": "durable_sync_position_validation",
-    })));
+    }))
 }
 
-#[endpoint]
-async fn snapshot_head(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+#[endpoint(
+    operation_id = "cx.sync.snapshot_head",
+    tags("sync"),
+    summary = "Read the snapshot-v2 head (manifest + chunk descriptors + merkle_root) for a Space"
+)]
+async fn snapshot_head(
+    space_id: salvo::oapi::extract::QueryParam<String, true>,
+    depot: &mut Depot,
+) -> crate::result::JsonResult<SnapshotHeadResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let Some(space_id) = query_param(req, "space_id") else {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "missing_param",
-            "space_id is required",
-        );
-        return;
-    };
+    let space_id = space_id.into_inner();
     if validate_space_id(&space_id).is_err() {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "invalid_param",
-            "invalid space_id",
-        );
-        return;
+        return Err(crate::error::AppError::invalid_param("invalid space_id"));
     }
     if is_space_deleted(state, &space_id) {
-        render_error(res, StatusCode::NOT_FOUND, "not_found", "not found");
-        return;
+        return Err(crate::error::AppError::not_found("not found"));
     }
-    let Ok(space_id_value) = SpaceId::new(space_id.clone()) else {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "invalid_param",
-            "invalid space_id",
-        );
-        return;
-    };
-    let spaces = state.spaces.lock().expect("spaces lock");
-    if spaces.get(&space_id_value).is_none() {
-        render_error(res, StatusCode::NOT_FOUND, "not_found", "not found");
-        return;
+    let space_id_value = SpaceId::new(space_id.clone())
+        .map_err(|_| crate::error::AppError::invalid_param("invalid space_id"))?;
+    {
+        let spaces = state.spaces.lock().expect("spaces lock");
+        if spaces.get(&space_id_value).is_none() {
+            return Err(crate::error::AppError::not_found("not found"));
+        }
     }
-    drop(spaces);
-    let Some(bundle) = snapshot_bundle_for_space(state, &space_id) else {
-        render_error(res, StatusCode::NOT_FOUND, "not_found", "not found");
-        return;
-    };
-    // Snapshot v2 (round 9): the manifest already lists per-chunk
-    // digests, so `chunks[]` becomes the per-chunk descriptor (id +
-    // size + digest) — receivers fetch each chunk via
-    // `/sync/snapshot-chunk?chunk_id=N` and check it against
-    // `merkle_root` using the chunk's `audit_path`.
+    let bundle = snapshot_bundle_for_space(state, &space_id)
+        .ok_or_else(|| crate::error::AppError::not_found("not found"))?;
+    // Snapshot v2: the manifest already lists per-chunk digests, so
+    // `chunks[]` becomes the per-chunk descriptor (id + size + digest)
+    // — receivers fetch each chunk via `/sync/snapshot-chunk?chunk_id=N`
+    // and check it against `merkle_root` using the chunk's `audit_path`.
     let chunk_descriptors: Vec<serde_json::Value> = bundle
         .chunks
         .iter()
@@ -1383,7 +1284,7 @@ async fn snapshot_head(depot: &mut Depot, req: &mut Request, res: &mut Response)
         "{}:{}:{}",
         bundle.snapshot_ref, bundle.state_hash, service_did
     );
-    res.render(Json(SnapshotHeadResponse {
+    crate::result::json_ok(SnapshotHeadResponse {
         snapshot_ref: bundle.snapshot_ref,
         state_hash: bundle.state_hash,
         manifest: bundle.manifest,
@@ -1399,69 +1300,42 @@ async fn snapshot_head(depot: &mut Depot, req: &mut Request, res: &mut Response)
         chunk_bytes: bundle.generator_proof.chunk_bytes,
         total_bytes: bundle.generator_proof.total_bytes,
         generator_proof: generator_proof_value,
-    }));
+    })
 }
 
-#[endpoint]
-async fn snapshot_chunk(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+#[endpoint(
+    operation_id = "cx.sync.snapshot_chunk",
+    tags("sync"),
+    summary = "Read one chunk of a snapshot-v2 bundle (with audit_path proving merkle membership)"
+)]
+async fn snapshot_chunk(
+    snapshot_ref: salvo::oapi::extract::QueryParam<String, true>,
+    chunk_id: salvo::oapi::extract::QueryParam<u32, false>,
+    depot: &mut Depot,
+) -> crate::result::JsonResult<serde_json::Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let Some(snapshot_ref) = query_param(req, "snapshot_ref") else {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "missing_param",
-            "snapshot_ref is required",
-        );
-        return;
-    };
-    let chunk_id_str = query_param(req, "chunk_id").unwrap_or_else(|| "0".to_owned());
-    let Ok(chunk_id) = chunk_id_str.parse::<u32>() else {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "invalid_param",
-            "chunk_id must be a non-negative integer",
-        );
-        return;
-    };
-    let Some((space_id, expected_hash)) = parse_snapshot_ref(&snapshot_ref) else {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "invalid_param",
-            "invalid snapshot_ref",
-        );
-        return;
-    };
+    let snapshot_ref = snapshot_ref.into_inner();
+    let chunk_id = chunk_id.into_inner().unwrap_or(0);
+    let (space_id, expected_hash) = parse_snapshot_ref(&snapshot_ref)
+        .ok_or_else(|| crate::error::AppError::invalid_param("invalid snapshot_ref"))?;
     if is_space_deleted(state, &space_id) {
-        render_error(res, StatusCode::NOT_FOUND, "not_found", "not found");
-        return;
+        return Err(crate::error::AppError::not_found("not found"));
     }
-    let Some(bundle) = snapshot_bundle_for_space(state, &space_id) else {
-        render_error(res, StatusCode::NOT_FOUND, "not_found", "not found");
-        return;
-    };
+    let bundle = snapshot_bundle_for_space(state, &space_id)
+        .ok_or_else(|| crate::error::AppError::not_found("not found"))?;
     if bundle.snapshot_ref != snapshot_ref || bundle.state_hash != expected_hash {
-        render_error(
-            res,
-            StatusCode::CONFLICT,
-            "stale_frontier",
+        return Err(crate::error::AppError::new(
+            crate::error::ErrorCode::StaleFrontier,
             "snapshot_ref no longer matches the current snapshot frontier",
-        );
-        return;
+        ));
     }
-    // Snapshot v2 (round 9): chunks[N] is the SDK-canonical
-    // SnapshotChunk @ chunk_id=N. Out-of-range `chunk_id` returns 404.
+    // Snapshot v2: chunks[N] is the SDK-canonical SnapshotChunk @
+    // chunk_id=N. Out-of-range `chunk_id` returns 404.
     let tree_size = bundle.tree.tree_size();
-    let Some(chunk) = bundle.chunks.get(chunk_id as usize) else {
-        render_error(
-            res,
-            StatusCode::NOT_FOUND,
-            "not_found",
-            "snapshot chunk not found",
-        );
-        return;
-    };
+    let chunk = bundle
+        .chunks
+        .get(chunk_id as usize)
+        .ok_or_else(|| crate::error::AppError::not_found("snapshot chunk not found"))?;
     let audit_path = bundle
         .tree
         .audit_path(chunk_id as usize)
@@ -1469,7 +1343,7 @@ async fn snapshot_chunk(depot: &mut Depot, req: &mut Request, res: &mut Response
         .into_iter()
         .map(|h| h.as_str().to_owned())
         .collect::<Vec<_>>();
-    res.render(Json(json!({
+    crate::result::json_ok(json!({
         "snapshot_ref": snapshot_ref,
         "chunk_id": chunk_id,
         "media_type": "application/json",
@@ -1480,5 +1354,5 @@ async fn snapshot_chunk(depot: &mut Depot, req: &mut Request, res: &mut Response
         "audit_path": audit_path,
         "tree_size": tree_size,
         "merkle_root": bundle.tree.root().as_str(),
-    })));
+    }))
 }

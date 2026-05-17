@@ -18,15 +18,20 @@ use std::collections::BTreeMap;
 use chrono::{DateTime, Utc};
 use contrix_sdk::{Operation, OperationId, SpaceId};
 use salvo::http::StatusCode;
+use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde_json::{Value, json};
 
 use super::{
-    append_audit_log, auth_or_render, now, project_accepted_operations, query_param, render_error,
-    sha256_hex, space_has_member, validate_did, validate_operation_policy,
-    validate_operation_semantics, validate_space_id,
+    append_audit_log, auth_or_render, now, project_accepted_operations, query_param,
+    query_param_all, render_error, sha256_hex, space_has_member, validate_did,
+    validate_operation_policy, validate_operation_semantics, validate_space_id,
 };
+use super::operations as events_operations;
 use crate::artifacts;
+use crate::error::{AppError, ErrorCode};
+use crate::result::{JsonResult, json_ok};
+use crate::routing::system::extract::AuthArgs;
 use crate::state::{AppState, CanonicalEventRecord, SessionRecord};
 use crate::wire::{
     EventBatchGetRequest, EventBatchGetResponse, EventDescribeResponse, EventReadResponse,
@@ -265,13 +270,43 @@ async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Response) 
             render_error(res, StatusCode::FORBIDDEN, "capability_denied", message);
             return;
         }
+        // `cx.profile.agent_workspace.v1`: cx.content.mention_redirect MUST
+        // carry a critical_extensions[] declaration with feature id
+        // `cx.feature.mention_redirect.v1` and fail_closed=true.
+        // Spec: agent-workspace-profile.md §8.1.
+        if let Some(content) = operation
+            .payload
+            .get("content")
+        {
+            if let Some(feature_id) =
+                events_operations::agent_workspace_required_feature_id(content)
+            {
+                let envelope_satisfies = envelope
+                    .pointer("/requirements/critical_extensions")
+                    .and_then(Value::as_array)
+                    .map(|arr| {
+                        arr.iter().any(|ext| {
+                            ext.get("id").and_then(Value::as_str) == Some(feature_id)
+                                && ext.get("fail_closed").and_then(Value::as_bool) == Some(true)
+                        })
+                    })
+                    .unwrap_or(false);
+                if !envelope_satisfies {
+                    render_error(
+                        res,
+                        StatusCode::BAD_REQUEST,
+                        "schema_violation",
+                        "cx.content.mention_redirect requires requirements.critical_extensions[] entry with fail_closed=true",
+                    );
+                    return;
+                }
+            }
+        }
         // Server-side state-machine preflight for cx.place.* / cx.flow.* /
         // cx.morph.* lifecycle events. Reject invalid transitions with
         // HTTP 412 before persisting per contrix-spec common-fields.md §5.1.
-        //   - round 11: Place
-        //   - round 13: Flow + Morph (mirror Place pattern; Flow/Morph
-        //     have no tombstone, so only update/archive/restore reject
-        //     paths surface here as create is unconditional).
+        // Flow / Morph have no tombstone, so only update / archive / restore
+        // reject paths surface here as create is unconditional.
         if let Ok(proj) = state.projection.lock() {
             if let Err(reason) = proj.check_place_lifecycle_transition(operation) {
                 render_error(res, StatusCode::PRECONDITION_FAILED, reason, reason);
@@ -285,17 +320,17 @@ async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Response) 
                 render_error(res, StatusCode::PRECONDITION_FAILED, reason, reason);
                 return;
             }
-            // Round 14b — `cx.redaction` targeting a Flow / Morph via
-            // `object_ref` is rejected if the target is already terminal
-            // per spec common-fields.md §5.1 (`<kind>_already_terminal`).
+            // `cx.redaction` targeting a Flow / Morph via `object_ref` is
+            // rejected if the target is already terminal per spec
+            // common-fields.md §5.1 (`<kind>_already_terminal`).
             if let Err(reason) = proj.check_redaction_target_transition(operation) {
                 render_error(res, StatusCode::PRECONDITION_FAILED, reason, reason);
                 return;
             }
-            // Round 14d — `cx.flow.track.*` sub-events follow the spec
-            // §5.1 update-on-non-active rule: parent Flow MUST be Active
-            // or the admission rejects with `flow_not_active` (mirrors
-            // SDK round 12 reducer guard so client + server agree).
+            // `cx.flow.track.*` sub-events follow the spec §5.1
+            // update-on-non-active rule: parent Flow MUST be Active or
+            // the admission rejects with `flow_not_active` (mirrors the
+            // SDK reducer guard so client + server agree).
             if let Err(reason) = proj.check_flow_track_transition(operation) {
                 render_error(res, StatusCode::PRECONDITION_FAILED, reason, reason);
                 return;
@@ -348,58 +383,52 @@ async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Response) 
     )));
 }
 
-#[endpoint]
-async fn get_event(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+#[endpoint(
+    operation_id = "cx.events.get",
+    tags("events"),
+    summary = "Fetch one canonical Event Envelope by event_id"
+)]
+async fn get_event(
+    aa: AuthArgs,
+    event_id: PathParam<String>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<EventReadResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let Some(session) = auth_or_render(state, req, res) else {
-        return;
-    };
-    let Some(event_id) = req.param::<String>("event_id") else {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "missing_param",
-            "event_id is required",
-        );
-        return;
-    };
-    let Some(record) = state.persistence.events().get(&event_id).ok().flatten() else {
-        render_error(res, StatusCode::NOT_FOUND, "not_found", "event not found");
-        return;
-    };
+    let session = aa.authenticated_session(state, req)?;
+    let event_id = event_id.into_inner();
+    let record = state
+        .persistence
+        .events()
+        .get(&event_id)
+        .ok()
+        .flatten()
+        .ok_or_else(|| AppError::not_found("event not found"))?;
     if !event_visible_to_session(state, &record, &session) {
-        render_error(res, StatusCode::NOT_FOUND, "not_found", "event not found");
-        return;
+        return Err(AppError::not_found("event not found"));
     }
-    res.render(Json(event_read_response(&record)));
+    json_ok(event_read_response(&record))
 }
 
-#[endpoint]
-async fn batch_get_events(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+#[endpoint(
+    operation_id = "cx.events.batch_get",
+    tags("events"),
+    summary = "Fetch up to MAX_EVENT_BATCH_GET canonical Event Envelopes by event_id"
+)]
+async fn batch_get_events(
+    aa: AuthArgs,
+    body: JsonBody<EventBatchGetRequest>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<EventBatchGetResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let Some(session) = auth_or_render(state, req, res) else {
-        return;
-    };
-    let body = match req.parse_json::<EventBatchGetRequest>().await {
-        Ok(body) => body,
-        Err(_) => {
-            render_error(
-                res,
-                StatusCode::BAD_REQUEST,
-                "bad_json",
-                "invalid batch-get request",
-            );
-            return;
-        }
-    };
+    let session = aa.authenticated_session(state, req)?;
+    let body = body.into_inner();
     if body.event_ids.len() > MAX_EVENT_BATCH_GET {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "quota_exceeded",
+        return Err(AppError::new(
+            ErrorCode::QuotaExceeded,
             "too many event_ids requested",
-        );
-        return;
+        ));
     }
     let store = state.persistence.events();
     let mut found = Vec::new();
@@ -412,11 +441,11 @@ async fn batch_get_events(depot: &mut Depot, req: &mut Request, res: &mut Respon
             _ => missing.push(event_id),
         }
     }
-    res.render(Json(EventBatchGetResponse {
+    json_ok(EventBatchGetResponse {
         events: found,
         missing,
         unauthorized: Vec::new(),
-    }));
+    })
 }
 
 /// Internal durable-Event-store reader, kept for actor-scoped audit reads
@@ -436,38 +465,27 @@ async fn batch_get_events(depot: &mut Depot, req: &mut Request, res: &mut Respon
 /// dispatch to the durable-store reader when the selector contains only
 /// `actors[]` (no `spaces[]`). Both the `#[endpoint]` wrapper and the
 /// sync-side dispatcher call this impl.
+///
+/// Round 15ad: returns `Result<EventsPageResponse, AppError>` so the wrapper
+/// can be a typed `JsonResult<T>` handler and the sync-side dispatcher
+/// can map the typed result into its own legacy `&mut Response` shape with
+/// a single `match`.
 pub(super) async fn events_query_durable_scope_impl(
-    depot: &mut Depot,
-    req: &mut Request,
-    res: &mut Response,
-) {
-    let state = depot.obtain::<AppState>().expect("state injected");
-    let Some(session) = auth_or_render(state, req, res) else {
-        return;
-    };
+    state: &AppState,
+    session: &SessionRecord,
+    req: &Request,
+) -> Result<EventsPageResponse, AppError> {
     // Repeated query-arg selector: `actors[]` ∪ `spaces[]`.
-    let actors = super::query_param_all(req, "actors");
-    let spaces = super::query_param_all(req, "spaces");
+    let actors = query_param_all(req, "actors");
+    let spaces = query_param_all(req, "spaces");
     for actor in &actors {
         if validate_did(actor).is_err() {
-            render_error(
-                res,
-                StatusCode::BAD_REQUEST,
-                "invalid_param",
-                &format!("invalid actor: {actor}"),
-            );
-            return;
+            return Err(AppError::invalid_param(format!("invalid actor: {actor}")));
         }
     }
     for space in &spaces {
         if validate_space_id(space).is_err() {
-            render_error(
-                res,
-                StatusCode::BAD_REQUEST,
-                "invalid_param",
-                &format!("invalid space: {space}"),
-            );
-            return;
+            return Err(AppError::invalid_param(format!("invalid space: {space}")));
         }
     }
     let cursor = query_param(req, "from");
@@ -475,13 +493,9 @@ pub(super) async fn events_query_durable_scope_impl(
     // older than `from` in reverse time order.
     let direction = query_param(req, "direction").unwrap_or_else(|| "forward".to_owned());
     if direction != "forward" && direction != "backward" {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "invalid_param",
+        return Err(AppError::invalid_param(
             "direction must be 'forward' or 'backward'",
-        );
-        return;
+        ));
     }
     let _until = query_param(req, "until"); // FUTURE: enforce upper-bound cursor; currently swallowed.
     let limit = query_param(req, "limit")
@@ -510,7 +524,7 @@ pub(super) async fn events_query_durable_scope_impl(
                 .is_some_and(|s| spaces_set.contains(s));
             actor_match || space_match
         })
-        .filter(|record| event_visible_to_session(state, record, &session))
+        .filter(|record| event_visible_to_session(state, record, session))
         .collect::<Vec<_>>();
     records.sort_by(|left, right| {
         left.received_at
@@ -539,20 +553,31 @@ pub(super) async fn events_query_durable_scope_impl(
         .flatten();
     let frontier = events_frontier_json(&page);
     let events = page.iter().map(event_read_response).collect();
-    res.render(Json(EventsPageResponse {
+    Ok(EventsPageResponse {
         events,
         next_cursor,
         frontier,
-    }));
+    })
 }
 
 /// Salvo `#[endpoint]` wrapper around [`events_query_durable_scope_impl`] so
 /// the actor-scoped durable-store reader can be wired to a route directly
 /// (currently used only as a fallback dispatched from `routing::events::sync::events_query`
 /// when the selector has no `spaces[]`).
-#[endpoint]
-async fn events_query_durable_scope(depot: &mut Depot, req: &mut Request, res: &mut Response) {
-    events_query_durable_scope_impl(depot, req, res).await
+#[endpoint(
+    operation_id = "cx.events.query_durable",
+    tags("events"),
+    summary = "Durable-store reader (bypasses projection; actor-scoped audit queries)"
+)]
+async fn events_query_durable_scope(
+    aa: AuthArgs,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<EventsPageResponse> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req)?;
+    let response = events_query_durable_scope_impl(state, &session, req).await?;
+    json_ok(response)
 }
 
 #[endpoint(
@@ -1543,6 +1568,7 @@ mod proof_strictness_tests {
             jws_replay_window_seconds: 0,
             jws_replay_window_per_family: std::collections::BTreeMap::new(),
             anchorer_signing_key_seed: None,
+            agent_audit_binding_signing_seed: None,
             use_keystore: false,
             federation_policy: FederationPolicy::Mesh,
             federation_peers: Vec::new(),
@@ -1555,6 +1581,10 @@ mod proof_strictness_tests {
             compaction_min_witnesses: 1,
             compaction_preserve_genesis: true,
             compaction_prune_only_singleton_successors: true,
+
+            compaction_prune_walk_interval_seconds: 0,
+
+            compaction_prune_walk_per_space_limit: 50,
         };
         AppState::new(config, Db { pool: None })
     }

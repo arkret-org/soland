@@ -372,11 +372,10 @@ fn evaluate_constraint(
             // resource itself reports no facets, fail-closed — the grant is
             // facet-bound and an unfaceted target falls outside its scope.
             //
-            // Round 6 renamed this from `allowed_entity_facets` (the entity
-            // scaffold was dropped). The check works on any spec-typed object
-            // resource that carries a `facets` field; `cx:flow:` / `cx:place:`
-            // / `cx:morph:` projections all surface facets through the same
-            // cell-family registry.
+            // The check works on any spec-typed object resource that
+            // carries a `facets` field; `cx:flow:` / `cx:place:` /
+            // `cx:morph:` projections all surface facets through the
+            // same cell-family registry.
             let allowed: Vec<String> = constraint
                 .value
                 .get("facets")

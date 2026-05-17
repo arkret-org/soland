@@ -1,4 +1,4 @@
-//! MAL-13 (round 25) — Snapshot/GC scanner.
+//! Snapshot/GC scanner.
 //!
 //! Walks the durable Move + Anchor stores and lists Moves that are NOT
 //! referenced by any Anchor frontier AND that have no active pending Move

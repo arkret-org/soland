@@ -1,10 +1,10 @@
 //! `cargo run --bin soland-rotate-drill -- ...`
 //!
-//! Round 28 (2026-05-10) — Anchorer signing-key rotation drill.
+//! Anchorer signing-key rotation drill.
 //!
 //! Three modes — selected by exactly one of the mode flags:
 //!
-//! 1. `--rotate-drill` (default when no mode flag is set) — exercises the full round-24
+//! 1. `--rotate-drill` (default when no mode flag is set) — exercises the full
 //!    `rotate-signing-key` flow end-to-end against a running soland instance:
 //!      - mints a fresh ed25519 seed,
 //!      - calls `POST /api/admin/v1/spaces/{space_id}/anchorer/rotate-signing-key` on the live

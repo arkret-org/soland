@@ -4,8 +4,9 @@
 //! - `GET /api/v1/profile/presence?did=…` — render the actor's current presence record together
 //!   with display name and avatar.
 //!
-//! Production note: presence is currently in-memory (see `AppState.presence`).
-//! Durable presence + ephemeral/durable channel split is tracked under `_todos.md` F-11.
+//! Production note: presence is currently in-memory (see
+//! `AppState.presence`). Durable presence + ephemeral/durable channel
+//! split is future work.
 
 use salvo::oapi::extract::QueryParam;
 use salvo::prelude::*;

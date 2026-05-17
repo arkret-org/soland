@@ -1,31 +1,26 @@
 //! MIMI (Messaging Layer Interop) provider-facade handlers.
 //!
 //! Surfaces under `/api/v1/mimi/*` plus the well-known
-//! `mimi-protocol-directory`.
+//! `mimi-protocol-directory`. Writes from the MIMI side map into the
+//! canonical Contrix reducer chain:
 //!
-//! **Sprint Q1 第二十三增量 (P4)**: writes from the MIMI side now map
-//! into the canonical Contrix reducer chain instead of stopping at
-//! audit-only receipts:
-//!
-//!   * `POST /mimi/rooms/{room_id}/messages` →
-//!     [`map_mimi_message_to_cx_message_create`] builds a
-//!     `MessageRecord` + projection `cx.message.create` event so the
-//!     MIMI ingress shows up on the canonical Contrix timeline.
-//!   * `PUT  /mimi/rooms/{room_id}/update` →
-//!     [`map_mimi_room_update_to_room_binding`] persists the binding
-//!     as a `cx.mimi.room_binding` projection event whenever the
-//!     update body carries a `room_binding` block.
-//!   * `POST /mimi/rooms/{room_id}/notify` →
-//!     broadcasts a synthetic `cx.mimi.notify` projection event so
-//!     live subscribers observe MIMI fanout.
-//!   * `POST /mimi/report-abuse` → still persists the moderation
-//!     report row AND emits a `cx.moderation.report` projection
-//!     event so the audit timeline reflects the report.
+//!   * `POST /mimi/rooms/{room_id}/messages` -> emits a
+//!     `MessageRecord` + a `cx.message.create` projection event so
+//!     the MIMI ingress shows up on the canonical Contrix timeline.
+//!   * `PUT  /mimi/rooms/{room_id}/update` -> emits a
+//!     `cx.mimi.room_binding` projection event whenever the update
+//!     body carries a `room_binding` block.
+//!   * `POST /mimi/rooms/{room_id}/notify` -> broadcasts a synthetic
+//!     `cx.mimi.notify` projection event so live subscribers observe
+//!     MIMI fanout.
+//!   * `POST /mimi/report-abuse` -> persists the moderation report
+//!     row AND emits a `cx.moderation.report` projection event so
+//!     the audit timeline reflects the report.
 //!
 //! Each canonical event carries `payload.mimi_provenance` metadata
-//! (provider id, original MIMI envelope hash, MIMI message id) so the
-//! receiving Contrix consumer can prove the message arrived through
-//! the MIMI facade rather than as a native signed Move.
+//! (provider id, original MIMI envelope hash, MIMI message id) so
+//! the receiving Contrix consumer can prove the message arrived
+//! through the MIMI facade rather than as a native signed Move.
 
 use chrono::Duration;
 use contrix_sdk::SpaceId;
@@ -121,11 +116,10 @@ async fn mimi_room_update(
     if !valid_mimi_room_id(&room_id) {
         return Err(AppError::invalid_param("invalid MIMI room id"));
     }
-    // Sprint Q1 第二十三增量 (P4): if the update carries a
-    // `room_binding` block, persist it as a `cx.mimi.room_binding`
-    // projection event so the Contrix timeline observes the
-    // binding. Updates without a binding block fall through to the
-    // legacy receipt-only response.
+    // If the update carries a `room_binding` block, persist it as a
+    // `cx.mimi.room_binding` projection event so the Contrix
+    // timeline observes the binding. Updates without a binding block
+    // fall through to the receipt-only response.
     let binding_event_id = match body.get("room_binding") {
         Some(binding) if binding.is_object() => Some(emit_mimi_room_binding_event(
             state, &room_id, binding,
@@ -165,12 +159,11 @@ async fn mimi_room_notify(
     if !valid_mimi_room_id(&room_id) {
         return Err(AppError::invalid_param("invalid MIMI room id"));
     }
-    // Sprint Q1 第二十三增量 (P4): fan out a synthetic
-    // `cx.mimi.notify` projection event so live subscribers observe
-    // the MIMI provider-to-provider notification. The notify event
-    // is an ephemeral signal in the spec's wire_scope taxonomy — we
-    // broadcast but don't persist into projection_events so it
-    // doesn't pollute durable history.
+    // Fan out a synthetic `cx.mimi.notify` projection event so live
+    // subscribers observe the MIMI provider-to-provider
+    // notification. The notify event is an ephemeral signal in the
+    // spec's wire_scope taxonomy - we broadcast but don't persist
+    // into projection_events so it doesn't pollute durable history.
     let space_id = mimi_bound_space_id(state, &room_id);
     let event_id = ids::generate_event_id();
     let notify_record = ProjectionEventRecord {
@@ -255,14 +248,13 @@ async fn mimi_room_message(
         .map(str::to_owned)
         .unwrap_or_else(|| format!("sha256:{}", sha256_hex(body.to_string().as_bytes())));
 
-    // Sprint Q1 第二十三增量 (P4): actually map the MIMI message
-    // into the canonical Contrix timeline. The mapping below mirrors
-    // what `POST /api/v1/messages/send` does: append a MessageRecord
-    // + a `cx.message.create` projection event so the message shows
-    // up in `GET /api/v1/events?space_id=...`. The MIMI provenance
-    // metadata is preserved verbatim under `payload.mimi_provenance`
-    // so audit consumers can verify the message arrived through the
-    // facade.
+    // Map the MIMI message into the canonical Contrix timeline.
+    // Mirrors what `POST /api/v1/messages/send` does: append a
+    // MessageRecord + a `cx.message.create` projection event so the
+    // message shows up in `GET /api/v1/events?space_id=...`. The
+    // MIMI provenance metadata is preserved verbatim under
+    // `payload.mimi_provenance` so audit consumers can verify the
+    // message arrived through the facade.
     let space_id = mimi_bound_space_id(state, &room_id);
     let sender = body
         .get("sender_did")
@@ -547,10 +539,10 @@ async fn mimi_report_abuse(
         tracing::error!(%error, "failed to persist mimi abuse report");
     }
 
-    // Sprint Q1 第二十三增量 (P4): also emit a `cx.moderation.report`
-    // projection event so the audit timeline observes the report in
-    // the same shape native Contrix reports use. The MIMI provenance
-    // is preserved under `payload.mimi_provenance`.
+    // Also emit a `cx.moderation.report` projection event so the
+    // audit timeline observes the report in the same shape native
+    // Contrix reports use. The MIMI provenance is preserved under
+    // `payload.mimi_provenance`.
     let space_id = body
         .get("space_id")
         .and_then(Value::as_str)
@@ -750,12 +742,12 @@ fn mimi_receipt(state: &AppState, operation_id: &str, body: &Value, extra: Value
     })
 }
 
-/// Sprint Q1 第二十三增量 (P4): look up which Contrix `space_id`
-/// (if any) the MIMI `room_id` is bound to. Scans the persistence
-/// projection event log for the most recent `cx.mimi.room_binding`
-/// event whose `payload.mimi_room_id` (or trailing segment of
-/// `mimi_room_uri`) matches `room_id`. Falls back to the demo space
-/// when no binding has been recorded yet.
+/// Look up which Contrix `space_id` (if any) the MIMI `room_id` is
+/// bound to. Scans the persistence projection event log for the
+/// most recent `cx.mimi.room_binding` event whose
+/// `payload.mimi_room_id` (or trailing segment of `mimi_room_uri`)
+/// matches `room_id`. Falls back to the demo space when no binding
+/// has been recorded yet.
 fn mimi_bound_space_id(state: &AppState, room_id: &str) -> String {
     const DEMO_SPACE: &str = "cx:space:0196419b-0000-7000-8000-000000000000";
     let Ok(entries) = state.persistence.projection_events().snapshot_all() else {
@@ -795,12 +787,12 @@ fn mimi_bound_space_id(state: &AppState, room_id: &str) -> String {
     DEMO_SPACE.to_owned()
 }
 
-/// Sprint Q1 第二十三增量 (P4): emit a `cx.mimi.room_binding`
-/// projection event capturing the binding state. Returns the
-/// generated event_id so the caller can echo it back to the MIMI
-/// client. The binding payload is captured verbatim under
-/// `payload.binding` and `mimi_room_id` is hoisted to the top level
-/// so [`mimi_bound_space_id`] can dispatch lookups efficiently.
+/// Emit a `cx.mimi.room_binding` projection event capturing the
+/// binding state. Returns the generated event_id so the caller can
+/// echo it back to the MIMI client. The binding payload is captured
+/// verbatim under `payload.binding` and `mimi_room_id` is hoisted to
+/// the top level so [`mimi_bound_space_id`] can dispatch lookups
+/// efficiently.
 fn emit_mimi_room_binding_event(
     state: &AppState,
     room_id: &str,

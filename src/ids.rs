@@ -50,8 +50,8 @@ pub fn generate_report_id() -> String {
 }
 
 /// Notification id helper. Spec uses `cx:notif:` (id-kind-registry), not
-/// `cx:notification:`. Round 6 aligned the prefix; callers haven't landed
-/// yet but the helper is the spec-correct shape.
+/// `cx:notification:`. Callers haven't landed yet but the helper is the
+/// spec-correct shape.
 pub fn generate_notification_id() -> String {
     generate("notif")
 }

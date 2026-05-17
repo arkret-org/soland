@@ -6,15 +6,15 @@
 //! - `GET /api/v1/federation/pull-operations`
 //! - `GET /api/v1/federation/space-members`
 //! - `POST /api/v1/federation/verify-actor`
-//! - **MAL-12 round 25**: `GET /api/v1/federation/anchors?space_id=...` (peer-pull: list
-//!   locally-held Anchors for a Space) + `POST /api/v1/federation/anchors` (peer-push: accept
-//!   Anchor envelopes for replication). The wire path is identical for both
-//!   [`crate::config::FederationPolicy::Mesh`] and [`crate::config::FederationPolicy::Hub`]; only
-//!   the outbound routing decision (broadcast vs hub-only) differs.
+//! - `GET /api/v1/federation/anchors?space_id=...` (peer-pull: list
+//!   locally-held Anchors for a Space) + `POST /api/v1/federation/anchors`
+//!   (peer-push: accept Anchor envelopes for replication). The wire path
+//!   is identical for both [`crate::config::FederationPolicy::Mesh`] and
+//!   [`crate::config::FederationPolicy::Hub`]; only the outbound routing
+//!   decision (broadcast vs hub-only) differs.
 //!
-//! Stream-C in `_todos.md` covers the production gaps: RFC 9421 transcript
-//! (B-06), idempotency (M-20), validation_class instead of bool (M-19),
-//! revocation fanout (M-18), and durable persistence beyond
+//! Production gaps: RFC 9421 transcript, idempotency, `validation_class`
+//! instead of bool, revocation fanout, and durable persistence beyond
 //! `state.federation_operations`.
 
 use chrono::Duration;
@@ -309,7 +309,7 @@ fn federation_request_digest(
         .map_err(|_| "federation transaction must be canonical JSON")
 }
 
-// ── MAL-12 round 25 — Anchor pull/push (federation/anchors) ──────────────
+// ── Anchor pull/push (federation/anchors) ──────────────
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct FederationAnchorsResponse {
@@ -404,7 +404,7 @@ pub(super) async fn federation_anchors_push(
     json_ok(FederationAnchorsPushResponse { accepted, rejected })
 }
 
-/// MAL-12 round 25 — outbound Move broadcast helper. Each accepted Move
+/// Outbound Move broadcast helper. Each accepted Move
 /// goes to:
 /// - [`FederationPolicy::Mesh`]: every peer in `state.config.federation_peers`.
 /// - [`FederationPolicy::Hub`]: only the first peer (`federation_peers[0]`).
@@ -500,6 +500,7 @@ mod tests {
             jws_replay_window_seconds: 0,
             jws_replay_window_per_family: AppConfig::default_replay_overrides(),
             anchorer_signing_key_seed: None,
+            agent_audit_binding_signing_seed: None,
             use_keystore: false,
             federation_policy: policy,
             federation_peers: peers,
@@ -512,6 +513,10 @@ mod tests {
             compaction_min_witnesses: 1,
             compaction_preserve_genesis: true,
             compaction_prune_only_singleton_successors: true,
+
+            compaction_prune_walk_interval_seconds: 0,
+
+            compaction_prune_walk_per_space_limit: 50,
         }
     }
 
