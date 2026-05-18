@@ -22,9 +22,43 @@ use crate::{JsonResult, ids, json_ok};
 
 pub(super) fn router() -> Router {
     Router::new()
+        .push(Router::with_path("devices").get(device_list))
         .push(Router::with_path("devices/pairing-challenge").post(device_pairing_challenge))
         .push(Router::with_path("devices/authorize-pairing").post(device_authorize_pairing))
         .push(Router::with_path("devices/{device_id}/revoke").post(device_revoke))
+}
+
+#[endpoint(
+    operation_id = "cx.devices.list",
+    tags("devices"),
+    summary = "List active devices for the authenticated principal",
+    status_codes(200, 401, 500)
+)]
+async fn device_list(aa: AuthArgs, depot: &mut Depot, req: &mut Request) -> JsonResult<Value> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req)?;
+    let devices = state
+        .persistence
+        .devices()
+        .list_for_actor(&session.actor)
+        .map_err(|error| AppError::internal(error.to_string()))?
+        .into_iter()
+        .map(|record| {
+            let mut value = device_inventory_to_json(&record);
+            if let Some(object) = value.as_object_mut() {
+                object.insert(
+                    "is_current_session_device".to_owned(),
+                    json!(record.device_id == session.device_id),
+                );
+            }
+            value
+        })
+        .collect::<Vec<_>>();
+    json_ok(json!({
+        "actor": session.actor,
+        "current_device_id": session.device_id,
+        "devices": devices,
+    }))
 }
 
 #[endpoint(

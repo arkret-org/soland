@@ -3657,6 +3657,23 @@ async fn device_pairing_challenge_and_authorization_surface_work() {
         authorized["production_gap"],
         "authorization_event_not_yet_in_operation_stream"
     );
+    let devices: Value = TestClient::get("http://server/api/v1/devices")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(devices["actor"], "did:web:alice.example");
+    assert_eq!(
+        devices["current_device_id"],
+        "cx:device:01904100-0000-7000-8000-a11ce0000001"
+    );
+    assert!(devices["devices"].as_array().unwrap().iter().any(|device| {
+        device["device_id"] == "cx:device:01904100-0000-7000-8000-9b04e0000007"
+            && device["verification_state"] == "verified"
+            && device["is_current_session_device"] == false
+    }));
     assert!(
         state
             .persistence

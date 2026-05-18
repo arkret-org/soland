@@ -1,6 +1,8 @@
 use contrix_sdk::Operation;
 use serde_json::Value;
 
+use crate::artifacts;
+
 pub const CX_MESSAGE_CREATE: &str = "cx.message.create";
 pub const CX_MESSAGE_REVISE: &str = "cx.message.revise";
 pub const CX_MESSAGE_REDACT: &str = "cx.message.redact";
@@ -148,7 +150,7 @@ pub const CX_IDENTITY_ACCOUNTABILITY_GRANT: &str = "cx.identity.accountability_g
 pub const CX_MORPH_SCHEMA_MIGRATE: &str = "cx.morph.schema_migrate";
 pub const CX_ATTESTATION_RANGE_COMPLETENESS: &str = "cx.attestation.range_completeness";
 
-pub fn canonical_kind_for_operation(operation: &Operation) -> Option<&'static str> {
+pub fn canonical_kind_for_operation(operation: &Operation) -> Option<&str> {
     canonical_kind_for_payload(&operation.object_type, &operation.payload)
 }
 
@@ -158,12 +160,15 @@ pub fn canonical_kind_string(operation: &Operation) -> String {
         .to_owned()
 }
 
-pub fn canonical_kind_for_payload(object_type: &str, _payload: &Value) -> Option<&'static str> {
+pub fn canonical_kind_for_payload<'a>(object_type: &'a str, _payload: &Value) -> Option<&'a str> {
     canonical_registered_kind(object_type)
 }
 
-fn canonical_registered_kind(object_type: &str) -> Option<&'static str> {
-    match object_type {
+fn canonical_registered_kind(object_type: &str) -> Option<&str> {
+    if !artifacts::active_durable_event_kinds().contains(object_type) {
+        return None;
+    }
+    let kind = match object_type {
         CX_MESSAGE_CREATE => Some(CX_MESSAGE_CREATE),
         CX_MESSAGE_REVISE => Some(CX_MESSAGE_REVISE),
         CX_MESSAGE_REDACT => Some(CX_MESSAGE_REDACT),
@@ -232,8 +237,9 @@ fn canonical_registered_kind(object_type: &str) -> Option<&'static str> {
         CX_IDENTITY_ACCOUNTABILITY_GRANT => Some(CX_IDENTITY_ACCOUNTABILITY_GRANT),
         CX_MORPH_SCHEMA_MIGRATE => Some(CX_MORPH_SCHEMA_MIGRATE),
         CX_ATTESTATION_RANGE_COMPLETENESS => Some(CX_ATTESTATION_RANGE_COMPLETENESS),
-        _ => None,
-    }
+        _ => Some(object_type),
+    };
+    kind
 }
 
 /// Applet + agent family classifiers used by projection/audit

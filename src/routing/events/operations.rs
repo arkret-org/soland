@@ -25,7 +25,7 @@
 //! encrypted-attachment `key_ref` shape, and the operation-schema gaps
 //! around the 100+ event kinds the reducer doesn't cover yet).
 
-use contrix_sdk::{Hash, Operation};
+use contrix_sdk::{Hash, Operation, schema::event_payload_validator_catalog};
 
 use super::{is_json_integer, is_valid_sha256_digest, validate_did};
 use crate::kinds;
@@ -454,12 +454,22 @@ pub fn validate_operation_semantics(
         let Some(kind) = kinds::canonical_kind_for_operation(operation) else {
             return Err("unregistered operation kind");
         };
-        let Some(schema) = operation_schema_for_kind(kind) else {
-            return Err("unregistered operation kind");
-        };
-        validate_operation_schema(operation, schema)?;
+        if let Some(schema) = operation_schema_for_kind(kind) {
+            validate_operation_schema(operation, schema)?;
+        } else {
+            validate_operation_schema_from_sdk_artifact(kind, operation)?;
+        }
     }
     Ok(())
+}
+
+fn validate_operation_schema_from_sdk_artifact(
+    kind: &str,
+    operation: &Operation,
+) -> Result<(), &'static str> {
+    event_payload_validator_catalog()
+        .validate_payload(kind, &operation.payload)
+        .map_err(|_| "operation payload violates SDK artifact schema")
 }
 
 pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
@@ -1595,6 +1605,58 @@ mod flow_tracks_update_tests {
         assert_eq!(
             validate_operation_schema(&missing_patch_or_tracks, schema),
             Err("flow tracks update requires patch or tracks")
+        );
+    }
+}
+
+#[cfg(test)]
+mod sdk_artifact_schema_tests {
+    use super::*;
+    use contrix_sdk::Operation;
+    use serde_json::json;
+
+    fn cross_signing_reset(payload: serde_json::Value) -> Operation {
+        Operation::create(
+            contrix_sdk::OperationId::new("cx:operation:01904100-0000-7000-8000-57d7d85564c5")
+                .unwrap(),
+            contrix_sdk::SpaceId::new("cx:space:01904100-0000-7000-8000-668e2181b41d").unwrap(),
+            "cx.cross_signing.reset",
+            payload,
+        )
+    }
+
+    #[test]
+    fn artifact_backed_kind_and_payload_validator_cover_cross_signing_reset() {
+        let operation = cross_signing_reset(json!({
+            "principal_id": "did:web:alice.example",
+            "previous_generation": 1,
+            "new_generation": 2,
+            "reset_reason": "rotation",
+            "proof": {
+                "kind": "principal_signing",
+                "signed_by": "did:web:alice.example#key-1",
+                "alg": "EdDSA",
+                "signature": "abc"
+            },
+            "issued_at": "2026-05-19T00:00:00Z"
+        }));
+        assert_eq!(
+            kinds::canonical_kind_for_operation(&operation),
+            Some("cx.cross_signing.reset")
+        );
+        assert!(operation_schema_for_kind("cx.cross_signing.reset").is_none());
+        validate_operation_schema_from_sdk_artifact("cx.cross_signing.reset", &operation).unwrap();
+
+        let missing_proof = cross_signing_reset(json!({
+            "principal_id": "did:web:alice.example",
+            "previous_generation": 1,
+            "new_generation": 2,
+            "reset_reason": "rotation",
+            "issued_at": "2026-05-19T00:00:00Z"
+        }));
+        assert_eq!(
+            validate_operation_schema_from_sdk_artifact("cx.cross_signing.reset", &missing_proof),
+            Err("operation payload violates SDK artifact schema")
         );
     }
 }

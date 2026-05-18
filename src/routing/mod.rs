@@ -1085,6 +1085,7 @@ fn device_inventory_to_json(device: &DeviceInventoryRecord) -> serde_json::Value
         "device_id": device.device_id,
         "display_name": device.display_name,
         "verification": device.verification_state,
+        "verification_state": device.verification_state,
         "payload": device.payload,
         "created_at": device.created_at,
         "updated_at": device.updated_at,
