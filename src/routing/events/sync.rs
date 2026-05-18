@@ -30,6 +30,7 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use bytes::Bytes;
 use chrono::{Duration as ChronoDuration, SecondsFormat};
 use contrix_sdk::SpaceId;
+use ed25519_dalek::Signer as _;
 use futures_util::stream::StreamExt;
 use salvo::http::StatusCode;
 use salvo::prelude::*;
@@ -49,7 +50,7 @@ use crate::reducer::ProjectionState;
 use crate::state::{AppState, PresenceRecord, SessionRecord, TypingRecord};
 use crate::wire::{
     BackfillResponse, ClientSyncRequest, ClientSyncResponse, SetTypingRequest, SetTypingResponse,
-    SnapshotHeadResponse, SyncDescribeResponse, sync_token,
+    SnapshotHeadResponse, SyncDescribeResponse,
 };
 
 pub(super) fn router() -> Router {
@@ -430,7 +431,7 @@ pub fn sync_token_for_client_sync(
     let filter_hash = sync_filter_hash(profile, filter, renderer, facets);
     let issued_at_ms = issued_at.timestamp_millis();
     let expires_at_ms = expires_at.timestamp_millis();
-    let mut cursor = json!({
+    let cursor = json!({
         "v": "1",
         "purpose": "stream",
         "t": issued_at.to_rfc3339_opts(SecondsFormat::Millis, true),
@@ -451,31 +452,61 @@ pub fn sync_token_for_client_sync(
             "to_device": to_device_position
         }
     });
-    let mac = cursor_mac(state, &cursor);
+    encode_signed_sync_cursor(state, cursor)
+}
+
+pub(crate) fn sync_token_for_state(state: &AppState) -> String {
+    let issued_at = chrono::Utc::now();
+    let expires_at = issued_at + ChronoDuration::hours(1);
+    encode_signed_sync_cursor(
+        state,
+        json!({
+            "v": "1",
+            "purpose": "stream",
+            "t": issued_at.to_rfc3339_opts(SecondsFormat::Millis, true),
+            "x": expires_at.timestamp_millis(),
+            "_ctx": {
+                "kind": "generic",
+                "service_id": state.config.service_did.clone(),
+                "issued_at_ms": issued_at.timestamp_millis()
+            },
+            "_positions": {
+                "spaces": {},
+                "devices": {},
+                "to_device": 0
+            }
+        }),
+    )
+}
+
+pub(super) fn encode_signed_sync_cursor(state: &AppState, mut cursor: Value) -> String {
     if let Some(object) = cursor.as_object_mut() {
-        object.insert("_mac".to_owned(), Value::String(mac));
+        object.remove("_mac");
+        object.remove("_sig");
+        let sig = cursor_signature(state, &Value::Object(object.clone()));
+        object.insert("_sig".to_owned(), Value::String(sig));
     }
     let bytes = contrix_sdk::canonical::canonical_json_bytes(&cursor)
         .unwrap_or_else(|_| cursor.to_string().into_bytes());
     format!("cx:cursor:{}", URL_SAFE_NO_PAD.encode(bytes))
 }
 
-fn cursor_mac(state: &AppState, cursor_without_mac: &Value) -> String {
-    // TODO(spec-sync 3d296bf): replace this development binding with a real
-    // keyed HMAC or an opaque stateful cursor handle shared by every Soland
-    // cursor emitter. The wire shape is now v1-compatible; this hash only keeps
-    // the API contracts aligned while the signing key lifecycle is wired.
-    let payload = contrix_sdk::canonical::canonical_json_bytes(cursor_without_mac)
-        .unwrap_or_else(|_| cursor_without_mac.to_string().into_bytes());
+fn cursor_signature(state: &AppState, cursor_without_sig: &Value) -> String {
+    let payload = contrix_sdk::canonical::canonical_json_bytes(cursor_without_sig)
+        .unwrap_or_else(|_| cursor_without_sig.to_string().into_bytes());
     let mut bound = Vec::with_capacity(
-        b"soland-cursor-mac-v1".len() + state.config.service_did.len() + payload.len() + 2,
+        b"soland-cursor-sig-v1".len() + state.config.service_did.len() + payload.len() + 2,
     );
-    bound.extend_from_slice(b"soland-cursor-mac-v1");
+    bound.extend_from_slice(b"soland-cursor-sig-v1");
     bound.push(0);
     bound.extend_from_slice(state.config.service_did.as_bytes());
     bound.push(0);
     bound.extend_from_slice(&payload);
-    format!("hmac-sha256:{}", sha256_hex(&bound))
+    let signature = state.anchorer_signing_key().sign(&bound);
+    format!(
+        "eddsa-ed25519:{}",
+        URL_SAFE_NO_PAD.encode(signature.to_bytes())
+    )
 }
 
 pub fn parse_and_validate_sync_cursor(
@@ -506,15 +537,16 @@ pub fn parse_and_validate_sync_cursor(
     if expires_at <= now_ms {
         return Err(SyncCursorError::Expired);
     }
-    let Some(actual_mac) = value.get("_mac").and_then(|mac| mac.as_str()) else {
-        return Err(SyncCursorError::Invalid("since cursor must contain _mac"));
+    let Some(actual_sig) = value.get("_sig").and_then(|sig| sig.as_str()) else {
+        return Err(SyncCursorError::Invalid("since cursor must contain _sig"));
     };
     let mut unsigned = value.clone();
     if let Some(object) = unsigned.as_object_mut() {
         object.remove("_mac");
+        object.remove("_sig");
     }
-    let expected_mac = cursor_mac(state, &unsigned);
-    if actual_mac != expected_mac {
+    let expected_sig = cursor_signature(state, &unsigned);
+    if actual_sig != expected_sig {
         return Err(SyncCursorError::Integrity(
             "sync cursor integrity is invalid",
         ));
@@ -876,7 +908,7 @@ pub(super) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
         }
     }
 
-    let catchup_cursor = last_cursor.unwrap_or_else(sync_token);
+    let catchup_cursor = last_cursor.unwrap_or_else(|| sync_token_for_state(&state));
     let space_filter: BTreeSet<String> = accessible_spaces.iter().cloned().collect();
     let stream_deadline = tokio::time::Instant::now() + Duration::from_millis(max_duration_ms);
 
@@ -1127,7 +1159,9 @@ pub(super) async fn events_query(
                         events,
                         prev_cursor: cursor.clone(),
                         prev_batch: cursor,
-                        next_cursor: page.next_cursor.or_else(|| Some(sync_token())),
+                        next_cursor: page
+                            .next_cursor
+                            .or_else(|| Some(sync_token_for_state(state))),
                         limited: page.has_more,
                     })
                     .unwrap_or(json!({})),
@@ -1147,7 +1181,7 @@ pub(super) async fn events_query(
                 events: Vec::new(),
                 prev_cursor: cursor.clone(),
                 prev_batch: cursor,
-                next_cursor: Some(sync_token()),
+                next_cursor: Some(sync_token_for_state(state)),
                 limited: false,
             })
             .unwrap_or(json!({})),
@@ -1198,7 +1232,7 @@ pub(super) async fn events_query(
                 .and_then(|event| event["event_id"].as_str().map(ToOwned::to_owned))
         })
         .flatten()
-        .or_else(|| Some(sync_token()));
+        .or_else(|| Some(sync_token_for_state(state)));
     crate::result::json_ok(
         serde_json::to_value(BackfillResponse {
             events: page_events,

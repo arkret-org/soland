@@ -3,7 +3,7 @@ use std::time::Duration;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use contrix_sdk::{Operation, OperationId, SpaceId};
-use ed25519_dalek::{Signer, SigningKey};
+use ed25519_dalek::{Signature, Signer, SigningKey, Verifier};
 use salvo::http::StatusCode;
 use salvo::test::{ResponseExt, TestClient};
 use serde_json::Value;
@@ -1713,7 +1713,7 @@ async fn service_did_is_config_driven_across_public_metadata() {
     let service_did = "did:web:configured.example";
     let state = AppState::new(test_config_with_service_did(service_did), Db { pool: None });
     let token = dev_token(state.clone()).await;
-    let service = app_from_state(state);
+    let service = app_from_state(state.clone());
 
     let server: Value = TestClient::get("http://server/api/v1/server/describe")
         .send(&service)
@@ -1786,6 +1786,47 @@ async fn service_did_is_config_driven_across_public_metadata() {
         .await
         .unwrap();
     assert_eq!(ice["signature"]["kid"], format!("{service_did}#media-ice"));
+    assert!(
+        ice["signature"]["sig"]
+            .as_str()
+            .is_some_and(|sig| sig.starts_with("eddsa-ed25519:"))
+    );
+    assert_ne!(ice["signature"]["sig"], "placeholder");
+    assert!(
+        ice["signature"]["payload_hash"]
+            .as_str()
+            .is_some_and(|hash| hash.starts_with("sha256:"))
+    );
+    let mut signed_payload = ice.clone();
+    signed_payload.as_object_mut().unwrap().remove("signature");
+    let payload_bytes = contrix_sdk::canonical::canonical_json_bytes(&signed_payload).unwrap();
+    assert_eq!(
+        ice["signature"]["payload_hash"],
+        format!("sha256:{:x}", Sha256::digest(&payload_bytes))
+    );
+    let signature_bytes = URL_SAFE_NO_PAD
+        .decode(
+            ice["signature"]["sig"]
+                .as_str()
+                .unwrap()
+                .strip_prefix("eddsa-ed25519:")
+                .unwrap(),
+        )
+        .unwrap();
+    let signature = Signature::from_bytes(&signature_bytes.try_into().unwrap());
+    let mut signing_input = Vec::with_capacity(
+        b"soland-media-ice-config-v1".len() + service_did.len() + payload_bytes.len() + 2,
+    );
+    signing_input.extend_from_slice(b"soland-media-ice-config-v1");
+    signing_input.push(0);
+    signing_input.extend_from_slice(service_did.as_bytes());
+    signing_input.push(0);
+    signing_input.extend_from_slice(&payload_bytes);
+    state
+        .anchorer_signing_key()
+        .verifying_key()
+        .verify(&signing_input, &signature)
+        .unwrap();
 }
 
 #[tokio::test]
@@ -2322,6 +2363,12 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         .unwrap();
     let next_batch = decode_cursor(sync_with_message["next_batch"].as_str().unwrap());
     assert_eq!(next_batch["_ctx"]["profile"], "incremental");
+    assert!(next_batch.get("_mac").is_none());
+    assert!(
+        next_batch["_sig"]
+            .as_str()
+            .is_some_and(|sig| sig.starts_with("eddsa-ed25519:"))
+    );
     assert_eq!(next_batch["_ctx"]["principal_id"], "did:web:alice.example");
     assert_eq!(
         next_batch["_ctx"]["device_id"],
@@ -2486,7 +2533,10 @@ async fn account_contacts_and_space_lifecycle_workflow() {
     let mut expired_cursor = next_batch.clone();
     expired_cursor["x"] = serde_json::json!(1);
     if let Some(object) = expired_cursor.as_object_mut() {
-        object.insert("_mac".to_owned(), serde_json::json!("hmac-sha256:tampered"));
+        object.insert(
+            "_sig".to_owned(),
+            serde_json::json!("eddsa-ed25519:tampered"),
+        );
     }
     let mut expired = TestClient::post("http://server/api/v1/sync")
         .add_header("authorization", format!("Bearer {alice}"), true)
@@ -5760,6 +5810,9 @@ fn normalize_morph_payload(kind: &str, payload: &mut Value) {
             morph
                 .entry("created_at".to_owned())
                 .or_insert_with(|| Value::String("2026-05-17T00:00:00Z".to_owned()));
+            morph
+                .entry("schema_refs".to_owned())
+                .or_insert_with(|| serde_json::json!(["cx.schema.morph.v1"]));
         }
     }
     if matches!(
@@ -5923,7 +5976,7 @@ async fn flow_morph_lifecycle_state_machine_returns_412_for_illegal_transitions(
         .take_json()
         .await
         .unwrap();
-    assert_eq!(resp["status"], "accepted");
+    assert_eq!(resp["status"], "accepted", "create morph response: {resp}");
 
     // morph restore on Active → 412 morph_not_archived.
     let bad_morph_restore = signed_morph_event(

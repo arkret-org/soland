@@ -7,12 +7,15 @@
 //! - `POST /api/v1/contacts/respond` — accept or reject a pending request
 //! - `GET  /api/v1/contacts` — list contacts visible to the actor
 
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::SecondsFormat;
+use ed25519_dalek::Signer as _;
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{Value, json};
 
 use super::{
     AuthArgs, append_audit_log, is_valid_handle, normalize_handle, now, sha256_hex, validate_did,
@@ -609,14 +612,8 @@ async fn erase_account(
         "retained_stub_hash": retained_stub_hash.clone(),
         "completed_at": completed_at_wire.clone(),
     });
-    let proof_hash = format!(
-        "sha256:{}",
-        sha256_hex(proof_payload.to_string().as_bytes())
-    );
-    // TODO(spec-sync 3d296bf): sign this proof with Soland's service key as a
-    // detached signature once service-key provisioning is finalized. The
-    // receipt schema/event API is aligned now; this hash signature is a
-    // deployment-local placeholder for verifier wiring.
+    let proof_hash = erasure_receipt_payload_hash(&proof_payload);
+    let proof_signature = erasure_receipt_proof_signature(state, &proof_payload);
     let erasure_receipt = json!({
         "receipt_id": crate::ids::generate("receipt"),
         "schema": "cx.schema.erasure_receipt.v1",
@@ -643,7 +640,9 @@ async fn erase_account(
         "proofs": [{
             "verification_method": format!("{}#erasure-receipt", state.config.service_did),
             "payload_hash": proof_hash.clone(),
-            "signature": format!("sha256:{}", sha256_hex(erasure_receipt_signature_input(&proof_payload).as_bytes()))
+            "alg": "EdDSA",
+            "signature": proof_signature,
+            "signature_input": "soland-erasure-receipt-proof-v1"
         }]
     });
     append_audit_log(
@@ -671,8 +670,31 @@ async fn erase_account(
     }))
 }
 
-fn erasure_receipt_signature_input(payload: &serde_json::Value) -> String {
-    serde_json::to_string(payload).unwrap_or_else(|_| "{}".to_owned())
+fn erasure_receipt_payload_hash(payload: &Value) -> String {
+    let bytes = contrix_sdk::canonical::canonical_json_bytes(payload)
+        .unwrap_or_else(|_| payload.to_string().into_bytes());
+    format!("sha256:{}", sha256_hex(&bytes))
+}
+
+fn erasure_receipt_proof_signature(state: &AppState, payload: &Value) -> String {
+    let payload = contrix_sdk::canonical::canonical_json_bytes(payload)
+        .unwrap_or_else(|_| payload.to_string().into_bytes());
+    let mut signing_input = Vec::with_capacity(
+        b"soland-erasure-receipt-proof-v1".len()
+            + state.config.service_did.len()
+            + payload.len()
+            + 2,
+    );
+    signing_input.extend_from_slice(b"soland-erasure-receipt-proof-v1");
+    signing_input.push(0);
+    signing_input.extend_from_slice(state.config.service_did.as_bytes());
+    signing_input.push(0);
+    signing_input.extend_from_slice(&payload);
+    let signature = state.anchorer_signing_key().sign(&signing_input);
+    format!(
+        "eddsa-ed25519:{}",
+        URL_SAFE_NO_PAD.encode(signature.to_bytes())
+    )
 }
 
 fn short_actor_tag(did: &str) -> String {

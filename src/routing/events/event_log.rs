@@ -24,19 +24,19 @@ use serde_json::{Value, json};
 
 use super::operations as events_operations;
 use super::{
-    append_audit_log, auth_or_render, now, project_accepted_operations, query_param,
-    query_param_all, render_error, sha256_hex, space_has_member, validate_did,
+    append_audit_log, auth_or_render, is_valid_sha256_digest, now, project_accepted_operations,
+    query_param, query_param_all, render_error, sha256_hex, space_has_member, validate_did,
     validate_operation_policy, validate_operation_semantics, validate_space_id,
 };
-use crate::artifacts;
 use crate::error::{AppError, ErrorCode};
 use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::{AppState, CanonicalEventRecord, SessionRecord};
 use crate::wire::{
     EventBatchGetRequest, EventBatchGetResponse, EventDescribeResponse, EventReadResponse,
-    EventSubmitResponse, EventsFrontierResponse, EventsPageResponse, sync_token,
+    EventSubmitResponse, EventsFrontierResponse, EventsPageResponse,
 };
+use crate::{artifacts, kinds};
 
 pub(super) fn router() -> Router {
     Router::new()
@@ -821,11 +821,21 @@ fn validate_event_envelope(
     }
     require_object_field(object, "payload")?;
     validate_event_schema_and_payload(state, &kind, &schema_id, envelope, object)?;
+    validate_audit_accessed_payload(&kind, object)?;
+    validate_sender_commitment_binding(object)?;
 
     let prev_refs = event_ref_list(object, "prev_refs", MAX_EVENT_PREV_REFS)?;
     let authorized_refs = event_semantic_refs(object, state, MAX_EVENT_REFS)?;
     let canonical_bytes = event_canonical_bytes(envelope)?;
     let canonical_digest = event_digest(&canonical_bytes);
+    validate_flow_watch_audit_pair(
+        state,
+        &kind,
+        object,
+        &event_id,
+        &actor_id,
+        &canonical_digest,
+    )?;
     validate_event_proofs(
         object,
         state,
@@ -970,6 +980,372 @@ fn validate_event_critical_features(
         }
     }
     Ok(())
+}
+
+const SENDER_COMMITMENT_FEATURE: &str = "cx.profile.franking.sender_commitment.v1";
+const CX_AUDIT_ACCESSED: &str = "cx.audit.accessed";
+const MANAGE_OTHERS_AUDIT_MISSING: &str = "manage_others_audit_missing";
+
+fn validate_sender_commitment_binding(
+    object: &serde_json::Map<String, Value>,
+) -> Result<(), EventValidationError> {
+    if !event_requirements_features(object).any(|feature| feature == SENDER_COMMITMENT_FEATURE) {
+        return Ok(());
+    }
+    let Some(declared_digest) = object
+        .get("payload")
+        .and_then(|payload| payload.get("franking"))
+        .and_then(|franking| franking.get("sender_commitment_digest"))
+        .and_then(Value::as_str)
+        .filter(|digest| is_valid_sha256_digest(digest))
+    else {
+        return Err(event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "sender_commitment_missing",
+            "sender commitment digest is required",
+        ));
+    };
+    let Some(commitment) = object
+        .get("unsigned")
+        .and_then(|unsigned| unsigned.get("franking"))
+        .and_then(|franking| franking.get("sender_commitment"))
+    else {
+        return Err(event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "sender_commitment_missing",
+            "unsigned.franking.sender_commitment is required",
+        ));
+    };
+    let commitment_bytes = canonical::canonical_json_bytes(commitment).map_err(|_| {
+        event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "sender_commitment_invalid",
+            "sender commitment cannot be canonicalized",
+        )
+    })?;
+    let expected_digest = format!("sha256:{}", sha256_hex(&commitment_bytes));
+    if declared_digest != expected_digest {
+        return Err(event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "sender_commitment_invalid",
+            "sender commitment digest does not match unsigned sidecar",
+        ));
+    }
+    Ok(())
+}
+
+fn event_requirements_features<'a>(
+    object: &'a serde_json::Map<String, Value>,
+) -> impl Iterator<Item = &'a str> {
+    object
+        .get("requirements")
+        .and_then(|requirements| requirements.get("features"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+}
+
+fn validate_audit_accessed_payload(
+    kind: &str,
+    object: &serde_json::Map<String, Value>,
+) -> Result<(), EventValidationError> {
+    if kind != CX_AUDIT_ACCESSED {
+        return Ok(());
+    }
+    let payload = object
+        .get("payload")
+        .and_then(Value::as_object)
+        .ok_or_else(|| {
+            event_validation_error(
+                StatusCode::BAD_REQUEST,
+                "schema_violation",
+                "cx.audit.accessed payload must be an object",
+            )
+        })?;
+    const ALLOWED: &[&str] = &[
+        "access_kind",
+        "accessed_at",
+        "cell_head_after",
+        "cell_head_before",
+        "paired_event_digest",
+        "paired_event_id",
+        "purpose",
+        "ryw_required",
+        "target_actor_did",
+        "target_cell_id",
+        "target_ref",
+        "writer_did",
+    ];
+    if payload.keys().any(|key| !ALLOWED.contains(&key.as_str())) {
+        return Err(event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            "cx.audit.accessed payload contains an unknown field",
+        ));
+    }
+    let access_kind = required_payload_string(payload, "access_kind")?;
+    if !matches!(
+        access_kind.as_str(),
+        "watch_manage_others"
+            | "watch_audit_read"
+            | "e2ee_plaintext_release"
+            | "join_application_review"
+            | "policy_audit_read"
+            | "other"
+    ) {
+        return Err(event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            "cx.audit.accessed access_kind is invalid",
+        ));
+    }
+    let writer_did = required_payload_string(payload, "writer_did")?;
+    validate_did(&writer_did).map_err(|_| {
+        event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            "cx.audit.accessed writer_did must be a DID",
+        )
+    })?;
+    if object.get("actor_id").and_then(Value::as_str) != Some(writer_did.as_str()) {
+        return Err(event_validation_error(
+            StatusCode::FORBIDDEN,
+            "actor_session_mismatch",
+            "cx.audit.accessed writer_did must match actor_id",
+        ));
+    }
+    let target_ref = required_payload_string(payload, "target_ref")?;
+    if !target_ref.starts_with("cx:") {
+        return Err(event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            "cx.audit.accessed target_ref must be a typed object ref",
+        ));
+    }
+    if required_payload_string(payload, "purpose")?
+        .trim()
+        .is_empty()
+    {
+        return Err(event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            "cx.audit.accessed purpose must be non-empty",
+        ));
+    }
+    let accessed_at = required_payload_string(payload, "accessed_at")?;
+    DateTime::parse_from_rfc3339(&accessed_at).map_err(|_| {
+        event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            "cx.audit.accessed accessed_at must be RFC3339",
+        )
+    })?;
+    match access_kind.as_str() {
+        "watch_manage_others" => {
+            validate_watch_audit_payload_fields(payload)?;
+            for field in ["paired_event_id", "paired_event_digest"] {
+                let value = required_payload_string(payload, field)?;
+                if (field == "paired_event_id" && !is_valid_event_id(&value))
+                    || (field == "paired_event_digest" && !is_valid_sha256_digest(&value))
+                {
+                    return Err(event_validation_error(
+                        StatusCode::BAD_REQUEST,
+                        "schema_violation",
+                        "cx.audit.accessed paired event fields are invalid",
+                    ));
+                }
+            }
+            for field in ["cell_head_before", "cell_head_after"] {
+                if !payload.get(field).is_some_and(|value| {
+                    value.is_null() || value.as_str().is_some_and(is_valid_sha256_digest)
+                }) {
+                    return Err(event_validation_error(
+                        StatusCode::BAD_REQUEST,
+                        "schema_violation",
+                        "cx.audit.accessed cell heads must be null or sha256 digest",
+                    ));
+                }
+            }
+        }
+        "watch_audit_read" => {
+            validate_watch_audit_payload_fields(payload)?;
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn validate_watch_audit_payload_fields(
+    payload: &serde_json::Map<String, Value>,
+) -> Result<(), EventValidationError> {
+    let target_actor = required_payload_string(payload, "target_actor_did")?;
+    validate_did(&target_actor).map_err(|_| {
+        event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            "cx.audit.accessed target_actor_did must be a DID",
+        )
+    })?;
+    let target_cell_id = required_payload_string(payload, "target_cell_id")?;
+    if !target_cell_id.starts_with("cx:cell:") {
+        return Err(event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            "cx.audit.accessed target_cell_id must use cx:cell:",
+        ));
+    }
+    Ok(())
+}
+
+fn required_payload_string(
+    payload: &serde_json::Map<String, Value>,
+    field: &'static str,
+) -> Result<String, EventValidationError> {
+    payload
+        .get(field)
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| {
+            event_validation_error(
+                StatusCode::BAD_REQUEST,
+                "schema_violation",
+                format!("cx.audit.accessed requires {field}"),
+            )
+        })
+}
+
+fn validate_flow_watch_audit_pair(
+    state: &AppState,
+    kind: &str,
+    object: &serde_json::Map<String, Value>,
+    event_id: &str,
+    actor_id: &str,
+    canonical_digest: &str,
+) -> Result<(), EventValidationError> {
+    if kind != kinds::CX_FLOW_WATCH_SET {
+        return Ok(());
+    }
+    let payload = object
+        .get("payload")
+        .and_then(Value::as_object)
+        .ok_or_else(|| {
+            event_validation_error(
+                StatusCode::BAD_REQUEST,
+                "schema_violation",
+                "flow watch payload must be an object",
+            )
+        })?;
+    let target_actor = payload
+        .get("actor_did")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            event_validation_error(
+                StatusCode::BAD_REQUEST,
+                "schema_violation",
+                "flow watch payload requires actor_did",
+            )
+        })?;
+    if target_actor == actor_id {
+        return Ok(());
+    }
+    if payload.get("level").and_then(Value::as_str) == Some("muted")
+        || payload
+            .get("level_public")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    {
+        return Err(event_validation_error(
+            StatusCode::PRECONDITION_FAILED,
+            MANAGE_OTHERS_AUDIT_MISSING,
+            "manage_others flow watch writes cannot set muted or public levels",
+        ));
+    }
+    let audit_refs = event_refs_with_role(object, "audit_pair")?;
+    let Some(audit_ref) = audit_refs.first() else {
+        return Err(manage_others_audit_error(
+            "cross-actor flow watch writes require refs[role=audit_pair]",
+        ));
+    };
+    if audit_refs.len() != 1 {
+        return Err(manage_others_audit_error(
+            "cross-actor flow watch writes require exactly one audit_pair ref",
+        ));
+    }
+    let audit_record = state
+        .persistence
+        .events()
+        .get(audit_ref)
+        .map_err(|_| manage_others_audit_error("audit_pair event lookup failed"))?
+        .ok_or_else(|| manage_others_audit_error("audit_pair event is not accepted"))?;
+    if audit_record.kind != CX_AUDIT_ACCESSED {
+        return Err(manage_others_audit_error(
+            "audit_pair ref must point to cx.audit.accessed",
+        ));
+    }
+    let audit_payload = audit_record
+        .envelope
+        .get("payload")
+        .and_then(Value::as_object)
+        .ok_or_else(|| manage_others_audit_error("audit_pair payload is invalid"))?;
+    let flow_id = payload.get("flow_id").and_then(Value::as_str).unwrap_or("");
+    let checks = [
+        ("access_kind", "watch_manage_others"),
+        ("writer_did", actor_id),
+        ("target_actor_did", target_actor),
+        ("target_ref", flow_id),
+        ("paired_event_id", event_id),
+        ("paired_event_digest", canonical_digest),
+    ];
+    for (field, expected) in checks {
+        if audit_payload.get(field).and_then(Value::as_str) != Some(expected) {
+            return Err(manage_others_audit_error(
+                "audit_pair payload does not match the flow watch event",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn event_refs_with_role(
+    object: &serde_json::Map<String, Value>,
+    role: &str,
+) -> Result<Vec<String>, EventValidationError> {
+    let Some(values) = object.get("refs").and_then(Value::as_array) else {
+        return Ok(Vec::new());
+    };
+    let mut refs = Vec::new();
+    for value in values {
+        let Some(reference) = value.as_object() else {
+            continue;
+        };
+        if reference.get("role").and_then(Value::as_str) == Some(role) {
+            let id = reference.get("id").and_then(Value::as_str).ok_or_else(|| {
+                event_validation_error(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_param",
+                    "refs entries require id",
+                )
+            })?;
+            if !is_valid_event_id(id) {
+                return Err(event_validation_error(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_param",
+                    "audit_pair refs must use cx:event: typed ids",
+                ));
+            }
+            refs.push(id.to_owned());
+        }
+    }
+    Ok(refs)
+}
+
+fn manage_others_audit_error(message: impl Into<String>) -> EventValidationError {
+    event_validation_error(
+        StatusCode::PRECONDITION_FAILED,
+        MANAGE_OTHERS_AUDIT_MISSING,
+        message,
+    )
 }
 
 fn validate_event_time_fields(
@@ -1545,7 +1921,7 @@ fn event_submit_response(
         status: status.to_owned(),
         event_id: event_id.clone(),
         canonical_digest: canonical_digest.clone(),
-        sync_token: sync_token(),
+        sync_token: super::sync::sync_token_for_state(state),
         received_at,
         receipt: json!({
             "service_did": state.config.service_did.clone(),
@@ -1575,6 +1951,16 @@ fn projection_operation_from_event(
     payload_object
         .entry("sender".to_owned())
         .or_insert_with(|| Value::String(parsed.actor_id.clone()));
+    if parsed.kind == kinds::CX_MORPH_SCHEMA_MIGRATE {
+        if let Some(authorization_ref) = parsed.authorized_refs.first() {
+            payload_object
+                .entry("authorization_ref".to_owned())
+                .or_insert_with(|| Value::String(authorization_ref.clone()));
+        }
+        payload_object
+            .entry("capability_action".to_owned())
+            .or_insert_with(|| Value::String("cx.morph.schema.migrate".to_owned()));
+    }
 
     let operation_id = event_operation_id(envelope, &parsed.event_id)?;
     let mut operation = Operation::create(

@@ -213,7 +213,7 @@ pub(super) async fn federation_pull_operations(
     let next_cursor = operations
         .last()
         .map(|operation| operation.operation_id.to_string())
-        .or_else(|| Some(sync_token()));
+        .or_else(|| Some(sync_token(state)));
     json_ok(contrix_sdk::FederationPullOperationsResponse {
         operations,
         snapshot_bootstrap,
@@ -252,7 +252,7 @@ pub(super) async fn federation_space_members(
         .unwrap_or_default();
     json_ok(contrix_sdk::FederationSpaceMembersResponse {
         members,
-        membership_frontier: sync_token(),
+        membership_frontier: sync_token(state),
         next_cursor: None,
     })
 }

@@ -9,13 +9,10 @@
 //! projection layer and is governed by Space membership + plaintext
 //! visibility policy.
 
-use base64::Engine;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::Utc;
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde_json::{Value, json};
-use sha2::{Digest as _, Sha256};
 
 use super::operations::{
     validate_content_blocks, validate_encrypted_payload_envelope, validate_mentions,
@@ -31,11 +28,12 @@ use crate::state::{AppState, MessageRecord};
 use crate::{ids, kinds};
 
 fn encode_send_cursor(
+    state: &AppState,
     space_id: &str,
     positions: &std::collections::BTreeMap<String, i64>,
     issued_ms: i64,
 ) -> String {
-    let mut cursor = json!({
+    let cursor = json!({
         "v": "1",
         "purpose": "stream",
         "t": Utc::now().to_rfc3339(),
@@ -50,19 +48,7 @@ fn encode_send_cursor(
             "to_device": 0,
         }
     });
-    // TODO(spec-sync 3d296bf): route this through the shared Soland cursor
-    // signer/verifier. This keeps `/messages/send` API-compatible with v1
-    // cursors, but the current digest is not a production HMAC.
-    let mac = format!("{:x}", Sha256::digest(cursor.to_string().as_bytes()));
-    if let Some(object) = cursor.as_object_mut() {
-        object.insert(
-            "_mac".to_owned(),
-            Value::String(format!("hmac-sha256:{mac}")),
-        );
-    }
-    let bytes = contrix_sdk::canonical::canonical_json_bytes(&cursor)
-        .unwrap_or_else(|_| cursor.to_string().into_bytes());
-    format!("cx:cursor:{}", URL_SAFE_NO_PAD.encode(bytes))
+    super::sync::encode_signed_sync_cursor(state, cursor)
 }
 
 pub(super) fn router() -> Router {
@@ -182,7 +168,7 @@ async fn messages_send(
     let operation_id = format!("cx:operation:{event_suffix}");
     let mut positions = std::collections::BTreeMap::new();
     positions.insert(space_id.to_owned(), now.timestamp_micros());
-    let sync_token = encode_send_cursor(space_id, &positions, now.timestamp_millis());
+    let sync_token = encode_send_cursor(state, space_id, &positions, now.timestamp_millis());
 
     json_ok(json!({
         "event_id": event_id,

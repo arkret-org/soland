@@ -31,6 +31,9 @@ use super::{is_json_integer, is_valid_sha256_digest, validate_did};
 use crate::kinds;
 use crate::state::AppState;
 
+const CX_CROSS_SIGNING_RESET: &str = "cx.cross_signing.reset";
+const CROSS_SIGNING_RESET_MAX_CLOCK_SKEW_SECONDS: i64 = 300;
+
 #[derive(Clone, Copy)]
 pub struct OperationPayloadSchema {
     requirements: &'static [PayloadRequirement],
@@ -177,6 +180,24 @@ const MORPH_CREATE_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::R
 const MORPH_UPDATE_REQUIREMENTS: &[PayloadRequirement] = &[
     PayloadRequirement::Required("morph_id", "morph update operation requires morph_id"),
     PayloadRequirement::Required("patch", "morph update operation requires patch"),
+];
+const MORPH_SCHEMA_MIGRATE_REQUIREMENTS: &[PayloadRequirement] = &[
+    PayloadRequirement::Required(
+        "morph_id",
+        "morph schema_migrate operation requires morph_id",
+    ),
+    PayloadRequirement::Required(
+        "from_schema_refs",
+        "morph schema_migrate operation requires from_schema_refs",
+    ),
+    PayloadRequirement::Required(
+        "to_schema_refs",
+        "morph schema_migrate operation requires to_schema_refs",
+    ),
+    PayloadRequirement::Required(
+        "compatibility_class",
+        "morph schema_migrate operation requires compatibility_class",
+    ),
 ];
 // Flow position events (cx.flow.move / cx.flow.reorder).
 // Spec event-kind-registry sets `cell_subject` = (board_place_id, flow_id);
@@ -380,6 +401,20 @@ const AGENT_WORKSPACE_RESERVATION_CLEANUP_REQUIREMENTS: &[PayloadRequirement] = 
         "reservation.cleanup requires anchor-based ttl_evidence (NOT self-reported wall-clock)",
     ),
 ];
+const CROSS_SIGNING_RESET_REQUIREMENTS: &[PayloadRequirement] = &[
+    PayloadRequirement::Required("principal_id", "cross_signing reset requires principal_id"),
+    PayloadRequirement::Required(
+        "previous_generation",
+        "cross_signing reset requires previous_generation",
+    ),
+    PayloadRequirement::Required(
+        "new_generation",
+        "cross_signing reset requires new_generation",
+    ),
+    PayloadRequirement::Required("reset_reason", "cross_signing reset requires reset_reason"),
+    PayloadRequirement::Required("proof", "cross_signing reset requires proof"),
+    PayloadRequirement::Required("issued_at", "cross_signing reset requires issued_at"),
+];
 
 const READ_MARKER_REQUIREMENTS: &[PayloadRequirement] = &[
     PayloadRequirement::AnyOf(
@@ -437,6 +472,7 @@ pub fn validate_operation_semantics(
     _state: &AppState,
     operations: &[Operation],
 ) -> Result<(), &'static str> {
+    validate_cross_signing_reset_replay_batch(operations)?;
     for operation in operations {
         operation
             .validate_payload_object()
@@ -581,7 +617,11 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
         },
         kinds::CX_MORPH_UPDATE => OperationPayloadSchema {
             requirements: MORPH_UPDATE_REQUIREMENTS,
-            validate: None,
+            validate: Some(validate_morph_update_payload),
+        },
+        kinds::CX_MORPH_SCHEMA_MIGRATE => OperationPayloadSchema {
+            requirements: MORPH_SCHEMA_MIGRATE_REQUIREMENTS,
+            validate: Some(validate_morph_schema_migrate_payload),
         },
         kind if matches!(
             kind,
@@ -671,6 +711,10 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
         kinds::CX_AGENT_WORKSPACE_RESERVATION_CLEANUP => OperationPayloadSchema {
             requirements: AGENT_WORKSPACE_RESERVATION_CLEANUP_REQUIREMENTS,
             validate: Some(validate_agent_workspace_reservation_cleanup_payload),
+        },
+        CX_CROSS_SIGNING_RESET => OperationPayloadSchema {
+            requirements: CROSS_SIGNING_RESET_REQUIREMENTS,
+            validate: Some(validate_cross_signing_reset_payload),
         },
         _ => return None,
     };
@@ -910,6 +954,7 @@ pub fn payload_field_present(payload: &serde_json::Value, field: &str) -> bool {
 }
 
 pub fn validate_message_operation_payload(operation: &Operation) -> Result<(), &'static str> {
+    validate_sender_commitment_payload_binding(&operation.payload)?;
     if operation
         .payload
         .get("encrypted")
@@ -927,6 +972,155 @@ pub fn validate_message_operation_payload(operation: &Operation) -> Result<(), &
     Ok(())
 }
 
+const SENDER_COMMITMENT_FEATURE: &str = "cx.profile.franking.sender_commitment.v1";
+
+fn validate_sender_commitment_payload_binding(
+    payload: &serde_json::Value,
+) -> Result<(), &'static str> {
+    if !payload
+        .pointer("/requirements/features")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|features| {
+            features
+                .iter()
+                .any(|feature| feature.as_str() == Some(SENDER_COMMITMENT_FEATURE))
+        })
+    {
+        return Ok(());
+    }
+    let Some(declared_digest) = payload
+        .pointer("/franking/sender_commitment_digest")
+        .and_then(serde_json::Value::as_str)
+        .filter(|digest| is_valid_sha256_digest(digest))
+    else {
+        return Err("sender_commitment_missing");
+    };
+    let Some(commitment) = payload
+        .pointer("/unsigned/franking/sender_commitment")
+        .or_else(|| payload.pointer("/_unsigned/franking/sender_commitment"))
+    else {
+        return Err("sender_commitment_missing");
+    };
+    let expected_digest =
+        canonical_json_digest(commitment).map_err(|_| "sender_commitment_invalid")?;
+    if declared_digest != expected_digest.as_str() {
+        return Err("sender_commitment_invalid");
+    }
+    Ok(())
+}
+
+fn validate_morph_update_payload(operation: &Operation) -> Result<(), &'static str> {
+    if operation
+        .payload
+        .get("patch")
+        .and_then(serde_json::Value::as_object)
+        .is_some_and(|patch| patch.contains_key("schema_refs"))
+    {
+        return Err("morph_schema_refs_evolution_unauthorized");
+    }
+    Ok(())
+}
+
+fn validate_morph_schema_migrate_payload(operation: &Operation) -> Result<(), &'static str> {
+    validate_nonempty_unique_string_array(
+        operation.payload.get("from_schema_refs"),
+        "from_schema_refs",
+    )?;
+    validate_nonempty_unique_string_array(
+        operation.payload.get("to_schema_refs"),
+        "to_schema_refs",
+    )?;
+    match operation
+        .payload
+        .get("compatibility_class")
+        .and_then(serde_json::Value::as_str)
+    {
+        Some("additive") => Ok(()),
+        Some("breaking" | "transformation") => Err("morph_schema_refs_transformation_unsupported"),
+        _ => Err("morph schema_migrate compatibility_class is invalid"),
+    }
+}
+
+fn validate_nonempty_unique_string_array(
+    value: Option<&serde_json::Value>,
+    field: &'static str,
+) -> Result<(), &'static str> {
+    let Some(items) = value.and_then(serde_json::Value::as_array) else {
+        return Err(match field {
+            "from_schema_refs" => "from_schema_refs must be a non-empty string array",
+            "to_schema_refs" => "to_schema_refs must be a non-empty string array",
+            _ => "field must be a non-empty string array",
+        });
+    };
+    if items.is_empty() {
+        return Err(match field {
+            "from_schema_refs" => "from_schema_refs must be a non-empty string array",
+            "to_schema_refs" => "to_schema_refs must be a non-empty string array",
+            _ => "field must be a non-empty string array",
+        });
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    for item in items {
+        let Some(text) = item.as_str().filter(|text| !text.trim().is_empty()) else {
+            return Err(match field {
+                "from_schema_refs" => "from_schema_refs must contain only non-empty strings",
+                "to_schema_refs" => "to_schema_refs must contain only non-empty strings",
+                _ => "field must contain only non-empty strings",
+            });
+        };
+        if !seen.insert(text) {
+            return Err(match field {
+                "from_schema_refs" => "from_schema_refs must be unique",
+                "to_schema_refs" => "to_schema_refs must be unique",
+                _ => "field must be unique",
+            });
+        }
+    }
+    Ok(())
+}
+
+fn validate_cross_signing_reset_payload(operation: &Operation) -> Result<(), &'static str> {
+    let reset: contrix_sdk::crypto_protocol::CrossSigningResetContent =
+        serde_json::from_value(operation.payload.clone())
+            .map_err(|_| "cross_signing reset payload violates reset profile")?;
+    reset
+        .validate_structure()
+        .map_err(|_| "cross_signing reset payload violates reset profile")?;
+    let now = chrono::Utc::now();
+    let skew = (now - reset.issued_at).num_seconds().abs();
+    if skew > CROSS_SIGNING_RESET_MAX_CLOCK_SKEW_SECONDS {
+        return Err("cross_signing_reset_clock_skew_exceeded");
+    }
+    Ok(())
+}
+
+fn validate_cross_signing_reset_replay_batch(operations: &[Operation]) -> Result<(), &'static str> {
+    let mut seen = std::collections::BTreeSet::new();
+    for operation in operations {
+        if kinds::canonical_kind_for_operation(operation) != Some(CX_CROSS_SIGNING_RESET) {
+            continue;
+        }
+        let Some(principal_id) = operation
+            .payload
+            .get("principal_id")
+            .and_then(serde_json::Value::as_str)
+        else {
+            continue;
+        };
+        let Some(previous_generation) = operation
+            .payload
+            .get("previous_generation")
+            .and_then(serde_json::Value::as_u64)
+        else {
+            continue;
+        };
+        if !seen.insert((principal_id, previous_generation)) {
+            return Err("cross_signing_reset_replay");
+        }
+    }
+    Ok(())
+}
+
 pub fn validate_operation_policy(
     state: &AppState,
     operations: &[Operation],
@@ -940,6 +1134,30 @@ pub fn validate_operation_policy(
                 "private plaintext message operations require this service in plaintext_visible_services",
             );
         }
+        if kinds::canonical_kind_for_operation(operation) == Some(kinds::CX_MORPH_SCHEMA_MIGRATE) {
+            validate_morph_schema_migrate_capability(operation)?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_morph_schema_migrate_capability(operation: &Operation) -> Result<(), &'static str> {
+    if operation
+        .payload
+        .get("authorization_ref")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| value.starts_with("cx:event:"))
+        .is_none()
+    {
+        return Err("cx.morph.schema_migrate requires authorization_ref");
+    }
+    let action = operation
+        .payload
+        .get("capability_action")
+        .or_else(|| operation.payload.get("action"))
+        .and_then(serde_json::Value::as_str);
+    if action != Some("cx.morph.schema.migrate") {
+        return Err("cx.morph.schema_migrate requires cx.morph.schema.migrate capability");
     }
     Ok(())
 }
@@ -1610,6 +1828,130 @@ mod flow_tracks_update_tests {
 }
 
 #[cfg(test)]
+mod spec_sync_validator_tests {
+    use super::*;
+    use contrix_sdk::Operation;
+    use serde_json::json;
+
+    fn op(kind: &'static str, payload: serde_json::Value) -> Operation {
+        Operation::create(
+            contrix_sdk::OperationId::new("cx:operation:01904100-0000-7000-8000-57d7d85564c5")
+                .unwrap(),
+            contrix_sdk::SpaceId::new("cx:space:01904100-0000-7000-8000-668e2181b41d").unwrap(),
+            kind,
+            payload,
+        )
+    }
+
+    #[test]
+    fn sender_commitment_feature_requires_matching_unsigned_sidecar() {
+        let commitment = json!({
+            "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
+            "seq": 1
+        });
+        let digest = canonical_json_digest(&commitment).unwrap().to_string();
+        let valid = op(
+            kinds::CX_MESSAGE_CREATE,
+            json!({
+                "body": "hello",
+                "requirements": {"features": [SENDER_COMMITMENT_FEATURE]},
+                "franking": {"sender_commitment_digest": digest},
+                "unsigned": {"franking": {"sender_commitment": commitment}}
+            }),
+        );
+        assert!(validate_message_operation_payload(&valid).is_ok());
+
+        let missing = op(
+            kinds::CX_MESSAGE_CREATE,
+            json!({
+                "body": "hello",
+                "requirements": {"features": [SENDER_COMMITMENT_FEATURE]},
+                "franking": {}
+            }),
+        );
+        assert_eq!(
+            validate_message_operation_payload(&missing),
+            Err("sender_commitment_missing")
+        );
+
+        let invalid = op(
+            kinds::CX_MESSAGE_CREATE,
+            json!({
+                "body": "hello",
+                "requirements": {"features": [SENDER_COMMITMENT_FEATURE]},
+                "franking": {"sender_commitment_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"},
+                "unsigned": {"franking": {"sender_commitment": {"seq": 2}}}
+            }),
+        );
+        assert_eq!(
+            validate_message_operation_payload(&invalid),
+            Err("sender_commitment_invalid")
+        );
+    }
+
+    #[test]
+    fn morph_schema_refs_use_migrate_gate() {
+        let update = op(
+            kinds::CX_MORPH_UPDATE,
+            json!({
+                "morph_id": "cx:morph:01904100-0000-7000-8000-000000000001",
+                "patch": {"schema_refs": ["cx.schema.new"]}
+            }),
+        );
+        let update_schema = operation_schema_for_kind(kinds::CX_MORPH_UPDATE).unwrap();
+        assert_eq!(
+            validate_operation_schema(&update, update_schema),
+            Err("morph_schema_refs_evolution_unauthorized")
+        );
+
+        let migrate = op(
+            kinds::CX_MORPH_SCHEMA_MIGRATE,
+            json!({
+                "morph_id": "cx:morph:01904100-0000-7000-8000-000000000001",
+                "from_schema_refs": ["cx.schema.old"],
+                "to_schema_refs": ["cx.schema.old", "cx.schema.new"],
+                "compatibility_class": "additive",
+                "authorization_ref": "cx:event:01904100-0000-7000-8000-aaaaaaaaaaaa",
+                "capability_action": "cx.morph.schema.migrate"
+            }),
+        );
+        let migrate_schema = operation_schema_for_kind(kinds::CX_MORPH_SCHEMA_MIGRATE).unwrap();
+        assert!(validate_operation_schema(&migrate, migrate_schema).is_ok());
+        assert!(validate_morph_schema_migrate_capability(&migrate).is_ok());
+
+        let missing_gate = op(
+            kinds::CX_MORPH_SCHEMA_MIGRATE,
+            json!({
+                "morph_id": "cx:morph:01904100-0000-7000-8000-000000000001",
+                "from_schema_refs": ["cx.schema.old"],
+                "to_schema_refs": ["cx.schema.new"],
+                "compatibility_class": "additive"
+            }),
+        );
+        assert_eq!(
+            validate_morph_schema_migrate_capability(&missing_gate),
+            Err("cx.morph.schema_migrate requires authorization_ref")
+        );
+
+        let unsupported = op(
+            kinds::CX_MORPH_SCHEMA_MIGRATE,
+            json!({
+                "morph_id": "cx:morph:01904100-0000-7000-8000-000000000001",
+                "from_schema_refs": ["cx.schema.old"],
+                "to_schema_refs": ["cx.schema.new"],
+                "compatibility_class": "breaking",
+                "authorization_ref": "cx:event:01904100-0000-7000-8000-aaaaaaaaaaaa",
+                "capability_action": "cx.morph.schema.migrate"
+            }),
+        );
+        assert_eq!(
+            validate_operation_schema(&unsupported, migrate_schema),
+            Err("morph_schema_refs_transformation_unsupported")
+        );
+    }
+}
+
+#[cfg(test)]
 mod sdk_artifact_schema_tests {
     use super::*;
     use contrix_sdk::Operation;
@@ -1627,6 +1969,7 @@ mod sdk_artifact_schema_tests {
 
     #[test]
     fn artifact_backed_kind_and_payload_validator_cover_cross_signing_reset() {
+        let issued_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
         let operation = cross_signing_reset(json!({
             "principal_id": "did:web:alice.example",
             "previous_generation": 1,
@@ -1638,25 +1981,70 @@ mod sdk_artifact_schema_tests {
                 "alg": "EdDSA",
                 "signature": "abc"
             },
-            "issued_at": "2026-05-19T00:00:00Z"
+            "issued_at": issued_at
         }));
         assert_eq!(
             kinds::canonical_kind_for_operation(&operation),
             Some("cx.cross_signing.reset")
         );
-        assert!(operation_schema_for_kind("cx.cross_signing.reset").is_none());
+        assert!(operation_schema_for_kind("cx.cross_signing.reset").is_some());
         validate_operation_schema_from_sdk_artifact("cx.cross_signing.reset", &operation).unwrap();
+        validate_operation_schema(
+            &operation,
+            operation_schema_for_kind("cx.cross_signing.reset").unwrap(),
+        )
+        .unwrap();
 
         let missing_proof = cross_signing_reset(json!({
             "principal_id": "did:web:alice.example",
             "previous_generation": 1,
             "new_generation": 2,
             "reset_reason": "rotation",
-            "issued_at": "2026-05-19T00:00:00Z"
+            "issued_at": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
         }));
         assert_eq!(
             validate_operation_schema_from_sdk_artifact("cx.cross_signing.reset", &missing_proof),
             Err("operation payload violates SDK artifact schema")
+        );
+    }
+
+    #[test]
+    fn cross_signing_reset_profile_rejects_replay_and_clock_skew() {
+        let reset = cross_signing_reset(json!({
+            "principal_id": "did:web:alice.example",
+            "previous_generation": 1,
+            "new_generation": 2,
+            "reset_reason": "rotation",
+            "proof": {
+                "kind": "principal_signing",
+                "signed_by": "did:web:alice.example#key-1",
+                "alg": "EdDSA",
+                "signature": "abc"
+            },
+            "issued_at": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+        }));
+        assert_eq!(
+            validate_cross_signing_reset_replay_batch(&[reset.clone(), reset.clone()]),
+            Err("cross_signing_reset_replay")
+        );
+
+        let stale = cross_signing_reset(json!({
+            "principal_id": "did:web:alice.example",
+            "previous_generation": 1,
+            "new_generation": 2,
+            "reset_reason": "rotation",
+            "proof": {
+                "kind": "principal_signing",
+                "signed_by": "did:web:alice.example#key-1",
+                "alg": "EdDSA",
+                "signature": "abc"
+            },
+            "issued_at": (chrono::Utc::now() - chrono::Duration::seconds(CROSS_SIGNING_RESET_MAX_CLOCK_SKEW_SECONDS + 1))
+                .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+        }));
+        assert_eq!(
+            validate_cross_signing_reset_payload(&stale),
+            Err("cross_signing_reset_clock_skew_exceeded")
         );
     }
 }

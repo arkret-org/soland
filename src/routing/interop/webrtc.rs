@@ -12,14 +12,17 @@
 
 use std::collections::BTreeSet;
 
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::Duration;
+use ed25519_dalek::Signer as _;
 use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;
 use serde_json::{Value, json};
 
 use super::{
-    now, space_has_member, validate_canonical_json_value, validate_device_id, validate_did,
-    validate_space_id,
+    now, sha256_hex, space_has_member, validate_canonical_json_value, validate_device_id,
+    validate_did, validate_space_id,
 };
 use crate::error::AppError;
 use crate::ids;
@@ -103,10 +106,7 @@ async fn ice_config(
     let ttl_seconds = 300;
     let refresh_lead_seconds = 75;
     let expires_at = issued_at + Duration::seconds(ttl_seconds);
-    // TODO(C47): replace the deterministic placeholder with an EdDSA detached
-    // signature over the canonical response bytes once media-service key
-    // material is provisioned.
-    json_ok(json!({
+    let mut response = json!({
         "space_id": space_id,
         "call_id": call_id,
         "actor_id": actor_id,
@@ -117,12 +117,46 @@ async fn ice_config(
         "issued_at": issued_at,
         "expires_at": expires_at,
         "force_turn": false,
-        "signature": {
+    });
+    let payload_hash = ice_config_payload_hash(&response);
+    let signature = ice_config_signature(state, &response);
+    if let Some(object) = response.as_object_mut() {
+        object.insert(
+            "signature".to_owned(),
+            json!({
             "alg": "EdDSA",
             "kid": format!("{}#media-ice", state.config.service_did),
-            "sig": "placeholder"
-        }
-    }))
+                "payload_hash": payload_hash,
+            "sig": signature,
+            "signature_input": "soland-media-ice-config-v1"
+            }),
+        );
+    }
+    json_ok(response)
+}
+
+fn ice_config_payload_hash(payload: &Value) -> String {
+    let bytes = contrix_sdk::canonical::canonical_json_bytes(payload)
+        .unwrap_or_else(|_| payload.to_string().into_bytes());
+    format!("sha256:{}", sha256_hex(&bytes))
+}
+
+fn ice_config_signature(state: &AppState, payload: &Value) -> String {
+    let payload = contrix_sdk::canonical::canonical_json_bytes(payload)
+        .unwrap_or_else(|_| payload.to_string().into_bytes());
+    let mut signing_input = Vec::with_capacity(
+        b"soland-media-ice-config-v1".len() + state.config.service_did.len() + payload.len() + 2,
+    );
+    signing_input.extend_from_slice(b"soland-media-ice-config-v1");
+    signing_input.push(0);
+    signing_input.extend_from_slice(state.config.service_did.as_bytes());
+    signing_input.push(0);
+    signing_input.extend_from_slice(&payload);
+    let signature = state.anchorer_signing_key().sign(&signing_input);
+    format!(
+        "eddsa-ed25519:{}",
+        URL_SAFE_NO_PAD.encode(signature.to_bytes())
+    )
 }
 
 #[endpoint(

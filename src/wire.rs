@@ -6,7 +6,6 @@ use chrono::{DateTime, Utc};
 use contrix_sdk::{ServerDescription, SpaceSearchEntry};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use sha2::{Digest as _, Sha256};
 
 use crate::artifacts;
 
@@ -1558,29 +1557,16 @@ pub fn describe(
 pub fn sync_token() -> String {
     let now = Utc::now();
     let expires_at = now + chrono::Duration::hours(1);
-    let mut cursor = json!({
+    let cursor = json!({
         "v": "1",
         "purpose": "stream",
         "t": now.to_rfc3339(),
         "x": expires_at.timestamp_millis(),
-        "_positions": {
-            "spaces": {},
-            "devices": {},
-            "to_device": 0
-        }
+        "h": format!("wire:{}", now.timestamp_micros())
     });
-    // TODO(spec-sync 3d296bf): this generic fixture token uses a syntactic
-    // dev MAC only. Production cursors must be minted through the shared
-    // Soland cursor signer/verifier so `_mac` is a real keyed HMAC/signature or
-    // the cursor is represented by a server-side `h` handle.
-    let mac = format!("{:x}", Sha256::digest(cursor.to_string().as_bytes()));
-    if let Some(object) = cursor.as_object_mut() {
-        object.insert(
-            "_mac".to_owned(),
-            serde_json::Value::String(format!("hmac-sha256:{mac}")),
-        );
-    }
-    format!("cx:cursor:{}", URL_SAFE_NO_PAD.encode(cursor.to_string()))
+    let bytes = contrix_sdk::canonical::canonical_json_bytes(&cursor)
+        .unwrap_or_else(|_| cursor.to_string().into_bytes());
+    format!("cx:cursor:{}", URL_SAFE_NO_PAD.encode(bytes))
 }
 
 pub fn now() -> DateTime<Utc> {

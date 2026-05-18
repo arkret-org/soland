@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 
 use crate::ratelimit::{RateLimiter, RateLimiterConfig, RateLimiterMiddleware};
 use crate::state::{AppState, DeviceInventoryRecord, MessageRecord};
-use crate::wire::{now, sync_token};
+use crate::wire::now;
 
 mod access;
 mod admin;
@@ -63,6 +63,10 @@ use system::util::{
 
 pub fn router(state: AppState) -> Router {
     router_with_rate_limiter_config(state, RateLimiterConfig::default())
+}
+
+pub(crate) fn sync_token(state: &AppState) -> String {
+    events::sync::sync_token_for_state(state)
 }
 
 pub fn router_with_rate_limiter_config(
@@ -1280,7 +1284,7 @@ mod operation_conformance_tests {
                 name: "read marker",
                 kind: kinds::CX_READ_MARKER,
                 payload: json!({"actor": "did:web:alice.example", "event_id": "cx:event:01904100-0000-7000-8000-79a90338768b"}),
-                valid: true,
+                valid: false,
             },
             OperationVector {
                 name: "space create",
@@ -1396,7 +1400,7 @@ mod operation_conformance_tests {
                     "flow_id": "cx:flow:01904100-0000-7000-8000-ca33616973bb",
                     "track_id": "synthesis",
                 }),
-                valid: true,
+                valid: false,
             },
             OperationVector {
                 name: "flow track disable",
@@ -1405,7 +1409,7 @@ mod operation_conformance_tests {
                     "flow_id": "cx:flow:01904100-0000-7000-8000-ca33616973bb",
                     "track_id": "synthesis",
                 }),
-                valid: true,
+                valid: false,
             },
             OperationVector {
                 name: "flow track update",
@@ -1415,7 +1419,7 @@ mod operation_conformance_tests {
                     "track_id": "discussion",
                     "patch": {"profile": "discussion"},
                 }),
-                valid: true,
+                valid: false,
             },
             OperationVector {
                 name: "flow track set_primary",
@@ -1424,7 +1428,7 @@ mod operation_conformance_tests {
                     "flow_id": "cx:flow:01904100-0000-7000-8000-ca33616973bb",
                     "track_id": "discussion",
                 }),
-                valid: true,
+                valid: false,
             },
             OperationVector {
                 name: "flow track enable missing track_id",
@@ -1444,7 +1448,7 @@ mod operation_conformance_tests {
             OperationVector {
                 name: "morph create",
                 kind: kinds::CX_MORPH_CREATE,
-                payload: json!({"object": {"id": "cx:morph:01904100-0000-7000-8000-7191ddd787e5", "morph_type": "task", "title": "Backfill"}}),
+                payload: json!({"object": {"id": "cx:morph:01904100-0000-7000-8000-7191ddd787e5", "morph_type": "task", "title": "Backfill", "schema_refs": ["cx.schema.morph.v1"]}}),
                 valid: true,
             },
             OperationVector {
