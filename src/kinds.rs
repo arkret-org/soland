@@ -60,6 +60,13 @@ pub const CX_FLOW_TRACK_DISABLE: &str = "cx.flow.track.disable";
 pub const CX_FLOW_TRACK_ENABLE: &str = "cx.flow.track.enable";
 pub const CX_FLOW_TRACK_SET_PRIMARY: &str = "cx.flow.track.set_primary";
 pub const CX_FLOW_TRACK_UPDATE: &str = "cx.flow.track.update";
+// Round C44 (2026-05-18; spec dd465dd P-D12 O1.2) — unified Flow tracks
+// update event. payload.patch uses cx.patch.v1 against the
+// `Flow.tracks` map; atomic across multiple tracks. Replaces the four
+// legacy single-purpose `cx.flow.track.*` events. v1.x reducers MUST
+// accept both unified and legacy shapes for receiving; soland emits only
+// the unified form.
+pub const CX_FLOW_TRACKS_UPDATE: &str = "cx.flow.tracks.update";
 // Morph lifecycle (round 13). Same shape as Flow — no dedicated tombstone.
 pub const CX_MORPH_CREATE: &str = "cx.morph.create";
 pub const CX_MORPH_UPDATE: &str = "cx.morph.update";
@@ -110,6 +117,37 @@ pub const CX_AGENT_WORKSPACE_RESERVATION_SET: &str = "cx.agent_workspace.reserva
 pub const CX_AGENT_WORKSPACE_RESERVATION_RECOVER: &str = "cx.agent_workspace.reservation.recover";
 pub const CX_AGENT_WORKSPACE_RESERVATION_CLEANUP: &str = "cx.agent_workspace.reservation.cleanup";
 
+// Round C45 (2026-05-18 main; spec 346f347) — registry refactor dropped the
+// `.v1` suffix from these audit event kinds. Wire schema versioning now
+// flows through `requirements.features` (e.g. `cx.feature.audit_destruction_v1`).
+// `attested_hardware` Audit Agent removal MUST emit
+// `cx.audit.epoch_key_destruction` in the same anchor batch as the paired
+// `cx.mls.commit`. If the deadline passes without the attestation, soland
+// forces a `cx.space.audit_policy_downgrade` event that drops
+// `audit_assurance` from attested_hardware to disclosed_policy and triggers
+// a UI banner. Reducer-level validation lives in `src/reducer.rs` under
+// `apply_audit_epoch_key_destruction` / `apply_audit_policy_downgrade`
+// (still TODO stubs pending full attestation-chain verification).
+pub const CX_AUDIT_EPOCH_KEY_DESTRUCTION: &str = "cx.audit.epoch_key_destruction";
+pub const CX_SPACE_AUDIT_POLICY_DOWNGRADE: &str = "cx.space.audit_policy_downgrade";
+
+// Round C45 (2026-05-18 main) — new event kinds.
+//
+// `cx.identity.accountability_grant` (identity / reducer_input): issuer-signed
+//   endorsement that a subject DID is accountable_to the issuer for a declared
+//   scope. Required to verify `Actor Profile.accountable_to[]` entries; reducer
+//   strips unverified DIDs from accountable_to (or rejects with
+//   `accountability_grant_missing`, per deployment policy). zh/models/actor.md §3.3.1.
+// `cx.morph.schema_migrate` (morph / reducer_input): one-shot Morph
+//   `schema_refs[]` evolution event with explicit compatibility class.
+//   zh/models/morph.md §4.1 S3.
+// `cx.attestation.range_completeness` (audit / non-reducer): range-bound
+//   completeness attestation; backs cross-issuer fork detection.
+//   zh/sync/operations-sync.md §4.2.
+pub const CX_IDENTITY_ACCOUNTABILITY_GRANT: &str = "cx.identity.accountability_grant";
+pub const CX_MORPH_SCHEMA_MIGRATE: &str = "cx.morph.schema_migrate";
+pub const CX_ATTESTATION_RANGE_COMPLETENESS: &str = "cx.attestation.range_completeness";
+
 pub fn canonical_kind_for_operation(operation: &Operation) -> Option<&'static str> {
     canonical_kind_for_payload(&operation.object_type, &operation.payload)
 }
@@ -155,6 +193,7 @@ fn canonical_registered_kind(object_type: &str) -> Option<&'static str> {
         CX_FLOW_TRACK_ENABLE => Some(CX_FLOW_TRACK_ENABLE),
         CX_FLOW_TRACK_SET_PRIMARY => Some(CX_FLOW_TRACK_SET_PRIMARY),
         CX_FLOW_TRACK_UPDATE => Some(CX_FLOW_TRACK_UPDATE),
+        CX_FLOW_TRACKS_UPDATE => Some(CX_FLOW_TRACKS_UPDATE),
         CX_MORPH_CREATE => Some(CX_MORPH_CREATE),
         CX_MORPH_UPDATE => Some(CX_MORPH_UPDATE),
         CX_MORPH_ARCHIVE => Some(CX_MORPH_ARCHIVE),
@@ -181,6 +220,18 @@ fn canonical_registered_kind(object_type: &str) -> Option<&'static str> {
         CX_AGENT_PROTOCOL_SESSION_START => Some(CX_AGENT_PROTOCOL_SESSION_START),
         CX_AGENT_PROTOCOL_SESSION_STATUS => Some(CX_AGENT_PROTOCOL_SESSION_STATUS),
         CX_AGENT_PROTOCOL_SESSION_RESULT => Some(CX_AGENT_PROTOCOL_SESSION_RESULT),
+        // Tier-0 S6 audit kinds (C44 wire-valid, C45 renamed off `.v1`).
+        // Projection is currently `Ignored` pending full attestation-chain
+        // verification.
+        CX_AUDIT_EPOCH_KEY_DESTRUCTION => Some(CX_AUDIT_EPOCH_KEY_DESTRUCTION),
+        CX_SPACE_AUDIT_POLICY_DOWNGRADE => Some(CX_SPACE_AUDIT_POLICY_DOWNGRADE),
+        // Round C45 — new event kinds. Wire-valid; reducer dispatch is TODO
+        // (accountability_grant strips unverified DIDs from accountable_to;
+        // morph.schema_migrate enforces capability + compatibility_class
+        // gate; range_completeness is non-reducer audit-side evidence).
+        CX_IDENTITY_ACCOUNTABILITY_GRANT => Some(CX_IDENTITY_ACCOUNTABILITY_GRANT),
+        CX_MORPH_SCHEMA_MIGRATE => Some(CX_MORPH_SCHEMA_MIGRATE),
+        CX_ATTESTATION_RANGE_COMPLETENESS => Some(CX_ATTESTATION_RANGE_COMPLETENESS),
         _ => None,
     }
 }

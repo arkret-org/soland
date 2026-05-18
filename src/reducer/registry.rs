@@ -9,8 +9,8 @@
 //! changes.
 
 pub use contrix_sdk::lattice_registry::{
-    BottomPolicy, ComponentDescriptor, Criticality, LatticeKind, LatticeKindError,
-    LatticeRegistry, StateCardinality,
+    BottomPolicy, ComponentDescriptor, Criticality, LatticeKind, LatticeKindError, LatticeRegistry,
+    StateCardinality,
 };
 
 #[cfg(test)]

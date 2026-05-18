@@ -512,7 +512,7 @@ mod tests {
     #[test]
     fn rejected_move_entry_serializes() {
         let r = RejectedMoveEntry {
-            move_id: "cx:move:sha256:00".to_owned(),
+            move_id: "sha256:00".to_owned(),
             reason: "bad sig".to_owned(),
         };
         let s = serde_json::to_string(&r).unwrap();
@@ -523,7 +523,7 @@ mod tests {
     #[test]
     fn submit_move_response_serializes_pending_without_reason() {
         let r = SubmitMoveResponse {
-            move_id: "cx:move:sha256:11".to_owned(),
+            move_id: "sha256:11".to_owned(),
             state: "pending".to_owned(),
             reason: None,
         };
@@ -535,7 +535,7 @@ mod tests {
     #[test]
     fn submit_move_response_includes_reason_on_reject() {
         let r = SubmitMoveResponse {
-            move_id: "cx:move:sha256:22".to_owned(),
+            move_id: "sha256:22".to_owned(),
             state: "rejected".to_owned(),
             reason: Some("payload_hash mismatch".to_owned()),
         };

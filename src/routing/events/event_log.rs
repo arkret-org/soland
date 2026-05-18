@@ -485,16 +485,32 @@ pub(super) async fn events_query_durable_scope_impl(
             return Err(AppError::invalid_param(format!("invalid space: {space}")));
         }
     }
-    let cursor = query_param(req, "from");
-    // Direction: forward (default) | backward — backward returns events
-    // older than `from` in reverse time order.
-    let direction = query_param(req, "direction").unwrap_or_else(|| "forward".to_owned());
-    if direction != "forward" && direction != "backward" {
+    // Round C44 (spec dc01ad7): query refactor — `from` / `until` /
+    // `direction` removed. `after=<cursor>` paginates forward; `before=<cursor>`
+    // paginates backward. Specifying both is an `invalid_param`; specifying
+    // neither defaults to forward-from-start.
+    let after = query_param(req, "after");
+    let before = query_param(req, "before");
+    if after.is_some() && before.is_some() {
         return Err(AppError::invalid_param(
-            "direction must be 'forward' or 'backward'",
+            "specify either 'after' or 'before', not both",
         ));
     }
-    let _until = query_param(req, "until"); // FUTURE: enforce upper-bound cursor; currently swallowed.
+    // Aggressive: reject any legacy query keys so wire-incompatible clients
+    // fail closed instead of silently misordering.
+    for legacy in ["from", "until", "direction"] {
+        if query_param(req, legacy).is_some() {
+            return Err(AppError::invalid_param(format!(
+                "legacy query parameter '{legacy}' removed in spec dc01ad7; use 'before' or 'after'"
+            )));
+        }
+    }
+    let (cursor, direction) = match (after, before) {
+        (Some(cursor), None) => (Some(cursor), "forward"),
+        (None, Some(cursor)) => (Some(cursor), "backward"),
+        (None, None) => (None, "forward"),
+        (Some(_), Some(_)) => unreachable!("validated above"),
+    };
     let limit = query_param(req, "limit")
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(50)
@@ -591,6 +607,13 @@ async fn events_frontier(
     let session = aa.authenticated_session(state, req)?;
     let actor_id = query_param(req, "actor_id");
     let space_id = query_param(req, "space_id");
+    // Round C47 (spec e10b6ad): `peer_role` ∈ {account_client,
+    // federation_peer, anonymous_health}; default `account_client`.
+    // federation_peer additionally returns `frontier_root`, per-actor
+    // `actor_seq_upper_bounds`, and a service signature; anonymous_health
+    // returns only the frontier_root summary. TODO(C47 Lane B4): wire real
+    // Merkle root commitment + service-signature envelope.
+    let peer_role = query_param(req, "peer_role").unwrap_or_else(|| "account_client".to_owned());
     let events = state
         .persistence
         .events()
@@ -626,10 +649,33 @@ async fn events_frontier(
             );
         }
     }
+    let mut frontier = json!({
+        "storage": state.db.mode(),
+        "generated_at": now(),
+        "peer_role": peer_role,
+    });
+    match peer_role.as_str() {
+        "federation_peer" => {
+            if let Some(obj) = frontier.as_object_mut() {
+                obj.insert("frontier_root".to_owned(), Value::Null);
+                obj.insert(
+                    "actor_seq_upper_bounds".to_owned(),
+                    serde_json::to_value(&actor_frontier).unwrap_or(Value::Null),
+                );
+                obj.insert("signature".to_owned(), Value::Null);
+            }
+        }
+        "anonymous_health" => {
+            if let Some(obj) = frontier.as_object_mut() {
+                obj.insert("frontier_root".to_owned(), Value::Null);
+            }
+        }
+        _ => {}
+    }
     crate::result::json_ok(EventsFrontierResponse {
         actor_frontier,
         space_frontier,
-        frontier: json!({"storage": state.db.mode(), "generated_at": now()}),
+        frontier,
     })
 }
 

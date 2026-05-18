@@ -16,6 +16,154 @@
 //! typed-vs-string parity is locked in by the registry round-trip test below.
 
 use contrix_sdk::error as core_error;
+
+/// Round C44 (2026-05-18; spec dc01ad7 Tier-0) — registered
+/// `failed_precondition` reason codes new in this round. These are
+/// re-exported from contrix-sdk so soland call sites can use
+/// `crate::error::reasons::INCEPTION_UPGRADE_FINGERPRINT_MISMATCH` directly.
+pub mod reasons {
+    use contrix_sdk::error as core_error;
+
+    // S3 — `did:web` → `did:webvh` upgrade evidence.
+    pub const INCEPTION_UPGRADE_FINGERPRINT_MISMATCH: &str =
+        core_error::REASON_INCEPTION_UPGRADE_FINGERPRINT_MISMATCH;
+    pub const INCEPTION_UPGRADE_SIGNATURE_CHAIN_INVALID: &str =
+        core_error::REASON_INCEPTION_UPGRADE_SIGNATURE_CHAIN_INVALID;
+    pub const INCEPTION_UPGRADE_OLD_DOCUMENT_HASH_MISMATCH: &str =
+        core_error::REASON_INCEPTION_UPGRADE_OLD_DOCUMENT_HASH_MISMATCH;
+    pub const INCEPTION_UPGRADE_EVIDENCE_INSUFFICIENT: &str =
+        core_error::REASON_INCEPTION_UPGRADE_EVIDENCE_INSUFFICIENT;
+
+    // S4/S5 mention/reaction legacy SHA-256 reject reasons were removed in
+    // round C46 (spec d415679); routing-tag failures now collapse to
+    // `invalid_signature` / `schema_violation`.
+
+    // S6 — `attested_hardware` Audit Agent removal pairing.
+    pub const AUDIT_AGENT_KEY_DESTRUCTION_ATTESTATION_MISSING: &str =
+        core_error::REASON_AUDIT_AGENT_KEY_DESTRUCTION_ATTESTATION_MISSING;
+    pub const AUDIT_AGENT_REMOVE_REQUIRES_PAIRED_DESTRUCTION_ATTESTATION: &str =
+        core_error::REASON_AUDIT_AGENT_REMOVE_REQUIRES_PAIRED_DESTRUCTION_ATTESTATION;
+    pub const AUDIT_AGENT_DESTRUCTION_NOT_PAIRED_WITH_REMOVE: &str =
+        core_error::REASON_AUDIT_AGENT_DESTRUCTION_NOT_PAIRED_WITH_REMOVE;
+    pub const AUDIT_AGENT_DESTRUCTION_PROOF_NOT_ENCLAVE_SIGNED: &str =
+        core_error::REASON_AUDIT_AGENT_DESTRUCTION_PROOF_NOT_ENCLAVE_SIGNED;
+    pub const AUDIT_AGENT_EPOCH_RANGE_INCOMPLETE: &str =
+        core_error::REASON_AUDIT_AGENT_EPOCH_RANGE_INCOMPLETE;
+    pub const AUDIT_AGENT_ATTESTATION_MISMATCH: &str =
+        core_error::REASON_AUDIT_AGENT_ATTESTATION_MISMATCH;
+
+    // Profile interactions.
+    pub const MLS_SEND_PAUSE_ADVISORY_REQUIRES_E2EE_RELAXED_PROFILE: &str =
+        core_error::REASON_MLS_SEND_PAUSE_ADVISORY_REQUIRES_E2EE_RELAXED_PROFILE;
+    pub const CONFLICTING_E2EE_PROFILES: &str = core_error::REASON_CONFLICTING_E2EE_PROFILES;
+    pub const CONFLICTING_AGENT_WORKSPACE_PROFILES: &str =
+        core_error::REASON_CONFLICTING_AGENT_WORKSPACE_PROFILES;
+    pub const LITE_PROFILE_WRITES_DISALLOWED_EVENT_KIND: &str =
+        core_error::REASON_LITE_PROFILE_WRITES_DISALLOWED_EVENT_KIND;
+
+    // ── Round C45 (2026-05-18 main; spec 5ed365c) — lifecycle / patch /
+    // nonce / accountability_grant / delegation / recovery / sender
+    // commitment / range completeness / deprecation reason codes. Surfaced
+    // by re-export so soland call sites can use the `reasons::` namespace.
+    pub const FLOW_NOT_ACTIVE: &str = core_error::REASON_FLOW_NOT_ACTIVE;
+    pub const FLOW_NOT_ARCHIVED: &str = core_error::REASON_FLOW_NOT_ARCHIVED;
+    pub const FLOW_ALREADY_TERMINAL: &str = core_error::REASON_FLOW_ALREADY_TERMINAL;
+    pub const PLACE_NOT_ACTIVE: &str = core_error::REASON_PLACE_NOT_ACTIVE;
+    pub const PLACE_NOT_ARCHIVED: &str = core_error::REASON_PLACE_NOT_ARCHIVED;
+    pub const PLACE_ALREADY_TERMINAL: &str = core_error::REASON_PLACE_ALREADY_TERMINAL;
+    pub const PLACE_PARENT_CYCLE: &str = core_error::REASON_PLACE_PARENT_CYCLE;
+    pub const PLACE_HAS_LIVE_DEPENDENTS: &str = core_error::REASON_PLACE_HAS_LIVE_DEPENDENTS;
+    pub const MORPH_NOT_ACTIVE: &str = core_error::REASON_MORPH_NOT_ACTIVE;
+    pub const MORPH_NOT_ARCHIVED: &str = core_error::REASON_MORPH_NOT_ARCHIVED;
+    pub const MORPH_ALREADY_TERMINAL: &str = core_error::REASON_MORPH_ALREADY_TERMINAL;
+    pub const MESSAGE_ALREADY_TERMINAL: &str = core_error::REASON_MESSAGE_ALREADY_TERMINAL;
+    pub const RELATION_ALREADY_TERMINAL: &str = core_error::REASON_RELATION_ALREADY_TERMINAL;
+
+    pub const HATE_SPEECH: &str = core_error::REASON_HATE_SPEECH;
+    pub const NSFW: &str = core_error::REASON_NSFW;
+    pub const ILLEGAL: &str = core_error::REASON_ILLEGAL;
+    pub const MISINFORMATION: &str = core_error::REASON_MISINFORMATION;
+    pub const OTHER: &str = core_error::REASON_OTHER;
+
+    pub const CURSOR_INTEGRITY_INVALID: &str = core_error::REASON_CURSOR_INTEGRITY_INVALID;
+    pub const CLAIM_RATE_LIMITED: &str = core_error::REASON_CLAIM_RATE_LIMITED;
+    pub const NAMING_CONVENTION_VIOLATION: &str = core_error::REASON_NAMING_CONVENTION_VIOLATION;
+    pub const APPROVAL_NONCE_REUSED: &str = core_error::REASON_APPROVAL_NONCE_REUSED;
+    pub const EXECUTED_BY_MISSING: &str = core_error::REASON_EXECUTED_BY_MISSING;
+    pub const THIRD_PARTY_INVITE_TOKEN_IN_QUERY: &str =
+        core_error::REASON_THIRD_PARTY_INVITE_TOKEN_IN_QUERY;
+
+    pub const PATCH_PATH_INVALID: &str = core_error::REASON_PATCH_PATH_INVALID;
+    pub const PATCH_PATH_REDUCER_MANAGED: &str = core_error::REASON_PATCH_PATH_REDUCER_MANAGED;
+    pub const PATCH_UNSET_REDACTABLE_FIELD: &str = core_error::REASON_PATCH_UNSET_REDACTABLE_FIELD;
+    pub const PATCH_SELECTOR_NO_MATCH: &str = core_error::REASON_PATCH_SELECTOR_NO_MATCH;
+    pub const PATCH_SELECTOR_AMBIGUOUS: &str = core_error::REASON_PATCH_SELECTOR_AMBIGUOUS;
+
+    pub const AEAD_NONCE_COUNTER_REPLAY: &str = core_error::REASON_AEAD_NONCE_COUNTER_REPLAY;
+    pub const AEAD_NONCE_DERIVATION_INVALID: &str =
+        core_error::REASON_AEAD_NONCE_DERIVATION_INVALID;
+
+    pub const ACCOUNTABILITY_GRANT_MISSING: &str = core_error::REASON_ACCOUNTABILITY_GRANT_MISSING;
+    pub const KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH: &str =
+        core_error::REASON_KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH;
+
+    pub const DELEGATION_CYCLE: &str = core_error::REASON_DELEGATION_CYCLE;
+    pub const DELEGATION_EXPIRY_WIDENING: &str = core_error::REASON_DELEGATION_EXPIRY_WIDENING;
+
+    pub const RECOVERY_WITNESS_MISSING: &str = core_error::REASON_RECOVERY_WITNESS_MISSING;
+    pub const RECOVERY_WITNESS_INVALID: &str = core_error::REASON_RECOVERY_WITNESS_INVALID;
+    pub const RECOVERY_WITNESS_POST_CONFLICT: &str =
+        core_error::REASON_RECOVERY_WITNESS_POST_CONFLICT;
+    pub const RECOVERY_CAPABILITY_NOT_ANCHORED: &str =
+        core_error::REASON_RECOVERY_CAPABILITY_NOT_ANCHORED;
+
+    pub const CHALLENGE_PROOF_INVALID: &str = core_error::REASON_CHALLENGE_PROOF_INVALID;
+    pub const INVALID_TASK_FSM_TRANSITION: &str = core_error::REASON_INVALID_TASK_FSM_TRANSITION;
+
+    // `mixed_secret_storage_disallowed_by_profile` was dropped from the
+    // spec registry in round C47 (spec e10b6ad); soland no longer surfaces
+    // a dedicated reason for that check — schema validation in the key
+    // management decode path now rejects mixed storage as
+    // `schema_violation`.
+
+    pub const AUDIT_CAPABILITY_INCOMPLETE: &str = core_error::REASON_AUDIT_CAPABILITY_INCOMPLETE;
+    pub const WATCH_MUST_BE_SELF: &str = core_error::REASON_WATCH_MUST_BE_SELF;
+    pub const WATCH_MUTED_MUST_BE_SELF: &str = core_error::REASON_WATCH_MUTED_MUST_BE_SELF;
+    pub const WATCH_LEVEL_PUBLIC_MUST_BE_SELF: &str =
+        core_error::REASON_WATCH_LEVEL_PUBLIC_MUST_BE_SELF;
+    pub const MANAGE_OTHERS_AUDIT_MISSING: &str = core_error::REASON_MANAGE_OTHERS_AUDIT_MISSING;
+    pub const CROSS_SPACE_STRUCTURAL_RELATION: &str =
+        core_error::REASON_CROSS_SPACE_STRUCTURAL_RELATION;
+    pub const JOIN_AUTHORISATION_INVALID: &str = core_error::REASON_JOIN_AUTHORISATION_INVALID;
+    pub const JOIN_RULE_POLICY_MISMATCH: &str = core_error::REASON_JOIN_RULE_POLICY_MISMATCH;
+    pub const CROSS_SIGNING_RESET: &str = core_error::REASON_CROSS_SIGNING_RESET;
+    pub const TTL_EXPIRED: &str = core_error::REASON_TTL_EXPIRED;
+    pub const NOT_PROVISIONED: &str = core_error::REASON_NOT_PROVISIONED;
+
+    pub const MORPH_SCHEMA_REFS_EVOLUTION_UNAUTHORIZED: &str =
+        core_error::REASON_MORPH_SCHEMA_REFS_EVOLUTION_UNAUTHORIZED;
+    pub const MORPH_SCHEMA_REFS_TRANSFORMATION_UNSUPPORTED: &str =
+        core_error::REASON_MORPH_SCHEMA_REFS_TRANSFORMATION_UNSUPPORTED;
+    pub const MORPH_SCHEMA_VERSION_BINDING_MISSING: &str =
+        core_error::REASON_MORPH_SCHEMA_VERSION_BINDING_MISSING;
+
+    pub const SENDER_COMMITMENT_INVALID: &str = core_error::REASON_SENDER_COMMITMENT_INVALID;
+    pub const SENDER_COMMITMENT_SEQ_REPLAY: &str = core_error::REASON_SENDER_COMMITMENT_SEQ_REPLAY;
+    pub const SENDER_COMMITMENT_CIPHERTEXT_MISMATCH: &str =
+        core_error::REASON_SENDER_COMMITMENT_CIPHERTEXT_MISMATCH;
+    pub const SENDER_COMMITMENT_EPOCH_MISMATCH: &str =
+        core_error::REASON_SENDER_COMMITMENT_EPOCH_MISMATCH;
+
+    pub const RANGE_COMPLETENESS_ROOT_MISMATCH: &str =
+        core_error::REASON_RANGE_COMPLETENESS_ROOT_MISMATCH;
+    pub const RANGE_COMPLETENESS_ACTOR_SEQ_GAP: &str =
+        core_error::REASON_RANGE_COMPLETENESS_ACTOR_SEQ_GAP;
+
+    // Round C46 (spec d415679) dropped the `deprecated_event_kind` /
+    // `legacy_event_kind` sunset-timeline reason codes because the legacy
+    // `cx.flow.track.*` events those reasons gated were removed from the
+    // registry outright.
+}
 use salvo::async_trait;
 use salvo::http::StatusCode;
 use salvo::oapi::{self, Components, EndpointOutRegister, Operation, ToSchema};
@@ -116,6 +264,40 @@ pub enum ErrorCode {
     PolicyCombinationInvalid,
     AnchorerRecoveryMissing,
     UnsupportedLatticeType,
+    /// Round C44 (2026-05-18; spec dc01ad7) — registry add: peer or
+    /// ServiceDescribe advertises a `cx.profile.*` ID this implementation
+    /// does not support. Wire-level top error code (not a
+    /// `failed_precondition` sub-reason).
+    ProfileUnsupported,
+    // ── Round C45 (2026-05-18 main; spec 5ed365c) — 6 new wire-level codes.
+    /// Cursor MAC/signature/handle did not verify against the issuer's
+    /// transcript (purpose / principal / device / service / filter / positions /
+    /// target / x / issuer_kid). Distinct from `CursorExpired` (TTL) and
+    /// `UnsupportedFeature` (capability miss). Client MUST clear local cursor
+    /// cache and restart from initial `/sync`.
+    CursorIntegrityInvalid,
+    /// Reducer state-machine precondition failed. Carries a reason from the
+    /// flow/place/morph/message/relation lifecycle family (e.g.
+    /// `flow_not_active`, `place_parent_cycle`).
+    FailedPrecondition,
+    /// Typed-hash algorithm prefix (e.g. `cx:event:<algo>:<digest>`) is not
+    /// in the receiver's supported hash list.
+    UnsupportedHash,
+    /// Anchor frontier has gaps within the receiver's `auth_chain` backfill
+    /// bound; soft-fail per scalability-constraints.
+    AnchorIncomplete,
+    /// Sender did not include a franking sidecar; E2EE frank cannot be
+    /// produced for the requested ciphertext.
+    FrankUnavailable,
+    /// TURN REST-style ephemeral credential is past its TTL; client MUST
+    /// request a fresh credential.
+    TurnCredentialExpired,
+    /// Round C47 (2026-05-18 main; spec e10b6ad) — federation high-assurance
+    /// peer has missed proactive frontier probes or produced invalid /
+    /// divergent frontier evidence and is quarantined for the affected
+    /// Space until fork resolution succeeds. See zh/sync/federation.md
+    /// §4.5.3. Returned on the federation-facing surface only.
+    StalePeer,
 }
 
 impl ErrorCode {
@@ -169,6 +351,14 @@ impl ErrorCode {
         Self::PolicyCombinationInvalid,
         Self::AnchorerRecoveryMissing,
         Self::UnsupportedLatticeType,
+        Self::ProfileUnsupported,
+        Self::CursorIntegrityInvalid,
+        Self::FailedPrecondition,
+        Self::UnsupportedHash,
+        Self::AnchorIncomplete,
+        Self::FrankUnavailable,
+        Self::TurnCredentialExpired,
+        Self::StalePeer,
     ];
 
     /// Canonical wire-form code (snake_case string used in `ErrorEnvelope.errcode`).
@@ -223,6 +413,14 @@ impl ErrorCode {
             Self::PolicyCombinationInvalid => core_error::ERROR_CODE_POLICY_COMBINATION_INVALID,
             Self::AnchorerRecoveryMissing => core_error::ERROR_CODE_ANCHORER_RECOVERY_MISSING,
             Self::UnsupportedLatticeType => core_error::ERROR_CODE_UNSUPPORTED_LATTICE_TYPE,
+            Self::ProfileUnsupported => core_error::ERROR_CODE_PROFILE_UNSUPPORTED,
+            Self::CursorIntegrityInvalid => core_error::ERROR_CODE_CURSOR_INTEGRITY_INVALID,
+            Self::FailedPrecondition => core_error::ERROR_CODE_FAILED_PRECONDITION,
+            Self::UnsupportedHash => core_error::ERROR_CODE_UNSUPPORTED_HASH,
+            Self::AnchorIncomplete => core_error::ERROR_CODE_ANCHOR_INCOMPLETE,
+            Self::FrankUnavailable => core_error::ERROR_CODE_FRANK_UNAVAILABLE,
+            Self::TurnCredentialExpired => core_error::ERROR_CODE_TURN_CREDENTIAL_EXPIRED,
+            Self::StalePeer => core_error::ERROR_CODE_STALE_PEER,
         }
     }
 

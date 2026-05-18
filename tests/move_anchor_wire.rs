@@ -123,7 +123,7 @@ fn build_invited_to_join_move() -> Move {
     let mut full = body.as_object().unwrap().clone();
     full.insert(
         "id".into(),
-        Value::String(format!("cx:move:sha256:{id_hex}")),
+        Value::String(format!("sha256:{id_hex}")),
     );
     full.insert(
         "sig".into(),
@@ -388,7 +388,7 @@ fn build_consent_grant_add_move() -> Move {
     let mut full = body.as_object().unwrap().clone();
     full.insert(
         "id".into(),
-        Value::String(format!("cx:move:sha256:{id_hex}")),
+        Value::String(format!("sha256:{id_hex}")),
     );
     full.insert(
         "sig".into(),
@@ -690,7 +690,7 @@ fn build_member_state_move_with_hlc(physical_ms: u64) -> Move {
     let mut full = body.as_object().unwrap().clone();
     full.insert(
         "id".into(),
-        Value::String(format!("cx:move:sha256:{id_hex}")),
+        Value::String(format!("sha256:{id_hex}")),
     );
     full.insert(
         "sig".into(),
@@ -1187,7 +1187,7 @@ async fn admin_reconfigure_anchorer_builds_real_move_and_anchors_it() {
     );
     let move_id = resp["move_id"].as_str().expect("move_id should be set");
     assert!(
-        move_id.starts_with("cx:move:sha256:"),
+        move_id.starts_with("sha256:"),
         "move_id should be content-addressed sha256, got {move_id}"
     );
     let anchor_id = resp["anchor_id"]

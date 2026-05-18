@@ -159,13 +159,12 @@ impl AuthzEngine {
             constraints,
             expires_at,
         };
-        let mut child =
-            contrix_sdk::authz::delegation::create_delegated_grant(
-                parent_grant_id,
-                &request,
-                &snapshot,
-                chrono::Utc::now(),
-            )?;
+        let mut child = contrix_sdk::authz::delegation::create_delegated_grant(
+            parent_grant_id,
+            &request,
+            &snapshot,
+            chrono::Utc::now(),
+        )?;
         // SDK leaves grant_id empty for caller-supplied id allocation.
         child.grant_id = ids::generate_grant_id();
         self.grants

@@ -815,6 +815,12 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
     m.insert(CX_FLOW_TRACK_ENABLE, apply_flow_track_touch_dispatch);
     m.insert(CX_FLOW_TRACK_SET_PRIMARY, apply_flow_track_touch_dispatch);
     m.insert(CX_FLOW_TRACK_UPDATE, apply_flow_track_touch_dispatch);
+    // C44 / P-D12 O1.2 — unified tracks patch. Same wire-touch dispatch as
+    // the legacy four; payload-shape validation (presence of `tracks`
+    // patch map) lives in the wire validator. TODO(C44.B2.full): apply
+    // patch ops against soland-side Flow.tracks projection once the
+    // server-side projection carries the tracks map.
+    m.insert(CX_FLOW_TRACKS_UPDATE, apply_flow_track_touch_dispatch);
     m.insert(CX_MORPH_CREATE, apply_morph_create_dispatch);
     m.insert(CX_MORPH_UPDATE, apply_morph_update_dispatch);
     m.insert(CX_MORPH_ARCHIVE, apply_morph_archive_dispatch);
@@ -2434,16 +2440,13 @@ impl ProjectionState {
         // `level` is required at schema layer; here we just project the
         // raw value (string or null). Reducer-level enum validation is
         // not duplicated — the SDK lattice impl + JSON Schema cover it.
-        let level = operation
-            .payload
-            .get("level")
-            .and_then(|v| {
-                if v.is_null() {
-                    None
-                } else {
-                    v.as_str().map(ToOwned::to_owned)
-                }
-            });
+        let level = operation.payload.get("level").and_then(|v| {
+            if v.is_null() {
+                None
+            } else {
+                v.as_str().map(ToOwned::to_owned)
+            }
+        });
         let level_public = operation
             .payload
             .get("level_public")

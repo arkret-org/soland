@@ -931,10 +931,10 @@ mod tests {
             ],
         );
         let state = AppState::new(cfg, Db { pool: None });
-        let targets = broadcast_move_to_peers(&state, "cx:move:sha256:01");
+        let targets = broadcast_move_to_peers(&state, "sha256:01");
         assert_eq!(targets.len(), 3);
         let peer_hash = sha256_hex("https://peer-a.example".as_bytes());
-        let move_hash = sha256_hex("cx:move:sha256:01".as_bytes());
+        let move_hash = sha256_hex("sha256:01".as_bytes());
         let txn_id = format!("outbound_move:{}:{}", &peer_hash[..16], &move_hash[..16]);
         let transcript = state
             .persistence
@@ -1001,7 +1001,7 @@ mod tests {
             ],
         );
         let state = AppState::new(cfg, Db { pool: None });
-        let targets = broadcast_move_to_peers(&state, "cx:move:sha256:02");
+        let targets = broadcast_move_to_peers(&state, "sha256:02");
         assert_eq!(targets, vec!["https://hub.example".to_owned()]);
     }
 
@@ -1055,10 +1055,10 @@ mod tests {
             vec!["https://peer-retry.example".to_owned()],
         );
         let state = AppState::new(cfg, Db { pool: None });
-        broadcast_move_to_peers(&state, "cx:move:sha256:retry");
+        broadcast_move_to_peers(&state, "sha256:retry");
 
         let peer_hash = sha256_hex("https://peer-retry.example".as_bytes());
-        let move_hash = sha256_hex("cx:move:sha256:retry".as_bytes());
+        let move_hash = sha256_hex("sha256:retry".as_bytes());
         let txn_id = format!("outbound_move:{}:{}", &peer_hash[..16], &move_hash[..16]);
         let before = state
             .persistence

@@ -1048,17 +1048,30 @@ pub(super) async fn events_query(
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(100)
         .min(100);
-    // `from` is the canonical cursor parameter; accept `cursor` as alias for
-    // ergonomics (legacy test fixtures and external SDK callers use both).
-    // `direction = forward | backward`.
-    let cursor = query_param(req, "from").or_else(|| query_param(req, "cursor"));
-    let direction = query_param(req, "direction").unwrap_or_else(|| "forward".to_owned());
-    if direction != "forward" && direction != "backward" {
+    // Round C44 (spec dc01ad7): query refactor — `from` / `until` /
+    // `direction` removed. `after=<cursor>` (forward) and `before=<cursor>`
+    // (backward) replace them. `cursor` legacy alias preserved at this layer
+    // for internal callers but only as `after` semantics.
+    let after = query_param(req, "after").or_else(|| query_param(req, "cursor"));
+    let before = query_param(req, "before");
+    if after.is_some() && before.is_some() {
         return Err(crate::error::AppError::invalid_param(
-            "direction must be 'forward' or 'backward'",
+            "specify either 'after' or 'before', not both",
         ));
     }
-    let backward = direction == "backward";
+    for legacy in ["from", "until", "direction"] {
+        if query_param(req, legacy).is_some() {
+            return Err(crate::error::AppError::invalid_param(format!(
+                "legacy query parameter '{legacy}' removed in spec dc01ad7; use 'before' or 'after'"
+            )));
+        }
+    }
+    let (cursor, backward) = match (after, before) {
+        (Some(c), None) => (Some(c), false),
+        (None, Some(c)) => (Some(c), true),
+        (None, None) => (None, false),
+        (Some(_), Some(_)) => unreachable!("validated above"),
+    };
 
     // Single-space fast path preserves the original `BackfillResponse` shape
     // for soland's existing test surface (cx.sync.backfill behavior).

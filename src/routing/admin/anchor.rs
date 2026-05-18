@@ -327,9 +327,8 @@ fn admin_signer_for(state: &AppState, admin_did_str: &str) -> Result<Ed25519Move
 /// reject — we don't actually round-trip through `AnchorerValue` here so
 /// extra envelope fields (`max_anchor_staleness_ms`, `paused`) survive.
 fn anchorer_value_object_from_body(body: &AnchorerReconfigBody) -> Result<Value, AppError> {
-    let invalid = |reason: &str| {
-        app_error!(InvalidParam, "{}", reason).with_status(StatusCode::BAD_REQUEST)
-    };
+    let invalid =
+        |reason: &str| app_error!(InvalidParam, "{}", reason).with_status(StatusCode::BAD_REQUEST);
     let mut v = serde_json::Map::new();
     v.insert("kind".to_owned(), Value::String(body.kind.clone()));
     match body.kind.as_str() {
@@ -915,8 +914,10 @@ pub(super) async fn admin_repair_bottom(
     match &body {
         BottomRepairStrategyBody::HeadInWinner { head } => {
             if head.move_id.is_empty() {
-                return Err(app_error!(InvalidParam, "winning head must carry a move_id")
-                    .with_status(StatusCode::BAD_REQUEST));
+                return Err(
+                    app_error!(InvalidParam, "winning head must carry a move_id")
+                        .with_status(StatusCode::BAD_REQUEST),
+                );
             }
             // Build the head_in Effect. The `tag` carries the winning
             // Move id; `value` carries a placeholder (the canonical
@@ -1057,7 +1058,7 @@ pub(super) async fn admin_repair_bottom(
                 "strategy": &body,
             });
             let bytes = serde_json::to_vec(&canonical_request).unwrap_or_default();
-            let placeholder_id = format!("cx:move:sha256:{}", sha256_hex_for(&bytes));
+            let placeholder_id = format!("sha256:{}", sha256_hex_for(&bytes));
             json_ok(AdminSubmitMoveResponse {
                 move_id: placeholder_id,
                 accepted: false,
@@ -2083,7 +2084,7 @@ mod tests {
     #[test]
     fn admin_submit_move_response_serializes_status() {
         let r = AdminSubmitMoveResponse {
-            move_id: "cx:move:sha256:00".to_owned(),
+            move_id: "sha256:00".to_owned(),
             accepted: false,
             reason: Some("placeholder".to_owned()),
             anchor_id: None,

@@ -206,6 +206,7 @@ const FLOW_WATCH_REQUIREMENTS: &[PayloadRequirement] = &[
 // Flow track sub-events. Required fields per SDK schemas:
 //   `cx.flow.track.{disable,enable,set_primary}` -> flow_id + track_id
 //   `cx.flow.track.update`                      -> flow_id + track_id + patch
+//   `cx.flow.tracks.update`                     -> flow_id + (patch | tracks)
 const FLOW_TRACK_REQUIREMENTS: &[PayloadRequirement] = &[
     PayloadRequirement::Required("flow_id", "flow track operation requires flow_id"),
     PayloadRequirement::Required("track_id", "flow track operation requires track_id"),
@@ -214,6 +215,14 @@ const FLOW_TRACK_UPDATE_REQUIREMENTS: &[PayloadRequirement] = &[
     PayloadRequirement::Required("flow_id", "flow track update requires flow_id"),
     PayloadRequirement::Required("track_id", "flow track update requires track_id"),
     PayloadRequirement::Required("patch", "flow track update requires patch"),
+];
+const FLOW_TRACKS_UPDATE_FIELDS: &[&str] = &["patch", "tracks"];
+const FLOW_TRACKS_UPDATE_REQUIREMENTS: &[PayloadRequirement] = &[
+    PayloadRequirement::Required("flow_id", "flow tracks update requires flow_id"),
+    PayloadRequirement::AnyOf(
+        FLOW_TRACKS_UPDATE_FIELDS,
+        "flow tracks update requires patch or tracks",
+    ),
 ];
 // Applet protocol family.
 //
@@ -546,6 +555,10 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
         },
         kinds::CX_FLOW_TRACK_UPDATE => OperationPayloadSchema {
             requirements: FLOW_TRACK_UPDATE_REQUIREMENTS,
+            validate: None,
+        },
+        kinds::CX_FLOW_TRACKS_UPDATE => OperationPayloadSchema {
+            requirements: FLOW_TRACKS_UPDATE_REQUIREMENTS,
             validate: None,
         },
         kind if kinds::is_morph_lifecycle_kind(kind) => OperationPayloadSchema {
@@ -1513,6 +1526,76 @@ mod agent_workspace_tests {
             "content": { "kind": "cx.content.text", "body": "hi" }
         });
         assert!(validate_content_block(&block).is_err());
+    }
+}
+
+#[cfg(test)]
+mod flow_tracks_update_tests {
+    use super::*;
+    use contrix_sdk::Operation;
+    use serde_json::json;
+
+    fn op(payload: serde_json::Value) -> Operation {
+        Operation::create(
+            contrix_sdk::OperationId::new("cx:operation:01904100-0000-7000-8000-57d7d85564c5")
+                .unwrap(),
+            contrix_sdk::SpaceId::new("cx:space:01904100-0000-7000-8000-668e2181b41d").unwrap(),
+            kinds::CX_FLOW_TRACKS_UPDATE,
+            payload,
+        )
+    }
+
+    #[test]
+    fn canonical_flow_tracks_update_accepts_patch_payload() {
+        let operation = op(json!({
+            "flow_id": "cx:flow:01904100-0000-7000-8000-000000000001",
+            "patch": {
+                "tracks": {
+                    "discussion": {"profile": "discussion"}
+                }
+            }
+        }));
+        assert_eq!(
+            kinds::canonical_kind_for_operation(&operation),
+            Some(kinds::CX_FLOW_TRACKS_UPDATE)
+        );
+        let schema = operation_schema_for_kind(kinds::CX_FLOW_TRACKS_UPDATE).unwrap();
+        assert!(validate_operation_schema(&operation, schema).is_ok());
+    }
+
+    #[test]
+    fn canonical_flow_tracks_update_accepts_tracks_payload() {
+        let operation = op(json!({
+            "flow_id": "cx:flow:01904100-0000-7000-8000-000000000001",
+            "tracks": {
+                "review": {"profile": "review"}
+            }
+        }));
+        let schema = operation_schema_for_kind(kinds::CX_FLOW_TRACKS_UPDATE).unwrap();
+        assert!(validate_operation_schema(&operation, schema).is_ok());
+    }
+
+    #[test]
+    fn canonical_flow_tracks_update_requires_flow_id_and_patch_or_tracks() {
+        let schema = operation_schema_for_kind(kinds::CX_FLOW_TRACKS_UPDATE).unwrap();
+
+        let missing_flow_id = op(json!({
+            "tracks": {
+                "discussion": {"profile": "discussion"}
+            }
+        }));
+        assert_eq!(
+            validate_operation_schema(&missing_flow_id, schema),
+            Err("flow tracks update requires flow_id")
+        );
+
+        let missing_patch_or_tracks = op(json!({
+            "flow_id": "cx:flow:01904100-0000-7000-8000-000000000001"
+        }));
+        assert_eq!(
+            validate_operation_schema(&missing_patch_or_tracks, schema),
+            Err("flow tracks update requires patch or tracks")
+        );
     }
 }
 
