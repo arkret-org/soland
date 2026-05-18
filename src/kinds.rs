@@ -40,6 +40,15 @@ pub const CX_FLOW_RESTORE: &str = "cx.flow.restore";
 // structured cache).
 pub const CX_FLOW_MOVE: &str = "cx.flow.move";
 pub const CX_FLOW_REORDER: &str = "cx.flow.reorder";
+// Round 16 — Flow watch subscription event. Writes the
+// `cx.component.flow.watch.v1` cas-register cell keyed by
+// (flow_id, actor_did). Spec:
+// contrix-spec/spec/v1/zh/models/flow-and-message.md §8. Like the
+// flow position events the Event-Envelope path only validates payload
+// shape; cell write happens on the Move/Anchor pipeline. The Flow
+// projection's updated_at is NOT bumped — watch is a per-(flow, actor)
+// subscription that does not represent a Flow state mutation.
+pub const CX_FLOW_WATCH_SET: &str = "cx.flow.watch.set";
 // Round 14d (2026-05-16) — Flow track sub-events. Manage individual
 // entries in `Flow.tracks: BTreeMap<String, FlowTrackConfig>` (SDK has
 // the reducer for these as of SDK round 12). soland's wire validator
@@ -141,6 +150,7 @@ fn canonical_registered_kind(object_type: &str) -> Option<&'static str> {
         CX_FLOW_RESTORE => Some(CX_FLOW_RESTORE),
         CX_FLOW_MOVE => Some(CX_FLOW_MOVE),
         CX_FLOW_REORDER => Some(CX_FLOW_REORDER),
+        CX_FLOW_WATCH_SET => Some(CX_FLOW_WATCH_SET),
         CX_FLOW_TRACK_DISABLE => Some(CX_FLOW_TRACK_DISABLE),
         CX_FLOW_TRACK_ENABLE => Some(CX_FLOW_TRACK_ENABLE),
         CX_FLOW_TRACK_SET_PRIMARY => Some(CX_FLOW_TRACK_SET_PRIMARY),

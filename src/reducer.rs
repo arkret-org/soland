@@ -447,6 +447,18 @@ pub enum ProjectionEffect {
         morph_id: String,
         new_state: ObjectLifecycleState,
     },
+    /// Flow watch cell touched. Cell write itself is owned by the
+    /// Move/Anchor pipeline (cas-register at SDK layer); the projection
+    /// only records that a watch change happened for `(flow_id, actor_did)`
+    /// so downstream listeners (notification dispatcher, watcher list
+    /// projection) can react. `level` is `None` when the effect clears
+    /// the cell.
+    FlowWatchUpdated {
+        flow_id: String,
+        actor_did: String,
+        level: Option<String>,
+        level_public: Option<bool>,
+    },
     /// Applet registry projection updated (registration or discovery).
     /// Keyed by the applet's `service_did`.
     AppletProjectionUpdated {
@@ -699,6 +711,13 @@ fn apply_flow_position_touch_dispatch(
 ) -> ProjectionEffect {
     s.apply_flow_position_touch(op, op.created_at)
 }
+fn apply_flow_watch_set_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_flow_watch_set(op, op.created_at)
+}
 fn apply_flow_track_touch_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
@@ -791,6 +810,7 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
     m.insert(CX_FLOW_RESTORE, apply_flow_restore_dispatch);
     m.insert(CX_FLOW_MOVE, apply_flow_position_touch_dispatch);
     m.insert(CX_FLOW_REORDER, apply_flow_position_touch_dispatch);
+    m.insert(CX_FLOW_WATCH_SET, apply_flow_watch_set_dispatch);
     m.insert(CX_FLOW_TRACK_DISABLE, apply_flow_track_touch_dispatch);
     m.insert(CX_FLOW_TRACK_ENABLE, apply_flow_track_touch_dispatch);
     m.insert(CX_FLOW_TRACK_SET_PRIMARY, apply_flow_track_touch_dispatch);
@@ -2372,6 +2392,67 @@ impl ProjectionState {
         ProjectionEffect::FlowLifecycle {
             flow_id,
             new_state: flow.state,
+        }
+    }
+
+    /// Apply `cx.flow.watch.set`. Writes the watch cell on the
+    /// Move/Anchor pipeline (cas-register `cx.component.flow.watch.v1`);
+    /// the soland projection records the materialised value into
+    /// `projection_flow_watches` via `ProjectionEffect::FlowWatchUpdated`.
+    /// The Flow's `updated_at` is NOT bumped — watch is a per-(flow, actor)
+    /// subscription, not a Flow mutation. Unknown Flow tolerated (causal
+    /// / backfill).
+    ///
+    /// Reducer invariant: `payload.actor_did == operation.sender` unless
+    /// the writer is gated by `cx.flow.watch.manage_others` (capability
+    /// check happens at the routing layer; this projection only records).
+    fn apply_flow_watch_set(
+        &mut self,
+        operation: &Operation,
+        _now: chrono::DateTime<chrono::Utc>,
+    ) -> ProjectionEffect {
+        let Some(flow_id) = operation
+            .payload
+            .get("flow_id")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned)
+        else {
+            return ProjectionEffect::Rejected {
+                reason: "missing_flow_id".to_owned(),
+            };
+        };
+        let Some(actor_did) = operation
+            .payload
+            .get("actor_did")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned)
+        else {
+            return ProjectionEffect::Rejected {
+                reason: "missing_actor_did".to_owned(),
+            };
+        };
+        // `level` is required at schema layer; here we just project the
+        // raw value (string or null). Reducer-level enum validation is
+        // not duplicated — the SDK lattice impl + JSON Schema cover it.
+        let level = operation
+            .payload
+            .get("level")
+            .and_then(|v| {
+                if v.is_null() {
+                    None
+                } else {
+                    v.as_str().map(ToOwned::to_owned)
+                }
+            });
+        let level_public = operation
+            .payload
+            .get("level_public")
+            .and_then(|v| v.as_bool());
+        ProjectionEffect::FlowWatchUpdated {
+            flow_id,
+            actor_did,
+            level,
+            level_public,
         }
     }
 

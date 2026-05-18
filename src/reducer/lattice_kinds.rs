@@ -123,7 +123,7 @@ mod tests {
     #[test]
     fn default_registry_still_covers_every_spec_family() {
         let registry = default_lattice_registry();
-        assert_eq!(registry.len(), 49);
+        assert_eq!(registry.len(), 50);
     }
 
     #[test]

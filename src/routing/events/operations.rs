@@ -190,6 +190,19 @@ const FLOW_POSITION_REQUIREMENTS: &[PayloadRequirement] = &[
         "flow position operation requires board_place_id",
     ),
 ];
+// Flow watch event (cx.flow.watch.set).
+// Spec event-kind-registry sets `cell_subject` = (flow_id, actor_did);
+// both fields are MUST-present in the payload. `level` is also required
+// (null = clear); enum + level_public validation lives at the
+// flow_watch_set_payload schema layer.
+const FLOW_WATCH_REQUIREMENTS: &[PayloadRequirement] = &[
+    PayloadRequirement::Required("flow_id", "flow watch operation requires flow_id"),
+    PayloadRequirement::Required("actor_did", "flow watch operation requires actor_did"),
+    PayloadRequirement::Required(
+        "level",
+        "flow watch operation requires level (use null to clear)",
+    ),
+];
 // Flow track sub-events. Required fields per SDK schemas:
 //   `cx.flow.track.{disable,enable,set_primary}` -> flow_id + track_id
 //   `cx.flow.track.update`                      -> flow_id + track_id + patch
@@ -519,6 +532,10 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
         },
         kinds::CX_FLOW_MOVE | kinds::CX_FLOW_REORDER => OperationPayloadSchema {
             requirements: FLOW_POSITION_REQUIREMENTS,
+            validate: None,
+        },
+        kinds::CX_FLOW_WATCH_SET => OperationPayloadSchema {
+            requirements: FLOW_WATCH_REQUIREMENTS,
             validate: None,
         },
         kinds::CX_FLOW_TRACK_DISABLE
