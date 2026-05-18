@@ -142,14 +142,17 @@ async fn get_device_messages(
             Err(SyncCursorError::Expired) => {
                 return Err(AppError::new(
                     ErrorCode::SyncTokenExpired,
-                    "sync token has expired",
+                    "cursor has expired",
                 ));
             }
             Err(SyncCursorError::Invalid(message)) => {
                 return Err(AppError::invalid_param(message));
             }
             Err(SyncCursorError::Mismatch(message)) => {
-                return Err(AppError::invalid_param(message));
+                return Err(AppError::new(ErrorCode::CursorIntegrityInvalid, message));
+            }
+            Err(SyncCursorError::Integrity(message)) => {
+                return Err(AppError::new(ErrorCode::CursorIntegrityInvalid, message));
             }
         },
         None => 0,

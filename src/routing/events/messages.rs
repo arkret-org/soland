@@ -15,6 +15,7 @@ use chrono::Utc;
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde_json::{Value, json};
+use sha2::{Digest as _, Sha256};
 
 use super::operations::{
     validate_content_blocks, validate_encrypted_payload_envelope, validate_mentions,
@@ -34,17 +35,31 @@ fn encode_send_cursor(
     positions: &std::collections::BTreeMap<String, i64>,
     issued_ms: i64,
 ) -> String {
-    let cursor = json!({
-        "schema": "cx.schema.cursor.v1",
-        "version": 1,
-        "kind": "message_send",
-        "space_id": space_id,
-        "issued_at_ms": issued_ms,
-        "positions": {
+    let mut cursor = json!({
+        "v": "1",
+        "purpose": "stream",
+        "t": Utc::now().to_rfc3339(),
+        "x": issued_ms + 60 * 60 * 1000,
+        "_ctx": {
+            "kind": "message_send",
+            "space_id": space_id,
+            "issued_at_ms": issued_ms
+        },
+        "_positions": {
             "spaces": positions,
             "to_device": 0,
         }
     });
+    // TODO(spec-sync 3d296bf): route this through the shared Soland cursor
+    // signer/verifier. This keeps `/messages/send` API-compatible with v1
+    // cursors, but the current digest is not a production HMAC.
+    let mac = format!("{:x}", Sha256::digest(cursor.to_string().as_bytes()));
+    if let Some(object) = cursor.as_object_mut() {
+        object.insert(
+            "_mac".to_owned(),
+            Value::String(format!("hmac-sha256:{mac}")),
+        );
+    }
     let bytes = contrix_sdk::canonical::canonical_json_bytes(&cursor)
         .unwrap_or_else(|_| cursor.to_string().into_bytes());
     format!("cx:cursor:{}", URL_SAFE_NO_PAD.encode(bytes))

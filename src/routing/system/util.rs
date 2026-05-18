@@ -134,15 +134,11 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
 
 // ── Token / digest validators ───────────────────────────────────────────────
 
-/// Validate a `sx:<unix_millis>` or `cx:cursor:<base64url>` token.
+/// Validate a `cx:cursor:<base64url>` token.
 ///
-/// `cx:cursor:` tokens are a base64url-encoded JSON object that must declare
-/// `schema = cx.schema.cursor.v1`, `version = 1`, a positive `issued_at_ms`,
-/// and a `positions` object.
+/// `cx:cursor:` tokens are a base64url-encoded v1 cursor object with
+/// `{v,purpose,t,x}` plus either a stateful `h` or stateless `_mac`/`_sig`.
 pub fn is_valid_sync_token(token: &str) -> bool {
-    if let Some(millis) = token.strip_prefix("sx:") {
-        return millis.parse::<i64>().is_ok_and(|value| value > 0);
-    }
     let Some(encoded) = token.strip_prefix("cx:cursor:") else {
         return false;
     };
@@ -152,21 +148,23 @@ pub fn is_valid_sync_token(token: &str) -> bool {
     let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
         return false;
     };
+    let has_handle = value.get("h").and_then(|handle| handle.as_str()).is_some();
+    let has_mac = value.get("_mac").and_then(|mac| mac.as_str()).is_some();
+    let has_sig = value.get("_sig").and_then(|sig| sig.as_str()).is_some();
     value
-        .get("schema")
-        .and_then(|schema| schema.as_str())
-        .is_some_and(|schema| schema == "cx.schema.cursor.v1")
+        .get("v")
+        .and_then(|v| v.as_str())
+        .is_some_and(|v| v == "1")
         && value
-            .get("version")
-            .and_then(|version| version.as_u64())
-            .is_some_and(|version| version == 1)
+            .get("purpose")
+            .and_then(|purpose| purpose.as_str())
+            .is_some_and(|purpose| matches!(purpose, "stream" | "barrier"))
+        && value.get("t").and_then(|t| t.as_str()).is_some()
         && value
-            .get("issued_at_ms")
-            .and_then(|millis| millis.as_i64())
-            .is_some_and(|millis| millis > 0)
-        && value
-            .get("positions")
-            .is_some_and(|positions| positions.is_object())
+            .get("x")
+            .and_then(|x| x.as_i64())
+            .is_some_and(|x| x > 0)
+        && ((has_handle && !has_mac && !has_sig) || (!has_handle && (has_mac || has_sig)))
 }
 
 /// `sha256:<64 lowercase hex>` shape.

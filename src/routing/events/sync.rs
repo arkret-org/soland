@@ -33,7 +33,7 @@ use contrix_sdk::SpaceId;
 use futures_util::stream::StreamExt;
 use salvo::http::StatusCode;
 use salvo::prelude::*;
-use serde_json::json;
+use serde_json::{Value, json};
 use tokio::sync::broadcast::error::RecvError;
 
 use super::{
@@ -129,23 +129,25 @@ async fn client_sync(
         ) {
             Ok(cursor) => cursor,
             Err(SyncCursorError::Expired) => {
-                // Spec note: the canonical errcode is `cursor_expired` (SDK
-                // aliases `sync_token_expired` to it), but soland tests +
-                // SDK clients written before the alias landed match the
-                // literal `sync_token_expired` string. Preserve it via the
-                // wire-code override.
                 return Err(crate::error::AppError::new(
                     crate::error::ErrorCode::SyncTokenExpired,
-                    "sync token has expired",
-                )
-                .with_wire_code("sync_token_expired"));
+                    "cursor has expired",
+                ));
             }
             Err(SyncCursorError::Invalid(message)) => {
                 return Err(crate::error::AppError::invalid_param(message));
             }
             Err(SyncCursorError::Mismatch(message)) => {
-                return Err(crate::error::AppError::invalid_param(message)
-                    .with_wire_code("sync_token_mismatch"));
+                return Err(crate::error::AppError::new(
+                    crate::error::ErrorCode::CursorIntegrityInvalid,
+                    message,
+                ));
+            }
+            Err(SyncCursorError::Integrity(message)) => {
+                return Err(crate::error::AppError::new(
+                    crate::error::ErrorCode::CursorIntegrityInvalid,
+                    message,
+                ));
             }
         }
     } else {
@@ -401,6 +403,7 @@ pub struct SyncCursor {
 pub enum SyncCursorError {
     Invalid(&'static str),
     Mismatch(&'static str),
+    Integrity(&'static str),
     Expired,
 }
 
@@ -427,31 +430,52 @@ pub fn sync_token_for_client_sync(
     let filter_hash = sync_filter_hash(profile, filter, renderer, facets);
     let issued_at_ms = issued_at.timestamp_millis();
     let expires_at_ms = expires_at.timestamp_millis();
-    // Canonical cursor schema: `cx.schema.cursor.v1`. Carries
-    // `version: 1` (u64), matching what `is_valid_sync_token` checks for.
-    let cursor = json!({
-        "schema": "cx.schema.cursor.v1",
-        "version": 1,
+    let mut cursor = json!({
+        "v": "1",
         "purpose": "stream",
-        "issued_at": issued_at.to_rfc3339_opts(SecondsFormat::Millis, true),
-        "issued_at_ms": issued_at_ms,
-        "expires_at_ms": expires_at_ms,
-        "profile": profile,
-        "principal_id": principal_id,
-        "device_id": device_id,
-        "service_id": state.config.service_did.clone(),
-        "renderer": renderer,
-        "facets": facets,
-        "filter_hash": filter_hash,
-        "positions": {
+        "t": issued_at.to_rfc3339_opts(SecondsFormat::Millis, true),
+        "x": expires_at_ms,
+        "_ctx": {
+            "profile": profile,
+            "principal_id": principal_id,
+            "device_id": device_id,
+            "service_id": state.config.service_did.clone(),
+            "renderer": renderer,
+            "facets": facets,
+            "filter_hash": filter_hash,
+            "issued_at_ms": issued_at_ms
+        },
+        "_positions": {
             "spaces": spaces_positions,
             "devices": device_positions,
             "to_device": to_device_position
         }
     });
+    let mac = cursor_mac(state, &cursor);
+    if let Some(object) = cursor.as_object_mut() {
+        object.insert("_mac".to_owned(), Value::String(mac));
+    }
     let bytes = contrix_sdk::canonical::canonical_json_bytes(&cursor)
         .unwrap_or_else(|_| cursor.to_string().into_bytes());
     format!("cx:cursor:{}", URL_SAFE_NO_PAD.encode(bytes))
+}
+
+fn cursor_mac(state: &AppState, cursor_without_mac: &Value) -> String {
+    // TODO(spec-sync 3d296bf): replace this development binding with a real
+    // keyed HMAC or an opaque stateful cursor handle shared by every Soland
+    // cursor emitter. The wire shape is now v1-compatible; this hash only keeps
+    // the API contracts aligned while the signing key lifecycle is wired.
+    let payload = contrix_sdk::canonical::canonical_json_bytes(cursor_without_mac)
+        .unwrap_or_else(|_| cursor_without_mac.to_string().into_bytes());
+    let mut bound = Vec::with_capacity(
+        b"soland-cursor-mac-v1".len() + state.config.service_did.len() + payload.len() + 2,
+    );
+    bound.extend_from_slice(b"soland-cursor-mac-v1");
+    bound.push(0);
+    bound.extend_from_slice(state.config.service_did.as_bytes());
+    bound.push(0);
+    bound.extend_from_slice(&payload);
+    format!("hmac-sha256:{}", sha256_hex(&bound))
 }
 
 pub fn parse_and_validate_sync_cursor(
@@ -466,9 +490,9 @@ pub fn parse_and_validate_sync_cursor(
 ) -> Result<SyncCursor, SyncCursorError> {
     let value = decode_sync_cursor_value(token)?;
     if value
-        .get("version")
-        .and_then(|v| v.as_u64())
-        .is_none_or(|v| v != 1)
+        .get("v")
+        .and_then(|v| v.as_str())
+        .is_none_or(|v| v != "1")
         || value
             .get("purpose")
             .and_then(|purpose| purpose.as_str())
@@ -476,42 +500,57 @@ pub fn parse_and_validate_sync_cursor(
     {
         return Err(SyncCursorError::Invalid("since must be a v1 sync cursor"));
     }
-    if value
-        .get("expires_at_ms")
-        .or_else(|| value.get("x"))
-        .and_then(|expires_at| expires_at.as_i64())
-        .is_some_and(|expires_at| expires_at <= now_ms)
-    {
+    let Some(expires_at) = value.get("x").and_then(|expires_at| expires_at.as_i64()) else {
+        return Err(SyncCursorError::Invalid("since cursor must contain x"));
+    };
+    if expires_at <= now_ms {
         return Err(SyncCursorError::Expired);
     }
+    let Some(actual_mac) = value.get("_mac").and_then(|mac| mac.as_str()) else {
+        return Err(SyncCursorError::Invalid("since cursor must contain _mac"));
+    };
+    let mut unsigned = value.clone();
+    if let Some(object) = unsigned.as_object_mut() {
+        object.remove("_mac");
+    }
+    let expected_mac = cursor_mac(state, &unsigned);
+    if actual_mac != expected_mac {
+        return Err(SyncCursorError::Integrity(
+            "sync cursor integrity is invalid",
+        ));
+    }
+    let ctx = value
+        .get("_ctx")
+        .and_then(|ctx| ctx.as_object())
+        .ok_or(SyncCursorError::Invalid("since cursor must contain _ctx"))?;
     let expected_principal = session
         .map(|session| session.actor.as_str())
         .unwrap_or("anonymous");
     let expected_device = session
         .map(|session| session.device_id.as_str())
         .unwrap_or("anonymous");
-    if value
+    if ctx
         .get("principal_id")
         .and_then(|principal| principal.as_str())
-        .is_some_and(|principal| principal != expected_principal)
+        .is_none_or(|principal| principal != expected_principal)
     {
         return Err(SyncCursorError::Mismatch(
             "sync token principal does not match request actor",
         ));
     }
-    if value
+    if ctx
         .get("device_id")
         .and_then(|device| device.as_str())
-        .is_some_and(|device| device != expected_device)
+        .is_none_or(|device| device != expected_device)
     {
         return Err(SyncCursorError::Mismatch(
             "sync token device does not match request device",
         ));
     }
-    if value
+    if ctx
         .get("service_id")
         .and_then(|service| service.as_str())
-        .is_some_and(|service| service != state.config.service_did)
+        .is_none_or(|service| service != state.config.service_did)
     {
         return Err(SyncCursorError::Mismatch(
             "sync token service does not match this service DID",
@@ -519,23 +558,23 @@ pub fn parse_and_validate_sync_cursor(
     }
     let expected_filter_hash =
         sync_filter_hash(profile.unwrap_or("incremental"), filter, renderer, facets);
-    if value
+    if ctx
         .get("filter_hash")
         .and_then(|filter_hash| filter_hash.as_str())
-        .is_some_and(|filter_hash| filter_hash != expected_filter_hash)
+        .is_none_or(|filter_hash| filter_hash != expected_filter_hash)
     {
         return Err(SyncCursorError::Mismatch(
             "sync token filter hash does not match request filter",
         ));
     }
-    let positions_value = value.get("positions").ok_or(SyncCursorError::Invalid(
-        "since cursor must contain positions",
+    let positions_value = value.get("_positions").ok_or(SyncCursorError::Invalid(
+        "since cursor must contain _positions",
     ))?;
     let positions = positions_value
         .get("spaces")
         .and_then(|spaces| spaces.as_object())
         .ok_or(SyncCursorError::Invalid(
-            "since cursor must contain positions.spaces",
+            "since cursor must contain _positions.spaces",
         ))?
         .iter()
         .filter_map(|(space_id, position)| {

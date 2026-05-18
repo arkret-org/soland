@@ -2201,8 +2201,8 @@ async fn account_contacts_and_space_lifecycle_workflow() {
             .starts_with("cx:operation:")
     );
     let send_cursor = decode_cursor(sent_message["sync_token"].as_str().unwrap());
-    assert_eq!(send_cursor["schema"], "cx.schema.cursor.v1");
-    assert!(send_cursor["positions"]["spaces"].is_object());
+    assert_eq!(send_cursor["v"], "1");
+    assert!(send_cursor["_positions"]["spaces"].is_object());
 
     let invalid_block_message = TestClient::post("http://server/api/v1/messages/send")
         .add_header("authorization", format!("Bearer {alice}"), true)
@@ -2321,25 +2321,24 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         .await
         .unwrap();
     let next_batch = decode_cursor(sync_with_message["next_batch"].as_str().unwrap());
-    assert_eq!(next_batch["profile"], "incremental");
-    assert_eq!(next_batch["principal_id"], "did:web:alice.example");
+    assert_eq!(next_batch["_ctx"]["profile"], "incremental");
+    assert_eq!(next_batch["_ctx"]["principal_id"], "did:web:alice.example");
     assert_eq!(
-        next_batch["device_id"],
+        next_batch["_ctx"]["device_id"],
         "cx:device:01904100-0000-7000-8000-a11ce0000001"
     );
-    assert_eq!(next_batch["service_id"], "did:web:soland.local");
+    assert_eq!(next_batch["_ctx"]["service_id"], "did:web:soland.local");
     assert!(
-        next_batch["filter_hash"]
+        next_batch["_ctx"]["filter_hash"]
             .as_str()
             .unwrap()
             .starts_with("sha256:")
     );
     assert!(
-        next_batch["expires_at_ms"].as_i64().unwrap()
-            > next_batch["issued_at_ms"].as_i64().unwrap()
+        next_batch["x"].as_i64().unwrap() > next_batch["_ctx"]["issued_at_ms"].as_i64().unwrap()
     );
     assert!(
-        next_batch["positions"]["spaces"][&space_id]
+        next_batch["_positions"]["spaces"][&space_id]
             .as_i64()
             .unwrap()
             > 0
@@ -2485,7 +2484,10 @@ async fn account_contacts_and_space_lifecycle_workflow() {
     assert_eq!(renderer_mismatch.status_code.unwrap().as_u16(), 400);
 
     let mut expired_cursor = next_batch.clone();
-    expired_cursor["expires_at_ms"] = serde_json::json!(1);
+    expired_cursor["x"] = serde_json::json!(1);
+    if let Some(object) = expired_cursor.as_object_mut() {
+        object.insert("_mac".to_owned(), serde_json::json!("hmac-sha256:tampered"));
+    }
     let mut expired = TestClient::post("http://server/api/v1/sync")
         .add_header("authorization", format!("Bearer {alice}"), true)
         .json(&serde_json::json!({"since": encode_cursor(&expired_cursor)}))
@@ -2493,7 +2495,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         .await;
     assert_eq!(expired.status_code.unwrap(), StatusCode::GONE);
     let expired_body: Value = expired.take_json().await.unwrap();
-    assert_eq!(expired_body["error"]["errcode"], "sync_token_expired");
+    assert_eq!(expired_body["error"]["errcode"], "cursor_expired");
 
     let exported: Value = TestClient::get(format!("http://server/api/v1/spaces/{space_id}/export"))
         .add_header("authorization", format!("Bearer {alice}"), true)
@@ -5145,7 +5147,7 @@ async fn to_device_messages_survive_duplicate_sync_until_cursor_ack() {
         .unwrap();
     assert_eq!(first["to_device"].as_array().unwrap().len(), 1);
     let first_cursor = decode_cursor(first["next_batch"].as_str().unwrap());
-    assert!(first_cursor["positions"]["to_device"].as_i64().unwrap() > 0);
+    assert!(first_cursor["_positions"]["to_device"].as_i64().unwrap() > 0);
 
     let duplicate: Value = TestClient::post("http://server/api/v1/sync")
         .add_header("authorization", format!("Bearer {token}"), true)

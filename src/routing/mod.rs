@@ -1919,7 +1919,7 @@ async fn wait_for_sync_token(
                 res,
                 StatusCode::BAD_REQUEST,
                 "invalid_header",
-                "X-Contrix-Wait-For must contain sx:<timestamp_ms> sync tokens",
+                "X-Contrix-Wait-For must contain cx:cursor sync tokens",
             );
             return;
         }

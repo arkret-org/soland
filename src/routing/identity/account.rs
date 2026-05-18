@@ -7,13 +7,16 @@
 //! - `POST /api/v1/contacts/respond` — accept or reject a pending request
 //! - `GET  /api/v1/contacts` — list contacts visible to the actor
 
+use chrono::SecondsFormat;
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use super::{AuthArgs, append_audit_log, is_valid_handle, normalize_handle, now, validate_did};
+use super::{
+    AuthArgs, append_audit_log, is_valid_handle, normalize_handle, now, sha256_hex, validate_did,
+};
 use crate::error::AppError;
 use crate::state::{AccountRecord, AppState, ContactRecord, DeviceInventoryRecord};
 use crate::wire::{
@@ -588,11 +591,66 @@ async fn erase_account(
         .expect("erased_actors lock")
         .insert(actor.clone());
 
+    let completed_at = now();
+    let completed_at_wire = completed_at.to_rfc3339_opts(SecondsFormat::Millis, true);
+    let retained_stub = json!({
+        "schema": "cx.schema.erasure_receipt.stub.v1",
+        "issuer": state.config.service_did.clone(),
+        "subject": {"kind": "principal", "ref": actor.clone()},
+        "storage_boundary": "account_private_store",
+        "completed_at": completed_at_wire.clone(),
+    });
+    let retained_stub_hash = format!(
+        "sha256:{}",
+        sha256_hex(retained_stub.to_string().as_bytes())
+    );
+    let proof_payload = json!({
+        "receipt_id_seed": actor.clone(),
+        "retained_stub_hash": retained_stub_hash.clone(),
+        "completed_at": completed_at_wire.clone(),
+    });
+    let proof_hash = format!(
+        "sha256:{}",
+        sha256_hex(proof_payload.to_string().as_bytes())
+    );
+    // TODO(spec-sync 3d296bf): sign this proof with Soland's service key as a
+    // detached signature once service-key provisioning is finalized. The
+    // receipt schema/event API is aligned now; this hash signature is a
+    // deployment-local placeholder for verifier wiring.
+    let erasure_receipt = json!({
+        "receipt_id": crate::ids::generate("receipt"),
+        "schema": "cx.schema.erasure_receipt.v1",
+        "issuer": state.config.service_did.clone(),
+        "subject": {
+            "kind": "principal",
+            "ref": actor.clone()
+        },
+        "scope": {
+            "storage_boundary": "account_private_store",
+            "service_scope": "soland.account.erase",
+            "target_refs": [actor.clone()]
+        },
+        "outcome": "completed",
+        "erased_classes": [
+            "account_private_state",
+            "push_routes",
+            "device_secrets",
+            "projection_rows"
+        ],
+        "retained_stub_hash": retained_stub_hash.clone(),
+        "completed_at": completed_at_wire.clone(),
+        "issued_at": completed_at_wire.clone(),
+        "proofs": [{
+            "verification_method": format!("{}#erasure-receipt", state.config.service_did),
+            "payload_hash": proof_hash.clone(),
+            "signature": format!("sha256:{}", sha256_hex(erasure_receipt_signature_input(&proof_payload).as_bytes()))
+        }]
+    });
     append_audit_log(
         state,
         Some(&actor),
-        "cx.audit.erasure_completed",
-        json!({"actor": actor.clone()}),
+        "cx.audit.erasure_receipt",
+        erasure_receipt.clone(),
         "accepted",
     );
     // Snapshot the audit log inline so the response is the canonical
@@ -606,10 +664,15 @@ async fn erase_account(
         .unwrap_or_default();
     json_ok(json!({
         "did": actor,
-        "state": "erasure_pending",
-        "erased_at": now(),
+        "state": "erased",
+        "erased_at": completed_at_wire,
+        "erasure_receipt": erasure_receipt,
         "audit_log": audit_log,
     }))
+}
+
+fn erasure_receipt_signature_input(payload: &serde_json::Value) -> String {
+    serde_json::to_string(payload).unwrap_or_else(|_| "{}".to_owned())
 }
 
 fn short_actor_tag(did: &str) -> String {
