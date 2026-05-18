@@ -4,7 +4,7 @@ use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;
 use serde_json::Value;
 
-use crate::error::AppError;
+use crate::error::{AppError, ErrorCode};
 use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
@@ -34,6 +34,108 @@ const REQUIRED_KEY_BACKUP_FIELDS: &[&str] = &[
     "ciphertext_digest",
 ];
 
+const KEY_BACKUP_CLASSES: &[&str] = &["did_recovery", "secret_storage", "mls_history", "external"];
+const KEY_BACKUP_CONTENT_TYPES: &[&str] = &[
+    "recovery_key_share",
+    "self_signing_key",
+    "user_signing_key",
+    "recovery_secret",
+    "mls_group_secrets_backup_key",
+    "mls_group_state",
+    "mls_epoch_secret",
+    "pending_welcome",
+    "private_account_state",
+];
+
+fn schema_error(message: impl Into<String>) -> AppError {
+    AppError::new(ErrorCode::SchemaViolation, message)
+}
+
+fn required_object<'a>(
+    parent: &'a Value,
+    field: &str,
+) -> Result<&'a serde_json::Map<String, Value>, AppError> {
+    parent
+        .get(field)
+        .and_then(Value::as_object)
+        .ok_or_else(|| schema_error(format!("key backup `{field}` must be an object")))
+}
+
+fn required_u64(parent: &Value, field: &str) -> Result<u64, AppError> {
+    parent
+        .get(field)
+        .and_then(Value::as_u64)
+        .ok_or_else(|| schema_error(format!("key backup kdf.params `{field}` is required")))
+}
+
+fn validate_key_backup_kdf(backup: &Value, encryption: &Value) -> Result<(), AppError> {
+    if encryption.get("recipient_method").and_then(Value::as_str) != Some("passphrase_kdf") {
+        return Ok(());
+    }
+
+    let kdf = encryption
+        .get("kdf")
+        .ok_or_else(|| schema_error("passphrase_kdf key backup requires encryption.kdf"))?;
+    let params = required_object(kdf, "params")?;
+    match kdf.get("name").and_then(Value::as_str) {
+        Some("argon2id") => {
+            let memory_floor = if backup
+                .get("mixed_secret_storage")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            {
+                262_144
+            } else {
+                65_536
+            };
+            let iteration_floor = if memory_floor == 262_144 { 4 } else { 3 };
+            if required_u64(&Value::Object(params.clone()), "memory_kib")? < memory_floor {
+                return Err(schema_error(format!(
+                    "argon2id params.memory_kib must be >= {memory_floor}"
+                )));
+            }
+            if required_u64(&Value::Object(params.clone()), "iterations")? < iteration_floor {
+                return Err(schema_error(format!(
+                    "argon2id params.iterations must be >= {iteration_floor}"
+                )));
+            }
+            if required_u64(&Value::Object(params.clone()), "parallelism")? < 1 {
+                return Err(schema_error("argon2id params.parallelism must be >= 1"));
+            }
+        }
+        Some("pbkdf2") => {
+            if required_u64(&Value::Object(params.clone()), "iterations")? < 600_000 {
+                return Err(schema_error("pbkdf2 params.iterations must be >= 600000"));
+            }
+            let hash = params
+                .get("hash")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            if !matches!(hash, "sha256" | "sha384" | "sha512") {
+                return Err(schema_error(
+                    "pbkdf2 params.hash must be sha256, sha384, or sha512",
+                ));
+            }
+            if kdf
+                .get("degraded_profile_reason")
+                .and_then(Value::as_str)
+                .map_or(true, str::is_empty)
+            {
+                return Err(schema_error(
+                    "pbkdf2 key backup requires degraded_profile_reason",
+                ));
+            }
+        }
+        Some(other) => {
+            return Err(schema_error(format!(
+                "unsupported key backup kdf name `{other}`"
+            )));
+        }
+        None => return Err(schema_error("key backup kdf.name is required")),
+    }
+    Ok(())
+}
+
 fn validate_key_backup_body(
     backup_id: &str,
     actor_id: &str,
@@ -62,6 +164,38 @@ fn validate_key_backup_body(
         return Err(AppError::capability_denied(
             "backup actor_id must match authenticated actor",
         ));
+    }
+    let backup_class = backup
+        .get("backup_class")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if !KEY_BACKUP_CLASSES.contains(&backup_class) {
+        return Err(schema_error(format!(
+            "unsupported key backup backup_class `{backup_class}`"
+        )));
+    }
+    let encryption = backup
+        .get("encryption")
+        .ok_or_else(|| schema_error("key backup encryption is required"))?;
+    validate_key_backup_kdf(backup, encryption)?;
+
+    let contents = backup
+        .get("contents")
+        .and_then(Value::as_array)
+        .ok_or_else(|| schema_error("key backup contents must be an array"))?;
+    if contents.is_empty() {
+        return Err(schema_error("key backup contents must not be empty"));
+    }
+    for item in contents {
+        let item_type = item
+            .get("item_type")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if !KEY_BACKUP_CONTENT_TYPES.contains(&item_type) {
+            return Err(schema_error(format!(
+                "unsupported key backup contents.item_type `{item_type}`"
+            )));
+        }
     }
     Ok(())
 }

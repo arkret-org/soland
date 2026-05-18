@@ -121,10 +121,7 @@ fn build_invited_to_join_move() -> Move {
         .map(|b| format!("{b:02x}"))
         .collect();
     let mut full = body.as_object().unwrap().clone();
-    full.insert(
-        "id".into(),
-        Value::String(format!("sha256:{id_hex}")),
-    );
+    full.insert("id".into(), Value::String(format!("sha256:{id_hex}")));
     full.insert(
         "sig".into(),
         json!({
@@ -386,10 +383,7 @@ fn build_consent_grant_add_move() -> Move {
         .map(|b| format!("{b:02x}"))
         .collect();
     let mut full = body.as_object().unwrap().clone();
-    full.insert(
-        "id".into(),
-        Value::String(format!("sha256:{id_hex}")),
-    );
+    full.insert("id".into(), Value::String(format!("sha256:{id_hex}")));
     full.insert(
         "sig".into(),
         json!({
@@ -688,10 +682,7 @@ fn build_member_state_move_with_hlc(physical_ms: u64) -> Move {
         .map(|b| format!("{b:02x}"))
         .collect();
     let mut full = body.as_object().unwrap().clone();
-    full.insert(
-        "id".into(),
-        Value::String(format!("sha256:{id_hex}")),
-    );
+    full.insert("id".into(), Value::String(format!("sha256:{id_hex}")));
     full.insert(
         "sig".into(),
         json!({

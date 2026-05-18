@@ -1711,10 +1711,9 @@ async fn server_describe_advertises_auth_server_url_when_configured() {
 #[tokio::test]
 async fn service_did_is_config_driven_across_public_metadata() {
     let service_did = "did:web:configured.example";
-    let service = app_from_state(AppState::new(
-        test_config_with_service_did(service_did),
-        Db { pool: None },
-    ));
+    let state = AppState::new(test_config_with_service_did(service_did), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+    let service = app_from_state(state);
 
     let server: Value = TestClient::get("http://server/api/v1/server/describe")
         .send(&service)
@@ -1774,13 +1773,19 @@ async fn service_did_is_config_driven_across_public_metadata() {
     assert_eq!(index["service_did"], service_did);
 
     let ice: Value = TestClient::post("http://server/contrix/v1/ice-config")
-        .json(&serde_json::json!({}))
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({
+            "space_id": "cx:space:0196419b-0000-7000-8000-000000000000",
+            "call_id": "cx:call:01964137-0000-7000-8000-000000000001",
+            "actor_id": "did:web:alice.example",
+            "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001"
+        }))
         .send(&service)
         .await
         .take_json()
         .await
         .unwrap();
-    assert_eq!(ice["service_did"], service_did);
+    assert_eq!(ice["signature"]["kid"], format!("{service_did}#media-ice"));
 }
 
 #[tokio::test]
@@ -1844,7 +1849,8 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         .await;
     assert_eq!(duplicate.status_code.unwrap().as_u16(), 409);
 
-    let hidden_bob: Value = TestClient::get("http://server/api/v1/directory/search-users?q=bob")
+    let hidden_bob: Value = TestClient::post("http://server/api/v1/directory/search-users")
+        .json(&serde_json::json!({"q": "bob"}))
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
@@ -1927,8 +1933,9 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         .unwrap();
     assert_eq!(bob_contacts["contacts"].as_array().unwrap().len(), 1);
 
-    let visible_bob: Value = TestClient::get("http://server/api/v1/directory/search-users?q=bob")
+    let visible_bob: Value = TestClient::post("http://server/api/v1/directory/search-users")
         .add_header("authorization", format!("Bearer {alice}"), true)
+        .json(&serde_json::json!({"q": "bob"}))
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
@@ -3352,7 +3359,8 @@ async fn directory_product_endpoints_return_demo_projection_shapes() {
         .unwrap();
     assert_eq!(actors["results"][0]["did"], "did:web:alice.example");
 
-    let users: Value = TestClient::get("http://server/api/v1/directory/search-users?q=alice")
+    let users: Value = TestClient::post("http://server/api/v1/directory/search-users")
+        .json(&serde_json::json!({"q": "alice"}))
         .send(&app())
         .await
         .take_json()
@@ -3369,7 +3377,8 @@ async fn directory_product_endpoints_return_demo_projection_shapes() {
         .unwrap();
     assert_eq!(handle["did"], "did:web:alice.example");
 
-    let invalid = TestClient::get("http://server/api/v1/directory/search-users?limit=0")
+    let invalid = TestClient::post("http://server/api/v1/directory/search-users")
+        .json(&serde_json::json!({"limit": 0}))
         .send(&app())
         .await;
     assert_eq!(invalid.status_code.unwrap().as_u16(), 400);
@@ -3508,15 +3517,24 @@ async fn broader_protocol_surface_returns_contract_shapes() {
     assert!(authz["decision_trace"]["matched_grants"].is_array());
     assert_eq!(authz["decision_trace"]["cache"]["mode"], "in_memory");
 
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
     let ice: Value = TestClient::post("http://server/contrix/v1/ice-config")
-        .json(&serde_json::json!({}))
-        .send(&app())
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({
+            "space_id": "cx:space:0196419b-0000-7000-8000-000000000000",
+            "call_id": "cx:call:01964137-0000-7000-8000-000000000001",
+            "actor_id": "did:web:alice.example",
+            "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001"
+        }))
+        .send(&app_from_state(state))
         .await
         .take_json()
         .await
         .unwrap();
-    assert_eq!(ice["service_did"], "did:web:soland.local");
+    assert_eq!(ice["actor_id"], "did:web:alice.example");
     assert!(ice["ice_servers"].is_array());
+    assert!(ice["signature"].is_object());
 }
 
 #[tokio::test]

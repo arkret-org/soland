@@ -413,6 +413,18 @@ pub struct ResolveOrganizationRequest {
 pub struct SearchActorsRequest {
     pub query: Option<String>,
     pub organization_id: Option<String>,
+    #[serde(default)]
+    pub space_id: Option<String>,
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
+pub struct SearchUsersRequest {
+    #[serde(default, alias = "q")]
+    pub query: Option<String>,
+    #[serde(default)]
+    pub space_id: Option<String>,
+    #[serde(default)]
     pub limit: Option<usize>,
 }
 

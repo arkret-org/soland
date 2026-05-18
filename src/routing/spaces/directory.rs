@@ -7,7 +7,7 @@
 //! - `POST /api/v1/directory/search-organizations`
 //! - `POST /api/v1/directory/resolve-organization`
 //! - `POST /api/v1/directory/search-actors`
-//! - `GET  /api/v1/directory/search-users`        — same as search-actors via `?query`
+//! - `POST /api/v1/directory/search-users`        — same as search-actors via body `q`
 //! - `POST /api/v1/directory/resolve-handle`
 //!
 //! Demo data lives here too — `demo_organization` / `demo_actors` are
@@ -16,7 +16,7 @@
 
 use std::collections::BTreeMap;
 
-use salvo::oapi::extract::{JsonBody, QueryParam};
+use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde_json::{Value, json};
 
@@ -32,7 +32,7 @@ use crate::wire::{
     DirectoryDescribeResponse, DirectoryValueSearchResponse, ResolveHandleRequest,
     ResolveHandleResponse, ResolveOrganizationRequest, ResolveOrganizationResponse,
     ResolveSpaceRequest, ResolveSpaceResponse, SearchActorsRequest, SearchOrganizationsRequest,
-    SearchSpacesRequest, SearchSpacesResponse,
+    SearchSpacesRequest, SearchSpacesResponse, SearchUsersRequest,
 };
 
 pub(super) fn router() -> Router {
@@ -43,7 +43,7 @@ pub(super) fn router() -> Router {
         .push(Router::with_path("directory/search-organizations").post(search_organizations))
         .push(Router::with_path("directory/resolve-organization").post(resolve_organization))
         .push(Router::with_path("directory/search-actors").post(search_actors))
-        .push(Router::with_path("directory/search-users").get(search_users))
+        .push(Router::with_path("directory/search-users").post(search_users))
         .push(Router::with_path("directory/resolve-handle").post(resolve_handle))
 }
 
@@ -286,18 +286,17 @@ async fn search_actors(
 #[endpoint(
     operation_id = "cx.directory.search_users",
     tags("directory"),
-    summary = "Search actors via the `?query` GET shortcut"
+    summary = "Search users via a POST body to avoid query-string leakage"
 )]
 async fn search_users(
-    query: QueryParam<String, false>,
-    q: QueryParam<String, false>,
-    limit: QueryParam<usize, false>,
+    body: JsonBody<SearchUsersRequest>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<DirectoryValueSearchResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let limit = checked_limit(limit.into_inner())?;
-    let query = query.into_inner().or_else(|| q.into_inner());
+    let body = body.into_inner();
+    let limit = checked_limit(body.limit)?;
+    let query = body.query;
     let session = authenticated_session(state, req).ok();
     let results: Vec<_> = demo_actors(state)
         .into_iter()

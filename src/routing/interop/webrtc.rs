@@ -18,7 +18,8 @@ use salvo::prelude::*;
 use serde_json::{Value, json};
 
 use super::{
-    now, space_has_member, validate_canonical_json_value, validate_did, validate_space_id,
+    now, space_has_member, validate_canonical_json_value, validate_device_id, validate_did,
+    validate_space_id,
 };
 use crate::error::AppError;
 use crate::ids;
@@ -45,15 +46,83 @@ pub(super) fn contrix_router() -> Router {
     Router::with_path("contrix/v1/ice-config").post(ice_config)
 }
 
-#[endpoint]
-async fn ice_config(depot: &mut Depot, res: &mut Response) {
+#[endpoint(
+    operation_id = "cx.media.ice_config",
+    tags("media"),
+    summary = "Issue signed ICE config"
+)]
+async fn ice_config(
+    aa: AuthArgs,
+    body: JsonBody<Value>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    res.render(Json(json!({
-        "service_did": state.config.service_did.clone(),
-        "ttl_seconds": 300,
-        "ice_servers": [],
-        "issued_at": now(),
-    })));
+    let session = aa.authenticated_session(state, req)?;
+    let body = body.into_inner();
+    let space_id = body
+        .get("space_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| AppError::missing_param("space_id is required"))?;
+    let call_id = body
+        .get("call_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| AppError::missing_param("call_id is required"))?;
+    let actor_id = body
+        .get("actor_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| AppError::missing_param("actor_id is required"))?;
+    let device_id = body
+        .get("device_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| AppError::missing_param("device_id is required"))?;
+
+    if validate_space_id(space_id).is_err() {
+        return Err(AppError::invalid_param("invalid space_id"));
+    }
+    if !is_valid_webrtc_session_id(call_id) {
+        return Err(AppError::invalid_param("invalid call_id"));
+    }
+    if validate_did(actor_id).is_err() || actor_id != session.actor {
+        return Err(AppError::invalid_param(
+            "actor_id must match the authenticated actor",
+        ));
+    }
+    if validate_device_id(device_id).is_err() || device_id != session.device_id {
+        return Err(AppError::invalid_param(
+            "device_id must match the authenticated device",
+        ));
+    }
+    if !space_has_member(state, space_id, actor_id) {
+        return Err(AppError::capability_denied(
+            "actor is not a joined member of the space",
+        ));
+    }
+
+    let issued_at = now();
+    let ttl_seconds = 300;
+    let refresh_lead_seconds = 75;
+    let expires_at = issued_at + Duration::seconds(ttl_seconds);
+    // TODO(C47): replace the deterministic placeholder with an EdDSA detached
+    // signature over the canonical response bytes once media-service key
+    // material is provisioned.
+    json_ok(json!({
+        "space_id": space_id,
+        "call_id": call_id,
+        "actor_id": actor_id,
+        "device_id": device_id,
+        "ice_servers": [{"urls": ["stun:stun.l.google.com:19302"]}],
+        "ttl_seconds": ttl_seconds,
+        "refresh_lead_seconds": refresh_lead_seconds,
+        "issued_at": issued_at,
+        "expires_at": expires_at,
+        "force_turn": false,
+        "signature": {
+            "alg": "EdDSA",
+            "kid": format!("{}#media-ice", state.config.service_did),
+            "sig": "placeholder"
+        }
+    }))
 }
 
 #[endpoint(
