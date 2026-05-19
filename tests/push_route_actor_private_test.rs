@@ -22,11 +22,12 @@ const SERVICE_DID_LOCAL: &str = "did:web:principal.acme.example";
 const SERVICE_DID_OTHER: &str = "did:web:principal.rogue.example";
 // Actor-private events on the chime/soland wire still carry a `space_id`
 // in the Operation envelope (the SDK's `Operation::create` requires
-// one); for control-stream / actor-private use the convention is the
-// actor's principal control stream id, but a placeholder is fine for
-// reducer-level tests — the dispatcher reads everything it needs from
-// `operation.payload`.
-const PLACEHOLDER_SPACE: &str = "cx:space:01904100-0000-7000-8000-aaaaaaaaaaaa";
+// one); post-R1.2 the SDK envelope field is conceptually a `realm_id`
+// (the security boundary, ex-`space_id`). For control-stream /
+// actor-private use the convention is the actor's principal control
+// stream id, but a placeholder is fine for reducer-level tests — the
+// dispatcher reads everything it needs from `operation.payload`.
+const PLACEHOLDER_REALM: &str = "cx:realm:01904100-0000-7000-8000-aaaaaaaaaaaa";
 const PRINCIPAL_A: &str = "did:web:alice.example";
 const PRINCIPAL_B: &str = "did:web:bob.example";
 const DEVICE_A: &str = "device-a";
@@ -40,7 +41,7 @@ const GATEWAY_DID: &str = "did:web:gateway.example";
 fn op(payload: Value) -> Operation {
     Operation::create(
         contrix_sdk::OperationId::new(format!("cx:operation:{}", uuid::Uuid::now_v7())).unwrap(),
-        contrix_sdk::SpaceId::new(PLACEHOLDER_SPACE).unwrap(),
+        contrix_sdk::SpaceId::new(PLACEHOLDER_REALM).unwrap(),
         soland::kinds::CX_DEVICE_PUSH_ROUTE,
         payload,
     )

@@ -21,6 +21,7 @@ pub(crate) mod events;
 pub(crate) mod federation;
 mod identity;
 mod interop;
+pub(crate) mod realms;
 pub(crate) mod spaces;
 pub(crate) mod system;
 
@@ -104,6 +105,7 @@ fn api_v1_router() -> Router {
         .push(system::router())
         .push(identity::router())
         .push(spaces::router())
+        .push(realms::router())
         .push(federation::router())
         .push(events::router())
         .push(access::router())

@@ -14,12 +14,20 @@ pub const CX_RELATION_DELETE: &str = "cx.relation.delete";
 pub const CX_VIEW_CREATE: &str = "cx.view.create";
 pub const CX_VIEW_UPDATE: &str = "cx.view.update";
 pub const CX_VIEW_RECONCILE: &str = "cx.view.reconcile";
-pub const CX_PLACE_CREATE: &str = "cx.place.create";
-pub const CX_PLACE_UPDATE: &str = "cx.place.update";
-pub const CX_PLACE_PARENT: &str = "cx.place.parent";
-pub const CX_PLACE_ARCHIVE: &str = "cx.place.archive";
-pub const CX_PLACE_RESTORE: &str = "cx.place.restore";
-pub const CX_PLACE_TOMBSTONE: &str = "cx.place.tombstone";
+// Realm/Space reversal (R1.2): the v1 protocol renames the old security
+// boundary `Space` to `Realm`, and the old container `Place` to `Space`.
+// These constants now point at the new wire strings. Internal Rust
+// identifiers (e.g. `CX_SPACE_CREATE`, struct `PlaceProjection`) retain
+// their pre-rename names — they're internal-only and a follow-up TODO
+// will rename them in a non-mechanical refactor.
+//
+// New container `cx.space.*` (was `cx.place.*`). Container lifecycle.
+pub const CX_PLACE_CREATE: &str = "cx.space.create";
+pub const CX_PLACE_UPDATE: &str = "cx.space.update";
+pub const CX_PLACE_PARENT: &str = "cx.space.parent";
+pub const CX_PLACE_ARCHIVE: &str = "cx.space.archive";
+pub const CX_PLACE_RESTORE: &str = "cx.space.restore";
+pub const CX_PLACE_TOMBSTONE: &str = "cx.space.tombstone";
 // Flow lifecycle (round 13 — Flow projection state machine). spec
 // `common-fields.md §5.1` Flow row: active / archived / redacted / deleted.
 // Flow has no dedicated `cx.flow.tombstone` event (terminal state reached
@@ -69,9 +77,12 @@ pub const CX_CONTAINER_MOVE_ITEM: &str = "cx.container.move_item";
 pub const CX_CONTAINER_REBALANCE: &str = "cx.container.rebalance";
 pub const CX_MEMBER_STATE: &str = "cx.member.state";
 pub const CX_READ_MARKER: &str = "cx.read.marker";
-pub const CX_SPACE_CREATE: &str = "cx.space.create";
-pub const CX_SPACE_UPDATE: &str = "cx.space.update";
-pub const CX_SPACE_DESTROY: &str = "cx.space.destroy";
+// Realm boundary (was the old `cx.space.*` security namespace). The
+// Rust identifiers retain the old name to keep the diff mechanical; the
+// `&str` values point at the new `cx.realm.*` wire strings.
+pub const CX_SPACE_CREATE: &str = "cx.realm.create";
+pub const CX_SPACE_UPDATE: &str = "cx.realm.update";
+pub const CX_SPACE_DESTROY: &str = "cx.realm.destroy";
 pub const CX_REDACTION: &str = "cx.redaction";
 // Round 14e+ (2026-05-16) — Applet protocol family. Spec
 // `extensions/applet-integration.md`. soland's role at this layer is to
@@ -114,13 +125,16 @@ pub const CX_AGENT_WORKSPACE_RESERVATION_CLEANUP: &str = "cx.agent_workspace.res
 // `attested_hardware` Audit Agent removal MUST emit
 // `cx.audit.epoch_key_destruction` in the same anchor batch as the paired
 // `cx.mls.commit`. If the deadline passes without the attestation, soland
-// forces a `cx.space.audit_policy_downgrade` event that drops
+// forces a `cx.realm.audit_policy_downgrade` event (R1.2: was
+// `cx.space.audit_policy_downgrade` pre-Realm/Space reversal) that drops
 // `audit_assurance` from attested_hardware to disclosed_policy and triggers
 // a UI banner. Reducer-level validation lives in `src/reducer.rs` under
 // `apply_audit_epoch_key_destruction` / `apply_audit_policy_downgrade`
 // (still TODO stubs pending full attestation-chain verification).
 pub const CX_AUDIT_EPOCH_KEY_DESTRUCTION: &str = "cx.audit.epoch_key_destruction";
-pub const CX_SPACE_AUDIT_POLICY_DOWNGRADE: &str = "cx.space.audit_policy_downgrade";
+// Realm reversal (R1.2): `cx.space.audit_policy_downgrade` →
+// `cx.realm.audit_policy_downgrade`.
+pub const CX_SPACE_AUDIT_POLICY_DOWNGRADE: &str = "cx.realm.audit_policy_downgrade";
 
 // Round C45 (2026-05-18 main) — new event kinds.
 //
@@ -139,25 +153,50 @@ pub const CX_IDENTITY_ACCOUNTABILITY_GRANT: &str = "cx.identity.accountability_g
 pub const CX_MORPH_SCHEMA_MIGRATE: &str = "cx.morph.schema_migrate";
 pub const CX_ATTESTATION_RANGE_COMPLETENESS: &str = "cx.attestation.range_completeness";
 
-// Round C46 (2026-05-19; spec 0a5ab85) — Space-scoped delivery binding
-// governance + per-device push route binding.
+// Round C46 (2026-05-19; spec 0a5ab85) — Realm-scoped delivery binding
+// governance + per-device push route binding. R1.2 (Realm/Space
+// reversal) renamed the event_kind and cell_family from the old
+// `cx.space.*` security namespace to `cx.realm.*`.
 //
-// `cx.space.delivery_binding_policy` (space / reducer_input): Space policy
-//   constraining which `binding_source` values are admissible, which
-//   recipient services are allowed, which endorsers are required, whether
-//   DID Document fallback / unroutable membership are permitted, and who
-//   may sign rebind. cell_family `cx.component.space.delivery_binding_policy.v1`,
-//   cas-register. Governs reducer acceptance of `cx.member.state{join}`
-//   delivery_binding. Reducer dispatch is TODO — current path validates
-//   only the wire-shape requirements (delivery_status + delivery_binding).
+// `cx.realm.delivery_binding_policy` (realm / reducer_input): Realm
+//   policy constraining which `binding_source` values are admissible,
+//   which recipient services are allowed, which endorsers are required,
+//   whether DID Document fallback / unroutable membership are permitted,
+//   and who may sign rebind. cell_family
+//   `cx.component.realm.delivery_binding_policy.v1`, cas-register.
+//   Governs reducer acceptance of `cx.member.state{join}`
+//   delivery_binding. The reducer projects the policy cell + applies
+//   binding-source / recipient-service / service-acceptance / policy-
+//   frontier checks against routable joins.
 //
 // `cx.device.push_route` (device / actor_private_event / reducer_input):
 //   per-device push route binding for the composite tuple
 //   `(recipient_service_did, principal, device, push_route)`. MUST NOT be
 //   replicated outside the binding's recipient_service_did context. Stored
 //   as actor-private state on the recipient Principal Server only.
-pub const CX_SPACE_DELIVERY_BINDING_POLICY: &str = "cx.space.delivery_binding_policy";
+// Realm reversal (R1.2): `cx.space.delivery_binding_policy` →
+// `cx.realm.delivery_binding_policy`. cell_family also renamed from
+// `cx.component.space.delivery_binding_policy.v1` →
+// `cx.component.realm.delivery_binding_policy.v1`.
+pub const CX_SPACE_DELIVERY_BINDING_POLICY: &str = "cx.realm.delivery_binding_policy";
+// `cx.device.push_route` is device-scoped — unchanged by the rename.
 pub const CX_DEVICE_PUSH_ROUTE: &str = "cx.device.push_route";
+
+// Round R1.2 — new event kinds introduced by the Realm/Space reversal.
+// Wire-accept + projection no-op stubs; full semantics are TODO.
+//
+// `cx.realm.link` (realm / reducer_input): typed link between Realm boundaries.
+// Replaces the old `cx.space.parent` / `cx.space.child` (security) shapes;
+// canonical `link_kind` handling is TODO(realm-rework).
+pub const CX_REALM_LINK: &str = "cx.realm.link";
+// `cx.realm.inheritance_policy` (realm / reducer_input): declares which
+// realm-scoped policies a child Realm inherits from its parent boundary.
+// Drives capability derivation alongside `cx.capability.derived`.
+pub const CX_REALM_INHERITANCE_POLICY: &str = "cx.realm.inheritance_policy";
+// `cx.capability.derived` (capability / reducer_input): records a capability
+// derived from a parent Realm's policy + a child Realm's inheritance
+// declaration. Full derive logic is TODO(realm-rework).
+pub const CX_CAPABILITY_DERIVED: &str = "cx.capability.derived";
 
 pub fn canonical_kind_for_operation(operation: &Operation) -> Option<&str> {
     canonical_kind_for_payload(&operation.object_type, &operation.payload)
@@ -245,6 +284,12 @@ fn canonical_registered_kind(object_type: &str) -> Option<&str> {
         // push registration plumbing.
         CX_SPACE_DELIVERY_BINDING_POLICY => Some(CX_SPACE_DELIVERY_BINDING_POLICY),
         CX_DEVICE_PUSH_ROUTE => Some(CX_DEVICE_PUSH_ROUTE),
+        // Round R1.2 (Realm/Space reversal) — schema-level accept; reducer
+        // projection is TODO(realm-rework) for link_kind / inheritance /
+        // capability derive semantics.
+        CX_REALM_LINK => Some(CX_REALM_LINK),
+        CX_REALM_INHERITANCE_POLICY => Some(CX_REALM_INHERITANCE_POLICY),
+        CX_CAPABILITY_DERIVED => Some(CX_CAPABILITY_DERIVED),
         _ => Some(object_type),
     };
     kind

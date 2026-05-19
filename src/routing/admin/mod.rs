@@ -5,6 +5,7 @@ pub(crate) mod audit;
 mod cells;
 mod collection;
 mod control;
+mod delivery_binding;
 mod introspect;
 
 pub(super) use introspect::{introspect_admin_scopes, require_admin_scope};
@@ -89,5 +90,18 @@ pub fn admin_router() -> Router {
         .push(
             Router::with_path("spaces/{space_id}/gc-candidates")
                 .get(anchor::admin_list_gc_candidates),
+        )
+        // R2.2 — Realm delivery-binding-policy admin surface (post
+        // Realm/Space reversal). Aggressive-mode v1: the old
+        // `/spaces/{id}/delivery-binding-policy` path returns 410 Gone
+        // so callers fail loudly instead of silently reading a stale
+        // shape.
+        .push(
+            Router::with_path("realms/{realm_id}/delivery-binding-policy")
+                .get(delivery_binding::admin_get_realm_delivery_binding_policy),
+        )
+        .push(
+            Router::with_path("spaces/{space_id}/delivery-binding-policy")
+                .get(delivery_binding::admin_legacy_space_delivery_binding_policy_gone),
         )
 }

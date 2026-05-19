@@ -2801,14 +2801,18 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         .iter()
         .filter(|event| {
             event["event_kind"].as_str().is_some_and(|event_kind| {
-                event_kind.starts_with("cx.space.") || event_kind == "cx.member.state"
+                // R1.2 (Realm/Space reversal): security boundary lifecycle
+                // moved from `cx.space.*` to `cx.realm.*`. Container
+                // `cx.space.*` (was `cx.place.*`) is not produced by this
+                // create/destroy assertion path.
+                event_kind.starts_with("cx.realm.") || event_kind == "cx.member.state"
             })
         })
         .map(|event| event["event_kind"].as_str().unwrap().to_owned())
         .collect();
     assert_eq!(
         event_kinds,
-        ["cx.member.state", "cx.space.create", "cx.space.destroy"]
+        ["cx.member.state", "cx.realm.create", "cx.realm.destroy"]
             .into_iter()
             .map(ToOwned::to_owned)
             .collect()
@@ -5485,9 +5489,11 @@ async fn snapshot_v2_audit_path_verifies_against_merkle_root() {
     assert_eq!(oob.status_code.unwrap().as_u16(), 404);
 }
 
-/// Build a signed `cx.place.*` event envelope for the Place state-machine
-/// integration test. Mirrors [`signed_event_envelope`] but with a custom
-/// `kind` + `payload` (Place events do not carry a message body).
+/// Build a signed container `cx.space.*` event envelope for the Space
+/// (container) state-machine integration test. Post-R1.2 the container
+/// namespace moved from `cx.place.*` to `cx.space.*`. Mirrors
+/// [`signed_event_envelope`] but with a custom `kind` + `payload`
+/// (container lifecycle events do not carry a message body).
 fn signed_place_event(
     event_id: &str,
     actor_seq: u64,
@@ -5537,7 +5543,7 @@ async fn place_lifecycle_state_machine_returns_412_for_illegal_transitions() {
     let create_event = signed_place_event(
         "cx:event:01904100-0000-7000-8000-d10dc0000001",
         1,
-        "cx.place.create",
+        "cx.space.create",
         serde_json::json!({
             "object": {
                 "id": place_id,
@@ -5563,7 +5569,7 @@ async fn place_lifecycle_state_machine_returns_412_for_illegal_transitions() {
     let bad_restore = signed_place_event(
         "cx:event:01904100-0000-7000-8000-d10dc0000002",
         2,
-        "cx.place.restore",
+        "cx.space.restore",
         serde_json::json!({ "place_id": place_id }),
         vec!["cx:event:01904100-0000-7000-8000-d10dc0000001"],
     );
@@ -5584,7 +5590,7 @@ async fn place_lifecycle_state_machine_returns_412_for_illegal_transitions() {
     let archive_event = signed_place_event(
         "cx:event:01904100-0000-7000-8000-d10dc0000003",
         3,
-        "cx.place.archive",
+        "cx.space.archive",
         serde_json::json!({ "place_id": place_id }),
         vec!["cx:event:01904100-0000-7000-8000-d10dc0000001"],
     );
@@ -5602,7 +5608,7 @@ async fn place_lifecycle_state_machine_returns_412_for_illegal_transitions() {
     let good_restore = signed_place_event(
         "cx:event:01904100-0000-7000-8000-d10dc0000004",
         4,
-        "cx.place.restore",
+        "cx.space.restore",
         serde_json::json!({ "place_id": place_id }),
         vec!["cx:event:01904100-0000-7000-8000-d10dc0000003"],
     );
@@ -5620,7 +5626,7 @@ async fn place_lifecycle_state_machine_returns_412_for_illegal_transitions() {
     let tombstone_event = signed_place_event(
         "cx:event:01904100-0000-7000-8000-d10dc0000005",
         5,
-        "cx.place.tombstone",
+        "cx.space.tombstone",
         serde_json::json!({ "place_id": place_id }),
         vec!["cx:event:01904100-0000-7000-8000-d10dc0000004"],
     );
@@ -5638,7 +5644,7 @@ async fn place_lifecycle_state_machine_returns_412_for_illegal_transitions() {
     let bad_tombstone = signed_place_event(
         "cx:event:01904100-0000-7000-8000-d10dc0000006",
         6,
-        "cx.place.tombstone",
+        "cx.space.tombstone",
         serde_json::json!({ "place_id": place_id }),
         vec!["cx:event:01904100-0000-7000-8000-d10dc0000005"],
     );
@@ -5661,7 +5667,7 @@ async fn place_lifecycle_state_machine_returns_412_for_illegal_transitions() {
     let bad_restore_terminal = signed_place_event(
         "cx:event:01904100-0000-7000-8000-d10dc0000007",
         7,
-        "cx.place.restore",
+        "cx.space.restore",
         serde_json::json!({ "place_id": place_id }),
         vec!["cx:event:01904100-0000-7000-8000-d10dc0000005"],
     );
@@ -6368,7 +6374,7 @@ async fn projection_places_endpoint_reports_lifecycle_state() {
     let create_event = signed_place_event(
         "cx:event:01904100-0000-7000-8000-f10ec0000001",
         1,
-        "cx.place.create",
+        "cx.space.create",
         serde_json::json!({
             "object": {
                 "id": place_id,
@@ -6393,7 +6399,7 @@ async fn projection_places_endpoint_reports_lifecycle_state() {
     let archive_event = signed_place_event(
         "cx:event:01904100-0000-7000-8000-f10ec0000002",
         2,
-        "cx.place.archive",
+        "cx.space.archive",
         serde_json::json!({ "place_id": place_id }),
         vec!["cx:event:01904100-0000-7000-8000-f10ec0000001"],
     );
@@ -6430,7 +6436,7 @@ async fn projection_places_endpoint_reports_lifecycle_state() {
     let restore_event = signed_place_event(
         "cx:event:01904100-0000-7000-8000-f10ec0000003",
         3,
-        "cx.place.restore",
+        "cx.space.restore",
         serde_json::json!({ "place_id": place_id }),
         vec!["cx:event:01904100-0000-7000-8000-f10ec0000002"],
     );
@@ -6961,7 +6967,7 @@ async fn projection_endpoints_hide_terminal_state_by_default() {
     let create_place = signed_place_event(
         "cx:event:01904100-0000-7000-8000-c15d70010001",
         1,
-        "cx.place.create",
+        "cx.space.create",
         serde_json::json!({
             "object": {
                 "id": place_id,
@@ -6986,7 +6992,7 @@ async fn projection_endpoints_hide_terminal_state_by_default() {
     let tombstone_place = signed_place_event(
         "cx:event:01904100-0000-7000-8000-c15d70010002",
         2,
-        "cx.place.tombstone",
+        "cx.space.tombstone",
         serde_json::json!({ "place_id": place_id }),
         vec!["cx:event:01904100-0000-7000-8000-c15d70010001"],
     );
@@ -7836,7 +7842,7 @@ async fn projection_persistence_write_through_mirrors_lifecycle_events() {
     let create_place = signed_place_event(
         "cx:event:01904100-0000-7000-8000-15a15ae00001",
         1,
-        "cx.place.create",
+        "cx.space.create",
         serde_json::json!({
             "object": {
                 "id": place_id,
@@ -7861,7 +7867,7 @@ async fn projection_persistence_write_through_mirrors_lifecycle_events() {
     let archive_place = signed_place_event(
         "cx:event:01904100-0000-7000-8000-15a15ae00002",
         2,
-        "cx.place.archive",
+        "cx.space.archive",
         serde_json::json!({ "place_id": place_id }),
         vec!["cx:event:01904100-0000-7000-8000-15a15ae00001"],
     );

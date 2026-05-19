@@ -736,6 +736,52 @@ fn validate_event_envelope(
     let kind = event_string_field(object, &["kind"]).ok_or_else(|| {
         event_validation_error(StatusCode::BAD_REQUEST, "missing_param", "kind is required")
     })?;
+    // R1.2 (Realm/Space reversal) — hard_reject the pre-rename security
+    // `cx.space.<event>` and container `cx.place.*` wire kinds with a
+    // distinct reason_code so clients can detect they need to upgrade.
+    // The reversal moved the security namespace from `cx.space.*` to
+    // `cx.realm.*` and the container namespace from `cx.place.*` to
+    // `cx.space.*`; both lists below name the pre-rename kinds that are
+    // now extinct on the wire.
+    if matches!(
+        kind.as_str(),
+        "cx.space.upgrade"
+            | "cx.space.organization"
+            | "cx.space.policy"
+            | "cx.space.join_rule"
+            | "cx.space.history_visibility"
+            | "cx.space.discovery"
+            | "cx.space.policy_server"
+            | "cx.space.policy_components"
+            | "cx.space.history_sharing_policy"
+            | "cx.space.delivery_binding_policy"
+            | "cx.space.asset_privacy_policy"
+            | "cx.space.read_receipt_policy"
+            | "cx.space.moderation_policy"
+            | "cx.space.plaintext_visible_services"
+            | "cx.space.media_service"
+            | "cx.space.schema"
+            | "cx.space.audit_policy_downgrade"
+            | "cx.space.destroy"
+            | "cx.space.freeze"
+            | "cx.space.notification.audit"
+            | "cx.space.child"
+    ) {
+        return Err(event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "realm_kind_renamed_in_v1",
+            "this security-namespace `cx.space.*` kind was renamed to \
+             `cx.realm.*` in v1 (Realm/Space reversal)",
+        ));
+    }
+    if kind.as_str().starts_with("cx.place.") {
+        return Err(event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "place_kind_renamed_to_space",
+            "the container namespace `cx.place.*` was renamed to \
+             `cx.space.*` in v1 (Realm/Space reversal)",
+        ));
+    }
     if !artifacts::active_durable_event_kinds().contains(&kind) {
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
@@ -1904,7 +1950,7 @@ fn event_visible_to_session(
 }
 
 /// Scan the durable Event store for the most
-/// recent `cx.space.read_receipt_policy` event in `space_id` and return
+/// recent `cx.realm.read_receipt_policy` event in `space_id` and return
 /// `(disclosure, visibility, scope_overrides_allowed)` from its payload.
 /// Returns `None` when no policy event has been written for this Space —
 /// caller treats that as the spec default `Optional` / `Members` /
@@ -1922,13 +1968,15 @@ pub fn effective_read_receipt_policy_for_space(
     state: &AppState,
     space_id: &str,
 ) -> Option<(String, String, bool)> {
-    // Cell-keyed fast path. The
-    // Move/Anchor pipeline writes `cx.component.space.read_receipt_policy.v1`
-    // resolved CasRegister value into `ProjectionState::cells` after every
-    // apply_anchor; we read directly from there.
+    // Cell-keyed fast path. The Move/Anchor pipeline writes the
+    // `cx.component.realm.read_receipt_policy.v1` resolved CasRegister
+    // value into `ProjectionState::cells` after every apply_anchor; we
+    // read directly from there. (R1.2 renamed the cell family from
+    // `cx.component.space.read_receipt_policy.v1` along with the event
+    // kind.)
     if let Ok(proj) = state.projection.lock() {
         let cell_id = contrix_sdk::CellRef::new(format!(
-            "cx:cell:cx.component.space.read_receipt_policy.v1:{space_id}"
+            "cx:cell:cx.component.realm.read_receipt_policy.v1:{space_id}"
         ))
         .ok()?;
         if let Some(value) = proj.cell_value(&cell_id) {
@@ -1957,7 +2005,7 @@ pub fn effective_read_receipt_policy_for_space(
     for record in &records {
         // CanonicalEventRecord uses `kind` (not event_kind) for the
         // canonical Contrix event kind string.
-        if record.kind != "cx.space.read_receipt_policy" {
+        if record.kind != "cx.realm.read_receipt_policy" {
             continue;
         }
         if record.space_id.as_deref() != Some(space_id) {

@@ -94,9 +94,9 @@ pub struct ProjectionState {
     ///     `cx.component.member.state.v1` FSM cell.
     ///   - `space_states` (mixed: ordered-log + cas-register) — kept as structured `space_states`
     ///     side-band cache (server-side `created_at`/`updated_at`/`deleted` flag) BUT every
-    ///     `apply_space_lifecycle` now also writes one of: `cx.component.space.create.v1`
-    ///     (ordered-log, append) / `cx.component.space.organization.v1` (cas-register, latest
-    ///     metadata) / `cx.component.space.destroy.v1` (cas-register, terminal). Helpers:
+    ///     `apply_space_lifecycle` now also writes one of: `cx.component.realm.create.v1`
+    ///     (ordered-log, append) / `cx.component.realm.organization.v1` (cas-register, latest
+    ///     metadata) / `cx.component.realm.destroy.v1` (cas-register, terminal). Helpers:
     ///     `space_create_log` / `space_organization_cell_value` / `space_is_destroyed` query cells
     ///     directly.
     /// Durable-event-only fields (`messages` / `reactions` / `read_markers`
@@ -136,6 +136,82 @@ pub struct ProjectionState {
     /// (`cx.agent.protocol_session.{start,status,result}`) are also not
     /// mirrored — see `applets` rationale.
     pub agents: BTreeMap<String, AgentProjection>,
+    /// R3.1 — Realm-link projection. Outer key is the source
+    /// `realm_id` (the envelope `space_id` of a `cx.realm.link` event);
+    /// the inner Vec accumulates every directed link the Realm has
+    /// declared, including non-`active` status entries (so admin tooling
+    /// can render `rejected` / `tombstoned` history). Cell-canonical
+    /// values live in `cells` under
+    /// `cx.component.realm.link.v1` keyed by `(realm, target, link_kind)`;
+    /// this is the structured side-band cache used by the query API.
+    pub realm_links: BTreeMap<String, Vec<RealmLinkState>>,
+    /// R3.1 — inverse index of [`Self::realm_links`] keyed by the
+    /// target `realm_id`. Lets the query API answer
+    /// `direction=inbound` in O(1) without a full scan.
+    pub realm_links_inbound: BTreeMap<String, Vec<RealmLinkState>>,
+    /// R3.2 — `cx.realm.inheritance_policy` projection, keyed by the
+    /// child `realm_id` (the envelope `space_id`). Cas-register
+    /// semantics — last write wins.
+    pub realm_inheritance_policies: BTreeMap<String, RealmInheritancePolicyState>,
+    /// R3.2 — `cx.capability.derived` projection, keyed by
+    /// `capability_id`. Cas-register semantics — last write wins per
+    /// capability.
+    pub capability_derived: BTreeMap<String, CapabilityDerivedState>,
+    /// R3.3 — `cx.realm.audit_policy_downgrade` audit log. Append-only
+    /// list of downgrade events per Realm.
+    pub realm_audit_downgrades: BTreeMap<String, Vec<RealmAuditDowngradeEntry>>,
+}
+
+/// R3.1 — structured cache row for a single directed Realm link.
+/// Mirrors the `cx.component.realm.link.v1` cell value plus envelope-
+/// derived timestamps so the query API can render `created_at` /
+/// `updated_at` without re-reading the durable Event store.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RealmLinkState {
+    pub realm_id: String,
+    pub target_realm_id: String,
+    /// Canonical link kind string (snake_case, one of the eight values
+    /// in `contrix_sdk::RealmLinkKind`).
+    pub link_kind: String,
+    /// `active` / `rejected` / `tombstoned`.
+    pub status: String,
+    pub label: Option<String>,
+    pub commitment: Option<String>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// R3.2 — structured cache row for `cx.realm.inheritance_policy`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RealmInheritancePolicyState {
+    pub realm_id: String,
+    pub source_realm_id: String,
+    pub allowed_policies: Vec<String>,
+    pub allowed_capability_bundles: Vec<String>,
+    pub max_depth: u32,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// R3.2 — structured cache row for `cx.capability.derived`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CapabilityDerivedState {
+    pub capability_id: String,
+    pub realm_id: String,
+    pub source_grant_ref: String,
+    pub source_realm_inheritance_policy_ref: String,
+    pub causal_frontier: String,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// R3.3 — single audit_policy_downgrade entry.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RealmAuditDowngradeEntry {
+    pub realm_id: String,
+    pub from_policy: Option<String>,
+    pub to_policy: Option<String>,
+    pub reason: Option<String>,
+    pub approver: Option<String>,
+    pub recorded_at: chrono::DateTime<chrono::Utc>,
 }
 
 /// Server-side Place state cache. Mirrors the `projection_places` table.
@@ -464,6 +540,39 @@ pub enum ProjectionEffect {
     AppletProjectionUpdated {
         service_did: String,
     },
+    /// R1.2 — `cx.realm.delivery_binding_policy` event was projected
+    /// into the canonical `cx.component.realm.delivery_binding_policy.v1`
+    /// cas-register cell.
+    DeliveryBindingPolicyProjected {
+        space_id: String,
+    },
+    /// R3.1 — `cx.realm.link` event was projected into the
+    /// `cx.component.realm.link.v1` or_set cell + the `realm_links`
+    /// structured cache.
+    RealmLinkProjected {
+        realm_id: String,
+        target_realm_id: String,
+        link_kind: String,
+        status: String,
+    },
+    /// R3.2 — `cx.realm.inheritance_policy` event was projected into the
+    /// `cx.component.realm.inheritance_policy.v1` cas-register cell.
+    RealmInheritancePolicyProjected {
+        realm_id: String,
+        source_realm_id: String,
+    },
+    /// R3.2 — `cx.capability.derived` event was projected into the
+    /// `cx.component.capability.derived.v1` cas-register cell.
+    CapabilityDerivedProjected {
+        capability_id: String,
+        realm_id: String,
+    },
+    /// R3.3 — `cx.realm.audit_policy_downgrade` event was appended to
+    /// the `cx.component.realm.audit_policy_downgrade.v1` ordered-log
+    /// audit cell + the structured side-band cache.
+    RealmAuditPolicyDowngradeProjected {
+        realm_id: String,
+    },
     /// Agent registry projection updated (endpoint). Keyed by the
     /// agent's `agent_did`.
     AgentProjectionUpdated {
@@ -774,6 +883,168 @@ fn apply_agent_endpoint_dispatch(
 ) -> ProjectionEffect {
     s.apply_agent_endpoint(op, op.created_at)
 }
+/// R1.2 — dispatch for `cx.realm.delivery_binding_policy`. Renamed from
+/// the pre-rename `cx.space.delivery_binding_policy`; cell family is
+/// `cx.component.realm.delivery_binding_policy.v1`.
+fn apply_delivery_binding_policy_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_delivery_binding_policy(op)
+}
+/// R3.1 — upsert a realm-link row into a per-Realm Vec cache. Matches
+/// on the composite key `(realm_id, target_realm_id, link_kind)`; an
+/// update replaces in place (keeping the original `created_at`).
+fn upsert_realm_link(vec: &mut Vec<RealmLinkState>, row: &RealmLinkState) {
+    if let Some(existing) = vec.iter_mut().find(|r| {
+        r.realm_id == row.realm_id
+            && r.target_realm_id == row.target_realm_id
+            && r.link_kind == row.link_kind
+    }) {
+        let created_at = existing.created_at;
+        *existing = row.clone();
+        existing.created_at = created_at;
+    } else {
+        vec.push(row.clone());
+    }
+}
+
+/// R3.2 — extract a string EventRef id from an `EventRef`-shaped
+/// payload field. Accepts both the canonical object shape
+/// `{"id": "cx:event:...", "role": "..."}` and a bare string form
+/// (older client tolerance).
+fn extract_event_ref_id(payload: &Value, field: &str) -> Option<String> {
+    let v = payload.get(field)?;
+    if let Some(s) = v.as_str() {
+        return Some(s.to_owned());
+    }
+    v.get("id").and_then(Value::as_str).map(ToOwned::to_owned)
+}
+
+/// R3.1 — dispatch for `cx.realm.link`. Projects the typed link payload
+/// into the `cx.component.realm.link.v1` or_set cell + structured
+/// `realm_links` / `realm_links_inbound` caches.
+fn apply_realm_link_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_realm_link(op, op.created_at)
+}
+
+/// R3.2 — dispatch for `cx.realm.inheritance_policy`. Projects the
+/// cas-register cell + structured cache; rejects `max_depth > 1`.
+fn apply_realm_inheritance_policy_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_realm_inheritance_policy(op, op.created_at)
+}
+
+/// R3.2 — dispatch for `cx.capability.derived`. Projects the cas-
+/// register cell + structured cache. Full evaluation of the derive
+/// (verify grant + replay inheritance) is TODO(realm-rework).
+fn apply_capability_derived_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_capability_derived(op, op.created_at)
+}
+
+/// R3.3 — dispatch for `cx.realm.audit_policy_downgrade`. Appends the
+/// downgrade entry to the ordered-log audit cell + the structured
+/// side-band cache.
+fn apply_realm_audit_policy_downgrade_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_realm_audit_policy_downgrade(op, op.created_at)
+}
+
+/// R1.2 — pure validation for a `cx.member.state{join,routable}`
+/// `delivery_binding` against a projected
+/// `cx.realm.delivery_binding_policy` payload. Returns `Ok(())` when the
+/// binding is admissible; `Err(reason_code)` otherwise. Reason codes
+/// mirror the spec join-policy.md §5.1 catalogue.
+fn enforce_delivery_binding_policy(
+    policy: &Value,
+    binding: &serde_json::Map<String, Value>,
+) -> Result<(), &'static str> {
+    let binding_source = binding
+        .get("binding_source")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let recipient_service_did = binding
+        .get("recipient_service_did")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+
+    // `allow_binding_sources` is an explicit allow-list. Missing or
+    // empty means "no source admissible" — fail closed.
+    let allow_sources: Vec<&str> = policy
+        .get("allow_binding_sources")
+        .and_then(Value::as_array)
+        .map(|arr| arr.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default();
+    if !allow_sources.iter().any(|s| *s == binding_source) {
+        return Err("binding_source_not_allowed");
+    }
+    // `did_document_default` requires the toggle even if the source list
+    // includes it (spec §5.1.3 — organization/compliance Realms must set
+    // `allow_did_document_default=false`).
+    if binding_source == "did_document_default"
+        && !policy
+            .get("allow_did_document_default")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    {
+        return Err("binding_source_not_allowed");
+    }
+
+    // `allowed_recipient_services`: empty allow-list means unrestricted
+    // (per spec, the policy may omit the list to opt out of explicit
+    // recipient pinning); non-empty list MUST contain the binding's
+    // recipient_service_did.
+    let allowed_recipients: Vec<&str> = policy
+        .get("allowed_recipient_services")
+        .and_then(Value::as_array)
+        .map(|arr| arr.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default();
+    if !allowed_recipients.is_empty()
+        && !allowed_recipients.iter().any(|s| *s == recipient_service_did)
+    {
+        return Err("recipient_service_not_allowed");
+    }
+
+    // `binding_source=explicit` requires a signed `service_acceptance_ref`.
+    if binding_source == "explicit"
+        && !binding
+            .get("service_acceptance_ref")
+            .map(|v| v.is_string())
+            .unwrap_or(false)
+    {
+        return Err("service_acceptance_missing");
+    }
+
+    // Frontier check: if the policy declares `policy_frontier`, the
+    // binding's carried `delivery_binding_frontier` MUST match or
+    // exceed it lexicographically. Missing carried frontier = stale.
+    if let Some(policy_frontier) = policy.get("policy_frontier").and_then(Value::as_str) {
+        let carried = binding
+            .get("delivery_binding_frontier")
+            .and_then(Value::as_str);
+        match carried {
+            None => return Err("delivery_binding_stale"),
+            Some(c) if c < policy_frontier => return Err("delivery_binding_stale"),
+            _ => {}
+        }
+    }
+    Ok(())
+}
 
 /// Build the canonical `event_kind → ApplyFn` registry consumed by
 /// [`ProjectionState::apply`]. Public so out-of-crate tests can assert
@@ -823,6 +1094,25 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
     m.insert(CX_APPLET_REGISTRATION, apply_applet_registration_dispatch);
     m.insert(CX_APPLET_DISCOVERY, apply_applet_discovery_dispatch);
     m.insert(CX_AGENT_ENDPOINT, apply_agent_endpoint_dispatch);
+    // R1.2 — Realm/Space reversal. delivery_binding_policy now lives on
+    // `cx.realm.*` with cell_family `cx.component.realm.delivery_binding_policy.v1`.
+    m.insert(
+        CX_SPACE_DELIVERY_BINDING_POLICY,
+        apply_delivery_binding_policy_dispatch,
+    );
+    // R3.1 / R3.2 / R3.3 — Realm-governance event kinds. Each writes a
+    // cell + a structured side-band cache; see the per-kind apply
+    // helpers for cell-family naming.
+    m.insert(CX_REALM_LINK, apply_realm_link_dispatch);
+    m.insert(
+        CX_REALM_INHERITANCE_POLICY,
+        apply_realm_inheritance_policy_dispatch,
+    );
+    m.insert(CX_CAPABILITY_DERIVED, apply_capability_derived_dispatch);
+    m.insert(
+        CX_SPACE_AUDIT_POLICY_DOWNGRADE,
+        apply_realm_audit_policy_downgrade_dispatch,
+    );
     m
 }
 
@@ -897,8 +1187,8 @@ impl ProjectionState {
     /// "cell-state-only event reached the inline cache by mistake"
     /// branch.
     ///
-    /// All cell-state events (cx.space.policy / cx.space.read_receipt_policy /
-    /// cx.consent.* / cx.member.state / cx.space.* facets) are routed via
+    /// All cell-state events (cx.realm.policy / cx.realm.read_receipt_policy /
+    /// cx.consent.* / cx.member.state / cx.realm.* facets) are routed via
     /// the Move/Anchor pipeline through `LatticeKind` impls in
     /// `lattice_kinds.rs`; the structured ProjectionState fields don't
     /// mirror them. `routing/projection.rs::project_read_receipt_policy`
@@ -1511,6 +1801,400 @@ impl ProjectionState {
         ProjectionEffect::RelationCreated(state.clone())
     }
 
+    /// R1.2 — project a `cx.realm.delivery_binding_policy` event into the
+    /// `cx.component.realm.delivery_binding_policy.v1` cas-register cell.
+    /// The payload is taken whole as the cell value so downstream readers
+    /// (`delivery_binding_policy_cell_value` + the `apply_membership`
+    /// validation path) can inspect each policy field directly.
+    fn apply_delivery_binding_policy(&mut self, operation: &Operation) -> ProjectionEffect {
+        let space_id = operation.space_id.to_string();
+        let value = operation.payload.clone();
+        if let Ok(cell_id) = contrix_sdk::CellRef::new(format!(
+            "cx:cell:cx.component.realm.delivery_binding_policy.v1:{space_id}"
+        )) {
+            self.cells.insert(cell_id, CellState::Value(value));
+        }
+        ProjectionEffect::DeliveryBindingPolicyProjected { space_id }
+    }
+
+    /// R3.1 — project a `cx.realm.link` event.
+    ///
+    /// Writes to the canonical `cx.component.realm.link.v1` cell (or_set
+    /// lattice, cell_subject = `(realm_id, target_realm_id, link_kind)`)
+    /// AND mirrors into the structured `realm_links` /
+    /// `realm_links_inbound` caches consumed by the
+    /// `/api/v1/realms/{id}/links` query API.
+    ///
+    /// Schema-level validation:
+    /// - `link_kind` MUST be one of the eight canonical values declared
+    ///   on `contrix_sdk::RealmLinkKind`.
+    /// - `target_realm_id` is required and MUST be a Realm-shaped id.
+    /// - `status` defaults to `active`; valid values are
+    ///   `active|rejected|tombstoned`.
+    /// - Self-referential links (target == source) are rejected with
+    ///   `realm_link_self_reference`.
+    fn apply_realm_link(
+        &mut self,
+        operation: &Operation,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> ProjectionEffect {
+        let realm_id = operation.space_id.to_string();
+        let Some(target_realm_id) = operation
+            .payload
+            .get("target_realm_id")
+            .and_then(Value::as_str)
+        else {
+            return ProjectionEffect::Rejected {
+                reason: "realm_link_target_missing".to_owned(),
+            };
+        };
+        let Some(link_kind) = operation.payload.get("link_kind").and_then(Value::as_str) else {
+            return ProjectionEffect::Rejected {
+                reason: "realm_link_kind_missing".to_owned(),
+            };
+        };
+        if contrix_sdk::RealmLinkKind::parse(link_kind).is_none() {
+            return ProjectionEffect::Rejected {
+                reason: "realm_link_kind_invalid".to_owned(),
+            };
+        }
+        if target_realm_id == realm_id {
+            return ProjectionEffect::Rejected {
+                reason: "realm_link_self_reference".to_owned(),
+            };
+        }
+        let status = operation
+            .payload
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or("active");
+        if !matches!(status, "active" | "rejected" | "tombstoned") {
+            return ProjectionEffect::Rejected {
+                reason: "realm_link_status_invalid".to_owned(),
+            };
+        }
+        let label = operation
+            .payload
+            .get("label")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
+        let commitment = operation
+            .payload
+            .get("commitment")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
+
+        // Cell write — or_set keyed by composite subject. Encode subject
+        // as `(realm, target, link_kind)` joined by `|` (cells store
+        // strings; reducer-side decoders re-split).
+        if let Ok(cell_id) = contrix_sdk::CellRef::new(format!(
+            "cx:cell:cx.component.realm.link.v1:{realm_id}|{target_realm_id}|{link_kind}"
+        )) {
+            let value = serde_json::json!({
+                "realm_id": realm_id,
+                "target_realm_id": target_realm_id,
+                "link_kind": link_kind,
+                "status": status,
+                "label": label,
+                "commitment": commitment,
+                "updated_at": now.to_rfc3339(),
+            });
+            self.cells.insert(cell_id, CellState::Value(value));
+        }
+
+        // Structured side-band cache mirror. Outbound: keyed by source
+        // realm. Inbound: keyed by target realm.
+        let row = RealmLinkState {
+            realm_id: realm_id.clone(),
+            target_realm_id: target_realm_id.to_owned(),
+            link_kind: link_kind.to_owned(),
+            status: status.to_owned(),
+            label,
+            commitment,
+            created_at: now,
+            updated_at: now,
+        };
+        upsert_realm_link(self.realm_links.entry(realm_id.clone()).or_default(), &row);
+        upsert_realm_link(
+            self.realm_links_inbound
+                .entry(target_realm_id.to_owned())
+                .or_default(),
+            &row,
+        );
+
+        ProjectionEffect::RealmLinkProjected {
+            realm_id,
+            target_realm_id: target_realm_id.to_owned(),
+            link_kind: link_kind.to_owned(),
+            status: status.to_owned(),
+        }
+    }
+
+    /// R3.2 — project a `cx.realm.inheritance_policy` event.
+    ///
+    /// Cell family: `cx.component.realm.inheritance_policy.v1` (cas-register).
+    /// Rejects payloads with `max_depth > 1` (current wire cap; multi-
+    /// depth composite inheritance is TODO(realm-rework)).
+    fn apply_realm_inheritance_policy(
+        &mut self,
+        operation: &Operation,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> ProjectionEffect {
+        let realm_id = operation.space_id.to_string();
+        let Some(source_realm_id) = operation
+            .payload
+            .get("source_realm_id")
+            .and_then(Value::as_str)
+        else {
+            return ProjectionEffect::Rejected {
+                reason: "realm_inheritance_source_missing".to_owned(),
+            };
+        };
+        let max_depth = operation
+            .payload
+            .get("max_depth")
+            .and_then(Value::as_u64)
+            .unwrap_or(1) as u32;
+        if max_depth == 0 {
+            return ProjectionEffect::Rejected {
+                reason: "realm_inheritance_max_depth_zero".to_owned(),
+            };
+        }
+        if max_depth > contrix_sdk::RealmInheritancePolicy::MAX_DEPTH_CAP {
+            return ProjectionEffect::Rejected {
+                reason: "realm_inheritance_max_depth_exceeded".to_owned(),
+            };
+        }
+        let allowed_policies: Vec<String> = operation
+            .payload
+            .get("allowed_policies")
+            .and_then(Value::as_array)
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(Value::as_str)
+                    .map(ToOwned::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default();
+        let allowed_capability_bundles: Vec<String> = operation
+            .payload
+            .get("allowed_capability_bundles")
+            .and_then(Value::as_array)
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(Value::as_str)
+                    .map(ToOwned::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        // TODO(realm-rework): verify that the parent Realm has actually
+        // granted these policies / bundles (today we accept any
+        // declaration). Full derive evaluation also TODO.
+
+        if let Ok(cell_id) = contrix_sdk::CellRef::new(format!(
+            "cx:cell:cx.component.realm.inheritance_policy.v1:{realm_id}"
+        )) {
+            let value = serde_json::json!({
+                "source_realm_id": source_realm_id,
+                "allowed_policies": allowed_policies,
+                "allowed_capability_bundles": allowed_capability_bundles,
+                "max_depth": max_depth,
+                "updated_at": now.to_rfc3339(),
+            });
+            self.cells.insert(cell_id, CellState::Value(value));
+        }
+
+        self.realm_inheritance_policies.insert(
+            realm_id.clone(),
+            RealmInheritancePolicyState {
+                realm_id: realm_id.clone(),
+                source_realm_id: source_realm_id.to_owned(),
+                allowed_policies,
+                allowed_capability_bundles,
+                max_depth,
+                updated_at: now,
+            },
+        );
+
+        ProjectionEffect::RealmInheritancePolicyProjected {
+            realm_id,
+            source_realm_id: source_realm_id.to_owned(),
+        }
+    }
+
+    /// R3.2 — project a `cx.capability.derived` event.
+    ///
+    /// Cell family: `cx.component.capability.derived.v1` (cas-register,
+    /// keyed by `capability_id`). Schema-level required fields:
+    /// `capability_id`, `source_grant_ref`, `source_realm_inheritance_policy_ref`,
+    /// `causal_frontier`. Full derive validation is TODO(realm-rework).
+    fn apply_capability_derived(
+        &mut self,
+        operation: &Operation,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> ProjectionEffect {
+        let realm_id = operation.space_id.to_string();
+        let Some(capability_id) = operation
+            .payload
+            .get("capability_id")
+            .and_then(Value::as_str)
+        else {
+            return ProjectionEffect::Rejected {
+                reason: "capability_derived_id_missing".to_owned(),
+            };
+        };
+        let source_grant_ref = match extract_event_ref_id(&operation.payload, "source_grant_ref") {
+            Some(s) => s,
+            None => {
+                return ProjectionEffect::Rejected {
+                    reason: "capability_derived_source_grant_ref_missing".to_owned(),
+                };
+            }
+        };
+        let source_realm_inheritance_policy_ref =
+            match extract_event_ref_id(&operation.payload, "source_realm_inheritance_policy_ref") {
+                Some(s) => s,
+                None => {
+                    return ProjectionEffect::Rejected {
+                        reason: "capability_derived_inheritance_ref_missing".to_owned(),
+                    };
+                }
+            };
+        let Some(causal_frontier) = operation
+            .payload
+            .get("causal_frontier")
+            .and_then(Value::as_str)
+        else {
+            return ProjectionEffect::Rejected {
+                reason: "capability_derived_causal_frontier_missing".to_owned(),
+            };
+        };
+
+        // TODO(realm-rework): full derive evaluation — verify
+        // source_grant_ref's bundle, replay the inheritance policy at
+        // causal_frontier, and emit the resulting effective capability
+        // set into a derived-capability index.
+
+        if let Ok(cell_id) = contrix_sdk::CellRef::new(format!(
+            "cx:cell:cx.component.capability.derived.v1:{capability_id}"
+        )) {
+            let mut value = serde_json::Map::new();
+            value.insert(
+                "capability_id".to_owned(),
+                Value::String(capability_id.to_owned()),
+            );
+            value.insert("realm_id".to_owned(), Value::String(realm_id.clone()));
+            value.insert(
+                "source_grant_ref".to_owned(),
+                Value::String(source_grant_ref.clone()),
+            );
+            value.insert(
+                "source_realm_inheritance_policy_ref".to_owned(),
+                Value::String(source_realm_inheritance_policy_ref.clone()),
+            );
+            value.insert(
+                "causal_frontier".to_owned(),
+                Value::String(causal_frontier.to_owned()),
+            );
+            value.insert("updated_at".to_owned(), Value::String(now.to_rfc3339()));
+            if let Some(bundle) = operation.payload.get("bundle") {
+                value.insert("bundle".to_owned(), bundle.clone());
+            }
+            self.cells
+                .insert(cell_id, CellState::Value(Value::Object(value)));
+        }
+
+        self.capability_derived.insert(
+            capability_id.to_owned(),
+            CapabilityDerivedState {
+                capability_id: capability_id.to_owned(),
+                realm_id: realm_id.clone(),
+                source_grant_ref,
+                source_realm_inheritance_policy_ref,
+                causal_frontier: causal_frontier.to_owned(),
+                updated_at: now,
+            },
+        );
+
+        ProjectionEffect::CapabilityDerivedProjected {
+            capability_id: capability_id.to_owned(),
+            realm_id,
+        }
+    }
+
+    /// R3.3 — project a `cx.realm.audit_policy_downgrade` event into the
+    /// `cx.component.realm.audit_policy_downgrade.v1` ordered-log cell
+    /// + the `realm_audit_downgrades` audit cache.
+    ///
+    /// Full audit closure (notify `cx.realm.notification.audit` holder,
+    /// trigger UI banner) is TODO(realm-rework) — see
+    /// `kinds.rs::CX_SPACE_AUDIT_POLICY_DOWNGRADE` for the broader
+    /// attestation-chain pipeline that drives this downgrade.
+    fn apply_realm_audit_policy_downgrade(
+        &mut self,
+        operation: &Operation,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> ProjectionEffect {
+        let realm_id = operation.space_id.to_string();
+        let from_policy = operation
+            .payload
+            .get("from_policy")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
+        let to_policy = operation
+            .payload
+            .get("to_policy")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
+        let reason = operation
+            .payload
+            .get("reason")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
+        let approver = operation
+            .payload
+            .get("approver")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
+
+        let entry = serde_json::json!({
+            "from_policy": from_policy,
+            "to_policy": to_policy,
+            "reason": reason,
+            "approver": approver,
+            "recorded_at": now.to_rfc3339(),
+            "operation_id": operation.operation_id.as_str(),
+        });
+        if let Ok(cell_id) = contrix_sdk::CellRef::new(format!(
+            "cx:cell:cx.component.realm.audit_policy_downgrade.v1:{realm_id}"
+        )) {
+            let new_log = match self.cells.get(&cell_id) {
+                Some(CellState::Value(Value::Array(existing))) => {
+                    let mut log = existing.clone();
+                    log.push(entry);
+                    CellState::Value(Value::Array(log))
+                }
+                _ => CellState::Value(Value::Array(vec![entry])),
+            };
+            self.cells.insert(cell_id, new_log);
+        }
+
+        self.realm_audit_downgrades
+            .entry(realm_id.clone())
+            .or_default()
+            .push(RealmAuditDowngradeEntry {
+                realm_id: realm_id.clone(),
+                from_policy,
+                to_policy,
+                reason,
+                approver,
+                recorded_at: now,
+            });
+
+        ProjectionEffect::RealmAuditPolicyDowngradeProjected { realm_id }
+    }
+
     fn apply_membership(
         &mut self,
         operation: &Operation,
@@ -1553,26 +2237,33 @@ impl ProjectionState {
                     return ProjectionEffect::Ignored;
                 }
                 Some("routable") => {
-                    if !operation
+                    let Some(binding) = operation
                         .payload
                         .get("delivery_binding")
-                        .map(|v| v.is_object())
-                        .unwrap_or(false)
-                    {
+                        .and_then(Value::as_object)
+                    else {
                         tracing::warn!(
                             space_id = %space_id,
                             member = %member,
                             "rejected routable join without delivery_binding (spec 0a5ab85)"
                         );
                         return ProjectionEffect::Ignored;
+                    };
+                    // R1.2 — `cx.realm.delivery_binding_policy` enforcement.
+                    // Without a projected policy cell, fail-closed for
+                    // routable joins per spec join-policy.md §5.1.3 —
+                    // there is no DID Document fallback path.
+                    let policy_value = self.delivery_binding_policy_cell_value(&space_id).cloned();
+                    let Some(policy) = policy_value else {
+                        return ProjectionEffect::Rejected {
+                            reason: "delivery_binding_policy_unset".to_owned(),
+                        };
+                    };
+                    if let Err(reason) = enforce_delivery_binding_policy(&policy, binding) {
+                        return ProjectionEffect::Rejected {
+                            reason: reason.to_owned(),
+                        };
                     }
-                    // TODO(spec-sync 0a5ab85): once cell_family
-                    // `cx.component.space.delivery_binding_policy.v1` is
-                    // projected, validate binding_source / recipient_service_did
-                    // against the policy here; fail closed on disallowed source
-                    // and emit `delivery_binding_stale` when the carried
-                    // `delivery_binding_frontier` lags the accepted handover
-                    // frontier. Senders MUST NOT fall back to DID Document.
                 }
                 Some("unroutable") => {
                     // Member is recorded but Space-scoped delivery is
@@ -1643,11 +2334,13 @@ impl ProjectionState {
     ) -> ProjectionEffect {
         // Keep the structured cache and the canonical cells map in sync.
         //
-        // Per spec event-kind-registry, each cx.space.* lifecycle event
-        // writes a distinct cell family with its own lattice:
-        //   cx.space.create  → cx.component.space.create.v1  (ordered-log, singleton)
-        //   cx.space.update  → cx.component.space.organization.v1 (cas-register, singleton)
-        //   cx.space.destroy → cx.component.space.destroy.v1 (cas-register, singleton)
+        // Per spec event-kind-registry, each cx.realm.* lifecycle event
+        // writes a distinct cell family with its own lattice (post-R1.2,
+        // the Realm/Space reversal renamed the security namespace from
+        // `space` to `realm`):
+        //   cx.realm.create  → cx.component.realm.create.v1  (ordered-log, singleton)
+        //   cx.realm.update  → cx.component.realm.organization.v1 (cas-register, singleton)
+        //   cx.realm.destroy → cx.component.realm.destroy.v1 (cas-register, singleton)
         //
         // The structured `space_states` field is the side-band cache —
         // keeps `created_at` / `updated_at` server-side timestamps and a
@@ -1670,6 +2363,49 @@ impl ProjectionState {
             .get("title")
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned);
+        // R3.4 — Realm security_class + federation_policy projection.
+        // Spec: a Realm with `security_class=high_assurance` MUST have
+        // `federation_policy ∈ {closed, restricted, quarantine}`. Any
+        // update that violates this MUST be rejected with
+        // `high_assurance_federation_policy_invalid`. We resolve the
+        // effective security_class by taking the new payload's value if
+        // present, otherwise the projected value from a prior event.
+        let payload_security_class = operation
+            .payload
+            .get("security_class")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
+        let payload_federation_policy = operation
+            .payload
+            .get("federation_policy")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
+        let projected_security_class = self.realm_security_class(&space_id);
+        let effective_security_class = payload_security_class
+            .clone()
+            .or(projected_security_class);
+        // Constraint: high_assurance forbids federation_policy=open. The
+        // projected federation_policy is computed by taking the payload
+        // value if present, otherwise the prior cell value.
+        let effective_federation_policy = payload_federation_policy.clone().or_else(|| {
+            contrix_sdk::CellRef::new(format!(
+                "cx:cell:cx.component.realm.organization.v1:{space_id}"
+            ))
+            .ok()
+            .and_then(|c| self.cell_value(&c).cloned())
+            .and_then(|v| {
+                v.get("federation_policy")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned)
+            })
+        });
+        if matches!(effective_security_class.as_deref(), Some("high_assurance"))
+            && matches!(effective_federation_policy.as_deref(), Some("open"))
+        {
+            return ProjectionEffect::Rejected {
+                reason: "high_assurance_federation_policy_invalid".to_owned(),
+            };
+        }
 
         // Structured cache mirror.
         let space = self
@@ -1708,11 +2444,13 @@ impl ProjectionState {
                 // spec lattice allows multiple (e.g. spec changes,
                 // re-genesis under recovery).
                 if let Ok(cell_id) = contrix_sdk::CellRef::new(format!(
-                    "cx:cell:cx.component.space.create.v1:{space_id}"
+                    "cx:cell:cx.component.realm.create.v1:{space_id}"
                 )) {
                     let entry = serde_json::json!({
                         "owner": owner,
                         "title": title,
+                        "security_class": payload_security_class,
+                        "federation_policy": payload_federation_policy,
                         "created_at": now.to_rfc3339(),
                         "operation_id": operation.operation_id.as_str(),
                     });
@@ -1733,14 +2471,25 @@ impl ProjectionState {
                 // pulled from payload (fields the spec evolves can land
                 // here without changing soland code).
                 if let Ok(cell_id) = contrix_sdk::CellRef::new(format!(
-                    "cx:cell:cx.component.space.organization.v1:{space_id}"
+                    "cx:cell:cx.component.realm.organization.v1:{space_id}"
                 )) {
-                    let mut value = serde_json::Map::new();
+                    // Start from the existing cell value so partial
+                    // updates retain previously-set fields.
+                    let mut value = match self.cells.get(&cell_id) {
+                        Some(CellState::Value(Value::Object(existing))) => existing.clone(),
+                        _ => serde_json::Map::new(),
+                    };
                     if let Some(o) = owner.as_ref() {
                         value.insert("owner".to_owned(), Value::String(o.clone()));
                     }
                     if let Some(t) = title.as_ref() {
                         value.insert("title".to_owned(), Value::String(t.clone()));
+                    }
+                    if let Some(sc) = payload_security_class.as_ref() {
+                        value.insert("security_class".to_owned(), Value::String(sc.clone()));
+                    }
+                    if let Some(fp) = payload_federation_policy.as_ref() {
+                        value.insert("federation_policy".to_owned(), Value::String(fp.clone()));
                     }
                     value.insert("updated_at".to_owned(), Value::String(now.to_rfc3339()));
                     self.cells
@@ -1750,7 +2499,7 @@ impl ProjectionState {
             k if k == crate::kinds::CX_SPACE_DESTROY => {
                 // cas-register: terminal {destroyed: true, at: ts}.
                 if let Ok(cell_id) = contrix_sdk::CellRef::new(format!(
-                    "cx:cell:cx.component.space.destroy.v1:{space_id}"
+                    "cx:cell:cx.component.realm.destroy.v1:{space_id}"
                 )) {
                     let value = serde_json::json!({
                         "destroyed": true,
@@ -2957,24 +3706,24 @@ impl ProjectionState {
 
     // ── Space lifecycle cell helpers ──
 
-    /// Read the effective `cx.component.space.organization.v1` cas-register
-    /// value (mutable Space metadata: owner, title, updated_at). Returns
-    /// `None` if no `cx.space.update` event has landed for this space, or
+    /// Read the effective `cx.component.realm.organization.v1` cas-register
+    /// value (mutable Realm metadata: owner, title, updated_at). Returns
+    /// `None` if no `cx.realm.update` event has landed for this realm, or
     /// if the cell is in `Bottom` (concurrent admin updates require recovery).
     pub fn space_organization_cell_value(&self, space_id: &str) -> Option<&Value> {
         let cell_id = contrix_sdk::CellRef::new(format!(
-            "cx:cell:cx.component.space.organization.v1:{space_id}"
+            "cx:cell:cx.component.realm.organization.v1:{space_id}"
         ))
         .ok()?;
         self.cell_value(&cell_id)
     }
 
-    /// Read the `cx.component.space.create.v1` ordered-log entries for the
-    /// space's genesis history. Returns `None` for spaces with no create
+    /// Read the `cx.component.realm.create.v1` ordered-log entries for the
+    /// realm's genesis history. Returns `None` for realms with no create
     /// events (e.g. before first projection) or `Bottom` state.
     pub fn space_create_log(&self, space_id: &str) -> Option<&[Value]> {
         let cell_id =
-            contrix_sdk::CellRef::new(format!("cx:cell:cx.component.space.create.v1:{space_id}"))
+            contrix_sdk::CellRef::new(format!("cx:cell:cx.component.realm.create.v1:{space_id}"))
                 .ok()?;
         match self.cells.get(&cell_id)? {
             CellState::Value(Value::Array(entries)) => Some(entries.as_slice()),
@@ -2982,17 +3731,142 @@ impl ProjectionState {
         }
     }
 
-    /// True when the `cx.component.space.destroy.v1` cell has a Value
+    /// True when the `cx.component.realm.destroy.v1` cell has a Value
     /// (any non-Bottom value indicates the destroy commit landed).
     /// Equivalent to checking `space_states[space_id].deleted` but reads
     /// from the protocol-canonical cells map source.
     pub fn space_is_destroyed(&self, space_id: &str) -> bool {
         let Ok(cell_id) =
-            contrix_sdk::CellRef::new(format!("cx:cell:cx.component.space.destroy.v1:{space_id}"))
+            contrix_sdk::CellRef::new(format!("cx:cell:cx.component.realm.destroy.v1:{space_id}"))
         else {
             return false;
         };
         matches!(self.cells.get(&cell_id), Some(CellState::Value(_)))
+    }
+
+    /// Read the projected `cx.component.realm.delivery_binding_policy.v1`
+    /// cas-register value, if any. R1.2 introduced a structured cache
+    /// for this cell so the wire-validation path in
+    /// `apply_membership` can fail-closed on routable joins when policy
+    /// is unset. TODO(realm-rework): once the projection mirror table
+    /// for delivery_binding_policy lands, switch this from the generic
+    /// cells map to the structured cache.
+    pub fn delivery_binding_policy_cell_value(&self, space_id: &str) -> Option<&Value> {
+        let cell_id = contrix_sdk::CellRef::new(format!(
+            "cx:cell:cx.component.realm.delivery_binding_policy.v1:{space_id}"
+        ))
+        .ok()?;
+        self.cell_value(&cell_id)
+    }
+
+    /// Read the `policy_frontier` declared on the most recent
+    /// `cx.realm.delivery_binding_policy` event for this realm. TODO
+    /// (realm-rework): wire this up to a structured cache so the
+    /// reducer can emit `delivery_binding_stale` rejections.
+    pub fn delivery_binding_policy_frontier(&self, space_id: &str) -> Option<&str> {
+        self.delivery_binding_policy_cell_value(space_id)?
+            .get("policy_frontier")
+            .and_then(Value::as_str)
+    }
+
+    /// R3.1 — query realm links by direction and optional link_kind
+    /// allow-list. Returns a Vec sorted by `(target_realm_id, link_kind)`
+    /// so the response is stable across calls.
+    ///
+    /// `direction` controls which side(s) of the edge to return:
+    /// `outbound` → edges where `realm_id == realm_id`, `inbound` →
+    /// edges where `target_realm_id == realm_id`, `both` → both
+    /// (outbound first, inbound second).
+    pub fn realm_links_query(
+        &self,
+        realm_id: &str,
+        direction: contrix_sdk::RealmLinkDirection,
+        link_kind_allow: Option<&[String]>,
+    ) -> Vec<RealmLinkState> {
+        use contrix_sdk::RealmLinkDirection;
+        let filter = |row: &&RealmLinkState| {
+            link_kind_allow
+                .map(|allow| allow.iter().any(|k| k == &row.link_kind))
+                .unwrap_or(true)
+        };
+        let mut out: Vec<RealmLinkState> = Vec::new();
+        if matches!(
+            direction,
+            RealmLinkDirection::Outbound | RealmLinkDirection::Both
+        ) {
+            if let Some(rows) = self.realm_links.get(realm_id) {
+                out.extend(rows.iter().filter(filter).cloned());
+            }
+        }
+        if matches!(
+            direction,
+            RealmLinkDirection::Inbound | RealmLinkDirection::Both
+        ) {
+            if let Some(rows) = self.realm_links_inbound.get(realm_id) {
+                out.extend(rows.iter().filter(filter).cloned());
+            }
+        }
+        out.sort_by(|a, b| {
+            a.target_realm_id
+                .cmp(&b.target_realm_id)
+                .then(a.link_kind.cmp(&b.link_kind))
+                .then(a.realm_id.cmp(&b.realm_id))
+        });
+        out
+    }
+
+    /// R3.2 — read the most-recent `cx.realm.inheritance_policy`
+    /// projection for a child Realm, if any.
+    pub fn realm_inheritance_policy(&self, realm_id: &str) -> Option<&RealmInheritancePolicyState> {
+        self.realm_inheritance_policies.get(realm_id)
+    }
+
+    /// R3.2 — read the most-recent `cx.capability.derived` projection
+    /// for a capability id, if any.
+    pub fn capability_derived_state(&self, capability_id: &str) -> Option<&CapabilityDerivedState> {
+        self.capability_derived.get(capability_id)
+    }
+
+    /// R3.3 — read the ordered audit log of
+    /// `cx.realm.audit_policy_downgrade` entries for a Realm.
+    pub fn realm_audit_downgrades(&self, realm_id: &str) -> &[RealmAuditDowngradeEntry] {
+        self.realm_audit_downgrades
+            .get(realm_id)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
+    }
+
+    /// R3.4 — read the projected Realm `security_class` (from the
+    /// `cx.component.realm.organization.v1` cas-register cell). Returns
+    /// `None` when no Realm-update has landed yet — caller may infer
+    /// `standard` per spec default.
+    pub fn realm_security_class(&self, realm_id: &str) -> Option<String> {
+        // First check the organization cell (cas-register, last write
+        // wins; carries the most recent update).
+        if let Ok(org_cell) = contrix_sdk::CellRef::new(format!(
+            "cx:cell:cx.component.realm.organization.v1:{realm_id}"
+        )) {
+            if let Some(v) = self
+                .cell_value(&org_cell)
+                .and_then(|c| c.get("security_class"))
+                .and_then(Value::as_str)
+            {
+                return Some(v.to_owned());
+            }
+        }
+        // Fallback: check the create-log cell's last entry.
+        if let Ok(create_cell) = contrix_sdk::CellRef::new(format!(
+            "cx:cell:cx.component.realm.create.v1:{realm_id}"
+        )) {
+            if let Some(arr) = self.cell_value(&create_cell).and_then(Value::as_array) {
+                if let Some(last) = arr.last() {
+                    if let Some(s) = last.get("security_class").and_then(Value::as_str) {
+                        return Some(s.to_owned());
+                    }
+                }
+            }
+        }
+        None
     }
 }
 

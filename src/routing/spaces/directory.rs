@@ -145,7 +145,10 @@ async fn resolve_space(
         Some(space) => json_ok(ResolveSpaceResponse {
             space_preview: space.clone(),
             stripped_state: vec![json!({
-                "type": "cx.space.discovery",
+                // R1.2 (Realm/Space reversal): security-namespace
+                // event renamed from `cx.space.discovery` to
+                // `cx.realm.discovery`.
+                "type": "cx.realm.discovery",
                 "subject": "",
                 "content": {
                     "discoverability": space_discoverability(state, space.space_id.as_str()),

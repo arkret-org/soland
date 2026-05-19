@@ -14,8 +14,10 @@
 //!   timeline-shaped responses.
 //!
 //! Today this layer only fans out `cx.message.*` / `cx.member.state` /
-//! `cx.space.*` lifecycle events; everything else is dropped on the floor
-//! (`project_accepted_operations` only routes message+membership+lifecycle).
+//! `cx.realm.*` (security boundary, was `cx.space.*` pre-R1.2) lifecycle
+//! events plus the container `cx.space.*` (was `cx.place.*`) family;
+//! everything else is dropped on the floor (`project_accepted_operations`
+//! only routes message+membership+lifecycle).
 //! Persistence: `projection_events` is in-memory plus a Pg mirror via
 //! `space_state_events` + `space_members`.
 
@@ -685,10 +687,11 @@ pub fn project_accepted_operations(state: &AppState, origin: &str, operations: &
         {
             project_membership_operation(state, origin, operation);
         }
-        // Cache cx.space.read_receipt_policy state into ProjectionState so
+        // Cache cx.realm.read_receipt_policy state into ProjectionState so
         // ephemeral cx.receipt.read fanout (and other readers) can hit a
         // BTreeMap lookup instead of scanning the durable Event store.
-        if kinds::canonical_kind_string(operation) == "cx.space.read_receipt_policy" {
+        // (R1.2 renamed `cx.space.read_receipt_policy` to `cx.realm.*`.)
+        if kinds::canonical_kind_string(operation) == "cx.realm.read_receipt_policy" {
             project_read_receipt_policy(state, operation);
         }
         // Also apply to the deterministic reducer
@@ -891,9 +894,11 @@ pub fn persist_projected_operation(
     Ok(())
 }
 
-/// Project a `cx.space.read_receipt_policy`
-/// durable-event into `ProjectionState::cells` as a synthesized CasRegister
-/// value at the canonical cell `cx:cell:cx.component.space.read_receipt_policy.v1:<space_id>`.
+/// Project a `cx.realm.read_receipt_policy` (post-R1.2; was
+/// `cx.space.read_receipt_policy`) durable-event into
+/// `ProjectionState::cells` as a synthesized CasRegister value at the
+/// canonical cell
+/// `cx:cell:cx.component.realm.read_receipt_policy.v1:<space_id>`.
 /// This unifies the read path with the Move/Anchor pipeline: both durable-
 /// event ingestion AND Move/Anchor `apply_anchor` write to the same cells
 /// map, so `routing::events::effective_read_receipt_policy_for_space`
@@ -927,7 +932,7 @@ pub fn project_read_receipt_policy(state: &AppState, operation: &Operation) {
     // the cells-map fast-path serve reads without scanning the durable
     // Event store on every fanout.
     let cell_id = match contrix_sdk::CellRef::new(format!(
-        "cx:cell:cx.component.space.read_receipt_policy.v1:{}",
+        "cx:cell:cx.component.realm.read_receipt_policy.v1:{}",
         space_id.as_str()
     )) {
         Ok(c) => c,

@@ -8,6 +8,21 @@ in-memory mode keeps the same API for fast local iteration.
 > for vulnerability disclosure, and [../_todos.md](../_todos.md) for the open
 > task list.
 
+## Realm vs Space
+
+Following the Phase 1–4 terminology inversion (Round R1.x — wire-breaking):
+
+- **Realm:** security boundary — membership, capability, E2EE, federation.
+  Reducer cells live under `cx.realm.*`; admin routes use `/realms/:id/...`.
+  Old name on the wire: `Space`.
+- **Space:** navigation container — board, list, section, calendar bucket
+  inside a Realm. Old name on the wire: `Place`.
+
+`cx.realm.link`, `cx.realm.inheritance_policy`, and `cx.capability.derived`
+are the new typed edges that wire boundaries together (governed_by /
+discoverable_from / mirror_of). Legacy `space_*` and `place_*` payload
+fields remain accepted as serde aliases.
+
 ## Quick start
 
 soland depends on the `contrix` crate at `../contrix-rust-sdk/crates/sdk`.
