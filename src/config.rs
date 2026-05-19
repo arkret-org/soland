@@ -193,6 +193,13 @@ pub struct AppConfig {
     /// DAGs; further candidates are picked up on subsequent ticks.
     /// Env: `SOLAND_COMPACTION_PRUNE_WALK_PER_SPACE_LIMIT` (default 50).
     pub compaction_prune_walk_per_space_limit: usize,
+    /// Round R2/R3 (T08) — deployment trust domain id, used to bind
+    /// `cx.cross_signing.reset` events to this Principal Server so the
+    /// same proof bytes cannot be replayed cross-domain. Loaded from
+    /// `SOLAND_TRUST_DOMAIN` (must match `cx:trust_domain:<scope>`,
+    /// scope = lowercase alphanumerics/dot/dash/underscore/colon ≤128 chars).
+    /// Defaults to `cx:trust_domain:<host_of_service_did>`.
+    pub trust_domain: String,
     /// When true, `AppState::new` seeds a deterministic demo Space
     /// (`cx:space:0196419b-...`), demo account (`did:web:alice.example`),
     /// and matching space_meta record on boot. Off by default so
@@ -447,6 +454,7 @@ impl AppConfig {
                 .unwrap_or(50)
                 .max(1);
         let seed_demo_data = env_bool("SOLAND_SEED_DEMO_DATA")?.unwrap_or(false);
+        let trust_domain = derive_trust_domain(&service_did)?;
 
         Ok(Self {
             bind,
@@ -489,6 +497,7 @@ impl AppConfig {
             compaction_prune_walk_interval_seconds,
             compaction_prune_walk_per_space_limit,
             seed_demo_data,
+            trust_domain,
         })
     }
 
@@ -770,6 +779,49 @@ fn load_agent_audit_binding_signing_seed() -> anyhow::Result<Option<[u8; 32]>> {
     let mut seed = [0u8; 32];
     seed.copy_from_slice(&bytes);
     Ok(Some(seed))
+}
+
+/// Round R2/R3 (T08) — derive a deployment-bound trust domain id.
+///
+/// Order of resolution:
+/// 1. `SOLAND_TRUST_DOMAIN` env var if set (must validate as
+///    `cx:trust_domain:<scope>` per SDK [`contrix_sdk::TypedTrustDomainId`]).
+/// 2. Synthesised from the configured `service_did` — strip the DID method
+///    prefix and lowercase the remainder, then prefix with
+///    `cx:trust_domain:`.
+fn derive_trust_domain(service_did: &str) -> anyhow::Result<String> {
+    if let Some(value) = env_non_empty("SOLAND_TRUST_DOMAIN") {
+        // Validate via SDK typed id — rejects bad shape at boot.
+        contrix_sdk::TypedTrustDomainId::new(value.clone()).map_err(|e| {
+            anyhow::anyhow!("SOLAND_TRUST_DOMAIN must be cx:trust_domain:<scope>: {e}")
+        })?;
+        return Ok(value);
+    }
+    let host = service_did
+        .strip_prefix("did:web:")
+        .or_else(|| service_did.strip_prefix("did:key:"))
+        .or_else(|| service_did.strip_prefix("did:webvh:"))
+        .unwrap_or(service_did);
+    // Normalise to the SDK scope grammar: lowercase, keep
+    // [a-z0-9.\-_:].
+    let scope: String = host
+        .to_ascii_lowercase()
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | ':'))
+        .collect();
+    let scope = if scope.is_empty() {
+        "local".to_owned()
+    } else {
+        scope
+    };
+    let candidate = format!("cx:trust_domain:{scope}");
+    // Final safety check.
+    contrix_sdk::TypedTrustDomainId::new(candidate.clone()).map_err(|e| {
+        anyhow::anyhow!(
+            "derived trust_domain from service_did {service_did:?} failed validation: {e}"
+        )
+    })?;
+    Ok(candidate)
 }
 
 fn env_csv(name: &str) -> Option<Vec<String>> {
