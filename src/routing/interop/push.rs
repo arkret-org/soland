@@ -29,10 +29,7 @@ use serde_json::{Value, json};
 use super::audit::append_audit_log;
 use super::auth::{SessionGrantValidationInput, validate_session_grant_binding};
 use super::push_outbound::{derive_push_gateway_service_base_url, join_api_v1_url};
-use super::{
-    authenticated_session, now, sha256_hex, validate_canonical_json_value,
-    validate_no_removed_legacy_contracts,
-};
+use super::{authenticated_session, now, sha256_hex, validate_canonical_json_value};
 use crate::error::AppError;
 use crate::persistence::DriftResult;
 use crate::result::{JsonResult, json_ok};
@@ -129,7 +126,7 @@ pub(super) async fn push_register(
     })
 }
 
-/// Map the legacy `(status, code, message)` triplet produced by
+/// Map the `(status, code, message)` triplet produced by
 /// `authenticated_session` + `push_register_session_grant_bridge` to a
 /// canonical `ErrorCode`. The lookup is fast and lossless because both call
 /// sites only emit a small closed set.
@@ -297,9 +294,6 @@ pub(super) async fn push_notify(
 ) -> JsonResult<PushNotifyResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
-    if let Err(message) = validate_no_removed_legacy_contracts(&body.notification) {
-        return Err(AppError::invalid_param(message));
-    }
     if push_notification_leaks_plaintext(&body.notification) {
         return Err(AppError::invalid_param(
             "push notification must not include plaintext content",

@@ -18,10 +18,9 @@
 //!
 //! Filtering: [`AppConfig::did_resolver_allow_methods`] is honoured by
 //! omitting any resolver whose method is not in the allow list. Method
-//! names compared are bare ("web", "webvh", "key") — matching
-//! the existing CSV shape produced by `env_csv` in `config.rs`. An
-//! empty / missing allow list (legacy config) is treated as "allow
-//! everything" so we don't break existing deployments.
+//! names compared are bare ("web", "webvh", "key") — matching the
+//! existing CSV shape produced by `env_csv` in `config.rs`. The allow
+//! list MUST be non-empty; an empty list resolves nothing.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -76,11 +75,9 @@ struct LocalIdentityResolver {
 
 impl LocalIdentityResolver {
     fn method_allowed(&self, method: &str) -> bool {
-        self.allowed_methods.is_empty()
-            || self
-                .allowed_methods
-                .iter()
-                .any(|allowed| allowed.eq_ignore_ascii_case(method))
+        self.allowed_methods
+            .iter()
+            .any(|allowed| allowed.eq_ignore_ascii_case(method))
     }
 
     fn document(&self, did: &Did) -> Result<DidDocument, Error> {
@@ -116,9 +113,6 @@ impl DidResolver for LocalIdentityResolver {
 }
 
 fn method_allowed(config: &AppConfig, method: &str) -> bool {
-    if config.did_resolver_allow_methods.is_empty() {
-        return true;
-    }
     config
         .did_resolver_allow_methods
         .iter()
@@ -313,16 +307,13 @@ mod tests {
     }
 
     #[test]
-    fn empty_allow_methods_treated_as_allow_all() {
-        // Backward compat: legacy deployments may have an empty
-        // allow_methods CSV. We must default to "allow everything" so
-        // existing chains keep resolving did:web / did:key.
+    fn empty_allow_methods_resolves_nothing() {
         let mut config = base_config();
         config.did_resolver_allow_methods.clear();
         config.external_webvh_provider_url = Some("https://webvh.example".to_owned());
         config.external_webvh_provider_active = true;
         let chain = build_did_resolver_chain(&config);
-        assert!(chain.supports(&sample_webvh_did()));
-        assert!(chain.supports(&sample_web_did()));
+        assert!(!chain.supports(&sample_webvh_did()));
+        assert!(!chain.supports(&sample_web_did()));
     }
 }

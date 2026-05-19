@@ -15,8 +15,6 @@
 //! - `validate_encrypted_payload_envelope` — `cx.profile.encrypted_payload.v1` envelope shape (MLS
 //!   sender / scheme / version / `key_ref`).
 //! - `validate_device_message_payload` — to-device payload shape.
-//! - `validate_no_removed_legacy_contracts` (+ scanners) — kicks payloads that reference the
-//!   removed legacy `cx.subject.*` / `cx.room.*` / `cx.card.*` contracts.
 //! - `validate_rfc3339_utc_z` — UTC-Z timestamp shape.
 //! - `canonical_json_digest` — sha256 over canonical-JSON bytes.
 //!
@@ -224,19 +222,8 @@ const FLOW_WATCH_REQUIREMENTS: &[PayloadRequirement] = &[
         "flow watch operation requires level (use null to clear)",
     ),
 ];
-// Flow track sub-events. Required fields per SDK schemas:
-//   `cx.flow.track.{disable,enable,set_primary}` -> flow_id + track_id
-//   `cx.flow.track.update`                      -> flow_id + track_id + patch
-//   `cx.flow.tracks.update`                     -> flow_id + (patch | tracks)
-const FLOW_TRACK_REQUIREMENTS: &[PayloadRequirement] = &[
-    PayloadRequirement::Required("flow_id", "flow track operation requires flow_id"),
-    PayloadRequirement::Required("track_id", "flow track operation requires track_id"),
-];
-const FLOW_TRACK_UPDATE_REQUIREMENTS: &[PayloadRequirement] = &[
-    PayloadRequirement::Required("flow_id", "flow track update requires flow_id"),
-    PayloadRequirement::Required("track_id", "flow track update requires track_id"),
-    PayloadRequirement::Required("patch", "flow track update requires patch"),
-];
+// Flow tracks update event. Required fields per SDK schema:
+//   `cx.flow.tracks.update` -> flow_id + (patch | tracks)
 const FLOW_TRACKS_UPDATE_FIELDS: &[&str] = &["patch", "tracks"];
 const FLOW_TRACKS_UPDATE_REQUIREMENTS: &[PayloadRequirement] = &[
     PayloadRequirement::Required("flow_id", "flow tracks update requires flow_id"),
@@ -424,50 +411,6 @@ const READ_MARKER_REQUIREMENTS: &[PayloadRequirement] = &[
     PayloadRequirement::Required("event_id", "read marker operation requires event_id"),
 ];
 
-const REMOVED_LEGACY_TYPED_ID_PREFIXES: &[&str] = &["cx:subject:", "cx:room:", "cx:card:"];
-const REMOVED_LEGACY_SCHEMA_IDS: &[&str] = &[
-    "cx.schema.subject.v1",
-    "cx.schema.room.v1",
-    "cx.schema.card.v1",
-];
-const REMOVED_LEGACY_EVENT_PREFIXES: &[&str] = &["cx.subject.", "cx.room.", "cx.card."];
-const ACTIVE_WIRE_LEGACY_CONTRACT_ERROR: &str =
-    "removed legacy subject/room/card contract is forbidden on the active v1 wire";
-
-pub fn is_removed_legacy_contract_string(value: &str) -> bool {
-    REMOVED_LEGACY_TYPED_ID_PREFIXES
-        .iter()
-        .any(|prefix| value.starts_with(prefix))
-        || REMOVED_LEGACY_SCHEMA_IDS
-            .iter()
-            .any(|schema_id| value == *schema_id)
-        || REMOVED_LEGACY_EVENT_PREFIXES
-            .iter()
-            .any(|prefix| value.starts_with(prefix))
-}
-
-pub fn value_contains_removed_legacy_contract(value: &serde_json::Value) -> bool {
-    match value {
-        serde_json::Value::String(value) => is_removed_legacy_contract_string(value),
-        serde_json::Value::Array(values) => {
-            values.iter().any(value_contains_removed_legacy_contract)
-        }
-        serde_json::Value::Object(object) => object.iter().any(|(key, value)| {
-            matches!(key.as_str(), "room_id" | "card_id" | "subject_id")
-                || value_contains_removed_legacy_contract(value)
-        }),
-        _ => false,
-    }
-}
-
-pub fn validate_no_removed_legacy_contracts(value: &serde_json::Value) -> Result<(), &'static str> {
-    if value_contains_removed_legacy_contract(value) {
-        Err(ACTIVE_WIRE_LEGACY_CONTRACT_ERROR)
-    } else {
-        Ok(())
-    }
-}
-
 pub fn validate_operation_semantics(
     _state: &AppState,
     operations: &[Operation],
@@ -477,15 +420,6 @@ pub fn validate_operation_semantics(
         operation
             .validate_payload_object()
             .map_err(|_| "operation payload must be a JSON object")?;
-        if is_removed_legacy_contract_string(operation.object_type.as_str())
-            || operation
-                .object_id
-                .as_deref()
-                .is_some_and(is_removed_legacy_contract_string)
-        {
-            return Err(ACTIVE_WIRE_LEGACY_CONTRACT_ERROR);
-        }
-        validate_no_removed_legacy_contracts(&operation.payload)?;
         validate_canonical_json_value(&operation.payload)?;
         let Some(kind) = kinds::canonical_kind_for_operation(operation) else {
             return Err("unregistered operation kind");
@@ -591,16 +525,6 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
         },
         kinds::CX_FLOW_WATCH_SET => OperationPayloadSchema {
             requirements: FLOW_WATCH_REQUIREMENTS,
-            validate: None,
-        },
-        kinds::CX_FLOW_TRACK_DISABLE
-        | kinds::CX_FLOW_TRACK_ENABLE
-        | kinds::CX_FLOW_TRACK_SET_PRIMARY => OperationPayloadSchema {
-            requirements: FLOW_TRACK_REQUIREMENTS,
-            validate: None,
-        },
-        kinds::CX_FLOW_TRACK_UPDATE => OperationPayloadSchema {
-            requirements: FLOW_TRACK_UPDATE_REQUIREMENTS,
             validate: None,
         },
         kinds::CX_FLOW_TRACKS_UPDATE => OperationPayloadSchema {
@@ -1377,8 +1301,6 @@ pub fn validate_content_block(block: &serde_json::Value) -> Result<(), &'static 
     let Some(block) = block.as_object() else {
         return Err("content block must be a JSON object");
     };
-    // Per spec 2026-05-09 (C21): content_block.type → content_block.kind.
-    // Accept new `kind` only; v1 not yet released → no compat for legacy `type`.
     let Some(block_kind) = block.get("kind").and_then(|value| value.as_str()) else {
         return Err("content block requires kind");
     };

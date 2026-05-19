@@ -201,11 +201,6 @@ impl AuthzEngine {
         (true, cascade)
     }
 
-    /// Backwards-compatible wrapper around [`Self::revoke_grant_with_cascade`].
-    pub fn revoke_grant(&self, grant_id: &str) -> bool {
-        self.revoke_grant_with_cascade(grant_id).0
-    }
-
     /// Look up a grant by id. Returns `None` if unknown.
     pub fn get_grant(&self, grant_id: &str) -> Option<Grant> {
         self.grants
@@ -739,7 +734,7 @@ mod tests {
             vec!["manage_space".to_owned()],
             vec![],
         );
-        engine.revoke_grant(&grant.grant_id);
+        engine.revoke_grant_with_cascade(&grant.grant_id);
         let result = engine.check(
             "did:web:bob",
             "manage_space",

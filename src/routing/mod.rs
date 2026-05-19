@@ -33,10 +33,7 @@ use events::flow::{
 };
 #[cfg(test)]
 use events::operations::validate_operation_semantics;
-use events::operations::{
-    validate_canonical_json_value, validate_device_message_payload,
-    validate_no_removed_legacy_contracts,
-};
+use events::operations::{validate_canonical_json_value, validate_device_message_payload};
 use events::projection::{
     accept_local_operations, ingest_federation_operations, operation_is_visible,
     projection_event_from_operation, redaction_targets_from_operations,
@@ -913,8 +910,8 @@ fn cors_handler_for_origin(origin: String) -> CorsHandler {
 #[derive(Clone)]
 pub struct ContrixOpenApiDoc(pub OpenApi);
 
-/// Snapshot v2: in addition to the legacy `snapshot_ref` / `state_hash` /
-/// `chunk_bytes` (single-chunk fallback), we surface SDK-canonical
+/// Snapshot bundle: surfaces the head fields (`snapshot_ref` / `state_hash` /
+/// `chunk_bytes` single-chunk fallback) alongside SDK-canonical
 /// [`contrix_sdk::SnapshotChunk`] partitions + a binary
 /// [`contrix_sdk::SnapshotMerkleTree`] over their digests + a signed
 /// [`contrix_sdk::GeneratorProof`]. Receivers verify the proof first, then
@@ -1390,59 +1387,6 @@ mod operation_conformance_tests {
                 name: "flow reorder missing flow_id",
                 kind: kinds::CX_FLOW_REORDER,
                 payload: json!({"board_place_id": "cx:place:01904100-0000-7000-8000-c10dc0000001", "rank": "a1"}),
-                valid: false,
-            },
-            // Flow track sub-event vectors.
-            OperationVector {
-                name: "flow track enable",
-                kind: kinds::CX_FLOW_TRACK_ENABLE,
-                payload: json!({
-                    "flow_id": "cx:flow:01904100-0000-7000-8000-ca33616973bb",
-                    "track_id": "synthesis",
-                }),
-                valid: false,
-            },
-            OperationVector {
-                name: "flow track disable",
-                kind: kinds::CX_FLOW_TRACK_DISABLE,
-                payload: json!({
-                    "flow_id": "cx:flow:01904100-0000-7000-8000-ca33616973bb",
-                    "track_id": "synthesis",
-                }),
-                valid: false,
-            },
-            OperationVector {
-                name: "flow track update",
-                kind: kinds::CX_FLOW_TRACK_UPDATE,
-                payload: json!({
-                    "flow_id": "cx:flow:01904100-0000-7000-8000-ca33616973bb",
-                    "track_id": "discussion",
-                    "patch": {"profile": "discussion"},
-                }),
-                valid: false,
-            },
-            OperationVector {
-                name: "flow track set_primary",
-                kind: kinds::CX_FLOW_TRACK_SET_PRIMARY,
-                payload: json!({
-                    "flow_id": "cx:flow:01904100-0000-7000-8000-ca33616973bb",
-                    "track_id": "discussion",
-                }),
-                valid: false,
-            },
-            OperationVector {
-                name: "flow track enable missing track_id",
-                kind: kinds::CX_FLOW_TRACK_ENABLE,
-                payload: json!({"flow_id": "cx:flow:01904100-0000-7000-8000-ca33616973bb"}),
-                valid: false,
-            },
-            OperationVector {
-                name: "flow track update missing patch",
-                kind: kinds::CX_FLOW_TRACK_UPDATE,
-                payload: json!({
-                    "flow_id": "cx:flow:01904100-0000-7000-8000-ca33616973bb",
-                    "track_id": "discussion",
-                }),
                 valid: false,
             },
             OperationVector {

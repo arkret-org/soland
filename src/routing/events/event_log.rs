@@ -324,11 +324,11 @@ async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Response) 
                 render_error(res, StatusCode::PRECONDITION_FAILED, reason, reason);
                 return;
             }
-            // `cx.flow.track.*` sub-events follow the spec §5.1
+            // `cx.flow.tracks.update` follows the spec §5.1
             // update-on-non-active rule: parent Flow MUST be Active or
             // the admission rejects with `flow_not_active` (mirrors the
             // SDK reducer guard so client + server agree).
-            if let Err(reason) = proj.check_flow_track_transition(operation) {
+            if let Err(reason) = proj.check_flow_tracks_transition(operation) {
                 render_error(res, StatusCode::PRECONDITION_FAILED, reason, reason);
                 return;
             }
@@ -463,10 +463,9 @@ async fn batch_get_events(
 /// `actors[]` (no `spaces[]`). Both the `#[endpoint]` wrapper and the
 /// sync-side dispatcher call this impl.
 ///
-/// Round 15ad: returns `Result<EventsPageResponse, AppError>` so the wrapper
-/// can be a typed `JsonResult<T>` handler and the sync-side dispatcher
-/// can map the typed result into its own legacy `&mut Response` shape with
-/// a single `match`.
+/// Returns `Result<EventsPageResponse, AppError>` so the wrapper can be a
+/// typed `JsonResult<T>` handler and the sync-side dispatcher can map the
+/// typed result into its own `&mut Response` shape with a single `match`.
 pub(super) async fn events_query_durable_scope_impl(
     state: &AppState,
     session: &SessionRecord,
@@ -495,15 +494,6 @@ pub(super) async fn events_query_durable_scope_impl(
         return Err(AppError::invalid_param(
             "specify either 'after' or 'before', not both",
         ));
-    }
-    // Aggressive: reject any legacy query keys so wire-incompatible clients
-    // fail closed instead of silently misordering.
-    for legacy in ["from", "until", "direction"] {
-        if query_param(req, legacy).is_some() {
-            return Err(AppError::invalid_param(format!(
-                "legacy query parameter '{legacy}' removed in spec dc01ad7; use 'before' or 'after'"
-            )));
-        }
     }
     let (cursor, direction) = match (after, before) {
         (Some(cursor), None) => (Some(cursor), "forward"),
@@ -726,7 +716,6 @@ fn validate_event_envelope(
             "Event Envelope must be a JSON object",
         )
     })?;
-    validate_removed_event_envelope_fields(object)?;
     validate_event_critical_features(object)?;
 
     let event_id = event_string_field(object, &["event_id"]).ok_or_else(|| {
@@ -857,89 +846,6 @@ fn validate_event_envelope(
         canonical_digest,
         canonical_bytes,
     })
-}
-
-fn validate_removed_event_envelope_fields(
-    object: &serde_json::Map<String, Value>,
-) -> Result<(), EventValidationError> {
-    // These fields were dropped wholesale in v1 (no migration path). They MUST
-    // NOT appear on the envelope; we fail closed.
-    for field in ["canonical_hash", "body", "content"] {
-        if object.contains_key(field) {
-            return Err(event_validation_error(
-                StatusCode::BAD_REQUEST,
-                "removed_event_field",
-                "event envelope contains a removed field",
-            ));
-        }
-    }
-    // Reject specific legacy values for fields that survived the rip-and-
-    // replace. The test contract enumerates the known-legacy values; these
-    // are detected and surfaced as `legacy_contract_removed`.
-    if object
-        .get("kind")
-        .and_then(Value::as_str)
-        .is_some_and(is_legacy_event_kind)
-    {
-        return Err(event_validation_error(
-            StatusCode::BAD_REQUEST,
-            "legacy_contract_removed",
-            "event kind belongs to a removed legacy registry",
-        ));
-    }
-    if object
-        .get("schema_id")
-        .and_then(Value::as_str)
-        .is_some_and(is_legacy_schema_id)
-    {
-        return Err(event_validation_error(
-            StatusCode::BAD_REQUEST,
-            "legacy_contract_removed",
-            "schema_id references a removed legacy schema",
-        ));
-    }
-    if let Some(payload) = object.get("payload").and_then(Value::as_object)
-        && payload_carries_legacy_contract(payload)
-    {
-        return Err(event_validation_error(
-            StatusCode::BAD_REQUEST,
-            "legacy_contract_removed",
-            "payload carries a removed legacy field or typed id",
-        ));
-    }
-    Ok(())
-}
-
-fn is_legacy_event_kind(kind: &str) -> bool {
-    matches!(
-        kind,
-        "cx.room.message" | "cx.room.create" | "cx.subject.create"
-    )
-}
-
-fn is_legacy_schema_id(schema_id: &str) -> bool {
-    matches!(
-        schema_id,
-        "cx.schema.room.v1" | "cx.schema.subject.v1" | "cx.schema.card.v1"
-    )
-}
-
-fn payload_carries_legacy_contract(payload: &serde_json::Map<String, Value>) -> bool {
-    const LEGACY_KEYS: &[&str] = &["room_id", "card_id", "subject_id"];
-    for key in LEGACY_KEYS {
-        if payload.contains_key(*key) {
-            return true;
-        }
-    }
-    const LEGACY_PREFIXES: &[&str] = &["cx:card:", "cx:subject:", "cx:room:"];
-    for value in payload.values() {
-        if let Some(text) = value.as_str()
-            && LEGACY_PREFIXES.iter().any(|p| text.starts_with(p))
-        {
-            return true;
-        }
-    }
-    false
 }
 
 fn validate_event_critical_features(
@@ -1473,21 +1379,12 @@ fn event_requirements_schema_id(
         .and_then(|schemas| schemas.first())
         .and_then(Value::as_str)
         .map(ToOwned::to_owned);
-    if !state.config.development_mode {
-        if object.contains_key("schema_id") {
-            return Err(event_validation_error(
-                StatusCode::BAD_REQUEST,
-                "legacy_contract_removed",
-                "schema_id is legacy; use requirements.schema[]",
-            ));
-        }
-        if canonical_schema_id.is_none() {
-            return Err(event_validation_error(
-                StatusCode::BAD_REQUEST,
-                "missing_param",
-                "requirements.schema[] is required in production mode",
-            ));
-        }
+    if !state.config.development_mode && canonical_schema_id.is_none() {
+        return Err(event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "missing_param",
+            "requirements.schema[] is required in production mode",
+        ));
     }
     let schema_id = canonical_schema_id
         .or_else(|| {
@@ -1777,46 +1674,12 @@ fn event_ref_list(
 
 fn event_semantic_refs(
     object: &serde_json::Map<String, Value>,
-    state: &AppState,
+    _state: &AppState,
     max_len: usize,
 ) -> Result<Vec<String>, EventValidationError> {
-    if !state.config.development_mode && object.contains_key("auth_refs") {
-        return Err(event_validation_error(
-            StatusCode::BAD_REQUEST,
-            "legacy_contract_removed",
-            "auth_refs is legacy; use refs[] with role=authorized_by",
-        ));
-    }
-    // Development fixtures may still use the legacy `auth_refs[]` alias. We
-    // coalesce it into the authorized_refs collection only outside production.
-    let value = object.get("refs");
-    if value.is_none() {
-        // Legacy `auth_refs[]` form: parse the strings as authorized-by refs.
-        let legacy = object.get("auth_refs");
-        let Some(values) = legacy.and_then(Value::as_array) else {
-            return Ok(Vec::new());
-        };
-        let mut authorized = Vec::new();
-        for value in values {
-            let Some(event_id) = value.as_str() else {
-                return Err(event_validation_error(
-                    StatusCode::BAD_REQUEST,
-                    "invalid_param",
-                    "auth_refs entries must be event-id strings",
-                ));
-            };
-            if !is_valid_event_id(event_id) {
-                return Err(event_validation_error(
-                    StatusCode::BAD_REQUEST,
-                    "invalid_param",
-                    "auth_refs entries must use cx:event: typed ids",
-                ));
-            }
-            authorized.push(event_id.to_owned());
-        }
-        return Ok(authorized);
-    }
-    let value = value.expect("refs branch handled above");
+    let Some(value) = object.get("refs") else {
+        return Ok(Vec::new());
+    };
     let Some(values) = value.as_array() else {
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
@@ -2238,7 +2101,7 @@ mod proof_strictness_tests {
     }
 
     #[test]
-    fn production_requires_requirements_schema_and_rejects_legacy_schema_id() {
+    fn production_requires_requirements_schema() {
         let state = make_state(false);
         let mut object = serde_json::Map::new();
 
@@ -2246,12 +2109,6 @@ mod proof_strictness_tests {
             .expect_err("production requires requirements.schema[]");
         assert_eq!(err.code, "missing_param");
 
-        object.insert("schema_id".to_owned(), json!("cx.schema.event.v1"));
-        let err = event_requirements_schema_id(&state, &object)
-            .expect_err("production rejects top-level schema_id");
-        assert_eq!(err.code, "legacy_contract_removed");
-
-        object.remove("schema_id");
         object.insert(
             "requirements".to_owned(),
             json!({ "schema": ["cx.schema.event.v1"] }),
@@ -2260,24 +2117,6 @@ mod proof_strictness_tests {
             event_requirements_schema_id(&state, &object).unwrap(),
             "cx.schema.event.v1"
         );
-    }
-
-    #[test]
-    fn production_rejects_legacy_auth_refs_alias() {
-        let state = make_state(false);
-        let mut object = serde_json::Map::new();
-        object.insert(
-            "auth_refs".to_owned(),
-            json!(["cx:event:01904100-0000-7000-8000-a11ce0000001"]),
-        );
-        let err = event_semantic_refs(&object, &state, MAX_EVENT_REFS)
-            .expect_err("production rejects auth_refs alias");
-        assert_eq!(err.code, "legacy_contract_removed");
-
-        let dev_state = make_state(true);
-        let refs = event_semantic_refs(&object, &dev_state, MAX_EVENT_REFS)
-            .expect("development still accepts legacy fixture alias");
-        assert_eq!(refs, vec!["cx:event:01904100-0000-7000-8000-a11ce0000001"]);
     }
 
     #[test]

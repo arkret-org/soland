@@ -34,10 +34,6 @@ pub mod reasons {
     pub const INCEPTION_UPGRADE_EVIDENCE_INSUFFICIENT: &str =
         core_error::REASON_INCEPTION_UPGRADE_EVIDENCE_INSUFFICIENT;
 
-    // S4/S5 mention/reaction legacy SHA-256 reject reasons were removed in
-    // round C46 (spec d415679); routing-tag failures now collapse to
-    // `invalid_signature` / `schema_violation`.
-
     // S6 — `attested_hardware` Audit Agent removal pairing.
     pub const AUDIT_AGENT_KEY_DESTRUCTION_ATTESTATION_MISSING: &str =
         core_error::REASON_AUDIT_AGENT_KEY_DESTRUCTION_ATTESTATION_MISSING;
@@ -159,11 +155,6 @@ pub mod reasons {
         core_error::REASON_RANGE_COMPLETENESS_ROOT_MISMATCH;
     pub const RANGE_COMPLETENESS_ACTOR_SEQ_GAP: &str =
         core_error::REASON_RANGE_COMPLETENESS_ACTOR_SEQ_GAP;
-
-    // Round C46 (spec d415679) dropped the `deprecated_event_kind` /
-    // `legacy_event_kind` sunset-timeline reason codes because the legacy
-    // `cx.flow.track.*` events those reasons gated were removed from the
-    // registry outright.
 }
 use salvo::async_trait;
 use salvo::http::StatusCode;
@@ -574,24 +565,9 @@ pub struct AppError {
     pub status: Option<StatusCode>,
     /// When set, overrides the wire-form `errcode` string. Use sparingly —
     /// only for handlers that emit a non-canonical errcode downstream
-    /// clients (or tests) already depend on (e.g. `unknown_schema`,
+    /// clients (or tests) depend on (e.g. `unknown_schema`,
     /// `<kind>_not_active`, `batch_not_supported`). New code should prefer
     /// a canonical `ErrorCode` variant.
-    ///
-    /// # v2 plan
-    ///
-    /// This override was introduced in round 15ab to preserve a small
-    /// set of non-canonical errcodes that floria / cotest fixtures and
-    /// out-of-tree clients already key off of: `unsupported_draft`,
-    /// `batch_not_supported`, `<kind>_not_active`, `sync_token_expired`,
-    /// and a handful of `unknown_*` strings. v1 keeps the escape hatch
-    /// so existing clients don't break on the canonical-codes rollout;
-    /// v2 SHOULD remove it and force every wire `errcode` to a registry
-    /// variant — at which point the handful of remaining override sites
-    /// migrate to one of the canonical 42 codes (most map cleanly to
-    /// `SchemaViolation` / `UnsupportedFeature` / `MethodNotAllowed` /
-    /// `SyncTokenExpired`).
-    // TODO(v2): reject wire_code_override; force canonical errcodes
     pub wire_code_override: Option<String>,
 }
 
@@ -612,19 +588,6 @@ impl AppError {
 
     /// Override the on-wire `errcode` string. See `wire_code_override` for
     /// the rationale + caveats.
-    ///
-    /// # v2 plan
-    ///
-    /// Round 15ab added this method to preserve non-canonical errcodes
-    /// (`unsupported_draft`, `batch_not_supported`, `<kind>_not_active`,
-    /// `sync_token_expired`, etc.) that pre-date the canonical
-    /// `ErrorCode` registry rollout. v2 SHOULD make this method a hard
-    /// error (or remove it entirely) and force every error to use a
-    /// canonical `ErrorCode` variant — once floria / cotest / external
-    /// clients have migrated off the legacy strings. Until then, this
-    /// stays as an escape hatch for the handful of pre-registry call
-    /// sites that still need it.
-    // TODO(v2): reject wire_code_override; force canonical errcodes
     pub fn with_wire_code(mut self, wire_code: impl Into<String>) -> Self {
         self.wire_code_override = Some(wire_code.into());
         self

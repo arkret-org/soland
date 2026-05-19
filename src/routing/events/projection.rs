@@ -500,10 +500,7 @@ fn write_through_projection(state: &AppState, operation: &Operation) {
             | kinds::CX_FLOW_RESTORE
             | kinds::CX_FLOW_MOVE
             | kinds::CX_FLOW_REORDER
-            | kinds::CX_FLOW_TRACK_DISABLE
-            | kinds::CX_FLOW_TRACK_ENABLE
-            | kinds::CX_FLOW_TRACK_SET_PRIMARY
-            | kinds::CX_FLOW_TRACK_UPDATE
+            | kinds::CX_FLOW_TRACKS_UPDATE
     );
     let is_morph_kind = matches!(
         kind,

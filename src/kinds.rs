@@ -8,11 +8,6 @@ pub const CX_MESSAGE_REVISE: &str = "cx.message.revise";
 pub const CX_MESSAGE_REDACT: &str = "cx.message.redact";
 pub const CX_REACTION_ADD: &str = "cx.reaction.add";
 pub const CX_REACTION_REMOVE: &str = "cx.reaction.remove";
-// `cx.entity.*` was a soland-local abstraction that never landed in
-// `contrix-spec/v1`. Typed objects in the protocol are `cx:flow:` /
-// `cx:place:` / `cx:morph:` / `cx:relation:` / `cx:view:`, each with its
-// own dedicated event kind (`cx.flow.create`, `cx.morph.create`, …). The
-// `cx.entity.*` constants and operation schemas were removed in round 6.
 pub const CX_RELATION_CREATE: &str = "cx.relation.create";
 pub const CX_RELATION_UPDATE: &str = "cx.relation.update";
 pub const CX_RELATION_DELETE: &str = "cx.relation.delete";
@@ -51,23 +46,12 @@ pub const CX_FLOW_REORDER: &str = "cx.flow.reorder";
 // projection's updated_at is NOT bumped — watch is a per-(flow, actor)
 // subscription that does not represent a Flow state mutation.
 pub const CX_FLOW_WATCH_SET: &str = "cx.flow.watch.set";
-// Round 14d (2026-05-16) — Flow track sub-events. Manage individual
-// entries in `Flow.tracks: BTreeMap<String, FlowTrackConfig>` (SDK has
-// the reducer for these as of SDK round 12). soland's wire validator
-// enforces payload shape (flow_id + track_id [+ patch for update]) and
+// Unified Flow tracks update event. `payload.patch` uses `cx.patch.v1`
+// against the `Flow.tracks` map; atomic across multiple tracks. soland's
+// wire validator enforces payload shape (flow_id + patch | tracks) and
 // the spec common-fields.md §5.1 update-on-non-active state guard.
-// FlowProjection still doesn't carry `tracks` server-side; the touch
-// just bumps `updated_at` (mirror of cx.flow.move/reorder pattern).
-pub const CX_FLOW_TRACK_DISABLE: &str = "cx.flow.track.disable";
-pub const CX_FLOW_TRACK_ENABLE: &str = "cx.flow.track.enable";
-pub const CX_FLOW_TRACK_SET_PRIMARY: &str = "cx.flow.track.set_primary";
-pub const CX_FLOW_TRACK_UPDATE: &str = "cx.flow.track.update";
-// Round C44 (2026-05-18; spec dd465dd P-D12 O1.2) — unified Flow tracks
-// update event. payload.patch uses cx.patch.v1 against the
-// `Flow.tracks` map; atomic across multiple tracks. Replaces the four
-// legacy single-purpose `cx.flow.track.*` events. v1.x reducers MUST
-// accept both unified and legacy shapes for receiving; soland emits only
-// the unified form.
+// FlowProjection doesn't carry `tracks` server-side; the touch just
+// bumps `updated_at` (mirror of cx.flow.move/reorder pattern).
 pub const CX_FLOW_TRACKS_UPDATE: &str = "cx.flow.tracks.update";
 // Morph lifecycle (round 13). Same shape as Flow — no dedicated tombstone.
 pub const CX_MORPH_CREATE: &str = "cx.morph.create";
@@ -194,10 +178,6 @@ fn canonical_registered_kind(object_type: &str) -> Option<&str> {
         CX_FLOW_MOVE => Some(CX_FLOW_MOVE),
         CX_FLOW_REORDER => Some(CX_FLOW_REORDER),
         CX_FLOW_WATCH_SET => Some(CX_FLOW_WATCH_SET),
-        CX_FLOW_TRACK_DISABLE => Some(CX_FLOW_TRACK_DISABLE),
-        CX_FLOW_TRACK_ENABLE => Some(CX_FLOW_TRACK_ENABLE),
-        CX_FLOW_TRACK_SET_PRIMARY => Some(CX_FLOW_TRACK_SET_PRIMARY),
-        CX_FLOW_TRACK_UPDATE => Some(CX_FLOW_TRACK_UPDATE),
         CX_FLOW_TRACKS_UPDATE => Some(CX_FLOW_TRACKS_UPDATE),
         CX_MORPH_CREATE => Some(CX_MORPH_CREATE),
         CX_MORPH_UPDATE => Some(CX_MORPH_UPDATE),
@@ -316,17 +296,11 @@ pub fn is_morph_lifecycle_kind(kind: &str) -> bool {
     matches!(kind, CX_MORPH_ARCHIVE | CX_MORPH_RESTORE)
 }
 
-/// Flow track sub-events (round 14d). Distinct from lifecycle events
+/// Flow tracks update events. Distinct from lifecycle events
 /// (`is_flow_lifecycle_kind`) because tracks don't transition Flow.state;
-/// they manage entries in `Flow.tracks` per SDK round 12. The state
-/// guard for these is "parent Flow MUST be Active" (spec §5.1 update
-/// rule), enforced via `check_flow_track_transition`.
-pub fn is_flow_track_kind(kind: &str) -> bool {
-    matches!(
-        kind,
-        CX_FLOW_TRACK_DISABLE
-            | CX_FLOW_TRACK_ENABLE
-            | CX_FLOW_TRACK_SET_PRIMARY
-            | CX_FLOW_TRACK_UPDATE
-    )
+/// they manage entries in `Flow.tracks`. The state guard is "parent Flow
+/// MUST be Active" (spec §5.1 update rule), enforced via
+/// `check_flow_tracks_transition`.
+pub fn is_flow_tracks_kind(kind: &str) -> bool {
+    matches!(kind, CX_FLOW_TRACKS_UPDATE)
 }

@@ -665,98 +665,6 @@ async fn events_describe_and_single_event_submit_work() {
     let unknown_schema_body: Value = unknown_schema_response.take_json().await.unwrap();
     assert_eq!(unknown_schema_body["error"]["errcode"], "unknown_schema");
 
-    let mut legacy_schema = signed_event_envelope(
-        "cx:event:01904100-0000-7000-8000-90ddb6d74138",
-        5,
-        Vec::new(),
-    );
-    legacy_schema["schema_id"] = Value::String("cx.schema.room.v1".to_owned());
-    legacy_schema["canonical_digest"] = Value::String(event_canonical_digest(&legacy_schema));
-    let mut legacy_schema_response = TestClient::post("http://server/api/v1/events")
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&legacy_schema)
-        .send(&app_from_state(state.clone()))
-        .await;
-    assert_eq!(
-        legacy_schema_response.status_code.unwrap(),
-        StatusCode::BAD_REQUEST
-    );
-    let legacy_schema_body: Value = legacy_schema_response.take_json().await.unwrap();
-    assert_eq!(
-        legacy_schema_body["error"]["errcode"],
-        "legacy_contract_removed"
-    );
-
-    let mut legacy_kind = signed_event_envelope(
-        "cx:event:01904100-0000-7000-8000-0d77e6a44b05",
-        6,
-        Vec::new(),
-    );
-    legacy_kind["kind"] = Value::String("cx.room.message".to_owned());
-    legacy_kind["canonical_digest"] = Value::String(event_canonical_digest(&legacy_kind));
-    let mut legacy_kind_response = TestClient::post("http://server/api/v1/events")
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&legacy_kind)
-        .send(&app_from_state(state.clone()))
-        .await;
-    assert_eq!(
-        legacy_kind_response.status_code.unwrap(),
-        StatusCode::BAD_REQUEST
-    );
-    let legacy_kind_body: Value = legacy_kind_response.take_json().await.unwrap();
-    assert_eq!(
-        legacy_kind_body["error"]["errcode"],
-        "legacy_contract_removed"
-    );
-
-    let mut legacy_field = signed_event_envelope(
-        "cx:event:01904100-0000-7000-8000-bba6bd8c8c00",
-        7,
-        Vec::new(),
-    );
-    legacy_field["payload"]["room_id"] = Value::String("!legacy:example.com".to_owned());
-    let legacy_field_payload_hash = sha256_json(&legacy_field["payload"]);
-    legacy_field["proofs"][0]["payload_hash"] = Value::String(legacy_field_payload_hash);
-    legacy_field["canonical_digest"] = Value::String(event_canonical_digest(&legacy_field));
-    let mut legacy_field_response = TestClient::post("http://server/api/v1/events")
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&legacy_field)
-        .send(&app_from_state(state.clone()))
-        .await;
-    assert_eq!(
-        legacy_field_response.status_code.unwrap(),
-        StatusCode::BAD_REQUEST
-    );
-    let legacy_field_body: Value = legacy_field_response.take_json().await.unwrap();
-    assert_eq!(
-        legacy_field_body["error"]["errcode"],
-        "legacy_contract_removed"
-    );
-
-    let mut legacy_typed_id = signed_event_envelope(
-        "cx:event:01904100-0000-7000-8000-206613515f76",
-        8,
-        Vec::new(),
-    );
-    legacy_typed_id["payload"]["flow_id"] = Value::String("cx:card:legacy-card".to_owned());
-    let legacy_typed_id_payload_hash = sha256_json(&legacy_typed_id["payload"]);
-    legacy_typed_id["proofs"][0]["payload_hash"] = Value::String(legacy_typed_id_payload_hash);
-    legacy_typed_id["canonical_digest"] = Value::String(event_canonical_digest(&legacy_typed_id));
-    let mut legacy_typed_id_response = TestClient::post("http://server/api/v1/events")
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&legacy_typed_id)
-        .send(&app_from_state(state.clone()))
-        .await;
-    assert_eq!(
-        legacy_typed_id_response.status_code.unwrap(),
-        StatusCode::BAD_REQUEST
-    );
-    let legacy_typed_id_body: Value = legacy_typed_id_response.take_json().await.unwrap();
-    assert_eq!(
-        legacy_typed_id_body["error"]["errcode"],
-        "legacy_contract_removed"
-    );
-
     let batch: Value = TestClient::post("http://server/api/v1/events/batch-get")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
@@ -1211,7 +1119,7 @@ async fn sync_backfill_exposes_prev_batch_and_limited_timeline_pages() {
     let next_cursor = first_page["next_cursor"].as_str().unwrap();
 
     let second_page: Value = TestClient::get(format!(
-        "http://server/api/v1/events?space_id={space_id}&limit=1&cursor={next_cursor}"
+        "http://server/api/v1/events?space_id={space_id}&limit=1&after={next_cursor}"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -1239,7 +1147,7 @@ async fn sync_backfill_exposes_prev_batch_and_limited_timeline_pages() {
     assert_eq!(gap["production_gap"], "durable_sync_position_validation");
 
     let mut invalid_cursor = TestClient::get(format!(
-        "http://server/api/v1/events?space_id={space_id}&cursor=cx:event:01904100-0000-7000-8000-b8ab57920a67"
+        "http://server/api/v1/events?space_id={space_id}&after=cx:event:01904100-0000-7000-8000-b8ab57920a67"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -1891,7 +1799,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
     assert_eq!(duplicate.status_code.unwrap().as_u16(), 409);
 
     let hidden_bob: Value = TestClient::post("http://server/api/v1/directory/search-users")
-        .json(&serde_json::json!({"q": "bob"}))
+        .json(&serde_json::json!({"query": "bob"}))
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
@@ -1976,7 +1884,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
 
     let visible_bob: Value = TestClient::post("http://server/api/v1/directory/search-users")
         .add_header("authorization", format!("Bearer {alice}"), true)
-        .json(&serde_json::json!({"q": "bob"}))
+        .json(&serde_json::json!({"query": "bob"}))
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
@@ -2469,42 +2377,6 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(filter_mismatch.status_code.unwrap().as_u16(), 400);
-
-    let mut legacy_filter = TestClient::post("http://server/api/v1/sync")
-        .add_header("authorization", format!("Bearer {alice}"), true)
-        .json(&serde_json::json!({
-            "filter": {"room_id": "cx:room:legacy-room"}
-        }))
-        .send(&app_from_state(state.clone()))
-        .await;
-    assert_eq!(legacy_filter.status_code.unwrap().as_u16(), 400);
-    let legacy_filter_body: Value = legacy_filter.take_json().await.unwrap();
-    assert_eq!(legacy_filter_body["error"]["errcode"], "invalid_param");
-
-    let mut legacy_card_filter = TestClient::post("http://server/api/v1/sync")
-        .add_header("authorization", format!("Bearer {alice}"), true)
-        .json(&serde_json::json!({
-            "filter": {"card_id": "cx:card:legacy-card"}
-        }))
-        .send(&app_from_state(state.clone()))
-        .await;
-    assert_eq!(legacy_card_filter.status_code.unwrap().as_u16(), 400);
-    let legacy_card_filter_body: Value = legacy_card_filter.take_json().await.unwrap();
-    assert_eq!(legacy_card_filter_body["error"]["errcode"], "invalid_param");
-
-    let mut legacy_subject_filter = TestClient::post("http://server/api/v1/sync")
-        .add_header("authorization", format!("Bearer {alice}"), true)
-        .json(&serde_json::json!({
-            "filter": {"subject_id": "cx:subject:legacy-subject"}
-        }))
-        .send(&app_from_state(state.clone()))
-        .await;
-    assert_eq!(legacy_subject_filter.status_code.unwrap().as_u16(), 400);
-    let legacy_subject_filter_body: Value = legacy_subject_filter.take_json().await.unwrap();
-    assert_eq!(
-        legacy_subject_filter_body["error"]["errcode"],
-        "invalid_param"
-    );
 
     let renderer_bound_sync: Value = TestClient::post("http://server/api/v1/sync")
         .add_header("authorization", format!("Bearer {alice}"), true)
@@ -3412,7 +3284,7 @@ async fn directory_product_endpoints_return_demo_projection_shapes() {
     assert_eq!(actors["results"][0]["did"], "did:web:alice.example");
 
     let users: Value = TestClient::post("http://server/api/v1/directory/search-users")
-        .json(&serde_json::json!({"q": "alice"}))
+        .json(&serde_json::json!({"query": "alice"}))
         .send(&app())
         .await
         .take_json()
@@ -3977,41 +3849,6 @@ async fn federation_rejects_replayed_operations() {
     assert!(invalid_push["accepted"].as_array().unwrap().is_empty());
     assert_eq!(invalid_push["rejected"][0]["reason"], "invalid_semantics");
 
-    let legacy_push_operation = Operation::create(
-        OperationId::new("cx:operation:01904100-0000-7000-8000-94aa4d18b027").unwrap(),
-        SpaceId::new("cx:space:01904100-0000-7000-8000-20d6cfd24be6").unwrap(),
-        kinds::CX_MESSAGE_CREATE,
-        serde_json::json!({
-            "event_id": "cx:event:01904100-0000-7000-8000-73cff2049160",
-            "sender": "did:web:remote.example",
-            "room_id": "!legacy:example.com",
-            "body": "legacy contract field"
-        }),
-    );
-    let legacy_push: Value = TestClient::post("http://server/api/v1/federation/push-operations")
-        .json(&serde_json::json!({
-            "origin": "did:web:remote.example",
-            "destination": "did:web:soland.local",
-            "space_id": "cx:space:01904100-0000-7000-8000-20d6cfd24be6",
-            "service_binding_ref": "did:web:remote.example#soland",
-            "operations": [legacy_push_operation]
-        }))
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    assert!(legacy_push["accepted"].as_array().unwrap().is_empty());
-    assert_eq!(
-        legacy_push["rejected"][0]["operation_id"],
-        "cx:operation:01904100-0000-7000-8000-94aa4d18b027"
-    );
-    assert_eq!(legacy_push["rejected"][0]["reason"], "invalid_semantics");
-    assert_eq!(
-        legacy_push["rejected"][0]["message"],
-        "removed legacy subject/room/card contract is forbidden on the active v1 wire"
-    );
-
     let redaction = Operation::create(
         OperationId::new("cx:operation:01904100-0000-7000-8000-fd0b34f35181").unwrap(),
         SpaceId::new("cx:space:01904100-0000-7000-8000-20d6cfd24be6").unwrap(),
@@ -4119,49 +3956,6 @@ async fn federation_transactions_are_idempotent_by_origin_and_body() {
             .send(&app_from_state(state.clone()))
             .await;
     assert_eq!(wrong_destination.status_code.unwrap().as_u16(), 403);
-
-    let legacy_transaction_operation = Operation::create(
-        OperationId::new("cx:operation:01904100-0000-7000-8000-e4214375a21c").unwrap(),
-        SpaceId::new("cx:space:01904100-0000-7000-8000-788d17d38a52").unwrap(),
-        kinds::CX_MESSAGE_CREATE,
-        serde_json::json!({
-            "event_id": "cx:event:01904100-0000-7000-8000-38e7dab19280",
-            "sender": "did:web:remote.example",
-            "flow_id": "cx:card:legacy-card",
-            "body": "legacy typed id"
-        }),
-    );
-    let legacy_transaction: Value =
-        TestClient::put("http://server/api/v1/federation/transactions/txn-legacy-contract")
-            .json(&serde_json::json!({
-                "origin": "did:web:remote.example",
-                "destination": "did:web:soland.local",
-                "service_binding_ref": "did:web:remote.example#soland",
-                "operations": [legacy_transaction_operation]
-            }))
-            .send(&app_from_state(state.clone()))
-            .await
-            .take_json()
-            .await
-            .unwrap();
-    assert!(
-        legacy_transaction["accepted"]
-            .as_array()
-            .unwrap()
-            .is_empty()
-    );
-    assert_eq!(
-        legacy_transaction["rejected"][0]["operation_id"],
-        "cx:operation:01904100-0000-7000-8000-e4214375a21c"
-    );
-    assert_eq!(
-        legacy_transaction["rejected"][0]["reason"],
-        "invalid_semantics"
-    );
-    assert_eq!(
-        legacy_transaction["rejected"][0]["message"],
-        "removed legacy subject/room/card contract is forbidden on the active v1 wire"
-    );
 }
 
 #[tokio::test]
@@ -4765,45 +4559,6 @@ async fn auth_keys_device_messages_and_blobs_work() {
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(plaintext_push.status_code.unwrap().as_u16(), 400);
-
-    let mut legacy_field_push = TestClient::post("http://server/api/v1/push/notify")
-        .json(&serde_json::json!({
-            "notification": {
-                "type": "blind_wakeup",
-                "devices": [{"device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001"}],
-                "room_id": "!legacy:example.com"
-            }
-        }))
-        .send(&app_from_state(state.clone()))
-        .await;
-    assert_eq!(legacy_field_push.status_code.unwrap().as_u16(), 400);
-    let legacy_field_push_body: Value = legacy_field_push.take_json().await.unwrap();
-    assert_eq!(legacy_field_push_body["error"]["errcode"], "invalid_param");
-    assert_eq!(
-        legacy_field_push_body["error"]["error"],
-        "removed legacy subject/room/card contract is forbidden on the active v1 wire"
-    );
-
-    let mut legacy_typed_id_push = TestClient::post("http://server/api/v1/push/notify")
-        .json(&serde_json::json!({
-            "notification": {
-                "type": "blind_wakeup",
-                "devices": [{"device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001"}],
-                "flow_id": "cx:card:legacy-card"
-            }
-        }))
-        .send(&app_from_state(state.clone()))
-        .await;
-    assert_eq!(legacy_typed_id_push.status_code.unwrap().as_u16(), 400);
-    let legacy_typed_id_push_body: Value = legacy_typed_id_push.take_json().await.unwrap();
-    assert_eq!(
-        legacy_typed_id_push_body["error"]["errcode"],
-        "invalid_param"
-    );
-    assert_eq!(
-        legacy_typed_id_push_body["error"]["error"],
-        "removed legacy subject/room/card contract is forbidden on the active v1 wire"
-    );
 
     let notify: Value = TestClient::post("http://server/api/v1/push/notify")
         .json(&serde_json::json!({
@@ -6549,13 +6304,13 @@ async fn projection_flows_endpoint_reports_lifecycle_state() {
     assert_eq!(row["state"], "archived");
 }
 
-/// Round 14d (2026-05-16) — `cx.flow.track.*` sub-events are accepted
-/// against an Active Flow (server-side touch bumps Flow.updated_at; the
-/// per-track state lives in SDK reducer's Flow.tracks map) but MUST be
-/// rejected with HTTP 412 + `flow_not_active` once the parent Flow is
-/// archived, per spec common-fields.md §5.1 update-on-non-active rule.
+/// `cx.flow.tracks.update` is accepted against an Active Flow (server-side
+/// touch bumps Flow.updated_at; per-track state lives in SDK reducer's
+/// Flow.tracks map) but MUST be rejected with HTTP 412 + `flow_not_active`
+/// once the parent Flow is archived, per spec common-fields.md §5.1
+/// update-on-non-active rule.
 #[tokio::test]
-async fn flow_track_events_rejected_when_parent_flow_archived() {
+async fn flow_tracks_update_rejected_when_parent_flow_archived() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
     let flow_id = "cx:flow:01904100-0000-7000-8000-aabbccdd0001";
@@ -6584,17 +6339,19 @@ async fn flow_track_events_rejected_when_parent_flow_archived() {
         .unwrap();
     assert_eq!(resp["status"], "accepted");
 
-    // 1) Track enable while Active — accepted; touches Flow.updated_at.
-    let enable = signed_flow_event(
+    let tracks_active = signed_flow_event(
         "cx:event:01904100-0000-7000-8000-aabbcc000002",
         2,
-        "cx.flow.track.enable",
-        serde_json::json!({ "flow_id": flow_id, "track_id": "discussion" }),
+        "cx.flow.tracks.update",
+        serde_json::json!({
+            "flow_id": flow_id,
+            "patch": {"tracks": {"discussion": {"profile": "discussion"}}}
+        }),
         vec!["cx:event:01904100-0000-7000-8000-aabbcc000001"],
     );
     let resp: Value = TestClient::post("http://server/api/v1/events")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&enable)
+        .json(&tracks_active)
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
@@ -6602,7 +6359,6 @@ async fn flow_track_events_rejected_when_parent_flow_archived() {
         .unwrap();
     assert_eq!(resp["status"], "accepted");
 
-    // 2) Archive the Flow.
     let archive = signed_flow_event(
         "cx:event:01904100-0000-7000-8000-aabbcc000003",
         3,
@@ -6620,63 +6376,24 @@ async fn flow_track_events_rejected_when_parent_flow_archived() {
         .unwrap();
     assert_eq!(resp["status"], "accepted");
 
-    // 3) Each of the four track sub-events on archived Flow → 412
-    //    flow_not_active. Same prev_refs (archive event) for each since
-    //    they're independent attempts.
-    let cases: &[(&str, &str, u64, Value)] = &[
-        (
-            "cx.flow.track.enable",
-            "cx:event:01904100-0000-7000-8000-aabbcc000004",
-            4,
-            serde_json::json!({ "flow_id": flow_id, "track_id": "synthesis" }),
-        ),
-        (
-            "cx.flow.track.update",
-            "cx:event:01904100-0000-7000-8000-aabbcc000005",
-            5,
-            serde_json::json!({
-                "flow_id": flow_id,
-                "track_id": "discussion",
-                "patch": {"template": "Q&A"},
-            }),
-        ),
-        (
-            "cx.flow.track.set_primary",
-            "cx:event:01904100-0000-7000-8000-aabbcc000006",
-            6,
-            serde_json::json!({ "flow_id": flow_id, "track_id": "discussion" }),
-        ),
-        (
-            "cx.flow.track.disable",
-            "cx:event:01904100-0000-7000-8000-aabbcc000007",
-            7,
-            serde_json::json!({ "flow_id": flow_id, "track_id": "discussion" }),
-        ),
-    ];
-    for (kind, ev_id, seq, payload) in cases {
-        let evt = signed_flow_event(
-            ev_id,
-            *seq,
-            kind,
-            payload.clone(),
-            vec!["cx:event:01904100-0000-7000-8000-aabbcc000003"],
-        );
-        let mut resp = TestClient::post("http://server/api/v1/events")
-            .add_header("authorization", format!("Bearer {token}"), true)
-            .json(&evt)
-            .send(&app_from_state(state.clone()))
-            .await;
-        assert_eq!(
-            resp.status_code.unwrap().as_u16(),
-            412,
-            "track event {kind} on archived Flow must return 412"
-        );
-        let body: Value = resp.take_json().await.unwrap();
-        assert_eq!(
-            body["error"]["errcode"], "flow_not_active",
-            "track event {kind} on archived Flow must return flow_not_active"
-        );
-    }
+    let tracks_archived = signed_flow_event(
+        "cx:event:01904100-0000-7000-8000-aabbcc000004",
+        4,
+        "cx.flow.tracks.update",
+        serde_json::json!({
+            "flow_id": flow_id,
+            "patch": {"tracks": {"synthesis": {"profile": "synthesis"}}}
+        }),
+        vec!["cx:event:01904100-0000-7000-8000-aabbcc000003"],
+    );
+    let mut resp = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&tracks_archived)
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(resp.status_code.unwrap().as_u16(), 412);
+    let body: Value = resp.take_json().await.unwrap();
+    assert_eq!(body["error"]["errcode"], "flow_not_active");
 }
 
 /// `POST /api/v1/audit/user-action` accepts client-side user-action

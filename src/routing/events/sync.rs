@@ -92,30 +92,6 @@ async fn client_sync(
 ) -> crate::result::JsonResult<ClientSyncResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
-    // Reject legacy filter keys / typed-id values before doing anything else.
-    // v1 dropped the Matrix-style `room_id` / Glassboard `card_id` /
-    // `subject_id` filter keys in favour of `spaces[]`; this surface fails
-    // closed on any envelope still carrying the old shape.
-    if let Some(filter_obj) = body.filter.as_ref().and_then(serde_json::Value::as_object) {
-        const LEGACY_KEYS: &[&str] = &["room_id", "card_id", "subject_id"];
-        for legacy in LEGACY_KEYS {
-            if filter_obj.contains_key(*legacy) {
-                return Err(crate::error::AppError::invalid_param(
-                    "filter contains a removed legacy key",
-                ));
-            }
-        }
-        const LEGACY_PREFIXES: &[&str] = &["cx:card:", "cx:subject:", "cx:room:"];
-        for value in filter_obj.values() {
-            if let Some(text) = value.as_str() {
-                if LEGACY_PREFIXES.iter().any(|p| text.starts_with(p)) {
-                    return Err(crate::error::AppError::invalid_param(
-                        "filter references a removed legacy typed id",
-                    ));
-                }
-            }
-        }
-    }
     let session = authenticated_session(state, req).ok();
     let since_cursor = if let Some(since) = body.since.as_deref() {
         match parse_and_validate_sync_cursor(
@@ -209,6 +185,27 @@ async fn client_sync(
             })
             .collect()
     };
+    // Compute "left since last cursor" so incremental syncs can prune
+    // client-side caches without forcing a full `since=None` re-sync.
+    // On full sync (no `since` cursor → empty `since_cursor.positions`)
+    // there is nothing to compare against; the client already treats
+    // omission from `spaces` as authoritative there.
+    let visible_space_ids: BTreeSet<&str> = visible_spaces
+        .iter()
+        .map(|(id, _, _, _, _)| id.as_str())
+        .collect();
+    let left_spaces: Vec<String> = if body.since.is_some() {
+        since_cursor
+            .positions
+            .keys()
+            .filter(|id| !visible_space_ids.contains(id.as_str()))
+            .cloned()
+            .collect()
+    } else {
+        Vec::new()
+    };
+    drop(visible_space_ids);
+
     let projection = state.projection.lock().expect("projection lock");
     let mut sync_spaces = std::collections::BTreeMap::new();
     let mut positions = BTreeMap::new();
@@ -311,6 +308,7 @@ async fn client_sync(
             to_device_position,
         ),
         spaces: sync_spaces,
+        left_spaces,
         to_device,
         account_data,
         device_lists: json!({"changed": [], "left": []}),
@@ -786,8 +784,7 @@ async fn set_typing(
 /// streaming: each line is one frame, frame `kind` is one of
 /// `event` / `catchup_complete` / `heartbeat` / `dropped`.
 ///
-/// Selector: repeated `spaces[]` query args (multi-value). The legacy
-/// singular `space_id` parameter is not supported.
+/// Selector: repeated `spaces[]` query args (multi-value).
 ///
 /// Lifecycle:
 ///   1. Validate inputs (spaces, accessibility).
@@ -841,7 +838,6 @@ pub(super) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(100)
         .min(100);
-    // Cursor parameter uses `from`; the legacy `cursor` param is not supported.
     let cursor = query_param(req, "from");
     let include_history = query_param(req, "include_history")
         .as_deref()
@@ -1119,23 +1115,13 @@ pub(super) async fn events_query(
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(100)
         .min(100);
-    // Round C44 (spec dc01ad7): query refactor — `from` / `until` /
-    // `direction` removed. `after=<cursor>` (forward) and `before=<cursor>`
-    // (backward) replace them. `cursor` legacy alias preserved at this layer
-    // for internal callers but only as `after` semantics.
-    let after = query_param(req, "after").or_else(|| query_param(req, "cursor"));
+    // `after=<cursor>` (forward) and `before=<cursor>` (backward) — spec dc01ad7.
+    let after = query_param(req, "after");
     let before = query_param(req, "before");
     if after.is_some() && before.is_some() {
         return Err(crate::error::AppError::invalid_param(
             "specify either 'after' or 'before', not both",
         ));
-    }
-    for legacy in ["from", "until", "direction"] {
-        if query_param(req, legacy).is_some() {
-            return Err(crate::error::AppError::invalid_param(format!(
-                "legacy query parameter '{legacy}' removed in spec dc01ad7; use 'before' or 'after'"
-            )));
-        }
     }
     let (cursor, backward) = match (after, before) {
         (Some(c), None) => (Some(c), false),
@@ -1268,20 +1254,8 @@ async fn sync_gap_backfill(
         return Err(crate::error::AppError::not_found("not found"));
     }
     let limit = limit.into_inner().unwrap_or(100).clamp(1, 500);
-    // Honor all the legacy cursor aliases (`from_cursor` / `from` / `prev_batch`
-    // / `cursor` and `to_cursor` / `to` / `next_batch`) that pre-typed
-    // clients send. The typed extractor only binds one name; fall back to
-    // raw req lookup for the aliases so this surface stays
-    // backwards-compatible.
-    let from_cursor = from_cursor
-        .into_inner()
-        .or_else(|| query_param(req, "from"))
-        .or_else(|| query_param(req, "prev_batch"))
-        .or_else(|| query_param(req, "cursor"));
-    let to_cursor = to_cursor
-        .into_inner()
-        .or_else(|| query_param(req, "to"))
-        .or_else(|| query_param(req, "next_batch"));
+    let from_cursor = from_cursor.into_inner();
+    let to_cursor = to_cursor.into_inner();
 
     // Resolve sync `cx:cursor:` tokens to reducer event cursors.
     let from_cursor = resolve_sync_cursor_to_event_id(state, &space_id, from_cursor)
