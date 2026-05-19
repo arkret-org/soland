@@ -2247,4 +2247,74 @@ mod proof_strictness_tests {
             err.message
         );
     }
+
+    /// T5.3 (Round 22) — pin the SDK production-verifier surface used by
+    /// soland's federation / event paths. The hand-rolled
+    /// `dev_proof_in_production` gate above rejects `type == "dev-proof"`
+    /// and the `"a..b"` / empty placeholder JWS specifically (those are
+    /// soland-shape concerns the SDK doesn't know about). The SDK
+    /// `ProductionVerifier::assert_production_proof` enforces the
+    /// orthogonal rule that the wire `Proof.kind` MUST NOT be in
+    /// `core::DEV_PROOF_KINDS` (`dev` / `test` / `mock` / `stub` /
+    /// `dummy`). Together they're the spec's full dev-proof gate. This
+    /// test asserts the SDK rule still bites on a `kind="dev"` proof —
+    /// so soland callers that switch to `ProductionVerifier::wrap(...)`
+    /// inherit the same fail-closed semantics they get inline today.
+    #[test]
+    fn soland_dev_proof_gate_matches_sdk_production_verifier() {
+        use contrix_sdk::Audience;
+        use contrix_sdk::Hash;
+        use contrix_sdk::signatures::{ProductionVerifier, build_proof_envelope};
+
+        struct Noop;
+        impl contrix_sdk::signatures::EventVerifier for Noop {
+            fn verify(
+                &self,
+                _: &[u8],
+                _: &[u8],
+                _: &contrix_sdk::signatures::PublicKeyMaterial,
+            ) -> std::result::Result<(), contrix_sdk::signatures::VerifierError> {
+                Ok(())
+            }
+            fn algorithm(&self) -> &str {
+                "EdDSA"
+            }
+        }
+        let verifier = ProductionVerifier::wrap(Noop);
+        // A proof with a kind in the SDK's DEV_PROOF_KINDS allowlist —
+        // must be rejected with DevProofRejected.
+        let dev = build_proof_envelope(
+            "dev",
+            "EdDSA",
+            "did:web:alice.example#k1",
+            Hash::new("sha256:0000000000000000000000000000000000000000000000000000000000000000")
+                .unwrap(),
+            None,
+            None::<Audience>,
+            "a..b",
+        );
+        let sdk_err = verifier
+            .assert_production_proof(&dev)
+            .expect_err("SDK ProductionVerifier must reject dev-kind proof");
+        assert!(matches!(
+            sdk_err,
+            contrix_sdk::signatures::VerifierError::DevProofRejected(_)
+        ));
+
+        // A proof with kind="detached_jws" — SDK accepts the kind
+        // (signature still has to verify separately).
+        let prod = build_proof_envelope(
+            contrix_sdk::signatures::detached_jws_kind(),
+            "EdDSA",
+            "did:web:alice.example#k1",
+            Hash::new("sha256:0000000000000000000000000000000000000000000000000000000000000000")
+                .unwrap(),
+            None,
+            None::<Audience>,
+            "header..sig",
+        );
+        verifier
+            .assert_production_proof(&prod)
+            .expect("SDK ProductionVerifier must accept detached_jws kind");
+    }
 }

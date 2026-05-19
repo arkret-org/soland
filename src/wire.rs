@@ -34,6 +34,34 @@ pub struct HealthResponse {
     ///   - `"closed"` — production mode with no admin principals AND no
     ///     introspection configured; admin endpoints are effectively locked.
     pub admin_auth_mode: &'static str,
+    /// T8.3 — non-sensitive production hardening checklist snapshot.
+    /// Surfaced on `/health` so sodmin's `/hardening` dashboard can
+    /// aggregate it across all services without scraping the more
+    /// expensive describe payload.
+    pub hardening: HardeningStatus,
+}
+
+/// T8.3 — production deployment hardening checklist snapshot.
+///
+/// Returned on `/health` and embedded in `/api/v1/server/describe`.
+/// Every field is derived from runtime config; nothing is hand-set by
+/// the operator. Booleans are intentionally coarse so we don't leak
+/// configured paths, hostnames, or token tails — sodmin renders the
+/// chips, the operator runs the actual probes.
+#[derive(Debug, Clone, Serialize, Deserialize, salvo::oapi::ToSchema)]
+pub struct HardeningStatus {
+    pub development_mode: bool,
+    pub tls_enabled: bool,
+    pub csp_header_configured: bool,
+    pub cors_strict: bool,
+    pub secret_manager_in_use: bool,
+    pub log_redaction_enabled: bool,
+    pub admin_auth_mode: String,
+    pub rate_limit_enabled: bool,
+    pub provider_credential_rotation: String,
+    pub checklist_score: u32,
+    pub checklist_max: u32,
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]

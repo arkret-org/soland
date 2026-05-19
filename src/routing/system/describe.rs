@@ -78,6 +78,7 @@ async fn health(depot: &mut Depot, res: &mut Response) -> JsonResult<HealthRespo
         development_mode: state.config.development_mode,
         proof_verifier_mode: state.config.proof_verifier_mode(),
         admin_auth_mode: state.config.admin_auth_mode(),
+        hardening: state.config.hardening_status(),
     })
 }
 
@@ -116,7 +117,79 @@ async fn server_describe(depot: &mut Depot) -> JsonResult<Value> {
     value["development_mode"] = json!(state.config.development_mode);
     value["proof_verifier_mode"] = json!(state.config.proof_verifier_mode());
     value["admin_auth_mode"] = json!(state.config.admin_auth_mode());
+    // T8.3 — embed the production hardening checklist so sodmin's
+    // `/hardening` page can render it without an extra round-trip.
+    value["hardening"] = serde_json::to_value(state.config.hardening_status())
+        .expect("hardening status serializes");
+
+    // T6.1 — claim-level partition of the describe response.
+    // See contrix-spec/spec/v1/zh/sync/service-surface.md §3.0 and
+    // `cx.schema.service_describe.v1`. The legacy `supported_operations`
+    // already populated above is wire-callable only; the helper below
+    // separates feature implementation from profile claims and dev-mode
+    // posture from cotest-verified claims.
+    apply_claim_level_partition(&mut value, state.config.development_mode);
     json_ok(value)
+}
+
+/// Inject the T6.1 claim-level partition fields (`implemented_features`,
+/// `claimed_profiles`, `verified_profiles`, `experimental_features`,
+/// `compat_surfaces`) into a describe response.
+///
+/// Invariants enforced here:
+/// - `verified_profiles` MUST be empty when `development_mode=true`.
+///   Soland never embeds a cotest run id at runtime today, so this is a
+///   hard `[]`; the debug_assert below guards future writers.
+/// - `claimed_profiles[].claim_kind` is always `self_claimed`; cotest
+///   verifier output is the only path to `verified_profiles`.
+pub(crate) fn apply_claim_level_partition(value: &mut Value, development_mode: bool) {
+    // implemented_features: mirror of supported_features. Every entry
+    // there corresponds to in-tree implementation code, but soland does
+    // not claim conformance for any of them today.
+    let implemented_features_owned: Vec<String> = value
+        .get("supported_features")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|item| item.as_str().map(ToOwned::to_owned))
+                .collect()
+        })
+        .unwrap_or_default();
+    value["implemented_features"] = json!(implemented_features_owned);
+
+    // claimed_profiles: self-claimed only.
+    value["claimed_profiles"] = json!([
+        {
+            "profile_id": "cx.profile.mimi_interop.v1",
+            "claim_kind": "self_claimed",
+            "notes": "MIMI provider facade first round (not a full v1 core conformance claim)"
+        }
+    ]);
+
+    // verified_profiles: nothing is cotest-verified at runtime today, and
+    // dev mode MUST yield an empty list per spec §3.0.
+    let verified_profiles: Vec<Value> = Vec::new();
+    debug_assert!(
+        !(development_mode && !verified_profiles.is_empty()),
+        "development_mode=true requires verified_profiles=[] (service-surface.md §3.0)"
+    );
+    value["verified_profiles"] = json!(verified_profiles);
+
+    // experimental_features: surfaces still maturing.
+    value["experimental_features"] = json!([
+        "federation.outbound_push.signed_intent",
+        "admin.bottom.manual_repair",
+        "index.query.local_projection",
+    ]);
+
+    // compat_surfaces: explicit external-interop passthroughs.
+    value["compat_surfaces"] = json!([
+        {
+            "name": "mimi_provider_facade",
+            "kind": "mimi_passthrough",
+            "notes": "MIMI provider directory + room binding facade; not a Contrix v1 core conformance surface"
+        }
+    ]);
 }
 
 #[endpoint(

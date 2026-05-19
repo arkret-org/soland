@@ -17,6 +17,7 @@ pub mod kinds;
 pub mod multisig_watchdog;
 pub mod object_storage;
 pub mod persistence;
+pub mod push_rule_core;
 pub mod ratelimit;
 pub mod reducer;
 pub mod result;

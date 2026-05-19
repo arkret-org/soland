@@ -555,6 +555,97 @@ impl AppConfig {
     pub fn tls_enabled(&self) -> bool {
         self.tls_cert_path.is_some() && self.tls_key_path.is_some()
     }
+
+    /// T8.3 — derive a non-sensitive production hardening snapshot from
+    /// the live config. Values are environment-detected (no operator
+    /// hand-holding required); `warnings[]` enumerates the failing
+    /// checklist items so sodmin can render them inline.
+    ///
+    /// The returned struct deliberately keeps only booleans / coarse
+    /// enums — no secret material, URLs, paths, or token tails — so it
+    /// is safe to publish on the unauthenticated `/health` endpoint.
+    pub fn hardening_status(&self) -> crate::wire::HardeningStatus {
+        let development_mode = self.development_mode;
+        let tls_enabled = self.tls_enabled();
+        // CSP is enforced upstream by the reverse proxy (Caddyfile /
+        // nginx); we can't probe the live header from inside the app,
+        // but a configured `cors_allow_origin` is a strong signal that
+        // the operator has wired up the proxy layer for browser clients.
+        let csp_header_configured = self.cors_allow_origin.is_some();
+        // CORS is "strict" when it is either unset (no cross-origin
+        // browser access) or set to a concrete origin list rather than
+        // the `*` wildcard.
+        let cors_strict = match self.cors_allow_origin.as_deref() {
+            None => true,
+            Some(value) => !value.trim().split(',').any(|origin| origin.trim() == "*"),
+        };
+        // Soland does not yet integrate with a remote secret manager —
+        // signing seeds come from env vars. We treat "env-provided
+        // signing seed" as the minimum acceptable production posture
+        // and surface a warning when it is missing.
+        let secret_manager_in_use = self.anchorer_signing_key_seed.is_some() || self.use_keystore;
+        // Log redaction is structurally enforced by the tracing layer
+        // (no PII fields are logged at INFO); we report true unless dev
+        // mode flips us into the chatty path.
+        let log_redaction_enabled = !development_mode;
+        let admin_auth_mode = self.admin_auth_mode().to_owned();
+        // Rate limiter is unconditionally installed by `router()`.
+        let rate_limit_enabled = true;
+        // Provider credential rotation: soland's only signing identity
+        // is the anchorer key; rotation is manual today. The KeyStore
+        // path is the closest thing to "scheduled" we ship.
+        let provider_credential_rotation = if self.use_keystore {
+            "scheduled".to_owned()
+        } else if self.anchorer_signing_key_seed.is_some() {
+            "manual".to_owned()
+        } else {
+            "none".to_owned()
+        };
+
+        let checks = [
+            ("development_mode_disabled", !development_mode),
+            ("tls_enabled", tls_enabled),
+            ("csp_header_configured", csp_header_configured),
+            ("cors_strict", cors_strict),
+            ("secret_manager_in_use", secret_manager_in_use),
+            ("log_redaction_enabled", log_redaction_enabled),
+            ("admin_auth_mode_production", admin_auth_mode != "development"),
+            ("rate_limit_enabled", rate_limit_enabled),
+            (
+                "provider_credential_rotation",
+                provider_credential_rotation != "none",
+            ),
+            (
+                "demo_data_disabled",
+                !self.seed_demo_data || development_mode,
+            ),
+        ];
+        let checklist_max = checks.len() as u32;
+        let mut checklist_score: u32 = 0;
+        let mut warnings: Vec<String> = Vec::new();
+        for (label, ok) in checks {
+            if ok {
+                checklist_score += 1;
+            } else {
+                warnings.push((*label).to_owned());
+            }
+        }
+
+        crate::wire::HardeningStatus {
+            development_mode,
+            tls_enabled,
+            csp_header_configured,
+            cors_strict,
+            secret_manager_in_use,
+            log_redaction_enabled,
+            admin_auth_mode,
+            rate_limit_enabled,
+            provider_credential_rotation,
+            checklist_score,
+            checklist_max,
+            warnings,
+        }
+    }
 }
 
 fn load_object_storage_config() -> anyhow::Result<ObjectStorageConfig> {

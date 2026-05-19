@@ -295,6 +295,24 @@ the development fallback. Remaining production work is tracked in
 durable projection/device sub-stores, full E2EE client workflow, anti-enumeration, and
 the complete federation/media/recovery/key-backup surfaces.
 
+## Production Deployment Checklist
+
+Before exposing soland to the public internet, walk every item below.
+The same list is computed at runtime and surfaced on
+`/health.hardening` (and `/api/v1/server/describe.hardening`) so sodmin's
+`/hardening` dashboard can flag failing checks across the whole fleet.
+
+- [ ] `SOLAND_DEVELOPMENT_MODE=false` (default — only flip to true on a loopback dev bind)
+- [ ] TLS enabled (`SOLAND_TLS_CERT_PATH` / `SOLAND_TLS_KEY_PATH`, or terminated at the reverse proxy)
+- [ ] CSP header configured at the reverse proxy
+- [ ] CORS limited to the configured allowed origins (`SOLAND_CORS_ALLOW_ORIGIN`)
+- [ ] Secrets in a secret manager (`SOLAND_ANCHORER_SIGNING_KEY`, OAuth introspection bearer)
+- [ ] Log redaction enabled (default outside dev mode)
+- [ ] Admin auth in production mode (`SOLAND_ADMIN_PRINCIPAL_DIDS` and/or `SOLAND_OAUTH_INTROSPECTION_URL`)
+- [ ] Rate limit enabled (default; do not disable in production)
+- [ ] Provider credential rotation scheduled (KeyStore + `rotate-signing-key`)
+- [ ] `SOLAND_SEED_DEMO_DATA=false` (default — never on a federated production deployment)
+
 ## License
 
 Apache-2.0 — see [LICENSE](LICENSE).
