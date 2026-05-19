@@ -180,7 +180,7 @@ async fn typed_describe_handlers_publish_response_schemas() {
     // Round 15g — access/authz.rs invites + effective_grants converted.
     // Their wire response types are already ToSchema; the conversion
     // adds them to the typed-handler output set.
-    for typed_now in ["InvitesResponse", "EffectiveGrantsResponse"] {
+    for typed_now in ["InvitesResponse", "EffectiveGrantsResBody"] {
         assert!(
             body.contains(typed_now),
             "{typed_now} missing — access/authz typed signature did not publish its schema"
@@ -202,14 +202,14 @@ async fn typed_describe_handlers_publish_response_schemas() {
     // schemas (and the typed query param schemas where applicable) to
     // the OpenAPI doc.
     for typed_now in [
-        "FederationTransactionRequest",
-        "FederationTransactionResponse",
-        "FederationPushOperationsRequest",
-        "FederationPushOperationsResponse",
-        "FederationPullOperationsResponse",
-        "FederationSpaceMembersResponse",
-        "FederationVerifyActorRequest",
-        "FederationVerifyActorResponse",
+        "FederationTransactionReqBody",
+        "FederationTransactionResBody",
+        "FederationPushOperationsReqBody",
+        "FederationPushOperationsResBody",
+        "FederationPullOperationsResBody",
+        "FederationSpaceMembersResBody",
+        "FederationVerifyActorReqBody",
+        "FederationVerifyActorResBody",
     ] {
         assert!(
             body.contains(typed_now),
@@ -238,11 +238,11 @@ async fn typed_describe_handlers_publish_response_schemas() {
     // All wire types already carry `ToSchema`; the conversions attach
     // operation_id + typed request/response/path/query schemas.
     for typed_now in [
-        "ModerationReportRequest",
-        "ModerationReportResponse",
+        "ModerationReportReqBody",
+        "ModerationReportResBody",
         "PushUnregisterRequest",
-        "PushNotifyRequest",
-        "PushNotifyResponse",
+        "PushNotifyReqBody",
+        "PushNotifyResBody",
         "CreateWebrtcSessionRequest",
         "CreateWebrtcSessionResponse",
         "WebrtcSignalRequest",
@@ -280,10 +280,10 @@ async fn typed_describe_handlers_publish_response_schemas() {
         "UpsertPolicyDocumentRequest",
         "PolicyDocumentResponse",
         "PolicyDocumentsResponse",
-        "PolicyCheckRequest",
-        "PolicyCheckResponse",
-        "AuthzCheckRequest",
-        "AuthzCheckResponse",
+        "PolicyCheckReqBody",
+        "PolicyCheckResBody",
+        "AuthzCheckReqBody",
+        "AuthzCheckResBody",
     ] {
         assert!(
             body.contains(typed_now),
@@ -311,9 +311,9 @@ async fn typed_describe_handlers_publish_response_schemas() {
     // Note: profile_presence's response wrapper `ProfilePresenceResponse`
     // is newly added in profile.rs (no upstream wire type existed).
     for typed_now in [
-        "KeysBackupsPutResponse",
-        "KeysBackupsListResponse",
-        "KeysBackupsDeleteResponse",
+        "KeysBackupsPutResBody",
+        "KeysBackupsListResBody",
+        "KeysBackupsDeleteResBody",
         "ProfilePresenceResponse",
     ] {
         assert!(
@@ -340,9 +340,9 @@ async fn typed_describe_handlers_publish_response_schemas() {
     // Wire types already had ToSchema; new operation_ids match the
     // existing `cx.device_messages.describe` family.
     for typed_now in [
-        "DeviceMessagesSendRequest",
-        "DeviceMessagesSendResponse",
-        "DeviceMessagesReceiveResponse",
+        "DeviceMessagesSendReqBody",
+        "DeviceMessagesSendResBody",
+        "DeviceMessagesReceiveResBody",
     ] {
         assert!(
             body.contains(typed_now),
@@ -358,12 +358,12 @@ async fn typed_describe_handlers_publish_response_schemas() {
 
     // Round 15o — identity/keys.rs typed batch (3 handlers).
     for typed_now in [
-        "KeysUploadRequest",
-        "KeysUploadResponse",
-        "KeysQueryRequest",
-        "KeysQueryResponse",
-        "KeysClaimRequest",
-        "KeysClaimResponse",
+        "KeysUploadReqBody",
+        "KeysUploadResBody",
+        "KeysQueryReqBody",
+        "KeysQueryResBody",
+        "KeysClaimReqBody",
+        "KeysClaimResBody",
     ] {
         assert!(
             body.contains(typed_now),
@@ -381,10 +381,10 @@ async fn typed_describe_handlers_publish_response_schemas() {
     // identity_resolve, identity_document, identity_log, identity_receipts.
     // embedded_webvh_log is skipped — it streams `application/jsonl` not JSON.
     for typed_now in [
-        "IdentityResolveRequest",
-        "IdentityResolveResponse",
-        "IdentityLogResponse",
-        "IdentityReceiptsResponse",
+        "IdentityResolveReqBody",
+        "IdentityResolveResBody",
+        "IdentityLogResBody",
+        "IdentityReceiptsResBody",
     ] {
         assert!(
             body.contains(typed_now),

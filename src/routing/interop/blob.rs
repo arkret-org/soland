@@ -206,7 +206,7 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         );
         return;
     }
-    res.render(Json(crate::wire::BlobUploadResponse {
+    res.render(Json(crate::wire::BlobUploadResBody {
         blob_ref,
         size,
         media_type,

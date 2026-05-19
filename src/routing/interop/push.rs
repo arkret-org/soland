@@ -39,7 +39,7 @@ use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::{AppState, PushRuleRecord, SessionRecord};
 use crate::wire::{
-    OkResponse, PushNotifyRequest, PushNotifyResponse, PushRegisterRequest, PushRegisterResponse,
+    OkResBody, PushNotifyReqBody, PushNotifyResBody, PushRegisterRequest, PushRegisterResponse,
     PushRulesResponse, PushUnregisterRequest, SessionGrantIntrospectionProof,
     UpsertPushRuleRequest, UpsertPushRuleResponse,
 };
@@ -153,7 +153,7 @@ pub(super) async fn push_unregister(
     body: JsonBody<PushUnregisterRequest>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<OkResponse> {
+) -> JsonResult<OkResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req)?;
     let body = body.into_inner();
@@ -181,7 +181,7 @@ pub(super) async fn push_unregister(
         }),
         if removed == 0 { "no_match" } else { "accepted" },
     );
-    json_ok(OkResponse { ok: true })
+    json_ok(OkResBody { ok: true })
 }
 
 #[endpoint(
@@ -272,7 +272,7 @@ pub(super) async fn delete_push_rule(
     rule_id: PathParam<String>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<OkResponse> {
+) -> JsonResult<OkResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req)?;
     let rule_id = rule_id.into_inner();
@@ -283,7 +283,7 @@ pub(super) async fn delete_push_rule(
         .persistence
         .push_rules()
         .delete(&session.actor, &rule_id);
-    json_ok(OkResponse { ok: true })
+    json_ok(OkResBody { ok: true })
 }
 
 #[endpoint(
@@ -292,9 +292,9 @@ pub(super) async fn delete_push_rule(
     summary = "Fan out a push notification through the rule engine"
 )]
 pub(super) async fn push_notify(
-    body: JsonBody<PushNotifyRequest>,
+    body: JsonBody<PushNotifyReqBody>,
     depot: &mut Depot,
-) -> JsonResult<PushNotifyResponse> {
+) -> JsonResult<PushNotifyResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
     if let Err(message) = validate_no_removed_legacy_contracts(&body.notification) {
@@ -380,7 +380,7 @@ pub(super) async fn push_notify(
             rejected.push(push_rejection(device, "push_rule", Some(rule_id)));
         }
     }
-    json_ok(PushNotifyResponse { rejected })
+    json_ok(PushNotifyResBody { rejected })
 }
 
 /// Resolve the gateway URL of a registered device into a `bridge_describe_url`

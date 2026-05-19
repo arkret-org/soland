@@ -29,7 +29,7 @@ use crate::error::AppError;
 use crate::result::{JsonResult, json_ok};
 use crate::state::{AppState, SessionRecord};
 use crate::wire::{
-    DirectoryDescribeResponse, DirectoryValueSearchResponse, ResolveHandleRequest,
+    DirectoryDescribeResBody, DirectoryValueSearchResponse, ResolveHandleRequest,
     ResolveHandleResponse, ResolveOrganizationRequest, ResolveOrganizationResponse,
     ResolveSpaceRequest, ResolveSpaceResponse, SearchActorsRequest, SearchOrganizationsRequest,
     SearchSpacesRequest, SearchSpacesResponse, SearchUsersRequest,
@@ -50,7 +50,7 @@ pub(super) fn router() -> Router {
 #[endpoint]
 async fn directory_describe(depot: &mut Depot, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
-    res.render(Json(DirectoryDescribeResponse {
+    res.render(Json(DirectoryDescribeResBody {
         service_did: state.config.service_did.clone(),
         resource_types: vec![
             "space".to_owned(),

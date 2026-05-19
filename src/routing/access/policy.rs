@@ -5,7 +5,7 @@
 //! - `GET    /api/v1/policy/documents/{id}`      — read one policy document
 //! - `PUT    /api/v1/policy/documents/{id}`      — upsert (idempotent)
 //! - `DELETE /api/v1/policy/documents/{id}`      — remove a policy document
-//! - `POST   /api/v1/policy/check`               — evaluate a `PolicyCheckRequest`
+//! - `POST   /api/v1/policy/check`               — evaluate a `PolicyCheckReqBody`
 //!
 //! `policy_document_to_response`, `is_valid_generated_or_custom_id`, and the
 //! supported-effect/scope/type validators are `pub` so admin / authz handlers
@@ -28,7 +28,7 @@ use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::{AppState, PolicyDocumentRecord};
 use crate::wire::{
-    OkResponse, PolicyCheckRequest, PolicyCheckResponse, PolicyDocumentResponse,
+    OkResBody, PolicyCheckReqBody, PolicyCheckResBody, PolicyDocumentResponse,
     PolicyDocumentsResponse, UpsertPolicyDocumentRequest,
 };
 
@@ -200,7 +200,7 @@ async fn delete_policy_document(
     policy_id: PathParam<String>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<OkResponse> {
+) -> JsonResult<OkResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req)?;
     let policy_id = policy_id.into_inner();
@@ -214,7 +214,7 @@ async fn delete_policy_document(
         ));
     }
     let _ = store.delete(&policy_id);
-    json_ok(OkResponse { ok: true })
+    json_ok(OkResBody { ok: true })
 }
 
 #[endpoint(
@@ -223,9 +223,9 @@ async fn delete_policy_document(
     summary = "Evaluate a policy decision for an actor + action + resource tuple"
 )]
 async fn policy_check(
-    body: JsonBody<PolicyCheckRequest>,
+    body: JsonBody<PolicyCheckReqBody>,
     depot: &mut Depot,
-) -> JsonResult<PolicyCheckResponse> {
+) -> JsonResult<PolicyCheckResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
     if validate_did(&body.actor).is_err() {
@@ -260,7 +260,7 @@ async fn policy_check(
         } else {
             ("allow".to_owned(), "ok".to_owned(), None, Vec::new())
         };
-    json_ok(PolicyCheckResponse {
+    json_ok(PolicyCheckResBody {
         decision,
         reason_code,
         policy_id: policy_id.clone(),
@@ -310,7 +310,7 @@ struct MatchedPolicyDecision {
 
 fn matching_policy_decision(
     state: &AppState,
-    request: &PolicyCheckRequest,
+    request: &PolicyCheckReqBody,
 ) -> Option<MatchedPolicyDecision> {
     state
         .persistence
@@ -347,7 +347,7 @@ fn matching_policy_decision(
         })
 }
 
-fn policy_matches_check(policy: &PolicyDocumentRecord, request: &PolicyCheckRequest) -> bool {
+fn policy_matches_check(policy: &PolicyDocumentRecord, request: &PolicyCheckReqBody) -> bool {
     policy_scope_matches(&policy.scope, request.space_id.as_deref())
         && policy_subject_matches(&policy.subject_ref, &request.actor)
         && (policy.policy_type == "*" || policy.policy_type == request.action)
@@ -377,7 +377,7 @@ fn policy_actions_match(actions: &Value, action: &str) -> bool {
     })
 }
 
-fn policy_resource_matches(resource: &Value, request: &PolicyCheckRequest) -> bool {
+fn policy_resource_matches(resource: &Value, request: &PolicyCheckReqBody) -> bool {
     let Some(resource) = resource.as_object() else {
         return true;
     };

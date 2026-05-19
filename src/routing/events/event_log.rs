@@ -34,7 +34,7 @@ use crate::routing::system::extract::AuthArgs;
 use crate::state::{AppState, CanonicalEventRecord, SessionRecord};
 use crate::wire::{
     EventBatchGetRequest, EventBatchGetResponse, EventDescribeResponse, EventReadResponse,
-    EventSubmitResponse, EventsFrontierResponse, EventsPageResponse,
+    EventSubmitResponse, EventsFrontierResBody, EventsPageResponse,
 };
 use crate::{artifacts, kinds};
 
@@ -602,7 +602,7 @@ async fn events_frontier(
     aa: crate::routing::system::extract::AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-) -> crate::result::JsonResult<EventsFrontierResponse> {
+) -> crate::result::JsonResult<EventsFrontierResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req)?;
     let actor_id = query_param(req, "actor_id");
@@ -672,7 +672,7 @@ async fn events_frontier(
         }
         _ => {}
     }
-    crate::result::json_ok(EventsFrontierResponse {
+    crate::result::json_ok(EventsFrontierResBody {
         actor_frontier,
         space_frontier,
         frontier,

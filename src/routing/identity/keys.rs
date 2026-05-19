@@ -16,8 +16,8 @@ use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::{AppState, DeviceInventoryRecord};
 use crate::wire::{
-    KeysClaimRequest, KeysClaimResponse, KeysQueryRequest, KeysQueryResponse, KeysUploadRequest,
-    KeysUploadResponse,
+    KeysClaimReqBody, KeysClaimResBody, KeysQueryReqBody, KeysQueryResBody, KeysUploadReqBody,
+    KeysUploadResBody,
 };
 
 pub(super) fn router() -> Router {
@@ -34,10 +34,10 @@ pub(super) fn router() -> Router {
 )]
 async fn keys_upload(
     aa: AuthArgs,
-    body: JsonBody<KeysUploadRequest>,
+    body: JsonBody<KeysUploadReqBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<KeysUploadResponse> {
+) -> JsonResult<KeysUploadResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req)?;
     if is_device_revoked(state, &session.actor, &session.device_id) {
@@ -146,7 +146,7 @@ async fn keys_upload(
     for (alg, count) in one_time_key_alg_counts {
         counts_value.insert(alg, json!(count));
     }
-    json_ok(KeysUploadResponse {
+    json_ok(KeysUploadResBody {
         one_time_key_counts: json!(counts_value),
         fallback_keys: body.fallback_keys,
     })
@@ -159,10 +159,10 @@ async fn keys_upload(
 )]
 async fn keys_query(
     aa: AuthArgs,
-    body: JsonBody<KeysQueryRequest>,
+    body: JsonBody<KeysQueryReqBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<KeysQueryResponse> {
+) -> JsonResult<KeysQueryResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let _ = aa.authenticated_session(state, req)?;
 
@@ -181,7 +181,7 @@ async fn keys_query(
         }
         result.insert(actor, json!(actor_keys));
     }
-    json_ok(KeysQueryResponse {
+    json_ok(KeysQueryResBody {
         device_keys: json!(result),
         failures: json!({}),
     })
@@ -194,10 +194,10 @@ async fn keys_query(
 )]
 async fn keys_claim(
     aa: AuthArgs,
-    body: JsonBody<KeysClaimRequest>,
+    body: JsonBody<KeysClaimReqBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<KeysClaimResponse> {
+) -> JsonResult<KeysClaimResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let _ = aa.authenticated_session(state, req)?;
 
@@ -213,7 +213,7 @@ async fn keys_claim(
         }
         claimed.insert(actor, json!(device_map));
     }
-    json_ok(KeysClaimResponse {
+    json_ok(KeysClaimResBody {
         one_time_keys: json!(claimed),
         failures: json!({}),
     })

@@ -22,8 +22,8 @@ use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
 use crate::wire::{
-    AuthzCheckRequest, AuthzCheckResponse, CreateGrantRequest, CreateGrantResponse,
-    EffectiveGrantsResponse, InvitesResponse, RevokeGrantResponse,
+    AuthzCheckReqBody, AuthzCheckResBody, CreateGrantRequest, CreateGrantResponse,
+    EffectiveGrantsResBody, InvitesResponse, RevokeGrantResponse,
 };
 
 pub(super) fn router() -> Router {
@@ -42,9 +42,9 @@ pub(super) fn router() -> Router {
     summary = "Evaluate one (actor, action, resource) authorization decision"
 )]
 async fn authz_check(
-    body: JsonBody<AuthzCheckRequest>,
+    body: JsonBody<AuthzCheckReqBody>,
     depot: &mut Depot,
-) -> JsonResult<AuthzCheckResponse> {
+) -> JsonResult<AuthzCheckResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
     let (resource_str, space_id, resource_facets) = if let Some(s) = body.resource.as_str() {
@@ -117,7 +117,7 @@ async fn authz_check(
             })
         })
         .collect::<Vec<_>>();
-    json_ok(AuthzCheckResponse {
+    json_ok(AuthzCheckResBody {
         allowed: result.allowed,
         reason_code: (!result.allowed).then(|| result.reason.clone()),
         reason: if result.allowed {
@@ -163,7 +163,7 @@ fn facet_names_from_value(value: Option<&serde_json::Value>) -> Vec<String> {
 async fn effective_grants(
     depot: &mut Depot,
     req: &mut Request,
-) -> crate::result::JsonResult<EffectiveGrantsResponse> {
+) -> crate::result::JsonResult<EffectiveGrantsResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let subject = query_param(req, "subject").unwrap_or_else(|| "did:web:alice.example".to_owned());
     let space_id = query_param(req, "space_id").unwrap_or_else(|| "*".to_owned());
@@ -211,7 +211,7 @@ async fn effective_grants(
         Vec::new()
     };
     let all_grants = [grants, default_grants].concat();
-    crate::result::json_ok(EffectiveGrantsResponse {
+    crate::result::json_ok(EffectiveGrantsResBody {
         grants: all_grants,
         state_hash: Some(
             "sha256:0000000000000000000000000000000000000000000000000000000000000000".to_owned(),

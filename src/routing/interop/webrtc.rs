@@ -30,7 +30,7 @@ use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::{AppState, WebrtcSessionRecord, WebrtcSignalRecord};
 use crate::wire::{
-    CreateWebrtcSessionRequest, CreateWebrtcSessionResponse, OkResponse, WebrtcSignalRequest,
+    CreateWebrtcSessionRequest, CreateWebrtcSessionResponse, OkResBody, WebrtcSignalRequest,
     WebrtcSignalResponse, WebrtcSignalsResponse,
 };
 
@@ -356,7 +356,7 @@ async fn delete_webrtc_session(
     session_id: PathParam<String>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<OkResponse> {
+) -> JsonResult<OkResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req)?;
     let session_id = session_id.into_inner();
@@ -374,7 +374,7 @@ async fn delete_webrtc_session(
         ));
     }
     let _ = state.persistence.webrtc().delete(&session_id);
-    json_ok(OkResponse { ok: true })
+    json_ok(OkResBody { ok: true })
 }
 
 fn prune_expired_webrtc_sessions(state: &AppState) {

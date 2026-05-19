@@ -302,7 +302,7 @@ pub struct OutboundPushBridgeCacheInvalidateResponse {
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct SyncDescribeResponse {
+pub struct SyncDescribeResBody {
     pub service_did: String,
     pub supported_sync_profiles: Vec<String>,
     pub limits: Value,
@@ -366,7 +366,7 @@ pub struct SearchSpacesRequest {
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct DirectoryDescribeResponse {
+pub struct DirectoryDescribeResBody {
     pub service_did: String,
     pub resource_types: Vec<String>,
     pub discovery_profiles: Vec<String>,
@@ -543,7 +543,7 @@ pub struct IndexSpaceHierarchyResponse {
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct BackfillResponse {
+pub struct BackfillResBody {
     pub events: Vec<Value>,
     pub prev_cursor: Option<String>,
     pub prev_batch: Option<String>,
@@ -602,7 +602,7 @@ pub struct EventsPageResponse {
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct EventsFrontierResponse {
+pub struct EventsFrontierResBody {
     pub actor_frontier: BTreeMap<String, u64>,
     pub space_frontier: BTreeMap<String, Value>,
     pub frontier: Value,
@@ -638,7 +638,7 @@ pub struct SnapshotHeadResponse {
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct AuthzCheckRequest {
+pub struct AuthzCheckReqBody {
     pub actor: String,
     pub action: String,
     pub resource: Value,
@@ -647,7 +647,7 @@ pub struct AuthzCheckRequest {
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct AuthzCheckResponse {
+pub struct AuthzCheckResBody {
     pub allowed: bool,
     pub reason_code: Option<String>,
     pub reason: Option<String>,
@@ -657,7 +657,7 @@ pub struct AuthzCheckResponse {
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct EffectiveGrantsResponse {
+pub struct EffectiveGrantsResBody {
     pub grants: Vec<Value>,
     pub state_hash: Option<String>,
     pub evaluated_at: DateTime<Utc>,
@@ -702,12 +702,12 @@ pub struct PushUnregisterRequest {
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct PushNotifyRequest {
+pub struct PushNotifyReqBody {
     pub notification: Value,
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct PushNotifyResponse {
+pub struct PushNotifyResBody {
     pub rejected: Vec<Value>,
 }
 
@@ -739,12 +739,12 @@ pub struct UpsertPushRuleRequest {
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct OkResponse {
+pub struct OkResBody {
     pub ok: bool,
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct ModerationReportRequest {
+pub struct ModerationReportReqBody {
     pub space_id: String,
     pub target_ref: String,
     pub reason: String,
@@ -755,7 +755,7 @@ pub struct ModerationReportRequest {
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct ModerationReportResponse {
+pub struct ModerationReportResBody {
     pub report_id: String,
     pub status: String,
     pub routed_to: Vec<String>,
@@ -798,7 +798,7 @@ pub struct PolicyDocumentsResponse {
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct PolicyCheckRequest {
+pub struct PolicyCheckReqBody {
     pub request_id: String,
     #[serde(default)]
     pub space_id: Option<String>,
@@ -813,7 +813,7 @@ pub struct PolicyCheckRequest {
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct PolicyCheckResponse {
+pub struct PolicyCheckResBody {
     pub decision: String,
     pub reason_code: String,
     pub policy_id: Option<String>,
@@ -1081,7 +1081,7 @@ pub struct SendMessageRequest {
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct IdentityDescribeResponse {
+pub struct IdentityDescribeResBody {
     pub service_did: String,
     pub registry_mode: String,
     pub supported_receipts: Vec<String>,
@@ -1093,27 +1093,27 @@ pub struct IdentityDescribeResponse {
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct IdentityResolveRequest {
+pub struct IdentityResolveReqBody {
     pub did: String,
     #[serde(default)]
     pub include: Vec<String>,
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct IdentityLogResponse {
+pub struct IdentityLogResBody {
     pub events: Vec<Value>,
     pub next_cursor: Option<String>,
     pub has_more: bool,
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct IdentityReceiptsResponse {
+pub struct IdentityReceiptsResBody {
     pub receipts: Vec<Value>,
     pub threshold_met: bool,
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct IdentityResolveResponse {
+pub struct IdentityResolveResBody {
     pub did_document: Value,
     pub key_log_head: Option<String>,
     pub seq: u64,
@@ -1122,7 +1122,7 @@ pub struct IdentityResolveResponse {
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct KeysUploadRequest {
+pub struct KeysUploadReqBody {
     pub device_id: String,
     #[serde(default)]
     pub device_keys: Value,
@@ -1147,38 +1147,38 @@ pub struct KeysUploadRequest {
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct KeysUploadResponse {
+pub struct KeysUploadResBody {
     pub one_time_key_counts: Value,
     pub fallback_keys: Value,
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct KeysQueryRequest {
+pub struct KeysQueryReqBody {
     pub device_keys: std::collections::BTreeMap<String, Vec<String>>,
     #[serde(default)]
     pub timeout_ms: Option<u64>,
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct KeysQueryResponse {
+pub struct KeysQueryResBody {
     pub device_keys: Value,
     pub failures: Value,
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct KeysClaimRequest {
+pub struct KeysClaimReqBody {
     pub one_time_keys:
         std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>,
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct KeysClaimResponse {
+pub struct KeysClaimResBody {
     pub one_time_keys: Value,
     pub failures: Value,
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct KeysBackupsPutResponse {
+pub struct KeysBackupsPutResBody {
     pub ok: bool,
     pub backup: Value,
     pub state: String,
@@ -1187,7 +1187,7 @@ pub struct KeysBackupsPutResponse {
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct KeysBackupsListResponse {
+pub struct KeysBackupsListResBody {
     pub backups: Vec<Value>,
     pub next_cursor: Option<String>,
     pub state: String,
@@ -1196,7 +1196,7 @@ pub struct KeysBackupsListResponse {
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct KeysBackupsDeleteResponse {
+pub struct KeysBackupsDeleteResBody {
     pub ok: bool,
     pub backup_id: String,
     pub deleted: bool,
@@ -1206,19 +1206,19 @@ pub struct KeysBackupsDeleteResponse {
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct DeviceMessagesSendRequest {
+pub struct DeviceMessagesSendReqBody {
     pub messages: std::collections::BTreeMap<String, std::collections::BTreeMap<String, Value>>,
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct DeviceMessagesSendResponse {
+pub struct DeviceMessagesSendResBody {
     pub ok: bool,
     pub delivered: Value,
     pub unknown_devices: Value,
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct DeviceMessagesReceiveResponse {
+pub struct DeviceMessagesReceiveResBody {
     pub events: Vec<Value>,
     pub next_batch: Option<String>,
     pub limited: bool,
@@ -1268,7 +1268,7 @@ pub struct WebrtcSignalsResponse {
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct BlobUploadResponse {
+pub struct BlobUploadResBody {
     pub blob_ref: String,
     pub size: usize,
     pub media_type: String,

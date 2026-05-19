@@ -49,8 +49,8 @@ use super::{
 use crate::reducer::ProjectionState;
 use crate::state::{AppState, PresenceRecord, SessionRecord, TypingRecord};
 use crate::wire::{
-    BackfillResponse, ClientSyncRequest, ClientSyncResponse, SetTypingRequest, SetTypingResponse,
-    SnapshotHeadResponse, SyncDescribeResponse,
+    BackfillResBody, ClientSyncRequest, ClientSyncResponse, SetTypingRequest, SetTypingResponse,
+    SnapshotHeadResponse, SyncDescribeResBody,
 };
 
 pub(super) fn router() -> Router {
@@ -66,7 +66,7 @@ pub(super) fn router() -> Router {
 #[endpoint]
 async fn sync_describe(depot: &mut Depot, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
-    res.render(Json(SyncDescribeResponse {
+    res.render(Json(SyncDescribeResBody {
         service_did: state.config.service_did.clone(),
         supported_sync_profiles: vec![
             "initial".to_owned(),
@@ -1144,7 +1144,7 @@ pub(super) async fn events_query(
         (Some(_), Some(_)) => unreachable!("validated above"),
     };
 
-    // Single-space fast path preserves the original `BackfillResponse` shape
+    // Single-space fast path preserves the original `BackfillResBody` shape
     // for soland's existing test surface (cx.sync.backfill behavior).
     if accessible_spaces.len() == 1 {
         let space_id = &accessible_spaces[0];
@@ -1155,7 +1155,7 @@ pub(super) async fn events_query(
                     events.reverse();
                 }
                 return crate::result::json_ok(
-                    serde_json::to_value(BackfillResponse {
+                    serde_json::to_value(BackfillResBody {
                         events,
                         prev_cursor: cursor.clone(),
                         prev_batch: cursor,
@@ -1177,7 +1177,7 @@ pub(super) async fn events_query(
             }
         }
         return crate::result::json_ok(
-            serde_json::to_value(BackfillResponse {
+            serde_json::to_value(BackfillResBody {
                 events: Vec::new(),
                 prev_cursor: cursor.clone(),
                 prev_batch: cursor,
@@ -1234,7 +1234,7 @@ pub(super) async fn events_query(
         .flatten()
         .or_else(|| Some(sync_token_for_state(state)));
     crate::result::json_ok(
-        serde_json::to_value(BackfillResponse {
+        serde_json::to_value(BackfillResBody {
             events: page_events,
             prev_cursor: cursor.clone(),
             prev_batch: cursor,

@@ -18,7 +18,7 @@ use crate::ids;
 // live in the SDK so yougen and sodmin admin can call them client-side. See
 // `contrix_sdk::authz::delegation` (crates/sdk/src/authz/delegation.rs).
 pub use contrix_sdk::authz::delegation::{
-    DelegationError, Grant, GrantConstraint as Constraint, GrantRequest, delegation_chain_intact,
+    DelegationError, Grant, GrantConstraint as Constraint, GrantReqBody, delegation_chain_intact,
     grant_effective_expiry, is_grant_expired, resource_within, revoke_with_cascade,
 };
 
@@ -146,7 +146,7 @@ impl AuthzEngine {
             .values()
             .cloned()
             .collect();
-        let request = GrantRequest {
+        let request = GrantReqBody {
             // Parent's space_id is authoritative for delegated children
             // (the wire `space_id` argument is informational only; the SDK
             // helper does not check it). Use the parent's so persisted

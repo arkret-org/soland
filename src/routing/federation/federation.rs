@@ -48,9 +48,9 @@ use crate::state::{AppState, FederationTransactionRecord};
 )]
 pub(super) async fn federation_transaction(
     txn_id: PathParam<String>,
-    body: JsonBody<contrix_sdk::FederationTransactionRequest>,
+    body: JsonBody<contrix_sdk::FederationTransactionReqBody>,
     depot: &mut Depot,
-) -> JsonResult<contrix_sdk::FederationTransactionResponse> {
+) -> JsonResult<contrix_sdk::FederationTransactionResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let txn_id = txn_id.into_inner();
     if !is_valid_federation_txn_id(&txn_id) {
@@ -64,7 +64,7 @@ pub(super) async fn federation_transaction(
         .get(body.origin.as_str(), &txn_id)
     {
         Ok(Some(record)) if record.content_digest == content_digest => {
-            let response: contrix_sdk::FederationTransactionResponse =
+            let response: contrix_sdk::FederationTransactionResBody =
                 serde_json::from_value(record.response).map_err(|error| {
                     AppError::internal(format!("cached federation response decode: {error}"))
                 })?;
@@ -92,7 +92,7 @@ pub(super) async fn federation_transaction(
         ));
     }
     let ingest = ingest_federation_operations(state, body.origin.as_str(), body.operations);
-    let response = contrix_sdk::FederationTransactionResponse {
+    let response = contrix_sdk::FederationTransactionResBody {
         ok: true,
         accepted: ingest.accepted,
         rejected: ingest.rejected,
@@ -126,9 +126,9 @@ pub(super) async fn federation_transaction(
     summary = "Accept a batch of operations pushed from a peer service"
 )]
 pub(super) async fn federation_push_operations(
-    body: JsonBody<contrix_sdk::FederationPushOperationsRequest>,
+    body: JsonBody<contrix_sdk::FederationPushOperationsReqBody>,
     depot: &mut Depot,
-) -> JsonResult<contrix_sdk::FederationPushOperationsResponse> {
+) -> JsonResult<contrix_sdk::FederationPushOperationsResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
     if !verify_federation_origin(body.origin.as_str()) {
@@ -142,7 +142,7 @@ pub(super) async fn federation_push_operations(
         ));
     }
     let ingest = ingest_federation_operations(state, body.origin.as_str(), body.operations);
-    json_ok(contrix_sdk::FederationPushOperationsResponse {
+    json_ok(contrix_sdk::FederationPushOperationsResBody {
         accepted: ingest.accepted,
         rejected: ingest.rejected,
         quarantine: Vec::new(),
@@ -160,7 +160,7 @@ pub(super) async fn federation_pull_operations(
     limit: QueryParam<usize, false>,
     snapshot_bootstrap: QueryParam<bool, false>,
     depot: &mut Depot,
-) -> JsonResult<contrix_sdk::FederationPullOperationsResponse> {
+) -> JsonResult<contrix_sdk::FederationPullOperationsResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let space_id = space_id.into_inner();
     if validate_space_id(&space_id).is_err() {
@@ -214,7 +214,7 @@ pub(super) async fn federation_pull_operations(
         .last()
         .map(|operation| operation.operation_id.to_string())
         .or_else(|| Some(sync_token(state)));
-    json_ok(contrix_sdk::FederationPullOperationsResponse {
+    json_ok(contrix_sdk::FederationPullOperationsResBody {
         operations,
         snapshot_bootstrap,
         next_cursor,
@@ -230,7 +230,7 @@ pub(super) async fn federation_pull_operations(
 pub(super) async fn federation_space_members(
     space_id: QueryParam<String, true>,
     depot: &mut Depot,
-) -> JsonResult<contrix_sdk::FederationSpaceMembersResponse> {
+) -> JsonResult<contrix_sdk::FederationSpaceMembersResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let space_id_value = SpaceId::new(space_id.into_inner())
         .map_err(|_| AppError::invalid_param("invalid space_id"))?;
@@ -250,7 +250,7 @@ pub(super) async fn federation_space_members(
                 .collect()
         })
         .unwrap_or_default();
-    json_ok(contrix_sdk::FederationSpaceMembersResponse {
+    json_ok(contrix_sdk::FederationSpaceMembersResBody {
         members,
         membership_frontier: sync_token(state),
         next_cursor: None,
@@ -263,10 +263,10 @@ pub(super) async fn federation_space_members(
     summary = "Verify a federated actor's signature against the local DID resolver"
 )]
 pub(super) async fn federation_verify_actor(
-    body: JsonBody<contrix_sdk::FederationVerifyActorRequest>,
-) -> JsonResult<contrix_sdk::FederationVerifyActorResponse> {
+    body: JsonBody<contrix_sdk::FederationVerifyActorReqBody>,
+) -> JsonResult<contrix_sdk::FederationVerifyActorResBody> {
     let body = body.into_inner();
-    json_ok(contrix_sdk::FederationVerifyActorResponse {
+    json_ok(contrix_sdk::FederationVerifyActorResBody {
         valid: true,
         actor_id: body.actor_id.clone(),
         verified_key_id: Some(format!("{}#dev", body.actor_id)),
@@ -305,7 +305,7 @@ fn is_valid_federation_txn_id(value: &str) -> bool {
 }
 
 fn federation_request_digest(
-    body: &contrix_sdk::FederationTransactionRequest,
+    body: &contrix_sdk::FederationTransactionReqBody,
 ) -> Result<String, &'static str> {
     let value =
         serde_json::to_value(body).map_err(|_| "federation transaction must serialize to JSON")?;

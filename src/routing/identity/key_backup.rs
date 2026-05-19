@@ -8,7 +8,7 @@ use crate::error::{AppError, ErrorCode};
 use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
-use crate::wire::{KeysBackupsDeleteResponse, KeysBackupsListResponse, KeysBackupsPutResponse};
+use crate::wire::{KeysBackupsDeleteResBody, KeysBackupsListResBody, KeysBackupsPutResBody};
 
 pub(super) fn router() -> Router {
     Router::new()
@@ -211,7 +211,7 @@ async fn put_key_backup(
     backup: JsonBody<Value>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<KeysBackupsPutResponse> {
+) -> JsonResult<KeysBackupsPutResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req)?;
     let backup_id = backup_id.into_inner();
@@ -230,7 +230,7 @@ async fn put_key_backup(
     store
         .put(backup_id.clone(), backup.clone())
         .map_err(|error| AppError::internal(error.to_string()))?;
-    json_ok(KeysBackupsPutResponse {
+    json_ok(KeysBackupsPutResBody {
         ok: true,
         backup: serde_json::json!({
             "backup_id": backup_id,
@@ -251,7 +251,7 @@ async fn list_key_backups(
     cursor: QueryParam<String, false>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<KeysBackupsListResponse> {
+) -> JsonResult<KeysBackupsListResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req)?;
     let backups = state
@@ -263,7 +263,7 @@ async fn list_key_backups(
         .filter(|backup| backup.get("actor_id").and_then(Value::as_str) == Some(&session.actor))
         .collect::<Vec<_>>();
     let next_cursor = cursor.into_inner().map(|_| "key-backups-end".to_owned());
-    json_ok(KeysBackupsListResponse {
+    json_ok(KeysBackupsListResBody {
         backups,
         next_cursor,
         state: "active".to_owned(),
@@ -310,7 +310,7 @@ async fn delete_key_backup(
     backup_id: PathParam<String>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<KeysBackupsDeleteResponse> {
+) -> JsonResult<KeysBackupsDeleteResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req)?;
     let backup_id = backup_id.into_inner();
@@ -321,7 +321,7 @@ async fn delete_key_backup(
         .flatten()
         .filter(|backup| backup.get("actor_id").and_then(Value::as_str) == Some(&session.actor))
         .is_some_and(|_| store.delete(&backup_id).unwrap_or(false));
-    json_ok(KeysBackupsDeleteResponse {
+    json_ok(KeysBackupsDeleteResBody {
         ok: true,
         backup_id,
         deleted,

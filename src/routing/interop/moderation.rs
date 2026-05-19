@@ -14,7 +14,7 @@ use crate::ids;
 use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
-use crate::wire::{ModerationReportRequest, ModerationReportResponse};
+use crate::wire::{ModerationReportReqBody, ModerationReportResBody};
 
 pub(super) fn router() -> Router {
     Router::with_path("moderation/report").post(moderation_report)
@@ -27,10 +27,10 @@ pub(super) fn router() -> Router {
 )]
 async fn moderation_report(
     aa: AuthArgs,
-    body: JsonBody<ModerationReportRequest>,
+    body: JsonBody<ModerationReportReqBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<ModerationReportResponse> {
+) -> JsonResult<ModerationReportResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req)?;
     let body = body.into_inner();
@@ -76,7 +76,7 @@ async fn moderation_report(
         json!({"report_id": report_id.clone()}),
         "queued",
     );
-    json_ok(ModerationReportResponse {
+    json_ok(ModerationReportResBody {
         report_id,
         status: "queued".to_owned(),
         routed_to: vec![moderation_service],

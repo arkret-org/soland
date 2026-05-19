@@ -29,8 +29,8 @@ use crate::error::{AppError, ErrorCode};
 use crate::result::{JsonResult, json_ok};
 use crate::state::{AppState, WebvhDocumentRecord, WebvhLogRecord};
 use crate::wire::{
-    IdentityDescribeResponse, IdentityLogResponse, IdentityReceiptsResponse,
-    IdentityResolveRequest, IdentityResolveResponse,
+    IdentityDescribeResBody, IdentityLogResBody, IdentityReceiptsResBody,
+    IdentityResolveReqBody, IdentityResolveResBody,
 };
 
 const WEBVH_SCID_PLACEHOLDER: &str = "{SCID}";
@@ -46,7 +46,7 @@ pub(super) async fn identity_describe(depot: &mut Depot, res: &mut Response) {
     if did_webvh["enabled"].as_bool().unwrap_or(false) {
         profiles.push("cx.identity.webvh.provider.v1".to_owned());
     }
-    res.render(Json(IdentityDescribeResponse {
+    res.render(Json(IdentityDescribeResBody {
         service_did: state.config.service_did.clone(),
         registry_mode: "development_local".to_owned(),
         supported_receipts: vec!["local".to_owned()],
@@ -356,16 +356,16 @@ pub(super) async fn embedded_webvh_log(depot: &mut Depot, req: &mut Request, res
     summary = "Resolve a DID via local webvh store + SDK resolver chain"
 )]
 pub(super) async fn identity_resolve(
-    body: JsonBody<IdentityResolveRequest>,
+    body: JsonBody<IdentityResolveReqBody>,
     depot: &mut Depot,
-) -> JsonResult<IdentityResolveResponse> {
+) -> JsonResult<IdentityResolveResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
     if validate_did(&body.did).is_err() {
         return Err(AppError::invalid_param("invalid did"));
     }
     if let Ok(Some(record)) = state.persistence.webvh().get_document(&body.did) {
-        return json_ok(IdentityResolveResponse {
+        return json_ok(IdentityResolveResBody {
             did_document: record.did_document,
             key_log_head: record.key_log_head,
             seq: record.seq,
@@ -383,7 +383,7 @@ pub(super) async fn identity_resolve(
             .ok()
     });
     if let Some(doc) = sdk_document {
-        return json_ok(IdentityResolveResponse {
+        return json_ok(IdentityResolveResBody {
             did_document: json!({
                 "id": doc.id.as_str(),
                 "verificationMethod": doc.verification_methods,
@@ -396,7 +396,7 @@ pub(super) async fn identity_resolve(
         });
     }
     let record = identity_document_record(state, &body.did);
-    json_ok(IdentityResolveResponse {
+    json_ok(IdentityResolveResBody {
         did_document: record.did_document,
         key_log_head: record.key_log_head,
         seq: record.seq,
@@ -413,14 +413,14 @@ pub(super) async fn identity_resolve(
 pub(super) async fn identity_document(
     did: salvo::oapi::extract::QueryParam<String, true>,
     depot: &mut Depot,
-) -> JsonResult<IdentityResolveResponse> {
+) -> JsonResult<IdentityResolveResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let did = did.into_inner();
     if validate_did(&did).is_err() {
         return Err(AppError::invalid_param("invalid did"));
     }
     let record = identity_document_record(state, &did);
-    json_ok(IdentityResolveResponse {
+    json_ok(IdentityResolveResBody {
         did_document: record.did_document,
         key_log_head: record.key_log_head,
         seq: record.seq,
@@ -437,7 +437,7 @@ pub(super) async fn identity_document(
 pub(super) async fn identity_log(
     did: salvo::oapi::extract::QueryParam<String, true>,
     depot: &mut Depot,
-) -> JsonResult<IdentityLogResponse> {
+) -> JsonResult<IdentityLogResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let did = did.into_inner();
     if validate_did(&did).is_err() {
@@ -459,7 +459,7 @@ pub(super) async fn identity_log(
             })
         })
         .collect();
-    json_ok(IdentityLogResponse {
+    json_ok(IdentityLogResBody {
         events,
         next_cursor: None,
         has_more: false,
@@ -474,14 +474,14 @@ pub(super) async fn identity_log(
 pub(super) async fn identity_receipts(
     did: salvo::oapi::extract::QueryParam<String, true>,
     depot: &mut Depot,
-) -> JsonResult<IdentityReceiptsResponse> {
+) -> JsonResult<IdentityReceiptsResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let did = did.into_inner();
     if validate_did(&did).is_err() {
         return Err(AppError::invalid_param("invalid did"));
     }
     let record = state.persistence.webvh().get_document(&did).ok().flatten();
-    json_ok(IdentityReceiptsResponse {
+    json_ok(IdentityReceiptsResBody {
         receipts: record
             .map(|record| {
                 vec![json!({

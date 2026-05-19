@@ -24,7 +24,7 @@ use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::{AppState, DeviceMessageRecord, SessionRecord};
 use crate::wire::{
-    DeviceMessagesReceiveResponse, DeviceMessagesSendRequest, DeviceMessagesSendResponse,
+    DeviceMessagesReceiveResBody, DeviceMessagesSendReqBody, DeviceMessagesSendResBody,
     sync_token,
 };
 
@@ -48,10 +48,10 @@ pub(super) fn router() -> Router {
 )]
 async fn send_device_messages(
     aa: AuthArgs,
-    body: JsonBody<DeviceMessagesSendRequest>,
+    body: JsonBody<DeviceMessagesSendReqBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<DeviceMessagesSendResponse> {
+) -> JsonResult<DeviceMessagesSendResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req)?;
     let idempotency_key = req
@@ -79,7 +79,7 @@ async fn send_device_messages(
         .try_register_txn(format!("{}:{idempotency_key}", session.actor))
         .unwrap_or(false);
     if !registered {
-        return json_ok(DeviceMessagesSendResponse {
+        return json_ok(DeviceMessagesSendResBody {
             ok: true,
             delivered: json!({}),
             unknown_devices: json!({}),
@@ -105,7 +105,7 @@ async fn send_device_messages(
         }
         delivered.insert(recipient, json!(delivered_devices));
     }
-    json_ok(DeviceMessagesSendResponse {
+    json_ok(DeviceMessagesSendResBody {
         ok: true,
         delivered: json!(delivered),
         unknown_devices: json!({}),
@@ -123,7 +123,7 @@ async fn get_device_messages(
     since: QueryParam<String, false>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<DeviceMessagesReceiveResponse> {
+) -> JsonResult<DeviceMessagesReceiveResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req)?;
     let cursor = ack.into_inner().or_else(|| since.into_inner());
@@ -173,7 +173,7 @@ async fn get_device_messages(
         .filter_map(|event| event.get("position").and_then(|position| position.as_i64()))
         .max()
         .unwrap_or(ack_position);
-    json_ok(DeviceMessagesReceiveResponse {
+    json_ok(DeviceMessagesReceiveResBody {
         events,
         next_batch: Some(sync_token_for_client_sync(
             state,
