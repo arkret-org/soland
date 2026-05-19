@@ -139,10 +139,12 @@ pub fn operation_type_string(operation: &Operation) -> String {
 }
 
 pub fn sync_timeline_message_json(message: &crate::reducer::MessageState) -> serde_json::Value {
-    // flow_id is always derived from space_id; thread_id is a branch
-    // within the flow, not the flow itself. See
+    // flow_id is always derived from space_id; thread_id is a discussion
+    // track within the flow, not the flow itself. See
     // `sync_timeline_message_record_json` for the matching MessageRecord
-    // path.
+    // path. The legacy top-level `branch` object was removed in revision
+    // 0a5ab85 (forbidden-wire-fields entry "branch") — only `track` is
+    // emitted on v1 wire.
     let flow_id = flow_id_from_space_id(&message.space_id);
     let track_id = message.thread_id.clone();
     json!({

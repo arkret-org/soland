@@ -1329,7 +1329,7 @@ mod operation_conformance_tests {
             OperationVector {
                 name: "flow create",
                 kind: kinds::CX_FLOW_CREATE,
-                payload: json!({"object": {"id": "cx:flow:01904100-0000-7000-8000-ca33616973bb", "kind": "room", "title": "Launch"}}),
+                payload: json!({"object": {"id": "cx:flow:01904100-0000-7000-8000-ca33616973bb", "kind": "discussion", "title": "Launch"}}),
                 valid: true,
             },
             OperationVector {

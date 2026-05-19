@@ -58,8 +58,13 @@ pub const CX_MORPH_CREATE: &str = "cx.morph.create";
 pub const CX_MORPH_UPDATE: &str = "cx.morph.update";
 pub const CX_MORPH_ARCHIVE: &str = "cx.morph.archive";
 pub const CX_MORPH_RESTORE: &str = "cx.morph.restore";
-pub const CX_FIELD_POSITION_MOVE: &str = "cx.field.position.move";
-pub const CX_FIELD_POSITION_REORDER: &str = "cx.field.position.reorder";
+// `cx.field.position.move` and `cx.field.position.reorder` were removed in
+// revision 0a5ab85 (see contrix-spec
+// `artifacts/registry/removed-event-kinds.json`). Field-level position move
+// was subsumed by track-relative ordering and the per-cell ordered-log
+// lattice. No replacement; reducer/wire MUST hard_reject these kinds. The
+// generic unknown-event-kind path in `event_log::submit_event` already
+// rejects them because they no longer appear in `active_durable_event_kinds`.
 pub const CX_CONTAINER_MOVE_ITEM: &str = "cx.container.move_item";
 pub const CX_CONTAINER_REBALANCE: &str = "cx.container.rebalance";
 pub const CX_MEMBER_STATE: &str = "cx.member.state";
@@ -134,6 +139,26 @@ pub const CX_IDENTITY_ACCOUNTABILITY_GRANT: &str = "cx.identity.accountability_g
 pub const CX_MORPH_SCHEMA_MIGRATE: &str = "cx.morph.schema_migrate";
 pub const CX_ATTESTATION_RANGE_COMPLETENESS: &str = "cx.attestation.range_completeness";
 
+// Round C46 (2026-05-19; spec 0a5ab85) — Space-scoped delivery binding
+// governance + per-device push route binding.
+//
+// `cx.space.delivery_binding_policy` (space / reducer_input): Space policy
+//   constraining which `binding_source` values are admissible, which
+//   recipient services are allowed, which endorsers are required, whether
+//   DID Document fallback / unroutable membership are permitted, and who
+//   may sign rebind. cell_family `cx.component.space.delivery_binding_policy.v1`,
+//   cas-register. Governs reducer acceptance of `cx.member.state{join}`
+//   delivery_binding. Reducer dispatch is TODO — current path validates
+//   only the wire-shape requirements (delivery_status + delivery_binding).
+//
+// `cx.device.push_route` (device / actor_private_event / reducer_input):
+//   per-device push route binding for the composite tuple
+//   `(recipient_service_did, principal, device, push_route)`. MUST NOT be
+//   replicated outside the binding's recipient_service_did context. Stored
+//   as actor-private state on the recipient Principal Server only.
+pub const CX_SPACE_DELIVERY_BINDING_POLICY: &str = "cx.space.delivery_binding_policy";
+pub const CX_DEVICE_PUSH_ROUTE: &str = "cx.device.push_route";
+
 pub fn canonical_kind_for_operation(operation: &Operation) -> Option<&str> {
     canonical_kind_for_payload(&operation.object_type, &operation.payload)
 }
@@ -183,8 +208,6 @@ fn canonical_registered_kind(object_type: &str) -> Option<&str> {
         CX_MORPH_UPDATE => Some(CX_MORPH_UPDATE),
         CX_MORPH_ARCHIVE => Some(CX_MORPH_ARCHIVE),
         CX_MORPH_RESTORE => Some(CX_MORPH_RESTORE),
-        CX_FIELD_POSITION_MOVE => Some(CX_FIELD_POSITION_MOVE),
-        CX_FIELD_POSITION_REORDER => Some(CX_FIELD_POSITION_REORDER),
         CX_CONTAINER_MOVE_ITEM => Some(CX_CONTAINER_MOVE_ITEM),
         CX_CONTAINER_REBALANCE => Some(CX_CONTAINER_REBALANCE),
         CX_READ_MARKER => Some(CX_READ_MARKER),
@@ -217,6 +240,11 @@ fn canonical_registered_kind(object_type: &str) -> Option<&str> {
         CX_IDENTITY_ACCOUNTABILITY_GRANT => Some(CX_IDENTITY_ACCOUNTABILITY_GRANT),
         CX_MORPH_SCHEMA_MIGRATE => Some(CX_MORPH_SCHEMA_MIGRATE),
         CX_ATTESTATION_RANGE_COMPLETENESS => Some(CX_ATTESTATION_RANGE_COMPLETENESS),
+        // Round C46 — delivery binding governance + push route binding.
+        // Wire-valid; reducer projection is TODO pending full policy /
+        // push registration plumbing.
+        CX_SPACE_DELIVERY_BINDING_POLICY => Some(CX_SPACE_DELIVERY_BINDING_POLICY),
+        CX_DEVICE_PUSH_ROUTE => Some(CX_DEVICE_PUSH_ROUTE),
         _ => Some(object_type),
     };
     kind

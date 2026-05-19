@@ -96,13 +96,17 @@ pub fn flow_projection_for_space(
         .map(|meta| meta.updated_at)
         .unwrap_or(created_at);
     let deleted = meta.as_ref().is_some_and(|meta| meta.deleted);
+    // `kind: "room"` and `room_kind` were removed in revision 0a5ab85
+    // (see contrix-spec `artifacts/registry/forbidden-wire-fields.json`
+    // entries `kind=room` and `room_kind`); Space is the v1 boundary and
+    // the Flow.kind discriminator MUST be a v1 value (e.g. "discussion").
     json!({
         "id": flow_id_from_space_id(space_id),
         "flow_id": flow_id_from_space_id(space_id),
         "type": "flow",
         "schema": "cx.schema.flow.v1",
         "space_id": space_id,
-        "kind": "room",
+        "kind": "discussion",
         "title": title,
         "description": summary,
         "state": if deleted { "archived" } else { "active" },
@@ -114,7 +118,7 @@ pub fn flow_projection_for_space(
             },
             "discussion": {
                 "enabled": true,
-                "room_kind": "discussion",
+                "track_kind": "discussion",
                 "history_visibility": flow_history_visibility_for_space(state, space_id),
                 "encryption_profile": if space_allows_plaintext_service(state, space_id) { "none" } else { "mls_rfc9420" },
                 "fields": {}

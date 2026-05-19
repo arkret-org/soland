@@ -334,11 +334,25 @@ async fn resolve_handle(
                 .is_some_and(|handle| handle == normalized)
     });
     match actor {
-        Some(actor) => json_ok(ResolveHandleResponse {
-            handle: normalized,
-            did: actor["did"].as_str().unwrap_or_default().to_owned(),
-            actor,
-        }),
+        Some(actor) => {
+            // Spec 0a5ab85: audience-bearing response. The directory MUST
+            // bind the claim to the requester's invocation context. We
+            // default to the explicit `audience` param, falling back to
+            // `requester` (so a verifier checking `audience == self` passes).
+            let audience = body.audience.or(body.requester);
+            let did = actor["did"].as_str().unwrap_or_default().to_owned();
+            // TODO(spec-sync 0a5ab85): emit a signed `handle_claim` envelope
+            // with `handle_uri` canonical form, `delivery_binding_hint`, and
+            // `issuer_service_did` so federation peers can use it to build
+            // a `member_delivery_binding` at join time.
+            json_ok(ResolveHandleResponse {
+                handle: normalized,
+                did,
+                actor,
+                audience,
+                handle_claim: None,
+            })
+        }
         None => Err(AppError::not_found("not found")),
     }
 }

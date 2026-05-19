@@ -547,19 +547,11 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
             requirements: MORPH_SCHEMA_MIGRATE_REQUIREMENTS,
             validate: Some(validate_morph_schema_migrate_payload),
         },
-        kind if matches!(
-            kind,
-            kinds::CX_FIELD_POSITION_MOVE | kinds::CX_FIELD_POSITION_REORDER
-        ) =>
-        {
-            // Flow / place position ops carry a `flow_id` or `place_id`
-            // payload — relation_id requirements cover both because every
-            // positional op runs through `cx.relation.position.*` cells.
-            OperationPayloadSchema {
-                requirements: RELATION_ID_REQUIREMENTS,
-                validate: None,
-            }
-        }
+        // `cx.field.position.move` / `cx.field.position.reorder` were removed
+        // in revision 0a5ab85 (see contrix-spec
+        // `artifacts/registry/removed-event-kinds.json`). The generic
+        // unknown-event-kind path in `event_log::submit_event` already
+        // hard-rejects these kinds; no operation schema branch is needed.
         kind if matches!(
             kind,
             kinds::CX_CONTAINER_MOVE_ITEM | kinds::CX_CONTAINER_REBALANCE

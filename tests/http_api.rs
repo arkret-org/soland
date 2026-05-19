@@ -503,6 +503,68 @@ async fn health_and_describe_work() {
     assert_eq!(full_gap["status"], "not_claimed");
 }
 
+/// T1.4: `/health` and `/api/v1/server/describe` both surface the runtime
+/// dev-mode posture so monitoring + sodmin can flag dev deployments with
+/// a red "DEVELOPMENT MODE" banner. `test_config()` boots with
+/// `development_mode = true` and no admin allowlist, so the expected
+/// `admin_auth_mode` is `"development"`.
+#[tokio::test]
+async fn describe_returns_development_mode_field() {
+    // Default test config — `development_mode = true`, no admin allowlist.
+    let dev_app = app();
+
+    let health: Value = TestClient::get("http://server/health")
+        .send(&dev_app)
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(health["development_mode"], true);
+    assert_eq!(health["proof_verifier_mode"], "development");
+    assert_eq!(health["admin_auth_mode"], "development");
+
+    let describe: Value = TestClient::get("http://server/api/v1/server/describe")
+        .send(&dev_app)
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(describe["development_mode"], true);
+    assert_eq!(describe["proof_verifier_mode"], "development");
+    assert_eq!(describe["admin_auth_mode"], "development");
+
+    // Now flip to production posture with an explicit admin allowlist to
+    // make sure the derivation tracks the config — this is the production
+    // shape sodmin must NOT render a red banner for.
+    let prod_config = AppConfig {
+        development_mode: false,
+        admin_principal_dids: vec!["did:web:ops.example".to_owned()],
+        ..test_config()
+    };
+    let prod_state = AppState::new(prod_config, Db { pool: None });
+    let prod_app = app_from_state(prod_state);
+
+    let prod_health: Value = TestClient::get("http://server/health")
+        .send(&prod_app)
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(prod_health["development_mode"], false);
+    assert_eq!(prod_health["proof_verifier_mode"], "production");
+    assert_eq!(prod_health["admin_auth_mode"], "did_allowlist");
+
+    let prod_describe: Value = TestClient::get("http://server/api/v1/server/describe")
+        .send(&prod_app)
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(prod_describe["development_mode"], false);
+    assert_eq!(prod_describe["proof_verifier_mode"], "production");
+    assert_eq!(prod_describe["admin_auth_mode"], "did_allowlist");
+}
+
 #[tokio::test]
 async fn events_describe_and_single_event_submit_work() {
     let state = AppState::new(test_config(), Db { pool: None });
@@ -2306,9 +2368,16 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         sync_with_message["spaces"][&space_id]["timeline"]["events"][0]["flow_id"],
         space_id.replace("cx:space:", "cx:flow:")
     );
+    // Legacy top-level `branch` object was removed in revision 0a5ab85
+    // (forbidden-wire-fields entry "branch"); the `track` projection is
+    // the v1 replacement.
     assert_eq!(
-        sync_with_message["spaces"][&space_id]["timeline"]["events"][0]["branch"]["branch_id"],
+        sync_with_message["spaces"][&space_id]["timeline"]["events"][0]["track"]["track_id"],
         "cx:flow:workflow"
+    );
+    assert_eq!(
+        sync_with_message["spaces"][&space_id]["timeline"]["events"][0]["track"]["track_kind"],
+        "discussion"
     );
     assert_eq!(
         sync_with_message["spaces"][&space_id]["summary"]["flow"]["schema"],

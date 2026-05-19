@@ -75,6 +75,9 @@ async fn health(depot: &mut Depot, res: &mut Response) -> JsonResult<HealthRespo
                 "ok": true,
             },
         }),
+        development_mode: state.config.development_mode,
+        proof_verifier_mode: state.config.proof_verifier_mode(),
+        admin_auth_mode: state.config.admin_auth_mode(),
     })
 }
 
@@ -106,6 +109,13 @@ async fn server_describe(depot: &mut Depot) -> JsonResult<Value> {
             "reason": "limited profile is a limitation descriptor, not a conformance claim"
         }
     ]);
+    // Surface the runtime posture so dashboards (e.g. sodmin) can render a
+    // red "DEVELOPMENT MODE" banner without parsing `auth_metadata.mode`.
+    // The same fields are also emitted on `/health` for monitoring probes
+    // that don't need the full describe payload.
+    value["development_mode"] = json!(state.config.development_mode);
+    value["proof_verifier_mode"] = json!(state.config.proof_verifier_mode());
+    value["admin_auth_mode"] = json!(state.config.admin_auth_mode());
     json_ok(value)
 }
 

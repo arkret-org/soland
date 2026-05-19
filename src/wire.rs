@@ -15,6 +15,25 @@ pub struct HealthResponse {
     pub service: &'static str,
     pub storage: &'static str,
     pub checks: Value,
+    /// True when soland is running with `SOLAND_DEVELOPMENT_MODE=true`.
+    /// Surfaced here so operators / dashboards (e.g. sodmin) can flag the
+    /// deployment with a "DEVELOPMENT MODE — do not use in production"
+    /// banner without having to scrape `/api/v1/server/describe`.
+    pub development_mode: bool,
+    /// String mirror of [`Self::development_mode`]: `"development"` when
+    /// `development_mode == true`, `"production"` otherwise. The proof
+    /// verifier path is gated on the same flag — dev mode currently
+    /// accepts unsigned / weakly-signed envelopes.
+    pub proof_verifier_mode: &'static str,
+    /// Effective admin-API authentication posture:
+    ///   - `"development"` — any authenticated session may call admin endpoints
+    ///     (dev mode lets every session through)
+    ///   - `"did_allowlist"` — production gate via `SOLAND_ADMIN_PRINCIPAL_DIDS`
+    ///   - `"oauth_introspection"` — bearer tokens are introspected against
+    ///     `SOLAND_OAUTH_INTROSPECTION_URL` (no admin allowlist configured)
+    ///   - `"closed"` — production mode with no admin principals AND no
+    ///     introspection configured; admin endpoints are effectively locked.
+    pub admin_auth_mode: &'static str,
 }
 
 #[derive(Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
@@ -435,11 +454,28 @@ pub struct SearchUsersRequest {
     pub space_id: Option<String>,
     #[serde(default)]
     pub limit: Option<usize>,
+    /// Why the requester wants to enumerate users — gates anti-enumeration
+    /// filtering. Spec 0a5ab85: `cx.directory.search_users` adds `intent`.
+    #[serde(default)]
+    pub intent: Option<String>,
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct ResolveHandleRequest {
     pub handle: String,
+    /// Why the handle is being resolved — gates audience binding on the
+    /// response handle claim. Spec 0a5ab85.
+    #[serde(default)]
+    pub intent: Option<String>,
+    /// DID / service DID of the requester. Used to scope audience-bearing
+    /// claims and apply Space `allowed_recipient_services` filtering.
+    #[serde(default)]
+    pub requester: Option<String>,
+    /// Optional explicit audience the verifier expects the claim to bind
+    /// to (typically a target Space DID or inviter service DID). When
+    /// present, the directory MUST issue an audience-bearing claim.
+    #[serde(default)]
+    pub audience: Option<String>,
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
@@ -459,6 +495,18 @@ pub struct ResolveHandleResponse {
     pub handle: String,
     pub did: String,
     pub actor: Value,
+    /// Audience the claim is bound to (echoes the `audience` request param
+    /// or the inferred default — typically the requester / target Space).
+    /// Verifiers MUST reject claims whose audience does not match their
+    /// invocation context. Spec 0a5ab85.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audience: Option<String>,
+    /// Embedded handle claim envelope when the resolver issued one. The
+    /// inner shape MUST conform to `handle-claim.schema.json`.
+    /// TODO(spec-sync 0a5ab85): replace `Value` with the typed `HandleClaim`
+    /// once soland depends on the new SDK model + signs the envelope.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub handle_claim: Option<Value>,
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]

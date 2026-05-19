@@ -360,8 +360,11 @@ fn timeline_events_for_space(
 
 fn sync_timeline_message_record_json(message: &crate::state::MessageRecord) -> serde_json::Value {
     // flow_id is always derived from space_id (one flow per space for
-    // the message timeline) — thread_id is a discussion branch *within*
-    // that flow, NOT the flow itself.
+    // the message timeline) — thread_id is the discussion *track* within
+    // that flow, NOT the flow itself. The legacy top-level `branch` object
+    // was removed in revision 0a5ab85 (see contrix-spec
+    // `artifacts/registry/forbidden-wire-fields.json` entry "branch"); the
+    // `track` field is the v1 replacement.
     let flow_id = flow_id_from_space_id(&message.space_id);
     let track_id = message.thread_id.clone();
     json!({
@@ -372,11 +375,6 @@ fn sync_timeline_message_record_json(message: &crate::state::MessageRecord) -> s
         "space_id": message.space_id,
         "track": default_discussion_track(&flow_id, &track_id),
         "thread_id": message.thread_id,
-        "branch": {
-            "branch_id": message.thread_id,
-            "flow_id": flow_id,
-            "kind": "thread",
-        },
         "sender": message.sender,
         "content": message.content,
         "encrypted": message.encrypted,

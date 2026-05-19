@@ -500,6 +500,45 @@ impl AppConfig {
             .any(|configured| configured == actor)
     }
 
+    /// Derive the effective admin-API authentication posture from the
+    /// current config. Returned values are stable strings safe to surface
+    /// in `/health` and `/api/v1/server/describe`:
+    ///
+    ///   - `"development"` — `SOLAND_DEVELOPMENT_MODE=true`; any authenticated
+    ///     session may call admin endpoints.
+    ///   - `"did_allowlist"` — production mode, `SOLAND_ADMIN_PRINCIPAL_DIDS`
+    ///     is non-empty; admin endpoints accept calls whose session actor
+    ///     appears in the allowlist.
+    ///   - `"oauth_introspection"` — production mode, no DID allowlist but
+    ///     OAuth bearer introspection is configured. Any token coauth
+    ///     introspects as valid passes.
+    ///   - `"closed"` — production mode with neither admin allowlist nor
+    ///     introspection configured; admin endpoints are effectively locked.
+    pub fn admin_auth_mode(&self) -> &'static str {
+        if self.development_mode {
+            "development"
+        } else if !self.admin_principal_dids.is_empty() {
+            "did_allowlist"
+        } else if self.oauth_introspection_url.is_some() {
+            "oauth_introspection"
+        } else {
+            "closed"
+        }
+    }
+
+    /// String mirror of [`Self::development_mode`]: `"development"` or
+    /// `"production"`. Exposed on `/health` and `/api/v1/server/describe`
+    /// so operators can see at a glance whether proof verification is
+    /// running in the relaxed dev-mode path.
+    #[inline]
+    pub fn proof_verifier_mode(&self) -> &'static str {
+        if self.development_mode {
+            "development"
+        } else {
+            "production"
+        }
+    }
+
     /// MAL-11 compaction policy assembled from the four env-driven config
     /// fields. Callers use this when evaluating prune candidates via
     /// [`contrix_sdk::CompactionPolicy::is_eligible`].

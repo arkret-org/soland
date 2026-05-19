@@ -1534,6 +1534,62 @@ impl ProjectionState {
             return ProjectionEffect::Ignored;
         }
 
+        // Spec 0a5ab85 (`membership_payload` conditional required) — when
+        // `membership=join`, the payload MUST carry `actor_id` (above) +
+        // `delivery_status`; when `delivery_status=routable`, it MUST carry
+        // `delivery_binding`. Validate here and reject malformed joins.
+        if new_state == "join" {
+            let delivery_status = operation
+                .payload
+                .get("delivery_status")
+                .and_then(Value::as_str);
+            match delivery_status {
+                None => {
+                    tracing::warn!(
+                        space_id = %space_id,
+                        member = %member,
+                        "rejected join without delivery_status (spec 0a5ab85)"
+                    );
+                    return ProjectionEffect::Ignored;
+                }
+                Some("routable") => {
+                    if !operation
+                        .payload
+                        .get("delivery_binding")
+                        .map(|v| v.is_object())
+                        .unwrap_or(false)
+                    {
+                        tracing::warn!(
+                            space_id = %space_id,
+                            member = %member,
+                            "rejected routable join without delivery_binding (spec 0a5ab85)"
+                        );
+                        return ProjectionEffect::Ignored;
+                    }
+                    // TODO(spec-sync 0a5ab85): once cell_family
+                    // `cx.component.space.delivery_binding_policy.v1` is
+                    // projected, validate binding_source / recipient_service_did
+                    // against the policy here; fail closed on disallowed source
+                    // and emit `delivery_binding_stale` when the carried
+                    // `delivery_binding_frontier` lags the accepted handover
+                    // frontier. Senders MUST NOT fall back to DID Document.
+                }
+                Some("unroutable") => {
+                    // Member is recorded but Space-scoped delivery is
+                    // suppressed until a rebind upgrades to routable.
+                }
+                Some(other) => {
+                    tracing::warn!(
+                        space_id = %space_id,
+                        member = %member,
+                        delivery_status = %other,
+                        "rejected join with unknown delivery_status"
+                    );
+                    return ProjectionEffect::Ignored;
+                }
+            }
+        }
+
         // Side-band data: `role` lives outside the FSM cell and is captured
         // here for the structured cache. `joined_at` is set on the first
         // `join` transition; subsequent transitions preserve the original.
