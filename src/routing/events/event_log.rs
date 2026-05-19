@@ -2086,6 +2086,7 @@ mod proof_strictness_tests {
 
             compaction_prune_walk_per_space_limit: 50,
             seed_demo_data: true,
+            trust_domain: "cx:trust_domain:soland.local".to_owned(),
         };
         AppState::new(config, Db { pool: None })
     }
