@@ -17,6 +17,7 @@ use crate::wire::now;
 mod access;
 mod admin;
 mod agent_workspace;
+pub(crate) mod conformance;
 pub(crate) mod events;
 pub(crate) mod federation;
 mod identity;
@@ -112,6 +113,7 @@ fn api_v1_router() -> Router {
         .push(admin::router())
         .push(interop::router())
         .push(agent_workspace::router())
+        .push(conformance::router())
         .push(
             Router::with_path("{**rest}")
                 .options(cors_preflight)
