@@ -117,6 +117,9 @@ async fn server_describe(depot: &mut Depot) -> JsonResult<Value> {
     value["development_mode"] = json!(state.config.development_mode);
     value["proof_verifier_mode"] = json!(state.config.proof_verifier_mode());
     value["admin_auth_mode"] = json!(state.config.admin_auth_mode());
+    // Round R2/R3 (T08) — expose deployment trust_domain so peers /
+    // clients can bind `cx.cross_signing.reset` payloads correctly.
+    value["trust_domain"] = json!(state.config.trust_domain);
     // T8.3 — embed the production hardening checklist so sodmin's
     // `/hardening` page can render it without an extra round-trip.
     value["hardening"] = serde_json::to_value(state.config.hardening_status())

@@ -23,6 +23,27 @@ are the new typed edges that wire boundaries together (governed_by /
 discoverable_from / mirror_of). Legacy `space_*` and `place_*` payload
 fields remain accepted as serde aliases.
 
+## Round R2/R3 deployment requirements
+
+Spec rounds 2+3 (2026-05-20) introduced wire-breaking changes that the
+operator must address at boot — see
+[`CHANGELOG.md`](CHANGELOG.md) `[Unreleased]` and
+[`../contrix-spec/CHANGELOG.md`](../contrix-spec/CHANGELOG.md) for the
+normative source. The key operational hooks:
+
+- **`SOLAND_TRUST_DOMAIN`** — required `cx:trust_domain:<scope>` value
+  (defaults to a value derived from the configured `service_did`).
+  Enters the canonical transcript of every `cx.cross_signing.reset`
+  proof; rotating this value invalidates outstanding proofs.
+- **Ephemeral kinds rejected on `POST /api/v1/events`** — producers
+  must route the 12 ephemeral kinds (`cx.call.signal`, `cx.presence`,
+  `cx.typing`, `cx.receipt.read`, `cx.key.verification.*`) through
+  the ephemeral envelope / device-message channels; no compatibility
+  shim.
+- **Realm terminal-state, presign blob fail-closed, federation
+  idempotency cache, relaxed window ≤ 300 s** — see CHANGELOG for
+  the full operator checklist.
+
 ## Quick start
 
 soland depends on the `contrix` crate at `../contrix-rust-sdk/crates/sdk`.

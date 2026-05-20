@@ -782,6 +782,36 @@ fn validate_event_envelope(
              `cx.space.*` in v1 (Realm/Space reversal)",
         ));
     }
+    // Round R2/R3 (T02/T23) — reject ephemeral kinds & receipt-object-only
+    // kinds at the submit entrypoint. Aggressive mode: no compat path —
+    // pre-Round-R2/R3 senders MUST switch to cx.schema.ephemeral_envelope.v1
+    // (broadcast forms) or cx.schema.device_message.v1 (cx.key.verification.*).
+    if let Some((code, reason)) = crate::round23::events_submit_pre_admit_check(&kind) {
+        return Err(event_validation_error(
+            code.http_status(),
+            code.as_str(),
+            reason,
+        ));
+    }
+    // Round R2/R3 (T07) — Realm in terminal state (cx.realm.destroy applied)
+    // refuses every non-audit-class write.
+    let realm_destroyed = if let Some(space_id) = event_string_field(object, &["space_id"]) {
+        state
+            .projection
+            .lock()
+            .map(|proj| proj.space_is_destroyed(&space_id))
+            .unwrap_or(false)
+    } else {
+        false
+    };
+    if let Some((code, reason)) = crate::round23::terminal_realm_check(realm_destroyed, &kind) {
+        return Err(event_validation_error(
+            code.http_status(),
+            code.as_str(),
+            reason,
+        ));
+    }
+
     if !artifacts::active_durable_event_kinds().contains(&kind) {
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
@@ -858,6 +888,86 @@ fn validate_event_envelope(
     validate_event_schema_and_payload(state, &kind, &schema_id, envelope, object)?;
     validate_audit_accessed_payload(&kind, object)?;
     validate_sender_commitment_binding(object)?;
+    // Round R2/R3 (T08) — cross_domain replay defence MUST run BEFORE the
+    // signature check (verified below in `validate_event_proofs`). Aggressive
+    // mode: payload missing the new required fields surfaces as
+    // schema_violation here; payload with mismatched trust_domain surfaces as
+    // the registered `cross_domain_replay_rejected` (409) code.
+    if kind == "cx.cross_signing.reset" {
+        let payload = object.get("payload").cloned().unwrap_or(Value::Null);
+        if let Err((code, reason)) = crate::round23::cross_signing_reset_replay_check(
+            &payload,
+            &event_id,
+            &state.config.trust_domain,
+        ) {
+            return Err(event_validation_error(code.http_status(), code.as_str(), &reason));
+        }
+    }
+    // Round R2/R3 (T09 + T12) — realm.policy_components hard ceiling, e2ee_relaxed
+    // mutex, and media plaintext triple binding. Active profile set + bindings
+    // come from the projection; TODO(round23-T12) plumb full per-Realm projection
+    // for `plaintext_visible_services[]` and MLS governance binding policy_root.
+    if kind == "cx.realm.policy_components" {
+        let payload = object.get("payload").cloned().unwrap_or(Value::Null);
+        // Best-effort: collect active profiles from the payload's own
+        // `profiles[]` field plus any payload-asserted "active_profiles".
+        let mut active_profiles: Vec<String> = payload
+            .get("profiles")
+            .and_then(Value::as_array)
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(ToOwned::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default();
+        if let Some(extra) = payload.get("active_profiles").and_then(Value::as_array) {
+            for v in extra {
+                if let Some(s) = v.as_str() {
+                    active_profiles.push(s.to_owned());
+                }
+            }
+        }
+        // TODO(round23-T12): replace these `false` defaults with reads from
+        // the per-Realm projection (`plaintext_visible_services[].purpose=media_plaintext`
+        // + current `cx.component.mls.epoch.v1` governance binding policy_root).
+        let media_plaintext_service_present = payload
+            .pointer("/plaintext_visible_services")
+            .and_then(Value::as_array)
+            .is_some_and(|arr| {
+                arr.iter().any(|svc| {
+                    svc.get("purpose").and_then(Value::as_str) == Some("media_plaintext")
+                })
+            });
+        let mls_governance_binding_covers_policy_root = payload
+            .pointer("/mls_governance_binding/policy_root")
+            .is_some();
+        if let Err((code, reason)) = crate::round23::realm_policy_components_check(
+            &payload,
+            &active_profiles,
+            media_plaintext_service_present,
+            mls_governance_binding_covers_policy_root,
+        ) {
+            return Err(event_validation_error(code.http_status(), code.as_str(), &reason));
+        }
+    }
+    // Round R2/R3 (T04) — Anchor frontier entries MUST be sha256:<hex>.
+    // We tighten the validator on the events ingest side for the
+    // `cx.realm.anchor.submit` payload shape used by federation push;
+    // the deeper canonical-bytes path uses SDK `anchor_canonical_bytes`
+    // which already excludes id + anchorer_sig (anchorer.rs:217).
+    if let Some(frontier) = object
+        .get("payload")
+        .and_then(|p| p.get("frontier"))
+        .and_then(Value::as_array)
+    {
+        let entries: Vec<String> = frontier
+            .iter()
+            .filter_map(|v| v.as_str().map(ToOwned::to_owned))
+            .collect();
+        if let Err((code, reason)) = crate::round23::validate_anchor_frontier_entries(&entries) {
+            return Err(event_validation_error(code.http_status(), code.as_str(), &reason));
+        }
+    }
 
     let prev_refs = event_ref_list(object, "prev_refs", MAX_EVENT_PREV_REFS)?;
     let authorized_refs = event_semantic_refs(object, state, MAX_EVENT_REFS)?;

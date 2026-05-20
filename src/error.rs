@@ -290,6 +290,49 @@ pub enum ErrorCode {
     /// Space until fork resolution succeeds. See zh/sync/federation.md
     /// §4.5.3. Returned on the federation-facing surface only.
     StalePeer,
+    // ── Round R2/R3 (2026-05-20; spec 8b7978d) — 15 new wire-level codes.
+    /// T09 — `cx.realm.policy_components.relaxed_window_max_ms > 300000`.
+    RelaxedWindowExceedsCeiling,
+    /// T09 — `cx.profile.e2ee_relaxed.v1` and audit compliance profile
+    /// active simultaneously.
+    E2eeRelaxedDisallowedInComplianceProfile,
+    /// T08 — `cx.cross_signing.reset.trust_domain` did not match the
+    /// receiving Principal Server's configured trust domain.
+    CrossDomainReplayRejected,
+    /// T08 — `cx.cross_signing.reset.reset_event_id != event.event_id`.
+    ResetEventIdMismatch,
+    /// T06 — `cx.moderation.appeal.decision` with verdict=overturn
+    /// without a paired `cx.moderation.decision.lift` in the same batch.
+    AppealOverturnMissingLift,
+    /// T06 — `cx.moderation.appeal.review/decision` issued by the same
+    /// actor as the original moderation decision (separation of duties).
+    AppealSelfReviewForbidden,
+    /// T07 — any non-audit-class event submitted on a Realm that has
+    /// reached the destroyed terminal state.
+    RealmTerminalState,
+    /// T10 — `cx.audit.agent.join` evidence does not match the Audit
+    /// Agent's declared attestation chain.
+    AuditAgentAttestationMismatch,
+    /// T10 — Audit Agent's declared `audit_purpose` does not match the
+    /// Realm-level audit policy purpose binding.
+    AuditPurposeMismatch,
+    /// T11 — Blob is currently subject to a legal hold; presign refused
+    /// fail-closed.
+    LegalHoldActive,
+    /// T11 — Blob has been redacted; presign refused fail-closed.
+    BlobRedacted,
+    /// T12 — SFU/MCU service DID is not listed in
+    /// `plaintext_visible_services[].purpose=media_plaintext` for a Realm
+    /// that has `media_service_decrypts=true`.
+    MediaPlaintextServiceNotAuthorised,
+    /// T12 — Current MLS epoch governance binding does not cover the
+    /// active media plaintext policy_root.
+    MlsGovernanceBindingStale,
+    /// T15 — `cx.3pid.lookup` short-code presented past its TTL window.
+    ExpiredInviteToken,
+    /// T16 — A late-recovery key share targeted an actor who is no
+    /// longer a member of the Realm at the recovery T₀.
+    LateRecoveryRejectedMembership,
 }
 
 impl ErrorCode {
@@ -351,6 +394,21 @@ impl ErrorCode {
         Self::FrankUnavailable,
         Self::TurnCredentialExpired,
         Self::StalePeer,
+        Self::RelaxedWindowExceedsCeiling,
+        Self::E2eeRelaxedDisallowedInComplianceProfile,
+        Self::CrossDomainReplayRejected,
+        Self::ResetEventIdMismatch,
+        Self::AppealOverturnMissingLift,
+        Self::AppealSelfReviewForbidden,
+        Self::RealmTerminalState,
+        Self::AuditAgentAttestationMismatch,
+        Self::AuditPurposeMismatch,
+        Self::LegalHoldActive,
+        Self::BlobRedacted,
+        Self::MediaPlaintextServiceNotAuthorised,
+        Self::MlsGovernanceBindingStale,
+        Self::ExpiredInviteToken,
+        Self::LateRecoveryRejectedMembership,
     ];
 
     /// Canonical wire-form code (snake_case string used in `ErrorEnvelope.errcode`).
@@ -413,6 +471,31 @@ impl ErrorCode {
             Self::FrankUnavailable => core_error::ERROR_CODE_FRANK_UNAVAILABLE,
             Self::TurnCredentialExpired => core_error::ERROR_CODE_TURN_CREDENTIAL_EXPIRED,
             Self::StalePeer => core_error::ERROR_CODE_STALE_PEER,
+            Self::RelaxedWindowExceedsCeiling => {
+                core_error::ERROR_CODE_RELAXED_WINDOW_EXCEEDS_CEILING
+            }
+            Self::E2eeRelaxedDisallowedInComplianceProfile => {
+                core_error::ERROR_CODE_E2EE_RELAXED_DISALLOWED_IN_COMPLIANCE_PROFILE
+            }
+            Self::CrossDomainReplayRejected => core_error::ERROR_CODE_CROSS_DOMAIN_REPLAY_REJECTED,
+            Self::ResetEventIdMismatch => core_error::ERROR_CODE_RESET_EVENT_ID_MISMATCH,
+            Self::AppealOverturnMissingLift => core_error::ERROR_CODE_APPEAL_OVERTURN_MISSING_LIFT,
+            Self::AppealSelfReviewForbidden => core_error::ERROR_CODE_APPEAL_SELF_REVIEW_FORBIDDEN,
+            Self::RealmTerminalState => core_error::ERROR_CODE_REALM_TERMINAL_STATE,
+            Self::AuditAgentAttestationMismatch => {
+                core_error::ERROR_CODE_AUDIT_AGENT_ATTESTATION_MISMATCH
+            }
+            Self::AuditPurposeMismatch => core_error::ERROR_CODE_AUDIT_PURPOSE_MISMATCH,
+            Self::LegalHoldActive => core_error::ERROR_CODE_LEGAL_HOLD_ACTIVE,
+            Self::BlobRedacted => core_error::ERROR_CODE_BLOB_REDACTED,
+            Self::MediaPlaintextServiceNotAuthorised => {
+                core_error::ERROR_CODE_MEDIA_PLAINTEXT_SERVICE_NOT_AUTHORISED
+            }
+            Self::MlsGovernanceBindingStale => core_error::ERROR_CODE_MLS_GOVERNANCE_BINDING_STALE,
+            Self::ExpiredInviteToken => core_error::ERROR_CODE_EXPIRED_INVITE_TOKEN,
+            Self::LateRecoveryRejectedMembership => {
+                core_error::ERROR_CODE_LATE_RECOVERY_REJECTED_MEMBERSHIP
+            }
         }
     }
 

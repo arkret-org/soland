@@ -401,6 +401,15 @@ const CROSS_SIGNING_RESET_REQUIREMENTS: &[PayloadRequirement] = &[
     PayloadRequirement::Required("reset_reason", "cross_signing reset requires reset_reason"),
     PayloadRequirement::Required("proof", "cross_signing reset requires proof"),
     PayloadRequirement::Required("issued_at", "cross_signing reset requires issued_at"),
+    // Round R2/R3 (T08) — wire-breaking required fields.
+    PayloadRequirement::Required(
+        "trust_domain",
+        "cross_signing reset requires trust_domain (Round R2/R3 wire-break)",
+    ),
+    PayloadRequirement::Required(
+        "reset_event_id",
+        "cross_signing reset requires reset_event_id (Round R2/R3 wire-break)",
+    ),
 ];
 
 const READ_MARKER_REQUIREMENTS: &[PayloadRequirement] = &[
@@ -1884,6 +1893,8 @@ mod sdk_artifact_schema_tests {
     #[test]
     fn artifact_backed_kind_and_payload_validator_cover_cross_signing_reset() {
         let issued_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        // Round R2/R3 (T08) — trust_domain + reset_event_id are now wire-breaking
+        // required fields.
         let operation = cross_signing_reset(json!({
             "principal_id": "did:web:alice.example",
             "previous_generation": 1,
@@ -1895,6 +1906,8 @@ mod sdk_artifact_schema_tests {
                 "alg": "EdDSA",
                 "signature": "abc"
             },
+            "trust_domain": "cx:trust_domain:soland.local",
+            "reset_event_id": "cx:event:01904100-0000-7000-8000-000000000001",
             "issued_at": issued_at
         }));
         assert_eq!(
@@ -1914,11 +1927,36 @@ mod sdk_artifact_schema_tests {
             "previous_generation": 1,
             "new_generation": 2,
             "reset_reason": "rotation",
+            "trust_domain": "cx:trust_domain:soland.local",
+            "reset_event_id": "cx:event:01904100-0000-7000-8000-000000000001",
             "issued_at": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
         }));
         assert_eq!(
             validate_operation_schema_from_sdk_artifact("cx.cross_signing.reset", &missing_proof),
             Err("operation payload violates SDK artifact schema")
+        );
+
+        // Round R2/R3 (T08) — missing trust_domain MUST hard-reject.
+        let missing_trust_domain = cross_signing_reset(json!({
+            "principal_id": "did:web:alice.example",
+            "previous_generation": 1,
+            "new_generation": 2,
+            "reset_reason": "rotation",
+            "proof": {
+                "kind": "principal_signing",
+                "signed_by": "did:web:alice.example#key-1",
+                "alg": "EdDSA",
+                "signature": "abc"
+            },
+            "reset_event_id": "cx:event:01904100-0000-7000-8000-000000000001",
+            "issued_at": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+        }));
+        assert!(
+            validate_operation_schema(
+                &missing_trust_domain,
+                operation_schema_for_kind("cx.cross_signing.reset").unwrap(),
+            )
+            .is_err()
         );
     }
 
@@ -1935,6 +1973,8 @@ mod sdk_artifact_schema_tests {
                 "alg": "EdDSA",
                 "signature": "abc"
             },
+            "trust_domain": "cx:trust_domain:soland.local",
+            "reset_event_id": "cx:event:01904100-0000-7000-8000-000000000001",
             "issued_at": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
         }));
         assert_eq!(
@@ -1953,6 +1993,8 @@ mod sdk_artifact_schema_tests {
                 "alg": "EdDSA",
                 "signature": "abc"
             },
+            "trust_domain": "cx:trust_domain:soland.local",
+            "reset_event_id": "cx:event:01904100-0000-7000-8000-000000000002",
             "issued_at": (chrono::Utc::now() - chrono::Duration::seconds(CROSS_SIGNING_RESET_MAX_CLOCK_SKEW_SECONDS + 1))
                 .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
         }));

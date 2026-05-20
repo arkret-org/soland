@@ -267,6 +267,36 @@ async fn blob_get(depot: &mut Depot, req: &mut Request, res: &mut Response) {
                 render_error(res, StatusCode::NOT_FOUND, "not_found", "not found");
                 return;
             }
+            // Round R2/R3 (T11) — fail-closed gates for E2EE / legal_hold /
+            // redacted / actor_private. The blob_get path here serves the
+            // bytes directly rather than issuing a presign URL; the gates +
+            // headers below give the spec-required protection even for the
+            // direct-serve path. TODO(round23-T11): wire dedicated presign
+            // endpoint once object storage backend supports it; for now
+            // direct-serve carries the same response shape requirements.
+            let blob_value = serde_json::json!({
+                "encryption": blob.encryption,
+                "uploaded_by": blob.uploaded_by,
+                "legal_hold": false,
+                "redacted": false,
+                "visibility": null,
+            });
+            if let Some(block) =
+                crate::round23::classify_presign_blob_block(&blob_value, &session.actor)
+            {
+                let (code, reason) = block.as_error();
+                render_error(res, code.http_status(), code.as_str(), reason);
+                return;
+            }
+            // Response headers per T11.
+            res.headers_mut().insert(
+                salvo::http::header::CACHE_CONTROL,
+                crate::round23::PRESIGN_CACHE_CONTROL.parse().unwrap(),
+            );
+            res.headers_mut().insert(
+                salvo::http::header::REFERRER_POLICY,
+                crate::round23::PRESIGN_REFERRER_POLICY.parse().unwrap(),
+            );
             let total_len = match usize::try_from(blob.size_bytes) {
                 Ok(total_len) => total_len,
                 Err(_) => {

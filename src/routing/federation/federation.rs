@@ -58,12 +58,47 @@ pub(super) async fn federation_transaction(
     }
     let body = body.into_inner();
     let content_digest = federation_request_digest(&body).map_err(AppError::invalid_param)?;
+    // Round R2/R3 (T14) — service-key binding fields for the idempotency
+    // cache key. When a peer replays an old txn_id AFTER rotating its
+    // verification key, the receiver MUST return the cached response with
+    // `historical_only=true` rather than triggering new side effects.
+    //
+    // TODO(round23-T14): pull these from the inbound request's RFC 9421
+    // signature headers + the federation origin's current key state
+    // record. For now we derive from the request body shape (origin DID
+    // is the only reliable signal until inbound RFC 9421 lands).
+    let _service_binding = crate::round23::FederationIdempotencyServiceBinding {
+        source_service_did: body.origin.to_string(),
+        verification_method: "<TODO(round23-T14): from Signature-Input>".to_owned(),
+        service_binding_ref: "<TODO(round23-T14)>".to_owned(),
+        origin_key_state_hash: "<TODO(round23-T14)>".to_owned(),
+    };
     match state
         .persistence
         .federation_transactions()
         .get(body.origin.as_str(), &txn_id)
     {
         Ok(Some(record)) if record.content_digest == content_digest => {
+            // Round R2/R3 (T14) — cache hit MUST re-do capability check.
+            // We re-validate origin & destination before serving cached
+            // response so a revoked peer cannot keep mining responses.
+            if !verify_federation_origin(body.origin.as_str()) {
+                return Err(AppError::unauthenticated(
+                    "federation origin must be a valid DID (cache re-verification)",
+                ));
+            }
+            if !federation_destination_matches(state, body.destination.as_str()) {
+                return Err(AppError::capability_denied(
+                    "federation transaction destination does not match this service \
+                     (cache re-verification)",
+                ));
+            }
+            // TODO(round23-T14): when the peer's key has been revoked since
+            // the cached response was minted, mark the response as
+            // historical_only so the caller knows side effects were NOT
+            // re-applied. The `_service_binding` value above carries the
+            // information that would let us detect this; for now we always
+            // return the cached response untouched.
             let response: contrix_sdk::FederationTransactionResBody =
                 serde_json::from_value(record.response).map_err(|error| {
                     AppError::internal(format!("cached federation response decode: {error}"))

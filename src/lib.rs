@@ -21,6 +21,7 @@ pub mod push_rule_core;
 pub mod ratelimit;
 pub mod reducer;
 pub mod result;
+pub mod round23;
 pub mod routing;
 pub mod schema;
 pub mod state;

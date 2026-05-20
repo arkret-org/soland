@@ -286,6 +286,21 @@ async fn submit_anchor(
     let _session = aa.authenticated_session(state, req)?;
     let anchor = body.into_inner();
 
+    // Round R2/R3 (T04) — frontier entries MUST be sha256:<hex>; reject the
+    // legacy `cx:event:<uuid>` form fail-closed.
+    let frontier_entries: Vec<String> = anchor
+        .frontier
+        .iter()
+        .map(|m| m.as_str().to_owned())
+        .collect();
+    if let Err((code, reason)) = crate::round23::validate_anchor_frontier_entries(&frontier_entries)
+    {
+        return Err(
+            AppError::new(code, reason)
+                .with_status(StatusCode::BAD_REQUEST),
+        );
+    }
+
     let move_store = state.move_store.as_ref();
     let anchor_store = state.anchor_store.as_ref();
     let cell_store = state.cell_store.as_ref();
