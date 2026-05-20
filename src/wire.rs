@@ -1514,12 +1514,24 @@ pub fn describe(
     // (`claimed_profiles[*]`, `compat_surfaces[*]`). The routing-layer
     // `apply_claim_level_partition` reserialises these via the SDK types
     // below so the JSON wire shape and the typed surface can never drift.
-    let claimed_profiles = vec![ClaimedProfileEntry {
-        notes: Some(
-            "MIMI provider facade first round (not a full v1 core conformance claim)".to_owned(),
-        ),
-        ..ClaimedProfileEntry::self_claimed("cx.profile.mimi_interop.v1")
-    }];
+    //
+    // Profile catalogue per `contrix-spec/spec/v1/zh/conformance/conformance-profiles.md`
+    // §1 / §7 / §8: a principal server self-claims the Event Store
+    // interop floor AND the Principal Server + Principal Server Events
+    // API stable-catalog profiles in addition to whatever interop
+    // staging extensions it implements (MIMI here).
+    let claimed_profiles = vec![
+        ClaimedProfileEntry::self_claimed("cx.profile.core_event_store.v1"),
+        ClaimedProfileEntry::self_claimed("cx.profile.principal_server.v1"),
+        ClaimedProfileEntry::self_claimed("cx.profile.principal_server_events_api.v1"),
+        ClaimedProfileEntry {
+            notes: Some(
+                "MIMI provider facade first round (not a full v1 core conformance claim)"
+                    .to_owned(),
+            ),
+            ..ClaimedProfileEntry::self_claimed("cx.profile.mimi_interop.v1")
+        },
+    ];
     let verified_profiles = Vec::new();
     let implemented_features_seed: Vec<String> = Vec::new();
     let experimental_features = vec![
@@ -1550,7 +1562,12 @@ pub fn describe(
             .expect("trust_domain must be cx:trust_domain:<scope>"),
         service_type: "principal_server".to_owned(),
         protocol_version: contrix_sdk::PROTOCOL_VERSION.to_owned(),
-        supported_profiles: vec!["cx.profile.mimi_interop.v1".to_owned()],
+        supported_profiles: vec![
+            "cx.profile.core_event_store.v1".to_owned(),
+            "cx.profile.principal_server.v1".to_owned(),
+            "cx.profile.principal_server_events_api.v1".to_owned(),
+            "cx.profile.mimi_interop.v1".to_owned(),
+        ],
         plaintext_visibility,
         implemented_features: implemented_features_seed,
         claimed_profiles,

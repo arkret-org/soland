@@ -175,14 +175,25 @@ pub(crate) fn apply_claim_level_partition(value: &mut Value, development_mode: b
     // typed `ClaimedProfileEntry` so the wire shape stays bound to
     // `service-describe.schema.json` (a future field rename in the
     // SDK becomes a soland build break, not a silent drift).
-    let claimed_profile = contrix_sdk::ClaimedProfileEntry {
-        notes: Some(
-            "MIMI provider facade first round (not a full v1 core conformance claim)".to_owned(),
-        ),
-        ..contrix_sdk::ClaimedProfileEntry::self_claimed("cx.profile.mimi_interop.v1")
-    };
+    //
+    // Conformance profile catalogue per `conformance-profiles.md` §1 /
+    // §7 / §8: a principal server claims the Event Store interop
+    // floor + Principal Server + Principal Server Events API in
+    // addition to the MIMI interop staging extension below.
+    let claimed_profiles = vec![
+        contrix_sdk::ClaimedProfileEntry::self_claimed("cx.profile.core_event_store.v1"),
+        contrix_sdk::ClaimedProfileEntry::self_claimed("cx.profile.principal_server.v1"),
+        contrix_sdk::ClaimedProfileEntry::self_claimed("cx.profile.principal_server_events_api.v1"),
+        contrix_sdk::ClaimedProfileEntry {
+            notes: Some(
+                "MIMI provider facade first round (not a full v1 core conformance claim)"
+                    .to_owned(),
+            ),
+            ..contrix_sdk::ClaimedProfileEntry::self_claimed("cx.profile.mimi_interop.v1")
+        },
+    ];
     value["claimed_profiles"] =
-        serde_json::to_value(vec![claimed_profile]).expect("claimed_profiles serializes");
+        serde_json::to_value(claimed_profiles).expect("claimed_profiles serializes");
 
     // verified_profiles: nothing is cotest-verified at runtime today, and
     // dev mode MUST yield an empty list per spec §3.0.
