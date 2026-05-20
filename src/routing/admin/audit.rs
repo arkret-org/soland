@@ -149,18 +149,25 @@ pub fn append_audit_log(
     state: &AppState,
     actor: Option<&str>,
     action: &str,
-    target: Value,
+    payload: Value,
     outcome: &str,
 ) {
-    let device_id = target
+    // Audit entry envelope follows the spec convention from
+    // `identity/account-lifecycle.md` §8 and `models/flow-and-message.md`
+    // §watch_audit_read, which both refer to the action-specific body of an
+    // audit event as `payload`. soland historically labelled this column
+    // `target`; the JSON output now exposes it as `payload` (the
+    // spec-aligned name) while retaining a copy under `target` for in-process
+    // consumers that have not yet migrated.
+    let device_id = payload
         .get("device_id")
         .and_then(|value| value.as_str())
         .map(ToOwned::to_owned);
-    let space_id = target
+    let space_id = payload
         .get("space_id")
         .and_then(|value| value.as_str())
         .map(ToOwned::to_owned);
-    let operation_id = target
+    let operation_id = payload
         .get("operation_id")
         .and_then(|value| value.as_str())
         .map(ToOwned::to_owned);
@@ -172,7 +179,10 @@ pub fn append_audit_log(
         "space_id": space_id,
         "operation_id": operation_id,
         "action": action,
-        "target": target,
+        "payload": payload.clone(),
+        // `target` is a legacy alias preserved for in-tree readers; new
+        // consumers MUST use `payload`. Remove once internal callers migrate.
+        "target": payload,
         "outcome": outcome,
         "created_at": now(),
     });

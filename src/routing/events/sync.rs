@@ -858,14 +858,17 @@ async fn set_typing(
 #[endpoint]
 pub(super) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected").clone();
-    // Repeated `spaces=` query args (multi-value).
-    let spaces = super::query_param_all(req, "spaces");
+    // Spec-canonical param is `realms=` (cx.events.subscribe). Legacy
+    // `spaces=` is accepted as an alias through the Realm/Space rename
+    // window so older clients don't break.
+    let mut spaces = super::query_param_all(req, "realms");
+    spaces.extend(super::query_param_all(req, "spaces"));
     if spaces.is_empty() {
         render_error(
             res,
             StatusCode::BAD_REQUEST,
             "missing_param",
-            "spaces is required",
+            "realms is required",
         );
         return;
     }
@@ -1133,10 +1136,13 @@ pub(super) async fn events_query(
     req: &mut Request,
 ) -> crate::result::JsonResult<serde_json::Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    // Collect all `spaces=` / `actors=` repeated args. Also accept the
-    // singular `space_id=` / `actor=` aliases for ergonomics.
-    let mut spaces = super::query_param_all(req, "spaces");
-    if let Some(single) = query_param(req, "space_id") {
+    // Spec-canonical params are `realms=` / `actors=` (cx.events.query).
+    // Legacy `spaces=` / `space_id=` aliases are still accepted during
+    // the Realm/Space rename window. Singular `realm_id=` / `actor=` are
+    // ergonomic shortcuts.
+    let mut spaces = super::query_param_all(req, "realms");
+    spaces.extend(super::query_param_all(req, "spaces"));
+    if let Some(single) = query_param(req, "realm_id").or_else(|| query_param(req, "space_id")) {
         if !spaces.contains(&single) {
             spaces.push(single);
         }
@@ -1149,7 +1155,7 @@ pub(super) async fn events_query(
     }
     if spaces.is_empty() && actors.is_empty() {
         return Err(crate::error::AppError::missing_param(
-            "events.query requires at least one of spaces[] / actors[] (or singular space_id / actor)",
+            "events.query requires at least one of realms[] / actors[] (or singular realm_id / actor)",
         ));
     }
     for space in &spaces {
@@ -1370,16 +1376,22 @@ async fn sync_gap_backfill(
 #[endpoint(
     operation_id = "cx.sync.snapshot_head",
     tags("sync"),
-    summary = "Read the snapshot-v2 head (manifest + chunk descriptors + merkle_root) for a Space"
+    summary = "Read the snapshot-v2 head (manifest + chunk descriptors + merkle_root) for a Realm"
 )]
 async fn snapshot_head(
-    space_id: salvo::oapi::extract::QueryParam<String, true>,
     depot: &mut Depot,
+    req: &mut Request,
 ) -> crate::result::JsonResult<SnapshotHeadResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let space_id = space_id.into_inner();
+    // Spec-canonical query param is `realm_id`. `space_id` is accepted
+    // as a legacy alias through the Realm/Space rename window.
+    let space_id = query_param(req, "realm_id")
+        .or_else(|| query_param(req, "space_id"))
+        .ok_or_else(|| {
+            crate::error::AppError::missing_param("realm_id is required")
+        })?;
     if validate_space_id(&space_id).is_err() {
-        return Err(crate::error::AppError::invalid_param("invalid space_id"));
+        return Err(crate::error::AppError::invalid_param("invalid realm_id"));
     }
     if is_space_deleted(state, &space_id) {
         return Err(crate::error::AppError::not_found("not found"));

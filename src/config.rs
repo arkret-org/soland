@@ -347,7 +347,6 @@ impl AppConfig {
             .ok()
             .filter(|value| !value.trim().is_empty());
         let object_storage = load_object_storage_config()?;
-        let cors_allow_origin = std::env::var("SOLAND_CORS_ALLOW_ORIGIN").ok();
         let auth_server_url = env_non_empty("SOLAND_AUTH_SERVER_URL");
         // Default to a production-safe posture (no `dev_login`, no relaxed DID
         // validation, no admin snapshot endpoints). Local development must opt
@@ -355,6 +354,23 @@ impl AppConfig {
         let development_mode = std::env::var("SOLAND_DEVELOPMENT_MODE")
             .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes"))
             .unwrap_or(false);
+        // CORS posture per api-conventions.md §10 — browser clients SHOULD be
+        // able to reach us via preflight. Three shapes:
+        //   - env unset, production mode → `None` (no CORS handler at all;
+        //     operator must opt in explicitly for browser access)
+        //   - env unset, development mode → defaults to `Some("*")`, the
+        //     spec-recommended permissive default for local / loopback work
+        //     so plain `cargo run` of soland is reachable from a yougen
+        //     dev server without extra env wiring
+        //   - env set → use as-is. `"*"` installs the permissive (mirror
+        //     origin, no credentials) handler; any other value is treated
+        //     as an explicit origin allow-list and installs the credentialed
+        //     handler. See `routing::cors_handler_for_config`.
+        let cors_allow_origin = std::env::var("SOLAND_CORS_ALLOW_ORIGIN")
+            .ok()
+            .map(|v| v.trim().to_owned())
+            .filter(|v| !v.is_empty())
+            .or_else(|| development_mode.then(|| "*".to_owned()));
         let oauth_introspection_url = env_non_empty("SOLAND_OAUTH_INTROSPECTION_URL");
         let oauth_introspection_bearer =
             env_non_empty_or_file("SOLAND_OAUTH_INTROSPECTION_BEARER")?;

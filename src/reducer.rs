@@ -3159,7 +3159,10 @@ impl ProjectionState {
     }
 
     /// Apply `cx.flow.archive` / `cx.flow.restore`. Spec
-    /// `common-fields.md §5.1`. Unknown Flow tolerated.
+    /// `common-fields.md §5.1` + `event-payload.schema.json`
+    /// `object_lifecycle_payload`. Unknown Flow tolerated. The target id is
+    /// carried by `target_ref` per spec; `object_ref` and the legacy
+    /// `flow_id` field are accepted as fallbacks.
     fn apply_flow_lifecycle(
         &mut self,
         operation: &Operation,
@@ -3168,7 +3171,9 @@ impl ProjectionState {
     ) -> ProjectionEffect {
         let Some(flow_id) = operation
             .payload
-            .get("flow_id")
+            .get("target_ref")
+            .or_else(|| operation.payload.get("object_ref"))
+            .or_else(|| operation.payload.get("flow_id"))
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned)
         else {

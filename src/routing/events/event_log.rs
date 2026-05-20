@@ -261,6 +261,13 @@ async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Response) 
     }
 
     let projection_operation = projection_operation_from_event(&parsed, &envelope);
+    tracing::debug!(
+        event_id = %parsed.event_id,
+        kind = %parsed.kind,
+        space_id = ?parsed.space_id,
+        has_projection = projection_operation.is_some(),
+        "submit_event"
+    );
     if let Some(operation) = projection_operation.as_ref() {
         if let Err(message) = validate_operation_semantics(state, std::slice::from_ref(operation)) {
             render_error(res, StatusCode::BAD_REQUEST, "schema_violation", message);
@@ -495,9 +502,12 @@ pub(super) async fn events_query_durable_scope_impl(
     session: &SessionRecord,
     req: &Request,
 ) -> Result<EventsPageResponse, AppError> {
-    // Repeated query-arg selector: `actors[]` ∪ `spaces[]`.
+    // Repeated query-arg selector: `actors[]` ∪ `realms[]` (with
+    // `spaces[]` accepted as a legacy alias through the Realm/Space
+    // rename window).
     let actors = query_param_all(req, "actors");
-    let spaces = query_param_all(req, "spaces");
+    let mut spaces = query_param_all(req, "realms");
+    spaces.extend(query_param_all(req, "spaces"));
     for actor in &actors {
         if validate_did(actor).is_err() {
             return Err(AppError::invalid_param(format!("invalid actor: {actor}")));
@@ -2154,13 +2164,26 @@ fn projection_operation_from_event(
     parsed: &ValidatedEventEnvelope,
     envelope: &Value,
 ) -> Option<Operation> {
-    super::operations::operation_schema_for_kind(&parsed.kind)?;
-    let space_id = SpaceId::new(parsed.space_id.clone()?).ok()?;
+    if super::operations::operation_schema_for_kind(&parsed.kind).is_none() {
+        tracing::debug!(kind = %parsed.kind, "projection: no schema for kind");
+        return None;
+    }
+    let space_id_raw = parsed.space_id.clone()?;
+    let space_id = match SpaceId::new(space_id_raw.clone()) {
+        Ok(value) => value,
+        Err(error) => {
+            tracing::debug!(kind = %parsed.kind, space_id = %space_id_raw, %error, "projection: SpaceId::new failed");
+            return None;
+        }
+    };
     let mut payload = envelope
         .get("payload")
         .cloned()
         .unwrap_or_else(|| json!({}));
-    let payload_object = payload.as_object_mut()?;
+    let Some(payload_object) = payload.as_object_mut() else {
+        tracing::debug!(kind = %parsed.kind, "projection: payload not an object");
+        return None;
+    };
     payload_object
         .entry("event_id".to_owned())
         .or_insert_with(|| Value::String(parsed.event_id.clone()));
@@ -2178,7 +2201,10 @@ fn projection_operation_from_event(
             .or_insert_with(|| Value::String("cx.morph.schema.migrate".to_owned()));
     }
 
-    let operation_id = event_operation_id(envelope, &parsed.event_id)?;
+    let Some(operation_id) = event_operation_id(envelope, &parsed.event_id) else {
+        tracing::debug!(kind = %parsed.kind, event_id = %parsed.event_id, "projection: event_operation_id failed");
+        return None;
+    };
     let mut operation = Operation::create(
         operation_id,
         space_id,
@@ -2195,13 +2221,23 @@ fn projection_operation_from_event(
 }
 
 fn event_operation_id(envelope: &Value, event_id: &str) -> Option<OperationId> {
-    if let Some(operation_id) = envelope
+    // Prefer the client-supplied alias when it's a valid OperationId
+    // (`cx:operation:<uuid v7>` per `contrix-rust-sdk/identifiers`).
+    // Older yougen builds shipped the event_id (cx:event:) verbatim in
+    // this slot; soland MUST NOT silently drop projection for such
+    // events ── fall through to the event_id-derived form so the
+    // projection chain (`project_accepted_operations` →
+    // `project_membership_operation` → SpaceInviteRecord write) still
+    // runs. The alias-when-present remains the dedupe key for clients
+    // that submit it correctly.
+    if let Some(alias) = envelope
         .get("unsigned")
         .and_then(Value::as_object)
         .and_then(|unsigned| unsigned.get("local_operation_idempotency_alias"))
         .and_then(Value::as_str)
+        && let Ok(operation_id) = OperationId::new(alias.to_owned())
     {
-        return OperationId::new(operation_id.to_owned()).ok();
+        return Some(operation_id);
     }
     let suffix = event_id.strip_prefix("cx:event:")?;
     OperationId::new(format!("cx:operation:{suffix}")).ok()

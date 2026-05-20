@@ -36,7 +36,7 @@ use super::{
 };
 use crate::ids;
 use crate::kinds;
-use crate::state::{AppState, MessageRecord, ProjectionEventRecord, SpaceMetaRecord};
+use crate::state::{AppState, MessageRecord, ProjectionEventRecord, SpaceInviteRecord, SpaceMetaRecord};
 
 #[derive(Clone, Debug)]
 pub struct ProjectedEventPage {
@@ -679,6 +679,12 @@ fn write_through_projection(state: &AppState, operation: &Operation) {
 
 pub fn project_accepted_operations(state: &AppState, origin: &str, operations: &[Operation]) {
     for operation in operations {
+        tracing::debug!(
+            kind = ?crate::kinds::canonical_kind_for_operation(operation),
+            space_id = %operation.space_id,
+            origin = %origin,
+            "project_accepted_operations"
+        );
         ensure_projected_space(state, origin, operation);
         if kinds::operation_is_message_create(operation) {
             project_federated_message(state, origin, operation);
@@ -1069,6 +1075,67 @@ pub fn project_membership_operation(state: &AppState, origin: &str, operation: &
         .get("actor_id")
         .and_then(|value| value.as_str())
         .unwrap_or(origin);
+
+    // Project an `invite` membership transition into a SpaceInviteRecord so
+    // `GET /api/v1/authz/invites` can surface seed invites carried on the
+    // event path (e.g. when the Realm bootstrap flow emits
+    // `cx.member.state{membership=invite}` for each seed member, per
+    // `models/realm-and-space.md` §3 + `governance/join-policy.md` §6). The
+    // legacy REST `POST /api/v1/spaces` path already writes the record; the
+    // event path needs the same write so the invite is reachable from both
+    // ingestion routes.
+    tracing::debug!(
+        membership = ?membership,
+        member = %member,
+        space_id = %operation.space_id,
+        origin = %origin,
+        "project_membership_operation"
+    );
+    if membership == Some("invite")
+        && let Ok(invitee) = Did::new(member)
+    {
+        let invites = state.persistence.space_invites();
+        let already_invited = invites.snapshot_all().unwrap_or_default().into_iter().any(
+            |existing| {
+                existing.space_id == operation.space_id.as_str()
+                    && existing.invitee.as_deref() == Some(invitee.as_str())
+                    && existing.status == "pending"
+            },
+        );
+        if !already_invited {
+            let invite_id = ids::generate_invite_id();
+            let invite_token = super::super::generate_invite_token(
+                &invite_id,
+                operation.space_id.as_str(),
+                invitee.as_str(),
+            );
+            let record = SpaceInviteRecord {
+                invite_id: invite_id.clone(),
+                space_id: operation.space_id.to_string(),
+                inviter: origin.to_owned(),
+                invitee: Some(invitee.as_str().to_owned()),
+                invite_token,
+                status: "pending".to_owned(),
+                expires_at: Some(operation.created_at + chrono::Duration::days(7)),
+                created_at: operation.created_at,
+            };
+            match invites.put(record) {
+                Ok(()) => tracing::info!(
+                    %invite_id,
+                    invitee = %invitee.as_str(),
+                    space_id = %operation.space_id,
+                    "projected seed-member invite via cx.member.state event"
+                ),
+                Err(error) => tracing::warn!(%error, "failed to project space invite"),
+            }
+        } else {
+            tracing::debug!(
+                invitee = %invitee.as_str(),
+                space_id = %operation.space_id,
+                "seed-invite skipped: already pending"
+            );
+        }
+    }
 
     let mut spaces = state.spaces.lock().expect("spaces lock");
     let Some(mut entry) = spaces.get(&operation.space_id).cloned() else {

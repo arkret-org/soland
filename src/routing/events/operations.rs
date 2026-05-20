@@ -120,6 +120,23 @@ const MEMBERSHIP_REQUIREMENTS: &[PayloadRequirement] = &[
         "membership operation requires member and membership",
     ),
 ];
+// `cx.realm.create` payload shape:
+// - canonical event path (`yougen/src/api.rs build_realm_bootstrap_events`):
+//   carries the full Realm object under `payload.object`, per
+//   `models/realm-and-space.md` §2.2 +
+//   `artifacts/schemas/realm.schema.json`.
+// - legacy REST path (`POST /api/v1/spaces` →
+//   `record_space_lifecycle_operation`): synthesises a payload keyed by
+//   `action: "create"` + flat owner / members / discoverability fields. This
+//   shape predates the canonical realm.schema.json payload but still flows
+//   through the same projection layer, so we accept either.
+const REALM_CREATE_ID_FIELDS: &[&str] = &["object", "action"];
+const REALM_CREATE_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::AnyOf(
+    REALM_CREATE_ID_FIELDS,
+    "cx.realm.create operation requires object (canonical) or action (legacy REST path)",
+)];
+// `cx.realm.update` / `cx.realm.destroy` carry an `action` string +
+// per-action fields (mirrors place / morph lifecycle for non-create paths).
 const SPACE_LIFECYCLE_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::Required(
     "action",
     "space lifecycle operation requires action",
@@ -149,14 +166,16 @@ const PLACE_PARENT_REQUIREMENTS: &[PayloadRequirement] = &[
     PayloadRequirement::Required("place_id", "place parent operation requires place_id"),
     PayloadRequirement::Required("parent_ref", "place parent operation requires parent_ref"),
 ];
-// Flow / Morph lifecycle payload requirements. Spec
-// `common-fields.md §5.1` mandates the same `<kind>_id`-only payload for
-// archive / restore as Place uses for archive/restore/tombstone. Create
-// carries a full object; update carries `<kind>_id` + `patch`.
-// `cx.flow.archive` / `cx.flow.restore` payload: just `flow_id`.
-const FLOW_LIFECYCLE_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::Required(
-    "flow_id",
-    "flow lifecycle operation requires flow_id",
+// Flow / Morph lifecycle payload requirements. The spec
+// `event-payload.schema.json` `object_lifecycle_payload` shape requires one
+// of `target_ref` / `object_ref` / `status`; soland additionally accepts the
+// legacy `flow_id` field name for backwards compatibility with older
+// builders. The first field present (in spec-canonical order) names the
+// target Flow; `apply_flow_lifecycle` reads them with the same precedence.
+const FLOW_LIFECYCLE_ID_FIELDS: &[&str] = &["target_ref", "object_ref", "flow_id"];
+const FLOW_LIFECYCLE_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::AnyOf(
+    FLOW_LIFECYCLE_ID_FIELDS,
+    "flow lifecycle operation requires target_ref (or flow_id)",
 )];
 const FLOW_CREATE_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::Required(
     "object",
@@ -623,6 +642,14 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
         },
         kind if kinds::is_membership_kind(kind) => OperationPayloadSchema {
             requirements: MEMBERSHIP_REQUIREMENTS,
+            validate: None,
+        },
+        kinds::CX_SPACE_CREATE => OperationPayloadSchema {
+            // `cx.realm.create` is technically lifecycle but carries the
+            // full Realm `object` rather than an `action`. Match it
+            // explicitly so the broader `is_space_lifecycle_kind` branch
+            // below stays focused on update / destroy.
+            requirements: REALM_CREATE_REQUIREMENTS,
             validate: None,
         },
         kind if kinds::is_space_lifecycle_kind(kind) => OperationPayloadSchema {

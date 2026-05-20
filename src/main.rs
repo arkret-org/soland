@@ -8,13 +8,17 @@ use soland::multisig_watchdog::{MultisigWatchdog, MultisigWatchdogConfig};
 use soland::state::AppState;
 use soland::{artifacts, service};
 use tokio::signal;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     dotenvy::dotenv().ok();
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .init();
+    // Keep this guard alive for the process lifetime so the non-blocking
+    // file appender drains its channel on shutdown. Dropping the guard
+    // flushes pending writes; storing it in `_file_guard` defers that drop
+    // until `main` returns.
+    let _file_guard = init_tracing()?;
 
     // Fail fast at startup if a bundled Contrix artifact is malformed instead
     // of crashing the first request that touches the offending OnceLock.
@@ -119,6 +123,72 @@ async fn main() -> anyhow::Result<()> {
     }
     tracing::info!("soland stopped");
     Ok(())
+}
+
+/// Build the tracing subscriber.
+///
+/// Always writes to stdout (the default, interactive-friendly destination —
+/// `cargo run` users see logs as usual). When `SOLAND_LOG_FILE` is set we
+/// additionally tee output to that path through a non-blocking appender so
+/// runner harnesses (cotest's `run-joint-e2e.ps1`) get a durable trace they
+/// can `tail -f` even when Windows fully buffers stdout under
+/// `Start-Process -RedirectStandardOutput`.
+///
+/// Returns the appender's worker guard. The caller MUST hold it for the
+/// process lifetime; dropping it earlier flushes and closes the channel
+/// (typical pattern: bind to `_guard` in `main`).
+fn init_tracing() -> anyhow::Result<Option<tracing_appender::non_blocking::WorkerGuard>> {
+    use tracing_subscriber::fmt;
+
+    let filter = tracing_subscriber::EnvFilter::from_default_env();
+
+    let stdout_layer = fmt::layer().with_writer(std::io::stdout);
+
+    let log_file = std::env::var("SOLAND_LOG_FILE")
+        .ok()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty());
+
+    if let Some(path) = log_file {
+        let path = std::path::PathBuf::from(path);
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent).with_context(|| {
+                    format!(
+                        "failed to create parent directory for SOLAND_LOG_FILE: {}",
+                        parent.display()
+                    )
+                })?;
+            }
+        }
+        let file_name = path
+            .file_name()
+            .ok_or_else(|| anyhow::anyhow!("SOLAND_LOG_FILE must include a file name"))?
+            .to_owned();
+        let dir = path.parent().filter(|p| !p.as_os_str().is_empty());
+        // `rolling::never` is misnamed: it produces a non-rotating appender
+        // that just opens (or creates) the file and appends each event.
+        let appender = match dir {
+            Some(dir) => tracing_appender::rolling::never(dir, &file_name),
+            None => tracing_appender::rolling::never(".", &file_name),
+        };
+        let (writer, guard) = tracing_appender::non_blocking(appender);
+        let file_layer = fmt::layer().with_ansi(false).with_writer(writer);
+        tracing_subscriber::registry()
+            .with(filter)
+            .with(stdout_layer)
+            .with(file_layer)
+            .try_init()
+            .map_err(|error| anyhow::anyhow!("tracing init failed: {error}"))?;
+        Ok(Some(guard))
+    } else {
+        tracing_subscriber::registry()
+            .with(filter)
+            .with(stdout_layer)
+            .try_init()
+            .map_err(|error| anyhow::anyhow!("tracing init failed: {error}"))?;
+        Ok(None)
+    }
 }
 
 async fn run_server<A>(acceptor: A, state: AppState)

@@ -77,7 +77,7 @@ pub fn router_with_rate_limiter_config(
         .hoop(affix_state::inject(state))
         .hoop(RateLimiterMiddleware::new(rate_limiter));
     if let Some(origin) = cors_allow_origin {
-        router = router.hoop(cors_handler_for_origin(origin));
+        router = router.hoop(cors_handler_for_origin_spec(&origin));
     }
     let router = router
         .push(system::health_router())
@@ -877,10 +877,32 @@ async fn api_not_found(res: &mut Response) {
     res.status_code(StatusCode::NOT_FOUND);
 }
 
-fn cors_handler_for_origin(origin: String) -> CorsHandler {
-    Cors::new()
-        .allow_origin(vec![origin.as_str()])
-        .allow_credentials(true)
+/// Build a `CorsHandler` from the `SOLAND_CORS_ALLOW_ORIGIN` config string.
+///
+/// Per `contrix-spec/spec/v1/zh/sync/api-conventions.md` §10 the recommended
+/// posture for browser-facing services is `Access-Control-Allow-Origin: *`,
+/// and §10 explicitly says browser-accessible private endpoints "不得依赖
+/// cookie 作为唯一认证方式" — meaning credentials need not be reflected to
+/// the browser. Salvo's `Cors` builder also panics if `*` is combined with
+/// `allow_credentials(true)`, so we branch:
+///
+/// - `"*"` → mirror the request origin (universally usable as a `*`
+///   substitute that survives the no-credentials constraint) and skip
+///   `allow_credentials`. Suitable for local-dev and any deployment where
+///   auth is carried in the `Authorization` header rather than cookies.
+/// - any other value → treat as an explicit origin allow-list (split on
+///   `,` for multi-origin operators) and enable `allow_credentials` so
+///   cookie-bearing browser clients deployed under a known origin still
+///   work.
+fn cors_handler_for_origin_spec(raw: &str) -> CorsHandler {
+    let entries: Vec<String> = raw
+        .split(',')
+        .map(|v| v.trim().to_owned())
+        .filter(|v| !v.is_empty())
+        .collect();
+    let is_wildcard = entries.iter().any(|v| v == "*");
+
+    let base = Cors::new()
         .allow_methods(vec![
             Method::GET,
             Method::POST,
@@ -898,8 +920,20 @@ fn cors_handler_for_origin(origin: String) -> CorsHandler {
             "x-contrix-wait-for",
             "x-contrix-sha256",
             "range",
-        ])
-        .expose_headers(vec![
+        ]);
+
+    let cors = if is_wildcard {
+        // Use `mirror_request` rather than the literal `*` header so the
+        // Vary: Origin response still admits the wildcard semantics while
+        // avoiding the salvo-side panic on `*` + credentials. No
+        // credentials are advertised in this posture.
+        base.allow_origin(salvo::cors::AllowOrigin::mirror_request())
+    } else {
+        let refs: Vec<&str> = entries.iter().map(|s| s.as_str()).collect();
+        base.allow_origin(refs).allow_credentials(true)
+    };
+
+    cors.expose_headers(vec![
             "retry-after",
             "x-contrix-wait-for-satisfied",
             "content-range",

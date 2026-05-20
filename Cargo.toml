@@ -50,5 +50,13 @@ arc-swap = "1.7.1"
 rand = "0.8.5"
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
+# Durable, observable tracing output when the runner harness sets
+# `SOLAND_LOG_FILE`. Without this appender, Windows fully-buffers stdout
+# when it's redirected to a file (PowerShell `Start-Process
+# -RedirectStandardOutput` chained through `cargo run`), so tracing
+# output is lost on graceful shutdown. The non-blocking appender keeps
+# write latency off the request path; we hold its guard for the
+# process lifetime so the channel flushes before exit.
+tracing-appender = "0.2.3"
 reqwest = { version = "0.12.28", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 uuid = { version = "1.18.1", features = ["v4", "v7", "serde"] }
