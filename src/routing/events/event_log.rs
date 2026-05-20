@@ -334,6 +334,12 @@ async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Response) 
             }
         }
     }
+    // Clone the envelope before passing to store.put — the bootstrap
+    // branch below still needs to read payload.object.* for
+    // cx.realm.create. Negligible cost: the envelope is already in
+    // memory and the alternative is fetching it back out of the
+    // store, which serialises through I/O.
+    let envelope_for_bootstrap = envelope.clone();
     if let Err(error) = store.put(CanonicalEventRecord {
         event_id: parsed.event_id.clone(),
         actor_id: parsed.actor_id.clone(),
@@ -357,6 +363,24 @@ async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Response) 
     }
     if let Some(operation) = projection_operation {
         project_accepted_operations(state, &parsed.actor_id, &[operation]);
+    }
+    // Spec realm-and-space.md §2.6 — `cx.realm.create` commit MUST
+    // atomically seed the creator into the Realm's member set so
+    // facet events from the same actor that arrive afterwards (even
+    // in the same client batch) pass the regular space_has_member
+    // check. The validator above already lets the create event through
+    // without the check; here we make sure subsequent events see a
+    // populated index.
+    if parsed.kind == "cx.realm.create"
+        && let Some(space_id_str) = parsed.space_id.as_deref()
+        && let Some(envelope_object) = envelope_for_bootstrap.as_object()
+    {
+        bootstrap_realm_member_index(
+            state,
+            space_id_str,
+            &parsed.actor_id,
+            envelope_object,
+        );
     }
     append_audit_log(
         state,
@@ -935,7 +959,19 @@ fn validate_event_envelope(
             "space_id must use the cx:space: typed prefix",
         ));
     }
-    if !space_has_member(state, &space_id, &session.actor) {
+    // Spec realm-and-space.md §2.6 — `cx.realm.create` is the genesis
+    // event for both the Realm metadata cell AND the creator's first
+    // member-state cell. The reducer MUST treat `created_by_principal`
+    // as already-a-member when admitting this event; otherwise spec-
+    // correct clients can never bootstrap a Realm through the canonical
+    // event-submission path. The submit_event commit path (below)
+    // materialises the member set in state.spaces immediately after
+    // store.put succeeds, so any follow-up facet event in the same
+    // session naturally passes the regular space_has_member check.
+    let is_realm_create_bootstrap = kind == "cx.realm.create"
+        && realm_create_actor_is_creator(object, &session.actor)
+        && !space_exists_in_index(state, &space_id);
+    if !is_realm_create_bootstrap && !space_has_member(state, &space_id, &session.actor) {
         return Err(event_validation_error(
             StatusCode::FORBIDDEN,
             "capability_denied",
@@ -1817,6 +1853,109 @@ fn event_string_field(object: &serde_json::Map<String, Value>, keys: &[&str]) ->
     keys.iter()
         .find_map(|key| object.get(*key).and_then(Value::as_str))
         .map(ToOwned::to_owned)
+}
+
+/// True iff a `cx.realm.create` event's `payload.object.created_by_principal`
+/// matches the session actor. Spec realm-and-space.md §2.6 — this is the
+/// genesis-member condition that lets the create event bypass the regular
+/// `space_has_member` check.
+fn realm_create_actor_is_creator(
+    object: &serde_json::Map<String, Value>,
+    actor: &str,
+) -> bool {
+    object
+        .get("payload")
+        .and_then(|payload| payload.get("object"))
+        .and_then(|create_object| create_object.get("created_by_principal"))
+        .and_then(Value::as_str)
+        .is_some_and(|creator| creator == actor)
+}
+
+/// Quick existence probe against the in-memory `state.spaces` index used
+/// by the regular `space_has_member` check. Used to gate the
+/// `cx.realm.create` bootstrap path so a duplicate-create attempt (where
+/// the Realm already has members) falls back to the normal member check.
+fn space_exists_in_index(state: &AppState, space_id: &str) -> bool {
+    let Ok(space_id_typed) = contrix_sdk::SpaceId::new(space_id.to_owned()) else {
+        return false;
+    };
+    state
+        .spaces
+        .lock()
+        .map(|spaces| spaces.get(&space_id_typed).is_some())
+        .unwrap_or(false)
+}
+
+/// Spec realm-and-space.md §2.6 step 2 — when a `cx.realm.create` event
+/// commits, materialise the in-memory Realm index entry with the
+/// creator as the first member so subsequent facet events (join_rule /
+/// history_visibility / discovery / policy_components / ...) from the
+/// same actor pass the regular `space_has_member` check without a
+/// separate `cx.member.state(join)` event.
+///
+/// Extracted out of `submit_event` (called once after `store.put`
+/// succeeds for a `cx.realm.create` event) so the private REST
+/// `POST /api/v1/spaces` endpoint can be deprecated without losing
+/// the bootstrap path.
+fn bootstrap_realm_member_index(
+    state: &AppState,
+    space_id: &str,
+    actor: &str,
+    object: &serde_json::Map<String, Value>,
+) {
+    let Ok(space_id_typed) = contrix_sdk::SpaceId::new(space_id.to_owned()) else {
+        tracing::warn!(%space_id, "bootstrap_realm_member_index: invalid space_id shape");
+        return;
+    };
+    let Ok(actor_typed) = contrix_sdk::Did::new(actor.to_owned()) else {
+        tracing::warn!(%actor, "bootstrap_realm_member_index: invalid actor DID");
+        return;
+    };
+    let payload_object = object
+        .get("payload")
+        .and_then(|payload| payload.get("object"));
+    let title = payload_object
+        .and_then(|create_object| create_object.get("title"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let summary = payload_object
+        .and_then(|create_object| create_object.get("summary"))
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
+    let discoverability = payload_object
+        .and_then(|create_object| create_object.get("default_discoverability"))
+        .and_then(Value::as_str)
+        .unwrap_or("invite_only")
+        .to_owned();
+    let history_visibility = payload_object
+        .and_then(|create_object| create_object.get("history_visibility"))
+        .and_then(Value::as_str)
+        .unwrap_or("shared")
+        .to_owned();
+    let encryption_profile = payload_object
+        .and_then(|create_object| create_object.get("encryption_profile"))
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
+    let mut entry = contrix_sdk::SpaceSearchEntry::new(space_id_typed.clone(), title);
+    entry.description = summary.clone();
+    entry.public = discoverability == "public";
+    entry.members.insert(actor_typed);
+    if let Ok(mut spaces) = state.spaces.lock() {
+        spaces.upsert(entry);
+    }
+    let meta = crate::state::SpaceMetaRecord {
+        owner: actor.to_owned(),
+        deleted: false,
+        discoverability,
+        history_visibility,
+        encryption_profile,
+        plaintext_visible_services: std::collections::BTreeSet::new(),
+        created_at: super::now(),
+        updated_at: super::now(),
+    };
+    if let Err(error) = state.persistence.space_meta().put(space_id, &meta) {
+        tracing::error!(%error, %space_id, "bootstrap_realm_member_index: failed to persist SpaceMetaRecord");
+    }
 }
 
 fn require_object_field(
