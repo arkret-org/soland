@@ -168,12 +168,55 @@ async fn client_sync(
         }
     }
     prune_expired_typing(state);
+
+    // Long-poll: spec (`client-sync.md §2`) lets the server hold the
+    // request open until new data arrives or `timeout_ms` elapses.
+    // Capped server-side at 30s so a buggy client can't pin a worker.
+    // First snapshot is taken immediately; subsequent iterations sleep
+    // POLL_INTERVAL_MS between projection re-reads. On full sync
+    // (no `since`) we always return immediately because the client
+    // needs the initial space list regardless of "freshness".
+    const SERVER_LONG_POLL_CEILING_MS: u64 = 30_000;
+    const POLL_INTERVAL_MS: u64 = 100;
+    let client_timeout_ms = body.timeout_ms.unwrap_or(0);
+    let effective_timeout_ms = client_timeout_ms.min(SERVER_LONG_POLL_CEILING_MS);
+    let is_full_sync = body.since.is_none();
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(effective_timeout_ms);
+
+    loop {
+        let response =
+            build_sync_snapshot(state, session.as_ref(), &body, &since_cursor);
+        let should_return = is_full_sync
+            || effective_timeout_ms == 0
+            || sync_snapshot_has_fresh_data(&response)
+            || tokio::time::Instant::now() >= deadline;
+        if should_return {
+            return crate::result::json_ok(response);
+        }
+        let next_poll = tokio::time::Instant::now() + Duration::from_millis(POLL_INTERVAL_MS);
+        let wake = next_poll.min(deadline);
+        tokio::time::sleep_until(wake).await;
+    }
+}
+
+/// Build one snapshot of the account-aggregate sync response. Called
+/// repeatedly by the long-poll loop in [`client_sync`] until the
+/// snapshot has fresh data ([`sync_snapshot_has_fresh_data`]) or the
+/// poll deadline passes. Cheap enough to re-run every 100 ms in dev;
+/// every read takes a fresh lock on `state.spaces` / `state.projection`
+/// so a concurrent writer's commit is observable on the next iteration.
+fn build_sync_snapshot(
+    state: &AppState,
+    session: Option<&SessionRecord>,
+    body: &ClientSyncRequest,
+    since_cursor: &SyncCursor,
+) -> contrix_sdk::model::SyncResBody {
     let visible_spaces: Vec<_> = {
         let spaces = state.spaces.lock().expect("spaces lock");
         spaces
             .search(Default::default())
             .into_iter()
-            .filter(|space| space_visible_to(state, space, session.as_ref()))
+            .filter(|space| space_visible_to(state, space, session))
             .map(|space| {
                 (
                     space.space_id.to_string(),
@@ -213,10 +256,6 @@ async fn client_sync(
         let flow = flow_projection_for_space(state, &space_id, &title, summary.as_deref());
         let flow_state_after = flow.clone();
         let flow_list_item = flow.clone();
-        let title_text = title.clone();
-        let summary_text = summary.clone();
-        let tags_value = tags.clone();
-        let category_value = category.clone();
         let since_position = since_cursor
             .positions
             .get(&space_id)
@@ -230,24 +269,24 @@ async fn client_sync(
             json!({
                 "summary": {
                     "flow": flow,
-                    "title": title_text,
-                    "summary": summary_text,
-                    "tags": tags_value,
-                    "category": category_value,
+                    "title": title,
+                    "summary": summary,
+                    "tags": tags,
+                    "category": category,
                 },
                 "flows": [flow_list_item],
                 "timeline": {"events": timeline_events, "limited": false},
                 "state": [],
                 "state_after": {"events": [flow_state_after]},
-                "ephemeral": typing_ephemeral_for_space(state, &space_id, session.as_ref()),
+                "ephemeral": typing_ephemeral_for_space(state, &space_id, session),
                 "unread": {"notification_count": 0, "highlight_count": 0}
             }),
         );
     }
+    drop(projection);
 
     let mut to_device_position = since_cursor.to_device_position;
     let to_device = session
-        .as_ref()
         .map(|session| {
             prune_acked_device_messages(state, session, since_cursor.to_device_position);
             let queued = state
@@ -277,7 +316,6 @@ async fn client_sync(
     // Space `title` during render. Spec: discovery/client-preferences.md
     // §2 (storage model) / §3.7 (Space remarks).
     let account_data = session
-        .as_ref()
         .map(|session| {
             state
                 .persistence
@@ -296,10 +334,10 @@ async fn client_sync(
         })
         .unwrap_or_default();
 
-    crate::result::json_ok(contrix_sdk::model::SyncResBody {
+    contrix_sdk::model::SyncResBody {
         cursor: sync_token_for_client_sync(
             state,
-            session.as_ref(),
+            session,
             body.profile.as_deref(),
             body.filter.as_ref(),
             body.renderer.as_deref(),
@@ -315,6 +353,24 @@ async fn client_sync(
         presence: Vec::new(),
         notifications: serde_json::Value::Null,
         partial: false,
+    }
+}
+
+/// True when this snapshot is worth returning to the client before the
+/// long-poll deadline — new timeline events for at least one space,
+/// any queued to_device message, or a realm the viewer just lost
+/// access to. account_data is intentionally excluded because soland
+/// always hydrates the full actor scope; using it as a freshness
+/// signal would defeat the long-poll wait.
+fn sync_snapshot_has_fresh_data(response: &contrix_sdk::model::SyncResBody) -> bool {
+    if !response.to_device.is_empty() || !response.left_spaces.is_empty() {
+        return true;
+    }
+    response.spaces.values().any(|body| {
+        body.get("timeline")
+            .and_then(|timeline| timeline.get("events"))
+            .and_then(|events| events.as_array())
+            .is_some_and(|events| !events.is_empty())
     })
 }
 
