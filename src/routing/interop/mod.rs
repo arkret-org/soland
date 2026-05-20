@@ -2,7 +2,7 @@ use salvo::prelude::*;
 
 mod blob;
 mod mimi;
-mod moderation;
+pub(crate) mod moderation;
 mod push;
 mod push_outbound;
 mod webrtc;

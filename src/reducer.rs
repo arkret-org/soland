@@ -1345,8 +1345,59 @@ impl ProjectionState {
             revised.revision_of = Some(original_id.clone());
             revised.created_at = now;
             revised.operation_id = operation.operation_id.to_string();
+            // Spec form: `payload.patch` (cx.schema.patch.v1) carrying
+            // shallow set/unset entries on the message's content body.
+            // The reducer accepts both shapes — legacy `payload.content`
+            // (full replace) and the new `payload.patch` (delta) — so
+            // existing clients keep working while new clients can emit
+            // patches. When both are present, `content` wins (legacy
+            // path).
             if let Some(content) = operation.payload.get("content") {
                 revised.content = content.clone();
+            } else if let Some(patch) = operation.payload.get("patch").and_then(Value::as_object) {
+                if let Some(obj) = revised.content.as_object_mut() {
+                    for (path, value) in patch {
+                        match value {
+                            Value::Object(op) if op.contains_key("$op") => {
+                                match op.get("$op").and_then(Value::as_str) {
+                                    Some("set") => {
+                                        if let Some(v) = op.get("value") {
+                                            obj.insert(path.clone(), v.clone());
+                                        }
+                                    }
+                                    Some("unset") => {
+                                        obj.remove(path);
+                                    }
+                                    // add/remove on arrays — best-effort
+                                    // shallow handling; reducer-side full
+                                    // grammar lives in
+                                    // `contrix_core::model::patch::Patch`.
+                                    Some("add") => {
+                                        if let Some(v) = op.get("value") {
+                                            obj.entry(path.clone())
+                                                .or_insert_with(|| Value::Array(Vec::new()))
+                                                .as_array_mut()
+                                                .map(|arr| arr.push(v.clone()));
+                                        }
+                                    }
+                                    Some("remove") => {
+                                        if let (Some(arr), Some(victim)) = (
+                                            obj.get_mut(path).and_then(Value::as_array_mut),
+                                            op.get("value"),
+                                        ) {
+                                            arr.retain(|v| v != victim);
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            // Direct-value sugar = set.
+                            other => {
+                                obj.insert(path.clone(), other.clone());
+                            }
+                        }
+                    }
+                }
             }
             let effect = ProjectionEffect::MessageRevised {
                 original_id: original_id.clone(),
@@ -2364,11 +2415,37 @@ impl ProjectionState {
             .get("owner")
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned);
+        // Title can arrive in either the legacy flat form (`title`) or
+        // the canonical `cx.schema.patch.v1` shape under `patch.title`.
+        // We accept both; on a tie the flat form wins for back-compat.
+        // Same fallback for `summary` / `description` would land here
+        // when we add structured Realm metadata fields. For now only
+        // `title` is updatable via patch — other fields remain
+        // lifecycle-driven (action, owner, security_class,
+        // federation_policy, trust_domain) and are NOT patchable
+        // because they have their own validators above.
         let title = operation
             .payload
             .get("title")
             .and_then(|v| v.as_str())
-            .map(ToOwned::to_owned);
+            .map(ToOwned::to_owned)
+            .or_else(|| {
+                operation
+                    .payload
+                    .get("patch")
+                    .and_then(|v| v.get("title"))
+                    .and_then(|patch_title| match patch_title {
+                        // `patch.title: "..."` (direct-value sugar)
+                        Value::String(s) => Some(s.clone()),
+                        // `patch.title: { "$op": "set", "value": "..." }`
+                        Value::Object(op) if op.get("$op").and_then(Value::as_str)
+                            == Some("set") =>
+                        {
+                            op.get("value").and_then(Value::as_str).map(ToOwned::to_owned)
+                        }
+                        _ => None,
+                    })
+            });
         // R3.4 — Realm security_class + federation_policy projection.
         // Spec: a Realm with `security_class=high_assurance` MUST have
         // `federation_policy ∈ {closed, restricted, quarantine}`. Any

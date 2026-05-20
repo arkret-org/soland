@@ -43,6 +43,7 @@ pub(super) fn router() -> Router {
         .push(
             Router::with_path("policies/{policy_id}")
                 .get(get_policy_document)
+                .patch(patch_policy_document)
                 .delete(delete_policy_document),
         )
 }
@@ -184,6 +185,99 @@ async fn upsert_policy_document(
         active: body.active,
         updated_at: now(),
     };
+    store
+        .put(record.clone())
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    json_ok(policy_document_to_response(&record))
+}
+
+/// Body for `PATCH /api/v1/policies/{policy_id}` — applies a
+/// `cx.schema.patch.v1` field-patch to the existing policy document's
+/// payload (effect / actions / resource / obligations). Behaves as a
+/// shallow set/unset over the payload object: each key in `patch` is
+/// either a direct value (sugared `set`) or an explicit
+/// `{ "$op": "set" | "unset", "value": ... }` form. Updates
+/// `record.updated_at`; idempotent if the same patch is applied twice.
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize, salvo::oapi::ToSchema)]
+pub struct PatchPolicyDocumentRequest {
+    #[salvo(schema(value_type = serde_json::Value))]
+    pub patch: serde_json::Map<String, Value>,
+}
+
+#[endpoint(
+    operation_id = "cx.policies.patch",
+    tags("policy"),
+    summary = "Apply a cx.schema.patch.v1 patch to a policy document"
+)]
+async fn patch_policy_document(
+    aa: AuthArgs,
+    policy_id: PathParam<String>,
+    body: JsonBody<PatchPolicyDocumentRequest>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<PolicyDocumentResponse> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req)?;
+    let policy_id = policy_id.into_inner();
+    let store = state.persistence.policy_documents();
+    let Ok(Some(mut record)) = store.get(&policy_id) else {
+        return Err(AppError::not_found("policy not found"));
+    };
+    if record.owner != session.actor {
+        return Err(AppError::capability_denied(
+            "policy is owned by another actor",
+        ));
+    }
+    let patch = body.into_inner().patch;
+    if patch.is_empty() {
+        return Err(AppError::invalid_param("patch must contain at least one entry"));
+    }
+    let payload_obj = record
+        .payload
+        .as_object_mut()
+        .ok_or_else(|| AppError::internal("policy payload is not a JSON object"))?;
+    for (path, value) in patch {
+        if path.is_empty() || path.len() > 1024 {
+            return Err(AppError::invalid_param(format!(
+                "patch path {path:?} fails length checks"
+            )));
+        }
+        match &value {
+            Value::Object(obj) if obj.contains_key("$op") => {
+                let op = obj.get("$op").and_then(Value::as_str).unwrap_or_default();
+                let inner = obj.get("value");
+                match op {
+                    "set" => {
+                        let v = inner.cloned().ok_or_else(|| {
+                            AppError::invalid_param(format!("patch {path:?} set requires value"))
+                        })?;
+                        payload_obj.insert(path, v);
+                    }
+                    "unset" => {
+                        if inner.is_some() {
+                            return Err(AppError::invalid_param(format!(
+                                "patch {path:?} unset MUST NOT carry value"
+                            )));
+                        }
+                        payload_obj.remove(&path);
+                    }
+                    other => {
+                        return Err(AppError::invalid_param(format!(
+                            "patch {path:?} unsupported $op {other:?} on policy payload"
+                        )));
+                    }
+                }
+            }
+            _ => {
+                // Direct-value sugar = set.
+                payload_obj.insert(path, value);
+            }
+        }
+    }
+    if let Err(message) = validate_canonical_json_value(&record.payload) {
+        return Err(AppError::invalid_param(message));
+    }
+    record.updated_at = now();
     store
         .put(record.clone())
         .map_err(|error| AppError::internal(error.to_string()))?;

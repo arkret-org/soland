@@ -7,6 +7,7 @@ mod collection;
 mod control;
 mod delivery_binding;
 mod introspect;
+mod moderation;
 
 pub(super) use introspect::{introspect_admin_scopes, require_admin_scope};
 
@@ -104,4 +105,5 @@ pub fn admin_router() -> Router {
             Router::with_path("spaces/{space_id}/delivery-binding-policy")
                 .get(delivery_binding::admin_legacy_space_delivery_binding_policy_gone),
         )
+        .push(moderation::router())
 }

@@ -225,13 +225,82 @@ pub trait AuditStore: Send + Sync {
     fn snapshot_all(&self) -> PersistenceResult<Vec<Value>>;
 }
 
-/// Moderation reports + assigned actions. Both are append-only today.
+/// Moderation reports + assigned actions + decisions + appeals + queue items.
+///
+/// Reports and actions are append-only (back-compat). The newer methods
+/// (decisions, appeals, queue items) form the spec-compliant triage
+/// flow: a report becomes a queue item, a queue item gets a decision,
+/// a decision can be appealed (4-state appeal FSM lives in
+/// `crate::round23::AppealState`).
+///
+/// The Pg backend stubs decisions/appeals/queue items as
+/// `Err(PersistenceError::Internal("not yet wired"))` so production
+/// instances fail loudly until a migration ships; the in-memory backend
+/// implements them fully and is used by dev mode + tests.
 pub trait ModerationStore: Send + Sync {
     fn append_report(&self, report: Value) -> PersistenceResult<()>;
     fn append_action(&self, action: Value) -> PersistenceResult<()>;
     fn list_reports(&self) -> PersistenceResult<Vec<Value>>;
     #[allow(dead_code)]
     fn list_actions(&self) -> PersistenceResult<Vec<Value>>;
+
+    /// Append a `cx.moderation.decision` record. The JSON must carry at
+    /// least `decision_id`, `target_ref`, `action`, `decided_by`,
+    /// `decided_at`. Idempotent on `decision_id`.
+    fn append_decision(&self, _decision: Value) -> PersistenceResult<()> {
+        Err(PersistenceError::Internal(
+            "moderation decision append not wired in this backend".to_owned(),
+        ))
+    }
+    fn list_decisions(&self) -> PersistenceResult<Vec<Value>> {
+        Ok(Vec::new())
+    }
+    fn get_decision(&self, _decision_id: &str) -> PersistenceResult<Option<Value>> {
+        Ok(None)
+    }
+    /// Mark a decision as lifted (used when an appeal verdict=overturn
+    /// is paired with `cx.moderation.decision.lift`). Stores the lift
+    /// record verbatim; readers MUST join against `list_decisions` to
+    /// determine the current active state.
+    fn append_decision_lift(&self, _lift: Value) -> PersistenceResult<()> {
+        Err(PersistenceError::Internal(
+            "moderation decision lift not wired in this backend".to_owned(),
+        ))
+    }
+
+    /// Upsert a `ModerationQueueItem` record. The JSON must carry
+    /// `queue_item_id`, `status`, `visibility`, `created_at`.
+    fn upsert_queue_item(&self, _item: Value) -> PersistenceResult<()> {
+        Err(PersistenceError::Internal(
+            "moderation queue item upsert not wired in this backend".to_owned(),
+        ))
+    }
+    fn list_queue_items(&self) -> PersistenceResult<Vec<Value>> {
+        Ok(Vec::new())
+    }
+    fn get_queue_item(&self, _queue_item_id: &str) -> PersistenceResult<Option<Value>> {
+        Ok(None)
+    }
+
+    /// Append an appeal event. `payload` MUST carry `appeal_id`,
+    /// `realm_id`, and the variant-specific fields (see
+    /// `contrix_core::round23::ModerationAppealPayload`). The store
+    /// keeps an event log per appeal; the current FSM state is derived
+    /// by replaying events.
+    fn append_appeal(&self, _appeal: Value) -> PersistenceResult<()> {
+        Err(PersistenceError::Internal(
+            "moderation appeal append not wired in this backend".to_owned(),
+        ))
+    }
+    /// List the latest known event for each known appeal (one record
+    /// per appeal_id). Used by sodmin to render the queue.
+    fn list_appeals(&self) -> PersistenceResult<Vec<Value>> {
+        Ok(Vec::new())
+    }
+    /// Full event history for one appeal, in append order.
+    fn appeal_history(&self, _appeal_id: &str) -> PersistenceResult<Vec<Value>> {
+        Ok(Vec::new())
+    }
 }
 
 /// Replay log of federation operations the local service has accepted from
@@ -1561,6 +1630,10 @@ impl AuditStore for MemoryAuditStore {
 struct MemoryModerationStore {
     reports: Mutex<Vec<Value>>,
     actions: Mutex<Vec<Value>>,
+    decisions: Mutex<Vec<Value>>,
+    decision_lifts: Mutex<Vec<Value>>,
+    queue_items: Mutex<Vec<Value>>,
+    appeals: Mutex<Vec<Value>>,
 }
 
 impl MemoryModerationStore {
@@ -1589,6 +1662,120 @@ impl ModerationStore for MemoryModerationStore {
 
     fn list_actions(&self) -> PersistenceResult<Vec<Value>> {
         Ok(self.actions.lock().expect("moderation action lock").clone())
+    }
+
+    fn append_decision(&self, decision: Value) -> PersistenceResult<()> {
+        let id = decision
+            .get("decision_id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                PersistenceError::Internal("moderation decision missing decision_id".to_owned())
+            })?
+            .to_owned();
+        let mut decisions = self.decisions.lock().expect("moderation decisions lock");
+        if !decisions
+            .iter()
+            .any(|d| d.get("decision_id").and_then(Value::as_str) == Some(id.as_str()))
+        {
+            decisions.push(decision);
+        }
+        Ok(())
+    }
+
+    fn list_decisions(&self) -> PersistenceResult<Vec<Value>> {
+        Ok(self.decisions.lock().expect("moderation decisions lock").clone())
+    }
+
+    fn get_decision(&self, decision_id: &str) -> PersistenceResult<Option<Value>> {
+        Ok(self
+            .decisions
+            .lock()
+            .expect("moderation decisions lock")
+            .iter()
+            .find(|d| d.get("decision_id").and_then(Value::as_str) == Some(decision_id))
+            .cloned())
+    }
+
+    fn append_decision_lift(&self, lift: Value) -> PersistenceResult<()> {
+        self.decision_lifts
+            .lock()
+            .expect("moderation decision lifts lock")
+            .push(lift);
+        Ok(())
+    }
+
+    fn upsert_queue_item(&self, item: Value) -> PersistenceResult<()> {
+        let id = item
+            .get("queue_item_id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                PersistenceError::Internal(
+                    "moderation queue item missing queue_item_id".to_owned(),
+                )
+            })?
+            .to_owned();
+        let mut queue = self.queue_items.lock().expect("moderation queue lock");
+        if let Some(slot) = queue
+            .iter_mut()
+            .find(|i| i.get("queue_item_id").and_then(Value::as_str) == Some(id.as_str()))
+        {
+            *slot = item;
+        } else {
+            queue.push(item);
+        }
+        Ok(())
+    }
+
+    fn list_queue_items(&self) -> PersistenceResult<Vec<Value>> {
+        Ok(self.queue_items.lock().expect("moderation queue lock").clone())
+    }
+
+    fn get_queue_item(&self, queue_item_id: &str) -> PersistenceResult<Option<Value>> {
+        Ok(self
+            .queue_items
+            .lock()
+            .expect("moderation queue lock")
+            .iter()
+            .find(|i| i.get("queue_item_id").and_then(Value::as_str) == Some(queue_item_id))
+            .cloned())
+    }
+
+    fn append_appeal(&self, appeal: Value) -> PersistenceResult<()> {
+        if appeal.get("appeal_id").and_then(Value::as_str).is_none() {
+            return Err(PersistenceError::Internal(
+                "moderation appeal missing appeal_id".to_owned(),
+            ));
+        }
+        self.appeals
+            .lock()
+            .expect("moderation appeals lock")
+            .push(appeal);
+        Ok(())
+    }
+
+    fn list_appeals(&self) -> PersistenceResult<Vec<Value>> {
+        // Collapse history → one record per appeal_id, keeping the
+        // last-appended event (insertion order = chronological).
+        let all = self.appeals.lock().expect("moderation appeals lock").clone();
+        let mut latest: std::collections::BTreeMap<String, Value> =
+            std::collections::BTreeMap::new();
+        for record in all {
+            if let Some(id) = record.get("appeal_id").and_then(Value::as_str) {
+                latest.insert(id.to_owned(), record);
+            }
+        }
+        Ok(latest.into_values().collect())
+    }
+
+    fn appeal_history(&self, appeal_id: &str) -> PersistenceResult<Vec<Value>> {
+        Ok(self
+            .appeals
+            .lock()
+            .expect("moderation appeals lock")
+            .iter()
+            .filter(|a| a.get("appeal_id").and_then(Value::as_str) == Some(appeal_id))
+            .cloned()
+            .collect())
     }
 }
 
