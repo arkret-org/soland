@@ -433,6 +433,11 @@ pub fn validate_operation_semantics(
         let Some(kind) = kinds::canonical_kind_for_operation(operation) else {
             return Err("unregistered operation kind");
         };
+        // Round 4 (B1.13 / B1.14) — typed payload validators for the
+        // new wire-broken shapes. These run BEFORE the per-kind schema
+        // check so a legacy `target_ref` payload is rejected with the
+        // round-4 reason rather than the generic SDK schema error.
+        round4_validate_payload(kind, operation)?;
         if let Some(schema) = operation_schema_for_kind(kind) {
             validate_operation_schema(operation, schema)?;
         } else {
@@ -440,6 +445,130 @@ pub fn validate_operation_semantics(
         }
     }
     Ok(())
+}
+
+/// Round 4 (B1.13 / B1.14 / B1.15) — typed payload validators dispatched
+/// on the canonical event kind. Hooks the SDK round-4 typed payload
+/// shapes (SpaceStateTransition / SpaceObjectTombstone / ConsentRevoke)
+/// into the soland operation admission pipeline.
+///
+/// For the space lifecycle events the SDK's typed payload requires
+/// `space_id` + `new_state`. Soland's pre-round-4 fixtures still use
+/// `place_id` (the post-R1.2 rename kept the field name) — the
+/// validator here HARD-REJECTS the wire-broken `target_ref` form but
+/// remains tolerant of the soland-internal `place_id` field so the
+/// in-tree reducer / fixture surface keeps building. Producers that
+/// emit `space_id` (the round-4 wire shape) MUST parse through
+/// `SpaceStateTransitionPayload` cleanly.
+fn round4_validate_payload(kind: &str, operation: &Operation) -> Result<(), &'static str> {
+    match kind {
+        // cx.space.archive / cx.space.restore use the typed
+        // SpaceStateTransitionPayload (space_id, new_state, reason?).
+        // The legacy top-level `target_ref` form is rejected
+        // unconditionally; everything else passes through to the
+        // per-kind PLACE_LIFECYCLE_REQUIREMENTS validator below.
+        "cx.space.archive" | "cx.space.restore" => {
+            if operation.payload.get("target_ref").is_some() {
+                return Err(
+                    "cx.space.archive/restore legacy `target_ref` form rejected by round-4 wire",
+                );
+            }
+            Ok(())
+        }
+        // cx.space.tombstone — same legacy reject rule.
+        "cx.space.tombstone" => {
+            if operation.payload.get("target_ref").is_some() {
+                return Err(
+                    "cx.space.tombstone legacy `target_ref` form rejected by round-4 wire",
+                );
+            }
+            Ok(())
+        }
+        // cx.consent.revoke — observed_dots[] required; implicit
+        // cascade is schema_violation. We accept the call sites that
+        // do not yet emit consent.revoke events (no payload to check)
+        // by returning Ok when the payload doesn't even resemble a
+        // consent revoke (missing consent_id) — the per-kind schema
+        // dispatcher will catch totally-empty payloads separately.
+        "cx.consent.revoke" => {
+            if operation.payload.get("consent_id").is_none()
+                && operation.payload.get("observed_dots").is_none()
+            {
+                return Ok(());
+            }
+            crate::round4::validate_consent_revoke_payload(&operation.payload)
+                .map(|_| ())
+                .map_err(|_| {
+                    "cx.consent.revoke payload violates round-4 observed_dots requirement"
+                })
+        }
+        // cx.cross_signing.publish — round 4 CAS-register cell with
+        // required `expected_previous_generation`. The reducer accepts
+        // only when expected_previous_generation == current_generation
+        // and new_generation == current_generation + 1. We enforce
+        // schema shape here; the actual CAS comparison happens during
+        // reducer apply once the cell row is read.
+        "cx.cross_signing.publish" => {
+            if operation
+                .payload
+                .get("expected_previous_generation")
+                .is_none()
+            {
+                return Err(
+                    "cx.cross_signing.publish payload requires expected_previous_generation \
+                     (round-4 CAS wire break)",
+                );
+            }
+            if operation.payload.get("new_generation").is_none() {
+                // ROUND4-ALLOW: error message string for the round-4 CAS contract.
+                return Err(
+                    "cx.cross_signing.publish payload requires new_generation (round-4 CAS)",
+                );
+            }
+            if operation.payload.get("trust_domain").is_none() {
+                // ROUND4-ALLOW: error message string for the round-4 wire break.
+                return Err(
+                    "cx.cross_signing.publish payload requires trust_domain (round-4 wire break)",
+                );
+            }
+            Ok(())
+        }
+        // cx.applet.protocol_session.start — round 4 requires the
+        // `applet_id` to be either a DID or a strictly-validated
+        // `cx:applet:<uuidv7>` typed id.
+        "cx.applet.protocol_session.start" => {
+            if let Some(applet_id) = operation.payload.get("applet_id").and_then(|v| v.as_str())
+            {
+                crate::round4::validate_applet_id(applet_id)
+                    .map(|_| ())
+                    .map_err(|_| {
+                        "applet_id must be a DID or cx:applet:<uuidv7> (round-4 wire break)"
+                    })?;
+            }
+            Ok(())
+        }
+        // cx.audit.policy_access — when `access_kind=e2ee_late_recovery`
+        // the payload MUST carry `late_recovery_original_event_id`.
+        "cx.audit.policy_access" => {
+            if let Some(access_kind) = operation
+                .payload
+                .get("access_kind")
+                .and_then(|v| v.as_str())
+                && access_kind == "e2ee_late_recovery"
+                && operation
+                    .payload
+                    .get("late_recovery_original_event_id")
+                    .is_none()
+            {
+                return Err(
+                    "cx.audit.policy_access access_kind=e2ee_late_recovery requires \
+                     late_recovery_original_event_id (round-4 wire break)",
+                );
+            }
+            Ok(())
+        }
+        _ => Ok(()),
+    }
 }
 
 fn validate_operation_schema_from_sdk_artifact(

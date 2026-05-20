@@ -603,7 +603,16 @@ async fn events_frontier(
     // `actor_seq_upper_bounds`, and a service signature; anonymous_health
     // returns only the frontier_root summary. TODO(C47 Lane B4): wire real
     // Merkle root commitment + service-signature envelope.
-    let peer_role = query_param(req, "peer_role").unwrap_or_else(|| "account_client".to_owned());
+    // Round 4 (B1.4) — peer_role routes to one of three typed response
+    // variants. The legacy single-shape response is wire-broken. We parse
+    // via the SDK helper so unknown values surface as invalid_param.
+    let peer_role_raw = query_param(req, "peer_role");
+    let peer_role = match crate::round4::parse_peer_role(peer_role_raw.as_deref()) {
+        Ok(pr) => pr,
+        Err(msg) => {
+            return Err(AppError::invalid_param(msg));
+        }
+    };
     let events = state
         .persistence
         .events()
@@ -611,6 +620,10 @@ async fn events_frontier(
         .unwrap_or_default();
     let mut actor_frontier: BTreeMap<String, u64> = BTreeMap::new();
     let mut space_frontier: BTreeMap<String, Value> = BTreeMap::new();
+    // Round 4 (B1.4) — collect a parallel SpaceId → Vec<EventId> map so
+    // the typed response variants can be built without re-parsing the
+    // string forms.
+    let mut space_to_event_ids: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for record in &events {
         if actor_id
             .as_deref()
@@ -637,16 +650,54 @@ async fn events_frontier(
                     "canonical_digest": record.canonical_digest.clone()
                 }),
             );
+            space_to_event_ids
+                .entry(space_id.to_owned())
+                .or_default()
+                .push(record.event_id.clone());
         }
     }
+
+    // Round 4 (B1.4) — build the typed SDK response variant. The legacy
+    // `frontier` JSON envelope is retained alongside for the existing
+    // ResBody wire shape (consumers that haven't migrated to the typed
+    // `events_frontier_v2` field yet), but the typed variant is the
+    // canonical shape per spec a77b995.
+    use contrix_sdk::Did as SdkDid;
+    let service_did = SdkDid::new(state.config.service_did.clone())
+        .unwrap_or_else(|_| SdkDid::new("did:web:soland.local".to_owned()).unwrap());
+    let typed_space_frontier =
+        crate::round4::typed_space_frontier(space_to_event_ids.clone());
+    let typed_actor_bounds =
+        crate::round4::typed_actor_upper_bounds(actor_frontier.clone());
+    let typed_response = crate::round4::build_typed_frontier_response(
+        peer_role,
+        &service_did,
+        typed_space_frontier,
+        typed_actor_bounds,
+        None,
+    );
+    // Render the JSON wire envelope. anonymous_health MUST strip
+    // receipts / actor_seq_upper_bounds / per-space frontier — the
+    // typed builder already does this; we mirror it onto the legacy
+    // `frontier` envelope for back-compat.
+    let peer_role_str = match peer_role {
+        contrix_sdk::FrontierPeerRole::AccountClient => "account_client",
+        contrix_sdk::FrontierPeerRole::FederationPeer => "federation_peer",
+        contrix_sdk::FrontierPeerRole::AnonymousHealth => "anonymous_health",
+    };
     let mut frontier = json!({
         "storage": state.db.mode(),
         "generated_at": now(),
-        "peer_role": peer_role,
+        "peer_role": peer_role_str,
+        "events_frontier_v2": serde_json::to_value(&typed_response).unwrap_or(Value::Null),
     });
-    match peer_role.as_str() {
-        "federation_peer" => {
+    match peer_role {
+        contrix_sdk::FrontierPeerRole::FederationPeer => {
             if let Some(obj) = frontier.as_object_mut() {
+                // TODO(round4-fed-frontier-signature): compute the real
+                // frontier_root + sign over canonical-JSON. Until then,
+                // the typed `events_frontier_v2` envelope carries the
+                // placeholder service_binding_ref + zero-hash root.
                 obj.insert("frontier_root".to_owned(), Value::Null);
                 obj.insert(
                     "actor_seq_upper_bounds".to_owned(),
@@ -655,12 +706,19 @@ async fn events_frontier(
                 obj.insert("signature".to_owned(), Value::Null);
             }
         }
-        "anonymous_health" => {
+        contrix_sdk::FrontierPeerRole::AnonymousHealth => {
+            // Strip everything that would leak per-tenant state.
             if let Some(obj) = frontier.as_object_mut() {
                 obj.insert("frontier_root".to_owned(), Value::Null);
             }
+            // Clear actor_frontier + space_frontier in the legacy envelope.
+            return crate::result::json_ok(EventsFrontierResBody {
+                actor_frontier: BTreeMap::new(),
+                space_frontier: BTreeMap::new(),
+                frontier,
+            });
         }
-        _ => {}
+        contrix_sdk::FrontierPeerRole::AccountClient => {}
     }
     crate::result::json_ok(EventsFrontierResBody {
         actor_frontier,

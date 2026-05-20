@@ -6,6 +6,68 @@ and the project tracks Contrix v1 spec revisions.
 
 ## [Unreleased]
 
+### Round R4 — protocol review closures (2026-05-20; contrix-spec `2a4d39b..a77b995`)
+
+Aggressive mode; no compatibility shim. Closes 8 protocol-review commits
+on the reducer / federation / state-machine surfaces. See
+[`../_todos.md`](../_todos.md) for the workstream context.
+
+- **BREAKING** `cx.realm.create` reducer now captures and locks `trust_domain`
+  as immutable Realm state. Subsequent mismatching events reject with
+  `cross_domain_replay_rejected`.
+- **BREAKING** `ServiceDescribe` v2: `cx.server.describe` /
+  `cx.sync.describe` / `cx.events.describe` / `cx.applet.describe` all return
+  the 17-field canonical envelope (including `trust_domain`,
+  `plaintext_visibility`, `claimed_profiles`, `verified_profiles`,
+  `development_mode`); `development_mode=true` with non-empty
+  `verified_profiles` warns.
+- **BREAKING** `/events/frontier` split by `peer_role` query param into the
+  three discriminated shapes `account_client` / `federation_peer` /
+  `anonymous_health`. The `anonymous_health` response strips `receipts` and
+  `actor_seq_upper_bounds`.
+- **BREAKING** `/events/subscribe` NDJSON now emits typed
+  `EventsSubscribeFrame{kind}`; `dropped` frames MUST carry a `cursor`
+  (otherwise downgrade to `resync_required`).
+- **BREAKING** `/events/submit` split into the discriminated oneOf
+  `single` / `batch` / `federation`. Federation form requires the 6-field
+  `FederationServiceBindingRef`; missing fields reject as `schema_violation`.
+- **BREAKING** Federation S2S transport verifies and signs the three new
+  headers `Source-Trust-Domain` / `Destination-Trust-Domain` /
+  `Request-Canonical-Hash`; mismatch reject as `cross_domain_replay_rejected`.
+- **BREAKING** Federation idempotency cache key now combines
+  `source_did` / `dest_did` / `request_canonical_hash` / `idempotency_key` /
+  `origin_key_state_hash`. Cache hits after key-state change return the
+  cached body with diagnostic `reason_code=historical_only` (no side
+  effects); cache hits re-run capability checks.
+- **Added** delivery-binding handover error codes: stale binding emits
+  `delivery_binding_stale` + `new_recipient_service_did` +
+  `handover_frontier`; post-handover replays emit
+  `delivery_binding_handed_over`.
+- **BREAKING** `cx.cross_signing.publish` reducer enforces CAS
+  (`expected_previous_generation == current && new_generation == current + 1`),
+  evaluated before signature verification.
+- **BREAKING** `audit_policy_version_hash` switched to the 4-arg form
+  `{realm_id, trust_domain, audit_disclosure, audit_assurance}`; old
+  2-arg receipts no longer verify. `AuditRywReceipt` now carries
+  `trust_domain`.
+- **BREAKING** `/blob/presign` requires `realm_id` for Realm-owned blobs;
+  reducer cross-checks against blob metadata.
+- **BREAKING** `cx.space.archive` / `restore` / `tombstone` accept the new
+  `space_state_transition_payload` / `space_object_tombstone_payload`
+  shapes; legacy top-level `target_ref` rejects as `schema_violation`.
+- **BREAKING** `ConsentRevoke` reducer requires `observed_dots[]`; implicit
+  cascade rejects as `schema_violation`.
+- **BREAKING** `cx.flow.update` / `cx.flow.tracks_patch` reducer uses
+  CAS-register semantics on cell-subject `flow_id` (bottom=reject; empty
+  field-set rejects).
+- **Added** Late key recovery path emits
+  `cx.audit.policy_access{access_kind=e2ee_late_recovery,
+  late_recovery_original_event_id}`.
+- **BREAKING** `agent_id` and `applet_id` MUST be DID-shaped (applet also
+  accepts `cx:applet:<uuidv7>`); non-DID values reject.
+- **Added** DID method-name regex sweep tightened to
+  `^did:[a-z0-9]+:[^\s]+$` across all parsers and fixtures.
+
 ### Round R2/R3 (2026-05-20; contrix-spec `8b7978d`) — 17 wire-breaking tasks
 
 Aggressive mode — there is no compatibility shim for any of the changes

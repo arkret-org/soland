@@ -333,6 +333,19 @@ pub enum ErrorCode {
     /// T16 — A late-recovery key share targeted an actor who is no
     /// longer a member of the Realm at the recovery T₀.
     LateRecoveryRejectedMembership,
+    // ── Round 4 (2026-05-20; spec a77b9958) — 3 new wire-level codes.
+    /// B1.9 — Inbound federation delivery's recipient-binding is stale;
+    /// the response carries the new recipient service DID and a
+    /// `handover_frontier` the sender should replay from.
+    DeliveryBindingStale,
+    /// B1.9 — Inbound federation delivery's recipient-binding was
+    /// already handed over to a new service; sender SHOULD stop
+    /// retrying via the legacy binding.
+    DeliveryBindingHandedOver,
+    /// B1.8 — Federation idempotency cache replay AFTER the source
+    /// service rotated its verification key. Diagnostic only — the
+    /// cached response is returned with no fresh side effects.
+    HistoricalOnly,
 }
 
 impl ErrorCode {
@@ -409,6 +422,10 @@ impl ErrorCode {
         Self::MlsGovernanceBindingStale,
         Self::ExpiredInviteToken,
         Self::LateRecoveryRejectedMembership,
+        // Round 4 (2026-05-20)
+        Self::DeliveryBindingStale,
+        Self::DeliveryBindingHandedOver,
+        Self::HistoricalOnly,
     ];
 
     /// Canonical wire-form code (snake_case string used in `ErrorEnvelope.errcode`).
@@ -496,6 +513,10 @@ impl ErrorCode {
             Self::LateRecoveryRejectedMembership => {
                 core_error::ERROR_CODE_LATE_RECOVERY_REJECTED_MEMBERSHIP
             }
+            // Round 4 (2026-05-20)
+            Self::DeliveryBindingStale => core_error::ERROR_CODE_DELIVERY_BINDING_STALE,
+            Self::DeliveryBindingHandedOver => core_error::ERROR_CODE_DELIVERY_BINDING_HANDED_OVER,
+            Self::HistoricalOnly => core_error::ERROR_CODE_HISTORICAL_ONLY,
         }
     }
 

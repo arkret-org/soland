@@ -50,28 +50,94 @@ pub(super) async fn federation_transaction(
     txn_id: PathParam<String>,
     body: JsonBody<contrix_sdk::FederationTransactionReqBody>,
     depot: &mut Depot,
+    req: &mut Request,
 ) -> JsonResult<contrix_sdk::FederationTransactionResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let txn_id = txn_id.into_inner();
+    // Round 4 (B1.7) — verify the three federation trust-domain headers
+    // (`Source-Trust-Domain` / `Destination-Trust-Domain` /
+    // `Request-Canonical-Hash`). Missing / malformed headers are
+    // schema_violation; a destination mismatch is
+    // cross_domain_replay_rejected. The configured
+    // `state.config.trust_domain` is the canonical receiver value.
+    let trust_headers =
+        match crate::round4::FederationTrustHeaders::from_salvo_request(req) {
+            Ok(headers) => Some(headers),
+            Err(violation) => {
+                // Headers are advisory until cotest C3 lands the full
+                // multi-server scenario; we log + continue rather than
+                // hard-reject. TODO(round4-fed-headers): flip to
+                // hard-reject after teabay + soland + cotest agree on
+                // the header transcript.
+                tracing::warn!(
+                    error = %violation.message(),
+                    "federation request missing/malformed round-4 trust-domain headers"
+                );
+                None
+            }
+        };
+    if let Some(ref headers) = trust_headers {
+        let expected = contrix_sdk::TypedTrustDomainId::new(
+            state.config.trust_domain.clone(),
+        );
+        if let Ok(expected) = expected
+            && headers.verify_destination(&expected).is_err()
+        {
+            return Err(AppError::new(
+                crate::error::ErrorCode::CrossDomainReplayRejected,
+                "federation Destination-Trust-Domain header does not match this service",
+            ));
+        }
+        // Append to the signing transcript for downstream verifier.
+        // TODO(round4-fed-transcript): wire into the RFC 9421
+        // signature base. For now we just compute the fragment so the
+        // helper is exercised + the trace fields are emitted.
+        let fragment = headers.transcript_fragment();
+        tracing::trace!(transcript_fragment = %fragment, "round-4 federation transcript fragment");
+    }
     if !is_valid_federation_txn_id(&txn_id) {
         return Err(AppError::invalid_param("invalid federation transaction id"));
     }
     let body = body.into_inner();
     let content_digest = federation_request_digest(&body).map_err(AppError::invalid_param)?;
-    // Round R2/R3 (T14) — service-key binding fields for the idempotency
-    // cache key. When a peer replays an old txn_id AFTER rotating its
-    // verification key, the receiver MUST return the cached response with
-    // `historical_only=true` rather than triggering new side effects.
+    // Round 4 (B1.8) — round-4 federation idempotency cache key. The
+    // composite carries (source_did, dest_did, request_canonical_hash,
+    // idempotency_key, origin_key_state_hash). When the strict key
+    // matches a cached entry the receiver returns the cached body
+    // unchanged; when the strict key misses but the canonical-replay
+    // key matches, the cached body is returned marked
+    // `reason_code=historical_only` (no fresh side effects).
     //
-    // TODO(round23-T14): pull these from the inbound request's RFC 9421
-    // signature headers + the federation origin's current key state
-    // record. For now we derive from the request body shape (origin DID
-    // is the only reliable signal until inbound RFC 9421 lands).
+    // The request_canonical_hash and origin_key_state_hash inputs are
+    // sourced from round-4 federation headers + the origin's current
+    // key state record. We pull what is available now and fall back to
+    // placeholders for the rest.
+    // TODO(round4-fed-binding-verify): wire origin_key_state_hash from
+    // the resolver chain's last observed cross-signing publish for the
+    // origin DID.
+    let r4_idem_key = trust_headers.as_ref().map(|headers| {
+        crate::round4::FederationIdempotencyKey {
+            source_did: body.origin.to_string(),
+            dest_did: body.destination.to_string(),
+            request_canonical_hash: headers.request_canonical_hash.as_str().to_owned(),
+            idempotency_key: txn_id.clone(),
+            origin_key_state_hash: "sha256:0000".to_owned(),
+        }
+    });
     let _service_binding = crate::round23::FederationIdempotencyServiceBinding {
         source_service_did: body.origin.to_string(),
-        verification_method: "<TODO(round23-T14): from Signature-Input>".to_owned(),
-        service_binding_ref: "<TODO(round23-T14)>".to_owned(),
-        origin_key_state_hash: "<TODO(round23-T14)>".to_owned(),
+        verification_method: r4_idem_key
+            .as_ref()
+            .map(|k| k.strict())
+            .unwrap_or_else(|| "<TODO(round4-fed-headers)>".to_owned()),
+        service_binding_ref: r4_idem_key
+            .as_ref()
+            .map(|k| k.canonical_replay())
+            .unwrap_or_else(|| "<TODO(round4-fed-headers)>".to_owned()),
+        origin_key_state_hash: r4_idem_key
+            .as_ref()
+            .map(|k| k.origin_key_state_hash.clone())
+            .unwrap_or_else(|| "<TODO(round4-fed-headers)>".to_owned()),
     };
     match state
         .persistence
@@ -79,9 +145,10 @@ pub(super) async fn federation_transaction(
         .get(body.origin.as_str(), &txn_id)
     {
         Ok(Some(record)) if record.content_digest == content_digest => {
-            // Round R2/R3 (T14) — cache hit MUST re-do capability check.
-            // We re-validate origin & destination before serving cached
-            // response so a revoked peer cannot keep mining responses.
+            // Round R2/R3 (T14) + Round 4 (B1.8) — cache hit MUST re-do
+            // capability check. We re-validate origin & destination
+            // before serving cached response so a revoked peer cannot
+            // keep mining responses.
             if !verify_federation_origin(body.origin.as_str()) {
                 return Err(AppError::unauthenticated(
                     "federation origin must be a valid DID (cache re-verification)",
@@ -93,14 +160,32 @@ pub(super) async fn federation_transaction(
                      (cache re-verification)",
                 ));
             }
-            // TODO(round23-T14): when the peer's key has been revoked since
-            // the cached response was minted, mark the response as
-            // historical_only so the caller knows side effects were NOT
-            // re-applied. The `_service_binding` value above carries the
-            // information that would let us detect this; for now we always
-            // return the cached response untouched.
+            // Round 4 (B1.8) — detect a canonical-replay hit (txn_id +
+            // request_canonical_hash match, but origin_key_state_hash
+            // has rotated since the cached entry was minted). Such a
+            // hit MUST be marked `reason_code=historical_only` and
+            // MUST NOT trigger fresh side effects. We approximate the
+            // detection here by checking whether the `record.status`
+            // already names the cached origin's key generation —
+            // soland doesn't yet persist `origin_key_state_hash` on
+            // the federation_transactions row, so for now we only
+            // mark when the headers carry an explicit `historical_only`
+            // hint. TODO(round4-historical-key-rotation): persist the
+            // origin's key state hash on the cached record so a real
+            // rotation triggers historical_only automatically.
+            let mut response_value = record.response.clone();
+            let request_signals_historical = req
+                .headers()
+                .get("X-Contrix-Origin-Key-Rotated")
+                .and_then(|v| v.to_str().ok())
+                .map(|s| matches!(s, "true" | "1" | "yes"))
+                .unwrap_or(false);
+            if request_signals_historical {
+                response_value =
+                    crate::round4::mark_response_historical_only(response_value);
+            }
             let response: contrix_sdk::FederationTransactionResBody =
-                serde_json::from_value(record.response).map_err(|error| {
+                serde_json::from_value(response_value).map_err(|error| {
                     AppError::internal(format!("cached federation response decode: {error}"))
                 })?;
             return json_ok(response);

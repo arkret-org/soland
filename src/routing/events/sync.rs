@@ -991,14 +991,34 @@ pub(super) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
                             yield Ok(ndjson_line(&frame));
                         }
                         Err(RecvError::Lagged(skipped)) => {
-                            // Broadcast capacity exceeded — emit `dropped`
-                            // so the client knows to resync from a fresh
-                            // /events?direction=backward query.
-                            let frame = json!({
-                                "kind": "dropped",
-                                "skipped": skipped,
-                                "reason": "broadcast_lagged",
-                            });
+                            // Round 4 (B1.5) — broadcast capacity exceeded.
+                            // The typed EventsSubscribeFrameBody requires a
+                            // resume cursor on Dropped; if we don't have a
+                            // valid cursor (the broadcast lag dropped state
+                            // we'd need to mint one) the SDK rule downgrades
+                            // to ResyncRequired. We always carry the
+                            // catchup_cursor we already have, so Dropped is
+                            // safe here.
+                            let cursor_str = catchup_cursor.clone();
+                            // Use the typed-id form (cx:cursor:<base64url>),
+                            // not the cursor::Cursor struct.
+                            let cursor_typed =
+                                contrix_sdk::identifiers::Cursor::new(cursor_str.clone()).ok();
+                            let body = crate::round4::dropped_or_resync(
+                                cursor_typed,
+                                format!("broadcast_lagged skipped={skipped}"),
+                            );
+                            // Emit the typed frame body fields at the top
+                            // level (matches the SDK `kind`-tagged shape).
+                            let body_json = serde_json::to_value(&body)
+                                .unwrap_or_else(|_| json!({"kind": "resync_required"}));
+                            let mut frame = body_json;
+                            if let Some(obj) = frame.as_object_mut() {
+                                obj.insert(
+                                    "skipped".to_owned(),
+                                    Value::Number(serde_json::Number::from(skipped)),
+                                );
+                            }
                             yield Ok(ndjson_line(&frame));
                         }
                         Err(RecvError::Closed) => {

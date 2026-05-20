@@ -472,6 +472,12 @@ pub struct SpaceState {
     pub deleted: bool,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
+    /// Round 4 (B1.2) — Realm trust domain. Captured and locked
+    /// immutable on the first `cx.realm.create`; subsequent events that
+    /// attempt to set a different trust domain MUST be rejected with
+    /// `cross_domain_replay_rejected`. Stored as the canonical
+    /// `cx:trust_domain:<scope>` string form.
+    pub trust_domain: Option<String>,
 }
 
 /// The effect of applying an operation to the projection state.
@@ -2380,6 +2386,36 @@ impl ProjectionState {
             .get("federation_policy")
             .and_then(Value::as_str)
             .map(ToOwned::to_owned);
+        // Round 4 (B1.2) — capture (and validate against any existing
+        // locked value) the Realm trust_domain. Payload field
+        // `trust_domain` (the canonical SDK shape) is preferred over the
+        // legacy `realm_trust_domain` key seen in pre-round-4 fixtures.
+        let payload_trust_domain = operation
+            .payload
+            .get("trust_domain")
+            .or_else(|| operation.payload.get("realm_trust_domain"))
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
+        if let Some(ref new_td) = payload_trust_domain {
+            // Shape MUST be `cx:trust_domain:<scope>` — delegate to SDK
+            // typed id validator.
+            if contrix_sdk::TypedTrustDomainId::new(new_td.clone()).is_err() {
+                return ProjectionEffect::Rejected {
+                    reason: contrix_sdk::ERROR_CODE_SCHEMA_VIOLATION.to_owned(),
+                };
+            }
+            // Compare against any prior locked value. Any mismatch is a
+            // cross-domain replay attempt: a peer is trying to relabel a
+            // Realm into a different trust domain.
+            if let Some(existing) = self.space_states.get(&space_id)
+                && let Some(locked_td) = existing.trust_domain.as_deref()
+                && locked_td != new_td.as_str()
+            {
+                return ProjectionEffect::Rejected {
+                    reason: contrix_sdk::ERROR_CODE_CROSS_DOMAIN_REPLAY_REJECTED.to_owned(),
+                };
+            }
+        }
         let projected_security_class = self.realm_security_class(&space_id);
         let effective_security_class = payload_security_class
             .clone()
@@ -2418,7 +2454,16 @@ impl ProjectionState {
                 deleted: false,
                 created_at: now,
                 updated_at: now,
+                trust_domain: payload_trust_domain.clone(),
             });
+        // Lock trust_domain on first observation (cx.realm.create). The
+        // mismatch case is already rejected above; here we only set the
+        // value when it has not yet been captured.
+        if space.trust_domain.is_none()
+            && let Some(td) = payload_trust_domain.clone()
+        {
+            space.trust_domain = Some(td);
+        }
         let is_destroy = matches!(
             action.as_str(),
             "delete" | "space.delete" | "destroy" | "space.destroy"

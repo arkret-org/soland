@@ -23,6 +23,41 @@ are the new typed edges that wire boundaries together (governed_by /
 discoverable_from / mirror_of). Legacy `space_*` and `place_*` payload
 fields remain accepted as serde aliases.
 
+## Round R4 (protocol review closures)
+
+Spec round 4 (`contrix-spec` range `2a4d39b..a77b995`, 8 commits) lands
+on top of R2/R3. See [`CHANGELOG.md`](CHANGELOG.md) `[Unreleased]` and
+[`../_todos.md`](../_todos.md) for the canonical wire-breaking list.
+Operator-visible highlights:
+
+- **`trust_domain` is now immutable on a Realm** — captured by
+  `cx.realm.create` and locked thereafter. Cross-domain replays reject
+  with `cross_domain_replay_rejected`.
+- **`ServiceDescribe` v2** — `cx.server.describe` / `cx.sync.describe` /
+  `cx.events.describe` / `cx.applet.describe` return the 17-field
+  canonical envelope, including `trust_domain` / `plaintext_visibility` /
+  `verified_profiles` / `development_mode` and a `rate_limit` oneOf.
+- **`/events/frontier` split by role** — `peer_role` query param routes
+  to `account_client` / `federation_peer` / `anonymous_health`. The
+  anonymous shape strips `receipts` and `actor_seq_upper_bounds`.
+- **`/events/subscribe` typed frames** — NDJSON now emits typed
+  `EventsSubscribeFrame{event|frontier|heartbeat|catchup_complete|
+  epoch_rotation|dropped|resync_required|unauthorized}`. `dropped`
+  MUST carry `cursor`.
+- **Federation S2S transport adds three signed headers** —
+  `Source-Trust-Domain`, `Destination-Trust-Domain`,
+  `Request-Canonical-Hash`. Verified into the signature transcript;
+  mismatch rejects.
+- **Federation idempotency `historical_only`** — cache hits after
+  source-key revocation return the cached body with
+  `reason_code=historical_only`; no side effects.
+- **Delivery-binding handover error codes** —
+  `delivery_binding_stale` (with `new_recipient_service_did` +
+  `handover_frontier`) and `delivery_binding_handed_over`.
+- **`cx.cross_signing.publish` CAS** —
+  `expected_previous_generation == current && new = current + 1`,
+  verified before signature.
+
 ## Round R2/R3 deployment requirements
 
 Spec rounds 2+3 (2026-05-20) introduced wire-breaking changes that the
