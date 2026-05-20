@@ -171,23 +171,28 @@ pub(crate) fn apply_claim_level_partition(value: &mut Value, development_mode: b
         .unwrap_or_default();
     value["implemented_features"] = json!(implemented_features_owned);
 
-    // claimed_profiles: self-claimed only.
-    value["claimed_profiles"] = json!([
-        {
-            "profile_id": "cx.profile.mimi_interop.v1",
-            "claim_kind": "self_claimed",
-            "notes": "MIMI provider facade first round (not a full v1 core conformance claim)"
-        }
-    ]);
+    // claimed_profiles: self-claimed only. Serialise via the SDK's
+    // typed `ClaimedProfileEntry` so the wire shape stays bound to
+    // `service-describe.schema.json` (a future field rename in the
+    // SDK becomes a soland build break, not a silent drift).
+    let claimed_profile = contrix_sdk::ClaimedProfileEntry {
+        notes: Some(
+            "MIMI provider facade first round (not a full v1 core conformance claim)".to_owned(),
+        ),
+        ..contrix_sdk::ClaimedProfileEntry::self_claimed("cx.profile.mimi_interop.v1")
+    };
+    value["claimed_profiles"] =
+        serde_json::to_value(vec![claimed_profile]).expect("claimed_profiles serializes");
 
     // verified_profiles: nothing is cotest-verified at runtime today, and
     // dev mode MUST yield an empty list per spec §3.0.
-    let verified_profiles: Vec<Value> = Vec::new();
+    let verified_profiles: Vec<contrix_sdk::VerifiedProfileEntry> = Vec::new();
     debug_assert!(
         !(development_mode && !verified_profiles.is_empty()),
         "development_mode=true requires verified_profiles=[] (service-surface.md §3.0)"
     );
-    value["verified_profiles"] = json!(verified_profiles);
+    value["verified_profiles"] =
+        serde_json::to_value(verified_profiles).expect("verified_profiles serializes");
 
     // experimental_features: surfaces still maturing.
     value["experimental_features"] = json!([
@@ -197,13 +202,19 @@ pub(crate) fn apply_claim_level_partition(value: &mut Value, development_mode: b
     ]);
 
     // compat_surfaces: explicit external-interop passthroughs.
-    value["compat_surfaces"] = json!([
-        {
-            "name": "mimi_provider_facade",
-            "kind": "mimi_passthrough",
-            "notes": "MIMI provider directory + room binding facade; not a Contrix v1 core conformance surface"
-        }
-    ]);
+    let compat_surface = contrix_sdk::CompatSurfaceEntry {
+        name: "mimi_provider_facade".to_owned(),
+        kind: contrix_sdk::CompatSurfaceKind::MimiPassthrough,
+        since: None,
+        notes: Some(
+            "MIMI provider directory + room binding facade; not a Contrix v1 core conformance \
+             surface"
+                .to_owned(),
+        ),
+        extra: Default::default(),
+    };
+    value["compat_surfaces"] =
+        serde_json::to_value(vec![compat_surface]).expect("compat_surfaces serializes");
 }
 
 #[endpoint(

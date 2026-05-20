@@ -3,7 +3,9 @@ use std::collections::BTreeMap;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, Utc};
-use contrix_sdk::{ServerDescription, SpaceSearchEntry};
+use contrix_sdk::{
+    ClaimedProfileEntry, CompatSurfaceEntry, CompatSurfaceKind, ServerDescription, SpaceSearchEntry,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -1508,15 +1510,34 @@ pub fn describe(
     // overrides these values on the JSON wire response — we keep typed
     // defaults here so out-of-tree typed consumers see the correct shape
     // and pass `ServerDescription::validate_v2`.
-    let claimed_profiles = vec!["cx.profile.mimi_interop.v1".to_owned()];
-    let verified_profiles: Vec<String> = Vec::new();
+    // Round 4 — typed entries match `service-describe.schema.json`
+    // (`claimed_profiles[*]`, `compat_surfaces[*]`). The routing-layer
+    // `apply_claim_level_partition` reserialises these via the SDK types
+    // below so the JSON wire shape and the typed surface can never drift.
+    let claimed_profiles = vec![ClaimedProfileEntry {
+        notes: Some(
+            "MIMI provider facade first round (not a full v1 core conformance claim)".to_owned(),
+        ),
+        ..ClaimedProfileEntry::self_claimed("cx.profile.mimi_interop.v1")
+    }];
+    let verified_profiles = Vec::new();
     let implemented_features_seed: Vec<String> = Vec::new();
     let experimental_features = vec![
         "federation.outbound_push.signed_intent".to_owned(),
         "admin.bottom.manual_repair".to_owned(),
         "index.query.local_projection".to_owned(),
     ];
-    let compat_surfaces = vec!["mimi_provider_facade".to_owned()];
+    let compat_surfaces = vec![CompatSurfaceEntry {
+        name: "mimi_provider_facade".to_owned(),
+        kind: CompatSurfaceKind::MimiPassthrough,
+        since: None,
+        notes: Some(
+            "MIMI provider directory + room binding facade; not a Contrix v1 core conformance \
+             surface"
+                .to_owned(),
+        ),
+        extra: Default::default(),
+    }];
     let plaintext_visibility = serde_json::json!({
         "default": "encrypted",
         "services": [],
