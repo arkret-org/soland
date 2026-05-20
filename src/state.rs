@@ -674,14 +674,28 @@ impl AppState {
                 if let Some(seed) = config.anchorer_signing_key_seed {
                     return (seed, AnchorerSigningKeyOrigin::Configured);
                 }
+                // Ephemeral fallback. In production we mix in `boot_nanos`
+                // so a soland that boots without a configured seed never
+                // signs with the same key twice — this is a security
+                // posture choice (no implicit long-lived key on disk).
+                //
+                // In `development_mode=true` we drop `boot_nanos` and
+                // derive the seed deterministically from `service_did`
+                // alone. The trade-off: every dev restart kept invalidating
+                // every previously-issued sync cursor with
+                // `cursor_integrity_invalid` because the freshly-minted
+                // key couldn't reproduce yesterday's signature. Stable in
+                // dev = `cargo run` doesn't break a connected yougen.
                 let mut hasher = Sha256::new();
                 hasher.update(b"soland:anchorer-ephemeral:");
                 hasher.update(service_did.as_bytes());
-                let boot_nanos = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .map(|d| d.as_nanos() as u64)
-                    .unwrap_or(0);
-                hasher.update(boot_nanos.to_le_bytes());
+                if !config.development_mode {
+                    let boot_nanos = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .map(|d| d.as_nanos() as u64)
+                        .unwrap_or(0);
+                    hasher.update(boot_nanos.to_le_bytes());
+                }
                 let seed: [u8; 32] = hasher.finalize().into();
                 (seed, AnchorerSigningKeyOrigin::Ephemeral)
             })();
