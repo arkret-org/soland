@@ -356,17 +356,18 @@ impl AppConfig {
             .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes"))
             .unwrap_or(false);
         let oauth_introspection_url = env_non_empty("SOLAND_OAUTH_INTROSPECTION_URL");
-        let oauth_introspection_bearer = env_non_empty("SOLAND_OAUTH_INTROSPECTION_BEARER");
+        let oauth_introspection_bearer =
+            env_non_empty_or_file("SOLAND_OAUTH_INTROSPECTION_BEARER")?;
         let session_grant_introspection_url =
             env_non_empty("SOLAND_SESSION_GRANT_INTROSPECTION_URL");
         let session_grant_introspection_bearer =
-            env_non_empty("SOLAND_SESSION_GRANT_INTROSPECTION_BEARER");
+            env_non_empty_or_file("SOLAND_SESSION_GRANT_INTROSPECTION_BEARER")?;
         let did_resolver_allow_methods = env_csv("SOLAND_DID_RESOLVER_ALLOW_METHODS")
             .unwrap_or_else(|| vec!["web".to_owned(), "key".to_owned(), "uuid".to_owned()]);
         let embedded_webvh_provider_enabled =
             env_bool("SOLAND_EMBEDDED_WEBVH_PROVIDER_ENABLED")?.unwrap_or(true);
         let embedded_webvh_registration_bearer =
-            env_non_empty("SOLAND_EMBEDDED_WEBVH_REGISTRATION_BEARER");
+            env_non_empty_or_file("SOLAND_EMBEDDED_WEBVH_REGISTRATION_BEARER")?;
         let external_webvh_provider_url = env_non_empty("SOLAND_EXTERNAL_WEBVH_PROVIDER_URL");
         let default_webvh_provider_id = env_non_empty("SOLAND_DEFAULT_WEBVH_PROVIDER_ID");
         // 0 disables replay-window enforcement; default 5 min per spec.
@@ -845,6 +846,43 @@ fn env_non_empty(name: &str) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+/// Resolve a secret-like value from `$NAME` OR from a file at `$NAME_FILE`.
+///
+/// Lets operators mount a token via Kubernetes / Docker / systemd secrets
+/// instead of inlining it in env. Empty / whitespace-only files are treated
+/// as unset, mirroring [`env_non_empty`].
+///
+/// # Errors
+///
+/// - `$NAME_FILE` is set but the path cannot be read.
+/// - Both `$NAME` and `$NAME_FILE` are set to different non-empty values.
+fn env_non_empty_or_file(name: &str) -> anyhow::Result<Option<String>> {
+    let from_env = env_non_empty(name);
+    let file_name = format!("{name}_FILE");
+    let file_value = match env_non_empty(&file_name) {
+        Some(path) => {
+            let raw = std::fs::read_to_string(&path).map_err(|error| {
+                anyhow::anyhow!("{file_name} points to {path:?} but the file could not be read: {error}")
+            })?;
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_owned())
+            }
+        }
+        None => None,
+    };
+    match (from_env, file_value) {
+        (None, None) => Ok(None),
+        (Some(value), None) | (None, Some(value)) => Ok(Some(value)),
+        (Some(env), Some(file)) if env == file => Ok(Some(env)),
+        (Some(_), Some(_)) => anyhow::bail!(
+            "{name} and {file_name} are both set to different values; pick one"
+        ),
+    }
+}
+
 fn required_env(name: &str) -> anyhow::Result<String> {
     env_non_empty(name).ok_or_else(|| anyhow::anyhow!("{name} is required"))
 }
@@ -868,4 +906,137 @@ fn arg_value(name: &str) -> Option<String> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Guard that scopes env-var mutation to a single test. The Rust
+    /// 2024 edition marks `set_var`/`remove_var` `unsafe`; this wrapper
+    /// localises the unsafe block and restores env on drop so tests
+    /// running in parallel against unique names never leak state.
+    struct ScopedEnv {
+        name: String,
+        file_name: String,
+    }
+
+    impl ScopedEnv {
+        fn new(name: &str) -> Self {
+            let guard = Self {
+                name: name.to_owned(),
+                file_name: format!("{name}_FILE"),
+            };
+            guard.clear();
+            guard
+        }
+
+        fn set_env(&self, value: &str) {
+            // SAFETY: scoped to a unique env var per test; clear() runs on drop.
+            unsafe { std::env::set_var(&self.name, value) };
+        }
+
+        fn set_file(&self, value: &str) {
+            // SAFETY: scoped to a unique env var per test; clear() runs on drop.
+            unsafe { std::env::set_var(&self.file_name, value) };
+        }
+
+        fn clear(&self) {
+            // SAFETY: scoped to env vars this guard owns.
+            unsafe {
+                std::env::remove_var(&self.name);
+                std::env::remove_var(&self.file_name);
+            }
+        }
+    }
+
+    impl Drop for ScopedEnv {
+        fn drop(&mut self) {
+            self.clear();
+        }
+    }
+
+    fn write_secret_file(suffix: &str, contents: &str) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "soland-config-test-{}-{suffix}",
+            std::process::id()
+        ));
+        std::fs::write(&path, contents).expect("write secret file");
+        path
+    }
+
+    #[test]
+    fn env_only_returns_value() {
+        let env = ScopedEnv::new("SOLAND_TEST_BEARER_ENV_ONLY");
+        env.set_env("from-env");
+        assert_eq!(
+            env_non_empty_or_file(&env.name).unwrap(),
+            Some("from-env".to_owned())
+        );
+    }
+
+    #[test]
+    fn file_only_returns_value() {
+        let env = ScopedEnv::new("SOLAND_TEST_BEARER_FILE_ONLY");
+        let path = write_secret_file("file-only", "from-file\n");
+        env.set_file(path.to_str().unwrap());
+        assert_eq!(
+            env_non_empty_or_file(&env.name).unwrap(),
+            Some("from-file".to_owned())
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn neither_set_returns_none() {
+        let env = ScopedEnv::new("SOLAND_TEST_BEARER_NEITHER");
+        assert!(env_non_empty_or_file(&env.name).unwrap().is_none());
+    }
+
+    #[test]
+    fn both_set_to_same_value_is_ok() {
+        let env = ScopedEnv::new("SOLAND_TEST_BEARER_BOTH_SAME");
+        env.set_env("same-tok");
+        let path = write_secret_file("both-same", "same-tok");
+        env.set_file(path.to_str().unwrap());
+        assert_eq!(
+            env_non_empty_or_file(&env.name).unwrap(),
+            Some("same-tok".to_owned())
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn both_set_to_different_values_errors() {
+        let env = ScopedEnv::new("SOLAND_TEST_BEARER_BOTH_DIFF");
+        env.set_env("env-tok");
+        let path = write_secret_file("both-diff", "file-tok");
+        env.set_file(path.to_str().unwrap());
+        let error = env_non_empty_or_file(&env.name).expect_err("must error");
+        assert!(
+            error.to_string().contains("are both set to different values"),
+            "unexpected error: {error}"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn file_pointing_to_missing_path_errors() {
+        let env = ScopedEnv::new("SOLAND_TEST_BEARER_MISSING_FILE");
+        env.set_file("/definitely/does/not/exist-soland-test");
+        let error = env_non_empty_or_file(&env.name).expect_err("must error");
+        assert!(
+            error.to_string().contains("could not be read"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn whitespace_file_is_treated_as_unset() {
+        let env = ScopedEnv::new("SOLAND_TEST_BEARER_WS_FILE");
+        let path = write_secret_file("ws-file", "   \n\t  \n");
+        env.set_file(path.to_str().unwrap());
+        assert!(env_non_empty_or_file(&env.name).unwrap().is_none());
+        let _ = std::fs::remove_file(&path);
+    }
 }
