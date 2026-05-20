@@ -1481,6 +1481,7 @@ pub fn describe(
     development_mode: bool,
     oauth_introspection_enabled: bool,
     auth_server_url: Option<&str>,
+    trust_domain: &str,
 ) -> ServerDescription {
     let mut supported_auth_methods = Vec::new();
     if development_mode {
@@ -1499,11 +1500,44 @@ pub fn describe(
     let supported_operations = canonical_supported_operations();
     let local_extension_operations = local_extension_operations();
 
+    // Round 4 (B1) — ServiceDescribe v2: 17 required top-level fields.
+    // Implemented / claimed / verified profiles are partitioned per spec
+    // service-surface.md §3.0; `verified_profiles` MUST be empty when
+    // `development_mode=true`. The full T6.1 claim-level partition layer
+    // in routing::system::describe::apply_claim_level_partition still
+    // overrides these values on the JSON wire response — we keep typed
+    // defaults here so out-of-tree typed consumers see the correct shape
+    // and pass `ServerDescription::validate_v2`.
+    let claimed_profiles = vec!["cx.profile.mimi_interop.v1".to_owned()];
+    let verified_profiles: Vec<String> = Vec::new();
+    let implemented_features_seed: Vec<String> = Vec::new();
+    let experimental_features = vec![
+        "federation.outbound_push.signed_intent".to_owned(),
+        "admin.bottom.manual_repair".to_owned(),
+        "index.query.local_projection".to_owned(),
+    ];
+    let compat_surfaces = vec!["mimi_provider_facade".to_owned()];
+    let plaintext_visibility = serde_json::json!({
+        "default": "encrypted",
+        "services": [],
+    });
+
     ServerDescription {
         service_did: service_did.parse().expect("valid service DID"),
+        trust_domain: trust_domain
+            .parse()
+            .expect("trust_domain must be cx:trust_domain:<scope>"),
         service_type: "principal_server".to_owned(),
-        protocol_version: "1.0".to_owned(),
+        protocol_version: contrix_sdk::PROTOCOL_VERSION.to_owned(),
         supported_profiles: vec!["cx.profile.mimi_interop.v1".to_owned()],
+        plaintext_visibility,
+        implemented_features: implemented_features_seed,
+        claimed_profiles,
+        verified_profiles,
+        experimental_features,
+        compat_surfaces,
+        development_mode,
+        rate_limit: serde_json::json!({"kind": "windowed", "per_minute": 600}),
         supported_features: vec![
             "account.register".to_owned(),
             "account.me".to_owned(),

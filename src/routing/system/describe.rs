@@ -101,7 +101,18 @@ async fn server_describe(depot: &mut Depot) -> JsonResult<Value> {
         state.config.development_mode,
         state.config.oauth_introspection_url.is_some(),
         state.config.auth_server_url.as_deref(),
+        &state.config.trust_domain,
     );
+    // Round 4 (B1) — validate the v2 invariants. development_mode=true MUST
+    // forbid non-empty verified_profiles; protocol_version MUST equal the
+    // SDK constant. A failure here means the producer drifted from the
+    // round-4 ServiceDescribe v2 schema.
+    if let Err(err) = description.validate_v2() {
+        tracing::error!(
+            error = %err,
+            "ServiceDescribe v2 validation failed; this is a build-time invariant"
+        );
+    }
     let mut value = serde_json::to_value(description).expect("server description serializes");
     value["unsupported_profiles"] = json!([
         {
