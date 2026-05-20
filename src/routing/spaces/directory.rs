@@ -2,8 +2,8 @@
 //!
 //! Surfaces:
 //! - `GET  /api/v1/directory/describe`            — capability + profile probe
-//! - `POST /api/v1/directory/search-spaces`       — fuzzy text + visibility filter
-//! - `POST /api/v1/directory/resolve-space`       — by id / alias / invite_token / signed_link
+//! - `POST /api/v1/directory/search-realms`       — fuzzy text + visibility filter
+//! - `POST /api/v1/directory/resolve-realm`       — by id / alias / invite_token / signed_link
 //! - `POST /api/v1/directory/search-organizations`
 //! - `POST /api/v1/directory/resolve-organization`
 //! - `POST /api/v1/directory/search-actors`
@@ -31,15 +31,15 @@ use crate::state::{AppState, SessionRecord};
 use crate::wire::{
     DirectoryDescribeResBody, DirectoryValueSearchResponse, ResolveHandleRequest,
     ResolveHandleResponse, ResolveOrganizationRequest, ResolveOrganizationResponse,
-    ResolveSpaceRequest, ResolveSpaceResponse, SearchActorsRequest, SearchOrganizationsRequest,
-    SearchSpacesRequest, SearchSpacesResponse, SearchUsersRequest,
+    ResolveRealmRequest, ResolveRealmResponse, SearchActorsRequest, SearchOrganizationsRequest,
+    SearchRealmsRequest, SearchRealmsResponse, SearchUsersRequest,
 };
 
 pub(super) fn router() -> Router {
     Router::new()
         .push(Router::with_path("directory/describe").get(directory_describe))
-        .push(Router::with_path("directory/search-spaces").post(search_spaces))
-        .push(Router::with_path("directory/resolve-space").post(resolve_space))
+        .push(Router::with_path("directory/search-realms").post(search_realms))
+        .push(Router::with_path("directory/resolve-realm").post(resolve_realm))
         .push(Router::with_path("directory/search-organizations").post(search_organizations))
         .push(Router::with_path("directory/resolve-organization").post(resolve_organization))
         .push(Router::with_path("directory/search-actors").post(search_actors))
@@ -63,15 +63,15 @@ async fn directory_describe(depot: &mut Depot, res: &mut Response) {
 }
 
 #[endpoint(
-    operation_id = "cx.directory.search_spaces",
+    operation_id = "cx.directory.search_realms",
     tags("directory"),
-    summary = "Fuzzy-text + visibility-filtered space search"
+    summary = "Fuzzy-text + visibility-filtered realm search"
 )]
-async fn search_spaces(
-    body: JsonBody<SearchSpacesRequest>,
+async fn search_realms(
+    body: JsonBody<SearchRealmsRequest>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<SearchSpacesResponse> {
+) -> JsonResult<SearchRealmsResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
     let query = contrix_sdk::SpaceSearchQuery {
@@ -88,22 +88,22 @@ async fn search_spaces(
         .filter(|space| space_search_visible_to(state, space, session.as_ref()))
         .cloned()
         .collect();
-    json_ok(SearchSpacesResponse {
+    json_ok(SearchRealmsResponse {
         results,
         next_cursor: None,
     })
 }
 
 #[endpoint(
-    operation_id = "cx.directory.resolve_space",
+    operation_id = "cx.directory.resolve_realm",
     tags("directory"),
-    summary = "Resolve a space by id / alias / invite_token / signed_link"
+    summary = "Resolve a realm by id / alias / invite_token / signed_link"
 )]
-async fn resolve_space(
-    body: JsonBody<ResolveSpaceRequest>,
+async fn resolve_realm(
+    body: JsonBody<ResolveRealmRequest>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<ResolveSpaceResponse> {
+) -> JsonResult<ResolveRealmResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
     if body.space_id.is_none()
@@ -142,7 +142,7 @@ async fn resolve_space(
                 .is_some_and(|alias| alias.eq_ignore_ascii_case(&entry.name)))
     });
     match space {
-        Some(space) => json_ok(ResolveSpaceResponse {
+        Some(space) => json_ok(ResolveRealmResponse {
             space_preview: space.clone(),
             stripped_state: vec![json!({
                 // R1.2 (Realm/Space reversal): security-namespace

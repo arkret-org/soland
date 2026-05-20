@@ -416,7 +416,7 @@ pub struct SetTypingResponse {
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct SearchSpacesRequest {
+pub struct SearchRealmsRequest {
     pub query: Option<String>,
     pub limit: Option<usize>,
 }
@@ -430,7 +430,7 @@ pub struct DirectoryDescribeResBody {
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct ResolveSpaceRequest {
+pub struct ResolveRealmRequest {
     pub space_id: Option<String>,
     pub alias: Option<String>,
     pub invite_token: Option<String>,
@@ -440,7 +440,9 @@ pub struct ResolveSpaceRequest {
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct ResolveSpaceResponse {
+pub struct ResolveRealmResponse {
+    // `space_preview` retained through the Realm/Space inversion migration
+    // window per contrix-spec renames.json (T21 entry).
     pub space_preview: SpaceSearchEntry,
     pub stripped_state: Vec<Value>,
     pub join_rule: String,
@@ -448,7 +450,7 @@ pub struct ResolveSpaceResponse {
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct SearchSpacesResponse {
+pub struct SearchRealmsResponse {
     pub results: Vec<SpaceSearchEntry>,
     pub next_cursor: Option<String>,
 }
@@ -1373,8 +1375,8 @@ const SUPPORTED_OPERATION_SURFACES: &[&str] = &[
 
 const SUPPORTED_STANDALONE_OPERATION_IDS: &[&str] = &[
     "cx.directory.describe",
-    "cx.directory.search_spaces",
-    "cx.directory.resolve_space",
+    "cx.directory.search_realms",
+    "cx.directory.resolve_realm",
     "cx.blob.upload",
     "cx.blob.head",
     "cx.blob.get",
@@ -1521,8 +1523,8 @@ pub fn describe(
             "sync.incremental_since".to_owned(),
             "sync.typing".to_owned(),
             "sync.backfill".to_owned(),
-            "directory.search_spaces".to_owned(),
-            "directory.resolve_space".to_owned(),
+            "directory.search_realms".to_owned(),
+            "directory.resolve_realm".to_owned(),
             "index.query".to_owned(),
             "authz.check".to_owned(),
             "profile.presence".to_owned(),

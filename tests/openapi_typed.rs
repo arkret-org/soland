@@ -421,8 +421,8 @@ async fn typed_describe_handlers_publish_response_schemas() {
         );
     }
     for operation_id in [
-        "cx.directory.search_spaces",
-        "cx.directory.resolve_space",
+        "cx.directory.search_realms",
+        "cx.directory.resolve_realm",
         "cx.directory.search_organizations",
         "cx.directory.resolve_organization",
         "cx.directory.search_actors",

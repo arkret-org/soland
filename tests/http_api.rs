@@ -1052,8 +1052,8 @@ async fn contrix_openapi_spec_contains_facet_projection_contracts() {
         "cx.sync.get_snapshot_head",
         "cx.extension.soland.sync.get_snapshot_chunk",
         "cx.directory.describe",
-        "cx.directory.search_spaces",
-        "cx.directory.resolve_space",
+        "cx.directory.search_realms",
+        "cx.directory.resolve_realm",
         "cx.extension.soland.index.describe",
         "cx.extension.soland.index.debug_reducer",
         "cx.extension.soland.admin.actors",
@@ -1885,7 +1885,7 @@ async fn service_did_is_config_driven_across_public_metadata() {
         .unwrap();
     assert_eq!(directory["service_did"], service_did);
 
-    let resolved: Value = TestClient::post("http://server/api/v1/directory/resolve-space")
+    let resolved: Value = TestClient::post("http://server/api/v1/directory/resolve-realm")
         .json(&serde_json::json!({"space_id": "cx:space:0196419b-0000-7000-8000-000000000000"}))
         .send(&service)
         .await
@@ -2130,7 +2130,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
     let space_id = created_space["space_id"].as_str().unwrap().to_owned();
     assert_eq!(created_space["owner"], "did:web:alice.example");
 
-    let hidden_space: Value = TestClient::post("http://server/api/v1/directory/search-spaces")
+    let hidden_space: Value = TestClient::post("http://server/api/v1/directory/search-realms")
         .json(&serde_json::json!({"query": "Workflow Space"}))
         .send(&app_from_state(state.clone()))
         .await
@@ -2165,12 +2165,12 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         .as_str()
         .unwrap()
         .to_owned();
-    let invalid_invite_resolve = TestClient::post("http://server/api/v1/directory/resolve-space")
+    let invalid_invite_resolve = TestClient::post("http://server/api/v1/directory/resolve-realm")
         .json(&serde_json::json!({"invite_token": "cx:invite-token:invalid"}))
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(invalid_invite_resolve.status_code.unwrap().as_u16(), 404);
-    let invite_resolve: Value = TestClient::post("http://server/api/v1/directory/resolve-space")
+    let invite_resolve: Value = TestClient::post("http://server/api/v1/directory/resolve-realm")
         .json(&serde_json::json!({"invite_token": invite_token}))
         .send(&app_from_state(state.clone()))
         .await
@@ -2191,7 +2191,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         .await
         .unwrap();
     let listed_space_id = listed_space["space_id"].as_str().unwrap().to_owned();
-    let listed_search: Value = TestClient::post("http://server/api/v1/directory/search-spaces")
+    let listed_search: Value = TestClient::post("http://server/api/v1/directory/search-realms")
         .json(&serde_json::json!({"query": "Listed Directory Space"}))
         .send(&app_from_state(state.clone()))
         .await
@@ -2228,7 +2228,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         .await
         .unwrap();
     let unlisted_space_id = unlisted_space["space_id"].as_str().unwrap().to_owned();
-    let unlisted_search: Value = TestClient::post("http://server/api/v1/directory/search-spaces")
+    let unlisted_search: Value = TestClient::post("http://server/api/v1/directory/search-realms")
         .json(&serde_json::json!({"query": "Unlisted Directory Space"}))
         .send(&app_from_state(state.clone()))
         .await
@@ -2236,7 +2236,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         .await
         .unwrap();
     assert!(unlisted_search["results"].as_array().unwrap().is_empty());
-    let unlisted_resolve: Value = TestClient::post("http://server/api/v1/directory/resolve-space")
+    let unlisted_resolve: Value = TestClient::post("http://server/api/v1/directory/resolve-realm")
         .json(&serde_json::json!({"space_id": unlisted_space_id.clone()}))
         .send(&app_from_state(state.clone()))
         .await
@@ -2248,13 +2248,13 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         unlisted_space_id
     );
 
-    let anonymous_resolve = TestClient::post("http://server/api/v1/directory/resolve-space")
+    let anonymous_resolve = TestClient::post("http://server/api/v1/directory/resolve-realm")
         .json(&serde_json::json!({"space_id": space_id}))
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(anonymous_resolve.status_code.unwrap().as_u16(), 404);
 
-    let owner_resolve: Value = TestClient::post("http://server/api/v1/directory/resolve-space")
+    let owner_resolve: Value = TestClient::post("http://server/api/v1/directory/resolve-realm")
         .add_header("authorization", format!("Bearer {alice}"), true)
         .json(&serde_json::json!({"space_id": space_id}))
         .send(&app_from_state(state.clone()))
@@ -2833,7 +2833,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
     assert!(membership_transitions.contains("join"));
     assert!(membership_transitions.contains("leave"));
 
-    let directory: Value = TestClient::post("http://server/api/v1/directory/search-spaces")
+    let directory: Value = TestClient::post("http://server/api/v1/directory/search-realms")
         .json(&serde_json::json!({"query": "Workflow Space"}))
         .send(&app_from_state(state.clone()))
         .await
@@ -3462,7 +3462,7 @@ async fn sync_directory_and_index_share_demo_space() {
             .contains_key("cx:space:0196419b-0000-7000-8000-000000000000")
     );
 
-    let directory: Value = TestClient::post("http://server/api/v1/directory/search-spaces")
+    let directory: Value = TestClient::post("http://server/api/v1/directory/search-realms")
         .json(&serde_json::json!({"query": "demo", "limit": 10}))
         .send(&app())
         .await
@@ -3631,7 +3631,7 @@ async fn broader_protocol_surface_returns_contract_shapes() {
         .unwrap();
     assert_eq!(directory_describe["service_did"], "did:web:soland.local");
 
-    let resolved: Value = TestClient::post("http://server/api/v1/directory/resolve-space")
+    let resolved: Value = TestClient::post("http://server/api/v1/directory/resolve-realm")
         .json(&serde_json::json!({"space_id": "cx:space:0196419b-0000-7000-8000-000000000000"}))
         .send(&app())
         .await
