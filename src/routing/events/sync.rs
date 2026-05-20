@@ -49,7 +49,7 @@ use super::{
 use crate::reducer::ProjectionState;
 use crate::state::{AppState, PresenceRecord, SessionRecord, TypingRecord};
 use crate::wire::{
-    BackfillResBody, ClientSyncRequest, ClientSyncResponse, SetTypingRequest, SetTypingResponse,
+    BackfillResBody, ClientSyncRequest, SetTypingRequest, SetTypingResponse,
     SnapshotHeadResponse, SyncDescribeResBody,
 };
 
@@ -89,7 +89,7 @@ async fn client_sync(
     body: salvo::oapi::extract::JsonBody<ClientSyncRequest>,
     depot: &mut Depot,
     req: &mut Request,
-) -> crate::result::JsonResult<ClientSyncResponse> {
+) -> crate::result::JsonResult<contrix_sdk::model::SyncResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
     let session = authenticated_session(state, req).ok();
@@ -296,8 +296,8 @@ async fn client_sync(
         })
         .unwrap_or_default();
 
-    crate::result::json_ok(ClientSyncResponse {
-        next_batch: sync_token_for_client_sync(
+    crate::result::json_ok(contrix_sdk::model::SyncResBody {
+        cursor: sync_token_for_client_sync(
             state,
             session.as_ref(),
             body.profile.as_deref(),
@@ -310,8 +310,11 @@ async fn client_sync(
         spaces: sync_spaces,
         left_spaces,
         to_device,
-        account_data,
         device_lists: json!({"changed": [], "left": []}),
+        account_data,
+        presence: Vec::new(),
+        notifications: serde_json::Value::Null,
+        partial: false,
     })
 }
 

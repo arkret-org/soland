@@ -375,28 +375,6 @@ pub struct ClientSyncRequest {
     pub set_presence: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct ClientSyncResponse {
-    pub next_batch: String,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub spaces: BTreeMap<String, Value>,
-    /// Spaces the viewer no longer has access to since the supplied
-    /// `since` cursor — left rooms, kicks, bans, server-side
-    /// deletions. The client uses this list to remove the Space from
-    /// every per-space cache so incremental syncs reconcile with the
-    /// server view without forcing a full `since=None` re-sync. Empty
-    /// for full syncs (the client treats omission of an id from
-    /// `spaces` as authoritative there).
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub left_spaces: Vec<String>,
-    #[serde(default)]
-    pub to_device: Vec<Value>,
-    #[serde(default)]
-    pub account_data: Vec<Value>,
-    #[serde(default)]
-    pub device_lists: Value,
-}
-
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct SetTypingRequest {
     pub space_id: String,
