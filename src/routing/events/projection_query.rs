@@ -1,26 +1,28 @@
-//! Read-side HTTP handlers for the server-side Place / Flow / Morph
+//! Read-side HTTP handlers for the server-side Space-container / Flow / Morph
 //! lifecycle projection state maintained by `reducer::ProjectionState`.
 //!
 //! These endpoints let yougen (and other clients) re-hydrate the
 //! optimistic Archive / Restore state after a page refresh, so a
-//! `cx.place.archive` accepted by the server doesn't appear "unarchived"
+//! `cx.space.archive` accepted by the server doesn't appear "unarchived"
 //! again when the kanban view re-mounts.
 //!
-//! - `GET /api/v1/projection/places?space_id=...` — list Places in a
-//!   Space, with `state` ∈ {active, archived, tombstoned} (spec
-//!   `common-fields.md §5.1`).
+//! - `GET /api/v1/projection/space-containers?realm_id=...` — extension
+//!   endpoint listing board/list Space containers in a Realm scope, with
+//!   `state` ∈ {active, archived, tombstoned} (spec `common-fields.md §5.1`).
+//!   `GET /api/v1/projection/places?space_id=...` remains a legacy alias
+//!   during the Realm/Space rename window.
 //! - `GET /api/v1/projection/flows?space_id=...` — same for Flows
 //!   (state ∈ {active, archived, deleted, redacted}).
 //! - `GET /api/v1/projection/morphs?space_id=...` — same for Morphs
 //!   (same enum as Flows).
 //!
 //! All three endpoints are authenticated. Resource visibility check
-//! piggy-backs on `space_id_accessible` so a non-member can't probe
-//! Place / Flow / Morph lifecycle state via this surface.
+//! piggy-backs on `realm_id_accessible` so a non-member can't probe
+//! Space-container / Flow / Morph lifecycle state via this surface.
 //!
 //! Handlers use typed `JsonResult<T>` signatures so the generated
 //! OpenAPI document carries proper schema components
-//! (PlaceProjectionListResponse / FlowProjectionListResponse /
+//! (SpaceContainerProjectionListResponse / FlowProjectionListResponse /
 //! MorphProjectionListResponse + row structs).
 //!
 //! Terminal-state visibility filter: each endpoint accepts an optional
@@ -33,21 +35,26 @@
 //! "deleted" cards). Explicit `include_terminal=true` returns the full
 //! set for audit / debugging / undelete UIs.
 
+use contrix_sdk::RealmId;
 use salvo::http::StatusCode;
 use salvo::oapi::extract::QueryParam;
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use super::{space_id_accessible, validate_space_id};
+use super::{realm_id_accessible, validate_space_id};
 use crate::error::{AppError, ErrorCode};
-use crate::reducer::{ObjectLifecycleState, PlaceLifecycleState};
+use crate::ids;
+use crate::reducer::{ObjectLifecycleState, SpaceContainerLifecycleState};
 use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
 
 pub(super) fn router() -> Router {
     Router::new()
-        .push(Router::with_path("projection/places").get(list_place_projections))
+        .push(
+            Router::with_path("projection/space-containers").get(list_space_container_projections),
+        )
+        .push(Router::with_path("projection/places").get(list_space_container_projections))
         .push(Router::with_path("projection/flows").get(list_flow_projections))
         .push(Router::with_path("projection/morphs").get(list_morph_projections))
 }
@@ -58,21 +65,60 @@ pub(super) fn router() -> Router {
 /// `ObjectLifecycleState::is_terminal` but inlined here so the
 /// `filter` chain in the handlers reads as
 /// `!is_object_terminal(f.state)` for symmetry with the Place check
-/// (`state != PlaceLifecycleState::Tombstoned`).
+/// (`state != SpaceContainerLifecycleState::Tombstoned`).
 fn is_object_terminal(state: ObjectLifecycleState) -> bool {
     state.is_terminal()
 }
 
+fn legacy_space_id_to_realm_id(space_id: &str) -> Option<String> {
+    let uuid = ids::parse_typed_uuid(space_id, "space")?;
+    Some(ids::format_typed_uuid("realm", &uuid))
+}
+
+fn realm_id_to_internal_space_id(realm_id: &str) -> Option<String> {
+    let uuid = ids::parse_typed_uuid(realm_id, "realm")?;
+    Some(ids::format_typed_uuid("space", &uuid))
+}
+
+fn projection_scope_from_query_params(
+    realm_id: Option<String>,
+    space_id: Option<String>,
+) -> Result<(String, String), AppError> {
+    if let Some(realm_id) = realm_id {
+        if RealmId::new(realm_id.clone()).is_err() {
+            return Err(AppError::invalid_param("invalid realm_id format"));
+        }
+        let Some(internal_space_id) = realm_id_to_internal_space_id(&realm_id) else {
+            return Err(AppError::invalid_param("invalid realm_id format"));
+        };
+        return Ok((realm_id, internal_space_id));
+    }
+
+    let Some(space_id) = space_id else {
+        return Err(AppError::missing_param(
+            "projection query requires realm_id (or legacy space_id)",
+        ));
+    };
+    if validate_space_id(&space_id).is_err() {
+        return Err(AppError::invalid_param("invalid space_id format"));
+    }
+    let realm_id = legacy_space_id_to_realm_id(&space_id)
+        .ok_or_else(|| AppError::invalid_param("invalid space_id format"))?;
+    Ok((realm_id, space_id))
+}
+
 // ── Typed response shapes ──────────────────────────────────────────────
 
-/// One row of `PlaceProjectionListResponse.places`. Mirrors
-/// `reducer::PlaceProjection` but with RFC3339-formatted timestamps and
+/// One row of `SpaceContainerProjectionListResponse.space_containers`. Mirrors
+/// `reducer::SpaceContainerProjection` but with RFC3339-formatted timestamps and
 /// the state enum flattened to its `&str` form per spec
 /// `common-fields.md §5.1`.
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct PlaceProjectionRow {
-    pub place_id: String,
-    pub space_id: String,
+pub struct SpaceContainerProjectionRow {
+    #[serde(rename = "container_space_id", alias = "place_id")]
+    pub container_space_id: String,
+    #[serde(rename = "realm_id", alias = "space_id")]
+    pub realm_id: String,
     pub kind: String,
     pub title: String,
     pub parent_ref: Option<String>,
@@ -85,9 +131,11 @@ pub struct PlaceProjectionRow {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct PlaceProjectionListResponse {
-    pub space_id: String,
-    pub places: Vec<PlaceProjectionRow>,
+pub struct SpaceContainerProjectionListResponse {
+    #[serde(rename = "realm_id", alias = "space_id")]
+    pub realm_id: String,
+    #[serde(rename = "space_containers", alias = "places")]
+    pub space_containers: Vec<SpaceContainerProjectionRow>,
     pub total: usize,
 }
 
@@ -135,25 +183,24 @@ pub struct MorphProjectionListResponse {
 // ── Handlers ───────────────────────────────────────────────────────────
 
 #[endpoint(
-    operation_id = "cx.projection.places",
+    operation_id = "cx.extension.soland.projection.space_containers",
     tags("projection"),
-    summary = "List Place lifecycle projection state for a Space"
+    summary = "List Space-container lifecycle projection state for a Realm"
 )]
-async fn list_place_projections(
+async fn list_space_container_projections(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-    space_id: QueryParam<String, true>,
+    realm_id: QueryParam<String, false>,
+    space_id: QueryParam<String, false>,
     include_terminal: QueryParam<bool, false>,
-) -> JsonResult<PlaceProjectionListResponse> {
+) -> JsonResult<SpaceContainerProjectionListResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req)?;
-    let space_id = space_id.into_inner();
+    let (realm_id, internal_space_id) =
+        projection_scope_from_query_params(realm_id.into_inner(), space_id.into_inner())?;
     let include_terminal = include_terminal.into_inner().unwrap_or(false);
-    if validate_space_id(&space_id).is_err() {
-        return Err(AppError::invalid_param("invalid space_id format"));
-    }
-    if !space_id_accessible(state, &space_id, Some(&session)) {
+    if !realm_id_accessible(state, &internal_space_id, Some(&session)) {
         return Err(AppError::new(
             ErrorCode::CapabilityDenied,
             "Space not visible to this actor",
@@ -167,14 +214,15 @@ async fn list_place_projections(
         )
         .with_status(StatusCode::INTERNAL_SERVER_ERROR)
     })?;
-    let places: Vec<PlaceProjectionRow> = proj
-        .places
+    let space_containers: Vec<SpaceContainerProjectionRow> = proj
+        .space_containers
         .values()
-        .filter(|p| p.space_id == space_id)
-        .filter(|p| include_terminal || p.state != PlaceLifecycleState::Tombstoned)
-        .map(|p| PlaceProjectionRow {
-            place_id: p.place_id.clone(),
-            space_id: p.space_id.clone(),
+        .filter(|p| p.space_id == internal_space_id)
+        .filter(|p| include_terminal || p.state != SpaceContainerLifecycleState::Tombstoned)
+        .map(|p| SpaceContainerProjectionRow {
+            container_space_id: p.container_space_id.clone(),
+            realm_id: legacy_space_id_to_realm_id(&p.space_id)
+                .unwrap_or_else(|| p.space_id.clone()),
             kind: p.kind.clone(),
             title: p.title.clone(),
             parent_ref: p.parent_ref.clone(),
@@ -186,16 +234,16 @@ async fn list_place_projections(
         })
         .collect();
     drop(proj);
-    let total = places.len();
-    json_ok(PlaceProjectionListResponse {
-        space_id,
-        places,
+    let total = space_containers.len();
+    json_ok(SpaceContainerProjectionListResponse {
+        realm_id,
+        space_containers,
         total,
     })
 }
 
 #[endpoint(
-    operation_id = "cx.projection.flows",
+    operation_id = "cx.extension.soland.projection.flows",
     tags("projection"),
     summary = "List Flow lifecycle projection state for a Space"
 )]
@@ -213,7 +261,7 @@ async fn list_flow_projections(
     if validate_space_id(&space_id).is_err() {
         return Err(AppError::invalid_param("invalid space_id format"));
     }
-    if !space_id_accessible(state, &space_id, Some(&session)) {
+    if !realm_id_accessible(state, &space_id, Some(&session)) {
         return Err(AppError::new(
             ErrorCode::CapabilityDenied,
             "Space not visible to this actor",
@@ -253,7 +301,7 @@ async fn list_flow_projections(
 }
 
 #[endpoint(
-    operation_id = "cx.projection.morphs",
+    operation_id = "cx.extension.soland.projection.morphs",
     tags("projection"),
     summary = "List Morph lifecycle projection state for a Space"
 )]
@@ -271,7 +319,7 @@ async fn list_morph_projections(
     if validate_space_id(&space_id).is_err() {
         return Err(AppError::invalid_param("invalid space_id format"));
     }
-    if !space_id_accessible(state, &space_id, Some(&session)) {
+    if !realm_id_accessible(state, &space_id, Some(&session)) {
         return Err(AppError::new(
             ErrorCode::CapabilityDenied,
             "Space not visible to this actor",

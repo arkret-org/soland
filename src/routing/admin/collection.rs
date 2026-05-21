@@ -27,7 +27,7 @@ use crate::error::AppError;
 use crate::kinds;
 use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
-use crate::state::AppState;
+use crate::state::{AppState, RealmDirectoryEntry};
 
 #[endpoint(
     operation_id = "cx.extension.soland.admin.collection",
@@ -152,17 +152,17 @@ fn admin_actor_items(state: &AppState) -> Vec<Value> {
 fn admin_space_items(state: &AppState) -> Vec<Value> {
     let meta: BTreeMap<String, _> = state
         .persistence
-        .space_meta()
+        .realm_meta()
         .list()
         .unwrap_or_default()
         .into_iter()
         .collect();
     // Snapshot the space registry under lock, then drop it: downstream
     // helpers (`flow_projection_for_space` → `space_allows_plaintext_service`)
-    // reach back into `state.spaces`, and `Mutex` is non-reentrant — holding
+    // reach back into `state.realms`, and `Mutex` is non-reentrant — holding
     // the guard across the map closure deadlocks on the second resource pass.
-    let space_snapshot: Vec<contrix_sdk::SpaceSearchEntry> = {
-        let spaces = state.spaces.lock().expect("spaces lock");
+    let space_snapshot: Vec<RealmDirectoryEntry> = {
+        let spaces = state.realms.lock().expect("spaces lock");
         spaces
             .search(Default::default())
             .into_iter()
@@ -172,7 +172,7 @@ fn admin_space_items(state: &AppState) -> Vec<Value> {
     space_snapshot
         .into_iter()
         .map(|space| {
-            let space_id = space.space_id.as_str().to_owned();
+            let space_id = space.realm_id.as_str().to_owned();
             let space_meta = meta.get(&space_id);
             let flow = flow_projection_for_space(
                 state,
@@ -241,8 +241,8 @@ fn admin_device_items(state: &AppState) -> Vec<Value> {
 fn admin_capability_items(state: &AppState) -> Vec<Value> {
     // Same non-reentrant-lock concern as `admin_space_items` — snapshot the
     // space list under lock, drop the guard, then call into authz.
-    let space_snapshot: Vec<contrix_sdk::SpaceSearchEntry> = {
-        let spaces = state.spaces.lock().expect("spaces lock");
+    let space_snapshot: Vec<RealmDirectoryEntry> = {
+        let spaces = state.realms.lock().expect("spaces lock");
         spaces
             .search(Default::default())
             .into_iter()
@@ -251,7 +251,7 @@ fn admin_capability_items(state: &AppState) -> Vec<Value> {
     };
     space_snapshot
         .into_iter()
-        .flat_map(|space| state.authz.grants_in_space(space.space_id.as_str()))
+        .flat_map(|space| state.authz.grants_in_space(space.realm_id.as_str()))
         .map(|grant| json!(grant))
         .collect()
 }

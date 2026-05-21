@@ -4,12 +4,13 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, Utc};
 use contrix_sdk::{
-    ClaimedProfileEntry, CompatSurfaceEntry, CompatSurfaceKind, ServerDescription, SpaceSearchEntry,
+    ClaimedProfileEntry, CompatSurfaceEntry, CompatSurfaceKind, ServerDescription,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::artifacts;
+use crate::state::RealmDirectoryEntry;
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct HealthResponse {
@@ -411,6 +412,7 @@ pub struct DirectoryDescribeResBody {
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct ResolveRealmRequest {
+    #[serde(rename = "realm_id", alias = "space_id")]
     pub space_id: Option<String>,
     pub alias: Option<String>,
     pub invite_token: Option<String>,
@@ -421,9 +423,7 @@ pub struct ResolveRealmRequest {
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct ResolveRealmResponse {
-    // `space_preview` retained through the Realm/Space inversion migration
-    // window per contrix-spec renames.json (T21 entry).
-    pub space_preview: SpaceSearchEntry,
+    pub space_preview: RealmDirectoryEntry,
     pub stripped_state: Vec<Value>,
     pub join_rule: String,
     pub via_services: Vec<String>,
@@ -431,7 +431,7 @@ pub struct ResolveRealmResponse {
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct SearchRealmsResponse {
-    pub results: Vec<SpaceSearchEntry>,
+    pub results: Vec<RealmDirectoryEntry>,
     pub next_cursor: Option<String>,
 }
 
@@ -671,6 +671,10 @@ pub struct EventsPageResponse {
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct EventsFrontierResBody {
     pub actor_frontier: BTreeMap<String, u64>,
+    pub realm_frontier: BTreeMap<String, Value>,
+    /// Legacy internal frontier keyed by the pre-R1.2 `cx:space:*` realm
+    /// mirror. Kept while old clients and persistence rows still use the
+    /// internal scope key.
     pub space_frontier: BTreeMap<String, Value>,
     pub frontier: Value,
 }
@@ -1290,6 +1294,7 @@ pub struct DeviceMessagesSendResBody {
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct DeviceMessagesReceiveResBody {
     pub events: Vec<Value>,
+    #[serde(rename = "next_cursor", alias = "next_batch")]
     pub next_batch: Option<String>,
     pub limited: bool,
 }

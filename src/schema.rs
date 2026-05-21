@@ -326,9 +326,9 @@ diesel::table! {
     }
 }
 
-// Server-side Place projection state for cx.place.* lifecycle events.
-// Spec: contrix-spec/v1/zh/models/space-and-place.md §4.4 +
-// common-fields.md §5.1 (canonical state-transition table).
+// Server-side Space-container projection state for cx.space.* lifecycle
+// events. The table/primary-key names remain `projection_places(place_id)` for
+// on-disk compatibility with existing deployments.
 diesel::table! {
     projection_places (place_id) {
         place_id -> Text,

@@ -16,18 +16,17 @@ pub const CX_VIEW_UPDATE: &str = "cx.view.update";
 pub const CX_VIEW_RECONCILE: &str = "cx.view.reconcile";
 // Realm/Space reversal (R1.2): the v1 protocol renames the old security
 // boundary `Space` to `Realm`, and the old container `Place` to `Space`.
-// These constants now point at the new wire strings. Internal Rust
-// identifiers (e.g. `CX_SPACE_CREATE`, struct `PlaceProjection`) retain
-// their pre-rename names — they're internal-only and a follow-up TODO
-// will rename them in a non-mechanical refactor.
+// These constants now point at the new wire strings. Container lifecycle
+// identifiers use `CX_SPACE_CONTAINER_*`; the realm lifecycle constants still
+// use `CX_SPACE_*` until the durable realm storage migration lands.
 //
 // New container `cx.space.*` (was `cx.place.*`). Container lifecycle.
-pub const CX_PLACE_CREATE: &str = "cx.space.create";
-pub const CX_PLACE_UPDATE: &str = "cx.space.update";
-pub const CX_PLACE_PARENT: &str = "cx.space.parent";
-pub const CX_PLACE_ARCHIVE: &str = "cx.space.archive";
-pub const CX_PLACE_RESTORE: &str = "cx.space.restore";
-pub const CX_PLACE_TOMBSTONE: &str = "cx.space.tombstone";
+pub const CX_SPACE_CONTAINER_CREATE: &str = "cx.space.create";
+pub const CX_SPACE_CONTAINER_UPDATE: &str = "cx.space.update";
+pub const CX_SPACE_CONTAINER_PARENT: &str = "cx.space.parent";
+pub const CX_SPACE_CONTAINER_ARCHIVE: &str = "cx.space.archive";
+pub const CX_SPACE_CONTAINER_RESTORE: &str = "cx.space.restore";
+pub const CX_SPACE_CONTAINER_TOMBSTONE: &str = "cx.space.tombstone";
 // Flow lifecycle (round 13 — Flow projection state machine). spec
 // `common-fields.md §5.1` Flow row: active / archived / redacted / deleted.
 // Flow has no dedicated `cx.flow.tombstone` event (terminal state reached
@@ -39,7 +38,7 @@ pub const CX_FLOW_ARCHIVE: &str = "cx.flow.archive";
 pub const CX_FLOW_RESTORE: &str = "cx.flow.restore";
 // Round 14 — Flow position events. Not state-machine transitions; they
 // write to the `cx.component.flow.position.v1` cell family keyed by
-// (board_place_id, flow_id). The Event-Envelope path only validates
+// (board_space_id, flow_id). The Event-Envelope path only validates
 // payload shape and bumps the Flow's updated_at/by; the cell write
 // happens on the Move/Anchor pipeline (out of scope for the reducer's
 // structured cache).
@@ -265,12 +264,12 @@ fn canonical_registered_kind(object_type: &str) -> Option<&str> {
         CX_VIEW_CREATE => Some(CX_VIEW_CREATE),
         CX_VIEW_UPDATE => Some(CX_VIEW_UPDATE),
         CX_VIEW_RECONCILE => Some(CX_VIEW_RECONCILE),
-        CX_PLACE_CREATE => Some(CX_PLACE_CREATE),
-        CX_PLACE_UPDATE => Some(CX_PLACE_UPDATE),
-        CX_PLACE_PARENT => Some(CX_PLACE_PARENT),
-        CX_PLACE_ARCHIVE => Some(CX_PLACE_ARCHIVE),
-        CX_PLACE_RESTORE => Some(CX_PLACE_RESTORE),
-        CX_PLACE_TOMBSTONE => Some(CX_PLACE_TOMBSTONE),
+        CX_SPACE_CONTAINER_CREATE => Some(CX_SPACE_CONTAINER_CREATE),
+        CX_SPACE_CONTAINER_UPDATE => Some(CX_SPACE_CONTAINER_UPDATE),
+        CX_SPACE_CONTAINER_PARENT => Some(CX_SPACE_CONTAINER_PARENT),
+        CX_SPACE_CONTAINER_ARCHIVE => Some(CX_SPACE_CONTAINER_ARCHIVE),
+        CX_SPACE_CONTAINER_RESTORE => Some(CX_SPACE_CONTAINER_RESTORE),
+        CX_SPACE_CONTAINER_TOMBSTONE => Some(CX_SPACE_CONTAINER_TOMBSTONE),
         CX_FLOW_CREATE => Some(CX_FLOW_CREATE),
         CX_FLOW_UPDATE => Some(CX_FLOW_UPDATE),
         CX_FLOW_ARCHIVE => Some(CX_FLOW_ARCHIVE),
@@ -388,10 +387,10 @@ pub fn is_space_lifecycle_kind(kind: &str) -> bool {
     matches!(kind, CX_SPACE_CREATE | CX_SPACE_UPDATE | CX_SPACE_DESTROY)
 }
 
-pub fn is_place_lifecycle_kind(kind: &str) -> bool {
+pub fn is_space_container_lifecycle_kind(kind: &str) -> bool {
     matches!(
         kind,
-        CX_PLACE_ARCHIVE | CX_PLACE_RESTORE | CX_PLACE_TOMBSTONE
+        CX_SPACE_CONTAINER_ARCHIVE | CX_SPACE_CONTAINER_RESTORE | CX_SPACE_CONTAINER_TOMBSTONE
     )
 }
 

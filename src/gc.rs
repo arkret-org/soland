@@ -98,11 +98,11 @@ pub fn scan_gc_candidates(state: &AppState, space_id: &SpaceId) -> Vec<GcCandida
 /// `space_id` is provided.
 pub fn scan_all_spaces(state: &AppState) -> Vec<GcCandidate> {
     let space_ids: Vec<SpaceId> = {
-        let spaces = state.spaces.lock().expect("spaces lock");
+        let spaces = state.realms.lock().expect("spaces lock");
         spaces
             .search(Default::default())
             .into_iter()
-            .map(|entry| entry.space_id.clone())
+            .filter_map(|entry| SpaceId::new(entry.realm_id.to_string()).ok())
             .collect()
     };
     space_ids

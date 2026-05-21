@@ -163,13 +163,13 @@ async fn typed_describe_handlers_publish_response_schemas() {
         );
     }
 
-    // Round 15c — projection_query.rs (`GET /api/v1/projection/{places,flows,morphs}`)
+    // Round 15c — projection_query.rs (`GET /api/v1/projection/{space-containers,flows,morphs}`)
     // converted from `&mut Response` + `res.render(Json(json!{...}))` to typed
     // `JsonResult<T>` signatures. Each handler's response wrapper +
     // row struct must now appear in the generated YAML.
     for typed_now in [
-        "PlaceProjectionListResponse",
-        "PlaceProjectionRow",
+        "SpaceContainerProjectionListResponse",
+        "SpaceContainerProjectionRow",
         "FlowProjectionListResponse",
         "FlowProjectionRow",
         "MorphProjectionListResponse",
@@ -339,10 +339,8 @@ async fn typed_describe_handlers_publish_response_schemas() {
     }
 
     // Round 15n — identity/device_messages.rs typed batch (2 handlers).
-    // - send_device_messages → cx.device_messages.send
-    // - get_device_messages → cx.device_messages.receive
-    // Wire types already had ToSchema; new operation_ids match the
-    // existing `cx.device_messages.describe` family.
+    // Wire types already had ToSchema; operation_ids follow the v1
+    // registry's put/get naming.
     for typed_now in [
         "DeviceMessagesSendReqBody",
         "DeviceMessagesSendResBody",
@@ -353,7 +351,7 @@ async fn typed_describe_handlers_publish_response_schemas() {
             "{typed_now} missing — round 15n typed signature did not publish its schema"
         );
     }
-    for operation_id in ["cx.device_messages.send", "cx.device_messages.receive"] {
+    for operation_id in ["cx.device_messages.put", "cx.device_messages.get"] {
         assert!(
             body.contains(&format!("operationId: {operation_id}")),
             "missing operationId {operation_id} from round 15n typed conversion"
@@ -397,9 +395,9 @@ async fn typed_describe_handlers_publish_response_schemas() {
     }
     for operation_id in [
         "cx.identity.resolve",
-        "cx.identity.document",
-        "cx.identity.log",
-        "cx.identity.receipts",
+        "cx.identity.get_document",
+        "cx.identity.get_log",
+        "cx.identity.get_receipts",
     ] {
         assert!(
             body.contains(&format!("operationId: {operation_id}")),

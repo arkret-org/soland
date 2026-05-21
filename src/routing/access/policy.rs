@@ -34,6 +34,7 @@ use crate::wire::{
 
 pub(super) fn router() -> Router {
     Router::new()
+        .push(Router::with_path("policy/check").post(policy_check))
         .push(
             Router::with_path("policies")
                 .get(list_policy_documents)

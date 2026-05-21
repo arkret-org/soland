@@ -22,7 +22,7 @@ use crate::state::{
     DeviceInventoryRecord, DeviceMessageRecord, FederationOutboxRecord,
     FederationTransactionRecord, MessageRecord, MultisigPendingRecord,
     OutboundPushBridgeCacheRecord, PolicyDocumentRecord, PresenceRecord, ProjectionEventRecord,
-    PushRuleRecord, SessionRecord, SpaceInviteRecord, SpaceMetaRecord, TypingRecord,
+    PushRuleRecord, SessionRecord, SpaceInviteRecord, RealmMetaRecord, TypingRecord,
     WebrtcSessionRecord, WebrtcSignalRecord, WebvhDocumentRecord, WebvhLogRecord,
 };
 
@@ -89,29 +89,37 @@ pub trait ContactStore: Send + Sync {
     fn delete(&self, requester: &str, target: &str) -> PersistenceResult<()>;
 }
 
-/// Trait for space metadata storage operations.
-pub trait SpaceMetaStore: Send + Sync {
-    fn get(&self, space_id: &str) -> PersistenceResult<Option<SpaceMetaRecord>>;
-    fn put(&self, space_id: &str, record: &SpaceMetaRecord) -> PersistenceResult<()>;
-    fn list(&self) -> PersistenceResult<Vec<(String, SpaceMetaRecord)>>;
+/// Trait for Realm metadata storage operations.
+pub trait RealmMetaStore: Send + Sync {
+    fn get(&self, space_id: &str) -> PersistenceResult<Option<RealmMetaRecord>>;
+    fn put(&self, space_id: &str, record: &RealmMetaRecord) -> PersistenceResult<()>;
+    fn list(&self) -> PersistenceResult<Vec<(String, RealmMetaRecord)>>;
     fn delete(&self, space_id: &str) -> PersistenceResult<()>;
 }
 
 // ── Projection persistence traits ─────────────────────────────────────────
-// Mirror the in-memory `reducer::ProjectionState::{places,flows,morphs}`
+// Mirror the in-memory
+// `reducer::ProjectionState::{space_containers,flows,morphs}`
 // maps onto durable storage. The reducer continues to own the in-memory
 // authoritative state; routing layers write through to these stores
 // after each accepted state-changing event, and `AppState::new` hydrates
-// from them on startup so restart doesn't lose Place/Flow/Morph
+// from them on startup so restart doesn't lose Space-container/Flow/Morph
 // lifecycle state.
 
-/// Durable Place projection store (mirror of `projection_places` table).
-pub trait PlaceProjectionStore: Send + Sync {
-    fn get(&self, place_id: &str) -> PersistenceResult<Option<PlaceProjectionRecord>>;
-    fn put(&self, record: &PlaceProjectionRecord) -> PersistenceResult<()>;
-    fn list_for_space(&self, space_id: &str) -> PersistenceResult<Vec<PlaceProjectionRecord>>;
-    fn snapshot_all(&self) -> PersistenceResult<Vec<PlaceProjectionRecord>>;
-    fn delete(&self, place_id: &str) -> PersistenceResult<()>;
+/// Durable Space-container projection store (mirror of legacy
+/// `projection_places` table).
+pub trait SpaceContainerProjectionStore: Send + Sync {
+    fn get(
+        &self,
+        container_space_id: &str,
+    ) -> PersistenceResult<Option<SpaceContainerProjectionRecord>>;
+    fn put(&self, record: &SpaceContainerProjectionRecord) -> PersistenceResult<()>;
+    fn list_for_space(
+        &self,
+        space_id: &str,
+    ) -> PersistenceResult<Vec<SpaceContainerProjectionRecord>>;
+    fn snapshot_all(&self) -> PersistenceResult<Vec<SpaceContainerProjectionRecord>>;
+    fn delete(&self, container_space_id: &str) -> PersistenceResult<()>;
 }
 
 /// Durable Flow projection store (mirror of `projection_flows` table).
@@ -132,13 +140,13 @@ pub trait MorphProjectionStore: Send + Sync {
     fn delete(&self, morph_id: &str) -> PersistenceResult<()>;
 }
 
-/// Wire / persistence record for a Place projection. Mirrors fields on
-/// `reducer::PlaceProjection` (state stored as the canonical `&str` form
-/// of `PlaceLifecycleState`) so callers can convert without pulling the
+/// Wire / persistence record for a Space-container projection. Mirrors fields on
+/// `reducer::SpaceContainerProjection` (state stored as the canonical `&str` form
+/// of `SpaceContainerLifecycleState`) so callers can convert without pulling the
 /// reducer enum into the persistence layer.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PlaceProjectionRecord {
-    pub place_id: String,
+pub struct SpaceContainerProjectionRecord {
+    pub container_space_id: String,
     pub space_id: String,
     pub kind: String,
     pub title: String,
@@ -847,7 +855,7 @@ pub trait PersistenceStore: Send + Sync {
     fn sessions(&self) -> &dyn SessionStore;
     fn account_data(&self) -> &dyn AccountDataStore;
     fn contacts(&self) -> &dyn ContactStore;
-    fn space_meta(&self) -> &dyn SpaceMetaStore;
+    fn realm_meta(&self) -> &dyn RealmMetaStore;
     fn messages(&self) -> &dyn MessageStore;
     fn blobs(&self) -> &dyn BlobStore;
     fn devices(&self) -> &dyn DeviceInventoryStore;
@@ -872,7 +880,7 @@ pub trait PersistenceStore: Send + Sync {
     fn one_time_keys(&self) -> &dyn OneTimeKeyStore;
     fn key_backups(&self) -> &dyn KeyBackupStore;
     fn multisig_pending(&self) -> &dyn MultisigPendingStore;
-    fn place_projections(&self) -> &dyn PlaceProjectionStore;
+    fn space_container_projections(&self) -> &dyn SpaceContainerProjectionStore;
     fn flow_projections(&self) -> &dyn FlowProjectionStore;
     fn morph_projections(&self) -> &dyn MorphProjectionStore;
     // G3.S1: MLS lifecycle stores.
@@ -887,7 +895,7 @@ pub struct MemoryPersistenceStore {
     sessions: MemorySessionStore,
     account_data: MemoryAccountDataStore,
     contacts: MemoryContactStore,
-    space_meta: MemorySpaceMetaStore,
+    realm_meta: MemoryRealmMetaStore,
     messages: MemoryMessageStore,
     blobs: MemoryBlobStore,
     devices: MemoryDeviceInventoryStore,
@@ -912,7 +920,7 @@ pub struct MemoryPersistenceStore {
     one_time_keys: MemoryOneTimeKeyStore,
     key_backups: MemoryKeyBackupStore,
     multisig_pending: MemoryMultisigPendingStore,
-    place_projections: MemoryPlaceProjectionStore,
+    space_container_projections: MemorySpaceContainerProjectionStore,
     flow_projections: MemoryFlowProjectionStore,
     morph_projections: MemoryMorphProjectionStore,
     // G3.S1: MLS lifecycle stores.
@@ -928,7 +936,7 @@ impl MemoryPersistenceStore {
             sessions: MemorySessionStore::new(),
             account_data: MemoryAccountDataStore::new(),
             contacts: MemoryContactStore::new(),
-            space_meta: MemorySpaceMetaStore::new(),
+            realm_meta: MemoryRealmMetaStore::new(),
             messages: MemoryMessageStore::new(),
             blobs: MemoryBlobStore::new(),
             devices: MemoryDeviceInventoryStore::new(),
@@ -953,7 +961,7 @@ impl MemoryPersistenceStore {
             one_time_keys: MemoryOneTimeKeyStore::new(),
             key_backups: MemoryKeyBackupStore::new(),
             multisig_pending: MemoryMultisigPendingStore::new(),
-            place_projections: MemoryPlaceProjectionStore::new(),
+            space_container_projections: MemorySpaceContainerProjectionStore::new(),
             flow_projections: MemoryFlowProjectionStore::new(),
             morph_projections: MemoryMorphProjectionStore::new(),
             // G3.S1: MLS lifecycle stores.
@@ -987,8 +995,8 @@ impl PersistenceStore for MemoryPersistenceStore {
         &self.contacts
     }
 
-    fn space_meta(&self) -> &dyn SpaceMetaStore {
-        &self.space_meta
+    fn realm_meta(&self) -> &dyn RealmMetaStore {
+        &self.realm_meta
     }
 
     fn messages(&self) -> &dyn MessageStore {
@@ -1087,8 +1095,8 @@ impl PersistenceStore for MemoryPersistenceStore {
         &self.multisig_pending
     }
 
-    fn place_projections(&self) -> &dyn PlaceProjectionStore {
-        &self.place_projections
+    fn space_container_projections(&self) -> &dyn SpaceContainerProjectionStore {
+        &self.space_container_projections
     }
 
     fn flow_projections(&self) -> &dyn FlowProjectionStore {
@@ -1445,12 +1453,12 @@ impl ContactStore for MemoryContactStore {
     }
 }
 
-// In-memory space meta store
-struct MemorySpaceMetaStore {
-    data: Arc<Mutex<BTreeMap<String, SpaceMetaRecord>>>,
+// In-memory Realm meta store
+struct MemoryRealmMetaStore {
+    data: Arc<Mutex<BTreeMap<String, RealmMetaRecord>>>,
 }
 
-impl MemorySpaceMetaStore {
+impl MemoryRealmMetaStore {
     fn new() -> Self {
         Self {
             data: Arc::new(Mutex::new(BTreeMap::new())),
@@ -1458,19 +1466,19 @@ impl MemorySpaceMetaStore {
     }
 }
 
-impl SpaceMetaStore for MemorySpaceMetaStore {
-    fn get(&self, space_id: &str) -> PersistenceResult<Option<SpaceMetaRecord>> {
+impl RealmMetaStore for MemoryRealmMetaStore {
+    fn get(&self, space_id: &str) -> PersistenceResult<Option<RealmMetaRecord>> {
         let data = self.data.lock().expect("lock");
         Ok(data.get(space_id).cloned())
     }
 
-    fn put(&self, space_id: &str, record: &SpaceMetaRecord) -> PersistenceResult<()> {
+    fn put(&self, space_id: &str, record: &RealmMetaRecord) -> PersistenceResult<()> {
         let mut data = self.data.lock().expect("lock");
         data.insert(space_id.to_owned(), record.clone());
         Ok(())
     }
 
-    fn list(&self) -> PersistenceResult<Vec<(String, SpaceMetaRecord)>> {
+    fn list(&self) -> PersistenceResult<Vec<(String, RealmMetaRecord)>> {
         let data = self.data.lock().expect("lock");
         Ok(data.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
     }
@@ -1482,13 +1490,13 @@ impl SpaceMetaStore for MemorySpaceMetaStore {
     }
 }
 
-// ── Memory impls for Place/Flow/Morph projection stores ──────────────────
+// ── Memory impls for Space-container/Flow/Morph projection stores ────────
 
-struct MemoryPlaceProjectionStore {
-    data: Arc<Mutex<BTreeMap<String, PlaceProjectionRecord>>>,
+struct MemorySpaceContainerProjectionStore {
+    data: Arc<Mutex<BTreeMap<String, SpaceContainerProjectionRecord>>>,
 }
 
-impl MemoryPlaceProjectionStore {
+impl MemorySpaceContainerProjectionStore {
     fn new() -> Self {
         Self {
             data: Arc::new(Mutex::new(BTreeMap::new())),
@@ -1496,19 +1504,25 @@ impl MemoryPlaceProjectionStore {
     }
 }
 
-impl PlaceProjectionStore for MemoryPlaceProjectionStore {
-    fn get(&self, place_id: &str) -> PersistenceResult<Option<PlaceProjectionRecord>> {
+impl SpaceContainerProjectionStore for MemorySpaceContainerProjectionStore {
+    fn get(
+        &self,
+        container_space_id: &str,
+    ) -> PersistenceResult<Option<SpaceContainerProjectionRecord>> {
         let data = self.data.lock().expect("lock");
-        Ok(data.get(place_id).cloned())
+        Ok(data.get(container_space_id).cloned())
     }
 
-    fn put(&self, record: &PlaceProjectionRecord) -> PersistenceResult<()> {
+    fn put(&self, record: &SpaceContainerProjectionRecord) -> PersistenceResult<()> {
         let mut data = self.data.lock().expect("lock");
-        data.insert(record.place_id.clone(), record.clone());
+        data.insert(record.container_space_id.clone(), record.clone());
         Ok(())
     }
 
-    fn list_for_space(&self, space_id: &str) -> PersistenceResult<Vec<PlaceProjectionRecord>> {
+    fn list_for_space(
+        &self,
+        space_id: &str,
+    ) -> PersistenceResult<Vec<SpaceContainerProjectionRecord>> {
         let data = self.data.lock().expect("lock");
         Ok(data
             .values()
@@ -1517,14 +1531,14 @@ impl PlaceProjectionStore for MemoryPlaceProjectionStore {
             .collect())
     }
 
-    fn snapshot_all(&self) -> PersistenceResult<Vec<PlaceProjectionRecord>> {
+    fn snapshot_all(&self) -> PersistenceResult<Vec<SpaceContainerProjectionRecord>> {
         let data = self.data.lock().expect("lock");
         Ok(data.values().cloned().collect())
     }
 
-    fn delete(&self, place_id: &str) -> PersistenceResult<()> {
+    fn delete(&self, container_space_id: &str) -> PersistenceResult<()> {
         let mut data = self.data.lock().expect("lock");
-        data.remove(place_id);
+        data.remove(container_space_id);
         Ok(())
     }
 }
@@ -3321,7 +3335,7 @@ pub struct PgPersistenceStore {
     key_backups: PgKeyBackupStore,
     webrtc: PgWebrtcSessionStore,
     policy_documents: PgPolicyDocumentStore,
-    place_projections: PgPlaceProjectionStore,
+    space_container_projections: PgSpaceContainerProjectionStore,
     flow_projections: PgFlowProjectionStore,
     morph_projections: PgMorphProjectionStore,
     projection_events: PgProjectionEventStore,
@@ -3350,7 +3364,7 @@ impl PgPersistenceStore {
             key_backups: PgKeyBackupStore { pool: pool.clone() },
             webrtc: PgWebrtcSessionStore { pool: pool.clone() },
             policy_documents: PgPolicyDocumentStore { pool: pool.clone() },
-            place_projections: PgPlaceProjectionStore { pool: pool.clone() },
+            space_container_projections: PgSpaceContainerProjectionStore { pool: pool.clone() },
             flow_projections: PgFlowProjectionStore { pool: pool.clone() },
             morph_projections: PgMorphProjectionStore { pool: pool.clone() },
             projection_events: PgProjectionEventStore { pool },
@@ -3376,8 +3390,8 @@ impl PersistenceStore for PgPersistenceStore {
         self.fallback.contacts()
     }
 
-    fn space_meta(&self) -> &dyn SpaceMetaStore {
-        self.fallback.space_meta()
+    fn realm_meta(&self) -> &dyn RealmMetaStore {
+        self.fallback.realm_meta()
     }
 
     fn messages(&self) -> &dyn MessageStore {
@@ -3476,8 +3490,8 @@ impl PersistenceStore for PgPersistenceStore {
         &self.multisig_pending
     }
 
-    fn place_projections(&self) -> &dyn PlaceProjectionStore {
-        &self.place_projections
+    fn space_container_projections(&self) -> &dyn SpaceContainerProjectionStore {
+        &self.space_container_projections
     }
 
     fn flow_projections(&self) -> &dyn FlowProjectionStore {
@@ -6207,17 +6221,17 @@ fn pg_conn(
         .map_err(|error| PersistenceError::Internal(format!("database pool error: {error}")))
 }
 
-// ── Pg-backed Place/Flow/Morph projection stores ─────────────────────────
-// Mirror the in-memory `ProjectionState::{places,flows,morphs}` onto
+// ── Pg-backed Space-container/Flow/Morph projection stores ───────────────
+// Mirror the in-memory `ProjectionState::{space_containers,flows,morphs}` onto
 // the `projection_places` / `projection_flows` / `projection_morphs`
 // tables. Same upsert shape as PgPolicyDocumentStore.
 
-struct PgPlaceProjectionStore {
+struct PgSpaceContainerProjectionStore {
     pool: PgPool,
 }
 
 #[derive(QueryableByName)]
-struct PlaceProjectionRow {
+struct SpaceContainerProjectionRow {
     #[diesel(sql_type = Text)]
     place_id: String,
     #[diesel(sql_type = Text)]
@@ -6244,10 +6258,10 @@ struct PlaceProjectionRow {
     updated_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
-impl From<PlaceProjectionRow> for PlaceProjectionRecord {
-    fn from(row: PlaceProjectionRow) -> Self {
+impl From<SpaceContainerProjectionRow> for SpaceContainerProjectionRecord {
+    fn from(row: SpaceContainerProjectionRow) -> Self {
         Self {
-            place_id: row.place_id,
+            container_space_id: row.place_id,
             space_id: row.space_id,
             kind: row.kind,
             title: row.title,
@@ -6263,23 +6277,26 @@ impl From<PlaceProjectionRow> for PlaceProjectionRecord {
     }
 }
 
-const PLACE_PROJECTION_COLUMNS: &str = "place_id, space_id, kind, title, parent_ref, rank, state, \
+const SPACE_CONTAINER_PROJECTION_COLUMNS: &str = "place_id, space_id, kind, title, parent_ref, rank, state, \
      state_changed_at, created_by, created_at, updated_by, updated_at";
 
-impl PlaceProjectionStore for PgPlaceProjectionStore {
-    fn get(&self, place_id: &str) -> PersistenceResult<Option<PlaceProjectionRecord>> {
+impl SpaceContainerProjectionStore for PgSpaceContainerProjectionStore {
+    fn get(
+        &self,
+        container_space_id: &str,
+    ) -> PersistenceResult<Option<SpaceContainerProjectionRecord>> {
         let mut conn = pg_conn(&self.pool)?;
         sql_query(format!(
-            "SELECT {PLACE_PROJECTION_COLUMNS} FROM projection_places WHERE place_id = $1"
+            "SELECT {SPACE_CONTAINER_PROJECTION_COLUMNS} FROM projection_places WHERE place_id = $1"
         ))
-        .bind::<Text, _>(place_id)
-        .get_result::<PlaceProjectionRow>(&mut conn)
+        .bind::<Text, _>(container_space_id)
+        .get_result::<SpaceContainerProjectionRow>(&mut conn)
         .optional()
-        .map(|row| row.map(PlaceProjectionRecord::from))
+        .map(|row| row.map(SpaceContainerProjectionRecord::from))
         .map_err(PersistenceError::from)
     }
 
-    fn put(&self, record: &PlaceProjectionRecord) -> PersistenceResult<()> {
+    fn put(&self, record: &SpaceContainerProjectionRecord) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool)?;
         sql_query(
             "INSERT INTO projection_places \
@@ -6297,7 +6314,7 @@ impl PlaceProjectionStore for PgPlaceProjectionStore {
                 updated_by = EXCLUDED.updated_by, \
                 updated_at = EXCLUDED.updated_at",
         )
-        .bind::<Text, _>(&record.place_id)
+        .bind::<Text, _>(&record.container_space_id)
         .bind::<Text, _>(&record.space_id)
         .bind::<Text, _>(&record.kind)
         .bind::<Text, _>(&record.title)
@@ -6314,32 +6331,43 @@ impl PlaceProjectionStore for PgPlaceProjectionStore {
         .map_err(PersistenceError::from)
     }
 
-    fn list_for_space(&self, space_id: &str) -> PersistenceResult<Vec<PlaceProjectionRecord>> {
+    fn list_for_space(
+        &self,
+        space_id: &str,
+    ) -> PersistenceResult<Vec<SpaceContainerProjectionRecord>> {
         let mut conn = pg_conn(&self.pool)?;
         sql_query(format!(
-            "SELECT {PLACE_PROJECTION_COLUMNS} FROM projection_places \
+            "SELECT {SPACE_CONTAINER_PROJECTION_COLUMNS} FROM projection_places \
              WHERE space_id = $1 ORDER BY place_id"
         ))
         .bind::<Text, _>(space_id)
-        .load::<PlaceProjectionRow>(&mut conn)
-        .map(|rows| rows.into_iter().map(PlaceProjectionRecord::from).collect())
+        .load::<SpaceContainerProjectionRow>(&mut conn)
+        .map(|rows| {
+            rows.into_iter()
+                .map(SpaceContainerProjectionRecord::from)
+                .collect()
+        })
         .map_err(PersistenceError::from)
     }
 
-    fn snapshot_all(&self) -> PersistenceResult<Vec<PlaceProjectionRecord>> {
+    fn snapshot_all(&self) -> PersistenceResult<Vec<SpaceContainerProjectionRecord>> {
         let mut conn = pg_conn(&self.pool)?;
         sql_query(format!(
-            "SELECT {PLACE_PROJECTION_COLUMNS} FROM projection_places ORDER BY place_id"
+            "SELECT {SPACE_CONTAINER_PROJECTION_COLUMNS} FROM projection_places ORDER BY place_id"
         ))
-        .load::<PlaceProjectionRow>(&mut conn)
-        .map(|rows| rows.into_iter().map(PlaceProjectionRecord::from).collect())
+        .load::<SpaceContainerProjectionRow>(&mut conn)
+        .map(|rows| {
+            rows.into_iter()
+                .map(SpaceContainerProjectionRecord::from)
+                .collect()
+        })
         .map_err(PersistenceError::from)
     }
 
-    fn delete(&self, place_id: &str) -> PersistenceResult<()> {
+    fn delete(&self, container_space_id: &str) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool)?;
         sql_query("DELETE FROM projection_places WHERE place_id = $1")
-            .bind::<Text, _>(place_id)
+            .bind::<Text, _>(container_space_id)
             .execute(&mut conn)
             .map(|_| ())
             .map_err(PersistenceError::from)

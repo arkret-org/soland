@@ -46,7 +46,7 @@ pub(super) fn router() -> Router {
 }
 
 #[endpoint(
-    operation_id = "cx.device_messages.send",
+    operation_id = "cx.device_messages.put",
     tags("device_messages"),
     summary = "Send to-device messages (idempotent on Idempotency-Key + sender actor)"
 )]
@@ -163,7 +163,7 @@ pub(crate) fn fanout_actor_private_update(
 }
 
 #[endpoint(
-    operation_id = "cx.device_messages.receive",
+    operation_id = "cx.device_messages.get",
     tags("device_messages"),
     summary = "Pull pending to-device messages for the bound session/device"
 )]

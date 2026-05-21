@@ -6,8 +6,9 @@
 //! Event Envelope). `/messages/send` is a deployment-local convenience
 //! that admin tooling, clients, and tests use to push a message without
 //! constructing the Envelope themselves. It still goes through the
-//! projection layer and is governed by Space membership + plaintext
-//! visibility policy.
+//! projection layer and is governed by Realm membership + plaintext
+//! visibility policy. Responses carry an explicit compatibility marker so
+//! clients cannot mistake this endpoint for canonical `cx.events.submit`.
 
 use chrono::Utc;
 use salvo::oapi::extract::JsonBody;
@@ -18,8 +19,8 @@ use super::operations::{
     validate_content_blocks, validate_encrypted_payload_envelope, validate_mentions,
 };
 use super::{
-    flow_id_from_space_id, message_id_from_event_id, space_allows_plaintext_service,
-    space_has_member, validate_space_id,
+    flow_id_from_space_id, message_id_from_event_id, realm_allows_plaintext_service,
+    realm_has_member, realm_scope_to_realm_id,
 };
 use crate::error::{AppError, ErrorCode};
 use crate::result::{JsonResult, json_ok};
@@ -65,34 +66,30 @@ async fn messages_send(
     body: JsonBody<Value>,
     depot: &mut Depot,
     req: &mut Request,
+    res: &mut Response,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req)?;
     let body = body.into_inner();
-    let requested_space_id = body
-        .get("space_id")
+    let requested_scope_id = body
+        .get("realm_id")
         .and_then(Value::as_str)
-        .ok_or_else(|| AppError::missing_param("space_id is required"))?;
-    if validate_space_id(requested_space_id).is_err() {
-        return Err(AppError::invalid_param("invalid space_id"));
-    }
+        .or_else(|| body.get("space_id").and_then(Value::as_str))
+        .ok_or_else(|| AppError::missing_param("realm_id is required"))?;
+    let requested_realm_id = realm_scope_to_realm_id(requested_scope_id)
+        .ok_or_else(|| AppError::invalid_param("invalid realm_id"))?;
     let body_flow_id = body.get("flow_id").and_then(Value::as_str);
     let routed_space_id = body_flow_id
         .and_then(|flow_id| {
             state.projection.lock().ok().and_then(|projection| {
-                let routed = projection.discussion_space_for_flow(flow_id, requested_space_id);
-                (routed != requested_space_id).then(|| routed.to_owned())
+                let routed = projection.discussion_space_for_flow(flow_id, &requested_realm_id);
+                (routed != requested_realm_id.as_str()).then(|| routed.to_owned())
             })
         })
-        .unwrap_or_else(|| requested_space_id.to_owned());
-    if validate_space_id(&routed_space_id).is_err() {
-        return Err(AppError::invalid_param(
-            "invalid routed discussion space_id",
-        ));
-    }
-    if !space_has_member(state, &routed_space_id, &session.actor) {
+        .unwrap_or_else(|| requested_realm_id.clone());
+    if !realm_has_member(state, &routed_space_id, &session.actor) {
         return Err(AppError::capability_denied(
-            "actor is not a joined member of the space",
+            "actor is not a joined member of the realm",
         ));
     }
     let encrypted = body
@@ -102,9 +99,9 @@ async fn messages_send(
     let content = body
         .get("content")
         .ok_or_else(|| AppError::missing_param("content is required"))?;
-    if !encrypted && !space_allows_plaintext_service(state, &routed_space_id) {
+    if !encrypted && !realm_allows_plaintext_service(state, &routed_space_id) {
         return Err(AppError::capability_denied(
-            "space policy denies plaintext writes from this service",
+            "realm policy denies plaintext writes from this service",
         ));
     }
     if encrypted {
@@ -132,6 +129,7 @@ async fn messages_send(
     }
 
     let event_id = ids::generate_event_id();
+    let routed_realm_id = routed_space_id.clone();
     let flow_id = body_flow_id
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| flow_id_from_space_id(&routed_space_id));
@@ -166,11 +164,12 @@ async fn messages_send(
         )),
         sender: Some(session.actor.clone()),
         payload: json!({
+            "realm_id": routed_realm_id.clone(),
             "flow_id": flow_id.clone(),
             "thread_id": thread_id.clone(),
             "content": content.clone(),
             "encrypted": encrypted,
-            "source_space_id": requested_space_id,
+            "source_realm_id": requested_realm_id.clone(),
         }),
         created_at: now,
     };
@@ -188,16 +187,24 @@ async fn messages_send(
     positions.insert(routed_space_id.clone(), now.timestamp_micros());
     let sync_token =
         encode_send_cursor(state, &routed_space_id, &positions, now.timestamp_millis());
+    let _ = res.add_header(
+        "X-Contrix-Compat-Surface",
+        "cx.extension.soland.messages.send",
+        true,
+    );
 
     json_ok(json!({
+        "canonical_event_envelope": false,
+        "compat_surface": "cx.extension.soland.messages.send",
         "event_id": event_id,
         "operation_id": operation_id,
         "kind": kinds::CX_MESSAGE_CREATE,
         "message_id": message_id_from_event_id(&event_id),
+        "realm_id": routed_realm_id,
         "flow_id": flow_id,
         "thread_id": thread_id,
         "space_id": routed_space_id,
-        "source_space_id": requested_space_id,
+        "source_realm_id": requested_realm_id,
         "sender": session.actor.clone(),
         "encrypted": encrypted,
         "created_at": now,

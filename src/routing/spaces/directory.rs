@@ -27,7 +27,7 @@ use super::{
 };
 use crate::error::AppError;
 use crate::result::{JsonResult, json_ok};
-use crate::state::{AppState, SessionRecord};
+use crate::state::{AppState, RealmDirectoryEntry, RealmDirectoryQuery, SessionRecord};
 use crate::wire::{
     DirectoryDescribeResBody, DirectoryValueSearchResponse, ResolveHandleRequest,
     ResolveHandleResponse, ResolveOrganizationRequest, ResolveOrganizationResponse,
@@ -74,14 +74,14 @@ async fn search_realms(
 ) -> JsonResult<SearchRealmsResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
-    let query = contrix_sdk::SpaceSearchQuery {
+    let query = RealmDirectoryQuery {
         text: body.query,
         public_only: false,
         limit: body.limit,
         ..Default::default()
     };
     let session = authenticated_session(state, req).ok();
-    let spaces = state.spaces.lock().expect("spaces lock");
+    let spaces = state.realms.lock().expect("spaces lock");
     let results = spaces
         .search(query)
         .into_iter()
@@ -112,7 +112,7 @@ async fn resolve_realm(
         && body.signed_link.is_none()
     {
         return Err(AppError::missing_param(
-            "one of space_id, alias, invite_token, or signed_link is required",
+            "one of realm_id, alias, invite_token, or signed_link is required",
         ));
     }
 
@@ -121,7 +121,7 @@ async fn resolve_realm(
         .invite_token
         .as_deref()
         .and_then(|token| invite_token_space_id(state, token));
-    let spaces = state.spaces.lock().expect("spaces lock");
+    let spaces = state.realms.lock().expect("spaces lock");
     let space = spaces.search(Default::default()).into_iter().find(|entry| {
         space_resolvable_to(
             state,
@@ -132,10 +132,10 @@ async fn resolve_realm(
         ) && (body
             .space_id
             .as_deref()
-            .is_some_and(|id| id == entry.space_id.as_str())
+            .is_some_and(|id| id == entry.realm_id.as_str())
             || invite_space_id
                 .as_deref()
-                .is_some_and(|id| id == entry.space_id.as_str())
+                .is_some_and(|id| id == entry.realm_id.as_str())
             || body
                 .alias
                 .as_deref()
@@ -151,13 +151,13 @@ async fn resolve_realm(
                 "type": "cx.realm.discovery",
                 "subject": "",
                 "content": {
-                    "discoverability": space_discoverability(state, space.space_id.as_str()),
+                    "discoverability": space_discoverability(state, space.realm_id.as_str()),
                     "directory_visibility": {
-                        "searchable": space_search_discoverability(state, space.space_id.as_str())
+                        "searchable": space_search_discoverability(state, space.realm_id.as_str())
                     }
                 }
             })],
-            join_rule: if space_discoverability(state, space.space_id.as_str()) == "public" {
+            join_rule: if space_discoverability(state, space.realm_id.as_str()) == "public" {
                 "public".to_owned()
             } else {
                 "invite_or_request".to_owned()
@@ -180,11 +180,11 @@ async fn search_organizations(
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
     let limit = checked_limit(body.limit)?;
-    let spaces = state.spaces.lock().expect("spaces lock");
+    let spaces = state.realms.lock().expect("spaces lock");
     let space_entries: Vec<_> = spaces
         .search(Default::default())
         .into_iter()
-        .filter(|space| !is_space_deleted(state, space.space_id.as_str()))
+        .filter(|space| !is_space_deleted(state, space.realm_id.as_str()))
         .collect();
     let organization = demo_organization(&space_entries, &state.config.service_did);
     let results = if query_matches(&organization, body.query.as_deref()) {
@@ -215,11 +215,11 @@ async fn resolve_organization(
         ));
     }
 
-    let spaces = state.spaces.lock().expect("spaces lock");
+    let spaces = state.realms.lock().expect("spaces lock");
     let space_entries: Vec<_> = spaces
         .search(Default::default())
         .into_iter()
-        .filter(|space| !is_space_deleted(state, space.space_id.as_str()))
+        .filter(|space| !is_space_deleted(state, space.realm_id.as_str()))
         .collect();
     let organization = demo_organization(&space_entries, &state.config.service_did);
     let matches_id = body
@@ -238,7 +238,7 @@ async fn resolve_organization(
         .into_iter()
         .map(|space| {
             json!({
-                "space_id": space.space_id,
+                "realm_id": space.realm_id,
                 "name": space.name,
                 "description": space.description,
                 "category": space.category,
@@ -391,7 +391,7 @@ pub fn actor_visible_to(state: &AppState, actor: &Value, session: Option<&Sessio
     })
 }
 
-pub fn demo_organization(spaces: &[&contrix_sdk::SpaceSearchEntry], service_did: &str) -> Value {
+pub fn demo_organization(spaces: &[&RealmDirectoryEntry], service_did: &str) -> Value {
     json!({
         "organization_id": "cx:org:demo",
         "handle": "@contrix-demo",

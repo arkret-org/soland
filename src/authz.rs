@@ -526,7 +526,7 @@ fn evaluate_constraint(
             // facet-bound and an unfaceted target falls outside its scope.
             //
             // The check works on any spec-typed object resource that
-            // carries a `facets` field; `cx:flow:` / `cx:place:` /
+            // carries a `facets` field; `cx:flow:` / `cx:space:` /
             // `cx:morph:` projections all surface facets through the
             // same cell-family registry.
             let allowed: Vec<String> = constraint

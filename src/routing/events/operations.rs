@@ -42,6 +42,7 @@ pub struct OperationPayloadSchema {
 pub enum PayloadRequirement {
     Required(&'static str, &'static str),
     AnyOf(&'static [&'static str], &'static str),
+    AnyKey(&'static [&'static str], &'static str),
 }
 
 const MESSAGE_CREATE_FIELDS: &[&str] = &["body", "content", "event_id"];
@@ -148,35 +149,49 @@ const REALM_CREATE_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::A
     "cx.realm.create operation requires object (canonical) or action (legacy REST path)",
 )];
 // `cx.realm.update` / `cx.realm.destroy` carry an `action` string +
-// per-action fields (mirrors place / morph lifecycle for non-create paths).
+// per-action fields (mirrors space-container / morph lifecycle for non-create
+// paths).
 const SPACE_LIFECYCLE_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::Required(
     "action",
     "space lifecycle operation requires action",
 )];
-// `cx.place.archive` / `cx.place.restore` / `cx.place.tombstone` share the same
-// shape: a single `place_id` field naming the target Place. The state-machine
-// guard (`place_not_archived` for restore) lives in both the SDK reducer
-// (`crates/sdk/src/resolver/state.rs::restore_place`) and soland's
-// server-side guard (`event_log::ensure_place_state_machine_allows`).
-const PLACE_LIFECYCLE_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::Required(
-    "place_id",
-    "place lifecycle operation requires place_id",
+// `cx.space.archive` / `cx.space.restore` / `cx.space.tombstone` share the
+// spec-canonical `space_id` target field. `place_id` remains accepted as an
+// migration alias for older clients.
+const SPACE_CONTAINER_LIFECYCLE_ID_FIELDS: &[&str] = &["space_id", "place_id"];
+const SPACE_CONTAINER_LIFECYCLE_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::AnyOf(
+    SPACE_CONTAINER_LIFECYCLE_ID_FIELDS,
+    "space lifecycle operation requires space_id",
 )];
-// `cx.place.create` carries a full Place object under `object`.
-const PLACE_CREATE_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::Required(
+// `cx.space.create` carries a full Space object under `object`.
+const SPACE_CONTAINER_CREATE_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::Required(
     "object",
-    "place create operation requires object",
+    "space create operation requires object",
 )];
-// `cx.place.update` carries `place_id` + `patch`.
-const PLACE_UPDATE_REQUIREMENTS: &[PayloadRequirement] = &[
-    PayloadRequirement::Required("place_id", "place update operation requires place_id"),
-    PayloadRequirement::Required("patch", "place update operation requires patch"),
+// `cx.space.update` carries `space_id` + `patch`; `place_id` remains a
+// migration alias for older clients.
+const SPACE_CONTAINER_UPDATE_ID_FIELDS: &[&str] = &["space_id", "place_id"];
+const SPACE_CONTAINER_UPDATE_REQUIREMENTS: &[PayloadRequirement] = &[
+    PayloadRequirement::AnyOf(
+        SPACE_CONTAINER_UPDATE_ID_FIELDS,
+        "space update operation requires space_id",
+    ),
+    PayloadRequirement::Required("patch", "space update operation requires patch"),
 ];
-// `cx.place.parent` carries `place_id` + `parent_ref` (parent is cx:place: or
-// cx:space: within the same Space).
-const PLACE_PARENT_REQUIREMENTS: &[PayloadRequirement] = &[
-    PayloadRequirement::Required("place_id", "place parent operation requires place_id"),
-    PayloadRequirement::Required("parent_ref", "place parent operation requires parent_ref"),
+// `cx.space.parent` carries `space_id` + `expected_parent_space_id`, with
+// optional `parent_space_id`. The old `place_id` / `parent_ref` shape is still
+// accepted as a migration alias for older clients.
+const SPACE_CONTAINER_PARENT_ID_FIELDS: &[&str] = &["space_id", "place_id"];
+const SPACE_CONTAINER_PARENT_EXPECTED_FIELDS: &[&str] = &["expected_parent_space_id", "parent_ref"];
+const SPACE_CONTAINER_PARENT_REQUIREMENTS: &[PayloadRequirement] = &[
+    PayloadRequirement::AnyOf(
+        SPACE_CONTAINER_PARENT_ID_FIELDS,
+        "space parent operation requires space_id",
+    ),
+    PayloadRequirement::AnyKey(
+        SPACE_CONTAINER_PARENT_EXPECTED_FIELDS,
+        "space parent operation requires expected_parent_space_id",
+    ),
 ];
 // Flow / Morph lifecycle payload requirements. The spec
 // `event-payload.schema.json` `object_lifecycle_payload` shape requires one
@@ -228,17 +243,35 @@ const MORPH_SCHEMA_MIGRATE_REQUIREMENTS: &[PayloadRequirement] = &[
         "morph schema_migrate operation requires compatibility_class",
     ),
 ];
-// Flow position events (cx.flow.move / cx.flow.reorder).
-// Spec event-kind-registry sets `cell_subject` = (board_place_id, flow_id);
-// both fields are MUST-present in the payload. Additional optional fields
-// (target_place_id for move, rank for reorder) carry the actual position
-// change but are policed at the cell-family layer, not here.
-const FLOW_POSITION_REQUIREMENTS: &[PayloadRequirement] = &[
+// Flow position events (cx.flow.move / cx.flow.reorder). Current spec uses
+// `board_space_id` on both payloads. `board_place_id` remains accepted as a
+// migration alias for old clients.
+const FLOW_POSITION_BOARD_FIELDS: &[&str] = &["board_space_id", "board_place_id"];
+const FLOW_MOVE_TARGET_FIELDS: &[&str] = &["target_space_id", "target_place_id"];
+const FLOW_REORDER_SPACE_FIELDS: &[&str] = &["space_id", "list_space_id", "list_place_id"];
+const FLOW_MOVE_REQUIREMENTS: &[PayloadRequirement] = &[
     PayloadRequirement::Required("flow_id", "flow position operation requires flow_id"),
-    PayloadRequirement::Required(
-        "board_place_id",
-        "flow position operation requires board_place_id",
+    PayloadRequirement::AnyOf(
+        FLOW_POSITION_BOARD_FIELDS,
+        "flow position operation requires board_space_id",
     ),
+    PayloadRequirement::AnyOf(
+        FLOW_MOVE_TARGET_FIELDS,
+        "flow move operation requires target_space_id",
+    ),
+    PayloadRequirement::Required("rank", "flow move operation requires rank"),
+];
+const FLOW_REORDER_REQUIREMENTS: &[PayloadRequirement] = &[
+    PayloadRequirement::Required("flow_id", "flow position operation requires flow_id"),
+    PayloadRequirement::AnyOf(
+        FLOW_POSITION_BOARD_FIELDS,
+        "flow position operation requires board_space_id",
+    ),
+    PayloadRequirement::AnyOf(
+        FLOW_REORDER_SPACE_FIELDS,
+        "flow reorder operation requires space_id",
+    ),
+    PayloadRequirement::Required("rank", "flow reorder operation requires rank"),
 ];
 // Flow watch event (cx.flow.watch.set).
 // Spec event-kind-registry sets `cell_subject` = (flow_id, actor_did);
@@ -497,7 +530,7 @@ fn round4_validate_payload(kind: &str, operation: &Operation) -> Result<(), &'st
         // SpaceStateTransitionPayload (space_id, new_state, reason?).
         // The legacy top-level `target_ref` form is rejected
         // unconditionally; everything else passes through to the
-        // per-kind PLACE_LIFECYCLE_REQUIREMENTS validator below.
+        // per-kind SPACE_CONTAINER_LIFECYCLE_REQUIREMENTS validator below.
         "cx.space.archive" | "cx.space.restore" => {
             if operation.payload.get("target_ref").is_some() {
                 return Err(
@@ -674,20 +707,20 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
             requirements: SPACE_LIFECYCLE_REQUIREMENTS,
             validate: None,
         },
-        kind if kinds::is_place_lifecycle_kind(kind) => OperationPayloadSchema {
-            requirements: PLACE_LIFECYCLE_REQUIREMENTS,
+        kind if kinds::is_space_container_lifecycle_kind(kind) => OperationPayloadSchema {
+            requirements: SPACE_CONTAINER_LIFECYCLE_REQUIREMENTS,
             validate: None,
         },
-        kinds::CX_PLACE_CREATE => OperationPayloadSchema {
-            requirements: PLACE_CREATE_REQUIREMENTS,
+        kinds::CX_SPACE_CONTAINER_CREATE => OperationPayloadSchema {
+            requirements: SPACE_CONTAINER_CREATE_REQUIREMENTS,
             validate: None,
         },
-        kinds::CX_PLACE_UPDATE => OperationPayloadSchema {
-            requirements: PLACE_UPDATE_REQUIREMENTS,
+        kinds::CX_SPACE_CONTAINER_UPDATE => OperationPayloadSchema {
+            requirements: SPACE_CONTAINER_UPDATE_REQUIREMENTS,
             validate: None,
         },
-        kinds::CX_PLACE_PARENT => OperationPayloadSchema {
-            requirements: PLACE_PARENT_REQUIREMENTS,
+        kinds::CX_SPACE_CONTAINER_PARENT => OperationPayloadSchema {
+            requirements: SPACE_CONTAINER_PARENT_REQUIREMENTS,
             validate: None,
         },
         kind if kinds::is_flow_lifecycle_kind(kind) => OperationPayloadSchema {
@@ -702,8 +735,12 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
             requirements: FLOW_UPDATE_REQUIREMENTS,
             validate: None,
         },
-        kinds::CX_FLOW_MOVE | kinds::CX_FLOW_REORDER => OperationPayloadSchema {
-            requirements: FLOW_POSITION_REQUIREMENTS,
+        kinds::CX_FLOW_MOVE => OperationPayloadSchema {
+            requirements: FLOW_MOVE_REQUIREMENTS,
+            validate: None,
+        },
+        kinds::CX_FLOW_REORDER => OperationPayloadSchema {
+            requirements: FLOW_REORDER_REQUIREMENTS,
             validate: None,
         },
         kinds::CX_FLOW_WATCH_SET => OperationPayloadSchema {
@@ -1040,6 +1077,14 @@ pub fn validate_operation_schema(
                     return Err(message);
                 }
             }
+            PayloadRequirement::AnyKey(fields, message) => {
+                if !fields
+                    .iter()
+                    .any(|field| payload_key_present(&operation.payload, field))
+                {
+                    return Err(message);
+                }
+            }
         }
     }
     if let Some(validate) = schema.validate {
@@ -1050,6 +1095,12 @@ pub fn validate_operation_schema(
 
 pub fn payload_field_present(payload: &serde_json::Value, field: &str) -> bool {
     payload.get(field).is_some_and(|value| !value.is_null())
+}
+
+pub fn payload_key_present(payload: &serde_json::Value, field: &str) -> bool {
+    payload
+        .as_object()
+        .is_some_and(|object| object.contains_key(field))
 }
 
 pub fn validate_message_operation_payload(operation: &Operation) -> Result<(), &'static str> {
@@ -1272,7 +1323,7 @@ pub fn message_operation_is_encrypted(operation: &Operation) -> bool {
 pub fn known_space_denies_plaintext_service(state: &AppState, space_id: &str) -> bool {
     state
         .persistence
-        .space_meta()
+        .realm_meta()
         .get(space_id)
         .ok()
         .flatten()
@@ -1920,6 +1971,137 @@ mod flow_tracks_update_tests {
         assert_eq!(
             validate_operation_schema(&missing_patch_or_tracks, schema),
             Err("flow tracks update requires patch or tracks")
+        );
+    }
+
+    fn flow_position_op(kind: &'static str, payload: serde_json::Value) -> Operation {
+        Operation::create(
+            contrix_sdk::OperationId::new("cx:operation:01904100-0000-7000-8000-57d7d85564c6")
+                .unwrap(),
+            contrix_sdk::SpaceId::new("cx:space:01904100-0000-7000-8000-668e2181b41d").unwrap(),
+            kind,
+            payload,
+        )
+    }
+
+    #[test]
+    fn canonical_flow_move_requires_board_target_and_rank() {
+        let schema = operation_schema_for_kind(kinds::CX_FLOW_MOVE).unwrap();
+        let operation = flow_position_op(
+            kinds::CX_FLOW_MOVE,
+            json!({
+                "board_space_id": "cx:space:01904100-0000-7000-8000-000000000001",
+                "flow_id": "cx:flow:01904100-0000-7000-8000-000000000002",
+                "target_space_id": "cx:space:01904100-0000-7000-8000-000000000003",
+                "rank": "a1"
+            }),
+        );
+        assert!(validate_operation_schema(&operation, schema).is_ok());
+
+        let missing_target = flow_position_op(
+            kinds::CX_FLOW_MOVE,
+            json!({
+                "board_space_id": "cx:space:01904100-0000-7000-8000-000000000001",
+                "flow_id": "cx:flow:01904100-0000-7000-8000-000000000002",
+                "rank": "a1"
+            }),
+        );
+        assert_eq!(
+            validate_operation_schema(&missing_target, schema),
+            Err("flow move operation requires target_space_id")
+        );
+    }
+
+    #[test]
+    fn canonical_flow_reorder_requires_board_space_and_rank() {
+        let schema = operation_schema_for_kind(kinds::CX_FLOW_REORDER).unwrap();
+        let operation = flow_position_op(
+            kinds::CX_FLOW_REORDER,
+            json!({
+                "board_space_id": "cx:space:01904100-0000-7000-8000-000000000001",
+                "flow_id": "cx:flow:01904100-0000-7000-8000-000000000002",
+                "space_id": "cx:space:01904100-0000-7000-8000-000000000003",
+                "rank": "a1"
+            }),
+        );
+        assert!(validate_operation_schema(&operation, schema).is_ok());
+
+        let legacy_alias = flow_position_op(
+            kinds::CX_FLOW_REORDER,
+            json!({
+                "board_place_id": "cx:space:01904100-0000-7000-8000-000000000001",
+                "flow_id": "cx:flow:01904100-0000-7000-8000-000000000002",
+                "list_place_id": "cx:space:01904100-0000-7000-8000-000000000003",
+                "rank": "a1"
+            }),
+        );
+        assert!(validate_operation_schema(&legacy_alias, schema).is_ok());
+    }
+
+    fn space_container_op(kind: &'static str, payload: serde_json::Value) -> Operation {
+        Operation::create(
+            contrix_sdk::OperationId::new("cx:operation:01904100-0000-7000-8000-57d7d85564c7")
+                .unwrap(),
+            contrix_sdk::SpaceId::new("cx:space:01904100-0000-7000-8000-668e2181b41d").unwrap(),
+            kind,
+            payload,
+        )
+    }
+
+    #[test]
+    fn canonical_space_update_requires_space_id_and_patch() {
+        let schema = operation_schema_for_kind(kinds::CX_SPACE_CONTAINER_UPDATE).unwrap();
+        let operation = space_container_op(
+            kinds::CX_SPACE_CONTAINER_UPDATE,
+            json!({
+                "space_id": "cx:space:01904100-0000-7000-8000-000000000003",
+                "patch": {"title": "Launch v2"}
+            }),
+        );
+        assert!(validate_operation_schema(&operation, schema).is_ok());
+
+        let missing_space_id = space_container_op(
+            kinds::CX_SPACE_CONTAINER_UPDATE,
+            json!({"patch": {"title": "Launch v2"}}),
+        );
+        assert_eq!(
+            validate_operation_schema(&missing_space_id, schema),
+            Err("space update operation requires space_id")
+        );
+    }
+
+    #[test]
+    fn canonical_space_parent_requires_space_id_and_expected_parent() {
+        let schema = operation_schema_for_kind(kinds::CX_SPACE_CONTAINER_PARENT).unwrap();
+        let operation = space_container_op(
+            kinds::CX_SPACE_CONTAINER_PARENT,
+            json!({
+                "space_id": "cx:space:01904100-0000-7000-8000-000000000003",
+                "parent_space_id": "cx:space:01904100-0000-7000-8000-000000000004",
+                "expected_parent_space_id": null
+            }),
+        );
+        assert!(validate_operation_schema(&operation, schema).is_ok());
+
+        let legacy_alias = space_container_op(
+            kinds::CX_SPACE_CONTAINER_PARENT,
+            json!({
+                "place_id": "cx:space:01904100-0000-7000-8000-000000000003",
+                "parent_ref": "cx:space:01904100-0000-7000-8000-000000000004"
+            }),
+        );
+        assert!(validate_operation_schema(&legacy_alias, schema).is_ok());
+
+        let missing_expected = space_container_op(
+            kinds::CX_SPACE_CONTAINER_PARENT,
+            json!({
+                "space_id": "cx:space:01904100-0000-7000-8000-000000000003",
+                "parent_space_id": "cx:space:01904100-0000-7000-8000-000000000004"
+            }),
+        );
+        assert_eq!(
+            validate_operation_schema(&missing_expected, schema),
+            Err("space parent operation requires expected_parent_space_id")
         );
     }
 }

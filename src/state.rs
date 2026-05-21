@@ -5,7 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use arc_swap::ArcSwap;
 use contrix_sdk::identity::CompositeDidResolver;
-use contrix_sdk::{Did, SpaceId, SpaceSearchEntry, SpaceSearchIndex};
+use contrix_sdk::{Did, RealmId};
 use ed25519_dalek::SigningKey;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -116,10 +116,160 @@ impl EventNotification {
     }
 }
 
+#[derive(Clone, Debug, Default)]
+pub struct RealmDirectoryQuery {
+    pub text: Option<String>,
+    pub tags: BTreeSet<String>,
+    pub members: BTreeSet<Did>,
+    pub public_only: bool,
+    pub limit: Option<usize>,
+}
+
+/// Searchable Realm directory entry. This intentionally replaces the SDK
+/// `SpaceSearchEntry` in soland because Realm, not Space, owns membership,
+/// discovery, history visibility and plaintext-service policy.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize, salvo::oapi::ToSchema)]
+pub struct RealmDirectoryEntry {
+    pub realm_id: RealmId,
+    pub name: String,
+    pub description: Option<String>,
+    pub tags: BTreeSet<String>,
+    pub members: BTreeSet<Did>,
+    pub public: bool,
+    pub category: Option<String>,
+}
+
+impl RealmDirectoryEntry {
+    pub fn new(realm_id: RealmId, name: impl Into<String>) -> Self {
+        Self {
+            realm_id,
+            name: name.into(),
+            description: None,
+            tags: BTreeSet::new(),
+            members: BTreeSet::new(),
+            public: false,
+            category: None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct RealmDirectoryIndex {
+    entries: BTreeMap<RealmId, RealmDirectoryEntry>,
+}
+
+impl RealmDirectoryIndex {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn upsert(&mut self, entry: RealmDirectoryEntry) {
+        self.entries.insert(entry.realm_id.clone(), entry);
+    }
+
+    pub fn get(&self, realm_id: &RealmId) -> Option<&RealmDirectoryEntry> {
+        self.entries.get(realm_id)
+    }
+
+    pub fn search_by_text(&self, query: &str) -> Vec<&RealmDirectoryEntry> {
+        let query = query.to_lowercase();
+        self.entries
+            .values()
+            .filter(|entry| realm_directory_text(entry).contains(&query))
+            .collect()
+    }
+
+    pub fn search_by_tag(&self, tag: &str) -> Vec<&RealmDirectoryEntry> {
+        self.entries
+            .values()
+            .filter(|entry| entry.tags.contains(tag))
+            .collect()
+    }
+
+    pub fn search_by_member(&self, member: &Did) -> Vec<&RealmDirectoryEntry> {
+        self.entries
+            .values()
+            .filter(|entry| entry.members.contains(member))
+            .collect()
+    }
+
+    pub fn search(&self, query: RealmDirectoryQuery) -> Vec<&RealmDirectoryEntry> {
+        let mut scored: Vec<_> = self
+            .entries
+            .values()
+            .filter(|entry| !query.public_only || entry.public)
+            .filter(|entry| {
+                query
+                    .text
+                    .as_ref()
+                    .map(|text| realm_directory_text(entry).contains(&text.to_lowercase()))
+                    .unwrap_or(true)
+            })
+            .filter(|entry| query.tags.iter().all(|tag| entry.tags.contains(tag)))
+            .filter(|entry| query.members.iter().all(|member| entry.members.contains(member)))
+            .map(|entry| (realm_directory_score(entry, &query), entry))
+            .collect();
+
+        scored.sort_by(|(left_score, left), (right_score, right)| {
+            right_score
+                .cmp(left_score)
+                .then_with(|| left.name.cmp(&right.name))
+        });
+
+        let mut results: Vec<_> = scored.into_iter().map(|(_, entry)| entry).collect();
+        if let Some(limit) = query.limit {
+            results.truncate(limit);
+        }
+        results
+    }
+}
+
+fn realm_directory_text(entry: &RealmDirectoryEntry) -> String {
+    format!(
+        "{} {} {}",
+        entry.name,
+        entry.description.as_deref().unwrap_or_default(),
+        entry.tags.iter().cloned().collect::<Vec<_>>().join(" ")
+    )
+    .to_lowercase()
+}
+
+fn realm_directory_score(entry: &RealmDirectoryEntry, query: &RealmDirectoryQuery) -> usize {
+    let mut score = 0;
+    if let Some(text) = &query.text {
+        let text = text.to_lowercase();
+        if entry.name.to_lowercase().contains(&text) {
+            score += 10;
+        }
+        if entry
+            .description
+            .as_deref()
+            .unwrap_or_default()
+            .to_lowercase()
+            .contains(&text)
+        {
+            score += 4;
+        }
+    }
+    score += query
+        .tags
+        .iter()
+        .filter(|tag| entry.tags.contains(*tag))
+        .count()
+        * 3;
+    score += query
+        .members
+        .iter()
+        .filter(|member| entry.members.contains(*member))
+        .count()
+        * 2;
+    score
+}
+
 /// Single-process service state. Every long-lived data surface lives behind
 /// `persistence` (a `dyn PersistenceStore`); the few remaining fields are
 /// either non-record state (config, db pool, hlc, authz engine) or runtime
-/// facets that don't fit the trait shape (in-memory `SpaceSearchIndex`,
+/// facets that don't fit the trait shape (in-memory `RealmDirectoryIndex`,
 /// `CompositeDidResolver`, `ProjectionState`).
 #[derive(Clone)]
 pub struct AppState {
@@ -130,7 +280,7 @@ pub struct AppState {
     pub hlc: ServerHlc,
     pub projection: Arc<Mutex<ProjectionState>>,
     pub authz: AuthzEngine,
-    pub spaces: Arc<Mutex<SpaceSearchIndex>>,
+    pub realms: Arc<Mutex<RealmDirectoryIndex>>,
     /// In-memory handle release ledger. Records `released_handle → released_at`
     /// for every handle vacated by `claim_handle` / `transfer_handle`; new
     /// claims for a handle still inside `HANDLE_GRACE_PERIOD_SECONDS` are
@@ -344,7 +494,7 @@ pub struct SpaceInviteRecord {
 }
 
 #[derive(Clone, Debug)]
-pub struct SpaceMetaRecord {
+pub struct RealmMetaRecord {
     pub owner: String,
     pub deleted: bool,
     pub discoverability: String,
@@ -648,7 +798,7 @@ impl AppState {
     }
 
     pub fn new(config: AppConfig, db: Db) -> Self {
-        let mut spaces = SpaceSearchIndex::new();
+        let mut realms = RealmDirectoryIndex::new();
         let now = chrono::Utc::now();
 
         let service_did = config.service_did.clone();
@@ -669,18 +819,18 @@ impl AppState {
         // production this stays off so soland deployments don't all advertise
         // the same hard-coded "Contrix Demo Space" id across federation peers.
         if config.seed_demo_data {
-            let mut demo = SpaceSearchEntry::new(
-                SpaceId::new("cx:space:0196419b-0000-7000-8000-000000000000")
-                    .expect("valid demo space id"),
-                "Contrix Demo Space",
+            let demo_realm_id = "cx:realm:0196419b-0000-7000-8000-000000000000";
+            let mut demo = RealmDirectoryEntry::new(
+                RealmId::new(demo_realm_id.to_owned()).expect("valid demo Realm id"),
+                "Contrix Demo Realm",
             );
-            demo.description = Some("Shared demo Space served by soland".to_owned());
+            demo.description = Some("Shared demo Realm served by soland".to_owned());
             demo.public = true;
             demo.members
                 .insert(Did::new("did:web:alice.example").expect("valid did"));
             demo.tags.insert("demo".to_owned());
             demo.category = Some("collaboration".to_owned());
-            spaces.upsert(demo);
+            realms.upsert(demo);
 
             let demo_account = AccountRecord {
                 did: "did:web:alice.example".to_owned(),
@@ -694,7 +844,7 @@ impl AppState {
                 tracing::warn!(%error, "failed to seed demo account into persistence store");
             }
 
-            let demo_space_meta = SpaceMetaRecord {
+            let demo_realm_meta = RealmMetaRecord {
                 owner: "did:web:alice.example".to_owned(),
                 deleted: false,
                 discoverability: "public".to_owned(),
@@ -704,11 +854,11 @@ impl AppState {
                 created_at: now,
                 updated_at: now,
             };
-            if let Err(error) = persistence.space_meta().put(
-                "cx:space:0196419b-0000-7000-8000-000000000000",
-                &demo_space_meta,
-            ) {
-                tracing::warn!(%error, "failed to seed demo space metadata into persistence store");
+            if let Err(error) = persistence
+                .realm_meta()
+                .put(demo_realm_id, &demo_realm_meta)
+            {
+                tracing::warn!(%error, "failed to seed demo Realm metadata into persistence store");
             }
         }
 
@@ -844,7 +994,7 @@ impl AppState {
         }
         let admin_keystore = Arc::new(admin_keystore);
 
-        // Hydrate Place/Flow/Morph projections from durable
+        // Hydrate Space-container/Flow/Morph projections from durable
         // persistence so process restart doesn't lose lifecycle state.
         // The write-through path in `routing::events::projection.rs::
         // write_through_projection` keeps these tables in sync as
@@ -860,7 +1010,7 @@ impl AppState {
             db,
             persistence,
             object_storage,
-            spaces: Arc::new(Mutex::new(spaces)),
+            realms: Arc::new(Mutex::new(realms)),
             handle_releases: Arc::new(Mutex::new(BTreeMap::new())),
             erased_actors: Arc::new(Mutex::new(BTreeSet::new())),
             notification_read_markers: Arc::new(Mutex::new(BTreeMap::new())),
@@ -918,7 +1068,7 @@ pub(crate) fn getrandom_seed(out: &mut [u8; 32]) {
     rand::rngs::OsRng.fill_bytes(out);
 }
 
-/// Read Place / Flow / Morph projection rows from durable
+/// Read Space-container / Flow / Morph projection rows from durable
 /// persistence into the supplied `ProjectionState`. Called at
 /// `AppState::new` so restart picks up the lifecycle state the
 /// write-through path stamped down on the way in. Unknown state
@@ -929,14 +1079,15 @@ fn hydrate_projections_from_persistence(
     proj: &mut ProjectionState,
 ) {
     use crate::reducer::{
-        FlowProjection, MorphProjection, ObjectLifecycleState, PlaceLifecycleState, PlaceProjection,
+        FlowProjection, MorphProjection, ObjectLifecycleState, SpaceContainerLifecycleState,
+        SpaceContainerProjection,
     };
 
-    fn parse_place_state(value: &str) -> Option<PlaceLifecycleState> {
+    fn parse_space_container_state(value: &str) -> Option<SpaceContainerLifecycleState> {
         match value {
-            "active" => Some(PlaceLifecycleState::Active),
-            "archived" => Some(PlaceLifecycleState::Archived),
-            "tombstoned" => Some(PlaceLifecycleState::Tombstoned),
+            "active" => Some(SpaceContainerLifecycleState::Active),
+            "archived" => Some(SpaceContainerLifecycleState::Archived),
+            "tombstoned" => Some(SpaceContainerLifecycleState::Tombstoned),
             _ => None,
         }
     }
@@ -950,20 +1101,20 @@ fn hydrate_projections_from_persistence(
         }
     }
 
-    if let Ok(rows) = persistence.place_projections().snapshot_all() {
+    if let Ok(rows) = persistence.space_container_projections().snapshot_all() {
         for record in rows {
-            let Some(state) = parse_place_state(&record.state) else {
+            let Some(state) = parse_space_container_state(&record.state) else {
                 tracing::warn!(
-                    place_id = %record.place_id,
+                    container_space_id = %record.container_space_id,
                     state = %record.state,
-                    "skipping place projection row with unknown state during hydrate"
+                    "skipping space-container projection row with unknown state during hydrate"
                 );
                 continue;
             };
-            proj.places.insert(
-                record.place_id.clone(),
-                PlaceProjection {
-                    place_id: record.place_id,
+            proj.space_containers.insert(
+                record.container_space_id.clone(),
+                SpaceContainerProjection {
+                    container_space_id: record.container_space_id,
                     space_id: record.space_id,
                     kind: record.kind,
                     title: record.title,

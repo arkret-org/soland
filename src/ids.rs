@@ -21,6 +21,10 @@ pub fn generate_space_id() -> String {
     generate("space")
 }
 
+pub fn generate_realm_id() -> String {
+    generate("realm")
+}
+
 pub fn generate_event_id() -> String {
     generate("event")
 }
@@ -168,6 +172,7 @@ mod tests {
 
     #[test]
     fn all_generators_produce_valid_prefixes() {
+        assert!(generate_realm_id().starts_with("cx:realm:"));
         assert!(generate_space_id().starts_with("cx:space:"));
         assert!(generate_event_id().starts_with("cx:event:"));
         assert!(generate_operation_id().starts_with("cx:operation:"));

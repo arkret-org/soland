@@ -485,7 +485,7 @@ async fn export_account(
 
     let spaces: Vec<serde_json::Value> = state
         .persistence
-        .space_meta()
+        .realm_meta()
         .list()
         .unwrap_or_default()
         .into_iter()

@@ -53,10 +53,11 @@ use identity::device_messages::{device_message_events_after, prune_acked_device_
 use identity::did::validate_did_document_services;
 use spaces::directory::demo_actors;
 use spaces::space::{
-    invite_token_space_id, is_space_deleted, prune_expired_typing, space_allows_plaintext_service,
-    space_discoverability, space_event_visible_to_session, space_has_member,
-    space_history_visibility, space_id_accessible, space_resolvable_to,
-    space_search_discoverability, space_search_visible_to, space_visible_to, touch_space,
+    invite_token_space_id, is_realm_deleted, is_space_deleted, prune_expired_typing,
+    realm_allows_plaintext_service, realm_discoverability, realm_event_visible_to_session,
+    realm_has_member, realm_history_visibility, realm_id_accessible, realm_scope_to_realm_id,
+    realm_visible_to, space_allows_plaintext_service, space_discoverability, space_has_member,
+    space_resolvable_to, space_search_discoverability, space_search_visible_to, touch_realm,
     typing_ephemeral_for_space,
 };
 use system::extract::AuthArgs;
@@ -165,7 +166,7 @@ fn contrix_openapi_doc(router: &Router) -> OpenApi {
                 // ViewRenderer / AllowedEntityFacetsConstraint /
                 // allowed_entity_facets) was removed alongside the entity
                 // abstraction. View facets are now declared by individual
-                // spec event kinds (`cx.view.*` / `cx.flow.*` / `cx.place.*`)
+                // spec event kinds (`cx.view.*` / `cx.flow.*` / `cx.space.*`)
                 // and bound through cell-family registry mappings.
                 "authz_constraint_kinds": ["allowed_object_facets"],
             }),
@@ -377,6 +378,34 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "messages",
         "cx.extension.soland.messages.send",
         "deployment-local convenience to send a plain message",
+    ),
+    (
+        "/api/v1/projection/space-containers",
+        PathItemType::Get,
+        "projection",
+        "cx.extension.soland.projection.space_containers",
+        "deployment-local Space-container projection query",
+    ),
+    (
+        "/api/v1/projection/places",
+        PathItemType::Get,
+        "projection",
+        "cx.extension.soland.projection.space_containers",
+        "legacy alias for Space-container projection query",
+    ),
+    (
+        "/api/v1/projection/flows",
+        PathItemType::Get,
+        "projection",
+        "cx.extension.soland.projection.flows",
+        "deployment-local Flow projection query",
+    ),
+    (
+        "/api/v1/projection/morphs",
+        PathItemType::Get,
+        "projection",
+        "cx.extension.soland.projection.morphs",
+        "deployment-local Morph projection query",
     ),
     (
         "/api/v1/index/describe",
@@ -892,7 +921,12 @@ async fn cors_preflight(res: &mut Response) {
 
 #[handler]
 async fn api_not_found(res: &mut Response) {
-    res.status_code(StatusCode::NOT_FOUND);
+    render_error(
+        res,
+        StatusCode::NOT_FOUND,
+        "unrecognized_endpoint",
+        "unrecognized endpoint",
+    );
 }
 
 /// Build a `CorsHandler` from the `SOLAND_CORS_ALLOW_ORIGIN` config string.
@@ -996,7 +1030,7 @@ pub(crate) fn snapshot_bundle_for_space(
 ) -> Option<SnapshotBundle> {
     let space_id_value = SpaceId::new(space_id.to_owned()).ok()?;
     let (title, members, category, tags) = {
-        let spaces = state.spaces.lock().expect("spaces lock");
+        let spaces = state.realms.lock().expect("spaces lock");
         let space = spaces.get(&space_id_value)?;
         (
             space.name.clone(),
@@ -1009,7 +1043,7 @@ pub(crate) fn snapshot_bundle_for_space(
             space.tags.iter().cloned().collect::<Vec<_>>(),
         )
     };
-    let meta = state.persistence.space_meta().get(space_id).ok().flatten();
+    let meta = state.persistence.realm_meta().get(space_id).ok().flatten();
     let messages = state
         .persistence
         .messages()
@@ -1360,26 +1394,26 @@ mod operation_conformance_tests {
                 valid: true,
             },
             OperationVector {
-                name: "place archive",
-                kind: kinds::CX_PLACE_ARCHIVE,
-                payload: json!({"place_id": "cx:place:01904100-0000-7000-8000-1fb50799ad42"}),
+                name: "space container archive",
+                kind: kinds::CX_SPACE_CONTAINER_ARCHIVE,
+                payload: json!({"space_id": "cx:space:01904100-0000-7000-8000-1fb50799ad42"}),
                 valid: true,
             },
             OperationVector {
-                name: "place restore",
-                kind: kinds::CX_PLACE_RESTORE,
-                payload: json!({"place_id": "cx:place:01904100-0000-7000-8000-1fb50799ad42"}),
+                name: "space container restore",
+                kind: kinds::CX_SPACE_CONTAINER_RESTORE,
+                payload: json!({"space_id": "cx:space:01904100-0000-7000-8000-1fb50799ad42"}),
                 valid: true,
             },
             OperationVector {
-                name: "place tombstone",
-                kind: kinds::CX_PLACE_TOMBSTONE,
-                payload: json!({"place_id": "cx:place:01904100-0000-7000-8000-1fb50799ad42"}),
+                name: "space container tombstone",
+                kind: kinds::CX_SPACE_CONTAINER_TOMBSTONE,
+                payload: json!({"space_id": "cx:space:01904100-0000-7000-8000-1fb50799ad42"}),
                 valid: true,
             },
             OperationVector {
-                name: "place restore missing place_id",
-                kind: kinds::CX_PLACE_RESTORE,
+                name: "space container restore missing space_id",
+                kind: kinds::CX_SPACE_CONTAINER_RESTORE,
                 payload: json!({"reason": "release_reopened"}),
                 valid: false,
             },
@@ -1420,8 +1454,9 @@ mod operation_conformance_tests {
                 kind: kinds::CX_FLOW_MOVE,
                 payload: json!({
                     "flow_id": "cx:flow:01904100-0000-7000-8000-ca33616973bb",
-                    "board_place_id": "cx:place:01904100-0000-7000-8000-c10dc0000001",
-                    "target_place_id": "cx:place:01904100-0000-7000-8000-c10dc0000002",
+                    "board_space_id": "cx:space:01904100-0000-7000-8000-c10dc0000001",
+                    "target_space_id": "cx:space:01904100-0000-7000-8000-c10dc0000002",
+                    "rank": "a1",
                 }),
                 valid: true,
             },
@@ -1430,13 +1465,14 @@ mod operation_conformance_tests {
                 kind: kinds::CX_FLOW_REORDER,
                 payload: json!({
                     "flow_id": "cx:flow:01904100-0000-7000-8000-ca33616973bb",
-                    "board_place_id": "cx:place:01904100-0000-7000-8000-c10dc0000001",
+                    "board_space_id": "cx:space:01904100-0000-7000-8000-c10dc0000001",
+                    "space_id": "cx:space:01904100-0000-7000-8000-c10dc0000002",
                     "rank": "a1",
                 }),
                 valid: true,
             },
             OperationVector {
-                name: "flow move missing board_place_id",
+                name: "flow move missing board_space_id",
                 kind: kinds::CX_FLOW_MOVE,
                 payload: json!({"flow_id": "cx:flow:01904100-0000-7000-8000-ca33616973bb"}),
                 valid: false,
@@ -1444,7 +1480,7 @@ mod operation_conformance_tests {
             OperationVector {
                 name: "flow reorder missing flow_id",
                 kind: kinds::CX_FLOW_REORDER,
-                payload: json!({"board_place_id": "cx:place:01904100-0000-7000-8000-c10dc0000001", "rank": "a1"}),
+                payload: json!({"board_space_id": "cx:space:01904100-0000-7000-8000-c10dc0000001", "space_id": "cx:space:01904100-0000-7000-8000-c10dc0000002", "rank": "a1"}),
                 valid: false,
             },
             OperationVector {

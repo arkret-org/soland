@@ -428,7 +428,7 @@ pub(super) async fn identity_resolve(
 }
 
 #[endpoint(
-    operation_id = "cx.identity.document",
+    operation_id = "cx.identity.get_document",
     tags("identity"),
     summary = "Fetch the locally-cached DID document for a DID"
 )]
@@ -452,7 +452,7 @@ pub(super) async fn identity_document(
 }
 
 #[endpoint(
-    operation_id = "cx.identity.log",
+    operation_id = "cx.identity.get_log",
     tags("identity"),
     summary = "Return the local webvh key-log events for a DID"
 )]
@@ -489,7 +489,7 @@ pub(super) async fn identity_log(
 }
 
 #[endpoint(
-    operation_id = "cx.identity.receipts",
+    operation_id = "cx.identity.get_receipts",
     tags("identity"),
     summary = "Read issuer receipts for the local webvh key-log of a DID"
 )]

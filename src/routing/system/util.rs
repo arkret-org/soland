@@ -229,7 +229,7 @@ pub fn handle_for_did(did: &str) -> String {
 // ── Discoverability validator ───────────────────────────────────────────────
 //
 // (The `entity` abstraction never landed in `contrix-spec/v1`; typed
-// objects in the protocol are `cx:flow:` / `cx:place:` / `cx:morph:` /
+// objects in the protocol are `cx:space:` / `cx:flow:` / `cx:morph:` /
 // `cx:relation:` / `cx:view:`, each driven by its own dedicated event
 // kind.)
 

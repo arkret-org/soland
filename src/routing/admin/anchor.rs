@@ -854,11 +854,11 @@ pub(super) async fn admin_list_bottom_global(
     let _session = aa.authenticated_session(state, req)?;
     let mut out = Vec::new();
     let space_ids: Vec<String> = {
-        let spaces = state.spaces.lock().expect("spaces lock");
+        let spaces = state.realms.lock().expect("spaces lock");
         spaces
             .search(Default::default())
             .into_iter()
-            .map(|s| s.space_id.as_str().to_owned())
+            .map(|s| s.realm_id.as_str().to_owned())
             .collect()
     };
     for space_id in space_ids {

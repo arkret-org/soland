@@ -15,7 +15,7 @@
 //! resolve "is this actor allowed to see / write to this Space?".
 
 use chrono::{DateTime, Duration, Utc};
-use contrix_sdk::{Did, Operation, OperationId, SpaceId, SpaceSearchEntry};
+use contrix_sdk::{Did, Operation, OperationId, RealmId, SpaceId};
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
@@ -26,7 +26,7 @@ use super::{
     is_valid_discoverability, now, validate_did, validate_space_id,
 };
 use crate::error::{AppError, ErrorCode};
-use crate::state::{AppState, SessionRecord, SpaceInviteRecord, SpaceMetaRecord};
+use crate::state::{AppState, RealmDirectoryEntry, RealmMetaRecord, SessionRecord, SpaceInviteRecord};
 use crate::wire::{
     AcceptSpaceInviteRequest, AddSpaceMemberRequest, CreateSpaceInviteRequest, CreateSpaceRequest,
     SetSpacePolicyRequest, SpaceInviteResponse, SpaceLifecycleResponse, SpacePolicyResponse,
@@ -52,7 +52,7 @@ pub(super) fn router() -> Router {
 }
 
 #[endpoint(
-    operation_id = "cx.spaces.get",
+    operation_id = "cx.extension.soland.spaces.get",
     tags("spaces"),
     summary = "Get a Space's lifecycle response (owner + members)"
 )]
@@ -69,7 +69,7 @@ async fn get_space(
 }
 
 #[endpoint(
-    operation_id = "cx.spaces.create",
+    operation_id = "cx.extension.soland.spaces.create",
     tags("spaces"),
     summary = "Create a Space, optionally inviting peers",
     status_codes(201, 400, 401, 409, 500)
@@ -141,9 +141,9 @@ async fn create_space(
     }
     let invitees = body.invitees.clone();
     let plaintext_visible_services = body.plaintext_visible_services.clone();
-    let space_id = ids::generate_space_id();
-    let mut entry = SpaceSearchEntry::new(
-        SpaceId::new(space_id.clone()).expect("generated valid space id"),
+    let space_id = ids::generate_realm_id();
+    let mut entry = RealmDirectoryEntry::new(
+        RealmId::new(space_id.clone()).expect("generated valid Realm id"),
         body.title.trim(),
     );
     entry.description = body.summary;
@@ -152,8 +152,8 @@ async fn create_space(
         .members
         .insert(Did::new(session.actor.clone()).expect("session did is valid"));
 
-    state.spaces.lock().expect("spaces lock").upsert(entry);
-    let meta = SpaceMetaRecord {
+    state.realms.lock().expect("spaces lock").upsert(entry);
+    let meta = RealmMetaRecord {
         owner: session.actor.clone(),
         deleted: false,
         discoverability: discoverability.clone(),
@@ -163,8 +163,8 @@ async fn create_space(
         created_at: now(),
         updated_at: now(),
     };
-    if let Err(error) = state.persistence.space_meta().put(&space_id, &meta) {
-        tracing::error!(%error, "failed to persist space meta");
+    if let Err(error) = state.persistence.realm_meta().put(&space_id, &meta) {
+        tracing::error!(%error, "failed to persist Realm meta");
     }
     let invite_records: Vec<_> = invitees
         .iter()
@@ -224,7 +224,7 @@ async fn create_space(
 }
 
 #[endpoint(
-    operation_id = "cx.spaces.update",
+    operation_id = "cx.extension.soland.spaces.update",
     tags("spaces"),
     summary = "Owner updates Space metadata and visibility"
 )]
@@ -238,7 +238,7 @@ async fn update_space(
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req)?;
     let space_id = space_id.into_inner();
-    if !space_owner_matches(state, &space_id, &session.actor) {
+    if !realm_owner_matches(state, &space_id, &session.actor) {
         return Err(AppError::capability_denied(
             "only the space owner can update the space",
         ));
@@ -271,9 +271,9 @@ async fn update_space(
         }
     }
     let space_id_value =
-        SpaceId::new(space_id.clone()).map_err(|_| AppError::invalid_param("invalid space_id"))?;
+        RealmId::new(space_id.clone()).map_err(|_| AppError::invalid_param("invalid realm_id"))?;
     {
-        let mut spaces = state.spaces.lock().expect("spaces lock");
+        let mut spaces = state.realms.lock().expect("spaces lock");
         let mut entry = spaces
             .get(&space_id_value)
             .cloned()
@@ -290,7 +290,7 @@ async fn update_space(
         spaces.upsert(entry);
     }
     {
-        let store = state.persistence.space_meta();
+        let store = state.persistence.realm_meta();
         let mut record = store
             .get(&space_id)
             .map_err(|error| AppError::internal(error.to_string()))?
@@ -331,7 +331,7 @@ async fn update_space(
 }
 
 #[endpoint(
-    operation_id = "cx.spaces.set_policy",
+    operation_id = "cx.extension.soland.spaces.set_policy",
     tags("spaces"),
     summary = "Owner updates coarse Space join and history policy"
 )]
@@ -345,7 +345,7 @@ async fn set_space_policy(
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req)?;
     let space_id = space_id.into_inner();
-    if !space_owner_matches(state, &space_id, &session.actor) {
+    if !realm_owner_matches(state, &space_id, &session.actor) {
         return Err(AppError::capability_denied(
             "only the space owner can update policy",
         ));
@@ -371,7 +371,7 @@ async fn set_space_policy(
         _ => "invite_only",
     };
     {
-        let store = state.persistence.space_meta();
+        let store = state.persistence.realm_meta();
         let mut record = store
             .get(&space_id)
             .map_err(|error| AppError::internal(error.to_string()))?
@@ -394,9 +394,9 @@ async fn set_space_policy(
             .map_err(|error| AppError::internal(error.to_string()))?;
     }
     {
-        let space_id_value = SpaceId::new(space_id.clone())
-            .map_err(|_| AppError::invalid_param("invalid space_id"))?;
-        let mut spaces = state.spaces.lock().expect("spaces lock");
+        let space_id_value = RealmId::new(space_id.clone())
+            .map_err(|_| AppError::invalid_param("invalid realm_id"))?;
+        let mut spaces = state.realms.lock().expect("spaces lock");
         let mut entry = spaces
             .get(&space_id_value)
             .cloned()
@@ -434,7 +434,7 @@ async fn set_space_policy(
 }
 
 #[endpoint(
-    operation_id = "cx.spaces.add_member",
+    operation_id = "cx.extension.soland.spaces.add_member",
     tags("spaces"),
     summary = "Owner adds a member to a Space"
 )]
@@ -448,7 +448,7 @@ async fn add_space_member(
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req)?;
     let space_id = space_id.into_inner();
-    if !space_owner_matches(state, &space_id, &session.actor) {
+    if !realm_owner_matches(state, &space_id, &session.actor) {
         return Err(AppError::capability_denied(
             "only the space owner can add members",
         ));
@@ -458,9 +458,9 @@ async fn add_space_member(
         return Err(AppError::invalid_param("invalid member did"));
     }
     let space_id_value =
-        SpaceId::new(space_id.clone()).map_err(|_| AppError::invalid_param("invalid space_id"))?;
+        RealmId::new(space_id.clone()).map_err(|_| AppError::invalid_param("invalid realm_id"))?;
     {
-        let mut spaces = state.spaces.lock().expect("spaces lock");
+        let mut spaces = state.realms.lock().expect("spaces lock");
         let mut entry = spaces
             .get(&space_id_value)
             .cloned()
@@ -498,7 +498,7 @@ async fn add_space_member(
 }
 
 #[endpoint(
-    operation_id = "cx.spaces.accept_invite",
+    operation_id = "cx.extension.soland.spaces.accept_invite",
     tags("spaces"),
     summary = "Invitee accepts a pending space invite and becomes a member"
 )]
@@ -553,9 +553,9 @@ async fn accept_space_invite(
 
     // Add invitee to space members.
     let space_id_value =
-        SpaceId::new(space_id.clone()).map_err(|_| AppError::invalid_param("invalid space_id"))?;
+        RealmId::new(space_id.clone()).map_err(|_| AppError::invalid_param("invalid realm_id"))?;
     {
-        let mut spaces = state.spaces.lock().expect("spaces lock");
+        let mut spaces = state.realms.lock().expect("spaces lock");
         let mut entry = spaces
             .get(&space_id_value)
             .cloned()
@@ -596,7 +596,7 @@ async fn accept_space_invite(
 }
 
 #[endpoint(
-    operation_id = "cx.spaces.create_invite",
+    operation_id = "cx.extension.soland.spaces.create_invite",
     tags("spaces"),
     summary = "Owner creates an invite to a Space for a target DID"
 )]
@@ -615,7 +615,7 @@ async fn create_space_invite(
     if validate_did(&target).is_err() {
         return Err(AppError::invalid_param("invalid target did"));
     }
-    if !space_owner_matches(state, &space_id, &session.actor) {
+    if !realm_owner_matches(state, &space_id, &session.actor) {
         return Err(AppError::capability_denied(
             "only the space owner can create invites",
         ));
@@ -680,7 +680,7 @@ async fn create_space_invite(
 }
 
 #[endpoint(
-    operation_id = "cx.spaces.remove_member",
+    operation_id = "cx.extension.soland.spaces.remove_member",
     tags("spaces"),
     summary = "Owner removes a member from a Space"
 )]
@@ -695,7 +695,7 @@ async fn remove_space_member(
     let session = aa.authenticated_session(state, req)?;
     let space_id = space_id.into_inner();
     let member_did = member_did.into_inner();
-    if !space_owner_matches(state, &space_id, &session.actor) {
+    if !realm_owner_matches(state, &space_id, &session.actor) {
         return Err(AppError::capability_denied(
             "only the space owner can remove members",
         ));
@@ -707,10 +707,10 @@ async fn remove_space_member(
         ));
     }
     let space_id_value =
-        SpaceId::new(space_id.clone()).map_err(|_| AppError::invalid_param("invalid space_id"))?;
+        RealmId::new(space_id.clone()).map_err(|_| AppError::invalid_param("invalid realm_id"))?;
     let member = Did::new(member_did).map_err(|_| AppError::invalid_param("invalid member did"))?;
     {
-        let mut spaces = state.spaces.lock().expect("spaces lock");
+        let mut spaces = state.realms.lock().expect("spaces lock");
         let mut entry = spaces
             .get(&space_id_value)
             .cloned()
@@ -744,7 +744,7 @@ async fn remove_space_member(
 }
 
 #[endpoint(
-    operation_id = "cx.spaces.delete",
+    operation_id = "cx.extension.soland.spaces.delete",
     tags("spaces"),
     summary = "Owner soft-deletes a Space"
 )]
@@ -757,13 +757,13 @@ async fn delete_space(
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req)?;
     let space_id = space_id.into_inner();
-    if !space_owner_matches(state, &space_id, &session.actor) {
+    if !realm_owner_matches(state, &space_id, &session.actor) {
         return Err(AppError::capability_denied(
             "only the space owner can delete the space",
         ));
     }
     {
-        let store = state.persistence.space_meta();
+        let store = state.persistence.realm_meta();
         let mut record = store
             .get(&space_id)
             .map_err(|error| AppError::internal(error.to_string()))?
@@ -797,7 +797,7 @@ async fn delete_space(
 }
 
 #[endpoint(
-    operation_id = "cx.spaces.export",
+    operation_id = "cx.extension.soland.spaces.export",
     tags("spaces"),
     summary = "Full event log + projection dump for a Space"
 )]
@@ -860,19 +860,19 @@ async fn export_space(
 
 // ── Helpers shared with the parent module ───────────────────────────────────
 //
-// Each is re-exported from `crate::routing::*` so existing callers in `mod.rs`
-// (e.g. `touch_space` from the projection writer at line ~12670) keep working.
+// Each is re-exported from `crate::routing::*` so sibling modules use the
+// same Realm metadata and membership checks.
 
 pub fn space_lifecycle_response(
     state: &AppState,
     space_id: &str,
 ) -> Result<SpaceLifecycleResponse, AppError> {
-    let space_id_value = SpaceId::new(space_id.to_owned())
-        .map_err(|_| AppError::invalid_param("invalid space_id"))?;
-    let spaces = state.spaces.lock().expect("spaces lock");
+    let space_id_value = RealmId::new(space_id.to_owned())
+        .map_err(|_| AppError::invalid_param("invalid realm_id"))?;
+    let spaces = state.realms.lock().expect("spaces lock");
     let record = state
         .persistence
-        .space_meta()
+        .realm_meta()
         .get(space_id)
         .map_err(|error| AppError::internal(error.to_string()))?
         .ok_or_else(|| AppError::not_found("not found"))?;
@@ -892,7 +892,7 @@ pub fn space_lifecycle_response(
 pub fn space_owner_matches(state: &AppState, space_id: &str, actor: &str) -> bool {
     state
         .persistence
-        .space_meta()
+        .realm_meta()
         .get(space_id)
         .ok()
         .flatten()
@@ -900,7 +900,7 @@ pub fn space_owner_matches(state: &AppState, space_id: &str, actor: &str) -> boo
 }
 
 pub fn touch_space(state: &AppState, space_id: &str) {
-    let store = state.persistence.space_meta();
+    let store = state.persistence.realm_meta();
     if let Ok(Some(mut record)) = store.get(space_id) {
         record.updated_at = now();
         if let Err(error) = store.put(space_id, &record) {
@@ -911,10 +911,109 @@ pub fn touch_space(state: &AppState, space_id: &str) {
 
 // ── Visibility + membership + typing query helpers ─────────────────────────
 
+pub fn realm_scope_to_realm_id(scope_id: &str) -> Option<String> {
+    RealmId::new(scope_id.to_owned())
+        .ok()
+        .map(|realm_id| realm_id.as_str().to_owned())
+}
+
+pub fn realm_owner_matches(state: &AppState, realm_or_internal_id: &str, actor: &str) -> bool {
+    realm_scope_to_realm_id(realm_or_internal_id)
+        .is_some_and(|realm_id| space_owner_matches(state, &realm_id, actor))
+}
+
+pub fn touch_realm(state: &AppState, realm_or_internal_id: &str) {
+    if let Some(realm_id) = realm_scope_to_realm_id(realm_or_internal_id) {
+        touch_space(state, &realm_id);
+    }
+}
+
+pub fn is_realm_deleted(state: &AppState, realm_or_internal_id: &str) -> bool {
+    realm_scope_to_realm_id(realm_or_internal_id)
+        .is_some_and(|realm_id| is_space_deleted(state, &realm_id))
+}
+
+pub fn realm_discoverability(state: &AppState, realm_or_internal_id: &str) -> String {
+    realm_scope_to_realm_id(realm_or_internal_id)
+        .map(|realm_id| space_discoverability(state, &realm_id))
+        .unwrap_or_else(|| "invite_only".to_owned())
+}
+
+pub fn realm_has_member(state: &AppState, realm_or_internal_id: &str, actor: &str) -> bool {
+    realm_scope_to_realm_id(realm_or_internal_id)
+        .is_some_and(|realm_id| space_has_member(state, &realm_id, actor))
+}
+
+pub fn realm_id_accessible(
+    state: &AppState,
+    realm_or_internal_id: &str,
+    session: Option<&SessionRecord>,
+) -> bool {
+    realm_scope_to_realm_id(realm_or_internal_id)
+        .is_some_and(|realm_id| space_id_accessible(state, &realm_id, session))
+}
+
+pub fn realm_visible_to(
+    state: &AppState,
+    space: &RealmDirectoryEntry,
+    session: Option<&SessionRecord>,
+) -> bool {
+    space_visible_to(state, space, session)
+}
+
+pub fn realm_history_visibility(state: &AppState, realm_or_internal_id: &str) -> String {
+    realm_scope_to_realm_id(realm_or_internal_id)
+        .map(|realm_id| space_history_visibility(state, &realm_id))
+        .unwrap_or_else(|| "joined".to_owned())
+}
+
+pub fn realm_member_joined_at(
+    state: &AppState,
+    realm_or_internal_id: &str,
+    actor: &str,
+) -> Option<DateTime<Utc>> {
+    realm_scope_to_realm_id(realm_or_internal_id)
+        .and_then(|realm_id| space_member_joined_at(state, &realm_id, actor))
+}
+
+pub fn realm_event_visible_to_session(
+    state: &AppState,
+    realm_or_internal_id: &str,
+    event_created_at: DateTime<Utc>,
+    sender: Option<&str>,
+    session: Option<&SessionRecord>,
+) -> bool {
+    if sender.is_some_and(|sender| session.is_some_and(|session| session.actor == sender)) {
+        return true;
+    }
+    match realm_history_visibility(state, realm_or_internal_id).as_str() {
+        "world_readable" => true,
+        "shared" => {
+            realm_discoverability(state, realm_or_internal_id) == "public"
+                || session.is_some_and(|session| {
+                    realm_has_member(state, realm_or_internal_id, &session.actor)
+                })
+        }
+        "joined" | "invited" => {
+            let Some(session) = session else {
+                return false;
+            };
+            realm_member_joined_at(state, realm_or_internal_id, &session.actor)
+                .is_some_and(|joined_at| event_created_at >= joined_at)
+        }
+        _ => false,
+    }
+}
+
+pub fn realm_allows_plaintext_service(state: &AppState, realm_or_internal_id: &str) -> bool {
+    realm_scope_to_realm_id(realm_or_internal_id)
+        .is_some_and(|realm_id| space_allows_plaintext_service(state, &realm_id))
+}
+
 pub fn is_space_deleted(state: &AppState, space_id: &str) -> bool {
     state
         .persistence
-        .space_meta()
+        .realm_meta()
         .get(space_id)
         .ok()
         .flatten()
@@ -924,7 +1023,7 @@ pub fn is_space_deleted(state: &AppState, space_id: &str) -> bool {
 pub fn space_discoverability(state: &AppState, space_id: &str) -> String {
     state
         .persistence
-        .space_meta()
+        .realm_meta()
         .get(space_id)
         .ok()
         .flatten()
@@ -937,21 +1036,21 @@ pub fn space_has_member(state: &AppState, space_id: &str, actor: &str) -> bool {
         tracing::warn!(%space_id, %actor, "space_has_member: space marked deleted");
         return false;
     }
-    let Ok(space_id_typed) = SpaceId::new(space_id.to_owned()) else {
-        tracing::warn!(%space_id, %actor, "space_has_member: invalid space_id shape");
+    let Ok(space_id_typed) = RealmId::new(space_id.to_owned()) else {
+        tracing::warn!(%space_id, %actor, "space_has_member: invalid realm_id shape");
         return false;
     };
     let Ok(actor_typed) = Did::new(actor.to_owned()) else {
         tracing::warn!(%space_id, %actor, "space_has_member: invalid actor DID shape");
         return false;
     };
-    let spaces = state.spaces.lock().expect("spaces lock");
+    let spaces = state.realms.lock().expect("spaces lock");
     match spaces.get(&space_id_typed) {
         None => {
             let known: Vec<String> = spaces
                 .search_by_text("")
                 .into_iter()
-                .map(|entry| entry.space_id.as_str().to_owned())
+                .map(|entry| entry.realm_id.as_str().to_owned())
                 .collect();
             tracing::warn!(
                 %space_id,
@@ -984,13 +1083,13 @@ pub fn space_has_member(state: &AppState, space_id: &str, actor: &str) -> bool {
 
 pub fn space_visible_to(
     state: &AppState,
-    space: &contrix_sdk::SpaceSearchEntry,
+    space: &RealmDirectoryEntry,
     session: Option<&SessionRecord>,
 ) -> bool {
-    if is_space_deleted(state, space.space_id.as_str()) {
+    if is_space_deleted(state, space.realm_id.as_str()) {
         return false;
     }
-    if space_discoverability(state, space.space_id.as_str()) == "public" {
+    if space_discoverability(state, space.realm_id.as_str()) == "public" {
         return true;
     }
     session.is_some_and(|session| {
@@ -1000,10 +1099,10 @@ pub fn space_visible_to(
 
 pub fn space_search_visible_to(
     state: &AppState,
-    space: &contrix_sdk::SpaceSearchEntry,
+    space: &RealmDirectoryEntry,
     session: Option<&SessionRecord>,
 ) -> bool {
-    if is_space_deleted(state, space.space_id.as_str()) {
+    if is_space_deleted(state, space.realm_id.as_str()) {
         return false;
     }
     if session.is_some_and(|session| {
@@ -1012,19 +1111,19 @@ pub fn space_search_visible_to(
         return true;
     }
     matches!(
-        space_discoverability(state, space.space_id.as_str()).as_str(),
+        space_discoverability(state, space.realm_id.as_str()).as_str(),
         "public" | "listed" | "restricted"
     )
 }
 
 pub fn space_resolvable_to(
     state: &AppState,
-    space: &contrix_sdk::SpaceSearchEntry,
+    space: &RealmDirectoryEntry,
     session: Option<&SessionRecord>,
     invite_token: Option<&str>,
     signed_link: Option<&str>,
 ) -> bool {
-    if is_space_deleted(state, space.space_id.as_str()) {
+    if is_space_deleted(state, space.realm_id.as_str()) {
         return false;
     }
     if session.is_some_and(|session| {
@@ -1032,10 +1131,10 @@ pub fn space_resolvable_to(
     }) {
         return true;
     }
-    match space_discoverability(state, space.space_id.as_str()).as_str() {
+    match space_discoverability(state, space.realm_id.as_str()).as_str() {
         "public" | "listed" | "restricted" | "unlisted" => true,
         "invite_only" => invite_token
-            .is_some_and(|token| invite_token_matches_space(state, space.space_id.as_str(), token)),
+            .is_some_and(|token| invite_token_matches_space(state, space.realm_id.as_str(), token)),
         "secret" => signed_link.is_some_and(|link| !link.trim().is_empty()),
         _ => false,
     }
@@ -1089,17 +1188,17 @@ pub fn space_id_accessible(
     space_id: &str,
     session: Option<&SessionRecord>,
 ) -> bool {
-    let Ok(sid) = SpaceId::new(space_id.to_owned()) else {
+    let Ok(sid) = RealmId::new(space_id.to_owned()) else {
         return false;
     };
-    let spaces = state.spaces.lock().expect("spaces lock");
+    let spaces = state.realms.lock().expect("spaces lock");
     let Some(space) = spaces.get(&sid) else {
         return false;
     };
-    if space_discoverability(state, space.space_id.as_str()) == "public" {
+    if space_discoverability(state, space.realm_id.as_str()) == "public" {
         return true;
     }
-    if space_history_visibility(state, space.space_id.as_str()) == "world_readable" {
+    if space_history_visibility(state, space.realm_id.as_str()) == "world_readable" {
         return true;
     }
     session.is_some_and(|session| {
@@ -1112,7 +1211,7 @@ pub fn space_id_accessible(
 pub fn space_history_visibility(state: &AppState, space_id: &str) -> String {
     state
         .persistence
-        .space_meta()
+        .realm_meta()
         .get(space_id)
         .ok()
         .flatten()
@@ -1136,7 +1235,7 @@ pub fn space_member_joined_at(
     {
         return Some(member.joined_at);
     }
-    let meta = state.persistence.space_meta().get(space_id).ok().flatten();
+    let meta = state.persistence.realm_meta().get(space_id).ok().flatten();
     if meta.as_ref().is_some_and(|record| record.owner == actor) {
         return meta.map(|record| record.created_at);
     }
@@ -1146,53 +1245,22 @@ pub fn space_member_joined_at(
     None
 }
 
-/// Per-event read-path history filter for `/sync` and `/api/v1/events`.
-/// `shared` retains the existing member-visible full history behaviour;
-/// `joined` / `invited` require the event to be at or after the viewer's
-/// joined-at timestamp.
-pub fn space_event_visible_to_session(
-    state: &AppState,
-    space_id: &str,
-    event_created_at: DateTime<Utc>,
-    sender: Option<&str>,
-    session: Option<&SessionRecord>,
-) -> bool {
-    if sender.is_some_and(|sender| session.is_some_and(|session| session.actor == sender)) {
-        return true;
-    }
-    match space_history_visibility(state, space_id).as_str() {
-        "world_readable" => true,
-        "shared" => {
-            space_discoverability(state, space_id) == "public"
-                || session.is_some_and(|session| space_has_member(state, space_id, &session.actor))
-        }
-        "joined" | "invited" => {
-            let Some(session) = session else {
-                return false;
-            };
-            space_member_joined_at(state, space_id, &session.actor)
-                .is_some_and(|joined_at| event_created_at >= joined_at)
-        }
-        _ => false,
-    }
-}
-
 pub fn space_allows_plaintext_service(state: &AppState, space_id: &str) -> bool {
-    let Ok(sid) = SpaceId::new(space_id.to_owned()) else {
+    let Ok(sid) = RealmId::new(space_id.to_owned()) else {
         return false;
     };
     {
-        let spaces = state.spaces.lock().expect("spaces lock");
+        let spaces = state.realms.lock().expect("spaces lock");
         if spaces
             .get(&sid)
-            .is_some_and(|space| space_discoverability(state, space.space_id.as_str()) == "public")
+            .is_some_and(|space| space_discoverability(state, space.realm_id.as_str()) == "public")
         {
             return true;
         }
     }
     state
         .persistence
-        .space_meta()
+        .realm_meta()
         .get(space_id)
         .ok()
         .flatten()
@@ -1253,9 +1321,12 @@ pub fn record_space_lifecycle_operation(
     space_id: &str,
     payload: serde_json::Value,
 ) -> contrix_sdk::Result<Option<String>> {
+    let Ok(space_id) = SpaceId::new(space_id.to_owned()) else {
+        return Ok(None);
+    };
     let operation = Operation::create(
         OperationId::new(ids::generate_operation_id()).expect("generated valid operation id"),
-        SpaceId::new(space_id.to_owned()).expect("validated space id"),
+        space_id,
         match payload.get("action").and_then(serde_json::Value::as_str) {
             Some("create") => kinds::CX_SPACE_CREATE,
             Some("destroy") | Some("delete") => kinds::CX_SPACE_DESTROY,
@@ -1282,9 +1353,12 @@ pub fn record_member_state_operation(
     if membership == "join" && payload.get("delivery_status").is_none() {
         payload["delivery_status"] = json!("unroutable");
     }
+    let Ok(space_id) = SpaceId::new(space_id.to_owned()) else {
+        return Ok(None);
+    };
     let operation = Operation::create(
         OperationId::new(ids::generate_operation_id()).expect("generated valid operation id"),
-        SpaceId::new(space_id.to_owned()).expect("validated space id"),
+        space_id,
         kinds::CX_MEMBER_STATE,
         payload,
     );

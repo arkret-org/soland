@@ -23,7 +23,7 @@
 
 use std::collections::HashSet;
 
-use contrix_sdk::{Did, Operation, OperationId, SpaceSearchEntry};
+use contrix_sdk::{Did, Operation, OperationId, RealmId};
 use diesel::sql_types::{Jsonb, Nullable, Text, Timestamptz, Uuid as SqlUuid};
 use diesel::{QueryableByName, RunQueryDsl, sql_query};
 use serde_json::{Value, json};
@@ -31,13 +31,14 @@ use uuid::Uuid;
 
 use super::{
     default_discussion_track, discussion_track_for_projection_event, flow_id_for_projection_event,
-    flow_id_from_space_id, is_valid_discoverability, message_id_from_event_id, now, touch_space,
+    flow_id_from_space_id, is_valid_discoverability, message_id_from_event_id, now, touch_realm,
     validate_operation_policy, validate_operation_semantics,
 };
 use crate::ids;
 use crate::kinds;
 use crate::state::{
-    AppState, MessageRecord, ProjectionEventRecord, SpaceInviteRecord, SpaceMetaRecord,
+    AppState, MessageRecord, ProjectionEventRecord, RealmDirectoryEntry, RealmMetaRecord,
+    SpaceInviteRecord,
 };
 
 #[derive(Clone, Debug)]
@@ -463,10 +464,10 @@ fn apply_via_lattice_registry(
 }
 
 /// After the deterministic reducer mutates the in-memory
-/// `ProjectionState::{places,flows,morphs}` maps for a Place / Flow /
-/// Morph lifecycle event, snapshot the affected entry (under
+/// `ProjectionState::{space_containers,flows,morphs}` maps for a
+/// Space-container / Flow / Morph lifecycle event, snapshot the affected entry (under
 /// projection lock) and upsert it to the corresponding
-/// `PlaceProjectionStore` / `FlowProjectionStore` / `MorphProjectionStore`
+/// `SpaceContainerProjectionStore` / `FlowProjectionStore` / `MorphProjectionStore`
 /// in persistence. Lock is released BEFORE the persistence write so
 /// any backend latency doesn't stall other reducer paths.
 ///
@@ -475,11 +476,13 @@ fn apply_via_lattice_registry(
 /// backfill ordering) also produce no write.
 fn write_through_projection(state: &AppState, operation: &Operation) {
     use crate::kinds;
-    use crate::persistence::{FlowProjectionRecord, MorphProjectionRecord, PlaceProjectionRecord};
-    use crate::reducer::{ObjectLifecycleState, PlaceLifecycleState};
+    use crate::persistence::{
+        FlowProjectionRecord, MorphProjectionRecord, SpaceContainerProjectionRecord,
+    };
+    use crate::reducer::{ObjectLifecycleState, SpaceContainerLifecycleState};
 
     enum Snapshot {
-        Place(PlaceProjectionRecord),
+        SpaceContainer(SpaceContainerProjectionRecord),
         Flow(FlowProjectionRecord),
         Morph(MorphProjectionRecord),
     }
@@ -487,15 +490,15 @@ fn write_through_projection(state: &AppState, operation: &Operation) {
     let Some(kind) = kinds::canonical_kind_for_operation(operation) else {
         return;
     };
-    // Place lifecycle: 6 event kinds → places map.
-    let is_place_kind = matches!(
+    // Space-container lifecycle: 6 event kinds → space_containers map.
+    let is_space_container_kind = matches!(
         kind,
-        kinds::CX_PLACE_CREATE
-            | kinds::CX_PLACE_UPDATE
-            | kinds::CX_PLACE_PARENT
-            | kinds::CX_PLACE_ARCHIVE
-            | kinds::CX_PLACE_RESTORE
-            | kinds::CX_PLACE_TOMBSTONE
+        kinds::CX_SPACE_CONTAINER_CREATE
+            | kinds::CX_SPACE_CONTAINER_UPDATE
+            | kinds::CX_SPACE_CONTAINER_PARENT
+            | kinds::CX_SPACE_CONTAINER_ARCHIVE
+            | kinds::CX_SPACE_CONTAINER_RESTORE
+            | kinds::CX_SPACE_CONTAINER_TOMBSTONE
     );
     // Flow lifecycle (state-affecting + position-touching).
     let is_flow_kind = matches!(
@@ -518,7 +521,7 @@ fn write_through_projection(state: &AppState, operation: &Operation) {
     // cx.redaction with an `object_ref` may have flipped a Flow or
     // Morph to Redacted. Pick up either by attempting both.
     let is_redaction = kind == kinds::CX_REDACTION;
-    if !(is_place_kind || is_flow_kind || is_morph_kind || is_redaction) {
+    if !(is_space_container_kind || is_flow_kind || is_morph_kind || is_redaction) {
         return;
     }
 
@@ -526,12 +529,13 @@ fn write_through_projection(state: &AppState, operation: &Operation) {
         let Ok(proj) = state.projection.lock() else {
             return;
         };
-        let place_id_from_payload = operation
+        let container_space_id_from_payload = operation
             .payload
-            .get("place_id")
+            .get("space_id")
+            .or_else(|| operation.payload.get("place_id"))
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned);
-        let place_id_from_object = operation
+        let container_space_id_from_object = operation
             .payload
             .get("object")
             .and_then(|v| v.get("id"))
@@ -566,11 +570,11 @@ fn write_through_projection(state: &AppState, operation: &Operation) {
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned);
 
-        // Place candidates.
-        if is_place_kind {
-            let id = place_id_from_payload.or(place_id_from_object);
-            if let Some(place) = id.and_then(|i| proj.places.get(&i)) {
-                return_snapshot_place(place)
+        // Space-container candidates.
+        if is_space_container_kind {
+            let id = container_space_id_from_payload.or(container_space_id_from_object);
+            if let Some(container) = id.and_then(|i| proj.space_containers.get(&i)) {
+                return_snapshot_space_container(container)
             } else {
                 None
             }
@@ -604,18 +608,20 @@ fn write_through_projection(state: &AppState, operation: &Operation) {
         return;
     };
 
-    fn return_snapshot_place(p: &crate::reducer::PlaceProjection) -> Option<Snapshot> {
-        Some(Snapshot::Place(PlaceProjectionRecord {
-            place_id: p.place_id.clone(),
+    fn return_snapshot_space_container(
+        p: &crate::reducer::SpaceContainerProjection,
+    ) -> Option<Snapshot> {
+        Some(Snapshot::SpaceContainer(SpaceContainerProjectionRecord {
+            container_space_id: p.container_space_id.clone(),
             space_id: p.space_id.clone(),
             kind: p.kind.clone(),
             title: p.title.clone(),
             parent_ref: p.parent_ref.clone(),
             rank: p.rank.clone(),
             state: match p.state {
-                PlaceLifecycleState::Active => "active",
-                PlaceLifecycleState::Archived => "archived",
-                PlaceLifecycleState::Tombstoned => "tombstoned",
+                SpaceContainerLifecycleState::Active => "active",
+                SpaceContainerLifecycleState::Archived => "archived",
+                SpaceContainerLifecycleState::Tombstoned => "tombstoned",
             }
             .to_owned(),
             state_changed_at: p.state_changed_at,
@@ -666,7 +672,7 @@ fn write_through_projection(state: &AppState, operation: &Operation) {
     }
 
     let result = match snapshot {
-        Snapshot::Place(r) => state.persistence.place_projections().put(&r),
+        Snapshot::SpaceContainer(r) => state.persistence.space_container_projections().put(&r),
         Snapshot::Flow(r) => state.persistence.flow_projections().put(&r),
         Snapshot::Morph(r) => state.persistence.morph_projections().put(&r),
     };
@@ -706,12 +712,12 @@ pub fn project_accepted_operations(state: &AppState, origin: &str, operations: &
         if let Ok(mut proj) = state.projection.lock() {
             apply_via_lattice_registry(state, &mut proj, operation);
         }
-        // Write through Place/Flow/Morph projection changes to durable
+        // Write through Space-container/Flow/Morph projection changes to durable
         // persistence. Captures the in-memory projection snapshot
         // (under lock), then upserts to persistence after releasing the
         // lock so any backend latency doesn't block other reducer paths.
         // Mirrors the canonical wire kinds the reducer dispatches into
-        // `ProjectionState::{places,flows,morphs}`.
+        // `ProjectionState::{space_containers,flows,morphs}`.
         write_through_projection(state, operation);
         let projected = projection_event_from_operation(operation, Some(origin));
         // Broadcast every accepted projection
@@ -958,15 +964,17 @@ pub fn project_read_receipt_policy(state: &AppState, operation: &Operation) {
 }
 
 pub fn ensure_projected_space(state: &AppState, origin: &str, operation: &Operation) {
-    let space_id = operation.space_id.clone();
-    let mut spaces = state.spaces.lock().expect("spaces lock");
+    let Ok(space_id) = RealmId::new(operation.space_id.to_string()) else {
+        return;
+    };
+    let mut spaces = state.realms.lock().expect("spaces lock");
     if spaces.get(&space_id).is_none() {
         let title = operation
             .payload
             .get("space_title")
             .and_then(|value| value.as_str())
             .unwrap_or_else(|| space_id.as_str());
-        let mut entry = SpaceSearchEntry::new(space_id.clone(), title);
+        let mut entry = RealmDirectoryEntry::new(space_id.clone(), title);
         entry.description = operation
             .payload
             .get("space_summary")
@@ -997,9 +1005,9 @@ pub fn ensure_projected_space(state: &AppState, origin: &str, operation: &Operat
     drop(spaces);
 
     let now = now();
-    let store = state.persistence.space_meta();
+    let store = state.persistence.realm_meta();
     if matches!(store.get(space_id.as_str()), Ok(None)) {
-        let record = SpaceMetaRecord {
+        let record = RealmMetaRecord {
             owner: origin.to_owned(),
             deleted: false,
             discoverability: operation
@@ -1056,12 +1064,15 @@ pub fn ensure_projected_space(state: &AppState, origin: &str, operation: &Operat
 }
 
 pub fn project_membership_operation(state: &AppState, origin: &str, operation: &Operation) {
+    let Ok(realm_id) = RealmId::new(operation.space_id.to_string()) else {
+        return;
+    };
     let membership = operation
         .payload
         .get("membership")
         .and_then(|value| value.as_str());
     if kinds::canonical_kind_for_operation(operation) == Some(kinds::CX_SPACE_DESTROY) {
-        let store = state.persistence.space_meta();
+        let store = state.persistence.realm_meta();
         if let Ok(Some(mut record)) = store.get(operation.space_id.as_str()) {
             record.deleted = true;
             record.updated_at = operation.created_at;
@@ -1142,8 +1153,8 @@ pub fn project_membership_operation(state: &AppState, origin: &str, operation: &
         }
     }
 
-    let mut spaces = state.spaces.lock().expect("spaces lock");
-    let Some(mut entry) = spaces.get(&operation.space_id).cloned() else {
+    let mut spaces = state.realms.lock().expect("spaces lock");
+    let Some(mut entry) = spaces.get(&realm_id).cloned() else {
         return;
     };
     if let Ok(member) = Did::new(member) {
@@ -1155,7 +1166,7 @@ pub fn project_membership_operation(state: &AppState, origin: &str, operation: &
     }
     spaces.upsert(entry);
     drop(spaces);
-    touch_space(state, operation.space_id.as_str());
+    touch_realm(state, operation.space_id.as_str());
 }
 
 pub fn project_federated_message(state: &AppState, origin: &str, operation: &Operation) {

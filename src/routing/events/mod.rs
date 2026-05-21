@@ -27,12 +27,13 @@ use projection::{
 
 use super::{
     append_audit_log, auth_or_render, authenticated_session, device_message_events_after,
-    is_json_integer, is_space_deleted, is_valid_discoverability, is_valid_sha256_digest, now,
+    is_json_integer, is_realm_deleted, is_valid_discoverability, is_valid_sha256_digest, now,
     parse_snapshot_ref, prune_acked_device_messages, prune_expired_typing, query_param,
-    query_param_all, render_error, sha256_hex, snapshot_bundle_for_space,
-    space_allows_plaintext_service, space_discoverability, space_event_visible_to_session,
-    space_has_member, space_history_visibility, space_id_accessible, space_visible_to, touch_space,
-    typing_ephemeral_for_space, validate_did, validate_space_id,
+    query_param_all, realm_allows_plaintext_service, realm_discoverability,
+    realm_event_visible_to_session, realm_has_member, realm_history_visibility,
+    realm_id_accessible, realm_scope_to_realm_id, realm_visible_to, render_error, sha256_hex,
+    snapshot_bundle_for_space, touch_realm, typing_ephemeral_for_space, validate_did,
+    validate_space_id,
 };
 
 pub fn router() -> Router {

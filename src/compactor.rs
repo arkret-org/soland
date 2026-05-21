@@ -105,11 +105,11 @@ pub fn spawn(state: AppState) -> Option<Arc<tokio::task::JoinHandle<()>>> {
 pub fn run_compactor_pass(state: &AppState, per_space_limit: usize) -> CompactorPassReport {
     let mut report = CompactorPassReport::default();
     let spaces: Vec<SpaceId> = {
-        let registry = state.spaces.lock().expect("spaces lock");
+        let registry = state.realms.lock().expect("spaces lock");
         registry
             .search(Default::default())
             .into_iter()
-            .map(|space| space.space_id.clone())
+            .filter_map(|space| SpaceId::new(space.realm_id.to_string()).ok())
             .collect()
     };
     report.spaces_scanned = spaces.len();

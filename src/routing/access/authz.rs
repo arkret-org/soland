@@ -79,19 +79,15 @@ async fn authz_check(
     let (owner, members) = {
         let owner = state
             .persistence
-            .space_meta()
+            .realm_meta()
             .get(&space_id)
             .ok()
             .flatten()
             .map(|m| m.owner);
-        let spaces = state.spaces.lock().expect("spaces lock");
-        let members = spaces
-            .get(
-                &contrix_sdk::SpaceId::new(space_id.clone()).unwrap_or_else(|_| {
-                    contrix_sdk::SpaceId::new("cx:space:01904100-0000-7000-8000-ec4565bea379")
-                        .unwrap()
-                }),
-            )
+        let spaces = state.realms.lock().expect("spaces lock");
+        let members = contrix_sdk::RealmId::new(space_id.clone())
+            .ok()
+            .and_then(|realm_id| spaces.get(&realm_id))
             .map(|s| s.members.iter().map(|m| m.to_string()).collect::<Vec<_>>())
             .unwrap_or_default();
         (owner, members)
@@ -171,7 +167,7 @@ async fn effective_grants(
         // Return grants across all spaces
         state
             .persistence
-            .space_meta()
+            .realm_meta()
             .list()
             .unwrap_or_default()
             .into_iter()
@@ -326,7 +322,7 @@ fn parse_expires_at(
 fn require_space_owner(state: &AppState, space_id: &str, actor: &str) -> Result<(), AppError> {
     let owner = state
         .persistence
-        .space_meta()
+        .realm_meta()
         .get(space_id)
         .ok()
         .flatten()
@@ -415,7 +411,7 @@ async fn revoke_grant(
     if grant.issuer != session.actor {
         let owner = state
             .persistence
-            .space_meta()
+            .realm_meta()
             .get(&grant.space_id)
             .ok()
             .flatten()

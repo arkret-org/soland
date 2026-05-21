@@ -178,7 +178,7 @@ fn signed_event_envelope(event_id: &str, actor_seq: u64, prev_refs: Vec<&str>) -
         "schema_id": "cx.schema.message.v1",
         "actor_id": "did:web:alice.example",
         "actor_seq": actor_seq,
-        "space_id": "cx:space:0196419b-0000-7000-8000-000000000000",
+        "realm_id": "cx:realm:0196419b-0000-7000-8000-000000000000",
         "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
         "audience": "did:web:soland.local",
         "domain": "did:web:soland.local",
@@ -815,6 +815,10 @@ async fn events_describe_and_single_event_submit_work() {
         fetched["metadata"]["canonical_digest"],
         first["canonical_digest"]
     );
+    assert_eq!(
+        fetched["metadata"]["realm_id"],
+        "cx:realm:0196419b-0000-7000-8000-000000000000"
+    );
 
     let second = signed_event_envelope(
         "cx:event:01904100-0000-7000-8000-63f16896f0b0",
@@ -840,6 +844,7 @@ async fn events_describe_and_single_event_submit_work() {
         "object": {
             "id": "cx:flow:01904100-0000-7000-8000-aa11ccff0001",
             "schema": "cx.schema.flow.v1",
+            "realm_id": "cx:realm:0196419b-0000-7000-8000-000000000000",
             "space_id": "cx:space:0196419b-0000-7000-8000-000000000000",
             "title": "Onboarding flow",
             "tracks": {
@@ -919,9 +924,13 @@ async fn events_describe_and_single_event_submit_work() {
             .unwrap();
     assert_eq!(listed["events"].as_array().unwrap().len(), 3);
     assert_eq!(listed["frontier"]["actors"]["did:web:alice.example"], 3);
+    assert_eq!(
+        listed["frontier"]["realms"]["cx:realm:0196419b-0000-7000-8000-000000000000"],
+        "cx:event:01904100-0000-7000-8000-df827a7269a3"
+    );
 
     let frontier: Value =
-        TestClient::get("http://server/api/v1/events/frontier?actor_id=did:web:alice.example")
+        TestClient::get("http://server/api/v1/events/frontier?actor_id=did:web:alice.example&realm_id=cx:realm:0196419b-0000-7000-8000-000000000000")
             .add_header("authorization", format!("Bearer {token}"), true)
             .send(&app_from_state(state.clone()))
             .await
@@ -929,6 +938,10 @@ async fn events_describe_and_single_event_submit_work() {
             .await
             .unwrap();
     assert_eq!(frontier["actor_frontier"]["did:web:alice.example"], 3);
+    assert_eq!(
+        frontier["realm_frontier"]["cx:realm:0196419b-0000-7000-8000-000000000000"]["event_id"],
+        "cx:event:01904100-0000-7000-8000-df827a7269a3"
+    );
 
     let mut conflicting = signed_event_envelope(
         "cx:event:01904100-0000-7000-8000-f15c8ea06c11",
@@ -2299,6 +2312,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         .await
         .unwrap();
     let space_id = created_space["space_id"].as_str().unwrap().to_owned();
+    let realm_id = space_id.replacen("cx:space:", "cx:realm:", 1);
     assert_eq!(created_space["owner"], "did:web:alice.example");
 
     let hidden_space: Value = TestClient::post("http://server/api/v1/directory/search-realms")
@@ -2526,7 +2540,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
     let sent_message: Value = TestClient::post("http://server/api/v1/messages/send")
         .add_header("authorization", format!("Bearer {alice}"), true)
         .json(&serde_json::json!({
-            "space_id": space_id,
+            "realm_id": realm_id,
             "thread_id": "cx:flow:workflow",
             "content": {"body": "hello workflow"},
             "encrypted": false
@@ -2542,6 +2556,9 @@ async fn account_contacts_and_space_lifecycle_workflow() {
             .unwrap()
             .starts_with("cx:operation:")
     );
+    assert_eq!(sent_message["realm_id"], realm_id);
+    assert_eq!(sent_message["space_id"], space_id);
+    assert_eq!(sent_message["source_realm_id"], realm_id);
     let send_cursor = decode_cursor(sent_message["sync_token"].as_str().unwrap());
     assert_eq!(send_cursor["v"], "1");
     assert!(send_cursor["_positions"]["spaces"].is_object());
@@ -2662,7 +2679,11 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         .take_json()
         .await
         .unwrap();
-    let next_batch = decode_cursor(sync_with_message["next_batch"].as_str().unwrap());
+    let next_batch = decode_cursor(
+        sync_with_message["next_batch"]
+            .as_str()
+            .unwrap_or_else(|| panic!("sync response missing next_batch: {sync_with_message}")),
+    );
     assert_eq!(next_batch["_ctx"]["profile"], "incremental");
     assert!(next_batch.get("_mac").is_none());
     assert!(
@@ -3715,7 +3736,7 @@ async fn directory_product_endpoints_return_demo_projection_shapes() {
 // `standard_entity_types_and_reverse_domain_custom_types_work` and
 // `view_endpoints_project_common_presentation_shapes` were deleted in
 // round 6: the `entity` / `view` abstraction they exercised never landed in
-// `contrix-spec/v1`. Typed objects in the protocol are `cx:flow:` / `cx:place:`
+// `contrix-spec/v1`. Typed objects in the protocol are `cx:flow:` / `cx:space:`
 // / `cx:morph:` / `cx:relation:` / `cx:view:`, each with its own dedicated
 // event kind; presentation concerns belong on `cx.view.*` events going
 // through the reducer, not on a free-form `/api/v1/entities` /
@@ -5670,16 +5691,18 @@ fn signed_place_event(
     event_id: &str,
     actor_seq: u64,
     kind: &str,
-    payload: Value,
+    mut payload: Value,
     prev_refs: Vec<&str>,
 ) -> Value {
+    normalize_space_container_payload(kind, &mut payload);
     let mut event = serde_json::json!({
         "event_id": event_id,
         "kind": kind,
-        "schema_id": "cx.schema.place.v1",
+        "schema_id": "cx.schema.space.v1",
         "actor_id": "did:web:alice.example",
         "actor_seq": actor_seq,
-        "space_id": "cx:space:0196419b-0000-7000-8000-000000000000",
+        "realm_id": "cx:realm:0196419b-0000-7000-8000-000000000000",
+        "created_at": "2026-05-17T00:00:00Z",
         "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
         "audience": "did:web:soland.local",
         "domain": "did:web:soland.local",
@@ -5699,27 +5722,56 @@ fn signed_place_event(
     event
 }
 
-/// End-to-end check that the server-side Place state-machine guard rejects
+fn normalize_space_container_payload(kind: &str, payload: &mut Value) {
+    let Some(object) = payload.as_object_mut() else {
+        return;
+    };
+    if kind == "cx.space.create" {
+        if let Some(space) = object.get_mut("object").and_then(Value::as_object_mut) {
+            space
+                .entry("schema".to_owned())
+                .or_insert_with(|| Value::String("cx.schema.space.v1".to_owned()));
+            space.entry("realm_id".to_owned()).or_insert_with(|| {
+                Value::String("cx:realm:0196419b-0000-7000-8000-000000000000".to_owned())
+            });
+            space
+                .entry("created_at".to_owned())
+                .or_insert_with(|| Value::String("2026-05-17T00:00:00Z".to_owned()));
+        }
+    }
+    if matches!(
+        kind,
+        "cx.space.archive" | "cx.space.restore" | "cx.space.tombstone"
+    ) && !object.contains_key("space_id")
+        && let Some(place_id) = object
+            .remove("place_id")
+            .and_then(|value| value.as_str().map(ToOwned::to_owned))
+    {
+        object.insert("space_id".to_owned(), Value::String(place_id));
+    }
+}
+
+/// End-to-end check that the server-side Space-container state-machine guard rejects
 /// illegal lifecycle transitions with HTTP 412 + the spec-canonical
 /// reason_code per `contrix-spec/v1/zh/models/common-fields.md §5.1`.
 /// Reducer-level unit coverage lives in `src/reducer.rs::tests`; this test
 /// verifies the wire mapping (`event_log::submit_event` →
-/// `check_place_lifecycle_transition` → `StatusCode::PRECONDITION_FAILED`).
+/// `check_space_container_lifecycle_transition` → `StatusCode::PRECONDITION_FAILED`).
 #[tokio::test]
-async fn place_lifecycle_state_machine_returns_412_for_illegal_transitions() {
+async fn space_container_lifecycle_state_machine_returns_412_for_illegal_transitions() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
-    let place_id = "cx:place:01904100-0000-7000-8000-c10dc0000001";
+    let container_space_id = "cx:space:01904100-0000-7000-8000-c10dc0000001";
 
-    // 1) cx.place.create — Active.
+    // 1) cx.space.create — Active.
     let create_event = signed_place_event(
         "cx:event:01904100-0000-7000-8000-d10dc0000001",
         1,
         "cx.space.create",
         serde_json::json!({
             "object": {
-                "id": place_id,
-                "space_id": "cx:space:0196419b-0000-7000-8000-000000000000",
+                "id": container_space_id,
+                "realm_id": "cx:realm:0196419b-0000-7000-8000-000000000000",
                 "kind": "list",
                 "title": "Roadmap",
                 "created_by": "did:web:alice.example",
@@ -5737,12 +5789,12 @@ async fn place_lifecycle_state_machine_returns_412_for_illegal_transitions() {
         .unwrap();
     assert_eq!(create_response["status"], "accepted");
 
-    // 2) cx.place.restore on Active → 412 place_not_archived.
+    // 2) cx.space.restore on Active → 412 place_not_archived.
     let bad_restore = signed_place_event(
         "cx:event:01904100-0000-7000-8000-d10dc0000002",
         2,
         "cx.space.restore",
-        serde_json::json!({ "place_id": place_id }),
+        serde_json::json!({ "space_id": container_space_id }),
         vec!["cx:event:01904100-0000-7000-8000-d10dc0000001"],
     );
     let mut bad_restore_response = TestClient::post("http://server/api/v1/events")
@@ -5758,12 +5810,12 @@ async fn place_lifecycle_state_machine_returns_412_for_illegal_transitions() {
     let body: Value = bad_restore_response.take_json().await.unwrap();
     assert_eq!(body["error"]["errcode"], "place_not_archived");
 
-    // 3) cx.place.archive — legal (Active → Archived).
+    // 3) cx.space.archive — legal (Active → Archived).
     let archive_event = signed_place_event(
         "cx:event:01904100-0000-7000-8000-d10dc0000003",
         3,
         "cx.space.archive",
-        serde_json::json!({ "place_id": place_id }),
+        serde_json::json!({ "space_id": container_space_id }),
         vec!["cx:event:01904100-0000-7000-8000-d10dc0000001"],
     );
     let archive_response: Value = TestClient::post("http://server/api/v1/events")
@@ -5776,12 +5828,12 @@ async fn place_lifecycle_state_machine_returns_412_for_illegal_transitions() {
         .unwrap();
     assert_eq!(archive_response["status"], "accepted");
 
-    // 4) cx.place.restore — legal now (Archived → Active).
+    // 4) cx.space.restore — legal now (Archived → Active).
     let good_restore = signed_place_event(
         "cx:event:01904100-0000-7000-8000-d10dc0000004",
         4,
         "cx.space.restore",
-        serde_json::json!({ "place_id": place_id }),
+        serde_json::json!({ "space_id": container_space_id }),
         vec!["cx:event:01904100-0000-7000-8000-d10dc0000003"],
     );
     let restore_response: Value = TestClient::post("http://server/api/v1/events")
@@ -5794,12 +5846,12 @@ async fn place_lifecycle_state_machine_returns_412_for_illegal_transitions() {
         .unwrap();
     assert_eq!(restore_response["status"], "accepted");
 
-    // 5) cx.place.tombstone — legal (Active → Tombstoned).
+    // 5) cx.space.tombstone — legal (Active → Tombstoned).
     let tombstone_event = signed_place_event(
         "cx:event:01904100-0000-7000-8000-d10dc0000005",
         5,
         "cx.space.tombstone",
-        serde_json::json!({ "place_id": place_id }),
+        serde_json::json!({ "space_id": container_space_id }),
         vec!["cx:event:01904100-0000-7000-8000-d10dc0000004"],
     );
     let tombstone_response: Value = TestClient::post("http://server/api/v1/events")
@@ -5812,12 +5864,12 @@ async fn place_lifecycle_state_machine_returns_412_for_illegal_transitions() {
         .unwrap();
     assert_eq!(tombstone_response["status"], "accepted");
 
-    // 6) cx.place.tombstone again on Tombstoned → 412 place_already_terminal.
+    // 6) cx.space.tombstone again on Tombstoned → 412 place_already_terminal.
     let bad_tombstone = signed_place_event(
         "cx:event:01904100-0000-7000-8000-d10dc0000006",
         6,
         "cx.space.tombstone",
-        serde_json::json!({ "place_id": place_id }),
+        serde_json::json!({ "space_id": container_space_id }),
         vec!["cx:event:01904100-0000-7000-8000-d10dc0000005"],
     );
     let mut bad_tombstone_response = TestClient::post("http://server/api/v1/events")
@@ -5833,14 +5885,14 @@ async fn place_lifecycle_state_machine_returns_412_for_illegal_transitions() {
     let body: Value = bad_tombstone_response.take_json().await.unwrap();
     assert_eq!(body["error"]["errcode"], "place_already_terminal");
 
-    // 7) cx.place.restore on Tombstoned → 412 place_not_archived (terminal
+    // 7) cx.space.restore on Tombstoned → 412 place_not_archived (terminal
     // state cannot be revived even though tombstone-vs-restore are different
     // transitions).
     let bad_restore_terminal = signed_place_event(
         "cx:event:01904100-0000-7000-8000-d10dc0000007",
         7,
         "cx.space.restore",
-        serde_json::json!({ "place_id": place_id }),
+        serde_json::json!({ "space_id": container_space_id }),
         vec!["cx:event:01904100-0000-7000-8000-d10dc0000005"],
     );
     let mut bad_restore_terminal_response = TestClient::post("http://server/api/v1/events")
@@ -5873,7 +5925,8 @@ fn signed_flow_event(
         "schema_id": "cx.schema.flow.v1",
         "actor_id": "did:web:alice.example",
         "actor_seq": actor_seq,
-        "space_id": "cx:space:0196419b-0000-7000-8000-000000000000",
+        "realm_id": "cx:realm:0196419b-0000-7000-8000-000000000000",
+        "created_at": "2026-05-17T00:00:00Z",
         "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
         "audience": "did:web:soland.local",
         "domain": "did:web:soland.local",
@@ -5901,6 +5954,9 @@ fn normalize_flow_payload(kind: &str, payload: &mut Value) {
         if let Some(flow) = object.get_mut("object").and_then(Value::as_object_mut) {
             flow.entry("schema".to_owned())
                 .or_insert_with(|| Value::String("cx.schema.flow.v1".to_owned()));
+            flow.entry("realm_id".to_owned()).or_insert_with(|| {
+                Value::String("cx:realm:0196419b-0000-7000-8000-000000000000".to_owned())
+            });
             flow.entry("created_at".to_owned())
                 .or_insert_with(|| Value::String("2026-05-17T00:00:00Z".to_owned()));
             flow.entry("tracks".to_owned()).or_insert_with(|| {
@@ -5939,7 +5995,8 @@ fn signed_morph_event(
         "schema_id": "cx.schema.morph.v1",
         "actor_id": "did:web:alice.example",
         "actor_seq": actor_seq,
-        "space_id": "cx:space:0196419b-0000-7000-8000-000000000000",
+        "realm_id": "cx:realm:0196419b-0000-7000-8000-000000000000",
+        "created_at": "2026-05-17T00:00:00Z",
         "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
         "audience": "did:web:soland.local",
         "domain": "did:web:soland.local",
@@ -5968,6 +6025,9 @@ fn normalize_morph_payload(kind: &str, payload: &mut Value) {
             morph
                 .entry("schema".to_owned())
                 .or_insert_with(|| Value::String("cx.schema.morph.v1".to_owned()));
+            morph.entry("realm_id".to_owned()).or_insert_with(|| {
+                Value::String("cx:realm:0196419b-0000-7000-8000-000000000000".to_owned())
+            });
             morph
                 .entry("created_at".to_owned())
                 .or_insert_with(|| Value::String("2026-05-17T00:00:00Z".to_owned()));
@@ -5989,7 +6049,7 @@ fn normalize_morph_payload(kind: &str, payload: &mut Value) {
 
 /// Round 13 — end-to-end check that Flow / Morph lifecycle state-machine
 /// guards map to HTTP 412 + canonical reason_code per spec §5.1. Mirrors
-/// `place_lifecycle_state_machine_returns_412_for_illegal_transitions`
+/// `space_container_lifecycle_state_machine_returns_412_for_illegal_transitions`
 /// from round 11. Combined Flow+Morph in one test to keep the suite small.
 #[tokio::test]
 async fn flow_morph_lifecycle_state_machine_returns_412_for_illegal_transitions() {
@@ -6521,8 +6581,8 @@ async fn account_data_requires_auth() {
     assert_eq!(resp.status_code.unwrap().as_u16(), 401);
 }
 
-/// `GET /api/v1/projection/places?space_id=...` returns the
-/// canonical `state` for every Place in a Space so a client can
+/// `GET /api/v1/projection/space-containers?realm_id=...` returns the
+/// canonical `state` for every board/list Space container in a Realm so a client can
 /// re-hydrate the archived-vs-active split after a refresh. After a
 /// happy archive the projection MUST report `"archived"`; after
 /// restore it MUST report
@@ -6532,25 +6592,26 @@ async fn projection_places_endpoint_reports_lifecycle_state() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
     let space_id = "cx:space:0196419b-0000-7000-8000-000000000000";
-    let place_id = "cx:place:01904100-0000-7000-8000-f10dc0000001";
+    let realm_id = "cx:realm:0196419b-0000-7000-8000-000000000000";
+    let container_space_id = "cx:space:01904100-0000-7000-8000-f10dc0000001";
 
     // ── auth required ──────────────────────────────────────────────────
     let unauth = TestClient::get(format!(
-        "http://server/api/v1/projection/places?space_id={space_id}"
+        "http://server/api/v1/projection/space-containers?realm_id={realm_id}"
     ))
     .send(&app_from_state(state.clone()))
     .await;
     assert_eq!(unauth.status_code.unwrap().as_u16(), 401);
 
-    // ── seed: create + archive a place ─────────────────────────────────
+    // ── seed: create + archive a Space container ────────────────────────
     let create_event = signed_place_event(
         "cx:event:01904100-0000-7000-8000-f10ec0000001",
         1,
         "cx.space.create",
         serde_json::json!({
             "object": {
-                "id": place_id,
-                "space_id": space_id,
+                "id": container_space_id,
+                "realm_id": realm_id,
                 "kind": "list",
                 "title": "Hydration target",
                 "created_by": "did:web:alice.example",
@@ -6566,13 +6627,16 @@ async fn projection_places_endpoint_reports_lifecycle_state() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(r["status"], "accepted");
+    assert_eq!(
+        r["status"], "accepted",
+        "create space container response: {r}"
+    );
 
     let archive_event = signed_place_event(
         "cx:event:01904100-0000-7000-8000-f10ec0000002",
         2,
         "cx.space.archive",
-        serde_json::json!({ "place_id": place_id }),
+        serde_json::json!({ "space_id": container_space_id }),
         vec!["cx:event:01904100-0000-7000-8000-f10ec0000001"],
     );
     let r: Value = TestClient::post("http://server/api/v1/events")
@@ -6583,11 +6647,14 @@ async fn projection_places_endpoint_reports_lifecycle_state() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(r["status"], "accepted");
+    assert_eq!(
+        r["status"], "accepted",
+        "archive space container response: {r}"
+    );
 
     // ── projection now reports archived ───────────────────────────────
     let body: Value = TestClient::get(format!(
-        "http://server/api/v1/projection/places?space_id={space_id}"
+        "http://server/api/v1/projection/space-containers?realm_id={realm_id}"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -6595,11 +6662,11 @@ async fn projection_places_endpoint_reports_lifecycle_state() {
     .take_json()
     .await
     .unwrap();
-    assert_eq!(body["space_id"], space_id);
-    let places = body["places"].as_array().unwrap();
-    let row = places
+    assert_eq!(body["realm_id"], realm_id);
+    let space_containers = body["space_containers"].as_array().unwrap();
+    let row = space_containers
         .iter()
-        .find(|p| p["place_id"] == place_id)
+        .find(|p| p["container_space_id"] == container_space_id)
         .expect("place not in projection response");
     assert_eq!(row["state"], "archived");
     assert_eq!(row["title"], "Hydration target");
@@ -6609,7 +6676,7 @@ async fn projection_places_endpoint_reports_lifecycle_state() {
         "cx:event:01904100-0000-7000-8000-f10ec0000003",
         3,
         "cx.space.restore",
-        serde_json::json!({ "place_id": place_id }),
+        serde_json::json!({ "space_id": container_space_id }),
         vec!["cx:event:01904100-0000-7000-8000-f10ec0000002"],
     );
     let r: Value = TestClient::post("http://server/api/v1/events")
@@ -6620,9 +6687,31 @@ async fn projection_places_endpoint_reports_lifecycle_state() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(r["status"], "accepted");
+    assert_eq!(
+        r["status"], "accepted",
+        "restore space container response: {r}"
+    );
 
     let body: Value = TestClient::get(format!(
+        "http://server/api/v1/projection/space-containers?realm_id={realm_id}"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    let row = body["space_containers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["container_space_id"] == container_space_id)
+        .expect("place still missing post-restore");
+    assert_eq!(row["state"], "active");
+
+    // Legacy endpoint/query remains accepted during migration but now emits
+    // the canonical response shape.
+    let legacy_body: Value = TestClient::get(format!(
         "http://server/api/v1/projection/places?space_id={space_id}"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
@@ -6631,13 +6720,8 @@ async fn projection_places_endpoint_reports_lifecycle_state() {
     .take_json()
     .await
     .unwrap();
-    let row = body["places"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|p| p["place_id"] == place_id)
-        .expect("place still missing post-restore");
-    assert_eq!(row["state"], "active");
+    assert_eq!(legacy_body["realm_id"], realm_id);
+    assert!(legacy_body["space_containers"].as_array().is_some());
 }
 
 /// `GET /api/v1/projection/flows?space_id=...` mirrors the Place
@@ -6829,7 +6913,7 @@ async fn audit_user_action_endpoint_persists_session_actor_entries_and_rejects_c
             "actor": "did:web:alice.example",
             "action": "ui.kanban.archive_list",
             "outcome": "ok",
-            "note": "user clicked Archive on list cx:place:demo",
+            "note": "user clicked Archive on list cx:space:demo",
             "recorded_at": "2026-05-16T12:34:56Z",
         }))
         .send(&app_from_state(state.clone()))
@@ -7122,7 +7206,7 @@ async fn admin_applets_agents_endpoints_reflect_submitted_registry_events() {
 }
 
 /// Round 15d (2026-05-16) — projection_query endpoints filter out
-/// terminal-state rows by default (tombstoned for Place; deleted /
+/// terminal-state rows by default (tombstoned for Space containers; deleted /
 /// redacted for Flow / Morph). Explicit `include_terminal=true` returns
 /// the full set. Spec: terminal states are unrecoverable per
 /// `common-fields.md §5.1`; clients hydrating a kanban view shouldn't
@@ -7132,20 +7216,21 @@ async fn projection_endpoints_hide_terminal_state_by_default() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
     let space_id = "cx:space:0196419b-0000-7000-8000-000000000000";
-    let place_id = "cx:place:01904100-0000-7000-8000-c15d70000001";
+    let realm_id = "cx:realm:0196419b-0000-7000-8000-000000000000";
+    let container_space_id = "cx:space:01904100-0000-7000-8000-c15d70000001";
     let flow_id = "cx:flow:01904100-0000-7000-8000-c15d70000002";
 
-    // Create + tombstone a Place.
+    // Create + tombstone a Space container.
     let create_place = signed_place_event(
         "cx:event:01904100-0000-7000-8000-c15d70010001",
         1,
         "cx.space.create",
         serde_json::json!({
             "object": {
-                "id": place_id,
-                "space_id": space_id,
+                "id": container_space_id,
+                "realm_id": realm_id,
                 "kind": "list",
-                "title": "Doomed Place",
+                "title": "Doomed Space",
                 "created_by": "did:web:alice.example",
             }
         }),
@@ -7165,7 +7250,7 @@ async fn projection_endpoints_hide_terminal_state_by_default() {
         "cx:event:01904100-0000-7000-8000-c15d70010002",
         2,
         "cx.space.tombstone",
-        serde_json::json!({ "place_id": place_id }),
+        serde_json::json!({ "space_id": container_space_id }),
         vec!["cx:event:01904100-0000-7000-8000-c15d70010001"],
     );
     let r: Value = TestClient::post("http://server/api/v1/events")
@@ -7178,9 +7263,9 @@ async fn projection_endpoints_hide_terminal_state_by_default() {
         .unwrap();
     assert_eq!(r["status"], "accepted");
 
-    // Default `GET /projection/places` — tombstoned Place is hidden.
+    // Default Space-container projection — tombstoned Space container is hidden.
     let body: Value = TestClient::get(format!(
-        "http://server/api/v1/projection/places?space_id={space_id}"
+        "http://server/api/v1/projection/space-containers?realm_id={realm_id}"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -7189,17 +7274,17 @@ async fn projection_endpoints_hide_terminal_state_by_default() {
     .await
     .unwrap();
     assert!(
-        body["places"]
+        body["space_containers"]
             .as_array()
             .unwrap()
             .iter()
-            .all(|p| p["place_id"] != place_id),
-        "tombstoned Place MUST be hidden from default projection listing"
+            .all(|p| p["container_space_id"] != container_space_id),
+        "tombstoned Space container MUST be hidden from default projection listing"
     );
 
-    // Explicit include_terminal=true — tombstoned Place is visible.
+    // Explicit include_terminal=true — tombstoned Space container is visible.
     let body: Value = TestClient::get(format!(
-        "http://server/api/v1/projection/places?space_id={space_id}&include_terminal=true"
+        "http://server/api/v1/projection/space-containers?realm_id={realm_id}&include_terminal=true"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -7207,12 +7292,12 @@ async fn projection_endpoints_hide_terminal_state_by_default() {
     .take_json()
     .await
     .unwrap();
-    let row = body["places"]
+    let row = body["space_containers"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|p| p["place_id"] == place_id)
-        .expect("tombstoned Place MUST appear when include_terminal=true");
+        .find(|p| p["container_space_id"] == container_space_id)
+        .expect("tombstoned Space container MUST appear when include_terminal=true");
     assert_eq!(row["state"], "tombstoned");
 
     // Create a Flow + redact it.
@@ -7995,9 +8080,9 @@ async fn snapshot_v2_multi_chunk_fixture_verifies_non_empty_audit_path() {
     );
 }
 
-/// Round 15h (2026-05-16) — Place / Flow / Morph projection write-through
+/// Round 15h (2026-05-16) — Space-container / Flow / Morph projection write-through
 /// to durable persistence. After each accepted lifecycle event, the
-/// in-memory `ProjectionState::{places,flows,morphs}` mutation is
+/// in-memory `ProjectionState::{space_containers,flows,morphs}` mutation is
 /// mirrored to `state.persistence.{place,flow,morph}_projections()` so
 /// process restart (via `AppState::new` hydrate path) can rebuild the
 /// projection cache. This test exercises the write-through; hydrate is
@@ -8006,21 +8091,21 @@ async fn snapshot_v2_multi_chunk_fixture_verifies_non_empty_audit_path() {
 async fn projection_persistence_write_through_mirrors_lifecycle_events() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
-    let place_id = "cx:place:01904100-0000-7000-8000-15a15a000001";
+    let container_space_id = "cx:space:01904100-0000-7000-8000-15a15a000001";
     let flow_id = "cx:flow:01904100-0000-7000-8000-15a15a000002";
     let morph_id = "cx:morph:01904100-0000-7000-8000-15a15a000003";
 
-    // Place: create + archive → persistence has state=archived.
+    // Space container: create + archive → persistence has state=archived.
     let create_place = signed_place_event(
         "cx:event:01904100-0000-7000-8000-15a15ae00001",
         1,
         "cx.space.create",
         serde_json::json!({
             "object": {
-                "id": place_id,
-                "space_id": "cx:space:0196419b-0000-7000-8000-000000000000",
+                "id": container_space_id,
+                "realm_id": "cx:realm:0196419b-0000-7000-8000-000000000000",
                 "kind": "list",
-                "title": "Persistent Place",
+                "title": "Persistent Space",
                 "created_by": "did:web:alice.example",
             }
         }),
@@ -8040,7 +8125,7 @@ async fn projection_persistence_write_through_mirrors_lifecycle_events() {
         "cx:event:01904100-0000-7000-8000-15a15ae00002",
         2,
         "cx.space.archive",
-        serde_json::json!({ "place_id": place_id }),
+        serde_json::json!({ "space_id": container_space_id }),
         vec!["cx:event:01904100-0000-7000-8000-15a15ae00001"],
     );
     let r: Value = TestClient::post("http://server/api/v1/events")
@@ -8055,29 +8140,35 @@ async fn projection_persistence_write_through_mirrors_lifecycle_events() {
 
     let place_row = state
         .persistence
-        .place_projections()
-        .get(place_id)
+        .space_container_projections()
+        .get(container_space_id)
         .unwrap()
         .expect("place projection MUST be mirrored to persistence after create+archive");
     assert_eq!(place_row.state, "archived");
-    assert_eq!(place_row.title, "Persistent Place");
+    assert_eq!(place_row.title, "Persistent Space");
 
     // list_for_space + snapshot_all reach the same row.
     let by_space = state
         .persistence
-        .place_projections()
+        .space_container_projections()
         .list_for_space("cx:space:0196419b-0000-7000-8000-000000000000")
         .unwrap();
     assert!(
-        by_space.iter().any(|p| p.place_id == place_id),
-        "list_for_space MUST surface the persisted place"
+        by_space
+            .iter()
+            .any(|p| p.container_space_id == container_space_id),
+        "list_for_space MUST surface the persisted space container"
     );
     let snapshot = state
         .persistence
-        .place_projections()
+        .space_container_projections()
         .snapshot_all()
         .unwrap();
-    assert!(snapshot.iter().any(|p| p.place_id == place_id));
+    assert!(
+        snapshot
+            .iter()
+            .any(|p| p.container_space_id == container_space_id)
+    );
 
     // Flow: create + redact → persistence has state=redacted.
     let create_flow = signed_flow_event(

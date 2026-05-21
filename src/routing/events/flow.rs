@@ -12,7 +12,7 @@
 
 use serde_json::json;
 
-use super::{now, sha256_hex, space_allows_plaintext_service, space_discoverability};
+use super::{now, realm_allows_plaintext_service, realm_discoverability, sha256_hex};
 use crate::state::{AppState, ProjectionEventRecord};
 
 pub fn retag_typed_id(value: &str, from_prefix: &str, to_prefix: &str) -> Option<String> {
@@ -69,7 +69,7 @@ pub fn discussion_track_for_projection_event(
 }
 
 pub fn flow_history_visibility_for_space(state: &AppState, space_id: &str) -> &'static str {
-    if space_discoverability(state, space_id) == "public" {
+    if realm_discoverability(state, space_id) == "public" {
         "shared"
     } else {
         "joined"
@@ -82,7 +82,7 @@ pub fn flow_projection_for_space(
     title: &str,
     summary: Option<&str>,
 ) -> serde_json::Value {
-    let meta = state.persistence.space_meta().get(space_id).ok().flatten();
+    let meta = state.persistence.realm_meta().get(space_id).ok().flatten();
     let owner = meta
         .as_ref()
         .map(|meta| meta.owner.clone())
@@ -120,7 +120,7 @@ pub fn flow_projection_for_space(
                 "enabled": true,
                 "track_kind": "discussion",
                 "history_visibility": flow_history_visibility_for_space(state, space_id),
-                "encryption_profile": if space_allows_plaintext_service(state, space_id) { "none" } else { "mls_rfc9420" },
+                "encryption_profile": if realm_allows_plaintext_service(state, space_id) { "none" } else { "mls_rfc9420" },
                 "fields": {}
             }
         },

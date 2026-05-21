@@ -29,8 +29,8 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use bytes::Bytes;
 use chrono::{DateTime, Duration as ChronoDuration, SecondsFormat, Utc};
-use contrix_sdk::SpaceId;
 use contrix_sdk::lattice::CellState;
+use contrix_sdk::{RealmId, SpaceId};
 use ed25519_dalek::Signer as _;
 use futures_util::stream::StreamExt;
 use salvo::http::StatusCode;
@@ -41,10 +41,10 @@ use tokio::sync::broadcast::error::RecvError;
 use super::{
     authenticated_session, backfill_gap_events, default_discussion_track,
     device_message_events_after, flow_id_from_space_id, flow_projection_for_space,
-    is_space_deleted, now, parse_snapshot_ref, projected_event_page, projection_event_json,
-    prune_acked_device_messages, prune_expired_typing, query_param, render_error, sha256_hex,
-    snapshot_bundle_for_space, space_discoverability, space_event_visible_to_session,
-    space_has_member, space_history_visibility, space_id_accessible, space_visible_to,
+    is_realm_deleted, now, parse_snapshot_ref, projected_event_page, projection_event_json,
+    prune_acked_device_messages, prune_expired_typing, query_param, realm_discoverability,
+    realm_event_visible_to_session, realm_has_member, realm_history_visibility,
+    realm_id_accessible, realm_visible_to, render_error, sha256_hex, snapshot_bundle_for_space,
     sync_timeline_message_json, truncate_gap_events, typing_ephemeral_for_space, validate_did,
     validate_space_id,
 };
@@ -63,6 +63,20 @@ pub(super) fn router() -> Router {
         .push(Router::with_path("sync/backfill/gap").get(sync_gap_backfill))
         .push(Router::with_path("sync/snapshot-head").get(snapshot_head))
         .push(Router::with_path("sync/snapshot-chunk").get(snapshot_chunk))
+}
+
+fn scope_selector_to_realm_id(value: &str) -> Result<String, crate::error::AppError> {
+    if RealmId::new(value.to_owned()).is_ok() {
+        return Ok(value.to_owned());
+    }
+    Err(crate::error::AppError::invalid_param("invalid realm_id"))
+}
+
+fn normalize_scope_selectors(values: Vec<String>) -> Result<Vec<String>, crate::error::AppError> {
+    values
+        .into_iter()
+        .map(|value| scope_selector_to_realm_id(&value))
+        .collect()
 }
 
 #[endpoint]
@@ -100,7 +114,7 @@ async fn client_sync(
     body: salvo::oapi::extract::JsonBody<ClientSyncRequest>,
     depot: &mut Depot,
     req: &mut Request,
-) -> crate::result::JsonResult<contrix_sdk::model::SyncResBody> {
+) -> crate::result::JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
     let session = authenticated_session(state, req).ok();
@@ -201,7 +215,7 @@ async fn client_sync(
             || sync_snapshot_has_fresh_data(&response)
             || tokio::time::Instant::now() >= deadline;
         if should_return {
-            return crate::result::json_ok(response);
+            return crate::result::json_ok(sync_snapshot_response_json(response));
         }
         let next_poll = tokio::time::Instant::now() + Duration::from_millis(POLL_INTERVAL_MS);
         let wake = next_poll.min(deadline);
@@ -209,11 +223,23 @@ async fn client_sync(
     }
 }
 
+fn sync_snapshot_response_json(response: contrix_sdk::model::SyncResBody) -> Value {
+    let mut value = serde_json::to_value(response).unwrap_or_else(|_| json!({}));
+    let cursor = value.get("cursor").cloned();
+    if let (Some(object), Some(cursor)) = (value.as_object_mut(), cursor) {
+        object
+            .entry("next_batch".to_owned())
+            .or_insert(cursor.clone());
+        object.entry("next_cursor".to_owned()).or_insert(cursor);
+    }
+    value
+}
+
 /// Build one snapshot of the account-aggregate sync response. Called
 /// repeatedly by the long-poll loop in [`client_sync`] until the
 /// snapshot has fresh data ([`sync_snapshot_has_fresh_data`]) or the
 /// poll deadline passes. Cheap enough to re-run every 100 ms in dev;
-/// every read takes a fresh lock on `state.spaces` / `state.projection`
+/// every read takes a fresh lock on `state.realms` / `state.projection`
 /// so a concurrent writer's commit is observable on the next iteration.
 fn build_sync_snapshot(
     state: &AppState,
@@ -222,14 +248,14 @@ fn build_sync_snapshot(
     since_cursor: &SyncCursor,
 ) -> contrix_sdk::model::SyncResBody {
     let visible_spaces: Vec<_> = {
-        let spaces = state.spaces.lock().expect("spaces lock");
+        let spaces = state.realms.lock().expect("spaces lock");
         spaces
             .search(Default::default())
             .into_iter()
-            .filter(|space| space_visible_to(state, space, session))
+            .filter(|space| realm_visible_to(state, space, session))
             .map(|space| {
                 (
-                    space.space_id.to_string(),
+                    space.realm_id.to_string(),
                     space.name.clone(),
                     space.description.clone(),
                     space.tags.clone(),
@@ -404,7 +430,7 @@ fn timeline_events_for_space(
         if position <= since_position || !seen.insert(message.event_id.clone()) {
             continue;
         }
-        if !space_event_visible_to_session_with_projection(
+        if !realm_event_visible_to_session_with_projection(
             state,
             projection,
             space_id,
@@ -428,7 +454,7 @@ fn timeline_events_for_space(
         if position <= since_position || !seen.insert(message.event_id.clone()) {
             continue;
         }
-        if !space_event_visible_to_session_with_projection(
+        if !realm_event_visible_to_session_with_projection(
             state,
             projection,
             space_id,
@@ -451,7 +477,7 @@ fn timeline_events_for_space(
     )
 }
 
-fn space_event_visible_to_session_with_projection(
+fn realm_event_visible_to_session_with_projection(
     state: &AppState,
     projection: &ProjectionState,
     space_id: &str,
@@ -462,11 +488,11 @@ fn space_event_visible_to_session_with_projection(
     if sender.is_some_and(|sender| session.is_some_and(|session| session.actor == sender)) {
         return true;
     }
-    match space_history_visibility(state, space_id).as_str() {
+    match realm_history_visibility(state, space_id).as_str() {
         "world_readable" => true,
         "shared" => {
-            space_discoverability(state, space_id) == "public"
-                || session.is_some_and(|session| space_has_member(state, space_id, &session.actor))
+            realm_discoverability(state, space_id) == "public"
+                || session.is_some_and(|session| realm_has_member(state, space_id, &session.actor))
         }
         "joined" | "invited" => {
             let Some(session) = session else {
@@ -479,12 +505,12 @@ fn space_event_visible_to_session_with_projection(
                 .or_else(|| {
                     let meta = state
                         .persistence
-                        .space_meta()
+                        .realm_meta()
                         .get(space_id)
                         .ok()
                         .flatten()?;
                     if meta.owner == session.actor
-                        || space_has_member(state, space_id, &session.actor)
+                        || realm_has_member(state, space_id, &session.actor)
                     {
                         Some(meta.created_at)
                     } else {
@@ -543,7 +569,7 @@ fn projection_record_visible_to_session(
     event: &ProjectionEventRecord,
     session: Option<&SessionRecord>,
 ) -> bool {
-    space_event_visible_to_session(
+    realm_event_visible_to_session(
         state,
         &event.space_id,
         event.created_at,
@@ -572,7 +598,7 @@ fn projection_event_value_visible_to_session(
         return false;
     };
     let sender = event.get("sender").and_then(Value::as_str);
-    space_event_visible_to_session(state, space_id, created_at, sender, session)
+    realm_event_visible_to_session(state, space_id, created_at, sender, session)
 }
 
 fn sync_timeline_message_record_json(message: &crate::state::MessageRecord) -> serde_json::Value {
@@ -958,7 +984,7 @@ async fn set_typing(
     if validate_space_id(&body.space_id).is_err() {
         return Err(crate::error::AppError::invalid_param("invalid space_id"));
     }
-    if !space_has_member(state, &body.space_id, &session.actor) {
+    if !realm_has_member(state, &body.space_id, &session.actor) {
         return Err(crate::error::AppError::capability_denied(
             "actor is not a joined member of the space",
         ));
@@ -1030,21 +1056,18 @@ pub(super) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
         );
         return;
     }
-    for space in &spaces {
-        if validate_space_id(space).is_err() {
-            render_error(
-                res,
-                StatusCode::BAD_REQUEST,
-                "invalid_param",
-                &format!("invalid space: {space}"),
-            );
+    let spaces = match normalize_scope_selectors(spaces) {
+        Ok(spaces) => spaces,
+        Err(error) => {
+            let message = error.to_string();
+            render_error(res, StatusCode::BAD_REQUEST, "invalid_param", &message);
             return;
         }
-    }
+    };
     let session = authenticated_session(&state, req).ok();
     let mut accessible_spaces: Vec<String> = Vec::with_capacity(spaces.len());
     for space in spaces {
-        if space_id_accessible(&state, &space, session.as_ref()) {
+        if realm_id_accessible(&state, &space, session.as_ref()) {
             accessible_spaces.push(space);
         }
     }
@@ -1316,13 +1339,7 @@ pub(super) async fn events_query(
             "events.query requires at least one of realms[] / actors[] (or singular realm_id / actor)",
         ));
     }
-    for space in &spaces {
-        if validate_space_id(space).is_err() {
-            return Err(crate::error::AppError::invalid_param(format!(
-                "invalid space: {space}"
-            )));
-        }
-    }
+    let spaces = normalize_scope_selectors(spaces)?;
     for actor in &actors {
         if validate_did(actor).is_err() {
             return Err(crate::error::AppError::invalid_param(format!(
@@ -1345,7 +1362,7 @@ pub(super) async fn events_query(
     let session = authenticated_session(state, req).ok();
     let mut accessible_spaces: Vec<String> = Vec::with_capacity(spaces.len());
     for space in spaces {
-        if space_id_accessible(state, &space, session.as_ref()) {
+        if realm_id_accessible(state, &space, session.as_ref()) {
             accessible_spaces.push(space);
         }
     }
@@ -1505,7 +1522,7 @@ async fn sync_gap_backfill(
         return Err(crate::error::AppError::invalid_param("invalid space_id"));
     }
     let session = authenticated_session(state, req).ok();
-    if !space_id_accessible(state, &space_id, session.as_ref()) {
+    if !realm_id_accessible(state, &space_id, session.as_ref()) {
         return Err(crate::error::AppError::not_found("not found"));
     }
     let limit = limit.into_inner().unwrap_or(100).clamp(1, 500);
@@ -1550,7 +1567,7 @@ async fn sync_gap_backfill(
 }
 
 #[endpoint(
-    operation_id = "cx.sync.snapshot_head",
+    operation_id = "cx.sync.get_snapshot_head",
     tags("sync"),
     summary = "Read the snapshot-v2 head (manifest + chunk descriptors + merkle_root) for a Realm"
 )]
@@ -1564,16 +1581,14 @@ async fn snapshot_head(
     let space_id = query_param(req, "realm_id")
         .or_else(|| query_param(req, "space_id"))
         .ok_or_else(|| crate::error::AppError::missing_param("realm_id is required"))?;
-    if validate_space_id(&space_id).is_err() {
-        return Err(crate::error::AppError::invalid_param("invalid realm_id"));
-    }
-    if is_space_deleted(state, &space_id) {
+    let space_id = scope_selector_to_realm_id(&space_id)?;
+    if is_realm_deleted(state, &space_id) {
         return Err(crate::error::AppError::not_found("not found"));
     }
-    let space_id_value = SpaceId::new(space_id.clone())
-        .map_err(|_| crate::error::AppError::invalid_param("invalid space_id"))?;
+    let space_id_value = RealmId::new(space_id.clone())
+        .map_err(|_| crate::error::AppError::invalid_param("invalid realm_id"))?;
     {
-        let spaces = state.spaces.lock().expect("spaces lock");
+        let spaces = state.realms.lock().expect("spaces lock");
         if spaces.get(&space_id_value).is_none() {
             return Err(crate::error::AppError::not_found("not found"));
         }
@@ -1638,7 +1653,7 @@ async fn snapshot_chunk(
     let chunk_id = chunk_id.into_inner().unwrap_or(0);
     let (space_id, expected_hash) = parse_snapshot_ref(&snapshot_ref)
         .ok_or_else(|| crate::error::AppError::invalid_param("invalid snapshot_ref"))?;
-    if is_space_deleted(state, &space_id) {
+    if is_realm_deleted(state, &space_id) {
         return Err(crate::error::AppError::not_found("not found"));
     }
     let bundle = snapshot_bundle_for_space(state, &space_id)

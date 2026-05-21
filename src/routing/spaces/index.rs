@@ -21,7 +21,7 @@ use serde_json::{Value, json};
 
 use crate::error::AppError;
 use crate::result::{JsonResult, json_ok};
-use crate::state::AppState;
+use crate::state::{AppState, RealmDirectoryEntry};
 
 const SUPPORTED_FACETS: &[&str] = &[
     "container",
@@ -88,8 +88,6 @@ fn object_kind_for(object_id: &str) -> Option<&'static str> {
         Some("flow")
     } else if object_id.starts_with("cx:morph:") {
         Some("morph")
-    } else if object_id.starts_with("cx:place:") {
-        Some("place")
     } else if object_id.starts_with("cx:actor_profile:") {
         Some("actor_profile")
     } else if object_id.starts_with("cx:view:") {
@@ -172,8 +170,8 @@ async fn index_notifications(
     let state = depot.obtain::<AppState>().expect("state injected");
     let actor = actor.into_inner().unwrap_or_default();
     let mut notifications: Vec<Value> = Vec::new();
-    let space_snapshot: Vec<contrix_sdk::SpaceSearchEntry> = {
-        let spaces = state.spaces.lock().expect("spaces lock");
+    let space_snapshot: Vec<RealmDirectoryEntry> = {
+        let spaces = state.realms.lock().expect("spaces lock");
         spaces
             .search(Default::default())
             .into_iter()
@@ -187,7 +185,7 @@ async fn index_notifications(
         let messages = state
             .persistence
             .messages()
-            .list_for_space(space.space_id.as_str(), 100)
+            .list_for_space(space.realm_id.as_str(), 100)
             .unwrap_or_default();
         for message in messages {
             if !actor.is_empty() && message.sender == actor {
@@ -486,8 +484,8 @@ async fn index_query(body: JsonBody<Value>, depot: &mut Depot) -> JsonResult<Val
         0
     };
 
-    let space_snapshot: Vec<contrix_sdk::SpaceSearchEntry> = {
-        let spaces = state.spaces.lock().expect("spaces lock");
+    let space_snapshot: Vec<RealmDirectoryEntry> = {
+        let spaces = state.realms.lock().expect("spaces lock");
         spaces
             .search(Default::default())
             .into_iter()
@@ -507,12 +505,12 @@ async fn index_query(body: JsonBody<Value>, depot: &mut Depot) -> JsonResult<Val
 
     let mut results: Vec<Value> = space_snapshot
         .into_iter()
-        .filter(|space| !super::is_space_deleted(state, space.space_id.as_str()))
+        .filter(|space| !super::is_space_deleted(state, space.realm_id.as_str()))
         .filter(|space| {
             if space_id_filter.is_empty() {
                 return true;
             }
-            space_id_filter.contains(space.space_id.as_str())
+            space_id_filter.contains(space.realm_id.as_str())
         })
         .filter(|space| {
             let Some(text) = filter_text.as_deref() else {
@@ -528,8 +526,8 @@ async fn index_query(body: JsonBody<Value>, depot: &mut Depot) -> JsonResult<Val
         .map(|space| {
             json!({
                 "kind": "space",
-                "object_id": space.space_id.as_str(),
-                "space_id": space.space_id.as_str(),
+                "object_id": space.realm_id.as_str(),
+                "realm_id": space.realm_id.as_str(),
                 "title": space.name,
                 "summary": space.description,
                 "tags": space.tags.iter().cloned().collect::<Vec<_>>(),
@@ -547,8 +545,8 @@ async fn index_query(body: JsonBody<Value>, depot: &mut Depot) -> JsonResult<Val
                 continue;
             }
             let registry_known = {
-                let registry = state.spaces.lock().expect("spaces lock");
-                contrix_sdk::SpaceId::new(space_id.clone())
+                let registry = state.realms.lock().expect("spaces lock");
+                contrix_sdk::RealmId::new(space_id.clone())
                     .ok()
                     .and_then(|id| registry.get(&id).cloned())
                     .is_some()

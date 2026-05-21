@@ -107,14 +107,15 @@ pub struct ProjectionState {
     /// / `relations` / `redactions`) stay structured per spec
     /// (those event kinds have no `cell_family` declaration).
     pub cells: BTreeMap<CellRef, CellState>,
-    /// Server-side Place projection — `place_id -> PlaceProjection`.
+    /// Server-side Space-container projection —
+    /// `container_space_id -> SpaceContainerProjection`.
     /// Maintains the canonical state-machine described in
-    /// `contrix-spec/v1/zh/models/common-fields.md §5.1` for cx.place.*
+    /// `contrix-spec/v1/zh/models/common-fields.md §5.1` for `cx.space.*`
     /// lifecycle events. Used by `event_log::submit_event` to reject
-    /// invalid transitions with HTTP 412 before persisting. Reducer
-    /// applies cx.place.create / update / parent / archive / restore /
-    /// tombstone; mirror table is `projection_places` (durable).
-    pub places: BTreeMap<String, PlaceProjection>,
+    /// invalid transitions with HTTP 412 before persisting. Reducer applies
+    /// `cx.space.create` / update / parent / archive / restore / tombstone;
+    /// mirror table is the legacy `projection_places` durable table.
+    pub space_containers: BTreeMap<String, SpaceContainerProjection>,
     /// Server-side Flow projection. Mirrors the canonical state-machine
     /// for cx.flow.create / update / archive / restore. Unlike Place
     /// there is no dedicated `cx.flow.tombstone` event; terminal state
@@ -359,16 +360,17 @@ pub struct MlsCommitEpoch {
     pub committed_at: i64,
 }
 
-/// Server-side Place state cache. Mirrors the `projection_places` table.
+/// Server-side Space-container state cache. Mirrors the legacy
+/// `projection_places` table.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PlaceProjection {
-    pub place_id: String,
+pub struct SpaceContainerProjection {
+    pub container_space_id: String,
     pub space_id: String,
     pub kind: String,
     pub title: String,
     pub parent_ref: Option<String>,
     pub rank: Option<String>,
-    pub state: PlaceLifecycleState,
+    pub state: SpaceContainerLifecycleState,
     pub state_changed_at: Option<chrono::DateTime<chrono::Utc>>,
     pub created_by: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
@@ -376,15 +378,23 @@ pub struct PlaceProjection {
     pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
+fn space_container_id_from_payload(payload: &Value) -> Option<String> {
+    payload
+        .get("space_id")
+        .or_else(|| payload.get("place_id"))
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum PlaceLifecycleState {
+pub enum SpaceContainerLifecycleState {
     #[default]
     Active,
     Archived,
     Tombstoned,
 }
 
-impl PlaceLifecycleState {
+impl SpaceContainerLifecycleState {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Active => "active",
@@ -471,7 +481,7 @@ pub struct AgentProjection {
 }
 
 /// State enum shared by Flow and Morph projections (mirrors SDK
-/// `contrix_sdk::ObjectState`). Unlike `PlaceLifecycleState` which has a
+/// `contrix_sdk::ObjectState`). Unlike `SpaceContainerLifecycleState` which has a
 /// single `Tombstoned` terminal, Flow / Morph distinguish the two terminal
 /// kinds `Deleted` (reached via cx.redaction with a delete intent) from
 /// `Redacted` (content cleared, audit envelope preserved). Per spec §5.1
@@ -657,13 +667,13 @@ pub enum ProjectionEffect {
         space_id: String,
         action: String,
     },
-    /// Place lifecycle transition accepted; new state is reflected in
-    /// `ProjectionState::places` and (when persisted) `projection_places`.
-    PlaceLifecycle {
-        place_id: String,
-        new_state: PlaceLifecycleState,
+    /// Space-container lifecycle transition accepted; new state is reflected in
+    /// `ProjectionState::space_containers` and (when persisted) `projection_places`.
+    SpaceContainerLifecycle {
+        container_space_id: String,
+        new_state: SpaceContainerLifecycleState,
     },
-    /// Flow lifecycle transition accepted. Mirror of `PlaceLifecycle`
+    /// Flow lifecycle transition accepted. Mirror of `SpaceContainerLifecycle`
     /// for `ProjectionState::flows`.
     FlowLifecycle {
         flow_id: String,
@@ -786,18 +796,18 @@ pub enum MlsEffect {
     },
 }
 
-/// Which Place lifecycle transition is being attempted. Used by
-/// `apply_place_lifecycle` to share the state-machine guard across the
-/// three event kinds.
+/// Which Space-container lifecycle transition is being attempted. Used by
+/// `apply_space_container_lifecycle` to share the state-machine guard across
+/// the three event kinds.
 #[derive(Clone, Copy, Debug)]
-enum PlaceLifecycleTransition {
+enum SpaceContainerLifecycleTransition {
     Archive,
     Restore,
     Tombstone,
 }
 
 /// Flow / Morph lifecycle transition picker. Mirror of
-/// `PlaceLifecycleTransition` but for the two-event family (no tombstone).
+/// `SpaceContainerLifecycleTransition` but for the two-event family (no tombstone).
 #[derive(Clone, Copy, Debug)]
 enum ObjectLifecycleTransition {
     Archive,
@@ -805,13 +815,10 @@ enum ObjectLifecycleTransition {
 }
 
 /// Extract the typed-id object reference from a `cx.redaction` event
-/// payload, used by both the reducer
-/// (`apply_redaction`) and the preflight
+/// payload, used by both the reducer (`apply_redaction`) and the preflight
 /// (`check_redaction_target_transition`). Returns `None` for redactions
-/// that only carry a `target_event_id` (message redaction path), or
-/// when no recognised object-ref field is present. The fallbacks
-/// `target_object_ref` / `object_ref` mirror SDK `extract_place_id`'s
-/// convention for object-level event payloads.
+/// that only carry a `target_event_id` (message redaction path), or when no
+/// recognised object-ref field is present.
 fn redaction_object_ref(operation: &Operation) -> Option<String> {
     operation
         .payload
@@ -942,47 +949,59 @@ fn apply_space_destroy_dispatch(
 ) -> ProjectionEffect {
     s.apply_space_lifecycle(op, op.created_at, crate::kinds::CX_SPACE_DESTROY)
 }
-fn apply_place_create_dispatch(
+fn apply_space_container_create_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
-    s.apply_place_create(op, op.created_at)
+    s.apply_space_container_create(op, op.created_at)
 }
-fn apply_place_update_dispatch(
+fn apply_space_container_update_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
-    s.apply_place_update(op, op.created_at)
+    s.apply_space_container_update(op, op.created_at)
 }
-fn apply_place_parent_dispatch(
+fn apply_space_container_parent_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
-    s.apply_place_parent(op, op.created_at)
+    s.apply_space_container_parent(op, op.created_at)
 }
-fn apply_place_archive_dispatch(
+fn apply_space_container_archive_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
-    s.apply_place_lifecycle(op, op.created_at, PlaceLifecycleTransition::Archive)
+    s.apply_space_container_lifecycle(
+        op,
+        op.created_at,
+        SpaceContainerLifecycleTransition::Archive,
+    )
 }
-fn apply_place_restore_dispatch(
+fn apply_space_container_restore_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
-    s.apply_place_lifecycle(op, op.created_at, PlaceLifecycleTransition::Restore)
+    s.apply_space_container_lifecycle(
+        op,
+        op.created_at,
+        SpaceContainerLifecycleTransition::Restore,
+    )
 }
-fn apply_place_tombstone_dispatch(
+fn apply_space_container_tombstone_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
-    s.apply_place_lifecycle(op, op.created_at, PlaceLifecycleTransition::Tombstone)
+    s.apply_space_container_lifecycle(
+        op,
+        op.created_at,
+        SpaceContainerLifecycleTransition::Tombstone,
+    )
 }
 fn apply_flow_create_dispatch(
     s: &mut ProjectionState,
@@ -1332,12 +1351,30 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
     m.insert(CX_SPACE_CREATE, apply_space_create_dispatch);
     m.insert(CX_SPACE_UPDATE, apply_space_update_dispatch);
     m.insert(CX_SPACE_DESTROY, apply_space_destroy_dispatch);
-    m.insert(CX_PLACE_CREATE, apply_place_create_dispatch);
-    m.insert(CX_PLACE_UPDATE, apply_place_update_dispatch);
-    m.insert(CX_PLACE_PARENT, apply_place_parent_dispatch);
-    m.insert(CX_PLACE_ARCHIVE, apply_place_archive_dispatch);
-    m.insert(CX_PLACE_RESTORE, apply_place_restore_dispatch);
-    m.insert(CX_PLACE_TOMBSTONE, apply_place_tombstone_dispatch);
+    m.insert(
+        CX_SPACE_CONTAINER_CREATE,
+        apply_space_container_create_dispatch,
+    );
+    m.insert(
+        CX_SPACE_CONTAINER_UPDATE,
+        apply_space_container_update_dispatch,
+    );
+    m.insert(
+        CX_SPACE_CONTAINER_PARENT,
+        apply_space_container_parent_dispatch,
+    );
+    m.insert(
+        CX_SPACE_CONTAINER_ARCHIVE,
+        apply_space_container_archive_dispatch,
+    );
+    m.insert(
+        CX_SPACE_CONTAINER_RESTORE,
+        apply_space_container_restore_dispatch,
+    );
+    m.insert(
+        CX_SPACE_CONTAINER_TOMBSTONE,
+        apply_space_container_tombstone_dispatch,
+    );
     m.insert(CX_FLOW_CREATE, apply_flow_create_dispatch);
     m.insert(CX_FLOW_UPDATE, apply_flow_update_dispatch);
     m.insert(CX_FLOW_ARCHIVE, apply_flow_archive_dispatch);
@@ -1765,8 +1802,8 @@ impl ProjectionState {
     /// naming a `cx:flow:` or `cx:morph:` typed-id, the redaction
     /// additionally flips the corresponding projection's state to
     /// `ObjectLifecycleState::Redacted` per spec common-fields.md §5.1.
-    /// Place is intentionally excluded — Place has no Redacted terminal,
-    /// and Place removal routes through `cx.place.tombstone` only.
+    /// Space containers are intentionally excluded — they have no Redacted
+    /// terminal, and removal routes through `cx.space.tombstone` only.
     fn apply_redaction(&mut self, operation: &Operation) -> ProjectionEffect {
         let target = operation
             .payload
@@ -2992,15 +3029,15 @@ impl ProjectionState {
         ProjectionEffect::SpaceLifecycle { space_id, action }
     }
 
-    /// Read-only state-machine preflight for a `cx.place.*` lifecycle
+    /// Read-only state-machine preflight for a `cx.space.*` container lifecycle
     /// operation. Returns `Err(reason_code)` if the projection's current
-    /// Place state forbids the transition per `common-fields.md §5.1`,
+    /// Space-container state forbids the transition per `common-fields.md §5.1`,
     /// else `Ok(())`. Used by `event_log::submit_event` to short-circuit
     /// HTTP admission with a 412 failed_precondition instead of letting
-    /// the reducer accept-then-reject after persistence. Unknown Place
-    /// (no prior cx.place.create projected) returns Ok — causal /
+    /// the reducer accept-then-reject after persistence. Unknown Space container
+    /// (no prior cx.space.create projected) returns Ok — causal /
     /// backfill ordering is allowed; the reducer also tolerates it.
-    pub fn check_place_lifecycle_transition(
+    pub fn check_space_container_lifecycle_transition(
         &self,
         operation: &Operation,
     ) -> Result<(), &'static str> {
@@ -3010,47 +3047,54 @@ impl ProjectionState {
             None => return Ok(()),
         };
 
-        // `cx.place.create` is unconditional (only constraint is that no
-        // existing place with the same id — but LWW overwrite is fine
+        // `cx.space.create` is unconditional (only constraint is that no
+        // existing Space container with the same id — but LWW overwrite is fine
         // per the reducer's existing `insert`).
-        // `cx.place.update` / `cx.place.parent` require Active source.
-        // `cx.place.archive` requires Active.
-        // `cx.place.restore` requires Archived.
-        // `cx.place.tombstone` requires {Active, Archived}.
-        let (allowed_source, reason): (&[PlaceLifecycleState], &'static str) = match kind {
-            CX_PLACE_CREATE => return Ok(()),
-            CX_PLACE_UPDATE | CX_PLACE_PARENT => {
-                (&[PlaceLifecycleState::Active], "place_not_active")
+        // `cx.space.update` / `cx.space.parent` require Active source.
+        // `cx.space.archive` requires Active.
+        // `cx.space.restore` requires Archived.
+        // `cx.space.tombstone` requires {Active, Archived}.
+        let (allowed_source, reason): (&[SpaceContainerLifecycleState], &'static str) = match kind {
+            CX_SPACE_CONTAINER_CREATE => return Ok(()),
+            CX_SPACE_CONTAINER_UPDATE | CX_SPACE_CONTAINER_PARENT => {
+                (&[SpaceContainerLifecycleState::Active], "place_not_active")
             }
-            CX_PLACE_ARCHIVE => (&[PlaceLifecycleState::Active], "place_not_active"),
-            CX_PLACE_RESTORE => (&[PlaceLifecycleState::Archived], "place_not_archived"),
-            CX_PLACE_TOMBSTONE => (
-                &[PlaceLifecycleState::Active, PlaceLifecycleState::Archived],
+            CX_SPACE_CONTAINER_ARCHIVE => {
+                (&[SpaceContainerLifecycleState::Active], "place_not_active")
+            }
+            CX_SPACE_CONTAINER_RESTORE => (
+                &[SpaceContainerLifecycleState::Archived],
+                "place_not_archived",
+            ),
+            CX_SPACE_CONTAINER_TOMBSTONE => (
+                &[
+                    SpaceContainerLifecycleState::Active,
+                    SpaceContainerLifecycleState::Archived,
+                ],
                 "place_already_terminal",
             ),
             _ => return Ok(()),
         };
 
-        let Some(place_id) = operation.payload.get("place_id").and_then(|v| v.as_str()) else {
-            // Missing place_id is a schema-validation problem caught
+        let Some(container_space_id) = space_container_id_from_payload(&operation.payload) else {
+            // Missing space_id/place_id is a schema-validation problem caught
             // upstream; preflight is not the right place to surface it.
             return Ok(());
         };
-        let Some(place) = self.places.get(place_id) else {
+        let Some(space_container) = self.space_containers.get(&container_space_id) else {
             // Unknown — causal / backfill window. Don't block.
             return Ok(());
         };
-        if !allowed_source.contains(&place.state) {
+        if !allowed_source.contains(&space_container.state) {
             return Err(reason);
         }
         Ok(())
     }
 
-    /// Apply `cx.place.create` — populate the `places` projection from
+    /// Apply `cx.space.create` — populate the Space-container projection from
     /// the wire `object` field. Idempotent: re-create with the same id
-    /// overwrites the existing entry per LWW. Spec:
-    /// `space-and-place.md §4.2`.
-    fn apply_place_create(
+    /// overwrites the existing entry per LWW.
+    fn apply_space_container_create(
         &mut self,
         operation: &Operation,
         now: chrono::DateTime<chrono::Utc>,
@@ -3060,7 +3104,7 @@ impl ProjectionState {
                 reason: "place_create_missing_object".to_owned(),
             };
         };
-        let Some(place_id) = object
+        let Some(container_space_id) = object
             .get("id")
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned)
@@ -3105,51 +3149,48 @@ impl ProjectionState {
             })
             .unwrap_or_default();
 
-        let projection = PlaceProjection {
-            place_id: place_id.clone(),
+        let projection = SpaceContainerProjection {
+            container_space_id: container_space_id.clone(),
             space_id,
             kind,
             title,
             parent_ref,
             rank,
-            state: PlaceLifecycleState::Active,
+            state: SpaceContainerLifecycleState::Active,
             state_changed_at: None,
             created_by,
             created_at: now,
             updated_by: None,
             updated_at: None,
         };
-        self.places.insert(place_id.clone(), projection);
+        self.space_containers
+            .insert(container_space_id.clone(), projection);
 
-        ProjectionEffect::PlaceLifecycle {
-            place_id,
-            new_state: PlaceLifecycleState::Active,
+        ProjectionEffect::SpaceContainerLifecycle {
+            container_space_id,
+            new_state: SpaceContainerLifecycleState::Active,
         }
     }
 
-    /// Apply `cx.place.update` — patch title / rank / fields on an
-    /// existing Place. Per common-fields.md §5.1 ("update on non-active
-    /// object MUST fail"): rejects with `place_not_active` if the target
-    /// is not in Active state. Unknown Place is tolerated.
-    fn apply_place_update(
+    /// Apply `cx.space.update` — patch title / rank / fields on an
+    /// existing Space container. Per common-fields.md §5.1 ("update on non-active
+    /// object MUST fail"): rejects with the legacy `place_not_active` reason
+    /// code if the target is not in Active state. Unknown Space container is
+    /// tolerated.
+    fn apply_space_container_update(
         &mut self,
         operation: &Operation,
         now: chrono::DateTime<chrono::Utc>,
     ) -> ProjectionEffect {
-        let Some(place_id) = operation
-            .payload
-            .get("place_id")
-            .and_then(|v| v.as_str())
-            .map(ToOwned::to_owned)
-        else {
+        let Some(container_space_id) = space_container_id_from_payload(&operation.payload) else {
             return ProjectionEffect::Rejected {
-                reason: "place_update_missing_place_id".to_owned(),
+                reason: "place_update_missing_space_id".to_owned(),
             };
         };
-        let Some(place) = self.places.get_mut(&place_id) else {
+        let Some(space_container) = self.space_containers.get_mut(&container_space_id) else {
             return ProjectionEffect::Ignored;
         };
-        if place.state != PlaceLifecycleState::Active {
+        if space_container.state != SpaceContainerLifecycleState::Active {
             return ProjectionEffect::Rejected {
                 reason: "place_not_active".to_owned(),
             };
@@ -3157,94 +3198,92 @@ impl ProjectionState {
         let patch = operation.payload.get("patch").and_then(|v| v.as_object());
         if let Some(patch) = patch {
             if let Some(title) = patch.get("title").and_then(|v| v.as_str()) {
-                place.title = title.to_owned();
+                space_container.title = title.to_owned();
             }
             if let Some(rank) = patch.get("rank").and_then(|v| v.as_str()) {
-                place.rank = Some(rank.to_owned());
+                space_container.rank = Some(rank.to_owned());
             }
         }
-        place.updated_by = operation
+        space_container.updated_by = operation
             .payload
             .get("sender")
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned);
-        place.updated_at = Some(now);
-        ProjectionEffect::PlaceLifecycle {
-            place_id,
-            new_state: place.state,
+        space_container.updated_at = Some(now);
+        ProjectionEffect::SpaceContainerLifecycle {
+            container_space_id,
+            new_state: space_container.state,
         }
     }
 
-    /// Apply `cx.place.parent` — update parent_ref. State-machine guard
+    /// Apply `cx.space.parent` — update parent_ref. State-machine guard
     /// (`parent on non-active MUST fail`) follows the same rule as
-    /// `apply_place_update`.
-    fn apply_place_parent(
+    /// `apply_space_container_update`.
+    fn apply_space_container_parent(
         &mut self,
         operation: &Operation,
         now: chrono::DateTime<chrono::Utc>,
     ) -> ProjectionEffect {
-        let Some(place_id) = operation
-            .payload
-            .get("place_id")
-            .and_then(|v| v.as_str())
-            .map(ToOwned::to_owned)
-        else {
+        let Some(container_space_id) = space_container_id_from_payload(&operation.payload) else {
             return ProjectionEffect::Rejected {
-                reason: "place_parent_missing_place_id".to_owned(),
+                reason: "place_parent_missing_space_id".to_owned(),
             };
         };
-        let parent_ref = operation
-            .payload
-            .get("parent_ref")
-            .and_then(|v| v.as_str())
-            .map(ToOwned::to_owned);
-        let Some(place) = self.places.get_mut(&place_id) else {
+        let parent_ref = if operation.payload.get("parent_space_id").is_some() {
+            operation
+                .payload
+                .get("parent_space_id")
+                .and_then(|v| v.as_str())
+                .map(ToOwned::to_owned)
+        } else {
+            operation
+                .payload
+                .get("parent_ref")
+                .and_then(|v| v.as_str())
+                .map(ToOwned::to_owned)
+        };
+        let Some(space_container) = self.space_containers.get_mut(&container_space_id) else {
             return ProjectionEffect::Ignored;
         };
-        if place.state != PlaceLifecycleState::Active {
+        if space_container.state != SpaceContainerLifecycleState::Active {
             return ProjectionEffect::Rejected {
                 reason: "place_not_active".to_owned(),
             };
         }
-        place.parent_ref = parent_ref;
-        place.updated_by = operation
+        space_container.parent_ref = parent_ref;
+        space_container.updated_by = operation
             .payload
             .get("sender")
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned);
-        place.updated_at = Some(now);
-        ProjectionEffect::PlaceLifecycle {
-            place_id,
-            new_state: place.state,
+        space_container.updated_at = Some(now);
+        ProjectionEffect::SpaceContainerLifecycle {
+            container_space_id,
+            new_state: space_container.state,
         }
     }
 
-    /// Apply a `cx.place.archive` / `cx.place.restore` / `cx.place.tombstone`
+    /// Apply a `cx.space.archive` / `cx.space.restore` / `cx.space.tombstone`
     /// event with the canonical state-machine guard from
-    /// `common-fields.md §5.1`. Unknown Place (no prior cx.place.create in
-    /// the projection) is tolerated — returns `Ignored` so causal /
+    /// `common-fields.md §5.1`. Unknown Space container (no prior
+    /// cx.space.create in the projection) is tolerated — returns `Ignored` so causal /
     /// backfill ordering doesn't get flagged as invalid. Invalid source
     /// state returns `Rejected { reason }` with the spec reason_code;
     /// `event_log::submit_event` maps that to HTTP 412.
-    fn apply_place_lifecycle(
+    fn apply_space_container_lifecycle(
         &mut self,
         operation: &Operation,
         now: chrono::DateTime<chrono::Utc>,
-        transition: PlaceLifecycleTransition,
+        transition: SpaceContainerLifecycleTransition,
     ) -> ProjectionEffect {
-        let Some(place_id) = operation
-            .payload
-            .get("place_id")
-            .and_then(|v| v.as_str())
-            .map(ToOwned::to_owned)
-        else {
+        let Some(container_space_id) = space_container_id_from_payload(&operation.payload) else {
             return ProjectionEffect::Rejected {
-                reason: "missing_place_id".to_owned(),
+                reason: "missing_space_id".to_owned(),
             };
         };
 
-        let Some(place) = self.places.get_mut(&place_id) else {
-            // Unknown Place — likely the cx.place.create has not yet
+        let Some(space_container) = self.space_containers.get_mut(&container_space_id) else {
+            // Unknown Space container — likely the cx.space.create has not yet
             // been projected (causal / backfill window). Tolerate
             // silently per the spec convention (common-fields.md §5.1
             // unknown-object tolerance).
@@ -3252,40 +3291,43 @@ impl ProjectionState {
         };
 
         let (allowed_source, target_state, reason_on_invalid) = match transition {
-            PlaceLifecycleTransition::Archive => (
-                &[PlaceLifecycleState::Active][..],
-                PlaceLifecycleState::Archived,
+            SpaceContainerLifecycleTransition::Archive => (
+                &[SpaceContainerLifecycleState::Active][..],
+                SpaceContainerLifecycleState::Archived,
                 "place_not_active",
             ),
-            PlaceLifecycleTransition::Restore => (
-                &[PlaceLifecycleState::Archived][..],
-                PlaceLifecycleState::Active,
+            SpaceContainerLifecycleTransition::Restore => (
+                &[SpaceContainerLifecycleState::Archived][..],
+                SpaceContainerLifecycleState::Active,
                 "place_not_archived",
             ),
-            PlaceLifecycleTransition::Tombstone => (
-                &[PlaceLifecycleState::Active, PlaceLifecycleState::Archived][..],
-                PlaceLifecycleState::Tombstoned,
+            SpaceContainerLifecycleTransition::Tombstone => (
+                &[
+                    SpaceContainerLifecycleState::Active,
+                    SpaceContainerLifecycleState::Archived,
+                ][..],
+                SpaceContainerLifecycleState::Tombstoned,
                 "place_already_terminal",
             ),
         };
 
-        if !allowed_source.contains(&place.state) {
+        if !allowed_source.contains(&space_container.state) {
             return ProjectionEffect::Rejected {
                 reason: reason_on_invalid.to_owned(),
             };
         }
 
-        place.state = target_state;
-        place.state_changed_at = Some(now);
-        place.updated_by = operation
+        space_container.state = target_state;
+        space_container.state_changed_at = Some(now);
+        space_container.updated_by = operation
             .payload
             .get("sender")
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned);
-        place.updated_at = Some(now);
+        space_container.updated_at = Some(now);
 
-        ProjectionEffect::PlaceLifecycle {
-            place_id,
+        ProjectionEffect::SpaceContainerLifecycle {
+            container_space_id,
             new_state: target_state,
         }
     }
@@ -3293,7 +3335,7 @@ impl ProjectionState {
     // ── Flow / Morph projection state machine ──
 
     /// Read-only state-machine preflight for a `cx.flow.*` lifecycle event.
-    /// Mirror of `check_place_lifecycle_transition` — used by
+    /// Mirror of `check_space_container_lifecycle_transition` — used by
     /// `event_log::submit_event` to short-circuit HTTP admission with 412
     /// failed_precondition. Unknown Flow returns `Ok` (causal/backfill
     /// tolerance per common-fields.md §5.1).
@@ -3337,8 +3379,8 @@ impl ProjectionState {
     /// §5.1, redaction is legal only from `active` or `archived` source;
     /// terminal source MUST `failed_precondition` with
     /// `<kind>_already_terminal`. Unknown object tolerated (causal /
-    /// backfill window). Place is excluded — spec routes Place removal
-    /// through `cx.place.tombstone` only.
+    /// backfill window). Space containers are excluded — spec routes their
+    /// removal through `cx.space.tombstone` only.
     pub fn check_redaction_target_transition(
         &self,
         operation: &Operation,
@@ -5187,27 +5229,27 @@ mod tests {
         );
     }
 
-    /// End-to-end Place lifecycle through the dispatcher: create →
+    /// End-to-end Space-container lifecycle through the dispatcher: create →
     /// archive (active → archived) → restore (archived → active) →
     /// tombstone (active → tombstoned). Verifies the projection's
     /// `places` map tracks state transitions correctly and the
     /// effects carry the new state.
     #[test]
-    fn place_lifecycle_round_trip() {
+    fn space_container_lifecycle_round_trip() {
         let mut state = ProjectionState::new();
         let hlc = ServerHlc::new("test");
         let space_id = "cx:space:01904100-0000-7000-8000-cfc039892036";
-        let place_id = "cx:place:01904100-0000-7000-8000-1fb50799ad42";
+        let container_space_id = "cx:space:01904100-0000-7000-8000-1fb50799ad42";
 
         // create
         let create_effect = state.apply(
             &make_operation(
-                crate::kinds::CX_PLACE_CREATE,
+                crate::kinds::CX_SPACE_CONTAINER_CREATE,
                 space_id,
                 serde_json::json!({
                     "object": {
-                        "id": place_id,
-                        "space_id": space_id,
+                        "id": container_space_id,
+                        "realm_id": "cx:realm:01904100-0000-7000-8000-cfc039892036",
                         "kind": "board",
                         "title": "Roadmap",
                         "created_by": "did:web:alice.example",
@@ -5218,90 +5260,99 @@ mod tests {
         );
         assert!(matches!(
             create_effect,
-            ProjectionEffect::PlaceLifecycle {
-                new_state: PlaceLifecycleState::Active,
+            ProjectionEffect::SpaceContainerLifecycle {
+                new_state: SpaceContainerLifecycleState::Active,
                 ..
             }
         ));
-        assert_eq!(state.places[place_id].state, PlaceLifecycleState::Active);
+        assert_eq!(
+            state.space_containers[container_space_id].state,
+            SpaceContainerLifecycleState::Active
+        );
 
         // archive
         let archive_effect = state.apply(
             &make_operation(
-                crate::kinds::CX_PLACE_ARCHIVE,
+                crate::kinds::CX_SPACE_CONTAINER_ARCHIVE,
                 space_id,
-                serde_json::json!({ "place_id": place_id, "sender": "did:web:alice.example" }),
+                serde_json::json!({ "space_id": container_space_id, "sender": "did:web:alice.example" }),
             ),
             &hlc,
         );
         assert!(matches!(
             archive_effect,
-            ProjectionEffect::PlaceLifecycle {
-                new_state: PlaceLifecycleState::Archived,
+            ProjectionEffect::SpaceContainerLifecycle {
+                new_state: SpaceContainerLifecycleState::Archived,
                 ..
             }
         ));
-        assert_eq!(state.places[place_id].state, PlaceLifecycleState::Archived);
+        assert_eq!(
+            state.space_containers[container_space_id].state,
+            SpaceContainerLifecycleState::Archived
+        );
 
         // restore
         let restore_effect = state.apply(
             &make_operation(
-                crate::kinds::CX_PLACE_RESTORE,
+                crate::kinds::CX_SPACE_CONTAINER_RESTORE,
                 space_id,
-                serde_json::json!({ "place_id": place_id, "sender": "did:web:alice.example" }),
+                serde_json::json!({ "space_id": container_space_id, "sender": "did:web:alice.example" }),
             ),
             &hlc,
         );
         assert!(matches!(
             restore_effect,
-            ProjectionEffect::PlaceLifecycle {
-                new_state: PlaceLifecycleState::Active,
+            ProjectionEffect::SpaceContainerLifecycle {
+                new_state: SpaceContainerLifecycleState::Active,
                 ..
             }
         ));
-        assert_eq!(state.places[place_id].state, PlaceLifecycleState::Active);
+        assert_eq!(
+            state.space_containers[container_space_id].state,
+            SpaceContainerLifecycleState::Active
+        );
 
         // tombstone
         let tombstone_effect = state.apply(
             &make_operation(
-                crate::kinds::CX_PLACE_TOMBSTONE,
+                crate::kinds::CX_SPACE_CONTAINER_TOMBSTONE,
                 space_id,
-                serde_json::json!({ "place_id": place_id, "sender": "did:web:alice.example" }),
+                serde_json::json!({ "space_id": container_space_id, "sender": "did:web:alice.example" }),
             ),
             &hlc,
         );
         assert!(matches!(
             tombstone_effect,
-            ProjectionEffect::PlaceLifecycle {
-                new_state: PlaceLifecycleState::Tombstoned,
+            ProjectionEffect::SpaceContainerLifecycle {
+                new_state: SpaceContainerLifecycleState::Tombstoned,
                 ..
             }
         ));
         assert_eq!(
-            state.places[place_id].state,
-            PlaceLifecycleState::Tombstoned
+            state.space_containers[container_space_id].state,
+            SpaceContainerLifecycleState::Tombstoned
         );
     }
 
-    /// Preflight `check_place_lifecycle_transition` rejects each illegal
+    /// Preflight `check_space_container_lifecycle_transition` rejects each illegal
     /// transition with the spec-canonical reason_code per
     /// `contrix-spec/v1/zh/models/common-fields.md §5.1`.
     #[test]
-    fn place_lifecycle_preflight_rejects_illegal_transitions() {
+    fn space_container_lifecycle_preflight_rejects_illegal_transitions() {
         let mut state = ProjectionState::new();
         let hlc = ServerHlc::new("test");
         let space_id = "cx:space:01904100-0000-7000-8000-cfc039892036";
-        let place_id = "cx:place:01904100-0000-7000-8000-1fb50799ad43";
+        let container_space_id = "cx:space:01904100-0000-7000-8000-1fb50799ad43";
 
         // Create the place (Active).
         state.apply(
             &make_operation(
-                crate::kinds::CX_PLACE_CREATE,
+                crate::kinds::CX_SPACE_CONTAINER_CREATE,
                 space_id,
                 serde_json::json!({
                     "object": {
-                        "id": place_id,
-                        "space_id": space_id,
+                        "id": container_space_id,
+                        "realm_id": "cx:realm:01904100-0000-7000-8000-cfc039892036",
                         "kind": "list",
                         "title": "Todo",
                         "created_by": "did:web:alice.example",
@@ -5313,74 +5364,74 @@ mod tests {
 
         // restore on Active → place_not_archived
         let restore_op = make_operation(
-            crate::kinds::CX_PLACE_RESTORE,
+            crate::kinds::CX_SPACE_CONTAINER_RESTORE,
             space_id,
-            serde_json::json!({ "place_id": place_id }),
+            serde_json::json!({ "space_id": container_space_id }),
         );
         assert_eq!(
-            state.check_place_lifecycle_transition(&restore_op),
+            state.check_space_container_lifecycle_transition(&restore_op),
             Err("place_not_archived")
         );
 
         // Archive then try archive again → place_not_active
         state.apply(
             &make_operation(
-                crate::kinds::CX_PLACE_ARCHIVE,
+                crate::kinds::CX_SPACE_CONTAINER_ARCHIVE,
                 space_id,
-                serde_json::json!({ "place_id": place_id }),
+                serde_json::json!({ "space_id": container_space_id }),
             ),
             &hlc,
         );
         let archive_op = make_operation(
-            crate::kinds::CX_PLACE_ARCHIVE,
+            crate::kinds::CX_SPACE_CONTAINER_ARCHIVE,
             space_id,
-            serde_json::json!({ "place_id": place_id }),
+            serde_json::json!({ "space_id": container_space_id }),
         );
         assert_eq!(
-            state.check_place_lifecycle_transition(&archive_op),
+            state.check_space_container_lifecycle_transition(&archive_op),
             Err("place_not_active")
         );
 
         // Tombstone (legal from Archived).
         state.apply(
             &make_operation(
-                crate::kinds::CX_PLACE_TOMBSTONE,
+                crate::kinds::CX_SPACE_CONTAINER_TOMBSTONE,
                 space_id,
-                serde_json::json!({ "place_id": place_id }),
+                serde_json::json!({ "space_id": container_space_id }),
             ),
             &hlc,
         );
         // Now restore on Tombstoned → still place_not_archived.
         let restore_again = make_operation(
-            crate::kinds::CX_PLACE_RESTORE,
+            crate::kinds::CX_SPACE_CONTAINER_RESTORE,
             space_id,
-            serde_json::json!({ "place_id": place_id }),
+            serde_json::json!({ "space_id": container_space_id }),
         );
         assert_eq!(
-            state.check_place_lifecycle_transition(&restore_again),
+            state.check_space_container_lifecycle_transition(&restore_again),
             Err("place_not_archived")
         );
         // Tombstone on Tombstoned → place_already_terminal.
         let tombstone_again = make_operation(
-            crate::kinds::CX_PLACE_TOMBSTONE,
+            crate::kinds::CX_SPACE_CONTAINER_TOMBSTONE,
             space_id,
-            serde_json::json!({ "place_id": place_id }),
+            serde_json::json!({ "space_id": container_space_id }),
         );
         assert_eq!(
-            state.check_place_lifecycle_transition(&tombstone_again),
+            state.check_space_container_lifecycle_transition(&tombstone_again),
             Err("place_already_terminal")
         );
         // Update on Tombstoned → place_not_active.
         let update_op = make_operation(
-            crate::kinds::CX_PLACE_UPDATE,
+            crate::kinds::CX_SPACE_CONTAINER_UPDATE,
             space_id,
             serde_json::json!({
-                "place_id": place_id,
+                "space_id": container_space_id,
                 "patch": { "title": "Renamed while tombstoned" }
             }),
         );
         assert_eq!(
-            state.check_place_lifecycle_transition(&update_op),
+            state.check_space_container_lifecycle_transition(&update_op),
             Err("place_not_active")
         );
     }
@@ -5389,16 +5440,103 @@ mod tests {
     /// backfill window. Spec: unknown-object tolerance rule in
     /// common-fields §5.1.
     #[test]
-    fn place_lifecycle_preflight_tolerates_unknown_place() {
+    fn space_container_lifecycle_preflight_tolerates_unknown_space_container() {
         let state = ProjectionState::new();
         let archive_unknown = make_operation(
-            crate::kinds::CX_PLACE_ARCHIVE,
+            crate::kinds::CX_SPACE_CONTAINER_ARCHIVE,
             "cx:space:01904100-0000-7000-8000-cfc039892036",
-            serde_json::json!({ "place_id": "cx:place:nope-not-here" }),
+            serde_json::json!({ "space_id": "cx:space:01904100-0000-7000-8000-cfc039892039" }),
         );
         assert_eq!(
-            state.check_place_lifecycle_transition(&archive_unknown),
+            state.check_space_container_lifecycle_transition(&archive_unknown),
             Ok(())
+        );
+    }
+
+    #[test]
+    fn space_update_and_parent_accept_canonical_payload_fields() {
+        let mut state = ProjectionState::new();
+        let hlc = ServerHlc::new("test");
+        let realm_space_id = "cx:space:01904100-0000-7000-8000-cfc039892036";
+        let container_space_id = "cx:space:01904100-0000-7000-8000-cfc039892037";
+        let parent_space_id = "cx:space:01904100-0000-7000-8000-cfc039892038";
+
+        state.apply(
+            &make_operation(
+                crate::kinds::CX_SPACE_CONTAINER_CREATE,
+                realm_space_id,
+                serde_json::json!({
+                    "object": {
+                        "id": container_space_id,
+                        "realm_id": "cx:realm:01904100-0000-7000-8000-cfc039892036",
+                        "kind": "list",
+                        "title": "Original",
+                        "created_by": "did:web:alice.example"
+                    }
+                }),
+            ),
+            &hlc,
+        );
+
+        let update = make_operation(
+            crate::kinds::CX_SPACE_CONTAINER_UPDATE,
+            realm_space_id,
+            serde_json::json!({
+                "space_id": container_space_id,
+                "patch": {
+                    "title": "Renamed",
+                    "rank": "mV"
+                }
+            }),
+        );
+        assert!(matches!(
+            state.apply(&update, &hlc),
+            ProjectionEffect::SpaceContainerLifecycle { .. }
+        ));
+        let projection = state.space_containers.get(container_space_id).unwrap();
+        assert_eq!(projection.title, "Renamed");
+        assert_eq!(projection.rank.as_deref(), Some("mV"));
+
+        let parent = make_operation(
+            crate::kinds::CX_SPACE_CONTAINER_PARENT,
+            realm_space_id,
+            serde_json::json!({
+                "space_id": container_space_id,
+                "parent_space_id": parent_space_id,
+                "expected_parent_space_id": null
+            }),
+        );
+        assert!(matches!(
+            state.apply(&parent, &hlc),
+            ProjectionEffect::SpaceContainerLifecycle { .. }
+        ));
+        assert_eq!(
+            state
+                .space_containers
+                .get(container_space_id)
+                .and_then(|projection| projection.parent_ref.as_deref()),
+            Some(parent_space_id)
+        );
+
+        let detach = make_operation(
+            crate::kinds::CX_SPACE_CONTAINER_PARENT,
+            realm_space_id,
+            serde_json::json!({
+                "space_id": container_space_id,
+                "parent_space_id": null,
+                "expected_parent_space_id": parent_space_id
+            }),
+        );
+        assert!(matches!(
+            state.apply(&detach, &hlc),
+            ProjectionEffect::SpaceContainerLifecycle { .. }
+        ));
+        assert_eq!(
+            state
+                .space_containers
+                .get(container_space_id)
+                .and_then(|projection| projection.parent_ref.as_deref()),
+            None
         );
     }
 
@@ -5706,7 +5844,7 @@ mod tests {
         let hlc = ServerHlc::new("test");
         let space_id = "cx:space:01904100-0000-7000-8000-cfc039892036";
         let flow_id = "cx:flow:01904100-0000-7000-8000-2fb50799ad50";
-        let board_place_id = "cx:place:01904100-0000-7000-8000-c10dc0000001";
+        let board_space_id = "cx:space:01904100-0000-7000-8000-c10dc0000001";
 
         state.apply(
             &make_operation(
@@ -5738,8 +5876,9 @@ mod tests {
                 space_id,
                 serde_json::json!({
                     "flow_id": flow_id,
-                    "board_place_id": board_place_id,
-                    "target_place_id": "cx:place:01904100-0000-7000-8000-c10dc0000002",
+                    "board_space_id": board_space_id,
+                    "target_space_id": "cx:space:01904100-0000-7000-8000-c10dc0000002",
+                    "rank": "a1",
                     "sender": "did:web:alice.example",
                 }),
             ),
@@ -5769,8 +5908,9 @@ mod tests {
                 space_id,
                 serde_json::json!({
                     "flow_id": flow_id,
-                    "board_place_id": board_place_id,
-                    "rank": "a1",
+                    "board_space_id": board_space_id,
+                    "space_id": "cx:space:01904100-0000-7000-8000-c10dc0000002",
+                    "rank": "a2",
                     "sender": "did:web:alice.example",
                 }),
             ),
@@ -5798,7 +5938,9 @@ mod tests {
                 "cx:space:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
                     "flow_id": "cx:flow:nope-not-here",
-                    "board_place_id": "cx:place:01904100-0000-7000-8000-c10dc0000001",
+                    "board_space_id": "cx:space:01904100-0000-7000-8000-c10dc0000001",
+                    "target_space_id": "cx:space:01904100-0000-7000-8000-c10dc0000002",
+                    "rank": "a1",
                 }),
             ),
             &hlc,
