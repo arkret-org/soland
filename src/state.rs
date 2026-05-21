@@ -128,7 +128,9 @@ pub struct RealmDirectoryQuery {
 /// Searchable Realm directory entry. This intentionally replaces the SDK
 /// `SpaceSearchEntry` in soland because Realm, not Space, owns membership,
 /// discovery, history visibility and plaintext-service policy.
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize, salvo::oapi::ToSchema)]
+#[derive(
+    Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize, salvo::oapi::ToSchema,
+)]
 pub struct RealmDirectoryEntry {
     pub realm_id: RealmId,
     pub name: String,
@@ -206,7 +208,12 @@ impl RealmDirectoryIndex {
                     .unwrap_or(true)
             })
             .filter(|entry| query.tags.iter().all(|tag| entry.tags.contains(tag)))
-            .filter(|entry| query.members.iter().all(|member| entry.members.contains(member)))
+            .filter(|entry| {
+                query
+                    .members
+                    .iter()
+                    .all(|member| entry.members.contains(member))
+            })
             .map(|entry| (realm_directory_score(entry, &query), entry))
             .collect();
 

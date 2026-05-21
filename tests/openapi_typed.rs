@@ -439,7 +439,6 @@ async fn typed_describe_handlers_publish_response_schemas() {
         "cx.extension.soland.index.space_hierarchy",
         "cx.extension.soland.index.query",
         "cx.extension.soland.index.debug_reducer",
-        "cx.extension.soland.messages.send",
         "cx.push.register_device",
         "cx.extension.soland.push.rules",
         "cx.push.upsert_rule",

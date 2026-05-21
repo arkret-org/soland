@@ -15,7 +15,7 @@
 //!   - `disclosure="required"` / `visibility="public"|"members"` → normal fanout
 //!     (`fanout="members"`).
 
-use contrix_sdk::{Operation, OperationId, SpaceId};
+use contrix_sdk::{Operation, OperationId, RealmId};
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, QueryParam};
 use salvo::prelude::*;
@@ -73,7 +73,7 @@ pub(super) async fn set_read_marker(
     });
     let operation = Operation::create(
         OperationId::new(operation_id.clone()).unwrap(),
-        SpaceId::new(realm_id.clone()).unwrap(),
+        RealmId::new(realm_id.clone()).unwrap(),
         kinds::CX_READ_MARKER,
         payload,
     );

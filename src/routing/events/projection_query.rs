@@ -9,11 +9,9 @@
 //! - `GET /api/v1/projection/space-containers?realm_id=...` — extension
 //!   endpoint listing board/list Space containers in a Realm scope, with
 //!   `state` ∈ {active, archived, tombstoned} (spec `common-fields.md §5.1`).
-//!   `GET /api/v1/projection/places?space_id=...` remains a legacy alias
-//!   during the Realm/Space rename window.
-//! - `GET /api/v1/projection/flows?space_id=...` — same for Flows
+//! - `GET /api/v1/projection/flows?realm_id=...` — same for Flows
 //!   (state ∈ {active, archived, deleted, redacted}).
-//! - `GET /api/v1/projection/morphs?space_id=...` — same for Morphs
+//! - `GET /api/v1/projection/morphs?realm_id=...` — same for Morphs
 //!   (same enum as Flows).
 //!
 //! All three endpoints are authenticated. Resource visibility check
@@ -27,7 +25,7 @@
 //!
 //! Terminal-state visibility filter: each endpoint accepts an optional
 //! `include_terminal=true|false` query parameter. Default is `false`:
-//!   - Place: tombstoned rows excluded.
+//!   - Space container: tombstoned rows excluded.
 //!   - Flow / Morph: deleted + redacted rows excluded.
 //! Spec rationale: tombstoned / deleted / redacted are unrecoverable
 //! terminals per common-fields.md §5.1; clients hydrating a kanban
@@ -41,9 +39,8 @@ use salvo::oapi::extract::QueryParam;
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use super::{realm_id_accessible, validate_space_id};
+use super::realm_id_accessible;
 use crate::error::{AppError, ErrorCode};
-use crate::ids;
 use crate::reducer::{ObjectLifecycleState, SpaceContainerLifecycleState};
 use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
@@ -54,7 +51,6 @@ pub(super) fn router() -> Router {
         .push(
             Router::with_path("projection/space-containers").get(list_space_container_projections),
         )
-        .push(Router::with_path("projection/places").get(list_space_container_projections))
         .push(Router::with_path("projection/flows").get(list_flow_projections))
         .push(Router::with_path("projection/morphs").get(list_morph_projections))
 }
@@ -70,41 +66,10 @@ fn is_object_terminal(state: ObjectLifecycleState) -> bool {
     state.is_terminal()
 }
 
-fn legacy_space_id_to_realm_id(space_id: &str) -> Option<String> {
-    let uuid = ids::parse_typed_uuid(space_id, "space")?;
-    Some(ids::format_typed_uuid("realm", &uuid))
-}
-
-fn realm_id_to_internal_space_id(realm_id: &str) -> Option<String> {
-    let uuid = ids::parse_typed_uuid(realm_id, "realm")?;
-    Some(ids::format_typed_uuid("space", &uuid))
-}
-
-fn projection_scope_from_query_params(
-    realm_id: Option<String>,
-    space_id: Option<String>,
-) -> Result<(String, String), AppError> {
-    if let Some(realm_id) = realm_id {
-        if RealmId::new(realm_id.clone()).is_err() {
-            return Err(AppError::invalid_param("invalid realm_id format"));
-        }
-        let Some(internal_space_id) = realm_id_to_internal_space_id(&realm_id) else {
-            return Err(AppError::invalid_param("invalid realm_id format"));
-        };
-        return Ok((realm_id, internal_space_id));
-    }
-
-    let Some(space_id) = space_id else {
-        return Err(AppError::missing_param(
-            "projection query requires realm_id (or legacy space_id)",
-        ));
-    };
-    if validate_space_id(&space_id).is_err() {
-        return Err(AppError::invalid_param("invalid space_id format"));
-    }
-    let realm_id = legacy_space_id_to_realm_id(&space_id)
-        .ok_or_else(|| AppError::invalid_param("invalid space_id format"))?;
-    Ok((realm_id, space_id))
+fn validate_realm_id(realm_id: String) -> Result<String, AppError> {
+    RealmId::new(realm_id.clone())
+        .map_err(|_| AppError::invalid_param("invalid realm_id format"))?;
+    Ok(realm_id)
 }
 
 // ── Typed response shapes ──────────────────────────────────────────────
@@ -115,9 +80,7 @@ fn projection_scope_from_query_params(
 /// `common-fields.md §5.1`.
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct SpaceContainerProjectionRow {
-    #[serde(rename = "container_space_id", alias = "place_id")]
     pub container_space_id: String,
-    #[serde(rename = "realm_id", alias = "space_id")]
     pub realm_id: String,
     pub kind: String,
     pub title: String,
@@ -132,9 +95,7 @@ pub struct SpaceContainerProjectionRow {
 
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct SpaceContainerProjectionListResponse {
-    #[serde(rename = "realm_id", alias = "space_id")]
     pub realm_id: String,
-    #[serde(rename = "space_containers", alias = "places")]
     pub space_containers: Vec<SpaceContainerProjectionRow>,
     pub total: usize,
 }
@@ -142,7 +103,7 @@ pub struct SpaceContainerProjectionListResponse {
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct FlowProjectionRow {
     pub flow_id: String,
-    pub space_id: String,
+    pub realm_id: String,
     pub title: String,
     pub summary: Option<String>,
     /// One of `active`, `archived`, `deleted`, `redacted` per spec
@@ -155,7 +116,7 @@ pub struct FlowProjectionRow {
 
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct FlowProjectionListResponse {
-    pub space_id: String,
+    pub realm_id: String,
     pub flows: Vec<FlowProjectionRow>,
     pub total: usize,
 }
@@ -163,7 +124,7 @@ pub struct FlowProjectionListResponse {
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct MorphProjectionRow {
     pub morph_id: String,
-    pub space_id: String,
+    pub realm_id: String,
     pub morph_type: String,
     pub title: Option<String>,
     /// Same state enum as Flow per spec.
@@ -175,7 +136,7 @@ pub struct MorphProjectionRow {
 
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct MorphProjectionListResponse {
-    pub space_id: String,
+    pub realm_id: String,
     pub morphs: Vec<MorphProjectionRow>,
     pub total: usize,
 }
@@ -191,16 +152,14 @@ async fn list_space_container_projections(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-    realm_id: QueryParam<String, false>,
-    space_id: QueryParam<String, false>,
+    realm_id: QueryParam<String, true>,
     include_terminal: QueryParam<bool, false>,
 ) -> JsonResult<SpaceContainerProjectionListResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req)?;
-    let (realm_id, internal_space_id) =
-        projection_scope_from_query_params(realm_id.into_inner(), space_id.into_inner())?;
+    let realm_id = validate_realm_id(realm_id.into_inner())?;
     let include_terminal = include_terminal.into_inner().unwrap_or(false);
-    if !realm_id_accessible(state, &internal_space_id, Some(&session)) {
+    if !realm_id_accessible(state, &realm_id, Some(&session)) {
         return Err(AppError::new(
             ErrorCode::CapabilityDenied,
             "Space not visible to this actor",
@@ -217,12 +176,11 @@ async fn list_space_container_projections(
     let space_containers: Vec<SpaceContainerProjectionRow> = proj
         .space_containers
         .values()
-        .filter(|p| p.space_id == internal_space_id)
+        .filter(|p| p.space_id == realm_id)
         .filter(|p| include_terminal || p.state != SpaceContainerLifecycleState::Tombstoned)
         .map(|p| SpaceContainerProjectionRow {
             container_space_id: p.container_space_id.clone(),
-            realm_id: legacy_space_id_to_realm_id(&p.space_id)
-                .unwrap_or_else(|| p.space_id.clone()),
+            realm_id: p.space_id.clone(),
             kind: p.kind.clone(),
             title: p.title.clone(),
             parent_ref: p.parent_ref.clone(),
@@ -245,23 +203,20 @@ async fn list_space_container_projections(
 #[endpoint(
     operation_id = "cx.extension.soland.projection.flows",
     tags("projection"),
-    summary = "List Flow lifecycle projection state for a Space"
+    summary = "List Flow lifecycle projection state for a Realm"
 )]
 async fn list_flow_projections(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-    space_id: QueryParam<String, true>,
+    realm_id: QueryParam<String, true>,
     include_terminal: QueryParam<bool, false>,
 ) -> JsonResult<FlowProjectionListResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req)?;
-    let space_id = space_id.into_inner();
+    let realm_id = validate_realm_id(realm_id.into_inner())?;
     let include_terminal = include_terminal.into_inner().unwrap_or(false);
-    if validate_space_id(&space_id).is_err() {
-        return Err(AppError::invalid_param("invalid space_id format"));
-    }
-    if !realm_id_accessible(state, &space_id, Some(&session)) {
+    if !realm_id_accessible(state, &realm_id, Some(&session)) {
         return Err(AppError::new(
             ErrorCode::CapabilityDenied,
             "Space not visible to this actor",
@@ -278,11 +233,11 @@ async fn list_flow_projections(
     let flows: Vec<FlowProjectionRow> = proj
         .flows
         .values()
-        .filter(|f| f.space_id == space_id)
+        .filter(|f| f.space_id == realm_id)
         .filter(|f| include_terminal || !is_object_terminal(f.state))
         .map(|f| FlowProjectionRow {
             flow_id: f.flow_id.clone(),
-            space_id: f.space_id.clone(),
+            realm_id: f.space_id.clone(),
             title: f.title.clone(),
             summary: f.summary.clone(),
             state: f.state.as_str().to_owned(),
@@ -294,7 +249,7 @@ async fn list_flow_projections(
     drop(proj);
     let total = flows.len();
     json_ok(FlowProjectionListResponse {
-        space_id,
+        realm_id,
         flows,
         total,
     })
@@ -303,23 +258,20 @@ async fn list_flow_projections(
 #[endpoint(
     operation_id = "cx.extension.soland.projection.morphs",
     tags("projection"),
-    summary = "List Morph lifecycle projection state for a Space"
+    summary = "List Morph lifecycle projection state for a Realm"
 )]
 async fn list_morph_projections(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-    space_id: QueryParam<String, true>,
+    realm_id: QueryParam<String, true>,
     include_terminal: QueryParam<bool, false>,
 ) -> JsonResult<MorphProjectionListResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req)?;
-    let space_id = space_id.into_inner();
+    let realm_id = validate_realm_id(realm_id.into_inner())?;
     let include_terminal = include_terminal.into_inner().unwrap_or(false);
-    if validate_space_id(&space_id).is_err() {
-        return Err(AppError::invalid_param("invalid space_id format"));
-    }
-    if !realm_id_accessible(state, &space_id, Some(&session)) {
+    if !realm_id_accessible(state, &realm_id, Some(&session)) {
         return Err(AppError::new(
             ErrorCode::CapabilityDenied,
             "Space not visible to this actor",
@@ -336,11 +288,11 @@ async fn list_morph_projections(
     let morphs: Vec<MorphProjectionRow> = proj
         .morphs
         .values()
-        .filter(|m| m.space_id == space_id)
+        .filter(|m| m.space_id == realm_id)
         .filter(|m| include_terminal || !is_object_terminal(m.state))
         .map(|m| MorphProjectionRow {
             morph_id: m.morph_id.clone(),
-            space_id: m.space_id.clone(),
+            realm_id: m.space_id.clone(),
             morph_type: m.morph_type.clone(),
             title: m.title.clone(),
             state: m.state.as_str().to_owned(),
@@ -352,7 +304,7 @@ async fn list_morph_projections(
     drop(proj);
     let total = morphs.len();
     json_ok(MorphProjectionListResponse {
-        space_id,
+        realm_id,
         morphs,
         total,
     })

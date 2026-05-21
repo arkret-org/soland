@@ -326,13 +326,11 @@ diesel::table! {
     }
 }
 
-// Server-side Space-container projection state for cx.space.* lifecycle
-// events. The table/primary-key names remain `projection_places(place_id)` for
-// on-disk compatibility with existing deployments.
+// Server-side Space-container projection state for cx.space.* lifecycle events.
 diesel::table! {
-    projection_places (place_id) {
-        place_id -> Text,
-        space_id -> Text,
+    projection_space_containers (container_space_id) {
+        container_space_id -> Text,
+        realm_id -> Text,
         kind -> Text,
         title -> Text,
         parent_ref -> Nullable<Text>,
@@ -428,7 +426,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     events,
     space_state_events,
     account_datas,
-    projection_places,
+    projection_space_containers,
     projection_flows,
     projection_morphs,
     projection_events,

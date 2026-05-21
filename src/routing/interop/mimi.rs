@@ -23,7 +23,7 @@
 //! through the MIMI facade rather than as a native signed Move.
 
 use chrono::Duration;
-use contrix_sdk::SpaceId;
+use contrix_sdk::RealmId;
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde_json::{Value, json};
@@ -258,9 +258,8 @@ async fn mimi_room_message(
         .unwrap_or_else(|| format!("sha256:{}", sha256_hex(body.to_string().as_bytes())));
 
     // Map the MIMI message into the canonical Contrix timeline.
-    // Mirrors what `POST /api/v1/messages/send` does: append a
-    // MessageRecord + a `cx.message.create` projection event so the
-    // message shows up in `GET /api/v1/events?space_id=...`. The
+    // Append a MessageRecord + a `cx.message.create` projection event so
+    // the message shows up in `GET /api/v1/events?space_id=...`. The
     // MIMI provenance metadata is preserved verbatim under
     // `payload.mimi_provenance` so audit consumers can verify the
     // message arrived through the facade.
@@ -860,11 +859,11 @@ fn mimi_room_projection(state: &AppState, room_id: &str, space_id: &str) -> Valu
 }
 
 fn mimi_room_participants(state: &AppState, space_id: &str) -> Vec<Value> {
-    let Ok(space_id) = SpaceId::new(space_id.to_owned()) else {
+    let Ok(space_id) = RealmId::new(space_id.to_owned()) else {
         return Vec::new();
     };
     state
-        .spaces
+        .realms
         .lock()
         .expect("spaces lock")
         .get(&space_id)

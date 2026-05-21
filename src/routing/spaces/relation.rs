@@ -10,7 +10,7 @@
 //! `_todos.md`); update-by-relation-id is reached via the canonical event
 //! submit endpoint instead.
 
-use contrix_sdk::{Operation, OperationId, SpaceId};
+use contrix_sdk::{Operation, OperationId, RealmId};
 use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;
 use serde_json::json;
@@ -85,7 +85,7 @@ async fn create_relation(
     });
     let operation = Operation::create(
         OperationId::new(operation_id.clone()).unwrap(),
-        SpaceId::new(body.space_id.clone()).unwrap(),
+        RealmId::new(body.space_id.clone()).unwrap(),
         kinds::CX_RELATION_CREATE,
         payload,
     );
@@ -130,7 +130,7 @@ async fn delete_relation(
     let operation_id = ids::generate_operation_id();
     let operation = Operation::create(
         OperationId::new(operation_id.clone()).unwrap(),
-        SpaceId::new(space_id).unwrap(),
+        RealmId::new(space_id).unwrap(),
         kinds::CX_RELATION_DELETE,
         json!({ "relation_id": relation_id }),
     );

@@ -29,7 +29,7 @@
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use contrix_sdk::{Operation, OperationId, SpaceId};
+use contrix_sdk::{Operation, OperationId, RealmId};
 use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;
 use serde_json::{Value, json};
@@ -424,14 +424,15 @@ fn require_str<'a>(body: &'a Value, field: &'static str) -> Result<&'a str, AppE
 
 /// Build a minimal in-process `Operation` carrying the MLS payload so
 /// the reducer's `apply_*` helpers run against the same shape they'd
-/// see from a federated envelope. The `operation_id` / `space_id` are
+/// see from a federated envelope. The `operation_id` / `realm_id` are
 /// placeholders — the reducer reads only `payload` + `created_at` for
 /// MLS kinds.
 fn build_op(object_type: &str, payload: Value) -> Operation {
     let op_id =
         OperationId::new("cx:operation:01904100-0000-7000-8000-000000000001").expect("op id");
-    let space_id = SpaceId::new("cx:space:01904100-0000-7000-8000-000000000000").expect("space id");
-    Operation::create(op_id, space_id, object_type, payload)
+    let realm_id =
+        RealmId::new("cx:realm:01904100-0000-7000-8000-000000000000").expect("realm id");
+    Operation::create(op_id, realm_id, object_type, payload)
 }
 
 /// Convert the reducer's in-process [`MlsKeyPackage`] into the

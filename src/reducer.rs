@@ -114,7 +114,7 @@ pub struct ProjectionState {
     /// lifecycle events. Used by `event_log::submit_event` to reject
     /// invalid transitions with HTTP 412 before persisting. Reducer applies
     /// `cx.space.create` / update / parent / archive / restore / tombstone;
-    /// mirror table is the legacy `projection_places` durable table.
+    /// mirror table is the `projection_space_containers` durable table.
     pub space_containers: BTreeMap<String, SpaceContainerProjection>,
     /// Server-side Flow projection. Mirrors the canonical state-machine
     /// for cx.flow.create / update / archive / restore. Unlike Place
@@ -360,8 +360,8 @@ pub struct MlsCommitEpoch {
     pub committed_at: i64,
 }
 
-/// Server-side Space-container state cache. Mirrors the legacy
-/// `projection_places` table.
+/// Server-side Space-container state cache. Mirrors the
+/// `projection_space_containers` table.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SpaceContainerProjection {
     pub container_space_id: String,
@@ -381,7 +381,6 @@ pub struct SpaceContainerProjection {
 fn space_container_id_from_payload(payload: &Value) -> Option<String> {
     payload
         .get("space_id")
-        .or_else(|| payload.get("place_id"))
         .and_then(Value::as_str)
         .map(ToOwned::to_owned)
 }
@@ -668,7 +667,7 @@ pub enum ProjectionEffect {
         action: String,
     },
     /// Space-container lifecycle transition accepted; new state is reflected in
-    /// `ProjectionState::space_containers` and (when persisted) `projection_places`.
+    /// `ProjectionState::space_containers` and (when persisted) `projection_space_containers`.
     SpaceContainerLifecycle {
         container_space_id: String,
         new_state: SpaceContainerLifecycleState,
@@ -1665,7 +1664,7 @@ impl ProjectionState {
             .payload
             .get("thread_id")
             .and_then(|v| v.as_str())
-            .unwrap_or(operation.space_id.as_str())
+            .unwrap_or(operation.realm_id.as_str())
             .to_owned();
         let content = operation
             .payload
@@ -1680,7 +1679,7 @@ impl ProjectionState {
 
         let state = MessageState {
             event_id: event_id.clone(),
-            space_id: operation.space_id.to_string(),
+            space_id: operation.realm_id.to_string(),
             sender,
             thread_id,
             content,
@@ -2007,7 +2006,7 @@ impl ProjectionState {
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_owned();
-        let space_id = operation.space_id.to_string();
+        let space_id = operation.realm_id.to_string();
         let scope_id = operation
             .payload
             .get("scope_id")
@@ -2085,7 +2084,7 @@ impl ProjectionState {
 
         let state = RelationState {
             relation_id: relation_id.clone(),
-            space_id: operation.space_id.to_string(),
+            space_id: operation.realm_id.to_string(),
             relation_kind,
             from_ref,
             to_ref,
@@ -2216,7 +2215,7 @@ impl ProjectionState {
             .entry(relation_id.clone())
             .or_insert_with(|| RelationState {
                 relation_id: relation_id.clone(),
-                space_id: operation.space_id.to_string(),
+                space_id: operation.realm_id.to_string(),
                 relation_kind: relation_kind.clone(),
                 from_ref: container_id.clone(),
                 to_ref: object_ref.clone(),
@@ -2240,7 +2239,7 @@ impl ProjectionState {
     /// (`delivery_binding_policy_cell_value` + the `apply_membership`
     /// validation path) can inspect each policy field directly.
     fn apply_delivery_binding_policy(&mut self, operation: &Operation) -> ProjectionEffect {
-        let space_id = operation.space_id.to_string();
+        let space_id = operation.realm_id.to_string();
         let value = operation.payload.clone();
         if let Ok(cell_id) = contrix_sdk::CellRef::new(format!(
             "cx:cell:cx.component.realm.delivery_binding_policy.v1:{space_id}"
@@ -2271,7 +2270,7 @@ impl ProjectionState {
         operation: &Operation,
         now: chrono::DateTime<chrono::Utc>,
     ) -> ProjectionEffect {
-        let realm_id = operation.space_id.to_string();
+        let realm_id = operation.realm_id.to_string();
         let Some(target_realm_id) = operation
             .payload
             .get("target_realm_id")
@@ -2389,7 +2388,7 @@ impl ProjectionState {
         operation: &Operation,
         now: chrono::DateTime<chrono::Utc>,
     ) -> ProjectionEffect {
-        let realm_id = operation.space_id.to_string();
+        let realm_id = operation.realm_id.to_string();
         let Some(source_realm_id) = operation
             .payload
             .get("source_realm_id")
@@ -2483,7 +2482,7 @@ impl ProjectionState {
         operation: &Operation,
         now: chrono::DateTime<chrono::Utc>,
     ) -> ProjectionEffect {
-        let realm_id = operation.space_id.to_string();
+        let realm_id = operation.realm_id.to_string();
         let Some(capability_id) = operation
             .payload
             .get("capability_id")
@@ -2585,7 +2584,7 @@ impl ProjectionState {
         operation: &Operation,
         now: chrono::DateTime<chrono::Utc>,
     ) -> ProjectionEffect {
-        let realm_id = operation.space_id.to_string();
+        let realm_id = operation.realm_id.to_string();
         let from_policy = operation
             .payload
             .get("from_policy")
@@ -2661,7 +2660,7 @@ impl ProjectionState {
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_owned();
-        let space_id = operation.space_id.to_string();
+        let space_id = operation.realm_id.to_string();
 
         if member.is_empty() {
             return ProjectionEffect::Ignored;
@@ -2801,7 +2800,7 @@ impl ProjectionState {
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_owned();
-        let space_id = operation.space_id.to_string();
+        let space_id = operation.realm_id.to_string();
         let owner = operation
             .payload
             .get("owner")
@@ -3077,7 +3076,7 @@ impl ProjectionState {
         };
 
         let Some(container_space_id) = space_container_id_from_payload(&operation.payload) else {
-            // Missing space_id/place_id is a schema-validation problem caught
+            // Missing space_id is a schema-validation problem caught
             // upstream; preflight is not the right place to surface it.
             return Ok(());
         };
@@ -3135,7 +3134,7 @@ impl ProjectionState {
             .get("space_id")
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned)
-            .unwrap_or_else(|| operation.space_id.to_string());
+            .unwrap_or_else(|| operation.realm_id.to_string());
         let created_by = object
             .get("created_by")
             .and_then(|v| v.as_str())
@@ -3486,7 +3485,7 @@ impl ProjectionState {
             .get("space_id")
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned)
-            .unwrap_or_else(|| operation.space_id.to_string());
+            .unwrap_or_else(|| operation.realm_id.to_string());
         let created_by = object
             .get("created_by")
             .and_then(|v| v.as_str())
@@ -3853,7 +3852,7 @@ impl ProjectionState {
             .get("space_id")
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned)
-            .unwrap_or_else(|| operation.space_id.to_string());
+            .unwrap_or_else(|| operation.realm_id.to_string());
         let created_by = object
             .get("created_by")
             .and_then(|v| v.as_str())

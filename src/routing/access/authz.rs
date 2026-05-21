@@ -47,14 +47,28 @@ async fn authz_check(
 ) -> JsonResult<AuthzCheckResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
-    let (resource_str, space_id, resource_facets) = if let Some(s) = body.resource.as_str() {
+    let (resource_str, realm_id, resource_facets) = if let Some(s) = body.resource.as_str() {
         (s.to_owned(), s.to_owned(), Vec::new())
     } else if let Some(obj) = body.resource.as_object() {
-        let kind = obj.get("kind").and_then(|v| v.as_str()).unwrap_or("space");
+        let kind = obj.get("kind").and_then(|v| v.as_str()).unwrap_or("realm");
         let sid = obj
-            .get("space_id")
+            .get("realm_id")
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned)
+            .or_else(|| {
+                obj.get("space_id")
+                    .and_then(|v| v.as_str())
+                    .map(ToOwned::to_owned)
+            })
+            .or_else(|| {
+                (kind == "realm")
+                    .then(|| {
+                        obj.get("id")
+                            .and_then(|v| v.as_str())
+                            .map(ToOwned::to_owned)
+                    })
+                    .flatten()
+            })
             .or_else(|| {
                 (kind == "space")
                     .then(|| {
@@ -75,17 +89,17 @@ async fn authz_check(
     } else {
         (String::new(), String::new(), Vec::new())
     };
-    // Look up space owner and members
+    // Look up Realm owner and members.
     let (owner, members) = {
         let owner = state
             .persistence
             .realm_meta()
-            .get(&space_id)
+            .get(&realm_id)
             .ok()
             .flatten()
             .map(|m| m.owner);
         let spaces = state.realms.lock().expect("spaces lock");
-        let members = contrix_sdk::RealmId::new(space_id.clone())
+        let members = contrix_sdk::RealmId::new(realm_id.clone())
             .ok()
             .and_then(|realm_id| spaces.get(&realm_id))
             .map(|s| s.members.iter().map(|m| m.to_string()).collect::<Vec<_>>())
@@ -96,7 +110,7 @@ async fn authz_check(
         &body.actor,
         &body.action,
         &resource_str,
-        &space_id,
+        &realm_id,
         owner.as_deref(),
         &members,
         &resource_facets,
@@ -127,7 +141,7 @@ async fn authz_check(
             "actor": body.actor,
             "action": body.action,
             "resource": resource_str,
-            "space_id": space_id,
+            "realm_id": realm_id,
             "matched_grants": matched_grants,
             "constraints": [],
             "missing_proofs": [],

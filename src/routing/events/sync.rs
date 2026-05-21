@@ -29,8 +29,8 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use bytes::Bytes;
 use chrono::{DateTime, Duration as ChronoDuration, SecondsFormat, Utc};
+use contrix_sdk::RealmId;
 use contrix_sdk::lattice::CellState;
-use contrix_sdk::{RealmId, SpaceId};
 use ed25519_dalek::Signer as _;
 use futures_util::stream::StreamExt;
 use salvo::http::StatusCode;
@@ -46,7 +46,6 @@ use super::{
     realm_event_visible_to_session, realm_has_member, realm_history_visibility,
     realm_id_accessible, realm_visible_to, render_error, sha256_hex, snapshot_bundle_for_space,
     sync_timeline_message_json, truncate_gap_events, typing_ephemeral_for_space, validate_did,
-    validate_space_id,
 };
 use crate::reducer::ProjectionState;
 use crate::state::{AppState, PresenceRecord, ProjectionEventRecord, SessionRecord, TypingRecord};
@@ -231,6 +230,9 @@ fn sync_snapshot_response_json(response: contrix_sdk::model::SyncResBody) -> Val
             .entry("next_batch".to_owned())
             .or_insert(cursor.clone());
         object.entry("next_cursor".to_owned()).or_insert(cursor);
+        object
+            .entry("to_device".to_owned())
+            .or_insert_with(|| json!([]));
     }
     value
 }
@@ -970,7 +972,7 @@ pub fn normalized_strings(values: &[String]) -> Vec<String> {
 #[endpoint(
     operation_id = "cx.sync.typing",
     tags("sync"),
-    summary = "Set / clear the actor's typing-indicator ephemeral for a Space"
+    summary = "Set / clear the actor's typing-indicator ephemeral for a Realm"
 )]
 async fn set_typing(
     aa: crate::routing::system::extract::AuthArgs,
@@ -981,12 +983,12 @@ async fn set_typing(
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req)?;
     let body = body.into_inner();
-    if validate_space_id(&body.space_id).is_err() {
-        return Err(crate::error::AppError::invalid_param("invalid space_id"));
+    if RealmId::new(body.realm_id.clone()).is_err() {
+        return Err(crate::error::AppError::invalid_param("invalid realm_id"));
     }
-    if !realm_has_member(state, &body.space_id, &session.actor) {
+    if !realm_has_member(state, &body.realm_id, &session.actor) {
         return Err(crate::error::AppError::capability_denied(
-            "actor is not a joined member of the space",
+            "actor is not a joined member of the realm",
         ));
     }
 
@@ -996,7 +998,7 @@ async fn set_typing(
         let expires_at = now + chrono::Duration::milliseconds(timeout_ms as i64);
         if let Err(error) = state.persistence.typing().put(TypingRecord {
             actor: session.actor.clone(),
-            space_id: body.space_id.clone(),
+            space_id: body.realm_id.clone(),
             scope_id: body.scope_id.clone(),
             expires_at,
             updated_at: now,
@@ -1008,13 +1010,13 @@ async fn set_typing(
         let _ = state
             .persistence
             .typing()
-            .remove(&session.actor, &body.space_id);
+            .remove(&session.actor, &body.realm_id);
         None
     };
 
     crate::result::json_ok(SetTypingResponse {
         ok: true,
-        space_id: body.space_id,
+        realm_id: body.realm_id,
         actor: session.actor,
         typing: body.typing,
         expires_at,
@@ -1318,12 +1320,9 @@ pub(super) async fn events_query(
 ) -> crate::result::JsonResult<serde_json::Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     // Spec-canonical params are `realms=` / `actors=` (cx.events.query).
-    // Legacy `spaces=` / `space_id=` aliases are still accepted during
-    // the Realm/Space rename window. Singular `realm_id=` / `actor=` are
-    // ergonomic shortcuts.
+    // Singular `realm_id=` / `actor=` are ergonomic shortcuts.
     let mut spaces = super::query_param_all(req, "realms");
-    spaces.extend(super::query_param_all(req, "spaces"));
-    if let Some(single) = query_param(req, "realm_id").or_else(|| query_param(req, "space_id")) {
+    if let Some(single) = query_param(req, "realm_id") {
         if !spaces.contains(&single) {
             spaces.push(single);
         }
@@ -1509,7 +1508,7 @@ pub(super) async fn events_query(
     summary = "Backfill the gap between two cursors (deployment-local; not in spec)"
 )]
 async fn sync_gap_backfill(
-    space_id: salvo::oapi::extract::QueryParam<String, true>,
+    realm_id: salvo::oapi::extract::QueryParam<String, true>,
     limit: salvo::oapi::extract::QueryParam<usize, false>,
     from_cursor: salvo::oapi::extract::QueryParam<String, false>,
     to_cursor: salvo::oapi::extract::QueryParam<String, false>,
@@ -1517,12 +1516,9 @@ async fn sync_gap_backfill(
     req: &mut Request,
 ) -> crate::result::JsonResult<serde_json::Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let space_id = space_id.into_inner();
-    if validate_space_id(&space_id).is_err() {
-        return Err(crate::error::AppError::invalid_param("invalid space_id"));
-    }
+    let realm_id = scope_selector_to_realm_id(&realm_id.into_inner())?;
     let session = authenticated_session(state, req).ok();
-    if !realm_id_accessible(state, &space_id, session.as_ref()) {
+    if !realm_id_accessible(state, &realm_id, session.as_ref()) {
         return Err(crate::error::AppError::not_found("not found"));
     }
     let limit = limit.into_inner().unwrap_or(100).clamp(1, 500);
@@ -1530,13 +1526,13 @@ async fn sync_gap_backfill(
     let to_cursor = to_cursor.into_inner();
 
     // Resolve sync `cx:cursor:` tokens to reducer event cursors.
-    let from_cursor = resolve_sync_cursor_to_event_id(state, &space_id, from_cursor)
+    let from_cursor = resolve_sync_cursor_to_event_id(state, &realm_id, from_cursor)
         .map_err(crate::error::AppError::invalid_param)?;
-    let to_cursor = resolve_sync_cursor_to_event_id(state, &space_id, to_cursor)
+    let to_cursor = resolve_sync_cursor_to_event_id(state, &realm_id, to_cursor)
         .map_err(crate::error::AppError::invalid_param)?;
 
     let (events, next_cursor, limited) =
-        backfill_gap_events(state, &space_id, from_cursor.as_deref(), limit).map_err(|error| {
+        backfill_gap_events(state, &realm_id, from_cursor.as_deref(), limit).map_err(|error| {
             if error.to_string().contains("invalid_cursor") {
                 crate::error::AppError::invalid_param("cursor not found")
                     .with_wire_code("invalid_cursor")
@@ -1576,10 +1572,8 @@ async fn snapshot_head(
     req: &mut Request,
 ) -> crate::result::JsonResult<SnapshotHeadResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    // Spec-canonical query param is `realm_id`. `space_id` is accepted
-    // as a legacy alias through the Realm/Space rename window.
+    // Spec-canonical query param is `realm_id`.
     let space_id = query_param(req, "realm_id")
-        .or_else(|| query_param(req, "space_id"))
         .ok_or_else(|| crate::error::AppError::missing_param("realm_id is required"))?;
     let space_id = scope_selector_to_realm_id(&space_id)?;
     if is_realm_deleted(state, &space_id) {
@@ -1612,8 +1606,7 @@ async fn snapshot_head(
         })
         .collect();
     let merkle_root = bundle.tree.root().as_str().to_owned();
-    let generator_proof_value =
-        serde_json::to_value(&bundle.generator_proof).unwrap_or(serde_json::Value::Null);
+    let generator_proof_value = bundle.generator_proof.clone();
     let service_did = state.config.service_did.clone();
     let signature_payload = format!(
         "{}:{}:{}",
@@ -1631,9 +1624,9 @@ async fn snapshot_head(
             "sig": sha256_hex(signature_payload.as_bytes())
         }),
         merkle_root,
-        chunk_count: bundle.generator_proof.chunk_count,
-        chunk_bytes: bundle.generator_proof.chunk_bytes,
-        total_bytes: bundle.generator_proof.total_bytes,
+        chunk_count: bundle.chunk_count,
+        chunk_bytes: bundle.chunk_bytes,
+        total_bytes: bundle.total_bytes,
         generator_proof: generator_proof_value,
     })
 }

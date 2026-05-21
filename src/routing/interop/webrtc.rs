@@ -15,6 +15,7 @@ use std::collections::BTreeSet;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::Duration;
+use contrix_sdk::RealmId;
 use ed25519_dalek::Signer as _;
 use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;
@@ -63,10 +64,10 @@ async fn ice_config(
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req)?;
     let body = body.into_inner();
-    let space_id = body
-        .get("space_id")
+    let realm_id = body
+        .get("realm_id")
         .and_then(Value::as_str)
-        .ok_or_else(|| AppError::missing_param("space_id is required"))?;
+        .ok_or_else(|| AppError::missing_param("realm_id is required"))?;
     let call_id = body
         .get("call_id")
         .and_then(Value::as_str)
@@ -80,8 +81,8 @@ async fn ice_config(
         .and_then(Value::as_str)
         .ok_or_else(|| AppError::missing_param("device_id is required"))?;
 
-    if validate_space_id(space_id).is_err() {
-        return Err(AppError::invalid_param("invalid space_id"));
+    if RealmId::new(realm_id.to_owned()).is_err() {
+        return Err(AppError::invalid_param("invalid realm_id"));
     }
     if !is_valid_webrtc_session_id(call_id) {
         return Err(AppError::invalid_param("invalid call_id"));
@@ -96,9 +97,9 @@ async fn ice_config(
             "device_id must match the authenticated device",
         ));
     }
-    if !space_has_member(state, space_id, actor_id) {
+    if !space_has_member(state, realm_id, actor_id) {
         return Err(AppError::capability_denied(
-            "actor is not a joined member of the space",
+            "actor is not a joined member of the realm",
         ));
     }
 
@@ -107,7 +108,7 @@ async fn ice_config(
     let refresh_lead_seconds = 75;
     let expires_at = issued_at + Duration::seconds(ttl_seconds);
     let mut response = json!({
-        "space_id": space_id,
+        "realm_id": realm_id,
         "call_id": call_id,
         "actor_id": actor_id,
         "device_id": device_id,

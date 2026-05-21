@@ -54,7 +54,7 @@ pub fn apply_realm_policy_server(
     state: &mut ProjectionState,
     operation: &Operation,
 ) -> ProjectionEffect {
-    let realm_id = operation.space_id.to_string();
+    let realm_id = operation.realm_id.to_string();
     let payload = &operation.payload;
 
     let Some(policy_server_did) = payload

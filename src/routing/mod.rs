@@ -1,6 +1,6 @@
 use std::sync::OnceLock;
 
-use contrix_sdk::SpaceId;
+use contrix_sdk::RealmId;
 use salvo::affix_state;
 use salvo::cors::{Cors, CorsHandler};
 use salvo::http::Method;
@@ -373,25 +373,11 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "get Event frontier",
     ),
     (
-        "/api/v1/messages/send",
-        PathItemType::Post,
-        "messages",
-        "cx.extension.soland.messages.send",
-        "deployment-local convenience to send a plain message",
-    ),
-    (
         "/api/v1/projection/space-containers",
         PathItemType::Get,
         "projection",
         "cx.extension.soland.projection.space_containers",
         "deployment-local Space-container projection query",
-    ),
-    (
-        "/api/v1/projection/places",
-        PathItemType::Get,
-        "projection",
-        "cx.extension.soland.projection.space_containers",
-        "legacy alias for Space-container projection query",
     ),
     (
         "/api/v1/projection/flows",
@@ -1001,10 +987,9 @@ pub struct ContrixOpenApiDoc(pub OpenApi);
 /// Snapshot bundle: surfaces the head fields (`snapshot_ref` / `state_hash` /
 /// `chunk_bytes` single-chunk fallback) alongside SDK-canonical
 /// [`contrix_sdk::SnapshotChunk`] partitions + a binary
-/// [`contrix_sdk::SnapshotMerkleTree`] over their digests + a signed
-/// [`contrix_sdk::GeneratorProof`]. Receivers verify the proof first, then
-/// fetch chunks lazily and check each one against `merkle_root` via
-/// `SnapshotMerkleTree::verify`.
+/// [`contrix_sdk::SnapshotMerkleTree`] over their digests + a signed Realm
+/// generator proof. Receivers verify the proof first, then fetch chunks lazily
+/// and check each one against `merkle_root` via `SnapshotMerkleTree::verify`.
 pub(crate) struct SnapshotBundle {
     pub snapshot_ref: String,
     /// `sha256:<hex>` digest over the full serialized state document.
@@ -1019,16 +1004,19 @@ pub(crate) struct SnapshotBundle {
     /// Merkle tree over `chunks[*].digest`. `tree.root()` is the
     /// `merkle_root` advertised in the snapshot head.
     pub tree: contrix_sdk::SnapshotMerkleTree,
-    /// Signed generator-proof envelope; binds `(generator_did, space_id,
+    pub chunk_count: u32,
+    pub total_bytes: u64,
+    pub chunk_bytes: u32,
+    /// Signed generator-proof envelope; binds `(generator_did, realm_id,
     /// state_root, merkle_root, chunk_count, total_bytes, chunk_bytes)`.
-    pub generator_proof: contrix_sdk::GeneratorProof,
+    pub generator_proof: Value,
 }
 
 pub(crate) fn snapshot_bundle_for_space(
     state: &AppState,
     space_id: &str,
 ) -> Option<SnapshotBundle> {
-    let space_id_value = SpaceId::new(space_id.to_owned()).ok()?;
+    let space_id_value = RealmId::new(space_id.to_owned()).ok()?;
     let (title, members, category, tags) = {
         let spaces = state.realms.lock().expect("spaces lock");
         let space = spaces.get(&space_id_value)?;
@@ -1057,10 +1045,10 @@ pub(crate) fn snapshot_bundle_for_space(
         .unwrap_or_else(now);
     let message_events = messages.iter().map(message_event).collect::<Vec<_>>();
     let state_document = json!({
-        "type": "cx.snapshot.space_state.v1",
+        "type": "cx.snapshot.realm_state.v1",
         "schema_profiles": ["cx.schema.core.v1"],
         "reducer_profile": "cx.reducer.v1",
-        "space_id": space_id,
+        "realm_id": space_id,
         "title": title,
         "category": category,
         "tags": tags,
@@ -1090,22 +1078,18 @@ pub(crate) fn snapshot_bundle_for_space(
     let total_bytes: u64 = chunks.iter().map(|c| c.bytes.len() as u64).sum();
     let chunk_target_bytes = chunker.target_chunk_bytes as u32;
     let state_root_hash = contrix_sdk::Hash::new(state_hash.clone()).ok()?;
-    let space_id_value = SpaceId::new(space_id.to_owned()).ok()?;
     let generator_did = contrix_sdk::Did::new(state.config.service_did.clone()).ok()?;
 
-    // Sign the canonical GeneratorProof body using the AnchorerWorker's
-    // Ed25519 key — the same key the admin endpoints use for compaction
-    // anchors and the snapshot generator are the same `service_did`.
-    let proof_body_bytes = contrix_sdk::GeneratorProof::body_bytes(
-        &generator_did,
-        &space_id_value,
-        &state_root_hash,
-        &merkle_root,
-        chunk_count,
-        total_bytes,
-        chunk_target_bytes,
-    )
-    .ok()?;
+    let proof_body = json!({
+        "generator_did": generator_did.to_string(),
+        "realm_id": space_id,
+        "state_root": state_root_hash.as_str(),
+        "merkle_root": merkle_root.as_str(),
+        "chunk_count": chunk_count,
+        "total_bytes": total_bytes,
+        "chunk_bytes": chunk_target_bytes,
+    });
+    let proof_body_bytes = contrix_sdk::canonical::canonical_json_bytes(&proof_body).ok()?;
     let signing_key = (*state.anchorer_signing_key()).clone();
     let signer = contrix_sdk::Ed25519MoveSigner::new(
         signing_key,
@@ -1113,19 +1097,19 @@ pub(crate) fn snapshot_bundle_for_space(
         format!("{}#snapshot-key", state.config.service_did),
     );
     let signature = contrix_sdk::MoveSigner::sign_payload(&signer, &proof_body_bytes).ok()?;
-    let generator_proof = contrix_sdk::GeneratorProof {
-        generator_did: generator_did.clone(),
-        space_id: space_id_value.clone(),
-        state_root: state_root_hash.clone(),
-        merkle_root: merkle_root.clone(),
-        chunk_count,
-        total_bytes,
-        chunk_bytes: chunk_target_bytes,
-        signature,
-    };
+    let generator_proof = json!({
+        "generator_did": generator_did.to_string(),
+        "realm_id": space_id,
+        "state_root": state_root_hash.as_str(),
+        "merkle_root": merkle_root.as_str(),
+        "chunk_count": chunk_count,
+        "total_bytes": total_bytes,
+        "chunk_bytes": chunk_target_bytes,
+        "signature": signature,
+    });
 
     let frontier = json!({
-        "space_id": space_id,
+        "realm_id": space_id,
         "generated_at": generated_at,
         "message_count": state_document["message_count"],
         "state_hash": state_hash,
@@ -1153,6 +1137,9 @@ pub(crate) fn snapshot_bundle_for_space(
         frontier,
         chunks,
         tree,
+        chunk_count,
+        total_bytes,
+        chunk_bytes: chunk_target_bytes,
         generator_proof,
     })
 }
@@ -1160,7 +1147,7 @@ pub(crate) fn snapshot_bundle_for_space(
 fn parse_snapshot_ref(snapshot_ref: &str) -> Option<(String, String)> {
     let rest = snapshot_ref.strip_prefix("cx:snapshot:")?;
     let (space_id, digest) = rest.rsplit_once(':')?;
-    if validate_space_id(space_id).is_err() || !is_valid_sha256_hex(digest) {
+    if RealmId::new(space_id.to_owned()).is_err() || !is_valid_sha256_hex(digest) {
         return None;
     }
     Some((space_id.to_owned(), format!("sha256:{digest}")))
@@ -1281,7 +1268,7 @@ mod operation_conformance_tests {
         let space_id = "cx:space:01904100-0000-7000-8000-000000000001".to_owned();
         Operation::create(
             OperationId::new(op_id).unwrap(),
-            SpaceId::new(space_id).unwrap(),
+            contrix_sdk::SpaceId::new(space_id).unwrap(),
             kind,
             payload,
         )

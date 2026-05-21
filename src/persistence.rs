@@ -22,7 +22,7 @@ use crate::state::{
     DeviceInventoryRecord, DeviceMessageRecord, FederationOutboxRecord,
     FederationTransactionRecord, MessageRecord, MultisigPendingRecord,
     OutboundPushBridgeCacheRecord, PolicyDocumentRecord, PresenceRecord, ProjectionEventRecord,
-    PushRuleRecord, SessionRecord, SpaceInviteRecord, RealmMetaRecord, TypingRecord,
+    PushRuleRecord, RealmMetaRecord, SessionRecord, SpaceInviteRecord, TypingRecord,
     WebrtcSessionRecord, WebrtcSignalRecord, WebvhDocumentRecord, WebvhLogRecord,
 };
 
@@ -106,8 +106,8 @@ pub trait RealmMetaStore: Send + Sync {
 // from them on startup so restart doesn't lose Space-container/Flow/Morph
 // lifecycle state.
 
-/// Durable Space-container projection store (mirror of legacy
-/// `projection_places` table).
+/// Durable Space-container projection store (mirror of
+/// `projection_space_containers` table).
 pub trait SpaceContainerProjectionStore: Send + Sync {
     fn get(
         &self,
@@ -2124,7 +2124,7 @@ impl FederationOperationsStore for MemoryFederationOperationsStore {
             .lock()
             .expect("federation lock")
             .iter()
-            .filter(|operation| operation.space_id.as_str() == space_id)
+            .filter(|operation| operation.realm_id.as_str() == space_id)
             .cloned()
             .collect())
     }
@@ -4751,7 +4751,7 @@ impl FederationOperationsStore for PgFederationOperationsStore {
             .and_then(|v| v.as_str().map(ToOwned::to_owned))
             .unwrap_or_else(|| "create".to_owned());
         let operation_id_uuid = ids::typed_uuid_part_or_panic(operation.operation_id.as_str());
-        let space_id_uuid = ids::typed_uuid_part_or_panic(operation.space_id.as_str());
+        let space_id_uuid = ids::typed_uuid_part_or_panic(operation.realm_id.as_str());
         sql_query(
             "INSERT INTO federation_operations \
              (id, space_id, object_type, object_id, operation_type, payload, created_at) \
@@ -6223,7 +6223,7 @@ fn pg_conn(
 
 // ── Pg-backed Space-container/Flow/Morph projection stores ───────────────
 // Mirror the in-memory `ProjectionState::{space_containers,flows,morphs}` onto
-// the `projection_places` / `projection_flows` / `projection_morphs`
+// the `projection_space_containers` / `projection_flows` / `projection_morphs`
 // tables. Same upsert shape as PgPolicyDocumentStore.
 
 struct PgSpaceContainerProjectionStore {
@@ -6233,9 +6233,9 @@ struct PgSpaceContainerProjectionStore {
 #[derive(QueryableByName)]
 struct SpaceContainerProjectionRow {
     #[diesel(sql_type = Text)]
-    place_id: String,
+    container_space_id: String,
     #[diesel(sql_type = Text)]
-    space_id: String,
+    realm_id: String,
     #[diesel(sql_type = Text)]
     kind: String,
     #[diesel(sql_type = Text)]
@@ -6261,8 +6261,8 @@ struct SpaceContainerProjectionRow {
 impl From<SpaceContainerProjectionRow> for SpaceContainerProjectionRecord {
     fn from(row: SpaceContainerProjectionRow) -> Self {
         Self {
-            container_space_id: row.place_id,
-            space_id: row.space_id,
+            container_space_id: row.container_space_id,
+            space_id: row.realm_id,
             kind: row.kind,
             title: row.title,
             parent_ref: row.parent_ref,
@@ -6277,7 +6277,7 @@ impl From<SpaceContainerProjectionRow> for SpaceContainerProjectionRecord {
     }
 }
 
-const SPACE_CONTAINER_PROJECTION_COLUMNS: &str = "place_id, space_id, kind, title, parent_ref, rank, state, \
+const SPACE_CONTAINER_PROJECTION_COLUMNS: &str = "container_space_id, realm_id, kind, title, parent_ref, rank, state, \
      state_changed_at, created_by, created_at, updated_by, updated_at";
 
 impl SpaceContainerProjectionStore for PgSpaceContainerProjectionStore {
@@ -6287,7 +6287,7 @@ impl SpaceContainerProjectionStore for PgSpaceContainerProjectionStore {
     ) -> PersistenceResult<Option<SpaceContainerProjectionRecord>> {
         let mut conn = pg_conn(&self.pool)?;
         sql_query(format!(
-            "SELECT {SPACE_CONTAINER_PROJECTION_COLUMNS} FROM projection_places WHERE place_id = $1"
+            "SELECT {SPACE_CONTAINER_PROJECTION_COLUMNS} FROM projection_space_containers WHERE container_space_id = $1"
         ))
         .bind::<Text, _>(container_space_id)
         .get_result::<SpaceContainerProjectionRow>(&mut conn)
@@ -6299,12 +6299,12 @@ impl SpaceContainerProjectionStore for PgSpaceContainerProjectionStore {
     fn put(&self, record: &SpaceContainerProjectionRecord) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool)?;
         sql_query(
-            "INSERT INTO projection_places \
-             (place_id, space_id, kind, title, parent_ref, rank, state, \
+            "INSERT INTO projection_space_containers \
+             (container_space_id, realm_id, kind, title, parent_ref, rank, state, \
               state_changed_at, created_by, created_at, updated_by, updated_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) \
-             ON CONFLICT (place_id) DO UPDATE SET \
-                space_id = EXCLUDED.space_id, \
+             ON CONFLICT (container_space_id) DO UPDATE SET \
+                realm_id = EXCLUDED.realm_id, \
                 kind = EXCLUDED.kind, \
                 title = EXCLUDED.title, \
                 parent_ref = EXCLUDED.parent_ref, \
@@ -6337,8 +6337,8 @@ impl SpaceContainerProjectionStore for PgSpaceContainerProjectionStore {
     ) -> PersistenceResult<Vec<SpaceContainerProjectionRecord>> {
         let mut conn = pg_conn(&self.pool)?;
         sql_query(format!(
-            "SELECT {SPACE_CONTAINER_PROJECTION_COLUMNS} FROM projection_places \
-             WHERE space_id = $1 ORDER BY place_id"
+            "SELECT {SPACE_CONTAINER_PROJECTION_COLUMNS} FROM projection_space_containers \
+             WHERE realm_id = $1 ORDER BY container_space_id"
         ))
         .bind::<Text, _>(space_id)
         .load::<SpaceContainerProjectionRow>(&mut conn)
@@ -6353,7 +6353,7 @@ impl SpaceContainerProjectionStore for PgSpaceContainerProjectionStore {
     fn snapshot_all(&self) -> PersistenceResult<Vec<SpaceContainerProjectionRecord>> {
         let mut conn = pg_conn(&self.pool)?;
         sql_query(format!(
-            "SELECT {SPACE_CONTAINER_PROJECTION_COLUMNS} FROM projection_places ORDER BY place_id"
+            "SELECT {SPACE_CONTAINER_PROJECTION_COLUMNS} FROM projection_space_containers ORDER BY container_space_id"
         ))
         .load::<SpaceContainerProjectionRow>(&mut conn)
         .map(|rows| {
@@ -6366,7 +6366,7 @@ impl SpaceContainerProjectionStore for PgSpaceContainerProjectionStore {
 
     fn delete(&self, container_space_id: &str) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool)?;
-        sql_query("DELETE FROM projection_places WHERE place_id = $1")
+        sql_query("DELETE FROM projection_space_containers WHERE container_space_id = $1")
             .bind::<Text, _>(container_space_id)
             .execute(&mut conn)
             .map(|_| ())

@@ -15,7 +15,9 @@ use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use super::{append_audit_log, now, space_has_member, validate_did, validate_space_id};
+use contrix_sdk::RealmId;
+
+use super::{append_audit_log, now, space_has_member, validate_did};
 use crate::error::AppError;
 use crate::ids;
 use crate::result::{JsonResult, json_ok};
@@ -43,24 +45,24 @@ async fn moderation_report(
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req)?;
     let body = body.into_inner();
-    if validate_space_id(&body.space_id).is_err() || validate_did(&body.reporter).is_err() {
-        return Err(AppError::invalid_param("invalid space_id or reporter"));
+    if RealmId::new(body.realm_id.clone()).is_err() || validate_did(&body.reporter).is_err() {
+        return Err(AppError::invalid_param("invalid realm_id or reporter"));
     }
     if body.reporter != session.actor {
         return Err(AppError::capability_denied(
             "reporter must match authenticated actor",
         ));
     }
-    if !space_has_member(state, &body.space_id, &session.actor) {
+    if !space_has_member(state, &body.realm_id, &session.actor) {
         return Err(AppError::capability_denied(
-            "reporter cannot see the target space",
+            "reporter cannot see the target realm",
         ));
     }
     let report_id = ids::generate_report_id();
     let moderation_service = format!("{}#moderation", state.config.service_did);
     let report_payload = json!({
         "report_id": report_id,
-        "space_id": body.space_id,
+        "realm_id": body.realm_id,
         "target_ref": body.target_ref,
         "reason": body.reason,
         "reporter": body.reporter,
@@ -76,7 +78,7 @@ async fn moderation_report(
     if let Err(error) = state.persistence.moderation().append_action(json!({
         "action_id": ids::generate("moderation_action"),
         "report_id": report_id,
-        "space_id": body.space_id,
+        "realm_id": body.realm_id,
         "target_ref": body.target_ref,
         "status": "open",
         "assigned_to": moderation_service.clone(),

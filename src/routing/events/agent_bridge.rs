@@ -129,7 +129,7 @@ pub fn maybe_emit_echo_result_for_session_start(
         });
         let error_record = ProjectionEventRecord {
             event_id: ids::generate("event"),
-            space_id: operation.space_id.to_string(),
+            space_id: operation.realm_id.to_string(),
             event_kind: kinds::CX_AGENT_PROTOCOL_SESSION_RESULT.to_owned(),
             operation_type: "agent_echo_bridge_failed".to_owned(),
             operation_id: None,
@@ -163,7 +163,7 @@ pub fn maybe_emit_echo_result_for_session_start(
     });
     let status_record = ProjectionEventRecord {
         event_id: ids::generate("event"),
-        space_id: operation.space_id.to_string(),
+        space_id: operation.realm_id.to_string(),
         event_kind: kinds::CX_AGENT_PROTOCOL_SESSION_STATUS.to_owned(),
         operation_type: "agent_echo_bridge_status".to_owned(),
         operation_id: None,
@@ -183,7 +183,7 @@ pub fn maybe_emit_echo_result_for_session_start(
     // event when the upstream replies (or fails). When no
     // endpoint_url is registered, fall back to the in-process echo
     // path.
-    let space_id_str = operation.space_id.to_string();
+    let space_id_str = operation.realm_id.to_string();
     let echo_value = params.clone();
     if let Some(endpoint_url) = agent_endpoint_url.clone() {
         // Outbound HTTP path. Clone what the spawned task needs and

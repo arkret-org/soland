@@ -156,9 +156,8 @@ const SPACE_LIFECYCLE_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement
     "space lifecycle operation requires action",
 )];
 // `cx.space.archive` / `cx.space.restore` / `cx.space.tombstone` share the
-// spec-canonical `space_id` target field. `place_id` remains accepted as an
-// migration alias for older clients.
-const SPACE_CONTAINER_LIFECYCLE_ID_FIELDS: &[&str] = &["space_id", "place_id"];
+// spec-canonical `space_id` target field.
+const SPACE_CONTAINER_LIFECYCLE_ID_FIELDS: &[&str] = &["space_id"];
 const SPACE_CONTAINER_LIFECYCLE_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::AnyOf(
     SPACE_CONTAINER_LIFECYCLE_ID_FIELDS,
     "space lifecycle operation requires space_id",
@@ -168,9 +167,8 @@ const SPACE_CONTAINER_CREATE_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequ
     "object",
     "space create operation requires object",
 )];
-// `cx.space.update` carries `space_id` + `patch`; `place_id` remains a
-// migration alias for older clients.
-const SPACE_CONTAINER_UPDATE_ID_FIELDS: &[&str] = &["space_id", "place_id"];
+// `cx.space.update` carries `space_id` + `patch`.
+const SPACE_CONTAINER_UPDATE_ID_FIELDS: &[&str] = &["space_id"];
 const SPACE_CONTAINER_UPDATE_REQUIREMENTS: &[PayloadRequirement] = &[
     PayloadRequirement::AnyOf(
         SPACE_CONTAINER_UPDATE_ID_FIELDS,
@@ -179,10 +177,9 @@ const SPACE_CONTAINER_UPDATE_REQUIREMENTS: &[PayloadRequirement] = &[
     PayloadRequirement::Required("patch", "space update operation requires patch"),
 ];
 // `cx.space.parent` carries `space_id` + `expected_parent_space_id`, with
-// optional `parent_space_id`. The old `place_id` / `parent_ref` shape is still
-// accepted as a migration alias for older clients.
-const SPACE_CONTAINER_PARENT_ID_FIELDS: &[&str] = &["space_id", "place_id"];
-const SPACE_CONTAINER_PARENT_EXPECTED_FIELDS: &[&str] = &["expected_parent_space_id", "parent_ref"];
+// optional `parent_space_id`.
+const SPACE_CONTAINER_PARENT_ID_FIELDS: &[&str] = &["space_id"];
+const SPACE_CONTAINER_PARENT_EXPECTED_FIELDS: &[&str] = &["expected_parent_space_id"];
 const SPACE_CONTAINER_PARENT_REQUIREMENTS: &[PayloadRequirement] = &[
     PayloadRequirement::AnyOf(
         SPACE_CONTAINER_PARENT_ID_FIELDS,
@@ -243,12 +240,10 @@ const MORPH_SCHEMA_MIGRATE_REQUIREMENTS: &[PayloadRequirement] = &[
         "morph schema_migrate operation requires compatibility_class",
     ),
 ];
-// Flow position events (cx.flow.move / cx.flow.reorder). Current spec uses
-// `board_space_id` on both payloads. `board_place_id` remains accepted as a
-// migration alias for old clients.
-const FLOW_POSITION_BOARD_FIELDS: &[&str] = &["board_space_id", "board_place_id"];
-const FLOW_MOVE_TARGET_FIELDS: &[&str] = &["target_space_id", "target_place_id"];
-const FLOW_REORDER_SPACE_FIELDS: &[&str] = &["space_id", "list_space_id", "list_place_id"];
+// Flow position events (cx.flow.move / cx.flow.reorder).
+const FLOW_POSITION_BOARD_FIELDS: &[&str] = &["board_space_id"];
+const FLOW_MOVE_TARGET_FIELDS: &[&str] = &["target_space_id"];
+const FLOW_REORDER_SPACE_FIELDS: &[&str] = &["space_id", "list_space_id"];
 const FLOW_MOVE_REQUIREMENTS: &[PayloadRequirement] = &[
     PayloadRequirement::Required("flow_id", "flow position operation requires flow_id"),
     PayloadRequirement::AnyOf(
@@ -517,13 +512,8 @@ pub fn validate_operation_semantics(
 /// into the soland operation admission pipeline.
 ///
 /// For the space lifecycle events the SDK's typed payload requires
-/// `space_id` + `new_state`. Soland's pre-round-4 fixtures still use
-/// `place_id` (the post-R1.2 rename kept the field name) — the
-/// validator here HARD-REJECTS the wire-broken `target_ref` form but
-/// remains tolerant of the soland-internal `place_id` field so the
-/// in-tree reducer / fixture surface keeps building. Producers that
-/// emit `space_id` (the round-4 wire shape) MUST parse through
-/// `SpaceStateTransitionPayload` cleanly.
+/// `space_id` + `new_state`. The validator here HARD-REJECTS the
+/// wire-broken `target_ref` form; producers must emit canonical `space_id`.
 fn round4_validate_payload(kind: &str, operation: &Operation) -> Result<(), &'static str> {
     match kind {
         // cx.space.archive / cx.space.restore use the typed
@@ -1278,7 +1268,7 @@ pub fn validate_operation_policy(
     for operation in operations {
         if kinds::operation_is_message_create(operation)
             && !message_operation_is_encrypted(operation)
-            && known_space_denies_plaintext_service(state, operation.space_id.as_str())
+            && known_space_denies_plaintext_service(state, operation.realm_id.as_str())
         {
             return Err(
                 "private plaintext message operations require this service in plaintext_visible_services",
@@ -2025,17 +2015,6 @@ mod flow_tracks_update_tests {
             }),
         );
         assert!(validate_operation_schema(&operation, schema).is_ok());
-
-        let legacy_alias = flow_position_op(
-            kinds::CX_FLOW_REORDER,
-            json!({
-                "board_place_id": "cx:space:01904100-0000-7000-8000-000000000001",
-                "flow_id": "cx:flow:01904100-0000-7000-8000-000000000002",
-                "list_place_id": "cx:space:01904100-0000-7000-8000-000000000003",
-                "rank": "a1"
-            }),
-        );
-        assert!(validate_operation_schema(&legacy_alias, schema).is_ok());
     }
 
     fn space_container_op(kind: &'static str, payload: serde_json::Value) -> Operation {
@@ -2082,15 +2061,6 @@ mod flow_tracks_update_tests {
             }),
         );
         assert!(validate_operation_schema(&operation, schema).is_ok());
-
-        let legacy_alias = space_container_op(
-            kinds::CX_SPACE_CONTAINER_PARENT,
-            json!({
-                "place_id": "cx:space:01904100-0000-7000-8000-000000000003",
-                "parent_ref": "cx:space:01904100-0000-7000-8000-000000000004"
-            }),
-        );
-        assert!(validate_operation_schema(&legacy_alias, schema).is_ok());
 
         let missing_expected = space_container_op(
             kinds::CX_SPACE_CONTAINER_PARENT,

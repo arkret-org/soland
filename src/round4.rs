@@ -265,12 +265,10 @@ pub fn dropped_or_resync(
 /// the pre-existing canonical Event Envelope; batch and federation are
 /// the new round-4 shapes.
 ///
-/// Wire-breaking: producers that put `envelopes[]` in the body without
-/// the `service_binding_ref` are routed to [`Self::Batch`]; producers
-/// that include the `service_binding_ref` are routed to
-/// [`Self::Federation`]. Producers MUST NOT send a federation submit on
-/// the client-facing endpoint; the receiving handler MUST gate
-/// `Self::Federation` behind federation authentication.
+/// Wire-breaking: producers MUST use spec `events[]`; producers that
+/// include the `service_binding_ref` are routed to [`Self::Federation`].
+/// Client-account writes omit `service_binding_ref`; federation writes are
+/// gated by federation authentication.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum EventsSubmitRequest {
@@ -289,7 +287,7 @@ impl EventsSubmitRequest {
     pub fn shape(body: &Value) -> &'static str {
         if body.get("service_binding_ref").is_some() {
             "federation"
-        } else if body.get("envelopes").is_some() {
+        } else if body.get("events").is_some() {
             "batch"
         } else {
             "single"
@@ -897,8 +895,8 @@ mod tests {
     #[test]
     fn events_submit_shape_classifies_three_forms() {
         let single = json!({"event_id": "x"});
-        let batch = json!({"envelopes": []});
-        let federation = json!({"envelopes": [], "service_binding_ref": {"realm_id": "x"}});
+        let batch = json!({"events": []});
+        let federation = json!({"events": [], "service_binding_ref": {"realm_id": "x"}});
         assert_eq!(EventsSubmitRequest::shape(&single), "single");
         assert_eq!(EventsSubmitRequest::shape(&batch), "batch");
         assert_eq!(EventsSubmitRequest::shape(&federation), "federation");
@@ -907,7 +905,6 @@ mod tests {
     #[test]
     fn federation_binding_rejects_duplicate_frontier_entries() {
         let req = EventsSubmitFederationRequest {
-            envelopes: Vec::new(),
             service_binding_ref: FederationServiceBindingRef {
                 realm_id: realm(),
                 space_policy_hash: Hash::new(format!("sha256:{}", "1".repeat(64))).unwrap(),
@@ -919,6 +916,7 @@ mod tests {
                 destination_service_type: "principal_server".to_owned(),
                 reducer_profile_hash: Hash::new(format!("sha256:{}", "2".repeat(64))).unwrap(),
             },
+            events: Vec::new(),
             idempotency_key: None,
         };
         let err = EventsSubmitRequest::validate_federation_binding(&req).unwrap_err();

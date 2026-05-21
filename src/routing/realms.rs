@@ -20,7 +20,7 @@
 //!   the task spec: `{realm_id, effective_policy, inheritance_chain,
 //!   inheritance_mode}`.
 
-use contrix_sdk::{Operation, OperationId, SpaceId};
+use contrix_sdk::{Operation, OperationId, RealmId};
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;
@@ -224,11 +224,11 @@ async fn post_realm_link(
     if let Some(commitment) = body.commitment.as_ref() {
         payload["commitment"] = json!(commitment);
     }
-    let space_id = SpaceId::new(realm_id.clone())
+    let realm_scope = RealmId::new(realm_id.clone())
         .map_err(|e| AppError::invalid_param(format!("realm_id: {e}")))?;
     let op_id = OperationId::new(ids::generate_operation_id())
         .map_err(|e| AppError::invalid_param(format!("operation_id: {e}")))?;
-    let operation = Operation::create(op_id, space_id, CX_REALM_LINK, payload);
+    let operation = Operation::create(op_id, realm_scope, CX_REALM_LINK, payload);
     accept_local_operations(state, &session.actor, std::slice::from_ref(&operation))
         .map_err(reducer_reject_to_app_error)?;
     json_ok(RealmLinkMutationResponse {
@@ -301,11 +301,11 @@ async fn delete_realm_link(
         "link_kind": link_kind,
         "status": "tombstoned",
     });
-    let space_id = SpaceId::new(realm_id.clone())
+    let realm_scope = RealmId::new(realm_id.clone())
         .map_err(|e| AppError::invalid_param(format!("realm_id: {e}")))?;
     let op_id = OperationId::new(ids::generate_operation_id())
         .map_err(|e| AppError::invalid_param(format!("operation_id: {e}")))?;
-    let operation = Operation::create(op_id, space_id, CX_REALM_LINK, payload);
+    let operation = Operation::create(op_id, realm_scope, CX_REALM_LINK, payload);
     accept_local_operations(state, &session.actor, std::slice::from_ref(&operation))
         .map_err(reducer_reject_to_app_error)?;
     json_ok(RealmLinkMutationResponse {

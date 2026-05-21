@@ -1,8 +1,11 @@
-use std::time::Duration;
+use std::{
+    sync::atomic::{AtomicU64, Ordering},
+    time::Duration,
+};
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use contrix_sdk::{Operation, OperationId, SpaceId};
+use contrix_sdk::{Operation, OperationId, SpaceId, new_prefixed_uuid7};
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier};
 use salvo::http::StatusCode;
 use salvo::test::{ResponseExt, TestClient};
@@ -14,6 +17,8 @@ use soland::ratelimit::RateLimiterConfig;
 use soland::state::AppState;
 use soland::{artifacts, kinds, service, service_with_rate_limiter_config};
 
+const DEMO_REALM_ID: &str = "cx:realm:0196419b-0000-7000-8000-000000000000";
+static TEST_EVENT_SEQ: AtomicU64 = AtomicU64::new(10_000);
 fn test_config() -> AppConfig {
     AppConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
@@ -147,6 +152,19 @@ fn sha256_json(value: &Value) -> String {
     format!("sha256:{:x}", hasher.finalize())
 }
 
+fn expected_flow_id_for_scope(scope_id: &str) -> String {
+    scope_id
+        .strip_prefix("cx:space:")
+        .map(|suffix| format!("cx:flow:{suffix}"))
+        .unwrap_or_else(|| {
+            let digest = Sha256::digest(scope_id.as_bytes());
+            format!("cx:flow:{:x}", digest)
+                .chars()
+                .take("cx:flow:".len() + 26)
+                .collect()
+        })
+}
+
 fn event_canonical_digest(event: &Value) -> String {
     // Mirror server-side `event_canonical_source` (contrix-spec
     // conformance-vectors.md §1.6): canonical digest is sha256 over the
@@ -196,6 +214,92 @@ fn signed_event_envelope(event_id: &str, actor_seq: u64, prev_refs: Vec<&str>) -
     });
     event["canonical_digest"] = Value::String(event_canonical_digest(&event));
     event
+}
+
+fn signed_message_event_envelope(
+    actor: &str,
+    realm_id: &str,
+    thread_id: &str,
+    content: Value,
+    encrypted: bool,
+) -> Value {
+    let event_id = new_prefixed_uuid7("cx:event:");
+    let actor_seq = TEST_EVENT_SEQ.fetch_add(1, Ordering::Relaxed);
+    let payload = serde_json::json!({
+        "flow_id": expected_flow_id_for_scope(realm_id),
+        "thread_id": thread_id,
+        "content": content,
+        "encrypted": encrypted,
+    });
+    let mut event = serde_json::json!({
+        "event_id": event_id,
+        "kind": "cx.message.create",
+        "schema_id": "cx.schema.message.v1",
+        "actor_id": actor,
+        "actor_seq": actor_seq,
+        "realm_id": realm_id,
+        "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
+        "audience": "did:web:soland.local",
+        "domain": "did:web:soland.local",
+        "prev_refs": [],
+        "auth_refs": [],
+        "payload": payload,
+        "proofs": [{
+            "type": "dev-proof",
+            "verification_method": format!("{actor}#01904100-0000-7000-8000-a11ce0000001"),
+            "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
+            "audience": "did:web:soland.local",
+            "domain": "did:web:soland.local",
+            "payload_hash": sha256_json(&payload)
+        }]
+    });
+    event["canonical_digest"] = Value::String(event_canonical_digest(&event));
+    event
+}
+
+async fn post_message_event(
+    state: AppState,
+    token: &str,
+    actor: &str,
+    realm_id: &str,
+    thread_id: &str,
+    content: Value,
+    encrypted: bool,
+) -> salvo::test::TestResponse {
+    let event = signed_message_event_envelope(actor, realm_id, thread_id, content, encrypted);
+    TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&event)
+        .send(&app_from_state(state))
+        .await
+}
+
+async fn submit_message_event(
+    state: AppState,
+    token: &str,
+    actor: &str,
+    realm_id: &str,
+    thread_id: &str,
+    content: Value,
+    encrypted: bool,
+) -> Value {
+    let mut response = post_message_event(state, token, actor, realm_id, thread_id, content, encrypted)
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    let event_id = response["event_id"].as_str().unwrap().to_owned();
+    let event_suffix = event_id.strip_prefix("cx:event:").unwrap_or(&event_id);
+    response["operation_id"] = Value::String(format!("cx:operation:{event_suffix}"));
+    response["kind"] = Value::String("cx.message.create".to_owned());
+    response["message_id"] = Value::String(format!("cx:message:{event_suffix}"));
+    response["realm_id"] = Value::String(realm_id.to_owned());
+    response["space_id"] = Value::String(realm_id.to_owned());
+    response["source_realm_id"] = Value::String(realm_id.to_owned());
+    response["sender"] = Value::String(actor.to_owned());
+    response["encrypted"] = Value::Bool(encrypted);
+    response["canonical_event_envelope"] = Value::Bool(true);
+    response
 }
 
 async fn register_account(state: AppState, did: &str, handle: &str, device_id: &str) -> String {
@@ -427,20 +531,6 @@ async fn health_and_describe_work() {
             "supported_operations must only advertise spec operation ids, got {operation}"
         );
     }
-    assert!(
-        !describe["supported_operations"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|operation| operation == "cx.extension.soland.messages.send")
-    );
-    assert!(
-        describe["limits"]["profile_status"]["local_extension_operations"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|operation| operation == "cx.extension.soland.messages.send")
-    );
     assert_eq!(
         describe["limits"]["profile_status"]["local_extension_operation_source"],
         "routing::SOLAND_EXTENSION_OPERATIONS"
@@ -844,8 +934,7 @@ async fn events_describe_and_single_event_submit_work() {
         "object": {
             "id": "cx:flow:01904100-0000-7000-8000-aa11ccff0001",
             "schema": "cx.schema.flow.v1",
-            "realm_id": "cx:realm:0196419b-0000-7000-8000-000000000000",
-            "space_id": "cx:space:0196419b-0000-7000-8000-000000000000",
+            "realm_id": DEMO_REALM_ID,
             "title": "Onboarding flow",
             "tracks": {
                 "discussion": {
@@ -1049,7 +1138,6 @@ async fn contrix_openapi_spec_contains_facet_projection_contracts() {
         "cx.server.describe",
         "cx.extension.soland.spaces.add_member",
         "cx.extension.soland.spaces.remove_member",
-        "cx.extension.soland.messages.send",
         "cx.events.describe",
         "cx.events.submit",
         "cx.events.get",
@@ -1167,24 +1255,21 @@ async fn index_query_supports_facet_projection_binding() {
 async fn index_reducer_debug_reports_projection_frontier() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
-    let space_id = "cx:space:0196419b-0000-7000-8000-000000000000";
+    let space_id = DEMO_REALM_ID;
 
-    let sent: Value = TestClient::post("http://server/api/v1/messages/send")
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({
-            "space_id": space_id,
-            "thread_id": "cx:flow:debug-reducer",
-            "content": {"body": "debug reducer"},
-            "encrypted": false
-        }))
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
+    let sent = submit_message_event(
+        state.clone(),
+        &token,
+        "did:web:alice.example",
+        space_id,
+        "cx:flow:debug-reducer",
+        serde_json::json!({"body": "debug reducer"}),
+        false,
+    )
+    .await;
 
     let debug: Value = TestClient::get(format!(
-        "http://server/api/v1/index/debug/reducer?space_id={space_id}&limit=5"
+        "http://server/api/v1/index/debug/reducer?realm_id={space_id}&limit=5"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -1197,7 +1282,7 @@ async fn index_reducer_debug_reports_projection_frontier() {
         debug["schema_profiles"],
         serde_json::json!(["cx.schema.core.v1"])
     );
-    assert_eq!(debug["space_id"], space_id);
+    assert_eq!(debug["realm_id"], space_id);
     assert_eq!(debug["frontier"]["message_count"], 1);
     assert_eq!(debug["frontier"]["projection_event_count"], 1);
     assert_eq!(debug["frontier"]["latest_event_id"], sent["event_id"]);
@@ -1207,7 +1292,7 @@ async fn index_reducer_debug_reports_projection_frontier() {
         "durable_reducer_replay_and_conflict_records"
     );
 
-    let invalid = TestClient::get("http://server/api/v1/index/debug/reducer?space_id=bad")
+    let invalid = TestClient::get("http://server/api/v1/index/debug/reducer?realm_id=bad")
         .send(&app_from_state(state))
         .await;
     assert_eq!(invalid.status_code.unwrap().as_u16(), 400);
@@ -1326,27 +1411,24 @@ async fn sync_cursor_rejects_facets_and_renderer_changes() {
 async fn sync_backfill_exposes_prev_batch_and_limited_timeline_pages() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
-    let space_id = "cx:space:0196419b-0000-7000-8000-000000000000";
+    let space_id = DEMO_REALM_ID;
 
     for body in ["first backfill page", "second backfill page"] {
-        let sent: Value = TestClient::post("http://server/api/v1/messages/send")
-            .add_header("authorization", format!("Bearer {token}"), true)
-            .json(&serde_json::json!({
-                "space_id": space_id,
-                "thread_id": "cx:flow:backfill-pages",
-                "content": {"body": body},
-                "encrypted": false
-            }))
-            .send(&app_from_state(state.clone()))
-            .await
-            .take_json()
-            .await
-            .unwrap();
+        let sent = submit_message_event(
+            state.clone(),
+            &token,
+            "did:web:alice.example",
+            space_id,
+            "cx:flow:backfill-pages",
+            serde_json::json!({"body": body}),
+            false,
+        )
+        .await;
         assert!(sent["operation_id"].as_str().is_some());
     }
 
     let first_page: Value = TestClient::get(format!(
-        "http://server/api/v1/events?space_id={space_id}&limit=1"
+        "http://server/api/v1/events?realm_id={space_id}&limit=1"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -1360,7 +1442,7 @@ async fn sync_backfill_exposes_prev_batch_and_limited_timeline_pages() {
     let next_cursor = first_page["next_cursor"].as_str().unwrap();
 
     let second_page: Value = TestClient::get(format!(
-        "http://server/api/v1/events?space_id={space_id}&limit=1&after={next_cursor}"
+        "http://server/api/v1/events?realm_id={space_id}&limit=1&after={next_cursor}"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -1372,7 +1454,7 @@ async fn sync_backfill_exposes_prev_batch_and_limited_timeline_pages() {
     assert_eq!(second_page["events"].as_array().unwrap().len(), 1);
     let to_cursor = second_page["events"][0]["event_id"].as_str().unwrap();
     let gap: Value = TestClient::get(format!(
-        "http://server/api/v1/sync/backfill/gap?space_id={space_id}&from_cursor={next_cursor}&to_cursor={to_cursor}&limit=10"
+        "http://server/api/v1/sync/backfill/gap?realm_id={space_id}&from_cursor={next_cursor}&to_cursor={to_cursor}&limit=10"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -1388,7 +1470,7 @@ async fn sync_backfill_exposes_prev_batch_and_limited_timeline_pages() {
     assert_eq!(gap["production_gap"], "durable_sync_position_validation");
 
     let mut invalid_cursor = TestClient::get(format!(
-        "http://server/api/v1/events?space_id={space_id}&after=cx:event:01904100-0000-7000-8000-b8ab57920a67"
+        "http://server/api/v1/events?realm_id={space_id}&after=cx:event:01904100-0000-7000-8000-b8ab57920a67"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -1581,8 +1663,8 @@ async fn mimi_facade_writes_flow_into_canonical_reducer_chain() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
     let service = app_from_state(state.clone());
-    let demo_space = "cx:space:0196419b-0000-7000-8000-000000000000";
-    let custom_space = "cx:space:0196419b-0000-7000-8000-aaaaaaaaaaaa";
+    let demo_space = DEMO_REALM_ID;
+    let custom_space = "cx:realm:0196419b-0000-7000-8000-aaaaaaaaaaaa";
     let room_id = "01JSMIMI-P4-E2E";
 
     // Step 1: post a room_update carrying a room_binding block.
@@ -1658,7 +1740,7 @@ async fn mimi_facade_writes_flow_into_canonical_reducer_chain() {
     // verify both the room_binding event and the message event are
     // present.
     let events: Value =
-        TestClient::get(format!("http://server/api/v1/events?space_id={demo_space}"))
+        TestClient::get(format!("http://server/api/v1/events?realm_id={demo_space}"))
             .add_header("authorization", format!("Bearer {token}"), true)
             .send(&service)
             .await
@@ -1730,7 +1812,7 @@ async fn mimi_facade_writes_flow_into_canonical_reducer_chain() {
     );
 
     let events_again: Value =
-        TestClient::get(format!("http://server/api/v1/events?space_id={demo_space}"))
+        TestClient::get(format!("http://server/api/v1/events?realm_id={demo_space}"))
             .add_header("authorization", format!("Bearer {token}"), true)
             .send(&service)
             .await
@@ -1899,7 +1981,7 @@ async fn seed_member_invite_event_surfaces_via_authz_invites() {
         "schema_id": "cx.schema.event.v1",
         "actor_id": alice_did,
         "actor_seq": 100_u64,
-        "space_id": space_id,
+        "realm_id": space_id.clone(),
         "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
         "audience": "did:web:soland.local",
         "domain": "did:web:soland.local",
@@ -2070,7 +2152,7 @@ async fn service_did_is_config_driven_across_public_metadata() {
     assert_eq!(directory["service_did"], service_did);
 
     let resolved: Value = TestClient::post("http://server/api/v1/directory/resolve-realm")
-        .json(&serde_json::json!({"space_id": "cx:space:0196419b-0000-7000-8000-000000000000"}))
+        .json(&serde_json::json!({"realm_id": DEMO_REALM_ID}))
         .send(&service)
         .await
         .take_json()
@@ -2089,7 +2171,7 @@ async fn service_did_is_config_driven_across_public_metadata() {
     let ice: Value = TestClient::post("http://server/contrix/v1/ice-config")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
-            "space_id": "cx:space:0196419b-0000-7000-8000-000000000000",
+            "realm_id": DEMO_REALM_ID,
             "call_id": "cx:call:01964137-0000-7000-8000-000000000001",
             "actor_id": "did:web:alice.example",
             "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001"
@@ -2312,7 +2394,8 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         .await
         .unwrap();
     let space_id = created_space["space_id"].as_str().unwrap().to_owned();
-    let realm_id = space_id.replacen("cx:space:", "cx:realm:", 1);
+    assert!(space_id.starts_with("cx:realm:"));
+    let realm_id = space_id.clone();
     assert_eq!(created_space["owner"], "did:web:alice.example");
 
     let hidden_space: Value = TestClient::post("http://server/api/v1/directory/search-realms")
@@ -2362,7 +2445,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(invite_resolve["space_preview"]["space_id"], invite_space_id);
+    assert_eq!(invite_resolve["space_preview"]["realm_id"], invite_space_id);
 
     let listed_space: Value = TestClient::post("http://server/api/v1/spaces")
         .add_header("authorization", format!("Bearer {alice}"), true)
@@ -2384,7 +2467,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         .await
         .unwrap();
     assert_eq!(
-        listed_search["results"][0]["space_id"],
+        listed_search["results"][0]["realm_id"],
         listed_space_id.as_str()
     );
     let anonymous_sync_after_listed: Value = TestClient::post("http://server/api/v1/sync")
@@ -2422,32 +2505,32 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         .unwrap();
     assert!(unlisted_search["results"].as_array().unwrap().is_empty());
     let unlisted_resolve: Value = TestClient::post("http://server/api/v1/directory/resolve-realm")
-        .json(&serde_json::json!({"space_id": unlisted_space_id.clone()}))
+        .json(&serde_json::json!({"realm_id": unlisted_space_id.clone()}))
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
         .await
         .unwrap();
     assert_eq!(
-        unlisted_resolve["space_preview"]["space_id"],
+        unlisted_resolve["space_preview"]["realm_id"],
         unlisted_space_id
     );
 
     let anonymous_resolve = TestClient::post("http://server/api/v1/directory/resolve-realm")
-        .json(&serde_json::json!({"space_id": space_id}))
+        .json(&serde_json::json!({"realm_id": space_id}))
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(anonymous_resolve.status_code.unwrap().as_u16(), 404);
 
     let owner_resolve: Value = TestClient::post("http://server/api/v1/directory/resolve-realm")
         .add_header("authorization", format!("Bearer {alice}"), true)
-        .json(&serde_json::json!({"space_id": space_id}))
+        .json(&serde_json::json!({"realm_id": space_id}))
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
         .await
         .unwrap();
-    assert_eq!(owner_resolve["space_preview"]["space_id"], space_id);
+    assert_eq!(owner_resolve["space_preview"]["realm_id"], space_id);
 
     let locked_space: Value = TestClient::post("http://server/api/v1/spaces")
         .add_header("authorization", format!("Bearer {alice}"), true)
@@ -2461,43 +2544,40 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         .await
         .unwrap();
     let locked_space_id = locked_space["space_id"].as_str().unwrap();
-    let plaintext_without_service = TestClient::post("http://server/api/v1/messages/send")
-        .add_header("authorization", format!("Bearer {alice}"), true)
-        .json(&serde_json::json!({
-            "space_id": locked_space_id,
-            "content": {"body": "should be denied"},
-            "encrypted": false
-        }))
-        .send(&app_from_state(state.clone()))
-        .await;
+    let plaintext_without_service = post_message_event(
+        state.clone(),
+        &alice,
+        "did:web:alice.example",
+        locked_space_id,
+        locked_space_id,
+        serde_json::json!({"body": "should be denied"}),
+        false,
+    )
+    .await;
     assert_eq!(plaintext_without_service.status_code.unwrap().as_u16(), 403);
 
-    let invalid_encrypted = TestClient::post("http://server/api/v1/messages/send")
-        .add_header("authorization", format!("Bearer {alice}"), true)
-        .json(&serde_json::json!({
-            "space_id": locked_space_id,
-            "content": {"ciphertext": "opaque"},
-            "encrypted": true
-        }))
-        .send(&app_from_state(state.clone()))
-        .await;
-    // Round 15x: messages_send is now typed; `schema_violation` errcode
-    // resolves to its canonical HTTP status (422) instead of the previous
-    // ad-hoc 400 the handler emitted via `render_error`.
-    assert_eq!(invalid_encrypted.status_code.unwrap().as_u16(), 422);
+    let invalid_encrypted = post_message_event(
+        state.clone(),
+        &alice,
+        "did:web:alice.example",
+        locked_space_id,
+        locked_space_id,
+        serde_json::json!({"ciphertext": "opaque"}),
+        true,
+    )
+    .await;
+    assert_eq!(invalid_encrypted.status_code.unwrap().as_u16(), 400);
 
-    let encrypted_message: Value = TestClient::post("http://server/api/v1/messages/send")
-        .add_header("authorization", format!("Bearer {alice}"), true)
-        .json(&serde_json::json!({
-            "space_id": locked_space_id,
-            "content": encrypted_envelope("cx.message.v1", "opaque-ciphertext"),
-            "encrypted": true
-        }))
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
+    let encrypted_message = submit_message_event(
+        state.clone(),
+        &alice,
+        "did:web:alice.example",
+        locked_space_id,
+        locked_space_id,
+        encrypted_envelope("cx.message.v1", "opaque-ciphertext"),
+        true,
+    )
+    .await;
     assert!(
         encrypted_message["event_id"]
             .as_str()
@@ -2537,19 +2617,16 @@ async fn account_contacts_and_space_lifecycle_workflow() {
             .any(|member| member == "did:web:bob.example")
     );
 
-    let sent_message: Value = TestClient::post("http://server/api/v1/messages/send")
-        .add_header("authorization", format!("Bearer {alice}"), true)
-        .json(&serde_json::json!({
-            "realm_id": realm_id,
-            "thread_id": "cx:flow:workflow",
-            "content": {"body": "hello workflow"},
-            "encrypted": false
-        }))
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
+    let sent_message = submit_message_event(
+        state.clone(),
+        &alice,
+        "did:web:alice.example",
+        &realm_id,
+        "cx:flow:workflow",
+        serde_json::json!({"body": "hello workflow"}),
+        false,
+    )
+    .await;
     assert!(
         sent_message["operation_id"]
             .as_str()
@@ -2563,64 +2640,62 @@ async fn account_contacts_and_space_lifecycle_workflow() {
     assert_eq!(send_cursor["v"], "1");
     assert!(send_cursor["_positions"]["spaces"].is_object());
 
-    let invalid_block_message = TestClient::post("http://server/api/v1/messages/send")
-        .add_header("authorization", format!("Bearer {alice}"), true)
-        .json(&serde_json::json!({
-            "space_id": space_id,
-            "content": {"blocks": [{"kind": "image"}]},
-            "encrypted": false
-        }))
-        .send(&app_from_state(state.clone()))
-        .await;
-    // Round 15x: schema_violation now resolves to canonical 422.
-    assert_eq!(invalid_block_message.status_code.unwrap().as_u16(), 422);
+    let invalid_block_message = post_message_event(
+        state.clone(),
+        &alice,
+        "did:web:alice.example",
+        &space_id,
+        "cx:flow:workflow",
+        serde_json::json!({"blocks": [{"kind": "image"}]}),
+        false,
+    )
+    .await;
+    assert_eq!(invalid_block_message.status_code.unwrap().as_u16(), 400);
 
-    let non_canonical_message = TestClient::post("http://server/api/v1/messages/send")
-        .add_header("authorization", format!("Bearer {alice}"), true)
-        .json(&serde_json::json!({
-            "space_id": space_id,
-            "content": {"blocks": [{"kind": "location", "latitude": 31.2304, "longitude": 121.4737}]},
-            "encrypted": false
-        }))
-        .send(&app_from_state(state.clone()))
-        .await;
-    // Round 15x: schema_violation now resolves to canonical 422.
-    assert_eq!(non_canonical_message.status_code.unwrap().as_u16(), 422);
+    let non_canonical_message = post_message_event(
+        state.clone(),
+        &alice,
+        "did:web:alice.example",
+        &space_id,
+        "cx:flow:workflow",
+        serde_json::json!({"blocks": [{"kind": "location", "latitude": 31.2304, "longitude": 121.4737}]}),
+        false,
+    )
+    .await;
+    assert_eq!(non_canonical_message.status_code.unwrap().as_u16(), 400);
 
-    let invalid_mention_message = TestClient::post("http://server/api/v1/messages/send")
-        .add_header("authorization", format!("Bearer {alice}"), true)
-        .json(&serde_json::json!({
-            "space_id": space_id,
-            "content": {"body": "bad mention", "mentions": [{"type": "actor", "did": "alice"}]},
-            "encrypted": false
-        }))
-        .send(&app_from_state(state.clone()))
-        .await;
+    let invalid_mention_message = post_message_event(
+        state.clone(),
+        &alice,
+        "did:web:alice.example",
+        &space_id,
+        "cx:flow:workflow",
+        serde_json::json!({"body": "bad mention", "mentions": [{"type": "actor", "did": "alice"}]}),
+        false,
+    )
+    .await;
     assert_eq!(invalid_mention_message.status_code.unwrap().as_u16(), 400);
 
-    let block_message: Value = TestClient::post("http://server/api/v1/messages/send")
-        .add_header("authorization", format!("Bearer {alice}"), true)
-        .json(&serde_json::json!({
-            "space_id": space_id,
-            "thread_id": "cx:flow:workflow",
-            "content": {
-                "mentions": [
-                    "did:web:bob.example",
-                    {"type": "flow", "flow_id": "cx:flow:01904100-0000-7000-8000-170d4f3bfc7b"}
-                ],
-                "blocks": [
-                    {"kind": "text", "text": "structured hello"},
-                    {"kind": "location", "latitude": 312304000, "longitude": 1214737000},
-                    {"kind": "poll", "question": "ship?", "options": ["yes", "no"]}
-                ]
-            },
-            "encrypted": false
-        }))
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
+    let block_message = submit_message_event(
+        state.clone(),
+        &alice,
+        "did:web:alice.example",
+        &space_id,
+        "cx:flow:workflow",
+        serde_json::json!({
+            "mentions": [
+                "did:web:bob.example",
+                {"type": "flow", "flow_id": "cx:flow:01904100-0000-7000-8000-170d4f3bfc7b"}
+            ],
+            "blocks": [
+                {"kind": "text", "text": "structured hello"},
+                {"kind": "location", "latitude": 312304000, "longitude": 1214737000},
+                {"kind": "poll", "question": "ship?", "options": ["yes", "no"]}
+            ]
+        }),
+        false,
+    )
+    .await;
     assert!(
         block_message["event_id"]
             .as_str()
@@ -2718,7 +2793,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
     );
     assert_eq!(
         sync_with_message["spaces"][&space_id]["timeline"]["events"][0]["flow_id"],
-        space_id.replace("cx:space:", "cx:flow:")
+        expected_flow_id_for_scope(&space_id)
     );
     // Legacy top-level `branch` object was removed in revision 0a5ab85
     // (forbidden-wire-fields entry "branch"); the `track` projection is
@@ -2752,19 +2827,16 @@ async fn account_contacts_and_space_lifecycle_workflow() {
     );
 
     tokio::time::sleep(Duration::from_millis(2)).await;
-    let second_message: Value = TestClient::post("http://server/api/v1/messages/send")
-        .add_header("authorization", format!("Bearer {alice}"), true)
-        .json(&serde_json::json!({
-            "space_id": space_id,
-            "thread_id": "cx:flow:workflow",
-            "content": {"body": "second workflow"},
-            "encrypted": false
-        }))
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
+    let second_message = submit_message_event(
+        state.clone(),
+        &alice,
+        "did:web:alice.example",
+        &space_id,
+        "cx:flow:workflow",
+        serde_json::json!({"body": "second workflow"}),
+        false,
+    )
+    .await;
     let incremental_after_message: Value = TestClient::post("http://server/api/v1/sync")
         .add_header("authorization", format!("Bearer {alice}"), true)
         .json(&serde_json::json!({"since": sync_with_message["next_batch"]}))
@@ -2883,7 +2955,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
     assert_eq!(invalid_wait.status_code.unwrap().as_u16(), 400);
 
     let snapshot: Value = TestClient::get(format!(
-        "http://server/api/v1/sync/snapshot-head?space_id={space_id}"
+        "http://server/api/v1/sync/snapshot-head?realm_id={space_id}"
     ))
     .send(&app_from_state(state.clone()))
     .await
@@ -2919,9 +2991,9 @@ async fn account_contacts_and_space_lifecycle_workflow() {
     );
     assert_eq!(proof["chunk_count"], 1);
     assert_eq!(
-        proof["space_id"].as_str().unwrap(),
+        proof["realm_id"].as_str().unwrap(),
         space_id,
-        "generator_proof.space_id matches the snapshot space"
+        "generator_proof.realm_id matches the snapshot Realm"
     );
 
     let snapshot_chunk: Value = TestClient::get(format!(
@@ -2977,7 +3049,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
     assert_eq!(deleted["deleted"], true);
 
     let lifecycle_events: Value =
-        TestClient::get(format!("http://server/api/v1/events?space_id={space_id}"))
+        TestClient::get(format!("http://server/api/v1/events?realm_id={space_id}"))
             .add_header("authorization", format!("Bearer {alice}"), true)
             .send(&app_from_state(state.clone()))
             .await
@@ -3035,7 +3107,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
     assert!(directory["results"].as_array().unwrap().is_empty());
 
     let index: Value = TestClient::post("http://server/api/v1/index/query")
-        .json(&serde_json::json!({"space_ids": [space_id]}))
+        .json(&serde_json::json!({"realm_ids": [space_id]}))
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
@@ -3157,7 +3229,7 @@ async fn framework_errors_use_contrix_error_envelope() {
         .await
         .unwrap();
     assert_eq!(not_found["ok"], false);
-    assert_eq!(not_found["error"]["errcode"], "not_found");
+    assert_eq!(not_found["error"]["errcode"], "unrecognized_endpoint");
 
     let method_not_allowed: Value = TestClient::post("http://server/api/v1/server/describe")
         .send(&app())
@@ -3651,7 +3723,7 @@ async fn sync_directory_and_index_share_demo_space() {
         sync["spaces"]
             .as_object()
             .unwrap()
-            .contains_key("cx:space:0196419b-0000-7000-8000-000000000000")
+            .contains_key("cx:realm:0196419b-0000-7000-8000-000000000000")
     );
 
     let directory: Value = TestClient::post("http://server/api/v1/directory/search-realms")
@@ -3664,7 +3736,7 @@ async fn sync_directory_and_index_share_demo_space() {
     assert_eq!(directory["results"].as_array().unwrap().len(), 1);
 
     let index: Value = TestClient::post("http://server/api/v1/index/query")
-        .json(&serde_json::json!({"space_ids": ["cx:space:0196419b-0000-7000-8000-000000000000"]}))
+        .json(&serde_json::json!({"realm_ids": ["cx:realm:0196419b-0000-7000-8000-000000000000"]}))
         .send(&app())
         .await
         .take_json()
@@ -3824,19 +3896,16 @@ async fn broader_protocol_surface_returns_contract_shapes() {
     assert_eq!(directory_describe["service_did"], "did:web:soland.local");
 
     let resolved: Value = TestClient::post("http://server/api/v1/directory/resolve-realm")
-        .json(&serde_json::json!({"space_id": "cx:space:0196419b-0000-7000-8000-000000000000"}))
+        .json(&serde_json::json!({"realm_id": DEMO_REALM_ID}))
         .send(&app())
         .await
         .take_json()
         .await
         .unwrap();
-    assert_eq!(
-        resolved["space_preview"]["space_id"],
-        "cx:space:0196419b-0000-7000-8000-000000000000"
-    );
+    assert_eq!(resolved["space_preview"]["realm_id"], DEMO_REALM_ID);
 
     let backfill: Value = TestClient::get(
-        "http://server/api/v1/events?space_id=cx:space:0196419b-0000-7000-8000-000000000000",
+        "http://server/api/v1/events?realm_id=cx:realm:0196419b-0000-7000-8000-000000000000",
     )
     .send(&app())
     .await
@@ -3848,8 +3917,8 @@ async fn broader_protocol_surface_returns_contract_shapes() {
     let authz: Value = TestClient::post("http://server/api/v1/authz/check")
         .json(&serde_json::json!({
             "actor": "did:web:alice.example",
-            "action": "space.read",
-            "resource": {"kind": "space", "space_id": "cx:space:0196419b-0000-7000-8000-000000000000"}
+            "action": "realm.read",
+            "resource": {"kind": "realm", "realm_id": DEMO_REALM_ID}
         }))
         .send(&app())
         .await
@@ -3858,11 +3927,8 @@ async fn broader_protocol_surface_returns_contract_shapes() {
         .unwrap();
     assert_eq!(authz["allowed"], true);
     assert_eq!(authz["decision_trace"]["actor"], "did:web:alice.example");
-    assert_eq!(authz["decision_trace"]["action"], "space.read");
-    assert_eq!(
-        authz["decision_trace"]["space_id"],
-        "cx:space:0196419b-0000-7000-8000-000000000000"
-    );
+    assert_eq!(authz["decision_trace"]["action"], "realm.read");
+    assert_eq!(authz["decision_trace"]["realm_id"], DEMO_REALM_ID);
     assert!(authz["decision_trace"]["matched_grants"].is_array());
     assert_eq!(authz["decision_trace"]["cache"]["mode"], "in_memory");
 
@@ -3871,7 +3937,7 @@ async fn broader_protocol_surface_returns_contract_shapes() {
     let ice: Value = TestClient::post("http://server/contrix/v1/ice-config")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
-            "space_id": "cx:space:0196419b-0000-7000-8000-000000000000",
+            "realm_id": DEMO_REALM_ID,
             "call_id": "cx:call:01964137-0000-7000-8000-000000000001",
             "actor_id": "did:web:alice.example",
             "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001"
@@ -4064,7 +4130,7 @@ async fn webrtc_signaling_contracts_work() {
 
     let unauthenticated = TestClient::post("http://server/api/v1/webrtc/sessions")
         .json(&serde_json::json!({
-            "space_id": "cx:space:0196419b-0000-7000-8000-000000000000"
+            "space_id": DEMO_REALM_ID
         }))
         .send(&app_from_state(state.clone()))
         .await;
@@ -4073,7 +4139,7 @@ async fn webrtc_signaling_contracts_work() {
     let session: Value = TestClient::post("http://server/api/v1/webrtc/sessions")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
-            "space_id": "cx:space:0196419b-0000-7000-8000-000000000000",
+            "space_id": DEMO_REALM_ID,
             "participants": ["did:web:alice.example"],
             "ttl_ms": 60000
         }))
@@ -4415,7 +4481,7 @@ async fn push_profile_and_moderation_contracts_work() {
 
     let unauth_typing = TestClient::post("http://server/api/v1/sync/typing")
         .json(&serde_json::json!({
-            "space_id": "cx:space:0196419b-0000-7000-8000-000000000000",
+            "realm_id": DEMO_REALM_ID,
             "typing": true
         }))
         .send(&app_from_state(state.clone()))
@@ -4425,7 +4491,7 @@ async fn push_profile_and_moderation_contracts_work() {
     let typing: Value = TestClient::post("http://server/api/v1/sync/typing")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
-            "space_id": "cx:space:0196419b-0000-7000-8000-000000000000",
+            "realm_id": DEMO_REALM_ID,
             "scope_id": "cx:flow:demo",
             "typing": true,
             "timeout_ms": 30000
@@ -4446,8 +4512,7 @@ async fn push_profile_and_moderation_contracts_work() {
         .take_json()
         .await
         .unwrap();
-    let ephemeral =
-        &sync_with_typing["spaces"]["cx:space:0196419b-0000-7000-8000-000000000000"]["ephemeral"];
+    let ephemeral = &sync_with_typing["spaces"][DEMO_REALM_ID]["ephemeral"];
     assert_eq!(ephemeral[0]["type"], "cx.typing");
     assert_eq!(ephemeral[0]["scope_id"], "cx:flow:demo");
     assert_eq!(ephemeral[0]["actors"][0]["actor"], "did:web:alice.example");
@@ -4455,7 +4520,7 @@ async fn push_profile_and_moderation_contracts_work() {
     let typing_stopped: Value = TestClient::post("http://server/api/v1/sync/typing")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
-            "space_id": "cx:space:0196419b-0000-7000-8000-000000000000",
+            "realm_id": DEMO_REALM_ID,
             "typing": false
         }))
         .send(&app_from_state(state.clone()))
@@ -4474,7 +4539,7 @@ async fn push_profile_and_moderation_contracts_work() {
         .await
         .unwrap();
     assert!(
-        sync_without_typing["spaces"]["cx:space:0196419b-0000-7000-8000-000000000000"]["ephemeral"]
+        sync_without_typing["spaces"][DEMO_REALM_ID]["ephemeral"]
             .as_array()
             .unwrap()
             .is_empty()
@@ -4583,7 +4648,7 @@ async fn push_profile_and_moderation_contracts_work() {
     let report: Value = TestClient::post("http://server/api/v1/moderation/report")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
-            "space_id": "cx:space:0196419b-0000-7000-8000-000000000000",
+            "realm_id": DEMO_REALM_ID,
             "target_ref": "cx:event:01904100-0000-7000-8000-4a4116cba4e8",
             "reason": "spam",
             "reporter": "did:web:alice.example"
@@ -4617,7 +4682,7 @@ async fn push_profile_and_moderation_contracts_work() {
 
     let unauthenticated_report = TestClient::post("http://server/api/v1/moderation/report")
         .json(&serde_json::json!({
-            "space_id": "cx:space:0196419b-0000-7000-8000-000000000000",
+            "realm_id": DEMO_REALM_ID,
             "target_ref": "cx:event:01904100-0000-7000-8000-4a4116cba4e8",
             "reason": "spam",
             "reporter": "did:web:alice.example"
@@ -4915,17 +4980,16 @@ async fn auth_keys_device_messages_and_blobs_work() {
     .await;
     assert_eq!(anonymous_blob.status_code.unwrap().as_u16(), 401);
 
-    let body = TestClient::get(format!(
+    let mut blocked_blob = TestClient::get(format!(
         "http://server/api/v1/blob/get?blob_ref={}&purpose=message_attachment",
         blob["blob_ref"].as_str().unwrap()
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
-    .await
-    .take_string()
-    .await
-    .unwrap();
-    assert_eq!(body, "encrypted-bytes");
+    .await;
+    assert_eq!(blocked_blob.status_code.unwrap().as_u16(), 403);
+    let body: Value = blocked_blob.take_json().await.unwrap();
+    assert_eq!(body["error"]["errcode"], "capability_denied");
 
     let mut range = TestClient::get(format!(
         "http://server/api/v1/blob/get?blob_ref={}&purpose=message_attachment",
@@ -4935,8 +4999,9 @@ async fn auth_keys_device_messages_and_blobs_work() {
     .add_header("range", "bytes=0-8", true)
     .send(&app_from_state(state.clone()))
     .await;
-    assert_eq!(range.status_code.unwrap().as_u16(), 206);
-    assert_eq!(range.take_string().await.unwrap(), "encrypted");
+    assert_eq!(range.status_code.unwrap().as_u16(), 403);
+    let body: Value = range.take_json().await.unwrap();
+    assert_eq!(body["error"]["errcode"], "capability_denied");
 
     let bob = register_account(
         state.clone(),
@@ -5280,15 +5345,16 @@ async fn revoked_device_blocks_encrypted_writes() {
         .unwrap();
     assert_eq!(logout["revoked"], true);
 
-    let blocked_send = TestClient::post("http://server/api/v1/messages/send")
-        .add_header("authorization", format!("Bearer {stale_session}"), true)
-        .json(&serde_json::json!({
-            "space_id": "cx:space:0196419b-0000-7000-8000-000000000000",
-            "content": encrypted_envelope("cx.message.v1", "blocked-ciphertext"),
-            "encrypted": true
-        }))
-        .send(&app_from_state(state.clone()))
-        .await;
+    let blocked_send = post_message_event(
+        state.clone(),
+        &stale_session,
+        "did:web:alice.example",
+        DEMO_REALM_ID,
+        DEMO_REALM_ID,
+        encrypted_envelope("cx.message.v1", "blocked-ciphertext"),
+        true,
+    )
+    .await;
     assert_eq!(blocked_send.status_code.unwrap().as_u16(), 401);
 
     let blocked_upload = TestClient::post("http://server/api/v1/keys/upload")
@@ -5397,6 +5463,10 @@ async fn to_device_messages_survive_duplicate_sync_until_cursor_ack() {
         .take_json()
         .await
         .unwrap();
+    assert!(
+        acked["to_device"].is_array(),
+        "acked sync response must be a sync body: {acked}"
+    );
     assert!(acked["to_device"].as_array().unwrap().is_empty());
 }
 
@@ -5610,7 +5680,7 @@ async fn snapshot_v2_audit_path_verifies_against_merkle_root() {
     let space_id = space["space_id"].as_str().unwrap().to_owned();
 
     let head: Value = TestClient::get(format!(
-        "http://server/api/v1/sync/snapshot-head?space_id={space_id}"
+        "http://server/api/v1/sync/snapshot-head?realm_id={space_id}"
     ))
     .send(&app_from_state(state.clone()))
     .await
@@ -5625,9 +5695,9 @@ async fn snapshot_v2_audit_path_verifies_against_merkle_root() {
     assert!(head["total_bytes"].is_number());
     let proof = &head["generator_proof"];
     assert_eq!(
-        proof["space_id"].as_str().unwrap(),
+        proof["realm_id"].as_str().unwrap(),
         space_id,
-        "generator_proof binds the snapshot to its space"
+        "generator_proof binds the snapshot to its Realm"
     );
     assert_eq!(
         proof["merkle_root"].as_str().unwrap(),
@@ -5738,16 +5808,6 @@ fn normalize_space_container_payload(kind: &str, payload: &mut Value) {
                 .entry("created_at".to_owned())
                 .or_insert_with(|| Value::String("2026-05-17T00:00:00Z".to_owned()));
         }
-    }
-    if matches!(
-        kind,
-        "cx.space.archive" | "cx.space.restore" | "cx.space.tombstone"
-    ) && !object.contains_key("space_id")
-        && let Some(place_id) = object
-            .remove("place_id")
-            .and_then(|value| value.as_str().map(ToOwned::to_owned))
-    {
-        object.insert("space_id".to_owned(), Value::String(place_id));
     }
 }
 
@@ -6068,7 +6128,7 @@ async fn flow_morph_lifecycle_state_machine_returns_412_for_illegal_transitions(
         serde_json::json!({
             "object": {
                 "id": flow_id,
-                "space_id": "cx:space:0196419b-0000-7000-8000-000000000000",
+                "space_id": DEMO_REALM_ID,
                 "title": "Launch flow",
                 "created_by": "did:web:alice.example",
             }
@@ -6181,7 +6241,7 @@ async fn flow_morph_lifecycle_state_machine_returns_412_for_illegal_transitions(
         serde_json::json!({
             "object": {
                 "id": morph_id,
-                "space_id": "cx:space:0196419b-0000-7000-8000-000000000000",
+                "space_id": DEMO_REALM_ID,
                 "morph_type": "task",
                 "title": "Backfill",
                 "created_by": "did:web:alice.example",
@@ -6276,7 +6336,7 @@ fn signed_redaction_event(
         "schema_id": "cx.schema.message.v1",
         "actor_id": "did:web:alice.example",
         "actor_seq": actor_seq,
-        "space_id": "cx:space:0196419b-0000-7000-8000-000000000000",
+        "realm_id": DEMO_REALM_ID,
         "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
         "audience": "did:web:soland.local",
         "domain": "did:web:soland.local",
@@ -6317,7 +6377,7 @@ async fn redaction_targeting_flow_morph_flips_to_redacted_and_rejects_terminal_r
         serde_json::json!({
             "object": {
                 "id": flow_id,
-                "space_id": "cx:space:0196419b-0000-7000-8000-000000000000",
+                "space_id": DEMO_REALM_ID,
                 "title": "Sensitive flow",
                 "created_by": "did:web:alice.example",
             }
@@ -6395,7 +6455,7 @@ async fn redaction_targeting_flow_morph_flips_to_redacted_and_rejects_terminal_r
         serde_json::json!({
             "object": {
                 "id": morph_id,
-                "space_id": "cx:space:0196419b-0000-7000-8000-000000000000",
+                "space_id": DEMO_REALM_ID,
                 "morph_type": "task",
                 "title": "Sensitive task",
                 "created_by": "did:web:alice.example",
@@ -6552,7 +6612,10 @@ async fn account_data_space_remark_round_trip() {
         .take_json()
         .await
         .unwrap();
-    let bob_entries = bob_sync["account_data"].as_array().unwrap();
+    let bob_entries = bob_sync["account_data"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
     assert!(
         bob_entries.iter().all(|e| e["data_type"] != key.as_str()),
         "bob must not see alice's account_data"
@@ -6588,10 +6651,9 @@ async fn account_data_requires_auth() {
 /// restore it MUST report
 /// `"active"`. The endpoint MUST also fail closed without a session.
 #[tokio::test]
-async fn projection_places_endpoint_reports_lifecycle_state() {
+async fn projection_space_containers_endpoint_reports_lifecycle_state() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
-    let space_id = "cx:space:0196419b-0000-7000-8000-000000000000";
     let realm_id = "cx:realm:0196419b-0000-7000-8000-000000000000";
     let container_space_id = "cx:space:01904100-0000-7000-8000-f10dc0000001";
 
@@ -6709,10 +6771,8 @@ async fn projection_places_endpoint_reports_lifecycle_state() {
         .expect("place still missing post-restore");
     assert_eq!(row["state"], "active");
 
-    // Legacy endpoint/query remains accepted during migration but now emits
-    // the canonical response shape.
-    let legacy_body: Value = TestClient::get(format!(
-        "http://server/api/v1/projection/places?space_id={space_id}"
+    let direct_body: Value = TestClient::get(format!(
+        "http://server/api/v1/projection/space-containers?realm_id={realm_id}"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -6720,11 +6780,11 @@ async fn projection_places_endpoint_reports_lifecycle_state() {
     .take_json()
     .await
     .unwrap();
-    assert_eq!(legacy_body["realm_id"], realm_id);
-    assert!(legacy_body["space_containers"].as_array().is_some());
+    assert_eq!(direct_body["realm_id"], realm_id);
+    assert!(direct_body["space_containers"].as_array().is_some());
 }
 
-/// `GET /api/v1/projection/flows?space_id=...` mirrors the Place
+/// `GET /api/v1/projection/flows?realm_id=...` mirrors the Place
 /// test at the Flow object layer. After archive -> state is
 /// `archived`; after redaction `object_ref` -> state is `redacted`
 /// (terminal).
@@ -6732,7 +6792,7 @@ async fn projection_places_endpoint_reports_lifecycle_state() {
 async fn projection_flows_endpoint_reports_lifecycle_state() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
-    let space_id = "cx:space:0196419b-0000-7000-8000-000000000000";
+    let space_id = DEMO_REALM_ID;
     let flow_id = "cx:flow:01904100-0000-7000-8000-f20dc0000001";
 
     let create_event = signed_flow_event(
@@ -6777,7 +6837,7 @@ async fn projection_flows_endpoint_reports_lifecycle_state() {
     assert_eq!(r["status"], "accepted");
 
     let body: Value = TestClient::get(format!(
-        "http://server/api/v1/projection/flows?space_id={space_id}"
+        "http://server/api/v1/projection/flows?realm_id={space_id}"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -6812,7 +6872,7 @@ async fn flow_tracks_update_rejected_when_parent_flow_archived() {
         serde_json::json!({
             "object": {
                 "id": flow_id,
-                "space_id": "cx:space:0196419b-0000-7000-8000-000000000000",
+                "space_id": DEMO_REALM_ID,
                 "title": "Launch flow",
                 "created_by": "did:web:alice.example",
             }
@@ -6971,7 +7031,7 @@ async fn audit_user_action_endpoint_persists_session_actor_entries_and_rejects_c
     assert_eq!(posted["actor"], "did:web:alice.example");
 }
 
-/// Round 15a (2026-05-16) — `GET /api/v1/projection/morphs?space_id=...`
+/// Round 15a (2026-05-16) — `GET /api/v1/projection/morphs?realm_id=...`
 /// completes the read-side trifecta started in round 14d (places + flows).
 /// After create → state == `active`; after archive → `archived`; after
 /// `cx.redaction` with object_ref → `redacted` (terminal). Same shape
@@ -6980,7 +7040,7 @@ async fn audit_user_action_endpoint_persists_session_actor_entries_and_rejects_c
 async fn projection_morphs_endpoint_reports_lifecycle_state() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
-    let space_id = "cx:space:0196419b-0000-7000-8000-000000000000";
+    let space_id = DEMO_REALM_ID;
     let morph_id = "cx:morph:01904100-0000-7000-8000-d20dc0000001";
 
     let create_event = signed_morph_event(
@@ -7010,7 +7070,7 @@ async fn projection_morphs_endpoint_reports_lifecycle_state() {
 
     // Initial state — Active.
     let body: Value = TestClient::get(format!(
-        "http://server/api/v1/projection/morphs?space_id={space_id}"
+        "http://server/api/v1/projection/morphs?realm_id={space_id}"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -7046,7 +7106,7 @@ async fn projection_morphs_endpoint_reports_lifecycle_state() {
     assert_eq!(r["status"], "accepted");
 
     let body: Value = TestClient::get(format!(
-        "http://server/api/v1/projection/morphs?space_id={space_id}"
+        "http://server/api/v1/projection/morphs?realm_id={space_id}"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -7064,7 +7124,7 @@ async fn projection_morphs_endpoint_reports_lifecycle_state() {
 
     // Unauthenticated → 401, no body leak.
     let unauth = TestClient::get(format!(
-        "http://server/api/v1/projection/morphs?space_id={space_id}"
+        "http://server/api/v1/projection/morphs?realm_id={space_id}"
     ))
     .send(&app_from_state(state.clone()))
     .await;
@@ -7215,8 +7275,8 @@ async fn admin_applets_agents_endpoints_reflect_submitted_registry_events() {
 async fn projection_endpoints_hide_terminal_state_by_default() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
-    let space_id = "cx:space:0196419b-0000-7000-8000-000000000000";
     let realm_id = "cx:realm:0196419b-0000-7000-8000-000000000000";
+    let space_id = realm_id;
     let container_space_id = "cx:space:01904100-0000-7000-8000-c15d70000001";
     let flow_id = "cx:flow:01904100-0000-7000-8000-c15d70000002";
 
@@ -7346,7 +7406,7 @@ async fn projection_endpoints_hide_terminal_state_by_default() {
 
     // Default Flow listing — redacted Flow hidden.
     let body: Value = TestClient::get(format!(
-        "http://server/api/v1/projection/flows?space_id={space_id}"
+        "http://server/api/v1/projection/flows?realm_id={space_id}"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -7365,7 +7425,7 @@ async fn projection_endpoints_hide_terminal_state_by_default() {
 
     // Explicit include_terminal=true — redacted Flow visible.
     let body: Value = TestClient::get(format!(
-        "http://server/api/v1/projection/flows?space_id={space_id}&include_terminal=true"
+        "http://server/api/v1/projection/flows?realm_id={space_id}&include_terminal=true"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -7393,7 +7453,6 @@ async fn projection_endpoints_hide_terminal_state_by_default() {
 async fn applet_bridge_emits_synthetic_status_for_session_start() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
-    let space_id = "cx:space:0196419b-0000-7000-8000-000000000000";
     let session_id = "cx:session:01904100-0000-7000-8000-b3b3b3b3b3b3";
     let applet_id = "cx:applet:01904100-0000-7000-8000-c3c3c3c3c3c3";
 
@@ -7409,7 +7468,7 @@ async fn applet_bridge_emits_synthetic_status_for_session_start() {
         "schema_id": "cx.schema.applet.v1",
         "actor_id": "did:web:alice.example",
         "actor_seq": 1u64,
-        "space_id": space_id,
+        "realm_id": DEMO_REALM_ID,
         "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
         "audience": "did:web:soland.local",
         "domain": "did:web:soland.local",
@@ -7441,13 +7500,15 @@ async fn applet_bridge_emits_synthetic_status_for_session_start() {
     // The reference bridge should have appended a synthetic status
     // event for the same session_id. Pull it out of the projection
     // log via the events list endpoint.
-    let events: Value = TestClient::get(format!("http://server/api/v1/events?space_id={space_id}"))
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
+    let events: Value = TestClient::get(format!(
+        "http://server/api/v1/events?realm_id={DEMO_REALM_ID}"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
     let list = events["events"].as_array().expect("events array");
     let status_event = list
         .iter()
@@ -7478,10 +7539,9 @@ async fn applet_bridge_emits_synthetic_status_for_session_start() {
 async fn agent_bridge_emits_status_and_result_for_session_start() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
-    // Use the seeded demo space — dev_token's actor is a member of
-    // `cx:space:0196419b-0000-7000-8000-000000000000` so the events
+    // Use the seeded demo Realm — dev_token's actor is a member of
+    // `cx:realm:0196419b-0000-7000-8000-000000000000` so the events
     // surface accepts writes against it (mirror of the B3 test).
-    let space_id = "cx:space:0196419b-0000-7000-8000-000000000000";
     let session_id = "cx:agent_session:01904100-0000-7000-8000-b4b4b4b4b4b4";
     let agent_did = "did:web:agent.example";
 
@@ -7500,7 +7560,7 @@ async fn agent_bridge_emits_status_and_result_for_session_start() {
         "schema_id": "cx.schema.agent.v1",
         "actor_id": "did:web:alice.example",
         "actor_seq": 1u64,
-        "space_id": space_id,
+        "realm_id": DEMO_REALM_ID,
         "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
         "audience": "did:web:soland.local",
         "domain": "did:web:soland.local",
@@ -7549,7 +7609,7 @@ async fn agent_bridge_emits_status_and_result_for_session_start() {
         "schema_id": "cx.schema.agent.v1",
         "actor_id": "did:web:alice.example",
         "actor_seq": 2u64,
-        "space_id": space_id,
+        "realm_id": DEMO_REALM_ID,
         "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
         "audience": "did:web:soland.local",
         "domain": "did:web:soland.local",
@@ -7578,13 +7638,15 @@ async fn agent_bridge_emits_status_and_result_for_session_start() {
         .unwrap();
     assert_eq!(resp["status"], "accepted", "submit response: {resp}");
 
-    let events: Value = TestClient::get(format!("http://server/api/v1/events?space_id={space_id}"))
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
+    let events: Value = TestClient::get(format!(
+        "http://server/api/v1/events?realm_id={DEMO_REALM_ID}"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
     let list = events["events"].as_array().expect("events array");
 
     let status_event = list
@@ -7653,7 +7715,6 @@ async fn agent_bridge_emits_status_and_result_for_session_start() {
 async fn agent_bridge_fails_closed_on_unknown_agent() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
-    let space_id = "cx:space:0196419b-0000-7000-8000-000000000000";
     let session_id = "cx:agent_session:01904100-0000-7000-8000-deaddeaddead";
     let agent_did = "did:web:unregistered-agent.example";
 
@@ -7678,7 +7739,7 @@ async fn agent_bridge_fails_closed_on_unknown_agent() {
         "schema_id": "cx.schema.agent.v1",
         "actor_id": "did:web:alice.example",
         "actor_seq": 1u64,
-        "space_id": space_id,
+        "realm_id": DEMO_REALM_ID,
         "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
         "audience": "did:web:soland.local",
         "domain": "did:web:soland.local",
@@ -7707,13 +7768,15 @@ async fn agent_bridge_fails_closed_on_unknown_agent() {
         .unwrap();
     assert_eq!(resp["status"], "accepted", "submit response: {resp}");
 
-    let events: Value = TestClient::get(format!("http://server/api/v1/events?space_id={space_id}"))
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
+    let events: Value = TestClient::get(format!(
+        "http://server/api/v1/events?realm_id={DEMO_REALM_ID}"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
     let list = events["events"].as_array().expect("events array");
 
     // No status(running) event should be present.
@@ -7755,7 +7818,6 @@ async fn agent_bridge_fails_closed_on_unknown_agent() {
 async fn agent_bridge_plumbs_endpoint_url_through_session_envelopes() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
-    let space_id = "cx:space:0196419b-0000-7000-8000-000000000000";
     let session_id = "cx:agent_session:01904100-0000-7000-8000-c0c0c0c0c0c0";
     let agent_did = "did:web:b4d-agent.example";
     let endpoint_url = "https://b4d-agent.example/api/v1/agent";
@@ -7776,7 +7838,7 @@ async fn agent_bridge_plumbs_endpoint_url_through_session_envelopes() {
         "schema_id": "cx.schema.agent.v1",
         "actor_id": "did:web:alice.example",
         "actor_seq": 1u64,
-        "space_id": space_id,
+        "realm_id": DEMO_REALM_ID,
         "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
         "audience": "did:web:soland.local",
         "domain": "did:web:soland.local",
@@ -7825,7 +7887,7 @@ async fn agent_bridge_plumbs_endpoint_url_through_session_envelopes() {
         "schema_id": "cx.schema.agent.v1",
         "actor_id": "did:web:alice.example",
         "actor_seq": 2u64,
-        "space_id": space_id,
+        "realm_id": DEMO_REALM_ID,
         "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
         "audience": "did:web:soland.local",
         "domain": "did:web:soland.local",
@@ -7863,14 +7925,15 @@ async fn agent_bridge_plumbs_endpoint_url_through_session_envelopes() {
         let mut found = None;
         for _ in 0..50 {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-            let events: Value =
-                TestClient::get(format!("http://server/api/v1/events?space_id={space_id}"))
-                    .add_header("authorization", format!("Bearer {token}"), true)
-                    .send(&app_from_state(state.clone()))
-                    .await
-                    .take_json()
-                    .await
-                    .unwrap();
+            let events: Value = TestClient::get(format!(
+                "http://server/api/v1/events?realm_id={DEMO_REALM_ID}"
+            ))
+            .add_header("authorization", format!("Bearer {token}"), true)
+            .send(&app_from_state(state.clone()))
+            .await
+            .take_json()
+            .await
+            .unwrap();
             if let Some(arr) = events["events"].as_array() {
                 if let Some(e) = arr.iter().find(|e| {
                     e["event_kind"] == "cx.agent.protocol_session.result"
@@ -7884,13 +7947,15 @@ async fn agent_bridge_plumbs_endpoint_url_through_session_envelopes() {
         found.expect("result event never landed within 5s")
     };
 
-    let events: Value = TestClient::get(format!("http://server/api/v1/events?space_id={space_id}"))
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
+    let events: Value = TestClient::get(format!(
+        "http://server/api/v1/events?realm_id={DEMO_REALM_ID}"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
     let list = events["events"].as_array().expect("events array");
 
     let status_event = list
@@ -7982,11 +8047,8 @@ async fn snapshot_v2_multi_chunk_fixture_verifies_non_empty_audit_path() {
     // is included. Body is a deterministic ASCII pattern so the test is
     // reproducible run-to-run.
     //
-    // Note: snapshot's `messages` array comes from the legacy
-    // `persistence.messages()` MessageRecord store, populated by
-    // `POST /api/v1/messages/send`. Submitting events via
-    // `POST /api/v1/events` writes to the `canonical_events` store but
-    // doesn't populate MessageRecord, so it wouldn't grow the snapshot.
+    // Snapshot's `messages` array comes from the MessageRecord store, now
+    // populated by canonical `POST /api/v1/events` projection.
     let body_text: String = (0..40)
         .map(|i| {
             format!(
@@ -7997,19 +8059,16 @@ async fn snapshot_v2_multi_chunk_fixture_verifies_non_empty_audit_path() {
         .collect();
     let messages_to_submit = 80u64;
     for seq in 1..=messages_to_submit {
-        let resp: Value = TestClient::post("http://server/api/v1/messages/send")
-            .add_header("authorization", format!("Bearer {token}"), true)
-            .json(&serde_json::json!({
-                "space_id": space_id,
-                "thread_id": format!("cx:flow:multi-chunk-{:02}", seq % 4),
-                "content": {"body": body_text, "msgtype": "m.text", "seq": seq},
-                "encrypted": false,
-            }))
-            .send(&app_from_state(state.clone()))
-            .await
-            .take_json()
-            .await
-            .unwrap();
+        let resp = submit_message_event(
+            state.clone(),
+            &token,
+            "did:web:alice.example",
+            &space_id,
+            &format!("cx:flow:multi-chunk-{:02}", seq % 4),
+            serde_json::json!({"body": body_text, "msgtype": "m.text", "seq": seq}),
+            false,
+        )
+        .await;
         assert!(
             resp["event_id"].is_string(),
             "send failed at seq {seq}: {resp:?}"
@@ -8017,7 +8076,7 @@ async fn snapshot_v2_multi_chunk_fixture_verifies_non_empty_audit_path() {
     }
 
     let head: Value = TestClient::get(format!(
-        "http://server/api/v1/sync/snapshot-head?space_id={space_id}"
+        "http://server/api/v1/sync/snapshot-head?realm_id={space_id}"
     ))
     .send(&app_from_state(state.clone()))
     .await
@@ -8151,7 +8210,7 @@ async fn projection_persistence_write_through_mirrors_lifecycle_events() {
     let by_space = state
         .persistence
         .space_container_projections()
-        .list_for_space("cx:space:0196419b-0000-7000-8000-000000000000")
+        .list_for_space(DEMO_REALM_ID)
         .unwrap();
     assert!(
         by_space
@@ -8178,7 +8237,7 @@ async fn projection_persistence_write_through_mirrors_lifecycle_events() {
         serde_json::json!({
             "object": {
                 "id": flow_id,
-                "space_id": "cx:space:0196419b-0000-7000-8000-000000000000",
+                "space_id": DEMO_REALM_ID,
                 "title": "Persistent Flow",
                 "created_by": "did:web:alice.example",
             }
@@ -8240,7 +8299,7 @@ async fn projection_persistence_write_through_mirrors_lifecycle_events() {
         serde_json::json!({
             "object": {
                 "id": morph_id,
-                "space_id": "cx:space:0196419b-0000-7000-8000-000000000000",
+                "space_id": DEMO_REALM_ID,
                 "morph_type": "task",
                 "title": "Persistent Morph",
                 "created_by": "did:web:alice.example",

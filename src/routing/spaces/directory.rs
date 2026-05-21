@@ -106,7 +106,7 @@ async fn resolve_realm(
 ) -> JsonResult<ResolveRealmResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
-    if body.space_id.is_none()
+    if body.realm_id.is_none()
         && body.alias.is_none()
         && body.invite_token.is_none()
         && body.signed_link.is_none()
@@ -130,7 +130,7 @@ async fn resolve_realm(
             body.invite_token.as_deref(),
             body.signed_link.as_deref(),
         ) && (body
-            .space_id
+            .realm_id
             .as_deref()
             .is_some_and(|id| id == entry.realm_id.as_str())
             || invite_space_id

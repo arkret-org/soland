@@ -71,17 +71,17 @@ pub fn maybe_emit_agent_membership_change(
     let payload = json!({
         "notification_type": "agent_membership_change",
         "source_event_id": operation.operation_id.to_string(),
-        "space_id": operation.space_id.to_string(),
+        "space_id": operation.realm_id.to_string(),
         "preview": {
             "change_kind": change_kind,
             "agent_did": subject_did,
-            "source_space_id": operation.space_id.to_string(),
+            "source_space_id": operation.realm_id.to_string(),
             "source_flow_id": source_flow_id,
         }
     });
     let record = ProjectionEventRecord {
         event_id: synthetic_event_id,
-        space_id: operation.space_id.to_string(),
+        space_id: operation.realm_id.to_string(),
         event_kind: "cx.notification.agent_membership_change".to_owned(),
         operation_type: "agent_workspace_membership_change".to_owned(),
         operation_id: None,

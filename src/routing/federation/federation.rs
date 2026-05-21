@@ -23,7 +23,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use chrono::{DateTime, Duration, Utc};
 use contrix_sdk::state_res::AnchorStore;
-use contrix_sdk::{Anchor, SpaceId};
+use contrix_sdk::{Anchor, RealmId, SpaceId};
 use ed25519_dalek::Signer as _;
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
@@ -349,10 +349,10 @@ pub(super) async fn federation_space_members(
     depot: &mut Depot,
 ) -> JsonResult<contrix_sdk::FederationSpaceMembersResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let space_id_value = SpaceId::new(space_id.into_inner())
-        .map_err(|_| AppError::invalid_param("invalid space_id"))?;
+    let space_id_value = RealmId::new(space_id.into_inner())
+        .map_err(|_| AppError::invalid_param("invalid realm_id"))?;
     let members = state
-        .spaces
+        .realms
         .lock()
         .expect("spaces lock")
         .get(&space_id_value)

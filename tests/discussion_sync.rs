@@ -1,9 +1,13 @@
 use salvo::test::{ResponseExt, TestClient};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use soland::config::{AppConfig, ObjectStorageConfig};
 use soland::db::Db;
 use soland::service;
 use soland::state::AppState;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static TEST_EVENT_SEQ: AtomicU64 = AtomicU64::new(1_000);
 
 fn test_config() -> AppConfig {
     AppConfig {
@@ -113,19 +117,69 @@ async fn add_member(state: AppState, owner_token: &str, space_id: &str, member: 
 }
 
 async fn send_message(state: AppState, token: &str, space_id: &str, body: &str) {
-    let sent: Value = TestClient::post("http://server/api/v1/messages/send")
+    let payload = json!({
+        "flow_id": flow_id_for_realm(space_id),
+        "thread_id": space_id,
+        "content": { "body": body },
+        "encrypted": false,
+    });
+    let mut event = json!({
+        "event_id": contrix_sdk::new_prefixed_uuid7("cx:event:"),
+        "kind": "cx.message.create",
+        "schema_id": "cx.schema.message.v1",
+        "actor_id": "did:web:alice.example",
+        "actor_seq": TEST_EVENT_SEQ.fetch_add(1, Ordering::Relaxed),
+        "realm_id": space_id,
+        "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
+        "audience": "did:web:soland.local",
+        "domain": "did:web:soland.local",
+        "prev_refs": [],
+        "auth_refs": [],
+        "payload": payload,
+        "proofs": [{
+            "type": "dev-proof",
+            "verification_method": "did:web:alice.example#01904100-0000-7000-8000-a11ce0000001",
+            "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
+            "audience": "did:web:soland.local",
+            "domain": "did:web:soland.local",
+            "payload_hash": sha256_json(&payload)
+        }]
+    });
+    event["canonical_digest"] = Value::String(event_canonical_digest(&event));
+    let sent: Value = TestClient::post("http://server/api/v1/events")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&json!({
-            "space_id": space_id,
-            "content": { "body": body },
-            "encrypted": false,
-        }))
+        .json(&event)
         .send(&app_from_state(state))
         .await
         .take_json()
         .await
         .unwrap();
     assert!(sent["event_id"].is_string(), "send failed: {sent:?}");
+}
+
+fn sha256_json(value: &Value) -> String {
+    let bytes = contrix_sdk::canonical::canonical_json_bytes(value).expect("json canonicalizes");
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    format!("sha256:{:x}", hasher.finalize())
+}
+
+fn flow_id_for_realm(realm_id: &str) -> String {
+    realm_id
+        .strip_prefix("cx:realm:")
+        .map(|suffix| format!("cx:flow:{suffix}"))
+        .unwrap_or_else(|| "cx:flow:01904100-0000-7000-8000-f10dc0000001".to_owned())
+}
+
+fn event_canonical_digest(event: &Value) -> String {
+    let mut canonical = event.clone();
+    if let Value::Object(object) = &mut canonical {
+        object.remove("proofs");
+        object.remove("unsigned");
+        object.remove("canonical_digest");
+        object.remove("canonical_hash");
+    }
+    sha256_json(&canonical)
 }
 
 fn sync_bodies(sync: &Value, space_id: &str) -> Vec<String> {

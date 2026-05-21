@@ -16,7 +16,7 @@
 //!
 //! Spec: `contrix-spec/spec/v1/zh/authz/policy-server.md` §2.
 
-use contrix_sdk::{Operation, OperationId, SpaceId};
+use contrix_sdk::{Operation, OperationId, RealmId};
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -135,11 +135,11 @@ async fn put_realm_policy_server(
         payload["on_timeout"] = json!(on_timeout);
     }
 
-    let space_id = SpaceId::new(realm_id.clone())
+    let realm_scope = RealmId::new(realm_id.clone())
         .map_err(|e| AppError::invalid_param(format!("realm_id: {e}")))?;
     let op_id = OperationId::new(ids::generate_operation_id())
         .map_err(|e| AppError::invalid_param(format!("operation_id: {e}")))?;
-    let operation = Operation::create(op_id, space_id, CX_REALM_POLICY_SERVER, payload);
+    let operation = Operation::create(op_id, realm_scope, CX_REALM_POLICY_SERVER, payload);
     accept_local_operations(state, &session.actor, std::slice::from_ref(&operation))
         .map_err(reducer_reject_to_app_error)?;
 

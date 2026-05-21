@@ -3,8 +3,8 @@
 //! Surfaces:
 //! - `GET  /api/v1/events/describe`  — declare the active event registry, schema/reducer profiles,
 //!   and limits.
-//! - `POST /api/v1/events`           — submit one canonical Event Envelope or an
-//!   `events[]` / `envelopes[]` batch.
+//! - `POST /api/v1/events`           — submit one canonical Event Envelope,
+//!   an `events[]` batch, or a federation `service_binding_ref` + `events[]` batch.
 //! - `GET  /api/v1/events/{event_id}` — fetch one envelope.
 //! - `POST /api/v1/events/batch-get`  — fetch up to `MAX_EVENT_BATCH_GET`.
 //! - `GET  /api/v1/events`            — paginated list (filtered by actor / realm).
@@ -15,8 +15,11 @@
 
 use std::collections::BTreeMap;
 
-use chrono::{DateTime, Utc};
-use contrix_sdk::{Hlc, Operation, OperationId, RealmId, SpaceId, canonical};
+use chrono::{DateTime, Duration, Utc};
+use contrix_sdk::{
+    EventsSubmitFederationRequest, Hlc, Operation, OperationId, RealmId, SpaceId,
+    TypedTrustDomainId, canonical,
+};
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
@@ -37,7 +40,7 @@ use crate::wire::{
     EventBatchGetRequest, EventBatchGetResponse, EventDescribeResponse, EventReadResponse,
     EventSubmitResponse, EventsFrontierResBody, EventsPageResponse,
 };
-use crate::{artifacts, ids, kinds};
+use crate::{artifacts, kinds};
 
 pub(super) fn router() -> Router {
     Router::new()
@@ -87,9 +90,6 @@ async fn events_describe(depot: &mut Depot, res: &mut Response) {
                 "canonical_digest": "server-computed sha256 over Event Envelope JSON with proofs and unsigned removed",
                 "proof_payload_hash": "sha256 over Event Envelope JSON with proofs and unsigned removed"
             },
-            "legacy_aliases": {
-                "space_id": "accepted only as a migration alias for pre Realm/Space inversion clients"
-            },
             "causality": {
                 "actor_seq": "strictly increasing per actor",
                 "prev_refs": "must reference accepted events",
@@ -125,7 +125,7 @@ async fn events_describe(depot: &mut Depot, res: &mut Response) {
         capabilities: json!({
             "single_event_submit": true,
             "batch_submit": true,
-            "federation_submit": false,
+            "federation_submit": true,
             "batch_receipt": false,
             "read_by_event_id": true,
             "batch_get": true,
@@ -142,9 +142,6 @@ async fn events_describe(depot: &mut Depot, res: &mut Response) {
 #[endpoint]
 async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let Some(session) = auth_or_render(state, req, res) else {
-        return;
-    };
     let envelope = match req.parse_json::<Value>().await {
         Ok(body) => body,
         Err(_) => {
@@ -158,11 +155,18 @@ async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Response) 
         }
     };
     if envelope.get("service_binding_ref").is_some() {
+        submit_federation_events(state, req, envelope, res);
+        return;
+    }
+    let Some(session) = auth_or_render(state, req, res) else {
+        return;
+    };
+    if envelope.get("envelopes").is_some() {
         render_error(
             res,
-            StatusCode::FORBIDDEN,
-            "unsupported_feature",
-            "federation cx.events.submit requires service-signature admission and is not enabled on this handler",
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            "cx.events.submit batch/federation request uses events[], not envelopes[]",
         );
         return;
     }
@@ -182,251 +186,14 @@ async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Response) 
             res,
             StatusCode::BAD_REQUEST,
             "schema_violation",
-            "POST /api/v1/events batch body must be an object with events[] or envelopes[]",
+            "POST /api/v1/events batch body must be an object with events[]",
         );
         return;
     }
-    let Ok(raw_bytes) = serde_json::to_vec(&envelope) else {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "bad_json",
-            "event envelope cannot be encoded",
-        );
-        return;
-    };
-    if raw_bytes.len() > MAX_EVENT_BYTES {
-        render_error(
-            res,
-            StatusCode::PAYLOAD_TOO_LARGE,
-            "payload_too_large",
-            "event envelope exceeds max_event_bytes",
-        );
-        return;
+    match submit_event_value(state, &session, envelope) {
+        Ok(response) => res.render(Json(response)),
+        Err(error) => render_submit_one_error(res, error),
     }
-
-    let parsed = match validate_event_envelope(state, &session, &envelope) {
-        Ok(parsed) => parsed,
-        Err(error) => {
-            render_error(res, error.status, error.code, &error.message);
-            return;
-        }
-    };
-
-    let received_at = now();
-    let store = state.persistence.events();
-    if let Ok(Some(existing)) = store.get(&parsed.event_id) {
-        if existing.canonical_bytes == parsed.canonical_bytes {
-            let response = event_submit_response(
-                state,
-                "duplicate",
-                existing.event_id.clone(),
-                existing.canonical_digest.clone(),
-                existing.received_at,
-                true,
-            );
-            res.render(Json(response));
-            return;
-        }
-        append_audit_log(
-            state,
-            Some(&session.actor),
-            "events.submit",
-            json!({
-                "event_id": parsed.event_id,
-                "reason": "duplicate_conflict",
-                "canonical_digest": parsed.canonical_digest
-            }),
-            "duplicate_conflict",
-        );
-        render_error(
-            res,
-            StatusCode::CONFLICT,
-            "duplicate_conflict",
-            "event_id already exists with different canonical bytes",
-        );
-        return;
-    }
-    if let Ok(Some(max_seq)) = store.max_actor_seq(&parsed.actor_id)
-        && parsed.actor_seq <= max_seq
-    {
-        render_error(
-            res,
-            StatusCode::CONFLICT,
-            "cas_conflict",
-            "actor_seq must be strictly increasing for the actor",
-        );
-        return;
-    }
-    for prev_ref in &parsed.prev_refs {
-        if !store.contains(prev_ref).unwrap_or(false) {
-            render_error(
-                res,
-                StatusCode::CONFLICT,
-                "dependency_missing",
-                "prev_refs must reference accepted events",
-            );
-            return;
-        }
-    }
-    for authorized_ref in &parsed.authorized_refs {
-        if !store.contains(authorized_ref).unwrap_or(false) {
-            render_error(
-                res,
-                StatusCode::CONFLICT,
-                "dependency_missing",
-                "refs[role=authorized_by] must reference accepted authorization events",
-            );
-            return;
-        }
-    }
-
-    let projection_operation = projection_operation_from_event(&parsed, &envelope);
-    tracing::debug!(
-        event_id = %parsed.event_id,
-        kind = %parsed.kind,
-        realm_id = %parsed.realm_id,
-        space_id = ?parsed.space_id,
-        has_projection = projection_operation.is_some(),
-        "submit_event"
-    );
-    if let Some(operation) = projection_operation.as_ref() {
-        if let Err(message) = validate_operation_semantics(state, std::slice::from_ref(operation)) {
-            render_error(res, StatusCode::BAD_REQUEST, "schema_violation", message);
-            return;
-        }
-        if let Err(message) = validate_operation_policy(state, std::slice::from_ref(operation)) {
-            render_error(res, StatusCode::FORBIDDEN, "capability_denied", message);
-            return;
-        }
-        // `cx.profile.agent_workspace.v1`: cx.content.mention_redirect MUST
-        // carry a critical_extensions[] declaration with feature id
-        // `cx.feature.mention_redirect.v1` and fail_closed=true.
-        // Spec: agent-workspace-profile.md §8.1.
-        if let Some(content) = operation.payload.get("content") {
-            if let Some(feature_id) =
-                events_operations::agent_workspace_required_feature_id(content)
-            {
-                let envelope_satisfies = envelope
-                    .pointer("/requirements/critical_extensions")
-                    .and_then(Value::as_array)
-                    .map(|arr| {
-                        arr.iter().any(|ext| {
-                            ext.get("id").and_then(Value::as_str) == Some(feature_id)
-                                && ext.get("fail_closed").and_then(Value::as_bool) == Some(true)
-                        })
-                    })
-                    .unwrap_or(false);
-                if !envelope_satisfies {
-                    render_error(
-                        res,
-                        StatusCode::BAD_REQUEST,
-                        "schema_violation",
-                        "cx.content.mention_redirect requires requirements.critical_extensions[] entry with fail_closed=true",
-                    );
-                    return;
-                }
-            }
-        }
-        // Server-side state-machine preflight for cx.space.* container,
-        // cx.flow.* and cx.morph.* lifecycle events. Reject invalid transitions with
-        // HTTP 412 before persisting per contrix-spec common-fields.md §5.1.
-        // Flow / Morph have no tombstone, so only update / archive / restore
-        // reject paths surface here as create is unconditional.
-        if let Ok(proj) = state.projection.lock() {
-            if let Err(reason) = proj.check_space_container_lifecycle_transition(operation) {
-                render_error(res, StatusCode::PRECONDITION_FAILED, reason, reason);
-                return;
-            }
-            if let Err(reason) = proj.check_flow_lifecycle_transition(operation) {
-                render_error(res, StatusCode::PRECONDITION_FAILED, reason, reason);
-                return;
-            }
-            if let Err(reason) = proj.check_morph_lifecycle_transition(operation) {
-                render_error(res, StatusCode::PRECONDITION_FAILED, reason, reason);
-                return;
-            }
-            // `cx.redaction` targeting a Flow / Morph via `object_ref` is
-            // rejected if the target is already terminal per spec
-            // common-fields.md §5.1 (`<kind>_already_terminal`).
-            if let Err(reason) = proj.check_redaction_target_transition(operation) {
-                render_error(res, StatusCode::PRECONDITION_FAILED, reason, reason);
-                return;
-            }
-            // `cx.flow.tracks.update` follows the spec §5.1
-            // update-on-non-active rule: parent Flow MUST be Active or
-            // the admission rejects with `flow_not_active` (mirrors the
-            // SDK reducer guard so client + server agree).
-            if let Err(reason) = proj.check_flow_tracks_transition(operation) {
-                render_error(res, StatusCode::PRECONDITION_FAILED, reason, reason);
-                return;
-            }
-        }
-    }
-    // Clone the envelope before passing to store.put — the bootstrap
-    // branch below still needs to read payload.object.* for
-    // cx.realm.create. Negligible cost: the envelope is already in
-    // memory and the alternative is fetching it back out of the
-    // store, which serialises through I/O.
-    let envelope_for_bootstrap = envelope.clone();
-    if let Err(error) = store.put(CanonicalEventRecord {
-        event_id: parsed.event_id.clone(),
-        actor_id: parsed.actor_id.clone(),
-        actor_seq: parsed.actor_seq,
-        space_id: parsed.space_id.clone(),
-        kind: parsed.kind.clone(),
-        schema_id: parsed.schema_id.clone(),
-        canonical_digest: parsed.canonical_digest.clone(),
-        canonical_bytes: parsed.canonical_bytes.clone(),
-        envelope,
-        received_at,
-    }) {
-        tracing::error!(%error, "failed to persist canonical event");
-        render_error(
-            res,
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "internal_error",
-            "events store unavailable",
-        );
-        return;
-    }
-    if let Some(operation) = projection_operation {
-        project_accepted_operations(state, &parsed.actor_id, &[operation]);
-    }
-    // Spec realm-and-space.md §2.6 — `cx.realm.create` commit MUST
-    // atomically seed the creator into the Realm's member set so
-    // facet events from the same actor that arrive afterwards (even
-    // in the same client batch) pass the regular realm_has_member
-    // check. The validator above already lets the create event through
-    // without the check; here we make sure subsequent events see a
-    // populated index.
-    if parsed.kind == "cx.realm.create"
-        && let Some(space_id_str) = parsed.space_id.as_deref()
-        && let Some(envelope_object) = envelope_for_bootstrap.as_object()
-    {
-        bootstrap_realm_member_index(state, space_id_str, &parsed.actor_id, envelope_object);
-    }
-    append_audit_log(
-        state,
-        Some(&session.actor),
-        "events.submit",
-        json!({
-            "event_id": parsed.event_id.clone(),
-            "realm_id": parsed.realm_id.clone(),
-            "space_id": parsed.space_id.clone(),
-            "kind": parsed.kind.clone(),
-            "canonical_digest": parsed.canonical_digest.clone()
-        }),
-        "accepted",
-    );
-    res.render(Json(event_submit_response(
-        state,
-        "accepted",
-        parsed.event_id,
-        parsed.canonical_digest,
-        received_at,
-        false,
-    )));
 }
 
 #[endpoint(
@@ -520,9 +287,7 @@ pub(super) async fn events_query_durable_scope_impl(
     session: &SessionRecord,
     req: &Request,
 ) -> Result<EventsPageResponse, AppError> {
-    // Repeated query-arg selector: `actors[]` ∪ `realms[]` (with
-    // `spaces[]` accepted as a legacy alias through the Realm/Space
-    // rename window).
+    // Repeated query-arg selector: `actors[]` ∪ `realms[]`.
     let mut actors = query_param_all(req, "actors");
     if let Some(single) = query_param(req, "actor").or_else(|| query_param(req, "actor_id")) {
         if !actors.contains(&single) {
@@ -530,8 +295,7 @@ pub(super) async fn events_query_durable_scope_impl(
         }
     }
     let mut spaces = query_param_all(req, "realms");
-    spaces.extend(query_param_all(req, "spaces"));
-    if let Some(single) = query_param(req, "realm_id").or_else(|| query_param(req, "space_id")) {
+    if let Some(single) = query_param(req, "realm_id") {
         if !spaces.contains(&single) {
             spaces.push(single);
         }
@@ -542,9 +306,7 @@ pub(super) async fn events_query_durable_scope_impl(
         }
     }
     for space in &mut spaces {
-        if let Some(internal_space_id) = realm_id_to_internal_space_id(space) {
-            *space = internal_space_id;
-        } else if validate_space_id(space).is_err() {
+        if RealmId::new(space.clone()).is_err() {
             return Err(AppError::invalid_param(format!("invalid realm: {space}")));
         }
     }
@@ -660,12 +422,9 @@ async fn events_frontier(
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req)?;
     let actor_id = query_param(req, "actor_id").or_else(|| query_param(req, "actor"));
-    let realm_selector = query_param(req, "realm_id").or_else(|| query_param(req, "space_id"));
+    let realm_selector = query_param(req, "realm_id");
     let internal_space_selector = match realm_selector.as_deref() {
-        Some(value) if RealmId::new(value.to_owned()).is_ok() => {
-            realm_id_to_internal_space_id(value)
-        }
-        Some(value) if validate_space_id(value).is_ok() => Some(value.to_owned()),
+        Some(value) if RealmId::new(value.to_owned()).is_ok() => Some(value.to_owned()),
         Some(_) => return Err(AppError::invalid_param("invalid realm_id")),
         None => None,
     };
@@ -892,14 +651,14 @@ fn render_submit_one_error(res: &mut Response, error: SubmitOneError) {
 }
 
 fn batch_envelopes_from_submit_body(body: &Value) -> Result<Option<Vec<Value>>, SubmitOneError> {
-    let Some(envelopes_value) = body.get("envelopes").or_else(|| body.get("events")) else {
+    let Some(envelopes_value) = body.get("events") else {
         return Ok(None);
     };
     let Some(envelopes) = envelopes_value.as_array() else {
         return Err(SubmitOneError::new(
             StatusCode::BAD_REQUEST,
             "schema_violation",
-            "events submit batch requires events[] or envelopes[] array",
+            "events submit batch requires events[] array",
         ));
     };
     if envelopes.is_empty() {
@@ -954,6 +713,216 @@ fn submit_event_batch(
     } else {
         "accepted"
     };
+    res.render(Json(json!({
+        "status": status,
+        "accepted": accepted,
+        "duplicate": duplicate,
+        "rejected": rejected,
+        "cursor": super::sync::sync_token_for_state(state),
+    })));
+}
+
+fn submit_federation_events(
+    state: &AppState,
+    req: &Request,
+    body: Value,
+    res: &mut Response,
+) {
+    let Some(object) = body.as_object() else {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            "federation cx.events.submit body must be an object",
+        );
+        return;
+    };
+    for key in object.keys() {
+        if !matches!(key.as_str(), "service_binding_ref" | "events" | "idempotency_key") {
+            render_error(
+                res,
+                StatusCode::BAD_REQUEST,
+                "schema_violation",
+                "federation cx.events.submit permits only service_binding_ref, events, and idempotency_key",
+            );
+            return;
+        }
+    }
+
+    let trust_headers = match crate::round4::FederationTrustHeaders::from_salvo_request(req) {
+        Ok(headers) => headers,
+        Err(violation) => {
+            render_error(
+                res,
+                StatusCode::BAD_REQUEST,
+                violation.error_code(),
+                &violation.message(),
+            );
+            return;
+        }
+    };
+    let expected_destination = match TypedTrustDomainId::new(state.config.trust_domain.clone()) {
+        Ok(value) => value,
+        Err(error) => {
+            tracing::error!(%error, "configured trust_domain failed typed validation");
+            render_error(
+                res,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                "service trust_domain is invalid",
+            );
+            return;
+        }
+    };
+    if trust_headers
+        .verify_destination(&expected_destination)
+        .is_err()
+    {
+        render_error(
+            res,
+            StatusCode::CONFLICT,
+            "cross_domain_replay_rejected",
+            "federation Destination-Trust-Domain header does not match this service",
+        );
+        return;
+    }
+    let request_hash = match canonical::canonical_sha256(&body) {
+        Ok(value) => value,
+        Err(error) => {
+            render_error(
+                res,
+                StatusCode::BAD_REQUEST,
+                "schema_violation",
+                &format!("federation request body is not canonical-hashable: {error}"),
+            );
+            return;
+        }
+    };
+    if request_hash != trust_headers.request_canonical_hash.as_str() {
+        render_error(
+            res,
+            StatusCode::CONFLICT,
+            "cross_domain_replay_rejected",
+            "Request-Canonical-Hash does not match the canonical request body",
+        );
+        return;
+    }
+
+    let submit = match serde_json::from_value::<EventsSubmitFederationRequest>(body) {
+        Ok(value) => value,
+        Err(error) => {
+            render_error(
+                res,
+                StatusCode::BAD_REQUEST,
+                "schema_violation",
+                &format!("invalid federation cx.events.submit shape: {error}"),
+            );
+            return;
+        }
+    };
+    if let Err((code, message)) = crate::round4::EventsSubmitRequest::validate_federation_binding(&submit) {
+        render_error(res, StatusCode::BAD_REQUEST, code, &message);
+        return;
+    }
+    if submit.events.is_empty() {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "missing_param",
+            "federation cx.events.submit must contain at least one event",
+        );
+        return;
+    }
+    if submit.events.len() > MAX_EVENT_BATCH_GET {
+        render_error(
+            res,
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "payload_too_large",
+            "federation cx.events.submit exceeds max batch size",
+        );
+        return;
+    }
+
+    let binding_realm = submit.service_binding_ref.realm_id.as_str().to_owned();
+    let mut accepted = Vec::new();
+    let mut duplicate = Vec::new();
+    let mut rejected = Vec::new();
+    let created_at = now();
+    let source_trust_domain = trust_headers.source_trust_domain.as_str().to_owned();
+
+    for envelope in submit.events {
+        let id = event_string_field_from_value(&envelope, "event_id")
+            .unwrap_or_else(|| "unknown".to_owned());
+        let event_realm = event_string_field_from_value(&envelope, "realm_id");
+        if event_realm.as_deref() != Some(binding_realm.as_str()) {
+            rejected.push(json!({
+                "id": id,
+                "reason_code": "schema_violation",
+                "detail": "event realm_id must match service_binding_ref.realm_id",
+            }));
+            continue;
+        }
+        let Some(actor) = event_string_field_from_value(&envelope, "actor_id") else {
+            rejected.push(json!({
+                "id": id,
+                "reason_code": "missing_param",
+                "detail": "actor_id is required",
+            }));
+            continue;
+        };
+        if validate_did(&actor).is_err() {
+            rejected.push(json!({
+                "id": id,
+                "reason_code": "invalid_param",
+                "detail": "actor_id must be a DID",
+            }));
+            continue;
+        }
+        let session = SessionRecord {
+            token_hash: format!("federation:{source_trust_domain}:{}", request_hash),
+            actor,
+            device_id: format!("federation:{source_trust_domain}"),
+            audience: state.config.service_did.clone(),
+            expires_at: created_at + Duration::minutes(5),
+            created_at,
+            revoked_at: None,
+        };
+        match submit_event_value(state, &session, envelope) {
+            Ok(response) => {
+                accepted.push(response.event_id.clone());
+                if response.status == "duplicate" {
+                    duplicate.push(response.event_id);
+                }
+            }
+            Err(error) => rejected.push(json!({
+                "id": id,
+                "reason_code": error.code,
+                "detail": error.message,
+            })),
+        }
+    }
+
+    let status = if !rejected.is_empty() {
+        "partial"
+    } else if accepted.len() == duplicate.len() && !duplicate.is_empty() {
+        "duplicate"
+    } else {
+        "accepted"
+    };
+    append_audit_log(
+        state,
+        None,
+        "events.submit.federation",
+        json!({
+            "realm_id": binding_realm,
+            "source_trust_domain": source_trust_domain,
+            "request_canonical_hash": request_hash,
+            "accepted": accepted,
+            "duplicate": duplicate,
+            "rejected_count": rejected.len()
+        }),
+        status,
+    );
     res.render(Json(json!({
         "status": status,
         "accepted": accepted,
@@ -1185,16 +1154,6 @@ fn submit_event_value(
     ))
 }
 
-fn realm_id_to_internal_space_id(realm_id: &str) -> Option<String> {
-    let uuid = ids::parse_typed_uuid(realm_id, "realm")?;
-    Some(ids::format_typed_uuid("space", &uuid))
-}
-
-fn legacy_space_id_to_realm_id(space_id: &str) -> Option<String> {
-    let uuid = ids::parse_typed_uuid(space_id, "space")?;
-    Some(ids::format_typed_uuid("realm", &uuid))
-}
-
 fn event_scope_ids(
     object: &serde_json::Map<String, Value>,
 ) -> Result<(String, String), EventValidationError> {
@@ -1206,38 +1165,14 @@ fn event_scope_ids(
                 "realm_id must use the cx:realm: typed prefix",
             ));
         }
-        let Some(internal_space_id) = realm_id_to_internal_space_id(&realm_id) else {
-            return Err(event_validation_error(
-                StatusCode::BAD_REQUEST,
-                "invalid_param",
-                "realm_id must use the cx:realm: typed prefix",
-            ));
-        };
-        return Ok((realm_id, internal_space_id));
+        return Ok((realm_id.clone(), realm_id));
     }
 
-    let space_id = event_string_field(object, &["space_id"]).ok_or_else(|| {
-        event_validation_error(
-            StatusCode::BAD_REQUEST,
-            "missing_param",
-            "realm_id is required",
-        )
-    })?;
-    if validate_space_id(&space_id).is_err() {
-        return Err(event_validation_error(
-            StatusCode::BAD_REQUEST,
-            "invalid_param",
-            "legacy space_id must use the cx:space: typed prefix",
-        ));
-    }
-    let realm_id = legacy_space_id_to_realm_id(&space_id).ok_or_else(|| {
-        event_validation_error(
-            StatusCode::BAD_REQUEST,
-            "invalid_param",
-            "legacy space_id must use the cx:space: typed prefix",
-        )
-    })?;
-    Ok((realm_id, space_id))
+    Err(event_validation_error(
+        StatusCode::BAD_REQUEST,
+        "missing_param",
+        "realm_id is required",
+    ))
 }
 
 fn validate_event_envelope(
@@ -2086,7 +2021,6 @@ fn validate_space_container_lifecycle_payload(payload: &Value) -> Result<(), Eve
     };
     let target = object
         .get("space_id")
-        .or_else(|| object.get("place_id"))
         .and_then(Value::as_str)
         .ok_or_else(|| {
             event_validation_error(
@@ -2688,7 +2622,7 @@ fn projection_operation_from_event(
     };
     let mut operation = Operation::create(
         operation_id,
-        space_id,
+        RealmId::new(space_id.to_string()).ok()?,
         parsed.kind.clone(),
         Value::Object(payload_object.clone()),
     );
@@ -2798,12 +2732,7 @@ fn canonical_realm_id_for_record(record: &CanonicalEventRecord) -> Option<String
         .get("realm_id")
         .and_then(Value::as_str)
         .map(ToOwned::to_owned)
-        .or_else(|| {
-            record
-                .space_id
-                .as_deref()
-                .and_then(legacy_space_id_to_realm_id)
-        })
+        .or_else(|| record.space_id.clone())
 }
 
 fn event_visible_to_session(

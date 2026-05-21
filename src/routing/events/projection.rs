@@ -175,7 +175,7 @@ pub fn projection_event_from_operation(
     let event_id = operation_event_id(operation);
     ProjectionEventRecord {
         event_id,
-        space_id: operation.space_id.to_string(),
+        space_id: operation.realm_id.to_string(),
         event_kind: kinds::canonical_kind_string(operation),
         operation_type: operation_type_string(operation),
         operation_id: Some(operation.operation_id.to_string()),
@@ -532,7 +532,6 @@ fn write_through_projection(state: &AppState, operation: &Operation) {
         let container_space_id_from_payload = operation
             .payload
             .get("space_id")
-            .or_else(|| operation.payload.get("place_id"))
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned);
         let container_space_id_from_object = operation
@@ -689,7 +688,7 @@ pub fn project_accepted_operations(state: &AppState, origin: &str, operations: &
     for operation in operations {
         tracing::debug!(
             kind = ?crate::kinds::canonical_kind_for_operation(operation),
-            space_id = %operation.space_id,
+            space_id = %operation.realm_id,
             origin = %origin,
             "project_accepted_operations"
         );
@@ -796,7 +795,7 @@ pub fn persist_projected_operation(
             .get("thread_id")
             .and_then(|value| value.as_str());
         let event_id_uuid = ids::typed_uuid_part_or_panic(&event_id);
-        let space_id_uuid = ids::typed_uuid_part_or_panic(operation.space_id.as_str());
+        let space_id_uuid = ids::typed_uuid_part_or_panic(operation.realm_id.as_str());
         let operation_id_uuid = ids::typed_uuid_part_or_panic(operation.operation_id.as_str());
         sql_query(
                 "INSERT INTO events (id, space_id, event_type, sender, thread_id, operation_id, payload, created_at) \
@@ -820,7 +819,7 @@ pub fn persist_projected_operation(
             .get("space_title")
             .or_else(|| operation.payload.get("title"))
             .and_then(|value| value.as_str())
-            .unwrap_or_else(|| operation.space_id.as_str());
+            .unwrap_or_else(|| operation.realm_id.as_str());
         let summary = operation
             .payload
             .get("space_summary")
@@ -842,7 +841,7 @@ pub fn persist_projected_operation(
                     "invite_only"
                 }
             });
-        let space_id_uuid = ids::typed_uuid_part_or_panic(operation.space_id.as_str());
+        let space_id_uuid = ids::typed_uuid_part_or_panic(operation.realm_id.as_str());
         let operation_id_uuid = ids::typed_uuid_part_or_panic(operation.operation_id.as_str());
         sql_query(
                 "INSERT INTO spaces (id, title, summary, owner, discoverability, payload, created_at, updated_at) \
@@ -922,7 +921,7 @@ pub fn persist_projected_operation(
 /// (we don't have HLC ordering on synthesized values yet); for full
 /// cas-register conflict semantics writes should go through Move/Anchor.
 pub fn project_read_receipt_policy(state: &AppState, operation: &Operation) {
-    let space_id = operation.space_id.clone();
+    let space_id = operation.realm_id.clone();
     let payload = match operation.payload.as_object() {
         Some(payload) => payload,
         None => return,
@@ -964,7 +963,7 @@ pub fn project_read_receipt_policy(state: &AppState, operation: &Operation) {
 }
 
 pub fn ensure_projected_space(state: &AppState, origin: &str, operation: &Operation) {
-    let Ok(space_id) = RealmId::new(operation.space_id.to_string()) else {
+    let Ok(space_id) = RealmId::new(operation.realm_id.to_string()) else {
         return;
     };
     let mut spaces = state.realms.lock().expect("spaces lock");
@@ -1064,7 +1063,7 @@ pub fn ensure_projected_space(state: &AppState, origin: &str, operation: &Operat
 }
 
 pub fn project_membership_operation(state: &AppState, origin: &str, operation: &Operation) {
-    let Ok(realm_id) = RealmId::new(operation.space_id.to_string()) else {
+    let Ok(realm_id) = RealmId::new(operation.realm_id.to_string()) else {
         return;
     };
     let membership = operation
@@ -1073,10 +1072,10 @@ pub fn project_membership_operation(state: &AppState, origin: &str, operation: &
         .and_then(|value| value.as_str());
     if kinds::canonical_kind_for_operation(operation) == Some(kinds::CX_SPACE_DESTROY) {
         let store = state.persistence.realm_meta();
-        if let Ok(Some(mut record)) = store.get(operation.space_id.as_str()) {
+        if let Ok(Some(mut record)) = store.get(operation.realm_id.as_str()) {
             record.deleted = true;
             record.updated_at = operation.created_at;
-            if let Err(error) = store.put(operation.space_id.as_str(), &record) {
+            if let Err(error) = store.put(operation.realm_id.as_str(), &record) {
                 tracing::warn!(%error, "failed to mark projected space deleted");
             }
         }
@@ -1100,7 +1099,7 @@ pub fn project_membership_operation(state: &AppState, origin: &str, operation: &
     tracing::debug!(
         membership = ?membership,
         member = %member,
-        space_id = %operation.space_id,
+        space_id = %operation.realm_id,
         origin = %origin,
         "project_membership_operation"
     );
@@ -1114,7 +1113,7 @@ pub fn project_membership_operation(state: &AppState, origin: &str, operation: &
                 .unwrap_or_default()
                 .into_iter()
                 .any(|existing| {
-                    existing.space_id == operation.space_id.as_str()
+                    existing.space_id == operation.realm_id.as_str()
                         && existing.invitee.as_deref() == Some(invitee.as_str())
                         && existing.status == "pending"
                 });
@@ -1122,12 +1121,12 @@ pub fn project_membership_operation(state: &AppState, origin: &str, operation: &
             let invite_id = ids::generate_invite_id();
             let invite_token = super::super::generate_invite_token(
                 &invite_id,
-                operation.space_id.as_str(),
+                operation.realm_id.as_str(),
                 invitee.as_str(),
             );
             let record = SpaceInviteRecord {
                 invite_id: invite_id.clone(),
-                space_id: operation.space_id.to_string(),
+                space_id: operation.realm_id.to_string(),
                 inviter: origin.to_owned(),
                 invitee: Some(invitee.as_str().to_owned()),
                 invite_token,
@@ -1139,7 +1138,7 @@ pub fn project_membership_operation(state: &AppState, origin: &str, operation: &
                 Ok(()) => tracing::info!(
                     %invite_id,
                     invitee = %invitee.as_str(),
-                    space_id = %operation.space_id,
+                    space_id = %operation.realm_id,
                     "projected seed-member invite via cx.member.state event"
                 ),
                 Err(error) => tracing::warn!(%error, "failed to project space invite"),
@@ -1147,7 +1146,7 @@ pub fn project_membership_operation(state: &AppState, origin: &str, operation: &
         } else {
             tracing::debug!(
                 invitee = %invitee.as_str(),
-                space_id = %operation.space_id,
+                space_id = %operation.realm_id,
                 "seed-invite skipped: already pending"
             );
         }
@@ -1166,7 +1165,7 @@ pub fn project_membership_operation(state: &AppState, origin: &str, operation: &
     }
     spaces.upsert(entry);
     drop(spaces);
-    touch_realm(state, operation.space_id.as_str());
+    touch_realm(state, operation.realm_id.as_str());
 }
 
 pub fn project_federated_message(state: &AppState, origin: &str, operation: &Operation) {
@@ -1200,7 +1199,7 @@ pub fn project_federated_message(state: &AppState, origin: &str, operation: &Ope
         .payload
         .get("thread_id")
         .and_then(|value| value.as_str())
-        .unwrap_or(operation.space_id.as_str())
+        .unwrap_or(operation.realm_id.as_str())
         .to_owned();
     let encrypted = operation
         .payload
@@ -1209,7 +1208,7 @@ pub fn project_federated_message(state: &AppState, origin: &str, operation: &Ope
         .unwrap_or(false);
     if let Err(error) = store.put(&MessageRecord {
         event_id,
-        space_id: operation.space_id.to_string(),
+        space_id: operation.realm_id.to_string(),
         sender,
         thread_id,
         content,

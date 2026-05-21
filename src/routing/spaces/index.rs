@@ -15,6 +15,7 @@
 //! mirrors what `directory` / `sync` expose so clients see a stable wire
 //! contract while the durable projection store lands.
 
+use contrix_sdk::RealmId;
 use salvo::oapi::extract::{JsonBody, QueryParam};
 use salvo::prelude::*;
 use serde_json::{Value, json};
@@ -39,7 +40,7 @@ const QUERY_FEATURES: &[&str] = &[
     "space_hierarchy",
     "debug_reducer_snapshot",
 ];
-const DEMO_SPACE_ID: &str = "cx:space:0196419b-0000-7000-8000-000000000000";
+const DEMO_REALM_ID: &str = "cx:realm:0196419b-0000-7000-8000-000000000000";
 const PERSONAL_BLOCKLIST_DATA_TYPES: &[&str] = &["cx.account.blocklist", "cx.account.blocklist.v1"];
 
 pub(super) fn router() -> Router {
@@ -284,14 +285,14 @@ fn value_is_sender(value: &Value, sender: &str) -> bool {
 #[endpoint]
 async fn index_inbox(depot: &mut Depot, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let flow_id = super::flow_id_from_space_id(DEMO_SPACE_ID);
+    let flow_id = super::flow_id_from_space_id(DEMO_REALM_ID);
     res.render(Json(json!({
         "service_did": state.config.service_did.clone(),
         "flows": [{
             "flow": {
                 "flow_id": flow_id,
                 "schema": "cx.schema.flow.v1",
-                "space_id": DEMO_SPACE_ID,
+                "realm_id": DEMO_REALM_ID,
                 "track": super::default_discussion_track(&flow_id, &flow_id),
             },
         }],
@@ -347,7 +348,7 @@ async fn index_search(body: JsonBody<Value>, depot: &mut Depot) -> JsonResult<Va
 
     if include_message || object_kinds.is_empty() {
         let candidate_spaces: Vec<String> = if space_id_filter.is_empty() {
-            vec![DEMO_SPACE_ID.to_owned()]
+            vec![DEMO_REALM_ID.to_owned()]
         } else {
             space_id_filter.iter().cloned().collect()
         };
@@ -392,7 +393,8 @@ async fn index_search(body: JsonBody<Value>, depot: &mut Depot) -> JsonResult<Va
     if include_space && results.len() < limit {
         results.push(json!({
             "kind": "space",
-            "object_id": DEMO_SPACE_ID,
+            "object_id": DEMO_REALM_ID,
+            "realm_id": DEMO_REALM_ID,
             "title": "Demo Space",
             "summary": format!("matched query `{query}`"),
             "score": 1.0,
@@ -429,7 +431,7 @@ async fn index_query(body: JsonBody<Value>, depot: &mut Depot) -> JsonResult<Val
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
     let space_ids = body
-        .get("space_ids")
+        .get("realm_ids")
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
@@ -568,8 +570,8 @@ async fn index_query(body: JsonBody<Value>, depot: &mut Depot) -> JsonResult<Val
     if results.is_empty() && space_id_filter.is_empty() && filter_text.is_none() {
         results.push(json!({
             "kind": "space",
-            "object_id": DEMO_SPACE_ID,
-            "space_id": DEMO_SPACE_ID,
+            "object_id": DEMO_REALM_ID,
+            "realm_id": DEMO_REALM_ID,
             "title": "Demo Space",
             "renderer": renderer,
             "facets": facets,
@@ -694,24 +696,24 @@ fn apply_index_sort(results: &mut [Value], sort: &Value) {
 #[endpoint(
     operation_id = "cx.extension.soland.index.debug_reducer",
     tags("index"),
-    summary = "Debug: dump recent reducer events for a Space"
+    summary = "Debug: dump recent reducer events for a Realm"
 )]
 async fn index_debug_reducer(
-    space_id: QueryParam<String, true>,
+    realm_id: QueryParam<String, true>,
     limit: QueryParam<usize, false>,
     depot: &mut Depot,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let space_id = space_id.into_inner();
-    if super::validate_space_id(&space_id).is_err() {
-        return Err(AppError::invalid_param("invalid space_id"));
+    let realm_id = realm_id.into_inner();
+    if RealmId::new(realm_id.clone()).is_err() {
+        return Err(AppError::invalid_param("invalid realm_id"));
     }
     let limit = limit.into_inner().unwrap_or(20).clamp(1, 200);
 
     let messages = state
         .persistence
         .messages()
-        .list_for_space(&space_id, limit)
+        .list_for_space(&realm_id, limit)
         .unwrap_or_default();
     let projection_events: Vec<Value> = messages
         .iter()
@@ -729,7 +731,7 @@ async fn index_debug_reducer(
 
     json_ok(json!({
         "service_did": state.config.service_did.clone(),
-        "space_id": space_id,
+        "realm_id": realm_id,
         "reducer_profile": "cx.reducer.v1",
         "schema_profiles": ["cx.schema.core.v1"],
         "frontier": {

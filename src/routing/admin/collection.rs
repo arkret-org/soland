@@ -268,7 +268,7 @@ fn admin_federation_items(state: &AppState) -> Vec<Value> {
             json!({
                 "kind": "federation_operation",
                 "operation_id": operation.operation_id,
-                "space_id": operation.space_id,
+                "space_id": operation.realm_id,
                 "operation_type": operation.operation_type,
                 "canonical_kind": kinds::canonical_kind_string(&operation),
                 "flow_id": flow_id_for_projection_event(&projected),

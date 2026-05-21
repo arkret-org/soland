@@ -87,7 +87,7 @@ pub fn maybe_emit_echo_status_for_session_start(
         .unwrap_or("")
         .to_owned();
     let params = body.get("params").cloned().unwrap_or(Value::Null);
-    let space_id_str = operation.space_id.to_string();
+    let space_id_str = operation.realm_id.to_string();
     let origin_owned = origin.to_owned();
 
     if let Some(bridge_url) = lookup_bridge_url(state, &applet_id) {

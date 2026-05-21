@@ -3,9 +3,7 @@ use std::collections::BTreeMap;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, Utc};
-use contrix_sdk::{
-    ClaimedProfileEntry, CompatSurfaceEntry, CompatSurfaceKind, ServerDescription,
-};
+use contrix_sdk::{ClaimedProfileEntry, CompatSurfaceEntry, CompatSurfaceKind, ServerDescription};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -378,7 +376,7 @@ pub struct ClientSyncRequest {
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct SetTypingRequest {
-    pub space_id: String,
+    pub realm_id: String,
     #[serde(default)]
     pub scope_id: Option<String>,
     #[serde(default)]
@@ -390,7 +388,7 @@ pub struct SetTypingRequest {
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct SetTypingResponse {
     pub ok: bool,
-    pub space_id: String,
+    pub realm_id: String,
     pub actor: String,
     pub typing: bool,
     pub expires_at: Option<DateTime<Utc>>,
@@ -412,8 +410,7 @@ pub struct DirectoryDescribeResBody {
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct ResolveRealmRequest {
-    #[serde(rename = "realm_id", alias = "space_id")]
-    pub space_id: Option<String>,
+    pub realm_id: Option<String>,
     pub alias: Option<String>,
     pub invite_token: Option<String>,
     pub signed_link: Option<String>,
@@ -702,9 +699,8 @@ pub struct SnapshotHeadResponse {
     /// download buffers before fetching.
     pub total_bytes: u64,
     /// Snapshot v2: signed commitment from the snapshot generator
-    /// binding `(generator_did, space_id, state_root, merkle_root,
-    /// chunk_count, total_bytes, chunk_bytes)`. Wire shape matches
-    /// `contrix_sdk::GeneratorProof`.
+    /// binding `(generator_did, realm_id, state_root, merkle_root,
+    /// chunk_count, total_bytes, chunk_bytes)`.
     pub generator_proof: Value,
 }
 
@@ -816,7 +812,7 @@ pub struct OkResBody {
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct ModerationReportReqBody {
-    pub space_id: String,
+    pub realm_id: String,
     pub target_ref: String,
     pub reason: String,
     pub reporter: String,
@@ -1569,7 +1565,6 @@ pub fn describe(
             "contacts.request".to_owned(),
             "contacts.respond".to_owned(),
             "space.lifecycle".to_owned(),
-            "messages.send".to_owned(),
             "schema.registry".to_owned(),
             "events.describe".to_owned(),
             "events.submit".to_owned(),

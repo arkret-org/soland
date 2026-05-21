@@ -3,15 +3,15 @@
 -- contrix-spec/spec/v1/zh/models/common-fields.md §5.1 (canonical
 -- state-transition table). soland's reducer maintains this in-memory
 -- (ProjectionState::flows / ProjectionState::morphs) and persists here
--- for restart durability. Mirror of the projection_places table from the
--- 20260515000000_place_projection migration; key difference is the state
+-- for restart durability. Mirror of the projection_space_containers table from the
+-- 20260515000000_space_container_projection migration; key difference is the state
 -- enum:
 --   - Flow / Morph: active / archived / deleted / redacted (per spec §5
 --     ObjectState row — Flow / Morph carry the redacted state but have
 --     no dedicated tombstone event; terminal state is reached via
 --     cx.redaction).
---   - Place uses {active, archived, tombstoned} (covered by the prior
---     migration; PlaceLifecycleState).
+--   - Space-container uses {active, archived, tombstoned} (covered by the prior
+--     migration; SpaceContainerLifecycleState).
 
 CREATE TABLE projection_flows (
     flow_id           TEXT PRIMARY KEY,

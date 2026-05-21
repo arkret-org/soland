@@ -7,7 +7,7 @@
 //! Both routes validate a `cx.reaction.add` / `cx.reaction.remove` operation
 //! and project it through the canonical projection layer.
 
-use contrix_sdk::{Operation, OperationId, SpaceId};
+use contrix_sdk::{Operation, OperationId, RealmId};
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde_json::json;
@@ -46,7 +46,7 @@ async fn add_reaction(
     });
     let operation = Operation::create(
         OperationId::new(operation_id.clone()).unwrap(),
-        SpaceId::new(body.space_id.clone()).unwrap(),
+        RealmId::new(body.space_id.clone()).unwrap(),
         kinds::CX_REACTION_ADD,
         payload,
     );
@@ -82,7 +82,7 @@ async fn remove_reaction(
     });
     let operation = Operation::create(
         OperationId::new(operation_id.clone()).unwrap(),
-        SpaceId::new(body.space_id.clone()).unwrap(),
+        RealmId::new(body.space_id.clone()).unwrap(),
         kinds::CX_REACTION_REMOVE,
         payload,
     );

@@ -8,7 +8,6 @@ pub(super) mod event_log;
 // facade can reuse the canonical space→flow mapping + projection-event
 // JSON shape when ingesting MIMI traffic into the Contrix timeline.
 pub(crate) mod flow;
-pub(super) mod messages;
 pub(super) mod operations;
 pub(crate) mod projection;
 pub(super) mod projection_query;
@@ -31,15 +30,13 @@ use super::{
     parse_snapshot_ref, prune_acked_device_messages, prune_expired_typing, query_param,
     query_param_all, realm_allows_plaintext_service, realm_discoverability,
     realm_event_visible_to_session, realm_has_member, realm_history_visibility,
-    realm_id_accessible, realm_scope_to_realm_id, realm_visible_to, render_error, sha256_hex,
-    snapshot_bundle_for_space, touch_realm, typing_ephemeral_for_space, validate_did,
-    validate_space_id,
+    realm_id_accessible, realm_visible_to, render_error, sha256_hex, snapshot_bundle_for_space,
+    touch_realm, typing_ephemeral_for_space, validate_did, validate_space_id,
 };
 
 pub fn router() -> Router {
     Router::new()
         .push(sync::router())
         .push(event_log::router())
-        .push(messages::router())
         .push(projection_query::router())
 }

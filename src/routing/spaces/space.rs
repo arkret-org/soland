@@ -15,7 +15,7 @@
 //! resolve "is this actor allowed to see / write to this Space?".
 
 use chrono::{DateTime, Duration, Utc};
-use contrix_sdk::{Did, Operation, OperationId, RealmId, SpaceId};
+use contrix_sdk::{Did, Operation, OperationId, RealmId};
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
@@ -23,10 +23,14 @@ use serde_json::{Value, json};
 
 use super::{
     AuthArgs, accept_local_operations, append_audit_log, generate_invite_token,
-    is_valid_discoverability, now, validate_did, validate_space_id,
+    is_valid_discoverability, now, validate_did,
 };
 use crate::error::{AppError, ErrorCode};
-use crate::state::{AppState, RealmDirectoryEntry, RealmMetaRecord, SessionRecord, SpaceInviteRecord};
+use crate::routing::events::projection::{append_projection_event, projection_event_json};
+use crate::state::{
+    AppState, ProjectionEventRecord, RealmDirectoryEntry, RealmMetaRecord, SessionRecord,
+    SpaceInviteRecord,
+};
 use crate::wire::{
     AcceptSpaceInviteRequest, AddSpaceMemberRequest, CreateSpaceInviteRequest, CreateSpaceRequest,
     SetSpacePolicyRequest, SpaceInviteResponse, SpaceLifecycleResponse, SpacePolicyResponse,
@@ -810,9 +814,7 @@ async fn export_space(
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req)?;
     let space_id = space_id.into_inner();
-    if validate_space_id(&space_id).is_err() {
-        return Err(AppError::invalid_param("invalid space_id"));
-    }
+    RealmId::new(space_id.clone()).map_err(|_| AppError::invalid_param("invalid realm_id"))?;
     if !space_id_accessible(state, &space_id, Some(&session)) {
         return Err(AppError::not_found("not found"));
     }
@@ -826,6 +828,7 @@ async fn export_space(
         .map(|event| {
             json!({
                 "event_id": event.event_id,
+                "realm_id": event.space_id,
                 "event_kind": event.event_kind,
                 "operation_type": event.operation_type,
                 "operation_id": event.operation_id,
@@ -841,7 +844,7 @@ async fn export_space(
         .map(|event| {
             json!({
                 "operation_id": event["operation_id"],
-                "space_id": event["space_id"],
+                "realm_id": event["realm_id"],
                 "object_type": event["event_kind"],
                 "operation_type": event["operation_type"],
                 "payload": event["payload"],
@@ -851,7 +854,7 @@ async fn export_space(
         .collect::<Vec<_>>();
     json_ok(json!({
         "schema": "cx.export.space.v1",
-        "space_id": space_id,
+        "realm_id": space_id,
         "generated_at": now(),
         "operations": operations,
         "events": events,
@@ -1321,12 +1324,19 @@ pub fn record_space_lifecycle_operation(
     space_id: &str,
     payload: serde_json::Value,
 ) -> contrix_sdk::Result<Option<String>> {
-    let Ok(space_id) = SpaceId::new(space_id.to_owned()) else {
-        return Ok(None);
+    let Ok(realm_id) = RealmId::new(space_id.to_owned()) else {
+        let kind = match payload.get("action").and_then(serde_json::Value::as_str) {
+            Some("create") => kinds::CX_SPACE_CREATE,
+            Some("destroy") | Some("delete") => kinds::CX_SPACE_DESTROY,
+            _ => kinds::CX_SPACE_UPDATE,
+        };
+        return Ok(Some(append_realm_projection_event(
+            state, actor, space_id, kind, payload,
+        )));
     };
     let operation = Operation::create(
         OperationId::new(ids::generate_operation_id()).expect("generated valid operation id"),
-        space_id,
+        realm_id,
         match payload.get("action").and_then(serde_json::Value::as_str) {
             Some("create") => kinds::CX_SPACE_CREATE,
             Some("destroy") | Some("delete") => kinds::CX_SPACE_DESTROY,
@@ -1353,16 +1363,52 @@ pub fn record_member_state_operation(
     if membership == "join" && payload.get("delivery_status").is_none() {
         payload["delivery_status"] = json!("unroutable");
     }
-    let Ok(space_id) = SpaceId::new(space_id.to_owned()) else {
-        return Ok(None);
+    let Ok(realm_id) = RealmId::new(space_id.to_owned()) else {
+        return Ok(Some(append_realm_projection_event(
+            state,
+            actor,
+            space_id,
+            kinds::CX_MEMBER_STATE,
+            payload,
+        )));
     };
     let operation = Operation::create(
         OperationId::new(ids::generate_operation_id()).expect("generated valid operation id"),
-        space_id,
+        realm_id,
         kinds::CX_MEMBER_STATE,
         payload,
     );
     accept_local_operations(state, actor, std::slice::from_ref(&operation))
         .map_err(|message| contrix_sdk::Error::Protocol(message.to_owned()))?;
     Ok(None)
+}
+
+fn append_realm_projection_event(
+    state: &AppState,
+    actor: &str,
+    realm_id: &str,
+    event_kind: &str,
+    payload: serde_json::Value,
+) -> String {
+    let operation_id = ids::generate_operation_id();
+    let event = ProjectionEventRecord {
+        event_id: operation_id.clone(),
+        space_id: realm_id.to_owned(),
+        event_kind: event_kind.to_owned(),
+        operation_type: "create".to_owned(),
+        operation_id: Some(operation_id.clone()),
+        sender: Some(actor.to_owned()),
+        payload,
+        created_at: now(),
+    };
+    let event_payload = projection_event_json(&event);
+    let _ = state
+        .event_broadcast
+        .send(crate::state::EventNotification::event(
+            event.space_id.clone(),
+            event.event_id.clone(),
+            event_payload,
+        ));
+    append_projection_event(state, event);
+    operation_id
 }
