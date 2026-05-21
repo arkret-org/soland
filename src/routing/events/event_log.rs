@@ -6,7 +6,7 @@
 //! - `POST /api/v1/events`           — submit one canonical Event Envelope,
 //!   an `events[]` batch, or a federation `service_binding_ref` + `events[]` batch.
 //! - `GET  /api/v1/events/{event_id}` — fetch one envelope.
-//! - `POST /api/v1/events/batch-get`  — fetch up to `MAX_EVENT_BATCH_GET`.
+//! - `POST /api/v1/events/resolve`    — fetch up to `MAX_EVENT_BATCH_GET`.
 //! - `GET  /api/v1/events`            — paginated list (filtered by actor / realm).
 //! - `GET  /api/v1/events/frontier`   — per-actor / per-realm frontier.
 //!
@@ -51,7 +51,7 @@ pub(super) fn router() -> Router {
                 .post(submit_event)
                 .get(super::sync::events_query),
         )
-        .push(Router::with_path("events/batch-get").post(batch_get_events))
+        .push(Router::with_path("events/resolve").post(resolve_events))
         .push(Router::with_path("events/frontier").get(events_frontier))
         .push(Router::with_path("events/{event_id}").get(get_event))
 }
@@ -128,7 +128,7 @@ async fn events_describe(depot: &mut Depot, res: &mut Response) {
             "federation_submit": true,
             "batch_receipt": false,
             "read_by_event_id": true,
-            "batch_get": true,
+            "resolve": true,
             "list_by_actor_or_realm": true,
             "list_by_actor_or_space": true,
             "frontier": true,
@@ -224,11 +224,11 @@ async fn get_event(
 }
 
 #[endpoint(
-    operation_id = "cx.events.batch_get",
+    operation_id = "cx.events.resolve",
     tags("events"),
     summary = "Fetch up to MAX_EVENT_BATCH_GET canonical Event Envelopes by event_id"
 )]
-async fn batch_get_events(
+async fn resolve_events(
     aa: AuthArgs,
     body: JsonBody<EventBatchGetRequest>,
     depot: &mut Depot,

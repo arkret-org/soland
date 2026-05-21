@@ -350,7 +350,7 @@ pub struct OutboundPushBridgeCacheInvalidateResponse {
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct SyncDescribeResBody {
+pub struct AccountDescribeResBody {
     pub service_did: String,
     pub supported_sync_profiles: Vec<String>,
     pub limits: Value,
@@ -359,15 +359,15 @@ pub struct SyncDescribeResBody {
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct ClientSyncRequest {
-    pub since: Option<String>,
+    pub after: Option<String>,
+    #[serde(default)]
+    pub catchup: Option<bool>,
     #[serde(default)]
     pub profile: Option<String>,
     #[serde(default)]
     pub renderer: Option<String>,
     #[serde(default)]
     pub facets: Vec<String>,
-    #[serde(default)]
-    pub timeout_ms: Option<u64>,
     #[serde(default)]
     pub filter: Option<Value>,
     #[serde(default)]

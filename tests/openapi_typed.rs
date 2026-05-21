@@ -520,15 +520,15 @@ async fn typed_describe_handlers_publish_response_schemas() {
     // Skip its operation_id assertion accordingly.
     //
     // Note: snapshot_head / snapshot_chunk get their operation_ids from
-    // the SOLAND_EXTENSION_OPERATIONS registry (`cx.sync.get_snapshot_head`
+    // the SOLAND_EXTENSION_OPERATIONS registry (`cx.snapshot.head`
     // / `cx.sync.get_snapshot_chunk`), not from my handler annotation.
     for operation_id in [
         "cx.events.get",
-        "cx.events.batch_get",
-        "cx.sync.account",
+        "cx.events.resolve",
+        "cx.account.subscribe",
         "cx.events.query",
         "cx.extension.soland.sync.backfill_gap",
-        "cx.sync.get_snapshot_head",
+        "cx.snapshot.head",
         "cx.extension.soland.sync.get_snapshot_chunk",
     ] {
         assert!(

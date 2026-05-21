@@ -16,7 +16,6 @@ use crate::wire::now;
 
 mod access;
 mod admin;
-mod agent_workspace;
 pub(crate) mod conformance;
 pub(crate) mod events;
 // G3.S9: extensions (applet manifest verifier, bot/ghost actor, TSP, sovereign enclave).
@@ -128,7 +127,6 @@ fn api_v1_router() -> Router {
         .push(access::router())
         .push(admin::router())
         .push(interop::router())
-        .push(agent_workspace::router())
         .push(conformance::router())
         // G3.S1: MLS / keys lifecycle — spec-canonical path is
         // `/api/v1/keys/keypackages/*` (see `mls::router`). Appended at
@@ -191,7 +189,7 @@ fn contrix_openapi_doc(router: &Router) -> OpenApi {
                 "events.submit": "cx.events.submit",
                 "events.query": "cx.events.query",
                 "events.subscribe": "cx.events.subscribe",
-                "sync.account": "cx.sync.account",
+                "account.subscribe": "cx.account.subscribe",
             }),
         )
         .add_extension(
@@ -340,11 +338,11 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "get one Event Envelope",
     ),
     (
-        "/api/v1/events/batch-get",
+        "/api/v1/events/resolve",
         PathItemType::Post,
         "events",
-        "cx.events.batch_get",
-        "get multiple Event Envelopes",
+        "cx.events.resolve",
+        "resolve Event Envelopes by id",
     ),
     (
         "/api/v1/events",
@@ -459,11 +457,18 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "verify federation actor",
     ),
     (
-        "/api/v1/sync",
-        PathItemType::Post,
-        "sync",
-        "cx.sync.account",
-        "account-aggregate sync",
+        "/api/v1/account/subscribe",
+        PathItemType::Get,
+        "account",
+        "cx.account.subscribe",
+        "account-aggregate subscribe",
+    ),
+    (
+        "/api/v1/account/describe",
+        PathItemType::Get,
+        "account",
+        "cx.account.describe",
+        "account aggregate describe",
     ),
     (
         "/api/v1/sync/typing",
@@ -480,10 +485,10 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "sync gap backfill (deployment-local)",
     ),
     (
-        "/api/v1/sync/snapshot-head",
+        "/api/v1/snapshot/head",
         PathItemType::Get,
-        "sync",
-        "cx.sync.get_snapshot_head",
+        "snapshot",
+        "cx.snapshot.head",
         "snapshot head",
     ),
     (

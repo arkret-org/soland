@@ -1,26 +1,26 @@
-//! Client sync + snapshot handlers + the cursor-helper machinery they share
+//! Account aggregate + snapshot handlers + the cursor-helper machinery they share
 //! with events and device-message modules.
 //!
 //! Surfaces for the current sync/event wire layout:
-//! - `GET  /api/v1/sync/describe`
-//! - `POST /api/v1/sync`                    — `cx.sync.account` (account-aggregate sync: timeline,
-//!   presence, typing, to_device). Renamed from `cx.sync.client_sync` — path unchanged.
+//! - `GET  /api/v1/account/describe`
+//! - `GET  /api/v1/account/subscribe`       — `cx.account.subscribe` (account-aggregate NDJSON:
+//!   timeline, presence, typing, to_device).
 //! - `POST /api/v1/sync/typing`             — `cx.sync.typing` (transient ephemeral)
 //! - `GET  /api/v1/events/subscribe`        — `cx.events.subscribe` (replaces `cx.sync.subscribe` /
-//!   `/api/v1/sync/subscribe`). Multi-space / multi-actor stream; frame `kind` field replaces
+//!   legacy sync subscribe). Multi-space / multi-actor stream; frame `kind` field replaces
 //!   `type`.
 //! - `GET  /api/v1/events`                  — `cx.events.query` (replaces `cx.events.list` +
 //!   `cx.sync.backfill` via `direction=forward|backward`).
 //! - `GET  /api/v1/sync/backfill/gap`       — `cx.sync.backfill_gap` (deployment-local; not in
 //!   spec)
-//! - `GET  /api/v1/sync/snapshot-head`
+//! - `GET  /api/v1/snapshot/head`
 //! - `GET  /api/v1/sync/snapshot-chunk`
 //!
 //! `SyncCursor`, `SyncCursorError`, `parse_and_validate_sync_cursor`,
 //! `decode_sync_cursor_value`, `sync_token_for_client_sync`, `sync_filter_hash`,
 //! `normalized_strings` is
 //! `pub` because sibling routing modules reuse them. They
-//! live here because the cursor lifecycle is anchored to `client_sync`.
+//! live here because the cursor lifecycle is anchored to account subscribe.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
@@ -50,17 +50,17 @@ use super::{
 use crate::reducer::ProjectionState;
 use crate::state::{AppState, PresenceRecord, ProjectionEventRecord, SessionRecord, TypingRecord};
 use crate::wire::{
-    BackfillResBody, ClientSyncRequest, SetTypingRequest, SetTypingResponse, SnapshotHeadResponse,
-    SyncDescribeResBody,
+    AccountDescribeResBody, BackfillResBody, ClientSyncRequest, SetTypingRequest,
+    SetTypingResponse, SnapshotHeadResponse,
 };
 
 pub(super) fn router() -> Router {
     Router::new()
-        .push(Router::with_path("sync/describe").get(sync_describe))
-        .push(Router::with_path("sync").post(client_sync))
+        .push(Router::with_path("account/describe").get(account_describe))
+        .push(Router::with_path("account/subscribe").get(account_subscribe))
         .push(Router::with_path("sync/typing").post(set_typing))
         .push(Router::with_path("sync/backfill/gap").get(sync_gap_backfill))
-        .push(Router::with_path("sync/snapshot-head").get(snapshot_head))
+        .push(Router::with_path("snapshot/head").get(snapshot_head))
         .push(Router::with_path("sync/snapshot-chunk").get(snapshot_chunk))
 }
 
@@ -79,9 +79,9 @@ fn normalize_scope_selectors(values: Vec<String>) -> Result<Vec<String>, crate::
 }
 
 #[endpoint]
-async fn sync_describe(depot: &mut Depot, res: &mut Response) {
+async fn account_describe(depot: &mut Depot, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
-    res.render(Json(SyncDescribeResBody {
+    res.render(Json(AccountDescribeResBody {
         service_did: state.config.service_did.clone(),
         supported_sync_profiles: vec![
             "initial".to_owned(),
@@ -105,21 +105,17 @@ async fn sync_describe(depot: &mut Depot, res: &mut Response) {
 }
 
 #[endpoint(
-    operation_id = "cx.sync.account",
+    operation_id = "cx.account.subscribe",
     tags("sync"),
-    summary = "Account-aggregate sync (timeline / presence / typing / to_device)"
+    summary = "Account-aggregate subscribe stream (timeline / presence / typing / to_device)"
 )]
-async fn client_sync(
-    body: salvo::oapi::extract::JsonBody<ClientSyncRequest>,
-    depot: &mut Depot,
-    req: &mut Request,
-) -> crate::result::JsonResult<Value> {
+async fn account_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let body = body.into_inner();
+    let body = account_subscribe_query(req);
     let session = authenticated_session(state, req).ok();
-    let since_cursor = if let Some(since) = body.since.as_deref() {
+    let since_cursor = if let Some(after) = body.after.as_deref() {
         match parse_and_validate_sync_cursor(
-            since,
+            after,
             state,
             session.as_ref(),
             body.profile.as_deref(),
@@ -130,25 +126,16 @@ async fn client_sync(
         ) {
             Ok(cursor) => cursor,
             Err(SyncCursorError::Expired) => {
-                return Err(crate::error::AppError::new(
-                    crate::error::ErrorCode::SyncTokenExpired,
-                    "cursor has expired",
-                ));
+                crate::error::ErrorCode::SyncTokenExpired.render(res, "cursor has expired");
+                return;
             }
             Err(SyncCursorError::Invalid(message)) => {
-                return Err(crate::error::AppError::invalid_param(message));
+                crate::error::ErrorCode::InvalidParam.render(res, &message);
+                return;
             }
-            Err(SyncCursorError::Mismatch(message)) => {
-                return Err(crate::error::AppError::new(
-                    crate::error::ErrorCode::CursorIntegrityInvalid,
-                    message,
-                ));
-            }
-            Err(SyncCursorError::Integrity(message)) => {
-                return Err(crate::error::AppError::new(
-                    crate::error::ErrorCode::CursorIntegrityInvalid,
-                    message,
-                ));
+            Err(SyncCursorError::Mismatch(message)) | Err(SyncCursorError::Integrity(message)) => {
+                crate::error::ErrorCode::CursorIntegrityInvalid.render(res, &message);
+                return;
             }
         }
     } else {
@@ -157,32 +144,17 @@ async fn client_sync(
     if let Some(presence) = body.set_presence.as_deref()
         && !matches!(presence, "online" | "offline" | "unavailable")
     {
-        return Err(crate::error::AppError::invalid_param(
-            "set_presence must be online, offline, or unavailable",
-        ));
-    }
-    if let Some(profile) = body.profile.as_deref()
-        && !matches!(
-            profile,
-            "initial" | "incremental" | "board" | "chat" | "topic"
-        )
-    {
-        return Err(crate::error::AppError::invalid_param(
-            "profile must be initial, incremental, board, chat, or topic",
-        ));
-    }
-    if let Some(renderer) = body.renderer.as_deref()
-        && !is_supported_view_renderer(renderer)
-    {
-        return Err(crate::error::AppError::invalid_param(
-            "renderer must be collection, timeline, graph, document, or composite",
-        ));
+        crate::error::ErrorCode::InvalidParam
+            .render(res, "set_presence must be online, offline, or unavailable");
+        return;
     }
 
     if let Some(presence) = body.set_presence.as_deref() {
-        let session = session.as_ref().ok_or_else(|| {
-            crate::error::AppError::unauthenticated("set_presence requires authentication")
-        })?;
+        let Some(session) = session.as_ref() else {
+            crate::error::ErrorCode::Unauthenticated
+                .render(res, "set_presence requires authentication");
+            return;
+        };
         if let Err(error) = state.persistence.presence().put(PresenceRecord {
             actor: session.actor.clone(),
             status: presence.to_owned(),
@@ -193,56 +165,62 @@ async fn client_sync(
     }
     prune_expired_typing(state);
 
-    // Long-poll: spec (`client-sync.md §2`) lets the server hold the
-    // request open until new data arrives or `timeout_ms` elapses.
-    // Capped server-side at 30s so a buggy client can't pin a worker.
-    // First snapshot is taken immediately; subsequent iterations sleep
-    // POLL_INTERVAL_MS between projection re-reads. On full sync
-    // (no `since`) we always return immediately because the client
-    // needs the initial space list regardless of "freshness".
-    const SERVER_LONG_POLL_CEILING_MS: u64 = 30_000;
-    const POLL_INTERVAL_MS: u64 = 100;
-    let client_timeout_ms = body.timeout_ms.unwrap_or(0);
-    let effective_timeout_ms = client_timeout_ms.min(SERVER_LONG_POLL_CEILING_MS);
-    let is_full_sync = body.since.is_none();
-    let deadline = tokio::time::Instant::now() + Duration::from_millis(effective_timeout_ms);
+    let response = build_sync_snapshot(state, session.as_ref(), &body, &since_cursor);
+    let cursor = response.cursor.clone();
+    let mut frames = vec![ndjson_line(&account_delta_frame(response))];
+    if body.catchup.unwrap_or(false) {
+        frames.push(ndjson_line(&json!({
+            "kind": "catchup_complete",
+            "cursor": cursor,
+        })));
+    }
 
-    loop {
-        let response = build_sync_snapshot(state, session.as_ref(), &body, &since_cursor);
-        let should_return = is_full_sync
-            || effective_timeout_ms == 0
-            || sync_snapshot_has_fresh_data(&response)
-            || tokio::time::Instant::now() >= deadline;
-        if should_return {
-            return crate::result::json_ok(sync_snapshot_response_json(response));
+    let body_stream = async_stream::stream! {
+        for frame in frames {
+            yield Ok::<Bytes, std::io::Error>(frame);
         }
-        let next_poll = tokio::time::Instant::now() + Duration::from_millis(POLL_INTERVAL_MS);
-        let wake = next_poll.min(deadline);
-        tokio::time::sleep_until(wake).await;
+    };
+    let _ = res.add_header("content-type", "application/x-ndjson", true);
+    res.stream(body_stream.boxed());
+}
+
+fn account_subscribe_query(req: &mut Request) -> ClientSyncRequest {
+    ClientSyncRequest {
+        after: query_param(req, "after"),
+        catchup: query_param(req, "catchup").and_then(|value| value.parse::<bool>().ok()),
+        profile: query_param(req, "profile"),
+        renderer: query_param(req, "renderer"),
+        facets: req.query::<Vec<String>>("facets").unwrap_or_default(),
+        filter: None,
+        set_presence: query_param(req, "set_presence"),
     }
 }
 
-fn sync_snapshot_response_json(response: contrix_sdk::model::SyncResBody) -> Value {
-    let mut value = serde_json::to_value(response).unwrap_or_else(|_| json!({}));
-    let cursor = value.get("cursor").cloned();
-    if let (Some(object), Some(cursor)) = (value.as_object_mut(), cursor) {
-        object
-            .entry("next_batch".to_owned())
-            .or_insert(cursor.clone());
-        object.entry("next_cursor".to_owned()).or_insert(cursor);
-        object
-            .entry("to_device".to_owned())
-            .or_insert_with(|| json!([]));
-    }
-    value
+fn account_delta_frame(response: contrix_sdk::model::SyncResBody) -> Value {
+    json!({
+        "kind": "delta",
+        "cursor": response.cursor,
+        "realms": {
+            "join": response.spaces,
+            "invite": {},
+            "knock": {},
+            "leave": response
+                .left_spaces
+                .into_iter()
+                .map(|id| (id, json!({})))
+                .collect::<BTreeMap<_, _>>(),
+        },
+        "to_device": {"events": response.to_device},
+        "device_lists": response.device_lists,
+        "account_data": {"events": response.account_data},
+        "presence": {"events": response.presence},
+        "notifications": response.notifications,
+        "partial": response.partial,
+    })
 }
 
-/// Build one snapshot of the account-aggregate sync response. Called
-/// repeatedly by the long-poll loop in [`client_sync`] until the
-/// snapshot has fresh data ([`sync_snapshot_has_fresh_data`]) or the
-/// poll deadline passes. Cheap enough to re-run every 100 ms in dev;
-/// every read takes a fresh lock on `state.realms` / `state.projection`
-/// so a concurrent writer's commit is observable on the next iteration.
+/// Build one snapshot of the account-aggregate sync response for the next
+/// `cx.account.subscribe` delta frame.
 fn build_sync_snapshot(
     state: &AppState,
     session: Option<&SessionRecord>,
@@ -266,16 +244,16 @@ fn build_sync_snapshot(
             })
             .collect()
     };
-    // Compute "left since last cursor" so incremental syncs can prune
-    // client-side caches without forcing a full `since=None` re-sync.
-    // On full sync (no `since` cursor → empty `since_cursor.positions`)
+    // Compute "left after last cursor" so incremental syncs can prune
+    // client-side caches without forcing a full account baseline.
+    // On full sync (no `after` cursor -> empty `since_cursor.positions`)
     // there is nothing to compare against; the client already treats
     // omission from `spaces` as authoritative there.
     let visible_space_ids: BTreeSet<&str> = visible_spaces
         .iter()
         .map(|(id, _, _, _, _)| id.as_str())
         .collect();
-    let left_spaces: Vec<String> = if body.since.is_some() {
+    let left_spaces: Vec<String> = if body.after.is_some() {
         since_cursor
             .positions
             .keys()
@@ -395,24 +373,6 @@ fn build_sync_snapshot(
         notifications: serde_json::Value::Null,
         partial: false,
     }
-}
-
-/// True when this snapshot is worth returning to the client before the
-/// long-poll deadline — new timeline events for at least one space,
-/// any queued to_device message, or a realm the viewer just lost
-/// access to. account_data is intentionally excluded because soland
-/// always hydrates the full actor scope; using it as a freshness
-/// signal would defeat the long-poll wait.
-fn sync_snapshot_has_fresh_data(response: &contrix_sdk::model::SyncResBody) -> bool {
-    if !response.to_device.is_empty() || !response.left_spaces.is_empty() {
-        return true;
-    }
-    response.spaces.values().any(|body| {
-        body.get("timeline")
-            .and_then(|timeline| timeline.get("events"))
-            .and_then(|events| events.as_array())
-            .is_some_and(|events| !events.is_empty())
-    })
 }
 
 fn timeline_events_for_space(
@@ -626,13 +586,6 @@ fn sync_timeline_message_record_json(message: &crate::state::MessageRecord) -> s
         "decryption_state": if message.encrypted { "opaque" } else { "cleartext" },
         "created_at": message.created_at,
     })
-}
-
-fn is_supported_view_renderer(renderer: &str) -> bool {
-    matches!(
-        renderer,
-        "collection" | "timeline" | "graph" | "document" | "composite"
-    )
 }
 
 #[derive(Debug, Default)]
@@ -1563,7 +1516,7 @@ async fn sync_gap_backfill(
 }
 
 #[endpoint(
-    operation_id = "cx.sync.get_snapshot_head",
+    operation_id = "cx.snapshot.head",
     tags("sync"),
     summary = "Read the snapshot-v2 head (manifest + chunk descriptors + merkle_root) for a Realm"
 )]

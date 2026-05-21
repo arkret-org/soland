@@ -1878,7 +1878,11 @@ mod agent_workspace_tests {
             "redirect_pair_id": "01964200-0000-7000-8000-aaaaaaaaaaaa"
         });
         let result = validate_content_block(&block);
-        assert!(result.is_ok(), "validate_content_block returned {:?}", result);
+        assert!(
+            result.is_ok(),
+            "validate_content_block returned {:?}",
+            result
+        );
     }
 
     #[test]
