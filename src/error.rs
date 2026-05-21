@@ -241,8 +241,8 @@ pub struct AppError {
     /// (`401` on missing token vs `403` on capability denial) sometimes need
     /// the override.
     pub status: Option<StatusCode>,
-    /// When set, overrides the wire-form `errcode` string. Use sparingly —
-    /// only for handlers that emit a non-canonical errcode downstream
+    /// When set, overrides the wire-form `error.code` string. Use sparingly -
+    /// only for handlers that emit a non-canonical code downstream
     /// clients (or tests) depend on (e.g. `unknown_schema`,
     /// `<kind>_not_active`, `batch_not_supported`). New code should prefer
     /// a canonical `ErrorCode` variant.
@@ -264,7 +264,7 @@ impl AppError {
         self
     }
 
-    /// Override the on-wire `errcode` string. See `wire_code_override` for
+    /// Override the on-wire `error.code` string. See `wire_code_override` for
     /// the rationale + caveats.
     pub fn with_wire_code(mut self, wire_code: impl Into<String>) -> Self {
         self.wire_code_override = Some(wire_code.into());
@@ -277,9 +277,9 @@ impl AppError {
         self.status.unwrap_or_else(|| error_http_status(self.code))
     }
 
-    /// Resolve the on-wire errcode string: explicit override first, then the
+    /// Resolve the on-wire `error.code` string: explicit override first, then the
     /// canonical mapping from the registry.
-    pub fn wire_errcode(&self) -> &str {
+    pub fn wire_code(&self) -> &str {
         self.wire_code_override
             .as_deref()
             .unwrap_or_else(|| self.code.as_str())
@@ -335,7 +335,7 @@ impl From<ErrorCode> for AppError {
 impl Writer for AppError {
     async fn write(self, _req: &mut Request, _depot: &mut Depot, res: &mut Response) {
         let status = self.http_status();
-        let wire = self.wire_errcode().to_owned();
+        let wire = self.wire_code().to_owned();
         render_error(res, status, &wire, &self.message);
     }
 }
@@ -344,7 +344,8 @@ impl EndpointOutRegister for AppError {
     fn register(components: &mut Components, operation: &mut Operation) {
         // Reuse `contrix_sdk::ErrorEnvelope` (already `ToSchema` under the
         // SDK's `salvo` feature) as the response body schema for every error
-        // status.  The wire representation is `{ errcode, error, retry_after_ms?, ... }`.
+        // status. The wire representation is the spec-canonical
+        // `{ ok: false, error: { code, message, ... }, request_id }`.
         let envelope_schema = <contrix_sdk::ErrorEnvelope as ToSchema>::to_schema(components);
         let response = |description: &'static str| {
             oapi::Response::new(description).add_content(

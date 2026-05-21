@@ -233,7 +233,7 @@ async fn realm_links_post_cycle_rejected_with_realm_link_cycle() {
     );
     let body: Value = r3.take_json().await.expect("error envelope is JSON");
     assert_eq!(
-        body["error"]["errcode"], "realm_link_cycle",
+        body["error"]["code"], "realm_link_cycle",
         "rejection MUST carry the spec reason code: {body}"
     );
 }
@@ -344,7 +344,7 @@ async fn realm_links_post_self_link_rejected() {
         .await;
     assert_eq!(r.status_code, Some(StatusCode::UNPROCESSABLE_ENTITY));
     let body: Value = r.take_json().await.expect("error envelope is JSON");
-    assert_eq!(body["error"]["errcode"], "realm_link_self_reference");
+    assert_eq!(body["error"]["code"], "realm_link_self_reference");
 }
 
 /// G3.S5 — effective-policy on a Realm with no

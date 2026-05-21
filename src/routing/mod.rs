@@ -908,10 +908,10 @@ async fn cors_preflight(res: &mut Response) {
 /// Catch-all handler under `/api/v1/*` and `/contrix/v1/*`.
 ///
 /// Per `contrix-spec/spec/v1/zh/sync/api-conventions.md` §10:
-/// * Unknown path → `404 Not Found` + JSON envelope `{"error":{"errcode":
+/// * Unknown path -> `404 Not Found` + JSON envelope `{"error":{"code":
 ///   "unrecognized_endpoint", ...}}`.
-/// * Known path, wrong method → `405 Method Not Allowed` + JSON envelope
-///   `{"error":{"errcode": "method_not_allowed", ...}}` AND the `Allow`
+/// * Known path, wrong method -> `405 Method Not Allowed` + JSON envelope
+///   `{"error":{"code": "method_not_allowed", ...}}` AND the `Allow`
 ///   response header MUST list the supported methods.
 ///
 /// Salvo's own 405 logic doesn't populate `Allow`, so we do the
@@ -2159,7 +2159,7 @@ mod framework_error_routing_tests {
         let body: Value = response.take_json().await.unwrap();
         assert_eq!(status, StatusCode::NOT_FOUND);
         assert_eq!(body["ok"], false);
-        assert_eq!(body["error"]["errcode"], "unrecognized_endpoint");
+        assert_eq!(body["error"]["code"], "unrecognized_endpoint");
     }
 
     /// End-to-end check that hitting a known `/api/v1/*` path with the
@@ -2188,7 +2188,7 @@ mod framework_error_routing_tests {
         let body: Value = response.take_json().await.unwrap();
         assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
         assert_eq!(body["ok"], false);
-        assert_eq!(body["error"]["errcode"], "method_not_allowed");
+        assert_eq!(body["error"]["code"], "method_not_allowed");
         // `/api/v1/events` supports POST (submit) + GET (query); the
         // `Allow` header must list them in canonical (`METHOD_HEADER_ORDER`)
         // order so it's stable across runs.

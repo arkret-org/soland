@@ -171,7 +171,7 @@ async fn spaces_delivery_binding_policy_legacy_path_returns_410_gone() {
     let body: Value = response.take_json().await.expect("error envelope is JSON");
     assert_eq!(body["ok"], false);
     assert_eq!(
-        body["error"]["errcode"], "realm_kind_renamed_in_v1",
+        body["error"]["code"], "realm_kind_renamed_in_v1",
         "legacy path must surface the rename reason code: {body}"
     );
 }

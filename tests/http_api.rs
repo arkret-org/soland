@@ -1175,7 +1175,7 @@ async fn events_describe_and_single_event_submit_work() {
         StatusCode::BAD_REQUEST
     );
     let unknown_schema_body: Value = unknown_schema_response.take_json().await.unwrap();
-    assert_eq!(unknown_schema_body["error"]["errcode"], "unknown_schema");
+    assert_eq!(unknown_schema_body["error"]["code"], "unknown_schema");
 
     let batch: Value = TestClient::post("http://server/api/v1/events/resolve")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -1238,7 +1238,7 @@ async fn events_describe_and_single_event_submit_work() {
         .await;
     assert_eq!(conflict.status_code.unwrap(), StatusCode::CONFLICT);
     let conflict_body: Value = conflict.take_json().await.unwrap();
-    assert_eq!(conflict_body["error"]["errcode"], "duplicate_conflict");
+    assert_eq!(conflict_body["error"]["code"], "duplicate_conflict");
 }
 
 #[tokio::test]
@@ -1671,7 +1671,7 @@ async fn sync_backfill_exposes_prev_cursor_and_limited_timeline_pages() {
     .await;
     assert_eq!(invalid_cursor.status_code.unwrap().as_u16(), 400);
     let invalid_cursor_body: Value = invalid_cursor.take_json().await.unwrap();
-    assert_eq!(invalid_cursor_body["error"]["errcode"], "invalid_cursor");
+    assert_eq!(invalid_cursor_body["error"]["code"], "invalid_cursor");
 }
 
 #[tokio::test]
@@ -2441,10 +2441,10 @@ async fn rate_limit_errors_use_standard_envelope_with_retry_after() {
 
     let limited: Value = second.take_json().await.unwrap();
     assert_eq!(limited["ok"], false);
-    assert_eq!(limited["error"]["errcode"], "rate_limited");
+    assert_eq!(limited["error"]["code"], "rate_limited");
     assert!(limited["error"]["retry_after_ms"].as_u64().unwrap() > 0);
     assert!(
-        limited["error"]["request_id"]
+        limited["request_id"]
             .as_str()
             .unwrap()
             .starts_with("cx:req:")
@@ -3077,7 +3077,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         .await;
     assert_eq!(expired.status_code.unwrap(), StatusCode::GONE);
     let expired_body: Value = expired.take_json().await.unwrap();
-    assert_eq!(expired_body["error"]["errcode"], "cursor_expired");
+    assert_eq!(expired_body["error"]["code"], "cursor_expired");
 
     let exported: Value = TestClient::get(format!("http://server/api/v1/spaces/{space_id}/export"))
         .add_header("authorization", format!("Bearer {alice}"), true)
@@ -3314,7 +3314,7 @@ async fn framework_errors_use_contrix_error_envelope() {
         .await
         .unwrap();
     assert_eq!(not_found["ok"], false);
-    assert_eq!(not_found["error"]["errcode"], "unrecognized_endpoint");
+    assert_eq!(not_found["error"]["code"], "unrecognized_endpoint");
 
     let method_not_allowed: Value = TestClient::post("http://server/api/v1/server/describe")
         .send(&app())
@@ -3323,7 +3323,7 @@ async fn framework_errors_use_contrix_error_envelope() {
         .await
         .unwrap();
     assert_eq!(method_not_allowed["ok"], false);
-    assert_eq!(method_not_allowed["error"]["errcode"], "method_not_allowed");
+    assert_eq!(method_not_allowed["error"]["code"], "method_not_allowed");
 }
 
 #[tokio::test]
@@ -3339,9 +3339,9 @@ async fn protected_endpoints_reject_query_auth_material() {
     assert_eq!(response.status_code.unwrap(), StatusCode::UNAUTHORIZED);
     let body: Value = response.take_json().await.unwrap();
     assert_eq!(body["ok"], false);
-    assert_eq!(body["error"]["errcode"], "unauthenticated");
+    assert_eq!(body["error"]["code"], "unauthenticated");
     assert_eq!(
-        body["error"]["error"],
+        body["error"]["message"],
         "auth material in query strings is not allowed"
     );
 }
@@ -5075,7 +5075,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
     .await;
     assert_eq!(blocked_blob.status_code.unwrap().as_u16(), 403);
     let body: Value = blocked_blob.take_json().await.unwrap();
-    assert_eq!(body["error"]["errcode"], "capability_denied");
+    assert_eq!(body["error"]["code"], "capability_denied");
 
     let mut range = TestClient::get(format!(
         "http://server/api/v1/blob/get?blob_ref={}&purpose=message_attachment",
@@ -5087,7 +5087,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
     .await;
     assert_eq!(range.status_code.unwrap().as_u16(), 403);
     let body: Value = range.take_json().await.unwrap();
-    assert_eq!(body["error"]["errcode"], "capability_denied");
+    assert_eq!(body["error"]["code"], "capability_denied");
 
     let bob = register_account(
         state.clone(),
@@ -5949,7 +5949,7 @@ async fn space_container_lifecycle_state_machine_returns_412_for_illegal_transit
         "restore on Active must yield HTTP 412 failed_precondition"
     );
     let body: Value = bad_restore_response.take_json().await.unwrap();
-    assert_eq!(body["error"]["errcode"], "place_not_archived");
+    assert_eq!(body["error"]["code"], "place_not_archived");
 
     // 3) cx.space.archive — legal (Active → Archived).
     let archive_event = signed_place_event(
@@ -6024,7 +6024,7 @@ async fn space_container_lifecycle_state_machine_returns_412_for_illegal_transit
         "tombstone-again on Tombstoned must yield HTTP 412 failed_precondition"
     );
     let body: Value = bad_tombstone_response.take_json().await.unwrap();
-    assert_eq!(body["error"]["errcode"], "place_already_terminal");
+    assert_eq!(body["error"]["code"], "place_already_terminal");
 
     // 7) cx.space.restore on Tombstoned → 412 place_not_archived (terminal
     // state cannot be revived even though tombstone-vs-restore are different
@@ -6046,7 +6046,7 @@ async fn space_container_lifecycle_state_machine_returns_412_for_illegal_transit
         412
     );
     let body: Value = bad_restore_terminal_response.take_json().await.unwrap();
-    assert_eq!(body["error"]["errcode"], "place_not_archived");
+    assert_eq!(body["error"]["code"], "place_not_archived");
 }
 
 /// Build a signed `cx.flow.*` event envelope for the Flow state-machine
@@ -6241,7 +6241,7 @@ async fn flow_morph_lifecycle_state_machine_returns_412_for_illegal_transitions(
         .await;
     assert_eq!(resp.status_code.unwrap().as_u16(), 412);
     let body: Value = resp.take_json().await.unwrap();
-    assert_eq!(body["error"]["errcode"], "flow_not_archived");
+    assert_eq!(body["error"]["code"], "flow_not_archived");
 
     // 3) flow archive — legal.
     let archive = signed_flow_event(
@@ -6276,7 +6276,7 @@ async fn flow_morph_lifecycle_state_machine_returns_412_for_illegal_transitions(
         .await;
     assert_eq!(resp.status_code.unwrap().as_u16(), 412);
     let body: Value = resp.take_json().await.unwrap();
-    assert_eq!(body["error"]["errcode"], "flow_not_active");
+    assert_eq!(body["error"]["code"], "flow_not_active");
 
     // 5) flow update on Archived → 412 flow_not_active.
     let bad_update = signed_flow_event(
@@ -6293,7 +6293,7 @@ async fn flow_morph_lifecycle_state_machine_returns_412_for_illegal_transitions(
         .await;
     assert_eq!(resp.status_code.unwrap().as_u16(), 412);
     let body: Value = resp.take_json().await.unwrap();
-    assert_eq!(body["error"]["errcode"], "flow_not_active");
+    assert_eq!(body["error"]["code"], "flow_not_active");
 
     // 6) flow restore — legal now.
     let good_restore = signed_flow_event(
@@ -6355,7 +6355,7 @@ async fn flow_morph_lifecycle_state_machine_returns_412_for_illegal_transitions(
         .await;
     assert_eq!(resp.status_code.unwrap().as_u16(), 412);
     let body: Value = resp.take_json().await.unwrap();
-    assert_eq!(body["error"]["errcode"], "morph_not_archived");
+    assert_eq!(body["error"]["code"], "morph_not_archived");
 
     // morph archive — legal.
     let morph_archive = signed_morph_event(
@@ -6390,7 +6390,7 @@ async fn flow_morph_lifecycle_state_machine_returns_412_for_illegal_transitions(
         .await;
     assert_eq!(resp.status_code.unwrap().as_u16(), 412);
     let body: Value = resp.take_json().await.unwrap();
-    assert_eq!(body["error"]["errcode"], "morph_not_active");
+    assert_eq!(body["error"]["code"], "morph_not_active");
 }
 
 /// Build a signed `cx.redaction` event envelope, used by round 14b to
@@ -6525,7 +6525,7 @@ async fn redaction_targeting_flow_morph_flips_to_redacted_and_rejects_terminal_r
         .await;
     assert_eq!(resp.status_code.unwrap().as_u16(), 412);
     let body: Value = resp.take_json().await.unwrap();
-    assert_eq!(body["error"]["errcode"], "flow_already_terminal");
+    assert_eq!(body["error"]["code"], "flow_already_terminal");
 
     // ── Morph path ───────────────────────────────────────────────────
 
@@ -6595,7 +6595,7 @@ async fn redaction_targeting_flow_morph_flips_to_redacted_and_rejects_terminal_r
         .await;
     assert_eq!(resp.status_code.unwrap().as_u16(), 412);
     let body: Value = resp.take_json().await.unwrap();
-    assert_eq!(body["error"]["errcode"], "morph_already_terminal");
+    assert_eq!(body["error"]["code"], "morph_already_terminal");
 }
 
 /// `cx.contacts.space.<space_id>` Space remarks: PUT → GET → /sync round-trip
@@ -7024,7 +7024,7 @@ async fn flow_tracks_update_rejected_when_parent_flow_archived() {
         .await;
     assert_eq!(resp.status_code.unwrap().as_u16(), 412);
     let body: Value = resp.take_json().await.unwrap();
-    assert_eq!(body["error"]["errcode"], "flow_not_active");
+    assert_eq!(body["error"]["code"], "flow_not_active");
 }
 
 /// `POST /api/v1/audit/user-action` accepts client-side user-action
@@ -7076,7 +7076,7 @@ async fn audit_user_action_endpoint_persists_session_actor_entries_and_rejects_c
         .await;
     assert_eq!(bad.status_code.unwrap().as_u16(), 403);
     let body: Value = bad.take_json().await.unwrap();
-    assert_eq!(body["error"]["errcode"], "capability_denied");
+    assert_eq!(body["error"]["code"], "capability_denied");
 
     // ── 4. missing actor / action → 400 ──────────────────────────────
     let mut missing_actor = TestClient::post("http://server/api/v1/audit/user-action")
@@ -7086,7 +7086,7 @@ async fn audit_user_action_endpoint_persists_session_actor_entries_and_rejects_c
         .await;
     assert_eq!(missing_actor.status_code.unwrap().as_u16(), 400);
     let body: Value = missing_actor.take_json().await.unwrap();
-    assert_eq!(body["error"]["errcode"], "invalid_param");
+    assert_eq!(body["error"]["code"], "invalid_param");
 
     let missing_action = TestClient::post("http://server/api/v1/audit/user-action")
         .add_header("authorization", format!("Bearer {token}"), true)

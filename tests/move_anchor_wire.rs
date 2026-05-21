@@ -1332,10 +1332,10 @@ async fn admin_get_cell_on_unknown_cell_returns_404_envelope() {
         .or(Some(&body))
         .expect("error envelope should be present");
     assert!(
-        envelope.get("errcode").is_some(),
+        envelope.get("code").is_some(),
         "404 body should be a canonical error envelope (got {body})"
     );
-    assert_eq!(envelope["errcode"], "not_found");
+    assert_eq!(envelope["code"], "not_found");
 }
 
 #[tokio::test]
@@ -1451,7 +1451,7 @@ async fn admin_get_cell_requires_bearer_token() {
     let body: Value = resp.take_json().await.unwrap();
     let envelope = body.get("error").or(Some(&body)).expect("envelope");
     assert!(
-        envelope.get("errcode").is_some(),
+        envelope.get("code").is_some(),
         "401 body should be a canonical error envelope (got {body})"
     );
 }
@@ -1474,7 +1474,7 @@ async fn admin_list_cells_requires_space_id_query_param() {
     );
     let body: Value = resp.take_json().await.unwrap();
     let envelope = body.get("error").or(Some(&body)).expect("envelope");
-    assert_eq!(envelope["errcode"], "missing_param");
+    assert_eq!(envelope["code"], "missing_param");
 }
 
 #[tokio::test]

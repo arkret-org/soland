@@ -169,10 +169,10 @@ async fn mls_lifecycle_end_to_end() {
     assert_eq!(collide_resp.status_code, Some(StatusCode::CONFLICT));
     let mut collide_resp = collide_resp;
     let collide_json: Value = collide_resp.take_json().await.unwrap();
-    // Error envelopes wrap the canonical errcode under `error.errcode`.
-    let collide_code = collide_json["error"]["errcode"]
+    // Error envelopes wrap the canonical code under `error.code`.
+    let collide_code = collide_json["error"]["code"]
         .as_str()
-        .or_else(|| collide_json["errcode"].as_str());
+        .or_else(|| collide_json["code"].as_str());
     assert_eq!(
         collide_code,
         Some("mls_keypackage_already_claimed"),

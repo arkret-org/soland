@@ -18,30 +18,19 @@ use salvo::prelude::*;
 use sha2::{Digest, Sha256};
 
 use crate::ids;
-use crate::wire::{ApiError, ApiErrorDetail};
-
 // ── HTTP helpers ────────────────────────────────────────────────────────────
 
 /// Render a Contrix-shaped error envelope and stamp the response status.
 ///
-/// Produces the flat Matrix/Palpo-style envelope:
-/// `{"ok": false, "error": {"errcode": <code>, "error": <message>,
-///  "request_id": <opaque>}}` — aligning with how downstream clients
-/// (sodmin, yougen, cotest) read errors via `body.error.errcode` /
-/// `body.error.error`.
+/// Produces the spec-canonical SDK envelope:
+/// `{"ok": false, "error": {"code": <code>, "message": <message>},
+///  "request_id": <opaque>}`.
 pub fn render_error(res: &mut Response, status: StatusCode, code: &str, message: &str) {
     let request_id = ids::generate_request_id();
     res.status_code(status);
-    res.render(Json(ApiError {
-        ok: false,
-        error: ApiErrorDetail {
-            errcode: code.to_owned(),
-            error: message.to_owned(),
-            request_id,
-            retry_after_ms: None,
-            details: std::collections::BTreeMap::new(),
-        },
-    }));
+    res.render(Json(
+        contrix_sdk::ErrorEnvelope::new(code, message).with_request_id(request_id),
+    ));
 }
 
 /// Pull a single query-string value, decoding `+` to space and any
