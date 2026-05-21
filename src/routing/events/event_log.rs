@@ -1986,6 +1986,35 @@ fn validate_event_schema_and_payload(
                 format!("event payload violates the registered payload schema: {error}"),
             )
         })?;
+    validate_realm_create_policy_constraints(kind, payload)?;
+    Ok(())
+}
+
+fn validate_realm_create_policy_constraints(
+    kind: &str,
+    payload: &Value,
+) -> Result<(), EventValidationError> {
+    if kind != kinds::CX_REALM_CREATE {
+        return Ok(());
+    }
+    let Some(object) = payload.get("object").and_then(Value::as_object) else {
+        return Ok(());
+    };
+    let history_visibility = object
+        .get("history_visibility")
+        .and_then(Value::as_str)
+        .unwrap_or("joined");
+    let encryption_profile = object
+        .get("encryption_profile")
+        .and_then(Value::as_str)
+        .unwrap_or("none");
+    if history_visibility == "world_readable" && encryption_profile != "none" {
+        return Err(event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "incompatible_history_with_encryption",
+            "world_readable history requires encryption_profile=none",
+        ));
+    }
     Ok(())
 }
 
@@ -2918,12 +2947,12 @@ mod proof_strictness_tests {
         assert_eq!(err.code, "missing_param");
         assert!(err.message.contains("hlc"));
 
-        object.insert("hlc".to_owned(), json!("019041000000-00000000-AABBCCDD"));
+        object.insert("hlc".to_owned(), json!("019041000000-0000-AABBCCDD"));
         let err = validate_event_time_fields(&state, &object)
             .expect_err("uppercase HLC is not canonical");
         assert_eq!(err.code, "invalid_param");
 
-        object.insert("hlc".to_owned(), json!("019041000000-00000000-aabbccdd"));
+        object.insert("hlc".to_owned(), json!("019041000000-0000-aabbccdd"));
         validate_event_time_fields(&state, &object).expect("canonical timestamps accepted");
     }
 
@@ -2996,6 +3025,47 @@ mod proof_strictness_tests {
         )
         .expect_err("flow.move without target/rank must fail payload validation");
         assert_eq!(err.code, "schema_violation");
+    }
+
+    #[test]
+    fn realm_create_rejects_world_readable_encrypted_history() {
+        let state = make_state(true);
+        let realm_id = "cx:realm:01904100-0000-7000-8000-a11ce0000001";
+        let envelope = json!({
+            "payload": {
+                "object": {
+                    "id": realm_id,
+                    "schema": "cx.schema.realm.v1",
+                    "title": "encrypted public history",
+                    "created_by_principal": "did:web:alice.example",
+                    "trust_domain": "cx:trust_domain:soland.local",
+                    "schema_refs": ["cx.schema.realm.v1"],
+                    "default_discoverability": "listed",
+                    "default_join_rule": "invite",
+                    "history_visibility": "world_readable",
+                    "encryption_profile": "mls_rfc9420",
+                    "security_class": "standard",
+                    "federation_policy": "restricted",
+                    "anchor_profile": "single_did",
+                    "hash_profile": "sha256",
+                    "anchorer": {
+                        "type": "single_did",
+                        "did": "did:web:alice.example"
+                    },
+                    "created_at": "2026-05-17T00:00:00Z"
+                }
+            }
+        });
+        let object = envelope.as_object().unwrap();
+        let err = validate_event_schema_and_payload(
+            &state,
+            "cx.realm.create",
+            "cx.schema.event.v1",
+            &envelope,
+            object,
+        )
+        .expect_err("encrypted world-readable Realm history must fail closed");
+        assert_eq!(err.code, "incompatible_history_with_encryption");
     }
 
     #[test]
