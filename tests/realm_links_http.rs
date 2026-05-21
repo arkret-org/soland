@@ -186,7 +186,7 @@ async fn realm_links_post_parent_then_effective_policy_walks_chain() {
 
 /// G3.S5 acceptance — cycle detection rejects a 3-realm `governed_by`
 /// triangle. A → B and B → C succeed; C → A closes the cycle and MUST
-/// be rejected with HTTP 422 + errcode `realm_link_cycle`.
+/// be rejected with HTTP 422 + `error.code` `realm_link_cycle`.
 #[tokio::test]
 async fn realm_links_post_cycle_rejected_with_realm_link_cycle() {
     let svc = app();
@@ -328,7 +328,7 @@ async fn realm_links_delete_recomputes_effective_policy() {
 }
 
 /// G3.S5 — self-link is rejected via the same 422 path used for cycle
-/// detection (different errcode, same HTTP shape).
+/// detection (different code, same HTTP shape).
 #[tokio::test]
 async fn realm_links_post_self_link_rejected() {
     let svc = app();

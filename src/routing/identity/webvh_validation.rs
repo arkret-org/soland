@@ -680,6 +680,6 @@ mod tests {
         // And the typed error envelope must surface 401 + the right code.
         let app: AppError = err.into();
         assert_eq!(app.http_status(), StatusCode::UNAUTHORIZED);
-        assert_eq!(app.wire_errcode(), "webvh_witness_signature_invalid");
+        assert_eq!(app.wire_code(), "webvh_witness_signature_invalid");
     }
 }
