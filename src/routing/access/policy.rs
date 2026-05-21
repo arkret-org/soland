@@ -14,21 +14,22 @@
 //! Production note: see `_todos.md` B9 (merge `policy_check` and `authz_check`
 //! into a single evaluator), B10 (obligation execution), B12 (cache TTL).
 
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use contrix_sdk::RealmId;
+use ed25519_dalek::Signer;
 use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;
 use serde_json::{Value, json};
 
-use super::{
-    is_valid_sha256_digest, now, sha256_hex, validate_canonical_json_value, validate_did,
-    validate_space_id,
-};
+use super::{is_valid_sha256_digest, now, sha256_hex, validate_canonical_json_value, validate_did};
 use crate::error::AppError;
 use crate::ids;
 use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::{AppState, PolicyDocumentRecord};
 use crate::wire::{
-    OkResBody, PolicyCheckReqBody, PolicyCheckResBody, PolicyDocumentResponse,
+    OkResBody, PolicyBinding, PolicyCheckReqBody, PolicyCheckResBody, PolicyDocumentResponse,
     PolicyDocumentsResponse, UpsertPolicyDocumentRequest,
 };
 
@@ -54,7 +55,7 @@ pub(super) fn contrix_router() -> Router {
 }
 
 #[endpoint(
-    operation_id = "cx.policies.list",
+    operation_id = "cx.extension.soland.policies.list",
     tags("policy"),
     summary = "List policy documents owned by the authenticated actor"
 )]
@@ -93,7 +94,7 @@ async fn list_policy_documents(
 }
 
 #[endpoint(
-    operation_id = "cx.policies.get",
+    operation_id = "cx.extension.soland.policies.get",
     tags("policy"),
     summary = "Read a single policy document by id"
 )]
@@ -118,7 +119,7 @@ async fn get_policy_document(
 }
 
 #[endpoint(
-    operation_id = "cx.policies.upsert",
+    operation_id = "cx.extension.soland.policies.upsert",
     tags("policy"),
     summary = "Idempotently create or replace a policy document"
 )]
@@ -206,7 +207,7 @@ pub struct PatchPolicyDocumentRequest {
 }
 
 #[endpoint(
-    operation_id = "cx.policies.patch",
+    operation_id = "cx.extension.soland.policies.patch",
     tags("policy"),
     summary = "Apply a cx.schema.patch.v1 patch to a policy document"
 )]
@@ -288,7 +289,7 @@ async fn patch_policy_document(
 }
 
 #[endpoint(
-    operation_id = "cx.policies.delete",
+    operation_id = "cx.extension.soland.policies.delete",
     tags("policy"),
     summary = "Delete a policy document by id"
 )]
@@ -328,10 +329,12 @@ async fn policy_check(
     if validate_did(&body.actor).is_err() {
         return Err(AppError::invalid_param("invalid actor"));
     }
-    if let Some(space_id) = &body.space_id
-        && validate_space_id(space_id).is_err()
+    if let Some(realm_id) = &body.realm_id
+        && RealmId::new(realm_id.clone()).is_err()
     {
-        return Err(AppError::invalid_param("invalid space_id"));
+        return Err(AppError::invalid_param(
+            "invalid realm_id (must match cx:realm:<uuid>)",
+        ));
     }
     if !is_valid_sha256_digest(&body.request_canonical_hash) {
         return Err(AppError::invalid_param(
@@ -357,6 +360,84 @@ async fn policy_check(
         } else {
             ("allow".to_owned(), "ok".to_owned(), None, Vec::new())
         };
+
+    // ── Frontier binding ───────────────────────────────────────────────
+    // The decision is pinned to a four-axis frontier so the caller (and
+    // any auditor replaying the response) can detect a stale decision
+    // once any of the four hashes move. All four hashes are sha256 hex
+    // over canonical JSON per `canonical_json_bytes`.
+    let bound_realm_id = body.realm_id.clone().unwrap_or_default();
+    let resource_value = body.event_preview.clone().unwrap_or(Value::Null);
+    let auth_state_value = json!({
+        "actor": body.actor,
+        "action": body.action,
+        "resource": resource_value,
+        "request_canonical_hash": body.request_canonical_hash,
+    });
+    let auth_state_hash = canonical_sha256_hex(&auth_state_value);
+
+    let mut policy_doc_ids: Vec<String> = state
+        .persistence
+        .policy_documents()
+        .list_for_owner(&body.actor)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|policy| policy.active)
+        .map(|policy| {
+            // Encode (policy_id, updated_at) so a policy mutation
+            // (`PATCH /policies/{id}`) shifts the frontier even if the
+            // policy_id set is unchanged.
+            format!("{}@{}", policy.policy_id, policy.updated_at.to_rfc3339())
+        })
+        .collect();
+    policy_doc_ids.sort();
+    let policy_frontier_value = json!({ "policy_documents": policy_doc_ids });
+    let policy_frontier_hash = canonical_sha256_hex(&policy_frontier_value);
+
+    let membership_frontier_value = if let Some(realm_id) = body.realm_id.as_deref() {
+        let mut members = collect_realm_member_dids(state, realm_id);
+        members.sort();
+        json!({ "realm_id": realm_id, "members": members })
+    } else {
+        let empty: Vec<String> = Vec::new();
+        json!({ "realm_id": Value::Null, "members": empty })
+    };
+    let membership_frontier_hash = canonical_sha256_hex(&membership_frontier_value);
+
+    let binding_expires_at = now() + chrono::Duration::hours(1);
+    let bound_to = PolicyBinding {
+        realm_id: bound_realm_id.clone(),
+        auth_state_hash: auth_state_hash.clone(),
+        policy_frontier_hash: policy_frontier_hash.clone(),
+        membership_frontier_hash: membership_frontier_hash.clone(),
+        expires_at: binding_expires_at,
+    };
+
+    // ── Detached JWS over canonical {decision, reason_code, bound_to,
+    // obligations} ──
+    let to_sign = json!({
+        "decision": decision,
+        "reason_code": reason_code,
+        "bound_to": {
+            "realm_id": bound_realm_id,
+            "auth_state_hash": auth_state_hash,
+            "policy_frontier_hash": policy_frontier_hash,
+            "membership_frontier_hash": membership_frontier_hash,
+            "expires_at": binding_expires_at.to_rfc3339(),
+        },
+        "obligations": obligations,
+    });
+    let canonical_bytes = contrix_sdk::canonical::canonical_json_bytes(&to_sign)
+        .unwrap_or_else(|_| serde_json::to_vec(&to_sign).unwrap_or_default());
+    let protected_header =
+        br#"{"alg":"EdDSA","typ":"cx.policy.check.binding.v1","b64":false,"crit":["b64"]}"#;
+    let protected_b64u = URL_SAFE_NO_PAD.encode(protected_header);
+    let payload_b64u = URL_SAFE_NO_PAD.encode(&canonical_bytes);
+    let signing_input = format!("{protected_b64u}.{payload_b64u}");
+    let signature = state.anchorer_signing_key().sign(signing_input.as_bytes());
+    let signature_b64u = URL_SAFE_NO_PAD.encode(signature.to_bytes());
+    let jws_detached = format!("{protected_b64u}..{signature_b64u}");
+
     json_ok(PolicyCheckResBody {
         decision,
         reason_code,
@@ -367,7 +448,7 @@ async fn policy_check(
             "request_id": body.request_id,
             "actor": body.actor,
             "action": body.action,
-            "space_id": body.space_id,
+            "realm_id": body.realm_id,
             "matched_policy": policy_id,
             "constraints": [],
             "obligations": obligations,
@@ -377,12 +458,49 @@ async fn policy_check(
                 "frontier": Value::Null
             }
         }),
+        bound_to,
         signature: json!({
-            "kid": format!("{}#policy-dev", state.config.service_did),
-            "alg": "none",
+            "kid": format!("{}#policy-binding-key", state.config.service_did),
+            "alg": "EdDSA",
+            "typ": "cx.policy.check.binding.v1",
+            "scheme": "ed25519-detached-jws",
+            "payload_digest": format!("sha256:{}", sha256_hex(&canonical_bytes)),
+            "jws": jws_detached,
             "sig": sha256_hex(body.request_canonical_hash.as_bytes())
         }),
     })
+}
+
+/// Canonical-JSON sha256 hex digest helper used to build each of the
+/// four `PolicyBinding` frontier hashes. Falls back to `serde_json`
+/// serialization if canonicalization fails (should not happen for the
+/// well-typed JSON shapes built inside `policy_check`).
+fn canonical_sha256_hex(value: &Value) -> String {
+    let bytes = contrix_sdk::canonical::canonical_json_bytes(value)
+        .unwrap_or_else(|_| serde_json::to_vec(value).unwrap_or_default());
+    sha256_hex(&bytes)
+}
+
+/// Snapshot the current member DID list for `realm_id`. Returns an
+/// empty Vec when the realm is unknown or marked deleted; callers fold
+/// the result into the `membership_frontier_hash` so the unknown-realm
+/// case still produces a stable, distinct hash from the populated one.
+fn collect_realm_member_dids(state: &AppState, realm_id: &str) -> Vec<String> {
+    let Ok(realm_id_typed) = RealmId::new(realm_id.to_owned()) else {
+        return Vec::new();
+    };
+    let realms = match state.realms.lock() {
+        Ok(guard) => guard,
+        Err(_) => return Vec::new(),
+    };
+    match realms.get(&realm_id_typed) {
+        Some(space) => space
+            .members
+            .iter()
+            .map(|did| did.as_str().to_owned())
+            .collect(),
+        None => Vec::new(),
+    }
 }
 
 pub fn policy_document_to_response(policy: &PolicyDocumentRecord) -> PolicyDocumentResponse {
@@ -445,15 +563,15 @@ fn matching_policy_decision(
 }
 
 fn policy_matches_check(policy: &PolicyDocumentRecord, request: &PolicyCheckReqBody) -> bool {
-    policy_scope_matches(&policy.scope, request.space_id.as_deref())
+    policy_scope_matches(&policy.scope, request.realm_id.as_deref())
         && policy_subject_matches(&policy.subject_ref, &request.actor)
         && (policy.policy_type == "*" || policy.policy_type == request.action)
         && policy_actions_match(&policy.payload["actions"], &request.action)
         && policy_resource_matches(&policy.payload["resource"], request)
 }
 
-fn policy_scope_matches(scope: &str, request_space_id: Option<&str>) -> bool {
-    scope == "*" || request_space_id == Some(scope)
+fn policy_scope_matches(scope: &str, request_realm_id: Option<&str>) -> bool {
+    scope == "*" || request_realm_id == Some(scope)
 }
 
 fn policy_subject_matches(subject_ref: &str, actor: &str) -> bool {
@@ -481,8 +599,10 @@ fn policy_resource_matches(resource: &Value, request: &PolicyCheckReqBody) -> bo
     if resource.is_empty() {
         return true;
     }
-    if let Some(space_id) = resource.get("space_id").and_then(|value| value.as_str())
-        && request.space_id.as_deref() != Some(space_id)
+    // Policy resources are Realm-scoped. The protocol no longer accepts
+    // legacy `space_id` constraints here.
+    if let Some(constraint_realm_id) = resource.get("realm_id").and_then(|value| value.as_str())
+        && request.realm_id.as_deref() != Some(constraint_realm_id)
     {
         return false;
     }
@@ -499,7 +619,7 @@ fn policy_resource_matches(resource: &Value, request: &PolicyCheckReqBody) -> bo
 }
 
 pub fn is_valid_policy_scope(value: &str) -> bool {
-    value == "*" || validate_space_id(value).is_ok()
+    value == "*" || RealmId::new(value.to_owned()).is_ok()
 }
 
 pub fn is_valid_policy_type(value: &str) -> bool {

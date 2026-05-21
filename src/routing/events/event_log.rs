@@ -17,8 +17,8 @@ use std::collections::BTreeMap;
 
 use chrono::{DateTime, Duration, Utc};
 use contrix_sdk::{
-    EventsSubmitFederationRequest, Hlc, Operation, OperationId, RealmId, SpaceId,
-    TypedTrustDomainId, canonical,
+    EventsSubmitFederationRequest, Hlc, Operation, OperationId, RealmId, TypedTrustDomainId,
+    canonical,
 };
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam};
@@ -722,12 +722,7 @@ fn submit_event_batch(
     })));
 }
 
-fn submit_federation_events(
-    state: &AppState,
-    req: &Request,
-    body: Value,
-    res: &mut Response,
-) {
+fn submit_federation_events(state: &AppState, req: &Request, body: Value, res: &mut Response) {
     let Some(object) = body.as_object() else {
         render_error(
             res,
@@ -738,7 +733,10 @@ fn submit_federation_events(
         return;
     };
     for key in object.keys() {
-        if !matches!(key.as_str(), "service_binding_ref" | "events" | "idempotency_key") {
+        if !matches!(
+            key.as_str(),
+            "service_binding_ref" | "events" | "idempotency_key"
+        ) {
             render_error(
                 res,
                 StatusCode::BAD_REQUEST,
@@ -820,7 +818,9 @@ fn submit_federation_events(
             return;
         }
     };
-    if let Err((code, message)) = crate::round4::EventsSubmitRequest::validate_federation_binding(&submit) {
+    if let Err((code, message)) =
+        crate::round4::EventsSubmitRequest::validate_federation_binding(&submit)
+    {
         render_error(res, StatusCode::BAD_REQUEST, code, &message);
         return;
     }
@@ -1316,15 +1316,15 @@ fn validate_event_envelope(
     validate_event_time_fields(state, object)?;
 
     let (realm_id, space_id) = event_scope_ids(object)?;
-    // Round R2/R3 (T07) — Realm in terminal state (cx.realm.destroy applied)
-    // refuses every non-audit-class write. During the Realm/Space inversion
-    // migration the projection still indexes the same UUID under cx:space:*.
-    let realm_destroyed = state
+    // Round R2/R3 (T07) + Stream-F (Wave 1B) — Realm in terminal state
+    // (`cx.realm.tombstone` OR `cx.realm.destroy` applied) refuses every
+    // non-audit-class write. Spec `realm-and-space.md` §2.5 / §2.5.1.
+    let realm_terminal = state
         .projection
         .lock()
-        .map(|proj| proj.space_is_destroyed(&space_id))
+        .map(|proj| proj.space_is_in_terminal_state(&space_id))
         .unwrap_or(false);
-    if let Some((code, reason)) = crate::round23::terminal_realm_check(realm_destroyed, &kind) {
+    if let Some((code, reason)) = crate::round23::terminal_realm_check(realm_terminal, &kind) {
         return Err(event_validation_error(
             code.http_status(),
             code.as_str(),
@@ -2319,9 +2319,8 @@ fn space_exists_in_index(state: &AppState, space_id: &str) -> bool {
 /// separate `cx.member.state(join)` event.
 ///
 /// Extracted out of `submit_event` (called once after `store.put`
-/// succeeds for a `cx.realm.create` event) so the private REST
-/// `POST /api/v1/spaces` endpoint can be deprecated without losing
-/// the bootstrap path.
+/// succeeds for a `cx.realm.create` event) so the canonical Event
+/// Envelope path owns Realm bootstrap state.
 fn bootstrap_realm_member_index(
     state: &AppState,
     space_id: &str,
@@ -2583,11 +2582,11 @@ fn projection_operation_from_event(
         tracing::debug!(kind = %parsed.kind, "projection: no schema for kind");
         return None;
     }
-    let space_id_raw = parsed.space_id.clone()?;
-    let space_id = match SpaceId::new(space_id_raw.clone()) {
+    let realm_id_raw = parsed.realm_id.clone();
+    let realm_id = match RealmId::new(realm_id_raw.clone()) {
         Ok(value) => value,
         Err(error) => {
-            tracing::debug!(kind = %parsed.kind, space_id = %space_id_raw, %error, "projection: SpaceId::new failed");
+            tracing::debug!(kind = %parsed.kind, realm_id = %realm_id_raw, %error, "projection: RealmId::new failed");
             return None;
         }
     };
@@ -2622,7 +2621,7 @@ fn projection_operation_from_event(
     };
     let mut operation = Operation::create(
         operation_id,
-        RealmId::new(space_id.to_string()).ok()?,
+        realm_id,
         parsed.kind.clone(),
         Value::Object(payload_object.clone()),
     );
@@ -2895,6 +2894,7 @@ mod proof_strictness_tests {
             trust_domain: "cx:trust_domain:soland.local".to_owned(),
             sovereign_enclave_enabled: false,
             sovereign_enclave_allowed_outbound_hosts: Vec::new(),
+            erasure_propagation_window_ms: 604_800_000,
         };
         AppState::new(config, Db { pool: None })
     }

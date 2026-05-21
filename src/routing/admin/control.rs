@@ -74,7 +74,7 @@ pub struct AdminControlFrameResponse {
 /// re-subscribe with `from=null` (or whatever the subscribe path
 /// considers a fresh-from-frontier start).
 #[endpoint(
-    operation_id = "cx.admin.events.resync_required",
+    operation_id = "cx.extension.soland.admin.events.resync_required",
     tags("admin", "events"),
     summary = "Broadcast a resync_required control frame to subscribers"
 )]
@@ -117,7 +117,7 @@ async fn admin_emit_resync_required(
 /// Clients receiving this frame MUST close the stream and re-authenticate
 /// before reconnecting; the existing session token is no longer accepted.
 #[endpoint(
-    operation_id = "cx.admin.events.unauthorized",
+    operation_id = "cx.extension.soland.admin.events.unauthorized",
     tags("admin", "events"),
     summary = "Broadcast an unauthorized control frame to subscribers"
 )]

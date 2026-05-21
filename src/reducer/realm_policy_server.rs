@@ -152,16 +152,16 @@ pub fn apply_realm_policy_server(
 mod tests {
     use super::*;
     use crate::reducer::RealmLinkState;
-    use contrix_sdk::{Operation, OperationId, SpaceId};
+    use contrix_sdk::{Operation, OperationId, RealmId};
     use serde_json::json;
 
-    const REALM_CHILD: &str = "cx:space:01904100-0000-7000-8000-cccccccccccc";
-    const REALM_ORG: &str = "cx:space:01904100-0000-7000-8000-000000000000";
+    const REALM_CHILD: &str = "cx:realm:01904100-0000-7000-8000-cccccccccccc";
+    const REALM_ORG: &str = "cx:realm:01904100-0000-7000-8000-000000000000";
 
     fn op(space_id: &str, payload: Value) -> Operation {
         Operation::create(
             OperationId::new(format!("cx:operation:{}", uuid::Uuid::now_v7())).unwrap(),
-            SpaceId::new(space_id).unwrap(),
+            RealmId::new(space_id).unwrap(),
             crate::kinds::CX_REALM_POLICY_SERVER,
             payload,
         )

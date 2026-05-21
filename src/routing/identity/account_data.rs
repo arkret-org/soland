@@ -102,7 +102,7 @@ fn account_data_update_type(data_type: &str) -> &'static str {
 }
 
 #[endpoint(
-    operation_id = "cx.account_data.set",
+    operation_id = "cx.extension.soland.account_data.set",
     tags("account_data"),
     summary = "Upsert an actor-private account_data entry",
     status_codes(200, 201, 400, 401, 413, 500)
@@ -181,7 +181,7 @@ async fn put_account_data(
 }
 
 #[endpoint(
-    operation_id = "cx.account_data.get",
+    operation_id = "cx.extension.soland.account_data.get",
     tags("account_data"),
     summary = "Fetch a single account_data entry by data_type"
 )]
@@ -208,7 +208,7 @@ async fn get_account_data(
 }
 
 #[endpoint(
-    operation_id = "cx.account_data.list",
+    operation_id = "cx.extension.soland.account_data.list",
     tags("account_data"),
     summary = "List every account_data entry owned by the authenticated actor"
 )]
@@ -231,7 +231,7 @@ async fn list_account_data(
 }
 
 #[endpoint(
-    operation_id = "cx.account_data.delete",
+    operation_id = "cx.extension.soland.account_data.delete",
     tags("account_data"),
     summary = "Delete an account_data entry"
 )]

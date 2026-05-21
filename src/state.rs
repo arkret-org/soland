@@ -1133,6 +1133,15 @@ fn hydrate_projections_from_persistence(
                     created_at: record.created_at,
                     updated_by: record.updated_by,
                     updated_at: record.updated_at,
+                    // Stream-F (Wave 1B): orphaned flag is reducer-only
+                    // bookkeeping; not persisted to the durable mirror
+                    // table yet. Replayed durable events will rebuild
+                    // it via apply_realm_lifecycle cascade.
+                    orphaned: false,
+                    // Stream-F (Wave 2C): same story — cross-Realm
+                    // parent_ref_locked is also a reducer-only flag
+                    // rebuilt by the destroy cascade on replay.
+                    parent_ref_locked: false,
                 },
             );
         }

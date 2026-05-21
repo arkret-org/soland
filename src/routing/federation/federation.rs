@@ -42,7 +42,7 @@ use crate::result::{JsonResult, json_ok};
 use crate::state::{AppState, FederationTransactionRecord};
 
 #[endpoint(
-    operation_id = "cx.federation.transaction",
+    operation_id = "cx.extension.soland.federation.transaction",
     tags("federation"),
     summary = "Idempotent inbound server-to-server federation transaction"
 )]
@@ -238,7 +238,7 @@ pub(super) async fn federation_transaction(
 }
 
 #[endpoint(
-    operation_id = "cx.federation.push_operations",
+    operation_id = "cx.extension.soland.federation.push_operations",
     tags("federation"),
     summary = "Accept a batch of operations pushed from a peer service"
 )]
@@ -267,7 +267,7 @@ pub(super) async fn federation_push_operations(
 }
 
 #[endpoint(
-    operation_id = "cx.federation.pull_operations",
+    operation_id = "cx.extension.soland.federation.pull_operations",
     tags("federation"),
     summary = "Pull a page of operations for a federated space, with optional snapshot bootstrap"
 )]
@@ -340,7 +340,7 @@ pub(super) async fn federation_pull_operations(
 }
 
 #[endpoint(
-    operation_id = "cx.federation.space_members",
+    operation_id = "cx.extension.soland.federation.space_members",
     tags("federation"),
     summary = "List space memberships for a federated space"
 )]
@@ -375,7 +375,7 @@ pub(super) async fn federation_space_members(
 }
 
 #[endpoint(
-    operation_id = "cx.federation.verify_actor",
+    operation_id = "cx.extension.soland.federation.verify_actor",
     tags("federation"),
     summary = "Verify a federated actor's signature against the local DID resolver"
 )]
@@ -454,7 +454,7 @@ pub struct FederationAnchorsPushResponse {
 }
 
 #[endpoint(
-    operation_id = "cx.federation.anchors.pull",
+    operation_id = "cx.extension.soland.federation.anchors.pull",
     tags("federation"),
     summary = "Pull locally-held Anchors for a Space (federation peer-pull)"
 )]
@@ -483,7 +483,7 @@ pub(super) async fn federation_anchors_pull(
 }
 
 #[endpoint(
-    operation_id = "cx.federation.anchors.push",
+    operation_id = "cx.extension.soland.federation.anchors.push",
     tags("federation"),
     summary = "Accept Anchor envelopes from a federation peer (peer-push)"
 )]
@@ -1050,6 +1050,74 @@ fn retry_backoff_ms(response: &Value, attempt: u64) -> u64 {
     initial.saturating_mul(multiplier).min(max)
 }
 
+/// Stream-F (Wave 2C) — test-only helper that materialises an
+/// `AppState` with the given federation peer set and erasure-receipt
+/// propagation window. Lives behind `cfg(test)` so it's only compiled
+/// for the test runner. Used by the
+/// `crate::routing::federation::erasure_fanout::tests` module to
+/// drive deterministic fanout + sweep behaviour without standing up
+/// the full HTTP server.
+#[cfg(test)]
+pub(crate) fn test_app_state_with_peers(
+    peers: Vec<String>,
+    erasure_propagation_window_ms: u64,
+) -> crate::state::AppState {
+    use std::net::SocketAddr;
+    use std::str::FromStr;
+
+    use crate::config::{AppConfig, FederationPolicy};
+    use crate::db::Db;
+    use crate::state::AppState;
+
+    let cfg = AppConfig {
+        bind: SocketAddr::from_str("127.0.0.1:0").unwrap(),
+        public_base_url: "http://test".to_owned(),
+        service_did: "did:web:test.local".to_owned(),
+        tls_cert_path: None,
+        tls_key_path: None,
+        database_url: None,
+        object_storage: crate::config::ObjectStorageConfig::local(std::env::temp_dir()),
+        cors_allow_origin: None,
+        auth_server_url: None,
+        development_mode: true,
+        oauth_introspection_url: None,
+        oauth_introspection_bearer: None,
+        session_grant_introspection_url: None,
+        session_grant_introspection_bearer: None,
+        did_resolver_allow_methods: vec!["web".to_owned()],
+        embedded_webvh_provider_enabled: false,
+        embedded_webvh_registration_bearer: None,
+        external_webvh_provider_url: None,
+        external_webvh_provider_active: false,
+        default_webvh_provider_id: None,
+        jws_replay_window_seconds: 0,
+        jws_replay_window_per_family: AppConfig::default_replay_overrides(),
+        anchorer_signing_key_seed: None,
+        agent_audit_binding_signing_seed: None,
+        use_keystore: false,
+        federation_policy: FederationPolicy::Mesh,
+        federation_peers: peers,
+        federation_outbound_enabled: false,
+        admin_default_page_limit: 100,
+        admin_max_page_limit: 1000,
+        admin_principal_dids: Vec::new(),
+        push_bridge_cache_ttl_seconds: 900,
+        push_bridge_trusted_service_dids: Vec::new(),
+        compaction_min_anchor_age_seconds: 604_800,
+        compaction_min_witnesses: 1,
+        compaction_preserve_genesis: true,
+        compaction_prune_only_singleton_successors: true,
+        compaction_prune_walk_interval_seconds: 0,
+        compaction_prune_walk_per_space_limit: 50,
+        seed_demo_data: false,
+        trust_domain: "cx:trust_domain:soland.local".to_owned(),
+        sovereign_enclave_enabled: false,
+        sovereign_enclave_allowed_outbound_hosts: Vec::new(),
+        erasure_propagation_window_ms,
+    };
+    AppState::new(cfg, Db { pool: None })
+}
+
 #[cfg(test)]
 mod tests {
     use std::net::SocketAddr;
@@ -1107,6 +1175,7 @@ mod tests {
             trust_domain: "cx:trust_domain:soland.local".to_owned(),
             sovereign_enclave_enabled: false,
             sovereign_enclave_allowed_outbound_hosts: Vec::new(),
+            erasure_propagation_window_ms: 604_800_000,
         }
     }
 

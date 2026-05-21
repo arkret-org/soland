@@ -1,27 +1,33 @@
 //! G3.S1 — MLS / E2EE lifecycle HTTP surface.
 //!
-//! Four routes under `/api/v1/mls/`:
+//! Spec-canonical binding under `/api/v1/keys/keypackages/*` (see
+//! `contrix-service-api.openapi.yaml §/keys/keypackages/*`):
 //!
-//! - `POST /keypackages`             — publish a fresh KeyPackage.
-//! - `POST /keypackages/{id}/claim`  — atomically claim a published KeyPackage.
-//!   Second claim of the same id returns `409 cas_conflict`.
-//! - `GET  /welcomes/pending`        — drain the calling device's Welcome
-//!   queue (caps at 50 per call; marks delivered rows with
-//!   `delivered_at = now()` so subsequent polls don't redeliver).
-//! - `POST /commits`                 — submit an MLS commit; bumps the
-//!   group's stored epoch by +1 from `expected_prev_epoch`. Stale /
-//!   out-of-order commits return `412 failed_precondition` with reason
-//!   `mls_epoch_skew`.
+//! - `POST /api/v1/keys/keypackages/upload` — op `cx.keys.keypackages.upload`
+//!   (publishes a fresh KeyPackage).
+//! - `POST /api/v1/keys/keypackages/claim`  — op `cx.keys.keypackages.claim`
+//!   (atomically claim a published KeyPackage; second claim of the same id
+//!   returns `409 cas_conflict`).
+//! - `GET  /api/v1/keys/keypackages/welcomes/pending` — extension op
+//!   `cx.extension.soland.mls.welcomes.pending` (drain the calling device's
+//!   Welcome queue; caps at 50 per call; marks delivered rows with
+//!   `delivered_at = now()` so subsequent polls don't redeliver). This is a
+//!   soland-specific extension (not in the canonical spec registry).
+//!
+//! MLS *commits* are no longer served by a dedicated REST surface — clients
+//! submit `cx.mls.commit` events via the normal `POST /api/v1/events`
+//! pipeline (`cx.events.submit` of the registered durable `cx.mls.commit`
+//! kind). The reducer's epoch-bump path is unchanged; only the HTTP
+//! entrypoint moved.
 //!
 //! Each handler:
 //!   1. authenticates the caller via [`AuthArgs`] (bearer session);
 //!   2. drives the reducer's `apply_*` helper in
 //!      [`crate::reducer::mls`] to keep the in-process projection in lockstep;
 //!   3. mirrors the write into the corresponding persistence store
-//!      ([`MlsKeyPackageStore`] / [`MlsWelcomeStore`] / [`MlsCommitStore`]).
+//!      ([`MlsKeyPackageStore`] / [`MlsWelcomeStore`]).
 //!
-//! Deferred (mapped to TODO(G3.S1-followup) markers below + in
-//! `reducer/mls.rs`):
+//! Deferred (mapped to TODO(G3.S1-followup) markers in `reducer/mls.rs`):
 //!   - governance_binding   — multi-sig commit attestation;
 //!   - covered_frontier     — sync-frontier roots protected by an MLS epoch;
 //!   - decryption_pending   — deferred-decryption queue + retry;
@@ -30,29 +36,35 @@
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use contrix_sdk::{Operation, OperationId, RealmId};
-use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
+use salvo::oapi::extract::{JsonBody, QueryParam};
 use salvo::prelude::*;
 use serde_json::{Value, json};
 
 use crate::error::{AppError, ErrorCode};
-use crate::persistence::{MlsCommitEpochRecord, MlsKeyPackageRecord, MlsWelcomeRecord};
+use crate::persistence::{MlsKeyPackageRecord, MlsWelcomeRecord};
 use crate::reducer::{
-    self, KeyPackageLifetime, MlsCommitEpoch, MlsEffect, MlsKeyPackage, MlsWelcome,
-    ProjectionEffect,
+    self, KeyPackageLifetime, MlsEffect, MlsKeyPackage, MlsWelcome, ProjectionEffect,
 };
 use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
 use crate::wire::now;
 
-/// Mount the `/mls/*` sub-router. Mounted under `/api/v1` from
-/// `routing::mod::api_v1_router`.
+/// Mount the `/keys/keypackages/*` sub-router. Mounted under `/api/v1`
+/// from `routing::mod::api_v1_router`.
+///
+/// Spec-canonical paths (see
+/// `contrix-service-api.openapi.yaml §/keys/keypackages/*`):
+///   - `POST /api/v1/keys/keypackages/upload`
+///   - `POST /api/v1/keys/keypackages/claim`
+///   - `GET  /api/v1/keys/keypackages/welcomes/pending` (soland extension)
 pub fn router() -> Router {
-    Router::with_path("mls")
-        .push(Router::with_path("keypackages").post(publish_keypackage))
-        .push(Router::with_path("keypackages/{id}/claim").post(claim_keypackage))
-        .push(Router::with_path("welcomes/pending").get(pending_welcomes))
-        .push(Router::with_path("commits").post(submit_commit))
+    Router::with_path("keys").push(
+        Router::with_path("keypackages")
+            .push(Router::with_path("upload").post(upload_keypackage))
+            .push(Router::with_path("claim").post(claim_keypackage))
+            .push(Router::with_path("welcomes/pending").get(pending_welcomes)),
+    )
 }
 
 /// Maximum Welcomes returned per `GET /welcomes/pending` call. Mirrors
@@ -63,11 +75,11 @@ pub const MAX_WELCOMES_PER_POLL: usize = 50;
 // ── publish ───────────────────────────────────────────────────────────
 
 #[endpoint(
-    operation_id = "cx.mls.keypackage.publish",
-    tags("mls"),
-    summary = "Publish a fresh MLS KeyPackage (G3.S1)"
+    operation_id = "cx.keys.keypackages.upload",
+    tags("keys"),
+    summary = "Upload a fresh MLS KeyPackage (G3.S1)"
 )]
-async fn publish_keypackage(
+async fn upload_keypackage(
     aa: AuthArgs,
     body: JsonBody<Value>,
     depot: &mut Depot,
@@ -100,7 +112,16 @@ async fn publish_keypackage(
     // Run the reducer's projection update first — that path enforces
     // the wire shape (lifetime, bytes presence, etc.) and gives us the
     // canonical Rejected reason if anything is malformed.
-    let op = build_op("cx.mls.keypackage.publish", body.clone());
+    //
+    // Canonical event kind is `cx.mls.keypackage` (publish/claim
+    // distinction is conveyed via `payload.action`). The HTTP
+    // operation_id (`cx.keys.keypackages.upload`) lives at the wire
+    // layer; the internal event log stores `cx.mls.keypackage`.
+    let mut publish_payload = body.clone();
+    if let Value::Object(ref mut map) = publish_payload {
+        map.insert("action".to_owned(), Value::String("publish".to_owned()));
+    }
+    let op = build_op(crate::kinds::CX_MLS_KEYPACKAGE, publish_payload);
     let effect = reducer::mls::apply_keypackage_publish(&mut state.projection.lock().unwrap(), &op);
     match effect {
         ProjectionEffect::Mls(MlsEffect::KeyPackagePublished { .. }) => {}
@@ -148,13 +169,12 @@ async fn publish_keypackage(
 // ── claim ─────────────────────────────────────────────────────────────
 
 #[endpoint(
-    operation_id = "cx.mls.keypackage.claim",
-    tags("mls"),
+    operation_id = "cx.keys.keypackages.claim",
+    tags("keys"),
     summary = "Atomically claim a published KeyPackage for a Welcome (G3.S1)"
 )]
 async fn claim_keypackage(
     aa: AuthArgs,
-    id: PathParam<String>,
     body: JsonBody<Value>,
     depot: &mut Depot,
     req: &mut Request,
@@ -162,17 +182,21 @@ async fn claim_keypackage(
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req)?;
 
-    let id = id.into_inner();
     let body = body.into_inner();
+    let keypackage_id = require_str(&body, "keypackage_id")?.to_owned();
     let group_id = require_str(&body, "group_id")?;
 
     // Build the canonical op so the reducer sees the same shape as a
-    // federated `cx.mls.keypackage.claim` envelope would.
+    // federated `cx.mls.keypackage` envelope would. Canonical event
+    // kind is `cx.mls.keypackage`; publish-vs-claim is conveyed via
+    // `payload.action`. The HTTP operation_id
+    // (`cx.keys.keypackages.claim`) lives at the wire layer only.
     let payload = json!({
-        "keypackage_id": id,
+        "action": "claim",
+        "keypackage_id": keypackage_id,
         "group_id": group_id,
     });
-    let op = build_op("cx.mls.keypackage.claim", payload);
+    let op = build_op(crate::kinds::CX_MLS_KEYPACKAGE, payload);
     let effect = reducer::mls::apply_keypackage_claim(&mut state.projection.lock().unwrap(), &op);
     let (consumed_at, claimed_keypackage_id, claimed_group_id) = match effect {
         ProjectionEffect::Mls(MlsEffect::KeyPackageClaimed {
@@ -239,9 +263,9 @@ async fn claim_keypackage(
 // ── welcomes/pending ──────────────────────────────────────────────────
 
 #[endpoint(
-    operation_id = "cx.mls.welcomes.pending",
-    tags("mls"),
-    summary = "Drain the calling device's MLS Welcome queue (G3.S1)"
+    operation_id = "cx.extension.soland.mls.welcomes.pending",
+    tags("keys"),
+    summary = "Drain the calling device's MLS Welcome queue (G3.S1; soland extension)"
 )]
 async fn pending_welcomes(
     aa: AuthArgs,
@@ -305,114 +329,12 @@ async fn pending_welcomes(
 }
 
 // ── commits ───────────────────────────────────────────────────────────
-
-#[endpoint(
-    operation_id = "cx.mls.commits.submit",
-    tags("mls"),
-    summary = "Submit an MLS commit; bumps the group's stored epoch (G3.S1)"
-)]
-async fn submit_commit(
-    aa: AuthArgs,
-    body: JsonBody<Value>,
-    depot: &mut Depot,
-    req: &mut Request,
-) -> JsonResult<Value> {
-    let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
-
-    let body = body.into_inner();
-    let group_id = require_str(&body, "group_id")?;
-    let expected_prev_epoch = body
-        .get("expected_prev_epoch")
-        .and_then(Value::as_u64)
-        .ok_or_else(|| AppError::missing_param("missing expected_prev_epoch"))?;
-    let leader_actor_did = body
-        .get("leader_actor_did")
-        .and_then(Value::as_str)
-        .unwrap_or(session.actor.as_str());
-    if leader_actor_did != session.actor {
-        return Err(AppError::capability_denied(
-            "leader_actor_did must match the calling session",
-        ));
-    }
-    let commit_bytes_b64 = body
-        .get("commit_bytes_b64")
-        .and_then(Value::as_str)
-        .ok_or_else(|| AppError::missing_param("missing commit_bytes_b64"))?;
-    if commit_bytes_b64.is_empty() {
-        return Err(AppError::invalid_param(
-            "commit_bytes_b64 must be non-empty",
-        ));
-    }
-
-    // TODO(G3.S1-followup): governance_binding — verify the commit
-    // carries a quorum signature set from the Realm's governance
-    // multi-sig policy before bumping the epoch.
-    // TODO(G3.S1-followup): covered_frontier — record which
-    // sync-frontier roots this epoch protects so plaintext fallback
-    // can be gated by the recipient.
-
-    let payload = json!({
-        "group_id": group_id,
-        "expected_prev_epoch": expected_prev_epoch,
-        "leader_actor_did": leader_actor_did,
-        "commit_bytes_b64": commit_bytes_b64,
-    });
-    let op = build_op("cx.mls.commit.epoch", payload);
-    let effect = reducer::mls::apply_commit_epoch(&mut state.projection.lock().unwrap(), &op);
-
-    let (new_epoch, previous_epoch) = match effect {
-        ProjectionEffect::Mls(MlsEffect::CommitEpochAdvanced {
-            previous_epoch,
-            new_epoch,
-            ..
-        }) => (new_epoch, previous_epoch),
-        ProjectionEffect::Rejected { reason }
-            if reason == reducer::mls::REASON_COMMIT_EPOCH_SKEW =>
-        {
-            return Err(AppError::new(
-                ErrorCode::FailedPrecondition,
-                "MLS commit epoch is stale or out-of-order",
-            )
-            .with_wire_code(reason));
-        }
-        ProjectionEffect::Rejected { reason } => {
-            return Err(AppError::new(ErrorCode::SchemaViolation, reason));
-        }
-        other => {
-            return Err(AppError::internal(format!(
-                "unexpected reducer effect: {other:?}"
-            )));
-        }
-    };
-
-    // Mirror to persistence. The CAS in `try_bump` would catch a
-    // concurrent writer in a Pg deployment.
-    let committed_at = op.created_at.timestamp();
-    let pg_result = state
-        .persistence
-        .mls_commits()
-        .try_bump(group_id, previous_epoch, leader_actor_did, committed_at)
-        .map_err(|err| AppError::internal(format!("mls_commits.try_bump: {err}")))?;
-    if pg_result.is_none() {
-        // Same rationale as the keypackage path: reducer accepted but
-        // store rejected → some other process raced. Surface the
-        // canonical skew code.
-        return Err(AppError::new(
-            ErrorCode::FailedPrecondition,
-            "MLS commit epoch race detected at persistence layer",
-        )
-        .with_wire_code(reducer::mls::REASON_COMMIT_EPOCH_SKEW));
-    }
-
-    json_ok(json!({
-        "group_id": group_id,
-        "previous_epoch": previous_epoch,
-        "epoch": new_epoch,
-        "leader_actor_did": leader_actor_did,
-        "committed_at": committed_at,
-    }))
-}
+//
+// Deleted as part of the spec-canonical refactor. MLS commits are now
+// submitted via the regular events pipeline as `cx.mls.commit` durable
+// events through `POST /api/v1/events` (op `cx.events.submit`). The
+// reducer's epoch-bump path (`reducer::mls::apply_commit_epoch`) is
+// invoked from the events submission flow; no dedicated REST surface.
 
 // ── helpers ───────────────────────────────────────────────────────────
 
@@ -430,8 +352,7 @@ fn require_str<'a>(body: &'a Value, field: &'static str) -> Result<&'a str, AppE
 fn build_op(object_type: &str, payload: Value) -> Operation {
     let op_id =
         OperationId::new("cx:operation:01904100-0000-7000-8000-000000000001").expect("op id");
-    let realm_id =
-        RealmId::new("cx:realm:01904100-0000-7000-8000-000000000000").expect("realm id");
+    let realm_id = RealmId::new("cx:realm:01904100-0000-7000-8000-000000000000").expect("realm id");
     Operation::create(op_id, realm_id, object_type, payload)
 }
 
@@ -467,16 +388,6 @@ fn welcome_to_record(w: &MlsWelcome) -> MlsWelcomeRecord {
         key_package_id: w.key_package_id.clone(),
         enqueued_at: w.enqueued_at,
         delivered_at: w.delivered_at,
-    }
-}
-
-#[allow(dead_code)]
-fn commit_to_record(c: &MlsCommitEpoch) -> MlsCommitEpochRecord {
-    MlsCommitEpochRecord {
-        group_id: c.group_id.clone(),
-        epoch: c.epoch,
-        leader_actor_did: c.leader_actor_did.clone(),
-        committed_at: c.committed_at,
     }
 }
 

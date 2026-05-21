@@ -55,10 +55,9 @@ use spaces::directory::demo_actors;
 use spaces::space::{
     invite_token_space_id, is_realm_deleted, is_space_deleted, prune_expired_typing,
     realm_allows_plaintext_service, realm_discoverability, realm_event_visible_to_session,
-    realm_has_member, realm_history_visibility, realm_id_accessible, realm_scope_to_realm_id,
-    realm_visible_to, space_allows_plaintext_service, space_discoverability, space_has_member,
-    space_resolvable_to, space_search_discoverability, space_search_visible_to, touch_realm,
-    typing_ephemeral_for_space,
+    realm_has_member, realm_history_visibility, realm_id_accessible, realm_visible_to,
+    space_allows_plaintext_service, space_discoverability, space_has_member, space_resolvable_to,
+    space_search_discoverability, space_search_visible_to, touch_realm, typing_ephemeral_for_space,
 };
 use system::extract::AuthArgs;
 use system::util::{
@@ -95,7 +94,16 @@ pub fn router_with_rate_limiter_config(
         .push(api_v1_router())
         .push(access::contrix_router())
         .push(interop::contrix_router())
-        .push(admin::admin_router());
+        .push(admin::admin_router())
+        // `/contrix/v1/*` fallback: per `contrix-spec/spec/v1/zh/sync/
+        // api-conventions.md` §10, any request under `/contrix/v1/...` that
+        // doesn't match a known route MUST return the canonical
+        // `unrecognized_endpoint` / `method_not_allowed` JSON envelope
+        // (never an HTML salvo 404). Mounted as a sibling to the concrete
+        // `contrix/v1/...` routers above; salvo's child-iteration order
+        // means it only fires when the concrete routes don't claim the
+        // path. See `api_not_found` for the 405/Allow disambiguation.
+        .push(contrix_v1_fallback_router());
     let doc = cached_contrix_openapi_doc(&router);
     router
         .unshift(
@@ -122,28 +130,57 @@ fn api_v1_router() -> Router {
         .push(interop::router())
         .push(agent_workspace::router())
         .push(conformance::router())
-        // G3.S1: MLS lifecycle — appended at the end of the registry so
-        // parallel agents (G3.S2, G3.S5, G3.S9) editing this block don't
-        // collide.
+        // G3.S1: MLS / keys lifecycle — spec-canonical path is
+        // `/api/v1/keys/keypackages/*` (see `mls::router`). Appended at
+        // the end of the registry so parallel agents (G3.S2, G3.S5,
+        // G3.S9) editing this block don't collide.
         .push(mls::router())
         // G3.S9: extensions (applet manifest verifier, bot/ghost actor,
         // TSP transport/route/audit)
         .push(extensions::router())
         // G3.S2: realm policy server
         .push(realm_policy::router())
+        // Catch-all so that anything under `/api/v1/...` that the typed
+        // routers above don't match returns the canonical Contrix JSON
+        // error envelope. `cors_preflight` is registered as an OPTIONS
+        // child so CORS preflight stays 204; every other method falls
+        // through to `api_not_found`, which itself decides between 404
+        // (`unrecognized_endpoint`) and 405 (`method_not_allowed` + the
+        // mandatory `Allow` header) based on whether the request path
+        // pattern is registered in the OpenAPI route map. Using `.goal()`
+        // (rather than per-method `.get/.post/...`) is what lets us
+        // distinguish "unknown path, any method" from "known path, wrong
+        // method" centrally instead of leaning on salvo's default 405
+        // logic which has no way to populate the `Allow` header.
         .push(
             Router::with_path("{**rest}")
                 .options(cors_preflight)
-                .get(api_not_found),
+                .goal(api_not_found),
         )
+}
+
+/// Fallback router mounted at `/contrix/v1/*`. Mirror of the `/api/v1/*`
+/// catch-all above — same JSON envelope, same 404/405 disambiguation. The
+/// concrete `contrix/v1/...` endpoints (currently `contrix/v1/check` and
+/// `contrix/v1/ice-config`) are mounted as their own top-level child
+/// routers and run *before* this fallback because salvo iterates the
+/// root's children in registration order.
+fn contrix_v1_fallback_router() -> Router {
+    Router::with_path("contrix/v1/{**rest}")
+        .options(cors_preflight)
+        .goal(api_not_found)
 }
 
 static CONTRIX_OPENAPI_DOC: OnceLock<OpenApi> = OnceLock::new();
 
 fn cached_contrix_openapi_doc(router: &Router) -> OpenApi {
-    CONTRIX_OPENAPI_DOC
+    let doc = CONTRIX_OPENAPI_DOC
         .get_or_init(|| contrix_openapi_doc(router))
-        .clone()
+        .clone();
+    // The same cached doc is also the source of truth for the
+    // 404/405 known-routes table used by `api_not_found`.
+    populate_known_routes(&doc);
+    doc
 }
 
 fn contrix_openapi_doc(router: &Router) -> OpenApi {
@@ -275,53 +312,11 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "list contacts",
     ),
     (
-        "/api/v1/spaces",
-        PathItemType::Post,
-        "spaces",
-        "cx.extension.soland.spaces.create",
-        "create space",
-    ),
-    (
-        "/api/v1/spaces/{space_id}",
-        PathItemType::Patch,
-        "spaces",
-        "cx.extension.soland.spaces.update",
-        "update space",
-    ),
-    (
-        "/api/v1/spaces/{space_id}/policy",
-        PathItemType::Put,
-        "spaces",
-        "cx.extension.soland.spaces.set_policy",
-        "set space policy",
-    ),
-    (
-        "/api/v1/spaces/{space_id}",
-        PathItemType::Delete,
-        "spaces",
-        "cx.extension.soland.spaces.delete",
-        "delete space",
-    ),
-    (
         "/api/v1/server/describe",
         PathItemType::Get,
         "server",
         "cx.server.describe",
         "server feature description",
-    ),
-    (
-        "/api/v1/spaces/{space_id}/members",
-        PathItemType::Post,
-        "spaces",
-        "cx.extension.soland.spaces.add_member",
-        "add space member",
-    ),
-    (
-        "/api/v1/spaces/{space_id}/members/{member_did}",
-        PathItemType::Delete,
-        "spaces",
-        "cx.extension.soland.spaces.remove_member",
-        "remove space member",
     ),
     (
         "/api/v1/events/describe",
@@ -905,14 +900,182 @@ async fn cors_preflight(res: &mut Response) {
     res.status_code(StatusCode::NO_CONTENT);
 }
 
+/// Catch-all handler under `/api/v1/*` and `/contrix/v1/*`.
+///
+/// Per `contrix-spec/spec/v1/zh/sync/api-conventions.md` §10:
+/// * Unknown path → `404 Not Found` + JSON envelope `{"error":{"errcode":
+///   "unrecognized_endpoint", ...}}`.
+/// * Known path, wrong method → `405 Method Not Allowed` + JSON envelope
+///   `{"error":{"errcode": "method_not_allowed", ...}}` AND the `Allow`
+///   response header MUST list the supported methods.
+///
+/// Salvo's own 405 logic doesn't populate `Allow`, so we do the
+/// disambiguation here using the registered OpenAPI route table (see
+/// [`KNOWN_ROUTES`] / [`allow_methods_for_path`]).
 #[handler]
-async fn api_not_found(res: &mut Response) {
+async fn api_not_found(req: &mut Request, res: &mut Response) {
+    let path = req.uri().path();
+    if let Some(methods) = allow_methods_for_path(path) {
+        let allow = methods
+            .iter()
+            .map(|m| m.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        if let Ok(allow_value) = salvo::http::HeaderValue::from_str(&allow) {
+            res.headers_mut()
+                .insert(salvo::http::header::ALLOW, allow_value);
+        }
+        render_error(
+            res,
+            StatusCode::METHOD_NOT_ALLOWED,
+            "method_not_allowed",
+            "method not allowed",
+        );
+        return;
+    }
     render_error(
         res,
         StatusCode::NOT_FOUND,
         "unrecognized_endpoint",
         "unrecognized endpoint",
     );
+}
+
+/// Map of registered route patterns → supported HTTP methods. Populated
+/// once at startup from the cached OpenAPI doc (see
+/// [`cached_contrix_openapi_doc`]) so that [`api_not_found`] can decide
+/// whether to return 404 (`unrecognized_endpoint`) or 405
+/// (`method_not_allowed` + `Allow` header) for a given request path.
+///
+/// Keys are OpenAPI-style patterns with `{param}` segments, e.g.
+/// `/api/v1/spaces/{space_id}`. Pattern→URI matching is segment-based
+/// (see [`pattern_matches_path`]) so concrete URIs like
+/// `/api/v1/spaces/cx:space:abc` resolve back to their declaring pattern
+/// without any regex compilation.
+static KNOWN_ROUTES: OnceLock<Vec<(String, Vec<Method>)>> = OnceLock::new();
+
+fn populate_known_routes(doc: &OpenApi) {
+    let _ = KNOWN_ROUTES.get_or_init(|| {
+        let mut out: Vec<(String, Vec<Method>)> = Vec::new();
+        for (path, item) in doc.paths.iter() {
+            // Only the protocol-bound HTTP surface participates in
+            // 404/405 disambiguation. `/api/v1/...` is soland's local
+            // surface and `/contrix/v1/...` is the cross-server federated
+            // surface; both are spec-mandated to return the canonical
+            // error envelope. Other prefixes (e.g. `/health`,
+            // `/.well-known/...`, `/api/admin/v1/...`) are out of scope
+            // for the `unrecognized_endpoint` / `method_not_allowed`
+            // contract.
+            if !(path.starts_with("/api/v1/") || path.starts_with("/contrix/v1/")) {
+                continue;
+            }
+            let methods: Vec<Method> = item
+                .operations
+                .keys()
+                .filter_map(path_item_type_to_method)
+                .collect();
+            if methods.is_empty() {
+                continue;
+            }
+            out.push((path.clone(), methods));
+        }
+        out
+    });
+}
+
+fn path_item_type_to_method(ty: &PathItemType) -> Option<Method> {
+    Some(match ty {
+        PathItemType::Get => Method::GET,
+        PathItemType::Post => Method::POST,
+        PathItemType::Put => Method::PUT,
+        PathItemType::Delete => Method::DELETE,
+        PathItemType::Patch => Method::PATCH,
+        PathItemType::Head => Method::HEAD,
+        PathItemType::Options => Method::OPTIONS,
+        // TRACE / CONNECT are not part of the Contrix HTTP binding;
+        // exclude them so they don't pollute the `Allow` header.
+        PathItemType::Trace | PathItemType::Connect => return None,
+    })
+}
+
+/// Resolve a concrete request path to the list of HTTP methods supported
+/// by any registered pattern that matches it. Returns `None` when the
+/// path doesn't correspond to a known route (→ caller emits 404), or
+/// `Some(methods)` otherwise (→ caller emits 405 with `Allow`).
+fn allow_methods_for_path(path: &str) -> Option<Vec<Method>> {
+    let routes = KNOWN_ROUTES.get()?;
+    // `http::Method` doesn't implement `Ord`, so we collect into a `Vec`
+    // and de-duplicate by string identity. The ordering used for the
+    // emitted `Allow` header is the canonical CRUD order
+    // (`METHOD_HEADER_ORDER`) so two distinct route patterns that
+    // contribute the same method set yield a stable, comparable header.
+    let mut all: Vec<Method> = Vec::new();
+    let mut matched = false;
+    for (pattern, methods) in routes {
+        if pattern_matches_path(pattern, path) {
+            matched = true;
+            for m in methods {
+                if !all.iter().any(|existing| existing == m) {
+                    all.push(m.clone());
+                }
+            }
+        }
+    }
+    if !matched {
+        return None;
+    }
+    let mut sorted: Vec<Method> = Vec::with_capacity(all.len());
+    for canonical in METHOD_HEADER_ORDER {
+        if let Some(idx) = all.iter().position(|m| m == canonical) {
+            sorted.push(all.remove(idx));
+        }
+    }
+    // Append anything left over (shouldn't happen — protocol is bounded
+    // to the canonical set) so we never silently drop methods.
+    sorted.extend(all);
+    Some(sorted)
+}
+
+/// Canonical order for the `Allow` response header. Matches the order
+/// the spec example uses (`Allow: POST, GET, ...`) so produced headers
+/// are stable across runs and easy to diff in tests.
+const METHOD_HEADER_ORDER: &[Method] = &[
+    Method::GET,
+    Method::HEAD,
+    Method::POST,
+    Method::PUT,
+    Method::PATCH,
+    Method::DELETE,
+    Method::OPTIONS,
+];
+
+/// Segment-based match between an OpenAPI pattern (which may contain
+/// `{param}` placeholders) and a concrete request path. Both must have
+/// the same segment count; literal segments must compare byte-equal and
+/// `{...}` segments accept any non-empty single segment.
+///
+/// Catchall wildcards (`{**rest}`) intentionally do not appear in the
+/// route map — they're only used by the unrecognized-endpoint catch-all
+/// itself and so should never participate in 405 disambiguation.
+fn pattern_matches_path(pattern: &str, path: &str) -> bool {
+    let pattern_parts: Vec<&str> = pattern.trim_matches('/').split('/').collect();
+    let path_parts: Vec<&str> = path.trim_matches('/').split('/').collect();
+    if pattern_parts.len() != path_parts.len() {
+        return false;
+    }
+    for (p, q) in pattern_parts.iter().zip(path_parts.iter()) {
+        if p.starts_with('{') && p.ends_with('}') {
+            // `{...}` placeholder — accept any single non-empty segment.
+            if q.is_empty() {
+                return false;
+            }
+            continue;
+        }
+        if p != q {
+            return false;
+        }
+    }
+    true
 }
 
 /// Build a `CorsHandler` from the `SOLAND_CORS_ALLOW_ORIGIN` config string.
@@ -1256,6 +1419,7 @@ mod operation_conformance_tests {
                 trust_domain: "cx:trust_domain:soland.local".to_owned(),
                 sovereign_enclave_enabled: false,
                 sovereign_enclave_allowed_outbound_hosts: Vec::new(),
+                erasure_propagation_window_ms: 604_800_000,
             },
             Db { pool: None },
         )
@@ -1265,10 +1429,10 @@ mod operation_conformance_tests {
         // Build a deterministic UUIDv7 from the index (last 12 hex pad as hex of the index).
         let payload_part = format!("{:012x}", index);
         let op_id = format!("cx:operation:01904100-0000-7000-8000-{payload_part}");
-        let space_id = "cx:space:01904100-0000-7000-8000-000000000001".to_owned();
+        let realm_id = "cx:realm:01904100-0000-7000-8000-000000000001".to_owned();
         Operation::create(
             OperationId::new(op_id).unwrap(),
-            contrix_sdk::SpaceId::new(space_id).unwrap(),
+            contrix_sdk::RealmId::new(realm_id).unwrap(),
             kind,
             payload,
         )
@@ -1357,26 +1521,49 @@ mod operation_conformance_tests {
                 valid: true,
             },
             OperationVector {
-                name: "read marker",
+                name: "read marker missing event_id",
                 kind: kinds::CX_READ_MARKER,
-                payload: json!({"actor": "did:web:alice.example", "event_id": "cx:event:01904100-0000-7000-8000-79a90338768b"}),
+                payload: json!({"actor": "did:web:alice.example"}),
                 valid: false,
             },
             OperationVector {
+                name: "read marker valid",
+                kind: kinds::CX_READ_MARKER,
+                payload: json!({"actor": "did:web:alice.example", "event_id": "cx:event:01904100-0000-7000-8000-79a90338768b"}),
+                valid: true,
+            },
+            OperationVector {
                 name: "space create",
-                kind: kinds::CX_SPACE_CREATE,
-                payload: json!({"action": "create", "title": "Launch"}),
+                kind: kinds::CX_REALM_CREATE,
+                payload: json!({"object": {
+                    "id": "cx:realm:0196419b-0000-7000-8000-000000000000",
+                    "schema": "cx.schema.realm.v1",
+                    "title": "Launch",
+                    "trust_domain": "cx:trust_domain:local",
+                    "created_by_principal": "did:web:alice.example",
+                    "schema_refs": ["cx.schema.realm.v1"],
+                    "default_discoverability": "invite",
+                    "default_join_rule": "invite",
+                    "history_visibility": "joined",
+                    "encryption_profile": "e2ee_required",
+                    "security_class": "standard",
+                    "federation_policy": "restricted",
+                    "anchor_profile": "single_did",
+                    "hash_profile": "sha256",
+                    "anchorer": {"type": "single_did", "did": "did:web:alice.example"},
+                    "created_at": "2026-05-20T00:00:00Z"
+                }}),
                 valid: true,
             },
             OperationVector {
                 name: "space update",
-                kind: kinds::CX_SPACE_UPDATE,
+                kind: kinds::CX_REALM_UPDATE,
                 payload: json!({"action": "update", "title": "Launch 2"}),
                 valid: true,
             },
             OperationVector {
                 name: "space destroy",
-                kind: kinds::CX_SPACE_DESTROY,
+                kind: kinds::CX_REALM_DESTROY,
                 payload: json!({"action": "destroy"}),
                 valid: true,
             },
@@ -1869,6 +2056,190 @@ mod canonical_conformance_vectors {
     fn did_web_accepts_missing_service_in_development() {
         let doc = json!({"id": "did:web:example.com"});
         assert!(validate_did_document_services("did:web:example.com", &doc, true).is_ok());
+    }
+}
+
+/// Unit tests for the `api_not_found` 404/405 disambiguation logic —
+/// specifically [`pattern_matches_path`] and the supporting helpers.
+/// Salvo wiring (the actual HTTP shape returned by the catch-all router)
+/// is covered by the integration test
+/// `framework_errors_use_contrix_error_envelope` in `tests/http_api.rs`.
+#[cfg(test)]
+mod framework_error_routing_tests {
+    use super::*;
+
+    #[test]
+    fn pattern_matches_concrete_path() {
+        assert!(pattern_matches_path("/api/v1/events", "/api/v1/events"));
+        assert!(!pattern_matches_path("/api/v1/events", "/api/v1/other"));
+    }
+
+    #[test]
+    fn pattern_matches_param_segment() {
+        assert!(pattern_matches_path(
+            "/api/v1/spaces/{space_id}",
+            "/api/v1/spaces/cx:space:01"
+        ));
+        // Different segment count → no match.
+        assert!(!pattern_matches_path(
+            "/api/v1/spaces/{space_id}",
+            "/api/v1/spaces/cx:space:01/policy"
+        ));
+        // Param must be non-empty.
+        assert!(!pattern_matches_path(
+            "/api/v1/spaces/{space_id}",
+            "/api/v1/spaces/"
+        ));
+    }
+
+    #[test]
+    fn pattern_matches_multi_param_segments() {
+        assert!(pattern_matches_path(
+            "/api/v1/events/{event_id}/refs/{ref_id}",
+            "/api/v1/events/cx:event:01/refs/cx:event:02"
+        ));
+    }
+
+    #[test]
+    fn pattern_rejects_segment_mismatch() {
+        assert!(!pattern_matches_path("/api/v1/events", "/api/v1"));
+        assert!(!pattern_matches_path("/api/v1", "/api/v1/events"));
+    }
+
+    #[test]
+    fn known_routes_map_resolves_known_path() {
+        // Seed the known-routes table with the protocol surface we'd
+        // expect the catch-all to disambiguate against. We don't go
+        // through the full OpenAPI doc build path because that pulls in
+        // the entire service router; the helper logic under test is
+        // pattern-matching, not OpenAPI introspection.
+        let _ = KNOWN_ROUTES.set(vec![
+            ("/api/v1/events".to_owned(), vec![Method::GET, Method::POST]),
+            ("/api/v1/spaces/{space_id}".to_owned(), vec![Method::GET]),
+        ]);
+
+        // Known path → returns the canonical method set (in
+        // `METHOD_HEADER_ORDER`) so the `Allow` header is stable.
+        let methods = allow_methods_for_path("/api/v1/events")
+            .expect("/api/v1/events is registered with at least one method");
+        assert_eq!(methods, vec![Method::GET, Method::POST]);
+
+        let methods = allow_methods_for_path("/api/v1/spaces/cx:space:abc")
+            .expect("/api/v1/spaces/{id} resolves with a concrete id");
+        assert_eq!(methods, vec![Method::GET]);
+
+        // Unknown path → `None`, which is the cue for `api_not_found`
+        // to emit `unrecognized_endpoint` instead of `method_not_allowed`.
+        assert!(allow_methods_for_path("/api/v1/does-not-exist").is_none());
+        assert!(allow_methods_for_path("/contrix/v1/does-not-exist").is_none());
+    }
+
+    /// End-to-end check that `/contrix/v1/*` unrecognized paths return
+    /// the canonical 404 + `unrecognized_endpoint` JSON envelope —
+    /// matching the existing `/api/v1/*` contract (see
+    /// `tests/http_api.rs::framework_errors_use_contrix_error_envelope`).
+    #[tokio::test]
+    async fn contrix_v1_unknown_path_returns_unrecognized_endpoint() {
+        use crate::db::Db;
+        use crate::state::AppState;
+        use salvo::test::{ResponseExt, TestClient};
+
+        let state = AppState::new(test_state_config(), Db { pool: None });
+        let svc = crate::service(state);
+
+        let mut response = TestClient::get("http://server/contrix/v1/does-not-exist")
+            .send(&svc)
+            .await;
+        let status = response.status_code.unwrap();
+        let body: Value = response.take_json().await.unwrap();
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(body["ok"], false);
+        assert_eq!(body["error"]["errcode"], "unrecognized_endpoint");
+    }
+
+    /// End-to-end check that hitting a known `/api/v1/*` path with the
+    /// wrong method returns 405 + the `method_not_allowed` JSON envelope
+    /// AND populates the `Allow` response header per
+    /// `contrix-spec/spec/v1/zh/sync/api-conventions.md` §10.
+    #[tokio::test]
+    async fn known_path_wrong_method_returns_method_not_allowed_with_allow_header() {
+        use crate::db::Db;
+        use crate::state::AppState;
+        use salvo::test::{ResponseExt, TestClient};
+
+        let state = AppState::new(test_state_config(), Db { pool: None });
+        let svc = crate::service(state);
+
+        let mut response = TestClient::patch("http://server/api/v1/events")
+            .send(&svc)
+            .await;
+        let status = response.status_code.unwrap();
+        let allow = response
+            .headers()
+            .get("allow")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_owned();
+        let body: Value = response.take_json().await.unwrap();
+        assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
+        assert_eq!(body["ok"], false);
+        assert_eq!(body["error"]["errcode"], "method_not_allowed");
+        // `/api/v1/events` supports POST (submit) + GET (query); the
+        // `Allow` header must list them in canonical (`METHOD_HEADER_ORDER`)
+        // order so it's stable across runs.
+        assert_eq!(allow, "GET, POST", "got Allow: {allow}");
+    }
+
+    fn test_state_config() -> crate::config::AppConfig {
+        use crate::config::{AppConfig, ObjectStorageConfig};
+        AppConfig {
+            bind: "127.0.0.1:0".parse().unwrap(),
+            public_base_url: "http://server".to_owned(),
+            service_did: "did:web:soland.local".to_owned(),
+            tls_cert_path: None,
+            tls_key_path: None,
+            database_url: None,
+            object_storage: ObjectStorageConfig::local(
+                std::env::temp_dir().join("soland-framework-error-test-blobs"),
+            ),
+            cors_allow_origin: None,
+            auth_server_url: None,
+            development_mode: true,
+            oauth_introspection_url: None,
+            oauth_introspection_bearer: None,
+            session_grant_introspection_url: None,
+            session_grant_introspection_bearer: None,
+            did_resolver_allow_methods: vec!["web".to_owned(), "key".to_owned(), "uuid".to_owned()],
+            embedded_webvh_provider_enabled: false,
+            embedded_webvh_registration_bearer: None,
+            external_webvh_provider_url: None,
+            external_webvh_provider_active: false,
+            default_webvh_provider_id: None,
+            jws_replay_window_seconds: 0,
+            jws_replay_window_per_family: std::collections::BTreeMap::new(),
+            anchorer_signing_key_seed: None,
+            agent_audit_binding_signing_seed: None,
+            use_keystore: false,
+            federation_policy: crate::config::FederationPolicy::Mesh,
+            federation_peers: Vec::new(),
+            federation_outbound_enabled: false,
+            admin_default_page_limit: 100,
+            admin_max_page_limit: 1000,
+            admin_principal_dids: Vec::new(),
+            push_bridge_cache_ttl_seconds: 900,
+            push_bridge_trusted_service_dids: Vec::new(),
+            compaction_min_anchor_age_seconds: 604_800,
+            compaction_min_witnesses: 1,
+            compaction_preserve_genesis: true,
+            compaction_prune_only_singleton_successors: true,
+            compaction_prune_walk_interval_seconds: 0,
+            compaction_prune_walk_per_space_limit: 50,
+            seed_demo_data: true,
+            trust_domain: "cx:trust_domain:soland.local".to_owned(),
+            sovereign_enclave_enabled: false,
+            sovereign_enclave_allowed_outbound_hosts: Vec::new(),
+            erasure_propagation_window_ms: 604_800_000,
+        }
     }
 }
 

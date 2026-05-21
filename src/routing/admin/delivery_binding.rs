@@ -110,7 +110,7 @@ fn response_from_cell(realm_id: &str, value: Option<&Value>) -> RealmDeliveryBin
 /// caller DID MUST appear in `admin_principal_dids` (gated via
 /// `super::require_admin_principal`).
 #[endpoint(
-    operation_id = "cx.admin.realms.delivery_binding_policy.get",
+    operation_id = "cx.extension.soland.admin.realms.delivery_binding_policy.get",
     tags("admin", "realm", "delivery_binding_policy"),
     summary = "Get effective Realm delivery-binding-policy"
 )]

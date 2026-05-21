@@ -143,7 +143,7 @@ fn resolve_space_for_cell(explicit: Option<&str>, cell_id: &CellRef) -> Result<S
 /// passing them to `req.param`; receivers MUST canonicalise via
 /// `CellRef::new` to round-trip into the projection map.
 #[endpoint(
-    operation_id = "cx.admin.cells.get",
+    operation_id = "cx.extension.soland.admin.cells.get",
     tags("admin", "cells"),
     summary = "Get one cell's resolved state"
 )]
@@ -241,7 +241,7 @@ async fn admin_get_cell(
 ///   default `100`) and `admin_max_page_limit` (env `SOLAND_ADMIN_MAX_PAGE_LIMIT`,
 ///   default `1000`). `offset` defaults to `0`.
 #[endpoint(
-    operation_id = "cx.admin.cells.list",
+    operation_id = "cx.extension.soland.admin.cells.list",
     tags("admin", "cells"),
     summary = "List cells matching a space + family prefix filter"
 )]

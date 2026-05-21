@@ -1,10 +1,11 @@
+use contrix_sdk::{Did, RealmId, new_prefixed_uuid7};
 use salvo::test::{ResponseExt, TestClient};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use soland::config::{AppConfig, ObjectStorageConfig};
 use soland::db::Db;
 use soland::service;
-use soland::state::AppState;
+use soland::state::{AppState, RealmDirectoryEntry, RealmMetaRecord};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static TEST_EVENT_SEQ: AtomicU64 = AtomicU64::new(1_000);
@@ -54,6 +55,7 @@ fn test_config() -> AppConfig {
         trust_domain: "cx:trust_domain:soland.local".to_owned(),
         sovereign_enclave_enabled: false,
         sovereign_enclave_allowed_outbound_hosts: Vec::new(),
+        erasure_propagation_window_ms: 604_800_000,
     }
 }
 
@@ -76,55 +78,116 @@ async fn dev_token(state: AppState, actor: &str, device_suffix: &str) -> String 
     login["access_token"].as_str().unwrap().to_owned()
 }
 
-async fn create_space(
-    state: AppState,
-    token: &str,
-    title: &str,
-    history_visibility: &str,
-) -> String {
-    let created: Value = TestClient::post("http://server/api/v1/spaces")
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&json!({
-            "title": title,
-            "summary": "history visibility fixture",
-            "public": true,
-            "history_visibility": history_visibility,
-        }))
-        .send(&app_from_state(state))
-        .await
-        .take_json()
-        .await
+/// Seed a Realm directly via AppState (the Realm REST mutation surface
+/// `POST /api/v1/spaces` was removed in W2A; tests now set up Realm
+/// fixtures internally and exercise downstream behaviour via the canonical
+/// `POST /api/v1/events` path).
+fn seed_realm(state: &AppState, owner: &str, title: &str, history_visibility: &str) -> String {
+    let realm_id = new_prefixed_uuid7("cx:realm:");
+    let typed_realm_id = RealmId::new(realm_id.clone()).unwrap();
+    let owner_did = Did::new(owner.to_owned()).unwrap();
+    let now = chrono::Utc::now();
+
+    let mut entry = RealmDirectoryEntry::new(typed_realm_id, title);
+    entry.description = Some("history visibility fixture".to_owned());
+    entry.public = true;
+    entry.members.insert(owner_did);
+    state.realms.lock().unwrap().upsert(entry);
+
+    state
+        .persistence
+        .realm_meta()
+        .put(
+            &realm_id,
+            &RealmMetaRecord {
+                owner: owner.to_owned(),
+                deleted: false,
+                discoverability: "public".to_owned(),
+                history_visibility: history_visibility.to_owned(),
+                encryption_profile: None,
+                plaintext_visible_services: std::collections::BTreeSet::new(),
+                created_at: now,
+                updated_at: now,
+            },
+        )
         .unwrap();
-    created["space_id"].as_str().unwrap().to_owned()
+
+    realm_id
 }
 
-async fn add_member(state: AppState, owner_token: &str, space_id: &str, member: &str) {
-    let body: Value = TestClient::post(format!("http://server/api/v1/spaces/{space_id}/members"))
+/// Have the owner admit a new member by submitting a
+/// `cx.member.state{membership:"join", actor_id: new_member}` event. The
+/// projection layer records `member.joined_at` (used by sync's
+/// history_visibility gate) and updates `state.realms.members` via
+/// `project_member_state`. The owner is already a member (seeded by
+/// `seed_realm`), so the event-log preflight `realm_has_member` check
+/// admits the event.
+async fn admit_member(
+    state: AppState,
+    owner_token: &str,
+    owner_did: &str,
+    owner_device_id: &str,
+    new_member_did: &str,
+    realm_id: &str,
+) {
+    let payload = json!({
+        "actor_id": new_member_did,
+        "membership": "join",
+        "role": "member",
+        "delivery_status": "unroutable",
+    });
+    let mut event = json!({
+        "event_id": new_prefixed_uuid7("cx:event:"),
+        "kind": "cx.member.state",
+        "schema_id": "cx.schema.event.v1",
+        "actor_id": owner_did,
+        "actor_seq": TEST_EVENT_SEQ.fetch_add(1, Ordering::Relaxed),
+        "realm_id": realm_id,
+        "device_id": owner_device_id,
+        "audience": "did:web:soland.local",
+        "domain": "did:web:soland.local",
+        "prev_refs": [],
+        "auth_refs": [],
+        "refs": [],
+        "payload": payload,
+        "proofs": [{
+            "type": "dev-proof",
+            "verification_method": format!("{owner_did}#{owner_device_id}"),
+            "device_id": owner_device_id,
+            "audience": "did:web:soland.local",
+            "domain": "did:web:soland.local",
+            "payload_hash": sha256_json(&payload)
+        }]
+    });
+    event["canonical_digest"] = Value::String(event_canonical_digest(&event));
+    let resp: Value = TestClient::post("http://server/api/v1/events")
         .add_header("authorization", format!("Bearer {owner_token}"), true)
-        .json(&json!({ "member": member }))
+        .json(&event)
         .send(&app_from_state(state))
         .await
         .take_json()
         .await
         .unwrap();
     assert!(
-        body["members"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|v| v == member)
+        resp["event_id"].is_string(),
+        "cx.member.state{{join}} admit failed: {resp:?}"
     );
 }
 
 async fn send_message(state: AppState, token: &str, space_id: &str, body: &str) {
     let payload = json!({
         "flow_id": flow_id_for_realm(space_id),
+        "track": "discussion",
         "thread_id": space_id,
-        "content": { "body": body },
+        "content": {
+            "kind": "cx.content.text",
+            "body": body,
+            "format": "plain"
+        },
         "encrypted": false,
     });
     let mut event = json!({
-        "event_id": contrix_sdk::new_prefixed_uuid7("cx:event:"),
+        "event_id": new_prefixed_uuid7("cx:event:"),
         "kind": "cx.message.create",
         "schema_id": "cx.schema.message.v1",
         "actor_id": "did:web:alice.example",
@@ -207,13 +270,25 @@ fn event_query_bodies(events: &Value) -> Vec<String> {
 #[tokio::test]
 async fn joined_history_hides_pre_join_messages_from_sync_and_events_query() {
     let state = AppState::new(test_config(), Db { pool: None });
-    let alice = dev_token(state.clone(), "did:web:alice.example", "a11ce0000001").await;
-    let bob = dev_token(state.clone(), "did:web:bob.example", "b0b000000000").await;
-    let space_id = create_space(state.clone(), &alice, "joined history", "joined").await;
+    let alice_did = "did:web:alice.example";
+    let alice_device_id = "cx:device:01904100-0000-7000-8000-a11ce0000001";
+    let alice = dev_token(state.clone(), alice_did, "a11ce0000001").await;
+    let bob_did = "did:web:bob.example";
+    let _bob_session_device = dev_token(state.clone(), bob_did, "b0b000000000").await;
+    let bob = _bob_session_device;
+    let space_id = seed_realm(&state, alice_did, "joined history", "joined");
 
     send_message(state.clone(), &alice, &space_id, "before bob joined").await;
     tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-    add_member(state.clone(), &alice, &space_id, "did:web:bob.example").await;
+    admit_member(
+        state.clone(),
+        &alice,
+        alice_did,
+        alice_device_id,
+        bob_did,
+        &space_id,
+    )
+    .await;
     tokio::time::sleep(std::time::Duration::from_millis(5)).await;
     send_message(state.clone(), &alice, &space_id, "after bob joined").await;
 
@@ -258,13 +333,24 @@ async fn joined_history_hides_pre_join_messages_from_sync_and_events_query() {
 #[tokio::test]
 async fn shared_history_allows_late_joiner_to_backfill_prior_messages() {
     let state = AppState::new(test_config(), Db { pool: None });
-    let alice = dev_token(state.clone(), "did:web:alice.example", "a11ce0000002").await;
-    let bob = dev_token(state.clone(), "did:web:bob.example", "b0b000000002").await;
-    let space_id = create_space(state.clone(), &alice, "shared history", "shared").await;
+    let alice_did = "did:web:alice.example";
+    let alice_device_id = "cx:device:01904100-0000-7000-8000-a11ce0000001";
+    let alice = dev_token(state.clone(), alice_did, "a11ce0000001").await;
+    let bob_did = "did:web:bob.example";
+    let bob = dev_token(state.clone(), bob_did, "b0b000000002").await;
+    let space_id = seed_realm(&state, alice_did, "shared history", "shared");
 
     send_message(state.clone(), &alice, &space_id, "shared before join").await;
     tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-    add_member(state.clone(), &alice, &space_id, "did:web:bob.example").await;
+    admit_member(
+        state.clone(),
+        &alice,
+        alice_did,
+        alice_device_id,
+        bob_did,
+        &space_id,
+    )
+    .await;
 
     let sync: Value = TestClient::post("http://server/api/v1/sync")
         .add_header("authorization", format!("Bearer {bob}"), true)
@@ -296,19 +382,19 @@ async fn shared_history_allows_late_joiner_to_backfill_prior_messages() {
 
 #[test]
 fn flow_update_records_discussion_realm_ref_and_rejects_orphans() {
-    use contrix_sdk::{Operation, OperationId, SpaceId};
+    use contrix_sdk::{Operation, OperationId};
     use soland::hlc::ServerHlc;
     use soland::reducer::{ProjectionEffect, ProjectionState};
 
-    const PARENT: &str = "cx:space:01904100-0000-7000-8000-d11111111111";
-    const CHILD: &str = "cx:space:01904100-0000-7000-8000-d22222222222";
-    const MISSING: &str = "cx:space:01904100-0000-7000-8000-d33333333333";
+    const PARENT: &str = "cx:realm:01904100-0000-7000-8000-d11111111111";
+    const CHILD: &str = "cx:realm:01904100-0000-7000-8000-d22222222222";
+    const MISSING: &str = "cx:realm:01904100-0000-7000-8000-d33333333333";
     const FLOW: &str = "cx:flow:01904100-0000-7000-8000-f11111111111";
 
-    fn op(kind: &str, space_id: &str, payload: Value) -> Operation {
+    fn op(kind: &str, realm_id: &str, payload: Value) -> Operation {
         Operation::create(
             OperationId::new(format!("cx:operation:{}", uuid::Uuid::now_v7())).unwrap(),
-            SpaceId::new(space_id).unwrap(),
+            RealmId::new(realm_id).unwrap(),
             kind,
             payload,
         )
@@ -319,7 +405,7 @@ fn flow_update_records_discussion_realm_ref_and_rejects_orphans() {
     for realm in [PARENT, CHILD] {
         state.apply(
             &op(
-                soland::kinds::CX_SPACE_CREATE,
+                soland::kinds::CX_REALM_CREATE,
                 realm,
                 json!({"action": "create", "owner": "did:web:alice.example", "public": true}),
             ),

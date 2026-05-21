@@ -105,6 +105,7 @@ fn outbox_test_config() -> AppConfig {
         trust_domain: "cx:trust_domain:soland-outbox.local".to_owned(),
         sovereign_enclave_enabled: false,
         sovereign_enclave_allowed_outbound_hosts: Vec::new(),
+        erasure_propagation_window_ms: 604_800_000,
     }
 }
 

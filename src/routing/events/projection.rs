@@ -429,7 +429,7 @@ pub fn project_federation_operation(state: &AppState, origin: &str, operation: &
     if kinds::operation_is_message_create(operation) {
         project_federated_message(state, origin, operation);
     } else if kinds::operation_is_membership(operation)
-        || kinds::operation_is_space_lifecycle(operation)
+        || kinds::operation_is_realm_lifecycle(operation)
     {
         project_membership_operation(state, origin, operation);
     }
@@ -696,7 +696,7 @@ pub fn project_accepted_operations(state: &AppState, origin: &str, operations: &
         if kinds::operation_is_message_create(operation) {
             project_federated_message(state, origin, operation);
         } else if kinds::operation_is_membership(operation)
-            || kinds::operation_is_space_lifecycle(operation)
+            || kinds::operation_is_realm_lifecycle(operation)
         {
             project_membership_operation(state, origin, operation);
         }
@@ -710,6 +710,17 @@ pub fn project_accepted_operations(state: &AppState, origin: &str, operations: &
         // Also apply to the deterministic reducer
         if let Ok(mut proj) = state.projection.lock() {
             apply_via_lattice_registry(state, &mut proj, operation);
+        }
+        // Stream-F (Wave 2C) — `cx.audit.erasure_receipt` federation
+        // fanout. The reducer has already pushed the receipt into the
+        // `erasure_receipts` projection; the fanout helper looks it up
+        // by `receipt_id`, enqueues one outbox row per federation peer,
+        // and seeds the per-peer `peer_status` map.
+        // Spec realm-and-space.md §2.5.2.
+        if kinds::canonical_kind_string(operation) == kinds::CX_AUDIT_ERASURE_RECEIPT
+            && let Some(receipt_id) = operation.payload.get("receipt_id").and_then(|v| v.as_str())
+        {
+            crate::routing::federation::erasure_fanout::fanout_erasure_receipt(state, receipt_id);
         }
         // Write through Space-container/Flow/Morph projection changes to durable
         // persistence. Captures the in-memory projection snapshot
@@ -812,7 +823,7 @@ pub fn persist_projected_operation(
             .bind::<Timestamptz, _>(operation.created_at)
             .execute(&mut conn)?;
     } else if kinds::operation_is_membership(operation)
-        || kinds::operation_is_space_lifecycle(operation)
+        || kinds::operation_is_realm_lifecycle(operation)
     {
         let title = operation
             .payload
@@ -1070,7 +1081,7 @@ pub fn project_membership_operation(state: &AppState, origin: &str, operation: &
         .payload
         .get("membership")
         .and_then(|value| value.as_str());
-    if kinds::canonical_kind_for_operation(operation) == Some(kinds::CX_SPACE_DESTROY) {
+    if kinds::canonical_kind_for_operation(operation) == Some(kinds::CX_REALM_DESTROY) {
         let store = state.persistence.realm_meta();
         if let Ok(Some(mut record)) = store.get(operation.realm_id.as_str()) {
             record.deleted = true;
@@ -1090,12 +1101,9 @@ pub fn project_membership_operation(state: &AppState, origin: &str, operation: &
 
     // Project an `invite` membership transition into a SpaceInviteRecord so
     // `GET /api/v1/authz/invites` can surface seed invites carried on the
-    // event path (e.g. when the Realm bootstrap flow emits
+    // canonical event path (e.g. when the Realm bootstrap flow emits
     // `cx.member.state{membership=invite}` for each seed member, per
-    // `models/realm-and-space.md` §3 + `governance/join-policy.md` §6). The
-    // legacy REST `POST /api/v1/spaces` path already writes the record; the
-    // event path needs the same write so the invite is reachable from both
-    // ingestion routes.
+    // `models/realm-and-space.md` §3 + `governance/join-policy.md` §6).
     tracing::debug!(
         membership = ?membership,
         member = %member,
@@ -1187,6 +1195,7 @@ pub fn project_federated_message(state: &AppState, origin: &str, operation: &Ope
     let content = operation
         .payload
         .get("content")
+        .or_else(|| operation.payload.get("encrypted_payload"))
         .cloned()
         .unwrap_or_else(|| operation.payload.clone());
     let sender = operation
@@ -1205,7 +1214,7 @@ pub fn project_federated_message(state: &AppState, origin: &str, operation: &Ope
         .payload
         .get("encrypted")
         .and_then(|value| value.as_bool())
-        .unwrap_or(false);
+        .unwrap_or_else(|| operation.payload.get("encrypted_payload").is_some());
     if let Err(error) = store.put(&MessageRecord {
         event_id,
         space_id: operation.realm_id.to_string(),

@@ -62,6 +62,7 @@ fn test_config() -> AppConfig {
         trust_domain: "cx:trust_domain:soland.local".to_owned(),
         sovereign_enclave_enabled: false,
         sovereign_enclave_allowed_outbound_hosts: Vec::new(),
+        erasure_propagation_window_ms: 604_800_000,
     }
 }
 
@@ -84,10 +85,10 @@ async fn dev_token(svc: &salvo::Service) -> String {
     login["access_token"].as_str().unwrap().to_owned()
 }
 
-const REALM_A: &str = "cx:space:01904100-0000-7000-8000-aaaaaaaaaaa1";
-const REALM_B: &str = "cx:space:01904100-0000-7000-8000-bbbbbbbbbbb2";
-const REALM_C: &str = "cx:space:01904100-0000-7000-8000-ccccccccccc3";
-const REALM_D: &str = "cx:space:01904100-0000-7000-8000-ddddddddddd4";
+const REALM_A: &str = "cx:realm:01904100-0000-7000-8000-aaaaaaaaaaa1";
+const REALM_B: &str = "cx:realm:01904100-0000-7000-8000-bbbbbbbbbbb2";
+const REALM_C: &str = "cx:realm:01904100-0000-7000-8000-ccccccccccc3";
+const REALM_D: &str = "cx:realm:01904100-0000-7000-8000-ddddddddddd4";
 
 /// Submit a `cx.realm.inheritance_policy` event directly through the
 /// reducer (the dedicated HTTP route is the standard `/api/v1/events`
@@ -99,10 +100,10 @@ fn project_inheritance_policy(
     source_realm_id: &str,
     allowed_policies: &[&str],
 ) {
-    use contrix_sdk::{Operation, OperationId, SpaceId};
+    use contrix_sdk::{Operation, OperationId, RealmId};
     let op = Operation::create(
         OperationId::new(format!("cx:operation:{}", uuid::Uuid::now_v7())).unwrap(),
-        SpaceId::new(realm_id).unwrap(),
+        RealmId::new(realm_id).unwrap(),
         soland::kinds::CX_REALM_INHERITANCE_POLICY,
         json!({
             "source_realm_id": source_realm_id,

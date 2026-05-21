@@ -22,6 +22,74 @@ pub(super) fn router() -> Router {
     Router::new()
         .push(Router::with_path("audit/events").get(audit_events))
         .push(Router::with_path("audit/user-action").post(post_user_action))
+        .push(Router::with_path("audit/erasure-receipts").get(audit_erasure_receipts))
+}
+
+/// Spec `realm-and-space.md` §2.5.2 — exposes the
+/// `cx.audit.erasure_receipt` projection so verifiers / auditors can
+/// query the local receipt list (including `fanout_status` per-peer
+/// state and the timeout-triggered `incomplete` flip). Advertised via
+/// `/api/v1/server/describe.erasure_receipts_endpoint`.
+///
+/// The endpoint is authentication-gated; reading the receipt list does
+/// not leak any post-erasure payload (the projection holds canonical
+/// receipt envelopes — issuer / subject / outcome / scope — which are
+/// the auditable surface by design).
+#[endpoint(
+    operation_id = "cx.extension.soland.audit.erasure_receipts.list",
+    tags("audit"),
+    summary = "List cx.audit.erasure_receipt projection rows + fanout state"
+)]
+async fn audit_erasure_receipts(
+    aa: AuthArgs,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<Value> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    // Authenticate the session so the endpoint isn't usable
+    // unauthenticated; we don't restrict cross-actor reads because the
+    // receipt list is the auditable surface (see method doc above).
+    let _session = aa.authenticated_session(state, req)?;
+    let receipts: Vec<Value> = {
+        let Ok(proj) = state.projection.lock() else {
+            return Err(AppError::internal("projection lock poisoned"));
+        };
+        proj.erasure_receipts
+            .iter()
+            .map(|r| {
+                let peer_status_map: serde_json::Map<String, Value> = r
+                    .peer_status
+                    .iter()
+                    .map(|(peer, status)| {
+                        (
+                            peer.clone(),
+                            json!({
+                                "sent_at": status.sent_at.map(|t| t.to_rfc3339()),
+                                "acked_at": status.acked_at.map(|t| t.to_rfc3339()),
+                                "outcome": status.outcome,
+                            }),
+                        )
+                    })
+                    .collect();
+                json!({
+                    "receipt_id": r.receipt_id,
+                    "issuer": r.issuer,
+                    "subject_kind": r.subject_kind,
+                    "subject_ref": r.subject_ref,
+                    "outcome": r.outcome,
+                    "storage_boundary": r.storage_boundary,
+                    "scope_realm_id": r.scope_realm_id,
+                    "fanout_status": r.fanout_status,
+                    "peer_status": peer_status_map,
+                    "recorded_at": r.recorded_at.to_rfc3339(),
+                    "payload": r.payload,
+                })
+            })
+            .collect()
+    };
+    json_ok(json!({
+        "receipts": receipts,
+    }))
 }
 
 /// Client-side telemetry sink.

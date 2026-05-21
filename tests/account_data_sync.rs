@@ -1,3 +1,4 @@
+use contrix_sdk::{Did, RealmId};
 use salvo::http::StatusCode;
 use salvo::test::{ResponseExt, TestClient};
 use serde_json::{Value, json};
@@ -5,7 +6,7 @@ use sha2::{Digest, Sha256};
 use soland::config::{AppConfig, ObjectStorageConfig};
 use soland::db::Db;
 use soland::service;
-use soland::state::AppState;
+use soland::state::{AppState, RealmDirectoryEntry, RealmMetaRecord};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static TEST_EVENT_SEQ: AtomicU64 = AtomicU64::new(2_000);
@@ -57,6 +58,7 @@ fn test_config() -> AppConfig {
         trust_domain: "cx:trust_domain:soland.local".to_owned(),
         sovereign_enclave_enabled: false,
         sovereign_enclave_allowed_outbound_hosts: Vec::new(),
+        erasure_propagation_window_ms: 604_800_000,
     }
 }
 
@@ -79,39 +81,50 @@ async fn dev_token(state: AppState, actor: &str, device_id: &str, display_name: 
     login["access_token"].as_str().unwrap().to_owned()
 }
 
-async fn create_plaintext_space(state: AppState, token: &str, title: &str) -> String {
-    let created: Value = TestClient::post("http://server/api/v1/spaces")
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&json!({
-            "title": title,
-            "summary": "G3.S6 account-private sync fixture",
-            "public": false,
-            "plaintext_visible_services": ["did:web:soland.local"]
-        }))
-        .send(&app_from_state(state))
-        .await
-        .take_json()
-        .await
+async fn create_plaintext_space(state: AppState, _token: &str, title: &str) -> String {
+    let realm_id = contrix_sdk::new_prefixed_uuid7("cx:realm:");
+    let typed_realm_id = RealmId::new(realm_id.clone()).unwrap();
+    let owner = Did::new("did:web:alice.example".to_owned()).unwrap();
+    let now = chrono::Utc::now();
+
+    let mut entry = RealmDirectoryEntry::new(typed_realm_id, title);
+    entry.description = Some("G3.S6 account-private sync fixture".to_owned());
+    entry.members.insert(owner);
+    state.realms.lock().unwrap().upsert(entry);
+    state
+        .persistence
+        .realm_meta()
+        .put(
+            &realm_id,
+            &RealmMetaRecord {
+                owner: "did:web:alice.example".to_owned(),
+                deleted: false,
+                discoverability: "invite_only".to_owned(),
+                history_visibility: "joined".to_owned(),
+                encryption_profile: None,
+                plaintext_visible_services: std::collections::BTreeSet::from([
+                    "did:web:soland.local".to_owned(),
+                ]),
+                created_at: now,
+                updated_at: now,
+            },
+        )
         .unwrap();
-    created["space_id"].as_str().unwrap().to_owned()
+    realm_id
 }
 
-async fn add_space_member(state: AppState, token: &str, space_id: &str, member: &str) {
-    let added: Value = TestClient::post(format!("http://server/api/v1/spaces/{space_id}/members"))
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&json!({"member": member}))
-        .send(&app_from_state(state))
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    assert!(
-        added["members"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|m| m == member)
-    );
+async fn add_space_member(state: AppState, _token: &str, space_id: &str, member: &str) {
+    let typed_realm_id = RealmId::new(space_id.to_owned()).unwrap();
+    let member_did = Did::new(member.to_owned()).unwrap();
+    let mut realms = state.realms.lock().unwrap();
+    let entry = realms
+        .get(&typed_realm_id)
+        .cloned()
+        .expect("seeded test realm exists before member add");
+    let mut updated = entry;
+    updated.members.insert(member_did);
+    assert!(updated.members.iter().any(|did| did.as_str() == member));
+    realms.upsert(updated);
 }
 
 async fn send_plaintext_message(
@@ -124,7 +137,8 @@ async fn send_plaintext_message(
     let payload = json!({
         "flow_id": flow_id_for_realm(space_id),
         "thread_id": space_id,
-        "content": {"body": body},
+        "track": "discussion",
+        "content": {"kind": "cx.content.text", "body": body},
         "encrypted": false
     });
     let mut event = json!({
@@ -150,14 +164,19 @@ async fn send_plaintext_message(
         }]
     });
     event["canonical_digest"] = Value::String(event_canonical_digest(&event));
-    TestClient::post("http://server/api/v1/events")
+    let response: Value = TestClient::post("http://server/api/v1/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&event)
         .send(&app_from_state(state))
         .await
         .take_json()
         .await
-        .unwrap()
+        .unwrap();
+    assert!(
+        response["event_id"].is_string(),
+        "message event submit must return event_id, got {response}"
+    );
+    response
 }
 
 fn sha256_json(value: &Value) -> String {
@@ -275,15 +294,14 @@ async fn blocklist_account_data_fans_out_and_filters_notifications() {
         .unwrap();
     assert!(bob_messages["events"].as_array().unwrap().is_empty());
 
-    let blocked_message =
-        send_plaintext_message(
-            state.clone(),
-            &bob,
-            "did:web:bob.example",
-            &space_id,
-            "blocked notification",
-        )
-        .await;
+    let blocked_message = send_plaintext_message(
+        state.clone(),
+        &bob,
+        "did:web:bob.example",
+        &space_id,
+        "blocked notification",
+    )
+    .await;
     let notifications: Value =
         TestClient::get("http://server/api/v1/index/notifications?actor=did:web:alice.example")
             .send(&app_from_state(state.clone()))
@@ -306,15 +324,14 @@ async fn blocklist_account_data_fans_out_and_filters_notifications() {
         .await;
     assert_eq!(unblock.status_code.unwrap().as_u16(), 200);
 
-    let visible_message =
-        send_plaintext_message(
-            state.clone(),
-            &bob,
-            "did:web:bob.example",
-            &space_id,
-            "visible notification",
-        )
-        .await;
+    let visible_message = send_plaintext_message(
+        state.clone(),
+        &bob,
+        "did:web:bob.example",
+        &space_id,
+        "visible notification",
+    )
+    .await;
     let notifications_after: Value =
         TestClient::get("http://server/api/v1/index/notifications?actor=did:web:alice.example")
             .send(&app_from_state(state.clone()))

@@ -422,7 +422,7 @@ mod tests {
     use crate::config::AppConfig;
     use crate::db::Db;
     use crate::state::AppState;
-    use contrix_sdk::{Operation, OperationId, SpaceId};
+    use contrix_sdk::{Operation, OperationId, RealmId};
     use std::net::SocketAddr;
     use std::str::FromStr;
 
@@ -473,6 +473,7 @@ mod tests {
             trust_domain: "cx:trust_domain:soland.local".to_owned(),
             sovereign_enclave_enabled: false,
             sovereign_enclave_allowed_outbound_hosts: Vec::new(),
+            erasure_propagation_window_ms: 604_800_000,
         };
         AppState::new(config, Db { pool: None })
     }
@@ -481,7 +482,7 @@ mod tests {
         let mut op = Operation::create(
             OperationId::new("cx:operation:01904100-0000-7bbb-8bbb-000000000001".to_owned())
                 .unwrap(),
-            SpaceId::new("cx:space:01904100-0000-7000-8000-bbbbbbbbbbbb".to_owned()).unwrap(),
+            RealmId::new("cx:realm:01904100-0000-7000-8000-bbbbbbbbbbbb".to_owned()).unwrap(),
             kinds::CX_AGENT_PROTOCOL_SESSION_START,
             json!({
                 "agent_did": agent_did,
@@ -810,7 +811,7 @@ mod tests {
         let mut op = Operation::create(
             OperationId::new("cx:operation:01904100-0000-7bbb-8bbb-000000000002".to_owned())
                 .unwrap(),
-            SpaceId::new("cx:space:01904100-0000-7000-8000-bbbbbbbbbbbb".to_owned()).unwrap(),
+            RealmId::new("cx:realm:01904100-0000-7000-8000-bbbbbbbbbbbb".to_owned()).unwrap(),
             kinds::CX_AGENT_ENDPOINT,
             json!({"endpoint_url": "https://agent.example/api"}),
         );
@@ -836,7 +837,7 @@ mod tests {
         let mut op = Operation::create(
             OperationId::new("cx:operation:01904100-0000-7bbb-8bbb-000000000003".to_owned())
                 .unwrap(),
-            SpaceId::new("cx:space:01904100-0000-7000-8000-bbbbbbbbbbbb".to_owned()).unwrap(),
+            RealmId::new("cx:realm:01904100-0000-7000-8000-bbbbbbbbbbbb".to_owned()).unwrap(),
             kinds::CX_AGENT_PROTOCOL_SESSION_START,
             json!({"agent_did": "did:web:agent.example"}),
         );

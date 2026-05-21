@@ -110,6 +110,17 @@ async fn main() -> anyhow::Result<()> {
     // `routing::federation::federation::broadcast_*_to_peers`.
     let _federation_dispatcher = soland::routing::federation::outbox::spawn(state.clone());
 
+    // Stream-F (Wave 2C) — periodic erasure-receipt federation fanout
+    // timeout sweep. Wakes every hour (the default sweep interval; the
+    // spec window is 7 days so missing a tick can only delay the
+    // `incomplete` flip by ~1h), scans `erasure_receipts` for receipts
+    // whose `recorded_at + erasure_propagation_window_ms` has lapsed
+    // with at least one peer still un-acknowledged, and flips
+    // `fanout_status = "incomplete"`. Spec
+    // `realm-and-space.md` §2.5.2. Same `federation_outbound_enabled`
+    // toggle as the dispatcher above.
+    let _erasure_fanout_sweep = soland::routing::federation::erasure_fanout::spawn(state.clone());
+
     tracing::info!(
         bind = %config.bind,
         public_base_url = %config.public_base_url,

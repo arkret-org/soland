@@ -1,6 +1,7 @@
 use salvo::prelude::*;
 
-mod federation;
+pub mod erasure_fanout;
+pub(crate) mod federation;
 pub(crate) mod move_anchor;
 pub mod outbox;
 

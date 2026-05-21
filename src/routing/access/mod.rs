@@ -6,7 +6,7 @@ pub(super) mod policy;
 use super::system::describe;
 use super::{
     append_audit_log, is_valid_sha256_digest, now, query_param, sha256_hex,
-    validate_canonical_json_value, validate_did, validate_space_id,
+    validate_canonical_json_value, validate_did,
 };
 
 pub fn router() -> Router {

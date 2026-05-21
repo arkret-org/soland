@@ -225,7 +225,7 @@ async fn get_device_messages(
         .unwrap_or(ack_position);
     json_ok(DeviceMessagesReceiveResBody {
         events,
-        next_batch: Some(sync_token_for_client_sync(
+        next_cursor: Some(sync_token_for_client_sync(
             state,
             Some(&session),
             None,

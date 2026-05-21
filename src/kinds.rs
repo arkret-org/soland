@@ -14,13 +14,9 @@ pub const CX_RELATION_DELETE: &str = "cx.relation.delete";
 pub const CX_VIEW_CREATE: &str = "cx.view.create";
 pub const CX_VIEW_UPDATE: &str = "cx.view.update";
 pub const CX_VIEW_RECONCILE: &str = "cx.view.reconcile";
-// Realm/Space reversal (R1.2): the v1 protocol renames the old security
-// boundary `Space` to `Realm`, and the old container `Place` to `Space`.
-// These constants now point at the new wire strings. Container lifecycle
-// identifiers use `CX_SPACE_CONTAINER_*`; the realm lifecycle constants still
-// use `CX_SPACE_*` until the durable realm storage migration lands.
-//
-// New container `cx.space.*` (was `cx.place.*`). Container lifecycle.
+// Space-container lifecycle (`cx.space.*`). Spec
+// `contrix-spec/spec/v1/zh/models/realm-and-space.md` — the v1 protocol
+// container, distinct from the `cx.realm.*` security boundary below.
 pub const CX_SPACE_CONTAINER_CREATE: &str = "cx.space.create";
 pub const CX_SPACE_CONTAINER_UPDATE: &str = "cx.space.update";
 pub const CX_SPACE_CONTAINER_PARENT: &str = "cx.space.parent";
@@ -76,12 +72,18 @@ pub const CX_CONTAINER_MOVE_ITEM: &str = "cx.container.move_item";
 pub const CX_CONTAINER_REBALANCE: &str = "cx.container.rebalance";
 pub const CX_MEMBER_STATE: &str = "cx.member.state";
 pub const CX_READ_MARKER: &str = "cx.read.marker";
-// Realm boundary (was the old `cx.space.*` security namespace). The
-// Rust identifiers retain the old name to keep the diff mechanical; the
-// `&str` values point at the new `cx.realm.*` wire strings.
-pub const CX_SPACE_CREATE: &str = "cx.realm.create";
-pub const CX_SPACE_UPDATE: &str = "cx.realm.update";
-pub const CX_SPACE_DESTROY: &str = "cx.realm.destroy";
+// Realm security-boundary lifecycle (`cx.realm.*`). Spec
+// `contrix-spec/spec/v1/zh/models/realm-and-space.md` §1 + §4.
+//
+// `cx.realm.tombstone` is the irreversible terminal-state event that
+// freezes the Realm and triggers the erasure-receipt fanout chain via
+// `cx.audit.erasure_receipt`. Distinct from `cx.realm.destroy`, which
+// is the GDPR-grade hard-delete request that retains a `retained_stub_hash`.
+pub const CX_REALM_CREATE: &str = "cx.realm.create";
+pub const CX_REALM_UPDATE: &str = "cx.realm.update";
+pub const CX_REALM_DESTROY: &str = "cx.realm.destroy";
+pub const CX_REALM_TOMBSTONE: &str = "cx.realm.tombstone";
+pub const CX_AUDIT_ERASURE_RECEIPT: &str = "cx.audit.erasure_receipt";
 pub const CX_REDACTION: &str = "cx.redaction";
 // Round 14e+ (2026-05-16) — Applet protocol family. Spec
 // `extensions/applet-integration.md`. soland's role at this layer is to
@@ -124,16 +126,13 @@ pub const CX_AGENT_WORKSPACE_RESERVATION_CLEANUP: &str = "cx.agent_workspace.res
 // `attested_hardware` Audit Agent removal MUST emit
 // `cx.audit.epoch_key_destruction` in the same anchor batch as the paired
 // `cx.mls.commit`. If the deadline passes without the attestation, soland
-// forces a `cx.realm.audit_policy_downgrade` event (R1.2: was
-// `cx.space.audit_policy_downgrade` pre-Realm/Space reversal) that drops
+// forces a `cx.realm.audit_policy_downgrade` event that drops
 // `audit_assurance` from attested_hardware to disclosed_policy and triggers
 // a UI banner. Reducer-level validation lives in `src/reducer.rs` under
 // `apply_audit_epoch_key_destruction` / `apply_audit_policy_downgrade`
 // (still TODO stubs pending full attestation-chain verification).
 pub const CX_AUDIT_EPOCH_KEY_DESTRUCTION: &str = "cx.audit.epoch_key_destruction";
-// Realm reversal (R1.2): `cx.space.audit_policy_downgrade` →
-// `cx.realm.audit_policy_downgrade`.
-pub const CX_SPACE_AUDIT_POLICY_DOWNGRADE: &str = "cx.realm.audit_policy_downgrade";
+pub const CX_REALM_AUDIT_POLICY_DOWNGRADE: &str = "cx.realm.audit_policy_downgrade";
 
 // Round C45 (2026-05-18 main) — new event kinds.
 //
@@ -153,9 +152,7 @@ pub const CX_MORPH_SCHEMA_MIGRATE: &str = "cx.morph.schema_migrate";
 pub const CX_ATTESTATION_RANGE_COMPLETENESS: &str = "cx.attestation.range_completeness";
 
 // Round C46 (2026-05-19; spec 0a5ab85) — Realm-scoped delivery binding
-// governance + per-device push route binding. R1.2 (Realm/Space
-// reversal) renamed the event_kind and cell_family from the old
-// `cx.space.*` security namespace to `cx.realm.*`.
+// governance + per-device push route binding.
 //
 // `cx.realm.delivery_binding_policy` (realm / reducer_input): Realm
 //   policy constraining which `binding_source` values are admissible,
@@ -173,20 +170,15 @@ pub const CX_ATTESTATION_RANGE_COMPLETENESS: &str = "cx.attestation.range_comple
 //   `(recipient_service_did, principal, device, push_route)`. MUST NOT be
 //   replicated outside the binding's recipient_service_did context. Stored
 //   as actor-private state on the recipient Principal Server only.
-// Realm reversal (R1.2): `cx.space.delivery_binding_policy` →
-// `cx.realm.delivery_binding_policy`. cell_family also renamed from
-// `cx.component.space.delivery_binding_policy.v1` →
-// `cx.component.realm.delivery_binding_policy.v1`.
-pub const CX_SPACE_DELIVERY_BINDING_POLICY: &str = "cx.realm.delivery_binding_policy";
-// `cx.device.push_route` is device-scoped — unchanged by the rename.
+pub const CX_REALM_DELIVERY_BINDING_POLICY: &str = "cx.realm.delivery_binding_policy";
+// `cx.device.push_route` is device-scoped.
 pub const CX_DEVICE_PUSH_ROUTE: &str = "cx.device.push_route";
 
-// Round R1.2 — new event kinds introduced by the Realm/Space reversal.
-// Wire-accept + projection no-op stubs; full semantics are TODO.
+// Realm graph + capability derivation event kinds. Wire-accept + projection
+// no-op stubs; full semantics are TODO.
 //
 // `cx.realm.link` (realm / reducer_input): typed link between Realm boundaries.
-// Replaces the old `cx.space.parent` / `cx.space.child` (security) shapes;
-// canonical `link_kind` handling is TODO(realm-rework).
+// Canonical `link_kind` handling is TODO(realm-rework).
 pub const CX_REALM_LINK: &str = "cx.realm.link";
 // `cx.realm.inheritance_policy` (realm / reducer_input): declares which
 // realm-scoped policies a child Realm inherits from its parent boundary.
@@ -205,33 +197,48 @@ pub const CX_REALM_POLICY_SERVER: &str = "cx.realm.policy_server";
 
 // G3.S1 — MLS / E2EE lifecycle event kinds.
 //
-// Scoped subset (in-scope per `_codex_test_gaps.md` G3.S1):
-//   - `cx.mls.keypackage.publish` — publish a per-(actor, device) KeyPackage envelope.
-//   - `cx.mls.keypackage.claim`   — atomic CAS claim of a published KeyPackage. Second
-//                                    claim of the same `keypackage_id` MUST be rejected
-//                                    (compare-and-swap; no replay).
-//   - `cx.mls.welcome.enqueue`    — append a Welcome to a per-(recipient, device) queue
-//                                    so the recipient device can fetch it on next sync.
-//   - `cx.mls.commit.epoch`       — bump the MLS group's stored epoch by exactly +1 from
-//                                    `expected_prev_epoch`. Stale / out-of-order commits
-//                                    are rejected with `mls_epoch_skew`.
+// Canonical kinds per
+// `contrix-spec/spec/v1/artifacts/schemas/event-schema.json` (kind enum):
+//   - `cx.mls.keypackage`    — KeyPackage publication. The publish/claim
+//                              distinction lives at the HTTP operation_id
+//                              layer (`cx.keys.keypackages.upload` /
+//                              `cx.keys.keypackages.claim`); the event log
+//                              stores only the canonical kind. The reducer
+//                              dispatches publish-vs-claim on the
+//                              `payload.action == "publish" | "claim"` field.
+//   - `cx.mls.welcome`       — Welcome envelope reference. Per-(recipient,
+//                              device) queue semantics are conveyed via
+//                              payload shape; no separate `.enqueue` suffix.
+//   - `cx.mls.commit`        — MLS commit (bumps the group's stored epoch
+//                              by +1 from `payload.expected_prev_epoch`).
+//                              The "epoch" semantics live in the payload,
+//                              not in the kind suffix.
+//   - `cx.mls.proposal`      — MLS proposal (wire-only; no reducer projection
+//                              yet).
+//   - `cx.mls.genesis`       — MLS group genesis (wire-only; no reducer
+//                              projection yet).
+//   - `cx.mls.commit_failed` — diagnostic of a failed commit / Welcome
+//                              processing path (wire-only; no reducer
+//                              projection yet).
 //
-// TODO(G3.S1-followup): governance_binding — multi-sig commit attestation event
-// kind (e.g. `cx.mls.commit.governance_binding`) that ties a commit to a Realm
-// governance quorum signature set; pending spec finalisation.
-// TODO(G3.S1-followup): covered_frontier — declare which sync-frontier roots
-// are MLS-protected by the current epoch (`cx.mls.epoch.covered_frontier`);
-// blocks epoch-stale plaintext fallback for protected ranges.
+// TODO(G3.S1-followup): governance_binding — multi-sig commit attestation
+// payload extension that ties a `cx.mls.commit` to a Realm governance
+// quorum signature set; pending spec finalisation.
+// TODO(G3.S1-followup): covered_frontier — declare which sync-frontier
+// roots are MLS-protected by the current epoch; blocks epoch-stale
+// plaintext fallback for protected ranges.
 // TODO(G3.S1-followup): decryption_pending — deferred-decryption queue +
-// retry event kind for messages that arrived before the key material; today
-// the recipient silently drops them.
-// TODO(G3.S1-followup): minimal_metadata — envelope-stripping rule registration
-// (`cx.mls.envelope.policy`) so peers know which header fields to redact when
-// forwarding an MLS-protected envelope.
-pub const CX_MLS_KEYPACKAGE_PUBLISH: &str = "cx.mls.keypackage.publish";
-pub const CX_MLS_KEYPACKAGE_CLAIM: &str = "cx.mls.keypackage.claim";
-pub const CX_MLS_WELCOME_ENQUEUE: &str = "cx.mls.welcome.enqueue";
-pub const CX_MLS_COMMIT_EPOCH: &str = "cx.mls.commit.epoch";
+// retry path for messages that arrived before the key material; today the
+// recipient silently drops them.
+// TODO(G3.S1-followup): minimal_metadata — envelope-stripping rule
+// registration so peers know which header fields to redact when forwarding
+// an MLS-protected envelope.
+pub const CX_MLS_KEYPACKAGE: &str = "cx.mls.keypackage";
+pub const CX_MLS_WELCOME: &str = "cx.mls.welcome";
+pub const CX_MLS_COMMIT: &str = "cx.mls.commit";
+pub const CX_MLS_PROPOSAL: &str = "cx.mls.proposal";
+pub const CX_MLS_GENESIS: &str = "cx.mls.genesis";
+pub const CX_MLS_COMMIT_FAILED: &str = "cx.mls.commit_failed";
 
 pub fn canonical_kind_for_operation(operation: &Operation) -> Option<&str> {
     canonical_kind_for_payload(&operation.object_type, &operation.payload)
@@ -285,11 +292,15 @@ fn canonical_registered_kind(object_type: &str) -> Option<&str> {
         CX_CONTAINER_MOVE_ITEM => Some(CX_CONTAINER_MOVE_ITEM),
         CX_CONTAINER_REBALANCE => Some(CX_CONTAINER_REBALANCE),
         CX_READ_MARKER => Some(CX_READ_MARKER),
-        CX_SPACE_CREATE | CX_SPACE_UPDATE | CX_SPACE_DESTROY => Some(match object_type {
-            CX_SPACE_CREATE => CX_SPACE_CREATE,
-            CX_SPACE_DESTROY => CX_SPACE_DESTROY,
-            _ => CX_SPACE_UPDATE,
-        }),
+        CX_REALM_CREATE | CX_REALM_UPDATE | CX_REALM_DESTROY | CX_REALM_TOMBSTONE => {
+            Some(match object_type {
+                CX_REALM_CREATE => CX_REALM_CREATE,
+                CX_REALM_DESTROY => CX_REALM_DESTROY,
+                CX_REALM_TOMBSTONE => CX_REALM_TOMBSTONE,
+                _ => CX_REALM_UPDATE,
+            })
+        }
+        CX_AUDIT_ERASURE_RECEIPT => Some(CX_AUDIT_ERASURE_RECEIPT),
         CX_MEMBER_STATE => Some(CX_MEMBER_STATE),
         // Applet protocol family (round 14e+).
         CX_APPLET_REGISTRATION => Some(CX_APPLET_REGISTRATION),
@@ -306,7 +317,7 @@ fn canonical_registered_kind(object_type: &str) -> Option<&str> {
         // Projection is currently `Ignored` pending full attestation-chain
         // verification.
         CX_AUDIT_EPOCH_KEY_DESTRUCTION => Some(CX_AUDIT_EPOCH_KEY_DESTRUCTION),
-        CX_SPACE_AUDIT_POLICY_DOWNGRADE => Some(CX_SPACE_AUDIT_POLICY_DOWNGRADE),
+        CX_REALM_AUDIT_POLICY_DOWNGRADE => Some(CX_REALM_AUDIT_POLICY_DOWNGRADE),
         // Round C45 — new event kinds. Wire-valid; reducer dispatch is TODO
         // (accountability_grant strips unverified DIDs from accountable_to;
         // morph.schema_migrate enforces capability + compatibility_class
@@ -317,11 +328,11 @@ fn canonical_registered_kind(object_type: &str) -> Option<&str> {
         // Round C46 — delivery binding governance + push route binding.
         // Wire-valid; reducer projection is TODO pending full policy /
         // push registration plumbing.
-        CX_SPACE_DELIVERY_BINDING_POLICY => Some(CX_SPACE_DELIVERY_BINDING_POLICY),
+        CX_REALM_DELIVERY_BINDING_POLICY => Some(CX_REALM_DELIVERY_BINDING_POLICY),
         CX_DEVICE_PUSH_ROUTE => Some(CX_DEVICE_PUSH_ROUTE),
-        // Round R1.2 (Realm/Space reversal) — schema-level accept; reducer
-        // projection is TODO(realm-rework) for link_kind / inheritance /
-        // capability derive semantics.
+        // Realm graph — schema-level accept; reducer projection is
+        // TODO(realm-rework) for link_kind / inheritance / capability
+        // derive semantics.
         CX_REALM_LINK => Some(CX_REALM_LINK),
         CX_REALM_INHERITANCE_POLICY => Some(CX_REALM_INHERITANCE_POLICY),
         CX_CAPABILITY_DERIVED => Some(CX_CAPABILITY_DERIVED),
@@ -330,6 +341,15 @@ fn canonical_registered_kind(object_type: &str) -> Option<&str> {
         _ => Some(object_type),
     };
     kind
+}
+
+/// True for any `cx.audit.*` event kind. Used by the Realm terminal-state
+/// admission guard (`round23::terminal_realm_check`) to admit audit-class
+/// writes even after a Realm has reached `cx.realm.tombstone` /
+/// `cx.realm.destroy` terminal state. Spec
+/// `contrix-spec/spec/v1/zh/models/realm-and-space.md` §2.5.1.
+pub fn is_audit_kind(kind: &str) -> bool {
+    kind.starts_with("cx.audit.")
 }
 
 /// Applet + agent family classifiers used by projection/audit
@@ -371,8 +391,8 @@ pub fn operation_is_membership(operation: &Operation) -> bool {
     canonical_kind_for_operation(operation) == Some(CX_MEMBER_STATE)
 }
 
-pub fn operation_is_space_lifecycle(operation: &Operation) -> bool {
-    canonical_kind_for_operation(operation).is_some_and(is_space_lifecycle_kind)
+pub fn operation_is_realm_lifecycle(operation: &Operation) -> bool {
+    canonical_kind_for_operation(operation).is_some_and(is_realm_lifecycle_kind)
 }
 
 pub fn is_redaction_kind(kind: &str) -> bool {
@@ -383,8 +403,11 @@ pub fn is_membership_kind(kind: &str) -> bool {
     kind == CX_MEMBER_STATE
 }
 
-pub fn is_space_lifecycle_kind(kind: &str) -> bool {
-    matches!(kind, CX_SPACE_CREATE | CX_SPACE_UPDATE | CX_SPACE_DESTROY)
+pub fn is_realm_lifecycle_kind(kind: &str) -> bool {
+    matches!(
+        kind,
+        CX_REALM_CREATE | CX_REALM_UPDATE | CX_REALM_DESTROY | CX_REALM_TOMBSTONE
+    )
 }
 
 pub fn is_space_container_lifecycle_kind(kind: &str) -> bool {

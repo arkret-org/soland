@@ -5,12 +5,12 @@ use serde_json::{Value, json};
 use soland::hlc::ServerHlc;
 use soland::reducer::{ProjectionEffect, ProjectionState};
 
-const REALM_A: &str = "cx:space:01904100-0000-7000-8000-aaaaaaaaaaaa";
+const REALM_A: &str = "cx:realm:01904100-0000-7000-8000-aaaaaaaaaaaa";
 
 fn op(kind: &str, space_id: &str, payload: Value) -> Operation {
     Operation::create(
         contrix_sdk::OperationId::new(format!("cx:operation:{}", uuid::Uuid::now_v7())).unwrap(),
-        contrix_sdk::SpaceId::new(space_id).unwrap(),
+        contrix_sdk::RealmId::new(space_id).unwrap(),
         kind,
         payload,
     )
@@ -28,7 +28,7 @@ fn audit_policy_downgrade_projects_log_and_cache() {
     });
     let effect = state.apply(
         &op(
-            soland::kinds::CX_SPACE_AUDIT_POLICY_DOWNGRADE,
+            soland::kinds::CX_REALM_AUDIT_POLICY_DOWNGRADE,
             REALM_A,
             payload,
         ),
@@ -71,7 +71,7 @@ fn audit_policy_downgrade_appends_to_existing_log() {
     for reason in ["attestation_deadline_missed", "operator_request"] {
         state.apply(
             &op(
-                soland::kinds::CX_SPACE_AUDIT_POLICY_DOWNGRADE,
+                soland::kinds::CX_REALM_AUDIT_POLICY_DOWNGRADE,
                 REALM_A,
                 json!({
                     "from_policy": "attested_hardware",

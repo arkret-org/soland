@@ -868,7 +868,7 @@ pub struct PolicyDocumentsResponse {
 pub struct PolicyCheckReqBody {
     pub request_id: String,
     #[serde(default)]
-    pub space_id: Option<String>,
+    pub realm_id: Option<String>,
     pub request_canonical_hash: String,
     pub action: String,
     pub actor: String,
@@ -879,6 +879,30 @@ pub struct PolicyCheckReqBody {
     pub auth_context: Option<Value>,
 }
 
+/// Frontier binding stamped onto every signed `PolicyCheckResBody`.
+///
+/// The four hashes pin the decision to a concrete authz universe so a
+/// client (or auditor) can detect that the decision is stale once any
+/// of the four frontiers move:
+///   - `realm_id` — scope this binding applies to (canonical
+///     `cx:realm:<uuid>` form). May be empty string when the request
+///     was realm-less (e.g. a global capability check).
+///   - `auth_state_hash` — sha256 hex over canonical JSON
+///     `{actor, action, resource, request_canonical_hash}`.
+///   - `policy_frontier_hash` — sha256 hex over canonical JSON
+///     `{policy_documents: [<sorted policy_ids>]}`.
+///   - `membership_frontier_hash` — sha256 hex over canonical JSON
+///     `{realm_id, members: [<sorted member DIDs>]}`.
+///   - `expires_at` — soft TTL for the binding (now + 1h).
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
+pub struct PolicyBinding {
+    pub realm_id: String,
+    pub auth_state_hash: String,
+    pub policy_frontier_hash: String,
+    pub membership_frontier_hash: String,
+    pub expires_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct PolicyCheckResBody {
     pub decision: String,
@@ -887,6 +911,7 @@ pub struct PolicyCheckResBody {
     pub expires_at: DateTime<Utc>,
     pub obligations: Vec<Value>,
     pub decision_trace: Value,
+    pub bound_to: PolicyBinding,
     pub signature: Value,
 }
 
@@ -1290,8 +1315,7 @@ pub struct DeviceMessagesSendResBody {
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct DeviceMessagesReceiveResBody {
     pub events: Vec<Value>,
-    #[serde(rename = "next_cursor", alias = "next_batch")]
-    pub next_batch: Option<String>,
+    pub next_cursor: Option<String>,
     pub limited: bool,
 }
 

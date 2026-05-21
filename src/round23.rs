@@ -77,23 +77,28 @@ pub fn events_submit_pre_admit_check(kind: &str) -> Option<(ErrorCode, &'static 
 /// `cx.audit.*` and `cx.audit.ryw_receipt`. Used by [`terminal_realm_check`].
 /// Round R2/R3 (T07).
 pub fn is_audit_class_kind(kind: &str) -> bool {
-    kind.starts_with("cx.audit.")
+    // Delegate to the canonical helper now that kinds.rs owns the
+    // classifier. Local re-export kept for back-compat with callers
+    // that already import `round23::is_audit_class_kind`.
+    crate::kinds::is_audit_kind(kind)
 }
 
 /// Reject any non-audit-class write on a Realm whose lifecycle state is
-/// terminal (`cx.realm.destroy` applied). Round R2/R3 (T07).
+/// terminal (`cx.realm.tombstone` or `cx.realm.destroy` applied).
+/// Round R2/R3 (T07); extended by Stream-F (Wave 1B) to cover the
+/// tombstone state per `realm-and-space.md` §2.5 / §2.5.1.
 ///
 /// Returns `Some((ErrorCode::RealmTerminalState, reason))` when the write
 /// MUST be rejected; `None` otherwise.
 pub fn terminal_realm_check(
-    realm_is_destroyed: bool,
+    realm_in_terminal_state: bool,
     kind: &str,
 ) -> Option<(ErrorCode, &'static str)> {
-    if realm_is_destroyed && !is_audit_class_kind(kind) {
+    if realm_in_terminal_state && !is_audit_class_kind(kind) {
         return Some((
             ErrorCode::RealmTerminalState,
-            "Realm has reached cx.realm.destroy terminal state; \
-             only audit-class events are accepted",
+            "Realm has reached cx.realm.tombstone or cx.realm.destroy \
+             terminal state; only audit-class events are accepted",
         ));
     }
     None

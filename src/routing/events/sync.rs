@@ -970,7 +970,7 @@ pub fn normalized_strings(values: &[String]) -> Vec<String> {
 }
 
 #[endpoint(
-    operation_id = "cx.sync.typing",
+    operation_id = "cx.extension.soland.sync.typing",
     tags("sync"),
     summary = "Set / clear the actor's typing-indicator ephemeral for a Realm"
 )]
@@ -1503,7 +1503,7 @@ pub(super) async fn events_query(
 }
 
 #[endpoint(
-    operation_id = "cx.sync.backfill_gap",
+    operation_id = "cx.extension.soland.sync.backfill_gap",
     tags("sync"),
     summary = "Backfill the gap between two cursors (deployment-local; not in spec)"
 )]
@@ -1632,7 +1632,7 @@ async fn snapshot_head(
 }
 
 #[endpoint(
-    operation_id = "cx.sync.snapshot_chunk",
+    operation_id = "cx.extension.soland.sync.snapshot_chunk",
     tags("sync"),
     summary = "Read one chunk of a snapshot-v2 bundle (with audit_path proving merkle membership)"
 )]

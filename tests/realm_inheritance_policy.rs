@@ -6,13 +6,13 @@ use serde_json::{Value, json};
 use soland::hlc::ServerHlc;
 use soland::reducer::{ProjectionEffect, ProjectionState};
 
-const REALM_PARENT: &str = "cx:space:01904100-0000-7000-8000-aaaaaaaaaaaa";
-const REALM_CHILD: &str = "cx:space:01904100-0000-7000-8000-bbbbbbbbbbbb";
+const REALM_PARENT: &str = "cx:realm:01904100-0000-7000-8000-aaaaaaaaaaaa";
+const REALM_CHILD: &str = "cx:realm:01904100-0000-7000-8000-bbbbbbbbbbbb";
 
 fn op(kind: &str, space_id: &str, payload: Value) -> Operation {
     Operation::create(
         contrix_sdk::OperationId::new(format!("cx:operation:{}", uuid::Uuid::now_v7())).unwrap(),
-        contrix_sdk::SpaceId::new(space_id).unwrap(),
+        contrix_sdk::RealmId::new(space_id).unwrap(),
         kind,
         payload,
     )

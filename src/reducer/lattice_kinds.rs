@@ -39,8 +39,6 @@ mod tests {
     use contrix_sdk::state_res::BottomMode;
 
     use super::*;
-    use crate::reducer::registry::BottomPolicy;
-
     /// Drift guard between the SDK-defined cell-family registry and
     /// soland's artifact-registry view of the spec event-kind
     /// registry. Both sources MUST agree on lattice and bottom policy

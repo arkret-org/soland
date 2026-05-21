@@ -1,6 +1,6 @@
 //! Flow ID derivation + discussion-track projection helpers.
 //!
-//! Flow IDs are derived from Space IDs via `cx:space:` → `cx:flow:` re-tagging
+//! Flow IDs are derived from Realm/Space IDs via typed-id → `cx:flow:` re-tagging
 //! (sha256 fallback for unrecognised prefixes). The discussion-track
 //! projection wraps the same flow_id with a default `discussion` shape for
 //! account sync and admin snapshots.
@@ -27,7 +27,9 @@ pub fn derived_flow_id(seed: &str) -> String {
 }
 
 pub fn flow_id_from_space_id(space_id: &str) -> String {
-    retag_typed_id(space_id, "cx:space:", "cx:flow:").unwrap_or_else(|| derived_flow_id(space_id))
+    retag_typed_id(space_id, "cx:realm:", "cx:flow:")
+        .or_else(|| retag_typed_id(space_id, "cx:space:", "cx:flow:"))
+        .unwrap_or_else(|| derived_flow_id(space_id))
 }
 
 pub fn message_id_from_event_id(event_id: &str) -> String {

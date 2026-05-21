@@ -12,12 +12,12 @@ use serde_json::{Value, json};
 use soland::hlc::ServerHlc;
 use soland::reducer::{ProjectionEffect, ProjectionState};
 
-const SPACE_A: &str = "cx:space:01904100-0000-7000-8000-cfc039892036";
+const SPACE_A: &str = "cx:realm:01904100-0000-7000-8000-cfc039892036";
 
 fn op(kind: &str, space_id: &str, payload: Value) -> Operation {
     Operation::create(
         contrix_sdk::OperationId::new(format!("cx:operation:{}", uuid::Uuid::now_v7())).unwrap(),
-        contrix_sdk::SpaceId::new(space_id).unwrap(),
+        contrix_sdk::RealmId::new(space_id).unwrap(),
         kind,
         payload,
     )
@@ -26,7 +26,7 @@ fn op(kind: &str, space_id: &str, payload: Value) -> Operation {
 fn apply_policy(state: &mut ProjectionState, hlc: &ServerHlc, payload: Value) {
     let effect = state.apply(
         &op(
-            soland::kinds::CX_SPACE_DELIVERY_BINDING_POLICY,
+            soland::kinds::CX_REALM_DELIVERY_BINDING_POLICY,
             SPACE_A,
             payload,
         ),

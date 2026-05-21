@@ -94,6 +94,7 @@ fn test_config() -> AppConfig {
         trust_domain: "cx:trust_domain:soland.local".to_owned(),
         sovereign_enclave_enabled: false,
         sovereign_enclave_allowed_outbound_hosts: Vec::new(),
+        erasure_propagation_window_ms: 604_800_000,
     }
 }
 
@@ -502,12 +503,12 @@ async fn anchorer_worker_signs_pending_move_and_publishes_anchor() {
     );
 }
 
-/// Demo space pre-seeded by AppState::new. Public/discoverable so the
+/// Demo realm pre-seeded by AppState::new. Public/discoverable so the
 /// test's dev-login session can subscribe without explicit membership
-/// registration. Other tests in this file use a different space id
+/// registration. Other tests in this file use a different realm id
 /// (Move/Anchor tests don't go through space_id_accessible).
 fn demo_space_id() -> &'static str {
-    "cx:space:0196419b-0000-7000-8000-000000000000"
+    "cx:realm:0196419b-0000-7000-8000-000000000000"
 }
 
 fn event_envelope(event_id: &str, actor: &str, space_id: &str, payload: Value) -> Value {

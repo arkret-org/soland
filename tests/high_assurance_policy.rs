@@ -15,13 +15,13 @@ use serde_json::{Value, json};
 use soland::hlc::ServerHlc;
 use soland::reducer::{ProjectionEffect, ProjectionState};
 
-const REALM_HA: &str = "cx:space:01904100-0000-7000-8000-aaaaaaaaaaaa";
-const REALM_STANDARD: &str = "cx:space:01904100-0000-7000-8000-bbbbbbbbbbbb";
+const REALM_HA: &str = "cx:realm:01904100-0000-7000-8000-aaaaaaaaaaaa";
+const REALM_STANDARD: &str = "cx:realm:01904100-0000-7000-8000-bbbbbbbbbbbb";
 
 fn op(kind: &str, space_id: &str, payload: Value) -> Operation {
     Operation::create(
         contrix_sdk::OperationId::new(format!("cx:operation:{}", uuid::Uuid::now_v7())).unwrap(),
-        contrix_sdk::SpaceId::new(space_id).unwrap(),
+        contrix_sdk::RealmId::new(space_id).unwrap(),
         kind,
         payload,
     )
@@ -34,7 +34,7 @@ fn high_assurance_rejects_open_federation_at_create() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let bad = op(
-        soland::kinds::CX_SPACE_CREATE,
+        soland::kinds::CX_REALM_CREATE,
         REALM_HA,
         json!({
             "owner": "did:web:alice",
@@ -61,7 +61,7 @@ fn high_assurance_accepts_closed_restricted_and_quarantine() {
         let mut state = ProjectionState::new();
         let hlc = ServerHlc::new("test");
         let good = op(
-            soland::kinds::CX_SPACE_CREATE,
+            soland::kinds::CX_REALM_CREATE,
             REALM_HA,
             json!({
                 "owner": "did:web:alice",
@@ -93,7 +93,7 @@ fn high_assurance_rejects_post_create_open_federation_update() {
 
     // First: create as high_assurance + restricted.
     let create = op(
-        soland::kinds::CX_SPACE_CREATE,
+        soland::kinds::CX_REALM_CREATE,
         REALM_HA,
         json!({
             "owner": "did:web:alice",
@@ -113,7 +113,7 @@ fn high_assurance_rejects_post_create_open_federation_update() {
     // update to install both fields into the cas-register cell so the
     // R3.4 guard has a projected value to look up.
     let update_to_restricted = op(
-        soland::kinds::CX_SPACE_UPDATE,
+        soland::kinds::CX_REALM_UPDATE,
         REALM_HA,
         json!({
             "owner": "did:web:alice",
@@ -131,7 +131,7 @@ fn high_assurance_rejects_post_create_open_federation_update() {
     // security_class. The reducer MUST consult the projected
     // security_class and reject.
     let bad_update = op(
-        soland::kinds::CX_SPACE_UPDATE,
+        soland::kinds::CX_REALM_UPDATE,
         REALM_HA,
         json!({
             "federation_policy": "open",
@@ -154,7 +154,7 @@ fn standard_realm_accepts_open_federation_policy() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let good = op(
-        soland::kinds::CX_SPACE_CREATE,
+        soland::kinds::CX_REALM_CREATE,
         REALM_STANDARD,
         json!({
             "owner": "did:web:alice",
@@ -179,7 +179,7 @@ fn high_assurance_rejects_simultaneous_open_in_same_payload() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let bad = op(
-        soland::kinds::CX_SPACE_UPDATE,
+        soland::kinds::CX_REALM_UPDATE,
         REALM_HA,
         json!({
             "security_class": "high_assurance",

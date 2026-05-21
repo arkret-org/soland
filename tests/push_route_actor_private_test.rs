@@ -41,7 +41,7 @@ const GATEWAY_DID: &str = "did:web:gateway.example";
 fn op(payload: Value) -> Operation {
     Operation::create(
         contrix_sdk::OperationId::new(format!("cx:operation:{}", uuid::Uuid::now_v7())).unwrap(),
-        contrix_sdk::SpaceId::new(PLACEHOLDER_REALM).unwrap(),
+        contrix_sdk::RealmId::new(PLACEHOLDER_REALM).unwrap(),
         soland::kinds::CX_DEVICE_PUSH_ROUTE,
         payload,
     )

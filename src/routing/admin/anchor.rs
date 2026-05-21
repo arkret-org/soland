@@ -632,7 +632,7 @@ fn collect_bottom_entries_for_space(state: &AppState, space_id: &str) -> Vec<Bot
 /// `GET /api/admin/v1/spaces/{space_id}/anchorer` — read current
 /// anchorer cell value.
 #[endpoint(
-    operation_id = "cx.admin.spaces.anchorer.get",
+    operation_id = "cx.extension.soland.admin.spaces.anchorer.get",
     tags("admin", "anchorer"),
     summary = "Get current anchorer cell value"
 )]
@@ -675,7 +675,7 @@ pub(super) async fn admin_get_anchorer(
 /// the signing identity is still the service signer so Moves chain off the
 /// AnchorerWorker key.
 #[endpoint(
-    operation_id = "cx.admin.spaces.anchorer.reconfigure",
+    operation_id = "cx.extension.soland.admin.spaces.anchorer.reconfigure",
     tags("admin", "anchorer"),
     summary = "Submit anchorer reconfiguration Move"
 )]
@@ -820,7 +820,7 @@ pub(super) async fn admin_reconfigure_anchorer(
 /// `GET /api/admin/v1/spaces/{space_id}/bottom` — list bottom cells in
 /// this Space.
 #[endpoint(
-    operation_id = "cx.admin.spaces.bottom.list",
+    operation_id = "cx.extension.soland.admin.spaces.bottom.list",
     tags("admin", "bottom"),
     summary = "List Bottom cells in a Space"
 )]
@@ -841,7 +841,7 @@ pub(super) async fn admin_list_space_bottom(
 
 /// `GET /api/admin/v1/bottom` — global cross-space bottom entries.
 #[endpoint(
-    operation_id = "cx.admin.bottom.list_global",
+    operation_id = "cx.extension.soland.admin.bottom.list_global",
     tags("admin", "bottom"),
     summary = "List Bottom cells across every Space"
 )]
@@ -879,7 +879,7 @@ pub(super) async fn admin_list_bottom_global(
 /// - `Manual` is **still placeholder** — free-form effects validation + admin-scope enforcement is
 ///   non-trivial and lives behind a separate admin signer flow.
 #[endpoint(
-    operation_id = "cx.admin.spaces.bottom.repair",
+    operation_id = "cx.extension.soland.admin.spaces.bottom.repair",
     tags("admin", "bottom"),
     summary = "Submit repair Move for a Bottom cell"
 )]
@@ -1086,7 +1086,7 @@ pub(super) async fn admin_repair_bottom(
 /// `GET /api/admin/v1/spaces/{space_id}/anchor-dag` — leaves + frontier
 /// + state_root snapshot built from the live `AnchorStore`.
 #[endpoint(
-    operation_id = "cx.admin.spaces.anchor_dag.get",
+    operation_id = "cx.extension.soland.admin.spaces.anchor_dag.get",
     tags("admin", "anchor-dag"),
     summary = "Get Anchor DAG snapshot for a Space"
 )]
@@ -1172,7 +1172,7 @@ pub(super) async fn admin_get_anchor_dag(
 /// structurally-correct response so sodmin's UI flow is unblocked.
 /// `max_moves` is honoured via `run_one_signing_pass`.
 #[endpoint(
-    operation_id = "cx.admin.spaces.anchor_dag.compact",
+    operation_id = "cx.extension.soland.admin.spaces.anchor_dag.compact",
     tags("admin", "anchor-dag"),
     summary = "Trigger signed compaction Anchor"
 )]
@@ -1302,7 +1302,7 @@ pub(super) async fn admin_compact_anchor_dag(
 /// `predecessor_refs` rewired to the pruned candidate's parents; the
 /// store guarantees no leaf prune (returns 4xx instead).
 #[endpoint(
-    operation_id = "cx.admin.spaces.anchor_dag.prune",
+    operation_id = "cx.extension.soland.admin.spaces.anchor_dag.prune",
     tags("admin", "anchor-dag"),
     summary = "Evaluate + prune a historical Anchor"
 )]
@@ -1543,7 +1543,10 @@ pub struct MultisigPendingResponse {
 /// aggregate via SDK `ThresholdAggregator` and publish the threshold-signed
 /// Anchor; the watchdog itself is a follow-up (in the meantime an admin can
 /// trigger aggregation via a separate ops command — not exposed yet).
-#[salvo::oapi::endpoint(operation_id = "cx.admin.multisig.partial", tags("admin", "multisig"))]
+#[salvo::oapi::endpoint(
+    operation_id = "cx.extension.soland.admin.multisig.partial",
+    tags("admin", "multisig")
+)]
 pub(super) async fn admin_submit_multisig_partial(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -1655,7 +1658,10 @@ pub(super) async fn admin_submit_multisig_partial(
 }
 
 /// `GET /api/admin/v1/spaces/{space_id}/multisig/pending`.
-#[salvo::oapi::endpoint(operation_id = "cx.admin.multisig.pending", tags("admin", "multisig"))]
+#[salvo::oapi::endpoint(
+    operation_id = "cx.extension.soland.admin.multisig.pending",
+    tags("admin", "multisig")
+)]
 pub(super) async fn admin_list_multisig_pending(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -1740,7 +1746,7 @@ pub struct RotateSigningKeyResponse {
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "cx.admin.spaces.anchorer.rotate_signing_key",
+    operation_id = "cx.extension.soland.admin.spaces.anchorer.rotate_signing_key",
     tags("admin", "anchorer"),
     summary = "Rotate the AnchorerWorker signing key"
 )]
@@ -1904,7 +1910,7 @@ pub struct GcCandidatesResponse {
 /// `GET /api/admin/v1/spaces/{space_id}/gc-candidates` — list Moves that
 /// are GC-eligible per MAL-13 rules. Read-only (no actual deletion).
 #[salvo::oapi::endpoint(
-    operation_id = "cx.admin.spaces.gc_candidates",
+    operation_id = "cx.extension.soland.admin.spaces.gc_candidates",
     tags("admin", "gc"),
     summary = "List GC-eligible Moves for a Space"
 )]

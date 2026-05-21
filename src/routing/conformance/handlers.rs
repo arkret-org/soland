@@ -69,7 +69,7 @@ fn encode_reject_for_vector(vector: &str) -> Option<(ErrorCode, &'static str)> {
 }
 
 #[endpoint(
-    operation_id = "cx.conformance.encode",
+    operation_id = "cx.extension.soland.conformance.encode",
     tags("conformance"),
     summary = "Run a canonical-JSON / digest conformance vector"
 )]
@@ -93,7 +93,7 @@ pub async fn encode(body: JsonBody<Value>) -> JsonResult<Value> {
 }
 
 #[endpoint(
-    operation_id = "cx.conformance.sign",
+    operation_id = "cx.extension.soland.conformance.sign",
     tags("conformance"),
     summary = "Run a signature-binding conformance vector"
 )]
@@ -149,7 +149,7 @@ pub async fn sign(body: JsonBody<Value>) -> JsonResult<Value> {
 }
 
 #[endpoint(
-    operation_id = "cx.conformance.hlc_merge",
+    operation_id = "cx.extension.soland.conformance.hlc_merge",
     tags("conformance"),
     summary = "Run an HLC ordering conformance vector"
 )]
@@ -197,7 +197,7 @@ pub async fn hlc_merge(body: JsonBody<Value>) -> JsonResult<Value> {
 }
 
 #[endpoint(
-    operation_id = "cx.conformance.cursor",
+    operation_id = "cx.extension.soland.conformance.cursor",
     tags("conformance"),
     summary = "Run an opaque-cursor conformance vector"
 )]
@@ -243,7 +243,7 @@ pub async fn cursor(body: JsonBody<Value>) -> JsonResult<Value> {
 }
 
 #[endpoint(
-    operation_id = "cx.conformance.envelope",
+    operation_id = "cx.extension.soland.conformance.envelope",
     tags("conformance"),
     summary = "Run an encrypted-envelope canonical-digest conformance vector"
 )]
@@ -264,7 +264,7 @@ pub async fn envelope(body: JsonBody<Value>) -> JsonResult<Value> {
 }
 
 #[endpoint(
-    operation_id = "cx.conformance.redact",
+    operation_id = "cx.extension.soland.conformance.redact",
     tags("conformance"),
     summary = "Run a redaction visibility / projection conformance vector"
 )]

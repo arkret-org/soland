@@ -192,7 +192,7 @@ pub struct SubmitMoveResponse {
 }
 
 #[endpoint(
-    operation_id = "cx.moves.submit",
+    operation_id = "cx.extension.soland.moves.submit",
     tags("moves"),
     summary = "Submit a Move for the next Anchor batch"
 )]
@@ -272,7 +272,7 @@ pub struct RejectedMoveEntry {
 }
 
 #[endpoint(
-    operation_id = "cx.anchors.submit",
+    operation_id = "cx.extension.soland.anchors.submit",
     tags("anchors"),
     summary = "Submit an Anchor; runs apply_anchor end-to-end"
 )]
@@ -438,7 +438,7 @@ pub struct SignAnchorResponse {
 /// background ticker. Production deploys will eventually wire a
 /// periodic ticker to call the same worker function.
 #[endpoint(
-    operation_id = "cx.admin.anchors.sign",
+    operation_id = "cx.extension.soland.admin.anchors.sign",
     tags("admin", "anchors"),
     summary = "Trigger one anchorer signing pass for a Space"
 )]

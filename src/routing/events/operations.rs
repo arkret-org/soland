@@ -133,20 +133,9 @@ const MEMBERSHIP_REQUIREMENTS: &[PayloadRequirement] = &[
         "membership operation requires member and membership",
     ),
 ];
-// `cx.realm.create` payload shape:
-// - canonical event path (`yougen/src/api.rs build_realm_bootstrap_events`):
-//   carries the full Realm object under `payload.object`, per
-//   `models/realm-and-space.md` §2.2 +
-//   `artifacts/schemas/realm.schema.json`.
-// - legacy REST path (`POST /api/v1/spaces` →
-//   `record_space_lifecycle_operation`): synthesises a payload keyed by
-//   `action: "create"` + flat owner / members / discoverability fields. This
-//   shape predates the canonical realm.schema.json payload but still flows
-//   through the same projection layer, so we accept either.
-const REALM_CREATE_ID_FIELDS: &[&str] = &["object", "action"];
-const REALM_CREATE_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::AnyOf(
-    REALM_CREATE_ID_FIELDS,
-    "cx.realm.create operation requires object (canonical) or action (legacy REST path)",
+const REALM_CREATE_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::Required(
+    "object",
+    "cx.realm.create operation requires payload.object",
 )];
 // `cx.realm.update` / `cx.realm.destroy` carry an `action` string +
 // per-action fields (mirrors space-container / morph lifecycle for non-create
@@ -685,15 +674,15 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
             requirements: MEMBERSHIP_REQUIREMENTS,
             validate: None,
         },
-        kinds::CX_SPACE_CREATE => OperationPayloadSchema {
+        kinds::CX_REALM_CREATE => OperationPayloadSchema {
             // `cx.realm.create` is technically lifecycle but carries the
             // full Realm `object` rather than an `action`. Match it
-            // explicitly so the broader `is_space_lifecycle_kind` branch
+            // explicitly so the broader `is_realm_lifecycle_kind` branch
             // below stays focused on update / destroy.
             requirements: REALM_CREATE_REQUIREMENTS,
             validate: None,
         },
-        kind if kinds::is_space_lifecycle_kind(kind) => OperationPayloadSchema {
+        kind if kinds::is_realm_lifecycle_kind(kind) => OperationPayloadSchema {
             requirements: SPACE_LIFECYCLE_REQUIREMENTS,
             validate: None,
         },
@@ -1095,13 +1084,18 @@ pub fn payload_key_present(payload: &serde_json::Value, field: &str) -> bool {
 
 pub fn validate_message_operation_payload(operation: &Operation) -> Result<(), &'static str> {
     validate_sender_commitment_payload_binding(&operation.payload)?;
-    if operation
+    let encrypted = operation
         .payload
         .get("encrypted")
         .and_then(|value| value.as_bool())
         .unwrap_or(false)
-    {
-        let Some(content) = operation.payload.get("content") else {
+        || operation.payload.get("encrypted_payload").is_some();
+    if encrypted {
+        let Some(content) = operation
+            .payload
+            .get("encrypted_payload")
+            .or_else(|| operation.payload.get("content"))
+        else {
             return Err("encrypted message operation requires content envelope");
         };
         validate_encrypted_payload_envelope(content)?;
@@ -1308,6 +1302,7 @@ pub fn message_operation_is_encrypted(operation: &Operation) -> bool {
         .get("encrypted")
         .and_then(|value| value.as_bool())
         .unwrap_or(false)
+        || operation.payload.get("encrypted_payload").is_some()
 }
 
 pub fn known_space_denies_plaintext_service(state: &AppState, space_id: &str) -> bool {
@@ -1520,10 +1515,12 @@ pub fn validate_content_block(block: &serde_json::Value) -> Result<(), &'static 
     let Some(block_kind) = block.get("kind").and_then(|value| value.as_str()) else {
         return Err("content block requires kind");
     };
+    let block_kind = block_kind.strip_prefix("cx.content.").unwrap_or(block_kind);
     match block_kind {
         "text" | "formatted_text" => {
             if !block
                 .get("text")
+                .or_else(|| block.get("body"))
                 .and_then(|value| value.as_str())
                 .is_some_and(|value| !value.trim().is_empty())
             {
@@ -1533,6 +1530,7 @@ pub fn validate_content_block(block: &serde_json::Value) -> Result<(), &'static 
         "code" => {
             if !block
                 .get("text")
+                .or_else(|| block.get("body"))
                 .and_then(|value| value.as_str())
                 .is_some_and(|value| !value.is_empty())
             {
@@ -1574,7 +1572,7 @@ pub fn validate_content_block(block: &serde_json::Value) -> Result<(), &'static 
         }
         // `cx.profile.agent_workspace.v1` content blocks.
         // Spec: agent-workspace-profile.md §8.1 / §8.2.
-        "cx.content.mention_redirect" => {
+        "mention_redirect" => {
             // Privacy invariant: source-side stub MUST NOT leak mirror IDs.
             // body / target_actor_id / authority_grant_ref / redirect_pair_id
             // are required (per content-mention-redirect.schema.json).
@@ -1617,7 +1615,7 @@ pub fn validate_content_block(block: &serde_json::Value) -> Result<(), &'static 
                 }
             }
         }
-        "cx.content.import_attestation" => {
+        "import_attestation" => {
             if block.get("body").and_then(|v| v.as_str()).is_none() {
                 return Err("import_attestation requires body (Content Block fallback)");
             }
@@ -1693,7 +1691,7 @@ mod agent_workspace_tests {
         Operation::create(
             contrix_sdk::OperationId::new("cx:operation:01904100-0000-7000-8000-57d7d85564c5")
                 .unwrap(),
-            contrix_sdk::SpaceId::new("cx:space:01904100-0000-7000-8000-668e2181b41d").unwrap(),
+            contrix_sdk::RealmId::new("cx:realm:01904100-0000-7000-8000-668e2181b41d").unwrap(),
             "agent_task",
             payload,
         )
@@ -1879,7 +1877,8 @@ mod agent_workspace_tests {
             "authority_grant_ref": "cx:grant:01964200-0000-7000-8000-000000000001",
             "redirect_pair_id": "01964200-0000-7000-8000-aaaaaaaaaaaa"
         });
-        assert!(validate_content_block(&block).is_ok());
+        let result = validate_content_block(&block);
+        assert!(result.is_ok(), "validate_content_block returned {:?}", result);
     }
 
     #[test]
@@ -1905,7 +1904,7 @@ mod flow_tracks_update_tests {
         Operation::create(
             contrix_sdk::OperationId::new("cx:operation:01904100-0000-7000-8000-57d7d85564c5")
                 .unwrap(),
-            contrix_sdk::SpaceId::new("cx:space:01904100-0000-7000-8000-668e2181b41d").unwrap(),
+            contrix_sdk::RealmId::new("cx:realm:01904100-0000-7000-8000-668e2181b41d").unwrap(),
             kinds::CX_FLOW_TRACKS_UPDATE,
             payload,
         )
@@ -1968,7 +1967,7 @@ mod flow_tracks_update_tests {
         Operation::create(
             contrix_sdk::OperationId::new("cx:operation:01904100-0000-7000-8000-57d7d85564c6")
                 .unwrap(),
-            contrix_sdk::SpaceId::new("cx:space:01904100-0000-7000-8000-668e2181b41d").unwrap(),
+            contrix_sdk::RealmId::new("cx:realm:01904100-0000-7000-8000-668e2181b41d").unwrap(),
             kind,
             payload,
         )
@@ -2021,7 +2020,7 @@ mod flow_tracks_update_tests {
         Operation::create(
             contrix_sdk::OperationId::new("cx:operation:01904100-0000-7000-8000-57d7d85564c7")
                 .unwrap(),
-            contrix_sdk::SpaceId::new("cx:space:01904100-0000-7000-8000-668e2181b41d").unwrap(),
+            contrix_sdk::RealmId::new("cx:realm:01904100-0000-7000-8000-668e2181b41d").unwrap(),
             kind,
             payload,
         )
@@ -2086,7 +2085,7 @@ mod spec_sync_validator_tests {
         Operation::create(
             contrix_sdk::OperationId::new("cx:operation:01904100-0000-7000-8000-57d7d85564c5")
                 .unwrap(),
-            contrix_sdk::SpaceId::new("cx:space:01904100-0000-7000-8000-668e2181b41d").unwrap(),
+            contrix_sdk::RealmId::new("cx:realm:01904100-0000-7000-8000-668e2181b41d").unwrap(),
             kind,
             payload,
         )
@@ -2210,7 +2209,7 @@ mod sdk_artifact_schema_tests {
         Operation::create(
             contrix_sdk::OperationId::new("cx:operation:01904100-0000-7000-8000-57d7d85564c5")
                 .unwrap(),
-            contrix_sdk::SpaceId::new("cx:space:01904100-0000-7000-8000-668e2181b41d").unwrap(),
+            contrix_sdk::RealmId::new("cx:realm:01904100-0000-7000-8000-668e2181b41d").unwrap(),
             "cx.cross_signing.reset",
             payload,
         )

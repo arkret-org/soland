@@ -383,18 +383,18 @@ mod tests {
     use super::*;
     use crate::hlc::ServerHlc;
     use crate::kinds::{CX_REALM_INHERITANCE_POLICY, CX_REALM_LINK};
-    use contrix_sdk::{Operation, OperationId, SpaceId};
+    use contrix_sdk::{Operation, OperationId, RealmId};
     use serde_json::json;
 
-    const REALM_A: &str = "cx:space:01904100-0000-7000-8000-aaaaaaaaaaa1";
-    const REALM_B: &str = "cx:space:01904100-0000-7000-8000-bbbbbbbbbbb2";
-    const REALM_C: &str = "cx:space:01904100-0000-7000-8000-ccccccccccc3";
-    const REALM_D: &str = "cx:space:01904100-0000-7000-8000-ddddddddddd4";
+    const REALM_A: &str = "cx:realm:01904100-0000-7000-8000-aaaaaaaaaaa1";
+    const REALM_B: &str = "cx:realm:01904100-0000-7000-8000-bbbbbbbbbbb2";
+    const REALM_C: &str = "cx:realm:01904100-0000-7000-8000-ccccccccccc3";
+    const REALM_D: &str = "cx:realm:01904100-0000-7000-8000-ddddddddddd4";
 
     fn op(kind: &str, space_id: &str, payload: Value) -> Operation {
         Operation::create(
             OperationId::new(format!("cx:operation:{}", uuid::Uuid::now_v7())).unwrap(),
-            SpaceId::new(space_id).unwrap(),
+            RealmId::new(space_id).unwrap(),
             kind,
             payload,
         )

@@ -65,6 +65,7 @@ fn test_config() -> AppConfig {
         trust_domain: "cx:trust_domain:soland.local".to_owned(),
         sovereign_enclave_enabled: false,
         sovereign_enclave_allowed_outbound_hosts: Vec::new(),
+        erasure_propagation_window_ms: 604_800_000,
     }
 }
 

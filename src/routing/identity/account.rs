@@ -80,7 +80,7 @@ pub(super) fn router() -> Router {
 }
 
 #[endpoint(
-    operation_id = "cx.account.register",
+    operation_id = "cx.extension.soland.account.register",
     tags("account"),
     summary = "Register a new account record",
     status_codes(201, 400, 401, 409, 500)
@@ -167,7 +167,7 @@ async fn account_register(
 }
 
 #[endpoint(
-    operation_id = "cx.account.me",
+    operation_id = "cx.extension.soland.account.me",
     tags("account"),
     summary = "Get the authenticated principal's account record"
 )]
@@ -190,7 +190,7 @@ async fn account_me(
 }
 
 #[endpoint(
-    operation_id = "cx.account.claim_handle",
+    operation_id = "cx.extension.soland.account.claim_handle",
     tags("account"),
     summary = "Claim or rename the authenticated principal's handle",
     status_codes(200, 400, 401, 409, 500)
@@ -270,7 +270,7 @@ async fn claim_handle(
 }
 
 #[endpoint(
-    operation_id = "cx.account.update_profile",
+    operation_id = "cx.extension.soland.account.update_profile",
     tags("account"),
     summary = "Update the authenticated principal's profile fields (display_name, bio, avatar_url)",
     status_codes(200, 400, 401, 404, 500)
@@ -344,7 +344,7 @@ fn empty_to_none(value: String) -> Option<String> {
 }
 
 #[endpoint(
-    operation_id = "cx.account.transfer_handle",
+    operation_id = "cx.extension.soland.account.transfer_handle",
     tags("account"),
     summary = "Transfer the authenticated principal's handle to another account",
     status_codes(200, 400, 401, 404, 409, 500)
@@ -431,7 +431,7 @@ async fn transfer_handle(
 }
 
 #[endpoint(
-    operation_id = "cx.account.export",
+    operation_id = "cx.extension.soland.account.export",
     tags("account"),
     summary = "GDPR export: assemble the authenticated principal's data bundle",
     status_codes(200, 401, 500)
@@ -534,7 +534,7 @@ async fn export_account(
 }
 
 #[endpoint(
-    operation_id = "cx.account.erase",
+    operation_id = "cx.extension.soland.account.erase",
     tags("account"),
     summary = "GDPR erasure: pseudonymize the authenticated principal and revoke access",
     status_codes(200, 401, 500)
@@ -709,7 +709,7 @@ fn short_actor_tag(did: &str) -> String {
 }
 
 #[endpoint(
-    operation_id = "cx.notifications.list",
+    operation_id = "cx.extension.soland.notifications.list",
     tags("notifications"),
     summary = "List notifications visible to the authenticated actor"
 )]
@@ -738,7 +738,7 @@ async fn list_notifications(
 }
 
 #[endpoint(
-    operation_id = "cx.notifications.mark_all_read",
+    operation_id = "cx.extension.soland.notifications.mark_all_read",
     tags("notifications"),
     summary = "Stamp the authenticated actor's `last_read_at` marker to Utc::now()"
 )]
@@ -968,7 +968,7 @@ pub struct PrincipalSpaceResponse {
 /// so a future `principal_space_overrides` table can backfill from the audit
 /// trail and the deterministic mapping stays the offline default.
 #[endpoint(
-    operation_id = "cx.account.principal_space",
+    operation_id = "cx.extension.soland.account.principal_space",
     tags("account"),
     summary = "Resolve the principal control Space for a DID"
 )]

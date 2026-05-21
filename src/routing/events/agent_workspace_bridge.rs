@@ -184,7 +184,7 @@ mod tests {
         let mut op = Operation::create(
             contrix_sdk::OperationId::new("cx:operation:01904100-0000-7000-8000-57d7d85564c5")
                 .unwrap(),
-            contrix_sdk::SpaceId::new("cx:space:01904100-0000-7000-8000-668e2181b41d").unwrap(),
+            contrix_sdk::RealmId::new("cx:realm:01904100-0000-7000-8000-668e2181b41d").unwrap(),
             kind.split('.').nth(1).unwrap_or("member"),
             payload,
         );

@@ -229,6 +229,15 @@ pub struct AppConfig {
     /// Comma-separated env var
     /// `SOLAND_SOVEREIGN_ENCLAVE_ALLOWED_OUTBOUND_HOSTS`.
     pub sovereign_enclave_allowed_outbound_hosts: Vec<String>,
+    /// Stream-F (Wave 2C) — cross-Principal-Server erasure-receipt
+    /// propagation window in milliseconds. After a
+    /// `cx.audit.erasure_receipt` is accepted, the federation fanout
+    /// worker waits up to this many ms for every peer to acknowledge.
+    /// Peers that don't respond inside the window flip the receipt's
+    /// top-level `fanout_status` to `incomplete`. Spec
+    /// `realm-and-space.md` §2.5.2: default 7 days (604_800_000 ms).
+    /// Env: `SOLAND_ERASURE_PROPAGATION_WINDOW_MS`.
+    pub erasure_propagation_window_ms: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -496,6 +505,12 @@ impl AppConfig {
                 .unwrap_or(50)
                 .max(1);
         let seed_demo_data = env_bool("SOLAND_SEED_DEMO_DATA")?.unwrap_or(false);
+        // Stream-F (Wave 2C) — erasure-receipt fanout window. Default 7
+        // days per spec `realm-and-space.md` §2.5.2.
+        let erasure_propagation_window_ms = std::env::var("SOLAND_ERASURE_PROPAGATION_WINDOW_MS")
+            .ok()
+            .and_then(|value| value.trim().parse::<u64>().ok())
+            .unwrap_or(604_800_000);
         // G3.S9 — sovereign enclave toggle + outbound host allow-list.
         let sovereign_enclave_enabled = env_bool("SOLAND_SOVEREIGN_ENCLAVE")?.unwrap_or(false);
         let sovereign_enclave_allowed_outbound_hosts =
@@ -555,6 +570,7 @@ impl AppConfig {
             trust_domain,
             sovereign_enclave_enabled,
             sovereign_enclave_allowed_outbound_hosts,
+            erasure_propagation_window_ms,
         })
     }
 

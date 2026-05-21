@@ -68,7 +68,7 @@ pub(super) fn router() -> Router {
 // ── Queue ────────────────────────────────────────────────────────────
 
 #[endpoint(
-    operation_id = "cx.admin.moderation.queue.list",
+    operation_id = "cx.extension.soland.admin.moderation.queue.list",
     tags("admin", "moderation"),
     summary = "List moderation queue items"
 )]
@@ -90,7 +90,7 @@ pub struct AssignReviewerReq {
 }
 
 #[endpoint(
-    operation_id = "cx.admin.moderation.queue.assign",
+    operation_id = "cx.extension.soland.admin.moderation.queue.assign",
     tags("admin", "moderation"),
     summary = "Assign reviewer DIDs to a queue item"
 )]
@@ -140,7 +140,7 @@ pub struct PrioritiseReq {
 }
 
 #[endpoint(
-    operation_id = "cx.admin.moderation.queue.priority",
+    operation_id = "cx.extension.soland.admin.moderation.queue.priority",
     tags("admin", "moderation"),
     summary = "Set priority on a queue item"
 )]
@@ -210,7 +210,7 @@ pub struct DecisionResBody {
 }
 
 #[endpoint(
-    operation_id = "cx.admin.moderation.decision",
+    operation_id = "cx.extension.soland.admin.moderation.decision",
     tags("admin", "moderation"),
     summary = "Issue a moderation decision"
 )]
@@ -286,7 +286,7 @@ pub struct LiftDecisionReq {
 }
 
 #[endpoint(
-    operation_id = "cx.admin.moderation.decision.lift",
+    operation_id = "cx.extension.soland.admin.moderation.decision.lift",
     tags("admin", "moderation"),
     summary = "Lift a previously-issued moderation decision"
 )]
@@ -337,7 +337,7 @@ async fn lift_decision(
 // ── Appeals ──────────────────────────────────────────────────────────
 
 #[endpoint(
-    operation_id = "cx.admin.moderation.appeals.list",
+    operation_id = "cx.extension.soland.admin.moderation.appeals.list",
     tags("admin", "moderation"),
     summary = "List moderation appeals (latest event per appeal)"
 )]
@@ -354,7 +354,7 @@ async fn list_appeals(aa: AuthArgs, depot: &mut Depot, req: &mut Request) -> Jso
 }
 
 #[endpoint(
-    operation_id = "cx.admin.moderation.appeals.get",
+    operation_id = "cx.extension.soland.admin.moderation.appeals.get",
     tags("admin", "moderation"),
     summary = "Full history of one moderation appeal"
 )]
@@ -405,7 +405,7 @@ pub struct ReviewAppealReq {
 }
 
 #[endpoint(
-    operation_id = "cx.admin.moderation.appeal.review",
+    operation_id = "cx.extension.soland.admin.moderation.appeal.review",
     tags("admin", "moderation"),
     summary = "Reviewer takes a moderation appeal under review"
 )]
@@ -487,7 +487,7 @@ pub struct DecideAppealReq {
 }
 
 #[endpoint(
-    operation_id = "cx.admin.moderation.appeal.decision",
+    operation_id = "cx.extension.soland.admin.moderation.appeal.decision",
     tags("admin", "moderation"),
     summary = "Reviewer issues verdict on a moderation appeal"
 )]
@@ -615,7 +615,7 @@ pub struct CloseAppealReq {
 }
 
 #[endpoint(
-    operation_id = "cx.admin.moderation.appeal.close",
+    operation_id = "cx.extension.soland.admin.moderation.appeal.close",
     tags("admin", "moderation"),
     summary = "Close a decided moderation appeal"
 )]

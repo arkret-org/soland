@@ -83,6 +83,12 @@ clippy:
 test:
     cargo test --locked
 
+# Run only the Stream J conformance gates (operation_id registry diff +
+# forbidden-terms scan). Cheap (file scan + regex, no DB), so CI can
+# block merges on it without paying the full integration cost.
+conformance-gates:
+    cargo test --locked --test conformance_gates
+
 # Query the default health endpoint.
 health:
     curl -fsS http://{{ bind }}/health

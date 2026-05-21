@@ -131,6 +131,13 @@ async fn server_describe(depot: &mut Depot) -> JsonResult<Value> {
     // Round R2/R3 (T08) — expose deployment trust_domain so peers /
     // clients can bind `cx.cross_signing.reset` payloads correctly.
     value["trust_domain"] = json!(state.config.trust_domain);
+    // Stream-F (Wave 2C) — advertise the audit erasure-receipts
+    // surface. Spec `realm-and-space.md` §2.5.2 requires the receipt
+    // list to be reachable via `server.describe.erasure_receipts_endpoint`
+    // so verifiers can query the issuing server's current view (incl.
+    // per-peer fanout_status and the timeout-triggered `incomplete`
+    // flip).
+    value["erasure_receipts_endpoint"] = json!("/api/v1/audit/erasure-receipts");
     // T8.3 — embed the production hardening checklist so sodmin's
     // `/hardening` page can render it without an extra round-trip.
     value["hardening"] =
@@ -455,7 +462,7 @@ pub(in crate::routing) async fn authz_describe() -> JsonResult<Value> {
 }
 
 #[endpoint(
-    operation_id = "cx.policies.describe",
+    operation_id = "cx.extension.soland.policies.describe",
     tags("policy"),
     summary = "Policy collection scaffold description"
 )]

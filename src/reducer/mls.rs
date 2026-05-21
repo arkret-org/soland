@@ -35,12 +35,12 @@ use super::{
     KeyPackageLifetime, MlsCommitEpoch, MlsEffect, MlsKeyPackage, MlsWelcome, ProjectionState,
 };
 
-/// Reason code emitted when a `cx.mls.keypackage.claim` event targets
-/// a KeyPackage that has already been claimed. Routing layer maps to
-/// HTTP 409 `cas_conflict`.
+/// Reason code emitted when a `cx.mls.keypackage` event with
+/// `payload.action == "claim"` targets a KeyPackage that has already
+/// been claimed. Routing layer maps to HTTP 409 `cas_conflict`.
 pub const REASON_KEYPACKAGE_ALREADY_CLAIMED: &str = "mls_keypackage_already_claimed";
-/// Reason code emitted when a `cx.mls.keypackage.claim` event targets
-/// an unknown KeyPackage id.
+/// Reason code emitted when a `cx.mls.keypackage` event with
+/// `payload.action == "claim"` targets an unknown KeyPackage id.
 pub const REASON_KEYPACKAGE_NOT_FOUND: &str = "mls_keypackage_not_found";
 /// Reason code emitted when a published KeyPackage's lifetime window
 /// is already past `not_after`. Mirrors RFC 9420 §10.
@@ -49,7 +49,8 @@ pub const REASON_KEYPACKAGE_EXPIRED: &str = "mls_keypackage_expired";
 /// match the group's stored epoch (out-of-order / stale / replay).
 pub const REASON_COMMIT_EPOCH_SKEW: &str = "mls_epoch_skew";
 
-/// G3.S1 — project a `cx.mls.keypackage.publish` event.
+/// G3.S1 — project a `cx.mls.keypackage` event with
+/// `payload.action == "publish"`.
 ///
 /// Payload shape (validated below):
 /// ```json
@@ -361,7 +362,7 @@ mod tests {
     use base64::Engine;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use chrono::{TimeZone, Utc};
-    use contrix_sdk::{Operation, OperationId, SpaceId};
+    use contrix_sdk::{Operation, OperationId, RealmId};
     use serde_json::json;
 
     use super::*;
@@ -371,7 +372,7 @@ mod tests {
         let mut op = Operation::create(
             OperationId::new("cx:operation:0196419b-0000-7000-8000-000000000001")
                 .expect("op id parses"),
-            SpaceId::new("cx:space:0196419b-0000-7000-8000-000000000000").expect("space id parses"),
+            RealmId::new("cx:realm:0196419b-0000-7000-8000-000000000000").expect("realm id parses"),
             object_type,
             payload,
         );
@@ -385,6 +386,7 @@ mod tests {
 
     fn publish_payload(id: &str, actor: &str, device: &str, not_after: i64) -> serde_json::Value {
         json!({
+            "action": "publish",
             "keypackage_id": id,
             "actor_did": actor,
             "device_id": device,
@@ -398,7 +400,7 @@ mod tests {
         let mut state = ProjectionState::default();
         let publish = op_at(
             100,
-            "cx.mls.keypackage.publish",
+            "cx.mls.keypackage",
             publish_payload(
                 "cx:mls_keypackage:01",
                 "did:web:alice.example",
@@ -423,8 +425,9 @@ mod tests {
 
         let claim = op_at(
             200,
-            "cx.mls.keypackage.claim",
+            "cx.mls.keypackage",
             json!({
+                "action": "claim",
                 "keypackage_id": "cx:mls_keypackage:01",
                 "group_id": "cx:mls_group:abc"
             }),
@@ -452,7 +455,7 @@ mod tests {
         let mut state = ProjectionState::default();
         let publish = op_at(
             100,
-            "cx.mls.keypackage.publish",
+            "cx.mls.keypackage",
             publish_payload(
                 "cx:mls_keypackage:02",
                 "did:web:alice.example",
@@ -465,8 +468,9 @@ mod tests {
         // First claim — wins.
         let claim1 = op_at(
             200,
-            "cx.mls.keypackage.claim",
+            "cx.mls.keypackage",
             json!({
+                "action": "claim",
                 "keypackage_id": "cx:mls_keypackage:02",
                 "group_id": "cx:mls_group:first"
             }),
@@ -480,8 +484,9 @@ mod tests {
         // Second claim — must be rejected by the CAS.
         let claim2 = op_at(
             201,
-            "cx.mls.keypackage.claim",
+            "cx.mls.keypackage",
             json!({
+                "action": "claim",
                 "keypackage_id": "cx:mls_keypackage:02",
                 "group_id": "cx:mls_group:second"
             }),
@@ -504,7 +509,7 @@ mod tests {
         let mut state = ProjectionState::default();
         let enqueue = op_at(
             300,
-            "cx.mls.welcome.enqueue",
+            "cx.mls.welcome",
             json!({
                 "welcome_id": "cx:mls_welcome:w1",
                 "group_id": "cx:mls_group:abc",
@@ -562,7 +567,7 @@ mod tests {
         // First commit on a brand-new group — expected_prev_epoch=0 → epoch=1.
         let c1 = op_at(
             500,
-            "cx.mls.commit.epoch",
+            "cx.mls.commit",
             json!({
                 "group_id": "cx:mls_group:abc",
                 "expected_prev_epoch": 0,
@@ -586,7 +591,7 @@ mod tests {
         // Second commit — expected_prev_epoch=1 → epoch=2.
         let c2 = op_at(
             501,
-            "cx.mls.commit.epoch",
+            "cx.mls.commit",
             json!({
                 "group_id": "cx:mls_group:abc",
                 "expected_prev_epoch": 1,
@@ -617,7 +622,7 @@ mod tests {
             &mut state,
             &op_at(
                 600,
-                "cx.mls.commit.epoch",
+                "cx.mls.commit",
                 json!({
                     "group_id": "cx:mls_group:abc",
                     "expected_prev_epoch": 0,
@@ -632,7 +637,7 @@ mod tests {
             &mut state,
             &op_at(
                 601,
-                "cx.mls.commit.epoch",
+                "cx.mls.commit",
                 json!({
                     "group_id": "cx:mls_group:abc",
                     "expected_prev_epoch": 0,
@@ -662,7 +667,7 @@ mod tests {
             &mut state,
             &op_at(
                 602,
-                "cx.mls.commit.epoch",
+                "cx.mls.commit",
                 json!({
                     "group_id": "cx:mls_group:abc",
                     "expected_prev_epoch": 5,

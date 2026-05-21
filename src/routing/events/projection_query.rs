@@ -6,7 +6,7 @@
 //! `cx.space.archive` accepted by the server doesn't appear "unarchived"
 //! again when the kanban view re-mounts.
 //!
-//! - `GET /api/v1/projection/space-containers?realm_id=...` — extension
+//! - `GET /api/v1/projection/space_containers?realm_id=...` — extension
 //!   endpoint listing board/list Space containers in a Realm scope, with
 //!   `state` ∈ {active, archived, tombstoned} (spec `common-fields.md §5.1`).
 //! - `GET /api/v1/projection/flows?realm_id=...` — same for Flows
@@ -49,7 +49,7 @@ use crate::state::AppState;
 pub(super) fn router() -> Router {
     Router::new()
         .push(
-            Router::with_path("projection/space-containers").get(list_space_container_projections),
+            Router::with_path("projection/space_containers").get(list_space_container_projections),
         )
         .push(Router::with_path("projection/flows").get(list_flow_projections))
         .push(Router::with_path("projection/morphs").get(list_morph_projections))
@@ -60,8 +60,8 @@ pub(super) fn router() -> Router {
 /// Terminal-state check for Flow / Morph. Mirror of
 /// `ObjectLifecycleState::is_terminal` but inlined here so the
 /// `filter` chain in the handlers reads as
-/// `!is_object_terminal(f.state)` for symmetry with the Place check
-/// (`state != SpaceContainerLifecycleState::Tombstoned`).
+/// `!is_object_terminal(f.state)` for symmetry with the Space-container
+/// check (`state != SpaceContainerLifecycleState::Tombstoned`).
 fn is_object_terminal(state: ObjectLifecycleState) -> bool {
     state.is_terminal()
 }

@@ -7169,10 +7169,10 @@ mod tests {
     // surface itself.
 
     fn make_test_operation(operation_id: &str, space_id: &str) -> Operation {
-        use contrix_sdk::{OperationId, SpaceId};
+        use contrix_sdk::{OperationId, RealmId};
         let mut op = Operation::create(
             OperationId::new(operation_id.to_owned()).unwrap(),
-            SpaceId::new(space_id.to_owned()).unwrap(),
+            RealmId::new(space_id.to_owned()).unwrap(),
             "cx.message.create",
             serde_json::json!({"sender": "did:web:alice", "thread_id": "cx:flow:1"}),
         );
@@ -7183,8 +7183,8 @@ mod tests {
     #[test]
     fn memory_federation_operations_store_dedups_and_filters_by_space() {
         let store = MemoryFederationOperationsStore::new();
-        let space_a = "cx:space:0196419b-0000-7000-8000-00000000aaaa";
-        let space_b = "cx:space:0196419b-0000-7000-8000-00000000bbbb";
+        let space_a = "cx:realm:0196419b-0000-7000-8000-00000000aaaa";
+        let space_b = "cx:realm:0196419b-0000-7000-8000-00000000bbbb";
         let op1 = make_test_operation("cx:operation:0196419b-0000-7000-8000-000000000001", space_a);
         let op2 = make_test_operation("cx:operation:0196419b-0000-7000-8000-000000000002", space_a);
         let op3 = make_test_operation("cx:operation:0196419b-0000-7000-8000-000000000003", space_b);

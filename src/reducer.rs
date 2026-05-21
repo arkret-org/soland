@@ -192,6 +192,100 @@ pub struct ProjectionState {
     /// Cell-family canonical value lives in
     /// `cx.component.realm.policy_server.v1`.
     pub realm_policy_servers: BTreeMap<String, RealmPolicyServerConfig>,
+    /// Device push-route projection keyed by the protocol composite
+    /// `(recipient_service_did, principal_id, device_id, push_route)`.
+    /// These are actor-private state cells and MUST stay isolated per
+    /// recipient Principal Server.
+    pub push_routes: BTreeMap<PushRouteSubject, PushRouteCellValue>,
+    /// Optional local Principal/Sync service DID. When set, incoming
+    /// `cx.device.push_route` writes whose `recipient_service_did` does
+    /// not match this service are rejected instead of cached.
+    pub local_service_did: Option<String>,
+    /// Stream-F (Wave 1B) — `cx.audit.erasure_receipt` projection.
+    /// Append-only list of receipts the reducer has accepted. Spec
+    /// `realm-and-space.md` §2.5.2 + erasure-receipt.schema.json.
+    /// Receipts are durable events; the projection cache here is used
+    /// by the `erasure_receipts_endpoint` server-describe surface and
+    /// by `apply_audit_erasure_receipt_dispatch`.
+    pub erasure_receipts: Vec<ErasureReceiptRecord>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct PushRouteSubject {
+    pub recipient_service_did: String,
+    pub principal_id: String,
+    pub device_id: String,
+    pub push_route: String,
+}
+
+/// Stream-F (Wave 2C) — per-peer fanout status for a single
+/// `cx.audit.erasure_receipt`. One row per federation peer that has
+/// received content from the affected Realm.
+///
+/// `sent_at` is stamped when the receipt is enqueued into the
+/// federation outbox. `acked_at` is stamped when the peer's own
+/// follow-up `cx.audit.erasure_receipt` lands back referencing the
+/// same `receipt_id`. `outcome` mirrors the peer's reported wire
+/// outcome (`completed` / `partially_completed` /
+/// `blocked_by_legal_hold` / `scheduled` / `failed`). Spec
+/// `realm-and-space.md` §2.5.2.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FanoutPeerStatus {
+    pub sent_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub acked_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub outcome: Option<String>,
+}
+
+/// Stream-F (Wave 1B) — `cx.audit.erasure_receipt` projection record.
+/// Mirrors a subset of the canonical `cx.schema.erasure_receipt.v1`
+/// payload (see
+/// `contrix-spec/spec/v1/artifacts/schemas/erasure-receipt.schema.json`).
+/// We only keep the fields the local audit / federation fanout layer
+/// actually consults — the rest of the payload (`proofs`,
+/// `erased_classes`, `retained_stub_hash`, …) round-trips through the
+/// raw `payload` blob for replay.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ErasureReceiptRecord {
+    pub receipt_id: Option<String>,
+    pub issuer: Option<String>,
+    pub subject_kind: Option<String>,
+    pub subject_ref: Option<String>,
+    pub outcome: String,
+    pub storage_boundary: Option<String>,
+    /// Stream-F (Wave 2C) — affected Realm extracted from
+    /// `payload.scope.realm_id`. Used by the federation fanout pass to
+    /// pick the set of peers that have received content from the
+    /// affected Realm. `None` for purely account-scoped receipts (no
+    /// federation fanout needed in that case).
+    pub scope_realm_id: Option<String>,
+    /// Cross-Principal-Server fanout status — `pending` until the
+    /// peer responses have all been collected, `complete` when every
+    /// recipient has acknowledged, `incomplete` when the
+    /// `erasure_propagation_window_ms` (default 7 days) lapses.
+    /// Stream-F (Wave 2C) — the timeout sweep in
+    /// `crate::routing::federation::erasure_fanout` flips this to
+    /// `incomplete` once `recorded_at + window < now` and any peer
+    /// in `peer_status` still has `acked_at.is_none()`.
+    pub fanout_status: String,
+    /// Stream-F (Wave 2C) — per-peer fanout state. Keyed by the
+    /// peer's `service_did` (canonical federation peer identity from
+    /// `config.federation_peers`). The reducer seeds one entry per
+    /// configured peer when the receipt is accepted; the federation
+    /// outbox stamps `sent_at` as soon as the row is enqueued.
+    pub peer_status: std::collections::BTreeMap<String, FanoutPeerStatus>,
+    pub recorded_at: chrono::DateTime<chrono::Utc>,
+    /// Raw payload preserved for replay / audit verifier round-trip.
+    pub payload: Value,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PushRouteCellValue {
+    pub push_target_id: Option<String>,
+    pub push_gateway_did: Option<String>,
+    pub encryption_key: Option<String>,
+    pub capabilities: Vec<String>,
+    pub revoked: bool,
+    pub revoked_targets: Vec<String>,
 }
 
 /// R3.1 — structured cache row for a single directed Realm link.
@@ -376,6 +470,24 @@ pub struct SpaceContainerProjection {
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_by: Option<String>,
     pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// Stream-F (Wave 1B) — `realm_destroyed_orphan` flag set by the
+    /// `cx.realm.destroy` cascade when this container's home Realm is
+    /// destroyed. Spec `realm-and-space.md` §2.5.1 ¶6: orphaned
+    /// containers become read-only locked projections; no
+    /// `cx.flow.move` / `cx.space.parent` / `cx.space.update` may
+    /// revive them. Defaults to `false`.
+    pub orphaned: bool,
+    /// Stream-F (Wave 2C) — cross-Realm `parent_ref` lazy-link lock.
+    /// Set to `true` by `cascade_realm_destroy` when this container's
+    /// `parent_ref` points at a Space whose home Realm has been
+    /// destroyed. The container itself stays alive in its own home
+    /// Realm but the parent edge MUST NOT propagate membership /
+    /// capability / history / E2EE / retention from the destroyed
+    /// Realm. UI / navigation surfaces SHOULD render this as a locked
+    /// lazy link and defer to the local reparent / archive / tombstone
+    /// flow inside the policy window. Spec `realm-and-space.md`
+    /// §2.5.1 ¶6. Defaults to `false`.
+    pub parent_ref_locked: bool,
 }
 
 fn space_container_id_from_payload(payload: &Value) -> Option<String> {
@@ -632,6 +744,21 @@ pub struct SpaceState {
     /// `cross_domain_replay_rejected`. Stored as the canonical
     /// `cx:trust_domain:<scope>` string form.
     pub trust_domain: Option<String>,
+    /// Stream-F (Wave 1B) — Realm terminal-state marker. Set by
+    /// `apply_realm_lifecycle` when a `cx.realm.tombstone` or
+    /// `cx.realm.destroy` event is projected. Possible values:
+    ///   - `None` — Realm is live.
+    ///   - `Some("tombstoned")` — `cx.realm.tombstone` accepted; the
+    ///     `successor_realm_id` field carries the migration target.
+    ///   - `Some("destroyed")` — `cx.realm.destroy` accepted; no successor.
+    /// Both terminal states block non-audit writes via
+    /// `crate::round23::terminal_realm_check`. Spec
+    /// `realm-and-space.md` §2.5 / §2.5.1.
+    pub terminal_state: Option<String>,
+    /// Stream-F (Wave 1B) — for `cx.realm.tombstone` only: the
+    /// `cx:realm:<uuid>` of the successor Realm that takes over child
+    /// Space/Flow placement. `None` for live or destroyed Realms.
+    pub successor_realm_id: Option<String>,
 }
 
 /// The effect of applying an operation to the projection state.
@@ -749,6 +876,12 @@ pub enum ProjectionEffect {
     RealmPolicyServerProjected {
         realm_id: String,
         policy_server_did: String,
+    },
+    /// `cx.device.push_route` actor-private state projected into the
+    /// per-recipient Principal Server push-route cell cache.
+    PushRouteUpdated {
+        subject: PushRouteSubject,
+        action: String,
     },
     /// State-machine rejected the operation per
     /// `common-fields.md §5.1`. Routing layer maps this to HTTP 412
@@ -927,26 +1060,40 @@ fn apply_membership_dispatch(
 ) -> ProjectionEffect {
     s.apply_membership(op, op.created_at)
 }
-fn apply_space_create_dispatch(
+fn apply_realm_create_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
-    s.apply_space_lifecycle(op, op.created_at, crate::kinds::CX_SPACE_CREATE)
+    s.apply_realm_lifecycle(op, op.created_at, crate::kinds::CX_REALM_CREATE)
 }
-fn apply_space_update_dispatch(
+fn apply_realm_update_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
-    s.apply_space_lifecycle(op, op.created_at, crate::kinds::CX_SPACE_UPDATE)
+    s.apply_realm_lifecycle(op, op.created_at, crate::kinds::CX_REALM_UPDATE)
 }
-fn apply_space_destroy_dispatch(
+fn apply_realm_tombstone_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
-    s.apply_space_lifecycle(op, op.created_at, crate::kinds::CX_SPACE_DESTROY)
+    s.apply_realm_lifecycle(op, op.created_at, crate::kinds::CX_REALM_TOMBSTONE)
+}
+fn apply_realm_destroy_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_realm_lifecycle(op, op.created_at, crate::kinds::CX_REALM_DESTROY)
+}
+fn apply_erasure_receipt_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_audit_erasure_receipt(op, op.created_at)
 }
 fn apply_space_container_create_dispatch(
     s: &mut ProjectionState,
@@ -1211,24 +1358,32 @@ fn apply_realm_audit_policy_downgrade_dispatch(
 // Each adapter forwards to the free function in `reducer::mls`. The
 // inline `ProjectionState` impls stay out of `reducer.rs` so the MLS
 // module can grow independently (see top-level `pub mod mls;`).
+//
+// Canonical event kinds per
+// `contrix-spec/spec/v1/artifacts/schemas/event-schema.json`: a single
+// `cx.mls.keypackage` kind covers both publish and claim. The reducer
+// dispatches on `payload.action == "publish" | "claim"` (the publish-
+// vs-claim split lives at the HTTP operation_id layer:
+// `cx.keys.keypackages.upload` vs `cx.keys.keypackages.claim`).
 
-fn apply_mls_keypackage_publish_dispatch(
+fn apply_mls_keypackage_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
-    mls::apply_keypackage_publish(s, op)
+    match op.payload.get("action").and_then(Value::as_str) {
+        Some("publish") => mls::apply_keypackage_publish(s, op),
+        Some("claim") => mls::apply_keypackage_claim(s, op),
+        Some(other) => ProjectionEffect::Rejected {
+            reason: format!("mls_keypackage_action_unknown:{other}"),
+        },
+        None => ProjectionEffect::Rejected {
+            reason: "mls_keypackage_action_missing".to_owned(),
+        },
+    }
 }
 
-fn apply_mls_keypackage_claim_dispatch(
-    s: &mut ProjectionState,
-    op: &Operation,
-    _hlc: &ServerHlc,
-) -> ProjectionEffect {
-    mls::apply_keypackage_claim(s, op)
-}
-
-fn apply_mls_welcome_enqueue_dispatch(
+fn apply_mls_welcome_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
     _hlc: &ServerHlc,
@@ -1236,7 +1391,7 @@ fn apply_mls_welcome_enqueue_dispatch(
     mls::apply_welcome_enqueue(s, op)
 }
 
-fn apply_mls_commit_epoch_dispatch(
+fn apply_mls_commit_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
     _hlc: &ServerHlc,
@@ -1347,9 +1502,11 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
     m.insert(CX_CONTAINER_MOVE_ITEM, apply_container_position_dispatch);
     m.insert(CX_CONTAINER_REBALANCE, apply_container_position_dispatch);
     m.insert(CX_MEMBER_STATE, apply_membership_dispatch);
-    m.insert(CX_SPACE_CREATE, apply_space_create_dispatch);
-    m.insert(CX_SPACE_UPDATE, apply_space_update_dispatch);
-    m.insert(CX_SPACE_DESTROY, apply_space_destroy_dispatch);
+    m.insert(CX_REALM_CREATE, apply_realm_create_dispatch);
+    m.insert(CX_REALM_UPDATE, apply_realm_update_dispatch);
+    m.insert(CX_REALM_TOMBSTONE, apply_realm_tombstone_dispatch);
+    m.insert(CX_REALM_DESTROY, apply_realm_destroy_dispatch);
+    m.insert(CX_AUDIT_ERASURE_RECEIPT, apply_erasure_receipt_dispatch);
     m.insert(
         CX_SPACE_CONTAINER_CREATE,
         apply_space_container_create_dispatch,
@@ -1396,9 +1553,10 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
     // R1.2 — Realm/Space reversal. delivery_binding_policy now lives on
     // `cx.realm.*` with cell_family `cx.component.realm.delivery_binding_policy.v1`.
     m.insert(
-        CX_SPACE_DELIVERY_BINDING_POLICY,
+        CX_REALM_DELIVERY_BINDING_POLICY,
         apply_delivery_binding_policy_dispatch,
     );
+    m.insert(CX_DEVICE_PUSH_ROUTE, apply_device_push_route_dispatch);
     // R3.1 / R3.2 / R3.3 — Realm-governance event kinds. Each writes a
     // cell + a structured side-band cache; see the per-kind apply
     // helpers for cell-family naming.
@@ -1409,20 +1567,20 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
     );
     m.insert(CX_CAPABILITY_DERIVED, apply_capability_derived_dispatch);
     m.insert(
-        CX_SPACE_AUDIT_POLICY_DOWNGRADE,
+        CX_REALM_AUDIT_POLICY_DOWNGRADE,
         apply_realm_audit_policy_downgrade_dispatch,
     );
     // G3.S1: MLS lifecycle. KeyPackage publish/claim (atomic CAS),
-    // Welcome to-device persistence, commit_epoch monotonic bump.
+    // Welcome to-device persistence, commit monotonic-epoch bump.
+    // Canonical event kinds — the publish/claim distinction lives at the
+    // HTTP operation_id layer and is conveyed inside the kind's payload
+    // via `action ∈ {"publish","claim"}`; the event log itself stores
+    // only the canonical `cx.mls.keypackage` kind.
     // Deferred (TODO(G3.S1-followup)): governance_binding, covered_frontier,
     // decryption_pending, minimal metadata. See `reducer/mls.rs`.
-    m.insert(
-        CX_MLS_KEYPACKAGE_PUBLISH,
-        apply_mls_keypackage_publish_dispatch,
-    );
-    m.insert(CX_MLS_KEYPACKAGE_CLAIM, apply_mls_keypackage_claim_dispatch);
-    m.insert(CX_MLS_WELCOME_ENQUEUE, apply_mls_welcome_enqueue_dispatch);
-    m.insert(CX_MLS_COMMIT_EPOCH, apply_mls_commit_epoch_dispatch);
+    m.insert(CX_MLS_KEYPACKAGE, apply_mls_keypackage_dispatch);
+    m.insert(CX_MLS_WELCOME, apply_mls_welcome_dispatch);
+    m.insert(CX_MLS_COMMIT, apply_mls_commit_dispatch);
     // G3.S9: extensions (applet/bot/tsp)
     m.insert(CX_EXTENSIONS_BOT_REGISTER, apply_bot_register);
     m.insert(CX_EXTENSIONS_BOT_REVOKE, apply_bot_revoke);
@@ -1447,6 +1605,14 @@ fn apply_realm_policy_server_dispatch(
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
     crate::reducer::realm_policy_server::apply_realm_policy_server(s, op)
+}
+
+fn apply_device_push_route_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_device_push_route(op)
 }
 
 // G3.S9 — adapter dispatches for the extensions module. These call
@@ -1500,9 +1666,195 @@ fn apply_tsp_audit_append(
 static APPLY_REGISTRY: std::sync::LazyLock<std::collections::HashMap<&'static str, ApplyFn>> =
     std::sync::LazyLock::new(default_apply_registry);
 
+fn empty_push_route_cell() -> PushRouteCellValue {
+    PushRouteCellValue {
+        push_target_id: None,
+        push_gateway_did: None,
+        encryption_key: None,
+        capabilities: Vec::new(),
+        revoked: false,
+        revoked_targets: Vec::new(),
+    }
+}
+
+fn push_route_cell_ref(subject: &PushRouteSubject) -> Option<CellRef> {
+    let cell_subject = contrix_sdk::composite_subject(&[
+        subject.recipient_service_did.as_str(),
+        subject.principal_id.as_str(),
+        subject.device_id.as_str(),
+        subject.push_route.as_str(),
+    ])
+    .ok()?;
+    CellRef::new(format!(
+        "cx:cell:cx.component.device.push_route.v1:{cell_subject}"
+    ))
+    .ok()
+}
+
 impl ProjectionState {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn set_local_service_did(&mut self, service_did: impl Into<String>) {
+        self.local_service_did = Some(service_did.into());
+    }
+
+    pub fn push_route_cell_value(&self, subject: &PushRouteSubject) -> Option<&PushRouteCellValue> {
+        self.push_routes.get(subject)
+    }
+
+    fn apply_device_push_route(&mut self, operation: &Operation) -> ProjectionEffect {
+        let Some(payload) = operation.payload.as_object() else {
+            return ProjectionEffect::Rejected {
+                reason: "push_route_payload_not_object".to_owned(),
+            };
+        };
+        let Some(recipient_service_did) =
+            payload.get("recipient_service_did").and_then(Value::as_str)
+        else {
+            return ProjectionEffect::Rejected {
+                reason: "push_route_missing_recipient_service_did".to_owned(),
+            };
+        };
+        if let Some(local_service_did) = self.local_service_did.as_deref()
+            && local_service_did != recipient_service_did
+        {
+            return ProjectionEffect::Rejected {
+                reason: "recipient_service_did_mismatch".to_owned(),
+            };
+        }
+        let Some(principal_id) = payload.get("principal_id").and_then(Value::as_str) else {
+            return ProjectionEffect::Rejected {
+                reason: "push_route_missing_principal_id".to_owned(),
+            };
+        };
+        let Some(device_id) = payload.get("device_id").and_then(Value::as_str) else {
+            return ProjectionEffect::Rejected {
+                reason: "push_route_missing_device_id".to_owned(),
+            };
+        };
+        let Some(push_route) = payload.get("push_route").and_then(Value::as_str) else {
+            return ProjectionEffect::Rejected {
+                reason: "push_route_missing_push_route".to_owned(),
+            };
+        };
+
+        let subject = PushRouteSubject {
+            recipient_service_did: recipient_service_did.to_owned(),
+            principal_id: principal_id.to_owned(),
+            device_id: device_id.to_owned(),
+            push_route: push_route.to_owned(),
+        };
+
+        let revoked = payload
+            .get("revoked")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+
+        if revoked {
+            let mut previous = self
+                .push_routes
+                .get(&subject)
+                .cloned()
+                .unwrap_or_else(empty_push_route_cell);
+            if let Some(target) = previous.push_target_id.take()
+                && !previous.revoked_targets.contains(&target)
+            {
+                previous.revoked_targets.push(target);
+            }
+            if let Some(target) = payload.get("push_target_id").and_then(Value::as_str)
+                && !previous
+                    .revoked_targets
+                    .iter()
+                    .any(|existing| existing == target)
+            {
+                previous.revoked_targets.push(target.to_owned());
+            }
+            previous.push_gateway_did = None;
+            previous.encryption_key = None;
+            previous.capabilities.clear();
+            previous.revoked = true;
+            self.store_push_route_cell(subject.clone(), previous);
+            return ProjectionEffect::PushRouteUpdated {
+                subject,
+                action: "revoked".to_owned(),
+            };
+        }
+
+        let Some(push_target_id) = payload.get("push_target_id").and_then(Value::as_str) else {
+            return ProjectionEffect::Rejected {
+                reason: "push_route_active_missing_push_target_id".to_owned(),
+            };
+        };
+        let Some(push_gateway_did) = payload.get("push_gateway_did").and_then(Value::as_str) else {
+            return ProjectionEffect::Rejected {
+                reason: "push_route_active_missing_push_gateway_did".to_owned(),
+            };
+        };
+        let capabilities = payload
+            .get("capabilities")
+            .and_then(Value::as_array)
+            .map(|values| {
+                values
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(ToOwned::to_owned)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let encryption_key = payload
+            .get("encryption_key")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
+
+        let mut next = self
+            .push_routes
+            .get(&subject)
+            .cloned()
+            .unwrap_or_else(empty_push_route_cell);
+        let mut action = "active";
+        if let Some(previous_target) = next.push_target_id.as_deref()
+            && previous_target != push_target_id
+        {
+            action = "rotated";
+            let previous_target = previous_target.to_owned();
+            if !next.revoked_targets.contains(&previous_target) {
+                next.revoked_targets.push(previous_target);
+            }
+        }
+        next.push_target_id = Some(push_target_id.to_owned());
+        next.push_gateway_did = Some(push_gateway_did.to_owned());
+        next.encryption_key = encryption_key;
+        next.capabilities = capabilities;
+        next.revoked = false;
+        self.store_push_route_cell(subject.clone(), next);
+
+        ProjectionEffect::PushRouteUpdated {
+            subject,
+            action: action.to_owned(),
+        }
+    }
+
+    fn store_push_route_cell(&mut self, subject: PushRouteSubject, value: PushRouteCellValue) {
+        if let Some(cell_ref) = push_route_cell_ref(&subject) {
+            self.cells.insert(
+                cell_ref,
+                CellState::Value(serde_json::json!({
+                    "recipient_service_did": &subject.recipient_service_did,
+                    "principal_id": &subject.principal_id,
+                    "device_id": &subject.device_id,
+                    "push_route": &subject.push_route,
+                    "push_target_id": &value.push_target_id,
+                    "push_gateway_did": &value.push_gateway_did,
+                    "encryption_key": &value.encryption_key,
+                    "capabilities": &value.capabilities,
+                    "revoked": value.revoked,
+                    "revoked_targets": &value.revoked_targets,
+                })),
+            );
+        }
+        self.push_routes.insert(subject, value);
     }
 
     /// Look up a cell's resolved state by its canonical [`CellRef`]. Returns
@@ -2577,7 +2929,7 @@ impl ProjectionState {
     ///
     /// Full audit closure (notify `cx.realm.notification.audit` holder,
     /// trigger UI banner) is TODO(realm-rework) — see
-    /// `kinds.rs::CX_SPACE_AUDIT_POLICY_DOWNGRADE` for the broader
+    /// `kinds.rs::CX_REALM_AUDIT_POLICY_DOWNGRADE` for the broader
     /// attestation-chain pipeline that drives this downgrade.
     fn apply_realm_audit_policy_downgrade(
         &mut self,
@@ -2774,26 +3126,58 @@ impl ProjectionState {
         }
     }
 
-    fn apply_space_lifecycle(
+    /// Apply a `cx.realm.*` lifecycle event. Stream-F (Wave 1B) rewrite
+    /// of the former `apply_space_lifecycle`: the function is now
+    /// restricted to the four canonical Realm lifecycle kinds
+    /// (`cx.realm.create`, `cx.realm.update`, `cx.realm.tombstone`,
+    /// `cx.realm.destroy`). Space-container lifecycle
+    /// (`cx.space.create` / `update` / `parent` / `archive` / `restore`
+    /// / `tombstone`) is handled by `apply_space_container_*`
+    /// in this same impl block — they were already separate methods
+    /// before this rename, so no extraction was needed.
+    ///
+    /// Spec anchors:
+    ///   - `realm-and-space.md` §2.5 (terminal state distinction:
+    ///     tombstone vs destroy)
+    ///   - `realm-and-space.md` §2.5.1 (destroy cascade rules)
+    ///   - `realm-and-space.md` §2.5.2 (erasure receipt fanout —
+    ///     reducer leg only; the actual federation push lives outside)
+    fn apply_realm_lifecycle(
         &mut self,
         operation: &Operation,
         now: chrono::DateTime<chrono::Utc>,
         kind: &'static str,
     ) -> ProjectionEffect {
+        // Defensive: only the four canonical Realm-lifecycle kinds may
+        // reach this function. The dispatch table enforces this; the
+        // assertion keeps internal callers honest.
+        debug_assert!(
+            matches!(
+                kind,
+                crate::kinds::CX_REALM_CREATE
+                    | crate::kinds::CX_REALM_UPDATE
+                    | crate::kinds::CX_REALM_TOMBSTONE
+                    | crate::kinds::CX_REALM_DESTROY
+            ),
+            "apply_realm_lifecycle dispatched with non-realm kind: {kind}",
+        );
+
         // Keep the structured cache and the canonical cells map in sync.
         //
         // Per spec event-kind-registry, each cx.realm.* lifecycle event
-        // writes a distinct cell family with its own lattice (post-R1.2,
-        // the Realm/Space reversal renamed the security namespace from
-        // `space` to `realm`):
-        //   cx.realm.create  → cx.component.realm.create.v1  (ordered-log, singleton)
-        //   cx.realm.update  → cx.component.realm.organization.v1 (cas-register, singleton)
-        //   cx.realm.destroy → cx.component.realm.destroy.v1 (cas-register, singleton)
+        // writes a distinct cell family with its own lattice:
+        //   cx.realm.create     → cx.component.realm.create.v1  (ordered-log, singleton)
+        //   cx.realm.update     → cx.component.realm.organization.v1 (cas-register, singleton)
+        //   cx.realm.tombstone  → cx.component.realm.destroy.v1 (cas-register, singleton)
+        //   cx.realm.destroy    → cx.component.realm.destroy.v1 (cas-register, singleton)
         //
-        // The structured `space_states` field is the side-band cache —
-        // keeps `created_at` / `updated_at` server-side timestamps and a
-        // simple `deleted` bool that directory/sync consumers
-        // already query. Cells map is the protocol-canonical source.
+        // Stream-F (Wave 1B): tombstone and destroy write the SAME cell
+        // family — both are terminal — but with different value shapes
+        // distinguished by the `terminal_kind` field and the presence
+        // (or absence) of `successor_realm_id`. Bottom = reject; a
+        // second terminal-state write rejects with
+        // `realm_already_terminal`.
+        let payload_object = operation.payload.get("object").and_then(Value::as_object);
         let action = operation
             .payload
             .get("action")
@@ -2804,22 +3188,22 @@ impl ProjectionState {
         let owner = operation
             .payload
             .get("owner")
+            .or_else(|| payload_object.and_then(|object| object.get("created_by_principal")))
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned);
-        // Title can arrive in either the legacy flat form (`title`) or
-        // the canonical `cx.schema.patch.v1` shape under `patch.title`.
-        // We accept both; on a tie the flat form wins for back-compat.
-        // Same fallback for `summary` / `description` would land here
-        // when we add structured Realm metadata fields. For now only
-        // `title` is updatable via patch — other fields remain
-        // lifecycle-driven (action, owner, security_class,
-        // federation_policy, trust_domain) and are NOT patchable
-        // because they have their own validators above.
+        // Realm create carries metadata in `payload.object`; update carries
+        // mutable presentation fields in the patch register.
         let title = operation
             .payload
             .get("title")
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned)
+            .or_else(|| {
+                payload_object
+                    .and_then(|object| object.get("title"))
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned)
+            })
             .or_else(|| {
                 operation
                     .payload
@@ -2849,21 +3233,21 @@ impl ProjectionState {
         let payload_security_class = operation
             .payload
             .get("security_class")
+            .or_else(|| payload_object.and_then(|object| object.get("security_class")))
             .and_then(Value::as_str)
             .map(ToOwned::to_owned);
         let payload_federation_policy = operation
             .payload
             .get("federation_policy")
+            .or_else(|| payload_object.and_then(|object| object.get("federation_policy")))
             .and_then(Value::as_str)
             .map(ToOwned::to_owned);
         // Round 4 (B1.2) — capture (and validate against any existing
-        // locked value) the Realm trust_domain. Payload field
-        // `trust_domain` (the canonical SDK shape) is preferred over the
-        // legacy `realm_trust_domain` key seen in pre-round-4 fixtures.
+        // locked value) the Realm trust_domain.
         let payload_trust_domain = operation
             .payload
             .get("trust_domain")
-            .or_else(|| operation.payload.get("realm_trust_domain"))
+            .or_else(|| payload_object.and_then(|object| object.get("trust_domain")))
             .and_then(Value::as_str)
             .map(ToOwned::to_owned);
         if let Some(ref new_td) = payload_trust_domain {
@@ -2911,6 +3295,60 @@ impl ProjectionState {
             };
         }
 
+        // Stream-F (Wave 1B): terminal-state preflight. A Realm already
+        // in `tombstoned` or `destroyed` state MUST NOT accept another
+        // terminal-state write (cell family is cas-register with
+        // bottom=reject; the structured cache mirrors that).
+        if let Some(existing) = self.space_states.get(&space_id)
+            && existing.terminal_state.is_some()
+            && matches!(
+                kind,
+                crate::kinds::CX_REALM_TOMBSTONE | crate::kinds::CX_REALM_DESTROY
+            )
+        {
+            return ProjectionEffect::Rejected {
+                reason: "realm_already_terminal".to_owned(),
+            };
+        }
+
+        // Stream-F (Wave 1B): cx.realm.tombstone preconditions. The
+        // event MUST carry a syntactically valid `successor_realm_id`
+        // pointing at a `cx:realm:<UUIDv7>` distinct from the
+        // terminating Realm. Absent → `missing_successor`; malformed →
+        // `schema_violation`; self-reference → `successor_self_reference`.
+        let payload_successor_realm_id = operation
+            .payload
+            .get("successor_realm_id")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
+        if kind == crate::kinds::CX_REALM_TOMBSTONE {
+            match payload_successor_realm_id.as_deref() {
+                None => {
+                    return ProjectionEffect::Rejected {
+                        reason: "missing_successor".to_owned(),
+                    };
+                }
+                Some(id) => {
+                    if crate::ids::RealmId::parse(id).is_err() {
+                        return ProjectionEffect::Rejected {
+                            reason: contrix_sdk::ERROR_CODE_SCHEMA_VIOLATION.to_owned(),
+                        };
+                    }
+                    if id == space_id {
+                        return ProjectionEffect::Rejected {
+                            reason: "successor_self_reference".to_owned(),
+                        };
+                    }
+                }
+            }
+        }
+        // cx.realm.destroy MUST NOT carry successor_realm_id (spec §2.5).
+        if kind == crate::kinds::CX_REALM_DESTROY && payload_successor_realm_id.is_some() {
+            return ProjectionEffect::Rejected {
+                reason: contrix_sdk::ERROR_CODE_SCHEMA_VIOLATION.to_owned(),
+            };
+        }
+
         // Structured cache mirror.
         let space = self
             .space_states
@@ -2923,6 +3361,8 @@ impl ProjectionState {
                 created_at: now,
                 updated_at: now,
                 trust_domain: payload_trust_domain.clone(),
+                terminal_state: None,
+                successor_realm_id: None,
             });
         // Lock trust_domain on first observation (cx.realm.create). The
         // mismatch case is already rejected above; here we only set the
@@ -2935,9 +3375,21 @@ impl ProjectionState {
         let is_destroy = matches!(
             action.as_str(),
             "delete" | "space.delete" | "destroy" | "space.destroy"
-        ) || kind == crate::kinds::CX_SPACE_DESTROY;
-        if is_destroy {
+        ) || kind == crate::kinds::CX_REALM_DESTROY;
+        // Stream-F (Wave 1B): both terminal-state events flip the
+        // legacy `deleted` flag so existing admin/audit tooling that
+        // queries `space_states[id].deleted` keeps working. The richer
+        // `terminal_state` / `successor_realm_id` fields are the new
+        // source of truth.
+        if is_destroy || kind == crate::kinds::CX_REALM_TOMBSTONE {
             space.deleted = true;
+        }
+        if kind == crate::kinds::CX_REALM_TOMBSTONE {
+            space.terminal_state = Some("tombstoned".to_owned());
+            space.successor_realm_id = payload_successor_realm_id.clone();
+        } else if kind == crate::kinds::CX_REALM_DESTROY {
+            space.terminal_state = Some("destroyed".to_owned());
+            space.successor_realm_id = None;
         }
         if owner.is_some() {
             space.owner.clone_from(&owner);
@@ -2950,7 +3402,7 @@ impl ProjectionState {
         // Cells map: synth a CellState::Value per the spec cell family
         // for this canonical kind.
         match kind {
-            k if k == crate::kinds::CX_SPACE_CREATE => {
+            k if k == crate::kinds::CX_REALM_CREATE => {
                 // ordered-log: append entries. We model the log here as
                 // an array of envelopes; each create event appends. For
                 // most Spaces there's exactly one create entry, but the
@@ -2978,7 +3430,7 @@ impl ProjectionState {
                     self.cells.insert(cell_id, new_log);
                 }
             }
-            k if k == crate::kinds::CX_SPACE_UPDATE => {
+            k if k == crate::kinds::CX_REALM_UPDATE => {
                 // cas-register: latest value wins. Composite of
                 // owner / title / arbitrary other organization fields
                 // pulled from payload (fields the spec evolves can land
@@ -3009,23 +3461,299 @@ impl ProjectionState {
                         .insert(cell_id, CellState::Value(Value::Object(value)));
                 }
             }
-            k if k == crate::kinds::CX_SPACE_DESTROY => {
+            k if k == crate::kinds::CX_REALM_TOMBSTONE => {
+                // Stream-F (Wave 1B): tombstone writes the same cell
+                // family as destroy but with `terminal_kind=tombstoned`
+                // + `successor_realm_id` so peers hydrating from cells
+                // alone can distinguish the two terminal flavours.
+                // Bottom = reject (the structured-cache preflight above
+                // mirrors that).
+                if let Ok(cell_id) = contrix_sdk::CellRef::new(format!(
+                    "cx:cell:cx.component.realm.destroy.v1:{space_id}"
+                )) {
+                    let value = serde_json::json!({
+                        "terminal_kind": "tombstoned",
+                        "destroyed": true,
+                        "successor_realm_id": payload_successor_realm_id,
+                        "at": now.to_rfc3339(),
+                        "operation_id": operation.operation_id.as_str(),
+                    });
+                    self.cells.insert(cell_id, CellState::Value(value));
+                }
+                // Tombstone keeps child Space/Flow placement live:
+                // succession transfers the navigation surface to the
+                // successor Realm. Spec §2.5 row "tombstone" — no
+                // realm_destroyed_orphan cascade fires here.
+            }
+            k if k == crate::kinds::CX_REALM_DESTROY => {
                 // cas-register: terminal {destroyed: true, at: ts}.
                 if let Ok(cell_id) = contrix_sdk::CellRef::new(format!(
                     "cx:cell:cx.component.realm.destroy.v1:{space_id}"
                 )) {
                     let value = serde_json::json!({
+                        "terminal_kind": "destroyed",
                         "destroyed": true,
                         "at": now.to_rfc3339(),
                         "operation_id": operation.operation_id.as_str(),
                     });
                     self.cells.insert(cell_id, CellState::Value(value));
                 }
+                // Stream-F (Wave 1B): destroy cascade per spec
+                // §2.5.1 ¶6 + ¶7.
+                self.cascade_realm_destroy(&space_id);
             }
             _ => {}
         }
 
         ProjectionEffect::SpaceLifecycle { space_id, action }
+    }
+
+    /// Stream-F (Wave 1B + Wave 2C) — `cx.realm.destroy` child-cascade.
+    /// Spec `realm-and-space.md` §2.5.1:
+    ///   ¶6 child Space-container placement (same Realm) → mark
+    ///      `realm_destroyed_orphan` (locked read-only projection).
+    ///   ¶6 cross-Realm `parent_ref` edge pointing at a Space inside
+    ///      the destroyed Realm → mark the *referencing* container's
+    ///      `parent_ref_locked = true` (Stream-F Wave 2C). The
+    ///      referencing Space stays alive in its OWN Realm; only the
+    ///      parent edge is downgraded so membership / capability /
+    ///      history / E2EE / retention stops propagating across the
+    ///      destroy frontier.
+    ///   ¶7 `Flow.discussion_realm_ref` either direction → drop the
+    ///      discussion edge so further `cx.message.*` writes on that
+    ///      track fail-closed (the discussion projection treats a
+    ///      missing entry as the default fail-closed state).
+    ///
+    /// The terminal-state admission check (event_log.rs) prevents
+    /// further writes against the destroyed Realm itself, which is the
+    /// load-bearing safety property; this cascade applies the
+    /// projection-side downgrade so UI / navigation surfaces honour
+    /// the destroy frontier without a fresh query against the
+    /// terminated Realm.
+    fn cascade_realm_destroy(&mut self, destroyed_realm_id: &str) {
+        // ¶6 same-Realm child Space-container cascade.
+        let mut orphaned_count = 0_usize;
+        for container in self.space_containers.values_mut() {
+            if container.space_id == destroyed_realm_id && !container.orphaned {
+                container.orphaned = true;
+                orphaned_count += 1;
+            }
+        }
+
+        // ¶6 cross-Realm parent_ref lazy-link downgrade (Stream-F
+        // Wave 2C). Spec realm-and-space.md §2.5.1 ¶6.
+        //
+        // For every Space across ALL Realms, check whether its
+        // `parent_ref` resolves to a Space whose home Realm is the
+        // destroyed one. The destroyed Realm's own children are
+        // already covered by the `orphaned` pass above; this loop
+        // catches the *cross-Realm* edges that target a Space
+        // hosted inside the destroyed Realm. Containers stay alive
+        // in their own Realms — only the navigation edge is locked.
+        //
+        // We first snapshot the parent_id lookup so we can mutate
+        // the same map without re-borrowing it.
+        let parent_home_realms: std::collections::BTreeMap<String, String> = self
+            .space_containers
+            .iter()
+            .map(|(id, c)| (id.clone(), c.space_id.clone()))
+            .collect();
+        let mut parent_lock_count = 0_usize;
+        for container in self.space_containers.values_mut() {
+            if container.parent_ref_locked {
+                continue; // already locked by an earlier destroy frontier
+            }
+            // Only consider cross-Realm parent edges (same-Realm
+            // children of the destroyed Realm are already marked
+            // orphaned above; their parent_ref_locked status is
+            // implied by the orphaned flag).
+            if container.space_id == destroyed_realm_id {
+                continue;
+            }
+            let Some(parent_id) = container.parent_ref.as_ref() else {
+                continue;
+            };
+            // Resolve the parent's home Realm. If the parent isn't
+            // in the projection (federated / not yet replicated),
+            // we can't downgrade — leave it for the federation
+            // backfill path to catch on next replay.
+            let Some(parent_home) = parent_home_realms.get(parent_id) else {
+                continue;
+            };
+            if parent_home == destroyed_realm_id {
+                container.parent_ref_locked = true;
+                parent_lock_count += 1;
+            }
+        }
+
+        // ¶7 discussion_realm_ref cascade — both directions:
+        //   (a) destroyed Realm is the LINKED discussion Realm
+        //       (`flow_discussion_realms` value)
+        //   (b) destroyed Realm is the SOURCE Flow's home Realm
+        //       (`FlowProjection.space_id`)
+        // We collect the affected flow_ids first to avoid the
+        // borrow-checker double-borrow on `self`.
+        let to_remove: Vec<String> = self
+            .flow_discussion_realms
+            .iter()
+            .filter_map(|(flow_id, target_realm)| {
+                if target_realm == destroyed_realm_id {
+                    Some(flow_id.clone())
+                } else {
+                    self.flows
+                        .get(flow_id)
+                        .filter(|f| f.space_id == destroyed_realm_id)
+                        .map(|_| flow_id.clone())
+                }
+            })
+            .collect();
+        for flow_id in &to_remove {
+            self.flow_discussion_realms.remove(flow_id);
+        }
+
+        tracing::info!(
+            destroyed_realm_id = %destroyed_realm_id,
+            orphaned_space_containers = orphaned_count,
+            cross_realm_parent_refs_locked = parent_lock_count,
+            severed_discussion_edges = to_remove.len(),
+            "stream-F realm.destroy cascade applied"
+        );
+    }
+
+    /// Stream-F (Wave 1B + Wave 2C) — apply a
+    /// `cx.audit.erasure_receipt` event. Stores the receipt in
+    /// [`ProjectionState::erasure_receipts`] with validated `outcome` +
+    /// `scope.storage_boundary` + `fanout_status` fields. The receipt
+    /// is durable; this projection cache backs the
+    /// `erasure_receipts_endpoint` server-describe surface.
+    ///
+    /// Stream-F (Wave 2C) — additionally extracts `scope.realm_id` so
+    /// the federation fanout pass can pick the affected Realm's peer
+    /// set, and seeds `peer_status` from the caller-supplied list (if
+    /// any). The actual peer push + per-peer status writes happen
+    /// outside the reducer in
+    /// `routing::federation::erasure_fanout::fanout_erasure_receipt`,
+    /// which is called from the projection write path with the
+    /// `AppState` handle.
+    fn apply_audit_erasure_receipt(
+        &mut self,
+        operation: &Operation,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> ProjectionEffect {
+        let payload = &operation.payload;
+        // Accept either the inner payload shape (canonical) or a
+        // flat object whose top-level fields are receipt fields.
+        // Spec `realm-and-space.md` §2.5.2 + erasure-receipt.schema.json.
+        let outcome = payload
+            .get("outcome")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
+        let outcome = match outcome {
+            Some(s) => s,
+            None => {
+                return ProjectionEffect::Rejected {
+                    reason: contrix_sdk::ERROR_CODE_SCHEMA_VIOLATION.to_owned(),
+                };
+            }
+        };
+        // The canonical schema enumerates 3 outcomes; the spec brief
+        // adds `scheduled` / `failed` for the receiving-peer feedback
+        // path. We accept all five and let the wire validator enforce
+        // the strict canonical set when the schema version requires.
+        let valid_outcomes = [
+            "completed",
+            "partially_completed",
+            "blocked_by_legal_hold",
+            "scheduled",
+            "failed",
+        ];
+        if !valid_outcomes.contains(&outcome.as_str()) {
+            return ProjectionEffect::Rejected {
+                reason: contrix_sdk::ERROR_CODE_SCHEMA_VIOLATION.to_owned(),
+            };
+        }
+        // `scope` MUST be present per schema; we only require it to
+        // be an object — the wire validator enforces the inner shape.
+        let Some(scope) = payload.get("scope").and_then(Value::as_object) else {
+            return ProjectionEffect::Rejected {
+                reason: contrix_sdk::ERROR_CODE_SCHEMA_VIOLATION.to_owned(),
+            };
+        };
+        let storage_boundary = scope
+            .get("storage_boundary")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
+        // Stream-F (Wave 2C) — extract the optional scope.realm_id.
+        // Drives the federation peer-set selection downstream. Per
+        // erasure-receipt.schema.json the field is optional; receipts
+        // for account-private erasures (no Realm scope) skip the
+        // federation fanout entirely.
+        let scope_realm_id = scope
+            .get("realm_id")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
+
+        let receipt_id = payload
+            .get("receipt_id")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
+        let issuer = payload
+            .get("issuer")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
+        let (subject_kind, subject_ref) = payload
+            .get("subject")
+            .and_then(Value::as_object)
+            .map(|s| {
+                (
+                    s.get("kind").and_then(Value::as_str).map(ToOwned::to_owned),
+                    s.get("ref").and_then(Value::as_str).map(ToOwned::to_owned),
+                )
+            })
+            .unwrap_or((None, None));
+        let fanout_status = payload
+            .get("fanout_status")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| "pending".to_owned());
+
+        self.erasure_receipts.push(ErasureReceiptRecord {
+            receipt_id: receipt_id.clone(),
+            issuer,
+            subject_kind,
+            subject_ref,
+            outcome: outcome.clone(),
+            storage_boundary,
+            scope_realm_id,
+            fanout_status,
+            // Stream-F (Wave 2C) — `peer_status` is seeded by the
+            // federation fanout helper (which has the AppState
+            // handle and therefore access to `config.federation_peers`).
+            // The reducer itself runs without AppState, so we leave
+            // the map empty here and let the outer projection write
+            // path populate it via `seed_peer_status`.
+            peer_status: std::collections::BTreeMap::new(),
+            recorded_at: now,
+            payload: payload.clone(),
+        });
+
+        tracing::info!(
+            receipt_id = ?receipt_id,
+            outcome = %outcome,
+            operation_id = %operation.operation_id.as_str(),
+            "stream-F erasure_receipt recorded"
+        );
+
+        // No dedicated ProjectionEffect variant yet — surface as
+        // SpaceLifecycle with a synthetic action so existing
+        // dispatchers (e.g. the broadcast layer) treat the event as
+        // a Realm-level audit signal. TODO(stream-F-followup): add
+        // a dedicated `ProjectionEffect::ErasureReceiptRecorded` once
+        // the federation layer wants a typed handle.
+        ProjectionEffect::SpaceLifecycle {
+            space_id: operation.realm_id.to_string(),
+            action: "audit.erasure_receipt".to_owned(),
+        }
     }
 
     /// Read-only state-machine preflight for a `cx.space.*` container lifecycle
@@ -3161,6 +3889,8 @@ impl ProjectionState {
             created_at: now,
             updated_by: None,
             updated_at: None,
+            orphaned: false,
+            parent_ref_locked: false,
         };
         self.space_containers
             .insert(container_space_id.clone(), projection);
@@ -4316,9 +5046,15 @@ impl ProjectionState {
     }
 
     /// True when the `cx.component.realm.destroy.v1` cell has a Value
-    /// (any non-Bottom value indicates the destroy commit landed).
+    /// (any non-Bottom value indicates a terminal-state commit landed).
     /// Equivalent to checking `space_states[space_id].deleted` but reads
     /// from the protocol-canonical cells map source.
+    ///
+    /// Stream-F (Wave 1B) note: this returns true for BOTH
+    /// `cx.realm.tombstone` and `cx.realm.destroy` because they share
+    /// the same cell family (`cx.component.realm.destroy.v1`). Callers
+    /// that need to distinguish the two should consult
+    /// [`Self::space_is_in_terminal_state`] / [`SpaceState::terminal_state`].
     pub fn space_is_destroyed(&self, space_id: &str) -> bool {
         let Ok(cell_id) =
             contrix_sdk::CellRef::new(format!("cx:cell:cx.component.realm.destroy.v1:{space_id}"))
@@ -4326,6 +5062,23 @@ impl ProjectionState {
             return false;
         };
         matches!(self.cells.get(&cell_id), Some(CellState::Value(_)))
+    }
+
+    /// Stream-F (Wave 1B) — true if the Realm is in ANY terminal state
+    /// (tombstoned OR destroyed). The wire-layer
+    /// `terminal_realm_check` consults this to reject non-audit
+    /// writes against terminal Realms. Spec
+    /// `realm-and-space.md` §2.5 / §2.5.1.
+    pub fn space_is_in_terminal_state(&self, space_id: &str) -> bool {
+        if let Some(s) = self.space_states.get(space_id)
+            && s.terminal_state.is_some()
+        {
+            return true;
+        }
+        // Fall back to the cell-presence check so peers that hydrate
+        // from cells without rebuilding `space_states` still see the
+        // terminal state.
+        self.space_is_destroyed(space_id)
     }
 
     /// Read the projected `cx.component.realm.delivery_binding_policy.v1`
@@ -4490,11 +5243,11 @@ mod tests {
     use super::*;
     use crate::hlc::ServerHlc;
 
-    fn make_operation(object_type: &str, space_id: &str, payload: Value) -> Operation {
+    fn make_operation(object_type: &str, realm_id: &str, payload: Value) -> Operation {
         Operation::create(
             contrix_sdk::OperationId::new(format!("cx:operation:{}", uuid::Uuid::now_v7()))
                 .unwrap(),
-            contrix_sdk::SpaceId::new(space_id).unwrap(),
+            contrix_sdk::RealmId::new(realm_id).unwrap(),
             object_type,
             payload,
         )
@@ -4506,7 +5259,7 @@ mod tests {
         let hlc = ServerHlc::new("test");
         let op = make_operation(
             crate::kinds::CX_MESSAGE_CREATE,
-            "cx:space:01904100-0000-7000-8000-cfc039892036",
+            "cx:realm:01904100-0000-7000-8000-cfc039892036",
             serde_json::json!({
                 "event_id": "cx:event:01904100-0000-7000-8000-caaa6a15bce1",
                 "sender": "did:web:alice",
@@ -4517,7 +5270,7 @@ mod tests {
         let effect = state.apply(&op, &hlc);
         assert!(matches!(effect, ProjectionEffect::MessageCreated(_)));
 
-        let msgs = state.messages_for_space("cx:space:01904100-0000-7000-8000-cfc039892036");
+        let msgs = state.messages_for_space("cx:realm:01904100-0000-7000-8000-cfc039892036");
         assert_eq!(msgs.len(), 1);
         assert_eq!(
             msgs[0].event_id,
@@ -4533,7 +5286,7 @@ mod tests {
         state.apply(
             &make_operation(
                 crate::kinds::CX_MESSAGE_CREATE,
-                "cx:space:01904100-0000-7000-8000-cfc039892036",
+                "cx:realm:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
                     "event_id": "cx:event:01904100-0000-7000-8000-caaa6a15bce1",
                     "sender": "did:web:alice",
@@ -4546,7 +5299,7 @@ mod tests {
         state.apply(
             &make_operation(
                 crate::kinds::CX_MESSAGE_REDACT,
-                "cx:space:01904100-0000-7000-8000-cfc039892036",
+                "cx:realm:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
                     "target_event_id": "cx:event:01904100-0000-7000-8000-caaa6a15bce1",
                     "by": "did:web:alice",
@@ -4558,7 +5311,7 @@ mod tests {
 
         assert!(
             state
-                .messages_for_space("cx:space:01904100-0000-7000-8000-cfc039892036")
+                .messages_for_space("cx:realm:01904100-0000-7000-8000-cfc039892036")
                 .is_empty()
         );
         assert!(
@@ -4589,7 +5342,7 @@ mod tests {
         state.apply(
             &make_operation(
                 crate::kinds::CX_MESSAGE_CREATE,
-                "cx:space:01904100-0000-7000-8000-cfc039892036",
+                "cx:realm:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
                     "event_id": event_id,
                     "sender": "did:web:alice",
@@ -4610,7 +5363,7 @@ mod tests {
         state.apply(
             &make_operation(
                 crate::kinds::CX_MESSAGE_REDACT,
-                "cx:space:01904100-0000-7000-8000-cfc039892036",
+                "cx:realm:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
                     "target_event_id": event_id,
                     "by": "did:web:alice",
@@ -4637,7 +5390,7 @@ mod tests {
         state.apply(
             &make_operation(
                 crate::kinds::CX_MESSAGE_REDACT,
-                "cx:space:01904100-0000-7000-8000-cfc039892036",
+                "cx:realm:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
                     "target_event_id": event_id,
                     "by": "did:web:alice",
@@ -4660,7 +5413,7 @@ mod tests {
         state.apply(
             &make_operation(
                 crate::kinds::CX_MESSAGE_REDACT,
-                "cx:space:01904100-0000-7000-8000-cfc039892036",
+                "cx:realm:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
                     "target_event_id": event_id,
                     "by": "did:web:alice",
@@ -4673,7 +5426,7 @@ mod tests {
         state.apply(
             &make_operation(
                 crate::kinds::CX_MESSAGE_REDACT,
-                "cx:space:01904100-0000-7000-8000-cfc039892036",
+                "cx:realm:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
                     "target_event_id": event_id,
                     "redaction_value": serde_json::Value::Null,
@@ -4708,7 +5461,7 @@ mod tests {
         state.apply(
             &make_operation(
                 crate::kinds::CX_MESSAGE_REDACT,
-                "cx:space:01904100-0000-7000-8000-cfc039892036",
+                "cx:realm:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
                     "target_event_id": event_id,
                     "by": "did:web:alice",
@@ -4739,7 +5492,7 @@ mod tests {
         state.apply(
             &make_operation(
                 crate::kinds::CX_REACTION_ADD,
-                "cx:space:01904100-0000-7000-8000-cfc039892036",
+                "cx:realm:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
                     "event_id": "cx:event:01904100-0000-7000-8000-caaa6a15bce1",
                     "actor": "did:web:alice",
@@ -4758,7 +5511,7 @@ mod tests {
         state.apply(
             &make_operation(
                 crate::kinds::CX_REACTION_REMOVE,
-                "cx:space:01904100-0000-7000-8000-cfc039892036",
+                "cx:realm:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
                     "event_id": "cx:event:01904100-0000-7000-8000-caaa6a15bce1",
                     "actor": "did:web:alice",
@@ -4789,7 +5542,7 @@ mod tests {
         state.apply(
             &make_operation(
                 crate::kinds::CX_MEMBER_STATE,
-                "cx:space:01904100-0000-7000-8000-cfc039892036",
+                "cx:realm:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
                     "actor_id": "did:web:bob",
                     "membership": "join",
@@ -4801,7 +5554,7 @@ mod tests {
         );
         assert_eq!(
             state
-                .members_of_space("cx:space:01904100-0000-7000-8000-cfc039892036")
+                .members_of_space("cx:realm:01904100-0000-7000-8000-cfc039892036")
                 .len(),
             1
         );
@@ -4809,7 +5562,7 @@ mod tests {
         state.apply(
             &make_operation(
                 crate::kinds::CX_MEMBER_STATE,
-                "cx:space:01904100-0000-7000-8000-cfc039892036",
+                "cx:realm:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
                     "actor_id": "did:web:bob",
                     "membership": "leave"
@@ -4819,7 +5572,7 @@ mod tests {
         );
         assert_eq!(
             state
-                .members_of_space("cx:space:01904100-0000-7000-8000-cfc039892036")
+                .members_of_space("cx:realm:01904100-0000-7000-8000-cfc039892036")
                 .len(),
             0
         );
@@ -4833,7 +5586,7 @@ mod tests {
         state.apply(
             &make_operation(
                 crate::kinds::CX_MESSAGE_CREATE,
-                "cx:space:01904100-0000-7000-8000-cfc039892036",
+                "cx:realm:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
                     "event_id": "cx:event:01904100-0000-7000-8000-caaa6a15bce1",
                     "sender": "did:web:alice",
@@ -4847,7 +5600,7 @@ mod tests {
         state.apply(
             &make_operation(
                 crate::kinds::CX_MESSAGE_REVISE,
-                "cx:space:01904100-0000-7000-8000-cfc039892036",
+                "cx:realm:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
                     "target_event_id": "cx:event:01904100-0000-7000-8000-caaa6a15bce1",
                     "new_event_id": "cx:event:01904100-0000-7000-8000-c4daaba541fc",
@@ -4857,7 +5610,7 @@ mod tests {
             &hlc,
         );
 
-        let msgs = state.messages_for_space("cx:space:01904100-0000-7000-8000-cfc039892036");
+        let msgs = state.messages_for_space("cx:realm:01904100-0000-7000-8000-cfc039892036");
         assert_eq!(msgs.len(), 2); // original + revision
         let revision = msgs
             .iter()
@@ -4875,7 +5628,7 @@ mod tests {
     fn cell_value_returns_none_for_unwritten_cell() {
         let state = ProjectionState::new();
         let cell_id = contrix_sdk::CellRef::new(
-            "cx:cell:cx.component.space.read_receipt_policy.v1:cx:space:01904100-0000-7000-8000-cfc039892036".to_owned(),
+            "cx:cell:cx.component.space.read_receipt_policy.v1:cx:realm:01904100-0000-7000-8000-cfc039892036".to_owned(),
         )
         .unwrap();
         assert!(state.cell(&cell_id).is_none());
@@ -4887,7 +5640,7 @@ mod tests {
         use contrix_sdk::lattice::CellState;
         let mut state = ProjectionState::new();
         let cell_id = contrix_sdk::CellRef::new(
-            "cx:cell:cx.component.space.policy.v1:cx:space:01904100-0000-7000-8000-cfc039892036"
+            "cx:cell:cx.component.space.policy.v1:cx:realm:01904100-0000-7000-8000-cfc039892036"
                 .to_owned(),
         )
         .unwrap();
@@ -4926,7 +5679,7 @@ mod tests {
         state.apply(
             &make_operation(
                 crate::kinds::CX_MEMBER_STATE,
-                "cx:space:01904100-0000-7000-8000-cfc039892036",
+                "cx:realm:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
                     "actor_id": "did:web:alice",
                     "membership": "join",
@@ -4940,7 +5693,7 @@ mod tests {
         // Structured cache populated with state="join" + role="admin".
         let m = state
             .member(
-                "cx:space:01904100-0000-7000-8000-cfc039892036",
+                "cx:realm:01904100-0000-7000-8000-cfc039892036",
                 "did:web:alice",
             )
             .expect("member entry should exist after join");
@@ -4956,7 +5709,7 @@ mod tests {
         // members_of_space only returns entries in `state="join"`.
         assert_eq!(
             state
-                .members_of_space("cx:space:01904100-0000-7000-8000-cfc039892036")
+                .members_of_space("cx:realm:01904100-0000-7000-8000-cfc039892036")
                 .len(),
             1
         );
@@ -4972,7 +5725,7 @@ mod tests {
             state.apply(
                 &make_operation(
                     crate::kinds::CX_MEMBER_STATE,
-                    "cx:space:01904100-0000-7000-8000-cfc039892036",
+                    "cx:realm:01904100-0000-7000-8000-cfc039892036",
                     serde_json::json!({
                         "actor_id": "did:web:bob",
                         "membership": membership,
@@ -4987,13 +5740,13 @@ mod tests {
         // `members_of_space()` (which filters by `state="join"`).
         assert_eq!(
             state
-                .members_in_state("cx:space:01904100-0000-7000-8000-cfc039892036", "ban")
+                .members_in_state("cx:realm:01904100-0000-7000-8000-cfc039892036", "ban")
                 .len(),
             1
         );
         assert_eq!(
             state
-                .members_of_space("cx:space:01904100-0000-7000-8000-cfc039892036")
+                .members_of_space("cx:realm:01904100-0000-7000-8000-cfc039892036")
                 .len(),
             0
         );
@@ -5006,7 +5759,7 @@ mod tests {
         state.apply(
             &make_operation(
                 crate::kinds::CX_MEMBER_STATE,
-                "cx:space:01904100-0000-7000-8000-cfc039892036",
+                "cx:realm:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({"actor_id": "did:web:bob", "membership": "invite"}),
             ),
             &hlc,
@@ -5017,13 +5770,13 @@ mod tests {
         );
         assert_eq!(
             state
-                .members_in_state("cx:space:01904100-0000-7000-8000-cfc039892036", "ban")
+                .members_in_state("cx:realm:01904100-0000-7000-8000-cfc039892036", "ban")
                 .len(),
             0
         );
         assert_eq!(
             state
-                .members_in_state("cx:space:01904100-0000-7000-8000-cfc039892036", "invite")
+                .members_in_state("cx:realm:01904100-0000-7000-8000-cfc039892036", "invite")
                 .len(),
             1
         );
@@ -5037,8 +5790,8 @@ mod tests {
         let hlc = ServerHlc::new("test");
         state.apply(
             &make_operation(
-                crate::kinds::CX_SPACE_CREATE,
-                "cx:space:01904100-0000-7000-8000-cfc039892036",
+                crate::kinds::CX_REALM_CREATE,
+                "cx:realm:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
                     "action": "create",
                     "owner": "did:web:alice",
@@ -5051,7 +5804,7 @@ mod tests {
         // Structured cache populated.
         let space = state
             .space_states
-            .get("cx:space:01904100-0000-7000-8000-cfc039892036")
+            .get("cx:realm:01904100-0000-7000-8000-cfc039892036")
             .expect("space_states entry should exist after create");
         assert_eq!(space.owner.as_deref(), Some("did:web:alice"));
         assert_eq!(space.title.as_deref(), Some("Test Space"));
@@ -5059,7 +5812,7 @@ mod tests {
 
         // Ordered-log cell has one entry.
         let log = state
-            .space_create_log("cx:space:01904100-0000-7000-8000-cfc039892036")
+            .space_create_log("cx:realm:01904100-0000-7000-8000-cfc039892036")
             .expect("create cell should be a Value(Array)");
         assert_eq!(log.len(), 1);
         assert_eq!(
@@ -5074,8 +5827,8 @@ mod tests {
         let hlc = ServerHlc::new("test");
         state.apply(
             &make_operation(
-                crate::kinds::CX_SPACE_UPDATE,
-                "cx:space:01904100-0000-7000-8000-cfc039892036",
+                crate::kinds::CX_REALM_UPDATE,
+                "cx:realm:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
                     "action": "update",
                     "owner": "did:web:alice",
@@ -5086,7 +5839,7 @@ mod tests {
         );
 
         let value = state
-            .space_organization_cell_value("cx:space:01904100-0000-7000-8000-cfc039892036")
+            .space_organization_cell_value("cx:realm:01904100-0000-7000-8000-cfc039892036")
             .expect("organization cell should resolve to Value");
         assert_eq!(
             value.get("title").and_then(Value::as_str),
@@ -5107,32 +5860,160 @@ mod tests {
         // First create...
         state.apply(
             &make_operation(
-                crate::kinds::CX_SPACE_CREATE,
-                "cx:space:01904100-0000-7000-8000-cfc039892036",
+                crate::kinds::CX_REALM_CREATE,
+                "cx:realm:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({"action": "create", "owner": "did:web:alice"}),
             ),
             &hlc,
         );
-        assert!(!state.space_is_destroyed("cx:space:01904100-0000-7000-8000-cfc039892036"));
+        assert!(!state.space_is_destroyed("cx:realm:01904100-0000-7000-8000-cfc039892036"));
 
         // ...then destroy.
         state.apply(
             &make_operation(
-                crate::kinds::CX_SPACE_DESTROY,
-                "cx:space:01904100-0000-7000-8000-cfc039892036",
+                crate::kinds::CX_REALM_DESTROY,
+                "cx:realm:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({"action": "destroy"}),
             ),
             &hlc,
         );
 
         // Cell-keyed query returns true.
-        assert!(state.space_is_destroyed("cx:space:01904100-0000-7000-8000-cfc039892036"));
+        assert!(state.space_is_destroyed("cx:realm:01904100-0000-7000-8000-cfc039892036"));
         // Structured cache mirror agrees.
         let space = state
             .space_states
-            .get("cx:space:01904100-0000-7000-8000-cfc039892036")
+            .get("cx:realm:01904100-0000-7000-8000-cfc039892036")
             .unwrap();
         assert!(space.deleted);
+    }
+
+    /// Stream-F (Wave 2C) — spec `realm-and-space.md` §2.5.1 ¶6.
+    /// `cx.realm.destroy` on Realm A must mark cross-Realm child
+    /// Spaces in Realm B (whose `parent_ref` points at a Space hosted
+    /// inside Realm A) with `parent_ref_locked = true`. The child
+    /// Space in Realm B stays alive (it's only the parent edge that
+    /// gets downgraded to a locked / lazy link).
+    #[test]
+    fn cascade_realm_destroy_locks_cross_realm_parent_ref() {
+        let mut state = ProjectionState::new();
+        let hlc = ServerHlc::new("test");
+        let realm_a = "cx:realm:01904100-0000-7000-8000-aaaaaaaaaaaa";
+        let realm_b = "cx:realm:01904100-0000-7000-8000-bbbbbbbbbbbb";
+        let parent_in_a = "cx:space:01904100-0000-7000-8000-000000000001";
+        let child_in_b = "cx:space:01904100-0000-7000-8000-000000000002";
+        // Container hosted inside Realm A (the to-be-destroyed Realm).
+        state.apply(
+            &make_operation(
+                crate::kinds::CX_SPACE_CONTAINER_CREATE,
+                realm_a,
+                serde_json::json!({
+                    "object": {
+                        "id": parent_in_a,
+                        "kind": "folder",
+                        "title": "Parent in Realm A",
+                    },
+                    "space_id": realm_a,
+                }),
+            ),
+            &hlc,
+        );
+        // Container hosted inside Realm B whose parent_ref points at
+        // the Realm-A container.
+        state.apply(
+            &make_operation(
+                crate::kinds::CX_SPACE_CONTAINER_CREATE,
+                realm_b,
+                serde_json::json!({
+                    "object": {
+                        "id": child_in_b,
+                        "kind": "folder",
+                        "title": "Child in Realm B",
+                        "parent_ref": parent_in_a,
+                    },
+                    "space_id": realm_b,
+                }),
+            ),
+            &hlc,
+        );
+
+        // Pre-condition: neither container is locked.
+        let child_pre = state.space_containers.get(child_in_b).unwrap();
+        assert!(!child_pre.parent_ref_locked);
+        assert!(!child_pre.orphaned);
+
+        // Destroy Realm A.
+        state.apply(
+            &make_operation(
+                crate::kinds::CX_REALM_DESTROY,
+                realm_a,
+                serde_json::json!({"action": "destroy"}),
+            ),
+            &hlc,
+        );
+
+        // Post-condition: child in Realm B has parent_ref_locked=true
+        // but is NOT marked orphaned (it lives in Realm B, which is
+        // still active).
+        let child_post = state.space_containers.get(child_in_b).unwrap();
+        assert!(
+            child_post.parent_ref_locked,
+            "cross-Realm parent_ref must be locked after parent's home Realm is destroyed"
+        );
+        assert!(
+            !child_post.orphaned,
+            "child Space in Realm B is NOT orphaned — only its parent edge is downgraded"
+        );
+        // The same-Realm container in Realm A IS orphaned by the
+        // existing ¶6 same-realm cascade.
+        let parent_post = state.space_containers.get(parent_in_a).unwrap();
+        assert!(
+            parent_post.orphaned,
+            "container hosted in destroyed Realm A must be orphaned"
+        );
+    }
+
+    /// Stream-F (Wave 2C) — `cx.audit.erasure_receipt` reducer pass
+    /// extracts `scope.realm_id`, seeds an empty `peer_status` map,
+    /// and stamps `fanout_status = "pending"`. The federation outbox
+    /// enqueue + per-peer seeding is exercised by
+    /// `crate::routing::federation::erasure_fanout::tests`.
+    #[test]
+    fn audit_erasure_receipt_records_scope_realm_id_and_pending_fanout() {
+        let mut state = ProjectionState::new();
+        let hlc = ServerHlc::new("test");
+        state.apply(
+            &make_operation(
+                crate::kinds::CX_AUDIT_ERASURE_RECEIPT,
+                "cx:realm:01904100-0000-7000-8000-cfc039892036",
+                serde_json::json!({
+                    "receipt_id": "cx:receipt:01",
+                    "schema": "cx.schema.erasure_receipt.v1",
+                    "issuer": "did:web:soland.local",
+                    "subject": {"kind": "realm", "ref": "cx:realm:01904100-0000-7000-8000-cfc039892036"},
+                    "scope": {
+                        "storage_boundary": "projection_store",
+                        "realm_id": "cx:realm:01904100-0000-7000-8000-cfc039892036",
+                    },
+                    "outcome": "completed",
+                }),
+            ),
+            &hlc,
+        );
+        assert_eq!(state.erasure_receipts.len(), 1);
+        let record = &state.erasure_receipts[0];
+        assert_eq!(record.receipt_id.as_deref(), Some("cx:receipt:01"));
+        assert_eq!(record.outcome, "completed");
+        assert_eq!(
+            record.scope_realm_id.as_deref(),
+            Some("cx:realm:01904100-0000-7000-8000-cfc039892036"),
+            "scope.realm_id MUST be extracted for the federation fanout pass"
+        );
+        assert_eq!(record.fanout_status, "pending");
+        // peer_status is seeded by the federation fanout helper
+        // (outside the reducer) so the in-reducer projection starts
+        // empty.
+        assert!(record.peer_status.is_empty());
     }
 
     #[test]
@@ -5142,15 +6023,15 @@ mod tests {
         for owner in ["did:web:alice", "did:web:bob"] {
             state.apply(
                 &make_operation(
-                    crate::kinds::CX_SPACE_CREATE,
-                    "cx:space:01904100-0000-7000-8000-cfc039892036",
+                    crate::kinds::CX_REALM_CREATE,
+                    "cx:realm:01904100-0000-7000-8000-cfc039892036",
                     serde_json::json!({"action": "create", "owner": owner}),
                 ),
                 &hlc,
             );
         }
         let log = state
-            .space_create_log("cx:space:01904100-0000-7000-8000-cfc039892036")
+            .space_create_log("cx:realm:01904100-0000-7000-8000-cfc039892036")
             .unwrap();
         assert_eq!(log.len(), 2, "ordered-log should accumulate entries");
     }
@@ -5178,13 +6059,13 @@ mod tests {
         state.apply(
             &make_operation(
                 crate::kinds::CX_MEMBER_STATE,
-                "cx:space:01904100-0000-7000-8000-cfc039892036",
+                "cx:realm:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({"actor_id": "did:web:carol", "membership": "knock"}),
             ),
             &hlc,
         );
         let knockers =
-            state.members_in_state("cx:space:01904100-0000-7000-8000-cfc039892036", "knock");
+            state.members_in_state("cx:realm:01904100-0000-7000-8000-cfc039892036", "knock");
         assert_eq!(knockers.len(), 1);
         assert_eq!(knockers[0].member, "did:web:carol");
         assert_eq!(
@@ -5198,7 +6079,7 @@ mod tests {
         use contrix_sdk::lattice::CellState;
         let mut state = ProjectionState::new();
         let cell_id = contrix_sdk::CellRef::new(
-            "cx:cell:cx.component.space.read_receipt_policy.v1:cx:space:01904100-0000-7000-8000-cfc039892036".to_owned(),
+            "cx:cell:cx.component.space.read_receipt_policy.v1:cx:realm:01904100-0000-7000-8000-cfc039892036".to_owned(),
         )
         .unwrap();
         state.cells.insert(
@@ -5210,7 +6091,7 @@ mod tests {
             })),
         );
         let value = state
-            .read_receipt_policy_cell_value("cx:space:01904100-0000-7000-8000-cfc039892036")
+            .read_receipt_policy_cell_value("cx:realm:01904100-0000-7000-8000-cfc039892036")
             .expect("policy cell should resolve");
         assert_eq!(
             value.get("disclosure").and_then(Value::as_str),
@@ -5237,7 +6118,7 @@ mod tests {
     fn space_container_lifecycle_round_trip() {
         let mut state = ProjectionState::new();
         let hlc = ServerHlc::new("test");
-        let space_id = "cx:space:01904100-0000-7000-8000-cfc039892036";
+        let space_id = "cx:realm:01904100-0000-7000-8000-cfc039892036";
         let container_space_id = "cx:space:01904100-0000-7000-8000-1fb50799ad42";
 
         // create
@@ -5340,7 +6221,7 @@ mod tests {
     fn space_container_lifecycle_preflight_rejects_illegal_transitions() {
         let mut state = ProjectionState::new();
         let hlc = ServerHlc::new("test");
-        let space_id = "cx:space:01904100-0000-7000-8000-cfc039892036";
+        let space_id = "cx:realm:01904100-0000-7000-8000-cfc039892036";
         let container_space_id = "cx:space:01904100-0000-7000-8000-1fb50799ad43";
 
         // Create the place (Active).
@@ -5443,7 +6324,7 @@ mod tests {
         let state = ProjectionState::new();
         let archive_unknown = make_operation(
             crate::kinds::CX_SPACE_CONTAINER_ARCHIVE,
-            "cx:space:01904100-0000-7000-8000-cfc039892036",
+            "cx:realm:01904100-0000-7000-8000-cfc039892036",
             serde_json::json!({ "space_id": "cx:space:01904100-0000-7000-8000-cfc039892039" }),
         );
         assert_eq!(
@@ -5456,7 +6337,7 @@ mod tests {
     fn space_update_and_parent_accept_canonical_payload_fields() {
         let mut state = ProjectionState::new();
         let hlc = ServerHlc::new("test");
-        let realm_space_id = "cx:space:01904100-0000-7000-8000-cfc039892036";
+        let realm_space_id = "cx:realm:01904100-0000-7000-8000-cfc039892036";
         let container_space_id = "cx:space:01904100-0000-7000-8000-cfc039892037";
         let parent_space_id = "cx:space:01904100-0000-7000-8000-cfc039892038";
 
@@ -5548,7 +6429,7 @@ mod tests {
     fn flow_lifecycle_round_trip() {
         let mut state = ProjectionState::new();
         let hlc = ServerHlc::new("test");
-        let space_id = "cx:space:01904100-0000-7000-8000-cfc039892036";
+        let space_id = "cx:realm:01904100-0000-7000-8000-cfc039892036";
         let flow_id = "cx:flow:01904100-0000-7000-8000-1fb50799ad50";
 
         let create_effect = state.apply(
@@ -5617,7 +6498,7 @@ mod tests {
     fn flow_lifecycle_preflight_rejects_illegal_transitions() {
         let mut state = ProjectionState::new();
         let hlc = ServerHlc::new("test");
-        let space_id = "cx:space:01904100-0000-7000-8000-cfc039892036";
+        let space_id = "cx:realm:01904100-0000-7000-8000-cfc039892036";
         let flow_id = "cx:flow:01904100-0000-7000-8000-1fb50799ad51";
 
         state.apply(
@@ -5686,7 +6567,7 @@ mod tests {
         let state = ProjectionState::new();
         let archive_unknown = make_operation(
             crate::kinds::CX_FLOW_ARCHIVE,
-            "cx:space:01904100-0000-7000-8000-cfc039892036",
+            "cx:realm:01904100-0000-7000-8000-cfc039892036",
             serde_json::json!({ "flow_id": "cx:flow:nope-not-here" }),
         );
         assert_eq!(
@@ -5701,7 +6582,7 @@ mod tests {
     fn morph_lifecycle_round_trip() {
         let mut state = ProjectionState::new();
         let hlc = ServerHlc::new("test");
-        let space_id = "cx:space:01904100-0000-7000-8000-cfc039892036";
+        let space_id = "cx:realm:01904100-0000-7000-8000-cfc039892036";
         let morph_id = "cx:morph:01904100-0000-7000-8000-1fb50799ad60";
 
         let create_effect = state.apply(
@@ -5754,7 +6635,7 @@ mod tests {
     fn morph_lifecycle_preflight_rejects_illegal_transitions() {
         let mut state = ProjectionState::new();
         let hlc = ServerHlc::new("test");
-        let space_id = "cx:space:01904100-0000-7000-8000-cfc039892036";
+        let space_id = "cx:realm:01904100-0000-7000-8000-cfc039892036";
         let morph_id = "cx:morph:01904100-0000-7000-8000-1fb50799ad61";
 
         state.apply(
@@ -5823,7 +6704,7 @@ mod tests {
         let state = ProjectionState::new();
         let archive_unknown = make_operation(
             crate::kinds::CX_MORPH_ARCHIVE,
-            "cx:space:01904100-0000-7000-8000-cfc039892036",
+            "cx:realm:01904100-0000-7000-8000-cfc039892036",
             serde_json::json!({ "morph_id": "cx:morph:nope-not-here" }),
         );
         assert_eq!(
@@ -5841,7 +6722,7 @@ mod tests {
     fn flow_position_events_touch_projection_without_changing_state() {
         let mut state = ProjectionState::new();
         let hlc = ServerHlc::new("test");
-        let space_id = "cx:space:01904100-0000-7000-8000-cfc039892036";
+        let space_id = "cx:realm:01904100-0000-7000-8000-cfc039892036";
         let flow_id = "cx:flow:01904100-0000-7000-8000-2fb50799ad50";
         let board_space_id = "cx:space:01904100-0000-7000-8000-c10dc0000001";
 
@@ -5934,7 +6815,7 @@ mod tests {
         let effect = state.apply(
             &make_operation(
                 crate::kinds::CX_FLOW_MOVE,
-                "cx:space:01904100-0000-7000-8000-cfc039892036",
+                "cx:realm:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
                     "flow_id": "cx:flow:nope-not-here",
                     "board_space_id": "cx:space:01904100-0000-7000-8000-c10dc0000001",
@@ -5956,7 +6837,7 @@ mod tests {
     fn redaction_with_flow_object_ref_flips_to_redacted() {
         let mut state = ProjectionState::new();
         let hlc = ServerHlc::new("test");
-        let space_id = "cx:space:01904100-0000-7000-8000-cfc039892036";
+        let space_id = "cx:realm:01904100-0000-7000-8000-cfc039892036";
         let flow_id = "cx:flow:01904100-0000-7000-8000-3fb50799ad50";
 
         state.apply(
@@ -6005,7 +6886,7 @@ mod tests {
     fn redaction_with_morph_object_ref_flips_to_redacted() {
         let mut state = ProjectionState::new();
         let hlc = ServerHlc::new("test");
-        let space_id = "cx:space:01904100-0000-7000-8000-cfc039892036";
+        let space_id = "cx:realm:01904100-0000-7000-8000-cfc039892036";
         let morph_id = "cx:morph:01904100-0000-7000-8000-3fb50799ad60";
 
         state.apply(
@@ -6052,7 +6933,7 @@ mod tests {
     fn redaction_preflight_rejects_against_already_terminal() {
         let mut state = ProjectionState::new();
         let hlc = ServerHlc::new("test");
-        let space_id = "cx:space:01904100-0000-7000-8000-cfc039892036";
+        let space_id = "cx:realm:01904100-0000-7000-8000-cfc039892036";
         let flow_id = "cx:flow:01904100-0000-7000-8000-3fb50799ad51";
         let morph_id = "cx:morph:01904100-0000-7000-8000-3fb50799ad61";
 
@@ -6151,7 +7032,7 @@ mod tests {
     fn flow_tracks_update_touches_active_flow_only() {
         let mut state = ProjectionState::new();
         let hlc = ServerHlc::new("test");
-        let space_id = "cx:space:01904100-0000-7000-8000-cfc039892036";
+        let space_id = "cx:realm:01904100-0000-7000-8000-cfc039892036";
         let flow_id = "cx:flow:01904100-0000-7000-8000-4fb50799ad50";
 
         state.apply(
@@ -6204,7 +7085,7 @@ mod tests {
     fn flow_tracks_preflight_rejects_when_flow_archived() {
         let mut state = ProjectionState::new();
         let hlc = ServerHlc::new("test");
-        let space_id = "cx:space:01904100-0000-7000-8000-cfc039892036";
+        let space_id = "cx:realm:01904100-0000-7000-8000-cfc039892036";
         let flow_id = "cx:flow:01904100-0000-7000-8000-4fb50799ad51";
 
         state.apply(
@@ -6259,7 +7140,7 @@ mod tests {
         let state = ProjectionState::new();
         let tracks_op = make_operation(
             crate::kinds::CX_FLOW_TRACKS_UPDATE,
-            "cx:space:01904100-0000-7000-8000-cfc039892036",
+            "cx:realm:01904100-0000-7000-8000-cfc039892036",
             serde_json::json!({
                 "flow_id": "cx:flow:nope-not-here",
                 "patch": {"tracks": {"synthesis": {"profile": "synthesis"}}}
@@ -6274,7 +7155,7 @@ mod tests {
     #[test]
     fn redaction_preflight_tolerates_unknown_object_or_message_path() {
         let state = ProjectionState::new();
-        let space_id = "cx:space:01904100-0000-7000-8000-cfc039892036";
+        let space_id = "cx:realm:01904100-0000-7000-8000-cfc039892036";
         // Unknown object_ref.
         let unknown = make_operation(
             crate::kinds::CX_REDACTION,
