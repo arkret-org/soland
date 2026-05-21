@@ -380,10 +380,7 @@ fn delivery_binding_policy_event_projects_cell_value() {
         .and_then(Value::as_array)
         .expect("allowed_recipient_services must be an array");
     assert_eq!(
-        allowed
-            .iter()
-            .filter_map(Value::as_str)
-            .collect::<Vec<_>>(),
+        allowed.iter().filter_map(Value::as_str).collect::<Vec<_>>(),
         vec!["did:web:principal.acme.example"]
     );
     assert_eq!(

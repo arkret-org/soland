@@ -60,26 +60,23 @@ pub(super) async fn federation_transaction(
     // schema_violation; a destination mismatch is
     // cross_domain_replay_rejected. The configured
     // `state.config.trust_domain` is the canonical receiver value.
-    let trust_headers =
-        match crate::round4::FederationTrustHeaders::from_salvo_request(req) {
-            Ok(headers) => Some(headers),
-            Err(violation) => {
-                // Headers are advisory until cotest C3 lands the full
-                // multi-server scenario; we log + continue rather than
-                // hard-reject. TODO(round4-fed-headers): flip to
-                // hard-reject after teabay + soland + cotest agree on
-                // the header transcript.
-                tracing::warn!(
-                    error = %violation.message(),
-                    "federation request missing/malformed round-4 trust-domain headers"
-                );
-                None
-            }
-        };
+    let trust_headers = match crate::round4::FederationTrustHeaders::from_salvo_request(req) {
+        Ok(headers) => Some(headers),
+        Err(violation) => {
+            // Headers are advisory until cotest C3 lands the full
+            // multi-server scenario; we log + continue rather than
+            // hard-reject. TODO(round4-fed-headers): flip to
+            // hard-reject after teabay + soland + cotest agree on
+            // the header transcript.
+            tracing::warn!(
+                error = %violation.message(),
+                "federation request missing/malformed round-4 trust-domain headers"
+            );
+            None
+        }
+    };
     if let Some(ref headers) = trust_headers {
-        let expected = contrix_sdk::TypedTrustDomainId::new(
-            state.config.trust_domain.clone(),
-        );
+        let expected = contrix_sdk::TypedTrustDomainId::new(state.config.trust_domain.clone());
         if let Ok(expected) = expected
             && headers.verify_destination(&expected).is_err()
         {
@@ -115,15 +112,16 @@ pub(super) async fn federation_transaction(
     // TODO(round4-fed-binding-verify): wire origin_key_state_hash from
     // the resolver chain's last observed cross-signing publish for the
     // origin DID.
-    let r4_idem_key = trust_headers.as_ref().map(|headers| {
-        crate::round4::FederationIdempotencyKey {
-            source_did: body.origin.to_string(),
-            dest_did: body.destination.to_string(),
-            request_canonical_hash: headers.request_canonical_hash.as_str().to_owned(),
-            idempotency_key: txn_id.clone(),
-            origin_key_state_hash: "sha256:0000".to_owned(),
-        }
-    });
+    let r4_idem_key =
+        trust_headers
+            .as_ref()
+            .map(|headers| crate::round4::FederationIdempotencyKey {
+                source_did: body.origin.to_string(),
+                dest_did: body.destination.to_string(),
+                request_canonical_hash: headers.request_canonical_hash.as_str().to_owned(),
+                idempotency_key: txn_id.clone(),
+                origin_key_state_hash: "sha256:0000".to_owned(),
+            });
     let _service_binding = crate::round23::FederationIdempotencyServiceBinding {
         source_service_did: body.origin.to_string(),
         verification_method: r4_idem_key
@@ -181,8 +179,7 @@ pub(super) async fn federation_transaction(
                 .map(|s| matches!(s, "true" | "1" | "yes"))
                 .unwrap_or(false);
             if request_signals_historical {
-                response_value =
-                    crate::round4::mark_response_historical_only(response_value);
+                response_value = crate::round4::mark_response_historical_only(response_value);
             }
             let response: contrix_sdk::FederationTransactionResBody =
                 serde_json::from_value(response_value).map_err(|error| {
@@ -550,6 +547,13 @@ pub fn broadcast_move_to_peers(state: &AppState, move_id: &str) -> Vec<String> {
     };
     for peer in &peers {
         record_outbound_fanout_attempt(state, "move", move_id, peer);
+        // G3.S0 — durable enqueue. The transcript persisted above remains
+        // the human-readable audit record; the outbox row is what the
+        // background dispatcher (`routing::federation::outbox`) actually
+        // POSTs. Failures to enqueue are logged but don't fail the
+        // inbound write — the transcript still gives operators a way to
+        // re-trigger delivery once the storage hiccup clears.
+        enqueue_outbound_for(state, "move", move_id, peer);
         let peer = peer.clone();
         let move_id_owned = move_id.to_owned();
         tokio::spawn(async move {
@@ -581,6 +585,8 @@ pub fn broadcast_anchor_to_peers(state: &AppState, anchor_id: &str) -> Vec<Strin
     };
     for peer in &peers {
         record_outbound_fanout_attempt(state, "anchor", anchor_id, peer);
+        // G3.S0 — durable enqueue (see broadcast_move_to_peers).
+        enqueue_outbound_for(state, "anchor", anchor_id, peer);
         let peer = peer.clone();
         let anchor_id_owned = anchor_id.to_owned();
         tokio::spawn(async move {
@@ -592,6 +598,66 @@ pub fn broadcast_anchor_to_peers(state: &AppState, anchor_id: &str) -> Vec<Strin
         });
     }
     peers
+}
+
+/// G3.S0 — bridge from the existing broadcast_*_to_peers helpers to the
+/// durable outbox. Computes the canonical request body the dispatcher
+/// will POST and inserts a `federation_outbox` row keyed by
+/// `(peer, resource_kind, resource_id)`. The idempotency key is
+/// deterministic so a restart-time re-broadcast collapses onto the
+/// existing row (UNIQUE INDEX on `peer_did, idempotency_key`) instead
+/// of creating a duplicate.
+fn enqueue_outbound_for(state: &AppState, resource_kind: &str, resource_id: &str, peer: &str) {
+    let endpoint = match resource_kind {
+        "anchor" => "/api/v1/federation/anchors",
+        _ => "/api/v1/federation/push-operations",
+    };
+    let payload = json!({
+        "schema": format!("cx.federation.outbound.{resource_kind}.v1"),
+        "origin": state.config.service_did,
+        "destination": peer,
+        "resource_kind": resource_kind,
+        "resource_id": resource_id,
+        "endpoint": endpoint,
+    });
+    // Reuse the SDK canonicalizer that already underpins the transcript
+    // signing path so the body bytes the dispatcher POSTs are identical
+    // to what the signature transcript covers — important once full
+    // RFC 9421 signing lands.
+    let payload_bytes = contrix_sdk::canonical::canonical_json_bytes(&payload)
+        .unwrap_or_else(|_| serde_json::to_vec(&payload).unwrap_or_default());
+    let payload_json =
+        String::from_utf8(payload_bytes.clone()).unwrap_or_else(|_| payload.to_string());
+    // Deterministic Idempotency-Key per spec `federation.md` §8.5 —
+    // `sha256(origin || destination || resource_kind || resource_id)`
+    // gives the (origin, destination, key) tuple the receiver dedupes
+    // against. Restart-time re-broadcast hits the UNIQUE INDEX and
+    // collapses to the existing outbox row.
+    let mut hasher = Sha256::new();
+    hasher.update(state.config.service_did.as_bytes());
+    hasher.update(b"|");
+    hasher.update(peer.as_bytes());
+    hasher.update(b"|");
+    hasher.update(resource_kind.as_bytes());
+    hasher.update(b"|");
+    hasher.update(resource_id.as_bytes());
+    let idempotency_key = format!("cx:outbox:{:x}", hasher.finalize());
+    if let Err(error) = crate::routing::federation::outbox::enqueue_outbound(
+        state,
+        peer,
+        peer,
+        endpoint,
+        &idempotency_key,
+        &payload_json,
+    ) {
+        tracing::warn!(
+            %error,
+            %peer,
+            resource_kind,
+            resource_id,
+            "failed to enqueue federation outbox row (transcript still persisted)"
+        );
+    }
 }
 
 fn record_outbound_fanout_attempt(
@@ -1023,6 +1089,7 @@ mod tests {
             use_keystore: false,
             federation_policy: policy,
             federation_peers: peers,
+            federation_outbound_enabled: false,
             admin_default_page_limit: 100,
             admin_max_page_limit: 1000,
             admin_principal_dids: Vec::new(),
@@ -1038,6 +1105,8 @@ mod tests {
             compaction_prune_walk_per_space_limit: 50,
             seed_demo_data: true,
             trust_domain: "cx:trust_domain:soland.local".to_owned(),
+            sovereign_enclave_enabled: false,
+            sovereign_enclave_allowed_outbound_hosts: Vec::new(),
         }
     }
 

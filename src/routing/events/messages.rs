@@ -69,14 +69,28 @@ async fn messages_send(
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req)?;
     let body = body.into_inner();
-    let space_id = body
+    let requested_space_id = body
         .get("space_id")
         .and_then(Value::as_str)
         .ok_or_else(|| AppError::missing_param("space_id is required"))?;
-    if validate_space_id(space_id).is_err() {
+    if validate_space_id(requested_space_id).is_err() {
         return Err(AppError::invalid_param("invalid space_id"));
     }
-    if !space_has_member(state, space_id, &session.actor) {
+    let body_flow_id = body.get("flow_id").and_then(Value::as_str);
+    let routed_space_id = body_flow_id
+        .and_then(|flow_id| {
+            state.projection.lock().ok().and_then(|projection| {
+                let routed = projection.discussion_space_for_flow(flow_id, requested_space_id);
+                (routed != requested_space_id).then(|| routed.to_owned())
+            })
+        })
+        .unwrap_or_else(|| requested_space_id.to_owned());
+    if validate_space_id(&routed_space_id).is_err() {
+        return Err(AppError::invalid_param(
+            "invalid routed discussion space_id",
+        ));
+    }
+    if !space_has_member(state, &routed_space_id, &session.actor) {
         return Err(AppError::capability_denied(
             "actor is not a joined member of the space",
         ));
@@ -88,7 +102,7 @@ async fn messages_send(
     let content = body
         .get("content")
         .ok_or_else(|| AppError::missing_param("content is required"))?;
-    if !encrypted && !space_allows_plaintext_service(state, space_id) {
+    if !encrypted && !space_allows_plaintext_service(state, &routed_space_id) {
         return Err(AppError::capability_denied(
             "space policy denies plaintext writes from this service",
         ));
@@ -118,7 +132,9 @@ async fn messages_send(
     }
 
     let event_id = ids::generate_event_id();
-    let flow_id = flow_id_from_space_id(space_id);
+    let flow_id = body_flow_id
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| flow_id_from_space_id(&routed_space_id));
     let thread_id = body
         .get("thread_id")
         .and_then(Value::as_str)
@@ -127,7 +143,7 @@ async fn messages_send(
     let now = Utc::now();
     let record = MessageRecord {
         event_id: event_id.clone(),
-        space_id: space_id.to_owned(),
+        space_id: routed_space_id.clone(),
         sender: session.actor.clone(),
         thread_id: thread_id.clone(),
         content: content.clone(),
@@ -141,7 +157,7 @@ async fn messages_send(
         .map_err(|error| AppError::internal(format!("message store unavailable: {error}")))?;
     let projection_record = crate::state::ProjectionEventRecord {
         event_id: event_id.clone(),
-        space_id: space_id.to_owned(),
+        space_id: routed_space_id.clone(),
         event_kind: kinds::CX_MESSAGE_CREATE.to_owned(),
         operation_type: "event".to_owned(),
         operation_id: Some(format!(
@@ -150,9 +166,11 @@ async fn messages_send(
         )),
         sender: Some(session.actor.clone()),
         payload: json!({
+            "flow_id": flow_id.clone(),
             "thread_id": thread_id.clone(),
             "content": content.clone(),
             "encrypted": encrypted,
+            "source_space_id": requested_space_id,
         }),
         created_at: now,
     };
@@ -167,8 +185,9 @@ async fn messages_send(
     let event_suffix = event_id.strip_prefix("cx:event:").unwrap_or(&event_id);
     let operation_id = format!("cx:operation:{event_suffix}");
     let mut positions = std::collections::BTreeMap::new();
-    positions.insert(space_id.to_owned(), now.timestamp_micros());
-    let sync_token = encode_send_cursor(state, space_id, &positions, now.timestamp_millis());
+    positions.insert(routed_space_id.clone(), now.timestamp_micros());
+    let sync_token =
+        encode_send_cursor(state, &routed_space_id, &positions, now.timestamp_millis());
 
     json_ok(json!({
         "event_id": event_id,
@@ -177,7 +196,8 @@ async fn messages_send(
         "message_id": message_id_from_event_id(&event_id),
         "flow_id": flow_id,
         "thread_id": thread_id,
-        "space_id": space_id,
+        "space_id": routed_space_id,
+        "source_space_id": requested_space_id,
         "sender": session.actor.clone(),
         "encrypted": encrypted,
         "created_at": now,

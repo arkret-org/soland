@@ -97,7 +97,10 @@ fn push_route_active_writes_cell_value() {
     );
     let effect = state.apply(&op(payload), &hlc);
     match effect {
-        ProjectionEffect::PushRouteUpdated { ref subject, action } => {
+        ProjectionEffect::PushRouteUpdated {
+            ref subject,
+            action,
+        } => {
             assert_eq!(subject.recipient_service_did, SERVICE_DID_LOCAL);
             assert_eq!(subject.principal_id, PRINCIPAL_A);
             assert_eq!(subject.device_id, DEVICE_A);
@@ -175,7 +178,10 @@ fn push_route_cell_subject_isolated_by_recipient_service_did() {
         )),
         &hlc,
     );
-    assert!(matches!(effect_a, ProjectionEffect::PushRouteUpdated { .. }));
+    assert!(matches!(
+        effect_a,
+        ProjectionEffect::PushRouteUpdated { .. }
+    ));
 
     // Principal Server B accepts a route for (alice, device-a, apns) with
     // a different `push_target_id`.
@@ -191,7 +197,10 @@ fn push_route_cell_subject_isolated_by_recipient_service_did() {
         )),
         &hlc,
     );
-    assert!(matches!(effect_b, ProjectionEffect::PushRouteUpdated { .. }));
+    assert!(matches!(
+        effect_b,
+        ProjectionEffect::PushRouteUpdated { .. }
+    ));
 
     // Each Principal Server's projection only carries its own cell —
     // the subjects differ on `recipient_service_did`, so they are
@@ -248,7 +257,10 @@ fn push_route_revoke_keeps_subject_and_appends_revoked_target() {
         "revoked": true,
     }));
     match state.apply(&revoke, &hlc) {
-        ProjectionEffect::PushRouteUpdated { ref subject, action } => {
+        ProjectionEffect::PushRouteUpdated {
+            ref subject,
+            action,
+        } => {
             // Same subject as the activation — confirms the cell_subject
             // contract.
             assert_eq!(subject.recipient_service_did, SERVICE_DID_LOCAL);

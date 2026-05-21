@@ -24,9 +24,13 @@ use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::{AppState, DeviceMessageRecord, SessionRecord};
 use crate::wire::{
-    DeviceMessagesReceiveResBody, DeviceMessagesSendReqBody, DeviceMessagesSendResBody,
-    sync_token,
+    DeviceMessagesReceiveResBody, DeviceMessagesSendReqBody, DeviceMessagesSendResBody, sync_token,
 };
+
+pub(crate) const ACCOUNT_DATA_UPDATE_TYPE: &str = "cx.account_data.update";
+pub(crate) const BLOCKLIST_UPDATE_TYPE: &str = "cx.account.blocklist.update";
+pub(crate) const READ_MARKER_UPDATE_TYPE: &str = "cx.read_marker.update";
+pub(crate) const NOTIFICATION_READ_MARKER_UPDATE_TYPE: &str = "cx.notification.read_marker.update";
 
 pub(super) fn router() -> Router {
     Router::new()
@@ -90,12 +94,13 @@ async fn send_device_messages(
         let mut delivered_devices = Vec::new();
         for (device_id, content) in devices {
             let created_at = now();
+            let position = state.next_to_device_position();
             if let Err(error) = device_messages.append(DeviceMessageRecord {
                 idempotency_key: idempotency_key.clone(),
                 sender: session.actor.clone(),
                 recipient: recipient.clone(),
                 device_id: device_id.clone(),
-                position: created_at.timestamp_micros(),
+                position,
                 content,
                 created_at,
             }) {
@@ -110,6 +115,51 @@ async fn send_device_messages(
         delivered: json!(delivered),
         unknown_devices: json!({}),
     })
+}
+
+pub(crate) fn fanout_actor_private_update(
+    state: &AppState,
+    actor: &str,
+    origin_device_id: &str,
+    event_type: &str,
+    content: Value,
+) -> usize {
+    let devices = state
+        .persistence
+        .devices()
+        .list_for_actor(actor)
+        .unwrap_or_default();
+    let mut delivered = 0;
+    for device in devices {
+        if device.revoked_at.is_some() || device.device_id == origin_device_id {
+            continue;
+        }
+        let created_at = now();
+        let position = state.next_to_device_position();
+        let idempotency_key = format!("{event_type}:{actor}:{origin_device_id}:{position}");
+        let envelope = json!({
+            "type": event_type,
+            "sender_device_id": origin_device_id,
+            "content": content.clone(),
+            "created_at": created_at,
+        });
+        match state
+            .persistence
+            .device_messages()
+            .append(DeviceMessageRecord {
+                idempotency_key,
+                sender: actor.to_owned(),
+                recipient: actor.to_owned(),
+                device_id: device.device_id,
+                position,
+                content: envelope,
+                created_at,
+            }) {
+            Ok(()) => delivered += 1,
+            Err(error) => tracing::error!(%error, actor, "failed to fan out actor-private update"),
+        }
+    }
+    delivered
 }
 
 #[endpoint(

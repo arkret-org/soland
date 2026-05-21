@@ -28,8 +28,9 @@ use std::time::Duration;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use bytes::Bytes;
-use chrono::{Duration as ChronoDuration, SecondsFormat};
+use chrono::{DateTime, Duration as ChronoDuration, SecondsFormat, Utc};
 use contrix_sdk::SpaceId;
+use contrix_sdk::lattice::CellState;
 use ed25519_dalek::Signer as _;
 use futures_util::stream::StreamExt;
 use salvo::http::StatusCode;
@@ -42,15 +43,16 @@ use super::{
     device_message_events_after, flow_id_from_space_id, flow_projection_for_space,
     is_space_deleted, now, parse_snapshot_ref, projected_event_page, projection_event_json,
     prune_acked_device_messages, prune_expired_typing, query_param, render_error, sha256_hex,
-    snapshot_bundle_for_space, space_has_member, space_id_accessible, space_visible_to,
+    snapshot_bundle_for_space, space_discoverability, space_event_visible_to_session,
+    space_has_member, space_history_visibility, space_id_accessible, space_visible_to,
     sync_timeline_message_json, truncate_gap_events, typing_ephemeral_for_space, validate_did,
     validate_space_id,
 };
 use crate::reducer::ProjectionState;
-use crate::state::{AppState, PresenceRecord, SessionRecord, TypingRecord};
+use crate::state::{AppState, PresenceRecord, ProjectionEventRecord, SessionRecord, TypingRecord};
 use crate::wire::{
-    BackfillResBody, ClientSyncRequest, SetTypingRequest, SetTypingResponse,
-    SnapshotHeadResponse, SyncDescribeResBody,
+    BackfillResBody, ClientSyncRequest, SetTypingRequest, SetTypingResponse, SnapshotHeadResponse,
+    SyncDescribeResBody,
 };
 
 pub(super) fn router() -> Router {
@@ -74,8 +76,17 @@ async fn sync_describe(depot: &mut Depot, res: &mut Response) {
             "board".to_owned(),
             "chat".to_owned(),
             "topic".to_owned(),
+            "offline_queue_flush".to_owned(),
+            "backfill_gap".to_owned(),
+            "bottom_cell_repair".to_owned(),
         ],
-        limits: json!({"max_spaces": 50, "max_timeline_events": 100}),
+        limits: json!({
+            "max_spaces": 50,
+            "max_timeline_events": 100,
+            "offline_flush_endpoint": "/api/v1/events",
+            "backfill_endpoint": "/api/v1/sync/backfill/gap",
+            "bottom_repair_endpoint": "/api/admin/v1/spaces/{space_id}/bottom/{cell_id}/repair"
+        }),
         frontier: json!({"storage": state.db.mode(), "generated_at": now()}),
     }));
 }
@@ -184,8 +195,7 @@ async fn client_sync(
     let deadline = tokio::time::Instant::now() + Duration::from_millis(effective_timeout_ms);
 
     loop {
-        let response =
-            build_sync_snapshot(state, session.as_ref(), &body, &since_cursor);
+        let response = build_sync_snapshot(state, session.as_ref(), &body, &since_cursor);
         let should_return = is_full_sync
             || effective_timeout_ms == 0
             || sync_snapshot_has_fresh_data(&response)
@@ -253,7 +263,8 @@ fn build_sync_snapshot(
     let mut sync_spaces = std::collections::BTreeMap::new();
     let mut positions = BTreeMap::new();
     for (space_id, title, summary, tags, category) in visible_spaces {
-        let flow = flow_projection_for_space(state, &space_id, &title, summary.as_deref());
+        let mut flow = flow_projection_for_space(state, &space_id, &title, summary.as_deref());
+        attach_discussion_realm_ref(&projection, &mut flow);
         let flow_state_after = flow.clone();
         let flow_list_item = flow.clone();
         let since_position = since_cursor
@@ -262,7 +273,8 @@ fn build_sync_snapshot(
             .copied()
             .unwrap_or_default();
         let (timeline_events, space_position) =
-            timeline_events_for_space(state, &projection, &space_id, since_position);
+            timeline_events_for_space(state, &projection, &space_id, since_position, session);
+        let bottom_cells = bottom_cells_for_space(&projection, &space_id);
         positions.insert(space_id.clone(), space_position);
         sync_spaces.insert(
             space_id.clone(),
@@ -278,6 +290,7 @@ fn build_sync_snapshot(
                 "timeline": {"events": timeline_events, "limited": false},
                 "state": [],
                 "state_after": {"events": [flow_state_after]},
+                "bottom_cells": bottom_cells,
                 "ephemeral": typing_ephemeral_for_space(state, &space_id, session),
                 "unread": {"notification_count": 0, "highlight_count": 0}
             }),
@@ -379,6 +392,7 @@ fn timeline_events_for_space(
     projection: &ProjectionState,
     space_id: &str,
     since_position: i64,
+    session: Option<&SessionRecord>,
 ) -> (Vec<serde_json::Value>, i64) {
     let mut seen = BTreeSet::new();
     let mut newest_position = since_position;
@@ -388,6 +402,16 @@ fn timeline_events_for_space(
         let position = message.created_at.timestamp_micros();
         newest_position = newest_position.max(position);
         if position <= since_position || !seen.insert(message.event_id.clone()) {
+            continue;
+        }
+        if !space_event_visible_to_session_with_projection(
+            state,
+            projection,
+            space_id,
+            message.created_at,
+            Some(&message.sender),
+            session,
+        ) {
             continue;
         }
         timeline_entries.push((position, sync_timeline_message_json(message)));
@@ -404,6 +428,16 @@ fn timeline_events_for_space(
         if position <= since_position || !seen.insert(message.event_id.clone()) {
             continue;
         }
+        if !space_event_visible_to_session_with_projection(
+            state,
+            projection,
+            space_id,
+            message.created_at,
+            Some(&message.sender),
+            session,
+        ) {
+            continue;
+        }
         timeline_entries.push((position, sync_timeline_message_record_json(&message)));
     }
 
@@ -415,6 +449,130 @@ fn timeline_events_for_space(
             .collect(),
         newest_position,
     )
+}
+
+fn space_event_visible_to_session_with_projection(
+    state: &AppState,
+    projection: &ProjectionState,
+    space_id: &str,
+    event_created_at: DateTime<Utc>,
+    sender: Option<&str>,
+    session: Option<&SessionRecord>,
+) -> bool {
+    if sender.is_some_and(|sender| session.is_some_and(|session| session.actor == sender)) {
+        return true;
+    }
+    match space_history_visibility(state, space_id).as_str() {
+        "world_readable" => true,
+        "shared" => {
+            space_discoverability(state, space_id) == "public"
+                || session.is_some_and(|session| space_has_member(state, space_id, &session.actor))
+        }
+        "joined" | "invited" => {
+            let Some(session) = session else {
+                return false;
+            };
+            let joined_at = projection
+                .member(space_id, &session.actor)
+                .filter(|member| member.state == "join")
+                .map(|member| member.joined_at)
+                .or_else(|| {
+                    let meta = state
+                        .persistence
+                        .space_meta()
+                        .get(space_id)
+                        .ok()
+                        .flatten()?;
+                    if meta.owner == session.actor
+                        || space_has_member(state, space_id, &session.actor)
+                    {
+                        Some(meta.created_at)
+                    } else {
+                        None
+                    }
+                });
+            joined_at.is_some_and(|joined_at| event_created_at >= joined_at)
+        }
+        _ => false,
+    }
+}
+
+fn attach_discussion_realm_ref(projection: &ProjectionState, flow: &mut Value) {
+    let Some(flow_id) = flow.get("flow_id").and_then(Value::as_str) else {
+        return;
+    };
+    let Some(realm_id) = projection.discussion_realm_for_flow(flow_id) else {
+        return;
+    };
+    if let Some(object) = flow.as_object_mut() {
+        object.insert("discussion_realm_ref".to_owned(), json!(realm_id));
+        if let Some(track) = object
+            .get_mut("tracks")
+            .and_then(|tracks| tracks.get_mut("discussion"))
+            .and_then(Value::as_object_mut)
+        {
+            track.insert("realm_id".to_owned(), json!(realm_id));
+        }
+    }
+}
+
+fn bottom_cells_for_space(projection: &ProjectionState, space_id: &str) -> Vec<Value> {
+    projection
+        .cells
+        .iter()
+        .filter_map(|(cell, state)| {
+            let CellState::Bottom(bottom) = state else {
+                return None;
+            };
+            let cell_id = cell.as_str();
+            if !cell_id.contains(space_id) {
+                return None;
+            }
+            Some(json!({
+                "space_id": space_id,
+                "cell_id": cell_id,
+                "state": "bottom",
+                "bottom": bottom,
+            }))
+        })
+        .collect()
+}
+
+fn projection_record_visible_to_session(
+    state: &AppState,
+    event: &ProjectionEventRecord,
+    session: Option<&SessionRecord>,
+) -> bool {
+    space_event_visible_to_session(
+        state,
+        &event.space_id,
+        event.created_at,
+        event.sender.as_deref(),
+        session,
+    )
+}
+
+fn projection_event_value_visible_to_session(
+    state: &AppState,
+    event: &Value,
+    session: Option<&SessionRecord>,
+) -> bool {
+    let Some(space_id) = event.get("space_id").and_then(Value::as_str) else {
+        return false;
+    };
+    let Some(created_at) = event
+        .get("created_at")
+        .and_then(Value::as_str)
+        .and_then(|value| {
+            DateTime::parse_from_rfc3339(value)
+                .ok()
+                .map(|dt| dt.with_timezone(&Utc))
+        })
+    else {
+        return false;
+    };
+    let sender = event.get("sender").and_then(Value::as_str);
+    space_event_visible_to_session(state, space_id, created_at, sender, session)
 }
 
 fn sync_timeline_message_record_json(message: &crate::state::MessageRecord) -> serde_json::Value {
@@ -1219,7 +1377,14 @@ pub(super) async fn events_query(
         let space_id = &accessible_spaces[0];
         match projected_event_page(state, space_id, cursor.as_deref(), limit) {
             Ok(Some(page)) => {
-                let mut events: Vec<_> = page.items.iter().map(projection_event_json).collect();
+                let mut events: Vec<_> = page
+                    .items
+                    .iter()
+                    .filter(|event| {
+                        projection_record_visible_to_session(state, event, session.as_ref())
+                    })
+                    .map(projection_event_json)
+                    .collect();
                 if backward {
                     events.reverse();
                 }
@@ -1267,7 +1432,14 @@ pub(super) async fn events_query(
                 if page.has_more {
                     any_has_more = true;
                 }
-                merged.extend(page.items.iter().map(projection_event_json));
+                merged.extend(
+                    page.items
+                        .iter()
+                        .filter(|event| {
+                            projection_record_visible_to_session(state, event, session.as_ref())
+                        })
+                        .map(projection_event_json),
+                );
             }
             Ok(None) => {}
             Err(error) => {
@@ -1355,6 +1527,10 @@ async fn sync_gap_backfill(
                 crate::error::AppError::internal(error.to_string())
             }
         })?;
+    let events = events
+        .into_iter()
+        .filter(|event| projection_event_value_visible_to_session(state, event, session.as_ref()))
+        .collect::<Vec<_>>();
     let (events, gap_complete) = truncate_gap_events(events, to_cursor.as_deref());
     let next_cursor = if gap_complete {
         to_cursor.clone()
@@ -1387,9 +1563,7 @@ async fn snapshot_head(
     // as a legacy alias through the Realm/Space rename window.
     let space_id = query_param(req, "realm_id")
         .or_else(|| query_param(req, "space_id"))
-        .ok_or_else(|| {
-            crate::error::AppError::missing_param("realm_id is required")
-        })?;
+        .ok_or_else(|| crate::error::AppError::missing_param("realm_id is required"))?;
     if validate_space_id(&space_id).is_err() {
         return Err(crate::error::AppError::invalid_param("invalid realm_id"));
     }

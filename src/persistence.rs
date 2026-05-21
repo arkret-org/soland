@@ -19,10 +19,11 @@ use crate::db::PgPool;
 use crate::ids;
 use crate::state::{
     AccountDataRecord, AccountRecord, BlobRecord, CanonicalEventRecord, ContactRecord,
-    DeviceInventoryRecord, DeviceMessageRecord, FederationTransactionRecord, MessageRecord,
-    MultisigPendingRecord, OutboundPushBridgeCacheRecord, PolicyDocumentRecord, PresenceRecord,
-    ProjectionEventRecord, PushRuleRecord, SessionRecord, SpaceInviteRecord, SpaceMetaRecord,
-    TypingRecord, WebrtcSessionRecord, WebrtcSignalRecord, WebvhDocumentRecord, WebvhLogRecord,
+    DeviceInventoryRecord, DeviceMessageRecord, FederationOutboxRecord,
+    FederationTransactionRecord, MessageRecord, MultisigPendingRecord,
+    OutboundPushBridgeCacheRecord, PolicyDocumentRecord, PresenceRecord, ProjectionEventRecord,
+    PushRuleRecord, SessionRecord, SpaceInviteRecord, SpaceMetaRecord, TypingRecord,
+    WebrtcSessionRecord, WebrtcSignalRecord, WebvhDocumentRecord, WebvhLogRecord,
 };
 
 /// Error type for persistence operations.
@@ -77,6 +78,12 @@ pub trait AccountDataStore: Send + Sync {
 /// Trait for contact storage operations.
 pub trait ContactStore: Send + Sync {
     fn get(&self, requester: &str, target: &str) -> PersistenceResult<Option<ContactRecord>>;
+    fn get_scoped(
+        &self,
+        requester: &str,
+        target: &str,
+        scope: &str,
+    ) -> PersistenceResult<Option<ContactRecord>>;
     fn put(&self, record: &ContactRecord) -> PersistenceResult<()>;
     fn list_for_actor(&self, actor: &str) -> PersistenceResult<Vec<ContactRecord>>;
     fn delete(&self, requester: &str, target: &str) -> PersistenceResult<()>;
@@ -215,6 +222,48 @@ pub trait FederationTransactionStore: Send + Sync {
     ) -> PersistenceResult<Option<FederationTransactionRecord>>;
     fn put(&self, record: &FederationTransactionRecord) -> PersistenceResult<()>;
     fn snapshot_all(&self) -> PersistenceResult<Vec<FederationTransactionRecord>>;
+}
+
+/// G3.S0 — durable outbound federation HTTP delivery queue.
+///
+/// Rows are inserted synchronously on the inbound write path
+/// (`routing::federation::federation::broadcast_move_to_peers` and
+/// `broadcast_anchor_to_peers`); the `FederationDispatcher` background
+/// worker (`routing::federation::outbox::FederationDispatcher`) polls
+/// pending rows and posts them to peers.
+///
+/// Idempotency: `(peer_did, idempotency_key)` is UNIQUE. Callers that
+/// re-enqueue the same logical request (replay of an accepted Move /
+/// Anchor on restart) MUST see `enqueue` return `Ok(false)` rather than
+/// a duplicate-row error; the worker treats the existing row as the
+/// authoritative delivery state.
+pub trait FederationOutboxStore: Send + Sync {
+    /// Insert a new outbox row. Returns `Ok(true)` if a fresh row was
+    /// stored, `Ok(false)` if `(peer_did, idempotency_key)` already
+    /// exists (callers MUST treat that as "already enqueued" rather
+    /// than an error — see trait-doc idempotency note).
+    fn enqueue(&self, record: &FederationOutboxRecord) -> PersistenceResult<bool>;
+    /// Returns rows where `delivered_at IS NULL` and `next_attempt_at
+    /// <= now_unix_secs`, ordered by `next_attempt_at` ascending. The
+    /// `limit` caps the per-poll batch so a backlog never starves
+    /// other workers on the same tokio runtime.
+    fn pending_due(
+        &self,
+        now_unix_secs: i64,
+        limit: usize,
+    ) -> PersistenceResult<Vec<FederationOutboxRecord>>;
+    /// Replace the row by `id`. Used by the worker after every delivery
+    /// attempt to record the new `attempts` / `last_status` /
+    /// `next_attempt_at` / `delivered_at` columns.
+    fn update(&self, record: &FederationOutboxRecord) -> PersistenceResult<()>;
+    /// Fetch a single row by primary key. Used by the integration test
+    /// (and the optional admin observability endpoint, not wired in
+    /// G3.S0).
+    fn get(&self, id: &str) -> PersistenceResult<Option<FederationOutboxRecord>>;
+    /// Snapshot the full table — diagnostics + the integration test
+    /// rely on it. Production deployments SHOULD NOT call this on a
+    /// large outbox; use `pending_due` instead.
+    fn snapshot_all(&self) -> PersistenceResult<Vec<FederationOutboxRecord>>;
 }
 
 /// Append-only audit log. Reads are always actor-scoped; the cursor is the
@@ -663,6 +712,120 @@ pub trait MultisigPendingStore: Send + Sync {
     ) -> PersistenceResult<bool>;
 }
 
+// ── G3.S1: MLS / E2EE lifecycle stores ────────────────────────────────
+//
+// Three independent durable surfaces — KeyPackages, Welcomes, commit
+// epochs — backing the reducer's projection of the same shape. The
+// reducer keeps an in-process projection (`ProjectionState::mls_*`); the
+// stores are the persistent mirror. The routing layer in
+// `routing/mls.rs` writes through to the stores AND updates the
+// projection; on restart `AppState::new` will eventually hydrate the
+// projection from the stores (TODO(G3.S1-followup): hydration is not
+// wired in this slice — the Memory store is in-process anyway, and the
+// Pg store is a stub pending migrations landing in production).
+
+/// G3.S1 — durable KeyPackage row.
+///
+/// The Pg backend's `(actor_did, device_id, id)` composite key is what
+/// enforces at-most-one row per `keypackage_id`. `try_claim` is the
+/// CAS path — it returns `Ok(true)` on the first claim, `Ok(false)` if
+/// the row is already claimed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MlsKeyPackageRecord {
+    pub id: String,
+    pub actor_did: String,
+    pub device_id: String,
+    pub lifetime_not_before: i64,
+    pub lifetime_not_after: i64,
+    pub key_package_bytes: Vec<u8>,
+    /// Group id that claimed this row. `None` while claimable.
+    pub claimed_by_group_id: Option<String>,
+    pub consumed_at: Option<i64>,
+    pub created_at: i64,
+}
+
+/// G3.S1 — durable Welcome envelope row (per recipient device).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MlsWelcomeRecord {
+    pub id: String,
+    pub group_id: String,
+    pub recipient_actor_did: String,
+    pub recipient_device_id: String,
+    pub welcome_bytes: Vec<u8>,
+    pub key_package_id: String,
+    pub enqueued_at: i64,
+    pub delivered_at: Option<i64>,
+}
+
+/// G3.S1 — durable per-group commit epoch row. The composite key is
+/// just `group_id`; the row's `epoch` is bumped monotonically by the
+/// CAS-protected `try_bump` path.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MlsCommitEpochRecord {
+    pub group_id: String,
+    pub epoch: u64,
+    pub leader_actor_did: String,
+    pub committed_at: i64,
+}
+
+/// G3.S1 — KeyPackage store. The `try_claim` CAS path is what
+/// guarantees at-most-one Welcome per published KeyPackage.
+pub trait MlsKeyPackageStore: Send + Sync {
+    /// Insert a fresh KeyPackage row. Returns `Ok(false)` if the
+    /// `id` is already present (re-publishes of the same id are
+    /// idempotent — production fixtures sometimes resubmit on retry).
+    fn put(&self, record: &MlsKeyPackageRecord) -> PersistenceResult<bool>;
+    fn get(&self, id: &str) -> PersistenceResult<Option<MlsKeyPackageRecord>>;
+    /// Atomically claim the named KeyPackage for `group_id`. Returns
+    /// `Ok(Some(record))` on success (with `claimed_by_group_id` /
+    /// `consumed_at` filled in), `Ok(None)` if the row is already
+    /// claimed or does not exist. The CAS check + update happens
+    /// inside the store so two concurrent callers see at-most-one win.
+    fn try_claim(
+        &self,
+        id: &str,
+        group_id: &str,
+        consumed_at: i64,
+    ) -> PersistenceResult<Option<MlsKeyPackageRecord>>;
+    /// Snapshot all rows. Diagnostics + the integration test rely on it.
+    fn snapshot_all(&self) -> PersistenceResult<Vec<MlsKeyPackageRecord>>;
+}
+
+/// G3.S1 — Welcome to-device queue store. Each recipient device drains
+/// its queue via `drain_pending`, which marks pending rows
+/// `delivered_at = now()` so a re-poll won't redeliver.
+pub trait MlsWelcomeStore: Send + Sync {
+    fn enqueue(&self, record: &MlsWelcomeRecord) -> PersistenceResult<()>;
+    /// Return at most `limit` rows where `delivered_at IS NULL`. Marks
+    /// each returned row with `delivered_at = now_unix_secs` in the
+    /// same call so subsequent polls skip them.
+    fn drain_pending(
+        &self,
+        recipient_actor_did: &str,
+        recipient_device_id: &str,
+        now_unix_secs: i64,
+        limit: usize,
+    ) -> PersistenceResult<Vec<MlsWelcomeRecord>>;
+    fn snapshot_all(&self) -> PersistenceResult<Vec<MlsWelcomeRecord>>;
+}
+
+/// G3.S1 — per-group MLS commit epoch store.
+pub trait MlsCommitStore: Send + Sync {
+    fn get(&self, group_id: &str) -> PersistenceResult<Option<MlsCommitEpochRecord>>;
+    /// Atomically advance the group's epoch IFF `expected_prev_epoch`
+    /// matches the row's current epoch (or 0 for a never-seen group).
+    /// Returns `Ok(Some(new_record))` on success, `Ok(None)` on a
+    /// stale `expected_prev_epoch` (the "mls_epoch_skew" path).
+    fn try_bump(
+        &self,
+        group_id: &str,
+        expected_prev_epoch: u64,
+        leader_actor_did: &str,
+        committed_at: i64,
+    ) -> PersistenceResult<Option<MlsCommitEpochRecord>>;
+    fn snapshot_all(&self) -> PersistenceResult<Vec<MlsCommitEpochRecord>>;
+}
+
 /// Per-owner policy documents.
 pub trait PolicyDocumentStore: Send + Sync {
     fn get(&self, policy_id: &str) -> PersistenceResult<Option<PolicyDocumentRecord>>;
@@ -689,6 +852,7 @@ pub trait PersistenceStore: Send + Sync {
     fn blobs(&self) -> &dyn BlobStore;
     fn devices(&self) -> &dyn DeviceInventoryStore;
     fn federation_transactions(&self) -> &dyn FederationTransactionStore;
+    fn federation_outbox(&self) -> &dyn FederationOutboxStore;
     fn audit(&self) -> &dyn AuditStore;
     fn moderation(&self) -> &dyn ModerationStore;
     fn federation_operations(&self) -> &dyn FederationOperationsStore;
@@ -711,6 +875,10 @@ pub trait PersistenceStore: Send + Sync {
     fn place_projections(&self) -> &dyn PlaceProjectionStore;
     fn flow_projections(&self) -> &dyn FlowProjectionStore;
     fn morph_projections(&self) -> &dyn MorphProjectionStore;
+    // G3.S1: MLS lifecycle stores.
+    fn mls_key_packages(&self) -> &dyn MlsKeyPackageStore;
+    fn mls_welcomes(&self) -> &dyn MlsWelcomeStore;
+    fn mls_commits(&self) -> &dyn MlsCommitStore;
 }
 
 /// In-memory implementation of persistence store.
@@ -724,6 +892,7 @@ pub struct MemoryPersistenceStore {
     blobs: MemoryBlobStore,
     devices: MemoryDeviceInventoryStore,
     federation_transactions: MemoryFederationTransactionStore,
+    federation_outbox: MemoryFederationOutboxStore,
     audit: MemoryAuditStore,
     moderation: MemoryModerationStore,
     federation_operations: MemoryFederationOperationsStore,
@@ -746,6 +915,10 @@ pub struct MemoryPersistenceStore {
     place_projections: MemoryPlaceProjectionStore,
     flow_projections: MemoryFlowProjectionStore,
     morph_projections: MemoryMorphProjectionStore,
+    // G3.S1: MLS lifecycle stores.
+    mls_key_packages: MemoryMlsKeyPackageStore,
+    mls_welcomes: MemoryMlsWelcomeStore,
+    mls_commits: MemoryMlsCommitStore,
 }
 
 impl MemoryPersistenceStore {
@@ -760,6 +933,7 @@ impl MemoryPersistenceStore {
             blobs: MemoryBlobStore::new(),
             devices: MemoryDeviceInventoryStore::new(),
             federation_transactions: MemoryFederationTransactionStore::new(),
+            federation_outbox: MemoryFederationOutboxStore::new(),
             audit: MemoryAuditStore::new(),
             moderation: MemoryModerationStore::new(),
             federation_operations: MemoryFederationOperationsStore::new(),
@@ -782,6 +956,10 @@ impl MemoryPersistenceStore {
             place_projections: MemoryPlaceProjectionStore::new(),
             flow_projections: MemoryFlowProjectionStore::new(),
             morph_projections: MemoryMorphProjectionStore::new(),
+            // G3.S1: MLS lifecycle stores.
+            mls_key_packages: MemoryMlsKeyPackageStore::new(),
+            mls_welcomes: MemoryMlsWelcomeStore::new(),
+            mls_commits: MemoryMlsCommitStore::new(),
         }
     }
 }
@@ -827,6 +1005,10 @@ impl PersistenceStore for MemoryPersistenceStore {
 
     fn federation_transactions(&self) -> &dyn FederationTransactionStore {
         &self.federation_transactions
+    }
+
+    fn federation_outbox(&self) -> &dyn FederationOutboxStore {
+        &self.federation_outbox
     }
 
     fn audit(&self) -> &dyn AuditStore {
@@ -915,6 +1097,19 @@ impl PersistenceStore for MemoryPersistenceStore {
 
     fn morph_projections(&self) -> &dyn MorphProjectionStore {
         &self.morph_projections
+    }
+
+    // G3.S1: MLS lifecycle stores.
+    fn mls_key_packages(&self) -> &dyn MlsKeyPackageStore {
+        &self.mls_key_packages
+    }
+
+    fn mls_welcomes(&self) -> &dyn MlsWelcomeStore {
+        &self.mls_welcomes
+    }
+
+    fn mls_commits(&self) -> &dyn MlsCommitStore {
+        &self.mls_commits
     }
 }
 
@@ -1179,7 +1374,7 @@ impl AccountDataStore for MemoryAccountDataStore {
 }
 
 struct MemoryContactStore {
-    data: Arc<Mutex<BTreeMap<(String, String), ContactRecord>>>,
+    data: Arc<Mutex<BTreeMap<(String, String, String), ContactRecord>>>,
 }
 
 impl MemoryContactStore {
@@ -1194,14 +1389,39 @@ impl ContactStore for MemoryContactStore {
     fn get(&self, requester: &str, target: &str) -> PersistenceResult<Option<ContactRecord>> {
         let data = self.data.lock().expect("lock");
         Ok(data
-            .get(&(requester.to_owned(), target.to_owned()))
+            .values()
+            .find(|record| {
+                record.requester == requester
+                    && record.target == target
+                    && record.scope == "message"
+            })
+            .or_else(|| {
+                data.values()
+                    .find(|record| record.requester == requester && record.target == target)
+            })
+            .cloned())
+    }
+
+    fn get_scoped(
+        &self,
+        requester: &str,
+        target: &str,
+        scope: &str,
+    ) -> PersistenceResult<Option<ContactRecord>> {
+        let data = self.data.lock().expect("lock");
+        Ok(data
+            .get(&(requester.to_owned(), target.to_owned(), scope.to_owned()))
             .cloned())
     }
 
     fn put(&self, record: &ContactRecord) -> PersistenceResult<()> {
         let mut data = self.data.lock().expect("lock");
         data.insert(
-            (record.requester.clone(), record.target.clone()),
+            (
+                record.requester.clone(),
+                record.target.clone(),
+                record.scope.clone(),
+            ),
             record.clone(),
         );
         Ok(())
@@ -1218,7 +1438,9 @@ impl ContactStore for MemoryContactStore {
 
     fn delete(&self, requester: &str, target: &str) -> PersistenceResult<()> {
         let mut data = self.data.lock().expect("lock");
-        data.remove(&(requester.to_owned(), target.to_owned()));
+        data.retain(|(row_requester, row_target, _), _| {
+            row_requester != requester || row_target != target
+        });
         Ok(())
     }
 }
@@ -1587,6 +1809,73 @@ impl FederationTransactionStore for MemoryFederationTransactionStore {
     }
 }
 
+// G3.S0 — in-memory outbound federation HTTP delivery queue.
+// Keyed by `id` (the row PK) with a secondary `(peer_did,
+// idempotency_key)` uniqueness guard implemented at insert time so the
+// Memory backend matches the Pg `federation_outbox_peer_idem` UNIQUE
+// INDEX semantics.
+struct MemoryFederationOutboxStore {
+    data: Arc<Mutex<BTreeMap<String, FederationOutboxRecord>>>,
+}
+
+impl MemoryFederationOutboxStore {
+    fn new() -> Self {
+        Self {
+            data: Arc::new(Mutex::new(BTreeMap::new())),
+        }
+    }
+}
+
+impl FederationOutboxStore for MemoryFederationOutboxStore {
+    fn enqueue(&self, record: &FederationOutboxRecord) -> PersistenceResult<bool> {
+        let mut data = self.data.lock().expect("federation_outbox lock");
+        // Match the Pg `(peer_did, idempotency_key)` UNIQUE INDEX —
+        // duplicate enqueue returns Ok(false) so re-broadcast on
+        // restart is structurally idempotent.
+        let already_present = data.values().any(|existing| {
+            existing.peer_did == record.peer_did
+                && existing.idempotency_key == record.idempotency_key
+        });
+        if already_present {
+            return Ok(false);
+        }
+        data.insert(record.id.clone(), record.clone());
+        Ok(true)
+    }
+
+    fn pending_due(
+        &self,
+        now_unix_secs: i64,
+        limit: usize,
+    ) -> PersistenceResult<Vec<FederationOutboxRecord>> {
+        let data = self.data.lock().expect("federation_outbox lock");
+        let mut rows: Vec<FederationOutboxRecord> = data
+            .values()
+            .filter(|row| row.delivered_at.is_none() && row.next_attempt_at <= now_unix_secs)
+            .cloned()
+            .collect();
+        rows.sort_by(|a, b| a.next_attempt_at.cmp(&b.next_attempt_at));
+        rows.truncate(limit);
+        Ok(rows)
+    }
+
+    fn update(&self, record: &FederationOutboxRecord) -> PersistenceResult<()> {
+        let mut data = self.data.lock().expect("federation_outbox lock");
+        data.insert(record.id.clone(), record.clone());
+        Ok(())
+    }
+
+    fn get(&self, id: &str) -> PersistenceResult<Option<FederationOutboxRecord>> {
+        let data = self.data.lock().expect("federation_outbox lock");
+        Ok(data.get(id).cloned())
+    }
+
+    fn snapshot_all(&self) -> PersistenceResult<Vec<FederationOutboxRecord>> {
+        let data = self.data.lock().expect("federation_outbox lock");
+        Ok(data.values().cloned().collect())
+    }
+}
+
 // ── New in-memory sub-stores ────────────────────────────────────────────────
 //
 // The structs below back every former `Arc<Mutex<...>>` field on `AppState`.
@@ -1683,7 +1972,11 @@ impl ModerationStore for MemoryModerationStore {
     }
 
     fn list_decisions(&self) -> PersistenceResult<Vec<Value>> {
-        Ok(self.decisions.lock().expect("moderation decisions lock").clone())
+        Ok(self
+            .decisions
+            .lock()
+            .expect("moderation decisions lock")
+            .clone())
     }
 
     fn get_decision(&self, decision_id: &str) -> PersistenceResult<Option<Value>> {
@@ -1709,9 +2002,7 @@ impl ModerationStore for MemoryModerationStore {
             .get("queue_item_id")
             .and_then(Value::as_str)
             .ok_or_else(|| {
-                PersistenceError::Internal(
-                    "moderation queue item missing queue_item_id".to_owned(),
-                )
+                PersistenceError::Internal("moderation queue item missing queue_item_id".to_owned())
             })?
             .to_owned();
         let mut queue = self.queue_items.lock().expect("moderation queue lock");
@@ -1727,7 +2018,11 @@ impl ModerationStore for MemoryModerationStore {
     }
 
     fn list_queue_items(&self) -> PersistenceResult<Vec<Value>> {
-        Ok(self.queue_items.lock().expect("moderation queue lock").clone())
+        Ok(self
+            .queue_items
+            .lock()
+            .expect("moderation queue lock")
+            .clone())
     }
 
     fn get_queue_item(&self, queue_item_id: &str) -> PersistenceResult<Option<Value>> {
@@ -1756,7 +2051,11 @@ impl ModerationStore for MemoryModerationStore {
     fn list_appeals(&self) -> PersistenceResult<Vec<Value>> {
         // Collapse history → one record per appeal_id, keeping the
         // last-appended event (insertion order = chronological).
-        let all = self.appeals.lock().expect("moderation appeals lock").clone();
+        let all = self
+            .appeals
+            .lock()
+            .expect("moderation appeals lock")
+            .clone();
         let mut latest: std::collections::BTreeMap<String, Value> =
             std::collections::BTreeMap::new();
         for record in all {
@@ -2606,6 +2905,178 @@ impl OneTimeKeyStore for MemoryOneTimeKeyStore {
     }
 }
 
+// ── G3.S1: in-memory MLS lifecycle stores ─────────────────────────────
+
+#[derive(Default)]
+struct MemoryMlsKeyPackageStore {
+    rows: Mutex<BTreeMap<String, MlsKeyPackageRecord>>,
+}
+
+impl MemoryMlsKeyPackageStore {
+    fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
+    fn put(&self, record: &MlsKeyPackageRecord) -> PersistenceResult<bool> {
+        let mut rows = self.rows.lock().expect("mls keypackage lock");
+        let fresh = !rows.contains_key(&record.id);
+        rows.insert(record.id.clone(), record.clone());
+        Ok(fresh)
+    }
+
+    fn get(&self, id: &str) -> PersistenceResult<Option<MlsKeyPackageRecord>> {
+        Ok(self
+            .rows
+            .lock()
+            .expect("mls keypackage lock")
+            .get(id)
+            .cloned())
+    }
+
+    fn try_claim(
+        &self,
+        id: &str,
+        group_id: &str,
+        consumed_at: i64,
+    ) -> PersistenceResult<Option<MlsKeyPackageRecord>> {
+        let mut rows = self.rows.lock().expect("mls keypackage lock");
+        let Some(row) = rows.get_mut(id) else {
+            return Ok(None);
+        };
+        if row.claimed_by_group_id.is_some() {
+            // Already claimed — CAS loser path.
+            return Ok(None);
+        }
+        row.claimed_by_group_id = Some(group_id.to_owned());
+        row.consumed_at = Some(consumed_at);
+        Ok(Some(row.clone()))
+    }
+
+    fn snapshot_all(&self) -> PersistenceResult<Vec<MlsKeyPackageRecord>> {
+        Ok(self
+            .rows
+            .lock()
+            .expect("mls keypackage lock")
+            .values()
+            .cloned()
+            .collect())
+    }
+}
+
+#[derive(Default)]
+struct MemoryMlsWelcomeStore {
+    queue: Mutex<VecDeque<MlsWelcomeRecord>>,
+}
+
+impl MemoryMlsWelcomeStore {
+    fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl MlsWelcomeStore for MemoryMlsWelcomeStore {
+    fn enqueue(&self, record: &MlsWelcomeRecord) -> PersistenceResult<()> {
+        self.queue
+            .lock()
+            .expect("mls welcome lock")
+            .push_back(record.clone());
+        Ok(())
+    }
+
+    fn drain_pending(
+        &self,
+        recipient_actor_did: &str,
+        recipient_device_id: &str,
+        now_unix_secs: i64,
+        limit: usize,
+    ) -> PersistenceResult<Vec<MlsWelcomeRecord>> {
+        let mut queue = self.queue.lock().expect("mls welcome lock");
+        let mut drained = Vec::new();
+        for row in queue.iter_mut() {
+            if drained.len() >= limit {
+                break;
+            }
+            if row.delivered_at.is_some() {
+                continue;
+            }
+            if row.recipient_actor_did != recipient_actor_did
+                || row.recipient_device_id != recipient_device_id
+            {
+                continue;
+            }
+            row.delivered_at = Some(now_unix_secs);
+            drained.push(row.clone());
+        }
+        Ok(drained)
+    }
+
+    fn snapshot_all(&self) -> PersistenceResult<Vec<MlsWelcomeRecord>> {
+        Ok(self
+            .queue
+            .lock()
+            .expect("mls welcome lock")
+            .iter()
+            .cloned()
+            .collect())
+    }
+}
+
+#[derive(Default)]
+struct MemoryMlsCommitStore {
+    rows: Mutex<BTreeMap<String, MlsCommitEpochRecord>>,
+}
+
+impl MemoryMlsCommitStore {
+    fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl MlsCommitStore for MemoryMlsCommitStore {
+    fn get(&self, group_id: &str) -> PersistenceResult<Option<MlsCommitEpochRecord>> {
+        Ok(self
+            .rows
+            .lock()
+            .expect("mls commit lock")
+            .get(group_id)
+            .cloned())
+    }
+
+    fn try_bump(
+        &self,
+        group_id: &str,
+        expected_prev_epoch: u64,
+        leader_actor_did: &str,
+        committed_at: i64,
+    ) -> PersistenceResult<Option<MlsCommitEpochRecord>> {
+        let mut rows = self.rows.lock().expect("mls commit lock");
+        let current = rows.get(group_id).map(|r| r.epoch).unwrap_or(0);
+        if expected_prev_epoch != current {
+            return Ok(None);
+        }
+        let new_record = MlsCommitEpochRecord {
+            group_id: group_id.to_owned(),
+            epoch: current.saturating_add(1),
+            leader_actor_did: leader_actor_did.to_owned(),
+            committed_at,
+        };
+        rows.insert(group_id.to_owned(), new_record.clone());
+        Ok(Some(new_record))
+    }
+
+    fn snapshot_all(&self) -> PersistenceResult<Vec<MlsCommitEpochRecord>> {
+        Ok(self
+            .rows
+            .lock()
+            .expect("mls commit lock")
+            .values()
+            .cloned()
+            .collect())
+    }
+}
+
 /// In-memory restore-ticket FSM row. Mirrors the Pg `restore_tickets`
 /// schema: `payload` is the ticket envelope JSON, `executor_state` and
 /// `approval_state` are the side-band sub-envelopes the routing layer
@@ -2836,6 +3307,7 @@ pub struct PgPersistenceStore {
     account_data: PgAccountDataStore,
     devices: PgDeviceInventoryStore,
     federation_transactions: PgFederationTransactionStore,
+    federation_outbox: PgFederationOutboxStore,
     push_bridge_cache: PgPushBridgeCacheStore,
     multisig_pending: PgMultisigPendingStore,
     audit: PgAuditStore,
@@ -2864,6 +3336,7 @@ impl PgPersistenceStore {
             account_data: PgAccountDataStore { pool: pool.clone() },
             devices: PgDeviceInventoryStore { pool: pool.clone() },
             federation_transactions: PgFederationTransactionStore { pool: pool.clone() },
+            federation_outbox: PgFederationOutboxStore { pool: pool.clone() },
             push_bridge_cache: PgPushBridgeCacheStore { pool: pool.clone() },
             multisig_pending: PgMultisigPendingStore { pool: pool.clone() },
             audit: PgAuditStore { pool: pool.clone() },
@@ -2921,6 +3394,10 @@ impl PersistenceStore for PgPersistenceStore {
 
     fn federation_transactions(&self) -> &dyn FederationTransactionStore {
         &self.federation_transactions
+    }
+
+    fn federation_outbox(&self) -> &dyn FederationOutboxStore {
+        &self.federation_outbox
     }
 
     fn audit(&self) -> &dyn AuditStore {
@@ -3010,7 +3487,67 @@ impl PersistenceStore for PgPersistenceStore {
     fn morph_projections(&self) -> &dyn MorphProjectionStore {
         &self.morph_projections
     }
+
+    // G3.S1: MLS lifecycle stores. The Pg backend currently routes
+    // through the in-memory fallback so the trait is wired end-to-end;
+    // real Pg-backed implementations land alongside the
+    // `20260521000000_mls_lifecycle` migration once production deploys
+    // it. The skeleton structs (`PgMlsKeyPackageStore` /
+    // `PgMlsWelcomeStore` / `PgMlsCommitStore`) below carry the pool
+    // ref + sql_query stubs so the conversion is mechanical.
+    // TODO(G3.S1-followup): swap these accessors to return
+    // `&self.mls_key_packages` etc. once `PgMls*Store` ships real
+    // SQL bound implementations.
+    fn mls_key_packages(&self) -> &dyn MlsKeyPackageStore {
+        self.fallback.mls_key_packages()
+    }
+
+    fn mls_welcomes(&self) -> &dyn MlsWelcomeStore {
+        self.fallback.mls_welcomes()
+    }
+
+    fn mls_commits(&self) -> &dyn MlsCommitStore {
+        self.fallback.mls_commits()
+    }
 }
+
+// ── G3.S1: Pg MLS store skeletons ─────────────────────────────────────
+//
+// Pool-bound stubs that match the SQL shape declared in
+// `migrations/20260521000000_mls_lifecycle/up.sql`. Today the
+// PgPersistenceStore accessors above delegate to the in-memory
+// fallback; the structs are kept here so the migration story is
+// already wired and the only delta when production rolls out is to
+// fill in the `sql_query(...)` bodies + flip the accessors.
+
+#[allow(dead_code)]
+struct PgMlsKeyPackageStore {
+    pool: PgPool,
+}
+
+#[allow(dead_code)]
+struct PgMlsWelcomeStore {
+    pool: PgPool,
+}
+
+#[allow(dead_code)]
+struct PgMlsCommitStore {
+    pool: PgPool,
+}
+
+// TODO(G3.S1-followup): `impl MlsKeyPackageStore for PgMlsKeyPackageStore`
+// using `INSERT ... ON CONFLICT (id) DO NOTHING` for `put`, and
+// `UPDATE mls_key_packages SET claimed_by_group_id=$2, consumed_at=$3
+// WHERE id=$1 AND claimed_by_group_id IS NULL RETURNING ...` for
+// `try_claim` (atomic CAS via the WHERE clause).
+// TODO(G3.S1-followup): `impl MlsWelcomeStore for PgMlsWelcomeStore`
+// using `UPDATE mls_welcomes SET delivered_at=$3 WHERE
+// recipient_actor_did=$1 AND recipient_device_id=$2 AND delivered_at
+// IS NULL RETURNING ... LIMIT $4` for the atomic drain.
+// TODO(G3.S1-followup): `impl MlsCommitStore for PgMlsCommitStore`
+// using `INSERT ... ON CONFLICT (group_id) DO UPDATE SET epoch =
+// EXCLUDED.epoch WHERE mls_commits.epoch = $2 RETURNING ...` for the
+// CAS bump.
 
 struct PgAccountStore {
     pool: PgPool,
@@ -3328,6 +3865,108 @@ impl FederationTransactionStore for PgFederationTransactionStore {
             .into_iter()
             .map(FederationTransactionRecord::from)
             .collect())
+    }
+}
+
+// G3.S0 — Postgres-backed durable outbound federation HTTP delivery queue.
+// Mirrors `MemoryFederationOutboxStore`. The `(peer_did,
+// idempotency_key)` UNIQUE INDEX in the migration is what makes
+// `enqueue` structurally idempotent across worker restarts; we catch
+// the conflict here and return Ok(false).
+struct PgFederationOutboxStore {
+    pool: PgPool,
+}
+
+impl FederationOutboxStore for PgFederationOutboxStore {
+    fn enqueue(&self, record: &FederationOutboxRecord) -> PersistenceResult<bool> {
+        let mut conn = pg_conn(&self.pool)?;
+        let inserted = sql_query(
+            "INSERT INTO federation_outbox \
+             (id, peer_did, peer_url, endpoint, idempotency_key, payload_json, attempts, \
+              next_attempt_at, last_status, last_response_excerpt, created_at, delivered_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) \
+             ON CONFLICT (peer_did, idempotency_key) DO NOTHING",
+        )
+        .bind::<Text, _>(&record.id)
+        .bind::<Text, _>(&record.peer_did)
+        .bind::<Text, _>(&record.peer_url)
+        .bind::<Text, _>(&record.endpoint)
+        .bind::<Text, _>(&record.idempotency_key)
+        .bind::<Text, _>(&record.payload_json)
+        .bind::<Integer, _>(record.attempts)
+        .bind::<BigInt, _>(record.next_attempt_at)
+        .bind::<Nullable<Integer>, _>(record.last_status)
+        .bind::<Nullable<Text>, _>(record.last_response_excerpt.as_deref())
+        .bind::<BigInt, _>(record.created_at)
+        .bind::<Nullable<BigInt>, _>(record.delivered_at)
+        .execute(&mut conn)
+        .map_err(PersistenceError::from)?;
+        Ok(inserted > 0)
+    }
+
+    fn pending_due(
+        &self,
+        now_unix_secs: i64,
+        limit: usize,
+    ) -> PersistenceResult<Vec<FederationOutboxRecord>> {
+        let mut conn = pg_conn(&self.pool)?;
+        let rows = sql_query(
+            "SELECT id, peer_did, peer_url, endpoint, idempotency_key, payload_json, attempts, \
+             next_attempt_at, last_status, last_response_excerpt, created_at, delivered_at \
+             FROM federation_outbox \
+             WHERE delivered_at IS NULL AND next_attempt_at <= $1 \
+             ORDER BY next_attempt_at ASC LIMIT $2",
+        )
+        .bind::<BigInt, _>(now_unix_secs)
+        .bind::<BigInt, _>(limit as i64)
+        .load::<FederationOutboxRow>(&mut conn)
+        .map_err(PersistenceError::from)?;
+        Ok(rows.into_iter().map(FederationOutboxRecord::from).collect())
+    }
+
+    fn update(&self, record: &FederationOutboxRecord) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query(
+            "UPDATE federation_outbox SET \
+             attempts = $2, next_attempt_at = $3, last_status = $4, \
+             last_response_excerpt = $5, delivered_at = $6 \
+             WHERE id = $1",
+        )
+        .bind::<Text, _>(&record.id)
+        .bind::<Integer, _>(record.attempts)
+        .bind::<BigInt, _>(record.next_attempt_at)
+        .bind::<Nullable<Integer>, _>(record.last_status)
+        .bind::<Nullable<Text>, _>(record.last_response_excerpt.as_deref())
+        .bind::<Nullable<BigInt>, _>(record.delivered_at)
+        .execute(&mut conn)
+        .map(|_| ())
+        .map_err(PersistenceError::from)
+    }
+
+    fn get(&self, id: &str) -> PersistenceResult<Option<FederationOutboxRecord>> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query(
+            "SELECT id, peer_did, peer_url, endpoint, idempotency_key, payload_json, attempts, \
+             next_attempt_at, last_status, last_response_excerpt, created_at, delivered_at \
+             FROM federation_outbox WHERE id = $1",
+        )
+        .bind::<Text, _>(id)
+        .get_result::<FederationOutboxRow>(&mut conn)
+        .optional()
+        .map(|row| row.map(FederationOutboxRecord::from))
+        .map_err(PersistenceError::from)
+    }
+
+    fn snapshot_all(&self) -> PersistenceResult<Vec<FederationOutboxRecord>> {
+        let mut conn = pg_conn(&self.pool)?;
+        let rows = sql_query(
+            "SELECT id, peer_did, peer_url, endpoint, idempotency_key, payload_json, attempts, \
+             next_attempt_at, last_status, last_response_excerpt, created_at, delivered_at \
+             FROM federation_outbox ORDER BY created_at ASC, id ASC",
+        )
+        .load::<FederationOutboxRow>(&mut conn)
+        .map_err(PersistenceError::from)?;
+        Ok(rows.into_iter().map(FederationOutboxRecord::from).collect())
     }
 }
 
@@ -5469,6 +6108,53 @@ impl From<FederationTransactionRow> for FederationTransactionRecord {
 }
 
 #[derive(QueryableByName)]
+struct FederationOutboxRow {
+    #[diesel(sql_type = Text)]
+    id: String,
+    #[diesel(sql_type = Text)]
+    peer_did: String,
+    #[diesel(sql_type = Text)]
+    peer_url: String,
+    #[diesel(sql_type = Text)]
+    endpoint: String,
+    #[diesel(sql_type = Text)]
+    idempotency_key: String,
+    #[diesel(sql_type = Text)]
+    payload_json: String,
+    #[diesel(sql_type = Integer)]
+    attempts: i32,
+    #[diesel(sql_type = BigInt)]
+    next_attempt_at: i64,
+    #[diesel(sql_type = Nullable<Integer>)]
+    last_status: Option<i32>,
+    #[diesel(sql_type = Nullable<Text>)]
+    last_response_excerpt: Option<String>,
+    #[diesel(sql_type = BigInt)]
+    created_at: i64,
+    #[diesel(sql_type = Nullable<BigInt>)]
+    delivered_at: Option<i64>,
+}
+
+impl From<FederationOutboxRow> for FederationOutboxRecord {
+    fn from(row: FederationOutboxRow) -> Self {
+        Self {
+            id: row.id,
+            peer_did: row.peer_did,
+            peer_url: row.peer_url,
+            endpoint: row.endpoint,
+            idempotency_key: row.idempotency_key,
+            payload_json: row.payload_json,
+            attempts: row.attempts,
+            next_attempt_at: row.next_attempt_at,
+            last_status: row.last_status,
+            last_response_excerpt: row.last_response_excerpt,
+            created_at: row.created_at,
+            delivered_at: row.delivered_at,
+        }
+    }
+}
+
+#[derive(QueryableByName)]
 struct PushBridgeCacheRow {
     #[diesel(sql_type = Text)]
     push_gateway_url: String,
@@ -6059,6 +6745,7 @@ mod tests {
             .put(&ContactRecord {
                 requester: "alice".to_owned(),
                 target: "bob".to_owned(),
+                scope: "message".to_owned(),
                 status: "accepted".to_owned(),
                 created_at: now,
                 updated_at: now,
@@ -6069,6 +6756,7 @@ mod tests {
             .put(&ContactRecord {
                 requester: "charlie".to_owned(),
                 target: "alice".to_owned(),
+                scope: "invite".to_owned(),
                 status: "pending".to_owned(),
                 created_at: now,
                 updated_at: now,

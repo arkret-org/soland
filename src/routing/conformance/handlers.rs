@@ -237,9 +237,8 @@ pub async fn cursor(body: JsonBody<Value>) -> JsonResult<Value> {
         v: "1".to_owned(),
         x: u64::from_be_bytes(x_bytes),
     };
-    let cursor_token = encode_cursor_shape(&shape).map_err(|err| {
-        AppError::new(ErrorCode::InternalError, format!("encode cursor: {err}"))
-    })?;
+    let cursor_token = encode_cursor_shape(&shape)
+        .map_err(|err| AppError::new(ErrorCode::InternalError, format!("encode cursor: {err}")))?;
     json_ok(json!({ "cursor": cursor_token }))
 }
 

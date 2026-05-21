@@ -26,8 +26,8 @@
 use chrono::{DateTime, Utc};
 use contrix_sdk::events::{is_ephemeral_kind, is_receipt_object_only, is_terminal_realm_state};
 use contrix_sdk::{
-    EPHEMERAL_ABSOLUTE_HARD_CEILING_MS, EventId, Hash, TypedTrustDomainId,
-    canonical, compute_policy_frontier_hash, validate_relaxed_window_ms,
+    EPHEMERAL_ABSOLUTE_HARD_CEILING_MS, EventId, Hash, TypedTrustDomainId, canonical,
+    compute_policy_frontier_hash, validate_relaxed_window_ms,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -149,18 +149,17 @@ pub fn cross_signing_reset_replay_check(
                 .to_owned(),
         ));
     }
-    let payload_reset_event_id =
-        payload
-            .get("reset_event_id")
-            .and_then(Value::as_str)
-            .ok_or_else(|| {
-                (
-                    ErrorCode::SchemaViolation,
-                    "cross_signing.reset payload missing required \
+    let payload_reset_event_id = payload
+        .get("reset_event_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            (
+                ErrorCode::SchemaViolation,
+                "cross_signing.reset payload missing required \
                      `reset_event_id` field (Round R2/R3 wire-breaking)"
-                        .to_owned(),
-                )
-            })?;
+                    .to_owned(),
+            )
+        })?;
     if EventId::new(payload_reset_event_id).is_err() {
         return Err((
             ErrorCode::SchemaViolation,
@@ -221,14 +220,13 @@ pub fn realm_policy_components_check(
     }
 
     // (2) T09 — e2ee_relaxed.v1 mutex against audit compliance.
-    let relaxed_active =
-        active_profiles
-            .iter()
-            .any(|p| p == "cx.profile.e2ee_relaxed.v1")
-            || payload
-                .pointer("/e2ee_relaxed/profile")
-                .and_then(Value::as_str)
-                == Some("cx.profile.e2ee_relaxed.v1");
+    let relaxed_active = active_profiles
+        .iter()
+        .any(|p| p == "cx.profile.e2ee_relaxed.v1")
+        || payload
+            .pointer("/e2ee_relaxed/profile")
+            .and_then(Value::as_str)
+            == Some("cx.profile.e2ee_relaxed.v1");
     let compliance_active = active_profiles
         .iter()
         .any(|p| AUDIT_COMPLIANCE_PROFILES.contains(&p.as_str()));
@@ -300,7 +298,10 @@ fn is_sha256_digest(s: &str) -> bool {
     let Some(hex) = s.strip_prefix("sha256:") else {
         return false;
     };
-    hex.len() == 64 && hex.chars().all(|c| c.is_ascii_digit() || matches!(c, 'a'..='f'))
+    hex.len() == 64
+        && hex
+            .chars()
+            .all(|c| c.is_ascii_digit() || matches!(c, 'a'..='f'))
 }
 
 // ────────────────────────────────────────────────────────────────────────
@@ -477,7 +478,10 @@ impl DeactivationFanoutProjection {
     pub fn new(actor: impl Into<String>, now: DateTime<Utc>) -> Self {
         let mut domain_status = std::collections::BTreeMap::new();
         for domain in DeactivationFanoutDomain::ALL {
-            domain_status.insert(domain.as_str().to_owned(), DeactivationDomainStatus::Pending);
+            domain_status.insert(
+                domain.as_str().to_owned(),
+                DeactivationDomainStatus::Pending,
+            );
         }
         Self {
             actor: actor.into(),
@@ -510,10 +514,13 @@ impl DeactivationFanoutProjection {
             "completed".to_owned()
         } else if any_failed && !any_pending {
             "partially_completed".to_owned()
-        } else if any_pending && self
-            .domain_status
-            .values()
-            .any(|s| matches!(s, DeactivationDomainStatus::Completed | DeactivationDomainStatus::Failed))
+        } else if any_pending
+            && self.domain_status.values().any(|s| {
+                matches!(
+                    s,
+                    DeactivationDomainStatus::Completed | DeactivationDomainStatus::Failed
+                )
+            })
         {
             "partially_completed".to_owned()
         } else {
@@ -575,10 +582,7 @@ pub fn classify_presign_blob_block(
     requester_actor: &str,
 ) -> Option<PresignBlobBlock> {
     // E2EE: any encryption metadata present.
-    if blob
-        .get("encryption")
-        .is_some_and(|v| !v.is_null())
-    {
+    if blob.get("encryption").is_some_and(|v| !v.is_null()) {
         return Some(PresignBlobBlock::E2ee);
     }
     // Legal hold flag.
@@ -1056,8 +1060,8 @@ mod tests {
 
     #[test]
     fn appeal_self_review_forbidden() {
-        let err = appeal_self_review_check("did:web:mod.example", "did:web:mod.example")
-            .unwrap_err();
+        let err =
+            appeal_self_review_check("did:web:mod.example", "did:web:mod.example").unwrap_err();
         assert_eq!(err.0, ErrorCode::AppealSelfReviewForbidden);
         appeal_self_review_check("did:web:reviewer.example", "did:web:mod.example").unwrap();
     }
@@ -1068,14 +1072,18 @@ mod tests {
         assert_eq!(p.refresh_outcome(), "in_progress");
         // Complete the first 4 domains, leave 3 pending → partially_completed.
         for domain in &DeactivationFanoutDomain::ALL[..4] {
-            p.domain_status
-                .insert(domain.as_str().to_owned(), DeactivationDomainStatus::Completed);
+            p.domain_status.insert(
+                domain.as_str().to_owned(),
+                DeactivationDomainStatus::Completed,
+            );
         }
         assert_eq!(p.refresh_outcome(), "partially_completed");
         // All completed → completed.
         for domain in DeactivationFanoutDomain::ALL {
-            p.domain_status
-                .insert(domain.as_str().to_owned(), DeactivationDomainStatus::Completed);
+            p.domain_status.insert(
+                domain.as_str().to_owned(),
+                DeactivationDomainStatus::Completed,
+            );
         }
         assert_eq!(p.refresh_outcome(), "completed");
     }
@@ -1132,7 +1140,10 @@ mod tests {
     fn federation_historical_only_mark() {
         let v = json!({"ok": true});
         let marked = mark_response_historical_only(v);
-        assert_eq!(marked.get("historical_only").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            marked.get("historical_only").and_then(Value::as_bool),
+            Some(true)
+        );
     }
 
     #[test]

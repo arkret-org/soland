@@ -230,7 +230,9 @@ async fn patch_policy_document(
     }
     let patch = body.into_inner().patch;
     if patch.is_empty() {
-        return Err(AppError::invalid_param("patch must contain at least one entry"));
+        return Err(AppError::invalid_param(
+            "patch must contain at least one entry",
+        ));
     }
     let payload_obj = record
         .payload

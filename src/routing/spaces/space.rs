@@ -14,7 +14,7 @@
 //! (federation, message, blob, directory, mimi, …) calls into this layer to
 //! resolve "is this actor allowed to see / write to this Space?".
 
-use chrono::Duration;
+use chrono::{DateTime, Duration, Utc};
 use contrix_sdk::{Did, Operation, OperationId, SpaceId, SpaceSearchEntry};
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam};
@@ -1120,6 +1120,63 @@ pub fn space_history_visibility(state: &AppState, space_id: &str) -> String {
         .unwrap_or_else(|| "joined".to_owned())
 }
 
+/// Best-effort joined-at timestamp for event history filtering.
+///
+/// The reducer's member projection is authoritative when present. Older
+/// rows and bootstrap owners predate that side-band cache, so current
+/// members without a projected row fall back to the Space creation time.
+pub fn space_member_joined_at(
+    state: &AppState,
+    space_id: &str,
+    actor: &str,
+) -> Option<DateTime<Utc>> {
+    if let Ok(projection) = state.projection.lock()
+        && let Some(member) = projection.member(space_id, actor)
+        && member.state == "join"
+    {
+        return Some(member.joined_at);
+    }
+    let meta = state.persistence.space_meta().get(space_id).ok().flatten();
+    if meta.as_ref().is_some_and(|record| record.owner == actor) {
+        return meta.map(|record| record.created_at);
+    }
+    if space_has_member(state, space_id, actor) {
+        return meta.map(|record| record.created_at);
+    }
+    None
+}
+
+/// Per-event read-path history filter for `/sync` and `/api/v1/events`.
+/// `shared` retains the existing member-visible full history behaviour;
+/// `joined` / `invited` require the event to be at or after the viewer's
+/// joined-at timestamp.
+pub fn space_event_visible_to_session(
+    state: &AppState,
+    space_id: &str,
+    event_created_at: DateTime<Utc>,
+    sender: Option<&str>,
+    session: Option<&SessionRecord>,
+) -> bool {
+    if sender.is_some_and(|sender| session.is_some_and(|session| session.actor == sender)) {
+        return true;
+    }
+    match space_history_visibility(state, space_id).as_str() {
+        "world_readable" => true,
+        "shared" => {
+            space_discoverability(state, space_id) == "public"
+                || session.is_some_and(|session| space_has_member(state, space_id, &session.actor))
+        }
+        "joined" | "invited" => {
+            let Some(session) = session else {
+                return false;
+            };
+            space_member_joined_at(state, space_id, &session.actor)
+                .is_some_and(|joined_at| event_created_at >= joined_at)
+        }
+        _ => false,
+    }
+}
+
 pub fn space_allows_plaintext_service(state: &AppState, space_id: &str) -> bool {
     let Ok(sid) = SpaceId::new(space_id.to_owned()) else {
         return false;
@@ -1222,6 +1279,9 @@ pub fn record_member_state_operation(
     payload["member"] = json!(member);
     payload["actor_id"] = json!(member);
     payload["membership"] = json!(membership);
+    if membership == "join" && payload.get("delivery_status").is_none() {
+        payload["delivery_status"] = json!("unroutable");
+    }
     let operation = Operation::create(
         OperationId::new(ids::generate_operation_id()).expect("generated valid operation id"),
         SpaceId::new(space_id.to_owned()).expect("validated space id"),

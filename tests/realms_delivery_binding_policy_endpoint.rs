@@ -55,6 +55,7 @@ fn test_config() -> AppConfig {
         use_keystore: false,
         federation_policy: soland::config::FederationPolicy::Mesh,
         federation_peers: Vec::new(),
+        federation_outbound_enabled: false,
         admin_default_page_limit: 100,
         admin_max_page_limit: 1000,
         admin_principal_dids: Vec::new(),
@@ -68,6 +69,8 @@ fn test_config() -> AppConfig {
         compaction_prune_walk_per_space_limit: 50,
         seed_demo_data: true,
         trust_domain: "cx:trust_domain:soland.local".to_owned(),
+        sovereign_enclave_enabled: false,
+        sovereign_enclave_allowed_outbound_hosts: Vec::new(),
     }
 }
 
@@ -136,12 +139,11 @@ async fn realms_delivery_binding_policy_endpoint_responds() {
 async fn realms_delivery_binding_policy_endpoint_rejects_invalid_id() {
     let svc = app();
     let token = dev_token(&svc).await;
-    let response = TestClient::get(
-        "http://server/api/admin/v1/realms/not-a-typed-id/delivery-binding-policy",
-    )
-    .add_header("authorization", format!("Bearer {token}"), true)
-    .send(&svc)
-    .await;
+    let response =
+        TestClient::get("http://server/api/admin/v1/realms/not-a-typed-id/delivery-binding-policy")
+            .add_header("authorization", format!("Bearer {token}"), true)
+            .send(&svc)
+            .await;
     assert_eq!(response.status_code, Some(StatusCode::BAD_REQUEST));
 }
 

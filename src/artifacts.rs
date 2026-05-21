@@ -32,6 +32,7 @@ static SCHEMA_REGISTRY: OnceLock<Value> = OnceLock::new();
 static OPERATION_REGISTRY: OnceLock<Value> = OnceLock::new();
 static ID_KIND_REGISTRY: OnceLock<Value> = OnceLock::new();
 static ACTIVE_DURABLE_EVENT_KINDS: OnceLock<BTreeSet<String>> = OnceLock::new();
+static ACTIVE_LOCAL_OPERATION_EVENT_KINDS: OnceLock<BTreeSet<String>> = OnceLock::new();
 static ACTIVE_DURABLE_CELL_BINDINGS: OnceLock<Vec<EventKindCellBinding>> = OnceLock::new();
 static CELL_FAMILY_BINDINGS: OnceLock<Vec<CellFamilyBinding>> = OnceLock::new();
 static SCHEMA_ENTRIES: OnceLock<Vec<SchemaRegistryEntry>> = OnceLock::new();
@@ -96,6 +97,26 @@ pub fn active_durable_event_kinds() -> &'static BTreeSet<String> {
             .filter(|entry| entry.get("status").and_then(Value::as_str) == Some("active"))
             .filter(|entry| {
                 entry.get("wire_scope").and_then(Value::as_str) == Some("durable_event")
+            })
+            .filter_map(|entry| entry.get("event_kind").and_then(Value::as_str))
+            .map(ToOwned::to_owned)
+            .collect()
+    })
+}
+
+pub fn active_local_operation_event_kinds() -> &'static BTreeSet<String> {
+    ACTIVE_LOCAL_OPERATION_EVENT_KINDS.get_or_init(|| {
+        event_kind_registry()
+            .get("event_kinds")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter(|entry| entry.get("status").and_then(Value::as_str) == Some("active"))
+            .filter(|entry| {
+                matches!(
+                    entry.get("wire_scope").and_then(Value::as_str),
+                    Some("durable_event" | "actor_private_event")
+                )
             })
             .filter_map(|entry| entry.get("event_kind").and_then(Value::as_str))
             .map(ToOwned::to_owned)

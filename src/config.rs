@@ -134,6 +134,14 @@ pub struct AppConfig {
     /// considers as broadcast targets (mesh) or hub upstream (hub). Empty
     /// disables federation outbound.
     pub federation_peers: Vec<String>,
+    /// G3.S0 — when true (default), `main.rs` spawns the
+    /// `FederationDispatcher` background worker that drains the
+    /// `federation_outbox` table and POSTs each pending row to its peer
+    /// with `Idempotency-Key` + `Content-Digest` headers. Set
+    /// `SOLAND_FEDERATION_OUTBOUND=0` to disable for integration tests
+    /// that don't want background HTTP traffic (the in-process `enqueue`
+    /// path still writes outbox rows so cotest can observe the boundary).
+    pub federation_outbound_enabled: bool,
     /// Default page size for `GET /api/v1/admin/cells` and the rest of
     /// the admin paginated read surfaces when the caller omits `limit`.
     /// Env: `SOLAND_ADMIN_PAGE_LIMIT` (default `100`).
@@ -208,6 +216,19 @@ pub struct AppConfig {
     /// `test_config()` to keep their fixture IDs stable.
     /// Env: `SOLAND_SEED_DEMO_DATA` (default false).
     pub seed_demo_data: bool,
+    /// G3.S9 — when true, soland claims `cx.profile.sovereign_enclave.v1`
+    /// on `/server/describe` and enforces the enclave invariants
+    /// (`routing::extensions::sovereign::assert_enclave_invariants`):
+    /// outbound federation OFF, DID resolver method allow-list
+    /// non-empty, every outbound HTTP call gated through
+    /// [`crate::routing::extensions::sovereign::outbound_allowed`].
+    /// Env: `SOLAND_SOVEREIGN_ENCLAVE` (default false).
+    pub sovereign_enclave_enabled: bool,
+    /// G3.S9 — host allow-list for outbound HTTP when the enclave
+    /// profile is enabled. Hosts are matched case-insensitively.
+    /// Comma-separated env var
+    /// `SOLAND_SOVEREIGN_ENCLAVE_ALLOWED_OUTBOUND_HOSTS`.
+    pub sovereign_enclave_allowed_outbound_hosts: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -410,6 +431,10 @@ impl AppConfig {
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
+        // G3.S0 — outbound dispatcher toggle. Defaults to enabled so the
+        // background worker drains the outbox; tests that don't want
+        // unsolicited HTTP traffic set `SOLAND_FEDERATION_OUTBOUND=0`.
+        let federation_outbound_enabled = env_bool("SOLAND_FEDERATION_OUTBOUND")?.unwrap_or(true);
         let admin_default_page_limit = std::env::var("SOLAND_ADMIN_PAGE_LIMIT")
             .ok()
             .and_then(|value| value.trim().parse::<usize>().ok())
@@ -471,6 +496,18 @@ impl AppConfig {
                 .unwrap_or(50)
                 .max(1);
         let seed_demo_data = env_bool("SOLAND_SEED_DEMO_DATA")?.unwrap_or(false);
+        // G3.S9 — sovereign enclave toggle + outbound host allow-list.
+        let sovereign_enclave_enabled = env_bool("SOLAND_SOVEREIGN_ENCLAVE")?.unwrap_or(false);
+        let sovereign_enclave_allowed_outbound_hosts =
+            std::env::var("SOLAND_SOVEREIGN_ENCLAVE_ALLOWED_OUTBOUND_HOSTS")
+                .ok()
+                .map(|v| {
+                    v.split(',')
+                        .map(|h| h.trim().to_owned())
+                        .filter(|h| !h.is_empty())
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
         let trust_domain = derive_trust_domain(&service_did)?;
 
         Ok(Self {
@@ -502,6 +539,7 @@ impl AppConfig {
             use_keystore,
             federation_policy,
             federation_peers,
+            federation_outbound_enabled,
             admin_default_page_limit,
             admin_max_page_limit,
             admin_principal_dids,
@@ -515,6 +553,8 @@ impl AppConfig {
             compaction_prune_walk_per_space_limit,
             seed_demo_data,
             trust_domain,
+            sovereign_enclave_enabled,
+            sovereign_enclave_allowed_outbound_hosts,
         })
     }
 
@@ -635,7 +675,10 @@ impl AppConfig {
             ("cors_strict", cors_strict),
             ("secret_manager_in_use", secret_manager_in_use),
             ("log_redaction_enabled", log_redaction_enabled),
-            ("admin_auth_mode_production", admin_auth_mode != "development"),
+            (
+                "admin_auth_mode_production",
+                admin_auth_mode != "development",
+            ),
             ("rate_limit_enabled", rate_limit_enabled),
             (
                 "provider_credential_rotation",
@@ -878,7 +921,9 @@ fn env_non_empty_or_file(name: &str) -> anyhow::Result<Option<String>> {
     let file_value = match env_non_empty(&file_name) {
         Some(path) => {
             let raw = std::fs::read_to_string(&path).map_err(|error| {
-                anyhow::anyhow!("{file_name} points to {path:?} but the file could not be read: {error}")
+                anyhow::anyhow!(
+                    "{file_name} points to {path:?} but the file could not be read: {error}"
+                )
             })?;
             let trimmed = raw.trim();
             if trimmed.is_empty() {
@@ -893,9 +938,9 @@ fn env_non_empty_or_file(name: &str) -> anyhow::Result<Option<String>> {
         (None, None) => Ok(None),
         (Some(value), None) | (None, Some(value)) => Ok(Some(value)),
         (Some(env), Some(file)) if env == file => Ok(Some(env)),
-        (Some(_), Some(_)) => anyhow::bail!(
-            "{name} and {file_name} are both set to different values; pick one"
-        ),
+        (Some(_), Some(_)) => {
+            anyhow::bail!("{name} and {file_name} are both set to different values; pick one")
+        }
     }
 }
 
@@ -1030,7 +1075,9 @@ mod tests {
         env.set_file(path.to_str().unwrap());
         let error = env_non_empty_or_file(&env.name).expect_err("must error");
         assert!(
-            error.to_string().contains("are both set to different values"),
+            error
+                .to_string()
+                .contains("are both set to different values"),
             "unexpected error: {error}"
         );
         let _ = std::fs::remove_file(&path);

@@ -117,13 +117,16 @@ mod tests {
         }
     }
 
-    /// Sanity: the SDK-defined registry has the same family count
-    /// soland saw before the move (49) — guards against silent drift
-    /// during the SDK lift.
+    /// Sanity: the SDK-defined registry covers every spec-normative
+    /// cell family. Locked at 75 after the R1.2 Realm-rename + new
+    /// flow-facet families landed in the spec event-kind registry —
+    /// see the matching assertion in
+    /// `contrix-rust-sdk/crates/sdk/src/lattice_registry.rs` for the
+    /// breakdown. Bump deliberately when a new spec family lands.
     #[test]
     fn default_registry_still_covers_every_spec_family() {
         let registry = default_lattice_registry();
-        assert_eq!(registry.len(), 50);
+        assert_eq!(registry.len(), 75);
     }
 
     #[test]

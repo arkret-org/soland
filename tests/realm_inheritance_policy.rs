@@ -142,7 +142,9 @@ fn capability_derived_projects_cell_and_cache() {
         }
         other => panic!("expected CapabilityDerivedProjected, got {other:?}"),
     }
-    let cached = state.capability_derived_state(capability_id).expect("cached");
+    let cached = state
+        .capability_derived_state(capability_id)
+        .expect("cached");
     assert_eq!(
         cached.source_grant_ref,
         "cx:event:01904100-0000-7000-8000-eeeeeeeeeeee"
@@ -174,8 +176,8 @@ fn capability_derived_rejects_missing_source_grant() {
         ProjectionEffect::Rejected { reason } => {
             assert_eq!(reason, "capability_derived_source_grant_ref_missing");
         }
-        other => panic!(
-            "expected Rejected(capability_derived_source_grant_ref_missing), got {other:?}"
-        ),
+        other => {
+            panic!("expected Rejected(capability_derived_source_grant_ref_missing), got {other:?}")
+        }
     }
 }

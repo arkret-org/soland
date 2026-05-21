@@ -295,10 +295,7 @@ async fn submit_anchor(
         .collect();
     if let Err((code, reason)) = crate::round23::validate_anchor_frontier_entries(&frontier_entries)
     {
-        return Err(
-            AppError::new(code, reason)
-                .with_status(StatusCode::BAD_REQUEST),
-        );
+        return Err(AppError::new(code, reason).with_status(StatusCode::BAD_REQUEST));
     }
 
     let move_store = state.move_store.as_ref();

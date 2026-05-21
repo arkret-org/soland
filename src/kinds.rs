@@ -198,6 +198,42 @@ pub const CX_REALM_INHERITANCE_POLICY: &str = "cx.realm.inheritance_policy";
 // declaration. Full derive logic is TODO(realm-rework).
 pub const CX_CAPABILITY_DERIVED: &str = "cx.capability.derived";
 
+// G3.S2 — `cx.realm.policy_server` (realm / reducer_input): declares the
+// pluggable policy-decision service for a Realm. cell_family
+// `cx.component.realm.policy_server.v1` (cas-register per SDK lattice
+// registry). Spec `contrix-spec/spec/v1/zh/authz/policy-server.md` §2.
+pub const CX_REALM_POLICY_SERVER: &str = "cx.realm.policy_server";
+
+// G3.S1 — MLS / E2EE lifecycle event kinds.
+//
+// Scoped subset (in-scope per `_codex_test_gaps.md` G3.S1):
+//   - `cx.mls.keypackage.publish` — publish a per-(actor, device) KeyPackage envelope.
+//   - `cx.mls.keypackage.claim`   — atomic CAS claim of a published KeyPackage. Second
+//                                    claim of the same `keypackage_id` MUST be rejected
+//                                    (compare-and-swap; no replay).
+//   - `cx.mls.welcome.enqueue`    — append a Welcome to a per-(recipient, device) queue
+//                                    so the recipient device can fetch it on next sync.
+//   - `cx.mls.commit.epoch`       — bump the MLS group's stored epoch by exactly +1 from
+//                                    `expected_prev_epoch`. Stale / out-of-order commits
+//                                    are rejected with `mls_epoch_skew`.
+//
+// TODO(G3.S1-followup): governance_binding — multi-sig commit attestation event
+// kind (e.g. `cx.mls.commit.governance_binding`) that ties a commit to a Realm
+// governance quorum signature set; pending spec finalisation.
+// TODO(G3.S1-followup): covered_frontier — declare which sync-frontier roots
+// are MLS-protected by the current epoch (`cx.mls.epoch.covered_frontier`);
+// blocks epoch-stale plaintext fallback for protected ranges.
+// TODO(G3.S1-followup): decryption_pending — deferred-decryption queue +
+// retry event kind for messages that arrived before the key material; today
+// the recipient silently drops them.
+// TODO(G3.S1-followup): minimal_metadata — envelope-stripping rule registration
+// (`cx.mls.envelope.policy`) so peers know which header fields to redact when
+// forwarding an MLS-protected envelope.
+pub const CX_MLS_KEYPACKAGE_PUBLISH: &str = "cx.mls.keypackage.publish";
+pub const CX_MLS_KEYPACKAGE_CLAIM: &str = "cx.mls.keypackage.claim";
+pub const CX_MLS_WELCOME_ENQUEUE: &str = "cx.mls.welcome.enqueue";
+pub const CX_MLS_COMMIT_EPOCH: &str = "cx.mls.commit.epoch";
+
 pub fn canonical_kind_for_operation(operation: &Operation) -> Option<&str> {
     canonical_kind_for_payload(&operation.object_type, &operation.payload)
 }
@@ -213,7 +249,7 @@ pub fn canonical_kind_for_payload<'a>(object_type: &'a str, _payload: &Value) ->
 }
 
 fn canonical_registered_kind(object_type: &str) -> Option<&str> {
-    if !artifacts::active_durable_event_kinds().contains(object_type) {
+    if !artifacts::active_local_operation_event_kinds().contains(object_type) {
         return None;
     }
     let kind = match object_type {
@@ -290,6 +326,8 @@ fn canonical_registered_kind(object_type: &str) -> Option<&str> {
         CX_REALM_LINK => Some(CX_REALM_LINK),
         CX_REALM_INHERITANCE_POLICY => Some(CX_REALM_INHERITANCE_POLICY),
         CX_CAPABILITY_DERIVED => Some(CX_CAPABILITY_DERIVED),
+        // G3.S2 — policy server declaration.
+        CX_REALM_POLICY_SERVER => Some(CX_REALM_POLICY_SERVER),
         _ => Some(object_type),
     };
     kind
@@ -377,3 +415,20 @@ pub fn is_morph_lifecycle_kind(kind: &str) -> bool {
 pub fn is_flow_tracks_kind(kind: &str) -> bool {
     matches!(kind, CX_FLOW_TRACKS_UPDATE)
 }
+
+// G3.S9: extensions (applet/bot/tsp) — stub event kinds. Wire-accept +
+// reducer no-op projection (we keep the structured caches in
+// `routing::extensions::{bot_actor, tsp}`). Full state-machine semantics
+// land with the protocol implementations themselves; the constants are
+// here so the reducer registry can dispatch.
+//
+// Spec anchors:
+//   - `extensions/applet-integration.md` §3–§5 (bot / ghost actor
+//     accountability model)
+//   - `identity/tsp-integration.md` §3–§5 (transport declaration, route,
+//     audit chain)
+pub const CX_EXTENSIONS_BOT_REGISTER: &str = "cx.extensions.bot_actor.register";
+pub const CX_EXTENSIONS_BOT_REVOKE: &str = "cx.extensions.bot_actor.revoke";
+pub const CX_EXTENSIONS_TSP_TRANSPORT_DECLARE: &str = "cx.extensions.tsp.transport_declare";
+pub const CX_EXTENSIONS_TSP_ROUTE_ESTABLISH: &str = "cx.extensions.tsp.route_establish";
+pub const CX_EXTENSIONS_TSP_AUDIT_APPEND: &str = "cx.extensions.tsp.audit_append";

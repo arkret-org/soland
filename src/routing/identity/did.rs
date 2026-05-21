@@ -24,13 +24,16 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
+use super::webvh_validation::{
+    WebvhLogEntry, validate_log_chain, verify_scid_against_did, verify_witness_signature,
+};
 use super::{append_audit_log, bearer_token, now, render_error, sha256_hex, validate_did};
 use crate::error::{AppError, ErrorCode};
 use crate::result::{JsonResult, json_ok};
 use crate::state::{AppState, WebvhDocumentRecord, WebvhLogRecord};
 use crate::wire::{
-    IdentityDescribeResBody, IdentityLogResBody, IdentityReceiptsResBody,
-    IdentityResolveReqBody, IdentityResolveResBody,
+    IdentityDescribeResBody, IdentityLogResBody, IdentityReceiptsResBody, IdentityResolveReqBody,
+    IdentityResolveResBody,
 };
 
 const WEBVH_SCID_PLACEHOLDER: &str = "{SCID}";
@@ -365,6 +368,25 @@ pub(super) async fn identity_resolve(
         return Err(AppError::invalid_param("invalid did"));
     }
     if let Ok(Some(record)) = state.persistence.webvh().get_document(&body.did) {
+        // G3.S3: every did:webvh resolution MUST first re-validate the
+        // log chain and SCID derivation, AND any witness signatures
+        // present on individual entries. Spec: identity-did.md §3.4 +
+        // §4.2.1.
+        //
+        // TODO(G3.S3-followup): multi-witness quorum + 24h
+        // degraded_no_witness window. Today we only verify single-party
+        // witness signatures (if present) and never fail closed on
+        // absent witnesses — the degraded-mode state machine is the
+        // next slice (see identity-did.md §4.2.1 and the E9.4 fixme in
+        // cotest/e2e/tests/identity/webvh-rotation.spec.ts).
+        //
+        // TODO(G3.S3-followup): emergency rotation path
+        // (key-management.md §3.3 recovery key). Today rotation entries
+        // must be controller-signed; recovery-key-only rotations are
+        // not yet accepted.
+        if body.did.starts_with("did:webvh:") {
+            run_webvh_resolution_checks(state, &body.did)?;
+        }
         return json_ok(IdentityResolveResBody {
             did_document: record.did_document,
             key_log_head: record.key_log_head,
@@ -949,6 +971,50 @@ fn render_json_bytes(res: &mut Response, content_type: &str, value: &Value) {
         body.len().to_string().parse().unwrap(),
     );
     res.write_body(body).ok();
+}
+
+/// Run G3.S3 webvh validation gates (prev_hash chain + SCID mismatch +
+/// single-witness signature) over a DID's locally-cached log before
+/// trusting the resolved document. Spec: identity-did.md §3.4 / §4.2.1
+/// / §3 ("DNS hijack protection") / §3.4 "controller proof".
+///
+/// TODO(G3.S3-followup): plug a resolver-policy-driven witness key set
+/// in once `trusted_witnesses` configuration lands (identity-did.md
+/// §4.1). For now we accept any witness key referenced by the entry's
+/// own proof, which suffices to catch a forged-signature attack but not
+/// a fully untrusted-witness one.
+fn run_webvh_resolution_checks(state: &AppState, did: &str) -> Result<(), AppError> {
+    let events = state
+        .persistence
+        .webvh()
+        .list_log_events(did)
+        .map_err(|error| {
+            tracing::error!(%error, %did, "failed to read webvh log during resolution checks");
+            AppError::internal("failed to read did:webvh log")
+        })?;
+    if events.is_empty() {
+        // No local log to validate — the resolver falls through to the
+        // SDK / default-document path higher up. We do not fail closed
+        // here because the cached document may legitimately come from
+        // an external resolver.
+        return Ok(());
+    }
+    let log: Vec<WebvhLogEntry> = events
+        .iter()
+        .map(|event| WebvhLogEntry::new(event.operation.clone()))
+        .collect();
+    validate_log_chain(&log)?;
+    let genesis = &log[0];
+    verify_scid_against_did(did, genesis)?;
+    // Resolver-policy-driven witness keys are not wired yet — pass an
+    // empty allow-list so `verify_witness_signature` only enforces the
+    // "if a proof is present, its signature MUST verify" rule. The
+    // "MUST come from a trusted witness" rule is the followup TODO
+    // above.
+    for entry in &log {
+        verify_witness_signature(entry, &[])?;
+    }
+    Ok(())
 }
 
 fn identity_document_record(state: &AppState, did: &str) -> WebvhDocumentRecord {

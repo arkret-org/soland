@@ -25,8 +25,9 @@ use serde_json::{Value, json};
 use super::operations as events_operations;
 use super::{
     append_audit_log, auth_or_render, is_valid_sha256_digest, now, project_accepted_operations,
-    query_param, query_param_all, render_error, sha256_hex, space_has_member, validate_did,
-    validate_operation_policy, validate_operation_semantics, validate_space_id,
+    query_param, query_param_all, render_error, sha256_hex, space_event_visible_to_session,
+    space_has_member, validate_did, validate_operation_policy, validate_operation_semantics,
+    validate_space_id,
 };
 use crate::error::{AppError, ErrorCode};
 use crate::result::{JsonResult, json_ok};
@@ -382,12 +383,7 @@ async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Response) 
         && let Some(space_id_str) = parsed.space_id.as_deref()
         && let Some(envelope_object) = envelope_for_bootstrap.as_object()
     {
-        bootstrap_realm_member_index(
-            state,
-            space_id_str,
-            &parsed.actor_id,
-            envelope_object,
-        );
+        bootstrap_realm_member_index(state, space_id_str, &parsed.actor_id, envelope_object);
     }
     append_audit_log(
         state,
@@ -699,10 +695,8 @@ async fn events_frontier(
     use contrix_sdk::Did as SdkDid;
     let service_did = SdkDid::new(state.config.service_did.clone())
         .unwrap_or_else(|_| SdkDid::new("did:web:soland.local".to_owned()).unwrap());
-    let typed_space_frontier =
-        crate::round4::typed_space_frontier(space_to_event_ids.clone());
-    let typed_actor_bounds =
-        crate::round4::typed_actor_upper_bounds(actor_frontier.clone());
+    let typed_space_frontier = crate::round4::typed_space_frontier(space_to_event_ids.clone());
+    let typed_actor_bounds = crate::round4::typed_actor_upper_bounds(actor_frontier.clone());
     let typed_response = crate::round4::build_typed_frontier_response(
         peer_role,
         &service_did,
@@ -1004,7 +998,11 @@ fn validate_event_envelope(
             &event_id,
             &state.config.trust_domain,
         ) {
-            return Err(event_validation_error(code.http_status(), code.as_str(), &reason));
+            return Err(event_validation_error(
+                code.http_status(),
+                code.as_str(),
+                &reason,
+            ));
         }
     }
     // Round R2/R3 (T09 + T12) — realm.policy_components hard ceiling, e2ee_relaxed
@@ -1051,7 +1049,11 @@ fn validate_event_envelope(
             media_plaintext_service_present,
             mls_governance_binding_covers_policy_root,
         ) {
-            return Err(event_validation_error(code.http_status(), code.as_str(), &reason));
+            return Err(event_validation_error(
+                code.http_status(),
+                code.as_str(),
+                &reason,
+            ));
         }
     }
     // Round R2/R3 (T04) — Anchor frontier entries MUST be sha256:<hex>.
@@ -1069,7 +1071,11 @@ fn validate_event_envelope(
             .filter_map(|v| v.as_str().map(ToOwned::to_owned))
             .collect();
         if let Err((code, reason)) = crate::round23::validate_anchor_frontier_entries(&entries) {
-            return Err(event_validation_error(code.http_status(), code.as_str(), &reason));
+            return Err(event_validation_error(
+                code.http_status(),
+                code.as_str(),
+                &reason,
+            ));
         }
     }
 
@@ -1869,10 +1875,7 @@ fn event_string_field(object: &serde_json::Map<String, Value>, keys: &[&str]) ->
 /// matches the session actor. Spec realm-and-space.md §2.6 — this is the
 /// genesis-member condition that lets the create event bypass the regular
 /// `space_has_member` check.
-fn realm_create_actor_is_creator(
-    object: &serde_json::Map<String, Value>,
-    actor: &str,
-) -> bool {
+fn realm_create_actor_is_creator(object: &serde_json::Map<String, Value>, actor: &str) -> bool {
     object
         .get("payload")
         .and_then(|payload| payload.get("object"))
@@ -2286,10 +2289,15 @@ fn event_visible_to_session(
     if record.actor_id == session.actor {
         return true;
     }
-    record
-        .space_id
-        .as_deref()
-        .is_some_and(|space_id| space_has_member(state, space_id, &session.actor))
+    record.space_id.as_deref().is_some_and(|space_id| {
+        space_event_visible_to_session(
+            state,
+            space_id,
+            record.received_at,
+            Some(&record.actor_id),
+            Some(session),
+        )
+    })
 }
 
 /// Scan the durable Event store for the most
@@ -2415,6 +2423,7 @@ mod proof_strictness_tests {
             use_keystore: false,
             federation_policy: FederationPolicy::Mesh,
             federation_peers: Vec::new(),
+            federation_outbound_enabled: false,
             admin_default_page_limit: 100,
             admin_max_page_limit: 1000,
             admin_principal_dids: Vec::new(),
@@ -2430,6 +2439,8 @@ mod proof_strictness_tests {
             compaction_prune_walk_per_space_limit: 50,
             seed_demo_data: true,
             trust_domain: "cx:trust_domain:soland.local".to_owned(),
+            sovereign_enclave_enabled: false,
+            sovereign_enclave_allowed_outbound_hosts: Vec::new(),
         };
         AppState::new(config, Db { pool: None })
     }

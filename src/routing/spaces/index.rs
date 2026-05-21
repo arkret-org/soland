@@ -40,6 +40,7 @@ const QUERY_FEATURES: &[&str] = &[
     "debug_reducer_snapshot",
 ];
 const DEMO_SPACE_ID: &str = "cx:space:0196419b-0000-7000-8000-000000000000";
+const PERSONAL_BLOCKLIST_DATA_TYPES: &[&str] = &["cx.account.blocklist", "cx.account.blocklist.v1"];
 
 pub(super) fn router() -> Router {
     Router::new()
@@ -192,12 +193,17 @@ async fn index_notifications(
             if !actor.is_empty() && message.sender == actor {
                 continue;
             }
+            if !actor.is_empty() && personal_blocklist_blocks_sender(state, &actor, &message.sender)
+            {
+                continue;
+            }
             notifications.push(json!({
                 "kind": "message",
                 "event_ref": message.event_id,
                 "space_id": message.space_id,
                 "thread_id": message.thread_id,
                 "sender": message.sender,
+                "encrypted": message.encrypted,
                 "created_at": message.created_at,
                 "unread": true,
             }));
@@ -210,6 +216,71 @@ async fn index_notifications(
         "unread_count": notifications.len(),
         "next_cursor": Value::Null,
     }))
+}
+
+fn personal_blocklist_blocks_sender(state: &AppState, actor: &str, sender: &str) -> bool {
+    PERSONAL_BLOCKLIST_DATA_TYPES.iter().any(|data_type| {
+        state
+            .persistence
+            .account_data()
+            .get(actor, data_type)
+            .ok()
+            .flatten()
+            .is_some_and(|record| blocklist_payload_blocks_sender(&record.payload, sender))
+    })
+}
+
+fn blocklist_payload_blocks_sender(payload: &Value, sender: &str) -> bool {
+    if let Some(entries) = payload.get("entries").and_then(Value::as_array) {
+        return entries
+            .iter()
+            .any(|entry| blocklist_entry_blocks_sender(entry, sender));
+    }
+    if let Some(entries) = payload.get("blocked").and_then(Value::as_array) {
+        return entries
+            .iter()
+            .any(|entry| blocklist_entry_blocks_sender(entry, sender));
+    }
+    blocklist_entry_blocks_sender(payload, sender)
+}
+
+fn blocklist_entry_blocks_sender(entry: &Value, sender: &str) -> bool {
+    match entry {
+        Value::String(_) => value_is_sender(entry, sender),
+        Value::Object(object) => {
+            let mode = object
+                .get("kind")
+                .or_else(|| object.get("action"))
+                .or_else(|| object.get("status"))
+                .and_then(Value::as_str)
+                .unwrap_or("block");
+            if matches!(mode, "allow" | "unblock" | "removed" | "deleted") {
+                return false;
+            }
+            object
+                .get("target")
+                .or_else(|| object.get("did"))
+                .or_else(|| object.get("actor"))
+                .is_some_and(|target| blocklist_entry_target_matches_sender(target, sender))
+        }
+        _ => false,
+    }
+}
+
+fn blocklist_entry_target_matches_sender(target: &Value, sender: &str) -> bool {
+    match target {
+        Value::String(_) => value_is_sender(target, sender),
+        Value::Object(object) => object
+            .get("did")
+            .or_else(|| object.get("actor"))
+            .or_else(|| object.get("id"))
+            .is_some_and(|value| value_is_sender(value, sender)),
+        _ => false,
+    }
+}
+
+fn value_is_sender(value: &Value, sender: &str) -> bool {
+    value.as_str().is_some_and(|value| value == sender)
 }
 
 #[endpoint]

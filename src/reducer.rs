@@ -24,6 +24,10 @@
 //! the structured fields migrate to a single `cells` map.
 
 pub mod lattice_kinds;
+pub mod mls;
+pub mod realm_links;
+// G3.S2: policy server cell reducer
+pub mod realm_policy_server;
 pub mod registry;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -117,6 +121,10 @@ pub struct ProjectionState {
     /// is reached via `cx.redaction`. Mirror table is `projection_flows`
     /// (durable).
     pub flows: BTreeMap<String, FlowProjection>,
+    /// Flow discussion routing override. When a Flow carries
+    /// `discussion_realm_ref`, discussion-track messages are hosted by
+    /// that linked Realm instead of the Flow's source Realm.
+    pub flow_discussion_realms: BTreeMap<String, String>,
     /// Server-side Morph projection. Same shape as Flow. Mirror table
     /// is `projection_morphs` (durable).
     pub morphs: BTreeMap<String, MorphProjection>,
@@ -160,6 +168,29 @@ pub struct ProjectionState {
     /// R3.3 — `cx.realm.audit_policy_downgrade` audit log. Append-only
     /// list of downgrade events per Realm.
     pub realm_audit_downgrades: BTreeMap<String, Vec<RealmAuditDowngradeEntry>>,
+    /// G3.S1 — published MLS KeyPackages keyed by `keypackage_id`. Each
+    /// row is per `(actor_did, device_id)`; the `claimed_by` /
+    /// `consumed_at` slots flip on a successful CAS claim.
+    pub mls_key_packages: BTreeMap<String, MlsKeyPackage>,
+    /// G3.S1 — per-device Welcome queue. Outer key is
+    /// `(recipient_actor_did, recipient_device_id)`; the inner Vec is
+    /// the FIFO of pending Welcomes. Entries gain a non-None
+    /// `delivered_at` when the recipient device drains them via
+    /// `GET /api/v1/mls/welcomes/pending`.
+    pub mls_welcomes: BTreeMap<(String, String), Vec<MlsWelcome>>,
+    /// G3.S1 — per-group MLS commit-epoch state. The reducer keeps the
+    /// monotonic epoch counter in lockstep with `apply_commit_epoch`
+    /// CAS rules: each accepted commit bumps the value by exactly +1
+    /// from the previous epoch. Stale / out-of-order commits are
+    /// rejected with `mls_epoch_skew`.
+    pub mls_commit_epochs: BTreeMap<String, MlsCommitEpoch>,
+    /// G3.S2 — per-Realm `cx.realm.policy_server` projection. Cas-
+    /// register semantics — last write wins. Org-level fallback (when
+    /// a Realm has no row of its own) is resolved at query time by
+    /// walking the `governed_by` link chain via [`Self::realm_links`].
+    /// Cell-family canonical value lives in
+    /// `cx.component.realm.policy_server.v1`.
+    pub realm_policy_servers: BTreeMap<String, RealmPolicyServerConfig>,
 }
 
 /// R3.1 — structured cache row for a single directed Realm link.
@@ -178,6 +209,38 @@ pub struct RealmLinkState {
     pub label: Option<String>,
     pub commitment: Option<String>,
     pub created_at: chrono::DateTime<chrono::Utc>,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// G3.S2 — structured cache row for `cx.realm.policy_server`. Mirrors
+/// the canonical `cx.component.realm.policy_server.v1` cas-register
+/// payload. Per spec `authz/policy-server.md` §2 the wire payload also
+/// carries `applies_to[]` / `policy_sources[]` / `abuse_profile_ref` /
+/// `public_keys[]`; the runtime fields needed by the outbound
+/// `/policy/check` client are the five captured here. The rest is held
+/// on the raw cell value for admin tooling that wants to round-trip the
+/// full declaration.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RealmPolicyServerConfig {
+    pub realm_id: String,
+    /// DID of the policy decision service. Used to resolve the
+    /// signature verification key and match against `bound_to.policy_server_id`.
+    pub policy_server_did: String,
+    /// HTTPS endpoint that accepts `POST /api/v1/policy/check`.
+    pub policy_server_url: String,
+    /// Decision cache TTL. Spec §2 default `300`. The outbound client
+    /// uses this as the per-realm cap on the in-memory decision cache;
+    /// a `bypass_cache=true` request still skips it.
+    pub cache_ttl_seconds: u64,
+    /// Wall-clock timeout for one `/policy/check` round-trip. Spec §6
+    /// `fail_mode=closed` deployments MUST fail-closed on timeout (see
+    /// `on_timeout` below). Defaults to 2000 ms when absent, matching
+    /// coauth's own evaluator deadline.
+    pub timeout_ms: u64,
+    /// `fail_closed` or `deny`. Both produce a locally-signed
+    /// `decision_proxy: true` deny when the upstream times out; the
+    /// difference is the canonical `reason_code` we emit.
+    pub on_timeout: String,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
@@ -212,6 +275,88 @@ pub struct RealmAuditDowngradeEntry {
     pub reason: Option<String>,
     pub approver: Option<String>,
     pub recorded_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// G3.S1 — KeyPackage lifetime window. MLS KeyPackages carry a
+/// `lifetime = (not_before, not_after)` per RFC 9420 §10. The reducer's
+/// CAS claim path enforces `not_before <= now < not_after` (out-of-window
+/// publishes are rejected on intake; expired KeyPackages cannot be
+/// claimed and a follow-up `claim` returns `keypackage_expired`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KeyPackageLifetime {
+    pub not_before: i64,
+    pub not_after: i64,
+}
+
+/// G3.S1 — published MLS KeyPackage row.
+///
+/// One per `(actor_did, device_id, keypackage_id)`. The atomic CAS claim
+/// flips `claimed_by` from `None` to `Some(group_id)` and sets
+/// `consumed_at`; a second claim against the same `id` is rejected.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MlsKeyPackage {
+    /// Canonical `cx:mls_keypackage:<uuid>` identifier.
+    pub id: String,
+    pub actor_did: String,
+    pub device_id: String,
+    pub lifetime: KeyPackageLifetime,
+    /// Opaque bytes of the MLS KeyPackage (`mls_key_package` per RFC 9420
+    /// §11). Server treats this as a black box; only the recipient device
+    /// can decrypt the Welcome it backs.
+    pub key_package_bytes: Vec<u8>,
+    /// `None` while the KeyPackage is still claimable; `Some(group_id)`
+    /// after a successful CAS claim. The CAS guarantees at-most-one
+    /// claim across concurrent Welcomes.
+    pub claimed_by: Option<String>,
+    /// Unix seconds at which the CAS claim happened (mirrors
+    /// `claimed_by`).
+    pub consumed_at: Option<i64>,
+    pub created_at: i64,
+}
+
+/// G3.S1 — single Welcome envelope queued for a recipient device.
+///
+/// The reducer's `apply_welcome_enqueue` appends one row per Welcome
+/// fanout target; the recipient device drains its queue via
+/// `GET /api/v1/mls/welcomes/pending`, which marks each delivered row
+/// with `delivered_at = now()` so a re-poll won't redeliver.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MlsWelcome {
+    /// Canonical `cx:mls_welcome:<uuid>` identifier.
+    pub id: String,
+    /// MLS group the Welcome admits the recipient into.
+    pub group_id: String,
+    pub recipient_actor_did: String,
+    pub recipient_device_id: String,
+    /// Opaque MLSMessage / Welcome bytes per RFC 9420 §12.4.3.
+    pub welcome_bytes: Vec<u8>,
+    /// References the KeyPackage that was claimed to produce this
+    /// Welcome (per `MlsKeyPackage::id`). Audit trail only — the
+    /// reducer does not re-validate the claim at delivery time.
+    pub key_package_id: String,
+    pub enqueued_at: i64,
+    /// Unix seconds the recipient first drained this Welcome. `None`
+    /// while pending.
+    pub delivered_at: Option<i64>,
+}
+
+/// G3.S1 — per-group MLS commit-epoch projection.
+///
+/// Each successful `apply_commit_epoch` bumps `epoch` by exactly +1
+/// from `expected_prev_epoch`; out-of-order or stale commits leave the
+/// row untouched and the reducer returns `Rejected { reason:
+/// "mls_epoch_skew" }`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MlsCommitEpoch {
+    /// MLS group id (`cx:mls_group:<...>`).
+    pub group_id: String,
+    /// Monotonic epoch counter. Starts at 0 before the first commit;
+    /// each commit bumps by +1.
+    pub epoch: u64,
+    /// DID of the committer (the `leader` per MLS terminology — the
+    /// member whose Commit was accepted).
+    pub leader_actor_did: String,
+    pub committed_at: i64,
 }
 
 /// Server-side Place state cache. Mirrors the `projection_places` table.
@@ -584,6 +729,18 @@ pub enum ProjectionEffect {
     AgentProjectionUpdated {
         agent_did: String,
     },
+    /// G3.S1 — MLS lifecycle effect. One variant covers all four
+    /// reducer paths (publish / claim / welcome_enqueue / commit_epoch)
+    /// so the routing layer can dispatch on `MlsEffect` without
+    /// growing four near-identical `ProjectionEffect` arms.
+    Mls(MlsEffect),
+    /// G3.S2 — `cx.realm.policy_server` projected into the
+    /// `cx.component.realm.policy_server.v1` cas-register cell + the
+    /// `realm_policy_servers` structured cache.
+    RealmPolicyServerProjected {
+        realm_id: String,
+        policy_server_did: String,
+    },
     /// State-machine rejected the operation per
     /// `common-fields.md §5.1`. Routing layer maps this to HTTP 412
     /// `failed_precondition` with the canonical reason_code.
@@ -591,6 +748,42 @@ pub enum ProjectionEffect {
         reason: String,
     },
     Ignored,
+}
+
+/// G3.S1 — discriminated effect emitted by the MLS reducer helpers.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MlsEffect {
+    /// `apply_keypackage_publish` — a fresh KeyPackage row was stored
+    /// for `(actor_did, device_id)`.
+    KeyPackagePublished {
+        keypackage_id: String,
+        actor_did: String,
+        device_id: String,
+    },
+    /// `apply_keypackage_claim` — the named KeyPackage was atomically
+    /// claimed for `group_id`. CAS guarantees at-most-one of these per
+    /// `keypackage_id`.
+    KeyPackageClaimed {
+        keypackage_id: String,
+        group_id: String,
+        consumed_at: i64,
+    },
+    /// `apply_welcome_enqueue` — a Welcome envelope was appended to the
+    /// per-`(recipient_actor_did, recipient_device_id)` queue.
+    WelcomeEnqueued {
+        welcome_id: String,
+        recipient_actor_did: String,
+        recipient_device_id: String,
+        group_id: String,
+    },
+    /// `apply_commit_epoch` — the group's epoch was bumped from
+    /// `previous_epoch` to `new_epoch`.
+    CommitEpochAdvanced {
+        group_id: String,
+        previous_epoch: u64,
+        new_epoch: u64,
+        leader_actor_did: String,
+    },
 }
 
 /// Which Place lifecycle transition is being attempted. Used by
@@ -840,6 +1033,30 @@ fn apply_flow_track_touch_dispatch(
 ) -> ProjectionEffect {
     s.apply_flow_track_touch(op, op.created_at)
 }
+
+fn discussion_realm_patch(payload: &Value) -> Option<Option<String>> {
+    if let Some(value) = payload.get("discussion_realm_ref") {
+        return Some(value.as_str().map(ToOwned::to_owned));
+    }
+    let patch_value = payload
+        .get("patch")
+        .and_then(Value::as_object)
+        .and_then(|patch| patch.get("discussion_realm_ref"))?;
+    match patch_value {
+        Value::Null => Some(None),
+        Value::String(value) => Some(Some(value.clone())),
+        Value::Object(op) => match op.get("$op").and_then(Value::as_str) {
+            Some("unset") => Some(None),
+            Some("set") => op
+                .get("value")
+                .and_then(Value::as_str)
+                .map(|value| Some(value.to_owned())),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 fn apply_morph_create_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
@@ -971,6 +1188,44 @@ fn apply_realm_audit_policy_downgrade_dispatch(
     s.apply_realm_audit_policy_downgrade(op, op.created_at)
 }
 
+// ── G3.S1: MLS lifecycle dispatch adapters ────────────────────────────
+//
+// Each adapter forwards to the free function in `reducer::mls`. The
+// inline `ProjectionState` impls stay out of `reducer.rs` so the MLS
+// module can grow independently (see top-level `pub mod mls;`).
+
+fn apply_mls_keypackage_publish_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    mls::apply_keypackage_publish(s, op)
+}
+
+fn apply_mls_keypackage_claim_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    mls::apply_keypackage_claim(s, op)
+}
+
+fn apply_mls_welcome_enqueue_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    mls::apply_welcome_enqueue(s, op)
+}
+
+fn apply_mls_commit_epoch_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    mls::apply_commit_epoch(s, op)
+}
+
 /// R1.2 — pure validation for a `cx.member.state{join,routable}`
 /// `delivery_binding` against a projected
 /// `cx.realm.delivery_binding_policy` payload. Returns `Ok(())` when the
@@ -1021,7 +1276,9 @@ fn enforce_delivery_binding_policy(
         .map(|arr| arr.iter().filter_map(Value::as_str).collect())
         .unwrap_or_default();
     if !allowed_recipients.is_empty()
-        && !allowed_recipients.iter().any(|s| *s == recipient_service_did)
+        && !allowed_recipients
+            .iter()
+            .any(|s| *s == recipient_service_did)
     {
         return Err("recipient_service_not_allowed");
     }
@@ -1119,7 +1376,89 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
         CX_SPACE_AUDIT_POLICY_DOWNGRADE,
         apply_realm_audit_policy_downgrade_dispatch,
     );
+    // G3.S1: MLS lifecycle. KeyPackage publish/claim (atomic CAS),
+    // Welcome to-device persistence, commit_epoch monotonic bump.
+    // Deferred (TODO(G3.S1-followup)): governance_binding, covered_frontier,
+    // decryption_pending, minimal metadata. See `reducer/mls.rs`.
+    m.insert(
+        CX_MLS_KEYPACKAGE_PUBLISH,
+        apply_mls_keypackage_publish_dispatch,
+    );
+    m.insert(CX_MLS_KEYPACKAGE_CLAIM, apply_mls_keypackage_claim_dispatch);
+    m.insert(CX_MLS_WELCOME_ENQUEUE, apply_mls_welcome_enqueue_dispatch);
+    m.insert(CX_MLS_COMMIT_EPOCH, apply_mls_commit_epoch_dispatch);
+    // G3.S9: extensions (applet/bot/tsp)
+    m.insert(CX_EXTENSIONS_BOT_REGISTER, apply_bot_register);
+    m.insert(CX_EXTENSIONS_BOT_REVOKE, apply_bot_revoke);
+    m.insert(
+        CX_EXTENSIONS_TSP_TRANSPORT_DECLARE,
+        apply_tsp_transport_declare,
+    );
+    m.insert(CX_EXTENSIONS_TSP_ROUTE_ESTABLISH, apply_tsp_route_establish);
+    m.insert(CX_EXTENSIONS_TSP_AUDIT_APPEND, apply_tsp_audit_append);
+    // G3.S2: policy server cell
+    m.insert(CX_REALM_POLICY_SERVER, apply_realm_policy_server_dispatch);
     m
+}
+
+// G3.S2: dispatch adapter for `cx.realm.policy_server`. The reducer
+// helper lives in the dedicated `reducer::realm_policy_server` module;
+// this adapter normalises its `(state, op) -> effect` signature to the
+// registry's `(state, op, hlc) -> effect` shape.
+fn apply_realm_policy_server_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    crate::reducer::realm_policy_server::apply_realm_policy_server(s, op)
+}
+
+// G3.S9 — adapter dispatches for the extensions module. These call
+// into the process-local registries in
+// `routing::extensions::{bot_actor, tsp}` (which own the structured
+// state for the stub) and always return `ProjectionEffect::Ignored`
+// because the central `ProjectionState` has no bot/tsp fields yet.
+// Full integration is a follow-up — see
+// `routing::extensions::mod.rs` TODO(G3.S9-followup).
+fn apply_bot_register(
+    _s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    let _ = crate::routing::extensions::bot_actor::apply_bot_register(op);
+    ProjectionEffect::Ignored
+}
+fn apply_bot_revoke(
+    _s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    let _ = crate::routing::extensions::bot_actor::apply_bot_revoke(op);
+    ProjectionEffect::Ignored
+}
+fn apply_tsp_transport_declare(
+    _s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    let _ = crate::routing::extensions::tsp::apply_tsp_transport_declare(op);
+    ProjectionEffect::Ignored
+}
+fn apply_tsp_route_establish(
+    _s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    let _ = crate::routing::extensions::tsp::apply_tsp_route_establish(op);
+    ProjectionEffect::Ignored
+}
+fn apply_tsp_audit_append(
+    _s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    let _ = crate::routing::extensions::tsp::apply_tsp_audit_append(op);
+    ProjectionEffect::Ignored
 }
 
 static APPLY_REGISTRY: std::sync::LazyLock<std::collections::HashMap<&'static str, ApplyFn>> =
@@ -1930,6 +2269,22 @@ impl ProjectionState {
                 reason: "realm_link_status_invalid".to_owned(),
             };
         }
+        // G3.S5 — cycle detection. Only `active` links on the directed
+        // governance kinds participate (see
+        // `reducer::realm_links::CYCLE_CHECKED_LINK_KINDS`). DFS from
+        // the proposed `target_realm_id` back to `realm_id`: if a path
+        // already exists, the new edge would close it into a cycle and
+        // we reject with `realm_link_cycle`. Rejected / tombstoned
+        // status flips are admitted unconditionally — they sever the
+        // edge rather than introduce one.
+        if status == "active"
+            && realm_links::is_cycle_checked_kind(link_kind)
+            && realm_links::path_exists(self, target_realm_id, &realm_id)
+        {
+            return ProjectionEffect::Rejected {
+                reason: "realm_link_cycle".to_owned(),
+            };
+        }
         let label = operation
             .payload
             .get("label")
@@ -2438,10 +2793,12 @@ impl ProjectionState {
                         // `patch.title: "..."` (direct-value sugar)
                         Value::String(s) => Some(s.clone()),
                         // `patch.title: { "$op": "set", "value": "..." }`
-                        Value::Object(op) if op.get("$op").and_then(Value::as_str)
-                            == Some("set") =>
+                        Value::Object(op)
+                            if op.get("$op").and_then(Value::as_str) == Some("set") =>
                         {
-                            op.get("value").and_then(Value::as_str).map(ToOwned::to_owned)
+                            op.get("value")
+                                .and_then(Value::as_str)
+                                .map(ToOwned::to_owned)
                         }
                         _ => None,
                     })
@@ -2494,9 +2851,7 @@ impl ProjectionState {
             }
         }
         let projected_security_class = self.realm_security_class(&space_id);
-        let effective_security_class = payload_security_class
-            .clone()
-            .or(projected_security_class);
+        let effective_security_class = payload_security_class.clone().or(projected_security_class);
         // Constraint: high_assurance forbids federation_policy=open. The
         // projected federation_policy is computed by taking the payload
         // value if present, otherwise the prior cell value.
@@ -3073,6 +3428,18 @@ impl ProjectionState {
             .get("summary")
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned);
+        let discussion_realm_ref = object
+            .get("discussion_realm_ref")
+            .and_then(|v| v.as_str())
+            .filter(|value| !value.trim().is_empty())
+            .map(ToOwned::to_owned);
+        if let Some(realm_id) = discussion_realm_ref.as_deref()
+            && !self.realm_exists_for_discussion_ref(realm_id)
+        {
+            return ProjectionEffect::Rejected {
+                reason: "orphan_discussion_realm_ref".to_owned(),
+            };
+        }
         let space_id = object
             .get("space_id")
             .and_then(|v| v.as_str())
@@ -3104,6 +3471,12 @@ impl ProjectionState {
             updated_at: None,
         };
         self.flows.insert(flow_id.clone(), projection);
+        if let Some(realm_id) = discussion_realm_ref {
+            self.flow_discussion_realms
+                .insert(flow_id.clone(), realm_id);
+        } else {
+            self.flow_discussion_realms.remove(&flow_id);
+        }
 
         ProjectionEffect::FlowLifecycle {
             flow_id,
@@ -3129,6 +3502,14 @@ impl ProjectionState {
                 reason: "flow_update_missing_flow_id".to_owned(),
             };
         };
+        let discussion_update = discussion_realm_patch(&operation.payload);
+        if let Some(Some(realm_id)) = discussion_update.as_ref()
+            && !self.realm_exists_for_discussion_ref(realm_id)
+        {
+            return ProjectionEffect::Rejected {
+                reason: "orphan_discussion_realm_ref".to_owned(),
+            };
+        }
         let Some(flow) = self.flows.get_mut(&flow_id) else {
             return ProjectionEffect::Ignored;
         };
@@ -3144,6 +3525,17 @@ impl ProjectionState {
             }
             if let Some(summary) = patch.get("summary").and_then(|v| v.as_str()) {
                 flow.summary = Some(summary.to_owned());
+            }
+        }
+        if let Some(update) = discussion_update {
+            match update {
+                Some(realm_id) => {
+                    self.flow_discussion_realms
+                        .insert(flow_id.clone(), realm_id);
+                }
+                None => {
+                    self.flow_discussion_realms.remove(&flow_id);
+                }
             }
         }
         flow.updated_by = operation
@@ -3683,6 +4075,30 @@ impl ProjectionState {
 
     // ── Query helpers ──
 
+    fn realm_exists_for_discussion_ref(&self, realm_id: &str) -> bool {
+        if self.space_is_destroyed(realm_id) {
+            return false;
+        }
+        self.space_states.contains_key(realm_id) || self.space_create_log(realm_id).is_some()
+    }
+
+    /// Return the linked Realm that hosts `flow_id`'s discussion track,
+    /// when the Flow has been upgraded to an independent discussion Realm.
+    pub fn discussion_realm_for_flow(&self, flow_id: &str) -> Option<&str> {
+        self.flow_discussion_realms.get(flow_id).map(String::as_str)
+    }
+
+    /// Resolve the effective Realm for discussion-track writes. Without a
+    /// linked Realm override, discussion messages stay in the source Realm.
+    pub fn discussion_space_for_flow<'a>(
+        &'a self,
+        flow_id: &str,
+        source_space_id: &'a str,
+    ) -> &'a str {
+        self.discussion_realm_for_flow(flow_id)
+            .unwrap_or(source_space_id)
+    }
+
     /// Get all non-redacted messages for a space, sorted by creation time.
     pub fn messages_for_space(&self, space_id: &str) -> Vec<&MessageState> {
         let mut msgs: Vec<_> = self
@@ -3954,6 +4370,37 @@ impl ProjectionState {
         self.capability_derived.get(capability_id)
     }
 
+    /// G3.S2 — read the most-recent `cx.realm.policy_server` projection
+    /// for a Realm, walking up the `governed_by` link chain when the
+    /// realm itself has no row of its own (org-level fallback). Returns
+    /// `None` if neither the realm nor any ancestor declared a policy
+    /// server. The walk caps at depth 8 to avoid runaway cycles —
+    /// `realm_links.rs` does cycle detection on writes, but the cap is
+    /// a defence-in-depth for projections that may have hydrated from
+    /// pre-cycle-detection persistence.
+    pub fn realm_policy_server_config(&self, realm_id: &str) -> Option<&RealmPolicyServerConfig> {
+        if let Some(cfg) = self.realm_policy_servers.get(realm_id) {
+            return Some(cfg);
+        }
+        // Org-level fallback: walk `governed_by` outbound links.
+        let mut cursor = realm_id.to_owned();
+        for _ in 0..8 {
+            let next = self.realm_links.get(&cursor).and_then(|rows| {
+                rows.iter()
+                    .find(|r| r.link_kind == "governed_by" && r.status == "active")
+                    .map(|r| r.target_realm_id.clone())
+            })?;
+            if next == cursor {
+                return None;
+            }
+            if let Some(cfg) = self.realm_policy_servers.get(&next) {
+                return Some(cfg);
+            }
+            cursor = next;
+        }
+        None
+    }
+
     /// R3.3 — read the ordered audit log of
     /// `cx.realm.audit_policy_downgrade` entries for a Realm.
     pub fn realm_audit_downgrades(&self, realm_id: &str) -> &[RealmAuditDowngradeEntry] {
@@ -3982,9 +4429,9 @@ impl ProjectionState {
             }
         }
         // Fallback: check the create-log cell's last entry.
-        if let Ok(create_cell) = contrix_sdk::CellRef::new(format!(
-            "cx:cell:cx.component.realm.create.v1:{realm_id}"
-        )) {
+        if let Ok(create_cell) =
+            contrix_sdk::CellRef::new(format!("cx:cell:cx.component.realm.create.v1:{realm_id}"))
+        {
             if let Some(arr) = self.cell_value(&create_cell).and_then(Value::as_array) {
                 if let Some(last) = arr.last() {
                     if let Some(s) = last.get("security_class").and_then(Value::as_str) {
@@ -4292,6 +4739,12 @@ mod tests {
         let mut state = ProjectionState::new();
         let hlc = ServerHlc::new("test");
 
+        // `membership=join` MUST carry `delivery_status` per
+        // contrix-spec/spec/v1/zh/governance/join-policy.md §5.1.1.
+        // We use `unroutable` so the projection write path does not
+        // additionally require a projected `cx.realm.delivery_binding_policy`
+        // cell (`routable` joins are exercised by the delivery-binding
+        // suite).
         state.apply(
             &make_operation(
                 crate::kinds::CX_MEMBER_STATE,
@@ -4299,7 +4752,8 @@ mod tests {
                 serde_json::json!({
                     "actor_id": "did:web:bob",
                     "membership": "join",
-                    "role": "member"
+                    "role": "member",
+                    "delivery_status": "unroutable"
                 }),
             ),
             &hlc,
@@ -4423,6 +4877,11 @@ mod tests {
         let mut state = ProjectionState::new();
         let hlc = ServerHlc::new("test");
 
+        // `membership=join` MUST carry `delivery_status` per
+        // contrix-spec/spec/v1/zh/governance/join-policy.md §5.1.1.
+        // `unroutable` keeps the projection focused on the FSM cell +
+        // structured cache write paths without requiring a projected
+        // realm delivery-binding policy.
         state.apply(
             &make_operation(
                 crate::kinds::CX_MEMBER_STATE,
@@ -4430,7 +4889,8 @@ mod tests {
                 serde_json::json!({
                     "actor_id": "did:web:alice",
                     "membership": "join",
-                    "role": "admin"
+                    "role": "admin",
+                    "delivery_status": "unroutable"
                 }),
             ),
             &hlc,

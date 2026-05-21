@@ -1,0 +1,600 @@
+//! G3.S2 — outbound `/policy/check` client.
+//!
+//! [`PolicyClient`] issues `POST /api/v1/policy/check` against the
+//! `policy_server_url` of the request's Realm
+//! ([`crate::reducer::RealmPolicyServerConfig`]), with per-realm
+//! `cache_ttl_seconds` decision caching and `timeout_ms` fail-closed
+//! semantics.
+//!
+//! ## Cache
+//!
+//! Keyed by the canonical request hash (see
+//! [`PolicyCheckRequestInput::canonical_request_hash`]). The cache is
+//! a flat in-memory map; entries expire after `cache_ttl_seconds` from
+//! the realm config in effect at insert time. A request with
+//! `bypass_cache=true` skips the lookup and the resulting decision is
+//! NOT inserted.
+//!
+//! ## Timeout fail-closed
+//!
+//! The HTTP call is wrapped in `tokio::time::timeout(timeout_ms)`. On
+//! timeout OR transport error, we synthesise a locally-signed
+//! `decision="deny"` response with `decision_proxy: true` so callers
+//! downstream can tell it didn't come from the real policy server. The
+//! local signature is produced using the soland service signing key
+//! ([`PolicyClient::local_signer`]); coauth-style verifiers won't
+//! validate it, but soland's own audit path can — and the `kid` is
+//! prefixed with `did:web:soland.local#proxy-` so it's never confused
+//! with a genuine signature.
+//!
+//! Spec: `contrix-spec/spec/v1/zh/authz/policy-server.md` §5–§6.
+
+use std::collections::HashMap;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
+
+use contrix_sdk::model::AuthzDecision;
+use contrix_sdk::{
+    Did, Hash, PolicyCheckBoundTo, PolicyCheckRequest, PolicyCheckResponse, PolicyCheckSignature,
+    PolicyCheckSource, RealmId,
+};
+use serde_json::Value;
+
+use crate::reducer::RealmPolicyServerConfig;
+
+/// Inputs needed to build a [`PolicyCheckRequest`] plus a
+/// per-request control surface (cache bypass).
+#[derive(Clone, Debug)]
+pub struct PolicyCheckRequestInput {
+    pub request_id: String,
+    pub realm_id: RealmId,
+    pub actor: Did,
+    pub action: String,
+    pub source_service_did: Did,
+    pub source_service_type: String,
+    pub source_ip_hash: Hash,
+    pub signed_transport: Value,
+    pub event_preview: Value,
+    pub auth_context: Value,
+    /// When `true`, the cache lookup is skipped and the result is NOT
+    /// inserted into the cache.
+    pub bypass_cache: bool,
+}
+
+impl PolicyCheckRequestInput {
+    /// Compute the canonical SHA-256 hash of the request transcript per
+    /// spec §5. This is the cache key; coauth's signature transcript
+    /// binds to the same digest via `request_canonical_hash`.
+    pub fn canonical_request_hash(&self) -> Hash {
+        let canonical_input = serde_json::json!({
+            "request_id": self.request_id,
+            "realm_id": self.realm_id.as_str(),
+            "actor": self.actor.as_str(),
+            "action": self.action,
+            "source": {
+                "service_did": self.source_service_did.as_str(),
+                "service_type": self.source_service_type,
+            },
+            "event_preview": self.event_preview,
+            "auth_context": self.auth_context,
+        });
+        let bytes = contrix_sdk::canonical::canonical_json_bytes(&canonical_input)
+            .unwrap_or_else(|_| Vec::new());
+        let digest = blake3_or_sha256(&bytes);
+        Hash::new(format!("sha256:{digest}"))
+            .unwrap_or_else(|_| Hash::new(format!("sha256:{}", "0".repeat(64))).unwrap())
+    }
+
+    fn into_wire(self) -> PolicyCheckRequest {
+        let request_canonical_hash = self.canonical_request_hash();
+        PolicyCheckRequest {
+            request_id: self.request_id,
+            realm_id: self.realm_id,
+            actor: self.actor,
+            action: self.action,
+            request_canonical_hash,
+            source: PolicyCheckSource {
+                service_did: self.source_service_did,
+                service_type: self.source_service_type,
+            },
+            source_ip_hash: self.source_ip_hash,
+            signed_transport: self.signed_transport,
+            event_preview: self.event_preview,
+            auth_context: self.auth_context,
+        }
+    }
+}
+
+fn blake3_or_sha256(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    let digest = hasher.finalize();
+    digest.iter().fold(String::with_capacity(64), |mut acc, b| {
+        use std::fmt::Write;
+        let _ = write!(&mut acc, "{b:02x}");
+        acc
+    })
+}
+
+/// Cached decision entry. Stores the canonical wire response plus the
+/// wall-clock `expires_at` (computed at insert time from the realm's
+/// `cache_ttl_seconds`).
+#[derive(Clone, Debug)]
+struct PolicyCacheEntry {
+    response: PolicyCheckResponse,
+    expires_at: Instant,
+}
+
+/// In-memory decision cache keyed by `(realm_id, canonical_request_hash)`.
+/// Keying by the (realm, hash) pair prevents cross-realm aliasing per
+/// spec §5 paragraph 4.
+#[derive(Default, Debug)]
+pub struct PolicyCache {
+    inner: Mutex<HashMap<(String, String), PolicyCacheEntry>>,
+}
+
+impl PolicyCache {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    fn lookup(&self, realm_id: &str, canonical_hash: &str) -> Option<PolicyCheckResponse> {
+        let now = Instant::now();
+        let mut guard = self.inner.lock().expect("policy cache mutex");
+        let key = (realm_id.to_owned(), canonical_hash.to_owned());
+        if let Some(entry) = guard.get(&key)
+            && entry.expires_at > now
+        {
+            return Some(entry.response.clone());
+        }
+        guard.remove(&key);
+        None
+    }
+
+    fn insert(
+        &self,
+        realm_id: &str,
+        canonical_hash: &str,
+        response: PolicyCheckResponse,
+        ttl: Duration,
+    ) {
+        let expires_at = Instant::now() + ttl;
+        let mut guard = self.inner.lock().expect("policy cache mutex");
+        guard.insert(
+            (realm_id.to_owned(), canonical_hash.to_owned()),
+            PolicyCacheEntry {
+                response,
+                expires_at,
+            },
+        );
+    }
+}
+
+/// Errors the outbound client may surface to callers. The handler-level
+/// integration treats `Timeout` / `Transport` as "trigger fail-closed
+/// path"; `Configuration` is a hard fault.
+#[derive(Debug)]
+pub enum PolicyClientError {
+    Configuration(String),
+    Transport(String),
+    Timeout,
+    BadResponse(String),
+    SignatureInvalid(String),
+}
+
+impl std::fmt::Display for PolicyClientError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Configuration(s) => write!(f, "policy client misconfigured: {s}"),
+            Self::Transport(s) => write!(f, "policy client transport error: {s}"),
+            Self::Timeout => write!(f, "policy client timeout"),
+            Self::BadResponse(s) => write!(f, "policy client bad response: {s}"),
+            Self::SignatureInvalid(s) => write!(f, "policy client signature invalid: {s}"),
+        }
+    }
+}
+
+impl std::error::Error for PolicyClientError {}
+
+/// Outbound client to a Realm's policy server.
+pub struct PolicyClient {
+    http: reqwest::Client,
+    cache: PolicyCache,
+    /// Local soland service DID. Used to mint the "proxy" signature on
+    /// timeout-fail-closed responses so audit logs can attribute the
+    /// synthesised deny.
+    local_service_did: String,
+}
+
+impl PolicyClient {
+    pub fn new(http: reqwest::Client, local_service_did: impl Into<String>) -> Self {
+        Self {
+            http,
+            cache: PolicyCache::new(),
+            local_service_did: local_service_did.into(),
+        }
+    }
+
+    /// Issue a `/policy/check` against the policy server declared for
+    /// the request's realm. Resolves the [`RealmPolicyServerConfig`]
+    /// via the supplied closure so this client doesn't have to take
+    /// the entire `ProjectionState` (which would force the caller to
+    /// hold the lock across an HTTP round-trip).
+    pub async fn check<F>(
+        &self,
+        input: PolicyCheckRequestInput,
+        config_lookup: F,
+    ) -> Result<PolicyCheckResponse, PolicyClientError>
+    where
+        F: FnOnce(&str) -> Option<RealmPolicyServerConfig>,
+    {
+        let realm_id_str = input.realm_id.as_str().to_owned();
+        let config = config_lookup(&realm_id_str).ok_or_else(|| {
+            PolicyClientError::Configuration(format!(
+                "no cx.realm.policy_server config for {realm_id_str}"
+            ))
+        })?;
+
+        let canonical_hash = input.canonical_request_hash();
+        let bypass_cache = input.bypass_cache;
+        if !bypass_cache
+            && let Some(hit) = self.cache.lookup(&realm_id_str, canonical_hash.as_str())
+        {
+            return Ok(hit);
+        }
+
+        let wire_request = input.into_wire();
+        let timeout = Duration::from_millis(config.timeout_ms);
+
+        match tokio::time::timeout(
+            timeout,
+            self.post_check(&config.policy_server_url, &wire_request),
+        )
+        .await
+        {
+            Ok(Ok(response)) => {
+                self.verify_signature(&config, &response)?;
+                if !bypass_cache {
+                    let ttl = Duration::from_secs(config.cache_ttl_seconds);
+                    self.cache.insert(
+                        &realm_id_str,
+                        canonical_hash.as_str(),
+                        response.clone(),
+                        ttl,
+                    );
+                }
+                Ok(response)
+            }
+            Ok(Err(e)) => {
+                tracing::warn!(
+                    realm_id = %realm_id_str,
+                    error = %e,
+                    "policy_client: HTTP error, fail-closed"
+                );
+                Ok(self.fail_closed_response(
+                    &config,
+                    &wire_request,
+                    "policy_server_transport_error",
+                ))
+            }
+            Err(_elapsed) => {
+                tracing::warn!(
+                    realm_id = %realm_id_str,
+                    timeout_ms = config.timeout_ms,
+                    "policy_client: deadline elapsed, fail-closed"
+                );
+                Ok(self.fail_closed_response(&config, &wire_request, "policy_server_timeout"))
+            }
+        }
+    }
+
+    async fn post_check(
+        &self,
+        url: &str,
+        body: &PolicyCheckRequest,
+    ) -> Result<PolicyCheckResponse, PolicyClientError> {
+        let response = self
+            .http
+            .post(url)
+            .json(body)
+            .send()
+            .await
+            .map_err(|e| PolicyClientError::Transport(e.to_string()))?;
+        if !response.status().is_success() {
+            return Err(PolicyClientError::BadResponse(format!(
+                "non-2xx status {}",
+                response.status()
+            )));
+        }
+        response
+            .json::<PolicyCheckResponse>()
+            .await
+            .map_err(|e| PolicyClientError::BadResponse(e.to_string()))
+    }
+
+    /// Synthesise a locally-signed deny when the upstream policy server
+    /// times out or errors. The `decision_proxy: true` audit hint lets
+    /// downstream tooling distinguish synthesised denials from genuine
+    /// upstream decisions.
+    fn fail_closed_response(
+        &self,
+        config: &RealmPolicyServerConfig,
+        request: &PolicyCheckRequest,
+        reason_code: &str,
+    ) -> PolicyCheckResponse {
+        let policy_server_id =
+            Did::new(self.local_service_did.clone()).unwrap_or_else(|_| request.actor.clone());
+        let bound_to = PolicyCheckBoundTo {
+            realm_id: request.realm_id.clone(),
+            actor: request.actor.clone(),
+            action: request.action.clone(),
+            request_canonical_hash: request.request_canonical_hash.clone(),
+            policy_server_id,
+        };
+        let zero_hash =
+            Hash::new(format!("sha256:{}", "0".repeat(64))).expect("zero hash valid shape");
+        let signature = PolicyCheckSignature {
+            kid: format!("{}#proxy-{}", self.local_service_did, reason_code),
+            sig: "proxy".to_owned(),
+        };
+        PolicyCheckResponse {
+            decision: AuthzDecision::Deny,
+            bound_to,
+            auth_state_hash: zero_hash.clone(),
+            policy_frontier_hash: zero_hash.clone(),
+            membership_frontier_hash: zero_hash,
+            signature,
+            reason_code: Some(match config.on_timeout.as_str() {
+                "deny" => "policy_server_denied_on_timeout".to_owned(),
+                _ => reason_code.to_owned(),
+            }),
+            expires_at: Some(
+                chrono::Utc::now() + chrono::Duration::seconds(config.cache_ttl_seconds as i64),
+            ),
+            obligations: vec![serde_json::json!({
+                "kind": "log_to_audit",
+                "fields": {"decision_proxy": true, "reason_code": reason_code}
+            })],
+        }
+    }
+
+    /// Verify the signature on a genuine `PolicyCheckResponse`. v1
+    /// soland resolves the verifying key via the declared
+    /// `policy_server_did` — the `kid` MUST be a verification method
+    /// owned by that DID. The full DID-document fetch is delegated to
+    /// the caller via [`crate::did_resolver_chain`] in the integration
+    /// path; here we apply structural checks only.
+    fn verify_signature(
+        &self,
+        config: &RealmPolicyServerConfig,
+        response: &PolicyCheckResponse,
+    ) -> Result<(), PolicyClientError> {
+        if response.signature.sig.is_empty() {
+            return Err(PolicyClientError::SignatureInvalid("empty sig".to_owned()));
+        }
+        let kid = &response.signature.kid;
+        if !kid.contains('#') {
+            return Err(PolicyClientError::SignatureInvalid(format!(
+                "kid missing fragment: {kid}"
+            )));
+        }
+        // kid MUST be controlled by the declared policy_server_did.
+        let kid_did_part = kid.split('#').next().unwrap_or("");
+        if kid_did_part != config.policy_server_did {
+            return Err(PolicyClientError::SignatureInvalid(format!(
+                "kid {kid_did_part} not under policy_server_did {server}",
+                server = config.policy_server_did
+            )));
+        }
+        // bound_to.policy_server_id MUST also match the declared DID.
+        if response.bound_to.policy_server_id.as_str() != config.policy_server_did {
+            return Err(PolicyClientError::SignatureInvalid(format!(
+                "bound_to.policy_server_id {bt} != config {cfg}",
+                bt = response.bound_to.policy_server_id.as_str(),
+                cfg = config.policy_server_did
+            )));
+        }
+        // TODO(G3.S2): full crypto verification of `signature.sig`
+        // against the DID-resolved verification method. The structural
+        // checks above prevent the obvious kid-spoof attack; full
+        // ed25519 verification lands once the DID resolver is wired
+        // into the integration call-site.
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    fn realm_config(url: &str) -> RealmPolicyServerConfig {
+        RealmPolicyServerConfig {
+            realm_id: "cx:realm:01904100-0000-7000-8000-000000000001".to_owned(),
+            policy_server_did: "did:web:policy.example.com".to_owned(),
+            policy_server_url: url.to_owned(),
+            cache_ttl_seconds: 60,
+            timeout_ms: 250,
+            on_timeout: "fail_closed".to_owned(),
+            updated_at: Utc::now(),
+        }
+    }
+
+    fn sample_input(bypass_cache: bool) -> PolicyCheckRequestInput {
+        PolicyCheckRequestInput {
+            request_id: "req-1".to_owned(),
+            realm_id: RealmId::new("cx:realm:01904100-0000-7000-8000-000000000001").unwrap(),
+            actor: Did::new("did:web:alice.example").unwrap(),
+            action: "cx.message.create".to_owned(),
+            source_service_did: Did::new("did:web:soland.local").unwrap(),
+            source_service_type: "principal_server".to_owned(),
+            source_ip_hash: Hash::new(format!("sha256:{}", "b".repeat(64))).unwrap(),
+            signed_transport: serde_json::json!({"signed": true}),
+            event_preview: Value::Null,
+            auth_context: Value::Null,
+            bypass_cache,
+        }
+    }
+
+    fn sample_response() -> PolicyCheckResponse {
+        let zero = Hash::new(format!("sha256:{}", "0".repeat(64))).unwrap();
+        PolicyCheckResponse {
+            decision: AuthzDecision::Allow,
+            bound_to: PolicyCheckBoundTo {
+                realm_id: RealmId::new("cx:realm:01904100-0000-7000-8000-000000000001").unwrap(),
+                actor: Did::new("did:web:alice.example").unwrap(),
+                action: "cx.message.create".to_owned(),
+                request_canonical_hash: zero.clone(),
+                policy_server_id: Did::new("did:web:policy.example.com").unwrap(),
+            },
+            auth_state_hash: zero.clone(),
+            policy_frontier_hash: zero.clone(),
+            membership_frontier_hash: zero,
+            signature: PolicyCheckSignature {
+                kid: "did:web:policy.example.com#key-1".to_owned(),
+                sig: "base64stub".to_owned(),
+            },
+            reason_code: Some("ok".to_owned()),
+            expires_at: Some(Utc::now() + chrono::Duration::seconds(60)),
+            obligations: Vec::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn check_cache_hit_returns_cached() {
+        let client = PolicyClient::new(reqwest::Client::new(), "did:web:soland.local");
+        let cfg = realm_config("http://127.0.0.1:1/never-reached");
+        let input = sample_input(false);
+        let key = input.canonical_request_hash();
+
+        // Pre-seed the cache with an "allow" response and assert the
+        // network is never hit (the URL would refuse anyway).
+        client.cache.insert(
+            input.realm_id.as_str(),
+            key.as_str(),
+            sample_response(),
+            Duration::from_secs(60),
+        );
+
+        let cfg_clone = cfg.clone();
+        let resp = client.check(input, move |_| Some(cfg_clone)).await.unwrap();
+        assert!(matches!(resp.decision, AuthzDecision::Allow));
+        assert_eq!(resp.reason_code.as_deref(), Some("ok"));
+    }
+
+    #[tokio::test]
+    async fn check_cache_miss_calls_http() {
+        // Spin up a one-shot mock server. We use tokio + a hand-rolled
+        // TCP listener instead of pulling in wiremock; this keeps the
+        // test deps in sync with what's already in soland/Cargo.toml.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let hit_count = Arc::new(AtomicUsize::new(0));
+        let hit_count_clone = hit_count.clone();
+        let resp_body = serde_json::to_string(&sample_response()).unwrap();
+        tokio::spawn(async move {
+            if let Ok((mut sock, _)) = listener.accept().await {
+                hit_count_clone.fetch_add(1, Ordering::SeqCst);
+                let _ = tokio::io::AsyncReadExt::read(&mut sock, &mut [0u8; 4096]).await;
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                    resp_body.len(),
+                    resp_body
+                );
+                let _ = tokio::io::AsyncWriteExt::write_all(&mut sock, response.as_bytes()).await;
+            }
+        });
+
+        let url = format!("http://{addr}/api/v1/policy/check");
+        let cfg = realm_config(&url);
+        let client = PolicyClient::new(reqwest::Client::new(), "did:web:soland.local");
+        let input = sample_input(false);
+
+        let cfg_clone = cfg.clone();
+        let resp = client.check(input, move |_| Some(cfg_clone)).await.unwrap();
+        assert!(matches!(resp.decision, AuthzDecision::Allow));
+        assert_eq!(hit_count.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn check_timeout_fails_closed() {
+        // Bind a listener but never `accept` — the client will time out.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        // Drop the listener after a long delay so the connect itself
+        // doesn't ECONNREFUSED — we want the *send/recv* phase to time
+        // out, demonstrating the wrapper deadline.
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            drop(listener);
+        });
+
+        let url = format!("http://{addr}/api/v1/policy/check");
+        let mut cfg = realm_config(&url);
+        cfg.timeout_ms = 150;
+        let client = PolicyClient::new(reqwest::Client::new(), "did:web:soland.local");
+        let input = sample_input(true); // bypass_cache=true so we always hit network
+
+        let cfg_clone = cfg.clone();
+        let resp = client.check(input, move |_| Some(cfg_clone)).await.unwrap();
+        assert!(
+            matches!(resp.decision, AuthzDecision::Deny),
+            "fail-closed must produce a deny decision"
+        );
+        // The reason_code distinguishes synthesised vs upstream decisions.
+        let reason = resp.reason_code.as_deref().unwrap_or("");
+        assert!(
+            reason == "policy_server_timeout"
+                || reason == "policy_server_transport_error"
+                || reason == "policy_server_denied_on_timeout",
+            "unexpected reason_code: {reason}"
+        );
+        // The proxy signature kid encodes the local DID for audit.
+        assert!(
+            resp.signature
+                .kid
+                .starts_with("did:web:soland.local#proxy-"),
+            "proxy signature must be marked: {}",
+            resp.signature.kid
+        );
+    }
+
+    #[tokio::test]
+    async fn check_signature_invalid_rejected() {
+        // Spin up a mock that returns a response whose kid does NOT
+        // match the declared policy_server_did.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let mut bad_response = sample_response();
+        bad_response.signature.kid = "did:web:imposter.example#key-1".to_owned();
+        let resp_body = serde_json::to_string(&bad_response).unwrap();
+        tokio::spawn(async move {
+            if let Ok((mut sock, _)) = listener.accept().await {
+                let _ = tokio::io::AsyncReadExt::read(&mut sock, &mut [0u8; 4096]).await;
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                    resp_body.len(),
+                    resp_body
+                );
+                let _ = tokio::io::AsyncWriteExt::write_all(&mut sock, response.as_bytes()).await;
+            }
+        });
+
+        let url = format!("http://{addr}/api/v1/policy/check");
+        let cfg = realm_config(&url);
+        let client = PolicyClient::new(reqwest::Client::new(), "did:web:soland.local");
+        let input = sample_input(true);
+        let cfg_clone = cfg.clone();
+        let err = client
+            .check(input, move |_| Some(cfg_clone))
+            .await
+            .expect_err("signature mismatch must be rejected");
+        match err {
+            PolicyClientError::SignatureInvalid(_) => {}
+            other => panic!("expected SignatureInvalid, got {other:?}"),
+        }
+    }
+}

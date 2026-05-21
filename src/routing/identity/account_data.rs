@@ -16,8 +16,11 @@ use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Value, json};
 
+use super::device_messages::{
+    ACCOUNT_DATA_UPDATE_TYPE, BLOCKLIST_UPDATE_TYPE, fanout_actor_private_update,
+};
 use super::{AuthArgs, now};
 use crate::error::AppError;
 use crate::state::{AccountDataRecord, AppState};
@@ -87,6 +90,17 @@ fn entry_from(record: AccountDataRecord) -> AccountDataEntry {
     }
 }
 
+fn account_data_update_type(data_type: &str) -> &'static str {
+    if matches!(
+        data_type,
+        "cx.account.blocklist" | "cx.account.blocklist.v1"
+    ) {
+        BLOCKLIST_UPDATE_TYPE
+    } else {
+        ACCOUNT_DATA_UPDATE_TYPE
+    }
+}
+
 #[endpoint(
     operation_id = "cx.account_data.set",
     tags("account_data"),
@@ -146,6 +160,18 @@ async fn put_account_data(
         "account_data.set",
         serde_json::json!({"data_type": data_type}),
         "accepted",
+    );
+    fanout_actor_private_update(
+        state,
+        &session.actor,
+        &session.device_id,
+        account_data_update_type(&data_type),
+        json!({
+            "operation": "put",
+            "data_type": data_type,
+            "content": record.payload.clone(),
+            "updated_at": record.updated_at,
+        }),
     );
 
     if !existed {
@@ -232,6 +258,17 @@ async fn delete_account_data(
         "account_data.delete",
         serde_json::json!({"data_type": data_type}),
         "accepted",
+    );
+    fanout_actor_private_update(
+        state,
+        &session.actor,
+        &session.device_id,
+        account_data_update_type(&data_type),
+        json!({
+            "operation": "delete",
+            "data_type": data_type,
+            "deleted_at": now(),
+        }),
     );
 
     json_ok(serde_json::json!({"ok": true, "data_type": data_type}))

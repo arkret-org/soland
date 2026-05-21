@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -17,6 +18,7 @@ use crate::hlc::ServerHlc;
 use crate::object_storage::{ObjectStorage, build_object_storage};
 use crate::persistence::{MemoryPersistenceStore, PersistenceStore, PgPersistenceStore};
 use crate::reducer::ProjectionState;
+use crate::verified_profiles::VerifiedProfileDescriptor;
 
 // `did_resolver_chain.rs` lives at `src/did_resolver_chain.rs`; declare it as
 // a submodule of `state` so `AppState::new` can construct the resolver chain
@@ -146,6 +148,16 @@ pub struct AppState {
     /// `Utc::now()`; the notifications read-side filter uses it to flag
     /// rows as read. Same in-memory shape as the other two.
     pub notification_read_markers: Arc<Mutex<BTreeMap<String, chrono::DateTime<chrono::Utc>>>>,
+    /// Monotonic position allocator for to-device queues. Cursor ack uses
+    /// numeric `position <= ack_position` pruning, so positions must advance
+    /// even when multiple fanout writes land in the same wall-clock microsecond.
+    pub to_device_position_counter: Arc<AtomicI64>,
+    /// Holder-private consent cell projection keyed by
+    /// `(holder_did, peer_did, scope)`. This is the minimal G3.S4
+    /// reducer cache that backs `/api/v1/consent/cells/*` and the contact
+    /// gate; durable Move/Anchor cell hydration can replace the backing map
+    /// without changing the routing contract.
+    pub consent_cells: Arc<Mutex<BTreeMap<ConsentCellKey, ConsentCellRecord>>>,
     pub did_resolver: Arc<Mutex<CompositeDidResolver>>,
     /// Move/Anchor/Lattice runtime stores.
     /// In-memory backends from the SDK; production deployments will
@@ -197,6 +209,14 @@ pub struct AppState {
     /// service-wide `service_admin_signer` shortcut for endpoints that
     /// want operator attribution in the audit chain.
     pub admin_keystore: Arc<contrix_sdk::AdminKeyStore>,
+    /// G4.T3 — verified-profile descriptors loaded from the artifact path in
+    /// `SOLAND_VERIFIED_PROFILES_ARTIFACT` at startup. Filtered to entries
+    /// whose `service_role == "principal_server"` and additionally
+    /// cross-checked against the local `claimed_profiles[]` set inside
+    /// `describe.rs::apply_claim_level_partition`. Empty when the env var
+    /// is unset / file missing / file malformed — that's the dev-mode
+    /// invariant in service-surface.md §3.0.
+    pub verified_profiles: Arc<Vec<VerifiedProfileDescriptor>>,
 }
 
 #[derive(Clone, Debug)]
@@ -260,8 +280,36 @@ pub struct WebvhLogRecord {
 pub struct ContactRecord {
     pub requester: String,
     pub target: String,
+    pub scope: String,
     pub status: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ConsentCellKey {
+    pub holder: String,
+    pub peer: String,
+    pub scope: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct ConsentGrantDot {
+    pub dot: String,
+    pub valid_until: Option<chrono::DateTime<chrono::Utc>>,
+    pub granted_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ConsentCellRecord {
+    pub holder: String,
+    pub peer: String,
+    pub scope: String,
+    pub cell_id: String,
+    pub requested_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub grant_dots: BTreeMap<String, ConsentGrantDot>,
+    pub revoked_dots: BTreeSet<String>,
+    pub revoked_at: Option<chrono::DateTime<chrono::Utc>>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
@@ -388,6 +436,56 @@ pub struct FederationTransactionRecord {
     pub response: Value,
     pub received_at: chrono::DateTime<chrono::Utc>,
     pub processed_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+/// G3.S0 — one outbound federation HTTP POST queued for the
+/// `FederationDispatcher` background worker. See
+/// `routing/federation/outbox.rs` for the worker loop and
+/// `migrations/20260520000000_federation_outbox/up.sql` for the durable
+/// schema.
+///
+/// Timestamps are stored as unix-seconds (`i64`) to match the SQLite-style
+/// schema defined in the spec subset; the Pg-backed store maps them to
+/// `BIGINT`. The reason we don't use `TIMESTAMPTZ` here is so the SDK +
+/// in-memory backend share the exact same numeric encoding the wire
+/// receipts (`Idempotency-Key`, dispatcher logs) compare against.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FederationOutboxRecord {
+    /// ULID/UUID — primary key.
+    pub id: String,
+    /// Peer DID (mirrors `federation_peers[i]`; today we treat the
+    /// configured peer URL as both did + url because the discovery layer
+    /// resolving DID → service endpoints lands in a later milestone).
+    pub peer_did: String,
+    /// Fully-qualified peer base URL (no trailing slash) the dispatcher
+    /// concatenates with `endpoint` to form the POST target.
+    pub peer_url: String,
+    /// Endpoint path on the peer, e.g. `/api/v1/federation/push-operations`
+    /// or `/api/v1/federation/anchors`.
+    pub endpoint: String,
+    /// `Idempotency-Key` header value the dispatcher sends. Derived
+    /// deterministically from `(origin, resource_kind, resource_id)` so
+    /// retries collapse onto the same row server-side per
+    /// `federation.md` §8.5.
+    pub idempotency_key: String,
+    /// Canonical request body the dispatcher POSTs verbatim.
+    pub payload_json: String,
+    /// Number of completed delivery attempts (excluding the next one).
+    pub attempts: i32,
+    /// Unix seconds — earliest time the worker may pick this row.
+    pub next_attempt_at: i64,
+    /// Last observed HTTP status code, or `-1` after the worker gave up
+    /// (attempts cap reached on retryable error). `None` until the first
+    /// attempt completes.
+    pub last_status: Option<i32>,
+    /// First ~1 KiB of the most recent response body, for postmortem.
+    pub last_response_excerpt: Option<String>,
+    /// Unix seconds — when the row was enqueued.
+    pub created_at: i64,
+    /// Unix seconds — when delivery terminated (2xx success, permanent
+    /// 4xx failure, or the gave-up sentinel). `None` while the row is
+    /// still pending.
+    pub delivered_at: Option<i64>,
 }
 
 #[derive(Clone, Debug)]
@@ -766,6 +864,8 @@ impl AppState {
             handle_releases: Arc::new(Mutex::new(BTreeMap::new())),
             erased_actors: Arc::new(Mutex::new(BTreeSet::new())),
             notification_read_markers: Arc::new(Mutex::new(BTreeMap::new())),
+            to_device_position_counter: Arc::new(AtomicI64::new(now.timestamp_micros())),
+            consent_cells: Arc::new(Mutex::new(BTreeMap::new())),
             did_resolver,
             move_store: Arc::new(contrix_sdk::state_res::MemoryMoveStore::default()),
             anchor_store: Arc::new(contrix_sdk::state_res::MemoryAnchorStore::default()),
@@ -783,6 +883,29 @@ impl AppState {
             anchorer_signing_key,
             anchorer_signing_key_origin,
             admin_keystore,
+            // G4.T3 — load verified-profile descriptors at startup. The env
+            // var IS the feature flag; absence keeps the dev-mode
+            // verified_profiles=[] invariant. See
+            // crate::verified_profiles::load_from_env for the file
+            // schema and logging policy.
+            verified_profiles: crate::verified_profiles::load_from_env(),
+        }
+    }
+
+    pub fn next_to_device_position(&self) -> i64 {
+        let wall = chrono::Utc::now().timestamp_micros();
+        loop {
+            let current = self.to_device_position_counter.load(Ordering::Relaxed);
+            let next = wall.max(current.saturating_add(1));
+            match self.to_device_position_counter.compare_exchange(
+                current,
+                next,
+                Ordering::SeqCst,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return next,
+                Err(_) => continue,
+            }
         }
     }
 }

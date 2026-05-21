@@ -207,7 +207,9 @@ async fn forward_to_applet_bridge(
         };
     }
     match response.json::<Value>().await {
-        Ok(body) => AppletBridgeOutcome::UpstreamSuccess { response_body: body },
+        Ok(body) => AppletBridgeOutcome::UpstreamSuccess {
+            response_body: body,
+        },
         Err(err) => AppletBridgeOutcome::UpstreamFailure {
             code: "upstream_body_parse_failed".to_owned(),
             message: format!("response body JSON parse: {err}"),

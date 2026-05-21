@@ -3,19 +3,21 @@ use salvo::prelude::*;
 pub(super) mod account;
 pub(super) mod account_data;
 pub(crate) mod auth;
+mod consent;
 mod device;
 pub(super) mod device_messages;
 pub(super) mod did;
 mod key_backup;
 mod keys;
 mod profile;
+pub(super) mod webvh_validation;
 
 use super::system::describe;
 use super::{
     AuthArgs, SyncCursorError, append_audit_log, bearer_token, device_inventory_to_json,
     handle_for_did, is_device_revoked, is_valid_handle, normalize_handle, now,
-    parse_and_validate_sync_cursor, render_error, sha256_hex, sync_token_for_client_sync,
-    validate_device_id, validate_device_message_payload, validate_did,
+    parse_and_validate_sync_cursor, query_param, render_error, sha256_hex,
+    sync_token_for_client_sync, validate_device_id, validate_device_message_payload, validate_did,
 };
 
 pub fn router() -> Router {
@@ -23,6 +25,7 @@ pub fn router() -> Router {
         .push(auth::router())
         .push(account::router())
         .push(account_data::router())
+        .push(consent::router())
         .push(
             Router::with_path("identity")
                 .push(Router::with_path("describe").get(did::identity_describe))

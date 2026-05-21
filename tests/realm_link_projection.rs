@@ -145,7 +145,10 @@ fn realm_link_rejects_invalid_status() {
 fn realm_link_status_flip_replaces_in_place() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    state.apply(&link_op(REALM_A, REALM_B, "governed_by", Some("active")), &hlc);
+    state.apply(
+        &link_op(REALM_A, REALM_B, "governed_by", Some("active")),
+        &hlc,
+    );
     state.apply(
         &link_op(REALM_A, REALM_B, "governed_by", Some("rejected")),
         &hlc,
@@ -166,7 +169,10 @@ fn realm_link_cell_value_persisted() {
     ))
     .unwrap();
     let value = state.cell_value(&cell_id).expect("cell must be projected");
-    assert_eq!(value.get("link_kind").and_then(Value::as_str), Some("join_gate_from"));
+    assert_eq!(
+        value.get("link_kind").and_then(Value::as_str),
+        Some("join_gate_from")
+    );
     assert_eq!(value.get("status").and_then(Value::as_str), Some("active"));
     assert_eq!(
         value.get("target_realm_id").and_then(Value::as_str),

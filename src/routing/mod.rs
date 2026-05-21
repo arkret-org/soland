@@ -19,12 +19,18 @@ mod admin;
 mod agent_workspace;
 pub(crate) mod conformance;
 pub(crate) mod events;
-pub(crate) mod federation;
+// G3.S9: extensions (applet manifest verifier, bot/ghost actor, TSP, sovereign enclave).
+pub mod extensions;
+pub mod federation;
 mod identity;
 mod interop;
+// G3.S1: MLS lifecycle (KeyPackage claim, Welcome to-device, commit_epoch).
+pub(crate) mod mls;
 pub(crate) mod realms;
 pub(crate) mod spaces;
 pub(crate) mod system;
+// G3.S2: realm policy server
+pub(crate) mod realm_policy;
 
 use access::policy::policy_document_to_response;
 use admin::audit::append_audit_log;
@@ -48,7 +54,8 @@ use identity::did::validate_did_document_services;
 use spaces::directory::demo_actors;
 use spaces::space::{
     invite_token_space_id, is_space_deleted, prune_expired_typing, space_allows_plaintext_service,
-    space_discoverability, space_has_member, space_id_accessible, space_resolvable_to,
+    space_discoverability, space_event_visible_to_session, space_has_member,
+    space_history_visibility, space_id_accessible, space_resolvable_to,
     space_search_discoverability, space_search_visible_to, space_visible_to, touch_space,
     typing_ephemeral_for_space,
 };
@@ -114,6 +121,15 @@ fn api_v1_router() -> Router {
         .push(interop::router())
         .push(agent_workspace::router())
         .push(conformance::router())
+        // G3.S1: MLS lifecycle — appended at the end of the registry so
+        // parallel agents (G3.S2, G3.S5, G3.S9) editing this block don't
+        // collide.
+        .push(mls::router())
+        // G3.S9: extensions (applet manifest verifier, bot/ghost actor,
+        // TSP transport/route/audit)
+        .push(extensions::router())
+        // G3.S2: realm policy server
+        .push(realm_policy::router())
         .push(
             Router::with_path("{**rest}")
                 .options(cors_preflight)
@@ -936,13 +952,13 @@ fn cors_handler_for_origin_spec(raw: &str) -> CorsHandler {
     };
 
     cors.expose_headers(vec![
-            "retry-after",
-            "x-contrix-wait-for-satisfied",
-            "content-range",
-            "accept-ranges",
-        ])
-        .max_age(3600)
-        .into_handler()
+        "retry-after",
+        "x-contrix-wait-for-satisfied",
+        "content-range",
+        "accept-ranges",
+    ])
+    .max_age(3600)
+    .into_handler()
 }
 
 #[derive(Clone)]
@@ -1201,6 +1217,7 @@ mod operation_conformance_tests {
                 use_keystore: false,
                 federation_policy: crate::config::FederationPolicy::Mesh,
                 federation_peers: Vec::new(),
+                federation_outbound_enabled: false,
                 admin_default_page_limit: 100,
                 admin_max_page_limit: 1000,
                 admin_principal_dids: Vec::new(),
@@ -1216,6 +1233,8 @@ mod operation_conformance_tests {
                 compaction_prune_walk_per_space_limit: 50,
                 seed_demo_data: true,
                 trust_domain: "cx:trust_domain:soland.local".to_owned(),
+                sovereign_enclave_enabled: false,
+                sovereign_enclave_allowed_outbound_hosts: Vec::new(),
             },
             Db { pool: None },
         )

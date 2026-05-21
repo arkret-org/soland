@@ -1024,6 +1024,8 @@ pub struct UpdateProfileResponse {
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct ContactRequestRequest {
     pub target: String,
+    #[serde(default)]
+    pub scope: Option<String>,
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
@@ -1036,6 +1038,7 @@ pub struct ContactRespondRequest {
 pub struct ContactResponse {
     pub requester: String,
     pub target: String,
+    pub scope: String,
     pub status: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -1760,13 +1763,17 @@ pub struct RemoveReactionRequest {
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct SetReadMarkerRequest {
-    pub space_id: String,
+    #[serde(default)]
+    pub space_id: Option<String>,
+    #[serde(default)]
+    pub realm_id: Option<String>,
     pub event_id: String,
     pub scope_id: Option<String>,
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct ReadMarkerResponse {
+    pub realm_id: String,
     pub space_id: String,
     pub actor: String,
     pub scope_id: String,

@@ -125,10 +125,11 @@ pub(super) async fn admin_get_realm_delivery_binding_policy(
     let _admin_session = super::require_admin_principal(state, session)?;
     let realm_id = realm_id.into_inner();
     if validate_space_id(&realm_id).is_err() {
-        return Err(
-            app_error!(InvalidParam, "invalid realm_id `{realm_id}`: must be a typed cx:space: id")
-                .with_status(StatusCode::BAD_REQUEST),
-        );
+        return Err(app_error!(
+            InvalidParam,
+            "invalid realm_id `{realm_id}`: must be a typed cx:space: id"
+        )
+        .with_status(StatusCode::BAD_REQUEST));
     }
     // Reducer keeps the cell keyed by the realm/space identifier; the
     // accessor name (`delivery_binding_policy_cell_value`) is preserved

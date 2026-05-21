@@ -133,8 +133,8 @@ async fn server_describe(depot: &mut Depot) -> JsonResult<Value> {
     value["trust_domain"] = json!(state.config.trust_domain);
     // T8.3 — embed the production hardening checklist so sodmin's
     // `/hardening` page can render it without an extra round-trip.
-    value["hardening"] = serde_json::to_value(state.config.hardening_status())
-        .expect("hardening status serializes");
+    value["hardening"] =
+        serde_json::to_value(state.config.hardening_status()).expect("hardening status serializes");
 
     // T6.1 — claim-level partition of the describe response.
     // See contrix-spec/spec/v1/zh/sync/service-surface.md §3.0 and
@@ -142,7 +142,11 @@ async fn server_describe(depot: &mut Depot) -> JsonResult<Value> {
     // already populated above is wire-callable only; the helper below
     // separates feature implementation from profile claims and dev-mode
     // posture from cotest-verified claims.
-    apply_claim_level_partition(&mut value, state.config.development_mode);
+    apply_claim_level_partition(
+        &mut value,
+        state.config.development_mode,
+        state.verified_profiles.as_ref(),
+    );
     json_ok(value)
 }
 
@@ -151,12 +155,23 @@ async fn server_describe(depot: &mut Depot) -> JsonResult<Value> {
 /// `compat_surfaces`) into a describe response.
 ///
 /// Invariants enforced here:
-/// - `verified_profiles` MUST be empty when `development_mode=true`.
-///   Soland never embeds a cotest run id at runtime today, so this is a
-///   hard `[]`; the debug_assert below guards future writers.
+/// - `verified_profiles` MUST be empty when `development_mode=true`. The
+///   loader [`crate::verified_profiles::load_from_env`] already returns an
+///   empty vec when the env var is unset, but we additionally enforce the
+///   dev-mode rule below: even if an operator points
+///   `SOLAND_VERIFIED_PROFILES_ARTIFACT` at a real file while running with
+///   `development_mode=true`, the wire surface emits `[]`.
 /// - `claimed_profiles[].claim_kind` is always `self_claimed`; cotest
-///   verifier output is the only path to `verified_profiles`.
-pub(crate) fn apply_claim_level_partition(value: &mut Value, development_mode: bool) {
+///   verifier output (G4.T3) is the only path to `verified_profiles`.
+/// - Every loaded verified entry whose `profile_id` does NOT appear in
+///   `claimed_profiles[]` is dropped with a `warn!` line. The wire never
+///   advertises a profile we don't also self-claim — that would be a
+///   silent cross-binding lie.
+pub(crate) fn apply_claim_level_partition(
+    value: &mut Value,
+    development_mode: bool,
+    loaded_verified: &[crate::verified_profiles::VerifiedProfileDescriptor],
+) {
     // implemented_features: mirror of supported_features. Every entry
     // there corresponds to in-tree implementation code, but soland does
     // not claim conformance for any of them today.
@@ -180,7 +195,7 @@ pub(crate) fn apply_claim_level_partition(value: &mut Value, development_mode: b
     // §7 / §8: a principal server claims the Event Store interop
     // floor + Principal Server + Principal Server Events API in
     // addition to the MIMI interop staging extension below.
-    let claimed_profiles = vec![
+    let mut claimed_profiles = vec![
         contrix_sdk::ClaimedProfileEntry::self_claimed("cx.profile.core_event_store.v1"),
         contrix_sdk::ClaimedProfileEntry::self_claimed("cx.profile.principal_server.v1"),
         contrix_sdk::ClaimedProfileEntry::self_claimed("cx.profile.principal_server_events_api.v1"),
@@ -192,12 +207,87 @@ pub(crate) fn apply_claim_level_partition(value: &mut Value, development_mode: b
             ..contrix_sdk::ClaimedProfileEntry::self_claimed("cx.profile.mimi_interop.v1")
         },
     ];
+    // G3.S9 — when the sovereign enclave profile is enabled, claim it
+    // alongside the baseline profiles. The enclave invariants
+    // (outbound federation off, DID method allow-list non-empty,
+    // outbound-call audit log) MUST already be satisfied — assertion
+    // happens at `main.rs` startup via
+    // `routing::extensions::sovereign::assert_enclave_invariants`.
+    //
+    // NOTE: `apply_claim_level_partition` is called from inside
+    // `server_describe`, which doesn't carry config through to this
+    // signature. We probe the env var directly here — the same way
+    // `AppConfig::from_env_and_args` does — so the claim follows the
+    // operator's posture without expanding this function's signature.
+    if matches!(
+        std::env::var("SOLAND_SOVEREIGN_ENCLAVE").as_deref(),
+        Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes")
+    ) {
+        claimed_profiles.push(contrix_sdk::ClaimedProfileEntry {
+            notes: Some(
+                "Sovereign enclave profile: outbound federation disabled, \
+                 outbound HTTP allow-list enforced. See \
+                 zh/sync/sovereign-deployment.md §2–§6."
+                    .to_owned(),
+            ),
+            ..contrix_sdk::ClaimedProfileEntry::self_claimed(
+                crate::routing::extensions::sovereign::SOVEREIGN_ENCLAVE_PROFILE_ID,
+            )
+        });
+    }
+    // Snapshot the claimed-profile id set BEFORE serialising (which moves
+    // the vec) — the verified_profiles cross-check below needs to know
+    // which profile ids the binary actually self-claims.
+    let claimed_id_set: std::collections::BTreeSet<String> = claimed_profiles
+        .iter()
+        .map(|c| c.profile_id.clone())
+        .collect();
     value["claimed_profiles"] =
         serde_json::to_value(claimed_profiles).expect("claimed_profiles serializes");
 
-    // verified_profiles: nothing is cotest-verified at runtime today, and
-    // dev mode MUST yield an empty list per spec §3.0.
-    let verified_profiles: Vec<contrix_sdk::VerifiedProfileEntry> = Vec::new();
+    // verified_profiles: populated by the G4.T3 cotest artifact loader.
+    // `loaded_verified` is the deserialised + role-filtered slice from
+    // `state.verified_profiles`. Dev-mode posture overrides any artifact:
+    // even with the env var pointed at a real file, `development_mode=true`
+    // forces `[]` per service-surface.md §3.0.
+    //
+    // Cross-check: every loaded entry's `profile_id` MUST also appear in
+    // the `claimed_profiles[]` built above. Entries that fail the
+    // cross-check are dropped with a warn — we never advertise a verified
+    // profile we don't also self-claim.
+    let verified_profiles: Vec<contrix_sdk::VerifiedProfileEntry> = if development_mode {
+        if !loaded_verified.is_empty() {
+            tracing::warn!(
+                target: "verified_profiles",
+                count = loaded_verified.len(),
+                "development_mode=true overrides loaded verified-profile artifact; \
+                 emitting verified_profiles=[] per service-surface.md §3.0"
+            );
+        }
+        Vec::new()
+    } else {
+        loaded_verified
+            .iter()
+            .filter_map(|entry| {
+                if !claimed_id_set.contains(&entry.profile_id) {
+                    tracing::warn!(
+                        target: "verified_profiles",
+                        profile_id = %entry.profile_id,
+                        "dropping verified-profile entry: profile_id absent from claimed_profiles"
+                    );
+                    return None;
+                }
+                Some(contrix_sdk::VerifiedProfileEntry {
+                    profile_id: entry.profile_id.clone(),
+                    claim_kind: contrix_sdk::CotestVerifiedKind::CotestVerified,
+                    cotest_run_id: entry.cotest_run_id.clone(),
+                    artifact_hash: entry.artifact_hash.clone(),
+                    timestamp: entry.timestamp,
+                    extra: Default::default(),
+                })
+            })
+            .collect()
+    };
     debug_assert!(
         !(development_mode && !verified_profiles.is_empty()),
         "development_mode=true requires verified_profiles=[] (service-surface.md §3.0)"

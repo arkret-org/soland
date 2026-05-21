@@ -18,7 +18,7 @@
 //! / `push_condition_matches` / `push_field_matches` / `value_at_path` /
 //! `value_matches_expected` / `push_value_for_condition` / `push_rejection`
 //! / `push_device_suppressed_by_rule` / `is_valid_push_rule_id` /
-//! `is_supported_push_action` / `push_notification_leaks_plaintext` /
+//! `is_supported_push_action` / `push_notification_leaks_private_payload` /
 //! `push_rule_to_json`.
 
 use salvo::http::StatusCode;
@@ -294,9 +294,9 @@ pub(super) async fn push_notify(
 ) -> JsonResult<PushNotifyResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
-    if push_notification_leaks_plaintext(&body.notification) {
+    if push_notification_leaks_private_payload(&body.notification, None) {
         return Err(AppError::invalid_param(
-            "push notification must not include plaintext content",
+            "push notification must not include plaintext content or stable identifiers",
         ));
     }
     let devices = body
@@ -525,15 +525,40 @@ fn optional_ascii_header<'a>(
         .transpose()
 }
 
-fn push_notification_leaks_plaintext(value: &serde_json::Value) -> bool {
+fn push_notification_leaks_private_payload(
+    value: &serde_json::Value,
+    parent_key: Option<&str>,
+) -> bool {
     match value {
         serde_json::Value::Object(object) => object.iter().any(|(key, value)| {
+            if parent_key == Some("devices")
+                && matches!(key.as_str(), "device_id" | "push_key" | "app_id")
+            {
+                return false;
+            }
             matches!(
                 key.as_str(),
-                "title" | "body" | "preview" | "content" | "plaintext" | "message"
-            ) || push_notification_leaks_plaintext(value)
+                "title"
+                    | "body"
+                    | "preview"
+                    | "content"
+                    | "plaintext"
+                    | "message"
+                    | "event_id"
+                    | "realm_id"
+                    | "space_id"
+                    | "flow_id"
+                    | "thread_id"
+                    | "sender"
+                    | "sender_did"
+                    | "sender_display_name"
+                    | "space_name"
+                    | "kind"
+            ) || push_notification_leaks_private_payload(value, Some(key.as_str()))
         }),
-        serde_json::Value::Array(values) => values.iter().any(push_notification_leaks_plaintext),
+        serde_json::Value::Array(values) => values
+            .iter()
+            .any(|value| push_notification_leaks_private_payload(value, parent_key)),
         _ => false,
     }
 }

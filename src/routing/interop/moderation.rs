@@ -66,7 +66,11 @@ async fn moderation_report(
         "reporter": body.reporter,
         "created_at": now(),
     });
-    if let Err(error) = state.persistence.moderation().append_report(report_payload.clone()) {
+    if let Err(error) = state
+        .persistence
+        .moderation()
+        .append_report(report_payload.clone())
+    {
         tracing::error!(%error, "failed to append moderation report");
     }
     if let Err(error) = state.persistence.moderation().append_action(json!({
@@ -216,5 +220,10 @@ pub(crate) fn appeal_state(state: &AppState, appeal_id: &str) -> Option<String> 
         .ok()?
         .into_iter()
         .last()
-        .and_then(|event| event.get("appeal_state").and_then(Value::as_str).map(ToOwned::to_owned))
+        .and_then(|event| {
+            event
+                .get("appeal_state")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+        })
 }

@@ -2,6 +2,7 @@ use salvo::prelude::*;
 
 mod federation;
 pub(crate) mod move_anchor;
+pub mod outbox;
 
 use super::{
     AuthArgs, ingest_federation_operations, now, operation_is_visible,

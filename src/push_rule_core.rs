@@ -197,10 +197,7 @@ impl PushDecision {
 pub fn evaluate_push_rule(receiver: WatchLevel, event: &EventContext) -> PushDecision {
     // Pre-engine deny rule — never reach the engine if muted.
     if matches!(receiver, WatchLevel::Muted) {
-        return PushDecision::dont_notify(
-            reason_code::MUTED,
-            internal_reason::MUTED_SHORT_CIRCUIT,
-        );
+        return PushDecision::dont_notify(reason_code::MUTED, internal_reason::MUTED_SHORT_CIRCUIT);
     }
 
     // E2EE blind wakeup: we cannot evaluate the full payload
@@ -212,10 +209,9 @@ pub fn evaluate_push_rule(receiver: WatchLevel, event: &EventContext) -> PushDec
 
     match receiver {
         WatchLevel::Muted => unreachable!("handled above"),
-        WatchLevel::All => PushDecision::notify(
-            reason_code::WATCH_ALLOWS,
-            internal_reason::WATCH_LEVEL_ALL,
-        ),
+        WatchLevel::All => {
+            PushDecision::notify(reason_code::WATCH_ALLOWS, internal_reason::WATCH_LEVEL_ALL)
+        }
         WatchLevel::MentionsOnly => {
             if event.directed() {
                 PushDecision::notify(
@@ -272,7 +268,10 @@ mod tests {
         assert!(!decision.deliver);
         assert!(!decision.blind_wakeup);
         assert_eq!(decision.reason_code, reason_code::MUTED);
-        assert_eq!(decision.internal_reason, internal_reason::MUTED_SHORT_CIRCUIT);
+        assert_eq!(
+            decision.internal_reason,
+            internal_reason::MUTED_SHORT_CIRCUIT
+        );
 
         // Even mentions are suppressed.
         let mut c = ctx();

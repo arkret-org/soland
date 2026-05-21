@@ -47,9 +47,9 @@ fn high_assurance_rejects_open_federation_at_create() {
         ProjectionEffect::Rejected { reason } => {
             assert_eq!(reason, "high_assurance_federation_policy_invalid");
         }
-        other => panic!(
-            "expected Rejected(high_assurance_federation_policy_invalid), got {other:?}"
-        ),
+        other => {
+            panic!("expected Rejected(high_assurance_federation_policy_invalid), got {other:?}")
+        }
     }
 }
 
@@ -141,9 +141,9 @@ fn high_assurance_rejects_post_create_open_federation_update() {
         ProjectionEffect::Rejected { reason } => {
             assert_eq!(reason, "high_assurance_federation_policy_invalid");
         }
-        other => panic!(
-            "expected Rejected(high_assurance_federation_policy_invalid), got {other:?}"
-        ),
+        other => {
+            panic!("expected Rejected(high_assurance_federation_policy_invalid), got {other:?}")
+        }
     }
 }
 
@@ -190,8 +190,8 @@ fn high_assurance_rejects_simultaneous_open_in_same_payload() {
         ProjectionEffect::Rejected { reason } => {
             assert_eq!(reason, "high_assurance_federation_policy_invalid");
         }
-        other => panic!(
-            "expected Rejected(high_assurance_federation_policy_invalid), got {other:?}"
-        ),
+        other => {
+            panic!("expected Rejected(high_assurance_federation_policy_invalid), got {other:?}")
+        }
     }
 }

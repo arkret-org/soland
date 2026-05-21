@@ -17,6 +17,8 @@ use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use super::consent::{has_active_consent_for_scope, normalize_scope, record_pending_request};
+use super::device_messages::{NOTIFICATION_READ_MARKER_UPDATE_TYPE, fanout_actor_private_update};
 use super::{
     AuthArgs, append_audit_log, is_valid_handle, normalize_handle, now, sha256_hex, validate_did,
 };
@@ -760,6 +762,17 @@ async fn notifications_mark_all_read(
         json!({"marked_at": marked_at.to_rfc3339()}),
         "accepted",
     );
+    fanout_actor_private_update(
+        state,
+        &session.actor,
+        &session.device_id,
+        NOTIFICATION_READ_MARKER_UPDATE_TYPE,
+        json!({
+            "actor_id": session.actor,
+            "device_id": session.device_id,
+            "marked_at": marked_at,
+        }),
+    );
     json_ok(json!({
         "marked_at": marked_at.to_rfc3339(),
         "actor": session.actor,
@@ -793,15 +806,30 @@ async fn contact_request(
     if target_account.is_none() {
         return Err(AppError::not_found("not found"));
     }
+    let scope = normalize_scope(body.scope.as_deref())?;
+    let contact_status =
+        if has_active_consent_for_scope(state, &body.target, &session.actor, &scope, now()) {
+            "accepted"
+        } else {
+            record_pending_request(state, &body.target, &session.actor, &scope, now());
+            "pending"
+        };
     let store = state.persistence.contacts();
-    if let Some(existing) = store
-        .get(&session.actor, &body.target)
+    if let Some(mut existing) = store
+        .get_scoped(&session.actor, &body.target, &scope)
         .map_err(|error| AppError::internal(error.to_string()))?
     {
+        if existing.status != contact_status {
+            existing.status = contact_status.to_owned();
+            existing.updated_at = now();
+            store
+                .put(&existing)
+                .map_err(|error| AppError::internal(error.to_string()))?;
+        }
         return json_ok(contact_response(existing));
     }
     if store
-        .get(&body.target, &session.actor)
+        .get_scoped(&body.target, &session.actor, &scope)
         .map_err(|error| AppError::internal(error.to_string()))?
         .is_some()
     {
@@ -813,7 +841,8 @@ async fn contact_request(
     let contact = ContactRecord {
         requester: session.actor,
         target: body.target,
-        status: "pending".to_owned(),
+        scope,
+        status: contact_status.to_owned(),
         created_at: now(),
         updated_at: now(),
     };
@@ -1016,6 +1045,7 @@ fn contact_response(contact: ContactRecord) -> ContactResponse {
     ContactResponse {
         requester: contact.requester,
         target: contact.target,
+        scope: contact.scope,
         status: contact.status,
         created_at: contact.created_at,
         updated_at: contact.updated_at,

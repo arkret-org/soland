@@ -63,6 +63,29 @@ async fn main() -> anyhow::Result<()> {
     }
     let state = AppState::new(config.clone(), Db::from_env()?);
 
+    // G3.S9 — sovereign enclave profile invariants. When
+    // `SOLAND_SOVEREIGN_ENCLAVE=1` the configured posture MUST satisfy:
+    //   * federation_outbound_enabled = false
+    //   * did_resolver_allow_methods non-empty
+    // Fail fast at startup if either invariant is violated; the enclave
+    // profile claim on `/server/describe` would otherwise be a lie.
+    let enclave_assertion =
+        soland::routing::extensions::sovereign::assert_enclave_invariants(&state.config);
+    if !enclave_assertion.is_compliant() {
+        anyhow::bail!(
+            "SOLAND_SOVEREIGN_ENCLAVE=1 but enclave invariants are not satisfied: {}",
+            enclave_assertion.violations.join("; ")
+        );
+    }
+    if enclave_assertion.enabled {
+        tracing::info!(
+            target: "sovereign_boundary_audit",
+            allowed_outbound_hosts = ?state.config.sovereign_enclave_allowed_outbound_hosts,
+            "sovereign enclave profile enabled; outbound federation is disabled \
+             and outbound HTTP must be on the allow-list",
+        );
+    }
+
     // Spawn the multisig leader-election watchdog. The task wakes every
     // 30s by default, scans `multisig_pending` for rows
     // whose threshold is met + canonical_b64 is non-empty, claims an
@@ -79,6 +102,13 @@ async fn main() -> anyhow::Result<()> {
     // walking; see `compactor.rs` for the policy and "when to enable"
     // rationale.
     let _compactor = soland::compactor::spawn(state.clone());
+
+    // G3.S0 — durable outbound federation HTTP delivery worker. No-op
+    // when `SOLAND_FEDERATION_OUTBOUND=0` (used by integration tests
+    // that don't want background HTTP traffic). The dispatcher drains
+    // the `federation_outbox` table populated by
+    // `routing::federation::federation::broadcast_*_to_peers`.
+    let _federation_dispatcher = soland::routing::federation::outbox::spawn(state.clone());
 
     tracing::info!(
         bind = %config.bind,

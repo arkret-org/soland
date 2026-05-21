@@ -528,7 +528,10 @@ async fn decide_appeal(
     if body.verdict != "modify" && body.modify_decision_ref.is_some() {
         return Err(AppError::new(
             ErrorCode::SchemaViolation,
-            format!("verdict={} MUST NOT include modify_decision_ref", body.verdict),
+            format!(
+                "verdict={} MUST NOT include modify_decision_ref",
+                body.verdict
+            ),
         ));
     }
     // Pull the original decision_ref so the paired-lift check can
@@ -550,7 +553,10 @@ async fn decide_appeal(
     let batch_pairs: Vec<(&str, &str)> = if lift_ref.is_empty() {
         Vec::new()
     } else {
-        vec![("cx.moderation.decision.lift", original_decision_ref.as_str())]
+        vec![(
+            "cx.moderation.decision.lift",
+            original_decision_ref.as_str(),
+        )]
     };
     // The lift_ref the caller supplies must point to a real lift
     // record AND that lift must reference the original decision.

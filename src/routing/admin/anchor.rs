@@ -943,6 +943,17 @@ pub(super) async fn admin_repair_bottom(
                 role: "recovery_capability".to_owned(),
                 critical: true,
             };
+            let anchor_ref = pick_admin_anchor_ref(state, &space);
+            let state_witness_ref = contrix_sdk::move_event::SemanticRef {
+                id: anchor_ref.as_str().to_owned(),
+                role: "state_witness".to_owned(),
+                critical: true,
+            };
+            let inclusion_proof_ref = contrix_sdk::move_event::SemanticRef {
+                id: format!("cx:proof:bottom-repair:{}", head.move_id),
+                role: "inclusion_proof".to_owned(),
+                critical: true,
+            };
             // Per-admin signing — Move's `verification_method` is the
             // operator's `<did>#admin-key` when a per-admin key is
             // provisioned, else falls back to the service signer.
@@ -950,11 +961,11 @@ pub(super) async fn admin_repair_bottom(
             let unsigned = UnsignedMove::new(
                 signer.signer_did().clone(),
                 space.clone(),
-                pick_admin_anchor_ref(state, &space),
+                anchor_ref,
                 vec![effect],
                 fresh_hlc(state)?,
             )
-            .with_refs(vec![recovery_ref]);
+            .with_refs(vec![recovery_ref, state_witness_ref, inclusion_proof_ref]);
             let signed_move = Move::sign(&unsigned, &signer)
                 .map_err(|e| app_error!(InternalError, "Move::sign failed: {e}"))?;
             let move_id = signed_move.id.as_str().to_owned();

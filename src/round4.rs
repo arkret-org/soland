@@ -57,18 +57,17 @@
 
 use chrono::{DateTime, Utc};
 use contrix_sdk::{
-    AccessKind, AuditPolicyAccessPayload,
-    ConsentRevokePayload, Did, EventId, EventsFrontierAccountClientResponse,
-    EventsFrontierAnonymousHealthResponse, EventsFrontierFederationPeerResponse,
-    EventsFrontierResponse, EventsSubmitBatchRequest, EventsSubmitFederationRequest,
-    EventsSubscribeFrameBody, FederationServiceBindingRef, FrontierPeerRole, Hash, RealmId,
-    SpaceId, SpaceObjectTombstonePayload, SpaceStateTransitionPayload, TypedTrustDomainId,
-    canonical, compute_audit_policy_version_hash, cross_signing_publish_cell_subject,
-    federation_trust_domain_transcript_fragment, flow_tracks_patch_cell_subject,
-    flow_update_cell_subject,
-    HEADER_DESTINATION_TRUST_DOMAIN, HEADER_REQUEST_CANONICAL_HASH, HEADER_SOURCE_TRUST_DOMAIN,
+    AccessKind, AuditPolicyAccessPayload, ConsentRevokePayload, Did,
     ERROR_CODE_CROSS_DOMAIN_REPLAY_REJECTED, ERROR_CODE_DELIVERY_BINDING_HANDED_OVER,
     ERROR_CODE_DELIVERY_BINDING_STALE, ERROR_CODE_HISTORICAL_ONLY, ERROR_CODE_SCHEMA_VIOLATION,
+    EventId, EventsFrontierAccountClientResponse, EventsFrontierAnonymousHealthResponse,
+    EventsFrontierFederationPeerResponse, EventsFrontierResponse, EventsSubmitBatchRequest,
+    EventsSubmitFederationRequest, EventsSubscribeFrameBody, FederationServiceBindingRef,
+    FrontierPeerRole, HEADER_DESTINATION_TRUST_DOMAIN, HEADER_REQUEST_CANONICAL_HASH,
+    HEADER_SOURCE_TRUST_DOMAIN, Hash, RealmId, SpaceId, SpaceObjectTombstonePayload,
+    SpaceStateTransitionPayload, TypedTrustDomainId, canonical, compute_audit_policy_version_hash,
+    cross_signing_publish_cell_subject, federation_trust_domain_transcript_fragment,
+    flow_tracks_patch_cell_subject, flow_update_cell_subject,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -170,10 +169,8 @@ pub fn build_typed_frontier_response(
                 // placeholder with the real reducer-profile-derived ref.
                 (
                     FederationServiceBindingRef {
-                        realm_id: RealmId::new(
-                            "cx:realm:00000000-0000-7000-8000-000000000000",
-                        )
-                        .expect("placeholder realm id"),
+                        realm_id: RealmId::new("cx:realm:00000000-0000-7000-8000-000000000000")
+                            .expect("placeholder realm id"),
                         space_policy_hash: Hash::new(format!("sha256:{}", "0".repeat(64)))
                             .expect("placeholder hash"),
                         membership_frontier: Vec::new(),
@@ -321,7 +318,10 @@ impl EventsSubmitRequest {
         // canonical-JSON drift attacks.
         for (name, frontier) in [
             ("membership_frontier", &binding.membership_frontier),
-            ("delivery_binding_frontier", &binding.delivery_binding_frontier),
+            (
+                "delivery_binding_frontier",
+                &binding.delivery_binding_frontier,
+            ),
         ] {
             let mut seen = std::collections::BTreeSet::new();
             for entry in frontier {
@@ -336,7 +336,8 @@ impl EventsSubmitRequest {
         if binding.destination_service_type.trim().is_empty() {
             return Err((
                 ERROR_CODE_SCHEMA_VIOLATION,
-                "service_binding_ref.destination_service_type MUST be a non-empty string".to_owned(),
+                "service_binding_ref.destination_service_type MUST be a non-empty string"
+                    .to_owned(),
             ));
         }
         Ok(())
@@ -360,9 +361,7 @@ impl FederationTrustHeaders {
     /// Round 4 (B1.7) — extract + validate the three headers from a
     /// salvo `Request`. Returns the typed triple on success or an
     /// [`HeaderViolation`] on the first missing / malformed header.
-    pub fn from_salvo_request(
-        req: &salvo::http::Request,
-    ) -> Result<Self, HeaderViolation> {
+    pub fn from_salvo_request(req: &salvo::http::Request) -> Result<Self, HeaderViolation> {
         let header_value = |name: &str| -> Result<&str, HeaderViolation> {
             let value = req
                 .headers()
@@ -372,20 +371,15 @@ impl FederationTrustHeaders {
                 .to_str()
                 .map_err(|_| HeaderViolation::Malformed(name.to_owned()))
         };
-        let source =
-            header_value(HEADER_SOURCE_TRUST_DOMAIN)?.to_owned();
-        let destination =
-            header_value(HEADER_DESTINATION_TRUST_DOMAIN)?.to_owned();
-        let canonical_hash =
-            header_value(HEADER_REQUEST_CANONICAL_HASH)?.to_owned();
+        let source = header_value(HEADER_SOURCE_TRUST_DOMAIN)?.to_owned();
+        let destination = header_value(HEADER_DESTINATION_TRUST_DOMAIN)?.to_owned();
+        let canonical_hash = header_value(HEADER_REQUEST_CANONICAL_HASH)?.to_owned();
         let source = TypedTrustDomainId::new(source)
             .map_err(|_| HeaderViolation::Malformed(HEADER_SOURCE_TRUST_DOMAIN.to_owned()))?;
-        let destination = TypedTrustDomainId::new(destination).map_err(|_| {
-            HeaderViolation::Malformed(HEADER_DESTINATION_TRUST_DOMAIN.to_owned())
-        })?;
-        let canonical_hash = Hash::new(canonical_hash).map_err(|_| {
-            HeaderViolation::Malformed(HEADER_REQUEST_CANONICAL_HASH.to_owned())
-        })?;
+        let destination = TypedTrustDomainId::new(destination)
+            .map_err(|_| HeaderViolation::Malformed(HEADER_DESTINATION_TRUST_DOMAIN.to_owned()))?;
+        let canonical_hash = Hash::new(canonical_hash)
+            .map_err(|_| HeaderViolation::Malformed(HEADER_REQUEST_CANONICAL_HASH.to_owned()))?;
         Ok(Self {
             source_trust_domain: source,
             destination_trust_domain: destination,
@@ -550,9 +544,7 @@ pub fn delivery_binding_stale_response(
 /// Returned when the inbound delivery is a duplicate of a binding that
 /// has already been handed over to the new recipient; the sender SHOULD
 /// stop retrying via the legacy binding.
-pub fn delivery_binding_handed_over_response(
-    new_recipient_service_did: &Did,
-) -> Value {
+pub fn delivery_binding_handed_over_response(new_recipient_service_did: &Did) -> Value {
     json!({
         "ok": false,
         "error": {
@@ -641,15 +633,11 @@ pub fn verify_blob_presign_realm_binding(
         (Some(req), Some(meta)) if req == meta => Ok(()),
         (None, Some(meta)) => Err((
             ERROR_CODE_SCHEMA_VIOLATION,
-            format!(
-                "/blob/presign request MUST carry realm_id={meta:?} for Realm-owned blob"
-            ),
+            format!("/blob/presign request MUST carry realm_id={meta:?} for Realm-owned blob"),
         )),
         (Some(req), None) => Err((
             "capability_denied",
-            format!(
-                "/blob/presign request carries realm_id={req:?} but blob has no realm binding"
-            ),
+            format!("/blob/presign request carries realm_id={req:?} but blob has no realm binding"),
         )),
         (Some(req), Some(meta)) => Err((
             "capability_denied",
@@ -723,9 +711,7 @@ pub fn parse_space_object_tombstone_payload(
     serde_json::from_value::<SpaceObjectTombstonePayload>(payload.clone()).map_err(|err| {
         (
             ERROR_CODE_SCHEMA_VIOLATION,
-            format!(
-                "cx.space.tombstone payload must match SpaceObjectTombstonePayload: {err}"
-            ),
+            format!("cx.space.tombstone payload must match SpaceObjectTombstonePayload: {err}"),
         )
     })
 }
@@ -738,13 +724,12 @@ pub fn parse_space_object_tombstone_payload(
 /// missing `observed_dots[]` is `schema_violation` — implicit cascade
 /// revoke is forbidden.
 pub fn validate_consent_revoke_payload(payload: &Value) -> Result<(), (&'static str, String)> {
-    let parsed: ConsentRevokePayload =
-        serde_json::from_value(payload.clone()).map_err(|err| {
-            (
-                ERROR_CODE_SCHEMA_VIOLATION,
-                format!("cx.consent.revoke payload shape is invalid: {err}"),
-            )
-        })?;
+    let parsed: ConsentRevokePayload = serde_json::from_value(payload.clone()).map_err(|err| {
+        (
+            ERROR_CODE_SCHEMA_VIOLATION,
+            format!("cx.consent.revoke payload shape is invalid: {err}"),
+        )
+    })?;
     parsed.validate_minimal().map_err(|err| {
         (
             ERROR_CODE_SCHEMA_VIOLATION,
@@ -861,7 +846,10 @@ mod tests {
 
     #[test]
     fn parse_peer_role_routes_correctly() {
-        assert_eq!(parse_peer_role(None).unwrap(), FrontierPeerRole::AccountClient);
+        assert_eq!(
+            parse_peer_role(None).unwrap(),
+            FrontierPeerRole::AccountClient
+        );
         assert_eq!(
             parse_peer_role(Some("federation_peer")).unwrap(),
             FrontierPeerRole::FederationPeer
@@ -897,7 +885,10 @@ mod tests {
     #[test]
     fn dropped_without_cursor_downgrades_to_resync() {
         let body = dropped_or_resync(None, "broadcast_lag");
-        assert!(matches!(body, EventsSubscribeFrameBody::ResyncRequired { .. }));
+        assert!(matches!(
+            body,
+            EventsSubscribeFrameBody::ResyncRequired { .. }
+        ));
         let cursor = Cursor::new("cx:cursor:resume").unwrap();
         let body = dropped_or_resync(Some(cursor), "broadcast_lag");
         assert!(matches!(body, EventsSubscribeFrameBody::Dropped { .. }));
@@ -907,8 +898,7 @@ mod tests {
     fn events_submit_shape_classifies_three_forms() {
         let single = json!({"event_id": "x"});
         let batch = json!({"envelopes": []});
-        let federation =
-            json!({"envelopes": [], "service_binding_ref": {"realm_id": "x"}});
+        let federation = json!({"envelopes": [], "service_binding_ref": {"realm_id": "x"}});
         assert_eq!(EventsSubmitRequest::shape(&single), "single");
         assert_eq!(EventsSubmitRequest::shape(&batch), "batch");
         assert_eq!(EventsSubmitRequest::shape(&federation), "federation");
@@ -1081,9 +1071,7 @@ mod tests {
     #[test]
     fn applet_id_accepts_did_or_cx_form() {
         assert!(validate_applet_id("did:web:applet.example").is_ok());
-        assert!(
-            validate_applet_id("cx:applet:01904100-0000-7000-8000-000000000001").is_ok()
-        );
+        assert!(validate_applet_id("cx:applet:01904100-0000-7000-8000-000000000001").is_ok());
         assert!(validate_applet_id("not-a-valid-id").is_err());
     }
 
@@ -1102,8 +1090,8 @@ mod tests {
 
     #[test]
     fn flow_cell_subject_helpers_return_flow_id() {
-        let flow = contrix_sdk::FlowId::new("cx:flow:01904100-0000-7000-8000-000000000001")
-            .unwrap();
+        let flow =
+            contrix_sdk::FlowId::new("cx:flow:01904100-0000-7000-8000-000000000001").unwrap();
         assert_eq!(flow_update_subject(&flow), flow.as_str());
         assert_eq!(flow_tracks_patch_subject(&flow), flow.as_str());
     }

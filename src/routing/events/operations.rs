@@ -108,6 +108,18 @@ const RELATION_ID_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::An
     RELATION_ID_FIELDS,
     "relation operation requires relation_id",
 )];
+// G3.S5 — `cx.realm.link` Move payload. The wire schema also permits
+// `status` / `label` / `commitment`, but those are optional and the
+// reducer assigns defaults. Required fields only.
+const REALM_LINK_TARGET_FIELDS: &[&str] = &["target_realm_id"];
+const REALM_LINK_KIND_FIELDS: &[&str] = &["link_kind"];
+const REALM_LINK_REQUIREMENTS: &[PayloadRequirement] = &[
+    PayloadRequirement::AnyOf(
+        REALM_LINK_TARGET_FIELDS,
+        "cx.realm.link requires target_realm_id",
+    ),
+    PayloadRequirement::AnyOf(REALM_LINK_KIND_FIELDS, "cx.realm.link requires link_kind"),
+];
 const VIEW_ID_FIELDS: &[&str] = &["view_id"];
 const VIEW_CREATE_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::AnyOf(
     VIEW_ID_FIELDS,
@@ -497,9 +509,7 @@ fn round4_validate_payload(kind: &str, operation: &Operation) -> Result<(), &'st
         // cx.space.tombstone — same legacy reject rule.
         "cx.space.tombstone" => {
             if operation.payload.get("target_ref").is_some() {
-                return Err(
-                    "cx.space.tombstone legacy `target_ref` form rejected by round-4 wire",
-                );
+                return Err("cx.space.tombstone legacy `target_ref` form rejected by round-4 wire");
             }
             Ok(())
         }
@@ -517,9 +527,7 @@ fn round4_validate_payload(kind: &str, operation: &Operation) -> Result<(), &'st
             }
             crate::round4::validate_consent_revoke_payload(&operation.payload)
                 .map(|_| ())
-                .map_err(|_| {
-                    "cx.consent.revoke payload violates round-4 observed_dots requirement"
-                })
+                .map_err(|_| "cx.consent.revoke payload violates round-4 observed_dots requirement")
         }
         // cx.cross_signing.publish — round 4 CAS-register cell with
         // required `expected_previous_generation`. The reducer accepts
@@ -556,13 +564,12 @@ fn round4_validate_payload(kind: &str, operation: &Operation) -> Result<(), &'st
         // `applet_id` to be either a DID or a strictly-validated
         // `cx:applet:<uuidv7>` typed id.
         "cx.applet.protocol_session.start" => {
-            if let Some(applet_id) = operation.payload.get("applet_id").and_then(|v| v.as_str())
-            {
+            if let Some(applet_id) = operation.payload.get("applet_id").and_then(|v| v.as_str()) {
                 crate::round4::validate_applet_id(applet_id)
                     .map(|_| ())
-                    .map_err(|_| {
-                        "applet_id must be a DID or cx:applet:<uuidv7> (round-4 wire break)"
-                    })?;
+                    .map_err(
+                        |_| "applet_id must be a DID or cx:applet:<uuidv7> (round-4 wire break)",
+                    )?;
             }
             Ok(())
         }
@@ -623,6 +630,17 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
         },
         kinds::CX_RELATION_UPDATE | kinds::CX_RELATION_DELETE => OperationPayloadSchema {
             requirements: RELATION_ID_REQUIREMENTS,
+            validate: None,
+        },
+        // G3.S5 — `cx.realm.link`. Permissive schema (target_realm_id +
+        // link_kind required; the reducer's `apply_realm_link`
+        // enforces the rest including cycle detection). We register
+        // here so `accept_local_operations` doesn't fall through to
+        // the SDK artifact validator (whose `realm_id` pattern is
+        // stricter than the in-tree fixtures need for testing —
+        // existing reducer-level tests use `cx:space:` prefixes).
+        kinds::CX_REALM_LINK => OperationPayloadSchema {
+            requirements: REALM_LINK_REQUIREMENTS,
             validate: None,
         },
         kinds::CX_VIEW_CREATE | kinds::CX_VIEW_UPDATE | kinds::CX_VIEW_RECONCILE => {

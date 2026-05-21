@@ -36,7 +36,9 @@ use super::{
 };
 use crate::ids;
 use crate::kinds;
-use crate::state::{AppState, MessageRecord, ProjectionEventRecord, SpaceInviteRecord, SpaceMetaRecord};
+use crate::state::{
+    AppState, MessageRecord, ProjectionEventRecord, SpaceInviteRecord, SpaceMetaRecord,
+};
 
 #[derive(Clone, Debug)]
 pub struct ProjectedEventPage {
@@ -1095,13 +1097,16 @@ pub fn project_membership_operation(state: &AppState, origin: &str, operation: &
         && let Ok(invitee) = Did::new(member)
     {
         let invites = state.persistence.space_invites();
-        let already_invited = invites.snapshot_all().unwrap_or_default().into_iter().any(
-            |existing| {
-                existing.space_id == operation.space_id.as_str()
-                    && existing.invitee.as_deref() == Some(invitee.as_str())
-                    && existing.status == "pending"
-            },
-        );
+        let already_invited =
+            invites
+                .snapshot_all()
+                .unwrap_or_default()
+                .into_iter()
+                .any(|existing| {
+                    existing.space_id == operation.space_id.as_str()
+                        && existing.invitee.as_deref() == Some(invitee.as_str())
+                        && existing.status == "pending"
+                });
         if !already_invited {
             let invite_id = ids::generate_invite_id();
             let invite_token = super::super::generate_invite_token(

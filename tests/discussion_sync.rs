@@ -1,0 +1,308 @@
+use salvo::test::{ResponseExt, TestClient};
+use serde_json::{Value, json};
+use soland::config::{AppConfig, ObjectStorageConfig};
+use soland::db::Db;
+use soland::service;
+use soland::state::AppState;
+
+fn test_config() -> AppConfig {
+    AppConfig {
+        bind: "127.0.0.1:0".parse().unwrap(),
+        public_base_url: "http://server".to_owned(),
+        service_did: "did:web:soland.local".to_owned(),
+        tls_cert_path: None,
+        tls_key_path: None,
+        database_url: None,
+        object_storage: ObjectStorageConfig::local(std::env::temp_dir().join("soland-test-blobs")),
+        cors_allow_origin: None,
+        auth_server_url: None,
+        development_mode: true,
+        oauth_introspection_url: None,
+        oauth_introspection_bearer: None,
+        session_grant_introspection_url: None,
+        session_grant_introspection_bearer: None,
+        did_resolver_allow_methods: vec!["web".to_owned(), "key".to_owned(), "uuid".to_owned()],
+        embedded_webvh_provider_enabled: false,
+        embedded_webvh_registration_bearer: None,
+        external_webvh_provider_url: None,
+        external_webvh_provider_active: false,
+        default_webvh_provider_id: None,
+        jws_replay_window_seconds: 0,
+        jws_replay_window_per_family: std::collections::BTreeMap::new(),
+        anchorer_signing_key_seed: None,
+        agent_audit_binding_signing_seed: None,
+        use_keystore: false,
+        federation_policy: soland::config::FederationPolicy::Mesh,
+        federation_peers: Vec::new(),
+        federation_outbound_enabled: false,
+        admin_default_page_limit: 100,
+        admin_max_page_limit: 1000,
+        admin_principal_dids: Vec::new(),
+        push_bridge_cache_ttl_seconds: 900,
+        push_bridge_trusted_service_dids: Vec::new(),
+        compaction_min_anchor_age_seconds: 604_800,
+        compaction_min_witnesses: 1,
+        compaction_preserve_genesis: true,
+        compaction_prune_only_singleton_successors: true,
+        compaction_prune_walk_interval_seconds: 0,
+        compaction_prune_walk_per_space_limit: 50,
+        seed_demo_data: true,
+        trust_domain: "cx:trust_domain:soland.local".to_owned(),
+        sovereign_enclave_enabled: false,
+        sovereign_enclave_allowed_outbound_hosts: Vec::new(),
+    }
+}
+
+fn app_from_state(state: AppState) -> salvo::Service {
+    service(state)
+}
+
+async fn dev_token(state: AppState, actor: &str, device_suffix: &str) -> String {
+    let login: Value = TestClient::post("http://server/api/v1/auth/dev-login")
+        .json(&json!({
+            "actor": actor,
+            "device_id": format!("cx:device:01904100-0000-7000-8000-{device_suffix}"),
+            "display_name": actor,
+        }))
+        .send(&app_from_state(state))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    login["access_token"].as_str().unwrap().to_owned()
+}
+
+async fn create_space(
+    state: AppState,
+    token: &str,
+    title: &str,
+    history_visibility: &str,
+) -> String {
+    let created: Value = TestClient::post("http://server/api/v1/spaces")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&json!({
+            "title": title,
+            "summary": "history visibility fixture",
+            "public": true,
+            "history_visibility": history_visibility,
+        }))
+        .send(&app_from_state(state))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    created["space_id"].as_str().unwrap().to_owned()
+}
+
+async fn add_member(state: AppState, owner_token: &str, space_id: &str, member: &str) {
+    let body: Value = TestClient::post(format!("http://server/api/v1/spaces/{space_id}/members"))
+        .add_header("authorization", format!("Bearer {owner_token}"), true)
+        .json(&json!({ "member": member }))
+        .send(&app_from_state(state))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert!(
+        body["members"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v == member)
+    );
+}
+
+async fn send_message(state: AppState, token: &str, space_id: &str, body: &str) {
+    let sent: Value = TestClient::post("http://server/api/v1/messages/send")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&json!({
+            "space_id": space_id,
+            "content": { "body": body },
+            "encrypted": false,
+        }))
+        .send(&app_from_state(state))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert!(sent["event_id"].is_string(), "send failed: {sent:?}");
+}
+
+fn sync_bodies(sync: &Value, space_id: &str) -> Vec<String> {
+    sync["spaces"][space_id]["timeline"]["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|event| event["content"]["body"].as_str().map(ToOwned::to_owned))
+        .collect()
+}
+
+fn event_query_bodies(events: &Value) -> Vec<String> {
+    events["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|event| {
+            event["payload"]["content"]["body"]
+                .as_str()
+                .map(ToOwned::to_owned)
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn joined_history_hides_pre_join_messages_from_sync_and_events_query() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let alice = dev_token(state.clone(), "did:web:alice.example", "a11ce0000001").await;
+    let bob = dev_token(state.clone(), "did:web:bob.example", "b0b000000000").await;
+    let space_id = create_space(state.clone(), &alice, "joined history", "joined").await;
+
+    send_message(state.clone(), &alice, &space_id, "before bob joined").await;
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    add_member(state.clone(), &alice, &space_id, "did:web:bob.example").await;
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    send_message(state.clone(), &alice, &space_id, "after bob joined").await;
+
+    let sync: Value = TestClient::post("http://server/api/v1/sync")
+        .add_header("authorization", format!("Bearer {bob}"), true)
+        .json(&json!({}))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    let bodies = sync_bodies(&sync, &space_id);
+    assert!(
+        !bodies.contains(&"before bob joined".to_owned()),
+        "{bodies:?}"
+    );
+    assert!(
+        bodies.contains(&"after bob joined".to_owned()),
+        "{bodies:?}"
+    );
+
+    let events: Value = TestClient::get(format!(
+        "http://server/api/v1/events?realm_id={space_id}&limit=20"
+    ))
+    .add_header("authorization", format!("Bearer {bob}"), true)
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    let bodies = event_query_bodies(&events);
+    assert!(
+        !bodies.contains(&"before bob joined".to_owned()),
+        "{bodies:?}"
+    );
+    assert!(
+        bodies.contains(&"after bob joined".to_owned()),
+        "{bodies:?}"
+    );
+}
+
+#[tokio::test]
+async fn shared_history_allows_late_joiner_to_backfill_prior_messages() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let alice = dev_token(state.clone(), "did:web:alice.example", "a11ce0000002").await;
+    let bob = dev_token(state.clone(), "did:web:bob.example", "b0b000000002").await;
+    let space_id = create_space(state.clone(), &alice, "shared history", "shared").await;
+
+    send_message(state.clone(), &alice, &space_id, "shared before join").await;
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    add_member(state.clone(), &alice, &space_id, "did:web:bob.example").await;
+
+    let sync: Value = TestClient::post("http://server/api/v1/sync")
+        .add_header("authorization", format!("Bearer {bob}"), true)
+        .json(&json!({}))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert!(
+        sync_bodies(&sync, &space_id).contains(&"shared before join".to_owned()),
+        "{sync:?}"
+    );
+
+    let events: Value = TestClient::get(format!(
+        "http://server/api/v1/events?realm_id={space_id}&limit=20"
+    ))
+    .add_header("authorization", format!("Bearer {bob}"), true)
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    assert!(
+        event_query_bodies(&events).contains(&"shared before join".to_owned()),
+        "{events:?}"
+    );
+}
+
+#[test]
+fn flow_update_records_discussion_realm_ref_and_rejects_orphans() {
+    use contrix_sdk::{Operation, OperationId, SpaceId};
+    use soland::hlc::ServerHlc;
+    use soland::reducer::{ProjectionEffect, ProjectionState};
+
+    const PARENT: &str = "cx:space:01904100-0000-7000-8000-d11111111111";
+    const CHILD: &str = "cx:space:01904100-0000-7000-8000-d22222222222";
+    const MISSING: &str = "cx:space:01904100-0000-7000-8000-d33333333333";
+    const FLOW: &str = "cx:flow:01904100-0000-7000-8000-f11111111111";
+
+    fn op(kind: &str, space_id: &str, payload: Value) -> Operation {
+        Operation::create(
+            OperationId::new(format!("cx:operation:{}", uuid::Uuid::now_v7())).unwrap(),
+            SpaceId::new(space_id).unwrap(),
+            kind,
+            payload,
+        )
+    }
+
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("discussion-route-test");
+    for realm in [PARENT, CHILD] {
+        state.apply(
+            &op(
+                soland::kinds::CX_SPACE_CREATE,
+                realm,
+                json!({"action": "create", "owner": "did:web:alice.example", "public": true}),
+            ),
+            &hlc,
+        );
+    }
+    state.apply(
+        &op(
+            soland::kinds::CX_FLOW_CREATE,
+            PARENT,
+            json!({"object": {"id": FLOW, "space_id": PARENT, "title": "Card"}}),
+        ),
+        &hlc,
+    );
+
+    let accepted = state.apply(
+        &op(
+            soland::kinds::CX_FLOW_UPDATE,
+            PARENT,
+            json!({"flow_id": FLOW, "patch": {"discussion_realm_ref": CHILD}}),
+        ),
+        &hlc,
+    );
+    assert!(matches!(accepted, ProjectionEffect::FlowLifecycle { .. }));
+    assert_eq!(state.discussion_realm_for_flow(FLOW), Some(CHILD));
+    assert_eq!(state.discussion_space_for_flow(FLOW, PARENT), CHILD);
+
+    let rejected = state.apply(
+        &op(
+            soland::kinds::CX_FLOW_UPDATE,
+            PARENT,
+            json!({"flow_id": FLOW, "patch": {"discussion_realm_ref": MISSING}}),
+        ),
+        &hlc,
+    );
+    assert!(matches!(
+        rejected,
+        ProjectionEffect::Rejected { reason } if reason == "orphan_discussion_realm_ref"
+    ));
+}

@@ -324,6 +324,7 @@ mod tests {
             use_keystore: false,
             federation_policy: FederationPolicy::Mesh,
             federation_peers: Vec::new(),
+            federation_outbound_enabled: false,
             admin_default_page_limit: 100,
             admin_max_page_limit: 1000,
             admin_principal_dids: Vec::new(),
@@ -340,6 +341,8 @@ mod tests {
             compaction_prune_walk_per_space_limit: 50,
             seed_demo_data: true,
             trust_domain: "cx:trust_domain:soland.local".to_owned(),
+            sovereign_enclave_enabled: false,
+            sovereign_enclave_allowed_outbound_hosts: Vec::new(),
         }
     }
 
