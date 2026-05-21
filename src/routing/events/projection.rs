@@ -759,12 +759,6 @@ pub fn project_accepted_operations(state: &AppState, origin: &str, operations: &
         // `routing::events::applet_bridge::maybe_emit_echo_status_for_session_start`
         // for the body shape contract.
         super::applet_bridge::maybe_emit_echo_status_for_session_start(state, origin, operation);
-        // `cx.profile.agent_workspace.v1`: when membership / capability
-        // events target an agent DID, fan out a synthetic
-        // `agent_membership_change` notification so controller-side
-        // workspaces observe source membership lifecycle.
-        // See agent-workspace-profile.md §14.
-        super::agent_workspace_bridge::maybe_emit_agent_membership_change(state, origin, operation);
         // Reference agent runtime: if the accepted operation is
         // `cx.agent.protocol_session.start`, fan out a synthetic
         // `cx.agent.protocol_session.status` (running) followed by a

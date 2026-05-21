@@ -1,7 +1,6 @@
 use salvo::prelude::*;
 
 pub(crate) mod agent_bridge;
-pub(super) mod agent_workspace_bridge;
 pub(super) mod applet_bridge;
 pub(super) mod event_log;
 // Flow + projection helpers are `pub(crate)` so the MIMI interop

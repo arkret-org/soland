@@ -6,7 +6,7 @@
 //! - `POST /api/v1/events`           — submit one canonical Event Envelope,
 //!   an `events[]` batch, or a federation `service_binding_ref` + `events[]` batch.
 //! - `GET  /api/v1/events/{event_id}` — fetch one envelope.
-//! - `POST /api/v1/events/resolve`    — fetch up to `MAX_EVENT_BATCH_GET`.
+//! - `POST /api/v1/events/resolve`    — resolve up to `MAX_EVENT_RESOLVE`.
 //! - `GET  /api/v1/events`            — paginated list (filtered by actor / realm).
 //! - `GET  /api/v1/events/frontier`   — per-actor / per-realm frontier.
 //!
@@ -25,19 +25,18 @@ use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde_json::{Value, json};
 
-use super::operations as events_operations;
 use super::{
     append_audit_log, auth_or_render, is_valid_sha256_digest, now, project_accepted_operations,
     query_param, query_param_all, realm_event_visible_to_session, realm_has_member, render_error,
     sha256_hex, validate_did, validate_operation_policy, validate_operation_semantics,
     validate_space_id,
 };
-use crate::error::{AppError, ErrorCode};
+use crate::error::{AppError, ErrorCode, error_http_status};
 use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::{AppState, CanonicalEventRecord, SessionRecord};
 use crate::wire::{
-    EventBatchGetRequest, EventBatchGetResponse, EventDescribeResponse, EventReadResponse,
+    EventDescribeResponse, EventReadResponse, EventResolveRequest, EventResolveResponse,
     EventSubmitResponse, EventsFrontierResBody, EventsPageResponse,
 };
 use crate::{artifacts, kinds};
@@ -59,7 +58,8 @@ pub(super) fn router() -> Router {
 const MAX_EVENT_BYTES: usize = 64 * 1024;
 const MAX_EVENT_PREV_REFS: usize = 32;
 const MAX_EVENT_REFS: usize = 64;
-const MAX_EVENT_BATCH_GET: usize = 100;
+const MAX_EVENT_RESOLVE: usize = 100;
+const MAX_EVENT_SUBMIT_BATCH: usize = 100;
 
 #[endpoint]
 async fn events_describe(depot: &mut Depot, res: &mut Response) {
@@ -118,8 +118,8 @@ async fn events_describe(depot: &mut Depot, res: &mut Response) {
             "max_event_bytes": MAX_EVENT_BYTES,
             "max_prev_refs": MAX_EVENT_PREV_REFS,
             "max_refs": MAX_EVENT_REFS,
-            "max_batch_size": MAX_EVENT_BATCH_GET,
-            "max_batch_get": MAX_EVENT_BATCH_GET,
+            "max_batch_size": MAX_EVENT_SUBMIT_BATCH,
+            "max_resolve": MAX_EVENT_RESOLVE,
             "max_list_limit": 100
         }),
         capabilities: json!({
@@ -226,21 +226,21 @@ async fn get_event(
 #[endpoint(
     operation_id = "cx.events.resolve",
     tags("events"),
-    summary = "Fetch up to MAX_EVENT_BATCH_GET canonical Event Envelopes by event_id"
+    summary = "Resolve up to MAX_EVENT_RESOLVE canonical Event Envelopes by event_id"
 )]
 async fn resolve_events(
     aa: AuthArgs,
-    body: JsonBody<EventBatchGetRequest>,
+    body: JsonBody<EventResolveRequest>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<EventBatchGetResponse> {
+) -> JsonResult<EventResolveResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req)?;
     let body = body.into_inner();
-    if body.event_ids.len() > MAX_EVENT_BATCH_GET {
+    if body.event_ids.len() + body.event_hashes.len() > MAX_EVENT_RESOLVE {
         return Err(AppError::new(
             ErrorCode::QuotaExceeded,
-            "too many event_ids requested",
+            "too many events requested",
         ));
     }
     let store = state.persistence.events();
@@ -254,7 +254,7 @@ async fn resolve_events(
             _ => missing.push(event_id),
         }
     }
-    json_ok(EventBatchGetResponse {
+    json_ok(EventResolveResponse {
         events: found,
         missing,
         unauthorized: Vec::new(),
@@ -668,7 +668,7 @@ fn batch_envelopes_from_submit_body(body: &Value) -> Result<Option<Vec<Value>>, 
             "events submit batch must contain at least one envelope",
         ));
     }
-    if envelopes.len() > MAX_EVENT_BATCH_GET {
+    if envelopes.len() > MAX_EVENT_SUBMIT_BATCH {
         return Err(SubmitOneError::new(
             StatusCode::PAYLOAD_TOO_LARGE,
             "payload_too_large",
@@ -833,7 +833,7 @@ fn submit_federation_events(state: &AppState, req: &Request, body: Value, res: &
         );
         return;
     }
-    if submit.events.len() > MAX_EVENT_BATCH_GET {
+    if submit.events.len() > MAX_EVENT_SUBMIT_BATCH {
         render_error(
             res,
             StatusCode::PAYLOAD_TOO_LARGE,
@@ -1041,28 +1041,6 @@ fn submit_event_value(
                 message,
             ));
         }
-        if let Some(content) = operation.payload.get("content")
-            && let Some(feature_id) =
-                events_operations::agent_workspace_required_feature_id(content)
-        {
-            let envelope_satisfies = envelope
-                .pointer("/requirements/critical_extensions")
-                .and_then(Value::as_array)
-                .map(|arr| {
-                    arr.iter().any(|ext| {
-                        ext.get("id").and_then(Value::as_str) == Some(feature_id)
-                            && ext.get("fail_closed").and_then(Value::as_bool) == Some(true)
-                    })
-                })
-                .unwrap_or(false);
-            if !envelope_satisfies {
-                return Err(SubmitOneError::new(
-                    StatusCode::BAD_REQUEST,
-                    "schema_violation",
-                    "cx.content.mention_redirect requires requirements.critical_extensions[] entry with fail_closed=true",
-                ));
-            }
-        }
         if let Ok(proj) = state.projection.lock() {
             if let Err(reason) = proj.check_space_container_lifecycle_transition(operation) {
                 return Err(SubmitOneError::new(
@@ -1259,7 +1237,7 @@ fn validate_event_envelope(
     // (broadcast forms) or cx.schema.device_message.v1 (cx.key.verification.*).
     if let Some((code, reason)) = crate::round23::events_submit_pre_admit_check(&kind) {
         return Err(event_validation_error(
-            code.http_status(),
+            error_http_status(code),
             code.as_str(),
             reason,
         ));
@@ -1326,7 +1304,7 @@ fn validate_event_envelope(
         .unwrap_or(false);
     if let Some((code, reason)) = crate::round23::terminal_realm_check(realm_terminal, &kind) {
         return Err(event_validation_error(
-            code.http_status(),
+            error_http_status(code),
             code.as_str(),
             reason,
         ));
@@ -1367,7 +1345,7 @@ fn validate_event_envelope(
             &state.config.trust_domain,
         ) {
             return Err(event_validation_error(
-                code.http_status(),
+                error_http_status(code),
                 code.as_str(),
                 &reason,
             ));
@@ -1418,7 +1396,7 @@ fn validate_event_envelope(
             mls_governance_binding_covers_policy_root,
         ) {
             return Err(event_validation_error(
-                code.http_status(),
+                error_http_status(code),
                 code.as_str(),
                 &reason,
             ));
@@ -1440,7 +1418,7 @@ fn validate_event_envelope(
             .collect();
         if let Err((code, reason)) = crate::round23::validate_anchor_frontier_entries(&entries) {
             return Err(event_validation_error(
-                code.http_status(),
+                error_http_status(code),
                 code.as_str(),
                 &reason,
             ));

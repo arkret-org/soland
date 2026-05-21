@@ -521,7 +521,7 @@ async fn typed_describe_handlers_publish_response_schemas() {
     //
     // Note: snapshot_head / snapshot_chunk get their operation_ids from
     // the SOLAND_EXTENSION_OPERATIONS registry (`cx.snapshot.head`
-    // / `cx.sync.get_snapshot_chunk`), not from my handler annotation.
+    // / `cx.extension.soland.sync.get_snapshot_chunk`), not from my handler annotation.
     for operation_id in [
         "cx.events.get",
         "cx.events.resolve",

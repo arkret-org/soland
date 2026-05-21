@@ -1,21 +1,7 @@
-//! Canonical Contrix error codes (spec error-code-registry.json v2026-05-03).
+//! Soland error integration for canonical Contrix SDK error codes.
 //!
-//! Every wire-form error code on `/api/v1/*` must belong to the registry of
-//! 42 canonical codes. This module gives the rest of the crate a typed
-//! [`ErrorCode`] enum that:
-//!
-//! 1. enumerates exactly the 42 codes from the active registry,
-//! 2. round-trips with `contrix_core::error::KNOWN_ERROR_CODES` (asserted in
-//!    [`tests::variant_count_matches_registry`] / [`tests::wire_codes_round_trip`]),
-//! 3. carries the canonical HTTP status binding so handlers don't hand-pick it, and
-//! 4. exposes a [`ErrorCode::render`] convenience that funnels through the existing
-//!    `crate::routing::util::render_error` so call-site rewrites are mechanical (`render_error(res,
-//!    StatusCode::CONFLICT, "cas_conflict", "...")` -> `ErrorCode::CasConflict.render(res, "...")`).
-//!
-//! This module is the structured path that new code MUST use; the
-//! typed-vs-string parity is locked in by the registry round-trip test below.
-
-use contrix_sdk::error as core_error;
+//! Wire-form error codes are owned by `contrix_sdk::ErrorCode`; this module
+//! only adds soland-specific Salvo rendering and typed endpoint plumbing.
 
 /// Round C44 (2026-05-18; spec dc01ad7 Tier-0) — registered
 /// `failed_precondition` reason codes new in this round. These are
@@ -52,8 +38,6 @@ pub mod reasons {
     pub const MLS_SEND_PAUSE_ADVISORY_REQUIRES_E2EE_RELAXED_PROFILE: &str =
         core_error::REASON_MLS_SEND_PAUSE_ADVISORY_REQUIRES_E2EE_RELAXED_PROFILE;
     pub const CONFLICTING_E2EE_PROFILES: &str = core_error::REASON_CONFLICTING_E2EE_PROFILES;
-    pub const CONFLICTING_AGENT_WORKSPACE_PROFILES: &str =
-        core_error::REASON_CONFLICTING_AGENT_WORKSPACE_PROFILES;
     pub const LITE_PROFILE_WRITES_DISALLOWED_EVENT_KIND: &str =
         core_error::REASON_LITE_PROFILE_WRITES_DISALLOWED_EVENT_KIND;
 
@@ -200,451 +184,41 @@ macro_rules! app_error {
     };
 }
 
-/// Every canonical Contrix error code, in registry order.
-///
-/// Order matches `contrix-spec/spec/v1/artifacts/registry/error-code-registry.json`
-/// (and `contrix_core::error::KNOWN_ERROR_CODES`). Adding a code requires
-/// touching this enum **and** the registry; the round-trip test in this
-/// module fails until both line up.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum ErrorCode {
-    BadJson,
-    BadQuery,
-    SchemaViolation,
-    MissingParam,
-    InvalidParam,
-    Unauthenticated,
-    AuthExpired,
-    SoftLoggedOut,
-    InvalidSignature,
-    CapabilityDenied,
-    SpaceFrozen,
-    ClaimRequired,
-    NotFound,
-    UnrecognizedEndpoint,
-    MethodNotAllowed,
-    Conflict,
-    CasConflict,
-    CausalConflict,
-    DependencyMissing,
-    DiscussionTrackDisabled,
-    /// C14 / read-receipts §2.5: Sync Service drops `cx.receipt.read` when
-    /// the effective Space `disclosure="disabled"` policy is in force.
-    PolicyViolation,
-    EpochMismatch,
-    DuplicateConflict,
-    RankExhausted,
-    HlcLogicalOverflow,
-    PayloadTooLarge,
-    DigestMismatch,
-    AadDigestMismatch,
-    PayloadDigestMismatch,
-    KeyUnavailable,
-    StateMismatch,
-    AuditReceiptInvalidated,
-    UnknownDid,
-    QuotaExceeded,
-    RateLimited,
-    Timeout,
-    StaleFrontier,
-    SyncTokenExpired,
-    UnsupportedFeature,
-    UnsupportedEventKind,
-    ProjectionIncomplete,
-    InternalError,
-    TemporarilyUnavailable,
-    PolicyCombinationInvalid,
-    AnchorerRecoveryMissing,
-    UnsupportedLatticeType,
-    /// Round C44 (2026-05-18; spec dc01ad7) — registry add: peer or
-    /// ServiceDescribe advertises a `cx.profile.*` ID this implementation
-    /// does not support. Wire-level top error code (not a
-    /// `failed_precondition` sub-reason).
-    ProfileUnsupported,
-    // ── Round C45 (2026-05-18 main; spec 5ed365c) — 6 new wire-level codes.
-    /// Cursor MAC/signature/handle did not verify against the issuer's
-    /// transcript (purpose / principal / device / service / filter / positions /
-    /// target / x / issuer_kid). Distinct from `CursorExpired` (TTL) and
-    /// `UnsupportedFeature` (capability miss). Client MUST clear local cursor
-    /// cache and restart from initial `/sync`.
-    CursorIntegrityInvalid,
-    /// Reducer state-machine precondition failed. Carries a reason from the
-    /// flow/place/morph/message/relation lifecycle family (e.g.
-    /// `flow_not_active`, `place_parent_cycle`).
-    FailedPrecondition,
-    /// Typed-hash algorithm prefix (e.g. `cx:event:<algo>:<digest>`) is not
-    /// in the receiver's supported hash list.
-    UnsupportedHash,
-    /// Anchor frontier has gaps within the receiver's `auth_chain` backfill
-    /// bound; soft-fail per scalability-constraints.
-    AnchorIncomplete,
-    /// Sender did not include a franking sidecar; E2EE frank cannot be
-    /// produced for the requested ciphertext.
-    FrankUnavailable,
-    /// TURN REST-style ephemeral credential is past its TTL; client MUST
-    /// request a fresh credential.
-    TurnCredentialExpired,
-    /// Round C47 (2026-05-18 main; spec e10b6ad) — federation high-assurance
-    /// peer has missed proactive frontier probes or produced invalid /
-    /// divergent frontier evidence and is quarantined for the affected
-    /// Space until fork resolution succeeds. See zh/sync/federation.md
-    /// §4.5.3. Returned on the federation-facing surface only.
-    StalePeer,
-    // ── Round R2/R3 (2026-05-20; spec 8b7978d) — 15 new wire-level codes.
-    /// T09 — `cx.realm.policy_components.relaxed_window_max_ms > 300000`.
-    RelaxedWindowExceedsCeiling,
-    /// T09 — `cx.profile.e2ee_relaxed.v1` and audit compliance profile
-    /// active simultaneously.
-    E2eeRelaxedDisallowedInComplianceProfile,
-    /// T08 — `cx.cross_signing.reset.trust_domain` did not match the
-    /// receiving Principal Server's configured trust domain.
-    CrossDomainReplayRejected,
-    /// T08 — `cx.cross_signing.reset.reset_event_id != event.event_id`.
-    ResetEventIdMismatch,
-    /// T06 — `cx.moderation.appeal.decision` with verdict=overturn
-    /// without a paired `cx.moderation.decision.lift` in the same batch.
-    AppealOverturnMissingLift,
-    /// T06 — `cx.moderation.appeal.review/decision` issued by the same
-    /// actor as the original moderation decision (separation of duties).
-    AppealSelfReviewForbidden,
-    /// T07 — any non-audit-class event submitted on a Realm that has
-    /// reached the destroyed terminal state.
-    RealmTerminalState,
-    /// T10 — `cx.audit.agent.join` evidence does not match the Audit
-    /// Agent's declared attestation chain.
-    AuditAgentAttestationMismatch,
-    /// T10 — Audit Agent's declared `audit_purpose` does not match the
-    /// Realm-level audit policy purpose binding.
-    AuditPurposeMismatch,
-    /// T11 — Blob is currently subject to a legal hold; presign refused
-    /// fail-closed.
-    LegalHoldActive,
-    /// T11 — Blob has been redacted; presign refused fail-closed.
-    BlobRedacted,
-    /// T12 — SFU/MCU service DID is not listed in
-    /// `plaintext_visible_services[].purpose=media_plaintext` for a Realm
-    /// that has `media_service_decrypts=true`.
-    MediaPlaintextServiceNotAuthorised,
-    /// T12 — Current MLS epoch governance binding does not cover the
-    /// active media plaintext policy_root.
-    MlsGovernanceBindingStale,
-    /// T15 — `cx.3pid.lookup` short-code presented past its TTL window.
-    ExpiredInviteToken,
-    /// T16 — A late-recovery key share targeted an actor who is no
-    /// longer a member of the Realm at the recovery T₀.
-    LateRecoveryRejectedMembership,
-    // ── Round 4 (2026-05-20; spec a77b9958) — 3 new wire-level codes.
-    /// B1.9 — Inbound federation delivery's recipient-binding is stale;
-    /// the response carries the new recipient service DID and a
-    /// `handover_frontier` the sender should replay from.
-    DeliveryBindingStale,
-    /// B1.9 — Inbound federation delivery's recipient-binding was
-    /// already handed over to a new service; sender SHOULD stop
-    /// retrying via the legacy binding.
-    DeliveryBindingHandedOver,
-    /// B1.8 — Federation idempotency cache replay AFTER the source
-    /// service rotated its verification key. Diagnostic only — the
-    /// cached response is returned with no fresh side effects.
-    HistoricalOnly,
+pub use contrix_sdk::ErrorCode;
+
+/// Convert the SDK registry status into Salvo's `StatusCode`.
+pub fn error_http_status(code: ErrorCode) -> StatusCode {
+    StatusCode::from_u16(code.http_status()).expect("registry status codes are valid HTTP statuses")
 }
 
-impl ErrorCode {
-    /// All variants in registry order. Length must equal
-    /// `contrix_core::error::KNOWN_ERROR_CODES.len()`; the round-trip test
-    /// catches mismatches.
-    pub const ALL: &'static [Self] = &[
-        Self::BadJson,
-        Self::BadQuery,
-        Self::SchemaViolation,
-        Self::MissingParam,
-        Self::InvalidParam,
-        Self::Unauthenticated,
-        Self::AuthExpired,
-        Self::SoftLoggedOut,
-        Self::InvalidSignature,
-        Self::CapabilityDenied,
-        Self::SpaceFrozen,
-        Self::ClaimRequired,
-        Self::NotFound,
-        Self::UnrecognizedEndpoint,
-        Self::MethodNotAllowed,
-        Self::Conflict,
-        Self::CasConflict,
-        Self::CausalConflict,
-        Self::DependencyMissing,
-        Self::DiscussionTrackDisabled,
-        Self::PolicyViolation,
-        Self::EpochMismatch,
-        Self::DuplicateConflict,
-        Self::RankExhausted,
-        Self::HlcLogicalOverflow,
-        Self::PayloadTooLarge,
-        Self::DigestMismatch,
-        Self::AadDigestMismatch,
-        Self::PayloadDigestMismatch,
-        Self::KeyUnavailable,
-        Self::StateMismatch,
-        Self::AuditReceiptInvalidated,
-        Self::UnknownDid,
-        Self::QuotaExceeded,
-        Self::RateLimited,
-        Self::Timeout,
-        Self::StaleFrontier,
-        Self::SyncTokenExpired,
-        Self::UnsupportedFeature,
-        Self::UnsupportedEventKind,
-        Self::ProjectionIncomplete,
-        Self::InternalError,
-        Self::TemporarilyUnavailable,
-        Self::PolicyCombinationInvalid,
-        Self::AnchorerRecoveryMissing,
-        Self::UnsupportedLatticeType,
-        Self::ProfileUnsupported,
-        Self::CursorIntegrityInvalid,
-        Self::FailedPrecondition,
-        Self::UnsupportedHash,
-        Self::AnchorIncomplete,
-        Self::FrankUnavailable,
-        Self::TurnCredentialExpired,
-        Self::StalePeer,
-        Self::RelaxedWindowExceedsCeiling,
-        Self::E2eeRelaxedDisallowedInComplianceProfile,
-        Self::CrossDomainReplayRejected,
-        Self::ResetEventIdMismatch,
-        Self::AppealOverturnMissingLift,
-        Self::AppealSelfReviewForbidden,
-        Self::RealmTerminalState,
-        Self::AuditAgentAttestationMismatch,
-        Self::AuditPurposeMismatch,
-        Self::LegalHoldActive,
-        Self::BlobRedacted,
-        Self::MediaPlaintextServiceNotAuthorised,
-        Self::MlsGovernanceBindingStale,
-        Self::ExpiredInviteToken,
-        Self::LateRecoveryRejectedMembership,
-        // Round 4 (2026-05-20)
-        Self::DeliveryBindingStale,
-        Self::DeliveryBindingHandedOver,
-        Self::HistoricalOnly,
-    ];
-
-    /// Canonical wire-form code (snake_case string used in `ErrorEnvelope.errcode`).
-    ///
-    /// Returns the same `&'static str` as the matching `ERROR_CODE_*`
-    /// constant in `contrix_core::error`.
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::BadJson => core_error::ERROR_CODE_BAD_JSON,
-            Self::BadQuery => core_error::ERROR_CODE_BAD_QUERY,
-            Self::SchemaViolation => core_error::ERROR_CODE_SCHEMA_VIOLATION,
-            Self::MissingParam => core_error::ERROR_CODE_MISSING_PARAM,
-            Self::InvalidParam => core_error::ERROR_CODE_INVALID_PARAM,
-            Self::Unauthenticated => core_error::ERROR_CODE_UNAUTHENTICATED,
-            Self::AuthExpired => core_error::ERROR_CODE_AUTH_EXPIRED,
-            Self::SoftLoggedOut => core_error::ERROR_CODE_SOFT_LOGGED_OUT,
-            Self::InvalidSignature => core_error::ERROR_CODE_INVALID_SIGNATURE,
-            Self::CapabilityDenied => core_error::ERROR_CODE_CAPABILITY_DENIED,
-            Self::SpaceFrozen => core_error::ERROR_CODE_SPACE_FROZEN,
-            Self::ClaimRequired => core_error::ERROR_CODE_CLAIM_REQUIRED,
-            Self::NotFound => core_error::ERROR_CODE_NOT_FOUND,
-            Self::UnrecognizedEndpoint => core_error::ERROR_CODE_UNRECOGNIZED_ENDPOINT,
-            Self::MethodNotAllowed => core_error::ERROR_CODE_METHOD_NOT_ALLOWED,
-            Self::Conflict => core_error::ERROR_CODE_CONFLICT,
-            Self::CasConflict => core_error::ERROR_CODE_CAS_CONFLICT,
-            Self::CausalConflict => core_error::ERROR_CODE_CAUSAL_CONFLICT,
-            Self::DependencyMissing => core_error::ERROR_CODE_DEPENDENCY_MISSING,
-            Self::DiscussionTrackDisabled => core_error::ERROR_CODE_DISCUSSION_TRACK_DISABLED,
-            Self::PolicyViolation => core_error::ERROR_CODE_POLICY_VIOLATION,
-            Self::EpochMismatch => core_error::ERROR_CODE_EPOCH_MISMATCH,
-            Self::DuplicateConflict => core_error::ERROR_CODE_DUPLICATE_CONFLICT,
-            Self::RankExhausted => core_error::ERROR_CODE_RANK_EXHAUSTED,
-            Self::HlcLogicalOverflow => core_error::ERROR_CODE_HLC_LOGICAL_OVERFLOW,
-            Self::PayloadTooLarge => core_error::ERROR_CODE_PAYLOAD_TOO_LARGE,
-            Self::DigestMismatch => core_error::ERROR_CODE_DIGEST_MISMATCH,
-            Self::AadDigestMismatch => core_error::ERROR_CODE_AAD_DIGEST_MISMATCH,
-            Self::PayloadDigestMismatch => core_error::ERROR_CODE_PAYLOAD_DIGEST_MISMATCH,
-            Self::KeyUnavailable => core_error::ERROR_CODE_KEY_UNAVAILABLE,
-            Self::StateMismatch => core_error::ERROR_CODE_STATE_MISMATCH,
-            Self::AuditReceiptInvalidated => core_error::ERROR_CODE_AUDIT_RECEIPT_INVALIDATED,
-            Self::UnknownDid => core_error::ERROR_CODE_UNKNOWN_DID,
-            Self::QuotaExceeded => core_error::ERROR_CODE_QUOTA_EXCEEDED,
-            Self::RateLimited => core_error::ERROR_CODE_RATE_LIMITED,
-            Self::Timeout => core_error::ERROR_CODE_TIMEOUT,
-            Self::StaleFrontier => core_error::ERROR_CODE_STALE_FRONTIER,
-            Self::SyncTokenExpired => core_error::ERROR_CODE_SYNC_TOKEN_EXPIRED,
-            Self::UnsupportedFeature => core_error::ERROR_CODE_UNSUPPORTED_FEATURE,
-            Self::UnsupportedEventKind => core_error::ERROR_CODE_UNSUPPORTED_EVENT_KIND,
-            Self::ProjectionIncomplete => core_error::ERROR_CODE_PROJECTION_INCOMPLETE,
-            Self::InternalError => core_error::ERROR_CODE_INTERNAL_ERROR,
-            Self::TemporarilyUnavailable => core_error::ERROR_CODE_TEMPORARILY_UNAVAILABLE,
-            Self::PolicyCombinationInvalid => core_error::ERROR_CODE_POLICY_COMBINATION_INVALID,
-            Self::AnchorerRecoveryMissing => core_error::ERROR_CODE_ANCHORER_RECOVERY_MISSING,
-            Self::UnsupportedLatticeType => core_error::ERROR_CODE_UNSUPPORTED_LATTICE_TYPE,
-            Self::ProfileUnsupported => core_error::ERROR_CODE_PROFILE_UNSUPPORTED,
-            Self::CursorIntegrityInvalid => core_error::ERROR_CODE_CURSOR_INTEGRITY_INVALID,
-            Self::FailedPrecondition => core_error::ERROR_CODE_FAILED_PRECONDITION,
-            Self::UnsupportedHash => core_error::ERROR_CODE_UNSUPPORTED_HASH,
-            Self::AnchorIncomplete => core_error::ERROR_CODE_ANCHOR_INCOMPLETE,
-            Self::FrankUnavailable => core_error::ERROR_CODE_FRANK_UNAVAILABLE,
-            Self::TurnCredentialExpired => core_error::ERROR_CODE_TURN_CREDENTIAL_EXPIRED,
-            Self::StalePeer => core_error::ERROR_CODE_STALE_PEER,
-            Self::RelaxedWindowExceedsCeiling => {
-                core_error::ERROR_CODE_RELAXED_WINDOW_EXCEEDS_CEILING
-            }
-            Self::E2eeRelaxedDisallowedInComplianceProfile => {
-                core_error::ERROR_CODE_E2EE_RELAXED_DISALLOWED_IN_COMPLIANCE_PROFILE
-            }
-            Self::CrossDomainReplayRejected => core_error::ERROR_CODE_CROSS_DOMAIN_REPLAY_REJECTED,
-            Self::ResetEventIdMismatch => core_error::ERROR_CODE_RESET_EVENT_ID_MISMATCH,
-            Self::AppealOverturnMissingLift => core_error::ERROR_CODE_APPEAL_OVERTURN_MISSING_LIFT,
-            Self::AppealSelfReviewForbidden => core_error::ERROR_CODE_APPEAL_SELF_REVIEW_FORBIDDEN,
-            Self::RealmTerminalState => core_error::ERROR_CODE_REALM_TERMINAL_STATE,
-            Self::AuditAgentAttestationMismatch => {
-                core_error::ERROR_CODE_AUDIT_AGENT_ATTESTATION_MISMATCH
-            }
-            Self::AuditPurposeMismatch => core_error::ERROR_CODE_AUDIT_PURPOSE_MISMATCH,
-            Self::LegalHoldActive => core_error::ERROR_CODE_LEGAL_HOLD_ACTIVE,
-            Self::BlobRedacted => core_error::ERROR_CODE_BLOB_REDACTED,
-            Self::MediaPlaintextServiceNotAuthorised => {
-                core_error::ERROR_CODE_MEDIA_PLAINTEXT_SERVICE_NOT_AUTHORISED
-            }
-            Self::MlsGovernanceBindingStale => core_error::ERROR_CODE_MLS_GOVERNANCE_BINDING_STALE,
-            Self::ExpiredInviteToken => core_error::ERROR_CODE_EXPIRED_INVITE_TOKEN,
-            Self::LateRecoveryRejectedMembership => {
-                core_error::ERROR_CODE_LATE_RECOVERY_REJECTED_MEMBERSHIP
-            }
-            // Round 4 (2026-05-20)
-            Self::DeliveryBindingStale => core_error::ERROR_CODE_DELIVERY_BINDING_STALE,
-            Self::DeliveryBindingHandedOver => core_error::ERROR_CODE_DELIVERY_BINDING_HANDED_OVER,
-            Self::HistoricalOnly => core_error::ERROR_CODE_HISTORICAL_ONLY,
-        }
-    }
-
-    /// Canonical HTTP status binding from the registry.
-    ///
-    /// We re-use `contrix_core::error::error_code_http_status` to keep the
-    /// soland binding in lock-step with the spec; the round-trip test
-    /// guarantees that lookup will never miss for any [`ErrorCode`] variant.
-    pub fn http_status(self) -> StatusCode {
-        let raw = core_error::error_code_http_status(self.as_str())
-            .expect("every ErrorCode variant has a registered HTTP status");
-        StatusCode::from_u16(raw).expect("registry status codes are valid HTTP statuses")
-    }
-
-    /// Render this error through the standard `util::render_error` envelope.
-    ///
-    /// Equivalent to `render_error(res, code.http_status(), code.as_str(), message)`
-    /// — call sites that don't need a custom HTTP status (i.e. nearly all of
-    /// them) should prefer this so the registry mapping is the only source of
-    /// truth.
-    pub fn render(self, res: &mut Response, message: &str) {
-        render_error(res, self.http_status(), self.as_str(), message);
-    }
-
-    /// Try to parse a wire-form code back into its typed variant.
-    ///
-    /// Useful for logs / tests where a string code arrives from the wire and
-    /// we want to assert it's a registered code (rather than a typo). For
-    /// any unknown code returns `None`.
-    pub fn from_wire(code: &str) -> Option<Self> {
-        Self::ALL.iter().copied().find(|c| c.as_str() == code)
-    }
+/// Render an SDK-owned error code through soland's standard error envelope.
+pub fn render_error_code(code: ErrorCode, res: &mut Response, message: &str) {
+    render_error(res, error_http_status(code), code.as_str(), message);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// The enum and the registry MUST contain the same number of codes.
-    /// Failing this means either a code was added to the registry without
-    /// updating the enum or vice-versa.
     #[test]
-    fn variant_count_matches_registry() {
+    fn sdk_error_codes_are_soland_source_of_truth() {
         assert_eq!(
             ErrorCode::ALL.len(),
-            core_error::KNOWN_ERROR_CODES.len(),
-            "ErrorCode::ALL drifted from contrix_core::error::KNOWN_ERROR_CODES",
+            contrix_sdk::error::KNOWN_ERROR_CODES.len(),
+            "soland must use the SDK registry shape directly",
         );
-    }
-
-    /// Every variant maps to a string in `KNOWN_ERROR_CODES`, and every
-    /// string in `KNOWN_ERROR_CODES` has a parsing target. Both directions.
-    #[test]
-    fn wire_codes_round_trip() {
-        for code in ErrorCode::ALL {
-            let wire = code.as_str();
-            assert!(
-                core_error::is_known_error_code(wire),
-                "ErrorCode::{:?} → {wire:?} is not in KNOWN_ERROR_CODES",
-                code
-            );
-            assert_eq!(
-                ErrorCode::from_wire(wire),
-                Some(*code),
-                "round trip failed for {:?}",
-                code
-            );
-        }
-        for wire in core_error::KNOWN_ERROR_CODES {
-            assert!(
-                ErrorCode::from_wire(wire).is_some(),
-                "registry code {wire:?} has no matching ErrorCode variant",
-            );
-        }
-    }
-
-    /// Every variant has a registered HTTP status — so `http_status()` never
-    /// hits its `expect` panic at runtime.
-    #[test]
-    fn http_status_lookup_never_misses() {
-        for code in ErrorCode::ALL {
-            let _ = code.http_status();
-        }
-    }
-
-    /// Spot-check a couple of well-known status bindings so a refactor of
-    /// the registry-mapper at least gets caught at the most common cases.
-    #[test]
-    fn http_status_spot_checks() {
-        assert_eq!(ErrorCode::BadJson.http_status(), StatusCode::BAD_REQUEST);
+        assert_eq!(ErrorCode::from_wire("bad_json"), Some(ErrorCode::BadJson));
         assert_eq!(
-            ErrorCode::Unauthenticated.http_status(),
-            StatusCode::UNAUTHORIZED
+            ErrorCode::from_wire("directory_not_authorized"),
+            Some(ErrorCode::DirectoryNotAuthorized),
         );
         assert_eq!(
-            ErrorCode::CapabilityDenied.http_status(),
-            StatusCode::FORBIDDEN
-        );
-        assert_eq!(ErrorCode::NotFound.http_status(), StatusCode::NOT_FOUND);
-        assert_eq!(ErrorCode::CasConflict.http_status(), StatusCode::CONFLICT);
-        assert_eq!(ErrorCode::SyncTokenExpired.http_status(), StatusCode::GONE);
-        assert_eq!(
-            ErrorCode::PayloadTooLarge.http_status(),
-            StatusCode::PAYLOAD_TOO_LARGE
+            error_http_status(ErrorCode::BadJson),
+            StatusCode::BAD_REQUEST
         );
         assert_eq!(
-            ErrorCode::SchemaViolation.http_status(),
-            StatusCode::UNPROCESSABLE_ENTITY
-        );
-        assert_eq!(
-            ErrorCode::RateLimited.http_status(),
-            StatusCode::TOO_MANY_REQUESTS
-        );
-        assert_eq!(
-            ErrorCode::InternalError.http_status(),
-            StatusCode::INTERNAL_SERVER_ERROR
-        );
-        assert_eq!(
-            ErrorCode::Timeout.http_status(),
-            StatusCode::GATEWAY_TIMEOUT
-        );
-        assert_eq!(
-            ErrorCode::TemporarilyUnavailable.http_status(),
-            StatusCode::SERVICE_UNAVAILABLE
-        );
-        assert_eq!(
-            ErrorCode::UnsupportedFeature.http_status(),
-            StatusCode::NOT_IMPLEMENTED
+            error_http_status(ErrorCode::DirectoryNotAuthorized),
+            StatusCode::FORBIDDEN,
         );
     }
 }
@@ -700,7 +274,7 @@ impl AppError {
     /// Resolve the HTTP status to use when rendering this error: explicit
     /// override first, then the registry binding.
     pub fn http_status(&self) -> StatusCode {
-        self.status.unwrap_or_else(|| self.code.http_status())
+        self.status.unwrap_or_else(|| error_http_status(self.code))
     }
 
     /// Resolve the on-wire errcode string: explicit override first, then the

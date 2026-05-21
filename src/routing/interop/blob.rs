@@ -285,7 +285,12 @@ async fn blob_get(depot: &mut Depot, req: &mut Request, res: &mut Response) {
                 crate::round23::classify_presign_blob_block(&blob_value, &session.actor)
             {
                 let (code, reason) = block.as_error();
-                render_error(res, code.http_status(), code.as_str(), reason);
+                render_error(
+                    res,
+                    crate::error::error_http_status(code),
+                    code.as_str(),
+                    reason,
+                );
                 return;
             }
             // Response headers per T11.

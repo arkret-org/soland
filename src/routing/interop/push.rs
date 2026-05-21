@@ -135,7 +135,7 @@ fn canonical_errcode(wire: &str) -> crate::error::ErrorCode {
     match wire {
         "missing_auth" | "unauthenticated" => ErrorCode::Unauthenticated,
         "invalid_header" | "invalid_param" | "missing_param" => ErrorCode::InvalidParam,
-        "session_expired" => ErrorCode::SyncTokenExpired,
+        "session_expired" => ErrorCode::CursorExpired,
         _ => ErrorCode::InternalError,
     }
 }

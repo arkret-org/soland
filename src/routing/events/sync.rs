@@ -6,9 +6,8 @@
 //! - `GET  /api/v1/account/subscribe`       — `cx.account.subscribe` (account-aggregate NDJSON:
 //!   timeline, presence, typing, to_device).
 //! - `POST /api/v1/sync/typing`             — `cx.sync.typing` (transient ephemeral)
-//! - `GET  /api/v1/events/subscribe`        — `cx.events.subscribe` (replaces `cx.sync.subscribe` /
-//!   legacy sync subscribe). Multi-space / multi-actor stream; frame `kind` field replaces
-//!   `type`.
+//! - `GET  /api/v1/events/subscribe`        — `cx.events.subscribe`. Multi-space / multi-actor
+//!   stream; frame `kind` field replaces `type`.
 //! - `GET  /api/v1/events`                  — `cx.events.query` (replaces `cx.events.list` +
 //!   `cx.sync.backfill` via `direction=forward|backward`).
 //! - `GET  /api/v1/sync/backfill/gap`       — `cx.sync.backfill_gap` (deployment-local; not in
@@ -18,8 +17,7 @@
 //!
 //! `SyncCursor`, `SyncCursorError`, `parse_and_validate_sync_cursor`,
 //! `decode_sync_cursor_value`, `sync_token_for_client_sync`, `sync_filter_hash`,
-//! `normalized_strings` is
-//! `pub` because sibling routing modules reuse them. They
+//! are `pub` because sibling routing modules reuse them. They
 //! live here because the cursor lifecycle is anchored to account subscribe.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -113,28 +111,37 @@ async fn account_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Respo
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = account_subscribe_query(req);
     let session = authenticated_session(state, req).ok();
-    let since_cursor = if let Some(after) = body.after.as_deref() {
+    let after_cursor = if let Some(after) = body.after.as_deref() {
         match parse_and_validate_sync_cursor(
             after,
             state,
             session.as_ref(),
-            body.profile.as_deref(),
             body.filter.as_ref(),
-            body.renderer.as_deref(),
-            &body.facets,
             chrono::Utc::now().timestamp_millis(),
         ) {
             Ok(cursor) => cursor,
             Err(SyncCursorError::Expired) => {
-                crate::error::ErrorCode::SyncTokenExpired.render(res, "cursor has expired");
+                crate::error::render_error_code(
+                    crate::error::ErrorCode::CursorExpired,
+                    res,
+                    "cursor has expired",
+                );
                 return;
             }
             Err(SyncCursorError::Invalid(message)) => {
-                crate::error::ErrorCode::InvalidParam.render(res, &message);
+                crate::error::render_error_code(
+                    crate::error::ErrorCode::InvalidParam,
+                    res,
+                    &message,
+                );
                 return;
             }
             Err(SyncCursorError::Mismatch(message)) | Err(SyncCursorError::Integrity(message)) => {
-                crate::error::ErrorCode::CursorIntegrityInvalid.render(res, &message);
+                crate::error::render_error_code(
+                    crate::error::ErrorCode::CursorIntegrityInvalid,
+                    res,
+                    &message,
+                );
                 return;
             }
         }
@@ -144,15 +151,21 @@ async fn account_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Respo
     if let Some(presence) = body.set_presence.as_deref()
         && !matches!(presence, "online" | "offline" | "unavailable")
     {
-        crate::error::ErrorCode::InvalidParam
-            .render(res, "set_presence must be online, offline, or unavailable");
+        crate::error::render_error_code(
+            crate::error::ErrorCode::InvalidParam,
+            res,
+            "set_presence must be online, offline, or unavailable",
+        );
         return;
     }
 
     if let Some(presence) = body.set_presence.as_deref() {
         let Some(session) = session.as_ref() else {
-            crate::error::ErrorCode::Unauthenticated
-                .render(res, "set_presence requires authentication");
+            crate::error::render_error_code(
+                crate::error::ErrorCode::Unauthenticated,
+                res,
+                "set_presence requires authentication",
+            );
             return;
         };
         if let Err(error) = state.persistence.presence().put(PresenceRecord {
@@ -165,7 +178,7 @@ async fn account_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Respo
     }
     prune_expired_typing(state);
 
-    let response = build_sync_snapshot(state, session.as_ref(), &body, &since_cursor);
+    let response = build_sync_snapshot(state, session.as_ref(), &body, &after_cursor);
     let cursor = response.cursor.clone();
     let mut frames = vec![ndjson_line(&account_delta_frame(response))];
     if body.catchup.unwrap_or(false) {
@@ -188,10 +201,7 @@ fn account_subscribe_query(req: &mut Request) -> ClientSyncRequest {
     ClientSyncRequest {
         after: query_param(req, "after"),
         catchup: query_param(req, "catchup").and_then(|value| value.parse::<bool>().ok()),
-        profile: query_param(req, "profile"),
-        renderer: query_param(req, "renderer"),
-        facets: req.query::<Vec<String>>("facets").unwrap_or_default(),
-        filter: None,
+        filter: query_param(req, "filter").and_then(|value| serde_json::from_str(&value).ok()),
         set_presence: query_param(req, "set_presence"),
     }
 }
@@ -225,7 +235,7 @@ fn build_sync_snapshot(
     state: &AppState,
     session: Option<&SessionRecord>,
     body: &ClientSyncRequest,
-    since_cursor: &SyncCursor,
+    after_cursor: &SyncCursor,
 ) -> contrix_sdk::model::SyncResBody {
     let visible_spaces: Vec<_> = {
         let spaces = state.realms.lock().expect("spaces lock");
@@ -246,7 +256,7 @@ fn build_sync_snapshot(
     };
     // Compute "left after last cursor" so incremental syncs can prune
     // client-side caches without forcing a full account baseline.
-    // On full sync (no `after` cursor -> empty `since_cursor.positions`)
+    // On full sync (no `after` cursor -> empty `after_cursor.positions`)
     // there is nothing to compare against; the client already treats
     // omission from `spaces` as authoritative there.
     let visible_space_ids: BTreeSet<&str> = visible_spaces
@@ -254,7 +264,7 @@ fn build_sync_snapshot(
         .map(|(id, _, _, _, _)| id.as_str())
         .collect();
     let left_spaces: Vec<String> = if body.after.is_some() {
-        since_cursor
+        after_cursor
             .positions
             .keys()
             .filter(|id| !visible_space_ids.contains(id.as_str()))
@@ -273,13 +283,13 @@ fn build_sync_snapshot(
         attach_discussion_realm_ref(&projection, &mut flow);
         let flow_state_after = flow.clone();
         let flow_list_item = flow.clone();
-        let since_position = since_cursor
+        let after_position = after_cursor
             .positions
             .get(&space_id)
             .copied()
             .unwrap_or_default();
         let (timeline_events, space_position) =
-            timeline_events_for_space(state, &projection, &space_id, since_position, session);
+            timeline_events_for_space(state, &projection, &space_id, after_position, session);
         let bottom_cells = bottom_cells_for_space(&projection, &space_id);
         positions.insert(space_id.clone(), space_position);
         sync_spaces.insert(
@@ -304,17 +314,17 @@ fn build_sync_snapshot(
     }
     drop(projection);
 
-    let mut to_device_position = since_cursor.to_device_position;
+    let mut to_device_position = after_cursor.to_device_position;
     let to_device = session
         .map(|session| {
-            prune_acked_device_messages(state, session, since_cursor.to_device_position);
+            prune_acked_device_messages(state, session, after_cursor.to_device_position);
             let queued = state
                 .persistence
                 .device_messages()
                 .list_after(
                     &session.actor,
                     &session.device_id,
-                    since_cursor.to_device_position,
+                    after_cursor.to_device_position,
                 )
                 .unwrap_or_default();
             let events = device_message_events_after(&queued);
@@ -357,10 +367,7 @@ fn build_sync_snapshot(
         cursor: sync_token_for_client_sync(
             state,
             session,
-            body.profile.as_deref(),
             body.filter.as_ref(),
-            body.renderer.as_deref(),
-            &body.facets,
             positions,
             to_device_position,
         ),
@@ -379,17 +386,17 @@ fn timeline_events_for_space(
     state: &AppState,
     projection: &ProjectionState,
     space_id: &str,
-    since_position: i64,
+    after_position: i64,
     session: Option<&SessionRecord>,
 ) -> (Vec<serde_json::Value>, i64) {
     let mut seen = BTreeSet::new();
-    let mut newest_position = since_position;
+    let mut newest_position = after_position;
     let mut timeline_entries = Vec::new();
 
     for message in projection.messages_for_space(space_id) {
         let position = message.created_at.timestamp_micros();
         newest_position = newest_position.max(position);
-        if position <= since_position || !seen.insert(message.event_id.clone()) {
+        if position <= after_position || !seen.insert(message.event_id.clone()) {
             continue;
         }
         if !realm_event_visible_to_session_with_projection(
@@ -413,7 +420,7 @@ fn timeline_events_for_space(
     {
         let position = message.created_at.timestamp_micros();
         newest_position = newest_position.max(position);
-        if position <= since_position || !seen.insert(message.event_id.clone()) {
+        if position <= after_position || !seen.insert(message.event_id.clone()) {
             continue;
         }
         if !realm_event_visible_to_session_with_projection(
@@ -605,10 +612,7 @@ pub enum SyncCursorError {
 pub fn sync_token_for_client_sync(
     state: &AppState,
     session: Option<&SessionRecord>,
-    profile: Option<&str>,
     filter: Option<&serde_json::Value>,
-    renderer: Option<&str>,
-    facets: &[String],
     spaces_positions: BTreeMap<String, i64>,
     to_device_position: i64,
 ) -> String {
@@ -621,8 +625,7 @@ pub fn sync_token_for_client_sync(
         .map(|session| session.device_id.clone())
         .unwrap_or_else(|| "anonymous".to_owned());
     let device_positions = BTreeMap::from([(device_id.clone(), issued_at.timestamp_micros())]);
-    let profile = profile.unwrap_or("incremental");
-    let filter_hash = sync_filter_hash(profile, filter, renderer, facets);
+    let filter_hash = sync_filter_hash(filter);
     let issued_at_ms = issued_at.timestamp_millis();
     let expires_at_ms = expires_at.timestamp_millis();
     let cursor = json!({
@@ -631,12 +634,9 @@ pub fn sync_token_for_client_sync(
         "t": issued_at.to_rfc3339_opts(SecondsFormat::Millis, true),
         "x": expires_at_ms,
         "_ctx": {
-            "profile": profile,
             "principal_id": principal_id,
             "device_id": device_id,
             "service_id": state.config.service_did.clone(),
-            "renderer": renderer,
-            "facets": facets,
             "filter_hash": filter_hash,
             "issued_at_ms": issued_at_ms
         },
@@ -707,10 +707,7 @@ pub fn parse_and_validate_sync_cursor(
     token: &str,
     state: &AppState,
     session: Option<&SessionRecord>,
-    profile: Option<&str>,
     filter: Option<&serde_json::Value>,
-    renderer: Option<&str>,
-    facets: &[String],
     now_ms: i64,
 ) -> Result<SyncCursor, SyncCursorError> {
     let value = decode_sync_cursor_value(token)?;
@@ -723,16 +720,18 @@ pub fn parse_and_validate_sync_cursor(
             .and_then(|purpose| purpose.as_str())
             .is_none_or(|purpose| purpose != "stream")
     {
-        return Err(SyncCursorError::Invalid("since must be a v1 sync cursor"));
+        return Err(SyncCursorError::Invalid(
+            "after must be a v1 account cursor",
+        ));
     }
     let Some(expires_at) = value.get("x").and_then(|expires_at| expires_at.as_i64()) else {
-        return Err(SyncCursorError::Invalid("since cursor must contain x"));
+        return Err(SyncCursorError::Invalid("after cursor must contain x"));
     };
     if expires_at <= now_ms {
         return Err(SyncCursorError::Expired);
     }
     let Some(actual_sig) = value.get("_sig").and_then(|sig| sig.as_str()) else {
-        return Err(SyncCursorError::Invalid("since cursor must contain _sig"));
+        return Err(SyncCursorError::Invalid("after cursor must contain _sig"));
     };
     let mut unsigned = value.clone();
     if let Some(object) = unsigned.as_object_mut() {
@@ -748,7 +747,7 @@ pub fn parse_and_validate_sync_cursor(
     let ctx = value
         .get("_ctx")
         .and_then(|ctx| ctx.as_object())
-        .ok_or(SyncCursorError::Invalid("since cursor must contain _ctx"))?;
+        .ok_or(SyncCursorError::Invalid("after cursor must contain _ctx"))?;
     let expected_principal = session
         .map(|session| session.actor.as_str())
         .unwrap_or("anonymous");
@@ -761,7 +760,7 @@ pub fn parse_and_validate_sync_cursor(
         .is_none_or(|principal| principal != expected_principal)
     {
         return Err(SyncCursorError::Mismatch(
-            "sync token principal does not match request actor",
+            "cursor principal does not match request actor",
         ));
     }
     if ctx
@@ -770,7 +769,7 @@ pub fn parse_and_validate_sync_cursor(
         .is_none_or(|device| device != expected_device)
     {
         return Err(SyncCursorError::Mismatch(
-            "sync token device does not match request device",
+            "cursor device does not match request device",
         ));
     }
     if ctx
@@ -779,28 +778,27 @@ pub fn parse_and_validate_sync_cursor(
         .is_none_or(|service| service != state.config.service_did)
     {
         return Err(SyncCursorError::Mismatch(
-            "sync token service does not match this service DID",
+            "cursor service does not match this service DID",
         ));
     }
-    let expected_filter_hash =
-        sync_filter_hash(profile.unwrap_or("incremental"), filter, renderer, facets);
+    let expected_filter_hash = sync_filter_hash(filter);
     if ctx
         .get("filter_hash")
         .and_then(|filter_hash| filter_hash.as_str())
         .is_none_or(|filter_hash| filter_hash != expected_filter_hash)
     {
         return Err(SyncCursorError::Mismatch(
-            "sync token filter hash does not match request filter",
+            "cursor filter hash does not match request filter",
         ));
     }
     let positions_value = value.get("_positions").ok_or(SyncCursorError::Invalid(
-        "since cursor must contain _positions",
+        "after cursor must contain _positions",
     ))?;
     let positions = positions_value
         .get("spaces")
         .and_then(|spaces| spaces.as_object())
         .ok_or(SyncCursorError::Invalid(
-            "since cursor must contain _positions.spaces",
+            "after cursor must contain _positions.spaces",
         ))?
         .iter()
         .filter_map(|(space_id, position)| {
@@ -822,14 +820,14 @@ pub fn parse_and_validate_sync_cursor(
 pub fn decode_sync_cursor_value(token: &str) -> Result<serde_json::Value, SyncCursorError> {
     let Some(encoded) = token.strip_prefix("cx:cursor:") else {
         return Err(SyncCursorError::Invalid(
-            "since must use a cx:cursor sync token",
+            "after must use a cx:cursor account token",
         ));
     };
     let bytes = URL_SAFE_NO_PAD
         .decode(encoded)
-        .map_err(|_| SyncCursorError::Invalid("since cursor must be valid base64url"))?;
+        .map_err(|_| SyncCursorError::Invalid("after cursor must be valid base64url"))?;
     serde_json::from_slice(&bytes)
-        .map_err(|_| SyncCursorError::Invalid("since cursor must contain JSON"))
+        .map_err(|_| SyncCursorError::Invalid("after cursor must contain JSON"))
 }
 
 /// Translate an optional client cursor to a backfill (event-id) cursor.
@@ -837,7 +835,7 @@ pub fn decode_sync_cursor_value(token: &str) -> Result<serde_json::Value, SyncCu
 /// - `None` → `None` (start from the beginning).
 /// - Plain string that does NOT start with `cx:cursor:` → pass through
 ///   unchanged; the caller already speaks the projection's `event_id` cursor.
-/// - `cx:cursor:...` → decode the structured sync token, look up
+/// - `cx:cursor:...` → decode the structured cursor, look up
 ///   `_positions[space_id]` (a `timestamp_micros` checkpoint), then walk
 ///   the space's projected events and persisted messages to find the most
 ///   recent event at-or-before that checkpoint and return its
@@ -898,28 +896,13 @@ pub fn resolve_sync_cursor_to_event_id(
     Ok(newest_event_id.map(|(_, event_id)| event_id))
 }
 
-pub fn sync_filter_hash(
-    profile: &str,
-    filter: Option<&serde_json::Value>,
-    renderer: Option<&str>,
-    facets: &[String],
-) -> String {
+pub fn sync_filter_hash(filter: Option<&serde_json::Value>) -> String {
     let empty_filter = json!({});
     let binding = json!({
-        "profile": profile,
         "filter": filter.unwrap_or(&empty_filter),
-        "renderer": renderer,
-        "facets": normalized_strings(facets),
     });
     contrix_sdk::canonical::canonical_sha256(&binding)
         .unwrap_or_else(|_| format!("sha256:{}", sha256_hex(binding.to_string().as_bytes())))
-}
-
-pub fn normalized_strings(values: &[String]) -> Vec<String> {
-    let mut values = values.to_vec();
-    values.sort();
-    values.dedup();
-    values
 }
 
 #[endpoint(
@@ -1361,7 +1344,6 @@ pub(super) async fn events_query(
                     serde_json::to_value(BackfillResBody {
                         events,
                         prev_cursor: cursor.clone(),
-                        prev_batch: cursor,
                         next_cursor: page
                             .next_cursor
                             .or_else(|| Some(sync_token_for_state(state))),
@@ -1383,7 +1365,6 @@ pub(super) async fn events_query(
             serde_json::to_value(BackfillResBody {
                 events: Vec::new(),
                 prev_cursor: cursor.clone(),
-                prev_batch: cursor,
                 next_cursor: Some(sync_token_for_state(state)),
                 limited: false,
             })
@@ -1447,7 +1428,6 @@ pub(super) async fn events_query(
         serde_json::to_value(BackfillResBody {
             events: page_events,
             prev_cursor: cursor.clone(),
-            prev_batch: cursor,
             next_cursor,
             limited,
         })
@@ -1507,7 +1487,7 @@ async fn sync_gap_backfill(
         "events": events,
         "from_cursor": from_cursor.clone(),
         "to_cursor": to_cursor.clone(),
-        "prev_batch": from_cursor.clone(),
+        "prev_cursor": from_cursor.clone(),
         "next_cursor": next_cursor,
         "limited": limited && !gap_complete,
         "gap_complete": gap_complete || !limited,

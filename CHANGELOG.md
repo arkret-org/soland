@@ -16,7 +16,7 @@ on the reducer / federation / state-machine surfaces. See
   as immutable Realm state. Subsequent mismatching events reject with
   `cross_domain_replay_rejected`.
 - **BREAKING** `ServiceDescribe` v2: `cx.server.describe` /
-  `cx.sync.describe` / `cx.events.describe` / `cx.applet.describe` all return
+  `cx.account.describe` / `cx.events.describe` / `cx.applet.describe` all return
   the 17-field canonical envelope (including `trust_domain`,
   `plaintext_visibility`, `claimed_profiles`, `verified_profiles`,
   `development_mode`); `development_mode=true` with non-empty

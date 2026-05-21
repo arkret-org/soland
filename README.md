@@ -33,7 +33,7 @@ Operator-visible highlights:
 - **`trust_domain` is now immutable on a Realm** — captured by
   `cx.realm.create` and locked thereafter. Cross-domain replays reject
   with `cross_domain_replay_rejected`.
-- **`ServiceDescribe` v2** — `cx.server.describe` / `cx.sync.describe` /
+- **`ServiceDescribe` v2** — `cx.server.describe` / `cx.account.describe` /
   `cx.events.describe` / `cx.applet.describe` return the 17-field
   canonical envelope, including `trust_domain` / `plaintext_visibility` /
   `verified_profiles` / `development_mode` and a `rate_limit` oneOf.
@@ -291,10 +291,10 @@ token with `urn:contrix:principal-server:session.bind`, then maps
 account/device view. The older `/api/v1/auth/session-grant/exchange` bridge is
 kept as a legacy scaffold, not the primary login path.
 
-Client-sync `next_batch` cursors are structured `cx:cursor:` tokens bound to
-the principal, device, service DID, filter hash, stream positions, and expiry.
-Passing `since` returns incremental timeline events; expired cursors fail with
-`sync_token_expired`.
+Account subscribe and Events API cursors are structured `cx:cursor:` tokens
+bound to the principal, device, service DID, filter hash, stream positions, and
+expiry. `/api/v1/account/subscribe` resumes with `after`; `/api/v1/events`
+paginates with `before` / `after`. Expired cursors fail with `cursor_expired`.
 
 Development bearer sessions are stored server-side by service-bound SHA-256
 token hash, not plaintext token. Logout records `revoked_at` and revoked

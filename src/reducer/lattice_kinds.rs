@@ -19,12 +19,11 @@ pub use contrix_sdk::lattice_registry::{
 // `ViewUpdate`, `ViewReconcile` mentioned in `routing/events/operations.rs`
 // comments) continues to compile.
 pub use contrix_sdk::lattice_registry::{
-    AccountStatus, AgentTaskExecutionState, AgentTaskSourceAuthority, AgentTaskTransparency,
-    AgentWorkspaceReservation, AnchorerCell, CapabilityDelegate, CapabilityDerived,
-    CapabilityGrant, ConsentGrant, CoveredFrontier, CrossSigningPublish, CrossSigningReset,
-    DeviceAuthorized, DeviceListUpdate, FlowPosition, MemberState, MimiRoomBinding, MlsEpoch,
-    PlaceParent, PolicyRule, ProfileCreate, SessionGrant, SpaceArchive, SpaceAssetPrivacyPolicy,
-    SpaceChild, SpaceCreate, SpaceDestroy, SpaceDiscovery, SpaceFreeze, SpaceHistorySharingPolicy,
+    AccountStatus, AnchorerCell, CapabilityDelegate, CapabilityDerived, CapabilityGrant,
+    ConsentGrant, CoveredFrontier, CrossSigningPublish, CrossSigningReset, DeviceAuthorized,
+    DeviceListUpdate, FlowPosition, MemberState, MimiRoomBinding, MlsEpoch, PlaceParent,
+    PolicyRule, ProfileCreate, SessionGrant, SpaceArchive, SpaceAssetPrivacyPolicy, SpaceChild,
+    SpaceCreate, SpaceDestroy, SpaceDiscovery, SpaceFreeze, SpaceHistorySharingPolicy,
     SpaceHistoryVisibility, SpaceInheritancePolicy, SpaceJoinRule, SpaceMediaService,
     SpaceModerationPolicy, SpaceOrganization, SpaceParent, SpacePlaintextVisibleServices,
     SpacePolicy, SpacePolicyComponents, SpacePolicyServer, SpaceReadReceiptPolicyLattice,
@@ -124,7 +123,7 @@ mod tests {
     #[test]
     fn default_registry_still_covers_every_spec_family() {
         let registry = default_lattice_registry();
-        assert_eq!(registry.len(), 75);
+        assert_eq!(registry.len(), 71);
     }
 
     #[test]
@@ -146,18 +145,5 @@ mod tests {
         let (_, reset_kind, reset_bottom) = binding_for("cx.component.cross_signing.reset.v1");
         assert_eq!(reset_kind, SdkLatticeKind::OrderedLog);
         assert_eq!(reset_bottom, BottomMode::Reject);
-
-        let (_, reservation_kind, reservation_bottom) =
-            binding_for("cx.component.agent_workspace.reservation.v1");
-        assert_eq!(reservation_kind, SdkLatticeKind::CasRegister);
-        assert_eq!(reservation_bottom, BottomMode::Reject);
-
-        assert!(!bindings.iter().any(|(family, _, _)| {
-            matches!(
-                *family,
-                "cx.component.agent_workspace.mirror_space_by_source.v1"
-                    | "cx.component.agent_workspace.mirror_flow_by_source.v1"
-            )
-        }));
     }
 }

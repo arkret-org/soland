@@ -169,29 +169,25 @@ pub(crate) fn fanout_actor_private_update(
 )]
 async fn get_device_messages(
     aa: AuthArgs,
-    ack: QueryParam<String, false>,
-    since: QueryParam<String, false>,
+    from: QueryParam<String, false>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<DeviceMessagesReceiveResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req)?;
-    let cursor = ack.into_inner().or_else(|| since.into_inner());
+    let cursor = from.into_inner();
     let ack_position = match cursor {
         Some(cursor) => match parse_and_validate_sync_cursor(
             &cursor,
             state,
             Some(&session),
             None,
-            None,
-            None,
-            &[],
             chrono::Utc::now().timestamp_millis(),
         ) {
             Ok(cursor) => cursor.to_device_position,
             Err(SyncCursorError::Expired) => {
                 return Err(AppError::new(
-                    ErrorCode::SyncTokenExpired,
+                    ErrorCode::CursorExpired,
                     "cursor has expired",
                 ));
             }
@@ -229,9 +225,6 @@ async fn get_device_messages(
             state,
             Some(&session),
             None,
-            None,
-            None,
-            &[],
             BTreeMap::new(),
             to_device_position,
         )),

@@ -1177,7 +1177,7 @@ async fn events_describe_and_single_event_submit_work() {
     let unknown_schema_body: Value = unknown_schema_response.take_json().await.unwrap();
     assert_eq!(unknown_schema_body["error"]["errcode"], "unknown_schema");
 
-    let batch: Value = TestClient::post("http://server/api/v1/events/batch-get")
+    let batch: Value = TestClient::post("http://server/api/v1/events/resolve")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "event_ids": ["cx:event:01904100-0000-7000-8000-f15c8ea06c11", "cx:event:01904100-0000-7000-8000-30f4e405b35e"]
@@ -1327,7 +1327,7 @@ async fn contrix_openapi_spec_contains_facet_projection_contracts() {
         "cx.events.describe",
         "cx.events.submit",
         "cx.events.get",
-        "cx.events.batch_get",
+        "cx.events.resolve",
         "cx.events.query",
         "cx.events.subscribe",
         "cx.events.frontier",
@@ -1339,10 +1339,10 @@ async fn contrix_openapi_spec_contains_facet_projection_contracts() {
         "cx.extension.soland.federation.pull_operations",
         "cx.extension.soland.federation.space_members",
         "cx.extension.soland.federation.verify_actor",
-        "cx.sync.account",
+        "cx.account.subscribe",
         "cx.extension.soland.sync.typing",
         "cx.extension.soland.sync.backfill_gap",
-        "cx.sync.get_snapshot_head",
+        "cx.snapshot.head",
         "cx.extension.soland.sync.get_snapshot_chunk",
         "cx.directory.describe",
         "cx.directory.search_realms",
@@ -1562,7 +1562,7 @@ async fn sync_cursor_rejects_facets_and_renderer_changes() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
 
-    let first: Value = TestClient::post("http://server/api/v1/sync")
+    let first: Value = TestClient::post("http://server/api/v1/account/subscribe?catchup=true")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "renderer": "collection",
@@ -1574,12 +1574,12 @@ async fn sync_cursor_rejects_facets_and_renderer_changes() {
         .take_json()
         .await
         .unwrap();
-    assert!(first["next_batch"].as_str().is_some());
+    assert!(first["cursor"].as_str().is_some());
 
-    let renderer_changed = TestClient::post("http://server/api/v1/sync")
+    let renderer_changed = TestClient::post("http://server/api/v1/account/subscribe?catchup=true")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
-            "since": first["next_batch"],
+            "after": first["cursor"],
             "renderer": "queue",
             "facets": ["stateful"],
             "filter": {"spaces": ["cx:space:0196419b-0000-7000-8000-000000000000"]},
@@ -1588,10 +1588,10 @@ async fn sync_cursor_rejects_facets_and_renderer_changes() {
         .await;
     assert_eq!(renderer_changed.status_code.unwrap().as_u16(), 400);
 
-    let facets_changed = TestClient::post("http://server/api/v1/sync")
+    let facets_changed = TestClient::post("http://server/api/v1/account/subscribe?catchup=true")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
-            "since": first["next_batch"],
+            "after": first["cursor"],
             "renderer": "collection",
             "facets": ["replyable"],
             "filter": {"spaces": ["cx:space:0196419b-0000-7000-8000-000000000000"]},
@@ -1602,7 +1602,7 @@ async fn sync_cursor_rejects_facets_and_renderer_changes() {
 }
 
 #[tokio::test]
-async fn sync_backfill_exposes_prev_batch_and_limited_timeline_pages() {
+async fn sync_backfill_exposes_prev_cursor_and_limited_timeline_pages() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
     let space_id = DEMO_REALM_ID;
@@ -1632,7 +1632,7 @@ async fn sync_backfill_exposes_prev_batch_and_limited_timeline_pages() {
     .unwrap();
     assert_eq!(first_page["events"].as_array().unwrap().len(), 1);
     assert_eq!(first_page["limited"], true);
-    assert!(first_page["prev_batch"].is_null());
+    assert!(first_page["prev_cursor"].is_null());
     let next_cursor = first_page["next_cursor"].as_str().unwrap();
 
     let second_page: Value = TestClient::get(format!(
@@ -1644,7 +1644,7 @@ async fn sync_backfill_exposes_prev_batch_and_limited_timeline_pages() {
     .take_json()
     .await
     .unwrap();
-    assert_eq!(second_page["prev_batch"], next_cursor);
+    assert_eq!(second_page["prev_cursor"], next_cursor);
     assert_eq!(second_page["events"].as_array().unwrap().len(), 1);
     let to_cursor = second_page["events"][0]["event_id"].as_str().unwrap();
     let gap: Value = TestClient::get(format!(
@@ -1658,7 +1658,7 @@ async fn sync_backfill_exposes_prev_batch_and_limited_timeline_pages() {
     .unwrap();
     assert_eq!(gap["from_cursor"], next_cursor);
     assert_eq!(gap["to_cursor"], to_cursor);
-    assert_eq!(gap["prev_batch"], next_cursor);
+    assert_eq!(gap["prev_cursor"], next_cursor);
     assert_eq!(gap["gap_complete"], true);
     assert_eq!(gap["events"].as_array().unwrap().len(), 1);
     assert_eq!(gap["production_gap"], "durable_sync_position_validation");
@@ -2076,7 +2076,7 @@ async fn configured_cors_allows_only_explicit_origin() {
     config.cors_allow_origin = Some("https://app.example".to_owned());
     let service = app_from_state(AppState::new(config, Db { pool: None }));
 
-    let allowed = TestClient::options("http://server/api/v1/sync")
+    let allowed = TestClient::options("http://server/api/v1/account/subscribe?catchup=true")
         .add_header("Origin", "https://app.example", true)
         .add_header("Access-Control-Request-Method", "POST", true)
         .add_header(
@@ -2101,7 +2101,7 @@ async fn configured_cors_allows_only_explicit_origin() {
         Some("true")
     );
 
-    let denied = TestClient::options("http://server/api/v1/sync")
+    let denied = TestClient::options("http://server/api/v1/account/subscribe?catchup=true")
         .add_header("Origin", "https://evil.example", true)
         .add_header("Access-Control-Request-Method", "POST", true)
         .send(&service)
@@ -2230,7 +2230,7 @@ async fn wildcard_cors_mirrors_origin_without_credentials() {
     config.cors_allow_origin = Some("*".to_owned());
     let service = app_from_state(AppState::new(config, Db { pool: None }));
 
-    let from_yougen = TestClient::options("http://server/api/v1/sync")
+    let from_yougen = TestClient::options("http://server/api/v1/account/subscribe?catchup=true")
         .add_header("Origin", "http://127.0.0.1:8080", true)
         .add_header("Access-Control-Request-Method", "POST", true)
         .add_header(
@@ -2258,7 +2258,7 @@ async fn wildcard_cors_mirrors_origin_without_credentials() {
 
     // A second, unrelated origin gets the same treatment — the handler is
     // genuinely origin-agnostic, not tied to a single hard-coded URL.
-    let from_other = TestClient::options("http://server/api/v1/sync")
+    let from_other = TestClient::options("http://server/api/v1/account/subscribe?catchup=true")
         .add_header("Origin", "https://app.elsewhere.example", true)
         .add_header("Access-Control-Request-Method", "POST", true)
         .send(&service)
@@ -2314,7 +2314,7 @@ async fn service_did_is_config_driven_across_public_metadata() {
         .unwrap();
     assert_eq!(identity["service_did"], service_did);
 
-    let sync: Value = TestClient::get("http://server/api/v1/sync/describe")
+    let sync: Value = TestClient::get("http://server/api/v1/account/describe")
         .send(&service)
         .await
         .take_json()
@@ -2648,13 +2648,14 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         listed_search["results"][0]["realm_id"],
         listed_space_id.as_str()
     );
-    let anonymous_sync_after_listed: Value = TestClient::post("http://server/api/v1/sync")
-        .json(&serde_json::json!({}))
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
+    let anonymous_sync_after_listed: Value =
+        TestClient::post("http://server/api/v1/account/subscribe?catchup=true")
+            .json(&serde_json::json!({}))
+            .send(&app_from_state(state.clone()))
+            .await
+            .take_json()
+            .await
+            .unwrap();
     assert!(
         !anonymous_sync_after_listed["spaces"]
             .as_object()
@@ -2759,14 +2760,15 @@ async fn account_contacts_and_space_lifecycle_workflow() {
             .starts_with("cx:event:")
     );
 
-    let bob_private_sync: Value = TestClient::post("http://server/api/v1/sync")
-        .add_header("authorization", format!("Bearer {bob}"), true)
-        .json(&serde_json::json!({}))
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
+    let bob_private_sync: Value =
+        TestClient::post("http://server/api/v1/account/subscribe?catchup=true")
+            .add_header("authorization", format!("Bearer {bob}"), true)
+            .json(&serde_json::json!({}))
+            .send(&app_from_state(state.clone()))
+            .await
+            .take_json()
+            .await
+            .unwrap();
     assert!(
         !bob_private_sync["spaces"]
             .as_object()
@@ -2914,47 +2916,41 @@ async fn account_contacts_and_space_lifecycle_workflow() {
             .any(|notification| notification["event_ref"] == sent_message["event_id"])
     );
 
-    let sync_with_message: Value = TestClient::post("http://server/api/v1/sync")
-        .add_header("authorization", format!("Bearer {alice}"), true)
-        .json(&serde_json::json!({}))
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    let next_batch = decode_cursor(
-        sync_with_message["next_batch"]
+    let sync_with_message: Value =
+        TestClient::post("http://server/api/v1/account/subscribe?catchup=true")
+            .add_header("authorization", format!("Bearer {alice}"), true)
+            .json(&serde_json::json!({}))
+            .send(&app_from_state(state.clone()))
+            .await
+            .take_json()
+            .await
+            .unwrap();
+    let cursor = decode_cursor(
+        sync_with_message["cursor"]
             .as_str()
-            .unwrap_or_else(|| panic!("sync response missing next_batch: {sync_with_message}")),
+            .unwrap_or_else(|| panic!("sync response missing cursor: {sync_with_message}")),
     );
-    assert_eq!(next_batch["_ctx"]["profile"], "incremental");
-    assert!(next_batch.get("_mac").is_none());
+    assert_eq!(cursor["_ctx"]["profile"], "incremental");
+    assert!(cursor.get("_mac").is_none());
     assert!(
-        next_batch["_sig"]
+        cursor["_sig"]
             .as_str()
             .is_some_and(|sig| sig.starts_with("eddsa-ed25519:"))
     );
-    assert_eq!(next_batch["_ctx"]["principal_id"], "did:web:alice.example");
+    assert_eq!(cursor["_ctx"]["principal_id"], "did:web:alice.example");
     assert_eq!(
-        next_batch["_ctx"]["device_id"],
+        cursor["_ctx"]["device_id"],
         "cx:device:01904100-0000-7000-8000-a11ce0000001"
     );
-    assert_eq!(next_batch["_ctx"]["service_id"], "did:web:soland.local");
+    assert_eq!(cursor["_ctx"]["service_id"], "did:web:soland.local");
     assert!(
-        next_batch["_ctx"]["filter_hash"]
+        cursor["_ctx"]["filter_hash"]
             .as_str()
             .unwrap()
             .starts_with("sha256:")
     );
-    assert!(
-        next_batch["x"].as_i64().unwrap() > next_batch["_ctx"]["issued_at_ms"].as_i64().unwrap()
-    );
-    assert!(
-        next_batch["_positions"]["spaces"][&space_id]
-            .as_i64()
-            .unwrap()
-            > 0
-    );
+    assert!(cursor["x"].as_i64().unwrap() > cursor["_ctx"]["issued_at_ms"].as_i64().unwrap());
+    assert!(cursor["_positions"]["spaces"][&space_id].as_i64().unwrap() > 0);
     assert_eq!(
         sync_with_message["spaces"][&space_id]["timeline"]["events"][0]["event_id"],
         sent_message["event_id"]
@@ -2979,14 +2975,15 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         "cx.schema.flow.v1"
     );
 
-    let incremental_noop: Value = TestClient::post("http://server/api/v1/sync")
-        .add_header("authorization", format!("Bearer {alice}"), true)
-        .json(&serde_json::json!({"since": sync_with_message["next_batch"]}))
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
+    let incremental_noop: Value =
+        TestClient::post("http://server/api/v1/account/subscribe?catchup=true")
+            .add_header("authorization", format!("Bearer {alice}"), true)
+            .json(&serde_json::json!({"after": sync_with_message["cursor"]}))
+            .send(&app_from_state(state.clone()))
+            .await
+            .take_json()
+            .await
+            .unwrap();
     assert!(
         incremental_noop["spaces"][&space_id]["timeline"]["events"]
             .as_array()
@@ -3005,14 +3002,15 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         false,
     )
     .await;
-    let incremental_after_message: Value = TestClient::post("http://server/api/v1/sync")
-        .add_header("authorization", format!("Bearer {alice}"), true)
-        .json(&serde_json::json!({"since": sync_with_message["next_batch"]}))
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
+    let incremental_after_message: Value =
+        TestClient::post("http://server/api/v1/account/subscribe?catchup=true")
+            .add_header("authorization", format!("Bearer {alice}"), true)
+            .json(&serde_json::json!({"after": sync_with_message["cursor"]}))
+            .send(&app_from_state(state.clone()))
+            .await
+            .take_json()
+            .await
+            .unwrap();
     let incremental_events = incremental_after_message["spaces"][&space_id]["timeline"]["events"]
         .as_array()
         .unwrap();
@@ -3022,39 +3020,40 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         second_message["event_id"]
     );
 
-    let mismatch = TestClient::post("http://server/api/v1/sync")
+    let mismatch = TestClient::post("http://server/api/v1/account/subscribe?catchup=true")
         .add_header("authorization", format!("Bearer {bob}"), true)
-        .json(&serde_json::json!({"since": sync_with_message["next_batch"]}))
+        .json(&serde_json::json!({"after": sync_with_message["cursor"]}))
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(mismatch.status_code.unwrap().as_u16(), 400);
 
-    let filter_mismatch = TestClient::post("http://server/api/v1/sync")
+    let filter_mismatch = TestClient::post("http://server/api/v1/account/subscribe?catchup=true")
         .add_header("authorization", format!("Bearer {alice}"), true)
         .json(&serde_json::json!({
-            "since": sync_with_message["next_batch"],
+            "after": sync_with_message["cursor"],
             "filter": {"spaces": [space_id.clone()]}
         }))
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(filter_mismatch.status_code.unwrap().as_u16(), 400);
 
-    let renderer_bound_sync: Value = TestClient::post("http://server/api/v1/sync")
+    let renderer_bound_sync: Value =
+        TestClient::post("http://server/api/v1/account/subscribe?catchup=true")
+            .add_header("authorization", format!("Bearer {alice}"), true)
+            .json(&serde_json::json!({
+                "renderer": "collection",
+                "facets": ["stateful"],
+                "filter": {"spaces": [space_id.clone()]}
+            }))
+            .send(&app_from_state(state.clone()))
+            .await
+            .take_json()
+            .await
+            .unwrap();
+    let renderer_mismatch = TestClient::post("http://server/api/v1/account/subscribe?catchup=true")
         .add_header("authorization", format!("Bearer {alice}"), true)
         .json(&serde_json::json!({
-            "renderer": "collection",
-            "facets": ["stateful"],
-            "filter": {"spaces": [space_id.clone()]}
-        }))
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    let renderer_mismatch = TestClient::post("http://server/api/v1/sync")
-        .add_header("authorization", format!("Bearer {alice}"), true)
-        .json(&serde_json::json!({
-            "since": renderer_bound_sync["next_batch"],
+            "after": renderer_bound_sync["cursor"],
             "renderer": "queue",
             "facets": ["stateful"],
             "filter": {"spaces": [space_id.clone()]}
@@ -3063,7 +3062,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         .await;
     assert_eq!(renderer_mismatch.status_code.unwrap().as_u16(), 400);
 
-    let mut expired_cursor = next_batch.clone();
+    let mut expired_cursor = cursor.clone();
     expired_cursor["x"] = serde_json::json!(1);
     if let Some(object) = expired_cursor.as_object_mut() {
         object.insert(
@@ -3071,9 +3070,9 @@ async fn account_contacts_and_space_lifecycle_workflow() {
             serde_json::json!("eddsa-ed25519:tampered"),
         );
     }
-    let mut expired = TestClient::post("http://server/api/v1/sync")
+    let mut expired = TestClient::post("http://server/api/v1/account/subscribe?catchup=true")
         .add_header("authorization", format!("Bearer {alice}"), true)
-        .json(&serde_json::json!({"since": encode_cursor(&expired_cursor)}))
+        .json(&serde_json::json!({"after": encode_cursor(&expired_cursor)}))
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(expired.status_code.unwrap(), StatusCode::GONE);
@@ -3096,25 +3095,26 @@ async fn account_contacts_and_space_lifecycle_workflow() {
             .any(|operation| operation["operation_id"] == sent_message["operation_id"])
     );
 
-    let waited_sync: Value = TestClient::post("http://server/api/v1/sync")
-        .add_header("authorization", format!("Bearer {alice}"), true)
-        .add_header(
-            "x-contrix-wait-for",
-            sent_message["sync_token"].as_str().unwrap(),
-            true,
-        )
-        .json(&serde_json::json!({}))
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
+    let waited_sync: Value =
+        TestClient::post("http://server/api/v1/account/subscribe?catchup=true")
+            .add_header("authorization", format!("Bearer {alice}"), true)
+            .add_header(
+                "x-contrix-wait-for",
+                sent_message["sync_token"].as_str().unwrap(),
+                true,
+            )
+            .json(&serde_json::json!({}))
+            .send(&app_from_state(state.clone()))
+            .await
+            .take_json()
+            .await
+            .unwrap();
     assert_eq!(
         waited_sync["spaces"][&space_id]["timeline"]["events"][0]["event_id"],
         sent_message["event_id"]
     );
 
-    let invalid_wait = TestClient::post("http://server/api/v1/sync")
+    let invalid_wait = TestClient::post("http://server/api/v1/account/subscribe?catchup=true")
         .add_header("authorization", format!("Bearer {alice}"), true)
         .add_header("x-contrix-wait-for", "not-a-sync-token", true)
         .json(&serde_json::json!({}))
@@ -3123,7 +3123,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
     assert_eq!(invalid_wait.status_code.unwrap().as_u16(), 400);
 
     let snapshot: Value = TestClient::get(format!(
-        "http://server/api/v1/sync/snapshot-head?realm_id={space_id}"
+        "http://server/api/v1/snapshot/head?realm_id={space_id}"
     ))
     .send(&app_from_state(state.clone()))
     .await
@@ -3220,7 +3220,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         .unwrap();
     assert!(index["results"].as_array().unwrap().is_empty());
 
-    let sync: Value = TestClient::post("http://server/api/v1/sync")
+    let sync: Value = TestClient::post("http://server/api/v1/account/subscribe?catchup=true")
         .json(&serde_json::json!({}))
         .send(&app_from_state(state.clone()))
         .await
@@ -3775,7 +3775,7 @@ fn test_sha256_multihash_multibase(bytes: &[u8]) -> String {
 
 #[tokio::test]
 async fn sync_directory_and_index_share_demo_space() {
-    let sync_describe: Value = TestClient::get("http://server/api/v1/sync/describe")
+    let sync_describe: Value = TestClient::get("http://server/api/v1/account/describe")
         .send(&app())
         .await
         .take_json()
@@ -3791,13 +3791,13 @@ async fn sync_directory_and_index_share_demo_space() {
         );
     }
 
-    let invalid_profile = TestClient::post("http://server/api/v1/sync")
+    let invalid_profile = TestClient::post("http://server/api/v1/account/subscribe?catchup=true")
         .json(&serde_json::json!({"profile": "invalid"}))
         .send(&app())
         .await;
     assert_eq!(invalid_profile.status_code.unwrap().as_u16(), 400);
 
-    let sync: Value = TestClient::post("http://server/api/v1/sync")
+    let sync: Value = TestClient::post("http://server/api/v1/account/subscribe?catchup=true")
         .json(&serde_json::json!({"profile": "chat"}))
         .send(&app())
         .await
@@ -4538,21 +4538,22 @@ async fn federation_transactions_are_idempotent_by_origin_and_body() {
 async fn push_profile_and_moderation_contracts_work() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
-    let unauth_presence = TestClient::post("http://server/api/v1/sync")
+    let unauth_presence = TestClient::post("http://server/api/v1/account/subscribe?catchup=true")
         .json(&serde_json::json!({"set_presence": "online"}))
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(unauth_presence.status_code, Some(StatusCode::UNAUTHORIZED));
 
-    let presence_sync: Value = TestClient::post("http://server/api/v1/sync")
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({"set_presence": "unavailable"}))
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    assert!(presence_sync["next_batch"].is_string());
+    let presence_sync: Value =
+        TestClient::post("http://server/api/v1/account/subscribe?catchup=true")
+            .add_header("authorization", format!("Bearer {token}"), true)
+            .json(&serde_json::json!({"set_presence": "unavailable"}))
+            .send(&app_from_state(state.clone()))
+            .await
+            .take_json()
+            .await
+            .unwrap();
+    assert!(presence_sync["cursor"].is_string());
 
     let profile: Value =
         TestClient::get("http://server/api/v1/profile/presence?did=did:web:alice.example")
@@ -4589,14 +4590,15 @@ async fn push_profile_and_moderation_contracts_work() {
     assert_eq!(typing["typing"], true);
     assert!(typing["expires_at"].is_string());
 
-    let sync_with_typing: Value = TestClient::post("http://server/api/v1/sync")
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({}))
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
+    let sync_with_typing: Value =
+        TestClient::post("http://server/api/v1/account/subscribe?catchup=true")
+            .add_header("authorization", format!("Bearer {token}"), true)
+            .json(&serde_json::json!({}))
+            .send(&app_from_state(state.clone()))
+            .await
+            .take_json()
+            .await
+            .unwrap();
     let ephemeral = &sync_with_typing["spaces"][DEMO_REALM_ID]["ephemeral"];
     assert_eq!(ephemeral[0]["type"], "cx.typing");
     assert_eq!(ephemeral[0]["scope_id"], "cx:flow:demo");
@@ -4615,14 +4617,15 @@ async fn push_profile_and_moderation_contracts_work() {
         .unwrap();
     assert_eq!(typing_stopped["typing"], false);
 
-    let sync_without_typing: Value = TestClient::post("http://server/api/v1/sync")
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({}))
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
+    let sync_without_typing: Value =
+        TestClient::post("http://server/api/v1/account/subscribe?catchup=true")
+            .add_header("authorization", format!("Bearer {token}"), true)
+            .json(&serde_json::json!({}))
+            .send(&app_from_state(state.clone()))
+            .await
+            .take_json()
+            .await
+            .unwrap();
     assert!(
         sync_without_typing["spaces"][DEMO_REALM_ID]["ephemeral"]
             .as_array()
@@ -5516,7 +5519,7 @@ async fn to_device_messages_survive_duplicate_sync_until_cursor_ack() {
         .send(&app_from_state(state.clone()))
         .await;
 
-    let first: Value = TestClient::post("http://server/api/v1/sync")
+    let first: Value = TestClient::post("http://server/api/v1/account/subscribe?catchup=true")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({}))
         .send(&app_from_state(state.clone()))
@@ -5525,10 +5528,10 @@ async fn to_device_messages_survive_duplicate_sync_until_cursor_ack() {
         .await
         .unwrap();
     assert_eq!(first["to_device"].as_array().unwrap().len(), 1);
-    let first_cursor = decode_cursor(first["next_batch"].as_str().unwrap());
+    let first_cursor = decode_cursor(first["cursor"].as_str().unwrap());
     assert!(first_cursor["_positions"]["to_device"].as_i64().unwrap() > 0);
 
-    let duplicate: Value = TestClient::post("http://server/api/v1/sync")
+    let duplicate: Value = TestClient::post("http://server/api/v1/account/subscribe?catchup=true")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({}))
         .send(&app_from_state(state.clone()))
@@ -5538,9 +5541,9 @@ async fn to_device_messages_survive_duplicate_sync_until_cursor_ack() {
         .unwrap();
     assert_eq!(duplicate["to_device"].as_array().unwrap().len(), 1);
 
-    let acked: Value = TestClient::post("http://server/api/v1/sync")
+    let acked: Value = TestClient::post("http://server/api/v1/account/subscribe?catchup=true")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({"since": first["next_batch"]}))
+        .json(&serde_json::json!({"after": first["cursor"]}))
         .send(&app_from_state(state))
         .await
         .take_json()
@@ -5758,7 +5761,7 @@ async fn snapshot_v2_audit_path_verifies_against_merkle_root() {
     let space_id = space["space_id"].as_str().unwrap().to_owned();
 
     let head: Value = TestClient::get(format!(
-        "http://server/api/v1/sync/snapshot-head?realm_id={space_id}"
+        "http://server/api/v1/snapshot/head?realm_id={space_id}"
     ))
     .send(&app_from_state(state.clone()))
     .await
@@ -6665,7 +6668,7 @@ async fn account_data_space_remark_round_trip() {
     assert_eq!(put_again.status_code.unwrap().as_u16(), 200);
 
     // /sync hydrates the actor's account_data entries.
-    let sync_resp: Value = TestClient::post("http://server/api/v1/sync")
+    let sync_resp: Value = TestClient::post("http://server/api/v1/account/subscribe?catchup=true")
         .add_header("authorization", format!("Bearer {alice}"), true)
         .json(&serde_json::json!({"timeout_ms": 0, "set_presence": "online"}))
         .send(&app_from_state(state.clone()))
@@ -6682,7 +6685,7 @@ async fn account_data_space_remark_round_trip() {
     assert_eq!(entry["content"]["pinned"], false);
 
     // Actor isolation: Bob's /sync does NOT see Alice's remark.
-    let bob_sync: Value = TestClient::post("http://server/api/v1/sync")
+    let bob_sync: Value = TestClient::post("http://server/api/v1/account/subscribe?catchup=true")
         .add_header("authorization", format!("Bearer {bob}"), true)
         .json(&serde_json::json!({"timeout_ms": 0, "set_presence": "online"}))
         .send(&app_from_state(state.clone()))
@@ -8151,7 +8154,7 @@ async fn snapshot_v2_multi_chunk_fixture_verifies_non_empty_audit_path() {
     }
 
     let head: Value = TestClient::get(format!(
-        "http://server/api/v1/sync/snapshot-head?realm_id={space_id}"
+        "http://server/api/v1/snapshot/head?realm_id={space_id}"
     ))
     .send(&app_from_state(state.clone()))
     .await

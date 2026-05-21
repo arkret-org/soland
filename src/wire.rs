@@ -363,12 +363,6 @@ pub struct ClientSyncRequest {
     #[serde(default)]
     pub catchup: Option<bool>,
     #[serde(default)]
-    pub profile: Option<String>,
-    #[serde(default)]
-    pub renderer: Option<String>,
-    #[serde(default)]
-    pub facets: Vec<String>,
-    #[serde(default)]
     pub filter: Option<Value>,
     #[serde(default)]
     pub set_presence: Option<String>,
@@ -610,7 +604,6 @@ pub struct IndexSpaceHierarchyResponse {
 pub struct BackfillResBody {
     pub events: Vec<Value>,
     pub prev_cursor: Option<String>,
-    pub prev_batch: Option<String>,
     pub next_cursor: Option<String>,
     pub limited: bool,
 }
@@ -646,13 +639,17 @@ pub struct EventReadResponse {
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct EventBatchGetRequest {
+pub struct EventResolveRequest {
     #[serde(default)]
     pub event_ids: Vec<String>,
+    #[serde(default)]
+    pub event_hashes: Vec<String>,
+    #[serde(default)]
+    pub include_payload: bool,
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct EventBatchGetResponse {
+pub struct EventResolveResponse {
     pub events: Vec<EventReadResponse>,
     pub missing: Vec<String>,
     pub unauthorized: Vec<String>,

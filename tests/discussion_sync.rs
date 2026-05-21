@@ -292,7 +292,7 @@ async fn joined_history_hides_pre_join_messages_from_sync_and_events_query() {
     tokio::time::sleep(std::time::Duration::from_millis(5)).await;
     send_message(state.clone(), &alice, &space_id, "after bob joined").await;
 
-    let sync: Value = TestClient::post("http://server/api/v1/sync")
+    let sync: Value = TestClient::post("http://server/api/v1/account/subscribe?catchup=true")
         .add_header("authorization", format!("Bearer {bob}"), true)
         .json(&json!({}))
         .send(&app_from_state(state.clone()))
@@ -352,7 +352,7 @@ async fn shared_history_allows_late_joiner_to_backfill_prior_messages() {
     )
     .await;
 
-    let sync: Value = TestClient::post("http://server/api/v1/sync")
+    let sync: Value = TestClient::post("http://server/api/v1/account/subscribe?catchup=true")
         .add_header("authorization", format!("Bearer {bob}"), true)
         .json(&json!({}))
         .send(&app_from_state(state.clone()))

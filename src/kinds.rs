@@ -102,24 +102,6 @@ pub const CX_AGENT_PROTOCOL_SESSION_START: &str = "cx.agent.protocol_session.sta
 pub const CX_AGENT_PROTOCOL_SESSION_STATUS: &str = "cx.agent.protocol_session.status";
 pub const CX_AGENT_PROTOCOL_SESSION_RESULT: &str = "cx.agent.protocol_session.result";
 
-// `cx.profile.agent_workspace.v1` — Agent Workspace task & FSM events.
-// Spec: `contrix-spec/spec/v1/zh/extensions/agent-workspace-profile.md`.
-// Mirror Space–scoped event kinds. Three orthogonal FSM cells:
-// execution_state / transparency / source_authority. Cancel is an alias for
-// execution.transition(to=cancelled_by_controller).
-pub const CX_AGENT_TASK_CREATE: &str = "cx.agent_task.create";
-pub const CX_AGENT_TASK_EXECUTION_TRANSITION: &str = "cx.agent_task.execution.transition";
-pub const CX_AGENT_TASK_TRANSPARENCY_TRANSITION: &str = "cx.agent_task.transparency.transition";
-pub const CX_AGENT_TASK_SOURCE_AUTHORITY_TRANSITION: &str =
-    "cx.agent_task.source_authority.transition";
-pub const CX_AGENT_TASK_CANCEL: &str = "cx.agent_task.cancel";
-
-// `cx.profile.agent_workspace.v1` — reservation Moves on mirror_*_by_source
-// cells (cas-register + empty sentinel pattern). Spec §6.2 / §6.3 / §6.4.
-pub const CX_AGENT_WORKSPACE_RESERVATION_SET: &str = "cx.agent_workspace.reservation.set";
-pub const CX_AGENT_WORKSPACE_RESERVATION_RECOVER: &str = "cx.agent_workspace.reservation.recover";
-pub const CX_AGENT_WORKSPACE_RESERVATION_CLEANUP: &str = "cx.agent_workspace.reservation.cleanup";
-
 // Round C45 (2026-05-18 main; spec 346f347) — registry refactor dropped the
 // `.v1` suffix from these audit event kinds. Wire schema versioning now
 // flows through `requirements.features` (e.g. `cx.feature.audit_destruction_v1`).
