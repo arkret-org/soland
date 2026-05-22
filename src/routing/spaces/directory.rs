@@ -26,6 +26,7 @@ use super::{
     space_search_discoverability, space_search_visible_to,
 };
 use crate::error::AppError;
+use crate::ids;
 use crate::result::{JsonResult, json_ok};
 use crate::state::{AppState, RealmDirectoryEntry, RealmDirectoryQuery, SessionRecord};
 use crate::wire::{
@@ -45,6 +46,10 @@ pub(super) fn router() -> Router {
         .push(Router::with_path("directory/search-actors").post(search_actors))
         .push(Router::with_path("directory/search-users").post(search_users))
         .push(Router::with_path("directory/resolve-handle").post(resolve_handle))
+        .push(Router::with_path("directory/private-contact-discovery").post(private_contact_discovery))
+        .push(Router::with_path("directory/announce").post(directory_announce))
+        .push(Router::with_path("directory/withdraw").post(directory_withdraw))
+        .push(Router::with_path("directory/subscribe").post(directory_subscribe))
 }
 
 #[endpoint]
@@ -358,6 +363,178 @@ async fn resolve_handle(
         }
         None => Err(AppError::not_found("not found")),
     }
+}
+
+#[endpoint(
+    operation_id = "cx.directory.private_contact_discovery",
+    tags("directory"),
+    summary = "Privacy-preserving contact discovery over padded identifier batches"
+)]
+async fn private_contact_discovery(
+    body: JsonBody<Value>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<Value> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let session = authenticated_session(state, req).ok();
+    let body = body.into_inner();
+    let contacts = body
+        .get("contacts")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let visible = demo_actors(state)
+        .into_iter()
+        .filter(|actor| actor_visible_to(state, actor, session.as_ref()))
+        .collect::<Vec<_>>();
+    let mut matches = Vec::new();
+    for contact in contacts {
+        let needle = contact
+            .get("identifier")
+            .or_else(|| contact.get("handle"))
+            .or_else(|| contact.get("did"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        if needle.is_empty() {
+            continue;
+        }
+        if let Some(actor) = visible.iter().find(|actor| {
+            actor
+                .get("did")
+                .and_then(Value::as_str)
+                .is_some_and(|did| did.eq_ignore_ascii_case(&needle))
+                || actor
+                    .get("handle")
+                    .and_then(Value::as_str)
+                    .is_some_and(|handle| handle.eq_ignore_ascii_case(&needle))
+        }) {
+            matches.push(json!({
+                "contact_ref": contact.get("ref").cloned().unwrap_or(Value::Null),
+                "did": actor.get("did").cloned().unwrap_or(Value::Null),
+                "handle": actor.get("handle").cloned().unwrap_or(Value::Null),
+                "proof": {
+                    "type": "directory_private_contact_discovery_dev",
+                    "issued_at": now(),
+                }
+            }));
+        }
+    }
+    json_ok(json!({
+        "matches": matches,
+        "proofs": [],
+        "retry_after_ms": Value::Null,
+        "privacy_profile": body.get("privacy_profile").cloned().unwrap_or_else(|| json!("padded_batch_dev")),
+    }))
+}
+
+#[endpoint(
+    operation_id = "cx.directory.announce",
+    tags("directory"),
+    summary = "Announce a discoverable directory resource"
+)]
+async fn directory_announce(
+    body: JsonBody<Value>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<Value> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let session = authenticated_session(state, req).map_err(|(status, code, message)| {
+        AppError::invalid_param(message)
+            .with_status(status)
+            .with_wire_code(code)
+    })?;
+    let body = body.into_inner();
+    let resource_kind = body
+        .get("resource_kind")
+        .and_then(Value::as_str)
+        .unwrap_or("realm");
+    let resource_id = body
+        .get("resource_id")
+        .or_else(|| body.get("realm_id"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| AppError::missing_param("resource_id is required"))?;
+    if resource_kind == "realm" && !super::space_has_member(state, resource_id, &session.actor) {
+        return Err(AppError::capability_denied(
+            "directory announcement requires realm membership",
+        ));
+    }
+    let announcement_id = format!(
+        "cx:announcement:{}",
+        super::sha256_hex(format!("{}:{}:{}", session.actor, resource_kind, resource_id).as_bytes())
+    );
+    json_ok(json!({
+        "ok": true,
+        "announcement_id": announcement_id,
+        "resource_kind": resource_kind,
+        "resource_id": resource_id,
+        "announced_by": session.actor,
+        "valid_until": (now() + chrono::Duration::hours(24)).to_rfc3339(),
+    }))
+}
+
+#[endpoint(
+    operation_id = "cx.directory.withdraw",
+    tags("directory"),
+    summary = "Withdraw a previously-announced directory resource"
+)]
+async fn directory_withdraw(
+    body: JsonBody<Value>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<Value> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let session = authenticated_session(state, req).map_err(|(status, code, message)| {
+        AppError::invalid_param(message)
+            .with_status(status)
+            .with_wire_code(code)
+    })?;
+    let body = body.into_inner();
+    let announcement_id = body
+        .get("announcement_id")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            body.get("resource_id")
+                .and_then(Value::as_str)
+                .map(|resource_id| {
+                    format!(
+                        "cx:announcement:{}",
+                        super::sha256_hex(format!("{}:realm:{}", session.actor, resource_id).as_bytes())
+                    )
+                })
+        })
+        .ok_or_else(|| AppError::missing_param("announcement_id or resource_id is required"))?;
+    json_ok(json!({
+        "ok": true,
+        "announcement_id": announcement_id,
+        "withdrawn_by": session.actor,
+        "withdrawn_at": now().to_rfc3339(),
+        "reason": body.get("reason").cloned().unwrap_or(Value::Null),
+    }))
+}
+
+#[endpoint(
+    operation_id = "cx.directory.subscribe",
+    tags("directory"),
+    summary = "Subscribe to directory update notifications"
+)]
+async fn directory_subscribe(
+    body: JsonBody<Value>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<Value> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let session = authenticated_session(state, req).ok();
+    let body = body.into_inner();
+    json_ok(json!({
+        "ok": true,
+        "subscription_id": ids::generate("directory_subscription"),
+        "cursor": crate::routing::sync_token(state),
+        "subscriber": session.map(|session| session.actor).unwrap_or_else(|| "anonymous".to_owned()),
+        "resource_kinds": body.get("resource_kinds").cloned().unwrap_or_else(|| json!(["realm", "actor", "organization"])),
+        "updates": [],
+    }))
 }
 
 // ── Helpers shared with the rest of `crate::routing` ───────────────────────

@@ -368,24 +368,15 @@ pub struct ClientSyncRequest {
     pub set_presence: Option<String>,
 }
 
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct SetTypingRequest {
-    pub realm_id: String,
-    #[serde(default)]
-    pub scope_id: Option<String>,
-    #[serde(default)]
-    pub typing: bool,
-    #[serde(default)]
-    pub timeout_ms: Option<u64>,
-}
-
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct SetTypingResponse {
-    pub ok: bool,
+pub struct EphemeralSubmitResponse {
+    pub accepted: bool,
+    pub kind: String,
     pub realm_id: String,
-    pub actor: String,
-    pub typing: bool,
-    pub expires_at: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dispatched_to: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub server_received_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
@@ -653,6 +644,24 @@ pub struct EventResolveResponse {
     pub events: Vec<EventReadResponse>,
     pub missing: Vec<String>,
     pub unauthorized: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
+pub struct EventsQueryPostRequest {
+    #[serde(default)]
+    pub realms: Vec<String>,
+    #[serde(default)]
+    pub actors: Vec<String>,
+    #[serde(default)]
+    pub after: Option<String>,
+    #[serde(default)]
+    pub before: Option<String>,
+    #[serde(default)]
+    pub order: Option<String>,
+    #[serde(default)]
+    pub filters: Option<Value>,
+    #[serde(default)]
+    pub limit: Option<usize>,
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
@@ -1777,35 +1786,6 @@ pub struct ReadMarkerResponse {
     pub scope_id: String,
     pub event_id: String,
     pub read_at: String,
-}
-
-/// C14 / read-receipts §2.4-2.5: ephemeral `cx.receipt.read` request body.
-/// `flow_id` / `track` are optional per §2.4 — receipts on a Flow track are
-/// scoped, top-level receipts are Space-wide. The Sync Service applies the
-/// effective Space `read_receipt_policy` before fanout: `disclosure="disabled"`
-/// → drop with 403 + `policy_violation`; `visibility="private"` → fanout
-/// only to the original sender.
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct SendReadReceiptRequest {
-    pub space_id: String,
-    pub event_id: String,
-    #[serde(default)]
-    pub flow_id: Option<String>,
-    #[serde(default)]
-    pub track: Option<String>,
-}
-
-/// C14: ephemeral `cx.receipt.read` accepted-for-fanout response. Soland
-/// returns this when the receipt passed policy gating; clients use the
-/// `fanout` field to know whether they're broadcast (members) or
-/// echoed-only (private — only sender will receive).
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct SendReadReceiptResponse {
-    pub space_id: String,
-    pub actor: String,
-    pub event_id: String,
-    pub fanout: String,
-    pub received_at: String,
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]

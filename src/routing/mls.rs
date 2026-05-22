@@ -63,6 +63,8 @@ pub fn router() -> Router {
         Router::with_path("keypackages")
             .push(Router::with_path("upload").post(upload_keypackage))
             .push(Router::with_path("claim").post(claim_keypackage))
+            .push(Router::with_path("consume").post(consume_keypackages))
+            .push(Router::with_path("revoke").post(revoke_keypackages))
             .push(Router::with_path("welcomes/pending").get(pending_welcomes)),
     )
 }
@@ -260,6 +262,110 @@ async fn claim_keypackage(
     }))
 }
 
+#[endpoint(
+    operation_id = "cx.keys.keypackages.consume",
+    tags("keys"),
+    summary = "Mark claimed KeyPackages consumed by an MLS epoch"
+)]
+async fn consume_keypackages(
+    aa: AuthArgs,
+    body: JsonBody<Value>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<Value> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req)?;
+    let body = body.into_inner();
+    let refs = keypackage_refs_from_body(&body)?;
+    let group_id = body
+        .get("group_id")
+        .or_else(|| body.get("flow_id"))
+        .and_then(Value::as_str)
+        .unwrap_or("manual-consume");
+    let consumed_at = now().timestamp();
+    let mut consumed = Vec::new();
+    let mut failures = serde_json::Map::new();
+    for keypackage_id in refs {
+        match state
+            .persistence
+            .mls_key_packages()
+            .try_claim(&keypackage_id, group_id, consumed_at)
+        {
+            Ok(Some(_)) => consumed.push(keypackage_id),
+            Ok(None) => {
+                failures.insert(keypackage_id, json!("already_consumed_or_missing"));
+            }
+            Err(error) => {
+                failures.insert(keypackage_id, json!(error.to_string()));
+            }
+        }
+    }
+    json_ok(json!({
+        "consumed": consumed,
+        "failures": failures,
+        "consumer_device_id": body.get("consumer_device_id").and_then(Value::as_str).unwrap_or(session.device_id.as_str()),
+        "consumed_at": consumed_at,
+    }))
+}
+
+#[endpoint(
+    operation_id = "cx.keys.keypackages.revoke",
+    tags("keys"),
+    summary = "Revoke unconsumed KeyPackages for a device"
+)]
+async fn revoke_keypackages(
+    aa: AuthArgs,
+    body: JsonBody<Value>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<Value> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req)?;
+    let body = body.into_inner();
+    let refs = keypackage_refs_from_body(&body)?;
+    let revoked_at = now().timestamp();
+    let mut revoked = Vec::new();
+    let mut failures = serde_json::Map::new();
+    for keypackage_id in refs {
+        match state.persistence.mls_key_packages().get(&keypackage_id) {
+            Ok(Some(record)) if record.actor_did != session.actor => {
+                failures.insert(keypackage_id, json!("not_owner"));
+            }
+            Ok(Some(record)) if record.consumed_at.is_some() => {
+                failures.insert(keypackage_id, json!("already_consumed"));
+            }
+            Ok(Some(_)) => {
+                match state.persistence.mls_key_packages().try_claim(
+                    &keypackage_id,
+                    "revoked",
+                    revoked_at,
+                ) {
+                    Ok(Some(_)) => revoked.push(keypackage_id),
+                    Ok(None) => {
+                        failures.insert(keypackage_id, json!("already_consumed_or_missing"));
+                    }
+                    Err(error) => {
+                        failures.insert(keypackage_id, json!(error.to_string()));
+                    }
+                }
+            }
+            Ok(None) => {
+                failures.insert(keypackage_id, json!("not_found"));
+            }
+            Err(error) => {
+                failures.insert(keypackage_id, json!(error.to_string()));
+            }
+        }
+    }
+    json_ok(json!({
+        "revoked": revoked,
+        "failures": failures,
+        "device_id": body.get("device_id").and_then(Value::as_str).unwrap_or(session.device_id.as_str()),
+        "reason": body.get("reason").cloned().unwrap_or(Value::Null),
+        "revoked_at": revoked_at,
+    }))
+}
+
 // ── welcomes/pending ──────────────────────────────────────────────────
 
 #[endpoint(
@@ -342,6 +448,29 @@ fn require_str<'a>(body: &'a Value, field: &'static str) -> Result<&'a str, AppE
     body.get(field)
         .and_then(Value::as_str)
         .ok_or_else(|| AppError::missing_param(format!("missing {field}")))
+}
+
+fn keypackage_refs_from_body(body: &Value) -> Result<Vec<String>, AppError> {
+    if let Some(items) = body.get("key_package_refs").and_then(Value::as_array) {
+        let refs = items
+            .iter()
+            .filter_map(Value::as_str)
+            .map(ToOwned::to_owned)
+            .collect::<Vec<_>>();
+        if refs.is_empty() {
+            return Err(AppError::missing_param("key_package_refs is required"));
+        }
+        return Ok(refs);
+    }
+    if let Some(item) = body
+        .get("keypackage_ref")
+        .or_else(|| body.get("keypackage_id"))
+        .or_else(|| body.get("key_package_ref"))
+        .and_then(Value::as_str)
+    {
+        return Ok(vec![item.to_owned()]);
+    }
+    Err(AppError::missing_param("key_package_refs is required"))
 }
 
 /// Build a minimal in-process `Operation` carrying the MLS payload so

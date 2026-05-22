@@ -12,19 +12,23 @@
 //! plaintext-visibility is enforced at write time but not at GC.
 
 use salvo::http::{Method, StatusCode};
+use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
-use serde_json::json;
+use serde_json::{Value, json};
 
 use super::{
-    append_audit_log, auth_or_render, is_valid_sha256_digest, is_valid_sha256_hex, now,
-    query_param, render_error, sha256_hex, space_allows_plaintext_service, space_has_member,
-    validate_space_id,
+    append_audit_log, auth_or_render, authenticated_session, is_valid_sha256_digest,
+    is_valid_sha256_hex, now, query_param, render_error, sha256_hex,
+    space_allows_plaintext_service, space_has_member, validate_space_id,
 };
+use crate::error::AppError;
+use crate::result::{JsonResult, json_ok};
 use crate::state::{AppState, BlobRecord, SessionRecord};
 
 pub(super) fn router() -> Router {
     Router::new()
         .push(Router::with_path("blob/upload").post(blob_upload))
+        .push(Router::with_path("blob/presign").post(blob_presign))
         .push(Router::with_path("blob/get").get(blob_get).head(blob_get))
 }
 
@@ -225,9 +229,6 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
 #[endpoint]
 async fn blob_get(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let Some(session) = auth_or_render(state, req, res) else {
-        return;
-    };
     let Some(blob_ref) = query_param(req, "blob_ref") else {
         render_error(
             res,
@@ -255,15 +256,31 @@ async fn blob_get(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         );
         return;
     }
+    let presigned = validate_presign_query(state, req, &blob_ref, &purpose);
+    let session = match authenticated_session(state, req) {
+        Ok(session) => Some(session),
+        Err(_) if presigned => None,
+        Err(_) => {
+            render_error(
+                res,
+                StatusCode::UNAUTHORIZED,
+                "unauthenticated",
+                "missing bearer token",
+            );
+            return;
+        }
+    };
     let blob = state.persistence.blobs().get(&blob_ref).ok().flatten();
     match blob.as_ref() {
         Some(blob) => {
-            if !blob_visible_to_session(
-                state,
-                blob,
-                &session,
-                query_param(req, "space_id").as_deref(),
-            ) {
+            if session.as_ref().is_some_and(|session| {
+                !blob_visible_to_session(
+                    state,
+                    blob,
+                    session,
+                    query_param(req, "space_id").as_deref(),
+                )
+            }) {
                 render_error(res, StatusCode::NOT_FOUND, "not_found", "not found");
                 return;
             }
@@ -281,9 +298,11 @@ async fn blob_get(depot: &mut Depot, req: &mut Request, res: &mut Response) {
                 "redacted": false,
                 "visibility": null,
             });
-            if let Some(block) =
-                crate::round23::classify_presign_blob_block(&blob_value, &session.actor)
-            {
+            let actor = session
+                .as_ref()
+                .map(|session| session.actor.as_str())
+                .unwrap_or("presigned");
+            if let Some(block) = crate::round23::classify_presign_blob_block(&blob_value, actor) {
                 let (code, reason) = block.as_error();
                 render_error(
                     res,
@@ -364,13 +383,14 @@ async fn blob_get(depot: &mut Depot, req: &mut Request, res: &mut Response) {
             }
             append_audit_log(
                 state,
-                Some(&session.actor),
+                session.as_ref().map(|session| session.actor.as_str()),
                 "blob.get",
                 json!({
                     "blob_ref": blob_ref.clone(),
-                    "device_id": session.device_id.clone(),
+                    "device_id": session.as_ref().map(|session| session.device_id.clone()),
                     "purpose": purpose,
                     "space_id": blob.space_id.clone(),
+                    "presigned": session.is_none(),
                     "status": status.as_u16()
                 }),
                 "accepted",
@@ -413,6 +433,105 @@ async fn blob_get(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         }
         None => render_error(res, StatusCode::NOT_FOUND, "not_found", "not found"),
     }
+}
+
+#[endpoint(
+    operation_id = "cx.blob.presign",
+    tags("blob"),
+    summary = "Issue a short-lived presigned blob download URL"
+)]
+async fn blob_presign(
+    aa: crate::routing::system::extract::AuthArgs,
+    body: JsonBody<Value>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<Value> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req)?;
+    let body = body.into_inner();
+    let blob_ref = body
+        .get("blob_ref")
+        .and_then(Value::as_str)
+        .ok_or_else(|| AppError::missing_param("blob_ref is required"))?;
+    let purpose = body
+        .get("purpose")
+        .and_then(Value::as_str)
+        .unwrap_or("download");
+    if !is_valid_blob_purpose(purpose) {
+        return Err(AppError::invalid_param("invalid blob purpose"));
+    }
+    let blob = state
+        .persistence
+        .blobs()
+        .get(blob_ref)
+        .ok()
+        .flatten()
+        .ok_or_else(|| AppError::not_found("blob not found"))?;
+    if !blob_visible_to_session(
+        state,
+        &blob,
+        &session,
+        body.get("space_id").and_then(Value::as_str),
+    ) {
+        return Err(AppError::not_found("blob not found"));
+    }
+    let ttl_seconds = body
+        .get("ttl_seconds")
+        .and_then(Value::as_u64)
+        .unwrap_or(300)
+        .clamp(1, 300);
+    let expires_at = now() + chrono::Duration::seconds(ttl_seconds as i64);
+    let token = presign_token(state, blob_ref, purpose, expires_at.timestamp());
+    let base = state.config.public_base_url.trim_end_matches('/');
+    let url = format!(
+        "{base}/api/v1/blob/get?blob_ref={}&purpose={}&expires_at={}&presign_token={}",
+        query_escape(blob_ref),
+        query_escape(purpose),
+        expires_at.timestamp(),
+        token,
+    );
+    json_ok(json!({
+        "url": url,
+        "method": "GET",
+        "expires_at": expires_at.to_rfc3339(),
+        "cache_control": crate::round23::PRESIGN_CACHE_CONTROL,
+        "referrer_policy": crate::round23::PRESIGN_REFERRER_POLICY,
+        "blob_ref": blob_ref,
+        "purpose": purpose,
+    }))
+}
+
+fn validate_presign_query(state: &AppState, req: &Request, blob_ref: &str, purpose: &str) -> bool {
+    let Some(expires_at) = query_param(req, "expires_at").and_then(|value| value.parse::<i64>().ok()) else {
+        return false;
+    };
+    if expires_at <= now().timestamp() {
+        return false;
+    }
+    let Some(token) = query_param(req, "presign_token") else {
+        return false;
+    };
+    token == presign_token(state, blob_ref, purpose, expires_at)
+}
+
+fn presign_token(state: &AppState, blob_ref: &str, purpose: &str, expires_at: i64) -> String {
+    sha256_hex(
+        format!(
+            "{}:{}:{}:{}",
+            state.config.service_did, blob_ref, purpose, expires_at
+        )
+        .as_bytes(),
+    )
+}
+
+fn query_escape(value: &str) -> String {
+    value
+        .replace('%', "%25")
+        .replace(':', "%3A")
+        .replace('/', "%2F")
+        .replace(' ', "%20")
+        .replace('&', "%26")
+        .replace('=', "%3D")
 }
 
 fn expected_blob_sha256(req: &Request) -> Result<Option<String>, &'static str> {

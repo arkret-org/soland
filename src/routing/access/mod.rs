@@ -12,7 +12,3 @@ use super::{
 pub fn router() -> Router {
     Router::new().push(authz::router()).push(policy::router())
 }
-
-pub fn contrix_router() -> Router {
-    policy::contrix_router()
-}

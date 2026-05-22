@@ -33,7 +33,6 @@ pub(crate) mod realm_policy;
 
 use access::policy::policy_document_to_response;
 use admin::audit::append_audit_log;
-use events::event_log::effective_read_receipt_policy_for_space;
 use events::flow::{
     default_discussion_track, discussion_track_for_projection_event, flow_id_for_projection_event,
     flow_id_from_space_id, flow_projection_for_space,
@@ -90,8 +89,8 @@ pub fn router_with_rate_limiter_config(
         .push(system::health_router())
         .push(interop::well_known_router())
         .push(identity::embedded_webvh_public_router())
+        .push(admin::spec_router())
         .push(api_v1_router())
-        .push(access::contrix_router())
         .push(interop::contrix_router())
         .push(admin::admin_router())
         // `/contrix/v1/*` fallback: per `contrix-spec/spec/v1/zh/sync/
@@ -159,10 +158,9 @@ fn api_v1_router() -> Router {
 
 /// Fallback router mounted at `/contrix/v1/*`. Mirror of the `/api/v1/*`
 /// catch-all above — same JSON envelope, same 404/405 disambiguation. The
-/// concrete `contrix/v1/...` endpoints (currently `contrix/v1/check` and
-/// `contrix/v1/ice-config`) are mounted as their own top-level child
-/// routers and run *before* this fallback because salvo iterates the
-/// root's children in registration order.
+/// concrete `contrix/v1/...` endpoints (currently `contrix/v1/ice-config`)
+/// are mounted as their own top-level child routers and run *before* this
+/// fallback because salvo iterates the root's children in registration order.
 fn contrix_v1_fallback_router() -> Router {
     Router::with_path("contrix/v1/{**rest}")
         .options(cors_preflight)
@@ -373,13 +371,6 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "Space lifecycle projection query",
     ),
     (
-        "/api/v1/projection/space-containers",
-        PathItemType::Get,
-        "projection",
-        "cx.extension.soland.projection.space_containers_legacy",
-        "legacy Space-container projection query alias",
-    ),
-    (
         "/api/v1/projection/flows",
         PathItemType::Get,
         "projection",
@@ -476,13 +467,6 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "account",
         "cx.account.describe",
         "account aggregate describe",
-    ),
-    (
-        "/api/v1/sync/typing",
-        PathItemType::Post,
-        "sync",
-        "cx.extension.soland.sync.typing",
-        "set typing state",
     ),
     (
         "/api/v1/sync/backfill/gap",
@@ -770,13 +754,6 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "webrtc",
         "cx.extension.soland.webrtc.close_session",
         "close WebRTC session",
-    ),
-    (
-        "/contrix/v1/check",
-        PathItemType::Post,
-        "policy",
-        "cx.policy.check",
-        "policy check",
     ),
     (
         "/api/v1/moderation/report",

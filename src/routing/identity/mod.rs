@@ -32,6 +32,10 @@ pub fn router() -> Router {
                 .push(Router::with_path("resolve").post(did::identity_resolve))
                 .push(Router::with_path("document").get(did::identity_document))
                 .push(Router::with_path("log").get(did::identity_log))
+                .push(
+                    Router::with_path("submit-did-operation")
+                        .post(did::identity_submit_did_operation),
+                )
                 .push(Router::with_path("webvh/register").post(did::embedded_webvh_register))
                 .push(Router::with_path("receipts").get(did::identity_receipts)),
         )

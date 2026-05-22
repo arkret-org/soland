@@ -50,10 +50,6 @@ pub(super) fn router() -> Router {
         )
 }
 
-pub(super) fn contrix_router() -> Router {
-    Router::with_path("contrix/v1/check").post(policy_check)
-}
-
 #[endpoint(
     operation_id = "cx.extension.soland.policies.list",
     tags("policy"),

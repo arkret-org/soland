@@ -4,13 +4,13 @@
 //! `mimi-protocol-directory`. Writes from the MIMI side map into the
 //! canonical Contrix reducer chain:
 //!
-//!   * `POST /mimi/rooms/{room_id}/messages` -> emits a
+//!   * `POST /mimi/rooms/{flow_id}/messages` -> emits a
 //!     `MessageRecord` + a `cx.message.create` projection event so
 //!     the MIMI ingress shows up on the canonical Contrix timeline.
-//!   * `PUT  /mimi/rooms/{room_id}/update` -> emits a
+//!   * `PUT  /mimi/rooms/{flow_id}/update` -> emits a
 //!     `cx.mimi.room_binding` projection event whenever the update
 //!     body carries a `room_binding` block.
-//!   * `POST /mimi/rooms/{room_id}/notify` -> broadcasts a synthetic
+//!   * `POST /mimi/rooms/{flow_id}/notify` -> broadcasts a synthetic
 //!     `cx.mimi.notify` projection event so live subscribers observe
 //!     MIMI fanout.
 //!   * `POST /mimi/report-abuse` -> persists the moderation report
@@ -39,10 +39,10 @@ pub(super) fn router() -> Router {
     Router::with_path("mimi")
         .push(Router::with_path("provider-directory").get(mimi_provider_directory))
         .push(Router::with_path("key-material").post(mimi_key_material))
-        .push(Router::with_path("rooms/{room_id}/update").put(mimi_room_update))
-        .push(Router::with_path("rooms/{room_id}/notify").post(mimi_room_notify))
-        .push(Router::with_path("rooms/{room_id}/messages").post(mimi_room_message))
-        .push(Router::with_path("rooms/{room_id}/group-info").get(mimi_group_info))
+        .push(Router::with_path("rooms/{flow_id}/update").put(mimi_room_update))
+        .push(Router::with_path("rooms/{flow_id}/notify").post(mimi_room_notify))
+        .push(Router::with_path("rooms/{flow_id}/messages").post(mimi_room_message))
+        .push(Router::with_path("rooms/{flow_id}/group-info").get(mimi_group_info))
         .push(Router::with_path("consent/request").post(mimi_consent_request))
         .push(Router::with_path("consent/update").post(mimi_consent_update))
         .push(Router::with_path("identifiers/query").post(mimi_identifiers_query))
@@ -100,12 +100,12 @@ async fn mimi_key_material(body: JsonBody<Value>, depot: &mut Depot) -> JsonResu
     summary = "Apply a MIMI room update (optionally persists `room_binding`)"
 )]
 async fn mimi_room_update(
-    room_id: PathParam<String>,
+    flow_id: PathParam<String>,
     body: JsonBody<Value>,
     depot: &mut Depot,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let room_id = room_id.into_inner();
+    let room_id = flow_id.into_inner();
     let body = body.into_inner();
     if let Some(message) = unsupported_mimi_draft(&body) {
         return Err(AppError::invalid_param(message).with_wire_code("unsupported_draft"));
@@ -152,12 +152,12 @@ async fn mimi_room_update(
     summary = "Fan out a MIMI room notify (broadcasts a `cx.mimi.notify` ephemeral)"
 )]
 async fn mimi_room_notify(
-    room_id: PathParam<String>,
+    flow_id: PathParam<String>,
     body: JsonBody<Value>,
     depot: &mut Depot,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let room_id = room_id.into_inner();
+    let room_id = flow_id.into_inner();
     let body = body.into_inner();
     if let Some(message) = unsupported_mimi_draft(&body) {
         return Err(AppError::invalid_param(message).with_wire_code("unsupported_draft"));
@@ -218,12 +218,12 @@ async fn mimi_room_notify(
     summary = "Submit a MIMI room message (mapped into cx.message.create projection)"
 )]
 async fn mimi_room_message(
-    room_id: PathParam<String>,
+    flow_id: PathParam<String>,
     body: JsonBody<Value>,
     depot: &mut Depot,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let room_id = room_id.into_inner();
+    let room_id = flow_id.into_inner();
     let body = body.into_inner();
     if let Some(message) = unsupported_mimi_draft(&body) {
         return Err(AppError::invalid_param(message).with_wire_code("unsupported_draft"));
@@ -390,9 +390,9 @@ async fn mimi_room_message(
     tags("mimi"),
     summary = "Read a MIMI room's group info / projection"
 )]
-async fn mimi_group_info(room_id: PathParam<String>, depot: &mut Depot) -> JsonResult<Value> {
+async fn mimi_group_info(flow_id: PathParam<String>, depot: &mut Depot) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let room_id = room_id.into_inner();
+    let room_id = flow_id.into_inner();
     if !valid_mimi_room_id(&room_id) {
         return Err(AppError::invalid_param("invalid MIMI room id"));
     }

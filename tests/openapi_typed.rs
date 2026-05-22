@@ -396,6 +396,7 @@ async fn typed_describe_handlers_publish_response_schemas() {
         "cx.identity.resolve",
         "cx.identity.get_document",
         "cx.identity.get_log",
+        "cx.identity.submit_did_operation",
         "cx.identity.get_receipts",
     ] {
         assert!(
@@ -428,6 +429,10 @@ async fn typed_describe_handlers_publish_response_schemas() {
         "cx.directory.search_actors",
         "cx.directory.search_users",
         "cx.directory.resolve_handle",
+        "cx.directory.private_contact_discovery",
+        "cx.directory.announce",
+        "cx.directory.withdraw",
+        "cx.directory.subscribe",
         "cx.relation.create",
         "cx.relation.delete",
         "cx.relation.list",
@@ -455,20 +460,18 @@ async fn typed_describe_handlers_publish_response_schemas() {
         );
     }
 
-    // Round 15z — events/sync.rs::set_typing (only sync.rs handler converted
-    // in this slice; rest of sync.rs is too entangled with cursor/stream
-    // helpers to migrate without scope creep).
+    // Round 15z — events/sync.rs typed canonical ephemeral send.
     assert!(
-        body.contains("operationId: cx.extension.soland.sync.typing"),
-        "missing operationId cx.extension.soland.sync.typing from round 15z typed conversion"
+        body.contains("operationId: cx.ephemeral.send"),
+        "missing operationId cx.ephemeral.send from canonical ephemeral endpoint"
     );
     assert!(
-        body.contains("SetTypingRequest"),
-        "SetTypingRequest missing — round 15z typed signature did not publish its schema"
+        body.contains("EphemeralSubmitResponse"),
+        "EphemeralSubmitResponse missing — canonical ephemeral endpoint did not publish its schema"
     );
     assert!(
-        body.contains("SetTypingResponse"),
-        "SetTypingResponse missing — round 15z typed signature did not publish its schema"
+        body.contains("operationId: cx.events.query_post"),
+        "missing operationId cx.events.query_post from canonical body-query endpoint"
     );
 
     // Round 15ab — interop/mimi.rs typed batch (10 handlers; mimi_protocol_directory
@@ -490,6 +493,21 @@ async fn typed_describe_handlers_publish_response_schemas() {
         assert!(
             body.contains(&format!("operationId: {operation_id}")),
             "missing operationId {operation_id} from round 15ab typed conversion"
+        );
+    }
+
+    for operation_id in [
+        "cx.blob.presign",
+        "cx.keys.keypackages.consume",
+        "cx.keys.keypackages.revoke",
+        "cx.admin.get_server_status",
+        "cx.admin.update_account_status",
+        "cx.admin.revoke_device",
+        "cx.admin.get_moderation_queue",
+    ] {
+        assert!(
+            body.contains(&format!("operationId: {operation_id}")),
+            "missing operationId {operation_id} from canonical gap-closure batch"
         );
     }
 

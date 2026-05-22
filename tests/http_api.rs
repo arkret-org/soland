@@ -1340,13 +1340,18 @@ async fn contrix_openapi_spec_contains_facet_projection_contracts() {
         "cx.extension.soland.federation.space_members",
         "cx.extension.soland.federation.verify_actor",
         "cx.account.subscribe",
-        "cx.extension.soland.sync.typing",
+        "cx.ephemeral.send",
+        "cx.events.query_post",
         "cx.extension.soland.sync.backfill_gap",
         "cx.snapshot.head",
         "cx.extension.soland.sync.get_snapshot_chunk",
         "cx.directory.describe",
         "cx.directory.search_realms",
         "cx.directory.resolve_realm",
+        "cx.directory.private_contact_discovery",
+        "cx.directory.announce",
+        "cx.directory.withdraw",
+        "cx.directory.subscribe",
         "cx.extension.soland.index.describe",
         "cx.extension.soland.index.debug_reducer",
         "cx.extension.soland.admin.actors",
@@ -1373,6 +1378,7 @@ async fn contrix_openapi_spec_contains_facet_projection_contracts() {
         "cx.extension.soland.push.rules",
         "cx.push.notify",
         "cx.blob.upload",
+        "cx.blob.presign",
         "cx.blob.head",
         "cx.blob.get",
         "cx.extension.soland.webrtc.create_session",
@@ -1391,6 +1397,13 @@ async fn contrix_openapi_spec_contains_facet_projection_contracts() {
         "cx.mimi.identifier_query",
         "cx.mimi.report_abuse",
         "cx.mimi.proxy_download",
+        "cx.keys.keypackages.consume",
+        "cx.keys.keypackages.revoke",
+        "cx.identity.submit_did_operation",
+        "cx.admin.get_server_status",
+        "cx.admin.update_account_status",
+        "cx.admin.revoke_device",
+        "cx.admin.get_moderation_queue",
     ];
     for operation_id in expected_operation_ids {
         assert!(
@@ -4538,22 +4551,42 @@ async fn federation_transactions_are_idempotent_by_origin_and_body() {
 async fn push_profile_and_moderation_contracts_work() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
-    let unauth_presence = TestClient::post("http://server/api/v1/account/subscribe?catchup=true")
-        .json(&serde_json::json!({"set_presence": "online"}))
+    let sent_at = chrono::Utc::now();
+    let expires_at = sent_at + chrono::Duration::seconds(30);
+    let unauth_presence = TestClient::post("http://server/api/v1/ephemeral")
+        .json(&serde_json::json!({
+            "kind": "cx.presence",
+            "realm_id": DEMO_REALM_ID,
+            "actor_id": "did:web:alice.example",
+            "sent_at": sent_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            "expires_at": expires_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            "payload": {
+                "status": "online"
+            }
+        }))
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(unauth_presence.status_code, Some(StatusCode::UNAUTHORIZED));
 
-    let presence_sync: Value =
-        TestClient::post("http://server/api/v1/account/subscribe?catchup=true")
-            .add_header("authorization", format!("Bearer {token}"), true)
-            .json(&serde_json::json!({"set_presence": "unavailable"}))
-            .send(&app_from_state(state.clone()))
-            .await
-            .take_json()
-            .await
-            .unwrap();
-    assert!(presence_sync["cursor"].is_string());
+    let presence: Value = TestClient::post("http://server/api/v1/ephemeral")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({
+            "kind": "cx.presence",
+            "realm_id": DEMO_REALM_ID,
+            "actor_id": "did:web:alice.example",
+            "sent_at": sent_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            "expires_at": expires_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            "payload": {
+                "status": "unavailable"
+            }
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(presence["accepted"], true);
+    assert_eq!(presence["kind"], "cx.presence");
 
     let profile: Value =
         TestClient::get("http://server/api/v1/profile/presence?did=did:web:alice.example")
@@ -4565,73 +4598,78 @@ async fn push_profile_and_moderation_contracts_work() {
     assert_eq!(profile["actor"], "did:web:alice.example");
     assert_eq!(profile["presence"]["status"], "unavailable");
 
-    let unauth_typing = TestClient::post("http://server/api/v1/sync/typing")
+    let unauth_typing = TestClient::post("http://server/api/v1/ephemeral")
         .json(&serde_json::json!({
+            "kind": "cx.typing",
             "realm_id": DEMO_REALM_ID,
-            "typing": true
+            "actor_id": "did:web:alice.example",
+            "sent_at": sent_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            "expires_at": expires_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            "payload": {
+                "typing": true
+            }
         }))
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(unauth_typing.status_code, Some(StatusCode::UNAUTHORIZED));
 
-    let typing: Value = TestClient::post("http://server/api/v1/sync/typing")
+    let typing: Value = TestClient::post("http://server/api/v1/ephemeral")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
+            "kind": "cx.typing",
             "realm_id": DEMO_REALM_ID,
-            "scope_id": "cx:flow:demo",
-            "typing": true,
-            "timeout_ms": 30000
+            "actor_id": "did:web:alice.example",
+            "sent_at": sent_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            "expires_at": expires_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            "payload": {
+                "scope_id": "cx:flow:demo",
+                "typing": true
+            }
         }))
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
         .await
         .unwrap();
-    assert_eq!(typing["typing"], true);
-    assert!(typing["expires_at"].is_string());
+    assert_eq!(typing["accepted"], true);
+    assert_eq!(typing["kind"], "cx.typing");
 
-    let sync_with_typing: Value =
-        TestClient::post("http://server/api/v1/account/subscribe?catchup=true")
-            .add_header("authorization", format!("Bearer {token}"), true)
-            .json(&serde_json::json!({}))
-            .send(&app_from_state(state.clone()))
-            .await
-            .take_json()
-            .await
-            .unwrap();
-    let ephemeral = &sync_with_typing["spaces"][DEMO_REALM_ID]["ephemeral"];
-    assert_eq!(ephemeral[0]["type"], "cx.typing");
-    assert_eq!(ephemeral[0]["scope_id"], "cx:flow:demo");
-    assert_eq!(ephemeral[0]["actors"][0]["actor"], "did:web:alice.example");
+    let active_typing = state
+        .persistence
+        .typing()
+        .list_for_space(DEMO_REALM_ID)
+        .unwrap();
+    assert_eq!(active_typing.len(), 1);
+    assert_eq!(active_typing[0].actor, "did:web:alice.example");
+    assert_eq!(active_typing[0].scope_id.as_deref(), Some("cx:flow:demo"));
 
-    let typing_stopped: Value = TestClient::post("http://server/api/v1/sync/typing")
+    let stop_sent_at = chrono::Utc::now();
+    let stop_expires_at = stop_sent_at + chrono::Duration::seconds(30);
+    let typing_stopped: Value = TestClient::post("http://server/api/v1/ephemeral")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
+            "kind": "cx.typing",
             "realm_id": DEMO_REALM_ID,
-            "typing": false
+            "actor_id": "did:web:alice.example",
+            "sent_at": stop_sent_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            "expires_at": stop_expires_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            "payload": {
+                "typing": false
+            }
         }))
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
         .await
         .unwrap();
-    assert_eq!(typing_stopped["typing"], false);
+    assert_eq!(typing_stopped["accepted"], true);
 
-    let sync_without_typing: Value =
-        TestClient::post("http://server/api/v1/account/subscribe?catchup=true")
-            .add_header("authorization", format!("Bearer {token}"), true)
-            .json(&serde_json::json!({}))
-            .send(&app_from_state(state.clone()))
-            .await
-            .take_json()
-            .await
-            .unwrap();
-    assert!(
-        sync_without_typing["spaces"][DEMO_REALM_ID]["ephemeral"]
-            .as_array()
-            .unwrap()
-            .is_empty()
-    );
+    let cleared_typing = state
+        .persistence
+        .typing()
+        .list_for_space(DEMO_REALM_ID)
+        .unwrap();
+    assert!(cleared_typing.is_empty());
 
     let push: Value = TestClient::post("http://server/api/v1/push/register-device")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -5618,7 +5656,7 @@ async fn policy_check_and_validation_work() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
 
-    let policy: Value = TestClient::post("http://server/contrix/v1/check")
+    let policy: Value = TestClient::post("http://server/api/v1/policy/check")
         .json(&serde_json::json!({
             "request_id": "req1",
             "realm_id": "cx:realm:0196419b-0000-7000-8000-000000000000",
@@ -5680,7 +5718,7 @@ async fn policy_check_and_validation_work() {
         .unwrap();
     assert_eq!(policies["policies"].as_array().unwrap().len(), 1);
 
-    let denied: Value = TestClient::post("http://server/contrix/v1/check")
+    let denied: Value = TestClient::post("http://server/api/v1/policy/check")
         .json(&serde_json::json!({
             "request_id": "req2",
             "realm_id": "cx:realm:0196419b-0000-7000-8000-000000000000",
@@ -5712,7 +5750,7 @@ async fn policy_check_and_validation_work() {
         .unwrap();
     assert_eq!(deleted["ok"], true);
 
-    let allowed_again: Value = TestClient::post("http://server/contrix/v1/check")
+    let allowed_again: Value = TestClient::post("http://server/api/v1/policy/check")
         .json(&serde_json::json!({
             "request_id": "req3",
             "realm_id": "cx:realm:0196419b-0000-7000-8000-000000000000",
@@ -6852,29 +6890,24 @@ async fn projection_space_containers_endpoint_reports_lifecycle_state() {
         .expect("place still missing post-restore");
     assert_eq!(row["state"], "active");
 
-    let legacy_underscore_body: Value = TestClient::get(format!(
+    let legacy_underscore = TestClient::get(format!(
         "http://server/api/v1/projection/space_containers?realm_id={realm_id}"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
-    .await
-    .take_json()
-    .await
-    .unwrap();
-    assert_eq!(legacy_underscore_body["realm_id"], realm_id);
-    assert!(legacy_underscore_body["spaces"].as_array().is_some());
+    .await;
+    assert_eq!(
+        legacy_underscore.status_code,
+        Some(StatusCode::NOT_FOUND)
+    );
 
-    let legacy_hyphen_body: Value = TestClient::get(format!(
+    let legacy_hyphen = TestClient::get(format!(
         "http://server/api/v1/projection/space-containers?realm_id={realm_id}"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
-    .await
-    .take_json()
-    .await
-    .unwrap();
-    assert_eq!(legacy_hyphen_body["realm_id"], realm_id);
-    assert!(legacy_hyphen_body["spaces"].as_array().is_some());
+    .await;
+    assert_eq!(legacy_hyphen.status_code, Some(StatusCode::NOT_FOUND));
 }
 
 /// `GET /api/v1/projection/flows?realm_id=...` mirrors the Place

@@ -5,7 +5,7 @@
 //! - `GET  /api/v1/account/describe`
 //! - `GET  /api/v1/account/subscribe`       — `cx.account.subscribe` (account-aggregate NDJSON:
 //!   timeline, presence, typing, to_device).
-//! - `POST /api/v1/sync/typing`             — `cx.sync.typing` (transient ephemeral)
+//! - `POST /api/v1/ephemeral`               — `cx.ephemeral.send` (broadcast ephemeral)
 //! - `GET  /api/v1/events/subscribe`        — `cx.events.subscribe`. Multi-space / multi-actor
 //!   stream; frame `kind` field replaces `type`.
 //! - `GET  /api/v1/events`                  — `cx.events.query` (replaces `cx.events.list` +
@@ -48,15 +48,15 @@ use super::{
 use crate::reducer::ProjectionState;
 use crate::state::{AppState, PresenceRecord, ProjectionEventRecord, SessionRecord, TypingRecord};
 use crate::wire::{
-    AccountDescribeResBody, BackfillResBody, ClientSyncRequest, SetTypingRequest,
-    SetTypingResponse, SnapshotHeadResponse,
+    AccountDescribeResBody, BackfillResBody, ClientSyncRequest, EphemeralSubmitResponse,
+    EventsQueryPostRequest, SnapshotHeadResponse,
 };
 
 pub(super) fn router() -> Router {
     Router::new()
         .push(Router::with_path("account/describe").get(account_describe))
         .push(Router::with_path("account/subscribe").get(account_subscribe))
-        .push(Router::with_path("sync/typing").post(set_typing))
+        .push(Router::with_path("ephemeral").post(submit_ephemeral))
         .push(Router::with_path("sync/backfill/gap").get(sync_gap_backfill))
         .push(Router::with_path("snapshot/head").get(snapshot_head))
         .push(Router::with_path("sync/snapshot-chunk").get(snapshot_chunk))
@@ -906,57 +906,169 @@ pub fn sync_filter_hash(filter: Option<&serde_json::Value>) -> String {
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.sync.typing",
+    operation_id = "cx.ephemeral.send",
     tags("sync"),
-    summary = "Set / clear the actor's typing-indicator ephemeral for a Realm"
+    summary = "Send a broadcast ephemeral signal"
 )]
-async fn set_typing(
+async fn submit_ephemeral(
     aa: crate::routing::system::extract::AuthArgs,
-    body: salvo::oapi::extract::JsonBody<SetTypingRequest>,
+    body: salvo::oapi::extract::JsonBody<contrix_sdk::EphemeralEnvelope>,
     depot: &mut Depot,
     req: &mut Request,
-) -> crate::result::JsonResult<SetTypingResponse> {
+) -> crate::result::JsonResult<EphemeralSubmitResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req)?;
-    let body = body.into_inner();
-    if RealmId::new(body.realm_id.clone()).is_err() {
-        return Err(crate::error::AppError::invalid_param("invalid realm_id"));
+    let envelope = body.into_inner();
+
+    validate_ephemeral_envelope(&envelope)?;
+
+    let realm_id = envelope.realm_id.to_string();
+    let actor_id = envelope.actor_id.to_string();
+    if actor_id != session.actor {
+        return Err(crate::error::AppError::capability_denied(
+            "ephemeral actor_id must match the bearer session actor",
+        ));
     }
-    if !realm_has_member(state, &body.realm_id, &session.actor) {
+    if !realm_has_member(state, &realm_id, &session.actor) {
         return Err(crate::error::AppError::capability_denied(
             "actor is not a joined member of the realm",
         ));
     }
 
-    let expires_at = if body.typing {
-        let timeout_ms = body.timeout_ms.unwrap_or(30_000).clamp(1_000, 120_000);
-        let now = chrono::Utc::now();
-        let expires_at = now + chrono::Duration::milliseconds(timeout_ms as i64);
-        if let Err(error) = state.persistence.typing().put(TypingRecord {
-            actor: session.actor.clone(),
-            space_id: body.realm_id.clone(),
-            scope_id: body.scope_id.clone(),
-            expires_at,
-            updated_at: now,
-        }) {
-            tracing::error!(%error, "failed to persist typing");
+    match envelope.kind.as_str() {
+        "cx.typing" => persist_ephemeral_typing(state, &session.actor, &realm_id, &envelope),
+        "cx.presence" => persist_ephemeral_presence(state, &session.actor, &envelope),
+        "cx.receipt.read" => admit_ephemeral_read_receipt(state, &realm_id, &envelope)?,
+        "cx.call.signal" => {}
+        _ => {
+            return Err(crate::error::AppError::invalid_param(
+                "unsupported ephemeral kind",
+            ));
         }
-        Some(expires_at)
-    } else {
-        let _ = state
-            .persistence
-            .typing()
-            .remove(&session.actor, &body.realm_id);
-        None
-    };
+    }
 
-    crate::result::json_ok(SetTypingResponse {
-        ok: true,
-        realm_id: body.realm_id,
-        actor: session.actor,
-        typing: body.typing,
-        expires_at,
+    crate::result::json_ok(EphemeralSubmitResponse {
+        accepted: true,
+        kind: envelope.kind,
+        realm_id,
+        dispatched_to: None,
+        server_received_at: Some(chrono::Utc::now()),
     })
+}
+
+fn validate_ephemeral_envelope(
+    envelope: &contrix_sdk::EphemeralEnvelope,
+) -> Result<(), crate::error::AppError> {
+    if !matches!(
+        envelope.kind.as_str(),
+        "cx.call.signal" | "cx.presence" | "cx.typing" | "cx.receipt.read"
+    ) {
+        return Err(crate::error::AppError::invalid_param(
+            "unsupported ephemeral kind",
+        ));
+    }
+    let window_ms = envelope
+        .expires_at
+        .signed_duration_since(envelope.sent_at)
+        .num_milliseconds();
+    if window_ms <= 0 || (window_ms as u64) > contrix_sdk::EPHEMERAL_ABSOLUTE_HARD_CEILING_MS as u64
+    {
+        return Err(crate::error::AppError::invalid_param(
+            "ephemeral expires_at must be after sent_at and within the hard TTL ceiling",
+        ));
+    }
+    if envelope.expires_at <= chrono::Utc::now() {
+        return Err(crate::error::AppError::invalid_param(
+            "ephemeral signal is already expired",
+        ));
+    }
+    Ok(())
+}
+
+fn persist_ephemeral_typing(
+    state: &AppState,
+    actor: &str,
+    realm_id: &str,
+    envelope: &contrix_sdk::EphemeralEnvelope,
+) {
+    let typing = envelope
+        .payload
+        .get("typing")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    if typing {
+        let scope_id = envelope
+            .payload
+            .get("scope_id")
+            .or_else(|| envelope.payload.get("flow_id"))
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .map(ToOwned::to_owned);
+        if let Err(error) = state.persistence.typing().put(TypingRecord {
+            actor: actor.to_owned(),
+            space_id: realm_id.to_owned(),
+            scope_id,
+            expires_at: envelope.expires_at,
+            updated_at: chrono::Utc::now(),
+        }) {
+            tracing::error!(%error, "failed to persist ephemeral typing");
+        }
+    } else {
+        let _ = state.persistence.typing().remove(actor, realm_id);
+    }
+}
+
+fn persist_ephemeral_presence(
+    state: &AppState,
+    actor: &str,
+    envelope: &contrix_sdk::EphemeralEnvelope,
+) {
+    let status = envelope
+        .payload
+        .get("status")
+        .or_else(|| envelope.payload.get("state"))
+        .and_then(Value::as_str)
+        .unwrap_or("online")
+        .to_owned();
+    if let Err(error) = state.persistence.presence().put(PresenceRecord {
+        actor: actor.to_owned(),
+        status,
+        updated_at: chrono::Utc::now(),
+    }) {
+        tracing::error!(%error, "failed to persist ephemeral presence");
+    }
+}
+
+fn admit_ephemeral_read_receipt(
+    state: &AppState,
+    realm_id: &str,
+    envelope: &contrix_sdk::EphemeralEnvelope,
+) -> Result<(), crate::error::AppError> {
+    if envelope
+        .payload
+        .get("event_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .is_none()
+    {
+        return Err(crate::error::AppError::invalid_param(
+            "cx.receipt.read payload requires event_id",
+        ));
+    }
+
+    let (disclosure, _visibility, _scope_overrides_allowed) =
+        super::event_log::effective_read_receipt_policy_for_space(state, realm_id)
+            .unwrap_or_else(|| ("optional".to_owned(), "members".to_owned(), true));
+    if disclosure == "disabled" {
+        return Err(crate::error::AppError::new(
+            crate::error::ErrorCode::PolicyViolation,
+            format!(
+                "Realm '{realm_id}' read_receipt_policy.disclosure=disabled; cx.receipt.read dropped"
+            ),
+        )
+        .with_status(StatusCode::FORBIDDEN));
+    }
+    Ok(())
 }
 
 /// `cx.events.subscribe` at `GET /api/v1/events/subscribe`. NDJSON
@@ -1233,6 +1345,59 @@ fn ndjson_line(value: &serde_json::Value) -> Bytes {
     Bytes::from(s)
 }
 
+#[derive(Clone, Debug)]
+struct EventsQueryParts {
+    realms: Vec<String>,
+    actors: Vec<String>,
+    after: Option<String>,
+    before: Option<String>,
+    order: String,
+    limit: usize,
+}
+
+fn validate_events_query_order(order: &str) -> Result<(), crate::error::AppError> {
+    match order {
+        "default" | "ascending" | "descending" => Ok(()),
+        _ => Err(crate::error::AppError::invalid_param(
+            "order must be default, ascending, or descending",
+        )),
+    }
+}
+
+fn events_query_direction(parts: &EventsQueryParts) -> bool {
+    parts.order == "descending" || (parts.order == "default" && parts.before.is_some() && parts.after.is_none())
+}
+
+fn events_query_cursor_and_stop(parts: &EventsQueryParts) -> (Option<String>, Option<String>, bool) {
+    let backward = events_query_direction(parts);
+    let cursor = if backward {
+        parts.before.clone().or_else(|| parts.after.clone())
+    } else {
+        parts.after.clone()
+    };
+    let stop = if backward {
+        parts.after.clone()
+    } else {
+        parts.before.clone()
+    };
+    (cursor, stop, backward)
+}
+
+fn truncate_before_stop_cursor(mut events: Vec<Value>, stop_cursor: Option<&str>) -> Vec<Value> {
+    let Some(stop_cursor) = stop_cursor else {
+        return events;
+    };
+    if let Some(index) = events.iter().position(|event| {
+        event
+            .get("event_id")
+            .and_then(Value::as_str)
+            .is_some_and(|event_id| event_id == stop_cursor)
+    }) {
+        events.truncate(index);
+    }
+    events
+}
+
 /// `cx.events.query` at `GET /api/v1/events`.
 /// Reads from the projection layer so callers writing through
 /// `POST /api/v1/events` see their messages here.
@@ -1255,27 +1420,57 @@ pub(super) async fn events_query(
     req: &mut Request,
 ) -> crate::result::JsonResult<serde_json::Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    // Spec-canonical params are `realms=` / `actors=` (cx.events.query).
-    // Singular `realm_id=` / `actor=` are ergonomic shortcuts.
-    let mut spaces = super::query_param_all(req, "realms");
-    if let Some(single) = query_param(req, "realm_id") {
-        if !spaces.contains(&single) {
-            spaces.push(single);
-        }
-    }
-    let mut actors = super::query_param_all(req, "actors");
-    if let Some(single) = query_param(req, "actor").or_else(|| query_param(req, "actor_id")) {
-        if !actors.contains(&single) {
-            actors.push(single);
-        }
-    }
-    if spaces.is_empty() && actors.is_empty() {
+    let limit = query_param(req, "limit")
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(100)
+        .clamp(1, 100);
+    let parts = EventsQueryParts {
+        realms: super::query_param_all(req, "realms"),
+        actors: super::query_param_all(req, "actors"),
+        after: query_param(req, "after"),
+        before: query_param(req, "before"),
+        order: query_param(req, "order").unwrap_or_else(|| "default".to_owned()),
+        limit,
+    };
+    events_query_impl(state, req, parts).await
+}
+
+#[endpoint(
+    operation_id = "cx.events.query_post",
+    tags("events"),
+    summary = "Body-based projection-aware events query for large selectors"
+)]
+pub(super) async fn events_query_post(
+    body: salvo::oapi::extract::JsonBody<EventsQueryPostRequest>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> crate::result::JsonResult<serde_json::Value> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let body = body.into_inner();
+    let parts = EventsQueryParts {
+        realms: body.realms,
+        actors: body.actors,
+        after: body.after,
+        before: body.before,
+        order: body.order.unwrap_or_else(|| "default".to_owned()),
+        limit: body.limit.unwrap_or(100).clamp(1, 100),
+    };
+    events_query_impl(state, req, parts).await
+}
+
+async fn events_query_impl(
+    state: &AppState,
+    req: &Request,
+    parts: EventsQueryParts,
+) -> crate::result::JsonResult<serde_json::Value> {
+    validate_events_query_order(&parts.order)?;
+    if parts.realms.is_empty() && parts.actors.is_empty() {
         return Err(crate::error::AppError::missing_param(
-            "events.query requires at least one of realms[] / actors[] (or singular realm_id / actor)",
+            "events.query requires at least one of realms[] / actors[]",
         ));
     }
-    let spaces = normalize_scope_selectors(spaces)?;
-    for actor in &actors {
+    let spaces = normalize_scope_selectors(parts.realms.clone())?;
+    for actor in &parts.actors {
         if validate_did(actor).is_err() {
             return Err(crate::error::AppError::invalid_param(format!(
                 "invalid actor: {actor}"
@@ -1291,7 +1486,7 @@ pub(super) async fn events_query(
                 .with_status(status)
                 .with_wire_code(code)
         })?;
-        let response = super::events_query_durable_scope_impl(state, &session, req).await?;
+        let response = durable_events_query_from_parts(state, &session, &parts);
         return crate::result::json_ok(serde_json::to_value(response).unwrap_or(json!({})));
     }
     let session = authenticated_session(state, req).ok();
@@ -1304,24 +1499,8 @@ pub(super) async fn events_query(
     if accessible_spaces.is_empty() {
         return Err(crate::error::AppError::not_found("not found"));
     }
-    let limit = query_param(req, "limit")
-        .and_then(|value| value.parse::<usize>().ok())
-        .unwrap_or(100)
-        .min(100);
-    // `after=<cursor>` (forward) and `before=<cursor>` (backward) — spec dc01ad7.
-    let after = query_param(req, "after");
-    let before = query_param(req, "before");
-    if after.is_some() && before.is_some() {
-        return Err(crate::error::AppError::invalid_param(
-            "specify either 'after' or 'before', not both",
-        ));
-    }
-    let (cursor, backward) = match (after, before) {
-        (Some(c), None) => (Some(c), false),
-        (None, Some(c)) => (Some(c), true),
-        (None, None) => (None, false),
-        (Some(_), Some(_)) => unreachable!("validated above"),
-    };
+    let limit = parts.limit;
+    let (cursor, stop_cursor, backward) = events_query_cursor_and_stop(&parts);
 
     // Single-space fast path preserves the original `BackfillResBody` shape
     // for soland's existing test surface (cx.sync.backfill behavior).
@@ -1340,6 +1519,7 @@ pub(super) async fn events_query(
                 if backward {
                     events.reverse();
                 }
+                let events = truncate_before_stop_cursor(events, stop_cursor.as_deref());
                 return crate::result::json_ok(
                     serde_json::to_value(BackfillResBody {
                         events,
@@ -1411,6 +1591,7 @@ pub(super) async fn events_query(
     if backward {
         merged.reverse();
     }
+    let merged = truncate_before_stop_cursor(merged, stop_cursor.as_deref());
     let mut page_events = merged.into_iter().take(limit + 1).collect::<Vec<_>>();
     let limited = page_events.len() > limit || any_has_more;
     if page_events.len() > limit {
@@ -1433,6 +1614,72 @@ pub(super) async fn events_query(
         })
         .unwrap_or(json!({})),
     )
+}
+
+fn durable_events_query_from_parts(
+    state: &AppState,
+    session: &SessionRecord,
+    parts: &EventsQueryParts,
+) -> crate::wire::EventsPageResponse {
+    let actors_set: BTreeSet<&str> = parts.actors.iter().map(String::as_str).collect();
+    let spaces_set: BTreeSet<&str> = parts.realms.iter().map(String::as_str).collect();
+    let mut records = state
+        .persistence
+        .events()
+        .snapshot_all()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|record| {
+            let actor_match = actors_set.contains(record.actor_id.as_str());
+            let space_match = record
+                .space_id
+                .as_deref()
+                .is_some_and(|s| spaces_set.contains(s));
+            actor_match || space_match
+        })
+        .filter(|record| super::event_log::event_visible_to_session(state, record, session))
+        .collect::<Vec<_>>();
+    records.sort_by(|left, right| {
+        left.received_at
+            .cmp(&right.received_at)
+            .then_with(|| left.event_id.cmp(&right.event_id))
+    });
+    let (cursor, stop_cursor, backward) = events_query_cursor_and_stop(parts);
+    if backward {
+        records.reverse();
+    }
+    let start = cursor
+        .as_deref()
+        .and_then(|cursor| records.iter().position(|record| record.event_id == cursor))
+        .map(|index| index + 1)
+        .unwrap_or(0);
+    let mut page = records
+        .into_iter()
+        .skip(start)
+        .take(parts.limit + 1)
+        .collect::<Vec<_>>();
+    if let Some(stop_cursor) = stop_cursor.as_deref()
+        && let Some(index) = page.iter().position(|record| record.event_id == stop_cursor)
+    {
+        page.truncate(index);
+    }
+    let has_more = page.len() > parts.limit;
+    if has_more {
+        page.truncate(parts.limit);
+    }
+    let next_cursor = has_more
+        .then(|| page.last().map(|record| record.event_id.clone()))
+        .flatten();
+    let frontier = super::event_log::events_frontier_json(&page);
+    let events = page
+        .iter()
+        .map(super::event_log::event_read_response)
+        .collect();
+    crate::wire::EventsPageResponse {
+        events,
+        next_cursor,
+        frontier,
+    }
 }
 
 #[endpoint(

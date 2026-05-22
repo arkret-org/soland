@@ -12,7 +12,6 @@ pub(crate) mod projection;
 pub(super) mod projection_query;
 pub(super) mod sync;
 
-use event_log::events_query_durable_scope_impl;
 use flow::{
     default_discussion_track, discussion_track_for_projection_event, flow_id_for_projection_event,
     flow_id_from_space_id, flow_projection_for_space, message_id_from_event_id,

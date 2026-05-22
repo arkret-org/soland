@@ -8,6 +8,7 @@ mod control;
 mod delivery_binding;
 mod introspect;
 mod moderation;
+mod spec;
 
 pub(super) use introspect::{introspect_admin_scopes, require_admin_scope};
 
@@ -51,6 +52,10 @@ pub fn router() -> Router {
         .push(Router::with_path("admin/{resource}").get(collection::admin_collection))
         .push(control::router())
         .push(audit::router())
+}
+
+pub fn spec_router() -> Router {
+    spec::router()
 }
 
 pub fn admin_router() -> Router {

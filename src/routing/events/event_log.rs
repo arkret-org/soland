@@ -50,6 +50,7 @@ pub(super) fn router() -> Router {
                 .post(submit_event)
                 .get(super::sync::events_query),
         )
+        .push(Router::with_path("events/query").post(super::sync::events_query_post))
         .push(Router::with_path("events/resolve").post(resolve_events))
         .push(Router::with_path("events/frontier").get(events_frontier))
         .push(Router::with_path("events/{event_id}").get(get_event))
@@ -2664,7 +2665,7 @@ fn event_operation_id(envelope: &Value, event_id: &str) -> Option<OperationId> {
     OperationId::new(format!("cx:operation:{suffix}")).ok()
 }
 
-fn event_read_response(record: &CanonicalEventRecord) -> EventReadResponse {
+pub(super) fn event_read_response(record: &CanonicalEventRecord) -> EventReadResponse {
     let realm_id = canonical_realm_id_for_record(record);
     EventReadResponse {
         event: record.envelope.clone(),
@@ -2682,7 +2683,7 @@ fn event_read_response(record: &CanonicalEventRecord) -> EventReadResponse {
     }
 }
 
-fn events_frontier_json(records: &[CanonicalEventRecord]) -> Value {
+pub(super) fn events_frontier_json(records: &[CanonicalEventRecord]) -> Value {
     let mut actors: BTreeMap<String, u64> = BTreeMap::new();
     let mut realms: BTreeMap<String, (DateTime<Utc>, String)> = BTreeMap::new();
     let mut spaces: BTreeMap<String, (DateTime<Utc>, String)> = BTreeMap::new();
@@ -2741,7 +2742,7 @@ fn canonical_realm_id_for_record(record: &CanonicalEventRecord) -> Option<String
         .or_else(|| record.space_id.clone())
 }
 
-fn event_visible_to_session(
+pub(super) fn event_visible_to_session(
     state: &AppState,
     record: &CanonicalEventRecord,
     session: &SessionRecord,

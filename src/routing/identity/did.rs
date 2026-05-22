@@ -8,7 +8,7 @@
 //! - `POST /api/v1/identity/webvh/register` — register through the embedded webvh provider
 //! - `GET  /webvh/{local_id}/did.json` — embedded webvh DID document
 //! - `GET  /webvh/{local_id}/did.jsonl` — embedded webvh log
-//! - `POST /api/v1/identity/did-operation`— submit a DID-operation (rotate/recover)
+//! - `POST /api/v1/identity/submit-did-operation` — submit a DID operation
 //! - `GET  /api/v1/identity/receipts`     — issuer receipts for the local key log
 //!
 //! All long-term state lives behind `state.persistence.webvh()`; the
@@ -517,6 +517,130 @@ pub(super) async fn identity_receipts(
             .unwrap_or_default(),
         threshold_met: true,
     })
+}
+
+#[endpoint(
+    operation_id = "cx.identity.submit_did_operation",
+    tags("identity"),
+    summary = "Submit a method-neutral DID operation to the local registry",
+    status_codes(200, 400, 401, 409, 500)
+)]
+pub(super) async fn identity_submit_did_operation(
+    depot: &mut Depot,
+    body: JsonBody<Value>,
+) -> JsonResult<Value> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let body = body.into_inner();
+    let did = string_field(&body, "did")
+        .or_else(|| {
+            body.get("operation")
+                .and_then(|operation| operation.get("did"))
+                .and_then(Value::as_str)
+        })
+        .or_else(|| {
+            body.get("operation")
+                .and_then(|operation| operation.get("state"))
+                .and_then(|state| state.get("id"))
+                .and_then(Value::as_str)
+        })
+        .or_else(|| {
+            body.get("did_document")
+                .and_then(|document| document.get("id"))
+                .and_then(Value::as_str)
+        })
+        .ok_or_else(|| AppError::invalid_param("did is required"))?
+        .to_owned();
+    if validate_did(&did).is_err() {
+        return Err(AppError::invalid_param("invalid did"));
+    }
+
+    let existing = state
+        .persistence
+        .webvh()
+        .get_document(&did)
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let next_seq = body
+        .get("seq")
+        .and_then(Value::as_u64)
+        .unwrap_or_else(|| existing.as_ref().map_or(1, |record| record.seq + 1));
+    if existing.as_ref().is_some_and(|record| next_seq <= record.seq) {
+        return Err(AppError::new(
+            ErrorCode::CasConflict,
+            "DID operation seq must advance the current document",
+        ));
+    }
+
+    let operation = did_operation_from_body(&body)?;
+    let mut document = did_document_from_operation(&did, existing.as_ref(), &body, &operation)?;
+    ensure_did_document_id(&did, &mut document)?;
+    let submitted_at = now();
+    let event_payload = json!({
+        "did": did.clone(),
+        "seq": next_seq,
+        "previous": existing.as_ref().and_then(|record| record.key_log_head.clone()),
+        "operation": operation,
+        "submitted_at": submitted_at,
+    });
+    let event_hash = format!(
+        "sha256:{}",
+        sha256_hex(&serde_json::to_vec(&event_payload).unwrap_or_default())
+    );
+    let method_evidence = json!({
+        "mode": "submitted_operation",
+        "source": "cx.identity.submit_did_operation",
+        "previous": existing
+            .as_ref()
+            .map(|record| record.method_evidence.clone())
+            .unwrap_or_else(|| json!({"mode": "development_local"})),
+    });
+    state
+        .persistence
+        .webvh()
+        .put_document(WebvhDocumentRecord {
+            did: did.clone(),
+            did_document: document.clone(),
+            key_log_head: Some(event_hash.clone()),
+            seq: next_seq,
+            method_evidence,
+            updated_at: submitted_at,
+        })
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    state
+        .persistence
+        .webvh()
+        .append_log_event(WebvhLogRecord {
+            event_hash: event_hash.clone(),
+            did: did.clone(),
+            seq: next_seq,
+            operation: event_payload,
+            created_at: submitted_at,
+        })
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    append_audit_log(
+        state,
+        Some(&did),
+        "identity.submit_did_operation",
+        json!({
+            "did": did.clone(),
+            "seq": next_seq,
+            "head_event_hash": event_hash.clone(),
+        }),
+        "accepted",
+    );
+    json_ok(json!({
+        "status": "accepted",
+        "did": did.clone(),
+        "seq": next_seq,
+        "head_event_hash": event_hash.clone(),
+        "did_document": document,
+        "receipts": [{
+            "service_did": state.config.service_did.clone(),
+            "did": did,
+            "head_event_hash": event_hash,
+            "seq": next_seq,
+            "issued_at": submitted_at,
+        }],
+    }))
 }
 
 #[derive(Clone, Debug)]
@@ -1041,6 +1165,94 @@ fn default_did_document(did: &str) -> Value {
         "authentication": [],
         "service": [{"id": "soland", "type": "ContrixPrincipalServer", "serviceEndpoint": "/api/v1"}]
     })
+}
+
+fn did_operation_from_body(body: &Value) -> Result<Value, AppError> {
+    if let Some(operation) = body.get("operation") {
+        if !operation.is_object() {
+            return Err(AppError::invalid_param("operation must be an object"));
+        }
+        return Ok(operation.clone());
+    }
+    if let Some(document) = body.get("did_document") {
+        if !document.is_object() {
+            return Err(AppError::invalid_param("did_document must be an object"));
+        }
+        return Ok(json!({"type": "replace", "state": document}));
+    }
+    if let Some(patch) = body.get("patch") {
+        if !patch.is_object() {
+            return Err(AppError::invalid_param("patch must be an object"));
+        }
+        return Ok(json!({"type": "patch", "patch": patch}));
+    }
+    Err(AppError::invalid_param(
+        "operation, did_document, or patch is required",
+    ))
+}
+
+fn string_field<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
+    value
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+fn did_document_from_operation(
+    did: &str,
+    existing: Option<&WebvhDocumentRecord>,
+    body: &Value,
+    operation: &Value,
+) -> Result<Value, AppError> {
+    if let Some(state) = operation.get("state") {
+        if !state.is_object() {
+            return Err(AppError::invalid_param("operation.state must be an object"));
+        }
+        return Ok(state.clone());
+    }
+    if let Some(document) = body.get("did_document") {
+        if !document.is_object() {
+            return Err(AppError::invalid_param("did_document must be an object"));
+        }
+        return Ok(document.clone());
+    }
+    let mut document = existing
+        .map(|record| record.did_document.clone())
+        .unwrap_or_else(|| default_did_document(did));
+    if let Some(patch) = operation
+        .get("patch")
+        .or_else(|| body.get("patch"))
+        .and_then(Value::as_object)
+    {
+        let Some(target) = document.as_object_mut() else {
+            return Err(AppError::invalid_param(
+                "existing DID document is not an object",
+            ));
+        };
+        for (key, value) in patch {
+            if value.is_null() {
+                target.remove(key);
+            } else {
+                target.insert(key.clone(), value.clone());
+            }
+        }
+    }
+    Ok(document)
+}
+
+fn ensure_did_document_id(did: &str, document: &mut Value) -> Result<(), AppError> {
+    let Some(map) = document.as_object_mut() else {
+        return Err(AppError::invalid_param("DID document must be an object"));
+    };
+    match map.get("id").and_then(Value::as_str) {
+        Some(value) if value == did => Ok(()),
+        Some(_) => Err(AppError::invalid_param("DID document id does not match did")),
+        None => {
+            map.insert("id".to_owned(), Value::String(did.to_owned()));
+            Ok(())
+        }
+    }
 }
 
 #[allow(dead_code)] // used by routing::tests::did_*; production path runs through validate_did_document

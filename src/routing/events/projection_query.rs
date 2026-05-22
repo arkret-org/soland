@@ -6,7 +6,7 @@
 //! `cx.space.archive` accepted by the server doesn't appear "unarchived"
 //! again when the kanban view re-mounts.
 //!
-//! - `GET /api/v1/projection/spaces?realm_id=...` — extension
+//! - `GET /api/v1/projection/spaces?realm_id=...` — canonical projection
 //!   endpoint listing Space containers in a Realm scope, with
 //!   `state` ∈ {active, archived, tombstoned} (spec `common-fields.md §5.1`).
 //! - `GET /api/v1/projection/flows?realm_id=...` — same for Flows
@@ -49,12 +49,6 @@ use crate::state::AppState;
 pub(super) fn router() -> Router {
     Router::new()
         .push(Router::with_path("projection/spaces").get(list_space_container_projections))
-        .push(
-            Router::with_path("projection/space-containers").get(list_space_container_projections),
-        )
-        .push(
-            Router::with_path("projection/space_containers").get(list_space_container_projections),
-        )
         .push(Router::with_path("projection/flows").get(list_flow_projections))
         .push(Router::with_path("projection/morphs").get(list_morph_projections))
 }
