@@ -4974,6 +4974,19 @@ async fn auth_keys_device_messages_and_blobs_work() {
         .await;
     assert_eq!(missing_envelope.status_code.unwrap().as_u16(), 400);
 
+    let large_plaintext = "a".repeat(96 * 1024);
+    let large_blob: Value = TestClient::post("http://server/api/v1/blob/upload")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .add_header("content-type", "image/jpeg", true)
+        .body(large_plaintext.clone())
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(large_blob["size"], large_plaintext.len());
+    assert_eq!(large_blob["media_type"], "image/jpeg");
+
     let locked_space = seed_test_realm(
         &state,
         "did:web:alice.example",

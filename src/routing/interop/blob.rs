@@ -38,6 +38,7 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let Some(session) = auth_or_render(state, req, res) else {
         return;
     };
+    req.set_secure_max_size(MAX_BLOB_UPLOAD_BYTES);
     let bytes = match req.payload().await {
         Ok(bytes) => bytes.to_vec(),
         Err(_) => {
