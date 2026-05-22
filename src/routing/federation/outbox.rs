@@ -19,17 +19,13 @@
 //! ## What this lands today
 //!
 //! Real HTTP POST. Real `Idempotency-Key` + `Content-Digest` (RFC 9530)
-//! headers. Exponential backoff capped at 1h. Permanent 4xx handling.
-//! Retry-cap "give up" handling. A single integration test pins the
-//! contract — see `soland/tests/federation_outbox.rs`.
+//! headers. RFC 9421-style HTTP Message Signature headers over the
+//! federation transcript. Exponential backoff capped at 1h. Permanent
+//! 4xx handling. Retry-cap "give up" handling. The integration suite
+//! pins the contract — see `soland/tests/federation_outbox.rs`.
 //!
 //! ## What's deferred
 //!
-//! - **RFC 9421 request signing**. The dispatcher does NOT emit
-//!   `Signature` / `Signature-Input` headers; only the body digest
-//!   header. The structural seam lives in [`rfc9421_sign`] — when full
-//!   signing lands, that function returns the populated header map and
-//!   every caller is already wired through it. See the TODO inside.
 //! - **Dead-letter queue**. When a 4xx (non-retryable) hits or the
 //!   attempts cap is reached, the row is marked `delivered_at = now` and
 //!   either `last_status = HTTP_status` (4xx) or `last_status = -1`
@@ -51,6 +47,7 @@ use std::time::Duration;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
+use ed25519_dalek::Signer as _;
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
@@ -138,33 +135,90 @@ pub fn enqueue_outbound(
     }
 }
 
-/// RFC 9421 signing stub.
-///
-/// TODO(G3.S0-followup): RFC 9421 HTTP Message Signatures
-/// (`federation.md` §3.2). Today this is a no-op so the dispatcher
-/// emits only `Content-Type` + `Idempotency-Key` + `Content-Digest`
-/// (RFC 9530). When full signing lands, this function MUST compute the
-/// signature base over the covered components — `@method`,
-/// `@target-uri`, `@authority`, `content-digest`,
-/// `source-service-did`, `destination-service-did`,
-/// `source-trust-domain`, `destination-trust-domain`,
-/// `request-canonical-hash` — sign it with
-/// `state.anchorer_signing_key()`, and return the populated
-/// `Signature` / `Signature-Input` header pair. The structural seam is
-/// here so call sites need no further changes.
-#[allow(dead_code)]
 fn rfc9421_sign(
-    _state: &AppState,
-    headers: reqwest::header::HeaderMap,
-    _method: &str,
-    _target_url: &str,
-    _body: &[u8],
+    state: &AppState,
+    mut headers: reqwest::header::HeaderMap,
+    method: &str,
+    target_url: &str,
+    body: &[u8],
 ) -> reqwest::header::HeaderMap {
-    // TODO(G3.S0-followup): emit `Signature` + `Signature-Input` headers
-    // bound to the per-deployment Ed25519 signing key. See
-    // crate::routing::federation::federation::http_message_signature_evidence
-    // for the existing transcript shape we'll wire through here.
+    let request_canonical_hash = format!("sha256:{:x}", Sha256::digest(body));
+    insert_header_if_valid(
+        &mut headers,
+        "request-canonical-hash",
+        &request_canonical_hash,
+    );
+
+    let created = now_unix_secs();
+    let keyid = format!("{}#federation-fanout-key", state.config.service_did);
+    let covered = [
+        "\"@method\"",
+        "\"@target-uri\"",
+        "\"content-digest\"",
+        "\"source-service-did\"",
+        "\"destination-service-did\"",
+        "\"source-trust-domain\"",
+        "\"destination-trust-domain\"",
+        "\"request-canonical-hash\"",
+    ]
+    .join(" ");
+    let signature_params =
+        format!("({covered});created={created};keyid=\"{keyid}\";alg=\"ed25519\"",);
+    let signature_input = format!("sig1={signature_params}");
+
+    let signature_base = format!(
+        "\"@method\": {}\n\
+         \"@target-uri\": {}\n\
+         \"content-digest\": {}\n\
+         \"source-service-did\": {}\n\
+         \"destination-service-did\": {}\n\
+         \"source-trust-domain\": {}\n\
+         \"destination-trust-domain\": {}\n\
+         \"request-canonical-hash\": {}\n\
+         \"@signature-params\": {}",
+        method.to_ascii_uppercase(),
+        target_url,
+        header_value(&headers, "content-digest").unwrap_or_default(),
+        header_value(&headers, "source-service-did").unwrap_or_default(),
+        header_value(&headers, "destination-service-did").unwrap_or_default(),
+        header_value(&headers, "source-trust-domain").unwrap_or_default(),
+        header_value(&headers, "destination-trust-domain").unwrap_or_default(),
+        request_canonical_hash,
+        signature_params,
+    );
+    let signature = state.anchorer_signing_key().sign(signature_base.as_bytes());
+    let signature_header = format!("sig1=:{}:", STANDARD.encode(signature.to_bytes()));
+
+    insert_header_if_valid(&mut headers, "signature-input", &signature_input);
+    insert_header_if_valid(&mut headers, "signature", &signature_header);
     headers
+}
+
+fn insert_header_if_valid(
+    headers: &mut reqwest::header::HeaderMap,
+    name: &'static str,
+    value: &str,
+) {
+    if let Ok(value) = reqwest::header::HeaderValue::from_str(value) {
+        headers.insert(name, value);
+    }
+}
+
+fn header_value(headers: &reqwest::header::HeaderMap, name: &str) -> Option<String> {
+    headers
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .map(ToOwned::to_owned)
+}
+
+fn trust_domain_from_service_did(service_did: &str) -> String {
+    let scope = service_did
+        .strip_prefix("did:web:")
+        .or_else(|| service_did.strip_prefix("did:key:"))
+        .or_else(|| service_did.strip_prefix("did:webvh:"))
+        .unwrap_or(service_did)
+        .replace(':', ".");
+    format!("cx:trust_domain:{scope}")
 }
 
 /// Compute the RFC 9530 `Content-Digest` header value for a body.
@@ -275,7 +329,22 @@ impl FederationDispatcher {
         if let Ok(value) = reqwest::header::HeaderValue::from_str(&digest) {
             headers.insert("content-digest", value);
         }
-        // RFC 9421 seam — see TODO inside.
+        insert_header_if_valid(
+            &mut headers,
+            "source-service-did",
+            &self.state.config.service_did,
+        );
+        insert_header_if_valid(&mut headers, "destination-service-did", &row.peer_did);
+        insert_header_if_valid(
+            &mut headers,
+            "source-trust-domain",
+            &self.state.config.trust_domain,
+        );
+        insert_header_if_valid(
+            &mut headers,
+            "destination-trust-domain",
+            &trust_domain_from_service_did(&row.peer_did),
+        );
         let headers = rfc9421_sign(&self.state, headers, "POST", &url, &body_bytes);
 
         let response = self

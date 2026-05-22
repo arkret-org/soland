@@ -22,10 +22,26 @@ use std::io::{Read, Write};
 use std::sync::mpsc;
 use std::time::Duration;
 
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
+use ed25519_dalek::{Signature, SigningKey, Verifier as _, VerifyingKey};
+use sha2::{Digest, Sha256};
 use soland::config::{AppConfig, FederationPolicy, ObjectStorageConfig};
 use soland::db::Db;
 use soland::routing::federation::outbox::{FederationDispatcher, enqueue_outbound};
 use soland::state::AppState;
+
+const PEER_DID: &str = "did:web:peer.example";
+const FEDERATION_ENDPOINT: &str = "/api/v1/federation/push-operations";
+const IDEMPOTENCY_KEY: &str = "cx:outbox:test-idem-key-0001";
+const PAYLOAD_JSON: &str = r#"{"resource":"sha256:01"}"#;
+
+struct CapturedSignedRequest {
+    captured: String,
+    target_uri: String,
+    state: AppState,
+    row_id: String,
+}
 
 /// Spin up a single-shot HTTP/1.1 mock peer on a random local port.
 /// Returns the base URL the dispatcher posts to + a channel receiver
@@ -111,6 +127,203 @@ fn outbox_test_config() -> AppConfig {
 
 #[tokio::test]
 async fn enqueue_then_dispatch_delivers_payload_with_spec_headers() {
+    let captured = capture_signed_request().await;
+
+    // Header assertions — Idempotency-Key, Content-Digest, trust-domain
+    // binding, and RFC 9421 Signature headers are mandatory on every
+    // outbound POST per spec federation.md §3.2 + §8.5.
+    let lower = captured.captured.to_ascii_lowercase();
+    assert!(
+        lower.contains("idempotency-key: cx:outbox:test-idem-key-0001"),
+        "captured request missing Idempotency-Key header; got: {}",
+        captured.captured
+    );
+    assert!(
+        lower.contains("content-digest: sha-256=:"),
+        "captured request missing Content-Digest (RFC 9530) header; got: {}",
+        captured.captured
+    );
+    assert!(
+        lower.contains("source-service-did: did:web:soland-outbox.local"),
+        "captured request missing Source-Service-DID binding; got: {}",
+        captured.captured
+    );
+    assert!(
+        lower.contains("destination-service-did: did:web:peer.example"),
+        "captured request missing Destination-Service-DID binding; got: {}",
+        captured.captured
+    );
+    assert!(
+        lower.contains("source-trust-domain: cx:trust_domain:soland-outbox.local"),
+        "captured request missing Source-Trust-Domain binding; got: {}",
+        captured.captured
+    );
+    assert!(
+        lower.contains("destination-trust-domain: cx:trust_domain:peer.example"),
+        "captured request missing Destination-Trust-Domain binding; got: {}",
+        captured.captured
+    );
+    assert!(
+        lower.contains("request-canonical-hash: sha256:"),
+        "captured request missing Request-Canonical-Hash binding; got: {}",
+        captured.captured
+    );
+    assert!(
+        lower.contains("signature-input: sig1=")
+            && lower.contains("keyid=\"did:web:soland-outbox.local#federation-fanout-key\""),
+        "captured request missing RFC 9421 Signature-Input; got: {}",
+        captured.captured
+    );
+    assert!(
+        lower.contains("signature: sig1=:"),
+        "captured request missing RFC 9421 Signature; got: {}",
+        captured.captured
+    );
+    assert!(
+        captured
+            .captured
+            .starts_with("POST /api/v1/federation/push-operations"),
+        "request line should target the configured endpoint; got: {}",
+        captured.captured
+    );
+    assert!(
+        captured.captured.contains(PAYLOAD_JSON),
+        "captured request body should match enqueued payload; got: {}",
+        captured.captured
+    );
+    assert_http_signature_verifies(&captured.captured, &captured.target_uri, &captured.state);
+
+    // Outbox row must be marked delivered with the mock's 2xx status.
+    let updated = captured
+        .state
+        .persistence
+        .federation_outbox()
+        .get(&captured.row_id)
+        .expect("outbox lookup")
+        .expect("row still present");
+    assert!(
+        updated.delivered_at.is_some(),
+        "row should be marked delivered after a 2xx response, got: {updated:?}"
+    );
+    assert_eq!(
+        updated.last_status,
+        Some(200),
+        "last_status should record the 2xx the mock peer returned"
+    );
+    assert_eq!(
+        updated.attempts, 1,
+        "exactly one delivery attempt should be recorded for a first-pass 2xx",
+    );
+}
+
+#[tokio::test]
+async fn outbound_signature_rejects_body_digest_tamper() {
+    let captured = capture_signed_request().await;
+    let mut headers = parse_headers(&captured.captured);
+    let original_digest = headers
+        .get("content-digest")
+        .expect("content-digest header")
+        .to_owned();
+    let tampered_digest = test_content_digest_header_value(br#"{"resource":"sha256:tampered"}"#);
+    assert_ne!(
+        original_digest, tampered_digest,
+        "body tamper must produce a distinct Content-Digest binding"
+    );
+    headers.insert("content-digest".to_owned(), tampered_digest);
+
+    let verifying_key = captured.state.anchorer_signing_key().verifying_key();
+    assert!(
+        !http_signature_verifies_with_headers(&headers, &captured.target_uri, &verifying_key),
+        "changing the body digest after signing must invalidate the RFC 9421 transcript"
+    );
+}
+
+#[tokio::test]
+async fn outbound_signature_rejects_missing_trust_domain_component() {
+    let captured = capture_signed_request().await;
+    let mut headers = parse_headers(&captured.captured);
+    headers.remove("destination-trust-domain");
+
+    let verifying_key = captured.state.anchorer_signing_key().verifying_key();
+    assert!(
+        !http_signature_verifies_with_headers(&headers, &captured.target_uri, &verifying_key),
+        "missing destination trust-domain must fail verification"
+    );
+}
+
+#[tokio::test]
+async fn outbound_signature_rejects_trust_domain_mismatch() {
+    let captured = capture_signed_request().await;
+    let mut headers = parse_headers(&captured.captured);
+    headers.insert(
+        "destination-trust-domain".to_owned(),
+        "cx:trust_domain:evil.example".to_owned(),
+    );
+
+    let verifying_key = captured.state.anchorer_signing_key().verifying_key();
+    assert!(
+        !http_signature_verifies_with_headers(&headers, &captured.target_uri, &verifying_key),
+        "trust-domain mismatch must fail verification"
+    );
+}
+
+#[test]
+fn outbound_enqueue_is_idempotent_for_same_peer_and_key() {
+    let state = AppState::new(outbox_test_config(), Db { pool: None });
+
+    let first = enqueue_outbound(
+        &state,
+        "http://127.0.0.1:9",
+        PEER_DID,
+        FEDERATION_ENDPOINT,
+        IDEMPOTENCY_KEY,
+        PAYLOAD_JSON,
+    )
+    .expect("first enqueue");
+    let second = enqueue_outbound(
+        &state,
+        "http://127.0.0.1:9",
+        PEER_DID,
+        FEDERATION_ENDPOINT,
+        IDEMPOTENCY_KEY,
+        PAYLOAD_JSON,
+    )
+    .expect("second enqueue with same peer/key");
+
+    assert_eq!(
+        first.id, second.id,
+        "same peer + idempotency key must return the original outbox row"
+    );
+    let snapshot = state
+        .persistence
+        .federation_outbox()
+        .snapshot_all()
+        .expect("outbox snapshot");
+    assert_eq!(
+        snapshot.len(),
+        1,
+        "idempotent replay must not create a duplicate outbox row"
+    );
+}
+
+#[tokio::test]
+async fn outbound_signature_fails_after_service_key_rotation() {
+    let captured = capture_signed_request().await;
+    let headers = parse_headers(&captured.captured);
+    let original_key = captured.state.anchorer_signing_key().verifying_key();
+    assert!(
+        http_signature_verifies_with_headers(&headers, &captured.target_uri, &original_key),
+        "sanity: original service key should verify the signed request"
+    );
+
+    let rotated_key = SigningKey::from_bytes(&[7_u8; 32]).verifying_key();
+    assert!(
+        !http_signature_verifies_with_headers(&headers, &captured.target_uri, &rotated_key),
+        "service-key rotation/revoke must invalidate replay of the old signed request"
+    );
+}
+
+async fn capture_signed_request() -> CapturedSignedRequest {
     let (peer_url, request_rx) = spawn_mock_peer();
     let state = AppState::new(outbox_test_config(), Db { pool: None });
 
@@ -120,10 +333,10 @@ async fn enqueue_then_dispatch_delivers_payload_with_spec_headers() {
     let row = enqueue_outbound(
         &state,
         &peer_url,
-        "did:web:peer.example",
-        "/api/v1/federation/push-operations",
-        "cx:outbox:test-idem-key-0001",
-        r#"{"resource":"sha256:01"}"#,
+        PEER_DID,
+        FEDERATION_ENDPOINT,
+        IDEMPOTENCY_KEY,
+        PAYLOAD_JSON,
     )
     .expect("enqueue must succeed");
     assert!(
@@ -145,44 +358,98 @@ async fn enqueue_then_dispatch_delivers_payload_with_spec_headers() {
         .recv_timeout(Duration::from_secs(5))
         .expect("mock peer should have received exactly one request");
 
-    // Header assertions — Idempotency-Key + Content-Digest are
-    // mandatory on every outbound POST per spec federation.md §3.2 + §8.5.
-    let lower = captured.to_ascii_lowercase();
+    CapturedSignedRequest {
+        captured,
+        target_uri: format!("{peer_url}{FEDERATION_ENDPOINT}"),
+        state,
+        row_id: row.id,
+    }
+}
+
+fn assert_http_signature_verifies(captured: &str, target_uri: &str, state: &AppState) {
+    let headers = parse_headers(captured);
+    let verifying_key = state.anchorer_signing_key().verifying_key();
     assert!(
-        lower.contains("idempotency-key: cx:outbox:test-idem-key-0001"),
-        "captured request missing Idempotency-Key header; got: {captured}"
+        http_signature_verifies_with_headers(&headers, target_uri, &verifying_key),
+        "RFC 9421 signature should verify against service key"
     );
-    assert!(
-        lower.contains("content-digest: sha-256=:"),
-        "captured request missing Content-Digest (RFC 9530) header; got: {captured}"
-    );
-    assert!(
-        captured.starts_with("POST /api/v1/federation/push-operations"),
-        "request line should target the configured endpoint; got: {captured}"
-    );
-    assert!(
-        captured.contains("{\"resource\":\"sha256:01\"}"),
-        "captured request body should match enqueued payload; got: {captured}"
+}
+
+fn http_signature_verifies_with_headers(
+    headers: &BTreeMap<String, String>,
+    target_uri: &str,
+    verifying_key: &VerifyingKey,
+) -> bool {
+    let signature_input = headers
+        .get("signature-input")
+        .and_then(|value| value.strip_prefix("sig1="));
+    let Some(signature_params) = signature_input else {
+        return false;
+    };
+    let signature_b64 = headers
+        .get("signature")
+        .and_then(|value| value.strip_prefix("sig1=:"))
+        .and_then(|value| value.strip_suffix(':'));
+    let Some(signature_b64) = signature_b64 else {
+        return false;
+    };
+    let Ok(signature_bytes) = STANDARD.decode(signature_b64) else {
+        return false;
+    };
+    let Ok(signature) = Signature::from_slice(&signature_bytes) else {
+        return false;
+    };
+
+    let (
+        Some(content_digest),
+        Some(source_service_did),
+        Some(destination_service_did),
+        Some(source_trust_domain),
+        Some(destination_trust_domain),
+        Some(request_canonical_hash),
+    ) = (
+        headers.get("content-digest"),
+        headers.get("source-service-did"),
+        headers.get("destination-service-did"),
+        headers.get("source-trust-domain"),
+        headers.get("destination-trust-domain"),
+        headers.get("request-canonical-hash"),
+    )
+    else {
+        return false;
+    };
+
+    let signature_base = format!(
+        "\"@method\": POST\n\
+         \"@target-uri\": {target_uri}\n\
+         \"content-digest\": {content_digest}\n\
+         \"source-service-did\": {source_service_did}\n\
+         \"destination-service-did\": {destination_service_did}\n\
+         \"source-trust-domain\": {source_trust_domain}\n\
+         \"destination-trust-domain\": {destination_trust_domain}\n\
+         \"request-canonical-hash\": {request_canonical_hash}\n\
+         \"@signature-params\": {signature_params}",
     );
 
-    // Outbox row must be marked delivered with the mock's 2xx status.
-    let updated = state
-        .persistence
-        .federation_outbox()
-        .get(&row.id)
-        .expect("outbox lookup")
-        .expect("row still present");
-    assert!(
-        updated.delivered_at.is_some(),
-        "row should be marked delivered after a 2xx response, got: {updated:?}"
-    );
-    assert_eq!(
-        updated.last_status,
-        Some(200),
-        "last_status should record the 2xx the mock peer returned"
-    );
-    assert_eq!(
-        updated.attempts, 1,
-        "exactly one delivery attempt should be recorded for a first-pass 2xx",
-    );
+    verifying_key
+        .verify(signature_base.as_bytes(), &signature)
+        .is_ok()
+}
+
+fn test_content_digest_header_value(body: &[u8]) -> String {
+    let digest = Sha256::digest(body);
+    format!("sha-256=:{}:", STANDARD.encode(digest))
+}
+
+fn parse_headers(captured: &str) -> BTreeMap<String, String> {
+    let mut headers = BTreeMap::new();
+    for line in captured.lines().skip(1) {
+        if line.trim().is_empty() {
+            break;
+        }
+        if let Some((name, value)) = line.split_once(':') {
+            headers.insert(name.to_ascii_lowercase(), value.trim().to_owned());
+        }
+    }
+    headers
 }

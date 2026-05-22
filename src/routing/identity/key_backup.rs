@@ -46,6 +46,7 @@ const KEY_BACKUP_CONTENT_TYPES: &[&str] = &[
     "pending_welcome",
     "private_account_state",
 ];
+const DELETE_PROOF_HEADER: &str = "x-contrix-key-backup-delete-proof";
 
 fn schema_error(message: impl Into<String>) -> AppError {
     AppError::new(ErrorCode::SchemaViolation, message)
@@ -200,6 +201,24 @@ fn validate_key_backup_body(
     Ok(())
 }
 
+fn delete_ownership_proof_matches(req: &Request, backup_id: &str, actor_id: &str) -> bool {
+    let Some(proof) = req
+        .headers()
+        .get(salvo::http::header::HeaderName::from_static(
+            DELETE_PROOF_HEADER,
+        ))
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+    else {
+        return false;
+    };
+    // Development-mode proof shape used by cotest and the reference UI until
+    // full SSK/JWS verification lands on this REST surface. It still binds
+    // the destructive delete to the current actor and backup id so a bearer
+    // token alone is not sufficient.
+    proof == format!("dev-ssk-delete:v1:{actor_id}:{backup_id}")
+}
+
 #[endpoint(
     operation_id = "cx.keys.backups.put",
     tags("keys"),
@@ -315,12 +334,27 @@ async fn delete_key_backup(
     let session = aa.authenticated_session(state, req)?;
     let backup_id = backup_id.into_inner();
     let store = state.persistence.key_backups();
-    let deleted = store
+    let owns_backup = store
         .get(&backup_id)
         .ok()
         .flatten()
         .filter(|backup| backup.get("actor_id").and_then(Value::as_str) == Some(&session.actor))
-        .is_some_and(|_| store.delete(&backup_id).unwrap_or(false));
+        .is_some();
+    if !owns_backup {
+        return json_ok(KeysBackupsDeleteResBody {
+            ok: true,
+            backup_id,
+            deleted: false,
+            state: "missing".to_owned(),
+            todos: Vec::new(),
+        });
+    }
+    if !delete_ownership_proof_matches(req, &backup_id, &session.actor) {
+        return Err(AppError::capability_denied(format!(
+            "key backup delete requires `{DELETE_PROOF_HEADER}` ownership proof"
+        )));
+    }
+    let deleted = store.delete(&backup_id).unwrap_or(false);
     json_ok(KeysBackupsDeleteResBody {
         ok: true,
         backup_id,
