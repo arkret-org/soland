@@ -819,6 +819,9 @@ async fn contact_request(
         .get_scoped(&session.actor, &body.target, &scope)
         .map_err(|error| AppError::internal(error.to_string()))?
     {
+        if existing.status == "rejected" {
+            return json_ok(contact_response(existing));
+        }
         if existing.status != contact_status {
             existing.status = contact_status.to_owned();
             existing.updated_at = now();

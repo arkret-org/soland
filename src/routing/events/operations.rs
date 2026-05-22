@@ -63,6 +63,11 @@ const RELATION_FROM_FIELDS: &[&str] = &["from_ref", "from"];
 const RELATION_TO_FIELDS: &[&str] = &["to_ref", "to"];
 const MEMBER_ACTOR_FIELDS: &[&str] = &["actor_id", "member", "actor", "sender"];
 const READ_MARKER_ACTOR_FIELDS: &[&str] = &["actor", "sender"];
+const MLS_COMMIT_GROUP_FIELDS: &[&str] = &["group_id"];
+const MLS_COMMIT_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::AnyOf(
+    MLS_COMMIT_GROUP_FIELDS,
+    "cx.mls.commit requires group_id for reducer projection",
+)];
 
 const MESSAGE_CREATE_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::AnyOf(
     MESSAGE_CREATE_FIELDS,
@@ -580,6 +585,10 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
         // existing reducer-level tests use `cx:space:` prefixes).
         kinds::CX_REALM_LINK => OperationPayloadSchema {
             requirements: REALM_LINK_REQUIREMENTS,
+            validate: None,
+        },
+        kinds::CX_MLS_COMMIT => OperationPayloadSchema {
+            requirements: MLS_COMMIT_REQUIREMENTS,
             validate: None,
         },
         kinds::CX_VIEW_CREATE | kinds::CX_VIEW_UPDATE | kinds::CX_VIEW_RECONCILE => {

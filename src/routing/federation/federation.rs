@@ -286,10 +286,11 @@ pub(super) async fn federation_pull_operations(
     let after_cursor: Option<String> = after_cursor.into_inner();
     let limit = limit.into_inner().unwrap_or(100).min(100);
     let want_snapshot_bootstrap = snapshot_bootstrap.into_inner().unwrap_or(false);
+    let realm_id = space_id.replacen("cx:space:", "cx:realm:", 1);
     let space_operations = state
         .persistence
         .federation_operations()
-        .list_for_space(&space_id)
+        .list_for_space(&realm_id)
         .unwrap_or_default();
     let redacted = redaction_targets_from_operations(&space_operations);
     let snapshot_bootstrap = want_snapshot_bootstrap.then(|| {

@@ -1078,6 +1078,18 @@ fn submit_event_value(
                     reason,
                 ));
             }
+            if kinds::canonical_kind_string(operation) == kinds::CX_MLS_COMMIT {
+                let mut snapshot = proj.clone();
+                if let crate::reducer::ProjectionEffect::Rejected { reason } =
+                    crate::reducer::mls::apply_commit_epoch(&mut snapshot, operation)
+                {
+                    return Err(SubmitOneError::new(
+                        StatusCode::PRECONDITION_FAILED,
+                        reason.clone(),
+                        reason,
+                    ));
+                }
+            }
         }
     }
 
