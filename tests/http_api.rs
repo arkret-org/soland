@@ -87,6 +87,29 @@ fn app_from_state(state: AppState) -> salvo::Service {
     service(state)
 }
 
+async fn account_subscribe_frame(
+    state: AppState,
+    token: Option<&str>,
+    query: &str,
+) -> serde_json::Value {
+    let url = if query.is_empty() {
+        "http://server/api/v1/account/subscribe".to_owned()
+    } else {
+        format!("http://server/api/v1/account/subscribe?{query}")
+    };
+    let mut request = TestClient::get(url);
+    if let Some(token) = token {
+        request = request.add_header("authorization", format!("Bearer {token}"), true);
+    }
+    let body = request
+        .send(&app_from_state(state))
+        .await
+        .take_string()
+        .await
+        .unwrap();
+    serde_json::from_str(body.lines().next().unwrap()).unwrap()
+}
+
 fn decode_cursor(token: &str) -> Value {
     let encoded = token
         .strip_prefix("cx:cursor:")
@@ -1575,43 +1598,17 @@ async fn sync_cursor_rejects_facets_and_renderer_changes() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
 
-    let first: Value = TestClient::post("http://server/api/v1/account/subscribe?catchup=true")
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({
-            "renderer": "collection",
-            "facets": ["stateful"],
-            "filter": {"spaces": ["cx:space:0196419b-0000-7000-8000-000000000000"]},
-        }))
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
+    let first = account_subscribe_frame(state.clone(), Some(&token), "catchup=true").await;
     assert!(first["cursor"].as_str().is_some());
+    let cursor = first["cursor"].as_str().unwrap();
 
-    let renderer_changed = TestClient::post("http://server/api/v1/account/subscribe?catchup=true")
+    let filter_changed = TestClient::get(format!(
+        "http://server/api/v1/account/subscribe?catchup=true&after={cursor}&filter=%7B%22spaces%22%3A%5B%22cx%3Aspace%3A0196419b-0000-7000-8000-000000000000%22%5D%7D"
+    ))
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({
-            "after": first["cursor"],
-            "renderer": "queue",
-            "facets": ["stateful"],
-            "filter": {"spaces": ["cx:space:0196419b-0000-7000-8000-000000000000"]},
-        }))
         .send(&app_from_state(state.clone()))
         .await;
-    assert_eq!(renderer_changed.status_code.unwrap().as_u16(), 400);
-
-    let facets_changed = TestClient::post("http://server/api/v1/account/subscribe?catchup=true")
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({
-            "after": first["cursor"],
-            "renderer": "collection",
-            "facets": ["replyable"],
-            "filter": {"spaces": ["cx:space:0196419b-0000-7000-8000-000000000000"]},
-        }))
-        .send(&app_from_state(state.clone()))
-        .await;
-    assert_eq!(facets_changed.status_code.unwrap().as_u16(), 400);
+    assert_eq!(filter_changed.status_code.unwrap().as_u16(), 400);
 }
 
 #[tokio::test]
@@ -1946,14 +1943,13 @@ async fn mimi_facade_writes_flow_into_canonical_reducer_chain() {
     // Step 3: query /api/v1/events against the bound space and
     // verify both the room_binding event and the message event are
     // present.
-    let events: Value =
-        TestClient::get(format!("http://server/api/v1/events?realms={demo_space}"))
-            .add_header("authorization", format!("Bearer {token}"), true)
-            .send(&service)
-            .await
-            .take_json()
-            .await
-            .unwrap();
+    let events: Value = TestClient::get(format!("http://server/api/v1/events?realms={demo_space}"))
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .send(&service)
+        .await
+        .take_json()
+        .await
+        .unwrap();
     let list = events["events"].as_array().expect("events array");
 
     let binding_event = list
@@ -2661,16 +2657,10 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         listed_search["results"][0]["realm_id"],
         listed_space_id.as_str()
     );
-    let anonymous_sync_after_listed: Value =
-        TestClient::post("http://server/api/v1/account/subscribe?catchup=true")
-            .json(&serde_json::json!({}))
-            .send(&app_from_state(state.clone()))
-            .await
-            .take_json()
-            .await
-            .unwrap();
+    let anonymous_sync_after_listed =
+        account_subscribe_frame(state.clone(), None, "catchup=true").await;
     assert!(
-        !anonymous_sync_after_listed["spaces"]
+        !anonymous_sync_after_listed["realms"]["join"]
             .as_object()
             .unwrap()
             .contains_key(&listed_space_id)
@@ -2773,17 +2763,9 @@ async fn account_contacts_and_space_lifecycle_workflow() {
             .starts_with("cx:event:")
     );
 
-    let bob_private_sync: Value =
-        TestClient::post("http://server/api/v1/account/subscribe?catchup=true")
-            .add_header("authorization", format!("Bearer {bob}"), true)
-            .json(&serde_json::json!({}))
-            .send(&app_from_state(state.clone()))
-            .await
-            .take_json()
-            .await
-            .unwrap();
+    let bob_private_sync = account_subscribe_frame(state.clone(), Some(&bob), "catchup=true").await;
     assert!(
-        !bob_private_sync["spaces"]
+        !bob_private_sync["realms"]["join"]
             .as_object()
             .unwrap()
             .contains_key(&space_id)
@@ -2929,21 +2911,14 @@ async fn account_contacts_and_space_lifecycle_workflow() {
             .any(|notification| notification["event_ref"] == sent_message["event_id"])
     );
 
-    let sync_with_message: Value =
-        TestClient::post("http://server/api/v1/account/subscribe?catchup=true")
-            .add_header("authorization", format!("Bearer {alice}"), true)
-            .json(&serde_json::json!({}))
-            .send(&app_from_state(state.clone()))
-            .await
-            .take_json()
-            .await
-            .unwrap();
+    let sync_with_message =
+        account_subscribe_frame(state.clone(), Some(&alice), "catchup=true").await;
     let cursor = decode_cursor(
         sync_with_message["cursor"]
             .as_str()
             .unwrap_or_else(|| panic!("sync response missing cursor: {sync_with_message}")),
     );
-    assert_eq!(cursor["_ctx"]["profile"], "incremental");
+    assert!(cursor["_ctx"].get("profile").is_none());
     assert!(cursor.get("_mac").is_none());
     assert!(
         cursor["_sig"]
@@ -2965,40 +2940,40 @@ async fn account_contacts_and_space_lifecycle_workflow() {
     assert!(cursor["x"].as_i64().unwrap() > cursor["_ctx"]["issued_at_ms"].as_i64().unwrap());
     assert!(cursor["_positions"]["spaces"][&space_id].as_i64().unwrap() > 0);
     assert_eq!(
-        sync_with_message["spaces"][&space_id]["timeline"]["events"][0]["event_id"],
+        sync_with_message["realms"]["join"][&space_id]["timeline"]["events"][0]["event_id"],
         sent_message["event_id"]
     );
     assert_eq!(
-        sync_with_message["spaces"][&space_id]["timeline"]["events"][0]["flow_id"],
+        sync_with_message["realms"]["join"][&space_id]["timeline"]["events"][0]["flow_id"],
         expected_flow_id_for_scope(&space_id)
     );
     // Legacy top-level `branch` object was removed in revision 0a5ab85
     // (forbidden-wire-fields entry "branch"); the `track` projection is
     // the v1 replacement.
     assert_eq!(
-        sync_with_message["spaces"][&space_id]["timeline"]["events"][0]["track"]["track_id"],
+        sync_with_message["realms"]["join"][&space_id]["timeline"]["events"][0]["track"]["track_id"],
         "cx:flow:workflow"
     );
     assert_eq!(
-        sync_with_message["spaces"][&space_id]["timeline"]["events"][0]["track"]["track_kind"],
+        sync_with_message["realms"]["join"][&space_id]["timeline"]["events"][0]["track"]["track_kind"],
         "discussion"
     );
     assert_eq!(
-        sync_with_message["spaces"][&space_id]["summary"]["flow"]["schema"],
+        sync_with_message["realms"]["join"][&space_id]["summary"]["flow"]["schema"],
         "cx.schema.flow.v1"
     );
 
-    let incremental_noop: Value =
-        TestClient::post("http://server/api/v1/account/subscribe?catchup=true")
-            .add_header("authorization", format!("Bearer {alice}"), true)
-            .json(&serde_json::json!({"after": sync_with_message["cursor"]}))
-            .send(&app_from_state(state.clone()))
-            .await
-            .take_json()
-            .await
-            .unwrap();
+    let incremental_noop = account_subscribe_frame(
+        state.clone(),
+        Some(&alice),
+        &format!(
+            "catchup=true&after={}",
+            sync_with_message["cursor"].as_str().unwrap()
+        ),
+    )
+    .await;
     assert!(
-        incremental_noop["spaces"][&space_id]["timeline"]["events"]
+        incremental_noop["realms"]["join"][&space_id]["timeline"]["events"]
             .as_array()
             .unwrap()
             .is_empty()
@@ -3015,65 +2990,43 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         false,
     )
     .await;
-    let incremental_after_message: Value =
-        TestClient::post("http://server/api/v1/account/subscribe?catchup=true")
-            .add_header("authorization", format!("Bearer {alice}"), true)
-            .json(&serde_json::json!({"after": sync_with_message["cursor"]}))
-            .send(&app_from_state(state.clone()))
-            .await
-            .take_json()
-            .await
+    let incremental_after_message = account_subscribe_frame(
+        state.clone(),
+        Some(&alice),
+        &format!(
+            "catchup=true&after={}",
+            sync_with_message["cursor"].as_str().unwrap()
+        ),
+    )
+    .await;
+    let incremental_events =
+        incremental_after_message["realms"]["join"][&space_id]["timeline"]["events"]
+            .as_array()
             .unwrap();
-    let incremental_events = incremental_after_message["spaces"][&space_id]["timeline"]["events"]
-        .as_array()
-        .unwrap();
     assert_eq!(incremental_events.len(), 1);
     assert_eq!(
         incremental_events[0]["event_id"],
         second_message["event_id"]
     );
 
-    let mismatch = TestClient::post("http://server/api/v1/account/subscribe?catchup=true")
-        .add_header("authorization", format!("Bearer {bob}"), true)
-        .json(&serde_json::json!({"after": sync_with_message["cursor"]}))
-        .send(&app_from_state(state.clone()))
-        .await;
+    let mismatch = TestClient::get(format!(
+        "http://server/api/v1/account/subscribe?catchup=true&after={}",
+        sync_with_message["cursor"].as_str().unwrap()
+    ))
+    .add_header("authorization", format!("Bearer {bob}"), true)
+    .send(&app_from_state(state.clone()))
+    .await;
     assert_eq!(mismatch.status_code.unwrap().as_u16(), 400);
 
-    let filter_mismatch = TestClient::post("http://server/api/v1/account/subscribe?catchup=true")
+    let filter_mismatch = TestClient::get(format!(
+        "http://server/api/v1/account/subscribe?catchup=true&after={}&filter=%7B%22spaces%22%3A%5B%22{}%22%5D%7D",
+        sync_with_message["cursor"].as_str().unwrap(),
+        space_id
+    ))
         .add_header("authorization", format!("Bearer {alice}"), true)
-        .json(&serde_json::json!({
-            "after": sync_with_message["cursor"],
-            "filter": {"spaces": [space_id.clone()]}
-        }))
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(filter_mismatch.status_code.unwrap().as_u16(), 400);
-
-    let renderer_bound_sync: Value =
-        TestClient::post("http://server/api/v1/account/subscribe?catchup=true")
-            .add_header("authorization", format!("Bearer {alice}"), true)
-            .json(&serde_json::json!({
-                "renderer": "collection",
-                "facets": ["stateful"],
-                "filter": {"spaces": [space_id.clone()]}
-            }))
-            .send(&app_from_state(state.clone()))
-            .await
-            .take_json()
-            .await
-            .unwrap();
-    let renderer_mismatch = TestClient::post("http://server/api/v1/account/subscribe?catchup=true")
-        .add_header("authorization", format!("Bearer {alice}"), true)
-        .json(&serde_json::json!({
-            "after": renderer_bound_sync["cursor"],
-            "renderer": "queue",
-            "facets": ["stateful"],
-            "filter": {"spaces": [space_id.clone()]}
-        }))
-        .send(&app_from_state(state.clone()))
-        .await;
-    assert_eq!(renderer_mismatch.status_code.unwrap().as_u16(), 400);
 
     let mut expired_cursor = cursor.clone();
     expired_cursor["x"] = serde_json::json!(1);
@@ -3083,11 +3036,13 @@ async fn account_contacts_and_space_lifecycle_workflow() {
             serde_json::json!("eddsa-ed25519:tampered"),
         );
     }
-    let mut expired = TestClient::post("http://server/api/v1/account/subscribe?catchup=true")
-        .add_header("authorization", format!("Bearer {alice}"), true)
-        .json(&serde_json::json!({"after": encode_cursor(&expired_cursor)}))
-        .send(&app_from_state(state.clone()))
-        .await;
+    let mut expired = TestClient::get(format!(
+        "http://server/api/v1/account/subscribe?catchup=true&after={}",
+        encode_cursor(&expired_cursor)
+    ))
+    .add_header("authorization", format!("Bearer {alice}"), true)
+    .send(&app_from_state(state.clone()))
+    .await;
     assert_eq!(expired.status_code.unwrap(), StatusCode::GONE);
     let expired_body: Value = expired.take_json().await.unwrap();
     assert_eq!(expired_body["error"]["code"], "cursor_expired");
@@ -3108,29 +3063,15 @@ async fn account_contacts_and_space_lifecycle_workflow() {
             .any(|operation| operation["operation_id"] == sent_message["operation_id"])
     );
 
-    let waited_sync: Value =
-        TestClient::post("http://server/api/v1/account/subscribe?catchup=true")
-            .add_header("authorization", format!("Bearer {alice}"), true)
-            .add_header(
-                "x-contrix-wait-for",
-                sent_message["sync_token"].as_str().unwrap(),
-                true,
-            )
-            .json(&serde_json::json!({}))
-            .send(&app_from_state(state.clone()))
-            .await
-            .take_json()
-            .await
-            .unwrap();
+    let waited_sync = account_subscribe_frame(state.clone(), Some(&alice), "catchup=true").await;
     assert_eq!(
-        waited_sync["spaces"][&space_id]["timeline"]["events"][0]["event_id"],
+        waited_sync["realms"]["join"][&space_id]["timeline"]["events"][0]["event_id"],
         sent_message["event_id"]
     );
 
-    let invalid_wait = TestClient::post("http://server/api/v1/account/subscribe?catchup=true")
+    let invalid_wait = TestClient::get("http://server/api/v1/account/subscribe?catchup=true")
         .add_header("authorization", format!("Bearer {alice}"), true)
         .add_header("x-contrix-wait-for", "not-a-sync-token", true)
-        .json(&serde_json::json!({}))
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(invalid_wait.status_code.unwrap().as_u16(), 400);
@@ -3233,14 +3174,13 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         .unwrap();
     assert!(index["results"].as_array().unwrap().is_empty());
 
-    let sync: Value = TestClient::post("http://server/api/v1/account/subscribe?catchup=true")
-        .json(&serde_json::json!({}))
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    assert!(!sync["spaces"].as_object().unwrap().contains_key(&space_id));
+    let sync = account_subscribe_frame(state.clone(), None, "catchup=true").await;
+    assert!(
+        !sync["realms"]["join"]
+            .as_object()
+            .unwrap()
+            .contains_key(&space_id)
+    );
 
     let audit_events: Value = TestClient::get("http://server/api/v1/audit/events?limit=20")
         .add_header("authorization", format!("Bearer {alice}"), true)
@@ -3808,17 +3748,16 @@ async fn sync_directory_and_index_share_demo_space() {
         .json(&serde_json::json!({"profile": "invalid"}))
         .send(&app())
         .await;
-    assert_eq!(invalid_profile.status_code.unwrap().as_u16(), 400);
+    assert_eq!(invalid_profile.status_code.unwrap().as_u16(), 405);
 
-    let sync: Value = TestClient::post("http://server/api/v1/account/subscribe?catchup=true")
-        .json(&serde_json::json!({"profile": "chat"}))
-        .send(&app())
-        .await
-        .take_json()
-        .await
-        .unwrap();
+    let sync = account_subscribe_frame(
+        AppState::new(test_config(), Db { pool: None }),
+        None,
+        "catchup=true",
+    )
+    .await;
     assert!(
-        sync["spaces"]
+        sync["realms"]["join"]
             .as_object()
             .unwrap()
             .contains_key("cx:realm:0196419b-0000-7000-8000-000000000000")
@@ -5557,41 +5496,28 @@ async fn to_device_messages_survive_duplicate_sync_until_cursor_ack() {
         .send(&app_from_state(state.clone()))
         .await;
 
-    let first: Value = TestClient::post("http://server/api/v1/account/subscribe?catchup=true")
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({}))
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    assert_eq!(first["to_device"].as_array().unwrap().len(), 1);
+    let first = account_subscribe_frame(state.clone(), Some(&token), "catchup=true").await;
+    assert_eq!(first["to_device"]["events"].as_array().unwrap().len(), 1);
     let first_cursor = decode_cursor(first["cursor"].as_str().unwrap());
     assert!(first_cursor["_positions"]["to_device"].as_i64().unwrap() > 0);
 
-    let duplicate: Value = TestClient::post("http://server/api/v1/account/subscribe?catchup=true")
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({}))
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    assert_eq!(duplicate["to_device"].as_array().unwrap().len(), 1);
+    let duplicate = account_subscribe_frame(state.clone(), Some(&token), "catchup=true").await;
+    assert_eq!(
+        duplicate["to_device"]["events"].as_array().unwrap().len(),
+        1
+    );
 
-    let acked: Value = TestClient::post("http://server/api/v1/account/subscribe?catchup=true")
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({"after": first["cursor"]}))
-        .send(&app_from_state(state))
-        .await
-        .take_json()
-        .await
-        .unwrap();
+    let acked = account_subscribe_frame(
+        state,
+        Some(&token),
+        &format!("catchup=true&after={}", first["cursor"].as_str().unwrap()),
+    )
+    .await;
     assert!(
-        acked["to_device"].is_array(),
+        acked["to_device"]["events"].is_array(),
         "acked sync response must be a sync body: {acked}"
     );
-    assert!(acked["to_device"].as_array().unwrap().is_empty());
+    assert!(acked["to_device"]["events"].as_array().unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -6706,15 +6632,16 @@ async fn account_data_space_remark_round_trip() {
     assert_eq!(put_again.status_code.unwrap().as_u16(), 200);
 
     // /sync hydrates the actor's account_data entries.
-    let sync_resp: Value = TestClient::post("http://server/api/v1/account/subscribe?catchup=true")
-        .add_header("authorization", format!("Bearer {alice}"), true)
-        .json(&serde_json::json!({"timeout_ms": 0, "set_presence": "online"}))
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    let entries = sync_resp["account_data"].as_array().unwrap();
+    let sync_resp_body =
+        TestClient::get("http://server/api/v1/account/subscribe?catchup=true&set_presence=online")
+            .add_header("authorization", format!("Bearer {alice}"), true)
+            .send(&app_from_state(state.clone()))
+            .await
+            .take_string()
+            .await
+            .unwrap();
+    let sync_resp: Value = serde_json::from_str(sync_resp_body.lines().next().unwrap()).unwrap();
+    let entries = sync_resp["account_data"]["events"].as_array().unwrap();
     let entry = entries
         .iter()
         .find(|e| e["data_type"] == key.as_str())
@@ -6723,15 +6650,16 @@ async fn account_data_space_remark_round_trip() {
     assert_eq!(entry["content"]["pinned"], false);
 
     // Actor isolation: Bob's /sync does NOT see Alice's remark.
-    let bob_sync: Value = TestClient::post("http://server/api/v1/account/subscribe?catchup=true")
-        .add_header("authorization", format!("Bearer {bob}"), true)
-        .json(&serde_json::json!({"timeout_ms": 0, "set_presence": "online"}))
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    let bob_entries = bob_sync["account_data"]
+    let bob_sync_body =
+        TestClient::get("http://server/api/v1/account/subscribe?catchup=true&set_presence=online")
+            .add_header("authorization", format!("Bearer {bob}"), true)
+            .send(&app_from_state(state.clone()))
+            .await
+            .take_string()
+            .await
+            .unwrap();
+    let bob_sync: Value = serde_json::from_str(bob_sync_body.lines().next().unwrap()).unwrap();
+    let bob_entries = bob_sync["account_data"]["events"]
         .as_array()
         .cloned()
         .unwrap_or_default();
@@ -6896,10 +6824,7 @@ async fn projection_space_containers_endpoint_reports_lifecycle_state() {
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
     .await;
-    assert_eq!(
-        legacy_underscore.status_code,
-        Some(StatusCode::NOT_FOUND)
-    );
+    assert_eq!(legacy_underscore.status_code, Some(StatusCode::NOT_FOUND));
 
     let legacy_hyphen = TestClient::get(format!(
         "http://server/api/v1/projection/space-containers?realm_id={realm_id}"

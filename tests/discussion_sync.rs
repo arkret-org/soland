@@ -63,6 +63,17 @@ fn app_from_state(state: AppState) -> salvo::Service {
     service(state)
 }
 
+async fn account_subscribe_frame(state: AppState, token: &str, query: &str) -> Value {
+    let body = TestClient::get(format!("http://server/api/v1/account/subscribe?{query}"))
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .send(&app_from_state(state))
+        .await
+        .take_string()
+        .await
+        .unwrap();
+    serde_json::from_str(body.lines().next().unwrap()).unwrap()
+}
+
 async fn dev_token(state: AppState, actor: &str, device_suffix: &str) -> String {
     let login: Value = TestClient::post("http://server/api/v1/auth/dev-login")
         .json(&json!({
@@ -246,7 +257,7 @@ fn event_canonical_digest(event: &Value) -> String {
 }
 
 fn sync_bodies(sync: &Value, space_id: &str) -> Vec<String> {
-    sync["spaces"][space_id]["timeline"]["events"]
+    sync["realms"]["join"][space_id]["timeline"]["events"]
         .as_array()
         .unwrap()
         .iter()
@@ -292,14 +303,7 @@ async fn joined_history_hides_pre_join_messages_from_sync_and_events_query() {
     tokio::time::sleep(std::time::Duration::from_millis(5)).await;
     send_message(state.clone(), &alice, &space_id, "after bob joined").await;
 
-    let sync: Value = TestClient::post("http://server/api/v1/account/subscribe?catchup=true")
-        .add_header("authorization", format!("Bearer {bob}"), true)
-        .json(&json!({}))
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
+    let sync = account_subscribe_frame(state.clone(), &bob, "catchup=true").await;
     let bodies = sync_bodies(&sync, &space_id);
     assert!(
         !bodies.contains(&"before bob joined".to_owned()),
@@ -311,7 +315,7 @@ async fn joined_history_hides_pre_join_messages_from_sync_and_events_query() {
     );
 
     let events: Value = TestClient::get(format!(
-        "http://server/api/v1/events?realm_id={space_id}&limit=20"
+        "http://server/api/v1/events?realms={space_id}&limit=20"
     ))
     .add_header("authorization", format!("Bearer {bob}"), true)
     .send(&app_from_state(state.clone()))
@@ -352,21 +356,14 @@ async fn shared_history_allows_late_joiner_to_backfill_prior_messages() {
     )
     .await;
 
-    let sync: Value = TestClient::post("http://server/api/v1/account/subscribe?catchup=true")
-        .add_header("authorization", format!("Bearer {bob}"), true)
-        .json(&json!({}))
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
+    let sync = account_subscribe_frame(state.clone(), &bob, "catchup=true").await;
     assert!(
         sync_bodies(&sync, &space_id).contains(&"shared before join".to_owned()),
         "{sync:?}"
     );
 
     let events: Value = TestClient::get(format!(
-        "http://server/api/v1/events?realm_id={space_id}&limit=20"
+        "http://server/api/v1/events?realms={space_id}&limit=20"
     ))
     .add_header("authorization", format!("Bearer {bob}"), true)
     .send(&app_from_state(state.clone()))
