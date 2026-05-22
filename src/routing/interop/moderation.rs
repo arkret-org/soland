@@ -18,7 +18,7 @@ use serde_json::{Value, json};
 use contrix_sdk::RealmId;
 
 use super::{append_audit_log, now, space_has_member, validate_did};
-use crate::error::AppError;
+use crate::error::{AppError, ErrorCode};
 use crate::ids;
 use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
@@ -164,6 +164,25 @@ async fn moderation_appeal_submit(
     if body.decision_ref.trim().is_empty() {
         return Err(AppError::invalid_param("decision_ref is required"));
     }
+    let appellant = session.actor.clone();
+    let duplicate_active = state
+        .persistence
+        .moderation()
+        .list_appeals()
+        .unwrap_or_default()
+        .into_iter()
+        .any(|appeal| {
+            appeal.get("decision_ref").and_then(Value::as_str) == Some(body.decision_ref.as_str())
+                && appeal.get("appellant").and_then(Value::as_str) == Some(appellant.as_str())
+                && appeal.get("appeal_state").and_then(Value::as_str) != Some("closed")
+        });
+    if duplicate_active {
+        return Err(AppError::new(
+            ErrorCode::DuplicateConflict,
+            "active appeal already exists for this decision and appellant",
+        )
+        .with_status(StatusCode::CONFLICT));
+    }
     let appeal_id = ids::generate("appeal");
     let evidence_visibility = body
         .evidence_visibility
@@ -181,7 +200,7 @@ async fn moderation_appeal_submit(
         "realm_id": body.realm_id,
         "decision_ref": body.decision_ref,
         "target_ref": body.target_ref,
-        "appellant": session.actor,
+        "appellant": appellant,
         "reason_text_ref": body.reason_text_ref,
         "evidence_refs": body.evidence_refs,
         "evidence_visibility": evidence_visibility,

@@ -478,9 +478,7 @@ fn realm_event_visible_to_session_with_projection(
                         .get(space_id)
                         .ok()
                         .flatten()?;
-                    if meta.owner == session.actor
-                        || realm_has_member(state, space_id, &session.actor)
-                    {
+                    if meta.owner == session.actor {
                         Some(meta.created_at)
                     } else {
                         None
@@ -1165,6 +1163,9 @@ pub(super) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
             match projected_event_page(&state, space_id, cursor.as_deref(), limit) {
                 Ok(Some(page)) => {
                     for event in page.items {
+                        if !projection_record_visible_to_session(&state, &event, session.as_ref()) {
+                            continue;
+                        }
                         seq += 1;
                         let event_cursor = event.event_id.clone();
                         last_cursor = Some(event_cursor.clone());
@@ -1199,6 +1200,7 @@ pub(super) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
     let catchup_cursor = last_cursor.unwrap_or_else(|| sync_token_for_state(&state));
     let space_filter: BTreeSet<String> = accessible_spaces.iter().cloned().collect();
     let stream_deadline = tokio::time::Instant::now() + Duration::from_millis(max_duration_ms);
+    let session_for_stream = session.clone();
 
     // The async stream — yields one NDJSON line (Bytes) per frame.
     let body_stream = async_stream::stream! {
@@ -1243,6 +1245,13 @@ pub(super) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
                             use crate::state::EventNotificationKind;
                             let frame = match notification.kind {
                                 EventNotificationKind::Event { cursor, event_payload } => {
+                                    if !projection_event_value_visible_to_session(
+                                        &state,
+                                        &event_payload,
+                                        session_for_stream.as_ref(),
+                                    ) {
+                                        continue;
+                                    }
                                     live_seq += 1;
                                     json!({
                                         "kind": "event",

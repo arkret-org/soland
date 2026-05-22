@@ -333,9 +333,7 @@ impl AppealState {
             (self, new),
             (None, Submitted)
                 | (Submitted, UnderReview)
-                | (Submitted, Closed)
                 | (UnderReview, Decided)
-                | (UnderReview, Closed)
                 | (Decided, Closed)
         )
     }
@@ -1038,6 +1036,8 @@ mod tests {
         assert!(Submitted.can_transition_to(UnderReview));
         assert!(UnderReview.can_transition_to(Decided));
         assert!(Decided.can_transition_to(Closed));
+        assert!(!Submitted.can_transition_to(Closed));
+        assert!(!UnderReview.can_transition_to(Closed));
         assert!(!Decided.can_transition_to(Submitted));
         assert!(!Closed.can_transition_to(Submitted));
     }

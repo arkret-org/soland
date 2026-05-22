@@ -1,7 +1,7 @@
 //! WebRTC session + signaling handlers.
 //!
 //! Surfaces:
-//! - `POST /api/v1/contrix/v1/ice-config` (TURN / STUN list — currently empty)
+//! - `POST /contrix/v1/ice-config` (TURN / STUN list — currently empty)
 //! - `POST /api/v1/webrtc/sessions` create
 //! - `PUT/GET /api/v1/webrtc/sessions/{session_id}/signals`
 //! - `DELETE /api/v1/webrtc/sessions/{session_id}` close
@@ -257,6 +257,22 @@ async fn put_webrtc_signal(
             "webrtc signal requires a proof bound to the actor",
         ));
     }
+    if let Some(requested_seq) = body.seq {
+        let Some(record) = state.persistence.webrtc().get(&session_id).ok().flatten() else {
+            return Err(AppError::not_found("session not found"));
+        };
+        if !record.participants.contains(&session.actor) {
+            return Err(AppError::capability_denied(
+                "actor is not a participant of the webrtc session",
+            ));
+        }
+        if requested_seq < record.next_seq {
+            return Err(AppError::invalid_param("webrtc signal seq rollback"));
+        }
+        if requested_seq > record.next_seq {
+            return Err(AppError::invalid_param("webrtc signal seq gap"));
+        }
+    }
 
     prune_expired_webrtc_sessions(state);
     let actor = session.actor.clone();
@@ -403,16 +419,37 @@ fn is_supported_webrtc_signal_type(value: &str) -> bool {
         value,
         "offer"
             | "answer"
-            | "candidate"
             | "ice"
-            | "renegotiate"
             | "hangup"
+            | "reject"
+            | "mute_state"
+            | "media_state"
+            | "speaking"
+            | "focus_join"
+            | "focus_leave"
+            | "error"
+            | "device_change"
+            | "renegotiate"
+            | "candidate"
             | "cx.webrtc.offer"
             | "cx.webrtc.answer"
             | "cx.webrtc.candidate"
             | "cx.webrtc.ice"
             | "cx.webrtc.renegotiate"
             | "cx.webrtc.hangup"
+            | "cx.call.signal.offer"
+            | "cx.call.signal.answer"
+            | "cx.call.signal.ice"
+            | "cx.call.signal.hangup"
+            | "cx.call.signal.reject"
+            | "cx.call.signal.mute_state"
+            | "cx.call.signal.media_state"
+            | "cx.call.signal.speaking"
+            | "cx.call.signal.focus_join"
+            | "cx.call.signal.focus_leave"
+            | "cx.call.signal.error"
+            | "cx.call.signal.device_change"
+            | "cx.call.signal.renegotiate"
     )
 }
 
@@ -445,6 +482,7 @@ fn webrtc_signal_to_json(signal: &WebrtcSignalRecord) -> Value {
         "type": signal.message_type,
         "payload": signal.payload,
         "proofs": signal.proofs,
+        "device_proof": signal.proofs.first().cloned().unwrap_or(Value::Null),
         "created_at": signal.created_at,
     })
 }

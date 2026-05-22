@@ -1312,6 +1312,8 @@ pub struct CreateWebrtcSessionResponse {
 pub struct WebrtcSignalRequest {
     pub message_type: String,
     #[serde(default)]
+    pub seq: Option<u64>,
+    #[serde(default)]
     pub payload: Value,
     #[serde(default)]
     pub proofs: Vec<Value>,

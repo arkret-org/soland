@@ -143,6 +143,63 @@ pub fn operation_type_string(operation: &Operation) -> String {
         .unwrap_or_else(|| "create".to_owned())
 }
 
+fn first_string_field<'a>(value: &'a Value, keys: &[&str]) -> Option<&'a str> {
+    keys.iter()
+        .find_map(|key| value.get(*key).and_then(Value::as_str))
+}
+
+fn object_string_field<'a>(operation: &'a Operation, keys: &[&str]) -> Option<&'a str> {
+    operation
+        .payload
+        .get("object")
+        .and_then(|object| first_string_field(object, keys))
+}
+
+fn patch_string_field<'a>(operation: &'a Operation, field: &str) -> Option<&'a str> {
+    let patch_value = operation
+        .payload
+        .get("patch")
+        .and_then(|patch| patch.get(field))?;
+    match patch_value {
+        Value::String(value) => Some(value.as_str()),
+        Value::Object(op) if op.get("$op").and_then(Value::as_str) == Some("set") => {
+            op.get("value").and_then(Value::as_str)
+        }
+        _ => None,
+    }
+}
+
+fn operation_realm_title(operation: &Operation) -> Option<&str> {
+    first_string_field(&operation.payload, &["space_title", "title"])
+        .or_else(|| object_string_field(operation, &["title"]))
+        .or_else(|| patch_string_field(operation, "title"))
+}
+
+fn operation_realm_summary(operation: &Operation) -> Option<&str> {
+    first_string_field(&operation.payload, &["space_summary", "summary"])
+        .or_else(|| object_string_field(operation, &["summary"]))
+        .or_else(|| patch_string_field(operation, "summary"))
+}
+
+fn operation_realm_discoverability(operation: &Operation) -> Option<&str> {
+    first_string_field(&operation.payload, &["discoverability"])
+        .or_else(|| object_string_field(operation, &["default_discoverability", "discoverability"]))
+        .or_else(|| patch_string_field(operation, "default_discoverability"))
+        .or_else(|| patch_string_field(operation, "discoverability"))
+}
+
+fn operation_realm_history_visibility(operation: &Operation) -> Option<&str> {
+    first_string_field(&operation.payload, &["history_visibility"])
+        .or_else(|| object_string_field(operation, &["history_visibility"]))
+        .or_else(|| patch_string_field(operation, "history_visibility"))
+}
+
+fn operation_realm_encryption_profile(operation: &Operation) -> Option<&str> {
+    first_string_field(&operation.payload, &["encryption_profile"])
+        .or_else(|| object_string_field(operation, &["encryption_profile"]))
+        .or_else(|| patch_string_field(operation, "encryption_profile"))
+}
+
 pub fn sync_timeline_message_json(message: &crate::reducer::MessageState) -> serde_json::Value {
     // flow_id is always derived from space_id; thread_id is a discussion
     // track within the flow, not the flow itself. See
@@ -818,48 +875,52 @@ pub fn persist_projected_operation(
     } else if kinds::operation_is_membership(operation)
         || kinds::operation_is_realm_lifecycle(operation)
     {
-        let title = operation
-            .payload
-            .get("space_title")
-            .or_else(|| operation.payload.get("title"))
-            .and_then(|value| value.as_str())
-            .unwrap_or_else(|| operation.realm_id.as_str());
-        let summary = operation
-            .payload
-            .get("space_summary")
-            .or_else(|| operation.payload.get("summary"))
-            .and_then(|value| value.as_str());
-        let discoverability = operation
-            .payload
-            .get("discoverability")
-            .and_then(|value| value.as_str())
-            .unwrap_or_else(|| {
-                if operation
-                    .payload
-                    .get("public")
-                    .and_then(|value| value.as_bool())
-                    .unwrap_or(false)
-                {
-                    "public"
-                } else {
-                    "invite_only"
-                }
-            });
+        let title = operation_realm_title(operation);
+        let title_for_insert = title.unwrap_or_else(|| operation.realm_id.as_str());
+        let summary = operation_realm_summary(operation);
+        let discoverability = operation_realm_discoverability(operation).unwrap_or_else(|| {
+            if operation
+                .payload
+                .get("public")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false)
+            {
+                "public"
+            } else {
+                "invite_only"
+            }
+        });
         let space_id_uuid = ids::typed_uuid_part_or_panic(operation.realm_id.as_str());
         let operation_id_uuid = ids::typed_uuid_part_or_panic(operation.operation_id.as_str());
-        sql_query(
-                "INSERT INTO spaces (id, title, summary, owner, discoverability, payload, created_at, updated_at) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $7) \
-                 ON CONFLICT (id) DO UPDATE SET title = EXCLUDED.title, summary = EXCLUDED.summary, updated_at = EXCLUDED.updated_at",
-            )
-            .bind::<SqlUuid, _>(space_id_uuid)
-            .bind::<Text, _>(title)
-            .bind::<Nullable<Text>, _>(summary)
-            .bind::<Nullable<Text>, _>(Some(origin))
-            .bind::<Text, _>(discoverability)
-            .bind::<Jsonb, _>(&operation.payload)
-            .bind::<Timestamptz, _>(operation.created_at)
-            .execute(&mut conn)?;
+        if title.is_some() {
+            sql_query(
+                    "INSERT INTO spaces (id, title, summary, owner, discoverability, payload, created_at, updated_at) \
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $7) \
+                     ON CONFLICT (id) DO UPDATE SET title = EXCLUDED.title, summary = COALESCE(EXCLUDED.summary, spaces.summary), updated_at = EXCLUDED.updated_at",
+                )
+                .bind::<SqlUuid, _>(space_id_uuid)
+                .bind::<Text, _>(title_for_insert)
+                .bind::<Nullable<Text>, _>(summary)
+                .bind::<Nullable<Text>, _>(Some(origin))
+                .bind::<Text, _>(discoverability)
+                .bind::<Jsonb, _>(&operation.payload)
+                .bind::<Timestamptz, _>(operation.created_at)
+                .execute(&mut conn)?;
+        } else {
+            sql_query(
+                    "INSERT INTO spaces (id, title, summary, owner, discoverability, payload, created_at, updated_at) \
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $7) \
+                     ON CONFLICT (id) DO UPDATE SET summary = COALESCE(EXCLUDED.summary, spaces.summary), updated_at = EXCLUDED.updated_at",
+                )
+                .bind::<SqlUuid, _>(space_id_uuid)
+                .bind::<Text, _>(title_for_insert)
+                .bind::<Nullable<Text>, _>(summary)
+                .bind::<Nullable<Text>, _>(Some(origin))
+                .bind::<Text, _>(discoverability)
+                .bind::<Jsonb, _>(&operation.payload)
+                .bind::<Timestamptz, _>(operation.created_at)
+                .execute(&mut conn)?;
+        }
 
         if let Some(member) = operation
             .payload
@@ -972,33 +1033,21 @@ pub fn ensure_projected_space(state: &AppState, origin: &str, operation: &Operat
     };
     let mut spaces = state.realms.lock().expect("spaces lock");
     if spaces.get(&space_id).is_none() {
-        let title = operation
-            .payload
-            .get("space_title")
-            .and_then(|value| value.as_str())
-            .unwrap_or_else(|| space_id.as_str());
+        let title = operation_realm_title(operation).unwrap_or_else(|| space_id.as_str());
         let mut entry = RealmDirectoryEntry::new(space_id.clone(), title);
-        entry.description = operation
-            .payload
-            .get("space_summary")
-            .and_then(|value| value.as_str())
-            .map(ToOwned::to_owned);
-        let discoverability = operation
-            .payload
-            .get("discoverability")
-            .and_then(|value| value.as_str())
-            .unwrap_or_else(|| {
-                if operation
-                    .payload
-                    .get("public")
-                    .and_then(|value| value.as_bool())
-                    .unwrap_or(false)
-                {
-                    "public"
-                } else {
-                    "invite_only"
-                }
-            });
+        entry.description = operation_realm_summary(operation).map(ToOwned::to_owned);
+        let discoverability = operation_realm_discoverability(operation).unwrap_or_else(|| {
+            if operation
+                .payload
+                .get("public")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false)
+            {
+                "public"
+            } else {
+                "invite_only"
+            }
+        });
         entry.public = discoverability == "public";
         if let Ok(origin) = Did::new(origin.to_owned()) {
             entry.members.insert(origin);
@@ -1013,10 +1062,7 @@ pub fn ensure_projected_space(state: &AppState, origin: &str, operation: &Operat
         let record = RealmMetaRecord {
             owner: origin.to_owned(),
             deleted: false,
-            discoverability: operation
-                .payload
-                .get("discoverability")
-                .and_then(|value| value.as_str())
+            discoverability: operation_realm_discoverability(operation)
                 .filter(|value| is_valid_discoverability(value))
                 .unwrap_or_else(|| {
                     if operation
@@ -1031,19 +1077,13 @@ pub fn ensure_projected_space(state: &AppState, origin: &str, operation: &Operat
                     }
                 })
                 .to_owned(),
-            history_visibility: operation
-                .payload
-                .get("history_visibility")
-                .and_then(|value| value.as_str())
+            history_visibility: operation_realm_history_visibility(operation)
                 .filter(|value| {
                     matches!(*value, "shared" | "joined" | "invited" | "world_readable")
                 })
                 .unwrap_or("joined")
                 .to_owned(),
-            encryption_profile: operation
-                .payload
-                .get("encryption_profile")
-                .and_then(|value| value.as_str())
+            encryption_profile: operation_realm_encryption_profile(operation)
                 .map(ToOwned::to_owned),
             plaintext_visible_services: operation
                 .payload
@@ -1218,5 +1258,81 @@ pub fn project_federated_message(state: &AppState, origin: &str, operation: &Ope
         created_at: operation.created_at,
     }) {
         tracing::warn!(%error, "failed to persist projected message");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    const REALM_ID: &str = "cx:realm:01904100-0000-7000-8000-000000000001";
+    const OPERATION_ID: &str = "cx:operation:01904100-0000-7000-8000-000000000002";
+
+    fn op(kind: &str, payload: Value) -> Operation {
+        Operation::create(
+            OperationId::new(OPERATION_ID.to_owned()).unwrap(),
+            RealmId::new(REALM_ID.to_owned()).unwrap(),
+            kind,
+            payload,
+        )
+    }
+
+    #[test]
+    fn realm_projection_metadata_reads_canonical_object_fields() {
+        let operation = op(
+            kinds::CX_REALM_CREATE,
+            json!({
+                "object": {
+                    "id": REALM_ID,
+                    "title": "Launch Room",
+                    "summary": "Planning space",
+                    "default_discoverability": "listed",
+                    "history_visibility": "shared",
+                    "encryption_profile": "plaintext"
+                }
+            }),
+        );
+
+        assert_eq!(operation_realm_title(&operation), Some("Launch Room"));
+        assert_eq!(operation_realm_summary(&operation), Some("Planning space"));
+        assert_eq!(operation_realm_discoverability(&operation), Some("listed"));
+        assert_eq!(
+            operation_realm_history_visibility(&operation),
+            Some("shared")
+        );
+        assert_eq!(
+            operation_realm_encryption_profile(&operation),
+            Some("plaintext")
+        );
+    }
+
+    #[test]
+    fn member_state_without_title_does_not_project_realm_title() {
+        let operation = op(
+            kinds::CX_MEMBER_STATE,
+            json!({
+                "actor_id": "did:web:alice.example",
+                "membership": "join"
+            }),
+        );
+
+        assert_eq!(operation_realm_title(&operation), None);
+        assert_eq!(operation_realm_summary(&operation), None);
+    }
+
+    #[test]
+    fn realm_update_reads_patch_title_without_realm_id_fallback() {
+        let operation = op(
+            kinds::CX_REALM_UPDATE,
+            json!({
+                "action": "update",
+                "patch": {
+                    "title": { "$op": "set", "value": "Renamed Room" }
+                }
+            }),
+        );
+
+        assert_eq!(operation_realm_title(&operation), Some("Renamed Room"));
     }
 }

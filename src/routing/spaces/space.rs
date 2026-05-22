@@ -462,9 +462,10 @@ pub fn space_history_visibility(state: &AppState, space_id: &str) -> String {
 
 /// Best-effort joined-at timestamp for event history filtering.
 ///
-/// The reducer's member projection is authoritative when present. Older
-/// rows and bootstrap owners predate that side-band cache, so current
-/// members without a projected row fall back to the Space creation time.
+/// The reducer's member projection is authoritative when present. Bootstrap
+/// owners predate that side-band cache, so only the owner falls back to the
+/// Space creation time. Non-owner members without joined_at are hidden by
+/// `history_visibility=joined` instead of leaking pre-join history.
 pub fn space_member_joined_at(
     state: &AppState,
     space_id: &str,
@@ -478,9 +479,6 @@ pub fn space_member_joined_at(
     }
     let meta = state.persistence.realm_meta().get(space_id).ok().flatten();
     if meta.as_ref().is_some_and(|record| record.owner == actor) {
-        return meta.map(|record| record.created_at);
-    }
-    if space_has_member(state, space_id, actor) {
         return meta.map(|record| record.created_at);
     }
     None

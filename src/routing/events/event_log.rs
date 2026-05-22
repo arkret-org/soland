@@ -2368,6 +2368,20 @@ fn bootstrap_realm_member_index(
         .and_then(|create_object| create_object.get("encryption_profile"))
         .and_then(Value::as_str)
         .map(ToOwned::to_owned);
+    let plaintext_visible_services = object
+        .get("payload")
+        .and_then(|payload| payload.get("plaintext_visible_services"))
+        .or_else(|| {
+            payload_object.and_then(|create_object| create_object.get("plaintext_visible_services"))
+        })
+        .and_then(Value::as_array)
+        .map(|services| {
+            services
+                .iter()
+                .filter_map(|service| service.as_str().map(ToOwned::to_owned))
+                .collect()
+        })
+        .unwrap_or_default();
     let mut entry = crate::state::RealmDirectoryEntry::new(space_id_typed.clone(), title);
     entry.description = summary.clone();
     entry.public = discoverability == "public";
@@ -2381,7 +2395,7 @@ fn bootstrap_realm_member_index(
         discoverability,
         history_visibility,
         encryption_profile,
-        plaintext_visible_services: std::collections::BTreeSet::new(),
+        plaintext_visible_services,
         created_at: super::now(),
         updated_at: super::now(),
     };
