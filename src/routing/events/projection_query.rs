@@ -6,8 +6,8 @@
 //! `cx.space.archive` accepted by the server doesn't appear "unarchived"
 //! again when the kanban view re-mounts.
 //!
-//! - `GET /api/v1/projection/space_containers?realm_id=...` — extension
-//!   endpoint listing board/list Space containers in a Realm scope, with
+//! - `GET /api/v1/projection/spaces?realm_id=...` — extension
+//!   endpoint listing Space containers in a Realm scope, with
 //!   `state` ∈ {active, archived, tombstoned} (spec `common-fields.md §5.1`).
 //! - `GET /api/v1/projection/flows?realm_id=...` — same for Flows
 //!   (state ∈ {active, archived, deleted, redacted}).
@@ -20,7 +20,7 @@
 //!
 //! Handlers use typed `JsonResult<T>` signatures so the generated
 //! OpenAPI document carries proper schema components
-//! (SpaceContainerProjectionListResponse / FlowProjectionListResponse /
+//! (SpaceProjectionListResponse / FlowProjectionListResponse /
 //! MorphProjectionListResponse + row structs).
 //!
 //! Terminal-state visibility filter: each endpoint accepts an optional
@@ -48,6 +48,10 @@ use crate::state::AppState;
 
 pub(super) fn router() -> Router {
     Router::new()
+        .push(Router::with_path("projection/spaces").get(list_space_container_projections))
+        .push(
+            Router::with_path("projection/space-containers").get(list_space_container_projections),
+        )
         .push(
             Router::with_path("projection/space_containers").get(list_space_container_projections),
         )
@@ -74,13 +78,13 @@ fn validate_realm_id(realm_id: String) -> Result<String, AppError> {
 
 // ── Typed response shapes ──────────────────────────────────────────────
 
-/// One row of `SpaceContainerProjectionListResponse.space_containers`. Mirrors
+/// One row of `SpaceProjectionListResponse.spaces`. Mirrors
 /// `reducer::SpaceContainerProjection` but with RFC3339-formatted timestamps and
 /// the state enum flattened to its `&str` form per spec
 /// `common-fields.md §5.1`.
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct SpaceContainerProjectionRow {
-    pub container_space_id: String,
+pub struct SpaceProjectionRow {
+    pub space_id: String,
     pub realm_id: String,
     pub kind: String,
     pub title: String,
@@ -94,9 +98,9 @@ pub struct SpaceContainerProjectionRow {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct SpaceContainerProjectionListResponse {
+pub struct SpaceProjectionListResponse {
     pub realm_id: String,
-    pub space_containers: Vec<SpaceContainerProjectionRow>,
+    pub spaces: Vec<SpaceProjectionRow>,
     pub total: usize,
 }
 
@@ -144,9 +148,9 @@ pub struct MorphProjectionListResponse {
 // ── Handlers ───────────────────────────────────────────────────────────
 
 #[endpoint(
-    operation_id = "cx.extension.soland.projection.space_containers",
+    operation_id = "cx.projection.spaces",
     tags("projection"),
-    summary = "List Space-container lifecycle projection state for a Realm"
+    summary = "List Space lifecycle projection state for a Realm"
 )]
 async fn list_space_container_projections(
     aa: AuthArgs,
@@ -154,7 +158,7 @@ async fn list_space_container_projections(
     req: &mut Request,
     realm_id: QueryParam<String, true>,
     include_terminal: QueryParam<bool, false>,
-) -> JsonResult<SpaceContainerProjectionListResponse> {
+) -> JsonResult<SpaceProjectionListResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req)?;
     let realm_id = validate_realm_id(realm_id.into_inner())?;
@@ -173,13 +177,13 @@ async fn list_space_container_projections(
         )
         .with_status(StatusCode::INTERNAL_SERVER_ERROR)
     })?;
-    let space_containers: Vec<SpaceContainerProjectionRow> = proj
+    let spaces: Vec<SpaceProjectionRow> = proj
         .space_containers
         .values()
         .filter(|p| p.space_id == realm_id)
         .filter(|p| include_terminal || p.state != SpaceContainerLifecycleState::Tombstoned)
-        .map(|p| SpaceContainerProjectionRow {
-            container_space_id: p.container_space_id.clone(),
+        .map(|p| SpaceProjectionRow {
+            space_id: p.container_space_id.clone(),
             realm_id: p.space_id.clone(),
             kind: p.kind.clone(),
             title: p.title.clone(),
@@ -192,16 +196,16 @@ async fn list_space_container_projections(
         })
         .collect();
     drop(proj);
-    let total = space_containers.len();
-    json_ok(SpaceContainerProjectionListResponse {
+    let total = spaces.len();
+    json_ok(SpaceProjectionListResponse {
         realm_id,
-        space_containers,
+        spaces,
         total,
     })
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.projection.flows",
+    operation_id = "cx.projection.flows",
     tags("projection"),
     summary = "List Flow lifecycle projection state for a Realm"
 )]
@@ -256,7 +260,7 @@ async fn list_flow_projections(
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.projection.morphs",
+    operation_id = "cx.projection.morphs",
     tags("projection"),
     summary = "List Morph lifecycle projection state for a Realm"
 )]

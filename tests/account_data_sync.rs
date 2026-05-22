@@ -501,7 +501,7 @@ async fn push_blind_wakeup_rejects_e2ee_stable_identifiers() {
             "push_gateway": "https://push.example",
             "push_key": "opaque",
             "platform": "desktop",
-            "app_id": "clientx"
+            "app_id": "yougen"
         }))
         .send(&app_from_state(state.clone()))
         .await

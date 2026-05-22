@@ -1350,6 +1350,7 @@ const SUPPORTED_OPERATION_SURFACES: &[&str] = &[
     "realtime_media",
     "authz_policy",
     "moderation_reports",
+    "projection_lifecycle",
     "push",
     "mimi_interop",
 ];

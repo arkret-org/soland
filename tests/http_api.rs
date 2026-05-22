@@ -4640,7 +4640,7 @@ async fn push_profile_and_moderation_contracts_work() {
             "push_gateway": "https://push.example",
             "push_key": "opaque",
             "platform": "desktop",
-            "app_id": "clientx"
+            "app_id": "yougen"
         }))
         .send(&app_from_state(state.clone()))
         .await
@@ -5115,7 +5115,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
             "push_gateway": "https://push.example",
             "push_key": "opaque",
             "platform": "desktop",
-            "app_id": "clientx"
+            "app_id": "yougen"
         }))
         .send(&app_from_state(state.clone()))
         .await
@@ -5198,7 +5198,7 @@ async fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify(
             "push_gateway": push_gateway,
             "push_key": "opaque-token",
             "platform": "desktop",
-            "app_id": "clientx"
+            "app_id": "yougen"
         }))
         .send(&service)
         .await
@@ -5272,7 +5272,7 @@ async fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify(
         .json(&serde_json::json!({
             "device_id": device_id,
             "push_key": "opaque-token",
-            "app_id": "clientx"
+            "app_id": "yougen"
         }))
         .send(&service)
         .await
@@ -6725,7 +6725,7 @@ async fn account_data_requires_auth() {
     assert_eq!(resp.status_code.unwrap().as_u16(), 401);
 }
 
-/// `GET /api/v1/projection/space_containers?realm_id=...` returns the
+/// `GET /api/v1/projection/spaces?realm_id=...` returns the
 /// canonical `state` for every board/list Space container in a Realm so a client can
 /// re-hydrate the archived-vs-active split after a refresh. After a
 /// happy archive the projection MUST report `"archived"`; after
@@ -6740,7 +6740,7 @@ async fn projection_space_containers_endpoint_reports_lifecycle_state() {
 
     // ── auth required ──────────────────────────────────────────────────
     let unauth = TestClient::get(format!(
-        "http://server/api/v1/projection/space_containers?realm_id={realm_id}"
+        "http://server/api/v1/projection/spaces?realm_id={realm_id}"
     ))
     .send(&app_from_state(state.clone()))
     .await;
@@ -6797,7 +6797,7 @@ async fn projection_space_containers_endpoint_reports_lifecycle_state() {
 
     // ── projection now reports archived ───────────────────────────────
     let body: Value = TestClient::get(format!(
-        "http://server/api/v1/projection/space_containers?realm_id={realm_id}"
+        "http://server/api/v1/projection/spaces?realm_id={realm_id}"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -6806,10 +6806,10 @@ async fn projection_space_containers_endpoint_reports_lifecycle_state() {
     .await
     .unwrap();
     assert_eq!(body["realm_id"], realm_id);
-    let space_containers = body["space_containers"].as_array().unwrap();
-    let row = space_containers
+    let spaces = body["spaces"].as_array().unwrap();
+    let row = spaces
         .iter()
-        .find(|p| p["container_space_id"] == container_space_id)
+        .find(|p| p["space_id"] == container_space_id)
         .expect("place not in projection response");
     assert_eq!(row["state"], "archived");
     assert_eq!(row["title"], "Hydration target");
@@ -6836,7 +6836,7 @@ async fn projection_space_containers_endpoint_reports_lifecycle_state() {
     );
 
     let body: Value = TestClient::get(format!(
-        "http://server/api/v1/projection/space_containers?realm_id={realm_id}"
+        "http://server/api/v1/projection/spaces?realm_id={realm_id}"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -6844,15 +6844,15 @@ async fn projection_space_containers_endpoint_reports_lifecycle_state() {
     .take_json()
     .await
     .unwrap();
-    let row = body["space_containers"]
+    let row = body["spaces"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|p| p["container_space_id"] == container_space_id)
+        .find(|p| p["space_id"] == container_space_id)
         .expect("place still missing post-restore");
     assert_eq!(row["state"], "active");
 
-    let direct_body: Value = TestClient::get(format!(
+    let legacy_underscore_body: Value = TestClient::get(format!(
         "http://server/api/v1/projection/space_containers?realm_id={realm_id}"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
@@ -6861,8 +6861,20 @@ async fn projection_space_containers_endpoint_reports_lifecycle_state() {
     .take_json()
     .await
     .unwrap();
-    assert_eq!(direct_body["realm_id"], realm_id);
-    assert!(direct_body["space_containers"].as_array().is_some());
+    assert_eq!(legacy_underscore_body["realm_id"], realm_id);
+    assert!(legacy_underscore_body["spaces"].as_array().is_some());
+
+    let legacy_hyphen_body: Value = TestClient::get(format!(
+        "http://server/api/v1/projection/space-containers?realm_id={realm_id}"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    assert_eq!(legacy_hyphen_body["realm_id"], realm_id);
+    assert!(legacy_hyphen_body["spaces"].as_array().is_some());
 }
 
 /// `GET /api/v1/projection/flows?realm_id=...` mirrors the Place
@@ -7406,7 +7418,7 @@ async fn projection_endpoints_hide_terminal_state_by_default() {
 
     // Default Space-container projection — tombstoned Space container is hidden.
     let body: Value = TestClient::get(format!(
-        "http://server/api/v1/projection/space_containers?realm_id={realm_id}"
+        "http://server/api/v1/projection/spaces?realm_id={realm_id}"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -7415,17 +7427,17 @@ async fn projection_endpoints_hide_terminal_state_by_default() {
     .await
     .unwrap();
     assert!(
-        body["space_containers"]
+        body["spaces"]
             .as_array()
             .unwrap()
             .iter()
-            .all(|p| p["container_space_id"] != container_space_id),
+            .all(|p| p["space_id"] != container_space_id),
         "tombstoned Space container MUST be hidden from default projection listing"
     );
 
     // Explicit include_terminal=true — tombstoned Space container is visible.
     let body: Value = TestClient::get(format!(
-        "http://server/api/v1/projection/space_containers?realm_id={realm_id}&include_terminal=true"
+        "http://server/api/v1/projection/spaces?realm_id={realm_id}&include_terminal=true"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -7433,11 +7445,11 @@ async fn projection_endpoints_hide_terminal_state_by_default() {
     .take_json()
     .await
     .unwrap();
-    let row = body["space_containers"]
+    let row = body["spaces"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|p| p["container_space_id"] == container_space_id)
+        .find(|p| p["space_id"] == container_space_id)
         .expect("tombstoned Space container MUST appear when include_terminal=true");
     assert_eq!(row["state"], "tombstoned");
 

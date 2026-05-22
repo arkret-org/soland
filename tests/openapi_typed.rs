@@ -162,13 +162,13 @@ async fn typed_describe_handlers_publish_response_schemas() {
         );
     }
 
-    // Round 15c — projection_query.rs (`GET /api/v1/projection/{space-containers,flows,morphs}`)
+    // Round 15c — projection_query.rs (`GET /api/v1/projection/{spaces,flows,morphs}`)
     // converted from `&mut Response` + `res.render(Json(json!{...}))` to typed
     // `JsonResult<T>` signatures. Each handler's response wrapper +
     // row struct must now appear in the generated YAML.
     for typed_now in [
-        "SpaceContainerProjectionListResponse",
-        "SpaceContainerProjectionRow",
+        "SpaceProjectionListResponse",
+        "SpaceProjectionRow",
         "FlowProjectionListResponse",
         "FlowProjectionRow",
         "MorphProjectionListResponse",
