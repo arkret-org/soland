@@ -45,12 +45,15 @@ use super::{
     realm_id_accessible, realm_visible_to, render_error, sha256_hex, snapshot_bundle_for_space,
     sync_timeline_message_json, truncate_gap_events, typing_ephemeral_for_space, validate_did,
 };
+use crate::ids;
 use crate::reducer::ProjectionState;
 use crate::state::{AppState, PresenceRecord, ProjectionEventRecord, SessionRecord, TypingRecord};
 use crate::wire::{
     AccountDescribeResBody, BackfillResBody, ClientSyncRequest, EventsQueryPostRequest,
     SnapshotHeadResponse,
 };
+
+const TIMELINE_POSITION_SUBTICKS: i64 = 1024;
 
 pub(super) fn router() -> Router {
     Router::new()
@@ -394,7 +397,7 @@ fn timeline_events_for_space(
     let mut timeline_entries = Vec::new();
 
     for message in projection.messages_for_space(space_id) {
-        let position = message.created_at.timestamp_micros();
+        let position = timeline_event_position(state, &message.event_id, message.created_at);
         newest_position = newest_position.max(position);
         if position <= after_position || !seen.insert(message.event_id.clone()) {
             continue;
@@ -418,7 +421,7 @@ fn timeline_events_for_space(
         .list_for_space(space_id, 100)
         .unwrap_or_default()
     {
-        let position = message.created_at.timestamp_micros();
+        let position = timeline_event_position(state, &message.event_id, message.created_at);
         newest_position = newest_position.max(position);
         if position <= after_position || !seen.insert(message.event_id.clone()) {
             continue;
@@ -444,6 +447,31 @@ fn timeline_events_for_space(
             .collect(),
         newest_position,
     )
+}
+
+fn timeline_event_position(state: &AppState, event_id: &str, created_at: DateTime<Utc>) -> i64 {
+    let timestamp = state
+        .persistence
+        .events()
+        .get(event_id)
+        .ok()
+        .flatten()
+        .map(|record| record.received_at)
+        .unwrap_or(created_at);
+    timestamp_position_with_tie_breaker(timestamp, event_id)
+}
+
+fn timestamp_position_with_tie_breaker(timestamp: DateTime<Utc>, event_id: &str) -> i64 {
+    timestamp
+        .timestamp_micros()
+        .saturating_mul(TIMELINE_POSITION_SUBTICKS)
+        .saturating_add(timeline_event_tie_breaker(event_id))
+}
+
+fn timeline_event_tie_breaker(event_id: &str) -> i64 {
+    ids::typed_uuid_part(event_id)
+        .map(|uuid| ((uuid.as_u128() >> 64) & 0x03ff) as i64)
+        .unwrap_or_default()
 }
 
 fn realm_event_visible_to_session_with_projection(
@@ -868,7 +896,7 @@ pub fn resolve_sync_cursor_to_event_id(
     let mut newest_event_id: Option<(i64, String)> = None;
     let projection = state.projection.lock().expect("projection lock");
     for message in projection.messages_for_space(space_id) {
-        let position = message.created_at.timestamp_micros();
+        let position = timeline_event_position(state, &message.event_id, message.created_at);
         if position <= checkpoint {
             match &newest_event_id {
                 Some((existing_pos, _)) if *existing_pos >= position => {}
@@ -883,7 +911,7 @@ pub fn resolve_sync_cursor_to_event_id(
         .list_for_space(space_id, 1000)
         .unwrap_or_default()
     {
-        let position = message.created_at.timestamp_micros();
+        let position = timeline_event_position(state, &message.event_id, message.created_at);
         if position <= checkpoint {
             match &newest_event_id {
                 Some((existing_pos, _)) if *existing_pos >= position => {}
@@ -1878,4 +1906,27 @@ async fn snapshot_chunk(
         "tree_size": tree_size,
         "merkle_root": bundle.tree.root().as_str(),
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn timeline_position_disambiguates_same_second_events() {
+        let created_at = DateTime::parse_from_rfc3339("2026-05-22T16:18:24Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let realm_create = timestamp_position_with_tie_breaker(
+            created_at,
+            "cx:event:019e507b-16b2-719a-84fd-a9319ab43a36",
+        );
+        let welcome_message = timestamp_position_with_tie_breaker(
+            created_at,
+            "cx:event:019e507b-1857-73b7-9579-a00706bf0af4",
+        );
+
+        assert_ne!(realm_create, welcome_message);
+        assert!(welcome_message > realm_create);
+    }
 }

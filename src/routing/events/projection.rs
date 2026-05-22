@@ -751,6 +751,8 @@ pub fn project_accepted_operations(state: &AppState, origin: &str, operations: &
         ensure_projected_space(state, origin, operation);
         if kinds::operation_is_message_create(operation) {
             project_federated_message(state, origin, operation);
+        } else if kinds::canonical_kind_string(operation) == "cx.realm.plaintext_visible_services" {
+            project_plaintext_visible_services_operation(state, operation);
         } else if kinds::operation_is_membership(operation)
             || kinds::operation_is_realm_lifecycle(operation)
         {
@@ -1207,6 +1209,65 @@ pub fn project_membership_operation(state: &AppState, origin: &str, operation: &
     spaces.upsert(entry);
     drop(spaces);
     touch_realm(state, operation.realm_id.as_str());
+}
+
+fn plaintext_services_from_operation(operation: &Operation) -> Vec<String> {
+    let mut services = Vec::new();
+    let mut push_service = |value: &str| {
+        let service = value.trim();
+        if !service.is_empty() && !services.iter().any(|existing| existing == service) {
+            services.push(service.to_owned());
+        }
+    };
+    if let Some(items) = operation
+        .payload
+        .get("plaintext_visible_services")
+        .and_then(|value| value.as_array())
+    {
+        for item in items {
+            if let Some(service) = item.as_str() {
+                push_service(service);
+            }
+        }
+    }
+    if let Some(items) = operation
+        .payload
+        .get("services")
+        .and_then(|value| value.as_array())
+    {
+        for item in items {
+            if let Some(service) = item.as_str() {
+                push_service(service);
+            } else if let Some(service) = item.get("service_did").and_then(|value| value.as_str()) {
+                push_service(service);
+            }
+        }
+    }
+    services
+}
+
+fn project_plaintext_visible_services_operation(state: &AppState, operation: &Operation) {
+    let services = plaintext_services_from_operation(operation);
+    if services.is_empty() {
+        return;
+    }
+    let store = state.persistence.realm_meta();
+    let Ok(Some(mut record)) = store.get(operation.realm_id.as_str()) else {
+        return;
+    };
+    for service in services {
+        if !record
+            .plaintext_visible_services
+            .iter()
+            .any(|existing| existing == &service)
+        {
+            record.plaintext_visible_services.insert(service);
+        }
+    }
+    record.updated_at = operation.created_at;
+    if let Err(error) = store.put(operation.realm_id.as_str(), &record) {
+        tracing::warn!(%error, "failed to project plaintext visible services");
+    }
 }
 
 pub fn project_federated_message(state: &AppState, origin: &str, operation: &Operation) {
