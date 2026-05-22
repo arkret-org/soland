@@ -1102,7 +1102,6 @@ fn hydrate_projections_from_persistence(
         match value {
             "active" => Some(ObjectLifecycleState::Active),
             "archived" => Some(ObjectLifecycleState::Archived),
-            "deleted" => Some(ObjectLifecycleState::Deleted),
             "redacted" => Some(ObjectLifecycleState::Redacted),
             _ => None,
         }

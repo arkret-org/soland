@@ -289,7 +289,11 @@ pub(crate) fn apply_claim_level_partition(
                     claim_kind: contrix_sdk::CotestVerifiedKind::CotestVerified,
                     cotest_run_id: entry.cotest_run_id.clone(),
                     artifact_hash: entry.artifact_hash.clone(),
+                    artifact_ref: entry.artifact_ref.clone(),
+                    cotest_issuer_did: entry.cotest_issuer_did.clone(),
+                    signature: entry.signature.clone(),
                     timestamp: entry.timestamp,
+                    valid_until: entry.valid_until,
                     extra: Default::default(),
                 })
             })

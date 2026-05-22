@@ -46,7 +46,10 @@ pub(super) fn router() -> Router {
         .push(Router::with_path("directory/search-actors").post(search_actors))
         .push(Router::with_path("directory/search-users").post(search_users))
         .push(Router::with_path("directory/resolve-handle").post(resolve_handle))
-        .push(Router::with_path("directory/private-contact-discovery").post(private_contact_discovery))
+        .push(
+            Router::with_path("directory/private-contact-discovery")
+                .post(private_contact_discovery),
+        )
         .push(Router::with_path("directory/announce").post(directory_announce))
         .push(Router::with_path("directory/withdraw").post(directory_withdraw))
         .push(Router::with_path("directory/subscribe").post(directory_subscribe))
@@ -461,7 +464,9 @@ async fn directory_announce(
     }
     let announcement_id = format!(
         "cx:announcement:{}",
-        super::sha256_hex(format!("{}:{}:{}", session.actor, resource_kind, resource_id).as_bytes())
+        super::sha256_hex(
+            format!("{}:{}:{}", session.actor, resource_kind, resource_id).as_bytes()
+        )
     );
     json_ok(json!({
         "ok": true,
@@ -500,7 +505,9 @@ async fn directory_withdraw(
                 .map(|resource_id| {
                     format!(
                         "cx:announcement:{}",
-                        super::sha256_hex(format!("{}:realm:{}", session.actor, resource_id).as_bytes())
+                        super::sha256_hex(
+                            format!("{}:realm:{}", session.actor, resource_id).as_bytes()
+                        )
                     )
                 })
         })

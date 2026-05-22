@@ -368,17 +368,6 @@ pub struct ClientSyncRequest {
     pub set_presence: Option<String>,
 }
 
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct EphemeralSubmitResponse {
-    pub accepted: bool,
-    pub kind: String,
-    pub realm_id: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub dispatched_to: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub server_received_at: Option<DateTime<Utc>>,
-}
-
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct SearchRealmsRequest {
     pub query: Option<String>,

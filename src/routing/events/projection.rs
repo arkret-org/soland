@@ -665,7 +665,6 @@ fn write_through_projection(state: &AppState, operation: &Operation) {
         match s {
             ObjectLifecycleState::Active => "active",
             ObjectLifecycleState::Archived => "archived",
-            ObjectLifecycleState::Deleted => "deleted",
             ObjectLifecycleState::Redacted => "redacted",
         }
     }

@@ -563,7 +563,10 @@ pub(super) async fn identity_submit_did_operation(
         .get("seq")
         .and_then(Value::as_u64)
         .unwrap_or_else(|| existing.as_ref().map_or(1, |record| record.seq + 1));
-    if existing.as_ref().is_some_and(|record| next_seq <= record.seq) {
+    if existing
+        .as_ref()
+        .is_some_and(|record| next_seq <= record.seq)
+    {
         return Err(AppError::new(
             ErrorCode::CasConflict,
             "DID operation seq must advance the current document",
@@ -1247,7 +1250,9 @@ fn ensure_did_document_id(did: &str, document: &mut Value) -> Result<(), AppErro
     };
     match map.get("id").and_then(Value::as_str) {
         Some(value) if value == did => Ok(()),
-        Some(_) => Err(AppError::invalid_param("DID document id does not match did")),
+        Some(_) => Err(AppError::invalid_param(
+            "DID document id does not match did",
+        )),
         None => {
             map.insert("id".to_owned(), Value::String(did.to_owned()));
             Ok(())

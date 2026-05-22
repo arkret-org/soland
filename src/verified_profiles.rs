@@ -15,7 +15,11 @@
 //!           "service_role": "principal_server" | "auth_server" | ...,
 //!           "test_count": <int>,
 //!           "spec_file": "...",
-//!           "artifact_hash": "sha256:<hex>"
+//!           "artifact_hash": "sha256:<hex>",
+//!           "artifact_ref": "file:///.../verified-profiles.json",
+//!           "cotest_issuer_did": "did:...",
+//!           "signature": "<detached signature>",
+//!           "valid_until": "<RFC3339>"
 //!         }
 //!       ]
 //!     }
@@ -81,6 +85,14 @@ struct RawVerifiedEntry {
     spec_file: Option<String>,
     #[serde(default)]
     artifact_hash: Option<String>,
+    #[serde(default)]
+    artifact_ref: Option<String>,
+    #[serde(default)]
+    cotest_issuer_did: Option<String>,
+    #[serde(default)]
+    signature: Option<String>,
+    #[serde(default)]
+    valid_until: Option<DateTime<Utc>>,
 }
 
 /// In-memory representation of a loaded verified-profile entry, owned by
@@ -92,7 +104,11 @@ pub struct VerifiedProfileDescriptor {
     pub service_role: String,
     pub cotest_run_id: String,
     pub artifact_hash: String,
+    pub artifact_ref: String,
+    pub cotest_issuer_did: contrix_sdk::Did,
+    pub signature: String,
     pub timestamp: DateTime<Utc>,
+    pub valid_until: Option<DateTime<Utc>>,
     pub test_count: u64,
     pub spec_file: Option<String>,
 }
@@ -175,23 +191,48 @@ pub fn load_from_path(path: impl AsRef<Path>) -> Vec<VerifiedProfileDescriptor> 
         if role != SOLAND_SERVICE_ROLE {
             continue;
         }
-        let artifact_hash = match entry.artifact_hash {
-            Some(h) if !h.is_empty() => h,
-            _ => {
+        let Some(artifact_hash) = valid_artifact_hash(entry.artifact_hash, &entry.profile_id)
+        else {
+            continue;
+        };
+        let Some(artifact_ref) =
+            required_non_empty(entry.artifact_ref, "artifact_ref", &entry.profile_id)
+        else {
+            continue;
+        };
+        let Some(cotest_issuer_did_raw) = required_non_empty(
+            entry.cotest_issuer_did,
+            "cotest_issuer_did",
+            &entry.profile_id,
+        ) else {
+            continue;
+        };
+        let cotest_issuer_did = match contrix_sdk::Did::new(cotest_issuer_did_raw) {
+            Ok(did) => did,
+            Err(error) => {
                 tracing::warn!(
                     target: "verified_profiles",
                     profile_id = %entry.profile_id,
-                    "dropping verified-profile entry: missing artifact_hash"
+                    %error,
+                    "dropping verified-profile entry: invalid cotest_issuer_did"
                 );
                 continue;
             }
+        };
+        let Some(signature) = required_non_empty(entry.signature, "signature", &entry.profile_id)
+        else {
+            continue;
         };
         out.push(VerifiedProfileDescriptor {
             profile_id: entry.profile_id,
             service_role: role.to_owned(),
             cotest_run_id: run_id.clone(),
             artifact_hash,
+            artifact_ref,
+            cotest_issuer_did,
+            signature,
             timestamp: generated_at,
+            valid_until: entry.valid_until,
             test_count: entry.test_count.unwrap_or(0),
             spec_file: entry.spec_file,
         });
@@ -208,6 +249,39 @@ pub fn load_from_path(path: impl AsRef<Path>) -> Vec<VerifiedProfileDescriptor> 
         "loaded verified-profile entries from artifact"
     );
     out
+}
+
+fn valid_artifact_hash(value: Option<String>, profile_id: &str) -> Option<String> {
+    let hash = required_non_empty(value, "artifact_hash", profile_id)?;
+    if hash.strip_prefix("sha256:").is_some_and(|hex| {
+        hex.len() == 64
+            && hex
+                .bytes()
+                .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+    }) {
+        return Some(hash);
+    }
+    tracing::warn!(
+        target: "verified_profiles",
+        profile_id = %profile_id,
+        "dropping verified-profile entry: artifact_hash must match sha256:<64 lowercase hex>"
+    );
+    None
+}
+
+fn required_non_empty(value: Option<String>, field: &str, profile_id: &str) -> Option<String> {
+    match value {
+        Some(value) if !value.trim().is_empty() => Some(value),
+        _ => {
+            tracing::warn!(
+                target: "verified_profiles",
+                profile_id = %profile_id,
+                field = %field,
+                "dropping verified-profile entry: missing required field"
+            );
+            None
+        }
+    }
 }
 
 #[cfg(test)]
@@ -251,20 +325,27 @@ mod tests {
             "generated_at": "2026-05-20T00:00:00Z",
             "run_id": "test-run",
             "verified": [
-                {
-                    "profile_id": "cx.profile.principal_server.v1",
-                    "service_role": "principal_server",
-                    "test_count": 3,
-                    "spec_file": "cotest/e2e/tests/conformance/profile-gates.spec.ts",
-                    "artifact_hash": "sha256:deadbeef"
-                },
-                {
-                    "profile_id": "cx.profile.auth_server.v1",
-                    "service_role": "auth_server",
-                    "test_count": 1,
-                    "spec_file": "cotest/e2e/tests/sync/service-surface-contract.spec.ts",
-                    "artifact_hash": "sha256:cafebabe"
-                }
+                 {
+                     "profile_id": "cx.profile.principal_server.v1",
+                     "service_role": "principal_server",
+                     "test_count": 3,
+                     "spec_file": "cotest/e2e/tests/conformance/profile-gates.spec.ts",
+                     "artifact_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                     "artifact_ref": "file:///tmp/verified-profiles.json",
+                     "cotest_issuer_did": "did:web:cotest.example",
+                     "signature": "eddsa-jcs-b64url:test-principal-signature",
+                     "valid_until": "2026-06-20T00:00:00Z"
+                 },
+                 {
+                     "profile_id": "cx.profile.auth_server.v1",
+                     "service_role": "auth_server",
+                     "test_count": 1,
+                     "spec_file": "cotest/e2e/tests/sync/service-surface-contract.spec.ts",
+                     "artifact_hash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                     "artifact_ref": "file:///tmp/verified-profiles.json",
+                     "cotest_issuer_did": "did:web:cotest.example",
+                     "signature": "eddsa-jcs-b64url:test-auth-signature"
+                 }
             ]
         }"#;
         f.write_all(payload.as_bytes()).unwrap();
@@ -273,7 +354,17 @@ mod tests {
         assert_eq!(v[0].profile_id, "cx.profile.principal_server.v1");
         assert_eq!(v[0].service_role, "principal_server");
         assert_eq!(v[0].cotest_run_id, "test-run");
-        assert_eq!(v[0].artifact_hash, "sha256:deadbeef");
+        assert_eq!(
+            v[0].artifact_hash,
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+        assert_eq!(v[0].artifact_ref, "file:///tmp/verified-profiles.json");
+        assert_eq!(v[0].cotest_issuer_did.as_str(), "did:web:cotest.example");
+        assert_eq!(v[0].signature, "eddsa-jcs-b64url:test-principal-signature");
+        assert_eq!(
+            v[0].valid_until.unwrap().to_rfc3339(),
+            "2026-06-20T00:00:00+00:00"
+        );
     }
 
     /// Per-test scratch dir — using the OS temp dir directly avoids pulling

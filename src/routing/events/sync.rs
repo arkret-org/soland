@@ -27,8 +27,8 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use bytes::Bytes;
 use chrono::{DateTime, Duration as ChronoDuration, SecondsFormat, Utc};
-use contrix_sdk::RealmId;
 use contrix_sdk::lattice::CellState;
+use contrix_sdk::{EphemeralSubmitResBody, RealmId};
 use ed25519_dalek::Signer as _;
 use futures_util::stream::StreamExt;
 use salvo::http::StatusCode;
@@ -48,8 +48,8 @@ use super::{
 use crate::reducer::ProjectionState;
 use crate::state::{AppState, PresenceRecord, ProjectionEventRecord, SessionRecord, TypingRecord};
 use crate::wire::{
-    AccountDescribeResBody, BackfillResBody, ClientSyncRequest, EphemeralSubmitResponse,
-    EventsQueryPostRequest, SnapshotHeadResponse,
+    AccountDescribeResBody, BackfillResBody, ClientSyncRequest, EventsQueryPostRequest,
+    SnapshotHeadResponse,
 };
 
 pub(super) fn router() -> Router {
@@ -915,30 +915,31 @@ async fn submit_ephemeral(
     body: salvo::oapi::extract::JsonBody<contrix_sdk::EphemeralEnvelope>,
     depot: &mut Depot,
     req: &mut Request,
-) -> crate::result::JsonResult<EphemeralSubmitResponse> {
+) -> crate::result::JsonResult<EphemeralSubmitResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req)?;
     let envelope = body.into_inner();
 
     validate_ephemeral_envelope(&envelope)?;
 
-    let realm_id = envelope.realm_id.to_string();
+    let realm_id = envelope.realm_id.clone();
+    let realm_id_str = realm_id.as_str();
     let actor_id = envelope.actor_id.to_string();
     if actor_id != session.actor {
         return Err(crate::error::AppError::capability_denied(
             "ephemeral actor_id must match the bearer session actor",
         ));
     }
-    if !realm_has_member(state, &realm_id, &session.actor) {
+    if !realm_has_member(state, realm_id_str, &session.actor) {
         return Err(crate::error::AppError::capability_denied(
             "actor is not a joined member of the realm",
         ));
     }
 
     match envelope.kind.as_str() {
-        "cx.typing" => persist_ephemeral_typing(state, &session.actor, &realm_id, &envelope),
+        "cx.typing" => persist_ephemeral_typing(state, &session.actor, realm_id_str, &envelope),
         "cx.presence" => persist_ephemeral_presence(state, &session.actor, &envelope),
-        "cx.receipt.read" => admit_ephemeral_read_receipt(state, &realm_id, &envelope)?,
+        "cx.receipt.read" => admit_ephemeral_read_receipt(state, realm_id_str, &envelope)?,
         "cx.call.signal" => {}
         _ => {
             return Err(crate::error::AppError::invalid_param(
@@ -947,7 +948,7 @@ async fn submit_ephemeral(
         }
     }
 
-    crate::result::json_ok(EphemeralSubmitResponse {
+    crate::result::json_ok(EphemeralSubmitResBody {
         accepted: true,
         kind: envelope.kind,
         realm_id,
@@ -1365,10 +1366,13 @@ fn validate_events_query_order(order: &str) -> Result<(), crate::error::AppError
 }
 
 fn events_query_direction(parts: &EventsQueryParts) -> bool {
-    parts.order == "descending" || (parts.order == "default" && parts.before.is_some() && parts.after.is_none())
+    parts.order == "descending"
+        || (parts.order == "default" && parts.before.is_some() && parts.after.is_none())
 }
 
-fn events_query_cursor_and_stop(parts: &EventsQueryParts) -> (Option<String>, Option<String>, bool) {
+fn events_query_cursor_and_stop(
+    parts: &EventsQueryParts,
+) -> (Option<String>, Option<String>, bool) {
     let backward = events_query_direction(parts);
     let cursor = if backward {
         parts.before.clone().or_else(|| parts.after.clone())
@@ -1659,7 +1663,9 @@ fn durable_events_query_from_parts(
         .take(parts.limit + 1)
         .collect::<Vec<_>>();
     if let Some(stop_cursor) = stop_cursor.as_deref()
-        && let Some(index) = page.iter().position(|record| record.event_id == stop_cursor)
+        && let Some(index) = page
+            .iter()
+            .position(|record| record.event_id == stop_cursor)
     {
         page.truncate(index);
     }

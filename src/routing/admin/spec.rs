@@ -29,13 +29,32 @@ pub(super) fn router() -> Router {
     summary = "Read canonical service-admin status",
     status_codes(200, 401, 403, 500)
 )]
-async fn get_server_status(aa: AuthArgs, depot: &mut Depot, req: &mut Request) -> JsonResult<Value> {
+async fn get_server_status(
+    aa: AuthArgs,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req)?;
     let session = require_admin_principal(state, session)?;
-    let account_count = state.persistence.accounts().list().map(|items| items.len()).ok();
-    let device_count = state.persistence.devices().list().map(|items| items.len()).ok();
-    let realm_count = state.realms.lock().expect("realms lock").search(Default::default()).len();
+    let account_count = state
+        .persistence
+        .accounts()
+        .list()
+        .map(|items| items.len())
+        .ok();
+    let device_count = state
+        .persistence
+        .devices()
+        .list()
+        .map(|items| items.len())
+        .ok();
+    let realm_count = state
+        .realms
+        .lock()
+        .expect("realms lock")
+        .search(Default::default())
+        .len();
     json_ok(json!({
         "status": "ok",
         "service_did": state.config.service_did.clone(),
@@ -75,7 +94,10 @@ async fn update_account_status(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .ok_or_else(|| AppError::invalid_param("status is required"))?;
-    let reason = body.get("reason").and_then(Value::as_str).map(str::to_owned);
+    let reason = body
+        .get("reason")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
     append_audit_log(
         state,
         Some(&session.actor),
@@ -120,17 +142,12 @@ async fn revoke_device(
         .and_then(Value::as_str)
         .map(str::to_owned)
         .or_else(|| {
-            state
-                .persistence
-                .devices()
-                .list()
-                .ok()
-                .and_then(|devices| {
-                    devices
-                        .into_iter()
-                        .find(|record| record.device_id == device_id)
-                        .map(|record| record.actor)
-                })
+            state.persistence.devices().list().ok().and_then(|devices| {
+                devices
+                    .into_iter()
+                    .find(|record| record.device_id == device_id)
+                    .map(|record| record.actor)
+            })
         })
         .ok_or_else(|| AppError::not_found("device not found"))?;
     revoke_device_record(state, &target_actor, &device_id).map_err(AppError::internal)?;

@@ -592,18 +592,14 @@ pub struct AgentProjection {
 }
 
 /// State enum shared by Flow and Morph projections (mirrors SDK
-/// `contrix_sdk::ObjectState`). Unlike `SpaceContainerLifecycleState` which has a
-/// single `Tombstoned` terminal, Flow / Morph distinguish the two terminal
-/// kinds `Deleted` (reached via cx.redaction with a delete intent) from
-/// `Redacted` (content cleared, audit envelope preserved). Per spec §5.1
-/// both are equivalent for state-machine purposes — neither admits any
-/// transition out, so the soland reducer reuses one enum.
+/// `contrix_sdk::ObjectState`). Unlike `SpaceContainerLifecycleState` which has
+/// a single `Tombstoned` terminal, Flow / Morph use `Redacted` as their terminal
+/// state per spec §5.1.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ObjectLifecycleState {
     #[default]
     Active,
     Archived,
-    Deleted,
     Redacted,
 }
 
@@ -612,15 +608,14 @@ impl ObjectLifecycleState {
         match self {
             Self::Active => "active",
             Self::Archived => "archived",
-            Self::Deleted => "deleted",
             Self::Redacted => "redacted",
         }
     }
 
-    /// Terminal state per spec §5.1: `tombstoned / deleted / redacted` are
-    /// equivalent unrecoverable terminals.
+    /// Terminal state per spec §5.1: Flow / Morph use `redacted` as their
+    /// unrecoverable terminal.
     pub fn is_terminal(&self) -> bool {
-        matches!(self, Self::Deleted | Self::Redacted)
+        matches!(self, Self::Redacted)
     }
 }
 

@@ -10,7 +10,7 @@
 //!   endpoint listing Space containers in a Realm scope, with
 //!   `state` ∈ {active, archived, tombstoned} (spec `common-fields.md §5.1`).
 //! - `GET /api/v1/projection/flows?realm_id=...` — same for Flows
-//!   (state ∈ {active, archived, deleted, redacted}).
+//!   (state ∈ {active, archived, redacted}).
 //! - `GET /api/v1/projection/morphs?realm_id=...` — same for Morphs
 //!   (same enum as Flows).
 //!
@@ -18,26 +18,26 @@
 //! piggy-backs on `realm_id_accessible` so a non-member can't probe
 //! Space-container / Flow / Morph lifecycle state via this surface.
 //!
-//! Handlers use typed `JsonResult<T>` signatures so the generated
-//! OpenAPI document carries proper schema components
-//! (SpaceProjectionListResponse / FlowProjectionListResponse /
-//! MorphProjectionListResponse + row structs).
+//! Handlers use the SDK response DTOs so generated OpenAPI stays aligned with
+//! the spec artifact registry.
 //!
 //! Terminal-state visibility filter: each endpoint accepts an optional
 //! `include_terminal=true|false` query parameter. Default is `false`:
 //!   - Space container: tombstoned rows excluded.
-//!   - Flow / Morph: deleted + redacted rows excluded.
-//! Spec rationale: tombstoned / deleted / redacted are unrecoverable
-//! terminals per common-fields.md §5.1; clients hydrating a kanban
-//! view shouldn't see them by default (would be a UX bug to render
-//! "deleted" cards). Explicit `include_terminal=true` returns the full
-//! set for audit / debugging / undelete UIs.
+//!   - Flow / Morph: redacted rows excluded.
+//! Spec rationale: tombstoned / redacted are unrecoverable terminals per
+//! common-fields.md §5.1; clients hydrating a kanban view shouldn't see them by
+//! default. Explicit `include_terminal=true` returns the full set for audit /
+//! debugging UIs.
 
-use contrix_sdk::RealmId;
+use contrix_sdk::{
+    Did, FlowId, MorphId, ProjectionFlowRow, ProjectionFlowsResBody, ProjectionMorphRow,
+    ProjectionMorphsResBody, ProjectionObjectState, ProjectionSpaceRow, ProjectionSpaceState,
+    ProjectionSpacesResBody, RealmId, SpaceId,
+};
 use salvo::http::StatusCode;
 use salvo::oapi::extract::QueryParam;
 use salvo::prelude::*;
-use serde::{Deserialize, Serialize};
 
 use super::realm_id_accessible;
 use crate::error::{AppError, ErrorCode};
@@ -70,73 +70,34 @@ fn validate_realm_id(realm_id: String) -> Result<String, AppError> {
     Ok(realm_id)
 }
 
-// ── Typed response shapes ──────────────────────────────────────────────
-
-/// One row of `SpaceProjectionListResponse.spaces`. Mirrors
-/// `reducer::SpaceContainerProjection` but with RFC3339-formatted timestamps and
-/// the state enum flattened to its `&str` form per spec
-/// `common-fields.md §5.1`.
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct SpaceProjectionRow {
-    pub space_id: String,
-    pub realm_id: String,
-    pub kind: String,
-    pub title: String,
-    pub parent_ref: Option<String>,
-    pub rank: Option<String>,
-    /// One of `active`, `archived`, `tombstoned` per spec.
-    pub state: String,
-    pub created_by: String,
-    pub created_at: String,
-    pub updated_at: Option<String>,
+fn projection_space_state(state: SpaceContainerLifecycleState) -> ProjectionSpaceState {
+    match state {
+        SpaceContainerLifecycleState::Active => ProjectionSpaceState::Active,
+        SpaceContainerLifecycleState::Archived => ProjectionSpaceState::Archived,
+        SpaceContainerLifecycleState::Tombstoned => ProjectionSpaceState::Tombstoned,
+    }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct SpaceProjectionListResponse {
-    pub realm_id: String,
-    pub spaces: Vec<SpaceProjectionRow>,
-    pub total: usize,
+fn projection_object_state(state: ObjectLifecycleState) -> ProjectionObjectState {
+    match state {
+        ObjectLifecycleState::Active => ProjectionObjectState::Active,
+        ObjectLifecycleState::Archived => ProjectionObjectState::Archived,
+        ObjectLifecycleState::Redacted => ProjectionObjectState::Redacted,
+    }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct FlowProjectionRow {
-    pub flow_id: String,
-    pub realm_id: String,
-    pub title: String,
-    pub summary: Option<String>,
-    /// One of `active`, `archived`, `deleted`, `redacted` per spec
-    /// `common-fields.md §5.1` Flow row.
-    pub state: String,
-    pub created_by: String,
-    pub created_at: String,
-    pub updated_at: Option<String>,
+fn parse_projection_id<T>(value: &str, field: &str) -> Result<T, AppError>
+where
+    T: std::str::FromStr,
+    T::Err: std::fmt::Display,
+{
+    value
+        .parse::<T>()
+        .map_err(|_| AppError::internal(format!("invalid {field} in projection state")))
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct FlowProjectionListResponse {
-    pub realm_id: String,
-    pub flows: Vec<FlowProjectionRow>,
-    pub total: usize,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct MorphProjectionRow {
-    pub morph_id: String,
-    pub realm_id: String,
-    pub morph_type: String,
-    pub title: Option<String>,
-    /// Same state enum as Flow per spec.
-    pub state: String,
-    pub created_by: String,
-    pub created_at: String,
-    pub updated_at: Option<String>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct MorphProjectionListResponse {
-    pub realm_id: String,
-    pub morphs: Vec<MorphProjectionRow>,
-    pub total: usize,
+fn total_count(len: usize) -> Result<u64, AppError> {
+    u64::try_from(len).map_err(|_| AppError::internal("projection row count overflow"))
 }
 
 // ── Handlers ───────────────────────────────────────────────────────────
@@ -152,10 +113,12 @@ async fn list_space_container_projections(
     req: &mut Request,
     realm_id: QueryParam<String, true>,
     include_terminal: QueryParam<bool, false>,
-) -> JsonResult<SpaceProjectionListResponse> {
+) -> JsonResult<ProjectionSpacesResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req)?;
     let realm_id = validate_realm_id(realm_id.into_inner())?;
+    let response_realm_id = RealmId::new(realm_id.clone())
+        .map_err(|_| AppError::invalid_param("invalid realm_id format"))?;
     let include_terminal = include_terminal.into_inner().unwrap_or(false);
     if !realm_id_accessible(state, &realm_id, Some(&session)) {
         return Err(AppError::new(
@@ -171,28 +134,31 @@ async fn list_space_container_projections(
         )
         .with_status(StatusCode::INTERNAL_SERVER_ERROR)
     })?;
-    let spaces: Vec<SpaceProjectionRow> = proj
+    let spaces: Vec<ProjectionSpaceRow> = proj
         .space_containers
         .values()
         .filter(|p| p.space_id == realm_id)
         .filter(|p| include_terminal || p.state != SpaceContainerLifecycleState::Tombstoned)
-        .map(|p| SpaceProjectionRow {
-            space_id: p.container_space_id.clone(),
-            realm_id: p.space_id.clone(),
-            kind: p.kind.clone(),
-            title: p.title.clone(),
-            parent_ref: p.parent_ref.clone(),
-            rank: p.rank.clone(),
-            state: p.state.as_str().to_owned(),
-            created_by: p.created_by.clone(),
-            created_at: p.created_at.to_rfc3339(),
-            updated_at: p.updated_at.map(|t| t.to_rfc3339()),
+        .map(|p| {
+            Ok(ProjectionSpaceRow {
+                space_id: parse_projection_id::<SpaceId>(&p.container_space_id, "space_id")?,
+                realm_id: parse_projection_id::<RealmId>(&p.space_id, "realm_id")?,
+                kind: p.kind.clone(),
+                title: p.title.clone(),
+                parent_ref: p.parent_ref.clone(),
+                rank: p.rank.clone(),
+                state: projection_space_state(p.state),
+                created_by: Some(parse_projection_id::<Did>(&p.created_by, "created_by")?),
+                created_at: Some(p.created_at),
+                updated_at: p.updated_at,
+                state_changed_at: p.state_changed_at,
+            })
         })
-        .collect();
+        .collect::<Result<_, AppError>>()?;
     drop(proj);
-    let total = spaces.len();
-    json_ok(SpaceProjectionListResponse {
-        realm_id,
+    let total = total_count(spaces.len())?;
+    json_ok(ProjectionSpacesResBody {
+        realm_id: response_realm_id,
         spaces,
         total,
     })
@@ -209,10 +175,12 @@ async fn list_flow_projections(
     req: &mut Request,
     realm_id: QueryParam<String, true>,
     include_terminal: QueryParam<bool, false>,
-) -> JsonResult<FlowProjectionListResponse> {
+) -> JsonResult<ProjectionFlowsResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req)?;
     let realm_id = validate_realm_id(realm_id.into_inner())?;
+    let response_realm_id = RealmId::new(realm_id.clone())
+        .map_err(|_| AppError::invalid_param("invalid realm_id format"))?;
     let include_terminal = include_terminal.into_inner().unwrap_or(false);
     if !realm_id_accessible(state, &realm_id, Some(&session)) {
         return Err(AppError::new(
@@ -228,26 +196,29 @@ async fn list_flow_projections(
         )
         .with_status(StatusCode::INTERNAL_SERVER_ERROR)
     })?;
-    let flows: Vec<FlowProjectionRow> = proj
+    let flows: Vec<ProjectionFlowRow> = proj
         .flows
         .values()
         .filter(|f| f.space_id == realm_id)
         .filter(|f| include_terminal || !is_object_terminal(f.state))
-        .map(|f| FlowProjectionRow {
-            flow_id: f.flow_id.clone(),
-            realm_id: f.space_id.clone(),
-            title: f.title.clone(),
-            summary: f.summary.clone(),
-            state: f.state.as_str().to_owned(),
-            created_by: f.created_by.clone(),
-            created_at: f.created_at.to_rfc3339(),
-            updated_at: f.updated_at.map(|t| t.to_rfc3339()),
+        .map(|f| {
+            Ok(ProjectionFlowRow {
+                flow_id: parse_projection_id::<FlowId>(&f.flow_id, "flow_id")?,
+                realm_id: parse_projection_id::<RealmId>(&f.space_id, "realm_id")?,
+                state: projection_object_state(f.state),
+                title: Some(f.title.clone()),
+                summary: f.summary.clone(),
+                created_by: Some(parse_projection_id::<Did>(&f.created_by, "created_by")?),
+                created_at: Some(f.created_at),
+                updated_at: f.updated_at,
+                state_changed_at: f.state_changed_at,
+            })
         })
-        .collect();
+        .collect::<Result<_, AppError>>()?;
     drop(proj);
-    let total = flows.len();
-    json_ok(FlowProjectionListResponse {
-        realm_id,
+    let total = total_count(flows.len())?;
+    json_ok(ProjectionFlowsResBody {
+        realm_id: response_realm_id,
         flows,
         total,
     })
@@ -264,10 +235,12 @@ async fn list_morph_projections(
     req: &mut Request,
     realm_id: QueryParam<String, true>,
     include_terminal: QueryParam<bool, false>,
-) -> JsonResult<MorphProjectionListResponse> {
+) -> JsonResult<ProjectionMorphsResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req)?;
     let realm_id = validate_realm_id(realm_id.into_inner())?;
+    let response_realm_id = RealmId::new(realm_id.clone())
+        .map_err(|_| AppError::invalid_param("invalid realm_id format"))?;
     let include_terminal = include_terminal.into_inner().unwrap_or(false);
     if !realm_id_accessible(state, &realm_id, Some(&session)) {
         return Err(AppError::new(
@@ -283,26 +256,29 @@ async fn list_morph_projections(
         )
         .with_status(StatusCode::INTERNAL_SERVER_ERROR)
     })?;
-    let morphs: Vec<MorphProjectionRow> = proj
+    let morphs: Vec<ProjectionMorphRow> = proj
         .morphs
         .values()
         .filter(|m| m.space_id == realm_id)
         .filter(|m| include_terminal || !is_object_terminal(m.state))
-        .map(|m| MorphProjectionRow {
-            morph_id: m.morph_id.clone(),
-            realm_id: m.space_id.clone(),
-            morph_type: m.morph_type.clone(),
-            title: m.title.clone(),
-            state: m.state.as_str().to_owned(),
-            created_by: m.created_by.clone(),
-            created_at: m.created_at.to_rfc3339(),
-            updated_at: m.updated_at.map(|t| t.to_rfc3339()),
+        .map(|m| {
+            Ok(ProjectionMorphRow {
+                morph_id: parse_projection_id::<MorphId>(&m.morph_id, "morph_id")?,
+                realm_id: parse_projection_id::<RealmId>(&m.space_id, "realm_id")?,
+                morph_type: m.morph_type.clone(),
+                state: projection_object_state(m.state),
+                title: m.title.clone(),
+                created_by: Some(parse_projection_id::<Did>(&m.created_by, "created_by")?),
+                created_at: Some(m.created_at),
+                updated_at: m.updated_at,
+                state_changed_at: m.state_changed_at,
+            })
         })
-        .collect();
+        .collect::<Result<_, AppError>>()?;
     drop(proj);
-    let total = morphs.len();
-    json_ok(MorphProjectionListResponse {
-        realm_id,
+    let total = total_count(morphs.len())?;
+    json_ok(ProjectionMorphsResBody {
+        realm_id: response_realm_id,
         morphs,
         total,
     })

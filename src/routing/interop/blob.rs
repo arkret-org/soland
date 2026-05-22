@@ -502,7 +502,9 @@ async fn blob_presign(
 }
 
 fn validate_presign_query(state: &AppState, req: &Request, blob_ref: &str, purpose: &str) -> bool {
-    let Some(expires_at) = query_param(req, "expires_at").and_then(|value| value.parse::<i64>().ok()) else {
+    let Some(expires_at) =
+        query_param(req, "expires_at").and_then(|value| value.parse::<i64>().ok())
+    else {
         return false;
     };
     if expires_at <= now().timestamp() {

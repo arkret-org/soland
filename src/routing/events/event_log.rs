@@ -3029,6 +3029,141 @@ mod proof_strictness_tests {
     }
 
     #[test]
+    fn event_payload_validator_enforces_flow_update_object_patch_schema() {
+        let state = make_state(true);
+        let flow_id = "cx:flow:01904100-0000-7000-8000-f10dc0000001";
+        let valid = json!({
+            "payload": {
+                "flow_id": flow_id,
+                "patch": {
+                    "fields.document": {
+                        "$op": "set",
+                        "value": { "blocks": [] }
+                    }
+                }
+            }
+        });
+        validate_event_schema_and_payload(
+            &state,
+            "cx.flow.update",
+            "cx.schema.event.v1",
+            &valid,
+            valid.as_object().unwrap(),
+        )
+        .expect("canonical cx.flow.update object_patch_payload should validate");
+
+        let legacy_top_level_fields = json!({
+            "payload": {
+                "flow_id": flow_id,
+                "fields": {
+                    "document": { "blocks": [] }
+                }
+            }
+        });
+        let err = validate_event_schema_and_payload(
+            &state,
+            "cx.flow.update",
+            "cx.schema.event.v1",
+            &legacy_top_level_fields,
+            legacy_top_level_fields.as_object().unwrap(),
+        )
+        .expect_err("cx.flow.update without payload.patch must fail object_patch_payload");
+        assert_eq!(err.code, "schema_violation");
+
+        let invalid_patch_op = json!({
+            "payload": {
+                "flow_id": flow_id,
+                "patch": {
+                    "fields.document": {
+                        "$op": "replace",
+                        "value": { "blocks": [] }
+                    }
+                }
+            }
+        });
+        let err = validate_event_schema_and_payload(
+            &state,
+            "cx.flow.update",
+            "cx.schema.event.v1",
+            &invalid_patch_op,
+            invalid_patch_op.as_object().unwrap(),
+        )
+        .expect_err("cx.flow.update patch operations must match cx.patch.v1 exactly");
+        assert_eq!(err.code, "schema_violation");
+    }
+
+    #[test]
+    fn event_payload_validator_catalog_covers_active_standard_durable_events() {
+        let catalog = contrix_sdk::schema::event_payload_validator_catalog();
+        let event_kinds = artifacts::active_durable_event_kinds()
+            .iter()
+            .map(String::as_str)
+            .filter(|kind| contrix_sdk::events::is_standard_event_kind(kind))
+            .collect::<Vec<_>>();
+        let missing = catalog.missing_payload_validators_for(event_kinds.iter().copied());
+        assert!(
+            missing.is_empty(),
+            "missing payload validators: {missing:?}"
+        );
+        assert!(
+            event_kinds.len() > 20,
+            "catalog coverage test should cover the active registry, not a fixture subset"
+        );
+    }
+
+    #[test]
+    fn event_payload_validator_enforces_object_patch_family_schema() {
+        let catalog = contrix_sdk::schema::event_payload_validator_catalog();
+        let object_patch_kinds = [
+            "cx.realm.update",
+            "cx.flow.update",
+            "cx.flow.tracks.update",
+            "cx.morph.update",
+            "cx.profile.update",
+            "cx.profile.space_override",
+        ];
+        let missing = catalog.missing_payload_validators_for(object_patch_kinds);
+        assert!(
+            missing.is_empty(),
+            "missing object_patch validators: {missing:?}"
+        );
+
+        for event_kind in object_patch_kinds {
+            catalog
+                .validate_payload(
+                    event_kind,
+                    &json!({
+                        "patch": {
+                            "title": { "$op": "set", "value": "Roadmap" }
+                        }
+                    }),
+                )
+                .unwrap_or_else(|err| {
+                    panic!("{event_kind} must accept canonical object_patch_payload: {err}");
+                });
+            assert!(
+                catalog
+                    .validate_payload(event_kind, &json!({ "title": "Roadmap" }))
+                    .is_err(),
+                "{event_kind} must reject legacy non-patch update payloads"
+            );
+            assert!(
+                catalog
+                    .validate_payload(
+                        event_kind,
+                        &json!({
+                            "patch": {
+                                "title": { "$op": "replace", "value": "Roadmap" }
+                            }
+                        }),
+                    )
+                    .is_err(),
+                "{event_kind} must reject patch ops outside cx.patch.v1"
+            );
+        }
+    }
+
+    #[test]
     fn realm_create_rejects_world_readable_encrypted_history() {
         let state = make_state(true);
         let realm_id = "cx:realm:01904100-0000-7000-8000-a11ce0000001";

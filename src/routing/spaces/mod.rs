@@ -10,9 +10,8 @@ pub(super) mod space;
 use super::{
     AuthArgs, accept_local_operations, authenticated_session, default_discussion_track,
     device_inventory_to_json, flow_id_from_space_id, handle_for_did, invite_token_space_id,
-    is_space_deleted, normalize_handle, now, space_discoverability, space_resolvable_to,
-    space_has_member, space_search_discoverability, space_search_visible_to, validate_space_id,
-    sha256_hex,
+    is_space_deleted, normalize_handle, now, sha256_hex, space_discoverability, space_has_member,
+    space_resolvable_to, space_search_discoverability, space_search_visible_to, validate_space_id,
 };
 
 pub fn router() -> Router {
