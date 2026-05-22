@@ -241,7 +241,7 @@ async fn post_realm_link(
 
 /// Map a reducer rejection reason code (e.g. `realm_link_cycle`,
 /// `realm_link_self_reference`, `realm_link_kind_invalid`) into a 422
-/// `AppError` whose wire `errcode` matches the spec reason code. We
+/// `AppError` whose wire `error.code` matches the spec reason code. We
 /// override both the HTTP status (422 per task spec) and the wire code
 /// so downstream tests / clients can branch on the canonical string.
 fn reducer_reject_to_app_error(reason: &'static str) -> AppError {

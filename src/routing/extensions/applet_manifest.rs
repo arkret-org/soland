@@ -96,7 +96,7 @@ pub struct VerifiedAppletManifest {
     pub metadata: Value,
 }
 
-/// Verifier errors. Variant names mirror the wire `errcode` strings
+/// Verifier errors. Variant names mirror the wire `error.code` strings
 /// surfaced in the HTTP response so callers can pattern-match without
 /// `Display`-parsing.
 #[derive(Clone, Debug, thiserror::Error, PartialEq, Eq)]

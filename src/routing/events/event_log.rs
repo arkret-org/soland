@@ -2769,7 +2769,7 @@ fn event_visible_to_session(
 ///
 /// Used by future ephemeral `cx.receipt.read` fanout handlers to enforce
 /// the policy: when `disclosure="disabled"`, drop the receipt and return
-/// HTTP 403 with errcode `policy_violation`. When `visibility="private"`,
+/// HTTP 403 with `error.code` `policy_violation`. When `visibility="private"`,
 /// fanout only to the original sender of the referenced event.
 ///
 /// **Note**: this is a linear scan of the durable event store. For the

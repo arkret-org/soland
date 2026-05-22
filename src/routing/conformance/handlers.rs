@@ -16,7 +16,7 @@
 //!   POST /api/v1/conformance/redact    { vector_id, event, redaction, viewer_did }       → { projected_event }
 //!
 //! Reject paths (`vector_id` starts with `reject_`) return HTTP 4xx with
-//! `errcode` in the documented set:
+//! `error.code` in the documented set:
 //!   - `schema_violation` / `invalid_canonical_json` / `invalid_encoding` for /encode
 //!   - `hlc_logical_overflow` for /hlc-merge
 //!
@@ -40,7 +40,7 @@ use crate::{JsonResult, json_ok};
 
 /// Pull `vector_id` from a body — used by every endpoint to detect the
 /// `reject_*` / `logical_overflow` test paths and to surface an explicit
-/// errcode when the field is missing.
+/// code when the field is missing.
 fn vector_id(body: &Value) -> Result<&str, AppError> {
     body.get("vector_id")
         .and_then(Value::as_str)
@@ -49,7 +49,7 @@ fn vector_id(body: &Value) -> Result<&str, AppError> {
 
 /// Errors that mean "the vector_id encodes a deliberate reject path" — used
 /// by `/encode` to map `reject_noncanonical_numbers.v1` /
-/// `reject_malformed_json.v1` style vectors to their documented errcodes.
+/// `reject_malformed_json.v1` style vectors to their documented codes.
 fn encode_reject_for_vector(vector: &str) -> Option<(ErrorCode, &'static str)> {
     if vector.contains("reject_malformed_json") {
         Some((ErrorCode::BadJson, "vector requests malformed-JSON reject"))

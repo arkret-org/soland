@@ -356,7 +356,7 @@ fn delegation_error_to_app_error(err: crate::authz::DelegationError) -> AppError
     // We don't have a canonical `failed_precondition` ErrorCode in the
     // registry; reuse `StateMismatch` as the base (semantically close — a
     // precondition on parent grant state failed) and override the wire
-    // string so the test can assert the spec-canonical errcode.
+    // string so the test can assert the spec-canonical code.
     let state_mismatch = crate::error::ErrorCode::StateMismatch;
     match err {
         DelegationError::ParentNotFound => AppError::not_found("delegated_from grant not found"),

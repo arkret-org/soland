@@ -74,10 +74,10 @@ pub(super) async fn push_register(
                 ),
             ),
             Ok(None) => {
-                return Err(AppError::new(canonical_errcode(code), message).with_status(status));
+                return Err(AppError::new(canonical_error_code(code), message).with_status(status));
             }
             Err((status, code, message)) => {
-                return Err(AppError::new(canonical_errcode(code), message).with_status(status));
+                return Err(AppError::new(canonical_error_code(code), message).with_status(status));
             }
         },
     };
@@ -130,7 +130,7 @@ pub(super) async fn push_register(
 /// `authenticated_session` + `push_register_session_grant_bridge` to a
 /// canonical `ErrorCode`. The lookup is fast and lossless because both call
 /// sites only emit a small closed set.
-fn canonical_errcode(wire: &str) -> crate::error::ErrorCode {
+fn canonical_error_code(wire: &str) -> crate::error::ErrorCode {
     use crate::error::ErrorCode;
     match wire {
         "missing_auth" | "unauthenticated" => ErrorCode::Unauthenticated,

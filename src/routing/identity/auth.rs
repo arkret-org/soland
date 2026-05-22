@@ -536,7 +536,7 @@ pub fn authenticated_session(
         ));
     }
     // GDPR erasure surfaces ahead of device-revocation so callers get the
-    // spec-precise `account_erased` errcode rather than the generic
+    // spec-precise `account_erased` code rather than the generic
     // `unauthenticated`/`device revoked` fallback that erase() triggers
     // as a side effect.
     if state
