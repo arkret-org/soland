@@ -1194,7 +1194,7 @@ async fn events_describe_and_single_event_submit_work() {
     );
 
     let listed: Value =
-        TestClient::get("http://server/api/v1/events?actor_id=did:web:alice.example&limit=10")
+        TestClient::get("http://server/api/v1/events?actors=did:web:alice.example&limit=10")
             .add_header("authorization", format!("Bearer {token}"), true)
             .send(&app_from_state(state.clone()))
             .await
@@ -1635,7 +1635,7 @@ async fn sync_backfill_exposes_prev_cursor_and_limited_timeline_pages() {
     }
 
     let first_page: Value = TestClient::get(format!(
-        "http://server/api/v1/events?realm_id={space_id}&limit=1"
+        "http://server/api/v1/events?realms={space_id}&limit=1"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -1649,7 +1649,7 @@ async fn sync_backfill_exposes_prev_cursor_and_limited_timeline_pages() {
     let next_cursor = first_page["next_cursor"].as_str().unwrap();
 
     let second_page: Value = TestClient::get(format!(
-        "http://server/api/v1/events?realm_id={space_id}&limit=1&after={next_cursor}"
+        "http://server/api/v1/events?realms={space_id}&limit=1&after={next_cursor}"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -1677,7 +1677,7 @@ async fn sync_backfill_exposes_prev_cursor_and_limited_timeline_pages() {
     assert_eq!(gap["production_gap"], "durable_sync_position_validation");
 
     let mut invalid_cursor = TestClient::get(format!(
-        "http://server/api/v1/events?realm_id={space_id}&after=cx:event:01904100-0000-7000-8000-b8ab57920a67"
+        "http://server/api/v1/events?realms={space_id}&after=cx:event:01904100-0000-7000-8000-b8ab57920a67"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -1947,7 +1947,7 @@ async fn mimi_facade_writes_flow_into_canonical_reducer_chain() {
     // verify both the room_binding event and the message event are
     // present.
     let events: Value =
-        TestClient::get(format!("http://server/api/v1/events?realm_id={demo_space}"))
+        TestClient::get(format!("http://server/api/v1/events?realms={demo_space}"))
             .add_header("authorization", format!("Bearer {token}"), true)
             .send(&service)
             .await
@@ -2019,7 +2019,7 @@ async fn mimi_facade_writes_flow_into_canonical_reducer_chain() {
     );
 
     let events_again: Value =
-        TestClient::get(format!("http://server/api/v1/events?realm_id={demo_space}"))
+        TestClient::get(format!("http://server/api/v1/events?realms={demo_space}"))
             .add_header("authorization", format!("Bearer {token}"), true)
             .send(&service)
             .await
@@ -4003,7 +4003,7 @@ async fn broader_protocol_surface_returns_contract_shapes() {
     assert_eq!(resolved["space_preview"]["realm_id"], DEMO_REALM_ID);
 
     let backfill: Value = TestClient::get(
-        "http://server/api/v1/events?realm_id=cx:realm:0196419b-0000-7000-8000-000000000000",
+        "http://server/api/v1/events?realms=cx:realm:0196419b-0000-7000-8000-000000000000",
     )
     .send(&app())
     .await
@@ -7627,7 +7627,7 @@ async fn applet_bridge_emits_synthetic_status_for_session_start() {
     // event for the same session_id. Pull it out of the projection
     // log via the events list endpoint.
     let events: Value = TestClient::get(format!(
-        "http://server/api/v1/events?realm_id={DEMO_REALM_ID}"
+        "http://server/api/v1/events?realms={DEMO_REALM_ID}"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -7765,7 +7765,7 @@ async fn agent_bridge_emits_status_and_result_for_session_start() {
     assert_eq!(resp["status"], "accepted", "submit response: {resp}");
 
     let events: Value = TestClient::get(format!(
-        "http://server/api/v1/events?realm_id={DEMO_REALM_ID}"
+        "http://server/api/v1/events?realms={DEMO_REALM_ID}"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -7895,7 +7895,7 @@ async fn agent_bridge_fails_closed_on_unknown_agent() {
     assert_eq!(resp["status"], "accepted", "submit response: {resp}");
 
     let events: Value = TestClient::get(format!(
-        "http://server/api/v1/events?realm_id={DEMO_REALM_ID}"
+        "http://server/api/v1/events?realms={DEMO_REALM_ID}"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -8052,7 +8052,7 @@ async fn agent_bridge_plumbs_endpoint_url_through_session_envelopes() {
         for _ in 0..50 {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
             let events: Value = TestClient::get(format!(
-                "http://server/api/v1/events?realm_id={DEMO_REALM_ID}"
+                "http://server/api/v1/events?realms={DEMO_REALM_ID}"
             ))
             .add_header("authorization", format!("Bearer {token}"), true)
             .send(&app_from_state(state.clone()))
@@ -8074,7 +8074,7 @@ async fn agent_bridge_plumbs_endpoint_url_through_session_envelopes() {
     };
 
     let events: Value = TestClient::get(format!(
-        "http://server/api/v1/events?realm_id={DEMO_REALM_ID}"
+        "http://server/api/v1/events?realms={DEMO_REALM_ID}"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
