@@ -807,6 +807,7 @@ pub struct OkResBody {
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct ModerationReportReqBody {
+    #[serde(alias = "space_id")]
     pub realm_id: String,
     pub target_ref: String,
     pub reason: String,

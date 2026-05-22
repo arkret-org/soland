@@ -161,7 +161,8 @@ pub async fn hlc_merge(body: JsonBody<Value>) -> JsonResult<Value> {
         return Err(AppError::new(
             ErrorCode::HlcLogicalOverflow,
             "vector requests logical-counter overflow reject",
-        ));
+        )
+        .with_status(StatusCode::UNPROCESSABLE_ENTITY));
     }
     let clocks_value = body
         .get("clocks")
