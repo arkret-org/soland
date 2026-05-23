@@ -3,7 +3,7 @@
 //! Wraps the SDK's `HlcGenerator` to provide a server-wide HLC instance
 //! that can be shared across handlers via `AppState`.
 //!
-//! Format: `<12-hex-physical>-<8-hex-logical>-<8-hex-node>` (30 chars total)
+//! Format: `<12-hex-physical>-<4-hex-logical>-<8-hex-node>` (26 chars total)
 
 use std::sync::{Arc, Mutex};
 
@@ -49,11 +49,11 @@ mod tests {
     fn hlc_generates_valid_format() {
         let hlc = ServerHlc::new("did:web:soland.local");
         let val = hlc.now();
-        assert_eq!(val.len(), 30);
+        assert_eq!(val.len(), 26);
         assert!(val.chars().all(|c| c.is_ascii_hexdigit() || c == '-'));
         // Check dash positions
         assert_eq!(val.as_bytes()[12], b'-');
-        assert_eq!(val.as_bytes()[21], b'-');
+        assert_eq!(val.as_bytes()[17], b'-');
     }
 
     #[test]

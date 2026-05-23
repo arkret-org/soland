@@ -1149,6 +1149,7 @@ async fn events_describe_and_single_event_submit_work() {
             "schema": "cx.schema.flow.v1",
             "realm_id": DEMO_REALM_ID,
             "title": "Onboarding flow",
+            "stage": "draft",
             "tracks": {
                 "discussion": {
                     "is_primary": true,
@@ -1914,7 +1915,9 @@ async fn mimi_facade_writes_flow_into_canonical_reducer_chain() {
     .json(&serde_json::json!({
         "source_format": "text/plain;charset=utf-8",
         "content": {
-            "blocks": [{"kind": "cx.content.text", "text": "hello from MIMI P4"}],
+            "kind": "cx.content.composite",
+            "body": "hello from MIMI P4",
+            "parts": [{"kind": "cx.content.text", "body": "hello from MIMI P4"}],
         },
         "sender_did": "did:web:remote.example",
         "mimi_message_id": "mimi-msg-p4-001",
@@ -1973,7 +1976,7 @@ async fn mimi_facade_writes_flow_into_canonical_reducer_chain() {
     assert_eq!(message_event["event_kind"], "cx.message.create");
     assert_eq!(message_event["sender"], "did:web:remote.example");
     assert_eq!(
-        message_event["payload"]["content"]["blocks"][0]["text"],
+        message_event["payload"]["content"]["parts"][0]["body"],
         "hello from MIMI P4"
     );
     // mimi_provenance metadata MUST be preserved.
@@ -2065,7 +2068,11 @@ async fn mimi_facade_writes_flow_into_canonical_reducer_chain() {
     ))
     .json(&serde_json::json!({
         "source_format": "application/mimi-content",
-        "content": {"blocks": [{"kind": "cx.content.text", "text": "second message"}]},
+        "content": {
+            "kind": "cx.content.composite",
+            "body": "second message",
+            "parts": [{"kind": "cx.content.text", "body": "second message"}]
+        },
         "protocol_draft": "draft-ietf-mimi-protocol-06",
     }))
     .send(&service)
@@ -2660,7 +2667,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
     let anonymous_sync_after_listed =
         account_subscribe_frame(state.clone(), None, "catchup=true").await;
     assert!(
-        !anonymous_sync_after_listed["realms"]["join"]
+        !anonymous_sync_after_listed["realms"]
             .as_object()
             .unwrap()
             .contains_key(&listed_space_id)
@@ -2765,7 +2772,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
 
     let bob_private_sync = account_subscribe_frame(state.clone(), Some(&bob), "catchup=true").await;
     assert!(
-        !bob_private_sync["realms"]["join"]
+        !bob_private_sync["realms"]
             .as_object()
             .unwrap()
             .contains_key(&space_id)
@@ -2809,7 +2816,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         "did:web:alice.example",
         &space_id,
         "cx:flow:workflow",
-        serde_json::json!({"blocks": [{"kind": "image"}]}),
+        serde_json::json!({"kind": "cx.content.composite", "body": "invalid", "parts": [{"kind": "cx.content.image", "body": "image"}]}),
         false,
     )
     .await;
@@ -2821,7 +2828,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         "did:web:alice.example",
         &space_id,
         "cx:flow:workflow",
-        serde_json::json!({"blocks": [{"kind": "location", "latitude": 31.2304, "longitude": 121.4737}]}),
+        serde_json::json!({"kind": "cx.content.location", "body": "location", "latitude": 31.2304, "longitude": 121.4737}),
         false,
     )
     .await;
@@ -2846,13 +2853,13 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         &space_id,
         "cx:flow:workflow",
         serde_json::json!({
-            "kind": "cx.content.text",
+            "kind": "cx.content.composite",
             "body": "structured hello",
             "mentions": [
                 "did:web:bob.example",
                 {"type": "flow", "flow_id": "cx:flow:01904100-0000-7000-8000-170d4f3bfc7b"}
             ],
-            "blocks": [
+            "parts": [
                 {"kind": "cx.content.text", "body": "structured hello"},
                 {"kind": "cx.content.location", "body": "location", "latitude": 312304000, "longitude": 1214737000},
                 {"kind": "cx.content.poll", "body": "ship?", "question": "ship?", "options": ["yes", "no"]}
@@ -2940,26 +2947,20 @@ async fn account_contacts_and_space_lifecycle_workflow() {
     assert!(cursor["x"].as_i64().unwrap() > cursor["_ctx"]["issued_at_ms"].as_i64().unwrap());
     assert!(cursor["_positions"]["spaces"][&space_id].as_i64().unwrap() > 0);
     assert_eq!(
-        sync_with_message["realms"]["join"][&space_id]["timeline"]["events"][0]["event_id"],
+        sync_with_message["realms"][&space_id]["timeline"]["events"][0]["event_id"],
         sent_message["event_id"]
     );
     assert_eq!(
-        sync_with_message["realms"]["join"][&space_id]["timeline"]["events"][0]["flow_id"],
+        sync_with_message["realms"][&space_id]["timeline"]["events"][0]["flow_id"],
         expected_flow_id_for_scope(&space_id)
     );
-    // Legacy top-level `branch` object was removed in revision 0a5ab85
-    // (forbidden-wire-fields entry "branch"); the `track` projection is
-    // the v1 replacement.
+    // Message v1 exposes the timeline track as the const string `discussion`.
     assert_eq!(
-        sync_with_message["realms"]["join"][&space_id]["timeline"]["events"][0]["track"]["track_id"],
-        "cx:flow:workflow"
-    );
-    assert_eq!(
-        sync_with_message["realms"]["join"][&space_id]["timeline"]["events"][0]["track"]["track_kind"],
+        sync_with_message["realms"][&space_id]["timeline"]["events"][0]["track"],
         "discussion"
     );
     assert_eq!(
-        sync_with_message["realms"]["join"][&space_id]["summary"]["flow"]["schema"],
+        sync_with_message["realms"][&space_id]["summary"]["flow"]["schema"],
         "cx.schema.flow.v1"
     );
 
@@ -2973,7 +2974,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
     )
     .await;
     assert!(
-        incremental_noop["realms"]["join"][&space_id]["timeline"]["events"]
+        incremental_noop["realms"][&space_id]["timeline"]["events"]
             .as_array()
             .unwrap()
             .is_empty()
@@ -2999,10 +3000,9 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         ),
     )
     .await;
-    let incremental_events =
-        incremental_after_message["realms"]["join"][&space_id]["timeline"]["events"]
-            .as_array()
-            .unwrap();
+    let incremental_events = incremental_after_message["realms"][&space_id]["timeline"]["events"]
+        .as_array()
+        .unwrap();
     assert_eq!(incremental_events.len(), 1);
     assert_eq!(
         incremental_events[0]["event_id"],
@@ -3065,7 +3065,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
 
     let waited_sync = account_subscribe_frame(state.clone(), Some(&alice), "catchup=true").await;
     assert_eq!(
-        waited_sync["realms"]["join"][&space_id]["timeline"]["events"][0]["event_id"],
+        waited_sync["realms"][&space_id]["timeline"]["events"][0]["event_id"],
         sent_message["event_id"]
     );
 
@@ -3175,12 +3175,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
     assert!(index["results"].as_array().unwrap().is_empty());
 
     let sync = account_subscribe_frame(state.clone(), None, "catchup=true").await;
-    assert!(
-        !sync["realms"]["join"]
-            .as_object()
-            .unwrap()
-            .contains_key(&space_id)
-    );
+    assert!(!sync["realms"].as_object().unwrap().contains_key(&space_id));
 
     let audit_events: Value = TestClient::get("http://server/api/v1/audit/events?limit=20")
         .add_header("authorization", format!("Bearer {alice}"), true)
@@ -3757,7 +3752,7 @@ async fn sync_directory_and_index_share_demo_space() {
     )
     .await;
     assert!(
-        sync["realms"]["join"]
+        sync["realms"]
             .as_object()
             .unwrap()
             .contains_key("cx:realm:0196419b-0000-7000-8000-000000000000")
@@ -6077,6 +6072,8 @@ fn normalize_flow_payload(kind: &str, payload: &mut Value) {
             });
             flow.entry("created_at".to_owned())
                 .or_insert_with(|| Value::String("2026-05-17T00:00:00Z".to_owned()));
+            flow.entry("stage".to_owned())
+                .or_insert_with(|| Value::String("draft".to_owned()));
             flow.entry("tracks".to_owned()).or_insert_with(|| {
                 serde_json::json!({
                     "discussion": {
@@ -6149,6 +6146,9 @@ fn normalize_morph_payload(kind: &str, payload: &mut Value) {
             morph
                 .entry("created_at".to_owned())
                 .or_insert_with(|| Value::String("2026-05-17T00:00:00Z".to_owned()));
+            morph
+                .entry("stage".to_owned())
+                .or_insert_with(|| Value::String("draft".to_owned()));
             morph
                 .entry("schema_refs".to_owned())
                 .or_insert_with(|| serde_json::json!(["cx.schema.morph.v1"]));

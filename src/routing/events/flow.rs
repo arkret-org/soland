@@ -1,9 +1,8 @@
 //! Flow ID derivation + discussion-track projection helpers.
 //!
 //! Flow IDs are derived from Realm/Space IDs via typed-id → `cx:flow:` re-tagging
-//! (sha256 fallback for unrecognised prefixes). The discussion-track
-//! projection wraps the same flow_id with a default `discussion` shape for
-//! account sync and admin snapshots.
+//! (sha256 fallback for unrecognised prefixes). v1 Message payloads expose the
+//! discussion track as the const string `discussion`.
 //!
 //! All fns are `pub` because sync/projection writers consume them.
 //! This is a derivation layer the server fakes for clients that already
@@ -37,15 +36,8 @@ pub fn message_id_from_event_id(event_id: &str) -> String {
         .unwrap_or_else(|| format!("cx:message:{event_id}"))
 }
 
-pub fn default_discussion_track(flow_id: &str, track_id: &str) -> serde_json::Value {
-    json!({
-        "track_id": track_id,
-        "track_kind": "discussion",
-        "flow_id": flow_id,
-        "enabled": true,
-        "history_visibility": "joined",
-        "visibility": "joined",
-    })
+pub fn default_discussion_track(_flow_id: &str, _track_id: &str) -> serde_json::Value {
+    json!("discussion")
 }
 
 pub fn flow_id_for_projection_event(event: &ProjectionEventRecord) -> Option<String> {

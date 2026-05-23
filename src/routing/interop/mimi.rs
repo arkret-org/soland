@@ -283,7 +283,8 @@ async fn mimi_room_message(
         // MIMI text/plain fallback so a minimal body still
         // renders something in the Contrix timeline.
         json!({
-            "blocks": [{"kind": "cx.content.text", "text": ""}],
+            "kind": "cx.content.text",
+            "body": "",
             "raw_mimi_source_format": source_format,
         })
     });

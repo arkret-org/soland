@@ -1045,19 +1045,10 @@ pub fn validate_device_message_payload(content: &serde_json::Value) -> Result<()
 }
 
 pub fn validate_content_blocks(content: &serde_json::Value) -> Result<(), &'static str> {
-    let Some(blocks) = content.get("blocks") else {
-        return Ok(());
-    };
-    let Some(blocks) = blocks.as_array() else {
-        return Err("content.blocks must be an array");
-    };
-    if blocks.is_empty() {
-        return Err("content.blocks must not be empty");
+    if content.get("blocks").is_some() {
+        return Err("content.blocks is not permitted; use content.parts");
     }
-    for block in blocks {
-        validate_content_block(block)?;
-    }
-    Ok(())
+    validate_content_block(content)
 }
 
 pub fn validate_mentions(content: &serde_json::Value) -> Result<(), &'static str> {
@@ -1222,8 +1213,22 @@ pub fn validate_content_block(block: &serde_json::Value) -> Result<(), &'static 
     let Some(block_kind) = block.get("kind").and_then(|value| value.as_str()) else {
         return Err("content block requires kind");
     };
+    if block.get("blocks").is_some() {
+        return Err("content.blocks is not permitted; use content.parts");
+    }
     let block_kind = block_kind.strip_prefix("cx.content.").unwrap_or(block_kind);
     match block_kind {
+        "composite" => {
+            let Some(parts) = block.get("parts").and_then(|value| value.as_array()) else {
+                return Err("composite content block requires parts");
+            };
+            if parts.is_empty() {
+                return Err("content.parts must not be empty");
+            }
+            for part in parts {
+                validate_content_block(part)?;
+            }
+        }
         "text" | "formatted_text" => {
             if !block
                 .get("text")

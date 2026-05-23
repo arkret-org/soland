@@ -213,16 +213,7 @@ fn account_delta_frame(response: contrix_sdk::model::SyncResBody) -> Value {
     json!({
         "kind": "delta",
         "cursor": response.cursor,
-        "realms": {
-            "join": response.spaces,
-            "invite": {},
-            "knock": {},
-            "leave": response
-                .left_spaces
-                .into_iter()
-                .map(|id| (id, json!({})))
-                .collect::<BTreeMap<_, _>>(),
-        },
+        "realms": response.spaces,
         "to_device": {"events": response.to_device},
         "device_lists": response.device_lists,
         "account_data": {"events": response.account_data},

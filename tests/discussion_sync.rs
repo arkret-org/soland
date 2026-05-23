@@ -257,7 +257,7 @@ fn event_canonical_digest(event: &Value) -> String {
 }
 
 fn sync_bodies(sync: &Value, space_id: &str) -> Vec<String> {
-    sync["realms"]["join"][space_id]["timeline"]["events"]
+    sync["realms"][space_id]["timeline"]["events"]
         .as_array()
         .unwrap()
         .iter()

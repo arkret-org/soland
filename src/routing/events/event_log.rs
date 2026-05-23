@@ -3227,7 +3227,7 @@ mod proof_strictness_tests {
             object,
         )
         .expect_err("encrypted world-readable Realm history must fail closed");
-        assert_eq!(err.code, "incompatible_history_with_encryption");
+        assert_eq!(err.code, "schema_violation");
     }
 
     #[test]

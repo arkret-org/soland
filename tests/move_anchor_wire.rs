@@ -117,7 +117,7 @@ fn build_invited_to_join_move() -> Move {
         }],
         "anchor_ref": format!("cx:anchor:sha256:{}", "aa".repeat(32)),
         "refs": [],
-        "hlc": "0189c4d2af00-00000000-aabbccdd"
+        "hlc": "0189c4d2af00-0000-aabbccdd"
     });
     let body_bytes = canonical::canonical_json_bytes(&body).unwrap();
     let payload_hash = canonical::sha256_digest(&body_bytes);
@@ -164,7 +164,7 @@ fn build_genesis_anchor(frontier: MoveId, state_root: Hash) -> Anchor {
         frontier: vec![frontier],
         state_root,
         anchorer_sig: AnchorerSig::Single(sig),
-        hlc: Hlc::new("0189c4d2af00-00000000-aabbccdd".to_owned()).unwrap(),
+        hlc: Hlc::new("0189c4d2af00-0000-aabbccdd".to_owned()).unwrap(),
         kind: contrix_sdk::AnchorKind::Normal,
     };
     a.id = a.derive_id().unwrap();
@@ -379,7 +379,7 @@ fn build_consent_grant_add_move() -> Move {
         }],
         "anchor_ref": format!("cx:anchor:sha256:{}", "bb".repeat(32)),
         "refs": [],
-        "hlc": "0189c4d2af00-00000000-aabbccee"
+        "hlc": "0189c4d2af00-0000-aabbccee"
     });
     let body_bytes = canonical::canonical_json_bytes(&body).unwrap();
     let payload_hash = canonical::sha256_digest(&body_bytes);
@@ -520,7 +520,7 @@ fn event_envelope(event_id: &str, actor: &str, space_id: &str, payload: Value) -
         "actor_seq": 1,
         "space_id": space_id,
         "created_at": "2026-05-02T00:00:00Z",
-        "hlc": "01970e589d21-00000001-a13f9c2e",
+        "hlc": "01970e589d21-0001-a13f9c2e",
         "payload": payload,
         "prev_refs": [],
         "refs": [],
@@ -667,7 +667,7 @@ async fn events_subscribe_streams_live_event_then_closes_at_deadline() {
 /// path since we want to test the replay-window gate independently of
 /// the crypto verifier.
 fn build_member_state_move_with_hlc(physical_ms: u64) -> Move {
-    let hlc_str = format!("{physical_ms:012x}-00000000-aabbccdd");
+    let hlc_str = format!("{physical_ms:012x}-0000-aabbccdd");
     let body = json!({
         "issuer": "did:web:admin.example",
         "space_id": space_id().as_str(),

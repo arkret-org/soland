@@ -5259,7 +5259,7 @@ mod tests {
                 "event_id": "cx:event:01904100-0000-7000-8000-caaa6a15bce1",
                 "sender": "did:web:alice",
                 "thread_id": "cx:flow:1",
-                "content": {"body": "hello"}
+                "content": {"kind": "cx.content.text", "body": "hello"}
             }),
         );
         let effect = state.apply(&op, &hlc);
@@ -5286,7 +5286,7 @@ mod tests {
                     "event_id": "cx:event:01904100-0000-7000-8000-caaa6a15bce1",
                     "sender": "did:web:alice",
                     "thread_id": "cx:flow:1",
-                    "content": {"body": "hello"}
+                    "content": {"kind": "cx.content.text", "body": "hello"}
                 }),
             ),
             &hlc,
@@ -5342,7 +5342,7 @@ mod tests {
                     "event_id": event_id,
                     "sender": "did:web:alice",
                     "thread_id": "cx:flow:1",
-                    "content": {"body": "hello"}
+                    "content": {"kind": "cx.content.text", "body": "hello"}
                 }),
             ),
             hlc,
@@ -5586,7 +5586,7 @@ mod tests {
                     "event_id": "cx:event:01904100-0000-7000-8000-caaa6a15bce1",
                     "sender": "did:web:alice",
                     "thread_id": "cx:flow:1",
-                    "content": {"body": "original"}
+                    "content": {"kind": "cx.content.text", "body": "original"}
                 }),
             ),
             &hlc,
@@ -5599,7 +5599,7 @@ mod tests {
                 serde_json::json!({
                     "target_event_id": "cx:event:01904100-0000-7000-8000-caaa6a15bce1",
                     "new_event_id": "cx:event:01904100-0000-7000-8000-c4daaba541fc",
-                    "content": {"body": "revised"}
+                    "content": {"kind": "cx.content.text", "body": "revised"}
                 }),
             ),
             &hlc,

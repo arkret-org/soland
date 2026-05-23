@@ -1434,13 +1434,13 @@ mod operation_conformance_tests {
             OperationVector {
                 name: "message create",
                 kind: kinds::CX_MESSAGE_CREATE,
-                payload: json!({"event_id": "cx:event:01904100-0000-7000-8000-79a90338768b", "sender": "did:web:alice.example", "content": {"body": "hello"}}),
+                payload: json!({"event_id": "cx:event:01904100-0000-7000-8000-79a90338768b", "sender": "did:web:alice.example", "content": {"kind": "cx.content.text", "body": "hello"}}),
                 valid: true,
             },
             OperationVector {
                 name: "message revise",
                 kind: kinds::CX_MESSAGE_REVISE,
-                payload: json!({"target_event_id": "cx:event:01904100-0000-7000-8000-79a90338768b", "content": {"body": "edited"}}),
+                payload: json!({"target_event_id": "cx:event:01904100-0000-7000-8000-79a90338768b", "content": {"kind": "cx.content.text", "body": "edited"}}),
                 valid: true,
             },
             OperationVector {
