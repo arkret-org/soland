@@ -1762,22 +1762,34 @@ pub struct RemoveReactionRequest {
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct SetReadMarkerRequest {
-    #[serde(default)]
-    pub space_id: Option<String>,
-    #[serde(default)]
-    pub realm_id: Option<String>,
+    pub realm_id: String,
+    pub read_scope: ReadScopeWire,
+    pub position: ReadCursorPositionWire,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, salvo::oapi::ToSchema)]
+pub struct ReadScopeWire {
+    pub kind: String,
+    #[serde(rename = "ref", skip_serializing_if = "Option::is_none")]
+    pub object_ref: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub track: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, salvo::oapi::ToSchema)]
+pub struct ReadCursorPositionWire {
     pub event_id: String,
-    pub scope_id: Option<String>,
+    pub hlc: String,
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct ReadMarkerResponse {
     pub realm_id: String,
-    pub space_id: String,
-    pub actor: String,
-    pub scope_id: String,
-    pub event_id: String,
-    pub read_at: String,
+    pub actor_id: String,
+    pub device_id: String,
+    pub read_scope: ReadScopeWire,
+    pub position: ReadCursorPositionWire,
+    pub updated_at: String,
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]

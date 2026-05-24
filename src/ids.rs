@@ -59,6 +59,10 @@ pub fn generate_report_id() -> String {
     generate("report")
 }
 
+pub fn generate_read_cursor_id() -> String {
+    generate("read_cursor")
+}
+
 /// Notification id helper. Spec uses `cx:notification:` (id-kind-registry), not
 /// `cx:notification:`. Callers haven't landed yet but the helper is the
 /// spec-correct shape.

@@ -38,6 +38,7 @@ use contrix_sdk::{CellRef, Operation, SpaceId};
 use serde_json::Value;
 
 use crate::hlc::ServerHlc;
+use crate::wire::{ReadCursorPositionWire, ReadScopeWire};
 
 /// In-memory projection state produced by the reducer.
 #[derive(Clone, Debug, Default)]
@@ -690,11 +691,21 @@ pub struct ReactionState {
 
 #[derive(Clone, Debug)]
 pub struct ReadMarkerState {
-    pub actor: String,
-    pub space_id: String,
-    pub scope_id: String,
-    pub event_id: String,
-    pub read_at: chrono::DateTime<chrono::Utc>,
+    pub actor_id: String,
+    pub device_id: String,
+    pub realm_id: String,
+    pub read_scope: ReadScopeWire,
+    pub position: ReadCursorPositionWire,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+fn read_scope_key(scope: &ReadScopeWire) -> String {
+    format!(
+        "{}\u{1f}{}\u{1f}{}",
+        scope.kind.as_str(),
+        scope.object_ref.as_deref().unwrap_or(""),
+        scope.track.as_deref().unwrap_or("")
+    )
 }
 
 #[derive(Clone, Debug)]
@@ -2346,45 +2357,65 @@ impl ProjectionState {
         operation: &Operation,
         now: chrono::DateTime<chrono::Utc>,
     ) -> ProjectionEffect {
-        let actor = operation
+        let actor_id = operation
             .payload
-            .get("actor")
-            .or_else(|| operation.payload.get("sender"))
+            .get("actor_id")
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_owned();
-        let space_id = operation.realm_id.to_string();
-        let scope_id = operation
+        let device_id = operation
             .payload
-            .get("scope_id")
-            .or_else(|| operation.payload.get("thread_id"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("_default")
-            .to_owned();
-        let event_id = operation
-            .payload
-            .get("event_id")
+            .get("device_id")
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_owned();
+        let realm_id = operation
+            .payload
+            .get("realm_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or(operation.realm_id.as_str())
+            .to_owned();
+        let Some(read_scope) = operation
+            .payload
+            .get("read_scope")
+            .cloned()
+            .and_then(|value| serde_json::from_value::<ReadScopeWire>(value).ok())
+        else {
+            return ProjectionEffect::Ignored;
+        };
+        if matches!(
+            read_scope.kind.as_str(),
+            "flow_discussion" | "flow_synthesis"
+        ) {
+            return ProjectionEffect::Ignored;
+        }
+        let Some(position) = operation
+            .payload
+            .get("position")
+            .cloned()
+            .and_then(|value| serde_json::from_value::<ReadCursorPositionWire>(value).ok())
+        else {
+            return ProjectionEffect::Ignored;
+        };
 
-        if actor.is_empty() {
+        if actor_id.is_empty() {
             return ProjectionEffect::Ignored;
         }
 
         let marker = ReadMarkerState {
-            actor: actor.clone(),
-            space_id: space_id.clone(),
-            scope_id: scope_id.clone(),
-            event_id,
-            read_at: now,
+            actor_id: actor_id.clone(),
+            device_id,
+            realm_id: realm_id.clone(),
+            read_scope: read_scope.clone(),
+            position,
+            updated_at: now,
         };
-        let key = (space_id, actor, scope_id);
+        let key = (realm_id, actor_id, read_scope_key(&read_scope));
         // LWW: only update if newer
         let dominated = self
             .read_cursors
             .get(&key)
-            .is_some_and(|existing| existing.read_at >= marker.read_at);
+            .is_some_and(|existing| existing.updated_at >= marker.updated_at);
         if !dominated {
             self.read_cursors.insert(key, marker.clone());
         }

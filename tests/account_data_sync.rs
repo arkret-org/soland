@@ -381,8 +381,15 @@ async fn read_cursor_fans_out_per_realm_without_cross_actor_leakage() {
         .add_header("authorization", format!("Bearer {alice_desktop}"), true)
         .json(&json!({
             "realm_id": realm_a,
-            "event_id": event_a,
-            "scope_id": "timeline"
+            "read_scope": {
+                "kind": "flow",
+                "ref": format!("cx:flow:{}", realm_a.trim_start_matches("cx:realm:")),
+                "track": "discussion"
+            },
+            "position": {
+                "event_id": event_a,
+                "hlc": "019041000000-0001-a11ce001"
+            }
         }))
         .send(&app_from_state(state.clone()))
         .await
@@ -394,7 +401,7 @@ async fn read_cursor_fans_out_per_realm_without_cross_actor_leakage() {
         "marker_a response: {marker_a}"
     );
     assert_eq!(
-        marker_a["space_id"], realm_a,
+        marker_a["read_scope"]["track"], "discussion",
         "marker_a response: {marker_a}"
     );
 
@@ -402,8 +409,15 @@ async fn read_cursor_fans_out_per_realm_without_cross_actor_leakage() {
         .add_header("authorization", format!("Bearer {alice_desktop}"), true)
         .json(&json!({
             "realm_id": realm_b,
-            "event_id": event_b,
-            "scope_id": "timeline"
+            "read_scope": {
+                "kind": "flow",
+                "ref": format!("cx:flow:{}", realm_b.trim_start_matches("cx:realm:")),
+                "track": "discussion"
+            },
+            "position": {
+                "event_id": event_b,
+                "hlc": "019041000000-0001-a11ce002"
+            }
         }))
         .send(&app_from_state(state.clone()))
         .await
@@ -426,11 +440,11 @@ async fn read_cursor_fans_out_per_realm_without_cross_actor_leakage() {
     .unwrap();
     let markers_a = only_a["markers"].as_array().unwrap();
     assert_eq!(markers_a.len(), 1);
-    assert_eq!(markers_a[0]["event_id"], event_a);
+    assert_eq!(markers_a[0]["position"]["event_id"], event_a);
     assert_eq!(markers_a[0]["realm_id"], realm_a);
 
     let only_b: Value = TestClient::get(format!(
-        "http://server/api/v1/read-cursors?space_id={realm_b}"
+        "http://server/api/v1/read-cursors?realm_id={realm_b}"
     ))
     .add_header("authorization", format!("Bearer {alice_desktop}"), true)
     .send(&app_from_state(state.clone()))
@@ -440,7 +454,7 @@ async fn read_cursor_fans_out_per_realm_without_cross_actor_leakage() {
     .unwrap();
     let markers_b = only_b["markers"].as_array().unwrap();
     assert_eq!(markers_b.len(), 1);
-    assert_eq!(markers_b[0]["event_id"], event_b);
+    assert_eq!(markers_b[0]["position"]["event_id"], event_b);
     assert_eq!(markers_b[0]["realm_id"], realm_b);
 
     let phone_messages: Value = TestClient::get("http://server/api/v1/device_messages")
@@ -459,11 +473,11 @@ async fn read_cursor_fans_out_per_realm_without_cross_actor_leakage() {
     assert_eq!(read_cursor_fanouts.len(), 2);
     assert!(read_cursor_fanouts.iter().any(|event| {
         event["content"]["content"]["realm_id"] == realm_a
-            && event["content"]["content"]["event_id"] == event_a
+            && event["content"]["content"]["position"]["event_id"] == event_a
     }));
     assert!(read_cursor_fanouts.iter().any(|event| {
         event["content"]["content"]["realm_id"] == realm_b
-            && event["content"]["content"]["event_id"] == event_b
+            && event["content"]["content"]["position"]["event_id"] == event_b
     }));
 
     let bob_markers: Value = TestClient::get("http://server/api/v1/read-cursors")

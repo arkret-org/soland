@@ -62,7 +62,7 @@ const RELATION_KIND_FIELDS: &[&str] = &["relation_kind", "kind"];
 const RELATION_FROM_FIELDS: &[&str] = &["from_ref", "from"];
 const RELATION_TO_FIELDS: &[&str] = &["to_ref", "to"];
 const MEMBER_ACTOR_FIELDS: &[&str] = &["actor_id", "member", "actor", "sender"];
-const READ_MARKER_ACTOR_FIELDS: &[&str] = &["actor", "sender"];
+const READ_MARKER_ACTOR_FIELDS: &[&str] = &["actor_id"];
 const MLS_COMMIT_GROUP_FIELDS: &[&str] = &["group_id"];
 const MLS_COMMIT_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::AnyOf(
     MLS_COMMIT_GROUP_FIELDS,
@@ -400,7 +400,8 @@ const READ_MARKER_REQUIREMENTS: &[PayloadRequirement] = &[
         READ_MARKER_ACTOR_FIELDS,
         "read marker operation requires actor",
     ),
-    PayloadRequirement::Required("event_id", "read marker operation requires event_id"),
+    PayloadRequirement::Required("read_scope", "read marker operation requires read_scope"),
+    PayloadRequirement::Required("position", "read marker operation requires position"),
 ];
 
 pub fn validate_operation_semantics(
@@ -607,7 +608,7 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
         }
         kinds::CX_READ_MARKER => OperationPayloadSchema {
             requirements: READ_MARKER_REQUIREMENTS,
-            validate: None,
+            validate: Some(validate_read_marker_payload),
         },
         kind if kinds::is_membership_kind(kind) => OperationPayloadSchema {
             requirements: MEMBERSHIP_REQUIREMENTS,
@@ -812,6 +813,91 @@ pub fn validate_message_operation_payload(operation: &Operation) -> Result<(), &
     } else if let Some(content) = operation.payload.get("content") {
         validate_content_blocks(content)?;
         validate_mentions(content)?;
+    }
+    Ok(())
+}
+
+fn validate_read_marker_payload(operation: &Operation) -> Result<(), &'static str> {
+    let read_scope = operation
+        .payload
+        .get("read_scope")
+        .and_then(|value| value.as_object())
+        .ok_or("read marker read_scope must be an object")?;
+    let kind = read_scope
+        .get("kind")
+        .and_then(|value| value.as_str())
+        .ok_or("read marker read_scope.kind is required")?;
+    match kind {
+        "realm" => {
+            if read_scope.get("ref").is_some_and(|value| !value.is_null()) {
+                return Err("read marker read_scope.ref must be omitted for realm");
+            }
+        }
+        "flow" | "thread" | "view" | "message" | "morph" => {
+            if read_scope
+                .get("ref")
+                .and_then(|value| value.as_str())
+                .is_none_or(|value| value.trim().is_empty())
+            {
+                return Err("read marker read_scope.ref is required");
+            }
+        }
+        "flow_discussion" | "flow_synthesis" => {
+            return Err("read marker read_scope.kind removed; use flow plus track");
+        }
+        _ => return Err("read marker read_scope.kind is invalid"),
+    }
+    if let Some(track) = read_scope.get("track").and_then(|value| value.as_str()) {
+        if kind != "flow" {
+            return Err("read marker read_scope.track requires kind flow");
+        }
+        validate_read_scope_track(track)?;
+    }
+    let position = operation
+        .payload
+        .get("position")
+        .and_then(|value| value.as_object())
+        .ok_or("read marker position must be an object")?;
+    if position
+        .get("event_id")
+        .and_then(|value| value.as_str())
+        .is_none_or(|value| !value.starts_with("cx:event:"))
+    {
+        return Err("read marker position.event_id is invalid");
+    }
+    let hlc = position
+        .get("hlc")
+        .and_then(|value| value.as_str())
+        .ok_or("read marker position.hlc is required")?;
+    validate_read_cursor_hlc(hlc)?;
+    Ok(())
+}
+
+fn validate_read_scope_track(track: &str) -> Result<(), &'static str> {
+    let mut bytes = track.bytes();
+    let Some(first) = bytes.next() else {
+        return Err("read marker read_scope.track is invalid");
+    };
+    if !first.is_ascii_lowercase()
+        || track.len() > 64
+        || !bytes.all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+    {
+        return Err("read marker read_scope.track is invalid");
+    }
+    Ok(())
+}
+
+fn validate_read_cursor_hlc(hlc: &str) -> Result<(), &'static str> {
+    let parts = hlc.split('-').collect::<Vec<_>>();
+    if parts.len() != 3
+        || parts[0].len() != 12
+        || parts[1].len() != 4
+        || parts[2].len() != 8
+        || !parts
+            .iter()
+            .all(|part| part.bytes().all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f')))
+    {
+        return Err("read marker position.hlc is invalid");
     }
     Ok(())
 }
