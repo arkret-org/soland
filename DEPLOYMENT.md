@@ -266,6 +266,9 @@ pre-upgrade backup if you need to roll back.
 - Object storage uses a dedicated bucket/prefix or a dedicated local volume
   with quota enforcement.
 - Reverse proxy enforces TLS 1.2+ and the security headers you require.
+- Reverse proxy, API gateway, or load balancer enforces a shared rate-limit
+  budget when more than one soland replica is running. soland's built-in
+  limiter is per-process and must not be treated as a distributed quota.
 - `cargo deny check` runs in CI on every dependabot bump.
 - soland process runs as a non-root user (UID 10001 in the published image).
 - Rate-limit configuration matches your anticipated traffic
@@ -273,9 +276,8 @@ pre-upgrade backup if you need to roll back.
 
 ## 11. Known limits
 
-- **Single-process**: soland is a reference implementation. Multi-replica
-  deployments need an out-of-process rate-limit store (`_todos.md` Q6) and
-  durable persistence for everything in `_todos.md` F2.
+- **Rate limiting**: the built-in limiter is per-process. Multi-replica
+  deployments need a shared reverse-proxy/API-gateway quota in front of soland.
 - **Scaffold endpoints**: push outbound bridge, the MIMI provider directory,
   and most of the directory surface return placeholder shapes. See `_todos.md`
   Streams D / E / F for the production rollout.

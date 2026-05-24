@@ -53,6 +53,10 @@ We aim to:
   must be disabled in production.
 - Denial-of-service issues that require flooding from the same authenticated
   principal (rate-limit hardening is tracked as `_todos.md` Q6 / Cfg-1).
+  The built-in limiter is intentionally per-process for 1.0 local readiness:
+  every soland replica keeps its own IP bucket in memory, so horizontal
+  deployments must enforce a shared quota at the reverse proxy, API gateway, or
+  load-balancer layer.
 
 ## Known weaknesses
 
@@ -62,6 +66,9 @@ We aim to:
   (`_todos.md` B9).
 - The directory surface is backed by demo data, exposing pseudo-real handles
   during development (`_todos.md` Stream-E).
+- The built-in rate limiter is per-instance. Multi-replica production
+  deployments need a shared external limiter in front of soland; otherwise an
+  attacker can multiply the advertised per-minute quota by the replica count.
 
 If you find an issue overlapping a `_todos.md` item, the report is still
 welcome — exploitable severity often differs from the planned scope.
