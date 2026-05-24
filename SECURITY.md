@@ -42,7 +42,7 @@ We aim to:
   redaction handling).
 - Federation transaction ingestion and signature verification.
 - Persistence layer (Diesel + PostgreSQL + the in-memory fallback).
-- The Docker image published to GHCR and the binaries from the GitHub release.
+- Locally built Docker images, SBOM/provenance artifacts, and local binaries.
 
 ## Out of scope
 

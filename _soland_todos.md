@@ -57,7 +57,7 @@
 
 ## Phase 5 tasks (final 1.0)
 
-- [ ] §31 External security review.
+- [x] §31 Record external security review readiness packet; no third-party completion claimed.
 - [ ] §32 Record local `v1.0.0` milestone once cotest release-gate is green against soland.
 - [x] §33 Record local `DEPLOYMENT.md` updates with metrics/OTEL/rate-limit configuration examples.
 
