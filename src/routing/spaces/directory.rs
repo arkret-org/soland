@@ -17,6 +17,7 @@
 
 use std::collections::BTreeMap;
 
+use contrix_sdk::{Did, Ed25519MoveSigner, MoveSigner, canonical};
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde_json::{Value, json};
@@ -31,10 +32,11 @@ use crate::ids;
 use crate::result::{JsonResult, json_ok};
 use crate::state::{AppState, RealmDirectoryEntry, RealmDirectoryQuery, SessionRecord};
 use crate::wire::{
-    DirectoryDescribeResBody, DirectoryValueSearchResponse, ResolveHandleRequest,
-    ResolveHandleResponse, ResolveOrganizationRequest, ResolveOrganizationResponse,
-    ResolveRealmRequest, ResolveRealmResponse, SearchActorsRequest, SearchOrganizationsRequest,
-    SearchRealmsRequest, SearchRealmsResponse, SearchUsersRequest,
+    DirectoryDescribeResBody, DirectoryValueSearchResponse, HandleClaim,
+    HandleClaimDeliveryBinding, HandleClaimProof, ResolveHandleRequest, ResolveHandleResponse,
+    ResolveOrganizationRequest, ResolveOrganizationResponse, ResolveRealmRequest,
+    ResolveRealmResponse, SearchActorsRequest, SearchOrganizationsRequest, SearchRealmsRequest,
+    SearchRealmsResponse, SearchUsersRequest,
 };
 
 pub(super) fn router() -> Router {
@@ -356,22 +358,119 @@ async fn resolve_handle(
             // bind the claim to the requester's invocation context. We
             // default to the explicit `audience` param, falling back to
             // `requester` (so a verifier checking `audience == self` passes).
-            let audience = body.audience.or(body.requester);
+            let audience = body
+                .audience
+                .or(body.requester)
+                .unwrap_or_else(|| state.config.service_did.clone());
             let did = actor["did"].as_str().unwrap_or_default().to_owned();
-            // TODO(spec-sync 0a5ab85): populate and sign `handle_claim` with
-            // `handle_uri`, `member_delivery_binding`, and
-            // `issuer_service_did` so federation peers can build a join-time
-            // `member_delivery_binding`.
+            let handle_claim = signed_handle_claim(state, &normalized, &did, &audience)?;
             json_ok(ResolveHandleResponse {
                 handle: normalized,
                 did,
                 actor,
-                audience,
-                handle_claim: None,
+                audience: Some(audience),
+                handle_claim: Some(handle_claim),
             })
         }
         None => Err(AppError::not_found("not found")),
     }
+}
+
+fn signed_handle_claim(
+    state: &AppState,
+    handle: &str,
+    did: &str,
+    audience: &str,
+) -> Result<HandleClaim, AppError> {
+    let service_did = state.config.service_did.clone();
+    let service_domain = service_did
+        .strip_prefix("did:web:")
+        .map(|value| value.replace(':', "."))
+        .unwrap_or_else(|| "soland.local".to_owned());
+    let localpart = handle
+        .trim_start_matches('@')
+        .split(':')
+        .next()
+        .unwrap_or(handle)
+        .to_ascii_lowercase();
+    let handle_uri = format!("contrix://{service_domain}/users/{localpart}");
+    let created_at = now();
+    let expires_at = created_at + chrono::Duration::hours(24);
+    let unsigned = json!({
+        "schema": "cx.schema.handle_claim.v1",
+        "handle": handle,
+        "handle_uri": handle_uri,
+        "handle_aliases": [format!("acct:{localpart}@{service_domain}")],
+        "subject": did,
+        "issuer": service_did,
+        "issuer_service_did": service_did,
+        "binding_state": "verified",
+        "claim_type": "service_handle",
+        "visibility": "public",
+        "audience": audience,
+        "member_delivery_binding": {
+            "recipient_service_did": service_did,
+            "recipient_service_type": "principal_server",
+            "binding_source": "explicit",
+            "delivery_modes": ["events", "sync", "to_device", "push", "key_packages"],
+        },
+        "created_at": created_at.to_rfc3339(),
+        "expires_at": expires_at.to_rfc3339(),
+    });
+    let canonical_bytes = canonical::canonical_json_bytes(&unsigned)
+        .map_err(|err| AppError::internal(format!("handle claim canonicalization failed: {err}")))?;
+    let signer_did = Did::new(service_did.clone())
+        .map_err(|err| AppError::internal(format!("invalid service DID for handle claim: {err}")))?;
+    let signer = Ed25519MoveSigner::new(
+        (*state.anchorer_signing_key()).clone(),
+        signer_did,
+        format!("{service_did}#directory-handle-claim"),
+    );
+    let signature = MoveSigner::sign_payload(&signer, &canonical_bytes)
+        .map_err(|err| AppError::internal(format!("handle claim signing failed: {err}")))?;
+
+    Ok(HandleClaim {
+        schema: "cx.schema.handle_claim.v1".to_owned(),
+        handle: handle.to_owned(),
+        handle_uri: Some(handle_uri),
+        handle_aliases: vec![format!("acct:{localpart}@{service_domain}")],
+        subject: did.to_owned(),
+        issuer: service_did.clone(),
+        issuer_service_did: Some(service_did.clone()),
+        binding_state: "verified".to_owned(),
+        claim_type: Some("service_handle".to_owned()),
+        visibility: Some("public".to_owned()),
+        audience: Some(audience.to_owned()),
+        challenge: None,
+        claim_scope: BTreeMap::new(),
+        member_delivery_binding: Some(HandleClaimDeliveryBinding {
+            recipient_service_did: service_did,
+            recipient_service_type: Some("principal_server".to_owned()),
+            binding_source: "explicit".to_owned(),
+            delivery_modes: vec![
+                "events".to_owned(),
+                "sync".to_owned(),
+                "to_device".to_owned(),
+                "push".to_owned(),
+                "key_packages".to_owned(),
+            ],
+            service_acceptance_ref: None,
+            policy_ref: None,
+        }),
+        claims: Vec::new(),
+        created_at: created_at.to_rfc3339(),
+        expires_at: Some(expires_at.to_rfc3339()),
+        verified_at: None,
+        source_refs: Vec::new(),
+        proofs: vec![HandleClaimProof {
+            kind: "detached_jws".to_owned(),
+            alg: Some(signature.alg),
+            verification_method: Some(signature.verification_method),
+            payload_digest: Some(signature.payload_digest.as_str().to_owned()),
+            created_at: Some(signature.created_at.to_rfc3339()),
+            jws: Some(signature.jws),
+        }],
+    })
 }
 
 #[endpoint(

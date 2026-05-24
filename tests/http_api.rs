@@ -3878,6 +3878,18 @@ async fn directory_product_endpoints_return_demo_projection_shapes() {
         .await
         .unwrap();
     assert_eq!(handle["did"], "did:web:alice.example");
+    assert_eq!(handle["handle_claim"]["schema"], "cx.schema.handle_claim.v1");
+    assert_eq!(handle["handle_claim"]["handle_uri"], "contrix://soland.local/users/alice");
+    assert_eq!(
+        handle["handle_claim"]["member_delivery_binding"]["recipient_service_did"],
+        "did:web:soland.local"
+    );
+    assert_eq!(handle["handle_claim"]["proofs"][0]["kind"], "detached_jws");
+    assert!(
+        handle["handle_claim"]["proofs"][0]["payload_digest"]
+            .as_str()
+            .is_some_and(|digest| digest.starts_with("sha256:"))
+    );
 
     let invalid = TestClient::post("http://server/api/v1/directory/search-users")
         .json(&serde_json::json!({"limit": 0}))
