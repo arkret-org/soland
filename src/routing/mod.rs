@@ -4,12 +4,14 @@ use contrix_sdk::RealmId;
 use salvo::affix_state;
 use salvo::cors::{Cors, CorsHandler};
 use salvo::http::Method;
+use salvo::http::request::SecureMaxSize;
 use salvo::oapi::{
     OpenApi, Operation, PathItem, PathItemType, Response as OapiResponse, RouterExt,
 };
 use salvo::prelude::*;
 use serde_json::{Value, json};
 
+use crate::config::AppConfig;
 use crate::ratelimit::{RateLimiter, RateLimiterConfig, RateLimiterMiddleware};
 use crate::state::{AppState, DeviceInventoryRecord, MessageRecord};
 use crate::wire::now;
@@ -77,9 +79,22 @@ pub fn router_with_rate_limiter_config(
     state: AppState,
     rate_limiter_config: RateLimiterConfig,
 ) -> Router {
+    router_with_rate_limiter_and_request_size_config(
+        state,
+        rate_limiter_config,
+        AppConfig::max_request_size_bytes_from_env(),
+    )
+}
+
+pub fn router_with_rate_limiter_and_request_size_config(
+    state: AppState,
+    rate_limiter_config: RateLimiterConfig,
+    max_request_size_bytes: usize,
+) -> Router {
     let cors_allow_origin = state.config.cors_allow_origin.clone();
     let rate_limiter = RateLimiter::new(rate_limiter_config);
     let mut router = Router::new()
+        .hoop(SecureMaxSize::new(max_request_size_bytes))
         .hoop(affix_state::inject(state))
         .hoop(RateLimiterMiddleware::new(rate_limiter));
     if let Some(origin) = cors_allow_origin {

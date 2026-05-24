@@ -51,6 +51,7 @@ SOLAND_OBJECT_STORAGE_S3_SECRET_ACCESS_KEY=<secret-key>
 SOLAND_OBJECT_STORAGE_S3_FORCE_PATH_STYLE=true
 SOLAND_OBJECT_STORAGE_PREFIX=prod
 SOLAND_CORS_ALLOW_ORIGIN=https://app.example
+SOLAND_MAX_REQUEST_SIZE=1048576
 DATABASE_URL=postgres://soland:<password>@db.internal:5432/soland?sslmode=verify-full
 
 # `SOLAND_DEVELOPMENT_MODE` is unset (defaults to false). Enabling it in
@@ -59,6 +60,10 @@ DATABASE_URL=postgres://soland:<password>@db.internal:5432/soland?sslmode=verify
 
 RUST_LOG=soland=info,salvo=info,warn
 ```
+
+`SOLAND_MAX_REQUEST_SIZE` is parsed as bytes. Leave it unset for the default
+1 MiB body cap; requests above the cap return `413 Payload Too Large` before
+the route handler reads JSON or form data.
 
 Validate the env block on the target host once:
 

@@ -194,6 +194,7 @@ All settings can be supplied via environment variables (preferred) or a
 | `SOLAND_CORS_ALLOW_ORIGIN` | unset | Single explicit CORS origin for browser clients |
 | `SOLAND_AUTH_SERVER_URL` | unset | Public Auth / Account Server URL advertised to browser clients; registration and recovery calls go there |
 | `SOLAND_DEVELOPMENT_MODE` | `false` | Enable dev-only endpoints (`dev_login`, admin snapshots, relaxed DID validation) |
+| `SOLAND_MAX_REQUEST_SIZE` | `1048576` | Maximum request body bytes Salvo will read before returning `413 Payload Too Large` |
 | `RUST_LOG` | unset | Tracing subscriber filter, e.g. `soland=info,salvo=warn` |
 
 ## Local TLS

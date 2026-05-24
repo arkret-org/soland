@@ -15,7 +15,9 @@ use soland::config::{AppConfig, ObjectStorageConfig};
 use soland::db::Db;
 use soland::ratelimit::RateLimiterConfig;
 use soland::state::{AppState, RealmDirectoryEntry, RealmMetaRecord, SpaceInviteRecord};
-use soland::{artifacts, kinds, service, service_with_rate_limiter_config};
+use soland::{
+    artifacts, kinds, service, service_with_rate_limiter_config, service_with_request_size_limit,
+};
 
 const DEMO_REALM_ID: &str = "cx:realm:0196419b-0000-7000-8000-000000000000";
 static TEST_EVENT_SEQ: AtomicU64 = AtomicU64::new(10_000);
@@ -638,6 +640,25 @@ async fn dev_login_is_unavailable_in_production_mode() {
         .await;
 
     assert_eq!(response.status_code.unwrap(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn oversized_json_body_is_rejected_before_handler() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let body = serde_json::json!({
+        "query": "x".repeat(128),
+        "limit": 10,
+    });
+
+    let response = TestClient::post("http://server/api/v1/directory/search-realms")
+        .json(&body)
+        .send(&service_with_request_size_limit(state, 64))
+        .await;
+
+    assert_eq!(
+        response.status_code.unwrap(),
+        StatusCode::PAYLOAD_TOO_LARGE
+    );
 }
 
 #[tokio::test]

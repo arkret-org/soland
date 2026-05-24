@@ -1,6 +1,8 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
+pub const DEFAULT_MAX_REQUEST_SIZE_BYTES: usize = 1024 * 1024;
+
 #[derive(Clone, Debug)]
 pub struct AppConfig {
     pub bind: SocketAddr,
@@ -572,6 +574,16 @@ impl AppConfig {
             sovereign_enclave_allowed_outbound_hosts,
             erasure_propagation_window_ms,
         })
+    }
+
+    /// Maximum bytes Salvo will read from a request body before returning
+    /// `413 Payload Too Large`. Env: `SOLAND_MAX_REQUEST_SIZE`, in bytes.
+    pub fn max_request_size_bytes_from_env() -> usize {
+        std::env::var("SOLAND_MAX_REQUEST_SIZE")
+            .ok()
+            .and_then(|value| value.trim().parse::<usize>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(DEFAULT_MAX_REQUEST_SIZE_BYTES)
     }
 
     /// Returns true when `actor` is configured as an admin principal in

@@ -31,7 +31,9 @@ pub mod wire;
 
 pub use error::AppError;
 pub use result::{AppResult, EmptyResponse, EmptyResult, JsonResult, empty_ok, json_ok};
-pub use routing::{router, router_with_rate_limiter_config};
+pub use routing::{
+    router, router_with_rate_limiter_and_request_size_config, router_with_rate_limiter_config,
+};
 
 /// Re-export the reference Ed25519 signing seed + key_id so
 /// out-of-crate verifiers can recompute the signer's public key
@@ -57,4 +59,13 @@ pub fn service_with_rate_limiter_config(
 ) -> Service {
     Service::new(router_with_rate_limiter_config(state, rate_limiter_config))
         .catcher(Catcher::default().hoop(error_catcher))
+}
+
+pub fn service_with_request_size_limit(state: AppState, max_request_size_bytes: usize) -> Service {
+    Service::new(router_with_rate_limiter_and_request_size_config(
+        state,
+        RateLimiterConfig::default(),
+        max_request_size_bytes,
+    ))
+    .catcher(Catcher::default().hoop(error_catcher))
 }
