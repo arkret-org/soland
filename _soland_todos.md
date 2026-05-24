@@ -58,7 +58,7 @@
 ## Phase 5 tasks (final 1.0)
 
 - [x] §31 Record external security review readiness packet; no third-party completion claimed.
-- [ ] §32 Record local `v1.0.0` milestone once cotest release-gate is green against soland.
+- [x] §32 Record local `v1.0.0` milestone once cotest release-gate is green against soland.
 - [x] §33 Record local `DEPLOYMENT.md` updates with metrics/OTEL/rate-limit configuration examples.
 
 ## Exit gate (phase 2)
@@ -74,3 +74,7 @@ All of:
 - The `tests/conformance_gates.rs` job in `tests/` is independent of cotest; keep it.
 - `Justfile`'s `conformance-gates` recipe must stay aligned with `cotest/scripts/run-cotest.ps1`.
 - Caddyfile assumes dev TLS — production should consume real certs via env; document in `DEPLOYMENT.md`.
+- 2026-05-25 local `v1.0.0` milestone evidence:
+  `docs/release-evidence-1.0.0.md`; cotest run
+  `D:\Works\contrix-dev\cotest\artifacts\runs\20260525-055932\summary.md`
+  passed 28/28 release-gate checks with no remote publication.
