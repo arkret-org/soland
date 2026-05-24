@@ -28,7 +28,7 @@
 - [x] §10 `src/wire.rs:487` — replace `Value` union in `HandleClaim` with typed structure (spec-sync 0a5ab85).
 - [x] §11 `src/routing/events/event_log.rs:1391` — replace hardcoded `false` projection-query defaults with DB reads.
 - [x] §12 `src/routing/spaces/directory.rs:355` — emit spec-signed `handle_claim` envelope.
-- [ ] §13 `src/persistence.rs:3552-3561` — implement `PgMlsKeyPackageStore`, `PgMlsWelcomeStore`, `PgMlsCommitStore` trait impls (currently stubbed).
+- [x] §13 `src/persistence.rs:3552-3561` — implement `PgMlsKeyPackageStore`, `PgMlsWelcomeStore`, `PgMlsCommitStore` trait impls (currently stubbed).
 - [ ] §14 `src/reducer.rs:2900` — realm link_kind inheritance + capability rules.
 - [ ] §15 `src/kinds.rs:206-215` — governance multi-sig validation, threshold aggregation.
 

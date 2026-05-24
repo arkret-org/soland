@@ -20,8 +20,7 @@ use crate::ids;
 use crate::state::{
     AccountDataRecord, AccountRecord, BlobRecord, CanonicalEventRecord, ContactRecord,
     DeviceInventoryRecord, DeviceMessageRecord, FederationOutboxDeadLetterRecord,
-    FederationOutboxRecord,
-    FederationTransactionRecord, MessageRecord, MultisigPendingRecord,
+    FederationOutboxRecord, FederationTransactionRecord, MessageRecord, MultisigPendingRecord,
     OutboundPushBridgeCacheRecord, PolicyDocumentRecord, PresenceRecord, ProjectionEventRecord,
     PushRuleRecord, RealmMetaRecord, SessionRecord, SpaceInviteRecord, TypingRecord,
     WebrtcSessionRecord, WebrtcSignalRecord, WebvhDocumentRecord, WebvhLogRecord,
@@ -3370,6 +3369,9 @@ pub struct PgPersistenceStore {
     flow_projections: PgFlowProjectionStore,
     morph_projections: PgMorphProjectionStore,
     projection_events: PgProjectionEventStore,
+    mls_key_packages: PgMlsKeyPackageStore,
+    mls_welcomes: PgMlsWelcomeStore,
+    mls_commits: PgMlsCommitStore,
     fallback: MemoryPersistenceStore,
 }
 
@@ -3398,7 +3400,10 @@ impl PgPersistenceStore {
             space_container_projections: PgSpaceContainerProjectionStore { pool: pool.clone() },
             flow_projections: PgFlowProjectionStore { pool: pool.clone() },
             morph_projections: PgMorphProjectionStore { pool: pool.clone() },
-            projection_events: PgProjectionEventStore { pool },
+            projection_events: PgProjectionEventStore { pool: pool.clone() },
+            mls_key_packages: PgMlsKeyPackageStore { pool: pool.clone() },
+            mls_welcomes: PgMlsWelcomeStore { pool: pool.clone() },
+            mls_commits: PgMlsCommitStore { pool },
             fallback: MemoryPersistenceStore::new(),
         }
     }
@@ -3533,66 +3538,332 @@ impl PersistenceStore for PgPersistenceStore {
         &self.morph_projections
     }
 
-    // G3.S1: MLS lifecycle stores. The Pg backend currently routes
-    // through the in-memory fallback so the trait is wired end-to-end;
-    // real Pg-backed implementations land alongside the
-    // `20260521000000_mls_lifecycle` migration once production deploys
-    // it. The skeleton structs (`PgMlsKeyPackageStore` /
-    // `PgMlsWelcomeStore` / `PgMlsCommitStore`) below carry the pool
-    // ref + sql_query stubs so the conversion is mechanical.
-    // TODO(G3.S1-followup): swap these accessors to return
-    // `&self.mls_key_packages` etc. once `PgMls*Store` ships real
-    // SQL bound implementations.
     fn mls_key_packages(&self) -> &dyn MlsKeyPackageStore {
-        self.fallback.mls_key_packages()
+        &self.mls_key_packages
     }
 
     fn mls_welcomes(&self) -> &dyn MlsWelcomeStore {
-        self.fallback.mls_welcomes()
+        &self.mls_welcomes
     }
 
     fn mls_commits(&self) -> &dyn MlsCommitStore {
-        self.fallback.mls_commits()
+        &self.mls_commits
     }
 }
 
-// ── G3.S1: Pg MLS store skeletons ─────────────────────────────────────
-//
-// Pool-bound stubs that match the SQL shape declared in
-// `migrations/20260521000000_mls_lifecycle/up.sql`. Today the
-// PgPersistenceStore accessors above delegate to the in-memory
-// fallback; the structs are kept here so the migration story is
-// already wired and the only delta when production rolls out is to
-// fill in the `sql_query(...)` bodies + flip the accessors.
+// ── G3.S1: Pg MLS lifecycle stores ────────────────────────────────────
 
-#[allow(dead_code)]
 struct PgMlsKeyPackageStore {
     pool: PgPool,
 }
 
-#[allow(dead_code)]
 struct PgMlsWelcomeStore {
     pool: PgPool,
 }
 
-#[allow(dead_code)]
 struct PgMlsCommitStore {
     pool: PgPool,
 }
 
-// TODO(G3.S1-followup): `impl MlsKeyPackageStore for PgMlsKeyPackageStore`
-// using `INSERT ... ON CONFLICT (id) DO NOTHING` for `put`, and
-// `UPDATE mls_key_packages SET claimed_by_group_id=$2, consumed_at=$3
-// WHERE id=$1 AND claimed_by_group_id IS NULL RETURNING ...` for
-// `try_claim` (atomic CAS via the WHERE clause).
-// TODO(G3.S1-followup): `impl MlsWelcomeStore for PgMlsWelcomeStore`
-// using `UPDATE mls_welcomes SET delivered_at=$3 WHERE
-// recipient_actor_did=$1 AND recipient_device_id=$2 AND delivered_at
-// IS NULL RETURNING ... LIMIT $4` for the atomic drain.
-// TODO(G3.S1-followup): `impl MlsCommitStore for PgMlsCommitStore`
-// using `INSERT ... ON CONFLICT (group_id) DO UPDATE SET epoch =
-// EXCLUDED.epoch WHERE mls_commits.epoch = $2 RETURNING ...` for the
-// CAS bump.
+impl MlsKeyPackageStore for PgMlsKeyPackageStore {
+    fn put(&self, record: &MlsKeyPackageRecord) -> PersistenceResult<bool> {
+        let mut conn = pg_conn(&self.pool)?;
+        let inserted = sql_query(
+            "INSERT INTO mls_key_packages \
+             (id, actor_did, device_id, lifetime_not_before, lifetime_not_after, \
+              key_package_bytes, claimed_by_group_id, consumed_at, created_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
+             ON CONFLICT (id) DO NOTHING",
+        )
+        .bind::<Text, _>(&record.id)
+        .bind::<Text, _>(&record.actor_did)
+        .bind::<Text, _>(&record.device_id)
+        .bind::<BigInt, _>(record.lifetime_not_before)
+        .bind::<BigInt, _>(record.lifetime_not_after)
+        .bind::<Binary, _>(&record.key_package_bytes)
+        .bind::<Nullable<Text>, _>(&record.claimed_by_group_id)
+        .bind::<Nullable<BigInt>, _>(record.consumed_at)
+        .bind::<BigInt, _>(record.created_at)
+        .execute(&mut conn)?;
+        Ok(inserted > 0)
+    }
+
+    fn get(&self, id: &str) -> PersistenceResult<Option<MlsKeyPackageRecord>> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query(
+            "SELECT id, actor_did, device_id, lifetime_not_before, lifetime_not_after, \
+             key_package_bytes, claimed_by_group_id, consumed_at, created_at \
+             FROM mls_key_packages WHERE id = $1",
+        )
+        .bind::<Text, _>(id)
+        .get_result::<MlsKeyPackageRow>(&mut conn)
+        .optional()
+        .map(|row| row.map(MlsKeyPackageRecord::from))
+        .map_err(PersistenceError::from)
+    }
+
+    fn try_claim(
+        &self,
+        id: &str,
+        group_id: &str,
+        consumed_at: i64,
+    ) -> PersistenceResult<Option<MlsKeyPackageRecord>> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query(
+            "UPDATE mls_key_packages \
+             SET claimed_by_group_id = $2, consumed_at = $3 \
+             WHERE id = $1 AND claimed_by_group_id IS NULL \
+             RETURNING id, actor_did, device_id, lifetime_not_before, lifetime_not_after, \
+             key_package_bytes, claimed_by_group_id, consumed_at, created_at",
+        )
+        .bind::<Text, _>(id)
+        .bind::<Text, _>(group_id)
+        .bind::<BigInt, _>(consumed_at)
+        .get_result::<MlsKeyPackageRow>(&mut conn)
+        .optional()
+        .map(|row| row.map(MlsKeyPackageRecord::from))
+        .map_err(PersistenceError::from)
+    }
+
+    fn snapshot_all(&self) -> PersistenceResult<Vec<MlsKeyPackageRecord>> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query(
+            "SELECT id, actor_did, device_id, lifetime_not_before, lifetime_not_after, \
+             key_package_bytes, claimed_by_group_id, consumed_at, created_at \
+             FROM mls_key_packages ORDER BY created_at ASC, id ASC",
+        )
+        .load::<MlsKeyPackageRow>(&mut conn)
+        .map(|rows| rows.into_iter().map(MlsKeyPackageRecord::from).collect())
+        .map_err(PersistenceError::from)
+    }
+}
+
+impl MlsWelcomeStore for PgMlsWelcomeStore {
+    fn enqueue(&self, record: &MlsWelcomeRecord) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query(
+            "INSERT INTO mls_welcomes \
+             (id, group_id, recipient_actor_did, recipient_device_id, welcome_bytes, \
+              key_package_id, enqueued_at, delivered_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
+             ON CONFLICT (id) DO NOTHING",
+        )
+        .bind::<Text, _>(&record.id)
+        .bind::<Text, _>(&record.group_id)
+        .bind::<Text, _>(&record.recipient_actor_did)
+        .bind::<Text, _>(&record.recipient_device_id)
+        .bind::<Binary, _>(&record.welcome_bytes)
+        .bind::<Text, _>(&record.key_package_id)
+        .bind::<BigInt, _>(record.enqueued_at)
+        .bind::<Nullable<BigInt>, _>(record.delivered_at)
+        .execute(&mut conn)?;
+        Ok(())
+    }
+
+    fn drain_pending(
+        &self,
+        recipient_actor_did: &str,
+        recipient_device_id: &str,
+        now_unix_secs: i64,
+        limit: usize,
+    ) -> PersistenceResult<Vec<MlsWelcomeRecord>> {
+        let mut conn = pg_conn(&self.pool)?;
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX).max(0);
+        sql_query(
+            "WITH picked AS ( \
+                 SELECT id FROM mls_welcomes \
+                 WHERE recipient_actor_did = $1 \
+                   AND recipient_device_id = $2 \
+                   AND delivered_at IS NULL \
+                 ORDER BY enqueued_at ASC, id ASC \
+                 LIMIT $4 \
+                 FOR UPDATE SKIP LOCKED \
+             ) \
+             UPDATE mls_welcomes AS w \
+             SET delivered_at = $3 \
+             FROM picked \
+             WHERE w.id = picked.id \
+             RETURNING w.id, w.group_id, w.recipient_actor_did, w.recipient_device_id, \
+             w.welcome_bytes, w.key_package_id, w.enqueued_at, w.delivered_at",
+        )
+        .bind::<Text, _>(recipient_actor_did)
+        .bind::<Text, _>(recipient_device_id)
+        .bind::<BigInt, _>(now_unix_secs)
+        .bind::<BigInt, _>(limit)
+        .load::<MlsWelcomeRow>(&mut conn)
+        .map(|rows| rows.into_iter().map(MlsWelcomeRecord::from).collect())
+        .map_err(PersistenceError::from)
+    }
+
+    fn snapshot_all(&self) -> PersistenceResult<Vec<MlsWelcomeRecord>> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query(
+            "SELECT id, group_id, recipient_actor_did, recipient_device_id, welcome_bytes, \
+             key_package_id, enqueued_at, delivered_at \
+             FROM mls_welcomes ORDER BY enqueued_at ASC, id ASC",
+        )
+        .load::<MlsWelcomeRow>(&mut conn)
+        .map(|rows| rows.into_iter().map(MlsWelcomeRecord::from).collect())
+        .map_err(PersistenceError::from)
+    }
+}
+
+impl MlsCommitStore for PgMlsCommitStore {
+    fn get(&self, group_id: &str) -> PersistenceResult<Option<MlsCommitEpochRecord>> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query(
+            "SELECT group_id, epoch, leader_actor_did, committed_at \
+             FROM mls_commits WHERE group_id = $1",
+        )
+        .bind::<Text, _>(group_id)
+        .get_result::<MlsCommitEpochRow>(&mut conn)
+        .optional()
+        .map(|row| row.map(MlsCommitEpochRecord::from))
+        .map_err(PersistenceError::from)
+    }
+
+    fn try_bump(
+        &self,
+        group_id: &str,
+        expected_prev_epoch: u64,
+        leader_actor_did: &str,
+        committed_at: i64,
+    ) -> PersistenceResult<Option<MlsCommitEpochRecord>> {
+        let expected_epoch = i64::try_from(expected_prev_epoch)
+            .map_err(|_| PersistenceError::Internal("MLS epoch exceeds i64".to_owned()))?;
+        let next_epoch = expected_prev_epoch
+            .checked_add(1)
+            .and_then(|epoch| i64::try_from(epoch).ok())
+            .ok_or_else(|| PersistenceError::Internal("MLS epoch overflow".to_owned()))?;
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query(
+            "INSERT INTO mls_commits (group_id, epoch, leader_actor_did, committed_at) \
+             VALUES ($1, $3, $4, $5) \
+             ON CONFLICT (group_id) DO UPDATE SET \
+               epoch = EXCLUDED.epoch, \
+               leader_actor_did = EXCLUDED.leader_actor_did, \
+               committed_at = EXCLUDED.committed_at \
+             WHERE mls_commits.epoch = $2 \
+             RETURNING group_id, epoch, leader_actor_did, committed_at",
+        )
+        .bind::<Text, _>(group_id)
+        .bind::<BigInt, _>(expected_epoch)
+        .bind::<BigInt, _>(next_epoch)
+        .bind::<Text, _>(leader_actor_did)
+        .bind::<BigInt, _>(committed_at)
+        .get_result::<MlsCommitEpochRow>(&mut conn)
+        .optional()
+        .map(|row| row.map(MlsCommitEpochRecord::from))
+        .map_err(PersistenceError::from)
+    }
+
+    fn snapshot_all(&self) -> PersistenceResult<Vec<MlsCommitEpochRecord>> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query(
+            "SELECT group_id, epoch, leader_actor_did, committed_at \
+             FROM mls_commits ORDER BY group_id ASC",
+        )
+        .load::<MlsCommitEpochRow>(&mut conn)
+        .map(|rows| rows.into_iter().map(MlsCommitEpochRecord::from).collect())
+        .map_err(PersistenceError::from)
+    }
+}
+
+#[derive(QueryableByName)]
+struct MlsKeyPackageRow {
+    #[diesel(sql_type = Text)]
+    id: String,
+    #[diesel(sql_type = Text)]
+    actor_did: String,
+    #[diesel(sql_type = Text)]
+    device_id: String,
+    #[diesel(sql_type = BigInt)]
+    lifetime_not_before: i64,
+    #[diesel(sql_type = BigInt)]
+    lifetime_not_after: i64,
+    #[diesel(sql_type = Binary)]
+    key_package_bytes: Vec<u8>,
+    #[diesel(sql_type = Nullable<Text>)]
+    claimed_by_group_id: Option<String>,
+    #[diesel(sql_type = Nullable<BigInt>)]
+    consumed_at: Option<i64>,
+    #[diesel(sql_type = BigInt)]
+    created_at: i64,
+}
+
+impl From<MlsKeyPackageRow> for MlsKeyPackageRecord {
+    fn from(row: MlsKeyPackageRow) -> Self {
+        Self {
+            id: row.id,
+            actor_did: row.actor_did,
+            device_id: row.device_id,
+            lifetime_not_before: row.lifetime_not_before,
+            lifetime_not_after: row.lifetime_not_after,
+            key_package_bytes: row.key_package_bytes,
+            claimed_by_group_id: row.claimed_by_group_id,
+            consumed_at: row.consumed_at,
+            created_at: row.created_at,
+        }
+    }
+}
+
+#[derive(QueryableByName)]
+struct MlsWelcomeRow {
+    #[diesel(sql_type = Text)]
+    id: String,
+    #[diesel(sql_type = Text)]
+    group_id: String,
+    #[diesel(sql_type = Text)]
+    recipient_actor_did: String,
+    #[diesel(sql_type = Text)]
+    recipient_device_id: String,
+    #[diesel(sql_type = Binary)]
+    welcome_bytes: Vec<u8>,
+    #[diesel(sql_type = Text)]
+    key_package_id: String,
+    #[diesel(sql_type = BigInt)]
+    enqueued_at: i64,
+    #[diesel(sql_type = Nullable<BigInt>)]
+    delivered_at: Option<i64>,
+}
+
+impl From<MlsWelcomeRow> for MlsWelcomeRecord {
+    fn from(row: MlsWelcomeRow) -> Self {
+        Self {
+            id: row.id,
+            group_id: row.group_id,
+            recipient_actor_did: row.recipient_actor_did,
+            recipient_device_id: row.recipient_device_id,
+            welcome_bytes: row.welcome_bytes,
+            key_package_id: row.key_package_id,
+            enqueued_at: row.enqueued_at,
+            delivered_at: row.delivered_at,
+        }
+    }
+}
+
+#[derive(QueryableByName)]
+struct MlsCommitEpochRow {
+    #[diesel(sql_type = Text)]
+    group_id: String,
+    #[diesel(sql_type = BigInt)]
+    epoch: i64,
+    #[diesel(sql_type = Text)]
+    leader_actor_did: String,
+    #[diesel(sql_type = BigInt)]
+    committed_at: i64,
+}
+
+impl From<MlsCommitEpochRow> for MlsCommitEpochRecord {
+    fn from(row: MlsCommitEpochRow) -> Self {
+        Self {
+            group_id: row.group_id,
+            epoch: row.epoch.max(0) as u64,
+            leader_actor_did: row.leader_actor_did,
+            committed_at: row.committed_at,
+        }
+    }
+}
 
 struct PgAccountStore {
     pool: PgPool,
