@@ -12,7 +12,8 @@
 //!
 //! Demo data lives here too — `demo_organization` / `demo_actors` are
 //! placeholders until a real `actors` / `organizations` / `handles`
-//! PgStore lands.
+//! provider lands. They are gated to development mode so production
+//! deployments do not expose built-in identities.
 
 use std::collections::BTreeMap;
 
@@ -186,6 +187,7 @@ async fn search_organizations(
     depot: &mut Depot,
 ) -> JsonResult<DirectoryValueSearchResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
+    require_demo_directory_provider(state)?;
     let body = body.into_inner();
     let limit = checked_limit(body.limit)?;
     let spaces = state.realms.lock().expect("spaces lock");
@@ -216,6 +218,7 @@ async fn resolve_organization(
     depot: &mut Depot,
 ) -> JsonResult<ResolveOrganizationResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
+    require_demo_directory_provider(state)?;
     let body = body.into_inner();
     if body.organization_id.is_none() && body.handle.is_none() {
         return Err(AppError::missing_param(
@@ -270,6 +273,7 @@ async fn search_actors(
     req: &mut Request,
 ) -> JsonResult<DirectoryValueSearchResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
+    require_demo_directory_provider(state)?;
     let body = body.into_inner();
     let limit = checked_limit(body.limit)?;
     if let Some(organization_id) = body.organization_id.as_deref()
@@ -305,6 +309,7 @@ async fn search_users(
     req: &mut Request,
 ) -> JsonResult<DirectoryValueSearchResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
+    require_demo_directory_provider(state)?;
     let body = body.into_inner();
     let limit = checked_limit(body.limit)?;
     let query = body.query;
@@ -332,6 +337,7 @@ async fn resolve_handle(
     req: &mut Request,
 ) -> JsonResult<ResolveHandleResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
+    require_demo_directory_provider(state)?;
     let body = body.into_inner();
     if body.handle.trim().is_empty() {
         return Err(AppError::missing_param("handle is required"));
@@ -379,6 +385,7 @@ async fn private_contact_discovery(
     req: &mut Request,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
+    require_demo_directory_provider(state)?;
     let session = authenticated_session(state, req).ok();
     let body = body.into_inner();
     let contacts = body
@@ -573,6 +580,13 @@ pub fn actor_visible_to(state: &AppState, actor: &Value, session: Option<&Sessio
     session.is_some_and(|session| {
         session.actor == did || has_accepted_contact(state, &session.actor, did)
     })
+}
+
+fn require_demo_directory_provider(state: &AppState) -> Result<(), AppError> {
+    if state.config.development_mode {
+        return Ok(());
+    }
+    Err(AppError::not_found("directory provider not configured"))
 }
 
 pub fn demo_organization(spaces: &[&RealmDirectoryEntry], service_did: &str) -> Value {

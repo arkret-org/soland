@@ -3838,6 +3838,44 @@ async fn directory_product_endpoints_return_demo_projection_shapes() {
     assert_eq!(invalid.status_code.unwrap().as_u16(), 400);
 }
 
+#[tokio::test]
+async fn directory_demo_projection_rejects_outside_development_mode() {
+    let mut config = test_config();
+    config.development_mode = false;
+    config.seed_demo_data = true;
+    let service = app_from_state(AppState::new(config, Db { pool: None }));
+
+    let cases = [
+        (
+            "search-organizations",
+            serde_json::json!({"query": "contrix", "limit": 10}),
+        ),
+        (
+            "resolve-organization",
+            serde_json::json!({"organization_id": "cx:org:demo"}),
+        ),
+        ("search-actors", serde_json::json!({"query": "alice"})),
+        ("search-users", serde_json::json!({"query": "alice"})),
+        ("resolve-handle", serde_json::json!({"handle": "alice"})),
+        (
+            "private-contact-discovery",
+            serde_json::json!({"contacts": [{"handle": "@alice"}]}),
+        ),
+    ];
+
+    for (path, body) in cases {
+        let response = TestClient::post(format!("http://server/api/v1/directory/{path}"))
+            .json(&body)
+            .send(&service)
+            .await;
+        assert_eq!(
+            response.status_code.unwrap(),
+            StatusCode::NOT_FOUND,
+            "{path} must not expose demo directory data outside development mode"
+        );
+    }
+}
+
 // `standard_entity_types_and_reverse_domain_custom_types_work` and
 // `view_endpoints_project_common_presentation_shapes` were deleted in
 // round 6: the `entity` / `view` abstraction they exercised never landed in

@@ -53,7 +53,7 @@
 - [ ] §29 Set up Dependabot for cargo + GitHub Actions.
 
 ### Demo data cleanup (phase 2 deliverable)
-- [ ] §30 Replace demo directory data in `src/routing/spaces/directory.rs` with either: (a) reject when no provider registered, or (b) gate behind `SOLAND_DEVELOPMENT_MODE=true`.
+- [x] §30 Replace demo directory data in `src/routing/spaces/directory.rs` with either: (a) reject when no provider registered, or (b) gate behind `SOLAND_DEVELOPMENT_MODE=true`.
 
 ## Phase 5 tasks (final 1.0)
 
