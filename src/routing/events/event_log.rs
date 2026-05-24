@@ -27,9 +27,9 @@ use serde_json::{Value, json};
 
 use super::{
     append_audit_log, auth_or_render, is_valid_sha256_digest, now, project_accepted_operations,
-    query_param, query_param_all, realm_event_visible_to_session, realm_has_member, render_error,
-    sha256_hex, validate_did, validate_operation_policy, validate_operation_semantics,
-    validate_space_id,
+    query_param, query_param_all, realm_allows_plaintext_service, realm_event_visible_to_session,
+    realm_has_member, render_error, sha256_hex, validate_did, validate_operation_policy,
+    validate_operation_semantics, validate_space_id,
 };
 use crate::error::{AppError, ErrorCode, error_http_status};
 use crate::result::{JsonResult, json_ok};
@@ -1364,10 +1364,11 @@ fn validate_event_envelope(
             ));
         }
     }
-    // Round R2/R3 (T09 + T12) — realm.policy_components hard ceiling, e2ee_relaxed
-    // mutex, and media plaintext triple binding. Active profile set + bindings
-    // come from the projection; TODO(round23-T12) plumb full per-Realm projection
-    // for `plaintext_visible_services[]` and MLS governance binding policy_root.
+    // Round R2/R3 (T09 + T12) — realm.policy_components hard ceiling,
+    // e2ee_relaxed mutex, and media plaintext triple binding. Active
+    // profile set comes from the submitted policy-components payload;
+    // cross-policy bindings come from the materialized Realm metadata /
+    // MLS cells, with the current payload used only for same-event writes.
     if kind == "cx.realm.policy_components" {
         let payload = object.get("payload").cloned().unwrap_or(Value::Null);
         // Best-effort: collect active profiles from the payload's own
@@ -1388,20 +1389,10 @@ fn validate_event_envelope(
                 }
             }
         }
-        // TODO(round23-T12): replace these `false` defaults with reads from
-        // the per-Realm projection (`plaintext_visible_services[].purpose=media_plaintext`
-        // + current `cx.component.mls.epoch.v1` governance binding policy_root).
-        let media_plaintext_service_present = payload
-            .pointer("/plaintext_visible_services")
-            .and_then(Value::as_array)
-            .is_some_and(|arr| {
-                arr.iter().any(|svc| {
-                    svc.get("purpose").and_then(Value::as_str) == Some("media_plaintext")
-                })
-            });
-        let mls_governance_binding_covers_policy_root = payload
-            .pointer("/mls_governance_binding/policy_root")
-            .is_some();
+        let media_plaintext_service_present =
+            projected_media_plaintext_service_present(state, &space_id, &payload);
+        let mls_governance_binding_covers_policy_root =
+            projected_mls_governance_binding_covers_policy_root(state, &space_id, &payload);
         if let Err((code, reason)) = crate::round23::realm_policy_components_check(
             &payload,
             &active_profiles,
@@ -1471,6 +1462,103 @@ fn validate_event_envelope(
         authorized_refs,
         canonical_digest,
         canonical_bytes,
+    })
+}
+
+fn projected_media_plaintext_service_present(
+    state: &AppState,
+    realm_id: &str,
+    payload: &Value,
+) -> bool {
+    payload_declares_media_plaintext_service(payload, &state.config.service_did)
+        || realm_allows_plaintext_service(state, realm_id)
+}
+
+fn payload_declares_media_plaintext_service(payload: &Value, service_did: &str) -> bool {
+    payload
+        .pointer("/plaintext_visible_services")
+        .and_then(Value::as_array)
+        .is_some_and(|services| {
+            services.iter().any(|service| match service {
+                Value::String(value) => value == service_did || value == "media_plaintext",
+                Value::Object(object) => {
+                    let purpose_matches =
+                        object.get("purpose").and_then(Value::as_str) == Some("media_plaintext");
+                    let service_matches = object
+                        .get("service_did")
+                        .or_else(|| object.get("did"))
+                        .and_then(Value::as_str)
+                        .is_none_or(|value| value == service_did);
+                    purpose_matches && service_matches
+                }
+                _ => false,
+            })
+        })
+}
+
+fn projected_mls_governance_binding_covers_policy_root(
+    state: &AppState,
+    realm_id: &str,
+    payload: &Value,
+) -> bool {
+    let expected_policy_root = payload_mls_governance_policy_root(payload);
+    let Some(projection) = state.projection.lock().ok() else {
+        return expected_policy_root.is_some();
+    };
+    let mut observed_realm_mls_cell = false;
+    for (cell, cell_state) in &projection.cells {
+        let cell_id = cell.as_str();
+        let is_mls_cell = cell_id.contains("cx.component.mls.epoch.v1")
+            || cell_id.contains("cx.component.mls_epoch.v1")
+            || cell_id.contains("cx.component.mls.covered_frontier.v1");
+        if !is_mls_cell {
+            continue;
+        }
+        let contrix_sdk::lattice::CellState::Value(value) = cell_state else {
+            continue;
+        };
+        if !value_targets_realm(value, realm_id) {
+            continue;
+        }
+        observed_realm_mls_cell = true;
+        if mls_governance_value_covers_policy_root(value, expected_policy_root) {
+            return true;
+        }
+    }
+    !observed_realm_mls_cell && expected_policy_root.is_some()
+}
+
+fn payload_mls_governance_policy_root(payload: &Value) -> Option<&str> {
+    payload
+        .pointer("/mls_governance_binding/policy_root")
+        .or_else(|| payload.pointer("/governance_binding/policy_root"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+}
+
+fn value_targets_realm(value: &Value, realm_id: &str) -> bool {
+    ["realm_id", "space_id"].iter().all(|field| {
+        value
+            .get(*field)
+            .and_then(Value::as_str)
+            .is_none_or(|value| value == realm_id)
+    })
+}
+
+fn mls_governance_value_covers_policy_root(
+    value: &Value,
+    expected_policy_root: Option<&str>,
+) -> bool {
+    let candidates = [
+        value.pointer("/governance_binding/policy_root"),
+        value.pointer("/mls_governance_binding/policy_root"),
+        value.pointer("/policy_root"),
+    ];
+    candidates.iter().flatten().any(|candidate| {
+        candidate.as_str().is_some_and(|policy_root| {
+            !policy_root.trim().is_empty()
+                && expected_policy_root.is_none_or(|expected| expected == policy_root)
+        })
     })
 }
 
@@ -2957,6 +3045,80 @@ mod proof_strictness_tests {
             created_at: chrono::Utc::now(),
             revoked_at: None,
         }
+    }
+
+    #[test]
+    fn policy_components_media_plaintext_reads_realm_meta() {
+        let state = make_state(true);
+        let realm_id = "cx:realm:01904100-0000-7000-8000-a11ce0000001";
+        let now = chrono::Utc::now();
+        state
+            .persistence
+            .realm_meta()
+            .put(
+                realm_id,
+                &crate::state::RealmMetaRecord {
+                    owner: "did:web:alice.example".to_owned(),
+                    deleted: false,
+                    discoverability: "restricted".to_owned(),
+                    history_visibility: "joined".to_owned(),
+                    encryption_profile: Some("mls_rfc9420".to_owned()),
+                    plaintext_visible_services: std::collections::BTreeSet::from([state
+                        .config
+                        .service_did
+                        .clone()]),
+                    created_at: now,
+                    updated_at: now,
+                },
+            )
+            .unwrap();
+
+        let payload = json!({ "media_service_decrypts": true });
+
+        assert!(projected_media_plaintext_service_present(
+            &state, realm_id, &payload
+        ));
+    }
+
+    #[test]
+    fn policy_components_mls_governance_reads_projection_cell() {
+        let state = make_state(true);
+        let realm_id = "cx:realm:01904100-0000-7000-8000-a11ce0000001";
+        let policy_root = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        {
+            let mut projection = state.projection.lock().unwrap();
+            projection.cells.insert(
+                contrix_sdk::CellRef::new(
+                    "cx:cell:cx.component.mls.epoch.v1:cx:mls_group:unit-test".to_owned(),
+                )
+                .unwrap(),
+                contrix_sdk::lattice::CellState::Value(json!({
+                    "realm_id": realm_id,
+                    "epoch": 7,
+                    "governance_binding": {
+                        "policy_root": policy_root
+                    }
+                })),
+            );
+        }
+
+        let matching = json!({
+            "mls_governance_binding": {
+                "policy_root": policy_root
+            }
+        });
+        let stale = json!({
+            "mls_governance_binding": {
+                "policy_root": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            }
+        });
+
+        assert!(projected_mls_governance_binding_covers_policy_root(
+            &state, realm_id, &matching
+        ));
+        assert!(!projected_mls_governance_binding_covers_policy_root(
+            &state, realm_id, &stale
+        ));
     }
 
     #[test]
