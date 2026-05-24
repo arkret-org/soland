@@ -73,6 +73,7 @@ fn encode_reject_for_vector(vector: &str) -> Option<(ErrorCode, &'static str)> {
     tags("conformance"),
     summary = "Run a canonical-JSON / digest conformance vector"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.conformance.encode"))]
 pub async fn encode(body: JsonBody<Value>) -> JsonResult<Value> {
     super::ensure_enabled()?;
     let body = body.into_inner();
@@ -97,6 +98,7 @@ pub async fn encode(body: JsonBody<Value>) -> JsonResult<Value> {
     tags("conformance"),
     summary = "Run a signature-binding conformance vector"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.conformance.sign"))]
 pub async fn sign(body: JsonBody<Value>) -> JsonResult<Value> {
     super::ensure_enabled()?;
     let body = body.into_inner();
@@ -153,6 +155,7 @@ pub async fn sign(body: JsonBody<Value>) -> JsonResult<Value> {
     tags("conformance"),
     summary = "Run an HLC ordering conformance vector"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.conformance.hlc_merge"))]
 pub async fn hlc_merge(body: JsonBody<Value>) -> JsonResult<Value> {
     super::ensure_enabled()?;
     let body = body.into_inner();
@@ -202,6 +205,7 @@ pub async fn hlc_merge(body: JsonBody<Value>) -> JsonResult<Value> {
     tags("conformance"),
     summary = "Run an opaque-cursor conformance vector"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.conformance.cursor"))]
 pub async fn cursor(body: JsonBody<Value>) -> JsonResult<Value> {
     super::ensure_enabled()?;
     let body = body.into_inner();
@@ -248,6 +252,7 @@ pub async fn cursor(body: JsonBody<Value>) -> JsonResult<Value> {
     tags("conformance"),
     summary = "Run an encrypted-envelope canonical-digest conformance vector"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.conformance.envelope"))]
 pub async fn envelope(body: JsonBody<Value>) -> JsonResult<Value> {
     super::ensure_enabled()?;
     let body = body.into_inner();
@@ -269,6 +274,7 @@ pub async fn envelope(body: JsonBody<Value>) -> JsonResult<Value> {
     tags("conformance"),
     summary = "Run a redaction visibility / projection conformance vector"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.conformance.redact"))]
 pub async fn redact(body: JsonBody<Value>) -> JsonResult<Value> {
     super::ensure_enabled()?;
     let body = body.into_inner();

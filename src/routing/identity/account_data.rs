@@ -107,6 +107,7 @@ fn account_data_update_type(data_type: &str) -> &'static str {
     summary = "Upsert an actor-private account_data entry",
     status_codes(200, 201, 400, 401, 413, 500)
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.account_data.set"))]
 async fn put_account_data(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -185,6 +186,7 @@ async fn put_account_data(
     tags("account_data"),
     summary = "Fetch a single account_data entry by data_type"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.account_data.get"))]
 async fn get_account_data(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -212,6 +214,7 @@ async fn get_account_data(
     tags("account_data"),
     summary = "List every account_data entry owned by the authenticated actor"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.account_data.list"))]
 async fn list_account_data(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -235,6 +238,7 @@ async fn list_account_data(
     tags("account_data"),
     summary = "Delete an account_data entry"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.account_data.delete"))]
 async fn delete_account_data(
     aa: AuthArgs,
     depot: &mut Depot,

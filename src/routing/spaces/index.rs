@@ -57,6 +57,7 @@ pub(super) fn router() -> Router {
 }
 
 #[endpoint]
+#[tracing::instrument(skip_all, fields(op = "index_describe"))]
 async fn index_describe(depot: &mut Depot, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     res.render(Json(json!({
@@ -107,6 +108,7 @@ fn object_kind_for(object_id: &str) -> Option<&'static str> {
     tags("index"),
     summary = "Describe a typed object by its `cx:<kind>:...` id"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.index.object"))]
 async fn index_object(object_id: QueryParam<String, true>) -> JsonResult<Value> {
     let object_id = object_id.into_inner();
     let kind = object_kind_for(&object_id)
@@ -125,6 +127,7 @@ async fn index_object(object_id: QueryParam<String, true>) -> JsonResult<Value> 
     tags("index"),
     summary = "List events for a thread (up to 100)"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.index.thread"))]
 async fn index_thread(thread_id: QueryParam<String, true>, depot: &mut Depot) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let thread_id = thread_id.into_inner();
@@ -164,6 +167,7 @@ async fn index_thread(thread_id: QueryParam<String, true>, depot: &mut Depot) ->
     tags("index"),
     summary = "List inbox notifications for an actor across known spaces"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.index.notifications"))]
 async fn index_notifications(
     actor: QueryParam<String, false>,
     depot: &mut Depot,
@@ -283,6 +287,7 @@ fn value_is_sender(value: &Value, sender: &str) -> bool {
 }
 
 #[endpoint]
+#[tracing::instrument(skip_all, fields(op = "index_inbox"))]
 async fn index_inbox(depot: &mut Depot, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     let flow_id = super::flow_id_from_space_id(DEMO_REALM_ID);
@@ -305,6 +310,7 @@ async fn index_inbox(depot: &mut Depot, res: &mut Response) {
     tags("index"),
     summary = "Substring-search messages + spaces for a query string"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.index.search"))]
 async fn index_search(body: JsonBody<Value>, depot: &mut Depot) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
@@ -413,6 +419,7 @@ async fn index_search(body: JsonBody<Value>, depot: &mut Depot) -> JsonResult<Va
     tags("index"),
     summary = "Walk the space hierarchy below a root space id"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.index.space_hierarchy"))]
 async fn index_space_hierarchy(root_space_id: QueryParam<String, true>) -> JsonResult<Value> {
     let root_space_id = root_space_id.into_inner();
     json_ok(json!({
@@ -427,6 +434,7 @@ async fn index_space_hierarchy(root_space_id: QueryParam<String, true>) -> JsonR
     tags("index"),
     summary = "Faceted projection query (renderer + filters + sort + cursor)"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.index.query"))]
 async fn index_query(body: JsonBody<Value>, depot: &mut Depot) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
@@ -698,6 +706,7 @@ fn apply_index_sort(results: &mut [Value], sort: &Value) {
     tags("index"),
     summary = "Debug: dump recent reducer events for a Realm"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.index.debug_reducer"))]
 async fn index_debug_reducer(
     realm_id: QueryParam<String, true>,
     limit: QueryParam<usize, false>,

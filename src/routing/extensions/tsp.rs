@@ -281,6 +281,10 @@ pub(super) fn router() -> Router {
     tags("extensions"),
     summary = "Declare a TSP transport"
 )]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "cx.extension.soland.extensions.tsp.transports.declare")
+)]
 async fn declare_transport_endpoint(
     aa: AuthArgs,
     body: JsonBody<Value>,
@@ -330,6 +334,10 @@ async fn declare_transport_endpoint(
     tags("extensions"),
     summary = "List TSP transports owned by the authenticated actor"
 )]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "cx.extension.soland.extensions.tsp.transports.list")
+)]
 async fn list_transports_endpoint(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -345,6 +353,10 @@ async fn list_transports_endpoint(
     operation_id = "cx.extension.soland.extensions.tsp.routes.establish",
     tags("extensions"),
     summary = "Establish a TSP route"
+)]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "cx.extension.soland.extensions.tsp.routes.establish")
 )]
 async fn establish_route_endpoint(
     aa: AuthArgs,
@@ -393,6 +405,10 @@ async fn establish_route_endpoint(
     operation_id = "cx.extension.soland.extensions.tsp.routes.audit",
     tags("extensions"),
     summary = "Fetch the audit chain for a TSP route"
+)]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "cx.extension.soland.extensions.tsp.routes.audit")
 )]
 async fn audit_endpoint(aa: AuthArgs, depot: &mut Depot, req: &mut Request) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");

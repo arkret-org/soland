@@ -36,6 +36,7 @@ pub(super) fn router() -> Router {
     tags("moderation"),
     summary = "File a moderation report for content in a federated space"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.moderation.report"))]
 async fn moderation_report(
     aa: AuthArgs,
     body: JsonBody<ModerationReportReqBody>,
@@ -149,6 +150,7 @@ pub struct ModerationAppealSubmitResBody {
     tags("moderation"),
     summary = "Submit a moderation appeal against a prior decision"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.moderation.appeal.submit"))]
 async fn moderation_appeal_submit(
     aa: AuthArgs,
     body: JsonBody<ModerationAppealSubmitReqBody>,

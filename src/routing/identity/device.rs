@@ -34,6 +34,7 @@ pub(super) fn router() -> Router {
     summary = "List active devices for the authenticated principal",
     status_codes(200, 401, 500)
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.devices.list"))]
 async fn device_list(aa: AuthArgs, depot: &mut Depot, req: &mut Request) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req)?;
@@ -67,6 +68,7 @@ async fn device_list(aa: AuthArgs, depot: &mut Depot, req: &mut Request) -> Json
     summary = "Revoke a sibling device. Self-revoke (revoking the calling session's own device) is rejected with cannot_self_revoke",
     status_codes(200, 400, 401, 404, 500)
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.devices.revoke"))]
 async fn device_revoke(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -116,6 +118,7 @@ async fn device_revoke(
     tags("devices"),
     summary = "Mint a short-lived device pairing challenge"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.devices.pairing_challenge"))]
 async fn device_pairing_challenge(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -175,6 +178,7 @@ async fn device_pairing_challenge(
     tags("devices"),
     summary = "Authorise and register a paired sibling device"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.devices.authorize_pairing"))]
 async fn device_authorize_pairing(
     aa: AuthArgs,
     depot: &mut Depot,

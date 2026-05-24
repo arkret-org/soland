@@ -70,6 +70,7 @@ pub struct PutRealmPolicyServerRequest {
     tags("realms"),
     summary = "Read the projected cx.realm.policy_server config (G3.S2)"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.realms.policy_server.get"))]
 async fn get_realm_policy_server(
     aa: AuthArgs,
     realm_id: PathParam<String>,
@@ -109,6 +110,7 @@ async fn get_realm_policy_server(
     tags("realms"),
     summary = "Submit a cx.realm.policy_server Move (G3.S2)"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.realms.policy_server.put"))]
 async fn put_realm_policy_server(
     aa: AuthArgs,
     realm_id: PathParam<String>,
@@ -171,6 +173,7 @@ async fn put_realm_policy_server(
     tags("realms"),
     summary = "Tombstone the cx.realm.policy_server cell (G3.S2)"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.realms.policy_server.delete"))]
 async fn delete_realm_policy_server(
     aa: AuthArgs,
     realm_id: PathParam<String>,

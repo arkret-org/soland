@@ -83,6 +83,7 @@ pub const MAX_WELCOMES_PER_POLL: usize = 50;
     tags("keys"),
     summary = "Upload a fresh MLS KeyPackage (G3.S1)"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.keys.keypackages.upload"))]
 async fn upload_keypackage(
     aa: AuthArgs,
     body: JsonBody<Value>,
@@ -177,6 +178,7 @@ async fn upload_keypackage(
     tags("keys"),
     summary = "Atomically claim a published KeyPackage for a Welcome (G3.S1)"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.keys.keypackages.claim"))]
 async fn claim_keypackage(
     aa: AuthArgs,
     body: JsonBody<Value>,
@@ -269,6 +271,7 @@ async fn claim_keypackage(
     tags("keys"),
     summary = "Mark claimed KeyPackages consumed by an MLS epoch"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.keys.keypackages.consume"))]
 async fn consume_keypackages(
     aa: AuthArgs,
     body: JsonBody<Value>,
@@ -315,6 +318,7 @@ async fn consume_keypackages(
     tags("keys"),
     summary = "Revoke unconsumed KeyPackages for a device"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.keys.keypackages.revoke"))]
 async fn revoke_keypackages(
     aa: AuthArgs,
     body: JsonBody<Value>,
@@ -375,6 +379,7 @@ async fn revoke_keypackages(
     tags("keys"),
     summary = "Drain the calling device's MLS Welcome queue (G3.S1; soland extension)"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.mls.welcomes.pending"))]
 async fn pending_welcomes(
     aa: AuthArgs,
     limit: QueryParam<usize, false>,

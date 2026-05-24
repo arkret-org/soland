@@ -35,6 +35,7 @@ pub struct ProfilePresenceResponse {
     tags("profile"),
     summary = "Read an actor's presence record + display name"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.profile.presence"))]
 async fn profile_presence(
     did: QueryParam<String, false>,
     depot: &mut Depot,

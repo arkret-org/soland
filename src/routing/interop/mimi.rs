@@ -55,12 +55,14 @@ pub(super) fn well_known_router() -> Router {
 }
 
 #[endpoint]
+#[tracing::instrument(skip_all, fields(op = "mimi_protocol_directory"))]
 async fn mimi_protocol_directory(depot: &mut Depot, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     res.render(Json(mimi_provider_directory_value(state)));
 }
 
 #[endpoint]
+#[tracing::instrument(skip_all, fields(op = "mimi_provider_directory"))]
 async fn mimi_provider_directory(depot: &mut Depot, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     res.render(Json(mimi_provider_directory_value(state)));
@@ -71,6 +73,7 @@ async fn mimi_provider_directory(depot: &mut Depot, res: &mut Response) {
     tags("mimi"),
     summary = "Claim MIMI/MLS key material for a target identifier"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.mimi.key_material"))]
 async fn mimi_key_material(body: JsonBody<Value>, depot: &mut Depot) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
@@ -99,6 +102,7 @@ async fn mimi_key_material(body: JsonBody<Value>, depot: &mut Depot) -> JsonResu
     tags("mimi"),
     summary = "Apply a MIMI room update (optionally persists `room_binding`)"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.mimi.room_update"))]
 async fn mimi_room_update(
     flow_id: PathParam<String>,
     body: JsonBody<Value>,
@@ -151,6 +155,7 @@ async fn mimi_room_update(
     tags("mimi"),
     summary = "Fan out a MIMI room notify (broadcasts a `cx.mimi.notify` ephemeral)"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.mimi.room_notify"))]
 async fn mimi_room_notify(
     flow_id: PathParam<String>,
     body: JsonBody<Value>,
@@ -217,6 +222,7 @@ async fn mimi_room_notify(
     tags("mimi"),
     summary = "Submit a MIMI room message (mapped into cx.message.create projection)"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.mimi.submit_message"))]
 async fn mimi_room_message(
     flow_id: PathParam<String>,
     body: JsonBody<Value>,
@@ -391,6 +397,7 @@ async fn mimi_room_message(
     tags("mimi"),
     summary = "Read a MIMI room's group info / projection"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.mimi.group_info"))]
 async fn mimi_group_info(flow_id: PathParam<String>, depot: &mut Depot) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let room_id = flow_id.into_inner();
@@ -419,6 +426,7 @@ async fn mimi_group_info(flow_id: PathParam<String>, depot: &mut Depot) -> JsonR
     tags("mimi"),
     summary = "Open a MIMI consent request"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.mimi.request_consent"))]
 async fn mimi_consent_request(body: JsonBody<Value>, depot: &mut Depot) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
@@ -442,6 +450,7 @@ async fn mimi_consent_request(body: JsonBody<Value>, depot: &mut Depot) -> JsonR
     tags("mimi"),
     summary = "Update a MIMI consent state"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.mimi.update_consent"))]
 async fn mimi_consent_update(body: JsonBody<Value>, depot: &mut Depot) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
@@ -473,6 +482,7 @@ async fn mimi_consent_update(body: JsonBody<Value>, depot: &mut Depot) -> JsonRe
     tags("mimi"),
     summary = "Resolve a MIMI / DID identifier to a reachable Contrix actor"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.mimi.identifier_query"))]
 async fn mimi_identifiers_query(body: JsonBody<Value>, depot: &mut Depot) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
@@ -515,6 +525,7 @@ async fn mimi_identifiers_query(body: JsonBody<Value>, depot: &mut Depot) -> Jso
     tags("mimi"),
     summary = "File a MIMI abuse report (mirrors as cx.moderation.report projection event)"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.mimi.report_abuse"))]
 async fn mimi_report_abuse(body: JsonBody<Value>, depot: &mut Depot) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
@@ -610,6 +621,7 @@ async fn mimi_report_abuse(body: JsonBody<Value>, depot: &mut Depot) -> JsonResu
     tags("mimi"),
     summary = "Issue a proxy-download token for a MIMI blob (asset privacy policy honored)"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.mimi.proxy_download"))]
 async fn mimi_proxy_download(body: JsonBody<Value>, depot: &mut Depot) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();

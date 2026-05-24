@@ -122,6 +122,7 @@ impl From<&RealmLinkState> for RealmLinkResponseEntry {
     tags("realms"),
     summary = "List typed cross-Realm links projected from cx.realm.link"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.realms.links.list"))]
 async fn list_realm_links(
     aa: AuthArgs,
     realm_id: PathParam<String>,
@@ -180,6 +181,7 @@ async fn list_realm_links(
     tags("realms"),
     summary = "Submit a cx.realm.link Move (G3.S5)"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.realms.links.create"))]
 async fn post_realm_link(
     aa: AuthArgs,
     realm_id: PathParam<String>,
@@ -263,6 +265,7 @@ fn reducer_reject_to_app_error(reason: &'static str) -> AppError {
     tags("realms"),
     summary = "Tombstone a cx.realm.link (G3.S5)"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.realms.links.delete"))]
 async fn delete_realm_link(
     aa: AuthArgs,
     realm_id: PathParam<String>,
@@ -337,6 +340,7 @@ async fn delete_realm_link(
     tags("realms"),
     summary = "Read the merged effective policy after walking inheritance (G3.S5)"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.realms.effective_policy.get"))]
 async fn get_effective_policy(
     aa: AuthArgs,
     realm_id: PathParam<String>,

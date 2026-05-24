@@ -53,6 +53,7 @@ const PUSH_GATEWAY_CONTRACT_MAX_AGE_HOURS: i64 = 24;
     tags("push"),
     summary = "Register a device + push gateway token (bearer or session-grant bridge)"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.push.register_device"))]
 pub(super) async fn push_register(
     body: JsonBody<PushRegisterRequest>,
     depot: &mut Depot,
@@ -145,6 +146,7 @@ fn canonical_error_code(wire: &str) -> crate::error::ErrorCode {
     tags("push"),
     summary = "Unregister a push device for the authenticated actor"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.push.unregister_device"))]
 pub(super) async fn push_unregister(
     aa: AuthArgs,
     body: JsonBody<PushUnregisterRequest>,
@@ -186,6 +188,7 @@ pub(super) async fn push_unregister(
     tags("push"),
     summary = "List push notification rules for the authenticated actor"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.push.rules"))]
 pub(super) async fn push_rules(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -212,6 +215,7 @@ pub(super) async fn push_rules(
     tags("push"),
     summary = "Idempotently create or update a push notification rule"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.push.upsert_rule"))]
 pub(super) async fn upsert_push_rule(
     aa: AuthArgs,
     body: JsonBody<UpsertPushRuleRequest>,
@@ -264,6 +268,7 @@ pub(super) async fn upsert_push_rule(
     tags("push"),
     summary = "Delete a push notification rule"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.push.delete_rule"))]
 pub(super) async fn delete_push_rule(
     aa: AuthArgs,
     rule_id: PathParam<String>,
@@ -288,6 +293,7 @@ pub(super) async fn delete_push_rule(
     tags("push"),
     summary = "Fan out a push notification through the rule engine"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.push.notify"))]
 pub(super) async fn push_notify(
     body: JsonBody<PushNotifyReqBody>,
     depot: &mut Depot,

@@ -433,12 +433,7 @@ impl FederationDispatcher {
         );
     }
 
-    fn insert_dead_letter(
-        &self,
-        row: &FederationOutboxRecord,
-        terminal_status: i32,
-        reason: &str,
-    ) {
+    fn insert_dead_letter(&self, row: &FederationOutboxRecord, terminal_status: i32, reason: &str) {
         let failed_at = row.delivered_at.unwrap_or_else(now_unix_secs);
         let record = FederationOutboxDeadLetterRecord {
             id: Uuid::new_v4().to_string(),

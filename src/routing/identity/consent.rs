@@ -72,6 +72,7 @@ pub struct ConsentUpdateBody {
     tags("consent"),
     summary = "List consent cells visible to the authenticated holder"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.consent.cells.list"))]
 async fn list_consent_cells(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -103,6 +104,7 @@ async fn list_consent_cells(
     summary = "Read one holder-private consent cell",
     status_codes(200, 400, 401, 403, 404, 500)
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.consent.cells.get"))]
 async fn get_consent_cell(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -143,6 +145,7 @@ async fn get_consent_cell(
     summary = "Grant scoped consent to a peer DID",
     status_codes(200, 400, 401, 403, 500)
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.consent.cells.grant"))]
 async fn grant_consent_cell(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -191,6 +194,7 @@ async fn grant_consent_cell(
     summary = "Revoke scoped consent from a peer DID",
     status_codes(200, 400, 401, 403, 500)
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.consent.cells.revoke"))]
 async fn revoke_consent_cell(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -227,6 +231,7 @@ async fn revoke_consent_cell(
     summary = "Open a scoped consent request",
     status_codes(200, 201, 400, 401, 404, 500)
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.consent.request"))]
 async fn request_consent_cell(
     aa: AuthArgs,
     depot: &mut Depot,

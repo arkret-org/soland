@@ -59,6 +59,7 @@ pub(super) fn router() -> Router {
 }
 
 #[endpoint]
+#[tracing::instrument(skip_all, fields(op = "directory_describe"))]
 async fn directory_describe(depot: &mut Depot, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     res.render(Json(DirectoryDescribeResBody {
@@ -78,6 +79,7 @@ async fn directory_describe(depot: &mut Depot, res: &mut Response) {
     tags("directory"),
     summary = "Fuzzy-text + visibility-filtered realm search"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.directory.search_realms"))]
 async fn search_realms(
     body: JsonBody<SearchRealmsRequest>,
     depot: &mut Depot,
@@ -110,6 +112,7 @@ async fn search_realms(
     tags("directory"),
     summary = "Resolve a realm by id / alias / invite_token / signed_link"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.directory.resolve_realm"))]
 async fn resolve_realm(
     body: JsonBody<ResolveRealmRequest>,
     depot: &mut Depot,
@@ -184,6 +187,7 @@ async fn resolve_realm(
     tags("directory"),
     summary = "Fuzzy-text search across known organizations (demo data for now)"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.directory.search_organizations"))]
 async fn search_organizations(
     body: JsonBody<SearchOrganizationsRequest>,
     depot: &mut Depot,
@@ -215,6 +219,7 @@ async fn search_organizations(
     tags("directory"),
     summary = "Resolve an organization by organization_id or handle"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.directory.resolve_organization"))]
 async fn resolve_organization(
     body: JsonBody<ResolveOrganizationRequest>,
     depot: &mut Depot,
@@ -269,6 +274,7 @@ async fn resolve_organization(
     tags("directory"),
     summary = "Search actors visible to the calling session"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.directory.search_actors"))]
 async fn search_actors(
     body: JsonBody<SearchActorsRequest>,
     depot: &mut Depot,
@@ -305,6 +311,7 @@ async fn search_actors(
     tags("directory"),
     summary = "Search users via a POST body to avoid query-string leakage"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.directory.search_users"))]
 async fn search_users(
     body: JsonBody<SearchUsersRequest>,
     depot: &mut Depot,
@@ -333,6 +340,7 @@ async fn search_users(
     tags("directory"),
     summary = "Resolve a normalized actor handle (e.g. `@alice`) to a DID"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.directory.resolve_handle"))]
 async fn resolve_handle(
     body: JsonBody<ResolveHandleRequest>,
     depot: &mut Depot,
@@ -417,10 +425,12 @@ fn signed_handle_claim(
         "created_at": created_at.to_rfc3339(),
         "expires_at": expires_at.to_rfc3339(),
     });
-    let canonical_bytes = canonical::canonical_json_bytes(&unsigned)
-        .map_err(|err| AppError::internal(format!("handle claim canonicalization failed: {err}")))?;
-    let signer_did = Did::new(service_did.clone())
-        .map_err(|err| AppError::internal(format!("invalid service DID for handle claim: {err}")))?;
+    let canonical_bytes = canonical::canonical_json_bytes(&unsigned).map_err(|err| {
+        AppError::internal(format!("handle claim canonicalization failed: {err}"))
+    })?;
+    let signer_did = Did::new(service_did.clone()).map_err(|err| {
+        AppError::internal(format!("invalid service DID for handle claim: {err}"))
+    })?;
     let signer = Ed25519MoveSigner::new(
         (*state.anchorer_signing_key()).clone(),
         signer_did,
@@ -478,6 +488,7 @@ fn signed_handle_claim(
     tags("directory"),
     summary = "Privacy-preserving contact discovery over padded identifier batches"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.directory.private_contact_discovery"))]
 async fn private_contact_discovery(
     body: JsonBody<Value>,
     depot: &mut Depot,
@@ -542,6 +553,7 @@ async fn private_contact_discovery(
     tags("directory"),
     summary = "Announce a discoverable directory resource"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.directory.announce"))]
 async fn directory_announce(
     body: JsonBody<Value>,
     depot: &mut Depot,
@@ -589,6 +601,7 @@ async fn directory_announce(
     tags("directory"),
     summary = "Withdraw a previously-announced directory resource"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.directory.withdraw"))]
 async fn directory_withdraw(
     body: JsonBody<Value>,
     depot: &mut Depot,
@@ -632,6 +645,7 @@ async fn directory_withdraw(
     tags("directory"),
     summary = "Subscribe to directory update notifications"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.directory.push.register"))]
 async fn directory_subscribe(
     body: JsonBody<Value>,
     depot: &mut Depot,

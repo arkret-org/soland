@@ -76,6 +76,7 @@ pub(super) fn router() -> Router {
 }
 
 #[endpoint]
+#[tracing::instrument(skip_all, fields(op = "outbound_push_bridge_describe"))]
 async fn outbound_push_bridge_describe(depot: &mut Depot, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     res.render(Json(OutboundPushBridgeDescribeResponse {
@@ -168,6 +169,10 @@ async fn outbound_push_bridge_describe(depot: &mut Depot, res: &mut Response) {
     tags("push"),
     summary = "Resolve a push gateway URL to a cached contract snapshot"
 )]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "cx.extension.soland.push.outbound_bridge_resolve")
+)]
 async fn outbound_push_bridge_resolve(
     body: JsonBody<OutboundPushBridgeResolveRequest>,
     depot: &mut Depot,
@@ -231,6 +236,10 @@ async fn outbound_push_bridge_resolve(
     operation_id = "cx.extension.soland.push.outbound_bridge_fetch",
     tags("push"),
     summary = "Live-fetch the upstream push bridge contract + populate the durable cache"
+)]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "cx.extension.soland.push.outbound_bridge_fetch")
 )]
 async fn outbound_push_bridge_fetch(
     body: JsonBody<OutboundPushBridgeFetchRequest>,
@@ -364,6 +373,7 @@ async fn outbound_push_bridge_fetch(
 }
 
 #[endpoint]
+#[tracing::instrument(skip_all, fields(op = "outbound_push_bridge_cache_status"))]
 async fn outbound_push_bridge_cache_status(depot: &mut Depot, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     let entries = state
@@ -378,6 +388,7 @@ async fn outbound_push_bridge_cache_status(depot: &mut Depot, res: &mut Response
 }
 
 #[endpoint]
+#[tracing::instrument(skip_all, fields(op = "outbound_push_bridge_cache_export"))]
 async fn outbound_push_bridge_cache_export(depot: &mut Depot, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     let entries = state
@@ -399,6 +410,10 @@ async fn outbound_push_bridge_cache_export(depot: &mut Depot, res: &mut Response
     operation_id = "cx.extension.soland.push.outbound_bridge_cache_import",
     tags("push"),
     summary = "Import push bridge cache snapshots (replace_existing toggle)"
+)]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "cx.extension.soland.push.outbound_bridge_cache_import")
 )]
 async fn outbound_push_bridge_cache_import(
     body: JsonBody<OutboundPushBridgeCacheImportRequest>,
@@ -461,6 +476,10 @@ async fn outbound_push_bridge_cache_import(
     operation_id = "cx.extension.soland.push.outbound_bridge_cache_invalidate",
     tags("push"),
     summary = "Invalidate one or all push bridge cache entries"
+)]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "cx.extension.soland.push.outbound_bridge_cache_invalidate")
 )]
 async fn outbound_push_bridge_cache_invalidate(
     body: JsonBody<OutboundPushBridgeCacheInvalidateRequest>,

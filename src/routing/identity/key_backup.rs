@@ -224,6 +224,7 @@ fn delete_ownership_proof_matches(req: &Request, backup_id: &str, actor_id: &str
     tags("keys"),
     summary = "Store an encrypted key backup payload by backup_id"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.keys.backups.put"))]
 async fn put_key_backup(
     aa: AuthArgs,
     backup_id: PathParam<String>,
@@ -265,6 +266,7 @@ async fn put_key_backup(
     tags("keys"),
     summary = "List encrypted key backups owned by the authenticated actor"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.keys.backups.list"))]
 async fn list_key_backups(
     aa: AuthArgs,
     cursor: QueryParam<String, false>,
@@ -295,6 +297,7 @@ async fn list_key_backups(
     tags("keys"),
     summary = "Read a single encrypted key backup by backup_id"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.keys.backups.get"))]
 async fn get_key_backup(
     aa: AuthArgs,
     backup_id: PathParam<String>,
@@ -324,6 +327,7 @@ async fn get_key_backup(
     tags("keys"),
     summary = "Delete an encrypted key backup by backup_id"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.keys.backups.delete"))]
 async fn delete_key_backup(
     aa: AuthArgs,
     backup_id: PathParam<String>,

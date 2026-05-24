@@ -114,6 +114,10 @@ fn response_from_cell(realm_id: &str, value: Option<&Value>) -> RealmDeliveryBin
     tags("admin", "realm", "delivery_binding_policy"),
     summary = "Get effective Realm delivery-binding-policy"
 )]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "cx.extension.soland.admin.realms.delivery_binding_policy.get")
+)]
 pub(super) async fn admin_get_realm_delivery_binding_policy(
     aa: AuthArgs,
     depot: &mut Depot,

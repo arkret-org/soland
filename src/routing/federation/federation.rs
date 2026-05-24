@@ -46,6 +46,7 @@ use crate::state::{AppState, FederationTransactionRecord};
     tags("federation"),
     summary = "Idempotent inbound server-to-server federation transaction"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.federation.transaction"))]
 pub(super) async fn federation_transaction(
     txn_id: PathParam<String>,
     body: JsonBody<contrix_sdk::FederationTransactionReqBody>,
@@ -242,6 +243,10 @@ pub(super) async fn federation_transaction(
     tags("federation"),
     summary = "Accept a batch of operations pushed from a peer service"
 )]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "cx.extension.soland.federation.push_operations")
+)]
 pub(super) async fn federation_push_operations(
     body: JsonBody<contrix_sdk::FederationPushOperationsReqBody>,
     depot: &mut Depot,
@@ -270,6 +275,10 @@ pub(super) async fn federation_push_operations(
     operation_id = "cx.extension.soland.federation.pull_operations",
     tags("federation"),
     summary = "Pull a page of operations for a federated space, with optional snapshot bootstrap"
+)]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "cx.extension.soland.federation.pull_operations")
 )]
 pub(super) async fn federation_pull_operations(
     space_id: QueryParam<String, true>,
@@ -345,6 +354,7 @@ pub(super) async fn federation_pull_operations(
     tags("federation"),
     summary = "List space memberships for a federated space"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.federation.space_members"))]
 pub(super) async fn federation_space_members(
     space_id: QueryParam<String, true>,
     depot: &mut Depot,
@@ -380,6 +390,7 @@ pub(super) async fn federation_space_members(
     tags("federation"),
     summary = "Verify a federated actor's signature against the local DID resolver"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.federation.verify_actor"))]
 pub(super) async fn federation_verify_actor(
     body: JsonBody<contrix_sdk::FederationVerifyActorReqBody>,
     depot: &mut Depot,
@@ -518,6 +529,7 @@ pub struct FederationAnchorsPushResponse {
     tags("federation"),
     summary = "Pull locally-held Anchors for a Space (federation peer-pull)"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.federation.anchors.pull"))]
 pub(super) async fn federation_anchors_pull(
     depot: &mut Depot,
     space_id: QueryParam<String, true>,
@@ -547,6 +559,7 @@ pub(super) async fn federation_anchors_pull(
     tags("federation"),
     summary = "Accept Anchor envelopes from a federation peer (peer-push)"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.federation.anchors.push"))]
 pub(super) async fn federation_anchors_push(
     depot: &mut Depot,
     body: JsonBody<FederationAnchorsPushRequest>,

@@ -40,6 +40,10 @@ pub(super) fn router() -> Router {
     tags("audit"),
     summary = "List cx.audit.erasure_receipt projection rows + fanout state"
 )]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "cx.extension.soland.audit.erasure_receipts.list")
+)]
 async fn audit_erasure_receipts(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -108,6 +112,7 @@ async fn audit_erasure_receipts(
     tags("audit"),
     summary = "Append a client-side user-action audit entry"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.audit.user_action"))]
 async fn post_user_action(
     aa: AuthArgs,
     body: JsonBody<Value>,
@@ -157,6 +162,7 @@ async fn post_user_action(
     tags("audit"),
     summary = "Actor-scoped audit query (cursor-paginated; actor MUST match session)"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.audit.events"))]
 async fn audit_events(
     aa: AuthArgs,
     actor: QueryParam<String, false>,

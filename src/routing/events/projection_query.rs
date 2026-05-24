@@ -107,6 +107,7 @@ fn total_count(len: usize) -> Result<u64, AppError> {
     tags("projection"),
     summary = "List Space lifecycle projection state for a Realm"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.projection.spaces"))]
 async fn list_space_container_projections(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -169,6 +170,7 @@ async fn list_space_container_projections(
     tags("projection"),
     summary = "List Flow lifecycle projection state for a Realm"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.projection.flows"))]
 async fn list_flow_projections(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -229,6 +231,7 @@ async fn list_flow_projections(
     tags("projection"),
     summary = "List Morph lifecycle projection state for a Realm"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.projection.morphs"))]
 async fn list_morph_projections(
     aa: AuthArgs,
     depot: &mut Depot,

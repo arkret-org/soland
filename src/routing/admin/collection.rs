@@ -32,6 +32,7 @@ use crate::state::{AppState, RealmDirectoryEntry};
     tags("admin"),
     summary = "Dev-only paginated admin snapshot of a named collection"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.admin.collection"))]
 pub(super) async fn admin_collection(
     aa: AuthArgs,
     resource: PathParam<String>,

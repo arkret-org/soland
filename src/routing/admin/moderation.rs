@@ -72,6 +72,10 @@ pub(super) fn router() -> Router {
     tags("admin", "moderation"),
     summary = "List moderation queue items"
 )]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "cx.extension.soland.admin.moderation.queue.list")
+)]
 async fn list_queue(aa: AuthArgs, depot: &mut Depot, req: &mut Request) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req)?;
@@ -93,6 +97,10 @@ pub struct AssignReviewerReq {
     operation_id = "cx.extension.soland.admin.moderation.queue.assign",
     tags("admin", "moderation"),
     summary = "Assign reviewer DIDs to a queue item"
+)]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "cx.extension.soland.admin.moderation.queue.assign")
 )]
 async fn assign_queue_item(
     aa: AuthArgs,
@@ -143,6 +151,10 @@ pub struct PrioritiseReq {
     operation_id = "cx.extension.soland.admin.moderation.queue.priority",
     tags("admin", "moderation"),
     summary = "Set priority on a queue item"
+)]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "cx.extension.soland.admin.moderation.queue.priority")
 )]
 async fn prioritise_queue_item(
     aa: AuthArgs,
@@ -214,6 +226,7 @@ pub struct DecisionResBody {
     tags("admin", "moderation"),
     summary = "Issue a moderation decision"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.admin.moderation.decision"))]
 async fn issue_decision(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -246,11 +259,7 @@ async fn issue_decision(
         .append_decision(decision)
         .map_err(|err| AppError::internal(err.to_string()))?;
     if let Some(item_id) = body.queue_item_ref.clone() {
-        if let Ok(Some(mut item)) = state
-            .persistence
-            .moderation()
-            .get_queue_item(&item_id)
-        {
+        if let Ok(Some(mut item)) = state.persistence.moderation().get_queue_item(&item_id) {
             if let Some(obj) = item.as_object_mut() {
                 obj.insert("status".to_owned(), json!("actioned"));
                 obj.insert("updated_at".to_owned(), json!(Utc::now().to_rfc3339()));
@@ -289,6 +298,10 @@ pub struct LiftDecisionReq {
     operation_id = "cx.extension.soland.admin.moderation.decision.lift",
     tags("admin", "moderation"),
     summary = "Lift a previously-issued moderation decision"
+)]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "cx.extension.soland.admin.moderation.decision.lift")
 )]
 async fn lift_decision(
     aa: AuthArgs,
@@ -341,6 +354,10 @@ async fn lift_decision(
     tags("admin", "moderation"),
     summary = "List moderation appeals (latest event per appeal)"
 )]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "cx.extension.soland.admin.moderation.appeals.list")
+)]
 async fn list_appeals(aa: AuthArgs, depot: &mut Depot, req: &mut Request) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req)?;
@@ -357,6 +374,10 @@ async fn list_appeals(aa: AuthArgs, depot: &mut Depot, req: &mut Request) -> Jso
     operation_id = "cx.extension.soland.admin.moderation.appeals.get",
     tags("admin", "moderation"),
     summary = "Full history of one moderation appeal"
+)]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "cx.extension.soland.admin.moderation.appeals.get")
 )]
 async fn get_appeal(aa: AuthArgs, depot: &mut Depot, req: &mut Request) -> JsonResult<Value> {
     let appeal_id = req
@@ -408,6 +429,10 @@ pub struct ReviewAppealReq {
     operation_id = "cx.extension.soland.admin.moderation.appeal.review",
     tags("admin", "moderation"),
     summary = "Reviewer takes a moderation appeal under review"
+)]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "cx.extension.soland.admin.moderation.appeal.review")
 )]
 async fn review_appeal(
     aa: AuthArgs,
@@ -490,6 +515,10 @@ pub struct DecideAppealReq {
     operation_id = "cx.extension.soland.admin.moderation.appeal.decision",
     tags("admin", "moderation"),
     summary = "Reviewer issues verdict on a moderation appeal"
+)]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "cx.extension.soland.admin.moderation.appeal.decision")
 )]
 async fn decide_appeal(
     aa: AuthArgs,
@@ -618,6 +647,10 @@ pub struct CloseAppealReq {
     operation_id = "cx.extension.soland.admin.moderation.appeal.close",
     tags("admin", "moderation"),
     summary = "Close a decided moderation appeal"
+)]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "cx.extension.soland.admin.moderation.appeal.close")
 )]
 async fn close_appeal(
     aa: AuthArgs,

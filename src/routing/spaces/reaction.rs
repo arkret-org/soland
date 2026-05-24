@@ -29,6 +29,7 @@ pub(super) fn router() -> Router {
     tags("reactions"),
     summary = "Add a reaction to an event"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.reactions.add"))]
 async fn add_reaction(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -65,6 +66,7 @@ async fn add_reaction(
     tags("reactions"),
     summary = "Remove a previously-added reaction"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.reactions.remove"))]
 async fn remove_reaction(
     aa: AuthArgs,
     depot: &mut Depot,

@@ -55,6 +55,7 @@ pub(super) fn contrix_router() -> Router {
     tags("media"),
     summary = "Issue signed ICE config"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.media.ice_config"))]
 async fn ice_config(
     aa: AuthArgs,
     body: JsonBody<Value>,
@@ -165,6 +166,7 @@ fn ice_config_signature(state: &AppState, payload: &Value) -> String {
     tags("webrtc"),
     summary = "Create a WebRTC signaling session bound to a Space"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.webrtc.create_session"))]
 async fn create_webrtc_session(
     aa: AuthArgs,
     body: JsonBody<CreateWebrtcSessionRequest>,
@@ -232,6 +234,7 @@ async fn create_webrtc_session(
     tags("webrtc"),
     summary = "Append a WebRTC signaling message (offer/answer/candidate/...) to a session"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.webrtc.send_signal"))]
 async fn put_webrtc_signal(
     aa: AuthArgs,
     session_id: PathParam<String>,
@@ -314,6 +317,7 @@ async fn put_webrtc_signal(
     tags("webrtc"),
     summary = "Page through WebRTC signaling events for a session"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.webrtc.get_signals"))]
 async fn get_webrtc_signals(
     aa: AuthArgs,
     session_id: PathParam<String>,
@@ -368,6 +372,7 @@ async fn get_webrtc_signals(
     tags("webrtc"),
     summary = "Close (delete) a WebRTC signaling session"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.webrtc.close_session"))]
 async fn delete_webrtc_session(
     aa: AuthArgs,
     session_id: PathParam<String>,

@@ -77,6 +77,10 @@ pub struct AdminControlFrameResponse {
     tags("admin", "events"),
     summary = "Broadcast a resync_required control frame to subscribers"
 )]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "cx.extension.soland.admin.events.resync_required")
+)]
 async fn admin_emit_resync_required(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -120,6 +124,7 @@ async fn admin_emit_resync_required(
     tags("admin", "events"),
     summary = "Broadcast an unauthorized control frame to subscribers"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.admin.events.unauthorized"))]
 async fn admin_emit_unauthorized(
     aa: AuthArgs,
     depot: &mut Depot,

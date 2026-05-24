@@ -172,6 +172,7 @@ pub(super) fn router() -> Router {
     tags("extensions"),
     summary = "Register a bot or ghost actor"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.extensions.bots.register"))]
 async fn register_endpoint(
     aa: AuthArgs,
     body: JsonBody<Value>,
@@ -217,6 +218,7 @@ async fn register_endpoint(
     tags("extensions"),
     summary = "List bots / ghost actors owned by the authenticated actor"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.extensions.bots.list"))]
 async fn list_endpoint(aa: AuthArgs, depot: &mut Depot, req: &mut Request) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req)?;
@@ -229,6 +231,7 @@ async fn list_endpoint(aa: AuthArgs, depot: &mut Depot, req: &mut Request) -> Js
     tags("extensions"),
     summary = "Revoke a bot / ghost actor"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.extensions.bots.revoke"))]
 async fn revoke_endpoint(aa: AuthArgs, depot: &mut Depot, req: &mut Request) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req)?;

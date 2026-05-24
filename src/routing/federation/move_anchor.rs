@@ -196,6 +196,7 @@ pub struct SubmitMoveResponse {
     tags("moves"),
     summary = "Submit a Move for the next Anchor batch"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.moves.submit"))]
 async fn submit_move(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -276,6 +277,7 @@ pub struct RejectedMoveEntry {
     tags("anchors"),
     summary = "Submit an Anchor; runs apply_anchor end-to-end"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.anchors.submit"))]
 async fn submit_anchor(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -442,6 +444,7 @@ pub struct SignAnchorResponse {
     tags("admin", "anchors"),
     summary = "Trigger one anchorer signing pass for a Space"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.admin.anchors.sign"))]
 async fn admin_sign_anchor(
     aa: AuthArgs,
     depot: &mut Depot,

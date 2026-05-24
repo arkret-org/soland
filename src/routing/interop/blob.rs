@@ -33,6 +33,7 @@ pub(super) fn router() -> Router {
 }
 
 #[endpoint]
+#[tracing::instrument(skip_all, fields(op = "blob_upload"))]
 async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     let Some(session) = auth_or_render(state, req, res) else {
@@ -228,6 +229,7 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
 }
 
 #[endpoint]
+#[tracing::instrument(skip_all, fields(op = "blob_get"))]
 async fn blob_get(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     let Some(blob_ref) = query_param(req, "blob_ref") else {
@@ -441,6 +443,7 @@ async fn blob_get(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     tags("blob"),
     summary = "Issue a short-lived presigned blob download URL"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.blob.presign"))]
 async fn blob_presign(
     aa: crate::routing::system::extract::AuthArgs,
     body: JsonBody<Value>,

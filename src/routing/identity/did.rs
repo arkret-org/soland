@@ -41,6 +41,7 @@ const WEBVH_METHOD_VERSION: &str = "did:webvh:1.0";
 const ED25519_MULTICODEC_PREFIX: [u8; 2] = [0xed, 0x01];
 
 #[endpoint]
+#[tracing::instrument(skip_all, fields(op = "identity_describe"))]
 pub(super) async fn identity_describe(depot: &mut Depot, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     let allow_methods = state.config.did_resolver_allow_methods.clone();
@@ -112,6 +113,7 @@ pub struct EmbeddedWebvhRegisterResponse {
     summary = "Register through the embedded did:webvh provider",
     status_codes(201, 400, 401, 404, 409, 500, 503)
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.identity.webvh.register"))]
 pub(super) async fn embedded_webvh_register(
     depot: &mut Depot,
     req: &mut Request,
@@ -306,6 +308,7 @@ pub(super) async fn embedded_webvh_register(
 }
 
 #[endpoint]
+#[tracing::instrument(skip_all, fields(op = "embedded_webvh_document"))]
 pub(super) async fn embedded_webvh_document(
     depot: &mut Depot,
     req: &mut Request,
@@ -323,6 +326,7 @@ pub(super) async fn embedded_webvh_document(
 }
 
 #[endpoint]
+#[tracing::instrument(skip_all, fields(op = "embedded_webvh_log"))]
 pub(super) async fn embedded_webvh_log(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     let Some(record) = embedded_webvh_record_for_request(state, req, res) else {
@@ -358,6 +362,7 @@ pub(super) async fn embedded_webvh_log(depot: &mut Depot, req: &mut Request, res
     tags("identity"),
     summary = "Resolve a DID via local webvh store + SDK resolver chain"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.identity.resolve"))]
 pub(super) async fn identity_resolve(
     body: JsonBody<IdentityResolveReqBody>,
     depot: &mut Depot,
@@ -427,6 +432,7 @@ pub(super) async fn identity_resolve(
     tags("identity"),
     summary = "Fetch the locally-cached DID document for a DID"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.identity.get_document"))]
 pub(super) async fn identity_document(
     did: salvo::oapi::extract::QueryParam<String, true>,
     depot: &mut Depot,
@@ -451,6 +457,7 @@ pub(super) async fn identity_document(
     tags("identity"),
     summary = "Return the local webvh key-log events for a DID"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.identity.get_log"))]
 pub(super) async fn identity_log(
     did: salvo::oapi::extract::QueryParam<String, true>,
     depot: &mut Depot,
@@ -488,6 +495,7 @@ pub(super) async fn identity_log(
     tags("identity"),
     summary = "Read issuer receipts for the local webvh key-log of a DID"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.identity.get_receipts"))]
 pub(super) async fn identity_receipts(
     did: salvo::oapi::extract::QueryParam<String, true>,
     depot: &mut Depot,
@@ -520,6 +528,7 @@ pub(super) async fn identity_receipts(
     summary = "Submit a method-neutral DID operation to the local registry",
     status_codes(200, 400, 401, 409, 500)
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.identity.submit_did_operation"))]
 pub(super) async fn identity_submit_did_operation(
     depot: &mut Depot,
     body: JsonBody<Value>,

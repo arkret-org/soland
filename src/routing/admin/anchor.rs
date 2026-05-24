@@ -636,6 +636,7 @@ fn collect_bottom_entries_for_space(state: &AppState, space_id: &str) -> Vec<Bot
     tags("admin", "anchorer"),
     summary = "Get current anchorer cell value"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.admin.spaces.anchorer.get"))]
 pub(super) async fn admin_get_anchorer(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -678,6 +679,10 @@ pub(super) async fn admin_get_anchorer(
     operation_id = "cx.extension.soland.admin.spaces.anchorer.reconfigure",
     tags("admin", "anchorer"),
     summary = "Submit anchorer reconfiguration Move"
+)]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "cx.extension.soland.admin.spaces.anchorer.reconfigure")
 )]
 pub(super) async fn admin_reconfigure_anchorer(
     aa: AuthArgs,
@@ -824,6 +829,7 @@ pub(super) async fn admin_reconfigure_anchorer(
     tags("admin", "bottom"),
     summary = "List Bottom cells in a Space"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.admin.spaces.bottom.list"))]
 pub(super) async fn admin_list_space_bottom(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -845,6 +851,7 @@ pub(super) async fn admin_list_space_bottom(
     tags("admin", "bottom"),
     summary = "List Bottom cells across every Space"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.admin.bottom.list_global"))]
 pub(super) async fn admin_list_bottom_global(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -882,6 +889,10 @@ pub(super) async fn admin_list_bottom_global(
     operation_id = "cx.extension.soland.admin.spaces.bottom.repair",
     tags("admin", "bottom"),
     summary = "Submit repair Move for a Bottom cell"
+)]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "cx.extension.soland.admin.spaces.bottom.repair")
 )]
 pub(super) async fn admin_repair_bottom(
     aa: AuthArgs,
@@ -1090,6 +1101,10 @@ pub(super) async fn admin_repair_bottom(
     tags("admin", "anchor-dag"),
     summary = "Get Anchor DAG snapshot for a Space"
 )]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "cx.extension.soland.admin.spaces.anchor_dag.get")
+)]
 pub(super) async fn admin_get_anchor_dag(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -1175,6 +1190,10 @@ pub(super) async fn admin_get_anchor_dag(
     operation_id = "cx.extension.soland.admin.spaces.anchor_dag.compact",
     tags("admin", "anchor-dag"),
     summary = "Trigger signed compaction Anchor"
+)]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "cx.extension.soland.admin.spaces.anchor_dag.compact")
 )]
 pub(super) async fn admin_compact_anchor_dag(
     aa: AuthArgs,
@@ -1305,6 +1324,10 @@ pub(super) async fn admin_compact_anchor_dag(
     operation_id = "cx.extension.soland.admin.spaces.anchor_dag.prune",
     tags("admin", "anchor-dag"),
     summary = "Evaluate + prune a historical Anchor"
+)]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "cx.extension.soland.admin.spaces.anchor_dag.prune")
 )]
 pub(super) async fn admin_prune_anchor_dag(
     aa: AuthArgs,

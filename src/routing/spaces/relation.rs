@@ -40,6 +40,7 @@ pub(super) fn router() -> Router {
     tags("relations"),
     summary = "Create a relation between two refs in a Space"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.relation.create"))]
 async fn create_relation(
     aa: AuthArgs,
     body: JsonBody<CreateRelationRequest>,
@@ -113,6 +114,7 @@ async fn create_relation(
     tags("relations"),
     summary = "Soft-delete a relation by relation_id"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.relation.tombstone"))]
 async fn delete_relation(
     aa: AuthArgs,
     relation_id: PathParam<String>,
@@ -147,6 +149,7 @@ async fn delete_relation(
     tags("relations"),
     summary = "List relations for a space, optionally filtered by `kind`"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.relation.list"))]
 async fn list_relations(
     aa: AuthArgs,
     space_id: QueryParam<String, false>,

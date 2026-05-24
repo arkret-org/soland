@@ -53,6 +53,7 @@ pub(super) fn router() -> Router {
     tags("auth"),
     summary = "Development bearer-token login"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.auth.dev_login"))]
 async fn dev_login(
     depot: &mut Depot,
     body: JsonBody<DevLoginRequest>,
@@ -161,6 +162,7 @@ async fn dev_login(
     tags("auth"),
     summary = "Exchange a coauth session-grant for a principal-server bearer session"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.auth.exchange_session_grant"))]
 async fn exchange_session_grant(
     depot: &mut Depot,
     body: JsonBody<SessionGrantExchangeRequest>,
@@ -422,6 +424,7 @@ pub(crate) async fn validate_session_grant_binding(
     tags("auth"),
     summary = "Revoke the current bearer session and bound device"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.auth.logout"))]
 async fn logout(
     aa: super::AuthArgs,
     depot: &mut Depot,

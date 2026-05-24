@@ -2251,6 +2251,7 @@ mod framework_error_routing_tests {
 }
 
 #[endpoint]
+#[tracing::instrument(skip_all, fields(op = "contrix_openapi_yaml"))]
 async fn contrix_openapi_yaml(depot: &mut Depot, res: &mut Response) {
     let doc = depot
         .obtain::<ContrixOpenApiDoc>()

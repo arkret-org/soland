@@ -147,6 +147,7 @@ fn resolve_space_for_cell(explicit: Option<&str>, cell_id: &CellRef) -> Result<S
     tags("admin", "cells"),
     summary = "Get one cell's resolved state"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.admin.cells.get"))]
 async fn admin_get_cell(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -245,6 +246,7 @@ async fn admin_get_cell(
     tags("admin", "cells"),
     summary = "List cells matching a space + family prefix filter"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.admin.cells.list"))]
 async fn admin_list_cells(
     aa: AuthArgs,
     depot: &mut Depot,

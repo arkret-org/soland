@@ -79,6 +79,7 @@ fn normalize_scope_selectors(values: Vec<String>) -> Result<Vec<String>, crate::
 }
 
 #[endpoint]
+#[tracing::instrument(skip_all, fields(op = "account_describe"))]
 async fn account_describe(depot: &mut Depot, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     res.render(Json(AccountDescribeResBody {
@@ -109,6 +110,7 @@ async fn account_describe(depot: &mut Depot, res: &mut Response) {
     tags("sync"),
     summary = "Account-aggregate subscribe stream (timeline / presence / typing / to_device)"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.account.subscribe"))]
 async fn account_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = account_subscribe_query(req);
@@ -723,10 +725,7 @@ fn store_sync_cursor_handle(state: &AppState, stored: Value) -> String {
     }
 }
 
-fn stored_sync_cursor_by_handle(
-    state: &AppState,
-    handle: &str,
-) -> Result<Value, SyncCursorError> {
+fn stored_sync_cursor_by_handle(state: &AppState, handle: &str) -> Result<Value, SyncCursorError> {
     state
         .sync_cursor_handles
         .lock()
@@ -839,9 +838,9 @@ pub fn parse_and_validate_sync_cursor(
             "cursor filter hash does not match request filter",
         ));
     }
-    let positions_value = stored
-        .get("positions")
-        .ok_or(SyncCursorError::Integrity("cursor handle is missing positions"))?;
+    let positions_value = stored.get("positions").ok_or(SyncCursorError::Integrity(
+        "cursor handle is missing positions",
+    ))?;
     let positions = positions_value
         .get("spaces")
         .and_then(|spaces| spaces.as_object())
@@ -907,8 +906,8 @@ pub fn resolve_sync_cursor_to_event_id(
         .get("h")
         .and_then(Value::as_str)
         .ok_or("sync cursor is missing stateful handle")?;
-    let stored = stored_sync_cursor_by_handle(state, handle)
-        .map_err(|_| "sync cursor handle is unknown")?;
+    let stored =
+        stored_sync_cursor_by_handle(state, handle).map_err(|_| "sync cursor handle is unknown")?;
     let checkpoint = stored
         .get("positions")
         .and_then(|positions| positions.get("spaces"))
@@ -961,6 +960,7 @@ pub fn sync_filter_hash(filter: Option<&serde_json::Value>) -> String {
     tags("sync"),
     summary = "Send a broadcast ephemeral signal"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.ephemeral.send"))]
 async fn submit_ephemeral(
     aa: crate::routing::system::extract::AuthArgs,
     body: salvo::oapi::extract::JsonBody<contrix_sdk::EphemeralEnvelope>,
@@ -1142,6 +1142,7 @@ fn admit_ephemeral_read_receipt(
 ///      - client disconnects (drops the response stream)
 ///      - the broadcast channel is closed (server shutdown)
 #[endpoint]
+#[tracing::instrument(skip_all, fields(op = "events_subscribe"))]
 pub(super) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected").clone();
     // Spec-canonical param is `realms=` (cx.events.subscribe). Legacy
@@ -1481,6 +1482,7 @@ fn truncate_before_stop_cursor(mut events: Vec<Value>, stop_cursor: Option<&str>
     tags("events"),
     summary = "Projection-aware events query (single- or multi-space merge; backward / forward direction)"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.events.query"))]
 pub(super) async fn events_query(
     depot: &mut Depot,
     req: &mut Request,
@@ -1506,6 +1508,7 @@ pub(super) async fn events_query(
     tags("events"),
     summary = "Body-based projection-aware events query for large selectors"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.events.query_post"))]
 pub(super) async fn events_query_post(
     body: salvo::oapi::extract::JsonBody<EventsQueryPostRequest>,
     depot: &mut Depot,
@@ -1755,6 +1758,7 @@ fn durable_events_query_from_parts(
     tags("sync"),
     summary = "Backfill the gap between two cursors (deployment-local; not in spec)"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.sync.backfill_gap"))]
 async fn sync_gap_backfill(
     realm_id: salvo::oapi::extract::QueryParam<String, true>,
     limit: salvo::oapi::extract::QueryParam<usize, false>,
@@ -1815,6 +1819,7 @@ async fn sync_gap_backfill(
     tags("sync"),
     summary = "Read the snapshot-v2 head (manifest + chunk descriptors + merkle_root) for a Realm"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.snapshot.head"))]
 async fn snapshot_head(
     depot: &mut Depot,
     req: &mut Request,
@@ -1884,6 +1889,7 @@ async fn snapshot_head(
     tags("sync"),
     summary = "Read one chunk of a snapshot-v2 bundle (with audit_path proving merkle membership)"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.sync.snapshot_chunk"))]
 async fn snapshot_chunk(
     snapshot_ref: salvo::oapi::extract::QueryParam<String, true>,
     chunk_id: salvo::oapi::extract::QueryParam<u32, false>,

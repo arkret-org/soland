@@ -41,6 +41,7 @@ pub(super) fn router() -> Router {
     tags("authz"),
     summary = "Evaluate one (actor, action, resource) authorization decision"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.authz.check"))]
 async fn authz_check(
     body: JsonBody<AuthzCheckReqBody>,
     depot: &mut Depot,
@@ -170,6 +171,7 @@ fn facet_names_from_value(value: Option<&serde_json::Value>) -> Vec<String> {
     tags("authz"),
     summary = "List effective authorization grants for a subject"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.authz.get_effective_grants"))]
 async fn effective_grants(
     depot: &mut Depot,
     req: &mut Request,
@@ -237,6 +239,7 @@ async fn effective_grants(
     tags("authz"),
     summary = "Create an owner-issued or delegated authorization grant"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.authz.create_grant"))]
 async fn create_grant(
     aa: AuthArgs,
     body: JsonBody<CreateGrantRequest>,
@@ -407,6 +410,7 @@ fn delegation_error_to_app_error(err: crate::authz::DelegationError) -> AppError
     tags("authz"),
     summary = "Revoke an existing authorization grant by id"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.authz.revoke_grant"))]
 async fn revoke_grant(
     aa: AuthArgs,
     grant_id: PathParam<String>,
@@ -466,6 +470,7 @@ async fn revoke_grant(
     tags("authz"),
     summary = "List pending invites for the authenticated actor"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.authz.get_invites"))]
 async fn invites(
     aa: crate::routing::system::extract::AuthArgs,
     depot: &mut Depot,

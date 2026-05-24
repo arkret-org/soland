@@ -63,6 +63,7 @@ const MAX_EVENT_RESOLVE: usize = 100;
 const MAX_EVENT_SUBMIT_BATCH: usize = 100;
 
 #[endpoint]
+#[tracing::instrument(skip_all, fields(op = "events_describe"))]
 async fn events_describe(depot: &mut Depot, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     let event_kinds = artifacts::active_durable_event_kinds()
@@ -141,6 +142,7 @@ async fn events_describe(depot: &mut Depot, res: &mut Response) {
 }
 
 #[endpoint]
+#[tracing::instrument(skip_all, fields(op = "submit_event"))]
 async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     let envelope = match req.parse_json::<Value>().await {
@@ -202,6 +204,7 @@ async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Response) 
     tags("events"),
     summary = "Fetch one canonical Event Envelope by event_id"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.events.get"))]
 async fn get_event(
     aa: AuthArgs,
     event_id: PathParam<String>,
@@ -229,6 +232,7 @@ async fn get_event(
     tags("events"),
     summary = "Resolve up to MAX_EVENT_RESOLVE canonical Event Envelopes by event_id"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.events.resolve"))]
 async fn resolve_events(
     aa: AuthArgs,
     body: JsonBody<EventResolveRequest>,
@@ -399,6 +403,7 @@ pub(super) async fn events_query_durable_scope_impl(
     tags("events"),
     summary = "Durable-store reader (bypasses projection; actor-scoped audit queries)"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.events.query_durable"))]
 async fn events_query_durable_scope(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -415,6 +420,7 @@ async fn events_query_durable_scope(
     tags("events"),
     summary = "Per-actor + per-realm frontier (highest accepted actor_seq / latest event)"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.events.frontier"))]
 async fn events_frontier(
     aa: crate::routing::system::extract::AuthArgs,
     depot: &mut Depot,

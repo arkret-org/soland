@@ -50,6 +50,7 @@ pub(super) fn router() -> Router {
     tags("system"),
     summary = "Liveness probe + database / events health snapshot"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.system.health"))]
 async fn health(depot: &mut Depot, res: &mut Response) -> JsonResult<HealthResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let database_ok = database_ready(state);
@@ -82,11 +83,12 @@ async fn health(depot: &mut Depot, res: &mut Response) -> JsonResult<HealthRespo
     tags("system"),
     summary = "Readiness probe for deploy orchestrators"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.system.readyz"))]
 async fn readyz(depot: &mut Depot, res: &mut Response) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let database_ok = database_ready(state);
-    let oauth_introspection_ready =
-        state.config.oauth_introspection_url.is_none() || state.config.oauth_introspection_bearer.is_some();
+    let oauth_introspection_ready = state.config.oauth_introspection_url.is_none()
+        || state.config.oauth_introspection_bearer.is_some();
     let session_grant_introspection_ready = state.config.session_grant_introspection_url.is_none()
         || state.config.session_grant_introspection_bearer.is_some();
     let external_webvh_provider_ready = state.config.external_webvh_provider_url.is_none()
@@ -148,6 +150,7 @@ struct HealthCheckRow {
     tags("server"),
     summary = "Server capability description"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.server.describe"))]
 async fn server_describe(depot: &mut Depot) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let description = describe(
@@ -389,6 +392,7 @@ pub(crate) fn apply_claim_level_partition(
     tags("auth"),
     summary = "Auth bridge contract description (OAuth bearer introspection + push)"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.auth.bridge.describe"))]
 pub(in crate::routing) async fn auth_bridge_describe() -> JsonResult<AuthBridgeDescribeResponse> {
     json_ok(AuthBridgeDescribeResponse {
         contract: "contrix.rest.principal_bridge.v1".to_owned(),
@@ -445,6 +449,7 @@ pub(in crate::routing) async fn auth_bridge_describe() -> JsonResult<AuthBridgeD
     tags("authz"),
     summary = "Authz scaffold description (constraint + condition examples)"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.authz.describe"))]
 pub(in crate::routing) async fn authz_describe() -> JsonResult<Value> {
     json_ok(json!({
         "contract": "contrix.rest.authz_describe.v1",
@@ -525,6 +530,7 @@ pub(in crate::routing) async fn authz_describe() -> JsonResult<Value> {
     tags("policy"),
     summary = "Policy collection scaffold description"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.policies.describe"))]
 pub(in crate::routing) async fn policies_describe() -> JsonResult<Value> {
     json_ok(json!({
         "contract": "contrix.rest.policies_describe.v1",
@@ -574,6 +580,7 @@ pub(in crate::routing) async fn policies_describe() -> JsonResult<Value> {
     tags("device_messages"),
     summary = "Device messages contract description"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.device_messages.describe"))]
 pub(in crate::routing) async fn device_messages_describe() -> JsonResult<Value> {
     json_ok(json!({
         "contract": "contrix.rest.device_messages_describe.v1",
@@ -614,6 +621,7 @@ pub(in crate::routing) async fn device_messages_describe() -> JsonResult<Value> 
     tags("keys"),
     summary = "Encrypted key-backup surface description"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.keys.backups.describe"))]
 pub(in crate::routing) async fn key_backups_describe() -> JsonResult<Value> {
     json_ok(json!({
         "contract": "contrix.rest.key_backups_describe.v1",
@@ -634,6 +642,7 @@ pub(in crate::routing) async fn key_backups_describe() -> JsonResult<Value> {
     tags("system"),
     summary = "Integration manifest (dependencies + service surface inventory)"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.integration.describe"))]
 async fn integration_describe() -> JsonResult<IntegrationDescribeResponse> {
     json_ok(IntegrationDescribeResponse {
         contract: "contrix.rest.integration_manifest.v1".to_owned(),

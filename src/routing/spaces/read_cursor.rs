@@ -28,6 +28,7 @@ use crate::{JsonResult, ids, json_ok, kinds};
     tags("read_cursors"),
     summary = "Set the authenticated actor's read marker for a Space"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.read_cursors.set"))]
 pub(super) async fn set_read_cursor(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -94,6 +95,7 @@ pub(super) async fn set_read_cursor(
     tags("read_cursors"),
     summary = "List the authenticated actor's read markers, optionally filtered by space"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.read_cursors.list"))]
 pub(super) async fn get_read_cursors(
     aa: AuthArgs,
     depot: &mut Depot,

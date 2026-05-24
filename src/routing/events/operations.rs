@@ -893,9 +893,10 @@ fn validate_read_cursor_hlc(hlc: &str) -> Result<(), &'static str> {
         || parts[0].len() != 12
         || parts[1].len() != 4
         || parts[2].len() != 8
-        || !parts
-            .iter()
-            .all(|part| part.bytes().all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f')))
+        || !parts.iter().all(|part| {
+            part.bytes()
+                .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+        })
     {
         return Err("read marker position.hlc is invalid");
     }

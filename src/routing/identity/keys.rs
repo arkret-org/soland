@@ -32,6 +32,7 @@ pub(super) fn router() -> Router {
     tags("keys"),
     summary = "Upload device + one-time keys for the current session device"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.keys.upload"))]
 async fn keys_upload(
     aa: AuthArgs,
     body: JsonBody<KeysUploadReqBody>,
@@ -157,6 +158,7 @@ async fn keys_upload(
     tags("keys"),
     summary = "Fetch device key bundles for a peer set"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.keys.query"))]
 async fn keys_query(
     aa: AuthArgs,
     body: JsonBody<KeysQueryReqBody>,
@@ -192,6 +194,7 @@ async fn keys_query(
     tags("keys"),
     summary = "Claim one-time keys, draining the per-device pool"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.keys.claim"))]
 async fn keys_claim(
     aa: AuthArgs,
     body: JsonBody<KeysClaimReqBody>,

@@ -29,6 +29,7 @@ pub(super) fn router() -> Router {
     summary = "Read canonical service-admin status",
     status_codes(200, 401, 403, 500)
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.admin.get_server_status"))]
 async fn get_server_status(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -76,6 +77,7 @@ async fn get_server_status(
     summary = "Set an account moderation status",
     status_codes(200, 400, 401, 403, 500)
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.admin.update_account_status"))]
 async fn update_account_status(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -124,6 +126,7 @@ async fn update_account_status(
     summary = "Revoke a device as an administrator",
     status_codes(200, 400, 401, 403, 404, 500)
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.admin.revoke_device"))]
 async fn revoke_device(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -176,6 +179,7 @@ async fn revoke_device(
     summary = "List canonical moderation queue items",
     status_codes(200, 401, 403, 500)
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.admin.get_moderation_queue"))]
 async fn get_moderation_queue(
     aa: AuthArgs,
     depot: &mut Depot,

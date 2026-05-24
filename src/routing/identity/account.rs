@@ -85,6 +85,7 @@ pub(super) fn router() -> Router {
     summary = "Register a new account record",
     status_codes(201, 400, 401, 409, 500)
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.account.register"))]
 async fn account_register(
     depot: &mut Depot,
     res: &mut Response,
@@ -171,6 +172,7 @@ async fn account_register(
     tags("account"),
     summary = "Get the authenticated principal's account record"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.account.me"))]
 async fn account_me(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -195,6 +197,7 @@ async fn account_me(
     summary = "Claim or rename the authenticated principal's handle",
     status_codes(200, 400, 401, 409, 500)
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.account.claim_handle"))]
 async fn claim_handle(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -275,6 +278,7 @@ async fn claim_handle(
     summary = "Update the authenticated principal's profile fields (display_name, bio, avatar_url)",
     status_codes(200, 400, 401, 404, 500)
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.account.update_profile"))]
 async fn update_profile(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -349,6 +353,7 @@ fn empty_to_none(value: String) -> Option<String> {
     summary = "Transfer the authenticated principal's handle to another account",
     status_codes(200, 400, 401, 404, 409, 500)
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.account.transfer_handle"))]
 async fn transfer_handle(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -436,6 +441,7 @@ async fn transfer_handle(
     summary = "GDPR export: assemble the authenticated principal's data bundle",
     status_codes(200, 401, 500)
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.account.export"))]
 async fn export_account(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -539,6 +545,7 @@ async fn export_account(
     summary = "GDPR erasure: pseudonymize the authenticated principal and revoke access",
     status_codes(200, 401, 500)
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.account.erase"))]
 async fn erase_account(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -713,6 +720,7 @@ fn short_actor_tag(did: &str) -> String {
     tags("notifications"),
     summary = "List notifications visible to the authenticated actor"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.notifications.list"))]
 async fn list_notifications(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -741,6 +749,10 @@ async fn list_notifications(
     operation_id = "cx.extension.soland.notifications.mark_all_read",
     tags("notifications"),
     summary = "Stamp the authenticated actor's `last_read_at` marker to Utc::now()"
+)]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "cx.extension.soland.notifications.mark_all_read")
 )]
 async fn notifications_mark_all_read(
     aa: AuthArgs,
@@ -785,6 +797,7 @@ async fn notifications_mark_all_read(
     summary = "Open a pending contact relationship",
     status_codes(200, 201, 400, 401, 404, 409, 500)
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.contacts.request"))]
 async fn contact_request(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -861,6 +874,7 @@ async fn contact_request(
     tags("contacts"),
     summary = "Accept or reject a pending contact request"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.contacts.respond"))]
 async fn contact_respond(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -911,6 +925,7 @@ async fn contact_respond(
     tags("contacts"),
     summary = "List contacts visible to the authenticated actor"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.contacts.list"))]
 async fn list_contacts(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -975,6 +990,7 @@ pub struct PrincipalSpaceResponse {
     tags("account"),
     summary = "Resolve the principal control Space for a DID"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.account.principal_space"))]
 async fn account_principal_space(
     aa: AuthArgs,
     depot: &mut Depot,

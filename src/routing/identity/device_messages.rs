@@ -50,6 +50,7 @@ pub(super) fn router() -> Router {
     tags("device_messages"),
     summary = "Send to-device messages (idempotent on Idempotency-Key + sender actor)"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.device_messages.put"))]
 async fn send_device_messages(
     aa: AuthArgs,
     body: JsonBody<DeviceMessagesSendReqBody>,
@@ -167,6 +168,7 @@ pub(crate) fn fanout_actor_private_update(
     tags("device_messages"),
     summary = "Pull pending to-device messages for the bound session/device"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.device_messages.get"))]
 async fn get_device_messages(
     aa: AuthArgs,
     from: QueryParam<String, false>,

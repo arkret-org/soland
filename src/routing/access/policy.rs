@@ -55,6 +55,7 @@ pub(super) fn router() -> Router {
     tags("policy"),
     summary = "List policy documents owned by the authenticated actor"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.policies.list"))]
 async fn list_policy_documents(
     aa: AuthArgs,
     scope: QueryParam<String, false>,
@@ -94,6 +95,7 @@ async fn list_policy_documents(
     tags("policy"),
     summary = "Read a single policy document by id"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.policies.get"))]
 async fn get_policy_document(
     aa: AuthArgs,
     policy_id: PathParam<String>,
@@ -119,6 +121,7 @@ async fn get_policy_document(
     tags("policy"),
     summary = "Idempotently create or replace a policy document"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.policies.upsert"))]
 async fn upsert_policy_document(
     aa: AuthArgs,
     body: JsonBody<UpsertPolicyDocumentRequest>,
@@ -207,6 +210,7 @@ pub struct PatchPolicyDocumentRequest {
     tags("policy"),
     summary = "Apply a cx.schema.patch.v1 patch to a policy document"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.policies.patch"))]
 async fn patch_policy_document(
     aa: AuthArgs,
     policy_id: PathParam<String>,
@@ -289,6 +293,7 @@ async fn patch_policy_document(
     tags("policy"),
     summary = "Delete a policy document by id"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.policies.delete"))]
 async fn delete_policy_document(
     aa: AuthArgs,
     policy_id: PathParam<String>,
@@ -316,6 +321,7 @@ async fn delete_policy_document(
     tags("policy"),
     summary = "Evaluate a policy decision for an actor + action + resource tuple"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.policy.check"))]
 async fn policy_check(
     body: JsonBody<PolicyCheckReqBody>,
     depot: &mut Depot,

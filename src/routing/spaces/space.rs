@@ -41,6 +41,7 @@ pub(super) fn router() -> Router {
     tags("spaces"),
     summary = "Get a Space's lifecycle response (owner + members)"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.spaces.get"))]
 async fn get_space(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -58,6 +59,7 @@ async fn get_space(
     tags("spaces"),
     summary = "Full event log + projection dump for a Space"
 )]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.spaces.export"))]
 async fn export_space(
     aa: AuthArgs,
     depot: &mut Depot,
