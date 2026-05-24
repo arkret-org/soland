@@ -17,7 +17,7 @@
 
 ### Top 15 critical TODOs
 - [ ] §1 `src/routing/identity/did.rs:376,383` — multi-witness quorum + 24h DID rotation witness validation (G3.S3-followup).
-- [ ] §2 `src/routing/federation/federation.rs:89,112` — wire RFC 9421 canonical digest into `federation_verify_actor` (round 4).
+- [x] §2 `src/routing/federation/federation.rs:89,112` — wire RFC 9421 canonical digest into `federation_verify_actor` (round 4).
 - [ ] §3 `src/reducer/mls.rs:182,261,264` — Welcome envelope minimal-metadata stripping, `governance_binding` commit verification, `covered_frontier` tracking (G3.S1-followup).
 - [x] §4 `src/routing/federation/outbox.rs:406,428` — federation outbox terminal failure routing (4xx → dead-letter) (G3.S0-followup).
 - [ ] §5 `src/round23.rs:22,55,466` — async fanout worker + human reason field in redaction bodies (round23-T02/T07).

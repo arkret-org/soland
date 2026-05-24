@@ -382,8 +382,16 @@ pub(super) async fn federation_space_members(
 )]
 pub(super) async fn federation_verify_actor(
     body: JsonBody<contrix_sdk::FederationVerifyActorReqBody>,
+    depot: &mut Depot,
+    req: &mut Request,
 ) -> JsonResult<contrix_sdk::FederationVerifyActorResBody> {
+    let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
+    let request_hash = federation_verify_actor_digest(&body).map_err(|message| {
+        AppError::new(crate::error::ErrorCode::SchemaViolation, message)
+            .with_status(StatusCode::BAD_REQUEST)
+    })?;
+    validate_round4_federation_request_binding(&state.config.trust_domain, req, &request_hash)?;
     json_ok(contrix_sdk::FederationVerifyActorResBody {
         valid: true,
         actor_id: body.actor_id.clone(),
@@ -393,6 +401,57 @@ pub(super) async fn federation_verify_actor(
         expires_at: Some(now() + Duration::minutes(5)),
         warnings: Vec::new(),
     })
+}
+
+fn validate_round4_federation_request_binding(
+    trust_domain: &str,
+    req: &Request,
+    request_hash: &str,
+) -> Result<(), AppError> {
+    let headers =
+        crate::round4::FederationTrustHeaders::from_salvo_request(req).map_err(|violation| {
+            AppError::new(
+                crate::error::ErrorCode::SchemaViolation,
+                violation.message(),
+            )
+            .with_status(StatusCode::BAD_REQUEST)
+        })?;
+    let expected_destination = contrix_sdk::TypedTrustDomainId::new(trust_domain.to_owned())
+        .map_err(|error| AppError::internal(format!("configured trust_domain invalid: {error}")))?;
+    validate_round4_federation_headers(&headers, &expected_destination, request_hash)
+}
+
+fn validate_round4_federation_headers(
+    headers: &crate::round4::FederationTrustHeaders,
+    expected_destination: &contrix_sdk::TypedTrustDomainId,
+    request_hash: &str,
+) -> Result<(), AppError> {
+    headers
+        .verify_destination(expected_destination)
+        .map_err(|_| {
+            AppError::new(
+                crate::error::ErrorCode::CrossDomainReplayRejected,
+                "federation Destination-Trust-Domain header does not match this service",
+            )
+            .with_status(StatusCode::CONFLICT)
+        })?;
+    if request_hash != headers.request_canonical_digest.as_str() {
+        return Err(AppError::new(
+            crate::error::ErrorCode::CrossDomainReplayRejected,
+            "Request-Canonical-Digest does not match the canonical request body",
+        )
+        .with_status(StatusCode::CONFLICT));
+    }
+    Ok(())
+}
+
+fn federation_verify_actor_digest(
+    body: &contrix_sdk::FederationVerifyActorReqBody,
+) -> Result<String, &'static str> {
+    let value = serde_json::to_value(body)
+        .map_err(|_| "federation verify-actor request must serialize to JSON")?;
+    contrix_sdk::canonical::canonical_sha256(&value)
+        .map_err(|_| "federation verify-actor request must be canonical JSON")
 }
 
 fn verify_federation_origin(origin: &str) -> bool {
@@ -1178,6 +1237,96 @@ mod tests {
             sovereign_enclave_allowed_outbound_hosts: Vec::new(),
             erasure_propagation_window_ms: 604_800_000,
         }
+    }
+
+    fn verify_actor_body() -> contrix_sdk::FederationVerifyActorReqBody {
+        contrix_sdk::FederationVerifyActorReqBody {
+            actor_id: contrix_sdk::Did::new("did:web:alice.example").unwrap(),
+            challenge: Some("challenge-1".to_owned()),
+            signed_payload_digest: None,
+            signature: serde_json::json!({
+                "kid": "did:web:alice.example#key-1",
+                "alg": "EdDSA",
+                "sig": "test-signature"
+            }),
+            purpose: "federation.verify_actor".to_owned(),
+            space_id: None,
+        }
+    }
+
+    fn trust_domain(value: &str) -> contrix_sdk::TypedTrustDomainId {
+        contrix_sdk::TypedTrustDomainId::new(value.to_owned()).unwrap()
+    }
+
+    fn federation_headers(digest: &str) -> crate::round4::FederationTrustHeaders {
+        crate::round4::FederationTrustHeaders {
+            source_trust_domain: trust_domain("cx:trust_domain:peer.example"),
+            destination_trust_domain: trust_domain("cx:trust_domain:soland.local"),
+            request_canonical_digest: contrix_sdk::Hash::new(digest.to_owned()).unwrap(),
+        }
+    }
+
+    #[test]
+    fn verify_actor_digest_uses_canonical_json() {
+        let body = verify_actor_body();
+        let value = serde_json::to_value(&body).unwrap();
+        let expected = contrix_sdk::canonical::canonical_sha256(&value).unwrap();
+
+        assert_eq!(federation_verify_actor_digest(&body).unwrap(), expected);
+    }
+
+    #[test]
+    fn verify_actor_headers_accept_matching_canonical_digest() {
+        let body = verify_actor_body();
+        let digest = federation_verify_actor_digest(&body).unwrap();
+        let headers = federation_headers(&digest);
+
+        validate_round4_federation_headers(
+            &headers,
+            &trust_domain("cx:trust_domain:soland.local"),
+            &digest,
+        )
+        .expect("matching digest and destination accepted");
+    }
+
+    #[test]
+    fn verify_actor_headers_reject_digest_mismatch() {
+        let body = verify_actor_body();
+        let digest = federation_verify_actor_digest(&body).unwrap();
+        let headers = federation_headers(&format!("sha256:{}", "0".repeat(64)));
+
+        let error = validate_round4_federation_headers(
+            &headers,
+            &trust_domain("cx:trust_domain:soland.local"),
+            &digest,
+        )
+        .expect_err("mismatched digest rejected");
+
+        assert_eq!(
+            error.code,
+            crate::error::ErrorCode::CrossDomainReplayRejected
+        );
+        assert_eq!(error.http_status(), StatusCode::CONFLICT);
+    }
+
+    #[test]
+    fn verify_actor_headers_reject_destination_mismatch() {
+        let body = verify_actor_body();
+        let digest = federation_verify_actor_digest(&body).unwrap();
+        let headers = federation_headers(&digest);
+
+        let error = validate_round4_federation_headers(
+            &headers,
+            &trust_domain("cx:trust_domain:other.example"),
+            &digest,
+        )
+        .expect_err("wrong destination rejected");
+
+        assert_eq!(
+            error.code,
+            crate::error::ErrorCode::CrossDomainReplayRejected
+        );
+        assert_eq!(error.http_status(), StatusCode::CONFLICT);
     }
 
     #[tokio::test]
