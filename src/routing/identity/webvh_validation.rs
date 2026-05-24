@@ -12,11 +12,11 @@
 //! 2. **SCID mismatch rejection** — the SCID embedded in the DID string
 //!    MUST equal the SCID derivable from the genesis entry (§3 / §3.4 —
 //!    "DNS hijack protection" / "可审计的 DID 控制历史").
-//! 3. **Witness signature verification** — when a single witness proof is
-//!    present on an entry it MUST verify against an `updateKeys`-listed
-//!    public key. Multi-witness quorum, the 24h `degraded_no_witness`
-//!    window, and emergency rotation are explicitly out of scope here and
-//!    carry `TODO(G3.S3-followup)` markers (see callers).
+//! 3. **Witness signature verification** — every witness proof present on
+//!    an entry must verify, distinct valid witnesses are counted toward the
+//!    configured quorum, and entries with configured witnesses may only
+//!    remain in `degraded_no_witness` for 24h. Rotation entries fail closed
+//!    immediately when quorum is missing.
 //!
 //! Canonical JSON uses `contrix_sdk::canonical::canonical_json_bytes`
 //! (`encoding.md` §2 — deterministic, integer-only number profile) — the
@@ -32,6 +32,7 @@ use crate::error::{AppError, ErrorCode};
 
 const ED25519_MULTICODEC_PREFIX: [u8; 2] = [0xed, 0x01];
 const WEBVH_SCID_PLACEHOLDER: &str = "{SCID}";
+pub const WEBVH_DEGRADED_NO_WITNESS_MAX_SECS: i64 = 24 * 60 * 60;
 
 /// A `did:webvh` log entry as it appears on the wire. We keep the
 /// underlying `serde_json::Value` so the validator stays agnostic of the
@@ -79,6 +80,27 @@ pub enum WebvhValidationError {
     /// A witness proof was present but failed signature verification
     /// (bad key, bad signature bytes, or signer not on `updateKeys`).
     WitnessSignatureInvalid { reason: String },
+    /// A witness threshold was configured but not enough distinct valid
+    /// witnesses signed the entry.
+    WitnessQuorumNotMet {
+        at_index: usize,
+        required: usize,
+        valid: usize,
+    },
+    /// A witnessless / under-witnessed non-rotation entry stayed in
+    /// degraded mode longer than the allowed 24h window.
+    WitnessEvidenceExpired {
+        at_index: usize,
+        age_secs: i64,
+        max_secs: i64,
+    },
+    /// Key rotation is a high-risk DID operation and cannot use
+    /// degraded_no_witness.
+    RotationWitnessQuorumMissing {
+        at_index: usize,
+        required: usize,
+        valid: usize,
+    },
     /// The log was empty — every did:webvh resolve MUST have at least the
     /// genesis entry, so this is treated as a hard chain break too.
     EmptyLog,
@@ -97,6 +119,9 @@ impl WebvhValidationError {
             Self::ChainBreak { .. } => "webvh_chain_break",
             Self::ScidMismatch { .. } => "webvh_scid_mismatch",
             Self::WitnessSignatureInvalid { .. } => "webvh_witness_signature_invalid",
+            Self::WitnessQuorumNotMet { .. } => "webvh_witness_quorum_not_met",
+            Self::WitnessEvidenceExpired { .. } => "webvh_witness_evidence_expired",
+            Self::RotationWitnessQuorumMissing { .. } => "webvh_rotation_witness_quorum_missing",
             Self::EmptyLog => "webvh_empty_log",
             Self::MalformedEntry { .. } => "webvh_malformed_entry",
         }
@@ -109,6 +134,9 @@ impl WebvhValidationError {
         match self {
             Self::ChainBreak { .. }
             | Self::ScidMismatch { .. }
+            | Self::WitnessQuorumNotMet { .. }
+            | Self::WitnessEvidenceExpired { .. }
+            | Self::RotationWitnessQuorumMissing { .. }
             | Self::EmptyLog
             | Self::MalformedEntry { .. } => StatusCode::UNPROCESSABLE_ENTITY,
             Self::WitnessSignatureInvalid { .. } => StatusCode::UNAUTHORIZED,
@@ -132,6 +160,27 @@ impl WebvhValidationError {
             Self::WitnessSignatureInvalid { reason } => {
                 format!("did:webvh witness signature invalid: {reason}")
             }
+            Self::WitnessQuorumNotMet {
+                at_index,
+                required,
+                valid,
+            } => format!(
+                "did:webvh witness quorum not met at index {at_index}: required {required}, valid {valid}"
+            ),
+            Self::WitnessEvidenceExpired {
+                at_index,
+                age_secs,
+                max_secs,
+            } => format!(
+                "did:webvh witness evidence expired at index {at_index}: age {age_secs}s exceeds {max_secs}s"
+            ),
+            Self::RotationWitnessQuorumMissing {
+                at_index,
+                required,
+                valid,
+            } => format!(
+                "did:webvh rotation witness quorum missing at index {at_index}: required {required}, valid {valid}"
+            ),
             Self::EmptyLog => "did:webvh log is empty".to_owned(),
             Self::MalformedEntry { at_index, reason } => {
                 format!("did:webvh log entry at index {at_index} is malformed: {reason}")
@@ -314,39 +363,100 @@ pub fn verify_scid_against_did(
     Ok(())
 }
 
-/// Verify a single witness signature on a log entry, when one is
-/// present. The proof structure mirrors the controller proof
-/// (`DataIntegrityProof` / `eddsa-jcs-2022`) the embedded provider
-/// already verifies — the only difference is that the verification
-/// method must point at one of the configured / declared witness keys
-/// rather than `updateKeys`.
-///
-/// `accepted_witness_keys` is the multibase-encoded public key set the
-/// caller considers authoritative (resolver policy `trusted_witnesses`
-/// keys, or the keys declared inside the genesis entry's
-/// `parameters.witnesses`). An empty list means "no witness expected" —
-/// we return `Ok(())` in that case (which the caller maps to
-/// `degraded_no_witness` higher up).
-///
-/// TODO(G3.S3-followup): multi-witness quorum + 24h degraded window.
-/// This helper only validates **one** witness signature shape. The full
-/// `{witness_quorum, partial_signatures, fold}` pipeline + the
-/// `degraded_no_witness` 24h state machine (`identity-did.md` §4.2.1)
-/// belong to the next slice.
+/// Verify at least one witness signature on a log entry, when one is
+/// present. Kept for existing call sites; quorum-aware resolution uses
+/// [`validate_witness_policy_for_log`].
+#[cfg(test)]
 pub fn verify_witness_signature(
     entry: &WebvhLogEntry,
     accepted_witness_keys: &[String],
 ) -> Result<(), WebvhValidationError> {
+    verify_witness_quorum(entry, accepted_witness_keys, 1).map(|_| ())
+}
+
+/// Validate every configured witness policy in a did:webvh log.
+///
+/// Policy is read from `parameters.witnesses`, `parameters.witnessQuorum`,
+/// `parameters.witness_threshold`, or `parameters.witnessThreshold`.
+/// No configured witness policy means the deployment has opted out of
+/// witness enforcement for that DID. When a policy exists, non-rotation
+/// entries may be temporarily under-witnessed for 24h; rotation entries
+/// fail closed immediately because they change DID control.
+pub fn validate_witness_policy_for_log(
+    log: &[WebvhLogEntry],
+    now_unix_secs: i64,
+) -> Result<(), WebvhValidationError> {
+    let mut policy = WitnessPolicy::default();
+    for (index, entry) in log.iter().enumerate() {
+        policy.merge_from_entry(entry);
+        if policy.required_threshold == 0 {
+            continue;
+        }
+        let valid = verify_witness_quorum(
+            entry,
+            &policy.accepted_witness_keys,
+            policy.required_threshold,
+        )?;
+        if valid >= policy.required_threshold {
+            continue;
+        }
+        if index > 0 && is_rotation_entry(&log[index - 1], entry) {
+            return Err(WebvhValidationError::RotationWitnessQuorumMissing {
+                at_index: index,
+                required: policy.required_threshold,
+                valid,
+            });
+        }
+        let age_secs = entry_age_secs(entry, now_unix_secs).ok_or_else(|| {
+            WebvhValidationError::MalformedEntry {
+                at_index: index,
+                reason: "versionTime is required for degraded_no_witness window".to_owned(),
+            }
+        })?;
+        if age_secs > WEBVH_DEGRADED_NO_WITNESS_MAX_SECS {
+            return Err(WebvhValidationError::WitnessEvidenceExpired {
+                at_index: index,
+                age_secs,
+                max_secs: WEBVH_DEGRADED_NO_WITNESS_MAX_SECS,
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Verify all witness proofs on an entry and return the number of
+/// distinct valid verification methods. Invalid signatures remain hard
+/// failures; missing or under-threshold signatures return their valid
+/// count so the caller can apply the degraded-window rules.
+pub fn verify_witness_quorum(
+    entry: &WebvhLogEntry,
+    accepted_witness_keys: &[String],
+    required_threshold: usize,
+) -> Result<usize, WebvhValidationError> {
+    if required_threshold == 0 {
+        return Ok(0);
+    }
     let Some(proofs) = entry.payload.get("witness").and_then(Value::as_array) else {
-        // No witness proof attached — degraded mode handling is the
-        // caller's problem (see TODO above). Return Ok so we don't
-        // double-fail when a deployment legitimately runs without
-        // witnesses.
-        return Ok(());
+        return Ok(0);
     };
-    let Some(proof) = proofs.first().and_then(Value::as_object) else {
-        return Ok(());
-    };
+    let mut seen = std::collections::BTreeSet::new();
+    for proof in proofs.iter().filter_map(Value::as_object) {
+        let verification_method = proof
+            .get("verificationMethod")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+        verify_one_witness_proof(entry, proof, accepted_witness_keys)?;
+        seen.insert(verification_method);
+    }
+    Ok(seen.len())
+}
+
+fn verify_one_witness_proof(
+    entry: &WebvhLogEntry,
+    proof: &serde_json::Map<String, Value>,
+    accepted_witness_keys: &[String],
+) -> Result<(), WebvhValidationError> {
     let proof_type = proof
         .get("type")
         .and_then(Value::as_str)
@@ -407,6 +517,97 @@ pub fn verify_witness_signature(
             reason: "ed25519 verification failed".to_owned(),
         }
     })
+}
+
+#[derive(Default)]
+struct WitnessPolicy {
+    required_threshold: usize,
+    accepted_witness_keys: Vec<String>,
+}
+
+impl WitnessPolicy {
+    fn merge_from_entry(&mut self, entry: &WebvhLogEntry) {
+        let parameters = entry.payload.get("parameters").unwrap_or(&Value::Null);
+        if let Some(threshold) = witness_threshold(parameters) {
+            self.required_threshold = threshold;
+        }
+        for key in witness_keys(parameters) {
+            if !self.accepted_witness_keys.iter().any(|seen| seen == &key) {
+                self.accepted_witness_keys.push(key);
+            }
+        }
+        if self.required_threshold == 0 && !self.accepted_witness_keys.is_empty() {
+            self.required_threshold = 1;
+        }
+    }
+}
+
+fn witness_threshold(parameters: &Value) -> Option<usize> {
+    parameters
+        .get("witness_threshold")
+        .or_else(|| parameters.get("witnessThreshold"))
+        .or_else(|| parameters.pointer("/witnesses/threshold"))
+        .or_else(|| parameters.pointer("/witnesses/threshold_k"))
+        .or_else(|| parameters.pointer("/witnesses/k"))
+        .and_then(Value::as_u64)
+        .and_then(|value| usize::try_from(value).ok())
+        .filter(|value| *value > 0)
+}
+
+fn witness_keys(parameters: &Value) -> Vec<String> {
+    let Some(witnesses) = parameters.get("witnesses") else {
+        return Vec::new();
+    };
+    match witnesses {
+        Value::Array(items) => items.iter().filter_map(witness_key).collect(),
+        Value::Object(object) => object
+            .get("keys")
+            .or_else(|| object.get("trusted_witnesses"))
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(witness_key)
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn witness_key(value: &Value) -> Option<String> {
+    match value {
+        Value::String(value) if !value.trim().is_empty() => Some(value.trim().to_owned()),
+        Value::Object(object) => [
+            "publicKeyMultibase",
+            "public_key_multibase",
+            "verificationMethod",
+            "id",
+            "key",
+        ]
+        .iter()
+        .find_map(|field| object.get(*field).and_then(Value::as_str))
+        .map(|value| {
+            value
+                .rsplit_once('#')
+                .map(|(_, fragment)| fragment)
+                .unwrap_or(value)
+                .to_owned()
+        }),
+        _ => None,
+    }
+}
+
+fn is_rotation_entry(previous: &WebvhLogEntry, current: &WebvhLogEntry) -> bool {
+    previous.payload.pointer("/parameters/updateKeys")
+        != current.payload.pointer("/parameters/updateKeys")
+        || previous.payload.pointer("/state/verificationMethod")
+            != current.payload.pointer("/state/verificationMethod")
+        || previous.payload.pointer("/state/authentication")
+            != current.payload.pointer("/state/authentication")
+}
+
+fn entry_age_secs(entry: &WebvhLogEntry, now_unix_secs: i64) -> Option<i64> {
+    let version_time = entry.payload.get("versionTime").and_then(Value::as_str)?;
+    let parsed = chrono::DateTime::parse_from_rfc3339(version_time).ok()?;
+    Some(now_unix_secs.saturating_sub(parsed.timestamp()).max(0))
 }
 
 // ── internals ───────────────────────────────────────────────────────────
@@ -531,6 +732,19 @@ mod tests {
 
     fn encode_sig_multibase(sig: &Signature) -> String {
         format!("z{}", bs58::encode(sig.to_bytes()).into_string())
+    }
+
+    fn witness_proof(entry_without_witness: &Value, signer: &SigningKey) -> Value {
+        let canonical =
+            contrix_sdk::canonical::canonical_json_bytes(entry_without_witness).unwrap();
+        let signature = signer.sign(&canonical);
+        let public_key = encode_pubkey_multibase(&signer.verifying_key());
+        json!({
+            "type": "DataIntegrityProof",
+            "cryptosuite": "eddsa-jcs-2022",
+            "verificationMethod": format!("did:web:witness.example#{public_key}"),
+            "proofValue": encode_sig_multibase(&signature),
+        })
     }
 
     /// Build a genesis log entry with a self-consistent SCID + versionId.
@@ -681,5 +895,117 @@ mod tests {
         let app: AppError = err.into();
         assert_eq!(app.http_status(), StatusCode::UNAUTHORIZED);
         assert_eq!(app.wire_code(), "webvh_witness_signature_invalid");
+    }
+
+    #[test]
+    fn witness_quorum_counts_distinct_valid_signatures() {
+        let witness_a = fresh_signing_key();
+        let witness_b = fresh_signing_key();
+        let witness_c = fresh_signing_key();
+        let witness_a_pubkey = encode_pubkey_multibase(&witness_a.verifying_key());
+        let witness_b_pubkey = encode_pubkey_multibase(&witness_b.verifying_key());
+        let witness_c_pubkey = encode_pubkey_multibase(&witness_c.verifying_key());
+        let mut entry_body = json!({
+            "versionId": "1-zSomeHash",
+            "versionTime": "2026-05-25T00:00:00Z",
+            "parameters": {
+                "method": "did:webvh:1.0",
+                "updateKeys": ["z6MkupdateKey"],
+                "witness_threshold": 2,
+                "witnesses": [
+                    {"publicKeyMultibase": witness_a_pubkey},
+                    {"publicKeyMultibase": witness_b_pubkey},
+                    {"publicKeyMultibase": witness_c_pubkey}
+                ]
+            },
+        });
+        let proof_a = witness_proof(&entry_body, &witness_a);
+        let proof_b = witness_proof(&entry_body, &witness_b);
+        entry_body["witness"] = json!([proof_a, proof_b]);
+        let entry = WebvhLogEntry::new(entry_body);
+
+        let now = chrono::DateTime::parse_from_rfc3339("2026-05-25T00:01:00Z")
+            .unwrap()
+            .timestamp();
+        validate_witness_policy_for_log(&[entry], now)
+            .expect("two distinct valid witnesses satisfy threshold");
+    }
+
+    #[test]
+    fn rotation_without_witness_quorum_fails_closed_inside_degraded_window() {
+        let witness_a = encode_pubkey_multibase(&fresh_signing_key().verifying_key());
+        let witness_b = encode_pubkey_multibase(&fresh_signing_key().verifying_key());
+        let genesis = WebvhLogEntry::new(json!({
+            "versionId": "1-zGenesis",
+            "versionTime": "2026-05-25T00:00:00Z",
+            "parameters": {
+                "method": "did:webvh:1.0",
+                "updateKeys": ["z6MkoldKey"],
+                "witness_threshold": 2,
+                "witnesses": [
+                    {"publicKeyMultibase": witness_a},
+                    {"publicKeyMultibase": witness_b}
+                ]
+            },
+            "state": {"authentication": ["did:webvh:example#old"]},
+        }));
+        let rotation = WebvhLogEntry::new(json!({
+            "versionId": "2-zRotation",
+            "previousVersionId": "1-zGenesis",
+            "versionTime": "2026-05-25T00:30:00Z",
+            "parameters": {
+                "method": "did:webvh:1.0",
+                "updateKeys": ["z6MknewKey"],
+            },
+            "state": {"authentication": ["did:webvh:example#new"]},
+        }));
+        let now = chrono::DateTime::parse_from_rfc3339("2026-05-25T00:40:00Z")
+            .unwrap()
+            .timestamp();
+        let err = validate_witness_policy_for_log(&[genesis, rotation], now)
+            .expect_err("rotation cannot use degraded_no_witness");
+        match err {
+            WebvhValidationError::RotationWitnessQuorumMissing {
+                at_index,
+                required,
+                valid,
+            } => {
+                assert_eq!(at_index, 1);
+                assert_eq!(required, 2);
+                assert_eq!(valid, 0);
+            }
+            other => panic!("expected RotationWitnessQuorumMissing, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn non_rotation_missing_witness_expires_after_24h() {
+        let witness_a = encode_pubkey_multibase(&fresh_signing_key().verifying_key());
+        let entry = WebvhLogEntry::new(json!({
+            "versionId": "1-zGenesis",
+            "versionTime": "2026-05-25T00:00:00Z",
+            "parameters": {
+                "method": "did:webvh:1.0",
+                "updateKeys": ["z6MkoldKey"],
+                "witness_threshold": 1,
+                "witnesses": [
+                    {"publicKeyMultibase": witness_a}
+                ]
+            },
+        }));
+        let now = chrono::DateTime::parse_from_rfc3339("2026-05-26T00:00:01Z")
+            .unwrap()
+            .timestamp();
+        let err = validate_witness_policy_for_log(&[entry], now)
+            .expect_err("degraded_no_witness expires after 24h");
+        match err {
+            WebvhValidationError::WitnessEvidenceExpired {
+                at_index, max_secs, ..
+            } => {
+                assert_eq!(at_index, 0);
+                assert_eq!(max_secs, WEBVH_DEGRADED_NO_WITNESS_MAX_SECS);
+            }
+            other => panic!("expected WitnessEvidenceExpired, got {other:?}"),
+        }
     }
 }

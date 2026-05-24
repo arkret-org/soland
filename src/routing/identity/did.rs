@@ -25,7 +25,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use super::webvh_validation::{
-    WebvhLogEntry, validate_log_chain, verify_scid_against_did, verify_witness_signature,
+    WebvhLogEntry, validate_log_chain, validate_witness_policy_for_log, verify_scid_against_did,
 };
 use super::{append_audit_log, bearer_token, now, render_error, sha256_hex, validate_did};
 use crate::error::{AppError, ErrorCode};
@@ -369,16 +369,11 @@ pub(super) async fn identity_resolve(
     }
     if let Ok(Some(record)) = state.persistence.webvh().get_document(&body.did) {
         // G3.S3: every did:webvh resolution MUST first re-validate the
-        // log chain and SCID derivation, AND any witness signatures
-        // present on individual entries. Spec: identity-did.md §3.4 +
+        // log chain, SCID derivation, and configured witness quorum.
+        // Rotation entries fail closed when witness quorum is missing;
+        // non-rotation entries may only remain in degraded_no_witness
+        // for the spec's 24h window. Spec: identity-did.md §3.4 +
         // §4.2.1.
-        //
-        // TODO(G3.S3-followup): multi-witness quorum + 24h
-        // degraded_no_witness window. Today we only verify single-party
-        // witness signatures (if present) and never fail closed on
-        // absent witnesses — the degraded-mode state machine is the
-        // next slice (see identity-did.md §4.2.1 and the E9.4 fixme in
-        // cotest/e2e/tests/identity/webvh-rotation.spec.ts).
         //
         // TODO(G3.S3-followup): emergency rotation path
         // (key-management.md §3.3 recovery key). Today rotation entries
@@ -1101,15 +1096,10 @@ fn render_json_bytes(res: &mut Response, content_type: &str, value: &Value) {
 }
 
 /// Run G3.S3 webvh validation gates (prev_hash chain + SCID mismatch +
-/// single-witness signature) over a DID's locally-cached log before
-/// trusting the resolved document. Spec: identity-did.md §3.4 / §4.2.1
-/// / §3 ("DNS hijack protection") / §3.4 "controller proof".
-///
-/// TODO(G3.S3-followup): plug a resolver-policy-driven witness key set
-/// in once `trusted_witnesses` configuration lands (identity-did.md
-/// §4.1). For now we accept any witness key referenced by the entry's
-/// own proof, which suffices to catch a forged-signature attack but not
-/// a fully untrusted-witness one.
+/// witness quorum/degraded-window validation) over a DID's locally-cached
+/// log before trusting the resolved document. Spec: identity-did.md
+/// §3.4 / §4.2.1 / §3 ("DNS hijack protection") / §3.4 "controller
+/// proof".
 fn run_webvh_resolution_checks(state: &AppState, did: &str) -> Result<(), AppError> {
     let events = state
         .persistence
@@ -1133,14 +1123,7 @@ fn run_webvh_resolution_checks(state: &AppState, did: &str) -> Result<(), AppErr
     validate_log_chain(&log)?;
     let genesis = &log[0];
     verify_scid_against_did(did, genesis)?;
-    // Resolver-policy-driven witness keys are not wired yet — pass an
-    // empty allow-list so `verify_witness_signature` only enforces the
-    // "if a proof is present, its signature MUST verify" rule. The
-    // "MUST come from a trusted witness" rule is the followup TODO
-    // above.
-    for entry in &log {
-        verify_witness_signature(entry, &[])?;
-    }
+    validate_witness_policy_for_log(&log, now().timestamp())?;
     Ok(())
 }
 

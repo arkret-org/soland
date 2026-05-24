@@ -16,12 +16,12 @@
 ## Phase 2 tasks (critical-path)
 
 ### Top 15 critical TODOs
-- [ ] §1 `src/routing/identity/did.rs:376,383` — multi-witness quorum + 24h DID rotation witness validation (G3.S3-followup).
+- [x] §1 `src/routing/identity/did.rs:376,383` — multi-witness quorum + 24h DID rotation witness validation (G3.S3-followup).
 - [x] §2 `src/routing/federation/federation.rs:89,112` — wire RFC 9421 canonical digest into `federation_verify_actor` (round 4).
 - [x] §3 `src/reducer/mls.rs:182,261,264` — Welcome envelope minimal-metadata stripping, `governance_binding` commit verification, `covered_frontier` tracking (G3.S1-followup).
 - [x] §4 `src/routing/federation/outbox.rs:406,428` — federation outbox terminal failure routing (4xx → dead-letter) (G3.S0-followup).
 - [x] §5 `src/round23.rs:22,55,466` — async fanout worker + human reason field in redaction bodies (round23-T02/T07).
-- [ ] §6 `src/push_rule_core.rs:378` — cross-project consistency vector with cotest (T4.4).
+- [x] §6 `src/push_rule_core.rs:378` — cross-project consistency vector with cotest (T4.4).
 - [ ] §7 `src/authz/policy_client.rs:398` — full crypto verification of `signature.sig` in policy introspection (G3.S2).
 - [ ] §8 `src/reducer.rs:2817,2900` — parent capability verification, full derive evaluation (realm rework).
 - [ ] §9 `src/round4.rs:54,168` + `src/routing/events/event_log.rs:556` — federation transcript signature + Move Anchor frontier signing.
