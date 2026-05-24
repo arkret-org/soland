@@ -101,6 +101,7 @@ impl MultisigWatchdog {
                 let report = run_watchdog_pass(&self.state, &self.config);
                 if !report.aggregated.is_empty() || !report.failed.is_empty() {
                     tracing::info!(
+                        worker = "multisig_watchdog",
                         scanned = report.scanned,
                         aggregated = report.aggregated.len(),
                         failed = report.failed.len(),
@@ -127,7 +128,7 @@ pub fn run_watchdog_pass(state: &AppState, config: &MultisigWatchdogConfig) -> W
     let rows = match store.snapshot_all() {
         Ok(rows) => rows,
         Err(error) => {
-            tracing::warn!(%error, "multisig watchdog: snapshot_all failed");
+            tracing::warn!(%error, worker = "multisig_watchdog", "multisig watchdog: snapshot_all failed");
             return WatchdogPassReport::default();
         }
     };
@@ -158,7 +159,7 @@ pub fn run_watchdog_pass(state: &AppState, config: &MultisigWatchdogConfig) -> W
             }
             Ok((false, _)) => continue,
             Err(error) => {
-                tracing::warn!(%error, anchor_id = %record.anchor_id, "watchdog: try_claim failed");
+                tracing::warn!(%error, worker = "multisig_watchdog", anchor_id = %record.anchor_id, "watchdog: try_claim failed");
                 continue;
             }
         };
@@ -175,6 +176,7 @@ pub fn run_watchdog_pass(state: &AppState, config: &MultisigWatchdogConfig) -> W
                     Ok(false) => {
                         report.fenced_rejections.push(record.anchor_id.clone());
                         tracing::warn!(
+                            worker = "multisig_watchdog",
                             anchor_id = %record.anchor_id,
                             fence_seq,
                             node_id = %config.node_id,
@@ -182,7 +184,7 @@ pub fn run_watchdog_pass(state: &AppState, config: &MultisigWatchdogConfig) -> W
                         );
                     }
                     Err(error) => {
-                        tracing::warn!(%error, anchor_id = %record.anchor_id, "watchdog: post-aggregate delete failed");
+                        tracing::warn!(%error, worker = "multisig_watchdog", anchor_id = %record.anchor_id, "watchdog: post-aggregate delete failed");
                     }
                 }
             }
@@ -191,7 +193,7 @@ pub fn run_watchdog_pass(state: &AppState, config: &MultisigWatchdogConfig) -> W
                 report
                     .failed
                     .push((record.anchor_id.clone(), error.clone()));
-                tracing::warn!(%error, anchor_id = %record.anchor_id, "watchdog: aggregate failed");
+                tracing::warn!(%error, worker = "multisig_watchdog", anchor_id = %record.anchor_id, "watchdog: aggregate failed");
             }
         }
     }

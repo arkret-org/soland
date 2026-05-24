@@ -87,6 +87,7 @@ pub fn spawn(state: AppState) -> Option<Arc<tokio::task::JoinHandle<()>>> {
             let report = run_compactor_pass(&state, per_space_limit);
             if !report.pruned.is_empty() || !report.prune_errors.is_empty() {
                 tracing::info!(
+                    worker = "compactor",
                     spaces_scanned = report.spaces_scanned,
                     candidates_evaluated = report.candidates_evaluated,
                     pruned = report.pruned.len(),
@@ -123,6 +124,7 @@ pub fn run_compactor_pass(state: &AppState, per_space_limit: usize) -> Compactor
             Err(error) => {
                 tracing::warn!(
                     %error,
+                    worker = "compactor",
                     space_id = %space_id,
                     "compactor: failed to enumerate candidate anchors",
                 );

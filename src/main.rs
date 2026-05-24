@@ -94,6 +94,12 @@ async fn main() -> anyhow::Result<()> {
     // lifetime and shutdown_signal teardown closes the runtime.
     let watchdog_config = MultisigWatchdogConfig::for_service(&state.config.service_did);
     let _watchdog = MultisigWatchdog::new(state.clone(), watchdog_config).spawn();
+    tracing::info!(
+        worker = "multisig_watchdog",
+        enabled = true,
+        service_did = %state.config.service_did,
+        "background worker configured"
+    );
 
     // MAL-11 compaction prune walk worker. No-op when
     // `SOLAND_COMPACTION_PRUNE_WALK_INTERVAL_SECS=0` (the default) — the
@@ -102,6 +108,12 @@ async fn main() -> anyhow::Result<()> {
     // walking; see `compactor.rs` for the policy and "when to enable"
     // rationale.
     let _compactor = soland::compactor::spawn(state.clone());
+    tracing::info!(
+        worker = "compactor",
+        enabled = state.config.compaction_prune_walk_interval_seconds > 0,
+        interval_seconds = state.config.compaction_prune_walk_interval_seconds,
+        "background worker configured"
+    );
 
     // G3.S0 — durable outbound federation HTTP delivery worker. No-op
     // when `SOLAND_FEDERATION_OUTBOUND=0` (used by integration tests
@@ -109,6 +121,11 @@ async fn main() -> anyhow::Result<()> {
     // the `federation_outbox` table populated by
     // `routing::federation::federation::broadcast_*_to_peers`.
     let _federation_dispatcher = soland::routing::federation::outbox::spawn(state.clone());
+    tracing::info!(
+        worker = "federation_outbox",
+        enabled = state.config.federation_outbound_enabled,
+        "background worker configured"
+    );
 
     // Stream-F (Wave 2C) — periodic erasure-receipt federation fanout
     // timeout sweep. Wakes every hour (the default sweep interval; the
@@ -120,6 +137,12 @@ async fn main() -> anyhow::Result<()> {
     // `realm-and-space.md` §2.5.2. Same `federation_outbound_enabled`
     // toggle as the dispatcher above.
     let _erasure_fanout_sweep = soland::routing::federation::erasure_fanout::spawn(state.clone());
+    tracing::info!(
+        worker = "erasure_fanout_sweep",
+        enabled = state.config.federation_outbound_enabled,
+        propagation_window_ms = state.config.erasure_propagation_window_ms,
+        "background worker configured"
+    );
 
     tracing::info!(
         bind = %config.bind,
@@ -156,13 +179,18 @@ async fn main() -> anyhow::Result<()> {
             .rustls(RustlsConfig::new(keycert))
             .bind()
             .await;
-        tracing::info!("TLS listener enabled with rustls");
+        tracing::info!(
+            event = "tls_listener_enabled",
+            tls_provider = "rustls",
+            bind = %config.bind,
+            "TLS listener enabled"
+        );
         run_server(acceptor, state).await;
     } else {
         let acceptor = TcpListener::new(config.bind.to_string()).bind().await;
         run_server(acceptor, state).await;
     }
-    tracing::info!("soland stopped");
+    tracing::info!(event = "shutdown_complete", "soland stopped");
     Ok(())
 }
 
@@ -275,10 +303,10 @@ async fn shutdown_signal() {
 
     tokio::select! {
         _ = ctrl_c => {
-            tracing::info!("received SIGINT, shutting down");
+            tracing::info!(event = "shutdown_signal", signal = "SIGINT", "shutting down");
         }
         _ = terminate => {
-            tracing::info!("received SIGTERM, shutting down");
+            tracing::info!(event = "shutdown_signal", signal = "SIGTERM", "shutting down");
         }
     }
 }

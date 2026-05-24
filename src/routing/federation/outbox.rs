@@ -283,6 +283,7 @@ impl FederationDispatcher {
                 if let Err(error) = self.run_one_pass().await {
                     tracing::warn!(
                         %error,
+                        worker = "federation_outbox",
                         target = "federation_outbox",
                         "federation outbox pass failed (will retry on next tick)"
                     );
@@ -362,6 +363,7 @@ impl FederationDispatcher {
                     row.delivered_at = Some(now_unix_secs());
                     tracing::info!(
                         target = "federation_outbox",
+                        worker = "federation_outbox",
                         outbox_id = %row.id,
                         peer_did = %row.peer_did,
                         endpoint = %row.endpoint,
@@ -386,6 +388,7 @@ impl FederationDispatcher {
         if let Err(error) = self.state.persistence.federation_outbox().update(&row) {
             tracing::warn!(
                 %error,
+                worker = "federation_outbox",
                 outbox_id = %row.id,
                 target = "federation_outbox",
                 "failed to persist federation outbox row after delivery attempt"
@@ -403,6 +406,7 @@ impl FederationDispatcher {
             self.insert_dead_letter(row, GAVE_UP_STATUS_SENTINEL, "retry_budget_exhausted");
             tracing::warn!(
                 target = "federation_outbox",
+                worker = "federation_outbox",
                 outbox_id = %row.id,
                 peer_did = %row.peer_did,
                 attempts = row.attempts,
@@ -419,6 +423,7 @@ impl FederationDispatcher {
         self.insert_dead_letter(row, status, "terminal_http_status");
         tracing::warn!(
             target = "federation_outbox",
+            worker = "federation_outbox",
             outbox_id = %row.id,
             peer_did = %row.peer_did,
             endpoint = %row.endpoint,

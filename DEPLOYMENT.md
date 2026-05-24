@@ -202,14 +202,19 @@ The startup migrations are idempotent.
 
 ## 7. Observability
 
-Today soland emits structured `tracing` events at `info` and above. Future
-roadmap (see `_todos.md` Q5 / Dep-6):
+Today soland emits structured `tracing` events with stable `event` and
+`worker` fields for process lifecycle and background tasks. Future roadmap
+(see `_todos.md` Q5 / Dep-6):
 
 - per-handler `instrument` spans carrying `actor / space / event_kind`
 - `/metrics` Prometheus surface
 - OpenTelemetry exporter
 
-Until then, ship `RUST_LOG=soland=info` to your log pipeline and alert on:
+Set `RUST_LOG=soland=debug,salvo=info,warn` in production-like environments
+while closing 1.0 readiness. Keep `SOLAND_LOG_FILE` pointed at a durable path
+when running under a supervisor that buffers stdout.
+
+Alert on:
 
 - `200 /health` request rate dropping below the configured threshold
 - 5xx error rate over rolling 5-minute windows

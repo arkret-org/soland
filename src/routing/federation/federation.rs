@@ -618,6 +618,7 @@ pub fn broadcast_move_to_peers(state: &AppState, move_id: &str) -> Vec<String> {
         let move_id_owned = move_id.to_owned();
         tokio::spawn(async move {
             tracing::debug!(
+                worker = "federation_outbox_enqueue",
                 %peer,
                 move_id = %move_id_owned,
                 "federation broadcast move signed request transcript persisted for retry worker"
@@ -651,6 +652,7 @@ pub fn broadcast_anchor_to_peers(state: &AppState, anchor_id: &str) -> Vec<Strin
         let anchor_id_owned = anchor_id.to_owned();
         tokio::spawn(async move {
             tracing::debug!(
+                worker = "federation_outbox_enqueue",
                 %peer,
                 anchor_id = %anchor_id_owned,
                 "federation broadcast anchor signed request transcript persisted for retry worker"

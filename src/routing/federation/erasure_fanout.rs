@@ -266,6 +266,7 @@ pub fn spawn(state: AppState) -> Option<Arc<tokio::task::JoinHandle<()>>> {
             if flipped > 0 {
                 tracing::info!(
                     target = "erasure_fanout",
+                    worker = "erasure_fanout_sweep",
                     flipped,
                     "erasure receipt fanout sweep flipped receipts to incomplete"
                 );
