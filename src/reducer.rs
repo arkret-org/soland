@@ -345,6 +345,7 @@ pub struct RealmPolicyServerConfig {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RealmInheritancePolicyState {
     pub realm_id: String,
+    pub operation_id: String,
     pub source_realm_id: String,
     pub allowed_policies: Vec<String>,
     pub allowed_capability_bundles: Vec<String>,
@@ -360,6 +361,9 @@ pub struct CapabilityDerivedState {
     pub source_grant_ref: String,
     pub source_realm_inheritance_policy_ref: String,
     pub causal_frontier: String,
+    pub effective_actions: Vec<String>,
+    pub effective_resources: Vec<Value>,
+    pub effective_capability_bundles: Vec<String>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
@@ -1322,6 +1326,472 @@ fn extract_event_ref_id(payload: &Value, field: &str) -> Option<String> {
     v.get("id").and_then(Value::as_str).map(ToOwned::to_owned)
 }
 
+const CAPABILITY_GRANT_CELL_PREFIX: &str = "cx:cell:cx.component.capability.grant.v1:";
+
+#[derive(Clone, Debug)]
+struct CapabilityGrantSnapshot {
+    realm_id: Option<String>,
+    actions: BTreeSet<String>,
+    resources: Vec<Value>,
+    constraints: Vec<Value>,
+    capability_bundles: BTreeSet<String>,
+    expires_at: Option<chrono::DateTime<chrono::Utc>>,
+    revoked: bool,
+}
+
+#[derive(Clone, Debug)]
+struct DerivedCapabilityEvaluation {
+    effective_actions: Vec<String>,
+    effective_resources: Vec<Value>,
+    effective_capability_bundles: Vec<String>,
+}
+
+fn is_capability_bearing_realm_link_kind(link_kind: &str) -> bool {
+    matches!(link_kind, "governed_by" | "inherits_policy_from")
+}
+
+fn active_capability_inheritance_link_kind<'a>(
+    state: &'a ProjectionState,
+    realm_id: &str,
+    source_realm_id: &str,
+) -> Result<Option<&'a str>, &'static str> {
+    if realm_id == source_realm_id {
+        return Ok(None);
+    }
+    let mut saw_active_non_bearing_link = false;
+    if let Some(rows) = state.realm_links.get(realm_id) {
+        for row in rows {
+            if row.target_realm_id != source_realm_id || row.status != "active" {
+                continue;
+            }
+            if is_capability_bearing_realm_link_kind(&row.link_kind) {
+                return Ok(Some(row.link_kind.as_str()));
+            }
+            saw_active_non_bearing_link = true;
+        }
+    }
+    if saw_active_non_bearing_link {
+        Err("realm_inheritance_link_kind_not_capability_bearing")
+    } else {
+        Err("realm_inheritance_parent_link_missing")
+    }
+}
+
+fn has_active_realm_link_to_source(
+    state: &ProjectionState,
+    realm_id: &str,
+    source_realm_id: &str,
+) -> bool {
+    state
+        .realm_links
+        .get(realm_id)
+        .map(|rows| {
+            rows.iter().any(|row| {
+                row.target_realm_id == source_realm_id && row.status == "active"
+            })
+        })
+        .unwrap_or(false)
+}
+
+fn inheritance_policy_cell_ref(realm_id: &str) -> Option<CellRef> {
+    CellRef::new(format!(
+        "cx:cell:cx.component.realm.inheritance_policy.v1:{realm_id}"
+    ))
+    .ok()
+}
+
+fn inheritance_policy_ref_matches(
+    state: &ProjectionState,
+    realm_id: &str,
+    policy_ref: &str,
+) -> bool {
+    let cell_ref_string = format!("cx:cell:cx.component.realm.inheritance_policy.v1:{realm_id}");
+    if policy_ref == cell_ref_string {
+        return true;
+    }
+    if state
+        .realm_inheritance_policy(realm_id)
+        .map(|policy| policy.operation_id == policy_ref)
+        .unwrap_or(false)
+    {
+        return true;
+    }
+    let Some(cell_ref) = inheritance_policy_cell_ref(realm_id) else {
+        return false;
+    };
+    let Some(value) = state.cell_value(&cell_ref) else {
+        return false;
+    };
+    value
+        .get("operation_id")
+        .and_then(Value::as_str)
+        .map(|id| id == policy_ref)
+        .unwrap_or(false)
+}
+
+fn string_set_field(value: &Value, field: &str) -> BTreeSet<String> {
+    value
+        .get(field)
+        .map(string_set_from_value)
+        .unwrap_or_default()
+}
+
+fn string_set_from_value(value: &Value) -> BTreeSet<String> {
+    match value {
+        Value::String(s) => std::iter::once(s.clone()).collect(),
+        Value::Array(values) => values
+            .iter()
+            .filter_map(Value::as_str)
+            .map(ToOwned::to_owned)
+            .collect(),
+        _ => BTreeSet::new(),
+    }
+}
+
+fn value_array_field(value: &Value, field: &str) -> Vec<Value> {
+    value
+        .get(field)
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+}
+
+fn inheritance_allowed_policies(payload: &Value) -> Vec<String> {
+    let mut out = string_set_field(payload, "allowed_policies");
+    if let Some(inherits) = payload.get("inherits") {
+        out.extend(string_set_field(inherits, "policy_rules"));
+    }
+    out.into_iter().collect()
+}
+
+fn inheritance_allowed_capability_bundles(payload: &Value) -> Vec<String> {
+    let mut out = string_set_field(payload, "allowed_capability_bundles");
+    if let Some(inherits) = payload.get("inherits") {
+        out.extend(string_set_field(inherits, "capability_bundles"));
+    }
+    out.into_iter().collect()
+}
+
+fn derive_requested_actions(payload: &Value) -> BTreeSet<String> {
+    let mut out = string_set_field(payload, "actions");
+    out.extend(string_set_field(payload, "capabilities"));
+    if let Some(bundle) = payload.get("bundle") {
+        out.extend(string_set_field(bundle, "actions"));
+        out.extend(string_set_field(bundle, "capabilities"));
+    }
+    out
+}
+
+fn derive_requested_resources(payload: &Value) -> Vec<Value> {
+    let mut out = value_array_field(payload, "resources");
+    out.extend(value_array_field(payload, "resource_selectors"));
+    if let Some(bundle) = payload.get("bundle") {
+        out.extend(value_array_field(bundle, "resources"));
+        out.extend(value_array_field(bundle, "resource_selectors"));
+    }
+    out
+}
+
+fn derive_requested_capability_bundles(payload: &Value) -> BTreeSet<String> {
+    let mut out = string_set_field(payload, "capability_bundles");
+    out.extend(string_set_field(payload, "allowed_capability_bundles"));
+    if let Some(bundle) = payload.get("bundle") {
+        out.extend(string_set_from_value(bundle));
+        out.extend(string_set_field(bundle, "id"));
+        out.extend(string_set_field(bundle, "bundle_id"));
+        out.extend(string_set_field(bundle, "capability_bundles"));
+        out.extend(string_set_field(bundle, "bundle_ids"));
+    }
+    out
+}
+
+fn expiry_from_payload(payload: &Value) -> Option<chrono::DateTime<chrono::Utc>> {
+    payload
+        .get("expires_at")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            payload
+                .get("bundle")
+                .and_then(|bundle| bundle.get("expires_at"))
+                .and_then(Value::as_str)
+        })
+        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+        .map(|dt| dt.with_timezone(&chrono::Utc))
+}
+
+fn parse_rfc3339_utc(value: &Value, field: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    value
+        .get(field)
+        .and_then(Value::as_str)
+        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+        .map(|dt| dt.with_timezone(&chrono::Utc))
+}
+
+fn capability_grant_cells(state: &ProjectionState) -> impl Iterator<Item = (&CellRef, &Value)> {
+    state.cells.iter().filter_map(|(cell_ref, cell_state)| {
+        if !cell_ref.as_str().starts_with(CAPABILITY_GRANT_CELL_PREFIX) {
+            return None;
+        }
+        match cell_state {
+            CellState::Value(value) => Some((cell_ref, value)),
+            CellState::Bottom(_) => None,
+        }
+    })
+}
+
+fn grant_ids_match(value: &Value, id: &str) -> bool {
+    ["id", "grant_id", "capability_id", "event_id", "operation_id"]
+        .into_iter()
+        .any(|field| value.get(field).and_then(Value::as_str) == Some(id))
+        || value
+            .get("grant")
+            .map(|grant| grant_ids_match(grant, id))
+            .unwrap_or(false)
+}
+
+fn grant_snapshot_from_value(value: &Value) -> CapabilityGrantSnapshot {
+    let body = value
+        .get("grant")
+        .filter(|grant| grant.is_object())
+        .unwrap_or(value);
+
+    let mut actions = string_set_field(body, "actions");
+    actions.extend(string_set_field(value, "actions"));
+
+    let mut resources = value_array_field(body, "resources");
+    resources.extend(value_array_field(body, "resource_selectors"));
+    resources.extend(value_array_field(value, "resources"));
+    resources.extend(value_array_field(value, "resource_selectors"));
+
+    let mut constraints = value_array_field(body, "constraints");
+    constraints.extend(value_array_field(value, "constraints"));
+
+    let mut capability_bundles = string_set_field(body, "capability_bundles");
+    capability_bundles.extend(string_set_field(body, "bundle_ids"));
+    capability_bundles.extend(string_set_field(body, "bundles"));
+    capability_bundles.extend(string_set_field(body, "bundle"));
+    capability_bundles.extend(string_set_field(value, "capability_bundles"));
+    capability_bundles.extend(string_set_field(value, "bundle_ids"));
+    capability_bundles.extend(string_set_field(value, "bundles"));
+    capability_bundles.extend(string_set_field(value, "bundle"));
+
+    let realm_id = body
+        .get("realm_id")
+        .and_then(Value::as_str)
+        .or_else(|| value.get("realm_id").and_then(Value::as_str))
+        .map(ToOwned::to_owned);
+
+    let expires_at = parse_rfc3339_utc(body, "expires_at")
+        .or_else(|| parse_rfc3339_utc(value, "expires_at"));
+
+    let revoked = body.get("revoked").and_then(Value::as_bool).unwrap_or(false)
+        || value.get("revoked").and_then(Value::as_bool).unwrap_or(false)
+        || body.get("revoked_at").is_some()
+        || body.get("revoked_by").is_some()
+        || value.get("revoked_at").is_some()
+        || value.get("revoked_by").is_some();
+
+    CapabilityGrantSnapshot {
+        realm_id,
+        actions,
+        resources,
+        constraints,
+        capability_bundles,
+        expires_at,
+        revoked,
+    }
+}
+
+fn grant_snapshot_from_cell_item(
+    requested_ref: &str,
+    item: &Value,
+) -> Option<CapabilityGrantSnapshot> {
+    let tag_matches = item.get("tag").and_then(Value::as_str) == Some(requested_ref);
+    if let Some(value) = item.get("value") {
+        if tag_matches || grant_ids_match(value, requested_ref) {
+            return Some(grant_snapshot_from_value(value));
+        }
+    }
+    if tag_matches || grant_ids_match(item, requested_ref) {
+        return Some(grant_snapshot_from_value(item));
+    }
+    None
+}
+
+fn find_capability_grant(
+    state: &ProjectionState,
+    requested_ref: &str,
+) -> Option<CapabilityGrantSnapshot> {
+    for (_cell_ref, value) in capability_grant_cells(state) {
+        if let Some(items) = value.as_array() {
+            for item in items {
+                if let Some(grant) = grant_snapshot_from_cell_item(requested_ref, item) {
+                    return Some(grant);
+                }
+            }
+        } else if let Some(grant) = grant_snapshot_from_cell_item(requested_ref, value) {
+            return Some(grant);
+        }
+    }
+    None
+}
+
+fn grants_for_realm(state: &ProjectionState, realm_id: &str) -> Vec<CapabilityGrantSnapshot> {
+    let mut grants = Vec::new();
+    for (_cell_ref, value) in capability_grant_cells(state) {
+        if let Some(items) = value.as_array() {
+            for item in items {
+                let candidate = item.get("value").unwrap_or(item);
+                let grant = grant_snapshot_from_value(candidate);
+                if grant.realm_id.as_deref() == Some(realm_id) && !grant.revoked {
+                    grants.push(grant);
+                }
+            }
+        } else {
+            let grant = grant_snapshot_from_value(value);
+            if grant.realm_id.as_deref() == Some(realm_id) && !grant.revoked {
+                grants.push(grant);
+            }
+        }
+    }
+    grants
+}
+
+fn parent_capability_grants_allow(
+    state: &ProjectionState,
+    source_realm_id: &str,
+    allowed_policies: &[String],
+    allowed_capability_bundles: &[String],
+) -> Result<(), &'static str> {
+    let grants = grants_for_realm(state, source_realm_id);
+    if grants.is_empty() {
+        return Ok(());
+    }
+    let granted_actions: BTreeSet<String> = grants
+        .iter()
+        .flat_map(|grant| grant.actions.iter().cloned())
+        .collect();
+    let granted_bundles: BTreeSet<String> = grants
+        .iter()
+        .flat_map(|grant| grant.capability_bundles.iter().cloned())
+        .collect();
+    if allowed_policies
+        .iter()
+        .any(|policy| !granted_actions.contains(policy))
+    {
+        return Err("realm_inheritance_parent_policy_not_granted");
+    }
+    if allowed_capability_bundles
+        .iter()
+        .any(|bundle| !granted_bundles.contains(bundle))
+    {
+        return Err("realm_inheritance_parent_bundle_not_granted");
+    }
+    Ok(())
+}
+
+fn validate_derived_capability(
+    grant: &CapabilityGrantSnapshot,
+    policy: &RealmInheritancePolicyState,
+    payload: &Value,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<DerivedCapabilityEvaluation, &'static str> {
+    if grant.revoked {
+        return Err("capability_derived_source_grant_revoked");
+    }
+    if grant.expires_at.is_some_and(|expires_at| expires_at <= now) {
+        return Err("capability_derived_source_grant_expired");
+    }
+    if grant
+        .realm_id
+        .as_deref()
+        .is_some_and(|id| id != policy.source_realm_id)
+    {
+        return Err("capability_derived_source_grant_realm_mismatch");
+    }
+
+    let allowed_bundles: BTreeSet<String> =
+        policy.allowed_capability_bundles.iter().cloned().collect();
+    if !grant.capability_bundles.is_empty()
+        && grant
+            .capability_bundles
+            .iter()
+            .any(|bundle| !allowed_bundles.contains(bundle))
+    {
+        return Err("capability_derived_source_bundle_not_allowed");
+    }
+
+    let requested_bundles = derive_requested_capability_bundles(payload);
+    if requested_bundles
+        .iter()
+        .any(|bundle| !allowed_bundles.contains(bundle))
+    {
+        return Err("capability_derived_bundle_not_allowed");
+    }
+
+    let requested_actions = derive_requested_actions(payload);
+    if requested_actions
+        .iter()
+        .any(|action| !grant.actions.contains(action))
+    {
+        return Err("capability_derived_action_widening");
+    }
+
+    let requested_resources = derive_requested_resources(payload);
+    if !requested_resources.is_empty()
+        && requested_resources
+            .iter()
+            .any(|resource| !grant.resources.iter().any(|source| source == resource))
+    {
+        return Err("capability_derived_resource_widening");
+    }
+
+    if let Some(derived_expires_at) = expiry_from_payload(payload) {
+        if grant
+            .expires_at
+            .is_some_and(|source_expires_at| derived_expires_at > source_expires_at)
+        {
+            return Err("capability_derived_expiry_widening");
+        }
+    }
+
+    let requested_constraints = value_array_field(payload, "constraints");
+    if !requested_constraints.is_empty()
+        && grant
+            .constraints
+            .iter()
+            .any(|source| !requested_constraints.iter().any(|derived| derived == source))
+    {
+        return Err("capability_derived_constraint_widening");
+    }
+
+    let effective_actions = if requested_actions.is_empty() {
+        grant.actions.iter().cloned().collect()
+    } else {
+        requested_actions.into_iter().collect()
+    };
+    let effective_resources = if requested_resources.is_empty() {
+        grant.resources.clone()
+    } else {
+        requested_resources
+    };
+    let effective_capability_bundles = if requested_bundles.is_empty() {
+        grant
+            .capability_bundles
+            .intersection(&allowed_bundles)
+            .cloned()
+            .collect()
+    } else {
+        requested_bundles.into_iter().collect()
+    };
+
+    Ok(DerivedCapabilityEvaluation {
+        effective_actions,
+        effective_resources,
+        effective_capability_bundles,
+    })
+}
+
 /// R3.1 — dispatch for `cx.realm.link`. Projects the typed link payload
 /// into the `cx.component.realm.link.v1` or_set cell + structured
 /// `realm_links` / `realm_links_inbound` caches.
@@ -1334,7 +1804,8 @@ fn apply_realm_link_dispatch(
 }
 
 /// R3.2 — dispatch for `cx.realm.inheritance_policy`. Projects the
-/// cas-register cell + structured cache; rejects `max_depth > 1`.
+/// cas-register cell + structured cache; validates parent grant bounds
+/// when the relevant parent grant cells are available.
 fn apply_realm_inheritance_policy_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
@@ -1344,8 +1815,7 @@ fn apply_realm_inheritance_policy_dispatch(
 }
 
 /// R3.2 — dispatch for `cx.capability.derived`. Projects the cas-
-/// register cell + structured cache. Full evaluation of the derive
-/// (verify grant + replay inheritance) is TODO(realm-rework).
+/// register cell + structured cache after reducer-side derive evaluation.
 fn apply_capability_derived_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
@@ -2761,8 +3231,10 @@ impl ProjectionState {
     /// R3.2 — project a `cx.realm.inheritance_policy` event.
     ///
     /// Cell family: `cx.component.realm.inheritance_policy.v1` (cas-register).
-    /// Rejects payloads with `max_depth > 1` (current wire cap; multi-
-    /// depth composite inheritance is TODO(realm-rework)).
+    /// Rejects payloads with `max_depth > 1` (current wire cap), rejects
+    /// inheritance through an already-active non-capability-bearing Realm
+    /// link, and verifies requested policies / bundles against projected
+    /// parent grants when those grants are present in the reducer state.
     fn apply_realm_inheritance_policy(
         &mut self,
         operation: &Operation,
@@ -2778,6 +3250,21 @@ impl ProjectionState {
                 reason: "realm_inheritance_source_missing".to_owned(),
             };
         };
+        if contrix_sdk::RealmId::new(source_realm_id).is_err() {
+            return ProjectionEffect::Rejected {
+                reason: "realm_inheritance_source_invalid".to_owned(),
+            };
+        }
+        if operation
+            .payload
+            .get("mode")
+            .and_then(Value::as_str)
+            .is_some_and(|mode| mode != "narrow_only")
+        {
+            return ProjectionEffect::Rejected {
+                reason: "realm_inheritance_mode_invalid".to_owned(),
+            };
+        }
         let max_depth = operation
             .payload
             .get("max_depth")
@@ -2793,37 +3280,35 @@ impl ProjectionState {
                 reason: "realm_inheritance_max_depth_exceeded".to_owned(),
             };
         }
-        let allowed_policies: Vec<String> = operation
-            .payload
-            .get("allowed_policies")
-            .and_then(Value::as_array)
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(Value::as_str)
-                    .map(ToOwned::to_owned)
-                    .collect()
-            })
-            .unwrap_or_default();
-        let allowed_capability_bundles: Vec<String> = operation
-            .payload
-            .get("allowed_capability_bundles")
-            .and_then(Value::as_array)
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(Value::as_str)
-                    .map(ToOwned::to_owned)
-                    .collect()
-            })
-            .unwrap_or_default();
+        let allowed_policies = inheritance_allowed_policies(&operation.payload);
+        let allowed_capability_bundles =
+            inheritance_allowed_capability_bundles(&operation.payload);
 
-        // TODO(realm-rework): verify that the parent Realm has actually
-        // granted these policies / bundles (today we accept any
-        // declaration). Full derive evaluation also TODO.
+        if has_active_realm_link_to_source(self, &realm_id, source_realm_id) {
+            if let Err(reason) =
+                active_capability_inheritance_link_kind(self, &realm_id, source_realm_id)
+            {
+                return ProjectionEffect::Rejected {
+                    reason: reason.to_owned(),
+                };
+            }
+        }
+        if let Err(reason) = parent_capability_grants_allow(
+            self,
+            source_realm_id,
+            &allowed_policies,
+            &allowed_capability_bundles,
+        ) {
+            return ProjectionEffect::Rejected {
+                reason: reason.to_owned(),
+            };
+        }
 
         if let Ok(cell_id) = contrix_sdk::CellRef::new(format!(
             "cx:cell:cx.component.realm.inheritance_policy.v1:{realm_id}"
         )) {
             let value = serde_json::json!({
+                "operation_id": operation.operation_id.as_str(),
                 "source_realm_id": source_realm_id,
                 "allowed_policies": allowed_policies,
                 "allowed_capability_bundles": allowed_capability_bundles,
@@ -2837,6 +3322,7 @@ impl ProjectionState {
             realm_id.clone(),
             RealmInheritancePolicyState {
                 realm_id: realm_id.clone(),
+                operation_id: operation.operation_id.to_string(),
                 source_realm_id: source_realm_id.to_owned(),
                 allowed_policies,
                 allowed_capability_bundles,
@@ -2856,7 +3342,10 @@ impl ProjectionState {
     /// Cell family: `cx.component.capability.derived.v1` (cas-register,
     /// keyed by `capability_id`). Schema-level required fields:
     /// `capability_id`, `source_grant_ref`, `source_realm_inheritance_policy_ref`,
-    /// `causal_frontier`. Full derive validation is TODO(realm-rework).
+    /// `causal_frontier`. The reducer verifies the current inheritance
+    /// policy, the capability-bearing Realm link, the parent grant, and
+    /// the narrow-only derived actions / resources / bundles before writing
+    /// the projected effective capability set.
     fn apply_capability_derived(
         &mut self,
         operation: &Operation,
@@ -2899,10 +3388,60 @@ impl ProjectionState {
             };
         };
 
-        // TODO(realm-rework): full derive evaluation — verify
-        // source_grant_ref's bundle, replay the inheritance policy at
-        // causal_frontier, and emit the resulting effective capability
-        // set into a derived-capability index.
+        let Some(inheritance_policy) = self.realm_inheritance_policy(&realm_id).cloned() else {
+            return ProjectionEffect::Rejected {
+                reason: "capability_derived_inheritance_policy_missing".to_owned(),
+            };
+        };
+        if !inheritance_policy_ref_matches(
+            self,
+            &realm_id,
+            &source_realm_inheritance_policy_ref,
+        ) {
+            return ProjectionEffect::Rejected {
+                reason: "capability_derived_inheritance_ref_stale".to_owned(),
+            };
+        }
+        let source_link_kind = match active_capability_inheritance_link_kind(
+            self,
+            &realm_id,
+            &inheritance_policy.source_realm_id,
+        ) {
+            Ok(kind) => kind.map(ToOwned::to_owned),
+            Err("realm_inheritance_parent_link_missing") => {
+                return ProjectionEffect::Rejected {
+                    reason: "capability_derived_parent_link_missing".to_owned(),
+                };
+            }
+            Err("realm_inheritance_link_kind_not_capability_bearing") => {
+                return ProjectionEffect::Rejected {
+                    reason: "capability_derived_link_kind_not_capability_bearing".to_owned(),
+                };
+            }
+            Err(reason) => {
+                return ProjectionEffect::Rejected {
+                    reason: reason.to_owned(),
+                };
+            }
+        };
+        let Some(source_grant) = find_capability_grant(self, &source_grant_ref) else {
+            return ProjectionEffect::Rejected {
+                reason: "capability_derived_source_grant_missing".to_owned(),
+            };
+        };
+        let evaluation = match validate_derived_capability(
+            &source_grant,
+            &inheritance_policy,
+            &operation.payload,
+            now,
+        ) {
+            Ok(evaluation) => evaluation,
+            Err(reason) => {
+                return ProjectionEffect::Rejected {
+                    reason: reason.to_owned(),
+                };
+            }
+        };
 
         if let Ok(cell_id) = contrix_sdk::CellRef::new(format!(
             "cx:cell:cx.component.capability.derived.v1:{capability_id}"
@@ -2925,6 +3464,39 @@ impl ProjectionState {
                 "causal_frontier".to_owned(),
                 Value::String(causal_frontier.to_owned()),
             );
+            value.insert(
+                "source_realm_id".to_owned(),
+                Value::String(inheritance_policy.source_realm_id.clone()),
+            );
+            if let Some(kind) = source_link_kind.as_deref() {
+                value.insert("source_link_kind".to_owned(), Value::String(kind.to_owned()));
+            }
+            value.insert(
+                "effective_actions".to_owned(),
+                Value::Array(
+                    evaluation
+                        .effective_actions
+                        .iter()
+                        .cloned()
+                        .map(Value::String)
+                        .collect(),
+                ),
+            );
+            value.insert(
+                "effective_resources".to_owned(),
+                Value::Array(evaluation.effective_resources.clone()),
+            );
+            value.insert(
+                "effective_capability_bundles".to_owned(),
+                Value::Array(
+                    evaluation
+                        .effective_capability_bundles
+                        .iter()
+                        .cloned()
+                        .map(Value::String)
+                        .collect(),
+                ),
+            );
             value.insert("updated_at".to_owned(), Value::String(now.to_rfc3339()));
             if let Some(bundle) = operation.payload.get("bundle") {
                 value.insert("bundle".to_owned(), bundle.clone());
@@ -2941,6 +3513,9 @@ impl ProjectionState {
                 source_grant_ref,
                 source_realm_inheritance_policy_ref,
                 causal_frontier: causal_frontier.to_owned(),
+                effective_actions: evaluation.effective_actions,
+                effective_resources: evaluation.effective_resources,
+                effective_capability_bundles: evaluation.effective_capability_bundles,
                 updated_at: now,
             },
         );

@@ -1,7 +1,8 @@
 //! Reducer-level tests for `cx.realm.inheritance_policy` +
 //! `cx.capability.derived` (R3.2).
 
-use contrix_sdk::Operation;
+use contrix_sdk::lattice::CellState;
+use contrix_sdk::{Operation, OperationId, RealmId};
 use serde_json::{Value, json};
 use soland::hlc::ServerHlc;
 use soland::reducer::{ProjectionEffect, ProjectionState};
@@ -11,11 +12,65 @@ const REALM_CHILD: &str = "cx:realm:01904100-0000-7000-8000-bbbbbbbbbbbb";
 
 fn op(kind: &str, space_id: &str, payload: Value) -> Operation {
     Operation::create(
-        contrix_sdk::OperationId::new(format!("cx:operation:{}", uuid::Uuid::now_v7())).unwrap(),
-        contrix_sdk::RealmId::new(space_id).unwrap(),
+        OperationId::new(format!("cx:operation:{}", uuid::Uuid::now_v7())).unwrap(),
+        RealmId::new(space_id).unwrap(),
         kind,
         payload,
     )
+}
+
+fn link_op(source: &str, target: &str, link_kind: &str) -> Operation {
+    op(
+        soland::kinds::CX_REALM_LINK,
+        source,
+        json!({
+            "target_realm_id": target,
+            "link_kind": link_kind,
+            "status": "active",
+        }),
+    )
+}
+
+fn inheritance_op(child: &str, parent: &str, bundles: &[&str]) -> Operation {
+    op(
+        soland::kinds::CX_REALM_INHERITANCE_POLICY,
+        child,
+        json!({
+            "source_realm_id": parent,
+            "allowed_policies": [],
+            "allowed_capability_bundles": bundles,
+            "max_depth": 1,
+        }),
+    )
+}
+
+fn seed_source_grant(
+    state: &mut ProjectionState,
+    grant_ref: &str,
+    realm_id: &str,
+    actions: &[&str],
+    bundles: &[&str],
+) {
+    let cell_id = contrix_sdk::CellRef::new(format!(
+        "cx:cell:cx.component.capability.grant.v1:{grant_ref}"
+    ))
+    .unwrap();
+    state.cells.insert(
+        cell_id,
+        CellState::Value(json!([
+            {
+                "tag": grant_ref,
+                "value": {
+                    "event_id": grant_ref,
+                    "grant_id": "cx:grant:01904100-0000-7000-8000-111111111111",
+                    "realm_id": realm_id,
+                    "actions": actions,
+                    "resources": [{"kind": "realm", "id": realm_id}],
+                    "capability_bundles": bundles,
+                }
+            }
+        ])),
+    );
 }
 
 #[test]
@@ -62,6 +117,49 @@ fn inheritance_policy_projects_cell_and_cache() {
         value.get("source_realm_id").and_then(Value::as_str),
         Some(REALM_PARENT)
     );
+}
+
+#[test]
+fn inheritance_policy_rejects_parent_bundle_not_granted() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("test");
+    seed_source_grant(
+        &mut state,
+        "cx:event:01904100-0000-7000-8000-111111111111",
+        REALM_PARENT,
+        &["read"],
+        &["bundle.read.v1"],
+    );
+
+    let bad = inheritance_op(REALM_CHILD, REALM_PARENT, &["bundle.admin.v1"]);
+    match state.apply(&bad, &hlc) {
+        ProjectionEffect::Rejected { reason } => {
+            assert_eq!(reason, "realm_inheritance_parent_bundle_not_granted");
+        }
+        other => {
+            panic!("expected Rejected(realm_inheritance_parent_bundle_not_granted), got {other:?}")
+        }
+    }
+}
+
+#[test]
+fn inheritance_policy_rejects_non_capability_bearing_link_kind() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("test");
+    state.apply(
+        &link_op(REALM_CHILD, REALM_PARENT, "discoverable_from"),
+        &hlc,
+    );
+
+    let bad = inheritance_op(REALM_CHILD, REALM_PARENT, &[]);
+    match state.apply(&bad, &hlc) {
+        ProjectionEffect::Rejected { reason } => {
+            assert_eq!(reason, "realm_inheritance_link_kind_not_capability_bearing");
+        }
+        other => panic!(
+            "expected Rejected(realm_inheritance_link_kind_not_capability_bearing), got {other:?}"
+        ),
+    }
 }
 
 #[test]
@@ -112,6 +210,22 @@ fn capability_derived_projects_cell_and_cache() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let capability_id = "cx:capability:01904100-0000-7000-8000-dddddddddddd";
+    let source_grant_ref = "cx:event:01904100-0000-7000-8000-eeeeeeeeeeee";
+    state.apply(&link_op(REALM_CHILD, REALM_PARENT, "governed_by"), &hlc);
+    seed_source_grant(
+        &mut state,
+        source_grant_ref,
+        REALM_PARENT,
+        &["read"],
+        &["bundle.read.v1"],
+    );
+    let inheritance = inheritance_op(REALM_CHILD, REALM_PARENT, &["bundle.read.v1"]);
+    let inheritance_ref = inheritance.operation_id.to_string();
+    assert!(matches!(
+        state.apply(&inheritance, &hlc),
+        ProjectionEffect::RealmInheritancePolicyProjected { .. }
+    ));
+
     let effect = state.apply(
         &op(
             soland::kinds::CX_CAPABILITY_DERIVED,
@@ -119,15 +233,19 @@ fn capability_derived_projects_cell_and_cache() {
             json!({
                 "capability_id": capability_id,
                 "source_grant_ref": {
-                    "id": "cx:event:01904100-0000-7000-8000-eeeeeeeeeeee",
+                    "id": source_grant_ref,
                     "role": "authorized_by",
                 },
                 "source_realm_inheritance_policy_ref": {
-                    "id": "cx:event:01904100-0000-7000-8000-ffffffffffff",
+                    "id": inheritance_ref,
                     "role": "inherits_from",
                 },
                 "causal_frontier": "cx:frontier:02000000",
-                "bundle": {"capabilities": ["read"]},
+                "bundle": {
+                    "capability_bundles": ["bundle.read.v1"],
+                    "capabilities": ["read"],
+                    "resources": [{"kind": "realm", "id": REALM_PARENT}],
+                },
             }),
         ),
         &hlc,
@@ -145,15 +263,14 @@ fn capability_derived_projects_cell_and_cache() {
     let cached = state
         .capability_derived_state(capability_id)
         .expect("cached");
-    assert_eq!(
-        cached.source_grant_ref,
-        "cx:event:01904100-0000-7000-8000-eeeeeeeeeeee"
-    );
-    assert_eq!(
-        cached.source_realm_inheritance_policy_ref,
-        "cx:event:01904100-0000-7000-8000-ffffffffffff"
-    );
+    assert_eq!(cached.source_grant_ref, source_grant_ref);
+    assert_eq!(cached.source_realm_inheritance_policy_ref, inheritance_ref);
     assert_eq!(cached.causal_frontier, "cx:frontier:02000000");
+    assert_eq!(cached.effective_actions, vec!["read".to_owned()]);
+    assert_eq!(
+        cached.effective_capability_bundles,
+        vec!["bundle.read.v1".to_owned()]
+    );
 }
 
 #[test]
@@ -179,5 +296,93 @@ fn capability_derived_rejects_missing_source_grant() {
         other => {
             panic!("expected Rejected(capability_derived_source_grant_ref_missing), got {other:?}")
         }
+    }
+}
+
+#[test]
+fn capability_derived_rejects_action_widening() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("test");
+    let source_grant_ref = "cx:event:01904100-0000-7000-8000-eeeeeeeeeeee";
+    state.apply(
+        &link_op(REALM_CHILD, REALM_PARENT, "inherits_policy_from"),
+        &hlc,
+    );
+    seed_source_grant(
+        &mut state,
+        source_grant_ref,
+        REALM_PARENT,
+        &["read"],
+        &["bundle.read.v1"],
+    );
+    let inheritance = inheritance_op(REALM_CHILD, REALM_PARENT, &["bundle.read.v1"]);
+    let inheritance_ref = inheritance.operation_id.to_string();
+    state.apply(&inheritance, &hlc);
+
+    let bad = op(
+        soland::kinds::CX_CAPABILITY_DERIVED,
+        REALM_CHILD,
+        json!({
+            "capability_id": "cx:capability:01904100-0000-7000-8000-dddddddddddd",
+            "source_grant_ref": {"id": source_grant_ref, "role": "authorized_by"},
+            "source_realm_inheritance_policy_ref": {"id": inheritance_ref, "role": "inherits_from"},
+            "causal_frontier": "cx:frontier:02000000",
+            "bundle": {
+                "capability_bundles": ["bundle.read.v1"],
+                "capabilities": ["write"],
+            },
+        }),
+    );
+
+    match state.apply(&bad, &hlc) {
+        ProjectionEffect::Rejected { reason } => {
+            assert_eq!(reason, "capability_derived_action_widening");
+        }
+        other => panic!("expected Rejected(capability_derived_action_widening), got {other:?}"),
+    }
+}
+
+#[test]
+fn capability_derived_rejects_non_capability_bearing_link_kind() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("test");
+    let source_grant_ref = "cx:event:01904100-0000-7000-8000-eeeeeeeeeeee";
+    seed_source_grant(
+        &mut state,
+        source_grant_ref,
+        REALM_PARENT,
+        &["read"],
+        &["bundle.read.v1"],
+    );
+    let inheritance = inheritance_op(REALM_CHILD, REALM_PARENT, &["bundle.read.v1"]);
+    let inheritance_ref = inheritance.operation_id.to_string();
+    state.apply(&inheritance, &hlc);
+    state.apply(&link_op(REALM_CHILD, REALM_PARENT, "join_gate_from"), &hlc);
+
+    let bad = op(
+        soland::kinds::CX_CAPABILITY_DERIVED,
+        REALM_CHILD,
+        json!({
+            "capability_id": "cx:capability:01904100-0000-7000-8000-dddddddddddd",
+            "source_grant_ref": {"id": source_grant_ref, "role": "authorized_by"},
+            "source_realm_inheritance_policy_ref": {"id": inheritance_ref, "role": "inherits_from"},
+            "causal_frontier": "cx:frontier:02000000",
+            "bundle": {
+                "capability_bundles": ["bundle.read.v1"],
+                "capabilities": ["read"],
+            },
+        }),
+    );
+
+    match state.apply(&bad, &hlc) {
+        ProjectionEffect::Rejected { reason } => {
+            assert_eq!(
+                reason,
+                "capability_derived_link_kind_not_capability_bearing"
+            );
+        }
+        other => panic!(
+            "expected Rejected(capability_derived_link_kind_not_capability_bearing), got {other:?}"
+        ),
     }
 }

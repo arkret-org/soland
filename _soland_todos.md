@@ -23,13 +23,13 @@
 - [x] §5 `src/round23.rs:22,55,466` — async fanout worker + human reason field in redaction bodies (round23-T02/T07).
 - [x] §6 `src/push_rule_core.rs:378` — cross-project consistency vector with cotest (T4.4).
 - [x] §7 `src/authz/policy_client.rs:398` — full crypto verification of `signature.sig` in policy introspection (G3.S2).
-- [ ] §8 `src/reducer.rs:2817,2900` — parent capability verification, full derive evaluation (realm rework).
+- [x] §8 `src/reducer.rs:2817,2900` — parent capability verification, full derive evaluation (realm rework).
 - [x] §9 `src/round4.rs:54,168` + `src/routing/events/event_log.rs:556` — federation transcript signature + Move Anchor frontier signing.
 - [x] §10 `src/wire.rs:487` — replace `Value` union in `HandleClaim` with typed structure (spec-sync 0a5ab85).
 - [x] §11 `src/routing/events/event_log.rs:1391` — replace hardcoded `false` projection-query defaults with DB reads.
 - [x] §12 `src/routing/spaces/directory.rs:355` — emit spec-signed `handle_claim` envelope.
 - [x] §13 `src/persistence.rs:3552-3561` — implement `PgMlsKeyPackageStore`, `PgMlsWelcomeStore`, `PgMlsCommitStore` trait impls (currently stubbed).
-- [ ] §14 `src/reducer.rs:2900` — realm link_kind inheritance + capability rules.
+- [x] §14 `src/reducer.rs:2900` — realm link_kind inheritance + capability rules.
 - [x] §15 `src/kinds.rs:206-215` — governance multi-sig validation, threshold aggregation.
 
 ### Observability (phase 2 deliverable)
@@ -74,3 +74,4 @@ All of:
 - The `tests/conformance_gates.rs` job in `tests/` is independent of cotest; keep it.
 - `Justfile`'s `conformance-gates` recipe must stay aligned with `cotest/scripts/run-cotest.ps1`.
 - Caddyfile assumes dev TLS — production should consume real certs via env; document in `DEPLOYMENT.md`.
+
