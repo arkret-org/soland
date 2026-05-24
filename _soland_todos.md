@@ -59,7 +59,7 @@
 
 - [ ] §31 External security review.
 - [ ] §32 Record local `v1.0.0` milestone once cotest release-gate is green against soland.
-- [ ] §33 Publish `DEPLOYMENT.md` updates with metrics/OTEL/rate-limit configuration examples.
+- [x] §33 Record local `DEPLOYMENT.md` updates with metrics/OTEL/rate-limit configuration examples.
 
 ## Exit gate (phase 2)
 

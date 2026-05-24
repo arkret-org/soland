@@ -250,6 +250,45 @@ Alert on:
   should be impossible with `SOLAND_DEVELOPMENT_MODE=false`, but alert
   belt-and-braces)
 
+### Local observability and rate-limit examples
+
+Minimal local metrics-only run:
+
+```dotenv
+SOLAND_BIND=127.0.0.1:8698
+SOLAND_METRICS_BIND=127.0.0.1:9090
+RUST_LOG=soland=info,salvo=warn
+```
+
+OTLP trace export run:
+
+```powershell
+$env:SOLAND_OTEL_EXPORTER="otlp"
+$env:SOLAND_OTEL_ENDPOINT="http://127.0.0.1:4317"
+$env:SOLAND_OTEL_SAMPLE_RATIO="0.25"
+cargo run --features otel -- --bind 127.0.0.1:8698
+```
+
+Single-process local reverse-proxy rate-limit sketch:
+
+```nginx
+limit_req_zone $binary_remote_addr zone=soland_api:10m rate=600r/m;
+
+server {
+  listen 443 ssl;
+  server_name soland.example;
+
+  location / {
+    limit_req zone=soland_api burst=120 nodelay;
+    proxy_pass http://127.0.0.1:8698;
+  }
+}
+```
+
+For multi-replica deployments, enforce the quota at the shared gateway or
+load balancer. soland's in-process limiter remains useful as a last-resort
+guard, but it is not a distributed budget.
+
 ## 8. Local supply-chain artifacts
 
 Generate local image metadata and an SPDX JSON SBOM without pushing an image or
@@ -304,8 +343,8 @@ pre-upgrade backup if you need to roll back.
   limiter is per-process and must not be treated as a distributed quota.
 - `cargo deny check` runs in CI on every dependabot bump.
 - soland process runs as a non-root user (UID 10001 in the published image).
-- Rate-limit configuration matches your anticipated traffic
-  (`_todos.md` Q6 / Cfg-1 — currently single-process).
+- Rate-limit configuration matches your anticipated traffic and is enforced
+  at the shared gateway when more than one soland replica is running.
 
 ## 11. Known limits
 
