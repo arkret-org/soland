@@ -7,12 +7,9 @@
 -- rows with `delivered_at IS NULL AND next_attempt_at <= now` and posts
 -- them with `Idempotency-Key` + `Content-Digest` (RFC 9530) headers.
 --
--- TODO(G3.S0-followup): RFC 9421 HTTP message-signing covers `Signature`
--- and `Signature-Input` columns once full signing lands; today the
--- dispatcher only emits the digest header. TODO(G3.S0-followup):
--- dead-letter routing — terminal failures currently mark delivered_at
--- with last_status=-1 (gave up) or the 4xx status; a separate
--- federation_outbox_dead_letter table will own quarantine + replay.
+-- Terminal 4xx failures and exhausted retry budgets are mirrored into
+-- federation_outbox_dead_letter for operator replay/quarantine while the
+-- source row remains in federation_outbox for idempotency and diagnostics.
 CREATE TABLE IF NOT EXISTS federation_outbox (
     id TEXT PRIMARY KEY,
     peer_did TEXT NOT NULL,
@@ -33,3 +30,19 @@ CREATE INDEX IF NOT EXISTS federation_outbox_pending
 
 CREATE UNIQUE INDEX IF NOT EXISTS federation_outbox_peer_idem
     ON federation_outbox (peer_did, idempotency_key);
+
+CREATE TABLE IF NOT EXISTS federation_outbox_dead_letter (
+    id TEXT PRIMARY KEY,
+    outbox_id TEXT NOT NULL REFERENCES federation_outbox(id) ON DELETE CASCADE,
+    peer_did TEXT NOT NULL,
+    endpoint TEXT NOT NULL,
+    idempotency_key TEXT NOT NULL,
+    terminal_status INTEGER NOT NULL,
+    attempts INTEGER NOT NULL,
+    response_excerpt TEXT,
+    failed_at BIGINT NOT NULL,
+    reason TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS federation_outbox_dead_letter_failed_at
+    ON federation_outbox_dead_letter (failed_at, id);

@@ -650,6 +650,20 @@ pub struct FederationOutboxRecord {
     pub delivered_at: Option<i64>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FederationOutboxDeadLetterRecord {
+    pub id: String,
+    pub outbox_id: String,
+    pub peer_did: String,
+    pub endpoint: String,
+    pub idempotency_key: String,
+    pub terminal_status: i32,
+    pub attempts: i32,
+    pub response_excerpt: Option<String>,
+    pub failed_at: i64,
+    pub reason: String,
+}
+
 #[derive(Clone, Debug)]
 pub struct PresenceRecord {
     pub actor: String,

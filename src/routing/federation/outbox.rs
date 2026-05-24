@@ -26,13 +26,9 @@
 //!
 //! ## What's deferred
 //!
-//! - **Dead-letter queue**. When a 4xx (non-retryable) hits or the
-//!   attempts cap is reached, the row is marked `delivered_at = now` and
-//!   either `last_status = HTTP_status` (4xx) or `last_status = -1`
-//!   (gave up on retryable error). There is no separate quarantine
-//!   table; replay is operator-driven via the existing
-//!   federation_transactions transcript until the dead-letter table
-//!   ships. See the TODO in [`mark_terminal_failure`].
+//! - **Operator replay API**. Terminal failures are mirrored into
+//!   `federation_outbox_dead_letter`, but there is not yet an HTTP
+//!   endpoint that re-queues them with a fresh idempotency key.
 //!
 //! ## Parallel-work coordination
 //!
@@ -52,7 +48,7 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::persistence::PersistenceResult;
-use crate::state::{AppState, FederationOutboxRecord};
+use crate::state::{AppState, FederationOutboxDeadLetterRecord, FederationOutboxRecord};
 
 /// How often the dispatcher polls the outbox when idle.
 pub const POLL_INTERVAL: Duration = Duration::from_secs(5);
@@ -401,15 +397,10 @@ impl FederationDispatcher {
         if row.attempts >= MAX_ATTEMPTS {
             // Out of retries — mark as gave-up with the sentinel status
             // so observability tools can distinguish "permanent 4xx" from
-            // "exceeded retry budget on a retryable error". Dead-letter
-            // routing is the follow-up.
-            // TODO(G3.S0-followup): on attempts >= MAX_ATTEMPTS, insert
-            // a row into a separate federation_outbox_dead_letter table
-            // so ops can re-queue with a fresh idempotency-key after
-            // diagnosing the root cause. Today we just mark delivered_at
-            // and emit a warn-level audit line.
+            // "exceeded retry budget on a retryable error".
             row.delivered_at = Some(now_unix_secs());
             row.last_status = Some(GAVE_UP_STATUS_SENTINEL);
+            self.insert_dead_letter(row, GAVE_UP_STATUS_SENTINEL, "retry_budget_exhausted");
             tracing::warn!(
                 target = "federation_outbox",
                 outbox_id = %row.id,
@@ -425,12 +416,7 @@ impl FederationDispatcher {
 
     fn mark_terminal_failure(&self, row: &mut FederationOutboxRecord, status: i32) {
         row.delivered_at = Some(now_unix_secs());
-        // TODO(G3.S0-followup): route permanent 4xx terminal failures
-        // into a federation_outbox_dead_letter table for operator
-        // review. Today we mark delivered_at and emit a warn-level
-        // audit line; the row stays in `federation_outbox` so the
-        // operator can inspect `last_status` + `last_response_excerpt`
-        // until the dead-letter table ships.
+        self.insert_dead_letter(row, status, "terminal_http_status");
         tracing::warn!(
             target = "federation_outbox",
             outbox_id = %row.id,
@@ -440,6 +426,40 @@ impl FederationDispatcher {
             attempts = row.attempts,
             "federation outbox permanent failure (4xx, no retry, dead-letter follow-up pending)"
         );
+    }
+
+    fn insert_dead_letter(
+        &self,
+        row: &FederationOutboxRecord,
+        terminal_status: i32,
+        reason: &str,
+    ) {
+        let failed_at = row.delivered_at.unwrap_or_else(now_unix_secs);
+        let record = FederationOutboxDeadLetterRecord {
+            id: Uuid::new_v4().to_string(),
+            outbox_id: row.id.clone(),
+            peer_did: row.peer_did.clone(),
+            endpoint: row.endpoint.clone(),
+            idempotency_key: row.idempotency_key.clone(),
+            terminal_status,
+            attempts: row.attempts,
+            response_excerpt: row.last_response_excerpt.clone(),
+            failed_at,
+            reason: reason.to_owned(),
+        };
+        if let Err(error) = self
+            .state
+            .persistence
+            .federation_outbox()
+            .insert_dead_letter(&record)
+        {
+            tracing::warn!(
+                %error,
+                outbox_id = %row.id,
+                target = "federation_outbox",
+                "failed to insert federation outbox dead-letter row"
+            );
+        }
     }
 }
 

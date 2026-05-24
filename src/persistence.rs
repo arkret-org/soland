@@ -19,7 +19,8 @@ use crate::db::PgPool;
 use crate::ids;
 use crate::state::{
     AccountDataRecord, AccountRecord, BlobRecord, CanonicalEventRecord, ContactRecord,
-    DeviceInventoryRecord, DeviceMessageRecord, FederationOutboxRecord,
+    DeviceInventoryRecord, DeviceMessageRecord, FederationOutboxDeadLetterRecord,
+    FederationOutboxRecord,
     FederationTransactionRecord, MessageRecord, MultisigPendingRecord,
     OutboundPushBridgeCacheRecord, PolicyDocumentRecord, PresenceRecord, ProjectionEventRecord,
     PushRuleRecord, RealmMetaRecord, SessionRecord, SpaceInviteRecord, TypingRecord,
@@ -272,6 +273,14 @@ pub trait FederationOutboxStore: Send + Sync {
     /// rely on it. Production deployments SHOULD NOT call this on a
     /// large outbox; use `pending_due` instead.
     fn snapshot_all(&self) -> PersistenceResult<Vec<FederationOutboxRecord>>;
+    /// Append a terminal failure to the dead-letter queue. The outbox row
+    /// remains in place for idempotency and diagnostics; this queue is the
+    /// operator-facing replay/quarantine surface.
+    fn insert_dead_letter(
+        &self,
+        record: &FederationOutboxDeadLetterRecord,
+    ) -> PersistenceResult<()>;
+    fn dead_letters_snapshot(&self) -> PersistenceResult<Vec<FederationOutboxDeadLetterRecord>>;
 }
 
 /// Append-only audit log. Reads are always actor-scoped; the cursor is the
@@ -1830,12 +1839,14 @@ impl FederationTransactionStore for MemoryFederationTransactionStore {
 // INDEX semantics.
 struct MemoryFederationOutboxStore {
     data: Arc<Mutex<BTreeMap<String, FederationOutboxRecord>>>,
+    dead_letters: Arc<Mutex<BTreeMap<String, FederationOutboxDeadLetterRecord>>>,
 }
 
 impl MemoryFederationOutboxStore {
     fn new() -> Self {
         Self {
             data: Arc::new(Mutex::new(BTreeMap::new())),
+            dead_letters: Arc::new(Mutex::new(BTreeMap::new())),
         }
     }
 }
@@ -1887,6 +1898,26 @@ impl FederationOutboxStore for MemoryFederationOutboxStore {
     fn snapshot_all(&self) -> PersistenceResult<Vec<FederationOutboxRecord>> {
         let data = self.data.lock().expect("federation_outbox lock");
         Ok(data.values().cloned().collect())
+    }
+
+    fn insert_dead_letter(
+        &self,
+        record: &FederationOutboxDeadLetterRecord,
+    ) -> PersistenceResult<()> {
+        let mut dead_letters = self
+            .dead_letters
+            .lock()
+            .expect("federation_outbox_dead_letter lock");
+        dead_letters.insert(record.id.clone(), record.clone());
+        Ok(())
+    }
+
+    fn dead_letters_snapshot(&self) -> PersistenceResult<Vec<FederationOutboxDeadLetterRecord>> {
+        let dead_letters = self
+            .dead_letters
+            .lock()
+            .expect("federation_outbox_dead_letter lock");
+        Ok(dead_letters.values().cloned().collect())
     }
 }
 
@@ -3981,6 +4012,48 @@ impl FederationOutboxStore for PgFederationOutboxStore {
         .load::<FederationOutboxRow>(&mut conn)
         .map_err(PersistenceError::from)?;
         Ok(rows.into_iter().map(FederationOutboxRecord::from).collect())
+    }
+
+    fn insert_dead_letter(
+        &self,
+        record: &FederationOutboxDeadLetterRecord,
+    ) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query(
+            "INSERT INTO federation_outbox_dead_letter \
+             (id, outbox_id, peer_did, endpoint, idempotency_key, terminal_status, attempts, \
+              response_excerpt, failed_at, reason) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) \
+             ON CONFLICT (id) DO NOTHING",
+        )
+        .bind::<Text, _>(&record.id)
+        .bind::<Text, _>(&record.outbox_id)
+        .bind::<Text, _>(&record.peer_did)
+        .bind::<Text, _>(&record.endpoint)
+        .bind::<Text, _>(&record.idempotency_key)
+        .bind::<Integer, _>(record.terminal_status)
+        .bind::<Integer, _>(record.attempts)
+        .bind::<Nullable<Text>, _>(record.response_excerpt.as_deref())
+        .bind::<BigInt, _>(record.failed_at)
+        .bind::<Text, _>(&record.reason)
+        .execute(&mut conn)
+        .map(|_| ())
+        .map_err(PersistenceError::from)
+    }
+
+    fn dead_letters_snapshot(&self) -> PersistenceResult<Vec<FederationOutboxDeadLetterRecord>> {
+        let mut conn = pg_conn(&self.pool)?;
+        let rows = sql_query(
+            "SELECT id, outbox_id, peer_did, endpoint, idempotency_key, terminal_status, \
+             attempts, response_excerpt, failed_at, reason \
+             FROM federation_outbox_dead_letter ORDER BY failed_at ASC, id ASC",
+        )
+        .load::<FederationOutboxDeadLetterRow>(&mut conn)
+        .map_err(PersistenceError::from)?;
+        Ok(rows
+            .into_iter()
+            .map(FederationOutboxDeadLetterRecord::from)
+            .collect())
     }
 }
 
@@ -6164,6 +6237,47 @@ impl From<FederationOutboxRow> for FederationOutboxRecord {
             last_response_excerpt: row.last_response_excerpt,
             created_at: row.created_at,
             delivered_at: row.delivered_at,
+        }
+    }
+}
+
+#[derive(QueryableByName)]
+struct FederationOutboxDeadLetterRow {
+    #[diesel(sql_type = Text)]
+    id: String,
+    #[diesel(sql_type = Text)]
+    outbox_id: String,
+    #[diesel(sql_type = Text)]
+    peer_did: String,
+    #[diesel(sql_type = Text)]
+    endpoint: String,
+    #[diesel(sql_type = Text)]
+    idempotency_key: String,
+    #[diesel(sql_type = Integer)]
+    terminal_status: i32,
+    #[diesel(sql_type = Integer)]
+    attempts: i32,
+    #[diesel(sql_type = Nullable<Text>)]
+    response_excerpt: Option<String>,
+    #[diesel(sql_type = BigInt)]
+    failed_at: i64,
+    #[diesel(sql_type = Text)]
+    reason: String,
+}
+
+impl From<FederationOutboxDeadLetterRow> for FederationOutboxDeadLetterRecord {
+    fn from(row: FederationOutboxDeadLetterRow) -> Self {
+        Self {
+            id: row.id,
+            outbox_id: row.outbox_id,
+            peer_did: row.peer_did,
+            endpoint: row.endpoint,
+            idempotency_key: row.idempotency_key,
+            terminal_status: row.terminal_status,
+            attempts: row.attempts,
+            response_excerpt: row.response_excerpt,
+            failed_at: row.failed_at,
+            reason: row.reason,
         }
     }
 }

@@ -48,6 +48,13 @@ struct CapturedSignedRequest {
 /// that the test reads the captured raw request from after the worker
 /// finishes its delivery pass.
 fn spawn_mock_peer() -> (String, mpsc::Receiver<String>) {
+    spawn_mock_peer_with_status("200 OK", br#"{"accepted":true}"#)
+}
+
+fn spawn_mock_peer_with_status(
+    status: &'static str,
+    body: &'static [u8],
+) -> (String, mpsc::Receiver<String>) {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     let (tx, rx) = mpsc::channel();
@@ -62,9 +69,8 @@ fn spawn_mock_peer() -> (String, mpsc::Receiver<String>) {
         let mut buffer = [0_u8; 8192];
         let read = stream.read(&mut buffer).unwrap_or(0);
         let request = String::from_utf8_lossy(&buffer[..read]).to_string();
-        let body = b"{\"accepted\":true}";
         let response = format!(
-            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+            "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
             body.len(),
         );
         let _ = stream.write_all(response.as_bytes());
@@ -235,6 +241,57 @@ async fn outbound_signature_rejects_body_digest_tamper() {
     assert!(
         !http_signature_verifies_with_headers(&headers, &captured.target_uri, &verifying_key),
         "changing the body digest after signing must invalidate the RFC 9421 transcript"
+    );
+}
+
+#[tokio::test]
+async fn permanent_4xx_routes_to_dead_letter() {
+    let (peer_url, request_rx) =
+        spawn_mock_peer_with_status("404 Not Found", br#"{"error":"unknown_peer"}"#);
+    let state = AppState::new(outbox_test_config(), Db { pool: None });
+    let row = enqueue_outbound(
+        &state,
+        &peer_url,
+        PEER_DID,
+        FEDERATION_ENDPOINT,
+        IDEMPOTENCY_KEY,
+        PAYLOAD_JSON,
+    )
+    .expect("enqueue must succeed");
+
+    FederationDispatcher::new(state.clone())
+        .run_one_pass()
+        .await
+        .expect("dispatch pass must succeed");
+    let _ = request_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("mock peer should have received request");
+
+    let updated = state
+        .persistence
+        .federation_outbox()
+        .get(&row.id)
+        .expect("outbox lookup")
+        .expect("row still present");
+    assert!(updated.delivered_at.is_some());
+    assert_eq!(updated.last_status, Some(404));
+    assert_eq!(updated.attempts, 1);
+
+    let dead_letters = state
+        .persistence
+        .federation_outbox()
+        .dead_letters_snapshot()
+        .expect("dead-letter snapshot");
+    assert_eq!(dead_letters.len(), 1);
+    let dead = &dead_letters[0];
+    assert_eq!(dead.outbox_id, row.id);
+    assert_eq!(dead.peer_did, PEER_DID);
+    assert_eq!(dead.terminal_status, 404);
+    assert_eq!(dead.reason, "terminal_http_status");
+    assert!(
+        dead.response_excerpt
+            .as_deref()
+            .is_some_and(|body| body.contains("unknown_peer"))
     );
 }
 
