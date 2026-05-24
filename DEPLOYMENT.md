@@ -217,7 +217,32 @@ Until then, ship `RUST_LOG=soland=info` to your log pipeline and alert on:
   should be impossible with `SOLAND_DEVELOPMENT_MODE=false`, but alert
   belt-and-braces)
 
-## 8. Upgrade procedure
+## 8. Local supply-chain artifacts
+
+Generate local image metadata and an SPDX JSON SBOM without pushing an image or
+creating a release tag:
+
+```powershell
+pwsh ./scripts/local-supply-chain.ps1 -ImageTag soland:local
+```
+
+The script writes:
+
+- `target/supply-chain/soland-build-metadata.json` from `docker buildx`
+- `target/supply-chain/soland.spdx.json` from `syft`
+
+For local provenance evidence, sign or attest the generated metadata with an
+operator-owned key:
+
+```bash
+cosign attest-blob \
+  --key cosign.key \
+  --type slsaprovenance \
+  --predicate target/supply-chain/soland-build-metadata.json \
+  target/supply-chain/soland-build-metadata.json
+```
+
+## 9. Upgrade procedure
 
 1. Read the changelog / release notes for the target tag.
 2. `pg_dump` the database.
@@ -228,7 +253,7 @@ Until then, ship `RUST_LOG=soland=info` to your log pipeline and alert on:
 Downgrades are **not** supported once a migration has run; restore from the
 pre-upgrade backup if you need to roll back.
 
-## 9. Hardening checklist
+## 10. Hardening checklist
 
 - `SOLAND_DEVELOPMENT_MODE` is unset (or explicitly `false`).
 - `SOLAND_OAUTH_INTROSPECTION_URL` points at coauth's `/oauth2/introspect`,
@@ -246,7 +271,7 @@ pre-upgrade backup if you need to roll back.
 - Rate-limit configuration matches your anticipated traffic
   (`_todos.md` Q6 / Cfg-1 — currently single-process).
 
-## 10. Known limits
+## 11. Known limits
 
 - **Single-process**: soland is a reference implementation. Multi-replica
   deployments need an out-of-process rate-limit store (`_todos.md` Q6) and

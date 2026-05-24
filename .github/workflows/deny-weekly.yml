@@ -1,11 +1,11 @@
-name: Supply chain
+name: Weekly cargo-deny
 
 on:
-  pull_request:
-  push:
-    branches:
-      - main
-      - master
+  schedule:
+    # Re-run weekly so freshly published advisories surface even on quiet
+    # branches, independent of PR/push supply-chain checks.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
 
 permissions:
   contents: read

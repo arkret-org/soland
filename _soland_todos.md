@@ -46,11 +46,11 @@
 - [ ] §24 Replace ad-hoc admin-endpoint guards with an explicit `RequireAdmin` middleware that checks the OAuth scope.
 
 ### Engineering hygiene (master plan §5)
-- [ ] §25 Add Trivy image scan to `docker.yml`.
-- [ ] §26 Add local cosign/SLSA provenance command documentation; do not push images or tags.
-- [ ] §27 Generate SBOM (`syft`) as a local artifact.
-- [ ] §28 Add a `cargo deny` check on a weekly cron (separate from PR job).
-- [ ] §29 Set up Dependabot for cargo + GitHub Actions.
+- [x] §25 Add Trivy image scan to `docker.yml`.
+- [x] §26 Add local cosign/SLSA provenance command documentation; do not push images or tags.
+- [x] §27 Generate SBOM (`syft`) as a local artifact.
+- [x] §28 Add a `cargo deny` check on a weekly cron (separate from PR job).
+- [x] §29 Set up Dependabot for cargo + GitHub Actions.
 
 ### Demo data cleanup (phase 2 deliverable)
 - [x] §30 Replace demo directory data in `src/routing/spaces/directory.rs` with either: (a) reject when no provider registered, or (b) gate behind `SOLAND_DEVELOPMENT_MODE=true`.
