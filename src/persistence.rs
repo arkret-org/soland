@@ -326,7 +326,7 @@ pub trait ModerationStore: Send + Sync {
     }
 
     /// Upsert a `ModerationQueueItem` record. The JSON must carry
-    /// `queue_item_id`, `status`, `visibility`, `created_at`.
+    /// `id`, `status`, `visibility`, `created_at`.
     fn upsert_queue_item(&self, _item: Value) -> PersistenceResult<()> {
         Err(PersistenceError::Internal(
             "moderation queue item upsert not wired in this backend".to_owned(),
@@ -335,7 +335,7 @@ pub trait ModerationStore: Send + Sync {
     fn list_queue_items(&self) -> PersistenceResult<Vec<Value>> {
         Ok(Vec::new())
     }
-    fn get_queue_item(&self, _queue_item_id: &str) -> PersistenceResult<Option<Value>> {
+    fn get_queue_item(&self, _id: &str) -> PersistenceResult<Option<Value>> {
         Ok(None)
     }
 
@@ -2013,16 +2013,16 @@ impl ModerationStore for MemoryModerationStore {
 
     fn upsert_queue_item(&self, item: Value) -> PersistenceResult<()> {
         let id = item
-            .get("queue_item_id")
+            .get("id")
             .and_then(Value::as_str)
             .ok_or_else(|| {
-                PersistenceError::Internal("moderation queue item missing queue_item_id".to_owned())
+                PersistenceError::Internal("moderation queue item missing id".to_owned())
             })?
             .to_owned();
         let mut queue = self.queue_items.lock().expect("moderation queue lock");
         if let Some(slot) = queue
             .iter_mut()
-            .find(|i| i.get("queue_item_id").and_then(Value::as_str) == Some(id.as_str()))
+            .find(|i| i.get("id").and_then(Value::as_str) == Some(id.as_str()))
         {
             *slot = item;
         } else {
@@ -2039,13 +2039,13 @@ impl ModerationStore for MemoryModerationStore {
             .clone())
     }
 
-    fn get_queue_item(&self, queue_item_id: &str) -> PersistenceResult<Option<Value>> {
+    fn get_queue_item(&self, id: &str) -> PersistenceResult<Option<Value>> {
         Ok(self
             .queue_items
             .lock()
             .expect("moderation queue lock")
             .iter()
-            .find(|i| i.get("queue_item_id").and_then(Value::as_str) == Some(queue_item_id))
+            .find(|i| i.get("id").and_then(Value::as_str) == Some(id))
             .cloned())
     }
 
@@ -5018,7 +5018,7 @@ impl From<WebvhDocumentRow> for WebvhDocumentRecord {
 #[derive(QueryableByName)]
 struct WebvhLogRow {
     #[diesel(sql_type = Text)]
-    event_hash: String,
+    event_digest: String,
     #[diesel(sql_type = Text)]
     did: String,
     #[diesel(sql_type = BigInt)]
@@ -5032,7 +5032,7 @@ struct WebvhLogRow {
 impl From<WebvhLogRow> for WebvhLogRecord {
     fn from(row: WebvhLogRow) -> Self {
         Self {
-            event_hash: row.event_hash,
+            event_digest: row.event_digest,
             did: row.did,
             seq: row.seq.max(0) as u64,
             operation: row.operation,
@@ -5103,11 +5103,11 @@ impl WebvhStore for PgWebvhStore {
         let mut conn = pg_conn(&self.pool)?;
         sql_query(
             "INSERT INTO webvh_log_events \
-             (event_hash, did, seq, operation, created_at) \
+             (event_digest, did, seq, operation, created_at) \
              VALUES ($1, $2, $3, $4, $5) \
-             ON CONFLICT (event_hash) DO NOTHING",
+             ON CONFLICT (event_digest) DO NOTHING",
         )
-        .bind::<Text, _>(&event.event_hash)
+        .bind::<Text, _>(&event.event_digest)
         .bind::<Text, _>(&event.did)
         .bind::<BigInt, _>(event.seq as i64)
         .bind::<Jsonb, _>(&event.operation)
@@ -5120,8 +5120,8 @@ impl WebvhStore for PgWebvhStore {
     fn list_log_events(&self, did: &str) -> PersistenceResult<Vec<WebvhLogRecord>> {
         let mut conn = pg_conn(&self.pool)?;
         sql_query(
-            "SELECT event_hash, did, seq, operation, created_at \
-             FROM webvh_log_events WHERE did = $1 ORDER BY seq ASC, event_hash ASC",
+            "SELECT event_digest, did, seq, operation, created_at \
+             FROM webvh_log_events WHERE did = $1 ORDER BY seq ASC, event_digest ASC",
         )
         .bind::<Text, _>(did)
         .load::<WebvhLogRow>(&mut conn)
@@ -7343,14 +7343,14 @@ mod tests {
 
         // Append two log events under same DID.
         let log1 = WebvhLogRecord {
-            event_hash: "sha256:event-1".to_owned(),
+            event_digest: "sha256:event-1".to_owned(),
             did: "did:web:alice.example".to_owned(),
             seq: 1,
             operation: serde_json::json!({"op": "rotate", "n": 1}),
             created_at: now,
         };
         let log2 = WebvhLogRecord {
-            event_hash: "sha256:event-2".to_owned(),
+            event_digest: "sha256:event-2".to_owned(),
             did: "did:web:alice.example".to_owned(),
             seq: 2,
             operation: serde_json::json!({"op": "rotate", "n": 2}),

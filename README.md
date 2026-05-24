@@ -46,7 +46,7 @@ Operator-visible highlights:
   MUST carry `cursor`.
 - **Federation S2S transport adds three signed headers** —
   `Source-Trust-Domain`, `Destination-Trust-Domain`,
-  `Request-Canonical-Hash`. Verified into the signature transcript;
+  `Request-Canonical-Digest`. Verified into the signature transcript;
   mismatch rejects.
 - **Federation idempotency `historical_only`** — cache hits after
   source-key revocation return the cached body with
@@ -268,7 +268,7 @@ your hosts file:
 ```
 
 When `SOLAND_DEVELOPMENT_MODE=false` (the default), submitted commits must use
-production proof material — no `alg: none` or `dev-proof`, proof `payload_hash`
+production proof material — no `alg: none` or `dev-proof`, proof `payload_digest`
 must match the canonical commit digest, the verification method must be rooted
 in the commit author DID, and proof `domain`/`audience` must bind to
 `SOLAND_SERVICE_DID`.

@@ -126,7 +126,8 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
 /// Validate a `cx:cursor:<base64url>` token.
 ///
 /// `cx:cursor:` tokens are a base64url-encoded v1 cursor object with
-/// `{v,purpose,t,x}` plus either a stateful `h` or stateless `_mac`/`_sig`.
+/// `{v,purpose,t,x,h}`. Core cursors do not carry inline positions or
+/// stateless integrity material.
 pub fn is_valid_sync_token(token: &str) -> bool {
     let Some(encoded) = token.strip_prefix("cx:cursor:") else {
         return false;
@@ -137,9 +138,17 @@ pub fn is_valid_sync_token(token: &str) -> bool {
     let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
         return false;
     };
-    let has_handle = value.get("h").and_then(|handle| handle.as_str()).is_some();
-    let has_mac = value.get("_mac").and_then(|mac| mac.as_str()).is_some();
-    let has_sig = value.get("_sig").and_then(|sig| sig.as_str()).is_some();
+    let Some(handle) = value.get("h").and_then(|handle| handle.as_str()) else {
+        return false;
+    };
+    if value.get("_mac").is_some()
+        || value.get("_sig").is_some()
+        || value.get("issuer_kid").is_some()
+        || value.get("_ctx").is_some()
+        || value.get("_positions").is_some()
+    {
+        return false;
+    }
     value
         .get("v")
         .and_then(|v| v.as_str())
@@ -153,7 +162,7 @@ pub fn is_valid_sync_token(token: &str) -> bool {
             .get("x")
             .and_then(|x| x.as_i64())
             .is_some_and(|x| x > 0)
-        && ((has_handle && !has_mac && !has_sig) || (!has_handle && (has_mac || has_sig)))
+        && crate::round23::validate_cursor_handle(handle).is_ok()
 }
 
 /// `sha256:<64 lowercase hex>` shape.

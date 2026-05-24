@@ -56,7 +56,7 @@ pub(super) async fn federation_transaction(
     let txn_id = txn_id.into_inner();
     // Round 4 (B1.7) — verify the three federation trust-domain headers
     // (`Source-Trust-Domain` / `Destination-Trust-Domain` /
-    // `Request-Canonical-Hash`). Missing / malformed headers are
+    // `Request-Canonical-Digest`). Missing / malformed headers are
     // schema_violation; a destination mismatch is
     // cross_domain_replay_rejected. The configured
     // `state.config.trust_domain` is the canonical receiver value.
@@ -98,18 +98,18 @@ pub(super) async fn federation_transaction(
     let body = body.into_inner();
     let content_digest = federation_request_digest(&body).map_err(AppError::invalid_param)?;
     // Round 4 (B1.8) — round-4 federation idempotency cache key. The
-    // composite carries (source_did, dest_did, request_canonical_hash,
-    // idempotency_key, origin_key_state_hash). When the strict key
+    // composite carries (source_did, dest_did, request_canonical_digest,
+    // idempotency_key, origin_key_state_digest). When the strict key
     // matches a cached entry the receiver returns the cached body
     // unchanged; when the strict key misses but the canonical-replay
     // key matches, the cached body is returned marked
     // `reason_code=historical_only` (no fresh side effects).
     //
-    // The request_canonical_hash and origin_key_state_hash inputs are
+    // The request_canonical_digest and origin_key_state_digest inputs are
     // sourced from round-4 federation headers + the origin's current
     // key state record. We pull what is available now and fall back to
     // placeholders for the rest.
-    // TODO(round4-fed-binding-verify): wire origin_key_state_hash from
+    // TODO(round4-fed-binding-verify): wire origin_key_state_digest from
     // the resolver chain's last observed cross-signing publish for the
     // origin DID.
     let r4_idem_key =
@@ -118,9 +118,9 @@ pub(super) async fn federation_transaction(
             .map(|headers| crate::round4::FederationIdempotencyKey {
                 source_did: body.origin.to_string(),
                 dest_did: body.destination.to_string(),
-                request_canonical_hash: headers.request_canonical_hash.as_str().to_owned(),
+                request_canonical_digest: headers.request_canonical_digest.as_str().to_owned(),
                 idempotency_key: txn_id.clone(),
-                origin_key_state_hash: "sha256:0000".to_owned(),
+                origin_key_state_digest: "sha256:0000".to_owned(),
             });
     let _service_binding = crate::round23::FederationIdempotencyServiceBinding {
         source_service_did: body.origin.to_string(),
@@ -132,9 +132,9 @@ pub(super) async fn federation_transaction(
             .as_ref()
             .map(|k| k.canonical_replay())
             .unwrap_or_else(|| "<TODO(round4-fed-headers)>".to_owned()),
-        origin_key_state_hash: r4_idem_key
+        origin_key_state_digest: r4_idem_key
             .as_ref()
-            .map(|k| k.origin_key_state_hash.clone())
+            .map(|k| k.origin_key_state_digest.clone())
             .unwrap_or_else(|| "<TODO(round4-fed-headers)>".to_owned()),
     };
     match state
@@ -159,13 +159,13 @@ pub(super) async fn federation_transaction(
                 ));
             }
             // Round 4 (B1.8) — detect a canonical-replay hit (txn_id +
-            // request_canonical_hash match, but origin_key_state_hash
+            // request_canonical_digest match, but origin_key_state_digest
             // has rotated since the cached entry was minted). Such a
             // hit MUST be marked `reason_code=historical_only` and
             // MUST NOT trigger fresh side effects. We approximate the
             // detection here by checking whether the `record.status`
             // already names the cached origin's key generation —
-            // soland doesn't yet persist `origin_key_state_hash` on
+            // soland doesn't yet persist `origin_key_state_digest` on
             // the federation_transactions row, so for now we only
             // mark when the headers carry an explicit `historical_only`
             // hint. TODO(round4-historical-key-rotation): persist the
@@ -301,10 +301,10 @@ pub(super) async fn federation_pull_operations(
             "operation_count": space_operations.len(),
             "created_at": now(),
         });
-        let state_hash = format!("sha256:{}", sha256_hex(manifest.to_string().as_bytes()));
+        let state_digest = format!("sha256:{}", sha256_hex(manifest.to_string().as_bytes()));
         json!({
             "manifest": manifest,
-            "state_hash": state_hash,
+            "state_digest": state_digest,
             "chunks": [],
             "via_services": [state.config.service_did.clone()],
         })

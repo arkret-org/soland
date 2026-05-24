@@ -242,7 +242,7 @@ pub struct FanoutPeerStatus {
 /// `contrix-spec/spec/v1/artifacts/schemas/erasure-receipt.schema.json`).
 /// We only keep the fields the local audit / federation fanout layer
 /// actually consults — the rest of the payload (`proofs`,
-/// `erased_classes`, `retained_stub_hash`, …) round-trips through the
+/// `erased_classes`, `retained_stub_digest`, …) round-trips through the
 /// raw `payload` blob for replay.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ErasureReceiptRecord {

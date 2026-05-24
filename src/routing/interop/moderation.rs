@@ -91,9 +91,9 @@ async fn moderation_report(
     // assign reviewers. We default to `status=submitted`,
     // `visibility=metadata_only`, `priority=normal` — sodmin can update
     // via `POST /api/admin/v1/moderation/queue/{id}/{assign,prioritise}`.
-    let queue_item_id = ids::generate("modq");
+    let queue_item_ref = ids::generate("modq");
     let queue_item = json!({
-        "queue_item_id": queue_item_id,
+        "id": queue_item_ref,
         "report": report_payload,
         "status": "submitted",
         "priority": "normal",
@@ -109,7 +109,7 @@ async fn moderation_report(
         state,
         Some(&session.actor),
         "moderation.report",
-        json!({"report_id": report_id.clone(), "queue_item_id": queue_item_id}),
+        json!({"report_id": report_id.clone(), "id": queue_item_ref}),
         "queued",
     );
     json_ok(ModerationReportResBody {

@@ -224,7 +224,7 @@ CREATE TABLE IF NOT EXISTS webvh_documents (
 );
 
 CREATE TABLE IF NOT EXISTS webvh_log_events (
-    event_hash TEXT PRIMARY KEY,
+    event_digest TEXT PRIMARY KEY,
     did TEXT NOT NULL,
     seq BIGINT NOT NULL,
     operation JSONB NOT NULL,
@@ -263,7 +263,7 @@ CREATE TABLE IF NOT EXISTS blobs (
     storage_backend TEXT NOT NULL,
     storage_key TEXT NOT NULL,
     payload JSONB NOT NULL DEFAULT '{}'::JSONB,
-    retention_until TIMESTAMPTZ,
+    retention_expires_at TIMESTAMPTZ,
     legal_hold BOOLEAN NOT NULL DEFAULT FALSE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

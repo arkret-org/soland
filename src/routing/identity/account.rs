@@ -605,16 +605,16 @@ async fn erase_account(
         "storage_boundary": "account_private_store",
         "completed_at": completed_at_wire.clone(),
     });
-    let retained_stub_hash = format!(
+    let retained_stub_digest = format!(
         "sha256:{}",
         sha256_hex(retained_stub.to_string().as_bytes())
     );
     let proof_payload = json!({
         "receipt_id_seed": actor.clone(),
-        "retained_stub_hash": retained_stub_hash.clone(),
+        "retained_stub_digest": retained_stub_digest.clone(),
         "completed_at": completed_at_wire.clone(),
     });
-    let proof_hash = erasure_receipt_payload_hash(&proof_payload);
+    let proof_hash = erasure_receipt_payload_digest(&proof_payload);
     let proof_signature = erasure_receipt_proof_signature(state, &proof_payload);
     let erasure_receipt = json!({
         "receipt_id": crate::ids::generate("receipt"),
@@ -636,12 +636,12 @@ async fn erase_account(
             "device_secrets",
             "projection_rows"
         ],
-        "retained_stub_hash": retained_stub_hash.clone(),
+        "retained_stub_digest": retained_stub_digest.clone(),
         "completed_at": completed_at_wire.clone(),
         "issued_at": completed_at_wire.clone(),
         "proofs": [{
             "verification_method": format!("{}#erasure-receipt", state.config.service_did),
-            "payload_hash": proof_hash.clone(),
+            "payload_digest": proof_hash.clone(),
             "alg": "EdDSA",
             "signature": proof_signature,
             "signature_input": "soland-erasure-receipt-proof-v1"
@@ -672,7 +672,7 @@ async fn erase_account(
     }))
 }
 
-fn erasure_receipt_payload_hash(payload: &Value) -> String {
+fn erasure_receipt_payload_digest(payload: &Value) -> String {
     let bytes = contrix_sdk::canonical::canonical_json_bytes(payload)
         .unwrap_or_else(|_| payload.to_string().into_bytes());
     format!("sha256:{}", sha256_hex(&bytes))

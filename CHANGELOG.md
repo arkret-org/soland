@@ -33,10 +33,10 @@ on the reducer / federation / state-machine surfaces. See
   `FederationServiceBindingRef`; missing fields reject as `schema_violation`.
 - **BREAKING** Federation S2S transport verifies and signs the three new
   headers `Source-Trust-Domain` / `Destination-Trust-Domain` /
-  `Request-Canonical-Hash`; mismatch reject as `cross_domain_replay_rejected`.
+  `Request-Canonical-Digest`; mismatch reject as `cross_domain_replay_rejected`.
 - **BREAKING** Federation idempotency cache key now combines
-  `source_did` / `dest_did` / `request_canonical_hash` / `idempotency_key` /
-  `origin_key_state_hash`. Cache hits after key-state change return the
+  `source_did` / `dest_did` / `request_canonical_digest` / `idempotency_key` /
+  `origin_key_state_digest`. Cache hits after key-state change return the
   cached body with diagnostic `reason_code=historical_only` (no side
   effects); cache hits re-run capability checks.
 - **Added** delivery-binding handover error codes: stale binding emits
@@ -46,7 +46,7 @@ on the reducer / federation / state-machine surfaces. See
 - **BREAKING** `cx.cross_signing.publish` reducer enforces CAS
   (`expected_previous_generation == current && new_generation == current + 1`),
   evaluated before signature verification.
-- **BREAKING** `audit_policy_version_hash` switched to the 4-arg form
+- **BREAKING** `audit_policy_version_digest` switched to the 4-arg form
   `{realm_id, trust_domain, audit_disclosure, audit_assurance}`; old
   2-arg receipts no longer verify. `AuditRywReceipt` now carries
   `trust_domain`.
@@ -101,7 +101,7 @@ below. Producers on the old wire MUST upgrade.
 - **Federation idempotency service-key binding** struct
   (`FederationIdempotencyServiceBinding`) + `historical_only=true`
   marker for post-key-revoke replays (T14).
-- **Identity_link cache `policy_frontier_hash`** helper +
+- **Identity_link cache `policy_frontier_digest`** helper +
   `IdentityLinkInvalidationTrigger` enum for the five eager-invalidation
   classes (T13).
 - **Consent revoke `scope=any` cascade** table + 5-channel cache

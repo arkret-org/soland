@@ -527,7 +527,7 @@ async fn mimi_report_abuse(body: JsonBody<Value>, depot: &mut Depot) -> JsonResu
         "kind": "mimi_abuse_report",
         "mimi_room_uri": body.get("mimi_room_uri").cloned(),
         "provider_id": body.get("provider_id").cloned(),
-        "target_event_hash": body.get("target_event_hash").cloned(),
+        "target_event_digest": body.get("target_event_digest").cloned(),
         "frank": body.get("frank").cloned(),
         "created_at": now(),
     })) {
@@ -569,7 +569,7 @@ async fn mimi_report_abuse(body: JsonBody<Value>, depot: &mut Depot) -> JsonResu
             .map(str::to_owned),
         payload: json!({
             "report_id": report_id,
-            "target_event_hash": body.get("target_event_hash").cloned(),
+            "target_event_digest": body.get("target_event_digest").cloned(),
             "frank": body.get("frank").cloned(),
             "evidence_encrypted": true,
             "mimi_provenance": {

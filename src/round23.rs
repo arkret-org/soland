@@ -14,7 +14,7 @@
 //! - **Account deactivation fanout shape** (T07).
 //! - **Presign blob fail-closed gates + headers** (T11).
 //! - **Federation idempotency cache service-key binding** (T14).
-//! - **identity_link cache policy_frontier_hash invalidation** (T13).
+//! - **identity_link cache policy_frontier_digest invalidation** (T13).
 //! - **Cursor handle generation/validation** (T03).
 //! - **Late key recovery state machine** (T16).
 //! - **Consent revoke scope=any cascade + cache invalidation** (T17).
@@ -27,7 +27,7 @@ use chrono::{DateTime, Utc};
 use contrix_sdk::events::{is_ephemeral_kind, is_receipt_object_only, is_terminal_realm_state};
 use contrix_sdk::{
     EPHEMERAL_ABSOLUTE_HARD_CEILING_MS, EventId, Hash, TypedTrustDomainId, canonical,
-    compute_policy_frontier_hash, validate_relaxed_window_ms,
+    compute_policy_frontier_digest, validate_relaxed_window_ms,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -638,7 +638,7 @@ pub struct FederationIdempotencyServiceBinding {
     pub source_service_did: String,
     pub verification_method: String,
     pub service_binding_ref: String,
-    pub origin_key_state_hash: String,
+    pub origin_key_state_digest: String,
 }
 
 /// Round R2/R3 (T14) — when a cached federation transaction is replayed
@@ -657,18 +657,18 @@ pub fn mark_response_historical_only(mut response: Value) -> Value {
 }
 
 // ────────────────────────────────────────────────────────────────────────
-// T13 — identity_link cache policy_frontier_hash.
+// T13 — identity_link cache policy_frontier_digest.
 // ────────────────────────────────────────────────────────────────────────
 
 /// Round R2/R3 (T13) — compute the four-field policy frontier hash for
 /// an identity_link cache entry via SDK.
-pub fn identity_link_policy_frontier_hash(
+pub fn identity_link_policy_frontier_digest(
     disclosure_policy: &Value,
     history_visibility: &Value,
     identity_disclosure_profile: &Value,
     minimal_metadata_mode: &Value,
 ) -> [u8; 32] {
-    compute_policy_frontier_hash(
+    compute_policy_frontier_digest(
         disclosure_policy,
         history_visibility,
         identity_disclosure_profile,
@@ -1209,14 +1209,14 @@ mod tests {
     }
 
     #[test]
-    fn identity_link_policy_frontier_hash_is_deterministic() {
-        let a = identity_link_policy_frontier_hash(
+    fn identity_link_policy_frontier_digest_is_deterministic() {
+        let a = identity_link_policy_frontier_digest(
             &json!({"mode": "strict"}),
             &json!("members_only"),
             &json!({"profile": "default"}),
             &json!(false),
         );
-        let b = identity_link_policy_frontier_hash(
+        let b = identity_link_policy_frontier_digest(
             &json!({"mode": "strict"}),
             &json!("members_only"),
             &json!({"profile": "default"}),

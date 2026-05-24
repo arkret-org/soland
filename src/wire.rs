@@ -623,7 +623,7 @@ pub struct EventResolveRequest {
     #[serde(default)]
     pub event_ids: Vec<String>,
     #[serde(default)]
-    pub event_hashes: Vec<String>,
+    pub event_digests: Vec<String>,
     #[serde(default)]
     pub include_payload: bool,
 }
@@ -674,7 +674,7 @@ pub struct EventsFrontierResBody {
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct SnapshotHeadResponse {
     pub snapshot_ref: String,
-    pub state_hash: String,
+    pub state_digest: String,
     pub manifest: Value,
     pub chunks: Vec<Value>,
     pub frontier: Value,
@@ -721,7 +721,7 @@ pub struct AuthzCheckResBody {
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct EffectiveGrantsResBody {
     pub grants: Vec<Value>,
-    pub state_hash: Option<String>,
+    pub state_digest: Option<String>,
     pub evaluated_at: DateTime<Utc>,
 }
 
@@ -865,7 +865,7 @@ pub struct PolicyCheckReqBody {
     pub request_id: String,
     #[serde(default)]
     pub realm_id: Option<String>,
-    pub request_canonical_hash: String,
+    pub request_canonical_digest: String,
     pub action: String,
     pub actor: String,
     pub source: Value,
@@ -883,19 +883,19 @@ pub struct PolicyCheckReqBody {
 ///   - `realm_id` — scope this binding applies to (canonical
 ///     `cx:realm:<uuid>` form). May be empty string when the request
 ///     was realm-less (e.g. a global capability check).
-///   - `auth_state_hash` — sha256 hex over canonical JSON
-///     `{actor, action, resource, request_canonical_hash}`.
-///   - `policy_frontier_hash` — sha256 hex over canonical JSON
+///   - `auth_state_digest` — sha256 hex over canonical JSON
+///     `{actor, action, resource, request_canonical_digest}`.
+///   - `policy_frontier_digest` — sha256 hex over canonical JSON
 ///     `{policy_documents: [<sorted policy_ids>]}`.
-///   - `membership_frontier_hash` — sha256 hex over canonical JSON
+///   - `membership_frontier_digest` — sha256 hex over canonical JSON
 ///     `{realm_id, members: [<sorted member DIDs>]}`.
 ///   - `expires_at` — soft TTL for the binding (now + 1h).
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct PolicyBinding {
     pub realm_id: String,
-    pub auth_state_hash: String,
-    pub policy_frontier_hash: String,
-    pub membership_frontier_hash: String,
+    pub auth_state_digest: String,
+    pub policy_frontier_digest: String,
+    pub membership_frontier_digest: String,
     pub expires_at: DateTime<Utc>,
 }
 

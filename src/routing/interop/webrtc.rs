@@ -119,7 +119,7 @@ async fn ice_config(
         "expires_at": expires_at,
         "force_turn": false,
     });
-    let payload_hash = ice_config_payload_hash(&response);
+    let payload_digest = ice_config_payload_digest(&response);
     let signature = ice_config_signature(state, &response);
     if let Some(object) = response.as_object_mut() {
         object.insert(
@@ -127,7 +127,7 @@ async fn ice_config(
             json!({
             "alg": "EdDSA",
             "kid": format!("{}#media-ice", state.config.service_did),
-                "payload_hash": payload_hash,
+                "payload_digest": payload_digest,
             "sig": signature,
             "signature_input": "soland-media-ice-config-v1"
             }),
@@ -136,7 +136,7 @@ async fn ice_config(
     json_ok(response)
 }
 
-fn ice_config_payload_hash(payload: &Value) -> String {
+fn ice_config_payload_digest(payload: &Value) -> String {
     let bytes = contrix_sdk::canonical::canonical_json_bytes(payload)
         .unwrap_or_else(|_| payload.to_string().into_bytes());
     format!("sha256:{}", sha256_hex(&bytes))

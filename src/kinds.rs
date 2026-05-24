@@ -78,7 +78,7 @@ pub const CX_READ_MARKER: &str = "cx.read_cursor.advance";
 // `cx.realm.tombstone` is the irreversible terminal-state event that
 // freezes the Realm and triggers the erasure-receipt fanout chain via
 // `cx.audit.erasure_receipt`. Distinct from `cx.realm.destroy`, which
-// is the GDPR-grade hard-delete request that retains a `retained_stub_hash`.
+// is the GDPR-grade hard-delete request that retains a `retained_stub_digest`.
 pub const CX_REALM_CREATE: &str = "cx.realm.create";
 pub const CX_REALM_UPDATE: &str = "cx.realm.update";
 pub const CX_REALM_DESTROY: &str = "cx.realm.destroy";

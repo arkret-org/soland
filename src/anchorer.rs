@@ -534,12 +534,12 @@ impl AnchorerWorker {
         state: &AppState,
         canonical_bytes: &[u8],
     ) -> Result<MoveSignature, AnchorerError> {
-        // payload_hash = sha256(canonical_bytes), prefix-encoded.
+        // payload_digest = sha256(canonical_bytes), prefix-encoded.
         let hash_hex: String = Sha256::digest(canonical_bytes)
             .iter()
             .map(|b| format!("{b:02x}"))
             .collect();
-        let payload_hash = Hash::new(format!("sha256:{hash_hex}"))
+        let payload_digest = Hash::new(format!("sha256:{hash_hex}"))
             .map_err(|e| AnchorerError::Construction(format!("payload hash: {e}")))?;
 
         let signing_key = state.anchorer_signing_key();
@@ -554,7 +554,7 @@ impl AnchorerWorker {
         Ok(MoveSignature {
             alg: "EdDSA".to_owned(),
             verification_method: format!("{}#anchorer-key", self.service_did),
-            payload_hash,
+            payload_digest,
             created_at: chrono::Utc::now(),
             jws,
         })
@@ -568,7 +568,7 @@ impl AnchorerWorker {
 /// `anchor.anchorer_sig` with the real signature after deriving the
 /// canonical bytes and the id.
 fn zero_anchorer_sig_placeholder() -> Result<MoveSignature, AnchorerError> {
-    let payload_hash = Hash::new(format!("sha256:{}", "00".repeat(32)))
+    let payload_digest = Hash::new(format!("sha256:{}", "00".repeat(32)))
         .map_err(|e| AnchorerError::Construction(format!("zero payload hash: {e}")))?;
     // 64 zero bytes -> 86-char base64url-no-pad zero string. The detached
     // JWS shape is `header..signature`, with the SDK-canonical EdDSA
@@ -581,7 +581,7 @@ fn zero_anchorer_sig_placeholder() -> Result<MoveSignature, AnchorerError> {
     Ok(MoveSignature {
         alg: "EdDSA".to_owned(),
         verification_method: String::new(),
-        payload_hash,
+        payload_digest,
         created_at: chrono::Utc::now(),
         jws: format!("{header_b64}..{zero_sig_b64}"),
     })

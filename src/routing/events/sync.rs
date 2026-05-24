@@ -29,7 +29,6 @@ use bytes::Bytes;
 use chrono::{DateTime, Duration as ChronoDuration, SecondsFormat, Utc};
 use contrix_sdk::lattice::CellState;
 use contrix_sdk::{EphemeralSubmitResBody, RealmId};
-use ed25519_dalek::Signer as _;
 use futures_util::stream::StreamExt;
 use salvo::http::StatusCode;
 use salvo::prelude::*;
@@ -214,7 +213,7 @@ fn account_delta_frame(response: contrix_sdk::model::SyncResBody) -> Value {
         "kind": "delta",
         "cursor": response.cursor,
         "realms": response.spaces,
-        "to_device": {"events": response.to_device},
+        "to_device": {"messages": response.to_device},
         "device_lists": response.device_lists,
         "account_data": {"events": response.account_data},
         "presence": {"events": response.presence},
@@ -645,79 +644,96 @@ pub fn sync_token_for_client_sync(
     let filter_hash = sync_filter_hash(filter);
     let issued_at_ms = issued_at.timestamp_millis();
     let expires_at_ms = expires_at.timestamp_millis();
+    let positions = json!({
+        "spaces": spaces_positions,
+        "devices": device_positions,
+        "to_device": to_device_position
+    });
+    let ctx = json!({
+        "principal_id": principal_id,
+        "device_id": device_id,
+        "service_id": state.config.service_did.clone(),
+        "filter_hash": filter_hash,
+        "issued_at_ms": issued_at_ms
+    });
+    let handle = store_sync_cursor_handle(
+        state,
+        json!({
+            "ctx": ctx,
+            "positions": positions,
+            "expires_at_ms": expires_at_ms
+        }),
+    );
     let cursor = json!({
         "v": "1",
         "purpose": "stream",
         "t": issued_at.to_rfc3339_opts(SecondsFormat::Millis, true),
         "x": expires_at_ms,
-        "_ctx": {
-            "principal_id": principal_id,
-            "device_id": device_id,
-            "service_id": state.config.service_did.clone(),
-            "filter_hash": filter_hash,
-            "issued_at_ms": issued_at_ms
-        },
-        "_positions": {
-            "spaces": spaces_positions,
-            "devices": device_positions,
-            "to_device": to_device_position
-        }
+        "h": handle
     });
-    encode_signed_sync_cursor(state, cursor)
+    encode_sync_cursor_value(cursor)
 }
 
 pub(crate) fn sync_token_for_state(state: &AppState) -> String {
     let issued_at = chrono::Utc::now();
     let expires_at = issued_at + ChronoDuration::hours(1);
-    encode_signed_sync_cursor(
+    let expires_at_ms = expires_at.timestamp_millis();
+    let handle = store_sync_cursor_handle(
         state,
         json!({
-            "v": "1",
-            "purpose": "stream",
-            "t": issued_at.to_rfc3339_opts(SecondsFormat::Millis, true),
-            "x": expires_at.timestamp_millis(),
-            "_ctx": {
+            "ctx": {
                 "kind": "generic",
                 "service_id": state.config.service_did.clone(),
                 "issued_at_ms": issued_at.timestamp_millis()
             },
-            "_positions": {
+            "positions": {
                 "spaces": {},
                 "devices": {},
                 "to_device": 0
-            }
+            },
+            "expires_at_ms": expires_at_ms
         }),
-    )
+    );
+    encode_sync_cursor_value(json!({
+            "v": "1",
+            "purpose": "stream",
+            "t": issued_at.to_rfc3339_opts(SecondsFormat::Millis, true),
+            "x": expires_at_ms,
+            "h": handle
+    }))
 }
 
-pub(super) fn encode_signed_sync_cursor(state: &AppState, mut cursor: Value) -> String {
-    if let Some(object) = cursor.as_object_mut() {
-        object.remove("_mac");
-        object.remove("_sig");
-        let sig = cursor_signature(state, &Value::Object(object.clone()));
-        object.insert("_sig".to_owned(), Value::String(sig));
-    }
+pub(super) fn encode_sync_cursor_value(cursor: Value) -> String {
     let bytes = contrix_sdk::canonical::canonical_json_bytes(&cursor)
         .unwrap_or_else(|_| cursor.to_string().into_bytes());
     format!("cx:cursor:{}", URL_SAFE_NO_PAD.encode(bytes))
 }
 
-fn cursor_signature(state: &AppState, cursor_without_sig: &Value) -> String {
-    let payload = contrix_sdk::canonical::canonical_json_bytes(cursor_without_sig)
-        .unwrap_or_else(|_| cursor_without_sig.to_string().into_bytes());
-    let mut bound = Vec::with_capacity(
-        b"soland-cursor-sig-v1".len() + state.config.service_did.len() + payload.len() + 2,
-    );
-    bound.extend_from_slice(b"soland-cursor-sig-v1");
-    bound.push(0);
-    bound.extend_from_slice(state.config.service_did.as_bytes());
-    bound.push(0);
-    bound.extend_from_slice(&payload);
-    let signature = state.anchorer_signing_key().sign(&bound);
-    format!(
-        "eddsa-ed25519:{}",
-        URL_SAFE_NO_PAD.encode(signature.to_bytes())
-    )
+fn store_sync_cursor_handle(state: &AppState, stored: Value) -> String {
+    loop {
+        let handle = contrix_sdk::cursor::generate_cursor_handle();
+        let mut handles = state
+            .sync_cursor_handles
+            .lock()
+            .expect("sync cursor handles lock");
+        if !handles.contains_key(&handle) {
+            handles.insert(handle.clone(), stored.clone());
+            return handle;
+        }
+    }
+}
+
+fn stored_sync_cursor_by_handle(
+    state: &AppState,
+    handle: &str,
+) -> Result<Value, SyncCursorError> {
+    state
+        .sync_cursor_handles
+        .lock()
+        .expect("sync cursor handles lock")
+        .get(handle)
+        .cloned()
+        .ok_or(SyncCursorError::Integrity("sync cursor handle is unknown"))
 }
 
 pub fn parse_and_validate_sync_cursor(
@@ -747,24 +763,39 @@ pub fn parse_and_validate_sync_cursor(
     if expires_at <= now_ms {
         return Err(SyncCursorError::Expired);
     }
-    let Some(actual_sig) = value.get("_sig").and_then(|sig| sig.as_str()) else {
-        return Err(SyncCursorError::Invalid("after cursor must contain _sig"));
-    };
-    let mut unsigned = value.clone();
-    if let Some(object) = unsigned.as_object_mut() {
-        object.remove("_mac");
-        object.remove("_sig");
-    }
-    let expected_sig = cursor_signature(state, &unsigned);
-    if actual_sig != expected_sig {
+    if value.get("_mac").is_some()
+        || value.get("_sig").is_some()
+        || value.get("issuer_kid").is_some()
+        || value.get("_ctx").is_some()
+        || value.get("_positions").is_some()
+    {
         return Err(SyncCursorError::Integrity(
-            "sync cursor integrity is invalid",
+            "core cursor must use stateful handle form",
         ));
+    };
+    let Some(handle) = value.get("h").and_then(|h| h.as_str()) else {
+        return Err(SyncCursorError::Integrity("after cursor must contain h"));
+    };
+    if crate::round23::validate_cursor_handle(handle).is_err() {
+        return Err(SyncCursorError::Invalid("invalid cursor handle"));
     }
-    let ctx = value
-        .get("_ctx")
+    let stored = stored_sync_cursor_by_handle(state, handle)?;
+    if stored
+        .get("expires_at_ms")
+        .and_then(|expires_at| expires_at.as_i64())
+        .is_none_or(|expires_at| expires_at <= now_ms)
+    {
+        state
+            .sync_cursor_handles
+            .lock()
+            .expect("sync cursor handles lock")
+            .remove(handle);
+        return Err(SyncCursorError::Integrity("sync cursor handle has expired"));
+    }
+    let ctx = stored
+        .get("ctx")
         .and_then(|ctx| ctx.as_object())
-        .ok_or(SyncCursorError::Invalid("after cursor must contain _ctx"))?;
+        .ok_or(SyncCursorError::Integrity("cursor handle is missing ctx"))?;
     let expected_principal = session
         .map(|session| session.actor.as_str())
         .unwrap_or("anonymous");
@@ -808,14 +839,14 @@ pub fn parse_and_validate_sync_cursor(
             "cursor filter hash does not match request filter",
         ));
     }
-    let positions_value = value.get("_positions").ok_or(SyncCursorError::Invalid(
-        "after cursor must contain _positions",
-    ))?;
+    let positions_value = stored
+        .get("positions")
+        .ok_or(SyncCursorError::Integrity("cursor handle is missing positions"))?;
     let positions = positions_value
         .get("spaces")
         .and_then(|spaces| spaces.as_object())
-        .ok_or(SyncCursorError::Invalid(
-            "after cursor must contain _positions.spaces",
+        .ok_or(SyncCursorError::Integrity(
+            "cursor handle is missing positions.spaces",
         ))?
         .iter()
         .filter_map(|(space_id, position)| {
@@ -853,7 +884,8 @@ pub fn decode_sync_cursor_value(token: &str) -> Result<serde_json::Value, SyncCu
 /// - Plain string that does NOT start with `cx:cursor:` → pass through
 ///   unchanged; the caller already speaks the projection's `event_id` cursor.
 /// - `cx:cursor:...` → decode the structured cursor, look up
-///   `_positions[space_id]` (a `timestamp_micros` checkpoint), then walk
+///   the handle's stored position for `space_id` (a `timestamp_micros`
+///   checkpoint), then walk
 ///   the space's projected events and persisted messages to find the most
 ///   recent event at-or-before that checkpoint and return its
 ///   `event_id`. When no event sits at-or-before the checkpoint, return
@@ -871,14 +903,16 @@ pub fn resolve_sync_cursor_to_event_id(
     }
     let value = decode_sync_cursor_value(&cursor)
         .map_err(|_| "sync cursor is not a valid cx:cursor token")?;
-    let checkpoint = value
-        .pointer("/positions")
-        .or_else(|| value.pointer("/_positions"))
-        .and_then(|positions| {
-            positions
-                .pointer(&format!("/spaces/{}", space_id))
-                .or_else(|| positions.get(space_id))
-        })
+    let handle = value
+        .get("h")
+        .and_then(Value::as_str)
+        .ok_or("sync cursor is missing stateful handle")?;
+    let stored = stored_sync_cursor_by_handle(state, handle)
+        .map_err(|_| "sync cursor handle is unknown")?;
+    let checkpoint = stored
+        .get("positions")
+        .and_then(|positions| positions.get("spaces"))
+        .and_then(|spaces| spaces.get(space_id))
         .and_then(|position| position.as_i64());
     let Some(checkpoint) = checkpoint else {
         return Ok(None);
@@ -1824,11 +1858,11 @@ async fn snapshot_head(
     let service_did = state.config.service_did.clone();
     let signature_payload = format!(
         "{}:{}:{}",
-        bundle.snapshot_ref, bundle.state_hash, service_did
+        bundle.snapshot_ref, bundle.state_digest, service_did
     );
     crate::result::json_ok(SnapshotHeadResponse {
         snapshot_ref: bundle.snapshot_ref,
-        state_hash: bundle.state_hash,
+        state_digest: bundle.state_digest,
         manifest: bundle.manifest,
         chunks: chunk_descriptors,
         frontier: bundle.frontier,
@@ -1865,7 +1899,7 @@ async fn snapshot_chunk(
     }
     let bundle = snapshot_bundle_for_space(state, &space_id)
         .ok_or_else(|| crate::error::AppError::not_found("not found"))?;
-    if bundle.snapshot_ref != snapshot_ref || bundle.state_hash != expected_hash {
+    if bundle.snapshot_ref != snapshot_ref || bundle.state_digest != expected_hash {
         return Err(crate::error::AppError::new(
             crate::error::ErrorCode::StaleFrontier,
             "snapshot_ref no longer matches the current snapshot frontier",

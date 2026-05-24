@@ -22,20 +22,20 @@
 //!   carry all 6 fields of [`contrix_sdk::FederationServiceBindingRef`];
 //!   any missing field returns `schema_violation`.
 //! - **Federation S2S headers** — `Source-Trust-Domain`,
-//!   `Destination-Trust-Domain`, and `Request-Canonical-Hash` MUST be
+//!   `Destination-Trust-Domain`, and `Request-Canonical-Digest` MUST be
 //!   present on every inbound federation request and MUST be appended
 //!   to the message-signature transcript via
 //!   [`contrix_sdk::federation_trust_domain_transcript_fragment`].
 //! - **Federation idempotency cache** — key carries
-//!   `source_did + dest_did + request_canonical_hash + idempotency_key +
-//!   origin_key_state_hash`. Replay after key-state change emits
+//!   `source_did + dest_did + request_canonical_digest + idempotency_key +
+//!   origin_key_state_digest`. Replay after key-state change emits
 //!   `reason_code=historical_only` (no side effects).
 //! - **`/blob/presign` realm_id** — request MUST carry `realm_id`; for
 //!   Realm-owned blobs the value MUST match the blob metadata's
 //!   `realm_id` field.
 //! - **`AuditRywReceipt.trust_domain`** — recompute the policy version
 //!   hash via the 4-arg SDK helper
-//!   [`contrix_sdk::compute_audit_policy_version_hash`].
+//!   [`contrix_sdk::compute_audit_policy_version_digest`].
 //! - **`cx.consent.revoke` observed_dots** — required. Implicit cascade
 //!   is `schema_violation`.
 //! - **`cx.cross_signing.publish` CAS** — accept only when
@@ -63,9 +63,9 @@ use contrix_sdk::{
     EventId, EventsFrontierAccountClientResponse, EventsFrontierAnonymousHealthResponse,
     EventsFrontierFederationPeerResponse, EventsFrontierResponse, EventsSubmitBatchRequest,
     EventsSubmitFederationRequest, EventsSubscribeFrameBody, FederationServiceBindingRef,
-    FrontierPeerRole, HEADER_DESTINATION_TRUST_DOMAIN, HEADER_REQUEST_CANONICAL_HASH,
+    FrontierPeerRole, HEADER_DESTINATION_TRUST_DOMAIN, HEADER_REQUEST_CANONICAL_DIGEST,
     HEADER_SOURCE_TRUST_DOMAIN, Hash, RealmId, SpaceId, SpaceObjectTombstonePayload,
-    SpaceStateTransitionPayload, TypedTrustDomainId, canonical, compute_audit_policy_version_hash,
+    SpaceStateTransitionPayload, TypedTrustDomainId, canonical, compute_audit_policy_version_digest,
     cross_signing_publish_cell_subject, federation_trust_domain_transcript_fragment,
     flow_tracks_patch_cell_subject, flow_update_cell_subject,
 };
@@ -176,7 +176,7 @@ pub fn build_typed_frontier_response(
                         membership_frontier: Vec::new(),
                         delivery_binding_frontier: Vec::new(),
                         destination_service_type: "principal_server".to_owned(),
-                        reducer_profile_hash: Hash::new(format!("sha256:{}", "0".repeat(64)))
+                        reducer_profile_digest: Hash::new(format!("sha256:{}", "0".repeat(64)))
                             .expect("placeholder hash"),
                     },
                     Hash::new(format!("sha256:{}", "0".repeat(64))).expect("placeholder hash"),
@@ -302,7 +302,7 @@ impl EventsSubmitRequest {
     /// containing duplicates.
     ///
     /// `TODO(round4-fed-binding-verify)`: also verify the
-    /// `space_policy_hash` and `reducer_profile_hash` against the
+    /// `space_policy_hash` and `reducer_profile_digest` against the
     /// receiver's own materialised state (this is the deeper inbound
     /// verification chain).
     pub fn validate_federation_binding(
@@ -310,7 +310,7 @@ impl EventsSubmitRequest {
     ) -> Result<(), (&'static str, String)> {
         let binding = &req.service_binding_ref;
         // realm_id, space_policy_hash, destination_service_type,
-        // reducer_profile_hash — typed values, already non-null. The
+        // reducer_profile_digest — typed values, already non-null. The
         // membership and delivery_binding frontiers are arrays of
         // EventIds; reject duplicates inside a frontier to prevent
         // canonical-JSON drift attacks.
@@ -352,7 +352,7 @@ impl EventsSubmitRequest {
 pub struct FederationTrustHeaders {
     pub source_trust_domain: TypedTrustDomainId,
     pub destination_trust_domain: TypedTrustDomainId,
-    pub request_canonical_hash: Hash,
+    pub request_canonical_digest: Hash,
 }
 
 impl FederationTrustHeaders {
@@ -371,17 +371,17 @@ impl FederationTrustHeaders {
         };
         let source = header_value(HEADER_SOURCE_TRUST_DOMAIN)?.to_owned();
         let destination = header_value(HEADER_DESTINATION_TRUST_DOMAIN)?.to_owned();
-        let canonical_hash = header_value(HEADER_REQUEST_CANONICAL_HASH)?.to_owned();
+        let canonical_hash = header_value(HEADER_REQUEST_CANONICAL_DIGEST)?.to_owned();
         let source = TypedTrustDomainId::new(source)
             .map_err(|_| HeaderViolation::Malformed(HEADER_SOURCE_TRUST_DOMAIN.to_owned()))?;
         let destination = TypedTrustDomainId::new(destination)
             .map_err(|_| HeaderViolation::Malformed(HEADER_DESTINATION_TRUST_DOMAIN.to_owned()))?;
         let canonical_hash = Hash::new(canonical_hash)
-            .map_err(|_| HeaderViolation::Malformed(HEADER_REQUEST_CANONICAL_HASH.to_owned()))?;
+            .map_err(|_| HeaderViolation::Malformed(HEADER_REQUEST_CANONICAL_DIGEST.to_owned()))?;
         Ok(Self {
             source_trust_domain: source,
             destination_trust_domain: destination,
-            request_canonical_hash: canonical_hash,
+            request_canonical_digest: canonical_hash,
         })
     }
 
@@ -403,7 +403,7 @@ impl FederationTrustHeaders {
         federation_trust_domain_transcript_fragment(
             &self.source_trust_domain,
             &self.destination_trust_domain,
-            &self.request_canonical_hash,
+            &self.request_canonical_digest,
         )
     }
 }
@@ -435,26 +435,26 @@ impl HeaderViolation {
 // ════════════════════════════════════════════════════════════════════════
 
 /// Round 4 (B1.8) — composite idempotency cache key. The pre-round-4
-/// key did NOT incorporate `request_canonical_hash` or
-/// `origin_key_state_hash`; a replay after key revocation could mine
+/// key did NOT incorporate `request_canonical_digest` or
+/// `origin_key_state_digest`; a replay after key revocation could mine
 /// fresh side effects. Round 4 mixes both into the key so a cache hit
 /// requires the key state to be unchanged.
 ///
 /// When the *key state* has advanced since the cached response was
-/// minted, the cache should still match (the request_canonical_hash
+/// minted, the cache should still match (the request_canonical_digest
 /// + idempotency_key are the same) but the receiver MUST mark the
 /// response with `reason_code=historical_only` and MUST NOT trigger
 /// fresh side effects. This is implemented by deriving two keys:
-/// the strict key (with `origin_key_state_hash`) and the
+/// the strict key (with `origin_key_state_digest`) and the
 /// canonical-replay key (without it). The strict key is used for
 /// freshness; the canonical-replay key for historical lookup.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct FederationIdempotencyKey {
     pub source_did: String,
     pub dest_did: String,
-    pub request_canonical_hash: String,
+    pub request_canonical_digest: String,
     pub idempotency_key: String,
-    pub origin_key_state_hash: String,
+    pub origin_key_state_digest: String,
 }
 
 impl FederationIdempotencyKey {
@@ -465,16 +465,16 @@ impl FederationIdempotencyKey {
         let canonical = canonical::canonical_json_bytes(&json!({
             "source_did": self.source_did,
             "dest_did": self.dest_did,
-            "request_canonical_hash": self.request_canonical_hash,
+            "request_canonical_digest": self.request_canonical_digest,
             "idempotency_key": self.idempotency_key,
-            "origin_key_state_hash": self.origin_key_state_hash,
+            "origin_key_state_digest": self.origin_key_state_digest,
         }))
         .unwrap_or_default();
         let digest = Sha256::digest(&canonical);
         format!("sha256:{:x}", digest)
     }
 
-    /// Canonical-replay key — drops `origin_key_state_hash`. Used to
+    /// Canonical-replay key — drops `origin_key_state_digest`. Used to
     /// detect a replay AFTER the source service rotated its keys; if
     /// the strict key misses but the canonical-replay key hits, the
     /// receiver returns the cached body marked
@@ -484,7 +484,7 @@ impl FederationIdempotencyKey {
         let canonical = canonical::canonical_json_bytes(&json!({
             "source_did": self.source_did,
             "dest_did": self.dest_did,
-            "request_canonical_hash": self.request_canonical_hash,
+            "request_canonical_digest": self.request_canonical_digest,
             "idempotency_key": self.idempotency_key,
         }))
         .unwrap_or_default();
@@ -660,7 +660,7 @@ pub fn compute_audit_policy_hash(
     audit_disclosure: &Value,
     audit_assurance: &Value,
 ) -> [u8; 32] {
-    compute_audit_policy_version_hash(realm_id, trust_domain, audit_disclosure, audit_assurance)
+    compute_audit_policy_version_digest(realm_id, trust_domain, audit_disclosure, audit_assurance)
         .unwrap_or([0u8; 32])
 }
 
@@ -914,7 +914,7 @@ mod tests {
                 ],
                 delivery_binding_frontier: Vec::new(),
                 destination_service_type: "principal_server".to_owned(),
-                reducer_profile_hash: Hash::new(format!("sha256:{}", "2".repeat(64))).unwrap(),
+                reducer_profile_digest: Hash::new(format!("sha256:{}", "2".repeat(64))).unwrap(),
             },
             events: Vec::new(),
             idempotency_key: None,
@@ -924,17 +924,17 @@ mod tests {
     }
 
     #[test]
-    fn federation_idempotency_strict_key_changes_with_key_state_hash() {
+    fn federation_idempotency_strict_key_changes_with_key_state_digest() {
         let mut key = FederationIdempotencyKey {
             source_did: "did:web:alice.example".to_owned(),
             dest_did: "did:web:bob.example".to_owned(),
-            request_canonical_hash: "sha256:abc".to_owned(),
+            request_canonical_digest: "sha256:abc".to_owned(),
             idempotency_key: "idem-1".to_owned(),
-            origin_key_state_hash: "sha256:state-A".to_owned(),
+            origin_key_state_digest: "sha256:state-A".to_owned(),
         };
         let strict_a = key.strict();
         let replay_a = key.canonical_replay();
-        key.origin_key_state_hash = "sha256:state-B".to_owned();
+        key.origin_key_state_digest = "sha256:state-B".to_owned();
         let strict_b = key.strict();
         let replay_b = key.canonical_replay();
         // Strict key differs after key state advances.
@@ -998,7 +998,7 @@ mod tests {
     }
 
     #[test]
-    fn audit_policy_version_hash_domain_separates() {
+    fn audit_policy_version_digest_domain_separates() {
         let h1 = compute_audit_policy_hash(
             &realm(),
             &td(),

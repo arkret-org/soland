@@ -223,7 +223,7 @@ async fn effective_grants(
     let all_grants = [grants, default_grants].concat();
     crate::result::json_ok(EffectiveGrantsResBody {
         grants: all_grants,
-        state_hash: Some(
+        state_digest: Some(
             "sha256:0000000000000000000000000000000000000000000000000000000000000000".to_owned(),
         ),
         evaluated_at: now(),

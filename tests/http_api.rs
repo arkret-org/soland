@@ -357,7 +357,7 @@ fn signed_event_envelope(event_id: &str, actor_seq: u64, prev_refs: Vec<&str>) -
             "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
             "audience": "did:web:soland.local",
             "domain": "did:web:soland.local",
-            "payload_hash": sha256_json(&payload)
+            "payload_digest": sha256_json(&payload)
         }]
     });
     event["canonical_digest"] = Value::String(event_canonical_digest(&event));
@@ -455,7 +455,7 @@ fn signed_message_event_envelope(
             "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
             "audience": "did:web:soland.local",
             "domain": "did:web:soland.local",
-            "payload_hash": sha256_json(&payload)
+            "payload_digest": sha256_json(&payload)
         }]
     });
     event["canonical_digest"] = Value::String(event_canonical_digest(&event));
@@ -1168,7 +1168,7 @@ async fn events_describe_and_single_event_submit_work() {
     artifact_kind_event["kind"] = Value::String("cx.flow.create".to_owned());
     artifact_kind_event["schema_id"] = Value::String("cx.schema.flow.v1".to_owned());
     artifact_kind_event["payload"] = artifact_kind_payload.clone();
-    artifact_kind_event["proofs"][0]["payload_hash"] =
+    artifact_kind_event["proofs"][0]["payload_digest"] =
         Value::String(sha256_json(&artifact_kind_payload));
     artifact_kind_event["canonical_digest"] =
         Value::String(event_canonical_digest(&artifact_kind_event));
@@ -1252,8 +1252,8 @@ async fn events_describe_and_single_event_submit_work() {
         Vec::new(),
     );
     conflicting["payload"]["body"] = Value::String("different canonical body".to_owned());
-    let payload_hash = sha256_json(&conflicting["payload"]);
-    conflicting["proofs"][0]["payload_hash"] = Value::String(payload_hash);
+    let payload_digest = sha256_json(&conflicting["payload"]);
+    conflicting["proofs"][0]["payload_digest"] = Value::String(payload_digest);
     conflicting["canonical_digest"] = Value::String(event_canonical_digest(&conflicting));
     let mut conflict = TestClient::post("http://server/api/v1/events")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -1838,7 +1838,7 @@ async fn mimi_provider_facade_contracts_work() {
     let report = TestClient::post("http://server/api/v1/mimi/report-abuse")
         .json(&serde_json::json!({
             "mimi_room_uri": "mimi://soland.local/rooms/01JSMIMI",
-            "target_event_hash": "sha256:target",
+            "target_event_digest": "sha256:target",
             "frank": {"scheme": "dev-frank"}
         }))
         .send(&service)
@@ -1997,7 +1997,7 @@ async fn mimi_facade_writes_flow_into_canonical_reducer_chain() {
     let report_resp: Value = TestClient::post("http://server/api/v1/mimi/report-abuse")
         .json(&serde_json::json!({
             "mimi_room_uri": format!("mimi://soland.local/rooms/{room_id}"),
-            "target_event_hash": "sha256:abuse-target",
+            "target_event_digest": "sha256:abuse-target",
             "frank": {"scheme": "dev-frank"},
             "reporter_did": "did:web:reporter.example",
             "space_id": demo_space,
@@ -2198,7 +2198,7 @@ async fn seed_member_invite_event_surfaces_via_authz_invites() {
             "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
             "audience": "did:web:soland.local",
             "domain": "did:web:soland.local",
-            "payload_hash": sha256_json(&payload),
+            "payload_digest": sha256_json(&payload),
         }],
         "payload": payload,
     });
@@ -2392,7 +2392,7 @@ async fn service_did_is_config_driven_across_public_metadata() {
     );
     assert_ne!(ice["signature"]["sig"], "placeholder");
     assert!(
-        ice["signature"]["payload_hash"]
+        ice["signature"]["payload_digest"]
             .as_str()
             .is_some_and(|hash| hash.starts_with("sha256:"))
     );
@@ -2400,7 +2400,7 @@ async fn service_did_is_config_driven_across_public_metadata() {
     signed_payload.as_object_mut().unwrap().remove("signature");
     let payload_bytes = contrix_sdk::canonical::canonical_json_bytes(&signed_payload).unwrap();
     assert_eq!(
-        ice["signature"]["payload_hash"],
+        ice["signature"]["payload_digest"],
         format!("sha256:{:x}", Sha256::digest(&payload_bytes))
     );
     let signature_bytes = URL_SAFE_NO_PAD
@@ -2808,7 +2808,8 @@ async fn account_contacts_and_space_lifecycle_workflow() {
     assert_eq!(sent_message["source_realm_id"], realm_id);
     let send_cursor = decode_cursor(sent_message["sync_token"].as_str().unwrap());
     assert_eq!(send_cursor["v"], "1");
-    assert!(send_cursor["_positions"]["spaces"].is_object());
+    assert!(send_cursor["h"].as_str().is_some_and(|h| h.len() >= 22));
+    assert!(send_cursor.get("_positions").is_none());
 
     let invalid_block_message = post_message_event(
         state.clone(),
@@ -2925,27 +2926,16 @@ async fn account_contacts_and_space_lifecycle_workflow() {
             .as_str()
             .unwrap_or_else(|| panic!("sync response missing cursor: {sync_with_message}")),
     );
-    assert!(cursor["_ctx"].get("profile").is_none());
+    assert_eq!(cursor["v"], "1");
+    assert_eq!(cursor["purpose"], "stream");
+    assert!(cursor["t"].as_str().is_some());
+    assert!(cursor["x"].as_i64().unwrap() > 0);
+    assert!(cursor["h"].as_str().is_some_and(|h| h.len() >= 22));
+    assert!(cursor.get("_ctx").is_none());
+    assert!(cursor.get("_positions").is_none());
     assert!(cursor.get("_mac").is_none());
-    assert!(
-        cursor["_sig"]
-            .as_str()
-            .is_some_and(|sig| sig.starts_with("eddsa-ed25519:"))
-    );
-    assert_eq!(cursor["_ctx"]["principal_id"], "did:web:alice.example");
-    assert_eq!(
-        cursor["_ctx"]["device_id"],
-        "cx:device:01904100-0000-7000-8000-a11ce0000001"
-    );
-    assert_eq!(cursor["_ctx"]["service_id"], "did:web:soland.local");
-    assert!(
-        cursor["_ctx"]["filter_hash"]
-            .as_str()
-            .unwrap()
-            .starts_with("sha256:")
-    );
-    assert!(cursor["x"].as_i64().unwrap() > cursor["_ctx"]["issued_at_ms"].as_i64().unwrap());
-    assert!(cursor["_positions"]["spaces"][&space_id].as_i64().unwrap() > 0);
+    assert!(cursor.get("_sig").is_none());
+    assert!(cursor.get("issuer_kid").is_none());
     assert_eq!(
         sync_with_message["realms"][&space_id]["timeline"]["events"][0]["event_id"],
         sent_message["event_id"]
@@ -3030,12 +3020,6 @@ async fn account_contacts_and_space_lifecycle_workflow() {
 
     let mut expired_cursor = cursor.clone();
     expired_cursor["x"] = serde_json::json!(1);
-    if let Some(object) = expired_cursor.as_object_mut() {
-        object.insert(
-            "_sig".to_owned(),
-            serde_json::json!("eddsa-ed25519:tampered"),
-        );
-    }
     let mut expired = TestClient::get(format!(
         "http://server/api/v1/account/subscribe?catchup=true&after={}",
         encode_cursor(&expired_cursor)
@@ -3095,13 +3079,13 @@ async fn account_contacts_and_space_lifecycle_workflow() {
     assert_eq!(snapshot["manifest"]["reducer_profile"], "cx.reducer.v1");
     // Snapshot v2 (round 9): chunk_id is now a typed integer in the SDK
     // shape; small test states fit in a single 256 KiB chunk so chunk[0]
-    // .digest is the state_hash and chunk_count == 1.
+    // .digest is the state_digest and chunk_count == 1.
     assert_eq!(snapshot["chunks"][0]["chunk_id"], 0);
-    assert_eq!(snapshot["chunks"][0]["digest"], snapshot["state_hash"]);
+    assert_eq!(snapshot["chunks"][0]["digest"], snapshot["state_digest"]);
     assert_eq!(snapshot["chunk_count"], 1);
     assert_eq!(
         snapshot["merkle_root"].as_str().unwrap(),
-        snapshot["state_hash"].as_str().unwrap(),
+        snapshot["state_digest"].as_str().unwrap(),
         "single-chunk Merkle root collapses to the leaf digest"
     );
     // GeneratorProof envelope is present + carries a non-empty signature.
@@ -3127,7 +3111,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
     .take_json()
     .await
     .unwrap();
-    assert_eq!(snapshot_chunk["digest"], snapshot["state_hash"]);
+    assert_eq!(snapshot_chunk["digest"], snapshot["state_digest"]);
     assert_eq!(snapshot_chunk["verified"], true);
     assert!(!snapshot_chunk["bytes_base64"].as_str().unwrap().is_empty());
     // Snapshot v2: chunk responses surface the audit-path so receivers
@@ -4319,7 +4303,7 @@ async fn federation_rejects_replayed_operations() {
         "cx:realm:01904100-0000-7000-8000-20d6cfd24be6"
     );
     assert!(
-        bootstrap["snapshot_bootstrap"]["state_hash"]
+        bootstrap["snapshot_bootstrap"]["state_digest"]
             .as_str()
             .unwrap()
             .starts_with("sha256:")
@@ -5505,13 +5489,14 @@ async fn to_device_messages_survive_duplicate_sync_until_cursor_ack() {
         .await;
 
     let first = account_subscribe_frame(state.clone(), Some(&token), "catchup=true").await;
-    assert_eq!(first["to_device"]["events"].as_array().unwrap().len(), 1);
+    assert_eq!(first["to_device"]["messages"].as_array().unwrap().len(), 1);
     let first_cursor = decode_cursor(first["cursor"].as_str().unwrap());
-    assert!(first_cursor["_positions"]["to_device"].as_i64().unwrap() > 0);
+    assert!(first_cursor["h"].as_str().is_some_and(|h| h.len() >= 22));
+    assert!(first_cursor.get("_positions").is_none());
 
     let duplicate = account_subscribe_frame(state.clone(), Some(&token), "catchup=true").await;
     assert_eq!(
-        duplicate["to_device"]["events"].as_array().unwrap().len(),
+        duplicate["to_device"]["messages"].as_array().unwrap().len(),
         1
     );
 
@@ -5522,10 +5507,10 @@ async fn to_device_messages_survive_duplicate_sync_until_cursor_ack() {
     )
     .await;
     assert!(
-        acked["to_device"]["events"].is_array(),
+        acked["to_device"]["messages"].is_array(),
         "acked sync response must be a sync body: {acked}"
     );
-    assert!(acked["to_device"]["events"].as_array().unwrap().is_empty());
+    assert!(acked["to_device"]["messages"].as_array().unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -5594,7 +5579,7 @@ async fn policy_check_and_validation_work() {
         .json(&serde_json::json!({
             "request_id": "req1",
             "realm_id": "cx:realm:0196419b-0000-7000-8000-000000000000",
-            "request_canonical_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+            "request_canonical_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
             "action": "message.send",
             "actor": "did:web:alice.example",
             "source": {"service": "soland"}
@@ -5656,7 +5641,7 @@ async fn policy_check_and_validation_work() {
         .json(&serde_json::json!({
             "request_id": "req2",
             "realm_id": "cx:realm:0196419b-0000-7000-8000-000000000000",
-            "request_canonical_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+            "request_canonical_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
             "action": "message.send",
             "actor": "did:web:alice.example",
             "source": {"service": "soland", "kind": "realm"}
@@ -5688,7 +5673,7 @@ async fn policy_check_and_validation_work() {
         .json(&serde_json::json!({
             "request_id": "req3",
             "realm_id": "cx:realm:0196419b-0000-7000-8000-000000000000",
-            "request_canonical_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+            "request_canonical_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
             "action": "message.send",
             "actor": "did:web:alice.example",
             "source": {"service": "soland"}
@@ -5838,7 +5823,7 @@ fn signed_place_event(
             "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
             "audience": "did:web:soland.local",
             "domain": "did:web:soland.local",
-            "payload_hash": sha256_json(&payload)
+            "payload_digest": sha256_json(&payload)
         }]
     });
     event["canonical_digest"] = Value::String(event_canonical_digest(&event));
@@ -6052,7 +6037,7 @@ fn signed_flow_event(
             "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
             "audience": "did:web:soland.local",
             "domain": "did:web:soland.local",
-            "payload_hash": sha256_json(&payload)
+            "payload_digest": sha256_json(&payload)
         }]
     });
     event["canonical_digest"] = Value::String(event_canonical_digest(&event));
@@ -6124,7 +6109,7 @@ fn signed_morph_event(
             "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
             "audience": "did:web:soland.local",
             "domain": "did:web:soland.local",
-            "payload_hash": sha256_json(&payload)
+            "payload_digest": sha256_json(&payload)
         }]
     });
     event["canonical_digest"] = Value::String(event_canonical_digest(&event));
@@ -6407,7 +6392,7 @@ fn signed_redaction_event(
             "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
             "audience": "did:web:soland.local",
             "domain": "did:web:soland.local",
-            "payload_hash": sha256_json(&payload)
+            "payload_digest": sha256_json(&payload)
         }]
     });
     event["canonical_digest"] = Value::String(event_canonical_digest(&event));
@@ -7223,7 +7208,7 @@ async fn admin_applets_agents_endpoints_reflect_submitted_registry_events() {
     registration_event["kind"] = Value::String("cx.applet.registration".to_owned());
     registration_event["schema_id"] = Value::String("cx.schema.event_payload.v1".to_owned());
     registration_event["payload"] = registration_payload.clone();
-    registration_event["proofs"][0]["payload_hash"] =
+    registration_event["proofs"][0]["payload_digest"] =
         Value::String(sha256_json(&registration_payload));
     registration_event["canonical_digest"] =
         Value::String(event_canonical_digest(&registration_event));
@@ -7250,7 +7235,7 @@ async fn admin_applets_agents_endpoints_reflect_submitted_registry_events() {
     discovery_event["kind"] = Value::String("cx.applet.discovery".to_owned());
     discovery_event["schema_id"] = Value::String("cx.schema.event_payload.v1".to_owned());
     discovery_event["payload"] = discovery_payload.clone();
-    discovery_event["proofs"][0]["payload_hash"] = Value::String(sha256_json(&discovery_payload));
+    discovery_event["proofs"][0]["payload_digest"] = Value::String(sha256_json(&discovery_payload));
     discovery_event["canonical_digest"] = Value::String(event_canonical_digest(&discovery_event));
     let resp: Value = TestClient::post("http://server/api/v1/events")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -7279,7 +7264,7 @@ async fn admin_applets_agents_endpoints_reflect_submitted_registry_events() {
     agent_event["kind"] = Value::String("cx.agent.endpoint".to_owned());
     agent_event["schema_id"] = Value::String("cx.schema.event_payload.v1".to_owned());
     agent_event["payload"] = agent_payload.clone();
-    agent_event["proofs"][0]["payload_hash"] = Value::String(sha256_json(&agent_payload));
+    agent_event["proofs"][0]["payload_digest"] = Value::String(sha256_json(&agent_payload));
     agent_event["canonical_digest"] = Value::String(event_canonical_digest(&agent_event));
     let resp: Value = TestClient::post("http://server/api/v1/events")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -7545,7 +7530,7 @@ async fn applet_bridge_emits_synthetic_status_for_session_start() {
             "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
             "audience": "did:web:soland.local",
             "domain": "did:web:soland.local",
-            "payload_hash": sha256_json(&payload),
+            "payload_digest": sha256_json(&payload),
         }],
     });
     start_event["canonical_digest"] = Value::String(event_canonical_digest(&start_event));
@@ -7637,7 +7622,7 @@ async fn agent_bridge_emits_status_and_result_for_session_start() {
             "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
             "audience": "did:web:soland.local",
             "domain": "did:web:soland.local",
-            "payload_hash": sha256_json(&endpoint_payload),
+            "payload_digest": sha256_json(&endpoint_payload),
         }],
     });
     endpoint_event["canonical_digest"] = Value::String(event_canonical_digest(&endpoint_event));
@@ -7686,7 +7671,7 @@ async fn agent_bridge_emits_status_and_result_for_session_start() {
             "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
             "audience": "did:web:soland.local",
             "domain": "did:web:soland.local",
-            "payload_hash": sha256_json(&payload),
+            "payload_digest": sha256_json(&payload),
         }],
     });
     start_event["canonical_digest"] = Value::String(event_canonical_digest(&start_event));
@@ -7739,7 +7724,7 @@ async fn agent_bridge_emits_status_and_result_for_session_start() {
     assert_eq!(result_event["payload"]["result"]["agent_did"], agent_did);
     let binding = &result_event["payload"]["audit_binding"];
     assert_eq!(binding["binding_kind"], "ed25519_v1");
-    assert_eq!(binding["actor"], "did:web:alice.example");
+    assert_eq!(binding["actor_id"], "did:web:alice.example");
     assert_eq!(
         binding["key_id"],
         soland::REFERENCE_AGENT_AUDIT_ED25519_KEY_ID
@@ -7816,7 +7801,7 @@ async fn agent_bridge_fails_closed_on_unknown_agent() {
             "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
             "audience": "did:web:soland.local",
             "domain": "did:web:soland.local",
-            "payload_hash": sha256_json(&payload),
+            "payload_digest": sha256_json(&payload),
         }],
     });
     start_event["canonical_digest"] = Value::String(event_canonical_digest(&start_event));
@@ -7915,7 +7900,7 @@ async fn agent_bridge_plumbs_endpoint_url_through_session_envelopes() {
             "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
             "audience": "did:web:soland.local",
             "domain": "did:web:soland.local",
-            "payload_hash": sha256_json(&endpoint_payload),
+            "payload_digest": sha256_json(&endpoint_payload),
         }],
     });
     endpoint_event["canonical_digest"] = Value::String(event_canonical_digest(&endpoint_event));
@@ -7964,7 +7949,7 @@ async fn agent_bridge_plumbs_endpoint_url_through_session_envelopes() {
             "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
             "audience": "did:web:soland.local",
             "domain": "did:web:soland.local",
-            "payload_hash": sha256_json(&payload),
+            "payload_digest": sha256_json(&payload),
         }],
     });
     start_event["canonical_digest"] = Value::String(event_canonical_digest(&start_event));

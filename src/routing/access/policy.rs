@@ -332,9 +332,9 @@ async fn policy_check(
             "invalid realm_id (must match cx:realm:<uuid>)",
         ));
     }
-    if !is_valid_sha256_digest(&body.request_canonical_hash) {
+    if !is_valid_sha256_digest(&body.request_canonical_digest) {
         return Err(AppError::invalid_param(
-            "request_canonical_hash must be sha256:<64 lowercase hex>",
+            "request_canonical_digest must be sha256:<64 lowercase hex>",
         ));
     }
     let policy_decision = matching_policy_decision(state, &body);
@@ -368,9 +368,9 @@ async fn policy_check(
         "actor": body.actor,
         "action": body.action,
         "resource": resource_value,
-        "request_canonical_hash": body.request_canonical_hash,
+        "request_canonical_digest": body.request_canonical_digest,
     });
-    let auth_state_hash = canonical_sha256_hex(&auth_state_value);
+    let auth_state_digest = canonical_sha256_hex(&auth_state_value);
 
     let mut policy_doc_ids: Vec<String> = state
         .persistence
@@ -388,7 +388,7 @@ async fn policy_check(
         .collect();
     policy_doc_ids.sort();
     let policy_frontier_value = json!({ "policy_documents": policy_doc_ids });
-    let policy_frontier_hash = canonical_sha256_hex(&policy_frontier_value);
+    let policy_frontier_digest = canonical_sha256_hex(&policy_frontier_value);
 
     let membership_frontier_value = if let Some(realm_id) = body.realm_id.as_deref() {
         let mut members = collect_realm_member_dids(state, realm_id);
@@ -398,14 +398,14 @@ async fn policy_check(
         let empty: Vec<String> = Vec::new();
         json!({ "realm_id": Value::Null, "members": empty })
     };
-    let membership_frontier_hash = canonical_sha256_hex(&membership_frontier_value);
+    let membership_frontier_digest = canonical_sha256_hex(&membership_frontier_value);
 
     let binding_expires_at = now() + chrono::Duration::hours(1);
     let bound_to = PolicyBinding {
         realm_id: bound_realm_id.clone(),
-        auth_state_hash: auth_state_hash.clone(),
-        policy_frontier_hash: policy_frontier_hash.clone(),
-        membership_frontier_hash: membership_frontier_hash.clone(),
+        auth_state_digest: auth_state_digest.clone(),
+        policy_frontier_digest: policy_frontier_digest.clone(),
+        membership_frontier_digest: membership_frontier_digest.clone(),
         expires_at: binding_expires_at,
     };
 
@@ -416,9 +416,9 @@ async fn policy_check(
         "reason_code": reason_code,
         "bound_to": {
             "realm_id": bound_realm_id,
-            "auth_state_hash": auth_state_hash,
-            "policy_frontier_hash": policy_frontier_hash,
-            "membership_frontier_hash": membership_frontier_hash,
+            "auth_state_digest": auth_state_digest,
+            "policy_frontier_digest": policy_frontier_digest,
+            "membership_frontier_digest": membership_frontier_digest,
             "expires_at": binding_expires_at.to_rfc3339(),
         },
         "obligations": obligations,
@@ -462,7 +462,7 @@ async fn policy_check(
             "scheme": "ed25519-detached-jws",
             "payload_digest": format!("sha256:{}", sha256_hex(&canonical_bytes)),
             "jws": jws_detached,
-            "sig": sha256_hex(body.request_canonical_hash.as_bytes())
+            "sig": sha256_hex(body.request_canonical_digest.as_bytes())
         }),
     })
 }
@@ -479,7 +479,7 @@ fn canonical_sha256_hex(value: &Value) -> String {
 
 /// Snapshot the current member DID list for `realm_id`. Returns an
 /// empty Vec when the realm is unknown or marked deleted; callers fold
-/// the result into the `membership_frontier_hash` so the unknown-realm
+/// the result into the `membership_frontier_digest` so the unknown-realm
 /// case still produces a stable, distinct hash from the populated one.
 fn collect_realm_member_dids(state: &AppState, realm_id: &str) -> Vec<String> {
     let Ok(realm_id_typed) = RealmId::new(realm_id.to_owned()) else {

@@ -142,11 +142,11 @@ fn rfc9421_sign(
     target_url: &str,
     body: &[u8],
 ) -> reqwest::header::HeaderMap {
-    let request_canonical_hash = format!("sha256:{:x}", Sha256::digest(body));
+    let request_canonical_digest = format!("sha256:{:x}", Sha256::digest(body));
     insert_header_if_valid(
         &mut headers,
-        "request-canonical-hash",
-        &request_canonical_hash,
+        "request-canonical-digest",
+        &request_canonical_digest,
     );
 
     let created = now_unix_secs();
@@ -159,7 +159,7 @@ fn rfc9421_sign(
         "\"destination-service-did\"",
         "\"source-trust-domain\"",
         "\"destination-trust-domain\"",
-        "\"request-canonical-hash\"",
+        "\"request-canonical-digest\"",
     ]
     .join(" ");
     let signature_params =
@@ -174,7 +174,7 @@ fn rfc9421_sign(
          \"destination-service-did\": {}\n\
          \"source-trust-domain\": {}\n\
          \"destination-trust-domain\": {}\n\
-         \"request-canonical-hash\": {}\n\
+         \"request-canonical-digest\": {}\n\
          \"@signature-params\": {}",
         method.to_ascii_uppercase(),
         target_url,
@@ -183,7 +183,7 @@ fn rfc9421_sign(
         header_value(&headers, "destination-service-did").unwrap_or_default(),
         header_value(&headers, "source-trust-domain").unwrap_or_default(),
         header_value(&headers, "destination-trust-domain").unwrap_or_default(),
-        request_canonical_hash,
+        request_canonical_digest,
         signature_params,
     );
     let signature = state.anchorer_signing_key().sign(signature_base.as_bytes());

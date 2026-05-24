@@ -15,7 +15,7 @@
 //!           "service_role": "principal_server" | "auth_server" | ...,
 //!           "test_count": <int>,
 //!           "spec_file": "...",
-//!           "artifact_hash": "sha256:<hex>",
+//!           "artifact_digest": "sha256:<hex>",
 //!           "artifact_ref": "file:///.../verified-profiles.json",
 //!           "cotest_issuer_did": "did:...",
 //!           "signature": "<detached signature>",
@@ -84,7 +84,7 @@ struct RawVerifiedEntry {
     #[serde(default)]
     spec_file: Option<String>,
     #[serde(default)]
-    artifact_hash: Option<String>,
+    artifact_digest: Option<String>,
     #[serde(default)]
     artifact_ref: Option<String>,
     #[serde(default)]
@@ -103,7 +103,7 @@ pub struct VerifiedProfileDescriptor {
     pub profile_id: String,
     pub service_role: String,
     pub cotest_run_id: String,
-    pub artifact_hash: String,
+    pub artifact_digest: String,
     pub artifact_ref: String,
     pub cotest_issuer_did: contrix_sdk::Did,
     pub signature: String,
@@ -191,7 +191,7 @@ pub fn load_from_path(path: impl AsRef<Path>) -> Vec<VerifiedProfileDescriptor> 
         if role != SOLAND_SERVICE_ROLE {
             continue;
         }
-        let Some(artifact_hash) = valid_artifact_hash(entry.artifact_hash, &entry.profile_id)
+        let Some(artifact_digest) = valid_artifact_digest(entry.artifact_digest, &entry.profile_id)
         else {
             continue;
         };
@@ -227,7 +227,7 @@ pub fn load_from_path(path: impl AsRef<Path>) -> Vec<VerifiedProfileDescriptor> 
             profile_id: entry.profile_id,
             service_role: role.to_owned(),
             cotest_run_id: run_id.clone(),
-            artifact_hash,
+            artifact_digest,
             artifact_ref,
             cotest_issuer_did,
             signature,
@@ -251,8 +251,8 @@ pub fn load_from_path(path: impl AsRef<Path>) -> Vec<VerifiedProfileDescriptor> 
     out
 }
 
-fn valid_artifact_hash(value: Option<String>, profile_id: &str) -> Option<String> {
-    let hash = required_non_empty(value, "artifact_hash", profile_id)?;
+fn valid_artifact_digest(value: Option<String>, profile_id: &str) -> Option<String> {
+    let hash = required_non_empty(value, "artifact_digest", profile_id)?;
     if hash.strip_prefix("sha256:").is_some_and(|hex| {
         hex.len() == 64
             && hex
@@ -264,7 +264,7 @@ fn valid_artifact_hash(value: Option<String>, profile_id: &str) -> Option<String
     tracing::warn!(
         target: "verified_profiles",
         profile_id = %profile_id,
-        "dropping verified-profile entry: artifact_hash must match sha256:<64 lowercase hex>"
+        "dropping verified-profile entry: artifact_digest must match sha256:<64 lowercase hex>"
     );
     None
 }
@@ -330,7 +330,7 @@ mod tests {
                      "service_role": "principal_server",
                      "test_count": 3,
                      "spec_file": "cotest/e2e/tests/conformance/profile-gates.spec.ts",
-                     "artifact_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                     "artifact_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                      "artifact_ref": "file:///tmp/verified-profiles.json",
                      "cotest_issuer_did": "did:web:cotest.example",
                      "signature": "eddsa-jcs-b64url:test-principal-signature",
@@ -341,7 +341,7 @@ mod tests {
                      "service_role": "auth_server",
                      "test_count": 1,
                      "spec_file": "cotest/e2e/tests/sync/service-surface-contract.spec.ts",
-                     "artifact_hash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                     "artifact_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
                      "artifact_ref": "file:///tmp/verified-profiles.json",
                      "cotest_issuer_did": "did:web:cotest.example",
                      "signature": "eddsa-jcs-b64url:test-auth-signature"
@@ -355,7 +355,7 @@ mod tests {
         assert_eq!(v[0].service_role, "principal_server");
         assert_eq!(v[0].cotest_run_id, "test-run");
         assert_eq!(
-            v[0].artifact_hash,
+            v[0].artifact_digest,
             "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         );
         assert_eq!(v[0].artifact_ref, "file:///tmp/verified-profiles.json");

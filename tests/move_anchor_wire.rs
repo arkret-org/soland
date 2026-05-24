@@ -120,7 +120,7 @@ fn build_invited_to_join_move() -> Move {
         "hlc": "0189c4d2af00-0000-aabbccdd"
     });
     let body_bytes = canonical::canonical_json_bytes(&body).unwrap();
-    let payload_hash = canonical::sha256_digest(&body_bytes);
+    let payload_digest = canonical::sha256_digest(&body_bytes);
     let id_hex: String = Sha256::digest(&body_bytes)
         .iter()
         .map(|b| format!("{b:02x}"))
@@ -132,7 +132,7 @@ fn build_invited_to_join_move() -> Move {
         json!({
             "alg": "EdDSA",
             "verification_method": "did:web:admin.example#k1",
-            "payload_hash": payload_hash,
+            "payload_digest": payload_digest,
             "created_at": "2026-05-08T00:00:00Z",
             // Detached JWS shape (RFC 7515 §3.2). Real Ed25519 verification
             // is covered by separate production-verifier tests.
@@ -146,7 +146,7 @@ fn build_genesis_anchor(frontier: MoveId, state_root: Hash) -> Anchor {
     let sig = MoveSignature {
         alg: "EdDSA".to_owned(),
         verification_method: "did:web:anchorer.example#k1".to_owned(),
-        payload_hash: Hash::new(format!("sha256:{}", "ff".repeat(32))).unwrap(),
+        payload_digest: Hash::new(format!("sha256:{}", "ff".repeat(32))).unwrap(),
         created_at: chrono::DateTime::parse_from_rfc3339("2026-05-08T00:00:00Z")
             .unwrap()
             .with_timezone(&chrono::Utc),
@@ -382,7 +382,7 @@ fn build_consent_grant_add_move() -> Move {
         "hlc": "0189c4d2af00-0000-aabbccee"
     });
     let body_bytes = canonical::canonical_json_bytes(&body).unwrap();
-    let payload_hash = canonical::sha256_digest(&body_bytes);
+    let payload_digest = canonical::sha256_digest(&body_bytes);
     let id_hex: String = Sha256::digest(&body_bytes)
         .iter()
         .map(|b| format!("{b:02x}"))
@@ -394,7 +394,7 @@ fn build_consent_grant_add_move() -> Move {
         json!({
             "alg": "EdDSA",
             "verification_method": "did:web:admin.example#k1",
-            "payload_hash": payload_hash,
+            "payload_digest": payload_digest,
             "created_at": "2026-05-08T00:00:00Z",
             "jws": "eyJhbGciOiJFZERTQSJ9..ZmFrZS1zaWctZm9yLXRlc3Rz"
         }),
@@ -531,7 +531,7 @@ fn event_envelope(event_id: &str, actor: &str, space_id: &str, payload: Value) -
             "kind": "detached_jws",
             "alg": "EdDSA",
             "verification_method": format!("{actor}#test"),
-            "payload_hash": "",
+            "payload_digest": "",
             "created_at": "2026-05-02T00:00:00Z",
             "jws": "a..b",
         }],
@@ -551,7 +551,7 @@ fn event_digest(event: &Value) -> String {
 
 fn refresh_event_proof(event: &mut Value) {
     let digest = event_digest(event);
-    event["proofs"][0]["payload_hash"] = Value::String(digest);
+    event["proofs"][0]["payload_digest"] = Value::String(digest);
 }
 
 fn sha256_json(value: &Value) -> String {
@@ -681,7 +681,7 @@ fn build_member_state_move_with_hlc(physical_ms: u64) -> Move {
         "hlc": hlc_str,
     });
     let body_bytes = canonical::canonical_json_bytes(&body).unwrap();
-    let payload_hash = canonical::sha256_digest(&body_bytes);
+    let payload_digest = canonical::sha256_digest(&body_bytes);
     let id_hex: String = Sha256::digest(&body_bytes)
         .iter()
         .map(|b| format!("{b:02x}"))
@@ -693,7 +693,7 @@ fn build_member_state_move_with_hlc(physical_ms: u64) -> Move {
         json!({
             "alg": "EdDSA",
             "verification_method": "did:web:admin.example#k1",
-            "payload_hash": payload_hash,
+            "payload_digest": payload_digest,
             "created_at": "2026-05-08T00:00:00Z",
             "jws": "eyJhbGciOiJFZERTQSJ9..ZmFrZS1zaWctZm9yLXRlc3Rz"
         }),
@@ -812,7 +812,7 @@ fn encode_ed25519_multibase(pubkey: &[u8; 32]) -> String {
 }
 
 /// Build a JWS detached signature over `canonical_bytes` with `signing_key`.
-/// Returns `(jws, payload_hash_hex)`.
+/// Returns `(jws, payload_digest_hex)`.
 fn make_detached_jws(signing_key: &SigningKey, canonical_bytes: &[u8], tamper: bool) -> String {
     let header_json = br#"{"alg":"EdDSA"}"#;
     let header_b64 = URL_SAFE_NO_PAD.encode(header_json);

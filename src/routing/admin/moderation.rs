@@ -4,8 +4,8 @@
 //!
 //! ### Queue
 //! - `GET /queue` — list current queue items.
-//! - `POST /queue/{queue_item_id}/assign` — assign reviewer DIDs.
-//! - `POST /queue/{queue_item_id}/priority` — set priority.
+//! - `POST /queue/{id}/assign` — assign reviewer DIDs.
+//! - `POST /queue/{id}/priority` — set priority.
 //!
 //! ### Decisions
 //! - `POST /decision` — admin issues `cx.moderation.decision`. Body:
@@ -54,8 +54,8 @@ use crate::state::AppState;
 pub(super) fn router() -> Router {
     Router::with_path("moderation")
         .push(Router::with_path("queue").get(list_queue))
-        .push(Router::with_path("queue/{queue_item_id}/assign").post(assign_queue_item))
-        .push(Router::with_path("queue/{queue_item_id}/priority").post(prioritise_queue_item))
+        .push(Router::with_path("queue/{id}/assign").post(assign_queue_item))
+        .push(Router::with_path("queue/{id}/priority").post(prioritise_queue_item))
         .push(Router::with_path("decision").post(issue_decision))
         .push(Router::with_path("decision/{decision_id}/lift").post(lift_decision))
         .push(Router::with_path("appeals").get(list_appeals))
@@ -100,16 +100,16 @@ async fn assign_queue_item(
     req: &mut Request,
     body: JsonBody<AssignReviewerReq>,
 ) -> JsonResult<Value> {
-    let queue_item_id = req
-        .param::<String>("queue_item_id")
-        .ok_or_else(|| AppError::invalid_param("queue_item_id required"))?;
+    let item_id = req
+        .param::<String>("id")
+        .ok_or_else(|| AppError::invalid_param("id required"))?;
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req)?;
     let session = require_admin_principal(state, session)?;
     let mut item = state
         .persistence
         .moderation()
-        .get_queue_item(&queue_item_id)
+        .get_queue_item(&item_id)
         .ok()
         .flatten()
         .ok_or_else(|| AppError::not_found("queue item"))?;
@@ -127,7 +127,7 @@ async fn assign_queue_item(
         state,
         Some(&session.actor),
         "admin.moderation.queue.assign",
-        json!({ "queue_item_id": queue_item_id }),
+        json!({ "id": item_id }),
         "ok",
     );
     json_ok(item)
@@ -150,9 +150,9 @@ async fn prioritise_queue_item(
     req: &mut Request,
     body: JsonBody<PrioritiseReq>,
 ) -> JsonResult<Value> {
-    let queue_item_id = req
-        .param::<String>("queue_item_id")
-        .ok_or_else(|| AppError::invalid_param("queue_item_id required"))?;
+    let item_id = req
+        .param::<String>("id")
+        .ok_or_else(|| AppError::invalid_param("id required"))?;
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req)?;
     let session = require_admin_principal(state, session)?;
@@ -165,7 +165,7 @@ async fn prioritise_queue_item(
     let mut item = state
         .persistence
         .moderation()
-        .get_queue_item(&queue_item_id)
+        .get_queue_item(&item_id)
         .ok()
         .flatten()
         .ok_or_else(|| AppError::not_found("queue item"))?;
@@ -182,7 +182,7 @@ async fn prioritise_queue_item(
         state,
         Some(&session.actor),
         "admin.moderation.queue.priority",
-        json!({ "queue_item_id": queue_item_id, "priority": priority }),
+        json!({ "id": item_id, "priority": priority }),
         "ok",
     );
     json_ok(item)
@@ -245,11 +245,11 @@ async fn issue_decision(
         .moderation()
         .append_decision(decision)
         .map_err(|err| AppError::internal(err.to_string()))?;
-    if let Some(queue_item_id) = body.queue_item_ref.clone() {
+    if let Some(item_id) = body.queue_item_ref.clone() {
         if let Ok(Some(mut item)) = state
             .persistence
             .moderation()
-            .get_queue_item(&queue_item_id)
+            .get_queue_item(&item_id)
         {
             if let Some(obj) = item.as_object_mut() {
                 obj.insert("status".to_owned(), json!("actioned"));

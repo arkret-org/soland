@@ -164,8 +164,8 @@ async fn enqueue_then_dispatch_delivers_payload_with_spec_headers() {
         captured.captured
     );
     assert!(
-        lower.contains("request-canonical-hash: sha256:"),
-        "captured request missing Request-Canonical-Hash binding; got: {}",
+        lower.contains("request-canonical-digest: sha256:"),
+        "captured request missing Request-Canonical-Digest binding; got: {}",
         captured.captured
     );
     assert!(
@@ -406,14 +406,14 @@ fn http_signature_verifies_with_headers(
         Some(destination_service_did),
         Some(source_trust_domain),
         Some(destination_trust_domain),
-        Some(request_canonical_hash),
+        Some(request_canonical_digest),
     ) = (
         headers.get("content-digest"),
         headers.get("source-service-did"),
         headers.get("destination-service-did"),
         headers.get("source-trust-domain"),
         headers.get("destination-trust-domain"),
-        headers.get("request-canonical-hash"),
+        headers.get("request-canonical-digest"),
     )
     else {
         return false;
@@ -427,7 +427,7 @@ fn http_signature_verifies_with_headers(
          \"destination-service-did\": {destination_service_did}\n\
          \"source-trust-domain\": {source_trust_domain}\n\
          \"destination-trust-domain\": {destination_trust_domain}\n\
-         \"request-canonical-hash\": {request_canonical_hash}\n\
+         \"request-canonical-digest\": {request_canonical_digest}\n\
          \"@signature-params\": {signature_params}",
     );
 

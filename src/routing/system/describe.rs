@@ -288,7 +288,7 @@ pub(crate) fn apply_claim_level_partition(
                     profile_id: entry.profile_id.clone(),
                     claim_kind: contrix_sdk::CotestVerifiedKind::CotestVerified,
                     cotest_run_id: entry.cotest_run_id.clone(),
-                    artifact_hash: entry.artifact_hash.clone(),
+                    artifact_digest: entry.artifact_digest.clone(),
                     artifact_ref: entry.artifact_ref.clone(),
                     cotest_issuer_did: entry.cotest_issuer_did.clone(),
                     signature: entry.signature.clone(),

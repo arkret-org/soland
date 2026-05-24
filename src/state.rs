@@ -305,6 +305,11 @@ pub struct AppState {
     /// `Utc::now()`; the notifications read-side filter uses it to flag
     /// rows as read. Same in-memory shape as the other two.
     pub notification_read_cursors: Arc<Mutex<BTreeMap<String, chrono::DateTime<chrono::Utc>>>>,
+    /// Stateful account-sync cursor handle table. The wire cursor only carries
+    /// `{v,purpose,t,x,h}`; this map binds `h` to authenticated context and
+    /// stream positions. Durable storage can replace it without changing the
+    /// account subscribe API.
+    pub sync_cursor_handles: Arc<Mutex<BTreeMap<String, Value>>>,
     /// Monotonic position allocator for to-device queues. Cursor ack uses
     /// numeric `position <= ack_position` pruning, so positions must advance
     /// even when multiple fanout writes land in the same wall-clock microsecond.
@@ -426,7 +431,7 @@ pub struct WebvhDocumentRecord {
 
 #[derive(Clone, Debug)]
 pub struct WebvhLogRecord {
-    pub event_hash: String,
+    pub event_digest: String,
     pub did: String,
     pub seq: u64,
     pub operation: Value,
@@ -1021,6 +1026,7 @@ impl AppState {
             handle_releases: Arc::new(Mutex::new(BTreeMap::new())),
             erased_actors: Arc::new(Mutex::new(BTreeSet::new())),
             notification_read_cursors: Arc::new(Mutex::new(BTreeMap::new())),
+            sync_cursor_handles: Arc::new(Mutex::new(BTreeMap::new())),
             to_device_position_counter: Arc::new(AtomicI64::new(now.timestamp_micros())),
             consent_cells: Arc::new(Mutex::new(BTreeMap::new())),
             did_resolver,

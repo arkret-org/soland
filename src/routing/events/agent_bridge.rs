@@ -359,7 +359,7 @@ fn emit_agent_result_envelope(
                 },
                 "audit_binding": {
                     "binding_kind": "ed25519_v1",
-                    "actor": origin,
+                    "actor_id": origin,
                     "key_id": key_id,
                     "signature": signed.signature_b64,
                     "public_key_b64": signed.public_key_b64,
@@ -566,7 +566,7 @@ mod tests {
         // verifier needs no access to the signing seed.
         let binding = &result_entry.payload["audit_binding"];
         assert_eq!(binding["binding_kind"], "ed25519_v1");
-        assert_eq!(binding["actor"], actor);
+        assert_eq!(binding["actor_id"], actor);
         assert_eq!(binding["key_id"], REFERENCE_AGENT_AUDIT_ED25519_KEY_ID);
         let sig_b64 = binding["signature"].as_str().expect("signature base64");
         let public_key_b64 = binding["public_key_b64"].as_str().expect("public_key_b64");

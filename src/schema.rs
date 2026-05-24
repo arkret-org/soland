@@ -186,8 +186,8 @@ diesel::table! {
 }
 
 diesel::table! {
-    webvh_log_events (event_hash) {
-        event_hash -> Text,
+    webvh_log_events (event_digest) {
+        event_digest -> Text,
         did -> Text,
         seq -> Int8,
         operation -> Jsonb,
@@ -220,7 +220,7 @@ diesel::table! {
         storage_backend -> Text,
         storage_key -> Text,
         payload -> Jsonb,
-        retention_until -> Nullable<Timestamptz>,
+        retention_expires_at -> Nullable<Timestamptz>,
         legal_hold -> Bool,
         created_at -> Timestamptz,
     }

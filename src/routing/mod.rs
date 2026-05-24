@@ -1136,7 +1136,7 @@ fn cors_handler_for_origin_spec(raw: &str) -> CorsHandler {
 #[derive(Clone)]
 pub struct ContrixOpenApiDoc(pub OpenApi);
 
-/// Snapshot bundle: surfaces the head fields (`snapshot_ref` / `state_hash` /
+/// Snapshot bundle: surfaces the head fields (`snapshot_ref` / `state_digest` /
 /// `chunk_bytes` single-chunk fallback) alongside SDK-canonical
 /// [`contrix_sdk::SnapshotChunk`] partitions + a binary
 /// [`contrix_sdk::SnapshotMerkleTree`] over their digests + a signed Realm
@@ -1147,7 +1147,7 @@ pub(crate) struct SnapshotBundle {
     /// `sha256:<hex>` digest over the full serialized state document.
     /// Doubles as the snapshot's `state_root` until the
     /// `effective_anchor_view`-driven state root is wired in.
-    pub state_hash: String,
+    pub state_digest: String,
     pub manifest: Value,
     pub frontier: Value,
     /// Deterministic chunk partition (SDK
@@ -1210,11 +1210,11 @@ pub(crate) fn snapshot_bundle_for_space(
         "generated_at": generated_at,
     });
     let chunk_bytes = serde_json::to_vec(&state_document).ok()?;
-    let state_hash = format!("sha256:{}", sha256_hex(&chunk_bytes));
+    let state_digest = format!("sha256:{}", sha256_hex(&chunk_bytes));
     let snapshot_ref = format!(
         "cx:snapshot:{}:{}",
         space_id,
-        state_hash.trim_start_matches("sha256:")
+        state_digest.trim_start_matches("sha256:")
     );
 
     // Snapshot v2: deterministically chunk the state-document
@@ -1229,7 +1229,7 @@ pub(crate) fn snapshot_bundle_for_space(
     let chunk_count = chunks.len() as u32;
     let total_bytes: u64 = chunks.iter().map(|c| c.bytes.len() as u64).sum();
     let chunk_target_bytes = chunker.target_chunk_bytes as u32;
-    let state_root_hash = contrix_sdk::Hash::new(state_hash.clone()).ok()?;
+    let state_root_hash = contrix_sdk::Hash::new(state_digest.clone()).ok()?;
     let generator_did = contrix_sdk::Did::new(state.config.service_did.clone()).ok()?;
 
     let proof_body = json!({
@@ -1264,7 +1264,7 @@ pub(crate) fn snapshot_bundle_for_space(
         "realm_id": space_id,
         "generated_at": generated_at,
         "message_count": state_document["message_count"],
-        "state_hash": state_hash,
+        "state_digest": state_digest,
     });
     let manifest = json!({
         "snapshot_ref": snapshot_ref,
@@ -1274,7 +1274,7 @@ pub(crate) fn snapshot_bundle_for_space(
         "chunk_digests": chunks.iter().map(|c| c.digest.as_str().to_owned()).collect::<Vec<_>>(),
         "chunk_count": chunk_count,
         "merkle_root": merkle_root.as_str(),
-        "state_hash": state_hash,
+        "state_digest": state_digest,
         "signed_by": state.config.service_did,
         "generator": {
             "name": "soland-dev-snapshot",
@@ -1284,7 +1284,7 @@ pub(crate) fn snapshot_bundle_for_space(
     });
     Some(SnapshotBundle {
         snapshot_ref,
-        state_hash,
+        state_digest,
         manifest,
         frontier,
         chunks,
@@ -1538,7 +1538,7 @@ mod operation_conformance_tests {
                     "security_class": "standard",
                     "federation_policy": "restricted",
                     "anchor_profile": "single_did",
-                    "hash_profile": "sha256",
+                    "digest_algorithm": "sha256",
                     "anchorer": {"type": "single_did", "did": "did:web:alice.example"},
                     "created_at": "2026-05-20T00:00:00Z"
                 }}),

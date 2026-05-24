@@ -200,7 +200,7 @@ fn delivery_binding_policy_no_did_fallback_when_policy_unset() {
         json!({
             "binding_source": "did_document_default",
             "recipient_service_did": "did:web:principal.example",
-            "did_document_hash": "sha256:deadbeef",
+            "did_document_digest": "sha256:deadbeef",
             "resolved_at": "2026-05-19T00:00:00Z",
         }),
     );
@@ -240,7 +240,7 @@ fn delivery_binding_policy_rejects_did_document_default_when_disabled() {
         json!({
             "binding_source": "did_document_default",
             "recipient_service_did": "did:web:principal.example",
-            "did_document_hash": "sha256:deadbeef",
+            "did_document_digest": "sha256:deadbeef",
         }),
     );
     match state.apply(&bad, &hlc) {

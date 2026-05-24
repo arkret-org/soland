@@ -264,7 +264,7 @@ pub(super) async fn embedded_webvh_register(
         ));
     }
     if let Err(error) = state.persistence.webvh().append_log_event(WebvhLogRecord {
-        event_hash: version_id.clone(),
+        event_digest: version_id.clone(),
         did: location.did.clone(),
         seq: 1,
         operation: log_entry.clone(),
@@ -473,7 +473,7 @@ pub(super) async fn identity_log(
         .into_iter()
         .map(|event| {
             json!({
-                "event_hash": event.event_hash,
+                "event_digest": event.event_digest,
                 "did": event.did,
                 "seq": event.seq,
                 "operation": event.operation,
@@ -509,7 +509,7 @@ pub(super) async fn identity_receipts(
                 vec![json!({
                     "service_did": state.config.service_did.clone(),
                     "did": record.did,
-                    "head_event_hash": record.key_log_head,
+                    "head_event_digest": record.key_log_head,
                     "seq": record.seq,
                     "issued_at": record.updated_at,
                 })]
@@ -584,7 +584,7 @@ pub(super) async fn identity_submit_did_operation(
         "operation": operation,
         "submitted_at": submitted_at,
     });
-    let event_hash = format!(
+    let event_digest = format!(
         "sha256:{}",
         sha256_hex(&serde_json::to_vec(&event_payload).unwrap_or_default())
     );
@@ -602,7 +602,7 @@ pub(super) async fn identity_submit_did_operation(
         .put_document(WebvhDocumentRecord {
             did: did.clone(),
             did_document: document.clone(),
-            key_log_head: Some(event_hash.clone()),
+            key_log_head: Some(event_digest.clone()),
             seq: next_seq,
             method_evidence,
             updated_at: submitted_at,
@@ -612,7 +612,7 @@ pub(super) async fn identity_submit_did_operation(
         .persistence
         .webvh()
         .append_log_event(WebvhLogRecord {
-            event_hash: event_hash.clone(),
+            event_digest: event_digest.clone(),
             did: did.clone(),
             seq: next_seq,
             operation: event_payload,
@@ -626,7 +626,7 @@ pub(super) async fn identity_submit_did_operation(
         json!({
             "did": did.clone(),
             "seq": next_seq,
-            "head_event_hash": event_hash.clone(),
+            "head_event_digest": event_digest.clone(),
         }),
         "accepted",
     );
@@ -634,12 +634,12 @@ pub(super) async fn identity_submit_did_operation(
         "status": "accepted",
         "did": did.clone(),
         "seq": next_seq,
-        "head_event_hash": event_hash.clone(),
+        "head_event_digest": event_digest.clone(),
         "did_document": document,
         "receipts": [{
             "service_did": state.config.service_did.clone(),
             "did": did,
-            "head_event_hash": event_hash,
+            "head_event_digest": event_digest,
             "seq": next_seq,
             "issued_at": submitted_at,
         }],

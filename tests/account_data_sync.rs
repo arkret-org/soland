@@ -160,7 +160,7 @@ async fn send_plaintext_message(
             "device_id": "cx:device:01904100-0000-7000-8000-b0b000000001",
             "audience": "did:web:soland.local",
             "domain": "did:web:soland.local",
-            "payload_hash": sha256_json(&payload)
+            "payload_digest": sha256_json(&payload)
         }]
     });
     event["canonical_digest"] = Value::String(event_canonical_digest(&event));

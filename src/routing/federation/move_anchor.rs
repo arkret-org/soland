@@ -2,7 +2,7 @@
 //!
 //! Surfaces:
 //! - `POST /api/v1/moves`   — submit a Move; verifier validates structural shape + signature
-//!   payload_hash + effect-shape against the cell registry, then stashes pending in [`MoveStore`].
+//!   payload_digest + effect-shape against the cell registry, then stashes pending in [`MoveStore`].
 //! - `POST /api/v1/anchors` — submit an Anchor; runs `apply_anchor` end-to-end: structural →
 //!   predecessor known → frontier monotonic → batch-verify Moves → atomic effect append → recompute
 //!   state_root → persist.
@@ -549,10 +549,10 @@ mod tests {
         let r = SubmitMoveResponse {
             move_id: "sha256:22".to_owned(),
             state: "rejected".to_owned(),
-            reason: Some("payload_hash mismatch".to_owned()),
+            reason: Some("payload_digest mismatch".to_owned()),
         };
         let v = serde_json::to_value(&r).unwrap();
         assert_eq!(v["state"], json!("rejected"));
-        assert_eq!(v["reason"], json!("payload_hash mismatch"));
+        assert_eq!(v["reason"], json!("payload_digest mismatch"));
     }
 }

@@ -167,7 +167,7 @@ async fn admit_member(
             "device_id": owner_device_id,
             "audience": "did:web:soland.local",
             "domain": "did:web:soland.local",
-            "payload_hash": sha256_json(&payload)
+            "payload_digest": sha256_json(&payload)
         }]
     });
     event["canonical_digest"] = Value::String(event_canonical_digest(&event));
@@ -216,7 +216,7 @@ async fn send_message(state: AppState, token: &str, space_id: &str, body: &str) 
             "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
             "audience": "did:web:soland.local",
             "domain": "did:web:soland.local",
-            "payload_hash": sha256_json(&payload)
+            "payload_digest": sha256_json(&payload)
         }]
     });
     event["canonical_digest"] = Value::String(event_canonical_digest(&event));

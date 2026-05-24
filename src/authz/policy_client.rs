@@ -52,7 +52,7 @@ pub struct PolicyCheckRequestInput {
     pub action: String,
     pub source_service_did: Did,
     pub source_service_type: String,
-    pub source_ip_hash: Hash,
+    pub source_ip_digest: Hash,
     pub signed_transport: Value,
     pub event_preview: Value,
     pub auth_context: Value,
@@ -64,7 +64,7 @@ pub struct PolicyCheckRequestInput {
 impl PolicyCheckRequestInput {
     /// Compute the canonical SHA-256 hash of the request transcript per
     /// spec §5. This is the cache key; coauth's signature transcript
-    /// binds to the same digest via `request_canonical_hash`.
+    /// binds to the same digest via `request_canonical_digest`.
     pub fn canonical_request_hash(&self) -> Hash {
         let canonical_input = serde_json::json!({
             "request_id": self.request_id,
@@ -86,18 +86,18 @@ impl PolicyCheckRequestInput {
     }
 
     fn into_wire(self) -> PolicyCheckRequest {
-        let request_canonical_hash = self.canonical_request_hash();
+        let request_canonical_digest = self.canonical_request_hash();
         PolicyCheckRequest {
             request_id: self.request_id,
             realm_id: self.realm_id,
             actor: self.actor,
             action: self.action,
-            request_canonical_hash,
+            request_canonical_digest,
             source: PolicyCheckSource {
                 service_did: self.source_service_did,
                 service_type: self.source_service_type,
             },
-            source_ip_hash: self.source_ip_hash,
+            source_ip_digest: self.source_ip_digest,
             signed_transport: self.signed_transport,
             event_preview: self.event_preview,
             auth_context: self.auth_context,
@@ -329,7 +329,7 @@ impl PolicyClient {
             realm_id: request.realm_id.clone(),
             actor: request.actor.clone(),
             action: request.action.clone(),
-            request_canonical_hash: request.request_canonical_hash.clone(),
+            request_canonical_digest: request.request_canonical_digest.clone(),
             policy_server_id,
         };
         let zero_hash =
@@ -341,9 +341,9 @@ impl PolicyClient {
         PolicyCheckResponse {
             decision: AuthzDecision::Deny,
             bound_to,
-            auth_state_hash: zero_hash.clone(),
-            policy_frontier_hash: zero_hash.clone(),
-            membership_frontier_hash: zero_hash,
+            auth_state_digest: zero_hash.clone(),
+            policy_frontier_digest: zero_hash.clone(),
+            membership_frontier_digest: zero_hash,
             signature,
             reason_code: Some(match config.on_timeout.as_str() {
                 "deny" => "policy_server_denied_on_timeout".to_owned(),
@@ -431,7 +431,7 @@ mod tests {
             action: "cx.message.create".to_owned(),
             source_service_did: Did::new("did:web:soland.local").unwrap(),
             source_service_type: "principal_server".to_owned(),
-            source_ip_hash: Hash::new(format!("sha256:{}", "b".repeat(64))).unwrap(),
+            source_ip_digest: Hash::new(format!("sha256:{}", "b".repeat(64))).unwrap(),
             signed_transport: serde_json::json!({"signed": true}),
             event_preview: Value::Null,
             auth_context: Value::Null,
@@ -447,12 +447,12 @@ mod tests {
                 realm_id: RealmId::new("cx:realm:01904100-0000-7000-8000-000000000001").unwrap(),
                 actor: Did::new("did:web:alice.example").unwrap(),
                 action: "cx.message.create".to_owned(),
-                request_canonical_hash: zero.clone(),
+                request_canonical_digest: zero.clone(),
                 policy_server_id: Did::new("did:web:policy.example.com").unwrap(),
             },
-            auth_state_hash: zero.clone(),
-            policy_frontier_hash: zero.clone(),
-            membership_frontier_hash: zero,
+            auth_state_digest: zero.clone(),
+            policy_frontier_digest: zero.clone(),
+            membership_frontier_digest: zero,
             signature: PolicyCheckSignature {
                 kid: "did:web:policy.example.com#key-1".to_owned(),
                 sig: "base64stub".to_owned(),
