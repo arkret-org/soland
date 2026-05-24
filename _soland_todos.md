@@ -47,8 +47,8 @@
 
 ### Engineering hygiene (master plan §5)
 - [ ] §25 Add Trivy image scan to `docker.yml`.
-- [ ] §26 Add cosign-signed image push step on tag (SLSA provenance v1).
-- [ ] §27 Generate SBOM (`syft`) and attach to release artifacts.
+- [ ] §26 Add local cosign/SLSA provenance command documentation; do not push images or tags.
+- [ ] §27 Generate SBOM (`syft`) as a local artifact.
 - [ ] §28 Add a `cargo deny` check on a weekly cron (separate from PR job).
 - [ ] §29 Set up Dependabot for cargo + GitHub Actions.
 
@@ -58,7 +58,7 @@
 ## Phase 5 tasks (final 1.0)
 
 - [ ] §31 External security review.
-- [ ] §32 Cut `v1.0.0` tag once cotest release-gate is green against soland.
+- [ ] §32 Record local `v1.0.0` milestone once cotest release-gate is green against soland.
 - [ ] §33 Publish `DEPLOYMENT.md` updates with metrics/OTEL/rate-limit configuration examples.
 
 ## Exit gate (phase 2)
@@ -67,7 +67,7 @@ All of:
 1. §1-§30 closed.
 2. `cotest fast-smoke` profile green.
 3. CI green on linux/win/mac matrix.
-4. Tagged internal milestone `v0.9.0`.
+4. Local internal milestone `v0.9.0` recorded in docs/todos.
 
 ## Notes
 
