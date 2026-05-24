@@ -14,6 +14,7 @@ pub mod hlc;
 pub mod ids;
 pub mod jws_verify;
 pub mod kinds;
+pub mod metrics;
 pub mod multisig_watchdog;
 pub mod object_storage;
 pub mod persistence;

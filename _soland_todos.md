@@ -34,7 +34,7 @@
 
 ### Observability (phase 2 deliverable)
 - [ ] §16 Add `#[instrument(skip(state, body))]` to every route handler under `src/routing/`. Naming: `op=<spec.operation_id>`.
-- [ ] §17 Add Prometheus `/metrics` endpoint on a separate port (`SOLAND_METRICS_BIND`, default `127.0.0.1:9090`). Required series: `soland_request_total{op,status}`, `soland_request_duration_seconds{op}` (histogram), `soland_db_pool_in_use`, `soland_federation_outbox_depth`.
+- [x] §17 Add Prometheus `/metrics` endpoint on a separate port (`SOLAND_METRICS_BIND`, default `127.0.0.1:9090`). Required series: `soland_request_total{op,status}`, `soland_request_duration_seconds{op}` (histogram), `soland_db_pool_in_use`, `soland_federation_outbox_depth`.
 - [x] §18 Replace `tracing::info!/warn!` calls in `main.rs` and worker tasks with structured fields. Add `RUST_LOG=soland=debug` doc to `DEPLOYMENT.md`.
 - [ ] §19 Add OTEL exporter behind a feature flag (`feature = "otel"`); document in `DEPLOYMENT.md`. Defaults off.
 - [x] §20 Add `/readyz` (returns 503 until migrations + introspection key fetch succeed) in addition to existing `/health`.

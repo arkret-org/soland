@@ -38,4 +38,14 @@ impl Db {
             "memory"
         }
     }
+
+    pub fn pool_in_use(&self) -> u32 {
+        self.pool
+            .as_ref()
+            .map(|pool| {
+                let state = pool.state();
+                state.connections.saturating_sub(state.idle_connections)
+            })
+            .unwrap_or(0)
+    }
 }

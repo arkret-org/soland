@@ -283,9 +283,10 @@ pre-upgrade backup if you need to roll back.
 
 - **Rate limiting**: the built-in limiter is per-process. Multi-replica
   deployments need a shared reverse-proxy/API-gateway quota in front of soland.
+- **Metrics**: Prometheus text metrics are exposed on the separate
+  `SOLAND_METRICS_BIND` listener (default `127.0.0.1:9090`) at `/metrics`.
 - **Scaffold endpoints**: push outbound bridge, the MIMI provider directory,
   and most of the directory surface return placeholder shapes. See `_todos.md`
   Streams D / E / F for the production rollout.
-- **No metrics endpoint yet** (`_todos.md` Dep-6).
 - **Pre-1.0 schema drift**: protocol field renames listed in `_todos.md` Q2/Q3
   may require client updates between releases.

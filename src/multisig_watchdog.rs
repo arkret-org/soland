@@ -379,6 +379,7 @@ mod tests {
     fn test_state() -> AppState {
         let config = AppConfig {
             bind: SocketAddr::from_str("127.0.0.1:0").unwrap(),
+            metrics_bind: SocketAddr::from_str("127.0.0.1:0").unwrap(),
             public_base_url: "http://test".to_owned(),
             service_did: "did:web:test.local".to_owned(),
             tls_cert_path: None,

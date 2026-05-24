@@ -156,6 +156,7 @@ mod tests {
     fn base_config() -> AppConfig {
         AppConfig {
             bind: "127.0.0.1:0".parse::<SocketAddr>().unwrap(),
+            metrics_bind: "127.0.0.1:0".parse::<SocketAddr>().unwrap(),
             public_base_url: "http://127.0.0.1:0".to_owned(),
             service_did: "did:web:soland.test".to_owned(),
             tls_cert_path: None,

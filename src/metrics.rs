@@ -1,0 +1,278 @@
+use std::collections::BTreeMap;
+use std::net::SocketAddr;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
+
+use salvo::prelude::*;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
+use tokio::task::JoinHandle;
+
+use crate::state::AppState;
+
+const DURATION_BUCKETS: [f64; 11] = [
+    0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0,
+];
+
+static METRICS: OnceLock<Mutex<HttpMetrics>> = OnceLock::new();
+
+#[derive(Clone)]
+pub struct MetricsMiddleware;
+
+#[async_trait]
+impl Handler for MetricsMiddleware {
+    async fn handle(
+        &self,
+        req: &mut Request,
+        depot: &mut Depot,
+        res: &mut Response,
+        ctrl: &mut FlowCtrl,
+    ) {
+        let op = request_op_label(req);
+        let started = Instant::now();
+        ctrl.call_next(req, depot, res).await;
+        let status = res.status_code.unwrap_or(StatusCode::OK).as_u16();
+        record_http_request(&op, status, started.elapsed());
+    }
+}
+
+pub async fn spawn_metrics_server(
+    state: AppState,
+    bind: SocketAddr,
+) -> anyhow::Result<JoinHandle<()>> {
+    let listener = TcpListener::bind(bind).await?;
+    Ok(tokio::spawn(async move {
+        loop {
+            let (stream, remote_addr) = match listener.accept().await {
+                Ok(accepted) => accepted,
+                Err(error) => {
+                    tracing::error!(%error, "metrics listener accept failed");
+                    continue;
+                }
+            };
+            let state = state.clone();
+            tokio::spawn(async move {
+                if let Err(error) = handle_metrics_connection(stream, state).await {
+                    tracing::debug!(%remote_addr, %error, "metrics scrape failed");
+                }
+            });
+        }
+    }))
+}
+
+async fn handle_metrics_connection(mut stream: TcpStream, state: AppState) -> anyhow::Result<()> {
+    let mut buffer = [0_u8; 2048];
+    let read = stream.read(&mut buffer).await?;
+    let request = std::str::from_utf8(&buffer[..read]).unwrap_or_default();
+    let mut parts = request
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .split_whitespace();
+    let method = parts.next().unwrap_or_default();
+    let path = parts.next().unwrap_or_default();
+
+    let (status, body) = if (method == "GET" || method == "HEAD") && path == "/metrics" {
+        ("200 OK", render_metrics(&state))
+    } else {
+        ("404 Not Found", "not found\n".to_owned())
+    };
+
+    let include_body = method != "HEAD";
+    let response = format!(
+        "HTTP/1.1 {status}\r\nContent-Type: text/plain; version=0.0.4; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+    stream.write_all(response.as_bytes()).await?;
+    if include_body {
+        stream.write_all(body.as_bytes()).await?;
+    }
+    Ok(())
+}
+
+pub fn render_metrics(state: &AppState) -> String {
+    let mut output = render_http_metrics();
+    output.push_str(
+        "# HELP soland_db_pool_in_use PostgreSQL pool connections currently checked out.\n",
+    );
+    output.push_str("# TYPE soland_db_pool_in_use gauge\n");
+    output.push_str(&format!(
+        "soland_db_pool_in_use {}\n",
+        state.db.pool_in_use()
+    ));
+    output.push_str("# HELP soland_federation_outbox_depth Undelivered federation outbox rows.\n");
+    output.push_str("# TYPE soland_federation_outbox_depth gauge\n");
+    output.push_str(&format!(
+        "soland_federation_outbox_depth {}\n",
+        federation_outbox_depth(state)
+    ));
+    output
+}
+
+fn federation_outbox_depth(state: &AppState) -> usize {
+    state
+        .persistence
+        .federation_outbox()
+        .snapshot_all()
+        .map(|rows| rows.iter().filter(|row| row.delivered_at.is_none()).count())
+        .unwrap_or(0)
+}
+
+fn record_http_request(op: &str, status: u16, duration: Duration) {
+    let mut metrics = metrics_state().lock().expect("metrics lock");
+    *metrics
+        .request_totals
+        .entry((op.to_owned(), status))
+        .or_insert(0) += 1;
+
+    let seconds = duration.as_secs_f64();
+    let histogram = metrics.request_durations.entry(op.to_owned()).or_default();
+    histogram.count += 1;
+    histogram.sum_seconds += seconds;
+    for (index, bucket) in DURATION_BUCKETS.iter().enumerate() {
+        if seconds <= *bucket {
+            histogram.bucket_counts[index] += 1;
+        }
+    }
+}
+
+fn render_http_metrics() -> String {
+    let metrics = metrics_state().lock().expect("metrics lock").clone();
+    let mut output = String::new();
+    output.push_str("# HELP soland_request_total HTTP requests by operation and status.\n");
+    output.push_str("# TYPE soland_request_total counter\n");
+    for ((op, status), count) in &metrics.request_totals {
+        output.push_str(&format!(
+            "soland_request_total{{op=\"{}\",status=\"{}\"}} {}\n",
+            escape_label(op),
+            status,
+            count
+        ));
+    }
+
+    output.push_str("# HELP soland_request_duration_seconds HTTP request duration by operation.\n");
+    output.push_str("# TYPE soland_request_duration_seconds histogram\n");
+    for (op, histogram) in &metrics.request_durations {
+        for (index, bucket) in DURATION_BUCKETS.iter().enumerate() {
+            output.push_str(&format!(
+                "soland_request_duration_seconds_bucket{{op=\"{}\",le=\"{}\"}} {}\n",
+                escape_label(op),
+                bucket,
+                histogram.bucket_counts[index]
+            ));
+        }
+        output.push_str(&format!(
+            "soland_request_duration_seconds_bucket{{op=\"{}\",le=\"+Inf\"}} {}\n",
+            escape_label(op),
+            histogram.count
+        ));
+        output.push_str(&format!(
+            "soland_request_duration_seconds_sum{{op=\"{}\"}} {:.6}\n",
+            escape_label(op),
+            histogram.sum_seconds
+        ));
+        output.push_str(&format!(
+            "soland_request_duration_seconds_count{{op=\"{}\"}} {}\n",
+            escape_label(op),
+            histogram.count
+        ));
+    }
+    output
+}
+
+fn metrics_state() -> &'static Mutex<HttpMetrics> {
+    METRICS.get_or_init(|| Mutex::new(HttpMetrics::default()))
+}
+
+#[derive(Clone, Default)]
+struct HttpMetrics {
+    request_totals: BTreeMap<(String, u16), u64>,
+    request_durations: BTreeMap<String, HistogramStats>,
+}
+
+#[derive(Clone)]
+struct HistogramStats {
+    count: u64,
+    sum_seconds: f64,
+    bucket_counts: [u64; DURATION_BUCKETS.len()],
+}
+
+impl Default for HistogramStats {
+    fn default() -> Self {
+        Self {
+            count: 0,
+            sum_seconds: 0.0,
+            bucket_counts: [0; DURATION_BUCKETS.len()],
+        }
+    }
+}
+
+fn request_op_label(req: &Request) -> String {
+    format!(
+        "{} {}",
+        req.method(),
+        normalize_path_for_metrics(req.uri().path())
+    )
+}
+
+fn normalize_path_for_metrics(path: &str) -> String {
+    if path == "/" {
+        return "/".to_owned();
+    }
+    let segments = path
+        .trim_start_matches('/')
+        .split('/')
+        .map(|segment| {
+            if looks_like_path_id(segment) {
+                "{id}"
+            } else {
+                segment
+            }
+        })
+        .collect::<Vec<_>>();
+    format!("/{}", segments.join("/"))
+}
+
+fn looks_like_path_id(segment: &str) -> bool {
+    segment.starts_with("cx:")
+        || segment.starts_with("did:")
+        || (segment.len() >= 16
+            && segment
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == ':'))
+}
+
+fn escape_label(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('\n', "\\n")
+        .replace('"', "\\\"")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn metrics_render_required_http_series() {
+        let op = "GET /api/v1/events/{id}/metrics-test";
+        record_http_request(op, 200, Duration::from_millis(25));
+        let rendered = render_http_metrics();
+
+        assert!(rendered.contains("soland_request_total"));
+        assert!(rendered.contains("status=\"200\""));
+        assert!(rendered.contains("soland_request_duration_seconds_bucket"));
+        assert!(rendered.contains("soland_request_duration_seconds_sum"));
+        assert!(rendered.contains("soland_request_duration_seconds_count"));
+    }
+
+    #[test]
+    fn path_ids_are_normalized_for_operation_label() {
+        assert_eq!(
+            normalize_path_for_metrics(
+                "/api/v1/realms/cx:realm:01904100-0000-7000-8000-bbbbbbbbbbbb/events"
+            ),
+            "/api/v1/realms/{id}/events"
+        );
+    }
+}

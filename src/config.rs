@@ -6,6 +6,7 @@ pub const DEFAULT_MAX_REQUEST_SIZE_BYTES: usize = 1024 * 1024;
 #[derive(Clone, Debug)]
 pub struct AppConfig {
     pub bind: SocketAddr,
+    pub metrics_bind: SocketAddr,
     pub public_base_url: String,
     pub service_did: String,
     /// Optional TLS certificate PEM path. When both this and
@@ -366,6 +367,9 @@ impl AppConfig {
             .or_else(|| std::env::var("SOLAND_BIND").ok())
             .unwrap_or_else(|| "127.0.0.1:8698".to_owned())
             .parse()?;
+        let metrics_bind = std::env::var("SOLAND_METRICS_BIND")
+            .unwrap_or_else(|_| "127.0.0.1:9090".to_owned())
+            .parse()?;
         let public_base_url =
             std::env::var("SOLAND_PUBLIC_BASE_URL").unwrap_or_else(|_| format!("http://{bind}"));
         let service_did = std::env::var("SOLAND_SERVICE_DID")
@@ -529,6 +533,7 @@ impl AppConfig {
 
         Ok(Self {
             bind,
+            metrics_bind,
             public_base_url,
             service_did,
             tls_cert_path,

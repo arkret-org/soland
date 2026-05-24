@@ -2972,6 +2972,7 @@ mod proof_strictness_tests {
     fn make_state(development_mode: bool) -> AppState {
         let config = AppConfig {
             bind: "127.0.0.1:0".parse().unwrap(),
+            metrics_bind: "127.0.0.1:0".parse().unwrap(),
             public_base_url: "http://server".to_owned(),
             service_did: "did:web:soland.local".to_owned(),
             tls_cert_path: None,

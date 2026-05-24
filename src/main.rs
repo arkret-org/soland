@@ -144,8 +144,17 @@ async fn main() -> anyhow::Result<()> {
         "background worker configured"
     );
 
+    let _metrics_server =
+        soland::metrics::spawn_metrics_server(state.clone(), config.metrics_bind).await?;
+    tracing::info!(
+        worker = "metrics_server",
+        bind = %config.metrics_bind,
+        "background worker configured"
+    );
+
     tracing::info!(
         bind = %config.bind,
+        metrics_bind = %config.metrics_bind,
         public_base_url = %config.public_base_url,
         service_did = %config.service_did,
         tls_enabled = config.tls_enabled(),

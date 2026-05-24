@@ -1133,6 +1133,7 @@ pub(crate) fn test_app_state_with_peers(
 
     let cfg = AppConfig {
         bind: SocketAddr::from_str("127.0.0.1:0").unwrap(),
+        metrics_bind: SocketAddr::from_str("127.0.0.1:0").unwrap(),
         public_base_url: "http://test".to_owned(),
         service_did: "did:web:test.local".to_owned(),
         tls_cert_path: None,
@@ -1193,6 +1194,7 @@ mod tests {
     fn config_with_policy(policy: FederationPolicy, peers: Vec<String>) -> AppConfig {
         AppConfig {
             bind: SocketAddr::from_str("127.0.0.1:0").unwrap(),
+            metrics_bind: SocketAddr::from_str("127.0.0.1:0").unwrap(),
             public_base_url: "http://test".to_owned(),
             service_did: "did:web:test.local".to_owned(),
             tls_cert_path: None,

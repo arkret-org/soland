@@ -94,6 +94,7 @@ pub fn router_with_rate_limiter_and_request_size_config(
     let cors_allow_origin = state.config.cors_allow_origin.clone();
     let rate_limiter = RateLimiter::new(rate_limiter_config);
     let mut router = Router::new()
+        .hoop(crate::metrics::MetricsMiddleware)
         .hoop(SecureMaxSize::new(max_request_size_bytes))
         .hoop(affix_state::inject(state))
         .hoop(RateLimiterMiddleware::new(rate_limiter));
@@ -1370,6 +1371,7 @@ mod operation_conformance_tests {
         AppState::new(
             AppConfig {
                 bind: "127.0.0.1:0".parse().unwrap(),
+                metrics_bind: "127.0.0.1:0".parse().unwrap(),
                 public_base_url: "http://server".to_owned(),
                 service_did: "did:web:soland.local".to_owned(),
                 tls_cert_path: None,
@@ -2198,6 +2200,7 @@ mod framework_error_routing_tests {
         use crate::config::{AppConfig, ObjectStorageConfig};
         AppConfig {
             bind: "127.0.0.1:0".parse().unwrap(),
+            metrics_bind: "127.0.0.1:0".parse().unwrap(),
             public_base_url: "http://server".to_owned(),
             service_did: "did:web:soland.local".to_owned(),
             tls_cert_path: None,
