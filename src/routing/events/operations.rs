@@ -263,13 +263,16 @@ const FLOW_REORDER_REQUIREMENTS: &[PayloadRequirement] = &[
     PayloadRequirement::Required("rank", "flow reorder operation requires rank"),
 ];
 // Flow watch event (cx.flow.watch.set).
-// Spec event-kind-registry sets `cell_subject` = (flow_id, actor_did);
+// Spec event-kind-registry sets `cell_subject` = (flow_id, watcher_actor_id);
 // both fields are MUST-present in the payload. `level` is also required
 // (null = clear); enum + level_public validation lives at the
 // flow_watch_set_payload schema layer.
 const FLOW_WATCH_REQUIREMENTS: &[PayloadRequirement] = &[
     PayloadRequirement::Required("flow_id", "flow watch operation requires flow_id"),
-    PayloadRequirement::Required("actor_did", "flow watch operation requires actor_did"),
+    PayloadRequirement::Required(
+        "watcher_actor_id",
+        "flow watch operation requires watcher_actor_id",
+    ),
     PayloadRequirement::Required(
         "level",
         "flow watch operation requires level (use null to clear)",

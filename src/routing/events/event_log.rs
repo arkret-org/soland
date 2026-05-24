@@ -1619,7 +1619,7 @@ fn validate_audit_accessed_payload(
     let access_kind = required_payload_string(payload, "access_kind")?;
     if !matches!(
         access_kind.as_str(),
-        "watch_manage_others"
+        "watch_set_others"
             | "watch_audit_read"
             | "e2ee_plaintext_release"
             | "join_application_review"
@@ -1674,7 +1674,7 @@ fn validate_audit_accessed_payload(
         )
     })?;
     match access_kind.as_str() {
-        "watch_manage_others" => {
+        "watch_set_others" => {
             validate_watch_audit_payload_fields(payload)?;
             for field in ["paired_event_id", "paired_event_digest"] {
                 let value = required_payload_string(payload, field)?;
@@ -1769,13 +1769,13 @@ fn validate_flow_watch_audit_pair(
             )
         })?;
     let target_actor = payload
-        .get("actor_did")
+        .get("watcher_actor_id")
         .and_then(Value::as_str)
         .ok_or_else(|| {
             event_validation_error(
                 StatusCode::BAD_REQUEST,
                 "schema_violation",
-                "flow watch payload requires actor_did",
+                "flow watch payload requires watcher_actor_id",
             )
         })?;
     if target_actor == actor_id {
@@ -1822,7 +1822,7 @@ fn validate_flow_watch_audit_pair(
         .ok_or_else(|| manage_others_audit_error("audit_pair payload is invalid"))?;
     let flow_id = payload.get("flow_id").and_then(Value::as_str).unwrap_or("");
     let checks = [
-        ("access_kind", "watch_manage_others"),
+        ("access_kind", "watch_set_others"),
         ("writer_did", actor_id),
         ("target_actor_did", target_actor),
         ("target_ref", flow_id),

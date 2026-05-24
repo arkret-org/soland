@@ -7269,7 +7269,7 @@ mod tests {
             "reason": "spam"
         });
         let action = serde_json::json!({
-            "action_id": "cx:modq:01",
+            "action_id": "cx:moderation_queue_item:01",
             "moderator": "did:web:mod.example",
             "target_actor": "did:web:bob.example",
             "action_kind": "warn"

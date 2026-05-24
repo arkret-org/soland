@@ -376,7 +376,7 @@ mod tests {
     fn state_response_absent_state_omits_value_and_bottom() {
         let cell =
             CellRef::new("cx:cell:cx.component.consent.grant.v1:cnt.01abc".to_owned()).unwrap();
-        let resp = state_response_from(&cell, None, "or-set", "expose");
+        let resp = state_response_from(&cell, None, "or_set", "expose");
         let v = serde_json::to_value(&resp).unwrap();
         assert_eq!(v["state"], "absent");
         // `Option::None` with skip_serializing_if drops the keys entirely.

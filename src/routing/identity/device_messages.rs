@@ -29,8 +29,8 @@ use crate::wire::{
 
 pub(crate) const ACCOUNT_DATA_UPDATE_TYPE: &str = "cx.account_data.update";
 pub(crate) const BLOCKLIST_UPDATE_TYPE: &str = "cx.account.blocklist.update";
-pub(crate) const READ_MARKER_UPDATE_TYPE: &str = "cx.read_marker.update";
-pub(crate) const NOTIFICATION_READ_MARKER_UPDATE_TYPE: &str = "cx.notification.read_marker.update";
+pub(crate) const READ_MARKER_UPDATE_TYPE: &str = "cx.read_cursor.update";
+pub(crate) const NOTIFICATION_READ_MARKER_UPDATE_TYPE: &str = "cx.notification.read_cursor.update";
 
 pub(super) fn router() -> Router {
     Router::new()

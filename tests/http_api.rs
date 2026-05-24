@@ -1375,7 +1375,7 @@ async fn contrix_openapi_spec_contains_facet_projection_contracts() {
         "cx.directory.private_contact_discovery",
         "cx.directory.announce",
         "cx.directory.withdraw",
-        "cx.directory.subscribe",
+        "cx.directory.push.register",
         "cx.extension.soland.index.describe",
         "cx.extension.soland.index.debug_reducer",
         "cx.extension.soland.admin.actors",
@@ -1748,7 +1748,7 @@ async fn mimi_provider_facade_contracts_work() {
         "cx.mimi.key_material"
     );
 
-    let room_binding: Value = TestClient::put("http://server/api/v1/mimi/rooms/01JSMIMI/update")
+    let room_binding: Value = TestClient::put("http://server/api/v1/mimi/flows/01JSMIMI/update")
         .json(&serde_json::json!({
             "room_binding": {
                 "mimi_room_uri": "mimi://soland.local/rooms/01JSMIMI",
@@ -1764,7 +1764,7 @@ async fn mimi_provider_facade_contracts_work() {
         .unwrap();
     assert_eq!(room_binding["ok"], true);
 
-    let group_info: Value = TestClient::get("http://server/api/v1/mimi/rooms/01JSMIMI/group-info")
+    let group_info: Value = TestClient::get("http://server/api/v1/mimi/flows/01JSMIMI/group-info")
         .send(&service)
         .await
         .take_json()
@@ -1796,7 +1796,7 @@ async fn mimi_provider_facade_contracts_work() {
         false
     );
 
-    let mapped: Value = TestClient::post("http://server/api/v1/mimi/rooms/01JSMIMI/messages")
+    let mapped: Value = TestClient::post("http://server/api/v1/mimi/flows/01JSMIMI/messages")
         .json(&serde_json::json!({
             "source_format": "text/markdown;variant=GFM-MIMI",
             "body": "hello from MIMI"
@@ -1874,7 +1874,7 @@ async fn mimi_facade_writes_flow_into_canonical_reducer_chain() {
 
     // Step 1: post a room_update carrying a room_binding block.
     let update_resp: Value =
-        TestClient::put(format!("http://server/api/v1/mimi/rooms/{room_id}/update"))
+        TestClient::put(format!("http://server/api/v1/mimi/flows/{room_id}/update"))
             .json(&serde_json::json!({
                 "room_binding": {
                     "profile": "cx.profile.mimi_interop.v1",
@@ -1910,7 +1910,7 @@ async fn mimi_facade_writes_flow_into_canonical_reducer_chain() {
 
     // Step 2: submit_message into the same room.
     let msg_resp: Value = TestClient::post(format!(
-        "http://server/api/v1/mimi/rooms/{room_id}/messages"
+        "http://server/api/v1/mimi/flows/{room_id}/messages"
     ))
     .json(&serde_json::json!({
         "source_format": "text/plain;charset=utf-8",
@@ -2040,7 +2040,7 @@ async fn mimi_facade_writes_flow_into_canonical_reducer_chain() {
     // Step 5: a second room_update with a different binding_scope
     // updates the dispatch lookup. The most-recently-recorded
     // binding wins per `mimi_bound_space_id` semantics.
-    let _: Value = TestClient::put(format!("http://server/api/v1/mimi/rooms/{room_id}/update"))
+    let _: Value = TestClient::put(format!("http://server/api/v1/mimi/flows/{room_id}/update"))
         .json(&serde_json::json!({
             "room_binding": {
                 "profile": "cx.profile.mimi_interop.v1",
@@ -2064,7 +2064,7 @@ async fn mimi_facade_writes_flow_into_canonical_reducer_chain() {
         .unwrap();
 
     let msg_resp_2: Value = TestClient::post(format!(
-        "http://server/api/v1/mimi/rooms/{room_id}/messages"
+        "http://server/api/v1/mimi/flows/{room_id}/messages"
     ))
     .json(&serde_json::json!({
         "source_format": "application/mimi-content",
@@ -2463,7 +2463,7 @@ async fn rate_limit_errors_use_standard_envelope_with_retry_after() {
         limited["request_id"]
             .as_str()
             .unwrap()
-            .starts_with("cx:req:")
+            .starts_with("cx:request:")
     );
 }
 

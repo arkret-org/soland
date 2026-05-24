@@ -3,7 +3,7 @@ use salvo::prelude::*;
 pub(super) mod directory;
 mod index;
 mod reaction;
-mod read_marker;
+mod read_cursor;
 mod relation;
 pub(super) mod space;
 
@@ -19,9 +19,9 @@ pub fn router() -> Router {
         .push(space::router())
         .push(reaction::router())
         .push(
-            Router::with_path("read-markers")
-                .post(read_marker::set_read_marker)
-                .get(read_marker::get_read_markers),
+            Router::with_path("read-cursors")
+                .post(read_cursor::set_read_cursor)
+                .get(read_cursor::get_read_cursors),
         )
         .push(relation::router())
         .push(directory::router())

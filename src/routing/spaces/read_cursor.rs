@@ -1,9 +1,9 @@
-//! Read marker + read receipt handlers.
+//! Read cursor + read receipt handlers.
 //!
 //! Surfaces:
-//! - `POST /api/v1/read-markers` — set the actor's read marker (durable persistent state per-actor;
+//! - `POST /api/v1/read-cursors` — set the actor's read marker (durable persistent state per-actor;
 //!   spec discovery/read-receipts.md §6).
-//! - `GET  /api/v1/read-markers` — list the actor's read markers, optionally filtered by
+//! - `GET  /api/v1/read-cursors` — list the actor's read markers, optionally filtered by
 //!   `?space_id=...`.
 
 use contrix_sdk::{Operation, OperationId, RealmId};
@@ -22,11 +22,11 @@ use crate::wire::{ReadMarkerResponse, SetReadMarkerRequest};
 use crate::{JsonResult, ids, json_ok, kinds};
 
 #[endpoint(
-    operation_id = "cx.read_markers.set",
-    tags("read_markers"),
+    operation_id = "cx.read_cursors.set",
+    tags("read_cursors"),
     summary = "Set the authenticated actor's read marker for a Space"
 )]
-pub(super) async fn set_read_marker(
+pub(super) async fn set_read_cursor(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
@@ -75,7 +75,7 @@ pub(super) async fn set_read_marker(
         &session.device_id,
         READ_MARKER_UPDATE_TYPE,
         json!({
-            "schema": "cx.schema.read_marker.update.v1",
+            "schema": "cx.schema.read_cursor.update.v1",
             "actor_id": session.actor,
             "device_id": session.device_id,
             "realm_id": realm_id,
@@ -98,11 +98,11 @@ pub(super) async fn set_read_marker(
 }
 
 #[endpoint(
-    operation_id = "cx.read_markers.list",
-    tags("read_markers"),
+    operation_id = "cx.read_cursors.list",
+    tags("read_cursors"),
     summary = "List the authenticated actor's read markers, optionally filtered by space"
 )]
-pub(super) async fn get_read_markers(
+pub(super) async fn get_read_cursors(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
@@ -115,7 +115,7 @@ pub(super) async fn get_read_markers(
     let space_id = space_id.unwrap_or_default();
     let markers = {
         let proj = state.projection.lock().expect("projection lock");
-        proj.read_markers
+        proj.read_cursors
             .values()
             .filter(|m| m.actor == session.actor && (space_id.is_empty() || m.space_id == space_id))
             .map(|m| ReadMarkerResponse {

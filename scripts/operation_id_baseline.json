@@ -31,8 +31,8 @@
     "cx.push.upsert_rule",
     "cx.reactions.add",
     "cx.reactions.remove",
-    "cx.read_markers.list",
-    "cx.read_markers.set",
+    "cx.read_cursors.list",
+    "cx.read_cursors.set",
     "cx.realms.effective_policy.get",
     "cx.realms.links.create",
     "cx.realms.links.delete",
@@ -41,7 +41,7 @@
     "cx.realms.policy_server.get",
     "cx.realms.policy_server.put",
     "cx.relation.create",
-    "cx.relation.delete",
+    "cx.relation.tombstone",
     "cx.relation.list",
     "cx.system.health"
   ]

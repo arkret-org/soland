@@ -725,9 +725,9 @@ async fn list_notifications(
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req)?;
     let last_read_at = state
-        .notification_read_markers
+        .notification_read_cursors
         .lock()
-        .expect("notification_read_markers lock")
+        .expect("notification_read_cursors lock")
         .get(&session.actor)
         .copied();
     json_ok(json!({
@@ -751,9 +751,9 @@ async fn notifications_mark_all_read(
     let session = aa.authenticated_session(state, req)?;
     let marked_at = chrono::Utc::now();
     state
-        .notification_read_markers
+        .notification_read_cursors
         .lock()
-        .expect("notification_read_markers lock")
+        .expect("notification_read_cursors lock")
         .insert(session.actor.clone(), marked_at);
     append_audit_log(
         state,

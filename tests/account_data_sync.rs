@@ -349,7 +349,7 @@ async fn blocklist_account_data_fans_out_and_filters_notifications() {
 }
 
 #[tokio::test]
-async fn read_marker_fans_out_per_realm_without_cross_actor_leakage() {
+async fn read_cursor_fans_out_per_realm_without_cross_actor_leakage() {
     let state = AppState::new(test_config(), Db { pool: None });
     let alice_desktop = dev_token(
         state.clone(),
@@ -377,7 +377,7 @@ async fn read_marker_fans_out_per_realm_without_cross_actor_leakage() {
     let event_a = "cx:event:01904100-0000-7000-8000-0000000000aa";
     let event_b = "cx:event:01904100-0000-7000-8000-0000000000bb";
 
-    let marker_a: Value = TestClient::post("http://server/api/v1/read-markers")
+    let marker_a: Value = TestClient::post("http://server/api/v1/read-cursors")
         .add_header("authorization", format!("Bearer {alice_desktop}"), true)
         .json(&json!({
             "realm_id": realm_a,
@@ -398,7 +398,7 @@ async fn read_marker_fans_out_per_realm_without_cross_actor_leakage() {
         "marker_a response: {marker_a}"
     );
 
-    let marker_b: Value = TestClient::post("http://server/api/v1/read-markers")
+    let marker_b: Value = TestClient::post("http://server/api/v1/read-cursors")
         .add_header("authorization", format!("Bearer {alice_desktop}"), true)
         .json(&json!({
             "realm_id": realm_b,
@@ -416,7 +416,7 @@ async fn read_marker_fans_out_per_realm_without_cross_actor_leakage() {
     );
 
     let only_a: Value = TestClient::get(format!(
-        "http://server/api/v1/read-markers?realm_id={realm_a}"
+        "http://server/api/v1/read-cursors?realm_id={realm_a}"
     ))
     .add_header("authorization", format!("Bearer {alice_desktop}"), true)
     .send(&app_from_state(state.clone()))
@@ -430,7 +430,7 @@ async fn read_marker_fans_out_per_realm_without_cross_actor_leakage() {
     assert_eq!(markers_a[0]["realm_id"], realm_a);
 
     let only_b: Value = TestClient::get(format!(
-        "http://server/api/v1/read-markers?space_id={realm_b}"
+        "http://server/api/v1/read-cursors?space_id={realm_b}"
     ))
     .add_header("authorization", format!("Bearer {alice_desktop}"), true)
     .send(&app_from_state(state.clone()))
@@ -450,23 +450,23 @@ async fn read_marker_fans_out_per_realm_without_cross_actor_leakage() {
         .take_json()
         .await
         .unwrap();
-    let read_marker_fanouts = phone_messages["events"]
+    let read_cursor_fanouts = phone_messages["events"]
         .as_array()
         .unwrap()
         .iter()
-        .filter(|event| event["content"]["type"] == "cx.read_marker.update")
+        .filter(|event| event["content"]["type"] == "cx.read_cursor.update")
         .collect::<Vec<_>>();
-    assert_eq!(read_marker_fanouts.len(), 2);
-    assert!(read_marker_fanouts.iter().any(|event| {
+    assert_eq!(read_cursor_fanouts.len(), 2);
+    assert!(read_cursor_fanouts.iter().any(|event| {
         event["content"]["content"]["realm_id"] == realm_a
             && event["content"]["content"]["event_id"] == event_a
     }));
-    assert!(read_marker_fanouts.iter().any(|event| {
+    assert!(read_cursor_fanouts.iter().any(|event| {
         event["content"]["content"]["realm_id"] == realm_b
             && event["content"]["content"]["event_id"] == event_b
     }));
 
-    let bob_markers: Value = TestClient::get("http://server/api/v1/read-markers")
+    let bob_markers: Value = TestClient::get("http://server/api/v1/read-cursors")
         .add_header("authorization", format!("Bearer {bob}"), true)
         .send(&app_from_state(state.clone()))
         .await

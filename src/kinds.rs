@@ -10,7 +10,7 @@ pub const CX_REACTION_ADD: &str = "cx.reaction.add";
 pub const CX_REACTION_REMOVE: &str = "cx.reaction.remove";
 pub const CX_RELATION_CREATE: &str = "cx.relation.create";
 pub const CX_RELATION_UPDATE: &str = "cx.relation.update";
-pub const CX_RELATION_DELETE: &str = "cx.relation.delete";
+pub const CX_RELATION_DELETE: &str = "cx.relation.tombstone";
 pub const CX_VIEW_CREATE: &str = "cx.view.create";
 pub const CX_VIEW_UPDATE: &str = "cx.view.update";
 pub const CX_VIEW_RECONCILE: &str = "cx.view.reconcile";
@@ -42,7 +42,7 @@ pub const CX_FLOW_MOVE: &str = "cx.flow.move";
 pub const CX_FLOW_REORDER: &str = "cx.flow.reorder";
 // Round 16 — Flow watch subscription event. Writes the
 // `cx.component.flow.watch.v1` cas-register cell keyed by
-// (flow_id, actor_did). Spec:
+// (flow_id, watcher_actor_id). Spec:
 // contrix-spec/spec/v1/zh/models/flow-and-message.md §8. Like the
 // flow position events the Event-Envelope path only validates payload
 // shape; cell write happens on the Move/Anchor pipeline. The Flow
@@ -71,7 +71,7 @@ pub const CX_MORPH_RESTORE: &str = "cx.morph.restore";
 pub const CX_CONTAINER_MOVE_ITEM: &str = "cx.container.move_item";
 pub const CX_CONTAINER_REBALANCE: &str = "cx.container.rebalance";
 pub const CX_MEMBER_STATE: &str = "cx.member.state";
-pub const CX_READ_MARKER: &str = "cx.read.marker";
+pub const CX_READ_MARKER: &str = "cx.read_cursor.advance";
 // Realm security-boundary lifecycle (`cx.realm.*`). Spec
 // `contrix-spec/spec/v1/zh/models/realm-and-space.md` §1 + §4.
 //

@@ -293,7 +293,7 @@ pub(crate) fn apply_claim_level_partition(
                     cotest_issuer_did: entry.cotest_issuer_did.clone(),
                     signature: entry.signature.clone(),
                     timestamp: entry.timestamp,
-                    valid_until: entry.valid_until,
+                    expires_at: entry.valid_until,
                     extra: Default::default(),
                 })
             })

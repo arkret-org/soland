@@ -109,7 +109,7 @@ async fn create_relation(
 }
 
 #[endpoint(
-    operation_id = "cx.relation.delete",
+    operation_id = "cx.relation.tombstone",
     tags("relations"),
     summary = "Soft-delete a relation by relation_id"
 )]

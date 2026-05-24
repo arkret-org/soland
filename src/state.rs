@@ -304,7 +304,7 @@ pub struct AppState {
     /// Per-actor notifications read marker. `mark_all_read(actor)` writes
     /// `Utc::now()`; the notifications read-side filter uses it to flag
     /// rows as read. Same in-memory shape as the other two.
-    pub notification_read_markers: Arc<Mutex<BTreeMap<String, chrono::DateTime<chrono::Utc>>>>,
+    pub notification_read_cursors: Arc<Mutex<BTreeMap<String, chrono::DateTime<chrono::Utc>>>>,
     /// Monotonic position allocator for to-device queues. Cursor ack uses
     /// numeric `position <= ack_position` pruning, so positions must advance
     /// even when multiple fanout writes land in the same wall-clock microsecond.
@@ -1020,7 +1020,7 @@ impl AppState {
             realms: Arc::new(Mutex::new(realms)),
             handle_releases: Arc::new(Mutex::new(BTreeMap::new())),
             erased_actors: Arc::new(Mutex::new(BTreeSet::new())),
-            notification_read_markers: Arc::new(Mutex::new(BTreeMap::new())),
+            notification_read_cursors: Arc::new(Mutex::new(BTreeMap::new())),
             to_device_position_counter: Arc::new(AtomicI64::new(now.timestamp_micros())),
             consent_cells: Arc::new(Mutex::new(BTreeMap::new())),
             did_resolver,

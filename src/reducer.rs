@@ -18,7 +18,7 @@
 //! [`lattice_kinds`]; [`lattice_kinds::build_sdk_cell_registry`] feeds
 //! the SDK's `verify_move` / `apply_anchor` pipeline. This is the
 //! protocol-canonical path; [`ProjectionState`]'s structured fields
-//! (`messages`, `reactions`, `read_markers`, etc.) are an in-memory
+//! (`messages`, `reactions`, `read_cursors`, etc.) are an in-memory
 //! convenience cache populated from the durable Event-Envelope ingestion
 //! path that pre-dates the Move/Anchor model. As Anchor projection lands,
 //! the structured fields migrate to a single `cells` map.
@@ -47,7 +47,7 @@ pub struct ProjectionState {
     /// Reactions keyed by (event_id, actor, reaction_key). OR-Set.
     pub reactions: BTreeMap<String, BTreeMap<String, BTreeMap<String, ReactionState>>>,
     /// Read markers keyed by (space_id, actor, scope_id). LWW.
-    pub read_markers: BTreeMap<(String, String, String), ReadMarkerState>,
+    pub read_cursors: BTreeMap<(String, String, String), ReadMarkerState>,
     /// Relations keyed by relation_id. LWW by HLC.
     pub relations: BTreeMap<String, RelationState>,
     /// Structured side-band cache keyed by
@@ -103,7 +103,7 @@ pub struct ProjectionState {
     ///     metadata) / `cx.component.realm.destroy.v1` (cas-register, terminal). Helpers:
     ///     `space_create_log` / `space_organization_cell_value` / `space_is_destroyed` query cells
     ///     directly.
-    /// Durable-event-only fields (`messages` / `reactions` / `read_markers`
+    /// Durable-event-only fields (`messages` / `reactions` / `read_cursors`
     /// / `relations` / `redactions`) stay structured per spec
     /// (those event kinds have no `cell_family` declaration).
     pub cells: BTreeMap<CellRef, CellState>,
@@ -1013,12 +1013,12 @@ fn apply_reaction_remove_dispatch(
 ) -> ProjectionEffect {
     s.apply_reaction_remove(op)
 }
-fn apply_read_marker_dispatch(
+fn apply_read_cursor_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
-    s.apply_read_marker(op, op.created_at)
+    s.apply_read_cursor(op, op.created_at)
 }
 fn apply_relation_create_dispatch(
     s: &mut ProjectionState,
@@ -1490,7 +1490,7 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
     m.insert(CX_REDACTION, apply_redaction_dispatch);
     m.insert(CX_REACTION_ADD, apply_reaction_add_dispatch);
     m.insert(CX_REACTION_REMOVE, apply_reaction_remove_dispatch);
-    m.insert(CX_READ_MARKER, apply_read_marker_dispatch);
+    m.insert(CX_READ_MARKER, apply_read_cursor_dispatch);
     m.insert(CX_RELATION_CREATE, apply_relation_create_dispatch);
     m.insert(CX_RELATION_UPDATE, apply_relation_update_dispatch);
     m.insert(CX_RELATION_DELETE, apply_relation_delete_dispatch);
@@ -2341,7 +2341,7 @@ impl ProjectionState {
         }
     }
 
-    fn apply_read_marker(
+    fn apply_read_cursor(
         &mut self,
         operation: &Operation,
         now: chrono::DateTime<chrono::Utc>,
@@ -2382,11 +2382,11 @@ impl ProjectionState {
         let key = (space_id, actor, scope_id);
         // LWW: only update if newer
         let dominated = self
-            .read_markers
+            .read_cursors
             .get(&key)
             .is_some_and(|existing| existing.read_at >= marker.read_at);
         if !dominated {
-            self.read_markers.insert(key, marker.clone());
+            self.read_cursors.insert(key, marker.clone());
         }
         ProjectionEffect::ReadMarkerUpdated(marker)
     }
@@ -4494,8 +4494,8 @@ impl ProjectionState {
     /// subscription, not a Flow mutation. Unknown Flow tolerated (causal
     /// / backfill).
     ///
-    /// Reducer invariant: `payload.actor_did == operation.sender` unless
-    /// the writer is gated by `cx.flow.watch.manage_others` (capability
+    /// Reducer invariant: `payload.watcher_actor_id == operation.sender` unless
+    /// the writer is gated by `cx.flow.watch.set.others` (capability
     /// check happens at the routing layer; this projection only records).
     fn apply_flow_watch_set(
         &mut self,
@@ -4514,12 +4514,12 @@ impl ProjectionState {
         };
         let Some(actor_did) = operation
             .payload
-            .get("actor_did")
+            .get("watcher_actor_id")
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned)
         else {
             return ProjectionEffect::Rejected {
-                reason: "missing_actor_did".to_owned(),
+                reason: "missing_watcher_actor_id".to_owned(),
             };
         };
         // `level` is required at schema layer; here we just project the

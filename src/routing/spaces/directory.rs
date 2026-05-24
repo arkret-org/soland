@@ -353,7 +353,7 @@ async fn resolve_handle(
             let audience = body.audience.or(body.requester);
             let did = actor["did"].as_str().unwrap_or_default().to_owned();
             // TODO(spec-sync 0a5ab85): emit a signed `handle_claim` envelope
-            // with `handle_uri` canonical form, `delivery_binding_hint`, and
+            // with `handle_uri` canonical form, `member_delivery_binding`, and
             // `issuer_service_did` so federation peers can use it to build
             // a `member_delivery_binding` at join time.
             json_ok(ResolveHandleResponse {
@@ -522,7 +522,7 @@ async fn directory_withdraw(
 }
 
 #[endpoint(
-    operation_id = "cx.directory.subscribe",
+    operation_id = "cx.directory.push.register",
     tags("directory"),
     summary = "Subscribe to directory update notifications"
 )]
