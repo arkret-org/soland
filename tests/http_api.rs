@@ -624,6 +624,23 @@ async fn oauth_bearer_introspection_authenticates_directly() {
 }
 
 #[tokio::test]
+async fn dev_login_is_unavailable_in_production_mode() {
+    let mut config = test_config();
+    config.development_mode = false;
+    let state = AppState::new(config, Db { pool: None });
+
+    let response = TestClient::post("http://server/api/v1/auth/dev-login")
+        .json(&serde_json::json!({
+            "actor": "did:web:alice.example",
+            "device_id": "cx:device:01904100-0000-7000-8000-0a4a40000006"
+        }))
+        .send(&app_from_state(state))
+        .await;
+
+    assert_eq!(response.status_code.unwrap(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
 async fn health_and_describe_work() {
     let mut home = TestClient::get("http://server/").send(&app()).await;
     assert_eq!(home.status_code.unwrap(), StatusCode::OK);
