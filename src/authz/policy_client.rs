@@ -30,17 +30,26 @@
 //! Spec: `contrix-spec/spec/v1/zh/authz/policy-server.md` §5–§6.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+use base64::Engine as _;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use contrix_sdk::identity::DidResolver;
 use contrix_sdk::model::AuthzDecision;
 use contrix_sdk::{
     Did, Hash, PolicyCheckBoundTo, PolicyCheckRequest, PolicyCheckResponse, PolicyCheckSignature,
     PolicyCheckSource, RealmId,
 };
+use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+use serde::Serialize;
 use serde_json::Value;
 
 use crate::reducer::RealmPolicyServerConfig;
+
+type VerificationKeyResolver =
+    Arc<dyn Fn(&str) -> Result<VerifyingKey, String> + Send + Sync + 'static>;
 
 /// Inputs needed to build a [`PolicyCheckRequest`] plus a
 /// per-request control surface (cache bypass).
@@ -205,6 +214,7 @@ pub struct PolicyClient {
     /// timeout-fail-closed responses so audit logs can attribute the
     /// synthesised deny.
     local_service_did: String,
+    verification_key_resolver: Option<VerificationKeyResolver>,
 }
 
 impl PolicyClient {
@@ -213,7 +223,21 @@ impl PolicyClient {
             http,
             cache: PolicyCache::new(),
             local_service_did: local_service_did.into(),
+            verification_key_resolver: None,
         }
+    }
+
+    /// Attach the DID resolver used to verify genuine policy-server
+    /// signatures. Without this, upstream responses fail closed because
+    /// the client cannot resolve `signature.kid` to trusted key material.
+    pub fn with_policy_did_resolver(
+        mut self,
+        resolver: Arc<dyn DidResolver + Send + Sync>,
+    ) -> Self {
+        self.verification_key_resolver = Some(Arc::new(move |kid| {
+            resolve_policy_ed25519_pubkey(&*resolver, kid)
+        }));
+        self
     }
 
     /// Issue a `/policy/check` against the policy server declared for
@@ -254,7 +278,7 @@ impl PolicyClient {
         .await
         {
             Ok(Ok(response)) => {
-                self.verify_signature(&config, &response)?;
+                self.verify_signature(&config, &wire_request, &response)?;
                 if !bypass_cache {
                     let ttl = Duration::from_secs(config.cache_ttl_seconds);
                     self.cache.insert(
@@ -359,28 +383,32 @@ impl PolicyClient {
         }
     }
 
-    /// Verify the signature on a genuine `PolicyCheckResponse`. v1
-    /// soland resolves the verifying key via the declared
-    /// `policy_server_did` — the `kid` MUST be a verification method
-    /// owned by that DID. The full DID-document fetch is delegated to
-    /// the caller via [`crate::did_resolver_chain`] in the integration
-    /// path; here we apply structural checks only.
+    /// Verify the signature on a genuine `PolicyCheckResponse`. The
+    /// `kid` MUST be a verification method owned by the declared
+    /// `policy_server_did`; the signature MUST verify over the canonical
+    /// policy-check transcript reconstructed from the original request
+    /// and the response.
     fn verify_signature(
         &self,
         config: &RealmPolicyServerConfig,
+        request: &PolicyCheckRequest,
         response: &PolicyCheckResponse,
     ) -> Result<(), PolicyClientError> {
         if response.signature.sig.is_empty() {
             return Err(PolicyClientError::SignatureInvalid("empty sig".to_owned()));
         }
         let kid = &response.signature.kid;
-        if !kid.contains('#') {
+        let Some((kid_did_part, kid_fragment)) = kid.split_once('#') else {
             return Err(PolicyClientError::SignatureInvalid(format!(
                 "kid missing fragment: {kid}"
             )));
+        };
+        if kid_did_part.is_empty() || kid_fragment.is_empty() {
+            return Err(PolicyClientError::SignatureInvalid(format!(
+                "kid has empty DID or fragment: {kid}"
+            )));
         }
         // kid MUST be controlled by the declared policy_server_did.
-        let kid_did_part = kid.split('#').next().unwrap_or("");
         if kid_did_part != config.policy_server_did {
             return Err(PolicyClientError::SignatureInvalid(format!(
                 "kid {kid_did_part} not under policy_server_did {server}",
@@ -395,19 +423,225 @@ impl PolicyClient {
                 cfg = config.policy_server_did
             )));
         }
-        // TODO(G3.S2): full crypto verification of `signature.sig`
-        // against the DID-resolved verification method. The structural
-        // checks above prevent the obvious kid-spoof attack; full
-        // ed25519 verification lands once the DID resolver is wired
-        // into the integration call-site.
+        if response.bound_to.realm_id != request.realm_id {
+            return Err(PolicyClientError::SignatureInvalid(format!(
+                "bound_to.realm_id {bt} != request {req}",
+                bt = response.bound_to.realm_id.as_str(),
+                req = request.realm_id.as_str()
+            )));
+        }
+        if response.bound_to.actor != request.actor {
+            return Err(PolicyClientError::SignatureInvalid(format!(
+                "bound_to.actor {bt} != request {req}",
+                bt = response.bound_to.actor.as_str(),
+                req = request.actor.as_str()
+            )));
+        }
+        if response.bound_to.action != request.action {
+            return Err(PolicyClientError::SignatureInvalid(format!(
+                "bound_to.action {} != request {}",
+                response.bound_to.action, request.action
+            )));
+        }
+        if response.bound_to.request_canonical_digest != request.request_canonical_digest {
+            return Err(PolicyClientError::SignatureInvalid(format!(
+                "bound_to.request_canonical_digest {bt} != request {req}",
+                bt = response.bound_to.request_canonical_digest.as_str(),
+                req = request.request_canonical_digest.as_str()
+            )));
+        }
+
+        let Some(resolve_key) = &self.verification_key_resolver else {
+            return Err(PolicyClientError::Configuration(
+                "policy decision verification key resolver not configured".to_owned(),
+            ));
+        };
+        let verifying_key = resolve_key(kid).map_err(|e| {
+            PolicyClientError::SignatureInvalid(format!("verification key resolution failed: {e}"))
+        })?;
+        let signature = decode_policy_signature(&response.signature.sig)?;
+        let transcript = policy_decision_transcript_bytes(request, response)?;
+        verifying_key.verify(&transcript, &signature).map_err(|e| {
+            PolicyClientError::SignatureInvalid(format!("Ed25519 verify failed: {e}"))
+        })?;
         Ok(())
     }
+}
+
+#[derive(Debug, Serialize)]
+struct PolicyDecisionTranscript<'a> {
+    kind: &'a str,
+    request_id: &'a str,
+    decision: &'a AuthzDecision,
+    bound_to: &'a PolicyCheckBoundTo,
+    auth_state_digest: &'a Hash,
+    policy_frontier_digest: &'a Hash,
+    membership_frontier_digest: &'a Hash,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason_code: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    expires_at: Option<&'a str>,
+    #[serde(skip_serializing_if = "<[_]>::is_empty")]
+    obligations: &'a [Value],
+}
+
+fn policy_decision_transcript_bytes(
+    request: &PolicyCheckRequest,
+    response: &PolicyCheckResponse,
+) -> Result<Vec<u8>, PolicyClientError> {
+    let expires_at = response.expires_at.as_ref().map(format_canonical_rfc3339);
+    let transcript = PolicyDecisionTranscript {
+        kind: "cx.policy.check.transcript.v1",
+        request_id: request.request_id.as_str(),
+        decision: &response.decision,
+        bound_to: &response.bound_to,
+        auth_state_digest: &response.auth_state_digest,
+        policy_frontier_digest: &response.policy_frontier_digest,
+        membership_frontier_digest: &response.membership_frontier_digest,
+        reason_code: response.reason_code.as_deref(),
+        expires_at: expires_at.as_deref(),
+        obligations: &response.obligations,
+    };
+    contrix_sdk::canonical::canonical_json_bytes(&transcript)
+        .map_err(|e| PolicyClientError::BadResponse(format!("policy transcript canonicalize: {e}")))
+}
+
+fn format_canonical_rfc3339(ts: &chrono::DateTime<chrono::Utc>) -> String {
+    ts.format("%Y-%m-%dT%H:%M:%SZ").to_string()
+}
+
+fn decode_policy_signature(sig: &str) -> Result<Signature, PolicyClientError> {
+    if sig.bytes().all(|b| b == b'A') {
+        return Err(PolicyClientError::SignatureInvalid(
+            "signature is the all-zero sentinel".to_owned(),
+        ));
+    }
+    let bytes = URL_SAFE_NO_PAD.decode(sig.as_bytes()).map_err(|e| {
+        PolicyClientError::SignatureInvalid(format!("signature is not base64url: {e}"))
+    })?;
+    if bytes.len() != 64 {
+        return Err(PolicyClientError::SignatureInvalid(format!(
+            "Ed25519 signature must be 64 bytes, got {}",
+            bytes.len()
+        )));
+    }
+    let mut raw = [0u8; 64];
+    raw.copy_from_slice(&bytes);
+    Ok(Signature::from_bytes(&raw))
+}
+
+fn resolve_policy_ed25519_pubkey(
+    resolver: &dyn DidResolver,
+    verification_method: &str,
+) -> Result<VerifyingKey, String> {
+    let (did_str, fragment) = verification_method
+        .split_once('#')
+        .map(|(d, f)| (d.to_owned(), Some(f.to_owned())))
+        .unwrap_or_else(|| (verification_method.to_owned(), None));
+    let did = Did::new(did_str.clone()).map_err(|e| format!("invalid DID `{did_str}`: {e}"))?;
+    let document = resolver
+        .resolve_did(&did)
+        .map_err(|e| format!("DID resolve failed for `{did_str}`: {e}"))?;
+
+    let material = document
+        .verification_methods
+        .get(verification_method)
+        .or_else(|| {
+            fragment
+                .as_ref()
+                .and_then(|fragment| document.verification_methods.get(fragment))
+        })
+        .or_else(|| {
+            if document.verification_methods.len() == 1 {
+                document.verification_methods.values().next()
+            } else {
+                None
+            }
+        })
+        .ok_or_else(|| {
+            format!(
+                "verification_method `{verification_method}` not found in DID document for `{did_str}` (have {:?})",
+                document.verification_methods.keys().collect::<Vec<_>>()
+            )
+        })?;
+
+    decode_policy_ed25519_public_key(material)
+}
+
+fn decode_policy_ed25519_public_key(material: &str) -> Result<VerifyingKey, String> {
+    let material = material.trim();
+    if material.starts_with('z') {
+        return decode_ed25519_multibase(material);
+    }
+
+    let value: Value = serde_json::from_str(material)
+        .map_err(|e| format!("public key material is neither multibase nor JWK JSON: {e}"))?;
+    match value {
+        Value::String(inner) => decode_policy_ed25519_public_key(&inner),
+        Value::Object(object) => {
+            let kty = object.get("kty").and_then(Value::as_str).unwrap_or("");
+            let crv = object.get("crv").and_then(Value::as_str).unwrap_or("");
+            if kty != "OKP" || crv != "Ed25519" {
+                return Err(format!("unsupported publicKeyJwk kty/crv: {kty}/{crv}"));
+            }
+            let x = object
+                .get("x")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "Ed25519 publicKeyJwk missing x".to_owned())?;
+            let bytes = URL_SAFE_NO_PAD
+                .decode(x.as_bytes())
+                .map_err(|e| format!("Ed25519 publicKeyJwk x is not base64url: {e}"))?;
+            if bytes.len() != 32 {
+                return Err(format!(
+                    "Ed25519 publicKeyJwk x must be 32 bytes, got {}",
+                    bytes.len()
+                ));
+            }
+            let mut raw = [0u8; 32];
+            raw.copy_from_slice(&bytes);
+            VerifyingKey::from_bytes(&raw).map_err(|e| format!("invalid Ed25519 public key: {e}"))
+        }
+        other => Err(format!("unsupported public key material shape: {other}")),
+    }
+}
+
+fn decode_ed25519_multibase(multibase: &str) -> Result<VerifyingKey, String> {
+    let stripped = multibase
+        .strip_prefix('z')
+        .ok_or_else(|| format!("public key multibase missing `z` prefix: `{multibase}`"))?;
+    let decoded = bs58::decode(stripped)
+        .into_vec()
+        .map_err(|e| format!("base58btc decode failed for `{stripped}`: {e}"))?;
+    if decoded.len() < 2 {
+        return Err(format!(
+            "multicodec key too short ({} bytes)",
+            decoded.len()
+        ));
+    }
+    if decoded[0] != 0xed || decoded[1] != 0x01 {
+        return Err(format!(
+            "expected ed25519-pub multicodec (0xed 0x01), got 0x{:02x} 0x{:02x}",
+            decoded[0], decoded[1]
+        ));
+    }
+    let key_bytes = &decoded[2..];
+    if key_bytes.len() != 32 {
+        return Err(format!(
+            "Ed25519 public key must be 32 bytes, got {}",
+            key_bytes.len()
+        ));
+    }
+    let mut raw = [0u8; 32];
+    raw.copy_from_slice(key_bytes);
+    VerifyingKey::from_bytes(&raw).map_err(|e| format!("invalid Ed25519 public key: {e}"))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use chrono::Utc;
+    use contrix_sdk::identity::{DidDocument, DidWebResolver};
+    use ed25519_dalek::{Signer, SigningKey};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -463,6 +697,69 @@ mod tests {
         }
     }
 
+    fn signing_key() -> SigningKey {
+        SigningKey::from_bytes(&[17u8; 32])
+    }
+
+    fn wrong_signing_key() -> SigningKey {
+        SigningKey::from_bytes(&[18u8; 32])
+    }
+
+    fn test_policy_resolver(signing: &SigningKey) -> Arc<dyn DidResolver + Send + Sync> {
+        let mut resolver = DidWebResolver::new();
+        resolver
+            .insert(DidDocument::new(
+                Did::new("did:web:policy.example.com").unwrap(),
+                "did:web:policy.example.com#key-1",
+                ed25519_public_multibase(signing),
+            ))
+            .unwrap();
+        Arc::new(resolver)
+    }
+
+    fn ed25519_public_multibase(signing: &SigningKey) -> String {
+        let mut bytes = vec![0xed, 0x01];
+        bytes.extend_from_slice(signing.verifying_key().as_bytes());
+        format!("z{}", bs58::encode(bytes).into_string())
+    }
+
+    fn client_with_policy_key(signing: &SigningKey) -> PolicyClient {
+        PolicyClient::new(reqwest::Client::new(), "did:web:soland.local")
+            .with_policy_did_resolver(test_policy_resolver(signing))
+    }
+
+    fn signed_sample_response(
+        input: &PolicyCheckRequestInput,
+        signing: &SigningKey,
+    ) -> PolicyCheckResponse {
+        let wire_request = input.clone().into_wire();
+        let zero = Hash::new(format!("sha256:{}", "0".repeat(64))).unwrap();
+        let mut response = PolicyCheckResponse {
+            decision: AuthzDecision::Allow,
+            bound_to: PolicyCheckBoundTo {
+                realm_id: wire_request.realm_id.clone(),
+                actor: wire_request.actor.clone(),
+                action: wire_request.action.clone(),
+                request_canonical_digest: wire_request.request_canonical_digest.clone(),
+                policy_server_id: Did::new("did:web:policy.example.com").unwrap(),
+            },
+            auth_state_digest: zero.clone(),
+            policy_frontier_digest: zero.clone(),
+            membership_frontier_digest: zero,
+            signature: PolicyCheckSignature {
+                kid: "did:web:policy.example.com#key-1".to_owned(),
+                sig: String::new(),
+            },
+            reason_code: Some("ok".to_owned()),
+            expires_at: Some(Utc::now() + chrono::Duration::seconds(60)),
+            obligations: Vec::new(),
+        };
+        let transcript =
+            policy_decision_transcript_bytes(&wire_request, &response).expect("transcript bytes");
+        response.signature.sig = URL_SAFE_NO_PAD.encode(signing.sign(&transcript).to_bytes());
+        response
+    }
+
     #[tokio::test]
     async fn check_cache_hit_returns_cached() {
         let client = PolicyClient::new(reqwest::Client::new(), "did:web:soland.local");
@@ -494,7 +791,9 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         let hit_count = Arc::new(AtomicUsize::new(0));
         let hit_count_clone = hit_count.clone();
-        let resp_body = serde_json::to_string(&sample_response()).unwrap();
+        let signing = signing_key();
+        let input = sample_input(false);
+        let resp_body = serde_json::to_string(&signed_sample_response(&input, &signing)).unwrap();
         tokio::spawn(async move {
             if let Ok((mut sock, _)) = listener.accept().await {
                 hit_count_clone.fetch_add(1, Ordering::SeqCst);
@@ -510,8 +809,7 @@ mod tests {
 
         let url = format!("http://{addr}/api/v1/policy/check");
         let cfg = realm_config(&url);
-        let client = PolicyClient::new(reqwest::Client::new(), "did:web:soland.local");
-        let input = sample_input(false);
+        let client = client_with_policy_key(&signing);
 
         let cfg_clone = cfg.clone();
         let resp = client.check(input, move |_| Some(cfg_clone)).await.unwrap();
@@ -568,7 +866,9 @@ mod tests {
         // match the declared policy_server_did.
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        let mut bad_response = sample_response();
+        let signing = signing_key();
+        let input = sample_input(true);
+        let mut bad_response = signed_sample_response(&input, &signing);
         bad_response.signature.kid = "did:web:imposter.example#key-1".to_owned();
         let resp_body = serde_json::to_string(&bad_response).unwrap();
         tokio::spawn(async move {
@@ -585,8 +885,7 @@ mod tests {
 
         let url = format!("http://{addr}/api/v1/policy/check");
         let cfg = realm_config(&url);
-        let client = PolicyClient::new(reqwest::Client::new(), "did:web:soland.local");
-        let input = sample_input(true);
+        let client = client_with_policy_key(&signing);
         let cfg_clone = cfg.clone();
         let err = client
             .check(input, move |_| Some(cfg_clone))
@@ -594,6 +893,45 @@ mod tests {
             .expect_err("signature mismatch must be rejected");
         match err {
             PolicyClientError::SignatureInvalid(_) => {}
+            other => panic!("expected SignatureInvalid, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn check_forged_signature_rejected() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let signing = signing_key();
+        let input = sample_input(true);
+        let bad_response = signed_sample_response(&input, &wrong_signing_key());
+        let resp_body = serde_json::to_string(&bad_response).unwrap();
+        tokio::spawn(async move {
+            if let Ok((mut sock, _)) = listener.accept().await {
+                let _ = tokio::io::AsyncReadExt::read(&mut sock, &mut [0u8; 4096]).await;
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                    resp_body.len(),
+                    resp_body
+                );
+                let _ = tokio::io::AsyncWriteExt::write_all(&mut sock, response.as_bytes()).await;
+            }
+        });
+
+        let url = format!("http://{addr}/api/v1/policy/check");
+        let cfg = realm_config(&url);
+        let client = client_with_policy_key(&signing);
+        let cfg_clone = cfg.clone();
+        let err = client
+            .check(input, move |_| Some(cfg_clone))
+            .await
+            .expect_err("forged signature must be rejected");
+        match err {
+            PolicyClientError::SignatureInvalid(message) => {
+                assert!(
+                    message.contains("Ed25519 verify failed"),
+                    "unexpected message: {message}"
+                );
+            }
             other => panic!("expected SignatureInvalid, got {other:?}"),
         }
     }

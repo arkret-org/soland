@@ -22,10 +22,16 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
+use base64::Engine as _;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use contrix_sdk::identity::{DidDocument, DidResolver, DidWebResolver};
 use contrix_sdk::model::AuthzDecision;
 use contrix_sdk::{
-    Did, Hash, PolicyCheckBoundTo, PolicyCheckResponse, PolicyCheckSignature, RealmId,
+    Did, Hash, PolicyCheckBoundTo, PolicyCheckRequest, PolicyCheckResponse, PolicyCheckSignature,
+    PolicyCheckSource, RealmId,
 };
+use ed25519_dalek::{Signer, SigningKey};
+use serde::Serialize;
 use serde_json::Value;
 use soland::authz::obligation_executor::RequestContext;
 use soland::authz::policy_client::{PolicyCheckRequestInput, PolicyClient};
@@ -63,15 +69,62 @@ fn input(bypass_cache: bool) -> PolicyCheckRequestInput {
     }
 }
 
-fn mock_allow_response() -> PolicyCheckResponse {
+fn policy_signing_key() -> SigningKey {
+    SigningKey::from_bytes(&[23u8; 32])
+}
+
+fn policy_resolver(signing: &SigningKey) -> Arc<dyn DidResolver + Send + Sync> {
+    let mut resolver = DidWebResolver::new();
+    resolver
+        .insert(DidDocument::new(
+            Did::new(POLICY_SERVER_DID).unwrap(),
+            format!("{POLICY_SERVER_DID}#key-1"),
+            ed25519_public_multibase(signing),
+        ))
+        .unwrap();
+    Arc::new(resolver)
+}
+
+fn ed25519_public_multibase(signing: &SigningKey) -> String {
+    let mut bytes = vec![0xed, 0x01];
+    bytes.extend_from_slice(signing.verifying_key().as_bytes());
+    format!("z{}", bs58::encode(bytes).into_string())
+}
+
+fn wire_request(input: &PolicyCheckRequestInput) -> PolicyCheckRequest {
+    PolicyCheckRequest {
+        request_id: input.request_id.clone(),
+        realm_id: input.realm_id.clone(),
+        actor: input.actor.clone(),
+        action: input.action.clone(),
+        request_canonical_digest: input.canonical_request_hash(),
+        source: PolicyCheckSource {
+            service_did: input.source_service_did.clone(),
+            service_type: input.source_service_type.clone(),
+        },
+        source_ip_digest: input.source_ip_digest.clone(),
+        signed_transport: input.signed_transport.clone(),
+        event_preview: input.event_preview.clone(),
+        auth_context: input.auth_context.clone(),
+    }
+}
+
+fn mock_allow_response(
+    input: &PolicyCheckRequestInput,
+    signing: &SigningKey,
+) -> PolicyCheckResponse {
+    let request = wire_request(input);
     let zero = Hash::new(format!("sha256:{}", "0".repeat(64))).unwrap();
-    PolicyCheckResponse {
+    let now = chrono::Utc::now();
+    let expires_at =
+        chrono::DateTime::<chrono::Utc>::from_timestamp(now.timestamp() + 60, 0).unwrap();
+    let mut response = PolicyCheckResponse {
         decision: AuthzDecision::Allow,
         bound_to: PolicyCheckBoundTo {
-            realm_id: RealmId::new(REALM_ID).unwrap(),
-            actor: Did::new("did:web:alice.example").unwrap(),
-            action: "cx.message.create".to_owned(),
-            request_canonical_digest: zero.clone(),
+            realm_id: request.realm_id.clone(),
+            actor: request.actor.clone(),
+            action: request.action.clone(),
+            request_canonical_digest: request.request_canonical_digest.clone(),
             policy_server_id: Did::new(POLICY_SERVER_DID).unwrap(),
         },
         auth_state_digest: zero.clone(),
@@ -79,12 +132,55 @@ fn mock_allow_response() -> PolicyCheckResponse {
         membership_frontier_digest: zero,
         signature: PolicyCheckSignature {
             kid: format!("{POLICY_SERVER_DID}#key-1"),
-            sig: "stub-sig".to_owned(),
+            sig: String::new(),
         },
         reason_code: Some("ok".to_owned()),
-        expires_at: Some(chrono::Utc::now() + chrono::Duration::seconds(60)),
+        expires_at: Some(expires_at),
         obligations: Vec::new(),
-    }
+    };
+    let transcript = policy_decision_transcript_bytes(&request, &response);
+    response.signature.sig = URL_SAFE_NO_PAD.encode(signing.sign(&transcript).to_bytes());
+    response
+}
+
+#[derive(Debug, Serialize)]
+struct PolicyDecisionTranscript<'a> {
+    kind: &'a str,
+    request_id: &'a str,
+    decision: &'a AuthzDecision,
+    bound_to: &'a PolicyCheckBoundTo,
+    auth_state_digest: &'a Hash,
+    policy_frontier_digest: &'a Hash,
+    membership_frontier_digest: &'a Hash,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason_code: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    expires_at: Option<&'a str>,
+    #[serde(skip_serializing_if = "<[_]>::is_empty")]
+    obligations: &'a [Value],
+}
+
+fn policy_decision_transcript_bytes(
+    request: &PolicyCheckRequest,
+    response: &PolicyCheckResponse,
+) -> Vec<u8> {
+    let expires_at = response
+        .expires_at
+        .as_ref()
+        .map(|ts| ts.format("%Y-%m-%dT%H:%M:%SZ").to_string());
+    let transcript = PolicyDecisionTranscript {
+        kind: "cx.policy.check.transcript.v1",
+        request_id: request.request_id.as_str(),
+        decision: &response.decision,
+        bound_to: &response.bound_to,
+        auth_state_digest: &response.auth_state_digest,
+        policy_frontier_digest: &response.policy_frontier_digest,
+        membership_frontier_digest: &response.membership_frontier_digest,
+        reason_code: response.reason_code.as_deref(),
+        expires_at: expires_at.as_deref(),
+        obligations: &response.obligations,
+    };
+    contrix_sdk::canonical::canonical_json_bytes(&transcript).unwrap()
 }
 
 /// G3.S2 — soland calls coauth's `/policy/check` end-to-end. Asserts
@@ -96,7 +192,9 @@ async fn policy_server_integration_hits_mock() {
     let addr = listener.local_addr().unwrap();
     let hit_count = Arc::new(AtomicUsize::new(0));
     let hit_count_clone = hit_count.clone();
-    let body_json = serde_json::to_string(&mock_allow_response()).unwrap();
+    let signing = policy_signing_key();
+    let policy_input = input(true);
+    let body_json = serde_json::to_string(&mock_allow_response(&policy_input, &signing)).unwrap();
     tokio::spawn(async move {
         if let Ok((mut sock, _)) = listener.accept().await {
             hit_count_clone.fetch_add(1, Ordering::SeqCst);
@@ -113,7 +211,8 @@ async fn policy_server_integration_hits_mock() {
 
     let url = format!("http://{addr}/api/v1/policy/check");
     let cfg = config_for(&url, 2000);
-    let client = PolicyClient::new(reqwest::Client::new(), "did:web:soland.local");
+    let client = PolicyClient::new(reqwest::Client::new(), "did:web:soland.local")
+        .with_policy_did_resolver(policy_resolver(&signing));
     let engine = AuthzEngine::new();
 
     let mut ctx = RequestContext {
@@ -139,7 +238,7 @@ async fn policy_server_integration_hits_mock() {
         REALM_ID,
         Some(&client),
         Some(cfg),
-        Some(input(true)),
+        Some(policy_input),
         &mut ctx,
     )
     .await;

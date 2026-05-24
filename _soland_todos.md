@@ -22,7 +22,7 @@
 - [x] §4 `src/routing/federation/outbox.rs:406,428` — federation outbox terminal failure routing (4xx → dead-letter) (G3.S0-followup).
 - [x] §5 `src/round23.rs:22,55,466` — async fanout worker + human reason field in redaction bodies (round23-T02/T07).
 - [x] §6 `src/push_rule_core.rs:378` — cross-project consistency vector with cotest (T4.4).
-- [ ] §7 `src/authz/policy_client.rs:398` — full crypto verification of `signature.sig` in policy introspection (G3.S2).
+- [x] §7 `src/authz/policy_client.rs:398` — full crypto verification of `signature.sig` in policy introspection (G3.S2).
 - [ ] §8 `src/reducer.rs:2817,2900` — parent capability verification, full derive evaluation (realm rework).
 - [ ] §9 `src/round4.rs:54,168` + `src/routing/events/event_log.rs:556` — federation transcript signature + Move Anchor frontier signing.
 - [x] §10 `src/wire.rs:487` — replace `Value` union in `HandleClaim` with typed structure (spec-sync 0a5ab85).
