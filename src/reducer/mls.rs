@@ -258,9 +258,6 @@ pub fn apply_welcome_enqueue(state: &mut ProjectionState, op: &Operation) -> Pro
 /// untouched and emit `ProjectionEffect::Rejected { reason:
 /// "mls_epoch_skew" }`.
 ///
-/// TODO(G3.S1-followup): governance_binding — verify the commit
-/// carries a quorum signature set from the Realm's governance
-/// multi-sig policy before bumping the epoch.
 /// TODO(G3.S1-followup): covered_frontier — record which sync-frontier
 /// roots this epoch protects so plaintext fallback is gated.
 pub fn apply_commit_epoch(state: &mut ProjectionState, op: &Operation) -> ProjectionEffectOut {
@@ -284,6 +281,9 @@ pub fn apply_commit_epoch(state: &mut ProjectionState, op: &Operation) -> Projec
         .unwrap_or(false)
     {
         return reject("mls_commit_bytes_missing");
+    }
+    if let Err(reason) = crate::kinds::validate_mls_governance_binding(payload) {
+        return reject(reason);
     }
 
     let current = state
@@ -382,6 +382,26 @@ mod tests {
 
     fn b64(bytes: &[u8]) -> String {
         URL_SAFE_NO_PAD.encode(bytes)
+    }
+
+    fn governance_binding(previous_epoch: u64) -> Value {
+        json!({
+            "previous_epoch": previous_epoch,
+            "next_epoch": previous_epoch + 1,
+            "threshold": {
+                "k": 2,
+                "n": 3,
+                "signers": [
+                    "did:web:alice.example",
+                    "did:web:bob.example",
+                    "did:web:carol.example"
+                ]
+            },
+            "signatures": [
+                {"signer_did": "did:web:alice.example", "signature_b64": "alice-partial"},
+                {"signer_did": "did:web:bob.example", "signature_b64": "bob-partial"}
+            ]
+        })
     }
 
     fn publish_payload(id: &str, actor: &str, device: &str, not_after: i64) -> serde_json::Value {
@@ -573,6 +593,7 @@ mod tests {
                 "expected_prev_epoch": 0,
                 "leader_actor_did": "did:web:alice.example",
                 "commit_bytes_b64": b64(b"opaque-commit-1"),
+                "governance_binding": governance_binding(0),
             }),
         );
         let e1 = apply_commit_epoch(&mut state, &c1);
@@ -597,6 +618,7 @@ mod tests {
                 "expected_prev_epoch": 1,
                 "leader_actor_did": "did:web:alice.example",
                 "commit_bytes_b64": b64(b"opaque-commit-2"),
+                "governance_binding": governance_binding(1),
             }),
         );
         let e2 = apply_commit_epoch(&mut state, &c2);
@@ -628,6 +650,7 @@ mod tests {
                     "expected_prev_epoch": 0,
                     "leader_actor_did": "did:web:alice.example",
                     "commit_bytes_b64": b64(b"first"),
+                    "governance_binding": governance_binding(0),
                 }),
             ),
         );
@@ -643,6 +666,7 @@ mod tests {
                     "expected_prev_epoch": 0,
                     "leader_actor_did": "did:web:alice.example",
                     "commit_bytes_b64": b64(b"replay"),
+                    "governance_binding": governance_binding(0),
                 }),
             ),
         );
@@ -673,6 +697,7 @@ mod tests {
                     "expected_prev_epoch": 5,
                     "leader_actor_did": "did:web:alice.example",
                     "commit_bytes_b64": b64(b"leap"),
+                    "governance_binding": governance_binding(5),
                 }),
             ),
         );

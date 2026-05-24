@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use contrix_sdk::Operation;
 use serde_json::Value;
 
@@ -203,9 +205,6 @@ pub const CX_REALM_POLICY_SERVER: &str = "cx.realm.policy_server";
 //                              processing path (wire-only; no reducer
 //                              projection yet).
 //
-// TODO(G3.S1-followup): governance_binding — multi-sig commit attestation
-// payload extension that ties a `cx.mls.commit` to a Realm governance
-// quorum signature set; pending spec finalisation.
 // TODO(G3.S1-followup): covered_frontier — declare which sync-frontier
 // roots are MLS-protected by the current epoch; blocks epoch-stale
 // plaintext fallback for protected ranges.
@@ -221,6 +220,95 @@ pub const CX_MLS_COMMIT: &str = "cx.mls.commit";
 pub const CX_MLS_PROPOSAL: &str = "cx.mls.proposal";
 pub const CX_MLS_GENESIS: &str = "cx.mls.genesis";
 pub const CX_MLS_COMMIT_FAILED: &str = "cx.mls.commit_failed";
+
+pub fn validate_mls_governance_binding(payload: &Value) -> Result<(), &'static str> {
+    let binding = payload
+        .get("governance_binding")
+        .or_else(|| payload.get("mls_governance_binding"))
+        .ok_or("mls_governance_binding_missing")?;
+    let expected_prev_epoch = payload
+        .get("expected_prev_epoch")
+        .and_then(Value::as_u64)
+        .ok_or("mls_commit_expected_prev_epoch_missing")?;
+    if binding.get("previous_epoch").and_then(Value::as_u64) != Some(expected_prev_epoch) {
+        return Err("mls_governance_binding_previous_epoch_mismatch");
+    }
+    if binding.get("next_epoch").and_then(Value::as_u64) != expected_prev_epoch.checked_add(1) {
+        return Err("mls_governance_binding_next_epoch_mismatch");
+    }
+    if !governance_binding_threshold_met(binding) {
+        return Err("mls_governance_binding_threshold_not_met");
+    }
+    Ok(())
+}
+
+pub fn governance_binding_threshold_met(binding: &Value) -> bool {
+    let threshold = binding
+        .get("threshold")
+        .or_else(|| binding.get("quorum"))
+        .unwrap_or(binding);
+    let Some(k) = threshold
+        .get("k")
+        .or_else(|| threshold.get("threshold_k"))
+        .and_then(Value::as_u64)
+    else {
+        return false;
+    };
+    let Some(n) = threshold
+        .get("n")
+        .or_else(|| threshold.get("threshold_n"))
+        .and_then(Value::as_u64)
+    else {
+        return false;
+    };
+    if k == 0 || n == 0 || k > n {
+        return false;
+    }
+
+    let Some(signers) = threshold
+        .get("signers")
+        .or_else(|| threshold.get("members"))
+        .or_else(|| threshold.get("of"))
+        .and_then(Value::as_array)
+    else {
+        return false;
+    };
+    if signers.len() as u64 != n {
+        return false;
+    }
+    let signer_set: BTreeSet<&str> = signers.iter().filter_map(Value::as_str).collect();
+    if signer_set.len() as u64 != n {
+        return false;
+    }
+
+    let Some(signatures) = binding
+        .get("signatures")
+        .or_else(|| binding.get("partial_signatures"))
+        .or_else(|| binding.get("quorum_signatures"))
+        .and_then(Value::as_array)
+    else {
+        return false;
+    };
+    let mut valid_signers = BTreeSet::new();
+    for signature in signatures {
+        let signer = signature
+            .get("signer_did")
+            .or_else(|| signature.get("did"))
+            .and_then(Value::as_str);
+        let sig = signature
+            .get("signature_b64")
+            .or_else(|| signature.get("sig"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        if let (Some(signer), Some(_sig)) = (signer, sig)
+            && signer_set.contains(signer)
+        {
+            valid_signers.insert(signer);
+        }
+    }
+    valid_signers.len() as u64 >= k
+}
 
 pub fn canonical_kind_for_operation(operation: &Operation) -> Option<&str> {
     canonical_kind_for_payload(&operation.object_type, &operation.payload)
@@ -397,6 +485,73 @@ pub fn is_space_container_lifecycle_kind(kind: &str) -> bool {
         kind,
         CX_SPACE_CONTAINER_ARCHIVE | CX_SPACE_CONTAINER_RESTORE | CX_SPACE_CONTAINER_TOMBSTONE
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn mls_governance_binding_requires_threshold_quorum() {
+        let payload = json!({
+            "expected_prev_epoch": 7,
+            "governance_binding": {
+                "previous_epoch": 7,
+                "next_epoch": 8,
+                "threshold": {
+                    "k": 2,
+                    "n": 3,
+                    "signers": [
+                        "did:web:a.example",
+                        "did:web:b.example",
+                        "did:web:c.example"
+                    ]
+                },
+                "signatures": [
+                    {"signer_did": "did:web:a.example", "signature_b64": "aaa"},
+                    {"signer_did": "did:web:b.example", "signature_b64": "bbb"}
+                ]
+            }
+        });
+
+        validate_mls_governance_binding(&payload).unwrap();
+    }
+
+    #[test]
+    fn mls_governance_binding_rejects_stale_epoch_or_short_quorum() {
+        let stale = json!({
+            "expected_prev_epoch": 7,
+            "governance_binding": {
+                "previous_epoch": 6,
+                "next_epoch": 8,
+                "threshold": {"k": 1, "n": 1, "signers": ["did:web:a.example"]},
+                "signatures": [{"signer_did": "did:web:a.example", "signature_b64": "aaa"}]
+            }
+        });
+        assert_eq!(
+            validate_mls_governance_binding(&stale),
+            Err("mls_governance_binding_previous_epoch_mismatch")
+        );
+
+        let short = json!({
+            "expected_prev_epoch": 7,
+            "governance_binding": {
+                "previous_epoch": 7,
+                "next_epoch": 8,
+                "threshold": {
+                    "k": 2,
+                    "n": 2,
+                    "signers": ["did:web:a.example", "did:web:b.example"]
+                },
+                "signatures": [{"signer_did": "did:web:a.example", "signature_b64": "aaa"}]
+            }
+        });
+        assert_eq!(
+            validate_mls_governance_binding(&short),
+            Err("mls_governance_binding_threshold_not_met")
+        );
+    }
 }
 
 /// Flow has no dedicated `cx.flow.tombstone` event in the spec event-kind

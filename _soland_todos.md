@@ -30,7 +30,7 @@
 - [x] §12 `src/routing/spaces/directory.rs:355` — emit spec-signed `handle_claim` envelope.
 - [x] §13 `src/persistence.rs:3552-3561` — implement `PgMlsKeyPackageStore`, `PgMlsWelcomeStore`, `PgMlsCommitStore` trait impls (currently stubbed).
 - [ ] §14 `src/reducer.rs:2900` — realm link_kind inheritance + capability rules.
-- [ ] §15 `src/kinds.rs:206-215` — governance multi-sig validation, threshold aggregation.
+- [x] §15 `src/kinds.rs:206-215` — governance multi-sig validation, threshold aggregation.
 
 ### Observability (phase 2 deliverable)
 - [ ] §16 Add `#[instrument(skip(state, body))]` to every route handler under `src/routing/`. Naming: `op=<spec.operation_id>`.
