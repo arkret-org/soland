@@ -75,8 +75,7 @@ impl WatchLevel {
 ///
 /// The fields intentionally mirror `chime::PushRuleEventContext` so a
 /// soland decision and a chime-side decision agree byte-for-byte
-/// (cross-project consistency vectors in cotest exercise this — see
-/// the T4.4 TODO at the bottom of this file).
+/// (cross-project consistency vectors in cotest exercise this).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct EventContext {
     /// Whether the event explicitly mentions the receiver.
@@ -297,6 +296,13 @@ mod tests {
         assert!(decision.deliver);
         assert!(!decision.blind_wakeup);
         assert_eq!(decision.reason_code, reason_code::WATCH_ALLOWS);
+
+        let mut c = ctx();
+        c.assigned_to_actor = true;
+        let decision = evaluate_push_rule(WatchLevel::MentionsOnly, &c);
+        assert!(decision.deliver);
+        assert!(!decision.blind_wakeup);
+        assert_eq!(decision.reason_code, reason_code::WATCH_ALLOWS);
     }
 
     #[test]
@@ -375,9 +381,8 @@ mod tests {
         }
     }
 
-    // TODO(T4.4): cross-project consistency vector in cotest exercising
-    // identical `(WatchLevel, EventContext)` inputs through this
-    // function, `chime::evaluate_watch_level`, and yougen's
-    // `evaluate_notification` to assert the wire-safe `reason_code`
-    // strings agree.
+    // T4.4 cross-project coverage lives in cotest:
+    // `tests/push_rule_core_consistency.rs` imports this module plus
+    // chime and yougen, then drives the shared vector fixture at
+    // `tests/fixtures/push_rule_core_vectors.json`.
 }
