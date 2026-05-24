@@ -433,8 +433,7 @@ async fn events_frontier(
     // federation_peer, anonymous_health}; default `account_client`.
     // federation_peer additionally returns `frontier_root`, per-actor
     // `actor_seq_upper_bounds`, and a service signature; anonymous_health
-    // returns only the frontier_root summary. TODO(C47 Lane B4): wire real
-    // Merkle root commitment + service-signature envelope.
+    // returns only the frontier_root summary.
     // Round 4 (B1.4) — peer_role routes to one of three typed response
     // variants. The legacy single-shape response is wire-broken. We parse
     // via the SDK helper so unknown values surface as invalid_param.
@@ -455,10 +454,6 @@ async fn events_frontier(
     let mut space_frontier: BTreeMap<String, Value> = BTreeMap::new();
     let mut realm_latest: BTreeMap<String, (DateTime<Utc>, String)> = BTreeMap::new();
     let mut space_latest: BTreeMap<String, (DateTime<Utc>, String)> = BTreeMap::new();
-    // Round 4 (B1.4) — collect a parallel SpaceId → Vec<EventId> map so
-    // the typed response variants can be built without re-parsing the
-    // string forms.
-    let mut space_to_event_ids: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for record in &events {
         if actor_id
             .as_deref()
@@ -511,10 +506,6 @@ async fn events_frontier(
                     }),
                 );
             }
-            space_to_event_ids
-                .entry(space_id.to_owned())
-                .or_default()
-                .push(record.event_id.clone());
         }
     }
 
@@ -526,14 +517,62 @@ async fn events_frontier(
     use contrix_sdk::Did as SdkDid;
     let service_did = SdkDid::new(state.config.service_did.clone())
         .unwrap_or_else(|_| SdkDid::new("did:web:soland.local".to_owned()).unwrap());
-    let typed_space_frontier = crate::round4::typed_space_frontier(space_to_event_ids.clone());
+    let latest_space_event_ids = space_frontier.iter().filter_map(|(space, entry)| {
+        entry
+            .get("event_id")
+            .and_then(Value::as_str)
+            .map(|event_id| (space.clone(), vec![event_id.to_owned()]))
+    });
+    let typed_space_frontier = crate::round4::typed_space_frontier(latest_space_event_ids);
     let typed_actor_bounds = crate::round4::typed_actor_upper_bounds(actor_frontier.clone());
+    let generated_at = now();
+    let selected_realm_id = realm_selector
+        .as_deref()
+        .and_then(|value| RealmId::new(value.to_owned()).ok());
+    let frontier_root = crate::round4::frontier_root(&typed_space_frontier, &typed_actor_bounds)
+        .map_err(|error| AppError::internal(format!("frontier_root: {error}")))?;
+    let federation_signature = if matches!(peer_role, contrix_sdk::FrontierPeerRole::FederationPeer)
+    {
+        let signing_key = state.anchorer_signing_key();
+        Some(
+            crate::round4::sign_frontier_root(
+                &service_did,
+                selected_realm_id.as_ref(),
+                generated_at,
+                &frontier_root,
+                signing_key.as_ref(),
+            )
+            .map_err(|error| AppError::internal(format!("frontier signature: {error}")))?,
+        )
+    } else {
+        None
+    };
+    let federation_binding = if matches!(peer_role, contrix_sdk::FrontierPeerRole::FederationPeer) {
+        let binding_realm = selected_realm_id.clone().unwrap_or_else(|| {
+            RealmId::new("cx:realm:00000000-0000-7000-8000-000000000000".to_owned())
+                .expect("built-in fallback realm id is valid")
+        });
+        let service_binding_ref = crate::round4::frontier_service_binding_ref(
+            &binding_realm,
+            &typed_space_frontier,
+            &typed_actor_bounds,
+        )
+        .map_err(|error| AppError::internal(format!("frontier service binding: {error}")))?;
+        Some(crate::round4::FederationFrontierBinding {
+            service_binding_ref,
+            frontier_root: frontier_root.clone(),
+            receipts: Vec::new(),
+            signatures: federation_signature.iter().cloned().collect::<Vec<Value>>(),
+        })
+    } else {
+        None
+    };
     let typed_response = crate::round4::build_typed_frontier_response(
         peer_role,
         &service_did,
         typed_space_frontier,
         typed_actor_bounds,
-        None,
+        federation_binding,
     );
     // Render the JSON wire envelope. anonymous_health MUST strip
     // receipts / actor_seq_upper_bounds / per-space frontier — the
@@ -546,29 +585,39 @@ async fn events_frontier(
     };
     let mut frontier = json!({
         "storage": state.db.mode(),
-        "generated_at": now(),
+        "generated_at": generated_at,
         "peer_role": peer_role_str,
         "events_frontier_v2": serde_json::to_value(&typed_response).unwrap_or(Value::Null),
     });
     match peer_role {
         contrix_sdk::FrontierPeerRole::FederationPeer => {
             if let Some(obj) = frontier.as_object_mut() {
-                // TODO(round4-fed-frontier-signature): compute the real
-                // frontier_root + sign over canonical-JSON. Until then,
-                // the typed `events_frontier_v2` envelope carries the
-                // placeholder service_binding_ref + zero-hash root.
-                obj.insert("frontier_root".to_owned(), Value::Null);
+                obj.insert(
+                    "frontier_root".to_owned(),
+                    Value::String(frontier_root.as_str().to_owned()),
+                );
                 obj.insert(
                     "actor_seq_upper_bounds".to_owned(),
                     serde_json::to_value(&actor_frontier).unwrap_or(Value::Null),
                 );
-                obj.insert("signature".to_owned(), Value::Null);
+                obj.insert(
+                    "signature".to_owned(),
+                    federation_signature.unwrap_or(Value::Null),
+                );
             }
         }
         contrix_sdk::FrontierPeerRole::AnonymousHealth => {
             // Strip everything that would leak per-tenant state.
             if let Some(obj) = frontier.as_object_mut() {
-                obj.insert("frontier_root".to_owned(), Value::Null);
+                obj.insert(
+                    "frontier_root".to_owned(),
+                    Value::String(frontier_root.as_str().to_owned()),
+                );
+                obj.insert("retry_after_ms".to_owned(), Value::from(60_000));
+                obj.insert(
+                    "cache_until".to_owned(),
+                    Value::String((generated_at + Duration::seconds(60)).to_rfc3339()),
+                );
             }
             // Clear actor_frontier + realm/space frontier in the legacy envelope.
             return crate::result::json_ok(EventsFrontierResBody {

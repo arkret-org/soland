@@ -49,11 +49,10 @@
 //!   carries `late_recovery_original_event_id`. Validated via
 //!   [`contrix_sdk::AuditPolicyAccessPayload::validate_minimal`].
 //!
-//! Complex internals (full federation signing-transcript verifier
-//! chain, SnapshotBootstrap chunk generator / signature, full 3PID
-//! invite verifier chain) are tagged with `// TODO(round4-<short-tag>)`
-//! and left for a follow-up implementation pass; the cross-project wire
-//! shape + API paths are correct.
+//! Complex internals that are still outside this module's narrow wire
+//! helpers (SnapshotBootstrap chunk generator / signature and the full
+//! 3PID invite verifier chain) remain in their owning modules; the
+//! cross-project wire shape + API paths are correct.
 
 use chrono::{DateTime, Utc};
 use contrix_sdk::{
@@ -65,13 +64,15 @@ use contrix_sdk::{
     EventsSubmitFederationRequest, EventsSubscribeFrameBody, FederationServiceBindingRef,
     FrontierPeerRole, HEADER_DESTINATION_TRUST_DOMAIN, HEADER_REQUEST_CANONICAL_DIGEST,
     HEADER_SOURCE_TRUST_DOMAIN, Hash, RealmId, SpaceId, SpaceObjectTombstonePayload,
-    SpaceStateTransitionPayload, TypedTrustDomainId, canonical, compute_audit_policy_version_digest,
-    cross_signing_publish_cell_subject, federation_trust_domain_transcript_fragment,
-    flow_tracks_patch_cell_subject, flow_update_cell_subject,
+    SpaceStateTransitionPayload, TypedTrustDomainId, canonical,
+    compute_audit_policy_version_digest, cross_signing_publish_cell_subject,
+    federation_trust_domain_transcript_fragment, flow_tracks_patch_cell_subject,
+    flow_update_cell_subject,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+use std::collections::{BTreeMap, BTreeSet};
 
 // ════════════════════════════════════════════════════════════════════════
 // EventsFrontier 3-way split — typed response builder.
@@ -142,15 +143,23 @@ pub fn typed_actor_upper_bounds(
 /// `anonymous_health` MUST NOT carry receipts or actor_seq_upper_bounds
 /// — the type signature enforces this.
 ///
-/// `federation_peer` MUST carry `frontier_root` + `service_binding_ref`.
-/// `TODO(round4-fed-frontier-signature)`: append a real receipt signed by
-/// the service DID over the canonical-JSON `frontier_root`.
+/// `federation_peer` MUST carry `frontier_root` + `service_binding_ref`;
+/// callers should pass a [`FederationFrontierBinding`] produced from the
+/// frontier snapshot they are returning.
+#[derive(Debug, Clone)]
+pub struct FederationFrontierBinding {
+    pub service_binding_ref: FederationServiceBindingRef,
+    pub frontier_root: Hash,
+    pub receipts: Vec<Value>,
+    pub signatures: Vec<Value>,
+}
+
 pub fn build_typed_frontier_response(
     peer_role: FrontierPeerRole,
     service_did: &Did,
-    space_frontier: std::collections::BTreeMap<SpaceId, Vec<EventId>>,
-    actor_upper_bounds: std::collections::BTreeMap<Did, u64>,
-    federation_binding: Option<(FederationServiceBindingRef, Hash)>,
+    space_frontier: BTreeMap<SpaceId, Vec<EventId>>,
+    actor_upper_bounds: BTreeMap<Did, u64>,
+    federation_binding: Option<FederationFrontierBinding>,
 ) -> EventsFrontierResponse {
     match peer_role {
         FrontierPeerRole::AccountClient => {
@@ -161,34 +170,16 @@ pub fn build_typed_frontier_response(
             })
         }
         FrontierPeerRole::FederationPeer => {
-            // Synthesise a frontier_root + service_binding_ref placeholder
-            // when the caller has not yet wired its real values; the SDK
-            // type still enforces the wire shape.
-            let (binding, frontier_root) = federation_binding.unwrap_or_else(|| {
-                // TODO(round4-fed-frontier-signature): replace this
-                // placeholder with the real reducer-profile-derived ref.
-                (
-                    FederationServiceBindingRef {
-                        realm_id: RealmId::new("cx:realm:00000000-0000-7000-8000-000000000000")
-                            .expect("placeholder realm id"),
-                        space_policy_hash: Hash::new(format!("sha256:{}", "0".repeat(64)))
-                            .expect("placeholder hash"),
-                        membership_frontier: Vec::new(),
-                        delivery_binding_frontier: Vec::new(),
-                        destination_service_type: "principal_server".to_owned(),
-                        reducer_profile_digest: Hash::new(format!("sha256:{}", "0".repeat(64)))
-                            .expect("placeholder hash"),
-                    },
-                    Hash::new(format!("sha256:{}", "0".repeat(64))).expect("placeholder hash"),
-                )
+            let binding = federation_binding.unwrap_or_else(|| {
+                fallback_federation_frontier_binding(&space_frontier, &actor_upper_bounds)
             });
             EventsFrontierResponse::FederationPeer(EventsFrontierFederationPeerResponse {
                 peer_role,
                 frontier: space_frontier,
-                frontier_root,
-                service_binding_ref: binding,
-                receipts: Vec::new(),
-                signatures: Vec::new(),
+                frontier_root: binding.frontier_root,
+                service_binding_ref: binding.service_binding_ref,
+                receipts: binding.receipts,
+                signatures: binding.signatures,
                 actor_seq_upper_bounds: actor_upper_bounds,
             })
         }
@@ -204,6 +195,181 @@ pub fn build_typed_frontier_response(
                 generated_at: Utc::now(),
             })
         }
+    }
+}
+
+/// Round 4 (B1.4 / federation.md §4.5.1) — compute the deterministic
+/// frontier root over the current event heads and sorted per-actor seq
+/// upper bounds. Each leaf is first canonical-JSON hashed with a domain
+/// tag, then folded as a binary Merkle tree using canonical node JSON.
+/// The empty frontier still has a stable non-zero domain-separated root.
+pub fn frontier_root(
+    space_frontier: &BTreeMap<SpaceId, Vec<EventId>>,
+    actor_upper_bounds: &BTreeMap<Did, u64>,
+) -> Result<Hash, String> {
+    let mut heads = BTreeSet::new();
+    for events in space_frontier.values() {
+        for event in events {
+            heads.insert(event.as_str().to_owned());
+        }
+    }
+
+    let mut leaves = Vec::new();
+    for event_id in heads {
+        leaves.push(canonical_hash(&json!({
+            "domain": "cx.events.frontier.leaf.v1",
+            "kind": "head",
+            "event_id": event_id,
+        }))?);
+    }
+    for (actor, seq) in actor_upper_bounds {
+        leaves.push(canonical_hash(&json!({
+            "domain": "cx.events.frontier.leaf.v1",
+            "kind": "actor_seq_upper_bound",
+            "actor_id": actor.as_str(),
+            "actor_seq": seq,
+        }))?);
+    }
+
+    if leaves.is_empty() {
+        return canonical_hash(&json!({
+            "domain": "cx.events.frontier.root.v1",
+            "empty": true,
+        }));
+    }
+
+    while leaves.len() > 1 {
+        let mut next = Vec::with_capacity((leaves.len() + 1) / 2);
+        for pair in leaves.chunks(2) {
+            let right = pair.get(1).unwrap_or(&pair[0]);
+            next.push(canonical_hash(&json!({
+                "domain": "cx.events.frontier.node.v1",
+                "left": pair[0].as_str(),
+                "right": right.as_str(),
+            }))?);
+        }
+        leaves = next;
+    }
+    Ok(leaves.remove(0))
+}
+
+/// Build the frontier-derived federation binding reference carried on
+/// `peer_role=federation_peer`. The reducer-specific verifier still
+/// checks this independently on receive; this helper makes the emitted
+/// binding deterministic and tied to the same heads used for
+/// `frontier_root`.
+pub fn frontier_service_binding_ref(
+    realm_id: &RealmId,
+    space_frontier: &BTreeMap<SpaceId, Vec<EventId>>,
+    actor_upper_bounds: &BTreeMap<Did, u64>,
+) -> Result<FederationServiceBindingRef, String> {
+    let heads = frontier_heads(space_frontier);
+    let space_policy_hash = canonical_hash(&json!({
+        "domain": "cx.events.frontier.space_policy_hash.v1",
+        "realm_id": realm_id.as_str(),
+        "heads": heads.iter().map(EventId::as_str).collect::<Vec<_>>(),
+        "actor_seq_upper_bounds": actor_upper_bounds
+            .iter()
+            .map(|(actor, seq)| json!({
+                "actor_id": actor.as_str(),
+                "actor_seq": seq,
+            }))
+            .collect::<Vec<_>>(),
+    }))?;
+    let reducer_profile_digest = canonical_hash(&json!({
+        "domain": "cx.events.frontier.reducer_profile.v1",
+        "profile": "cx.reducer.v1",
+    }))?;
+
+    Ok(FederationServiceBindingRef {
+        realm_id: realm_id.clone(),
+        space_policy_hash,
+        membership_frontier: heads.clone(),
+        delivery_binding_frontier: heads,
+        destination_service_type: "principal_server".to_owned(),
+        reducer_profile_digest,
+    })
+}
+
+/// Canonical payload signed by the issuing service for a federation
+/// frontier probe. Per federation.md §4.5.1 the signature covers only
+/// the root plus `(realm_id, issuer, observed_at)` so peers can compare
+/// roots without replaying the whole frontier body.
+pub fn frontier_signature_payload(
+    realm_id: Option<&RealmId>,
+    issuer: &Did,
+    observed_at: DateTime<Utc>,
+    frontier_root: &Hash,
+) -> Value {
+    json!({
+        "domain": "cx.events.frontier.signature.v1",
+        "frontier_root": frontier_root.as_str(),
+        "realm_id": realm_id.map(RealmId::as_str),
+        "issuer": issuer.as_str(),
+        "observed_at": observed_at.to_rfc3339(),
+    })
+}
+
+/// Build an Ed25519 detached-JWS signature envelope for the canonical
+/// frontier signature payload.
+pub fn sign_frontier_root(
+    service_did: &Did,
+    realm_id: Option<&RealmId>,
+    observed_at: DateTime<Utc>,
+    frontier_root: &Hash,
+    signing_key: &ed25519_dalek::SigningKey,
+) -> Result<Value, String> {
+    let signed_payload =
+        frontier_signature_payload(realm_id, service_did, observed_at, frontier_root);
+    let canonical_bytes =
+        canonical::canonical_json_bytes(&signed_payload).map_err(|error| error.to_string())?;
+    let payload_digest = canonical::sha256_digest(&canonical_bytes);
+    let jws = contrix_sdk::jws::sign_jws_ed25519(&canonical_bytes, signing_key)
+        .map_err(|error| error.to_string())?;
+
+    Ok(json!({
+        "alg": "EdDSA",
+        "typ": "cx.events.frontier.signature.v1",
+        "scheme": "ed25519-detached-jws",
+        "verification_method": format!("{}#frontier-key", service_did.as_str()),
+        "payload_digest": payload_digest,
+        "created_at": observed_at.to_rfc3339(),
+        "jws": jws,
+        "signed_payload": signed_payload,
+    }))
+}
+
+fn frontier_heads(space_frontier: &BTreeMap<SpaceId, Vec<EventId>>) -> Vec<EventId> {
+    let mut heads: BTreeMap<&str, &EventId> = BTreeMap::new();
+    for events in space_frontier.values() {
+        for event in events {
+            heads.insert(event.as_str(), event);
+        }
+    }
+    heads.into_values().cloned().collect()
+}
+
+fn canonical_hash(value: &Value) -> Result<Hash, String> {
+    let digest = canonical::canonical_sha256(value).map_err(|error| error.to_string())?;
+    Hash::new(digest).map_err(|error| error.to_string())
+}
+
+fn fallback_federation_frontier_binding(
+    space_frontier: &BTreeMap<SpaceId, Vec<EventId>>,
+    actor_upper_bounds: &BTreeMap<Did, u64>,
+) -> FederationFrontierBinding {
+    let realm_id = RealmId::new("cx:realm:00000000-0000-7000-8000-000000000000".to_owned())
+        .expect("built-in fallback realm id is valid");
+    let frontier_root = frontier_root(space_frontier, actor_upper_bounds)
+        .expect("frontier root over typed ids must canonicalize");
+    let service_binding_ref =
+        frontier_service_binding_ref(&realm_id, space_frontier, actor_upper_bounds)
+            .expect("frontier-derived binding must canonicalize");
+    FederationFrontierBinding {
+        service_binding_ref,
+        frontier_root,
+        receipts: Vec::new(),
+        signatures: Vec::new(),
     }
 }
 
@@ -841,6 +1007,12 @@ mod tests {
     fn bob() -> Did {
         Did::new("did:web:bob.example").unwrap()
     }
+    fn space() -> SpaceId {
+        SpaceId::new("cx:space:01904100-0000-7000-8000-000000000001".to_owned()).unwrap()
+    }
+    fn event(id: &str) -> EventId {
+        EventId::new(id.to_owned()).unwrap()
+    }
 
     #[test]
     fn parse_peer_role_routes_correctly() {
@@ -878,6 +1050,109 @@ mod tests {
         assert!(json.get("actor_seq_upper_bounds").is_none());
         assert!(json.get("receipts").is_none());
         assert!(json.get("signatures").is_none());
+    }
+
+    #[test]
+    fn federation_frontier_root_is_order_stable() {
+        let mut frontier_a = BTreeMap::new();
+        frontier_a.insert(
+            space(),
+            vec![
+                event("cx:event:01904100-0000-7000-8000-000000000002"),
+                event("cx:event:01904100-0000-7000-8000-000000000001"),
+            ],
+        );
+        let mut frontier_b = BTreeMap::new();
+        frontier_b.insert(
+            space(),
+            vec![
+                event("cx:event:01904100-0000-7000-8000-000000000001"),
+                event("cx:event:01904100-0000-7000-8000-000000000002"),
+            ],
+        );
+        let actors = BTreeMap::from_iter(vec![(alice(), 7), (bob(), 3)]);
+
+        let root_a = frontier_root(&frontier_a, &actors).unwrap();
+        let root_b = frontier_root(&frontier_b, &actors).unwrap();
+        assert_eq!(root_a, root_b);
+        assert_ne!(
+            root_a.as_str(),
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+        );
+    }
+
+    #[test]
+    fn federation_frontier_signature_binds_root_tuple() {
+        let mut frontier = BTreeMap::new();
+        frontier.insert(
+            space(),
+            vec![event("cx:event:01904100-0000-7000-8000-000000000001")],
+        );
+        let actors = BTreeMap::from_iter(vec![(alice(), 7)]);
+        let root = frontier_root(&frontier, &actors).unwrap();
+        let observed_at = chrono::DateTime::parse_from_rfc3339("2026-05-20T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&[7_u8; 32]);
+
+        let signature =
+            sign_frontier_root(&alice(), Some(&realm()), observed_at, &root, &signing_key).unwrap();
+        assert_eq!(signature["alg"], "EdDSA");
+        assert_eq!(
+            signature["verification_method"],
+            "did:web:alice.example#frontier-key"
+        );
+        assert!(
+            signature["jws"]
+                .as_str()
+                .is_some_and(|jws| jws.contains(".."))
+        );
+        assert_eq!(signature["signed_payload"]["frontier_root"], root.as_str());
+        assert_eq!(
+            signature["signed_payload"]["realm_id"],
+            "cx:realm:01904100-0000-7000-8000-000000000001"
+        );
+
+        let bytes = canonical::canonical_json_bytes(&signature["signed_payload"]).unwrap();
+        assert_eq!(
+            signature["payload_digest"],
+            canonical::sha256_digest(&bytes)
+        );
+    }
+
+    #[test]
+    fn federation_peer_response_carries_root_binding_and_signature() {
+        let mut frontier = BTreeMap::new();
+        frontier.insert(
+            space(),
+            vec![event("cx:event:01904100-0000-7000-8000-000000000001")],
+        );
+        let actors = BTreeMap::from_iter(vec![(alice(), 7)]);
+        let root = frontier_root(&frontier, &actors).unwrap();
+        let service_binding_ref = frontier_service_binding_ref(&realm(), &frontier, &actors)
+            .expect("frontier binding builds");
+        let signature = json!({
+            "payload_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        });
+
+        let response = build_typed_frontier_response(
+            FrontierPeerRole::FederationPeer,
+            &alice(),
+            frontier,
+            actors,
+            Some(FederationFrontierBinding {
+                service_binding_ref,
+                frontier_root: root.clone(),
+                receipts: Vec::new(),
+                signatures: vec![signature.clone()],
+            }),
+        );
+        let EventsFrontierResponse::FederationPeer(peer) = response else {
+            panic!("expected federation_peer response");
+        };
+        assert_eq!(peer.frontier_root, root);
+        assert_eq!(peer.signatures, vec![signature]);
+        assert_eq!(peer.service_binding_ref.membership_frontier.len(), 1);
     }
 
     #[test]
