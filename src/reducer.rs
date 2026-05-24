@@ -2202,12 +2202,7 @@ impl ProjectionState {
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_owned();
-        let reason = operation
-            .payload
-            .get("reason")
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.is_empty())
-            .map(ToOwned::to_owned);
+        let reason = crate::round23::redaction_human_reason(&operation.payload);
         let cell = RedactionCellValue {
             redacted_at: operation.created_at,
             by,
@@ -5393,7 +5388,8 @@ mod tests {
                 serde_json::json!({
                     "target_event_id": event_id,
                     "by": "did:web:alice",
-                    "reason": "rethink",
+                    "reason": "policy:auto",
+                    "human_reason": "rethink",
                 }),
             ),
             &hlc,

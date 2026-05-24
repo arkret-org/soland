@@ -23,6 +23,9 @@
 //! (round23-T<XX>)` for the deeper internal logic and ship the wire-level
 //! reject + new event-kind shape that other implementers depend on.
 
+use std::future::Future;
+use std::pin::Pin;
+
 use chrono::{DateTime, Utc};
 use contrix_sdk::events::{is_ephemeral_kind, is_receipt_object_only, is_terminal_realm_state};
 use contrix_sdk::{
@@ -461,19 +464,20 @@ pub enum DeactivationDomainStatus {
     Failed,
 }
 
+pub type DeactivationFanoutFuture = Pin<Box<dyn Future<Output = Result<(), String>> + Send>>;
+
 /// Per-actor deactivation status projection. Round R2/R3 (T07).
 ///
-/// TODO(round23-T07): the async fanout worker that actually drains each
-/// domain still lives in implementer follow-ups (floria for push, chime
-/// for to-device); this struct is the canonical projection shape that
-/// other implementers can read from to surface UI state. The "outcome"
-/// field is `partially_completed` whenever any non-failed domain is
-/// still pending.
+/// The async fanout worker below drains the domain-specific hooks
+/// concurrently and records the per-domain status here. The "outcome"
+/// field is `partially_completed` whenever any non-failed domain is still
+/// pending or any domain failed.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DeactivationFanoutProjection {
     pub actor: String,
     pub initiated_at: DateTime<Utc>,
     pub domain_status: std::collections::BTreeMap<String, DeactivationDomainStatus>,
+    pub domain_reason: std::collections::BTreeMap<String, String>,
     pub outcome: String,
 }
 
@@ -490,6 +494,7 @@ impl DeactivationFanoutProjection {
             actor: actor.into(),
             initiated_at: now,
             domain_status,
+            domain_reason: std::collections::BTreeMap::new(),
             outcome: "in_progress".to_owned(),
         }
     }
@@ -531,6 +536,55 @@ impl DeactivationFanoutProjection {
         };
         &self.outcome
     }
+}
+
+pub async fn run_deactivation_fanout_worker<F>(
+    projection: &mut DeactivationFanoutProjection,
+    drain_domain: F,
+) where
+    F: Fn(DeactivationFanoutDomain) -> DeactivationFanoutFuture + Copy + Send + Sync + 'static,
+{
+    let mut tasks = tokio::task::JoinSet::new();
+    for domain in DeactivationFanoutDomain::ALL {
+        let domain = *domain;
+        let future = drain_domain(domain);
+        tasks.spawn(async move { (domain, future.await) });
+    }
+
+    while let Some(joined) = tasks.join_next().await {
+        let Ok((domain, result)) = joined else {
+            continue;
+        };
+        let key = domain.as_str().to_owned();
+        match result {
+            Ok(()) => {
+                projection
+                    .domain_status
+                    .insert(key.clone(), DeactivationDomainStatus::Completed);
+                projection.domain_reason.remove(&key);
+            }
+            Err(reason) => {
+                projection
+                    .domain_status
+                    .insert(key.clone(), DeactivationDomainStatus::Failed);
+                projection.domain_reason.insert(key, reason);
+            }
+        }
+    }
+    projection.refresh_outcome();
+}
+
+pub fn redaction_human_reason(payload: &Value) -> Option<String> {
+    ["human_reason", "reason", "reason_text"]
+        .iter()
+        .find_map(|field| {
+            payload
+                .get(*field)
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+        })
 }
 
 // ────────────────────────────────────────────────────────────────────────
@@ -1091,6 +1145,48 @@ mod tests {
             );
         }
         assert_eq!(p.refresh_outcome(), "completed");
+    }
+
+    #[tokio::test]
+    async fn deactivation_fanout_worker_records_domain_failures() {
+        let mut p = DeactivationFanoutProjection::new("did:web:alice.example", Utc::now());
+        run_deactivation_fanout_worker(&mut p, |domain| {
+            Box::pin(async move {
+                if domain == DeactivationFanoutDomain::PushChannelUnbind {
+                    Err("push token backend unavailable".to_owned())
+                } else {
+                    Ok(())
+                }
+            })
+        })
+        .await;
+
+        assert_eq!(p.refresh_outcome(), "partially_completed");
+        assert_eq!(
+            p.domain_status
+                .get(DeactivationFanoutDomain::PushChannelUnbind.as_str()),
+            Some(&DeactivationDomainStatus::Failed)
+        );
+        assert_eq!(
+            p.domain_reason
+                .get(DeactivationFanoutDomain::PushChannelUnbind.as_str())
+                .map(String::as_str),
+            Some("push token backend unavailable")
+        );
+    }
+
+    #[test]
+    fn redaction_human_reason_prefers_explicit_field() {
+        let payload = json!({
+            "target_event_id": "cx:event:01904100-0000-7000-8000-000000000abc",
+            "reason": "machine policy",
+            "human_reason": "moderator request"
+        });
+
+        assert_eq!(
+            redaction_human_reason(&payload).as_deref(),
+            Some("moderator request")
+        );
     }
 
     #[test]
