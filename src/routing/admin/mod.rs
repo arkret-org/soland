@@ -24,6 +24,48 @@ use super::{
     policy_document_to_response, projection_event_from_operation, sha256_hex,
 };
 
+/// Salvo middleware that gates an admin route on an OAuth-style admin
+/// scope. The middleware performs the bearer session lookup, introspects
+/// the session grant through `require_admin_scope`, and only then lets
+/// the endpoint handler run.
+#[derive(Clone, Debug)]
+pub(super) struct RequireAdmin {
+    scope: &'static str,
+}
+
+impl RequireAdmin {
+    pub(super) fn scope(scope: &'static str) -> Self {
+        Self { scope }
+    }
+}
+
+#[async_trait]
+impl Handler for RequireAdmin {
+    async fn handle(
+        &self,
+        req: &mut Request,
+        depot: &mut Depot,
+        res: &mut Response,
+        ctrl: &mut FlowCtrl,
+    ) {
+        let result = match depot.obtain::<AppState>() {
+            Ok(state) => match AuthArgs::default().authenticated_session(state, req) {
+                Ok(session) => require_admin_scope(state, req, &session, self.scope)
+                    .await
+                    .map(|_| ()),
+                Err(error) => Err(error),
+            },
+            Err(_) => Err(AppError::internal("state not injected")),
+        };
+
+        if let Err(error) = result {
+            error.write(req, depot, res).await;
+            return;
+        }
+        ctrl.call_next(req, depot, res).await;
+    }
+}
+
 /// Gate a write-side admin handler on the caller's authorization.
 ///
 /// In `development_mode` any authenticated session is allowed. In production
@@ -48,6 +90,7 @@ pub(super) fn require_admin_principal(
 
 pub fn router() -> Router {
     Router::new()
+        .hoop(RequireAdmin::scope(contrix_sdk::admin_scopes::ADMIN_READ))
         .push(cells::router())
         .push(Router::with_path("admin/{resource}").get(collection::admin_collection))
         .push(control::router())
@@ -55,12 +98,13 @@ pub fn router() -> Router {
 }
 
 pub fn spec_router() -> Router {
-    spec::router()
+    spec::router().hoop(RequireAdmin::scope(contrix_sdk::admin_scopes::ADMIN_READ))
 }
 
 pub fn admin_router() -> Router {
     Router::with_path("api/admin/v1")
         .oapi_tag("admin")
+        .hoop(RequireAdmin::scope(contrix_sdk::admin_scopes::ADMIN_READ))
         .push(Router::with_path("spaces/{space_id}/anchorer").get(anchor::admin_get_anchorer))
         .push(
             Router::with_path("spaces/{space_id}/anchorer/reconfigure")

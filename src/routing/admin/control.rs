@@ -14,10 +14,9 @@
 //! - `POST /api/v1/admin/events/unauthorized` — emit an `unauthorized` frame; clients MUST close
 //!   the stream and re-auth.
 //!
-//! Both endpoints are auth-gated via the standard `AuthArgs` bearer
-//! check; rate limiting comes from the global RateLimiter middleware.
-//! Production hardening (admin-only role gate, audit-log, replay
-//! protection) remains future work.
+//! Both endpoints are gated by the shared `RequireAdmin` middleware before
+//! the handler runs; rate limiting comes from the global RateLimiter
+//! middleware. Audit-log and replay protection remain future work.
 
 use salvo::http::StatusCode;
 use salvo::oapi::extract::JsonBody;

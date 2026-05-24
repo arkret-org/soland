@@ -5,12 +5,10 @@
 //!   collections (`actors`, `spaces`, `devices`, `capabilities`, `federation`, `applets`, `agents`,
 //!   `reports`, `invite-tokens`, `audit`, `policy`, `media`).
 //!
-//! Authorization: in `development_mode` any authenticated bearer session
-//! reaches the snapshot. In production mode the session actor MUST be listed
-//! in `AppConfig::admin_principal_dids` (env `SOLAND_ADMIN_PRINCIPAL_DIDS`)
-//! — empty list keeps the gate closed. Further hardening (durable cursor
-//! pagination, redaction policy, high-risk audit signing) is tracked under
-//! `_todos.md` Q9.
+//! Authorization is enforced by the shared `RequireAdmin` middleware with
+//! the SDK `admin.read` scope before this handler runs. Further hardening
+//! (durable cursor pagination, redaction policy, high-risk audit signing)
+//! is tracked under `_todos.md` Q9.
 
 use std::collections::BTreeMap;
 

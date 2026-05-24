@@ -43,7 +43,7 @@
 - [x] §21 Adopt a distributed rate limiter — pick one of: postgres-backed token bucket, Redis-backed, or document per-instance limitation in `SECURITY.md`. (Q3 in master plan.)
 - [x] §22 Wire request-size limits: `SOLAND_MAX_REQUEST_SIZE` env var; default 1 MiB; document.
 - [x] §23 Add CSRF guard on `/auth/dev-login` (or reject the endpoint in production via a hard-coded check).
-- [ ] §24 Replace ad-hoc admin-endpoint guards with an explicit `RequireAdmin` middleware that checks the OAuth scope.
+- [x] §24 Replace ad-hoc admin-endpoint guards with an explicit `RequireAdmin` middleware that checks the OAuth scope.
 
 ### Engineering hygiene (master plan §5)
 - [x] §25 Add Trivy image scan to `docker.yml`.
