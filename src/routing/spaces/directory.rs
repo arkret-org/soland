@@ -358,10 +358,10 @@ async fn resolve_handle(
             // `requester` (so a verifier checking `audience == self` passes).
             let audience = body.audience.or(body.requester);
             let did = actor["did"].as_str().unwrap_or_default().to_owned();
-            // TODO(spec-sync 0a5ab85): emit a signed `handle_claim` envelope
-            // with `handle_uri` canonical form, `member_delivery_binding`, and
-            // `issuer_service_did` so federation peers can use it to build
-            // a `member_delivery_binding` at join time.
+            // TODO(spec-sync 0a5ab85): populate and sign `handle_claim` with
+            // `handle_uri`, `member_delivery_binding`, and
+            // `issuer_service_did` so federation peers can build a join-time
+            // `member_delivery_binding`.
             json_ok(ResolveHandleResponse {
                 handle: normalized,
                 did,

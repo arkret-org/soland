@@ -471,6 +471,72 @@ pub struct ResolveOrganizationResponse {
     pub spaces: Vec<Value>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, salvo::oapi::ToSchema)]
+pub struct HandleClaim {
+    pub schema: String,
+    pub handle: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub handle_uri: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub handle_aliases: Vec<String>,
+    pub subject: String,
+    pub issuer: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub issuer_service_did: Option<String>,
+    pub binding_state: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub claim_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub visibility: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audience: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub challenge: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub claim_scope: BTreeMap<String, Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub member_delivery_binding: Option<HandleClaimDeliveryBinding>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub claims: Vec<Value>,
+    pub created_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verified_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub source_refs: Vec<String>,
+    pub proofs: Vec<HandleClaimProof>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, salvo::oapi::ToSchema)]
+pub struct HandleClaimDeliveryBinding {
+    pub recipient_service_did: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recipient_service_type: Option<String>,
+    pub binding_source: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub delivery_modes: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub service_acceptance_ref: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub policy_ref: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, salvo::oapi::ToSchema)]
+pub struct HandleClaimProof {
+    pub kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub alg: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verification_method: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub payload_digest: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub jws: Option<String>,
+}
+
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct ResolveHandleResponse {
     pub handle: String,
@@ -482,12 +548,9 @@ pub struct ResolveHandleResponse {
     /// invocation context. Spec 0a5ab85.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub audience: Option<String>,
-    /// Embedded handle claim envelope when the resolver issued one. The
-    /// inner shape MUST conform to `handle-claim.schema.json`.
-    /// TODO(spec-sync 0a5ab85): replace `Value` with the typed `HandleClaim`
-    /// once soland depends on the new SDK model + signs the envelope.
+    /// Embedded handle claim envelope when the resolver issued one.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub handle_claim: Option<Value>,
+    pub handle_claim: Option<HandleClaim>,
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
@@ -1887,4 +1950,60 @@ pub struct CreateGrantRequest {
     /// MUST fit within the parent's scope (capabilities.md §10).
     #[serde(default)]
     pub delegated_from: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn handle_claim_serializes_spec_shape() {
+        let claim = HandleClaim {
+            schema: "cx.schema.handle_claim.v1".to_owned(),
+            handle: "@alice:acme.example".to_owned(),
+            handle_uri: Some("contrix://acme.example/users/alice".to_owned()),
+            handle_aliases: vec!["acct:alice@acme.example".to_owned()],
+            subject: "did:web:alice.example".to_owned(),
+            issuer: "did:web:acme.example".to_owned(),
+            issuer_service_did: Some("did:web:principal.acme.example".to_owned()),
+            binding_state: "verified".to_owned(),
+            claim_type: Some("organization_handle".to_owned()),
+            visibility: Some("restricted".to_owned()),
+            audience: Some("cx:realm:0196419b-0000-7000-8000-000000000000".to_owned()),
+            challenge: None,
+            claim_scope: BTreeMap::new(),
+            member_delivery_binding: Some(HandleClaimDeliveryBinding {
+                recipient_service_did: "did:web:principal.acme.example".to_owned(),
+                recipient_service_type: Some("principal_server".to_owned()),
+                binding_source: "organization_policy".to_owned(),
+                delivery_modes: vec!["events".to_owned(), "sync".to_owned()],
+                service_acceptance_ref: None,
+                policy_ref: None,
+            }),
+            claims: Vec::new(),
+            created_at: "2026-05-19T00:00:00Z".to_owned(),
+            expires_at: Some("2026-08-19T00:00:00Z".to_owned()),
+            verified_at: None,
+            source_refs: Vec::new(),
+            proofs: vec![HandleClaimProof {
+                kind: "detached_jws".to_owned(),
+                alg: Some("EdDSA".to_owned()),
+                verification_method: Some("did:web:acme.example#key-1".to_owned()),
+                payload_digest: Some(
+                    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
+                ),
+                created_at: Some("2026-05-19T00:00:00Z".to_owned()),
+                jws: Some("aaa.bbb.ccc".to_owned()),
+            }],
+        };
+
+        let value = serde_json::to_value(claim).expect("handle claim serializes");
+        assert_eq!(value["schema"], "cx.schema.handle_claim.v1");
+        assert_eq!(
+            value["member_delivery_binding"]["recipient_service_did"],
+            "did:web:principal.acme.example"
+        );
+        assert!(value.get("claim_scope").is_none());
+        assert!(value.get("challenge").is_none());
+    }
 }
