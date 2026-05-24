@@ -7,6 +7,7 @@
 //!
 //! Surfaces:
 //! - `GET /health` — liveness + database/events health
+//! - `GET /readyz` — readiness gate for deploy orchestrators
 //! - `GET /api/v1/server/describe`
 //! - `GET /api/v1/auth/bridge/describe`
 //! - `GET /api/v1/authz/describe`
@@ -33,7 +34,9 @@ use crate::wire::{
 use crate::{JsonResult, json_ok};
 
 pub(super) fn health_router() -> Router {
-    Router::with_path("health").get(health)
+    Router::new()
+        .push(Router::with_path("health").get(health))
+        .push(Router::with_path("readyz").get(readyz))
 }
 
 pub(super) fn router() -> Router {
@@ -49,15 +52,7 @@ pub(super) fn router() -> Router {
 )]
 async fn health(depot: &mut Depot, res: &mut Response) -> JsonResult<HealthResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let database_ok = match state.db.pool.as_ref() {
-        Some(pool) => match pool.get() {
-            Ok(mut conn) => sql_query("SELECT 1 AS ok")
-                .get_result::<HealthCheckRow>(&mut conn)
-                .is_ok_and(|row| row.ok == 1),
-            Err(_) => false,
-        },
-        None => true,
-    };
+    let database_ok = database_ready(state);
     let ok = database_ok;
     if !ok {
         res.status_code(StatusCode::SERVICE_UNAVAILABLE);
@@ -80,6 +75,66 @@ async fn health(depot: &mut Depot, res: &mut Response) -> JsonResult<HealthRespo
         admin_auth_mode: state.config.admin_auth_mode(),
         hardening: state.config.hardening_status(),
     })
+}
+
+#[endpoint(
+    operation_id = "cx.system.readyz",
+    tags("system"),
+    summary = "Readiness probe for deploy orchestrators"
+)]
+async fn readyz(depot: &mut Depot, res: &mut Response) -> JsonResult<Value> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let database_ok = database_ready(state);
+    let oauth_introspection_ready =
+        state.config.oauth_introspection_url.is_none() || state.config.oauth_introspection_bearer.is_some();
+    let session_grant_introspection_ready = state.config.session_grant_introspection_url.is_none()
+        || state.config.session_grant_introspection_bearer.is_some();
+    let external_webvh_provider_ready = state.config.external_webvh_provider_url.is_none()
+        || state.config.external_webvh_provider_active;
+    let ok = database_ok
+        && oauth_introspection_ready
+        && session_grant_introspection_ready
+        && external_webvh_provider_ready;
+    if !ok {
+        res.status_code(StatusCode::SERVICE_UNAVAILABLE);
+    }
+    json_ok(json!({
+        "ok": ok,
+        "service": "soland",
+        "storage": state.db.mode(),
+        "checks": {
+            "database": {
+                "ok": database_ok,
+                "mode": state.db.mode(),
+                "migrations": if state.db.pool.is_some() { "applied_at_boot" } else { "not_required" },
+            },
+            "oauth_introspection": {
+                "ok": oauth_introspection_ready,
+                "configured": state.config.oauth_introspection_url.is_some(),
+            },
+            "session_grant_introspection": {
+                "ok": session_grant_introspection_ready,
+                "configured": state.config.session_grant_introspection_url.is_some(),
+            },
+            "external_webvh_provider": {
+                "ok": external_webvh_provider_ready,
+                "configured": state.config.external_webvh_provider_url.is_some(),
+                "active": state.config.external_webvh_provider_active,
+            },
+        }
+    }))
+}
+
+fn database_ready(state: &AppState) -> bool {
+    match state.db.pool.as_ref() {
+        Some(pool) => match pool.get() {
+            Ok(mut conn) => sql_query("SELECT 1 AS ok")
+                .get_result::<HealthCheckRow>(&mut conn)
+                .is_ok_and(|row| row.ok == 1),
+            Err(_) => false,
+        },
+        None => true,
+    }
 }
 
 #[derive(QueryableByName)]

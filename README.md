@@ -322,6 +322,7 @@ and reject plaintext blobs in private Spaces unless this service is listed in
 soland exposes the canonical Contrix v1 routes (~180 routes total). Highlights:
 
 - `GET  /health` — liveness + DB / persistence probe (used as the Docker healthcheck)
+- `GET  /readyz` — readiness probe for DB, boot migrations, introspection bearer config, and external webvh boot probe state
 - `GET  /.well-known/contrix/openapi.json` and `.../openapi.yaml` — the
   generated OpenAPI 3.1 document from soland's Salvo route wiring
 - `GET  /.well-known/mimi-protocol-directory`

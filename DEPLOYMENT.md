@@ -179,11 +179,15 @@ livenessProbe:
   periodSeconds: 30
 readinessProbe:
   httpGet:
-    path: /health
+    path: /readyz
     port: 8698
   initialDelaySeconds: 5
   periodSeconds: 10
 ```
+
+`/readyz` returns `503` until the database probe succeeds, boot migrations have
+completed, configured introspection bearers are present, and any configured
+external webvh provider has passed the startup `/describe` probe.
 
 ## 6. Backups
 

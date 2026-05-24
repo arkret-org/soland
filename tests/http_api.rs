@@ -678,6 +678,15 @@ async fn health_and_describe_work() {
     assert_eq!(health["checks"]["database"]["ok"], true);
     assert_eq!(health["checks"]["events"]["ok"], true);
 
+    let readyz: Value = TestClient::get("http://server/readyz")
+        .send(&app())
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(readyz["ok"], true);
+    assert_eq!(readyz["checks"]["database"]["ok"], true);
+
     let describe: Value = TestClient::get("http://server/api/v1/server/describe")
         .send(&app())
         .await
@@ -846,6 +855,24 @@ async fn health_and_describe_work() {
         .find(|gap| gap["profile"] == "cx.profile.principal_server.v1")
         .expect("principal server full-profile gap summary should be visible");
     assert_eq!(full_gap["status"], "not_claimed");
+}
+
+#[tokio::test]
+async fn readyz_returns_503_until_introspection_bearer_is_configured() {
+    let mut config = test_config();
+    config.development_mode = false;
+    config.oauth_introspection_url = Some("https://coauth.example/oauth2/introspect".to_owned());
+    config.oauth_introspection_bearer = None;
+    let service = app_from_state(AppState::new(config, Db { pool: None }));
+
+    let mut response = TestClient::get("http://server/readyz").send(&service).await;
+    assert_eq!(
+        response.status_code.unwrap(),
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+    let body: Value = response.take_json().await.unwrap();
+    assert_eq!(body["ok"], false);
+    assert_eq!(body["checks"]["oauth_introspection"]["ok"], false);
 }
 
 /// T6.1 — describe response MUST partition into `supported_operations`
