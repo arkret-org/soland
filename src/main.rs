@@ -18,7 +18,7 @@ async fn main() -> anyhow::Result<()> {
     // file appender drains its channel on shutdown. Dropping the guard
     // flushes pending writes; storing it in `_file_guard` defers that drop
     // until `main` returns.
-    let _file_guard = init_tracing()?;
+    let _tracing_guards = init_tracing()?;
 
     // Fail fast at startup if a bundled Contrix artifact is malformed instead
     // of crashing the first request that touches the offending OnceLock.
@@ -215,19 +215,25 @@ async fn main() -> anyhow::Result<()> {
 /// Returns the appender's worker guard. The caller MUST hold it for the
 /// process lifetime; dropping it earlier flushes and closes the channel
 /// (typical pattern: bind to `_guard` in `main`).
-fn init_tracing() -> anyhow::Result<Option<tracing_appender::non_blocking::WorkerGuard>> {
+struct TracingGuards {
+    _file_guard: Option<tracing_appender::non_blocking::WorkerGuard>,
+    _otel_guard: soland::otel::OtelGuard,
+}
+
+fn init_tracing() -> anyhow::Result<TracingGuards> {
     use tracing_subscriber::fmt;
+    use tracing_subscriber::{Layer, Registry};
 
     let filter = tracing_subscriber::EnvFilter::from_default_env();
-
-    let stdout_layer = fmt::layer().with_writer(std::io::stdout);
+    let mut layers: Vec<Box<dyn Layer<Registry> + Send + Sync>> =
+        vec![Box::new(fmt::layer().with_writer(std::io::stdout))];
 
     let log_file = std::env::var("SOLAND_LOG_FILE")
         .ok()
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty());
 
-    if let Some(path) = log_file {
+    let file_guard = if let Some(path) = log_file {
         let path = std::path::PathBuf::from(path);
         if let Some(parent) = path.parent() {
             if !parent.as_os_str().is_empty() {
@@ -252,21 +258,27 @@ fn init_tracing() -> anyhow::Result<Option<tracing_appender::non_blocking::Worke
         };
         let (writer, guard) = tracing_appender::non_blocking(appender);
         let file_layer = fmt::layer().with_ansi(false).with_writer(writer);
-        tracing_subscriber::registry()
-            .with(filter)
-            .with(stdout_layer)
-            .with(file_layer)
-            .try_init()
-            .map_err(|error| anyhow::anyhow!("tracing init failed: {error}"))?;
-        Ok(Some(guard))
+        layers.push(Box::new(file_layer));
+        Some(guard)
     } else {
-        tracing_subscriber::registry()
-            .with(filter)
-            .with(stdout_layer)
-            .try_init()
-            .map_err(|error| anyhow::anyhow!("tracing init failed: {error}"))?;
-        Ok(None)
+        None
+    };
+
+    let (otel_guard, otel_layer) = soland::otel::init_layer("soland")?;
+    if let Some(layer) = otel_layer {
+        layers.push(layer);
     }
+
+    tracing_subscriber::registry()
+        .with(layers)
+        .with(filter)
+        .try_init()
+        .map_err(|error| anyhow::anyhow!("tracing init failed: {error}"))?;
+
+    Ok(TracingGuards {
+        _file_guard: file_guard,
+        _otel_guard: otel_guard,
+    })
 }
 
 async fn run_server<A>(acceptor: A, state: AppState)

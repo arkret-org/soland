@@ -13,6 +13,15 @@ keywords = ["contrix", "decentralized", "did", "salvo", "server"]
 categories = ["network-programming", "web-programming::http-server"]
 authors = ["Contrix contributors"]
 
+[features]
+default = []
+otel = [
+    "dep:opentelemetry",
+    "dep:opentelemetry-otlp",
+    "dep:opentelemetry_sdk",
+    "dep:tracing-opentelemetry",
+]
+
 [dependencies]
 anyhow = "1.0.100"
 chrono = { version = "0.4.42", features = ["serde"] }
@@ -50,6 +59,10 @@ arc-swap = "1.7.1"
 rand = "0.8.5"
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
+opentelemetry = { version = "0.31.0", default-features = false, features = ["trace"], optional = true }
+opentelemetry_sdk = { version = "0.31.0", default-features = false, features = ["trace", "rt-tokio"], optional = true }
+opentelemetry-otlp = { version = "0.31.0", default-features = false, features = ["trace", "grpc-tonic"], optional = true }
+tracing-opentelemetry = { version = "0.32.1", default-features = false, optional = true }
 # Durable, observable tracing output when the runner harness sets
 # `SOLAND_LOG_FILE`. Without this appender, Windows fully-buffers stdout
 # when it's redirected to a file (PowerShell `Start-Process

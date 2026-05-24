@@ -202,13 +202,41 @@ The startup migrations are idempotent.
 
 ## 7. Observability
 
-Today soland emits structured `tracing` events with stable `event` and
-`worker` fields for process lifecycle and background tasks. Future roadmap
-(see `_todos.md` Q5 / Dep-6):
+soland emits structured `tracing` events with stable `event` and `worker`
+fields for process lifecycle and background tasks. It also exposes
+Prometheus text metrics on a separate listener:
+
+```dotenv
+SOLAND_METRICS_BIND=127.0.0.1:9090
+```
+
+Scrape `http://127.0.0.1:9090/metrics` for:
+
+- `soland_request_total{op,status}`
+- `soland_request_duration_seconds` histogram buckets
+- `soland_db_pool_in_use`
+- `soland_federation_outbox_depth`
+
+OpenTelemetry tracing is build-time opt-in so ordinary local runs do not pull
+an exporter:
+
+```powershell
+cargo run --features otel -- --bind 127.0.0.1:8698
+```
+
+Enable OTLP export at runtime:
+
+```dotenv
+SOLAND_OTEL_EXPORTER=otlp
+SOLAND_OTEL_ENDPOINT=http://otel-collector:4317
+SOLAND_OTEL_SERVICE_NAME=soland
+SOLAND_OTEL_SAMPLE_RATIO=1.0
+SOLAND_OTEL_TIMEOUT_SECS=3
+```
+
+Remaining roadmap before 1.0:
 
 - per-handler `instrument` spans carrying `actor / space / event_kind`
-- `/metrics` Prometheus surface
-- OpenTelemetry exporter
 
 Set `RUST_LOG=soland=debug,salvo=info,warn` in production-like environments
 while closing 1.0 readiness. Keep `SOLAND_LOG_FILE` pointed at a durable path
@@ -285,6 +313,8 @@ pre-upgrade backup if you need to roll back.
   deployments need a shared reverse-proxy/API-gateway quota in front of soland.
 - **Metrics**: Prometheus text metrics are exposed on the separate
   `SOLAND_METRICS_BIND` listener (default `127.0.0.1:9090`) at `/metrics`.
+- **OpenTelemetry**: OTLP trace export is disabled unless the binary is built
+  with `--features otel` and `SOLAND_OTEL_EXPORTER=otlp` is set.
 - **Scaffold endpoints**: push outbound bridge, the MIMI provider directory,
   and most of the directory surface return placeholder shapes. See `_todos.md`
   Streams D / E / F for the production rollout.
