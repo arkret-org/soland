@@ -28,10 +28,12 @@
 //!      ([`MlsKeyPackageStore`] / [`MlsWelcomeStore`]).
 //!
 //! Deferred (mapped to TODO(G3.S1-followup) markers in `reducer/mls.rs`):
-//!   - governance_binding   — multi-sig commit attestation;
-//!   - covered_frontier     — sync-frontier roots protected by an MLS epoch;
-//!   - decryption_pending   — deferred-decryption queue + retry;
-//!   - minimal metadata     — envelope stripping rules.
+//!   - decryption_pending   — deferred-decryption queue + retry.
+//!
+//! `cx.mls.commit` reducer validation now requires governance-binding
+//! quorum plus an attested covered frontier. `cx.mls.welcome` reducer
+//! validation queues only minimal routing metadata and rejects plaintext
+//! sender/profile/relationship side-band fields.
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;

@@ -205,15 +205,14 @@ pub const CX_REALM_POLICY_SERVER: &str = "cx.realm.policy_server";
 //                              processing path (wire-only; no reducer
 //                              projection yet).
 //
-// TODO(G3.S1-followup): covered_frontier — declare which sync-frontier
-// roots are MLS-protected by the current epoch; blocks epoch-stale
-// plaintext fallback for protected ranges.
 // TODO(G3.S1-followup): decryption_pending — deferred-decryption queue +
 // retry path for messages that arrived before the key material; today the
 // recipient silently drops them.
-// TODO(G3.S1-followup): minimal_metadata — envelope-stripping rule
-// registration so peers know which header fields to redact when forwarding
-// an MLS-protected envelope.
+// MLS commits now require a governance binding with an attested
+// membership/covered frontier; the soland reducer accumulates that
+// frontier in `MlsCommitEpoch.covered_frontier`. Welcome envelopes are
+// accepted only in minimal routing form: opaque Welcome bytes plus the
+// recipient delivery tuple.
 pub const CX_MLS_KEYPACKAGE: &str = "cx.mls.keypackage";
 pub const CX_MLS_WELCOME: &str = "cx.mls.welcome";
 pub const CX_MLS_COMMIT: &str = "cx.mls.commit";

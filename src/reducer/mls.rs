@@ -20,16 +20,15 @@
 //! 3. **commit_epoch increment** — `apply_commit_epoch`. The reducer
 //!    only accepts a commit whose `expected_prev_epoch` matches the
 //!    group's current stored epoch (0 for a brand-new group). Stale /
-//!    out-of-order commits are rejected with `mls_epoch_skew`.
+//!    out-of-order commits are rejected with `mls_epoch_skew`. Accepted
+//!    commits merge the attested governance frontier into the group's
+//!    covered-frontier accumulator.
 //!
 //! Deferred (TODO(G3.S1-followup) markers below + in `routing/mls.rs`):
-//!   - governance_binding (multi-sig commit attestation)
-//!   - covered_frontier (which sync-frontier roots are MLS-protected)
 //!   - decryption_pending (deferred-decryption queue + retry)
-//!   - minimal metadata (envelope stripping rules)
 
 use contrix_sdk::Operation;
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use super::{
     KeyPackageLifetime, MlsCommitEpoch, MlsEffect, MlsKeyPackage, MlsWelcome, ProjectionState,
@@ -48,6 +47,12 @@ pub const REASON_KEYPACKAGE_EXPIRED: &str = "mls_keypackage_expired";
 /// Reason code emitted when a commit's `expected_prev_epoch` does not
 /// match the group's stored epoch (out-of-order / stale / replay).
 pub const REASON_COMMIT_EPOCH_SKEW: &str = "mls_epoch_skew";
+/// Reject code for Welcome payloads that try to carry plaintext sender,
+/// profile, relationship, or device metadata outside the opaque MLS bytes.
+pub const REASON_WELCOME_METADATA_LEAK: &str = "mls_welcome_metadata_leak";
+/// Reject code for commits whose governance binding does not name an
+/// attested frontier to add into the covered-frontier accumulator.
+pub const REASON_COMMIT_COVERED_FRONTIER_MISSING: &str = "mls_covered_frontier_missing";
 
 /// G3.S1 — project a `cx.mls.keypackage` event with
 /// `payload.action == "publish"`.
@@ -179,11 +184,16 @@ pub fn apply_keypackage_claim(state: &mut ProjectionState, op: &Operation) -> Pr
 /// }
 /// ```
 ///
-/// TODO(G3.S1-followup): minimal metadata — strip Welcome envelope
-/// headers per the (forthcoming) `cx.mls.envelope.policy` ruleset so
-/// peers can forward without leaking sender / group metadata.
+/// The reducer intentionally stores only the routing tuple and opaque
+/// Welcome bytes. Any plaintext sender/profile/relationship metadata in
+/// the submitted envelope is rejected before the row is queued, which
+/// keeps cross-domain forwarders from learning more than the delivery
+/// key they need.
 pub fn apply_welcome_enqueue(state: &mut ProjectionState, op: &Operation) -> ProjectionEffectOut {
     let payload = &op.payload;
+    if welcome_payload_contains_forbidden_metadata(payload) {
+        return reject(REASON_WELCOME_METADATA_LEAK);
+    }
     let Some(welcome_id) = payload.get("welcome_id").and_then(Value::as_str) else {
         return reject("mls_welcome_id_missing");
     };
@@ -258,8 +268,6 @@ pub fn apply_welcome_enqueue(state: &mut ProjectionState, op: &Operation) -> Pro
 /// untouched and emit `ProjectionEffect::Rejected { reason:
 /// "mls_epoch_skew" }`.
 ///
-/// TODO(G3.S1-followup): covered_frontier — record which sync-frontier
-/// roots this epoch protects so plaintext fallback is gated.
 pub fn apply_commit_epoch(state: &mut ProjectionState, op: &Operation) -> ProjectionEffectOut {
     let payload = &op.payload;
     let Some(group_id) = payload.get("group_id").and_then(Value::as_str) else {
@@ -285,6 +293,10 @@ pub fn apply_commit_epoch(state: &mut ProjectionState, op: &Operation) -> Projec
     if let Err(reason) = crate::kinds::validate_mls_governance_binding(payload) {
         return reject(reason);
     }
+    let covered_delta = match extract_covered_frontier(payload) {
+        Some(frontier) => frontier,
+        None => return reject(REASON_COMMIT_COVERED_FRONTIER_MISSING),
+    };
 
     let current = state
         .mls_commit_epochs
@@ -296,12 +308,19 @@ pub fn apply_commit_epoch(state: &mut ProjectionState, op: &Operation) -> Projec
     }
     let new_epoch = current.saturating_add(1);
     let committed_at = op.created_at.timestamp();
+    let mut covered_frontier = state
+        .mls_commit_epochs
+        .get(group_id)
+        .map(|e| e.covered_frontier.clone())
+        .unwrap_or_default();
+    merge_frontier(&mut covered_frontier, &covered_delta);
     state.mls_commit_epochs.insert(
         group_id.to_owned(),
         MlsCommitEpoch {
             group_id: group_id.to_owned(),
             epoch: new_epoch,
             leader_actor_did: leader_actor_did.to_owned(),
+            covered_frontier: covered_frontier.clone(),
             committed_at,
         },
     );
@@ -311,6 +330,7 @@ pub fn apply_commit_epoch(state: &mut ProjectionState, op: &Operation) -> Projec
         previous_epoch: current,
         new_epoch,
         leader_actor_did: leader_actor_did.to_owned(),
+        covered_frontier,
     })
 }
 
@@ -341,6 +361,92 @@ fn parse_lifetime(v: Option<&Value>) -> Result<KeyPackageLifetime, &'static str>
         not_before,
         not_after,
     })
+}
+
+const WELCOME_FORBIDDEN_METADATA_KEYS: &[&str] = &[
+    "actor_id",
+    "principal_did",
+    "principal_id",
+    "sender_actor_did",
+    "sender_device_id",
+    "sender_display_name",
+    "sender_handle",
+    "sender_profile",
+    "device_list",
+    "relationship_graph",
+    "member_list",
+    "members",
+    "profile",
+    "identity_link",
+    "identity_links",
+    "delivery_binding",
+];
+
+fn welcome_payload_contains_forbidden_metadata(payload: &Value) -> bool {
+    let Some(object) = payload.as_object() else {
+        return false;
+    };
+    object
+        .keys()
+        .any(|key| WELCOME_FORBIDDEN_METADATA_KEYS.contains(&key.as_str()))
+        || object
+            .get("metadata")
+            .and_then(Value::as_object)
+            .is_some_and(metadata_object_contains_forbidden_key)
+        || object
+            .get("envelope_metadata")
+            .and_then(Value::as_object)
+            .is_some_and(metadata_object_contains_forbidden_key)
+}
+
+fn metadata_object_contains_forbidden_key(object: &Map<String, Value>) -> bool {
+    object
+        .keys()
+        .any(|key| WELCOME_FORBIDDEN_METADATA_KEYS.contains(&key.as_str()))
+}
+
+fn extract_covered_frontier(payload: &Value) -> Option<Vec<String>> {
+    let binding = payload
+        .get("governance_binding")
+        .or_else(|| payload.get("mls_governance_binding"))?;
+
+    let mut frontier = Vec::new();
+    push_frontier_values(binding.get("membership_frontier"), &mut frontier);
+    push_frontier_values(binding.get("covered_frontier"), &mut frontier);
+    push_frontier_values(
+        binding.get("covered_frontier_cell").and_then(|cell| {
+            cell.get("values")
+                .or_else(|| cell.get("members"))
+                .or_else(|| cell.get("anchors"))
+        }),
+        &mut frontier,
+    );
+    push_frontier_values(payload.get("covered_frontier"), &mut frontier);
+    frontier.sort();
+    frontier.dedup();
+    (!frontier.is_empty()).then_some(frontier)
+}
+
+fn push_frontier_values(value: Option<&Value>, out: &mut Vec<String>) {
+    match value {
+        Some(Value::String(value)) if !value.trim().is_empty() => {
+            out.push(value.to_owned());
+        }
+        Some(Value::Array(values)) => {
+            for value in values {
+                if let Some(value) = value.as_str().filter(|value| !value.trim().is_empty()) {
+                    out.push(value.to_owned());
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn merge_frontier(existing: &mut Vec<String>, delta: &[String]) {
+    existing.extend(delta.iter().cloned());
+    existing.sort();
+    existing.dedup();
 }
 
 /// Best-effort base64url-loose decode. Accepts both `URL_SAFE_NO_PAD`
@@ -388,6 +494,9 @@ mod tests {
         json!({
             "previous_epoch": previous_epoch,
             "next_epoch": previous_epoch + 1,
+            "membership_frontier": [
+                format!("cx:event:frontier-{previous_epoch}")
+            ],
             "threshold": {
                 "k": 2,
                 "n": 3,
@@ -582,6 +691,33 @@ mod tests {
     }
 
     #[test]
+    fn welcome_enqueue_rejects_plaintext_identity_metadata() {
+        let mut state = ProjectionState::default();
+        let enqueue = op_at(
+            300,
+            "cx.mls.welcome",
+            json!({
+                "welcome_id": "cx:mls_welcome:w-leaky",
+                "group_id": "cx:mls_group:abc",
+                "recipient_actor_did": "did:web:bob.example",
+                "recipient_device_id": "cx:device:bob-phone",
+                "welcome_bytes_b64": b64(b"opaque-welcome-bytes"),
+                "key_package_id": "cx:mls_keypackage:01",
+                "metadata": {
+                    "sender_handle": "@alice",
+                    "routing_hint": "ok"
+                }
+            }),
+        );
+        let effect = apply_welcome_enqueue(&mut state, &enqueue);
+        assert!(matches!(
+            effect,
+            ProjectionEffect::Rejected { reason } if reason == REASON_WELCOME_METADATA_LEAK
+        ));
+        assert!(state.mls_welcomes.is_empty());
+    }
+
+    #[test]
     fn commit_epoch_in_order_succeeds() {
         let mut state = ProjectionState::default();
         // First commit on a brand-new group — expected_prev_epoch=0 → epoch=1.
@@ -601,10 +737,12 @@ mod tests {
             ProjectionEffect::Mls(MlsEffect::CommitEpochAdvanced {
                 previous_epoch,
                 new_epoch,
+                ref covered_frontier,
                 ..
             }) => {
                 assert_eq!(previous_epoch, 0);
                 assert_eq!(new_epoch, 1);
+                assert_eq!(covered_frontier, &vec!["cx:event:frontier-0".to_owned()]);
             }
             other => panic!("expected CommitEpochAdvanced, got {other:?}"),
         }
@@ -627,13 +765,53 @@ mod tests {
             ProjectionEffect::Mls(MlsEffect::CommitEpochAdvanced { new_epoch: 2, .. })
         ));
         assert_eq!(
-            state
-                .mls_commit_epochs
-                .get("cx:mls_group:abc")
-                .unwrap()
-                .epoch,
-            2
+            state.mls_commit_epochs.get("cx:mls_group:abc").unwrap(),
+            &MlsCommitEpoch {
+                group_id: "cx:mls_group:abc".to_owned(),
+                epoch: 2,
+                leader_actor_did: "did:web:alice.example".to_owned(),
+                covered_frontier: vec![
+                    "cx:event:frontier-0".to_owned(),
+                    "cx:event:frontier-1".to_owned()
+                ],
+                committed_at: 501,
+            }
         );
+    }
+
+    #[test]
+    fn commit_epoch_requires_covered_frontier() {
+        let mut state = ProjectionState::default();
+        let effect = apply_commit_epoch(
+            &mut state,
+            &op_at(
+                500,
+                "cx.mls.commit",
+                json!({
+                    "group_id": "cx:mls_group:abc",
+                    "expected_prev_epoch": 0,
+                    "leader_actor_did": "did:web:alice.example",
+                    "commit_bytes_b64": b64(b"opaque-commit-1"),
+                    "governance_binding": {
+                        "previous_epoch": 0,
+                        "next_epoch": 1,
+                        "threshold": {
+                            "k": 1,
+                            "n": 1,
+                            "signers": ["did:web:alice.example"]
+                        },
+                        "signatures": [
+                            {"signer_did": "did:web:alice.example", "signature_b64": "alice-partial"}
+                        ]
+                    },
+                }),
+            ),
+        );
+        assert!(matches!(
+            effect,
+            ProjectionEffect::Rejected { reason } if reason == REASON_COMMIT_COVERED_FRONTIER_MISSING
+        ));
+        assert!(state.mls_commit_epochs.is_empty());
     }
 
     #[test]

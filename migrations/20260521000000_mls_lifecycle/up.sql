@@ -5,17 +5,12 @@
 -- `reducer::ProjectionState::mls_welcomes` /
 -- `reducer::ProjectionState::mls_commit_epochs`).
 --
--- TODO(G3.S1-followup): governance_binding column on `mls_commits`
--- (multi-sig commit attestation envelope reference).
--- TODO(G3.S1-followup): covered_frontier table — declares which
--- sync-frontier roots are MLS-protected by each commit epoch so peers
--- can gate plaintext fallback.
 -- TODO(G3.S1-followup): decryption_pending table — deferred-decryption
 -- queue keyed by `(recipient_actor_did, recipient_device_id, group_id,
 -- expected_epoch)` for messages that arrived before the key material.
--- TODO(G3.S1-followup): minimal_metadata — envelope-stripping policy
--- table so peers know which header fields to redact when forwarding
--- an MLS-protected envelope.
+-- Welcome rows store only the delivery tuple plus opaque bytes; the
+-- reducer rejects plaintext sender/profile/relationship metadata before
+-- enqueueing so cross-domain forwarders receive minimal routing data.
 
 -- KeyPackages. The CAS claim path uses
 --   `UPDATE mls_key_packages SET claimed_by_group_id=$2, consumed_at=$3
@@ -54,11 +49,15 @@ CREATE INDEX IF NOT EXISTS mls_welcomes_recipient_pending
 
 -- Commit epoch — one row per MLS group; monotonic counter bumped by the
 -- CAS path `UPDATE mls_commits SET epoch=$2, leader_actor_did=$3,
--- committed_at=$4 WHERE group_id=$1 AND epoch=$expected_prev RETURNING *`
--- (or INSERT when no row exists yet).
+-- covered_frontier=$4, governance_binding=$5, committed_at=$6
+-- WHERE group_id=$1 AND epoch=$expected_prev RETURNING *` (or INSERT
+-- when no row exists yet). `covered_frontier` is an or-set shaped JSON
+-- array of governance Anchor frontiers attested by accepted commits.
 CREATE TABLE IF NOT EXISTS mls_commits (
     group_id TEXT PRIMARY KEY,
     epoch BIGINT NOT NULL,
     leader_actor_did TEXT NOT NULL,
+    covered_frontier JSONB NOT NULL DEFAULT '[]'::jsonb,
+    governance_binding JSONB NOT NULL DEFAULT '{}'::jsonb,
     committed_at BIGINT NOT NULL
 );

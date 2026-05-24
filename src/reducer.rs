@@ -183,8 +183,9 @@ pub struct ProjectionState {
     /// G3.S1 — per-group MLS commit-epoch state. The reducer keeps the
     /// monotonic epoch counter in lockstep with `apply_commit_epoch`
     /// CAS rules: each accepted commit bumps the value by exactly +1
-    /// from the previous epoch. Stale / out-of-order commits are
-    /// rejected with `mls_epoch_skew`.
+    /// from the previous epoch. The same row accumulates the governance
+    /// Anchor frontier covered by accepted MLS commits so E2EE message
+    /// paths can gate plaintext fallback against stale epochs.
     pub mls_commit_epochs: BTreeMap<String, MlsCommitEpoch>,
     /// G3.S2 — per-Realm `cx.realm.policy_server` projection. Cas-
     /// register semantics — last write wins. Org-level fallback (when
@@ -441,7 +442,9 @@ pub struct MlsWelcome {
 /// Each successful `apply_commit_epoch` bumps `epoch` by exactly +1
 /// from `expected_prev_epoch`; out-of-order or stale commits leave the
 /// row untouched and the reducer returns `Rejected { reason:
-/// "mls_epoch_skew" }`.
+/// "mls_epoch_skew" }`. `covered_frontier` is the or-set style
+/// accumulator for governance Anchor ids / tags attested by accepted
+/// commits for this group.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MlsCommitEpoch {
     /// MLS group id (`cx:mls_group:<...>`).
@@ -452,6 +455,7 @@ pub struct MlsCommitEpoch {
     /// DID of the committer (the `leader` per MLS terminology — the
     /// member whose Commit was accepted).
     pub leader_actor_did: String,
+    pub covered_frontier: Vec<String>,
     pub committed_at: i64,
 }
 
@@ -925,12 +929,14 @@ pub enum MlsEffect {
         group_id: String,
     },
     /// `apply_commit_epoch` — the group's epoch was bumped from
-    /// `previous_epoch` to `new_epoch`.
+    /// `previous_epoch` to `new_epoch` and the attested governance
+    /// frontier was merged into the group's covered-frontier accumulator.
     CommitEpochAdvanced {
         group_id: String,
         previous_epoch: u64,
         new_epoch: u64,
         leader_actor_did: String,
+        covered_frontier: Vec<String>,
     },
 }
 
@@ -1577,13 +1583,14 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
         apply_realm_audit_policy_downgrade_dispatch,
     );
     // G3.S1: MLS lifecycle. KeyPackage publish/claim (atomic CAS),
-    // Welcome to-device persistence, commit monotonic-epoch bump.
+    // Welcome to-device persistence, commit monotonic-epoch bump, and
+    // governance covered-frontier accumulation.
     // Canonical event kinds — the publish/claim distinction lives at the
     // HTTP operation_id layer and is conveyed inside the kind's payload
     // via `action ∈ {"publish","claim"}`; the event log itself stores
     // only the canonical `cx.mls.keypackage` kind.
-    // Deferred (TODO(G3.S1-followup)): governance_binding, covered_frontier,
-    // decryption_pending, minimal metadata. See `reducer/mls.rs`.
+    // Deferred (TODO(G3.S1-followup)): decryption_pending. See
+    // `reducer/mls.rs`.
     m.insert(CX_MLS_KEYPACKAGE, apply_mls_keypackage_dispatch);
     m.insert(CX_MLS_WELCOME, apply_mls_welcome_dispatch);
     m.insert(CX_MLS_COMMIT, apply_mls_commit_dispatch);
