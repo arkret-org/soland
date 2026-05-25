@@ -182,6 +182,10 @@ pub struct MorphProjectionRecord {
     pub space_id: String,
     pub morph_type: String,
     pub title: Option<String>,
+    pub fields: serde_json::Value,
+    pub schema_refs: serde_json::Value,
+    pub facets: serde_json::Value,
+    pub versions: serde_json::Value,
     pub state: String,
     pub state_changed_at: Option<chrono::DateTime<chrono::Utc>>,
     pub created_by: String,
@@ -6937,6 +6941,14 @@ struct MorphProjectionRow {
     morph_type: String,
     #[diesel(sql_type = Nullable<Text>)]
     title: Option<String>,
+    #[diesel(sql_type = Jsonb)]
+    fields: serde_json::Value,
+    #[diesel(sql_type = Jsonb)]
+    schema_refs: serde_json::Value,
+    #[diesel(sql_type = Jsonb)]
+    facets: serde_json::Value,
+    #[diesel(sql_type = Jsonb)]
+    versions: serde_json::Value,
     #[diesel(sql_type = Text)]
     state: String,
     #[diesel(sql_type = Nullable<Timestamptz>)]
@@ -6958,6 +6970,10 @@ impl From<MorphProjectionRow> for MorphProjectionRecord {
             space_id: row.space_id,
             morph_type: row.morph_type,
             title: row.title,
+            fields: row.fields,
+            schema_refs: row.schema_refs,
+            facets: row.facets,
+            versions: row.versions,
             state: row.state,
             state_changed_at: row.state_changed_at,
             created_by: row.created_by,
@@ -6968,8 +6984,9 @@ impl From<MorphProjectionRow> for MorphProjectionRecord {
     }
 }
 
-const MORPH_PROJECTION_COLUMNS: &str = "morph_id, space_id, morph_type, title, state, \
-     state_changed_at, created_by, created_at, updated_by, updated_at";
+const MORPH_PROJECTION_COLUMNS: &str = "morph_id, space_id, morph_type, title, fields, \
+     schema_refs, facets, versions, state, state_changed_at, created_by, created_at, updated_by, \
+     updated_at";
 
 impl MorphProjectionStore for PgMorphProjectionStore {
     fn get(&self, morph_id: &str) -> PersistenceResult<Option<MorphProjectionRecord>> {
@@ -6988,13 +7005,17 @@ impl MorphProjectionStore for PgMorphProjectionStore {
         let mut conn = pg_conn(&self.pool)?;
         sql_query(
             "INSERT INTO projection_morphs \
-             (morph_id, space_id, morph_type, title, state, state_changed_at, \
-              created_by, created_at, updated_by, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) \
+             (morph_id, space_id, morph_type, title, fields, schema_refs, facets, versions, \
+              state, state_changed_at, created_by, created_at, updated_by, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) \
              ON CONFLICT (morph_id) DO UPDATE SET \
                 space_id = EXCLUDED.space_id, \
                 morph_type = EXCLUDED.morph_type, \
                 title = EXCLUDED.title, \
+                fields = EXCLUDED.fields, \
+                schema_refs = EXCLUDED.schema_refs, \
+                facets = EXCLUDED.facets, \
+                versions = EXCLUDED.versions, \
                 state = EXCLUDED.state, \
                 state_changed_at = EXCLUDED.state_changed_at, \
                 updated_by = EXCLUDED.updated_by, \
@@ -7004,6 +7025,10 @@ impl MorphProjectionStore for PgMorphProjectionStore {
         .bind::<Text, _>(&record.space_id)
         .bind::<Text, _>(&record.morph_type)
         .bind::<Nullable<Text>, _>(&record.title)
+        .bind::<Jsonb, _>(&record.fields)
+        .bind::<Jsonb, _>(&record.schema_refs)
+        .bind::<Jsonb, _>(&record.facets)
+        .bind::<Jsonb, _>(&record.versions)
         .bind::<Text, _>(&record.state)
         .bind::<Nullable<Timestamptz>, _>(record.state_changed_at)
         .bind::<Text, _>(&record.created_by)

@@ -35,6 +35,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use contrix_sdk::lattice::CellState;
 use contrix_sdk::state_res::{CellRegistry, CellStore, StoreError};
 use contrix_sdk::{CellRef, Operation, SpaceId};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::hlc::ServerHlc;
@@ -552,12 +553,32 @@ pub struct MorphProjection {
     pub space_id: String,
     pub morph_type: String,
     pub title: Option<String>,
+    pub fields: BTreeMap<String, Value>,
+    pub schema_refs: Vec<String>,
+    pub facets: Vec<String>,
+    pub versions: Vec<DocumentVersionProjection>,
     pub state: ObjectLifecycleState,
     pub state_changed_at: Option<chrono::DateTime<chrono::Utc>>,
     pub created_by: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_by: Option<String>,
     pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+/// Materialized version row for document-shaped Morphs.
+///
+/// This is intentionally projection-side state: the canonical source remains
+/// the ordered `cx.morph.create` / `cx.morph.update` event stream, while the
+/// read API exposes a compact version list for clients that need to hydrate a
+/// document view without replaying the whole history.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DocumentVersionProjection {
+    pub version_id: String,
+    pub event_id: String,
+    pub author: String,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub body_digest: String,
+    pub body: Value,
 }
 
 /// Server-side Applet registry entry. Populated by
@@ -1573,9 +1594,8 @@ fn has_active_realm_link_to_source(
         .realm_links
         .get(realm_id)
         .map(|rows| {
-            rows.iter().any(|row| {
-                row.target_realm_id == source_realm_id && row.status == "active"
-            })
+            rows.iter()
+                .any(|row| row.target_realm_id == source_realm_id && row.status == "active")
         })
         .unwrap_or(false)
 }
@@ -1727,9 +1747,15 @@ fn capability_grant_cells(state: &ProjectionState) -> impl Iterator<Item = (&Cel
 }
 
 fn grant_ids_match(value: &Value, id: &str) -> bool {
-    ["id", "grant_id", "capability_id", "event_id", "operation_id"]
-        .into_iter()
-        .any(|field| value.get(field).and_then(Value::as_str) == Some(id))
+    [
+        "id",
+        "grant_id",
+        "capability_id",
+        "event_id",
+        "operation_id",
+    ]
+    .into_iter()
+    .any(|field| value.get(field).and_then(Value::as_str) == Some(id))
         || value
             .get("grant")
             .map(|grant| grant_ids_match(grant, id))
@@ -1768,11 +1794,17 @@ fn grant_snapshot_from_value(value: &Value) -> CapabilityGrantSnapshot {
         .or_else(|| value.get("realm_id").and_then(Value::as_str))
         .map(ToOwned::to_owned);
 
-    let expires_at = parse_rfc3339_utc(body, "expires_at")
-        .or_else(|| parse_rfc3339_utc(value, "expires_at"));
+    let expires_at =
+        parse_rfc3339_utc(body, "expires_at").or_else(|| parse_rfc3339_utc(value, "expires_at"));
 
-    let revoked = body.get("revoked").and_then(Value::as_bool).unwrap_or(false)
-        || value.get("revoked").and_then(Value::as_bool).unwrap_or(false)
+    let revoked = body
+        .get("revoked")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+        || value
+            .get("revoked")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
         || body.get("revoked_at").is_some()
         || body.get("revoked_by").is_some()
         || value.get("revoked_at").is_some()
@@ -1944,10 +1976,11 @@ fn validate_derived_capability(
 
     let requested_constraints = value_array_field(payload, "constraints");
     if !requested_constraints.is_empty()
-        && grant
-            .constraints
-            .iter()
-            .any(|source| !requested_constraints.iter().any(|derived| derived == source))
+        && grant.constraints.iter().any(|source| {
+            !requested_constraints
+                .iter()
+                .any(|derived| derived == source)
+        })
     {
         return Err("capability_derived_constraint_widening");
     }
@@ -2407,7 +2440,9 @@ fn flow_position_from_create_payload(
     Some((board_space_id, list_space_id, rank))
 }
 
-fn flow_position_from_lifecycle_payload(payload: &Value) -> Option<(String, String, Option<String>)> {
+fn flow_position_from_lifecycle_payload(
+    payload: &Value,
+) -> Option<(String, String, Option<String>)> {
     let board_space_id = payload
         .get("board_space_id")
         .and_then(Value::as_str)
@@ -2470,10 +2505,12 @@ fn flow_status_patch_target(payload: &Value) -> Result<Option<String>, &'static 
         return Ok(None);
     };
     let value = patch.get("fields.status").or_else(|| {
-        patch.get("fields").and_then(|fields_patch| match patch_action(fields_patch) {
-            PatchAction::Set(value) => value.get("status"),
-            PatchAction::Unset | PatchAction::Ignore => None,
-        })
+        patch
+            .get("fields")
+            .and_then(|fields_patch| match patch_action(fields_patch) {
+                PatchAction::Set(value) => value.get("status"),
+                PatchAction::Unset | PatchAction::Ignore => None,
+            })
     });
     let Some(value) = value else {
         return Ok(None);
@@ -2562,6 +2599,79 @@ fn apply_flow_fields_patch(
             }
             PatchAction::Ignore => {}
         }
+    }
+}
+
+fn object_map_to_fields(object: Option<&Value>) -> BTreeMap<String, Value> {
+    object
+        .and_then(Value::as_object)
+        .map(|fields| {
+            fields
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect::<BTreeMap<_, _>>()
+        })
+        .unwrap_or_default()
+}
+
+fn string_array_field(object: &serde_json::Map<String, Value>, key: &str) -> Vec<String> {
+    let Some(value) = object.get(key) else {
+        return Vec::new();
+    };
+    if let Some(items) = value.as_array() {
+        return items
+            .iter()
+            .filter_map(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .map(ToOwned::to_owned)
+            .collect::<Vec<_>>();
+    }
+    value
+        .as_object()
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|(facet, enabled)| enabled.as_bool().unwrap_or(true).then_some(facet))
+                .filter(|value| !value.trim().is_empty())
+                .cloned()
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
+
+fn morph_document_body(fields: &BTreeMap<String, Value>) -> Option<Value> {
+    fields
+        .get("document")
+        .or_else(|| fields.get("body"))
+        .cloned()
+        .filter(|value| !value.is_null())
+}
+
+fn document_version_from_operation(
+    morph_id: &str,
+    operation: &Operation,
+    body: Value,
+) -> DocumentVersionProjection {
+    let event_id = operation
+        .payload
+        .get("event_id")
+        .and_then(Value::as_str)
+        .unwrap_or(operation.operation_id.as_str())
+        .to_owned();
+    let body_digest = contrix_sdk::canonical::canonical_sha256(&body)
+        .unwrap_or_else(|_| contrix_sdk::canonical::sha256_digest(body.to_string().as_bytes()));
+    DocumentVersionProjection {
+        version_id: format!("{morph_id}:version:{event_id}"),
+        event_id,
+        author: operation
+            .payload
+            .get("sender")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_owned(),
+        created_at: operation.created_at,
+        body_digest,
+        body,
     }
 }
 
@@ -2819,12 +2929,14 @@ impl ProjectionState {
         relation.relation_kind = "contains".to_owned();
         relation.from_ref = Some(list_space_id.to_owned());
         relation.to_ref = Some(flow_id.to_owned());
-        relation
-            .fields
-            .insert("board_space_id".to_owned(), Value::String(board_space_id.to_owned()));
-        relation
-            .fields
-            .insert("list_space_id".to_owned(), Value::String(list_space_id.to_owned()));
+        relation.fields.insert(
+            "board_space_id".to_owned(),
+            Value::String(board_space_id.to_owned()),
+        );
+        relation.fields.insert(
+            "list_space_id".to_owned(),
+            Value::String(list_space_id.to_owned()),
+        );
         if let Some(rank) = rank {
             relation
                 .fields
@@ -3014,11 +3126,8 @@ impl ProjectionState {
     }
 
     fn apply_poll_create(&mut self, message: &MessageState) {
-        let poll_id = poll_id_from_content(&message.content).unwrap_or_else(|| {
-            message
-                .event_id
-                .replacen("cx:event:", "cx:message:", 1)
-        });
+        let poll_id = poll_id_from_content(&message.content)
+            .unwrap_or_else(|| message.event_id.replacen("cx:event:", "cx:message:", 1));
         let Some(question) = poll_question_from_content(&message.content) else {
             return;
         };
@@ -3080,7 +3189,11 @@ impl ProjectionState {
                 reason: "poll_closed".to_owned(),
             };
         }
-        let valid: BTreeSet<String> = poll.options.iter().map(|option| option.id.clone()).collect();
+        let valid: BTreeSet<String> = poll
+            .options
+            .iter()
+            .map(|option| option.id.clone())
+            .collect();
         let selected: BTreeSet<String> = choices
             .into_iter()
             .filter(|choice| valid.contains(choice))
@@ -3849,8 +3962,7 @@ impl ProjectionState {
             };
         }
         let allowed_policies = inheritance_allowed_policies(&operation.payload);
-        let allowed_capability_bundles =
-            inheritance_allowed_capability_bundles(&operation.payload);
+        let allowed_capability_bundles = inheritance_allowed_capability_bundles(&operation.payload);
 
         if has_active_realm_link_to_source(self, &realm_id, source_realm_id) {
             if let Err(reason) =
@@ -3961,11 +4073,7 @@ impl ProjectionState {
                 reason: "capability_derived_inheritance_policy_missing".to_owned(),
             };
         };
-        if !inheritance_policy_ref_matches(
-            self,
-            &realm_id,
-            &source_realm_inheritance_policy_ref,
-        ) {
+        if !inheritance_policy_ref_matches(self, &realm_id, &source_realm_inheritance_policy_ref) {
             return ProjectionEffect::Rejected {
                 reason: "capability_derived_inheritance_ref_stale".to_owned(),
             };
@@ -4037,7 +4145,10 @@ impl ProjectionState {
                 Value::String(inheritance_policy.source_realm_id.clone()),
             );
             if let Some(kind) = source_link_kind.as_deref() {
-                value.insert("source_link_kind".to_owned(), Value::String(kind.to_owned()));
+                value.insert(
+                    "source_link_kind".to_owned(),
+                    Value::String(kind.to_owned()),
+                );
             }
             value.insert(
                 "effective_actions".to_owned(),
@@ -5402,11 +5513,9 @@ impl ProjectionState {
     /// Read-only preflight for profile-level Flow status FSM stored at
     /// `fields.status`. This guards common workflow statuses while leaving
     /// unknown/custom statuses to Realm profiles.
-    pub fn check_flow_status_transition(
-        &self,
-        operation: &Operation,
-    ) -> Result<(), &'static str> {
-        if crate::kinds::canonical_kind_for_operation(operation) != Some(crate::kinds::CX_FLOW_UPDATE)
+    pub fn check_flow_status_transition(&self, operation: &Operation) -> Result<(), &'static str> {
+        if crate::kinds::canonical_kind_for_operation(operation)
+            != Some(crate::kinds::CX_FLOW_UPDATE)
         {
             return Ok(());
         }
@@ -5427,13 +5536,16 @@ impl ProjectionState {
         operation: &Operation,
         actor_id: &str,
     ) -> Option<Value> {
-        if crate::kinds::canonical_kind_for_operation(operation) != Some(crate::kinds::CX_FLOW_UPDATE)
+        if crate::kinds::canonical_kind_for_operation(operation)
+            != Some(crate::kinds::CX_FLOW_UPDATE)
         {
             return None;
         }
         let flow_id = flow_id_from_payload(&operation.payload)?;
         let flow = self.flows.get(flow_id)?;
-        let next_status = flow_status_patch_target(&operation.payload).ok().flatten()?;
+        let next_status = flow_status_patch_target(&operation.payload)
+            .ok()
+            .flatten()?;
         let current_status = flow.fields.get("status").and_then(Value::as_str)?;
         if current_status == next_status {
             return None;
@@ -5633,8 +5745,7 @@ impl ProjectionState {
         operation: &Operation,
         now: chrono::DateTime<chrono::Utc>,
     ) -> ProjectionEffect {
-        let Some(flow_id) = flow_id_from_payload(&operation.payload).map(ToOwned::to_owned)
-        else {
+        let Some(flow_id) = flow_id_from_payload(&operation.payload).map(ToOwned::to_owned) else {
             return ProjectionEffect::Rejected {
                 reason: "flow_update_missing_flow_id".to_owned(),
             };
@@ -5963,6 +6074,9 @@ impl ProjectionState {
             .get("title")
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned);
+        let fields = object_map_to_fields(object.get("fields"));
+        let schema_refs = string_array_field(object, "schema_refs");
+        let facets = string_array_field(object, "facets");
         let space_id = object
             .get("space_id")
             .and_then(|v| v.as_str())
@@ -5980,12 +6094,19 @@ impl ProjectionState {
                     .map(ToOwned::to_owned)
             })
             .unwrap_or_default();
+        let versions = morph_document_body(&fields)
+            .map(|body| vec![document_version_from_operation(&morph_id, operation, body)])
+            .unwrap_or_default();
 
         let projection = MorphProjection {
             morph_id: morph_id.clone(),
             space_id,
             morph_type,
             title,
+            fields,
+            schema_refs,
+            facets,
+            versions,
             state: ObjectLifecycleState::Active,
             state_changed_at: None,
             created_by,
@@ -6027,12 +6148,13 @@ impl ProjectionState {
         }
         let patch = operation.payload.get("patch").and_then(|v| v.as_object());
         if let Some(patch) = patch {
-            if let Some(title) = patch.get("title").and_then(|v| v.as_str()) {
-                morph.title = Some(title.to_owned());
+            if let Some(title) = patch_string_value(patch, "title") {
+                morph.title = title;
             }
-            if let Some(morph_type) = patch.get("morph_type").and_then(|v| v.as_str()) {
-                morph.morph_type = morph_type.to_owned();
+            if let Some(morph_type) = patch_string_value(patch, "morph_type").flatten() {
+                morph.morph_type = morph_type;
             }
+            apply_flow_fields_patch(&mut morph.fields, patch);
         }
         morph.updated_by = operation
             .payload
@@ -6040,6 +6162,16 @@ impl ProjectionState {
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned);
         morph.updated_at = Some(now);
+        if let Some(body) = morph_document_body(&morph.fields) {
+            let next = document_version_from_operation(&morph_id, operation, body);
+            let already_recorded = morph
+                .versions
+                .last()
+                .is_some_and(|current| current.body_digest == next.body_digest);
+            if !already_recorded {
+                morph.versions.push(next);
+            }
+        }
         ProjectionEffect::MorphLifecycle {
             morph_id,
             new_state: morph.state,

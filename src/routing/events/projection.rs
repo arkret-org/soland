@@ -896,6 +896,15 @@ fn write_through_projection(state: &AppState, operation: &Operation) {
             space_id: m.space_id.clone(),
             morph_type: m.morph_type.clone(),
             title: m.title.clone(),
+            fields: serde_json::Value::Object(
+                m.fields
+                    .iter()
+                    .map(|(key, value)| (key.clone(), value.clone()))
+                    .collect(),
+            ),
+            schema_refs: json!(m.schema_refs),
+            facets: json!(m.facets),
+            versions: json!(m.versions),
             state: object_state_str(m.state).to_owned(),
             state_changed_at: m.state_changed_at,
             created_by: m.created_by.clone(),

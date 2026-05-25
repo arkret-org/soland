@@ -6352,6 +6352,40 @@ fn normalize_morph_payload(kind: &str, payload: &mut Value) {
     }
 }
 
+/// Build a signed relation event envelope for read-model projection tests.
+fn signed_relation_event(
+    event_id: &str,
+    actor_seq: u64,
+    payload: Value,
+    prev_refs: Vec<&str>,
+) -> Value {
+    let mut event = serde_json::json!({
+        "event_id": event_id,
+        "kind": "cx.relation.create",
+        "schema_id": "cx.schema.event_payload.v1",
+        "actor_id": "did:web:alice.example",
+        "actor_seq": actor_seq,
+        "realm_id": DEMO_REALM_ID,
+        "created_at": "2026-05-17T00:00:00Z",
+        "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
+        "audience": "did:web:soland.local",
+        "domain": "did:web:soland.local",
+        "prev_refs": prev_refs,
+        "auth_refs": [],
+        "payload": payload.clone(),
+        "proofs": [{
+            "type": "dev-proof",
+            "verification_method": "did:web:alice.example#01904100-0000-7000-8000-a11ce0000001",
+            "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
+            "audience": "did:web:soland.local",
+            "domain": "did:web:soland.local",
+            "payload_digest": sha256_json(&payload)
+        }]
+    });
+    event["canonical_digest"] = Value::String(event_canonical_digest(&event));
+    event
+}
+
 /// Round 13 — end-to-end check that Flow / Morph lifecycle state-machine
 /// guards map to HTTP 412 + canonical reason_code per spec §5.1. Mirrors
 /// `space_container_lifecycle_state_machine_returns_412_for_illegal_transitions`
@@ -7578,6 +7612,192 @@ async fn projection_morphs_endpoint_reports_lifecycle_state() {
     .send(&app_from_state(state.clone()))
     .await;
     assert_eq!(unauth.status_code, Some(StatusCode::UNAUTHORIZED));
+}
+
+#[tokio::test]
+async fn projection_document_endpoint_reports_body_versions_relations_and_range_comments() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+    let realm_id = DEMO_REALM_ID;
+    let morph_id = "cx:morph:01904100-0000-7000-8000-d21dc0000001";
+    let relation_id = "cx:relation:01904100-0000-7000-8000-d21dc0000001";
+    let incident_ref = "cx:flow:01904100-0000-7000-8000-d21dc0000100";
+
+    let initial_body = serde_json::json!({
+        "schema_version": 1,
+        "blocks": [{
+            "id": "b1",
+            "kind": "Paragraph",
+            "content": "abcdefghij"
+        }]
+    });
+    let create_event = signed_morph_event(
+        "cx:event:01904100-0000-7000-8000-d21ec0000001",
+        1,
+        "cx.morph.create",
+        serde_json::json!({
+            "object": {
+                "id": morph_id,
+                "space_id": realm_id,
+                "morph_type": "document",
+                "title": "Postmortem draft",
+                "schema_refs": ["cx.schema.morph.v1"],
+                "facets": {
+                    "documentable": {}
+                },
+                "fields": {
+                    "document": initial_body
+                },
+                "created_by": "did:web:alice.example",
+            }
+        }),
+        Vec::new(),
+    );
+    let create_response: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&create_event)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    if create_response["status"] != "accepted" {
+        panic!("create document morph response: {create_response}");
+    }
+
+    let relation_event = signed_relation_event(
+        "cx:event:01904100-0000-7000-8000-d21ec0000002",
+        2,
+        serde_json::json!({
+            "relation_id": relation_id,
+            "kind": "references",
+            "from_ref": morph_id,
+            "to_ref": incident_ref,
+            "fields": {
+                "role": "postmortem_for"
+            }
+        }),
+        vec!["cx:event:01904100-0000-7000-8000-d21ec0000001"],
+    );
+    let relation_response: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&relation_event)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(
+        relation_response["status"], "accepted",
+        "create document relation response: {relation_response}"
+    );
+
+    let comment_response = submit_message_event(
+        state.clone(),
+        &token,
+        "did:web:alice.example",
+        realm_id,
+        morph_id,
+        serde_json::json!({
+            "kind": "cx.content.text",
+            "morph_id": morph_id,
+            "anchor_range": {
+                "target_ref": morph_id,
+                "start": 2,
+                "end": 9
+            },
+            "body": "tighten this section"
+        }),
+        false,
+    )
+    .await;
+    if comment_response["canonical_event_envelope"] != true {
+        panic!("create document comment response: {comment_response}");
+    }
+
+    let updated_body = serde_json::json!({
+        "schema_version": 1,
+        "blocks": [{
+            "id": "b1",
+            "kind": "Paragraph",
+            "content": "abc"
+        }]
+    });
+    let update_event = signed_morph_event(
+        "cx:event:01904100-0000-7000-8000-d21ec0000003",
+        20_000,
+        "cx.morph.update",
+        serde_json::json!({
+            "morph_id": morph_id,
+            "target_ref": morph_id,
+            "patch": {
+                "fields": {
+                    "$op": "set",
+                    "value": {
+                        "document": updated_body
+                    }
+                }
+            }
+        }),
+        vec!["cx:event:01904100-0000-7000-8000-d21ec0000001"],
+    );
+    let update_response: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&update_event)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(
+        update_response["status"], "accepted",
+        "update document morph response: {update_response}"
+    );
+
+    let body: Value = TestClient::get(format!(
+        "http://server/api/v1/projection/documents/{morph_id}"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    assert_eq!(body["document"]["morph_id"], morph_id);
+    assert_eq!(body["document"]["realm_id"], realm_id);
+    assert_eq!(body["document"]["morph_type"], "document");
+    assert_eq!(body["document"]["body"], updated_body);
+    assert_eq!(body["document"]["fields"]["document"], updated_body);
+    assert_eq!(body["document"]["schema_refs"][0], "cx.schema.morph.v1");
+    assert_eq!(body["document"]["facets"][0], "documentable");
+
+    let versions = body["versions"].as_array().expect("versions array");
+    assert_eq!(versions.len(), 2);
+    assert_eq!(versions[0]["body"], initial_body);
+    assert_eq!(versions[1]["body"], updated_body);
+    assert_ne!(versions[0]["body_digest"], versions[1]["body_digest"]);
+
+    let relation = body["relations"]
+        .as_array()
+        .expect("relations array")
+        .iter()
+        .find(|relation| relation["relation_id"] == relation_id)
+        .expect("document relation projected");
+    assert_eq!(relation["relation_kind"], "references");
+    assert_eq!(relation["from"], morph_id);
+    assert_eq!(relation["to"], incident_ref);
+    assert_eq!(relation["fields"]["role"], "postmortem_for");
+
+    let comment = body["comments"]
+        .as_array()
+        .expect("comments array")
+        .iter()
+        .find(|comment| comment["body"] == "tighten this section")
+        .expect("document range comment projected");
+    assert_eq!(comment["anchor_range"]["start"], 2);
+    assert_eq!(comment["anchor_range"]["end"], 9);
+    assert_eq!(comment["state"], "orphaned");
+    assert_eq!(body["cursor_presence"].as_array().unwrap().len(), 0);
 }
 
 /// Round 15b (2026-05-16) — `cx.applet.registration` + `cx.applet.discovery`

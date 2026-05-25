@@ -1267,6 +1267,39 @@ fn hydrate_projections_from_persistence(
                     space_id: record.space_id,
                     morph_type: record.morph_type,
                     title: record.title,
+                    fields: record
+                        .fields
+                        .as_object()
+                        .map(|fields| {
+                            fields
+                                .iter()
+                                .map(|(key, value)| (key.clone(), value.clone()))
+                                .collect()
+                        })
+                        .unwrap_or_default(),
+                    schema_refs: record
+                        .schema_refs
+                        .as_array()
+                        .map(|items| {
+                            items
+                                .iter()
+                                .filter_map(serde_json::Value::as_str)
+                                .map(ToOwned::to_owned)
+                                .collect()
+                        })
+                        .unwrap_or_default(),
+                    facets: record
+                        .facets
+                        .as_array()
+                        .map(|items| {
+                            items
+                                .iter()
+                                .filter_map(serde_json::Value::as_str)
+                                .map(ToOwned::to_owned)
+                                .collect()
+                        })
+                        .unwrap_or_default(),
+                    versions: serde_json::from_value(record.versions).unwrap_or_default(),
                     state,
                     state_changed_at: record.state_changed_at,
                     created_by: record.created_by,

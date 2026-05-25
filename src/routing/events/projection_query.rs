@@ -36,13 +36,15 @@ use contrix_sdk::{
     ProjectionSpacesResBody, RealmId, SpaceId,
 };
 use salvo::http::StatusCode;
-use salvo::oapi::extract::QueryParam;
+use salvo::oapi::extract::{PathParam, QueryParam};
 use salvo::prelude::*;
+use serde_json::{Value, json};
 
 use super::realm_id_accessible;
 use crate::error::{AppError, ErrorCode};
 use crate::reducer::{
-    ObjectLifecycleState, ProjectionState, RelationState, SpaceContainerLifecycleState,
+    MorphProjection, ObjectLifecycleState, ProjectionState, RelationState,
+    SpaceContainerLifecycleState,
 };
 use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
@@ -53,6 +55,7 @@ pub(super) fn router() -> Router {
         .push(Router::with_path("projection/spaces").get(list_space_container_projections))
         .push(Router::with_path("projection/flows").get(list_flow_projections))
         .push(Router::with_path("projection/morphs").get(list_morph_projections))
+        .push(Router::with_path("projection/documents/{morph_id}").get(read_document_projection))
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────
@@ -149,6 +152,158 @@ fn flow_position_fields(
         .transpose()?;
     let rank = relation_string_field(relation, "rank").map(ToOwned::to_owned);
     Ok((board_space_id, list_space_id, rank))
+}
+
+fn document_body_from_morph(morph: &MorphProjection) -> Value {
+    morph
+        .fields
+        .get("document")
+        .or_else(|| morph.fields.get("body"))
+        .cloned()
+        .unwrap_or(Value::Null)
+}
+
+fn document_text_len(value: &Value) -> usize {
+    if let Some(text) = value.as_str() {
+        return text.chars().count();
+    }
+    if let Some(blocks) = value.get("blocks").and_then(Value::as_array) {
+        return blocks
+            .iter()
+            .map(|block| {
+                block
+                    .get("content")
+                    .or_else(|| block.get("text"))
+                    .and_then(Value::as_str)
+                    .map(|text| text.chars().count())
+                    .unwrap_or(0)
+            })
+            .sum::<usize>()
+            + blocks.len().saturating_sub(1);
+    }
+    value.to_string().chars().count()
+}
+
+fn comment_anchor_range(content: &Value) -> Option<(u64, u64)> {
+    let range = content.get("anchor_range")?;
+    let start = range
+        .get("start")
+        .or_else(|| range.get("range_start"))
+        .and_then(Value::as_u64)?;
+    let end = range
+        .get("end")
+        .or_else(|| range.get("range_end"))
+        .and_then(Value::as_u64)?;
+    (end > start).then_some((start, end))
+}
+
+fn comment_target_ref(content: &Value) -> Option<&str> {
+    content
+        .get("morph_id")
+        .or_else(|| content.get("document_id"))
+        .or_else(|| content.get("target_ref"))
+        .or_else(|| content.pointer("/anchor_range/morph_id"))
+        .or_else(|| content.pointer("/anchor_range/document_id"))
+        .or_else(|| content.pointer("/anchor_range/target_ref"))
+        .and_then(Value::as_str)
+}
+
+fn comment_reply_to(content: &Value) -> Option<&str> {
+    content
+        .get("reply_to")
+        .or_else(|| content.get("in_reply_to"))
+        .and_then(Value::as_str)
+}
+
+fn comment_body(content: &Value) -> String {
+    content
+        .get("body")
+        .or_else(|| content.get("text"))
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_owned()
+}
+
+fn document_comments_json(
+    projection: &ProjectionState,
+    morph_id: &str,
+    document_len: usize,
+) -> Vec<Value> {
+    let mut roots = Vec::new();
+    let mut replies: std::collections::BTreeMap<String, Vec<Value>> =
+        std::collections::BTreeMap::new();
+    for message in projection.messages.values() {
+        let content = &message.content;
+        if comment_target_ref(content) != Some(morph_id) {
+            continue;
+        }
+        if let Some(parent) = comment_reply_to(content) {
+            replies.entry(parent.to_owned()).or_default().push(json!({
+                "event_id": message.event_id,
+                "author": message.sender,
+                "body": comment_body(content),
+                "created_at": message.created_at,
+            }));
+            continue;
+        }
+        let Some((start, end)) = comment_anchor_range(content) else {
+            continue;
+        };
+        let explicit_state = content
+            .get("state")
+            .or_else(|| content.get("comment_state"))
+            .and_then(Value::as_str);
+        let state = if matches!(explicit_state, Some("orphaned" | "locked")) {
+            explicit_state.unwrap()
+        } else if usize::try_from(end)
+            .ok()
+            .is_some_and(|end| end > document_len)
+        {
+            "orphaned"
+        } else {
+            "active"
+        };
+        roots.push(json!({
+            "comment_id": message.event_id,
+            "author": message.sender,
+            "body": comment_body(content),
+            "anchor_range": { "start": start, "end": end },
+            "state": state,
+            "created_at": message.created_at,
+        }));
+    }
+    for root in &mut roots {
+        if let Some(comment_id) = root.get("comment_id").and_then(Value::as_str)
+            && let Some(children) = replies.remove(comment_id)
+        {
+            root["replies"] = Value::Array(children);
+        }
+    }
+    roots
+}
+
+fn document_relations_json(projection: &ProjectionState, morph_id: &str) -> Vec<Value> {
+    projection
+        .relations
+        .values()
+        .filter(|relation| !relation.deleted)
+        .filter(|relation| {
+            relation.from_ref.as_deref() == Some(morph_id)
+                || relation.to_ref.as_deref() == Some(morph_id)
+        })
+        .map(|relation| {
+            json!({
+                "relation_id": relation.relation_id,
+                "realm_id": relation.space_id,
+                "relation_kind": relation.relation_kind,
+                "from": relation.from_ref,
+                "to": relation.to_ref,
+                "fields": relation.fields,
+                "created_at": relation.created_at,
+                "updated_at": relation.updated_at,
+            })
+        })
+        .collect()
 }
 
 // ── Handlers ───────────────────────────────────────────────────────────
@@ -340,4 +495,83 @@ async fn list_morph_projections(
         morphs,
         total,
     })
+}
+
+#[endpoint(
+    operation_id = "cx.projection.document",
+    tags("projection"),
+    summary = "Read a document Morph projection with body, versions, relations, comments, and cursor presence"
+)]
+#[tracing::instrument(skip_all, fields(op = "cx.projection.document"))]
+async fn read_document_projection(
+    aa: AuthArgs,
+    depot: &mut Depot,
+    req: &mut Request,
+    morph_id: PathParam<String>,
+) -> JsonResult<Value> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req)?;
+    let morph_id = morph_id.into_inner();
+    let _ = parse_projection_id::<MorphId>(&morph_id, "morph_id")?;
+    let proj = state.projection.lock().map_err(|_| {
+        AppError::new(
+            ErrorCode::TemporarilyUnavailable,
+            "projection state unavailable",
+        )
+        .with_status(StatusCode::INTERNAL_SERVER_ERROR)
+    })?;
+    let morph = proj
+        .morphs
+        .get(&morph_id)
+        .cloned()
+        .ok_or_else(|| AppError::not_found("document Morph not found"))?;
+    if !realm_id_accessible(state, &morph.space_id, Some(&session)) {
+        return Err(AppError::new(
+            ErrorCode::CapabilityDenied,
+            "Document not visible to this actor",
+        )
+        .with_status(StatusCode::FORBIDDEN));
+    }
+    let body = document_body_from_morph(&morph);
+    let document_len = document_text_len(&body);
+    let comments = document_comments_json(&proj, &morph_id, document_len);
+    let relations = document_relations_json(&proj, &morph_id);
+    let versions = morph
+        .versions
+        .iter()
+        .map(|version| {
+            json!({
+                "version_id": version.version_id,
+                "event_id": version.event_id,
+                "author": version.author,
+                "created_at": version.created_at,
+                "body_digest": version.body_digest,
+                "body": version.body,
+            })
+        })
+        .collect::<Vec<_>>();
+    let response = json!({
+        "document": {
+            "morph_id": morph.morph_id,
+            "realm_id": morph.space_id,
+            "morph_type": morph.morph_type,
+            "title": morph.title,
+            "state": morph.state.as_str(),
+            "fields": morph.fields,
+            "body": body,
+            "schema_refs": morph.schema_refs,
+            "facets": morph.facets,
+            "created_by": morph.created_by,
+            "created_at": morph.created_at,
+            "updated_by": morph.updated_by,
+            "updated_at": morph.updated_at,
+            "state_changed_at": morph.state_changed_at,
+        },
+        "versions": versions,
+        "relations": relations,
+        "comments": comments,
+        "cursor_presence": [],
+    });
+    drop(proj);
+    json_ok(response)
 }
