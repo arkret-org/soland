@@ -18,7 +18,7 @@ use std::time::Duration;
 
 use contrix_sdk::RealmId;
 
-use super::{append_audit_log, now, space_has_member, validate_did};
+use super::{append_audit_log, now, query_param, space_has_member, validate_did};
 use crate::error::{AppError, ErrorCode};
 use crate::ids;
 use crate::result::{JsonResult, json_ok};
@@ -29,6 +29,7 @@ use crate::wire::{ModerationReportReqBody, ModerationReportResBody};
 pub(super) fn router() -> Router {
     Router::new()
         .push(Router::with_path("moderation/report").post(moderation_report))
+        .push(Router::with_path("moderation/reports").get(moderation_reports))
         .push(Router::with_path("moderation/appeal").post(moderation_appeal_submit))
 }
 
@@ -126,6 +127,85 @@ async fn moderation_report(
         status: "queued".to_owned(),
         routed_to,
     })
+}
+
+#[endpoint(
+    operation_id = "cx.moderation.reports",
+    tags("moderation"),
+    summary = "List moderation reports visible to the authenticated actor"
+)]
+#[tracing::instrument(skip_all, fields(op = "cx.moderation.reports"))]
+async fn moderation_reports(
+    aa: AuthArgs,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<Value> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req)?;
+    let realm_id = query_param(req, "realm_id").or_else(|| query_param(req, "space_id"));
+    if let Some(realm_id) = realm_id.as_deref()
+        && RealmId::new(realm_id.to_owned()).is_err()
+    {
+        return Err(AppError::invalid_param("invalid realm_id"));
+    }
+    let reports = visible_reports_for_actor(state, &session.actor, realm_id.as_deref());
+    let total = reports.len();
+    json_ok(json!({
+        "reports": reports.clone(),
+        "items": reports,
+        "total": total,
+        "visibility": "reporter_owner_admin",
+    }))
+}
+
+pub(crate) fn visible_reports_for_actor(
+    state: &AppState,
+    actor: &str,
+    realm_filter: Option<&str>,
+) -> Vec<Value> {
+    state
+        .persistence
+        .moderation()
+        .list_reports()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|report| {
+            let realm_id = report_realm_id(report);
+            realm_filter.is_none_or(|filter| realm_id == Some(filter))
+        })
+        .filter(|report| moderation_report_visible_to_actor(state, report, actor))
+        .collect()
+}
+
+pub(crate) fn moderation_report_visible_to_actor(
+    state: &AppState,
+    report: &Value,
+    actor: &str,
+) -> bool {
+    if state.config.is_admin_principal(actor) {
+        return true;
+    }
+    if report.get("reporter").and_then(Value::as_str) == Some(actor) {
+        return true;
+    }
+    report_realm_id(report).is_some_and(|realm_id| realm_owner_matches(state, realm_id, actor))
+}
+
+fn report_realm_id(report: &Value) -> Option<&str> {
+    report
+        .get("realm_id")
+        .or_else(|| report.get("space_id"))
+        .and_then(Value::as_str)
+}
+
+fn realm_owner_matches(state: &AppState, realm_id: &str, actor: &str) -> bool {
+    state
+        .persistence
+        .realm_meta()
+        .get(realm_id)
+        .ok()
+        .flatten()
+        .is_some_and(|meta| meta.owner == actor)
 }
 
 async fn notify_audit_agent_for_report(

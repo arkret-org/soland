@@ -79,11 +79,11 @@ pub(super) async fn admin_collection(
         "agents" => ("agents", admin_agent_items(state)),
         "reports" => (
             "reports",
-            state
-                .persistence
-                .moderation()
-                .list_reports()
-                .unwrap_or_default(),
+            crate::routing::interop::moderation::visible_reports_for_actor(
+                state,
+                &session.actor,
+                None,
+            ),
         ),
         "invite-tokens" => ("invite_tokens", admin_invite_items(state)),
         "audit" => (
