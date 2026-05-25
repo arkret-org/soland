@@ -146,10 +146,12 @@ fn rfc9421_sign(
     );
 
     let created = now_unix_secs();
+    let expires = created + 300;
     let keyid = format!("{}#federation-fanout-key", state.config.service_did);
     let covered = [
         "\"@method\"",
         "\"@target-uri\"",
+        "\"@authority\"",
         "\"content-digest\"",
         "\"source-service-did\"",
         "\"destination-service-did\"",
@@ -158,13 +160,16 @@ fn rfc9421_sign(
         "\"request-canonical-digest\"",
     ]
     .join(" ");
-    let signature_params =
-        format!("({covered});created={created};keyid=\"{keyid}\";alg=\"ed25519\"",);
+    let signature_params = format!(
+        "({covered});created={created};expires={expires};keyid=\"{keyid}\";alg=\"ed25519\"",
+    );
     let signature_input = format!("sig1={signature_params}");
+    let authority = authority_from_target_url(target_url);
 
     let signature_base = format!(
         "\"@method\": {}\n\
          \"@target-uri\": {}\n\
+         \"@authority\": {}\n\
          \"content-digest\": {}\n\
          \"source-service-did\": {}\n\
          \"destination-service-did\": {}\n\
@@ -174,6 +179,7 @@ fn rfc9421_sign(
          \"@signature-params\": {}",
         method.to_ascii_uppercase(),
         target_url,
+        authority,
         header_value(&headers, "content-digest").unwrap_or_default(),
         header_value(&headers, "source-service-did").unwrap_or_default(),
         header_value(&headers, "destination-service-did").unwrap_or_default(),
@@ -188,6 +194,18 @@ fn rfc9421_sign(
     insert_header_if_valid(&mut headers, "signature-input", &signature_input);
     insert_header_if_valid(&mut headers, "signature", &signature_header);
     headers
+}
+
+fn authority_from_target_url(target_url: &str) -> String {
+    let Ok(url) = reqwest::Url::parse(target_url) else {
+        return String::new();
+    };
+    let Some(host) = url.host_str() else {
+        return String::new();
+    };
+    url.port()
+        .map(|port| format!("{host}:{port}"))
+        .unwrap_or_else(|| host.to_owned())
 }
 
 fn insert_header_if_valid(

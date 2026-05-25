@@ -177,6 +177,7 @@ async fn enqueue_then_dispatch_delivers_payload_with_spec_headers() {
     );
     assert!(
         lower.contains("signature-input: sig1=")
+            && lower.contains("\"@authority\"")
             && lower.contains("keyid=\"did:web:soland-outbox.local#federation-fanout-key\""),
         "captured request missing RFC 9421 Signature-Input; got: {}",
         captured.captured
@@ -476,10 +477,12 @@ fn http_signature_verifies_with_headers(
     else {
         return false;
     };
+    let authority = authority_from_target_uri(target_uri);
 
     let signature_base = format!(
         "\"@method\": POST\n\
          \"@target-uri\": {target_uri}\n\
+         \"@authority\": {authority}\n\
          \"content-digest\": {content_digest}\n\
          \"source-service-did\": {source_service_did}\n\
          \"destination-service-did\": {destination_service_did}\n\
@@ -492,6 +495,18 @@ fn http_signature_verifies_with_headers(
     verifying_key
         .verify(signature_base.as_bytes(), &signature)
         .is_ok()
+}
+
+fn authority_from_target_uri(target_uri: &str) -> String {
+    let Ok(url) = reqwest::Url::parse(target_uri) else {
+        return String::new();
+    };
+    let Some(host) = url.host_str() else {
+        return String::new();
+    };
+    url.port()
+        .map(|port| format!("{host}:{port}"))
+        .unwrap_or_else(|| host.to_owned())
 }
 
 fn test_content_digest_header_value(body: &[u8]) -> String {

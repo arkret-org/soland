@@ -4,7 +4,7 @@ use std::{
 };
 
 use base64::Engine;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use contrix_sdk::{Did, Operation, OperationId, RealmId, new_prefixed_uuid7};
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier};
 use salvo::http::StatusCode;
@@ -125,6 +125,83 @@ fn decode_cursor(token: &str) -> Value {
 
 fn encode_cursor(cursor: &Value) -> String {
     format!("cx:cursor:{}", URL_SAFE_NO_PAD.encode(cursor.to_string()))
+}
+
+fn signed_federation_push_headers(
+    origin: &str,
+    destination: &str,
+    target_uri: &str,
+    body: &Value,
+) -> Vec<(&'static str, String)> {
+    let body_bytes = contrix_sdk::canonical::canonical_json_bytes(body).unwrap();
+    let content_digest = format!("sha-256=:{}:", STANDARD.encode(Sha256::digest(&body_bytes)));
+    let request_digest = format!("sha256:{:x}", Sha256::digest(&body_bytes));
+    let source_trust_domain = trust_domain_from_service_did(origin);
+    let destination_trust_domain = trust_domain_from_service_did(destination);
+    let created = chrono::Utc::now().timestamp();
+    let expires = created + 300;
+    let keyid = format!("{origin}#federation-fanout-key");
+    let signature_params = format!(
+        "(\"@method\" \"@target-uri\" \"@authority\" \"content-digest\" \"source-service-did\" \"destination-service-did\" \"source-trust-domain\" \"destination-trust-domain\" \"request-canonical-digest\");created={created};expires={expires};keyid=\"{keyid}\";alg=\"ed25519\"",
+    );
+    let authority = authority_from_target_uri(target_uri);
+    let signature_base = format!(
+        "\"@method\": POST\n\
+         \"@target-uri\": {target_uri}\n\
+         \"@authority\": {authority}\n\
+         \"content-digest\": {content_digest}\n\
+         \"source-service-did\": {origin}\n\
+         \"destination-service-did\": {destination}\n\
+         \"source-trust-domain\": {source_trust_domain}\n\
+         \"destination-trust-domain\": {destination_trust_domain}\n\
+         \"request-canonical-digest\": {request_digest}\n\
+         \"@signature-params\": {signature_params}",
+    );
+    let signature = development_service_signing_key(origin).sign(signature_base.as_bytes());
+    vec![
+        ("content-digest", content_digest),
+        ("request-canonical-digest", request_digest),
+        ("source-service-did", origin.to_owned()),
+        ("destination-service-did", destination.to_owned()),
+        ("source-trust-domain", source_trust_domain),
+        ("destination-trust-domain", destination_trust_domain),
+        ("signature-input", format!("sig1={signature_params}")),
+        (
+            "signature",
+            format!("sig1=:{}:", STANDARD.encode(signature.to_bytes())),
+        ),
+    ]
+}
+
+fn authority_from_target_uri(target_uri: &str) -> String {
+    let Ok(url) = reqwest::Url::parse(target_uri) else {
+        return "server".to_owned();
+    };
+    let Some(host) = url.host_str() else {
+        return "server".to_owned();
+    };
+    url.port()
+        .map(|port| format!("{host}:{port}"))
+        .unwrap_or_else(|| host.to_owned())
+}
+
+fn development_service_signing_key(service_did: &str) -> SigningKey {
+    let mut hasher = Sha256::new();
+    hasher.update(b"soland:anchorer-ephemeral:");
+    hasher.update(service_did.as_bytes());
+    let seed: [u8; 32] = hasher.finalize().into();
+    SigningKey::from_bytes(&seed)
+}
+
+fn trust_domain_from_service_did(service_did: &str) -> String {
+    let scope = service_did
+        .strip_prefix("did:web:")
+        .or_else(|| service_did.strip_prefix("did:key:"))
+        .or_else(|| service_did.strip_prefix("did:webvh:"))
+        .unwrap_or(service_did)
+        .to_ascii_lowercase()
+        .replace(':', ".");
+    format!("cx:trust_domain:{scope}")
 }
 
 async fn dev_token(state: AppState) -> String {
@@ -4457,6 +4534,7 @@ async fn webrtc_signaling_contracts_work() {
 #[tokio::test]
 async fn federation_accepts_idempotent_replayed_operations() {
     let state = AppState::new(test_config(), Db { pool: None });
+    let push_url = "http://server/api/v1/federation/push-operations";
     let operation = Operation::create(
         OperationId::new("cx:operation:01904100-0000-7000-8000-4b147e97831e").unwrap(),
         RealmId::new("cx:realm:01904100-0000-7000-8000-20d6cfd24be6").unwrap(),
@@ -4469,14 +4547,23 @@ async fn federation_accepts_idempotent_replayed_operations() {
         }),
     );
 
-    let first: Value = TestClient::post("http://server/api/v1/federation/push-operations")
-        .json(&serde_json::json!({
-            "origin": "did:web:remote.example",
-            "destination": "did:web:soland.local",
-            "space_id": "cx:realm:01904100-0000-7000-8000-20d6cfd24be6",
-            "service_binding_ref": "did:web:remote.example#soland",
-            "operations": [operation.clone()]
-        }))
+    let first_body = serde_json::json!({
+        "origin": "did:web:remote.example",
+        "destination": "did:web:soland.local",
+        "space_id": "cx:realm:01904100-0000-7000-8000-20d6cfd24be6",
+        "service_binding_ref": "did:web:remote.example#soland",
+        "operations": [operation.clone()]
+    });
+    let mut first_req = TestClient::post(push_url).json(&first_body);
+    for (name, value) in signed_federation_push_headers(
+        "did:web:remote.example",
+        "did:web:soland.local",
+        push_url,
+        &first_body,
+    ) {
+        first_req = first_req.add_header(name, value, true);
+    }
+    let first: Value = first_req
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
@@ -4487,6 +4574,12 @@ async fn federation_accepts_idempotent_replayed_operations() {
         "cx:operation:01904100-0000-7000-8000-4b147e97831e"
     );
     assert!(first["rejected"].as_array().unwrap().is_empty());
+
+    let unsigned = TestClient::post(push_url)
+        .json(&first_body)
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(unsigned.status_code.unwrap().as_u16(), 401);
 
     let pulled: Value = TestClient::get(
         "http://server/api/v1/federation/pull-operations?space_id=cx:realm:01904100-0000-7000-8000-20d6cfd24be6",
@@ -4520,14 +4613,23 @@ async fn federation_accepts_idempotent_replayed_operations() {
             .starts_with("sha256:")
     );
 
-    let replay: Value = TestClient::post("http://server/api/v1/federation/push-operations")
-        .json(&serde_json::json!({
-            "origin": "did:web:remote.example",
-            "destination": "did:web:soland.local",
-            "space_id": "cx:realm:01904100-0000-7000-8000-20d6cfd24be6",
-            "service_binding_ref": "did:web:remote.example#soland",
-            "operations": [operation]
-        }))
+    let replay_body = serde_json::json!({
+        "origin": "did:web:remote.example",
+        "destination": "did:web:soland.local",
+        "space_id": "cx:realm:01904100-0000-7000-8000-20d6cfd24be6",
+        "service_binding_ref": "did:web:remote.example#soland",
+        "operations": [operation]
+    });
+    let mut replay_req = TestClient::post(push_url).json(&replay_body);
+    for (name, value) in signed_federation_push_headers(
+        "did:web:remote.example",
+        "did:web:soland.local",
+        push_url,
+        &replay_body,
+    ) {
+        replay_req = replay_req.add_header(name, value, true);
+    }
+    let replay: Value = replay_req
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
@@ -4563,14 +4665,23 @@ async fn federation_accepts_idempotent_replayed_operations() {
             "content": {"ciphertext": "missing-envelope-fields"}
         }),
     );
-    let invalid_push: Value = TestClient::post("http://server/api/v1/federation/push-operations")
-        .json(&serde_json::json!({
-            "origin": "did:web:remote.example",
-            "destination": "did:web:soland.local",
-            "space_id": "cx:realm:01904100-0000-7000-8000-20d6cfd24be6",
-            "service_binding_ref": "did:web:remote.example#soland",
-            "operations": [invalid_operation]
-        }))
+    let invalid_body = serde_json::json!({
+        "origin": "did:web:remote.example",
+        "destination": "did:web:soland.local",
+        "space_id": "cx:realm:01904100-0000-7000-8000-20d6cfd24be6",
+        "service_binding_ref": "did:web:remote.example#soland",
+        "operations": [invalid_operation]
+    });
+    let mut invalid_req = TestClient::post(push_url).json(&invalid_body);
+    for (name, value) in signed_federation_push_headers(
+        "did:web:remote.example",
+        "did:web:soland.local",
+        push_url,
+        &invalid_body,
+    ) {
+        invalid_req = invalid_req.add_header(name, value, true);
+    }
+    let invalid_push: Value = invalid_req
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
@@ -4588,14 +4699,23 @@ async fn federation_accepts_idempotent_replayed_operations() {
             "target_event_id": "cx:event:01904100-0000-7000-8000-19d11d370b0e"
         }),
     );
-    let redaction_push: Value = TestClient::post("http://server/api/v1/federation/push-operations")
-        .json(&serde_json::json!({
-            "origin": "did:web:remote.example",
-            "destination": "did:web:soland.local",
-            "space_id": "cx:realm:01904100-0000-7000-8000-20d6cfd24be6",
-            "service_binding_ref": "did:web:remote.example#soland",
-            "operations": [redaction]
-        }))
+    let redaction_body = serde_json::json!({
+        "origin": "did:web:remote.example",
+        "destination": "did:web:soland.local",
+        "space_id": "cx:realm:01904100-0000-7000-8000-20d6cfd24be6",
+        "service_binding_ref": "did:web:remote.example#soland",
+        "operations": [redaction]
+    });
+    let mut redaction_req = TestClient::post(push_url).json(&redaction_body);
+    for (name, value) in signed_federation_push_headers(
+        "did:web:remote.example",
+        "did:web:soland.local",
+        push_url,
+        &redaction_body,
+    ) {
+        redaction_req = redaction_req.add_header(name, value, true);
+    }
+    let redaction_push: Value = redaction_req
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
@@ -4615,6 +4735,63 @@ async fn federation_accepts_idempotent_replayed_operations() {
     .await
     .unwrap();
     assert!(redacted_pull["operations"].as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn federation_push_rejects_bad_rfc9421_and_missing_relay_inner_signature() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let push_url = "http://server/api/v1/federation/push-operations";
+    let operation = Operation::create(
+        OperationId::new("cx:operation:01904100-0000-7000-8000-7e173b950001").unwrap(),
+        RealmId::new("cx:realm:01904100-0000-7000-8000-7e173b950002").unwrap(),
+        kinds::CX_MESSAGE_CREATE,
+        serde_json::json!({
+            "event_id": "cx:event:01904100-0000-7000-8000-7e173b950003",
+            "sender": "did:web:remote.example",
+            "thread_id": "cx:flow:federation-bad-signature",
+            "body": "bad signature should not land"
+        }),
+    );
+    let body = serde_json::json!({
+        "origin": "did:web:remote.example",
+        "destination": "did:web:soland.local",
+        "space_id": "cx:realm:01904100-0000-7000-8000-7e173b950002",
+        "service_binding_ref": "did:web:remote.example#soland",
+        "operations": [operation]
+    });
+
+    let mut tampered_req = TestClient::post(push_url).json(&body);
+    for (name, value) in signed_federation_push_headers(
+        "did:web:remote.example",
+        "did:web:soland.local",
+        push_url,
+        &body,
+    ) {
+        let value = if name == "signature" {
+            format!("sig1=:{}:", STANDARD.encode([0_u8; 64]))
+        } else {
+            value
+        };
+        tampered_req = tampered_req.add_header(name, value, true);
+    }
+    let mut tampered = tampered_req.send(&app_from_state(state.clone())).await;
+    assert_eq!(tampered.status_code.unwrap().as_u16(), 401);
+    let tampered_body = tampered.take_string().await.unwrap();
+    assert!(tampered_body.contains("key_rotation_hint=refresh_origin_service_did"));
+
+    let mut relay_req = TestClient::post(push_url).json(&body);
+    for (name, value) in signed_federation_push_headers(
+        "did:web:relay.example",
+        "did:web:soland.local",
+        push_url,
+        &body,
+    ) {
+        relay_req = relay_req.add_header(name, value, true);
+    }
+    let mut relay = relay_req.send(&app_from_state(state)).await;
+    assert_eq!(relay.status_code.unwrap().as_u16(), 401);
+    let relay_body = relay.take_string().await.unwrap();
+    assert!(relay_body.contains("relay-inner-signature-input"));
 }
 
 #[tokio::test]
