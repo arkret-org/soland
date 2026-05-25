@@ -12,5 +12,6 @@
 .DS_Store
 .claude/
 *.pem
-*.log/_circle_rollout_baseline.md
+*.log
+/_circle_rollout_baseline.md
 /_*_todos.md
