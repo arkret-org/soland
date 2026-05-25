@@ -2360,6 +2360,73 @@ fn push_route_cell_ref(subject: &PushRouteSubject) -> Option<CellRef> {
     .ok()
 }
 
+fn object_field_string(
+    object: &serde_json::Map<String, Value>,
+    field_name: &str,
+) -> Option<String> {
+    object
+        .get("fields")
+        .and_then(Value::as_object)
+        .and_then(|fields| fields.get(field_name))
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn component_field_string(payload: &Value, family: &str, field_name: &str) -> Option<String> {
+    payload
+        .get("components")
+        .and_then(Value::as_array)
+        .and_then(|components| {
+            components.iter().find(|component| {
+                component
+                    .get("family")
+                    .and_then(Value::as_str)
+                    .is_some_and(|value| value == family)
+            })
+        })
+        .and_then(|component| component.get(field_name))
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn flow_position_from_create_payload(
+    payload: &Value,
+    object: &serde_json::Map<String, Value>,
+) -> Option<(String, String, Option<String>)> {
+    let board_space_id = object_field_string(object, "board_space_id").or_else(|| {
+        component_field_string(payload, "cx.component.flow.position.v1", "board_space_id")
+    })?;
+    let list_space_id = object_field_string(object, "list_space_id").or_else(|| {
+        component_field_string(payload, "cx.component.flow.position.v1", "list_space_id")
+    })?;
+    let rank = object_field_string(object, "rank")
+        .or_else(|| component_field_string(payload, "cx.component.flow.position.v1", "rank"));
+    Some((board_space_id, list_space_id, rank))
+}
+
+fn flow_position_from_lifecycle_payload(payload: &Value) -> Option<(String, String, Option<String>)> {
+    let board_space_id = payload
+        .get("board_space_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())?
+        .to_owned();
+    let list_space_id = payload
+        .get("target_space_id")
+        .or_else(|| payload.get("list_space_id"))
+        .or_else(|| payload.get("space_id"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())?
+        .to_owned();
+    let rank = payload
+        .get("rank")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(ToOwned::to_owned);
+    Some((board_space_id, list_space_id, rank))
+}
+
 impl ProjectionState {
     pub fn new() -> Self {
         Self::default()
@@ -2584,6 +2651,49 @@ impl ProjectionState {
             "order": order,
             "children": entries,
         })
+    }
+
+    fn store_flow_position_relation(
+        &mut self,
+        flow_id: &str,
+        realm_id: &str,
+        board_space_id: &str,
+        list_space_id: &str,
+        rank: Option<&str>,
+        now: chrono::DateTime<chrono::Utc>,
+    ) {
+        let relation_id = format!("cx:relation:kanban.position:{board_space_id}:{flow_id}");
+        let relation = self
+            .relations
+            .entry(relation_id.clone())
+            .or_insert_with(|| RelationState {
+                relation_id: relation_id.clone(),
+                space_id: realm_id.to_owned(),
+                relation_kind: "contains".to_owned(),
+                from_ref: Some(list_space_id.to_owned()),
+                to_ref: Some(flow_id.to_owned()),
+                fields: BTreeMap::new(),
+                deleted: false,
+                created_at: now,
+                updated_at: now,
+            });
+        relation.space_id = realm_id.to_owned();
+        relation.relation_kind = "contains".to_owned();
+        relation.from_ref = Some(list_space_id.to_owned());
+        relation.to_ref = Some(flow_id.to_owned());
+        relation
+            .fields
+            .insert("board_space_id".to_owned(), Value::String(board_space_id.to_owned()));
+        relation
+            .fields
+            .insert("list_space_id".to_owned(), Value::String(list_space_id.to_owned()));
+        if let Some(rank) = rank {
+            relation
+                .fields
+                .insert("rank".to_owned(), Value::String(rank.to_owned()));
+        }
+        relation.deleted = false;
+        relation.updated_at = now;
     }
 
     /// Reload the cells map for one Space from the SDK CellStore + apply
@@ -4934,14 +5044,6 @@ impl ProjectionState {
             };
         };
 
-        let Some(space_container) = self.space_containers.get_mut(&container_space_id) else {
-            // Unknown Space container — likely the cx.space.create has not yet
-            // been projected (causal / backfill window). Tolerate
-            // silently per the spec convention (common-fields.md §5.1
-            // unknown-object tolerance).
-            return ProjectionEffect::Ignored;
-        };
-
         let (allowed_source, target_state, reason_on_invalid) = match transition {
             SpaceContainerLifecycleTransition::Archive => (
                 &[SpaceContainerLifecycleState::Active][..],
@@ -4963,24 +5065,157 @@ impl ProjectionState {
             ),
         };
 
-        if !allowed_source.contains(&space_container.state) {
-            return ProjectionEffect::Rejected {
-                reason: reason_on_invalid.to_owned(),
-            };
-        }
-
-        space_container.state = target_state;
-        space_container.state_changed_at = Some(now);
-        space_container.updated_by = operation
+        let updated_by = operation
             .payload
             .get("sender")
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned);
-        space_container.updated_at = Some(now);
+        {
+            let Some(space_container) = self.space_containers.get_mut(&container_space_id) else {
+                // Unknown Space container — likely the cx.space.create has not yet
+                // been projected (causal / backfill window). Tolerate
+                // silently per the spec convention (common-fields.md §5.1
+                // unknown-object tolerance).
+                return ProjectionEffect::Ignored;
+            };
+
+            if !allowed_source.contains(&space_container.state) {
+                return ProjectionEffect::Rejected {
+                    reason: reason_on_invalid.to_owned(),
+                };
+            }
+
+            space_container.state = target_state;
+            space_container.state_changed_at = Some(now);
+            space_container.updated_by = updated_by.clone();
+            space_container.updated_at = Some(now);
+        }
+
+        self.cascade_space_container_lifecycle(
+            &container_space_id,
+            target_state,
+            now,
+            updated_by.as_deref(),
+        );
 
         ProjectionEffect::SpaceContainerLifecycle {
             container_space_id,
             new_state: target_state,
+        }
+    }
+
+    fn cascade_space_container_lifecycle(
+        &mut self,
+        container_space_id: &str,
+        target_state: SpaceContainerLifecycleState,
+        now: chrono::DateTime<chrono::Utc>,
+        updated_by: Option<&str>,
+    ) {
+        if !matches!(
+            target_state,
+            SpaceContainerLifecycleState::Active | SpaceContainerLifecycleState::Archived
+        ) {
+            return;
+        }
+
+        let child_container_ids = self
+            .space_containers
+            .values()
+            .filter(|container| container.parent_ref.as_deref() == Some(container_space_id))
+            .map(|container| container.container_space_id.clone())
+            .collect::<Vec<_>>();
+        let mut affected_container_ids = BTreeSet::from([container_space_id.to_owned()]);
+        for child_id in &child_container_ids {
+            affected_container_ids.insert(child_id.clone());
+        }
+
+        for child_id in child_container_ids {
+            if let Some(child) = self.space_containers.get_mut(&child_id) {
+                match target_state {
+                    SpaceContainerLifecycleState::Archived
+                        if child.state == SpaceContainerLifecycleState::Active =>
+                    {
+                        child.state = SpaceContainerLifecycleState::Archived;
+                        child.state_changed_at = Some(now);
+                        child.updated_by = updated_by.map(ToOwned::to_owned);
+                        child.updated_at = Some(now);
+                    }
+                    SpaceContainerLifecycleState::Active
+                        if child.state == SpaceContainerLifecycleState::Archived =>
+                    {
+                        child.state = SpaceContainerLifecycleState::Active;
+                        child.state_changed_at = Some(now);
+                        child.updated_by = updated_by.map(ToOwned::to_owned);
+                        child.updated_at = Some(now);
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        let flow_relation_ids = self
+            .relations
+            .iter()
+            .filter(|(_, relation)| !relation.deleted)
+            .filter(|(_, relation)| relation.relation_kind == "contains")
+            .filter(|(_, relation)| {
+                relation
+                    .from_ref
+                    .as_deref()
+                    .is_some_and(|from_ref| affected_container_ids.contains(from_ref))
+                    || relation
+                        .fields
+                        .get("board_space_id")
+                        .and_then(Value::as_str)
+                        == Some(container_space_id)
+            })
+            .filter_map(|(relation_id, relation)| {
+                relation
+                    .to_ref
+                    .as_deref()
+                    .filter(|flow_id| flow_id.starts_with("cx:flow:"))
+                    .map(|flow_id| (relation_id.clone(), flow_id.to_owned()))
+            })
+            .collect::<Vec<_>>();
+
+        for (relation_id, flow_id) in flow_relation_ids {
+            let Some(flow) = self.flows.get_mut(&flow_id) else {
+                continue;
+            };
+            let Some(relation) = self.relations.get_mut(&relation_id) else {
+                continue;
+            };
+            match target_state {
+                SpaceContainerLifecycleState::Archived
+                    if flow.state == ObjectLifecycleState::Active =>
+                {
+                    flow.state = ObjectLifecycleState::Archived;
+                    flow.state_changed_at = Some(now);
+                    flow.updated_by = updated_by.map(ToOwned::to_owned);
+                    flow.updated_at = Some(now);
+                    relation.fields.insert(
+                        "cascade_archived_by".to_owned(),
+                        Value::String(container_space_id.to_owned()),
+                    );
+                    relation.updated_at = now;
+                }
+                SpaceContainerLifecycleState::Active
+                    if flow.state == ObjectLifecycleState::Archived
+                        && relation
+                            .fields
+                            .get("cascade_archived_by")
+                            .and_then(Value::as_str)
+                            == Some(container_space_id) =>
+                {
+                    flow.state = ObjectLifecycleState::Active;
+                    flow.state_changed_at = Some(now);
+                    flow.updated_by = updated_by.map(ToOwned::to_owned);
+                    flow.updated_at = Some(now);
+                    relation.fields.remove("cascade_archived_by");
+                    relation.updated_at = now;
+                }
+                _ => {}
+            }
         }
     }
 
@@ -5170,6 +5405,18 @@ impl ProjectionState {
                 .insert(flow_id.clone(), realm_id);
         } else {
             self.flow_discussion_realms.remove(&flow_id);
+        }
+        if let Some((board_space_id, list_space_id, rank)) =
+            flow_position_from_create_payload(&operation.payload, object)
+        {
+            self.store_flow_position_relation(
+                &flow_id,
+                &operation.realm_id.to_string(),
+                &board_space_id,
+                &list_space_id,
+                rank.as_deref(),
+                now,
+            );
         }
 
         ProjectionEffect::FlowLifecycle {
@@ -5362,9 +5609,22 @@ impl ProjectionState {
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned);
         flow.updated_at = Some(now);
+        let projected_state = flow.state;
+        if let Some((board_space_id, list_space_id, rank)) =
+            flow_position_from_lifecycle_payload(&operation.payload)
+        {
+            self.store_flow_position_relation(
+                &flow_id,
+                &operation.realm_id.to_string(),
+                &board_space_id,
+                &list_space_id,
+                rank.as_deref(),
+                now,
+            );
+        }
         ProjectionEffect::FlowLifecycle {
             flow_id,
-            new_state: flow.state,
+            new_state: projected_state,
         }
     }
 
@@ -7422,6 +7682,223 @@ mod tests {
         assert_eq!(
             value["order"].as_array().expect("order array")[0].as_str(),
             Some(third_id)
+        );
+    }
+
+    #[test]
+    fn list_archive_cascades_card_and_restore_preserves_rank() {
+        let mut state = ProjectionState::new();
+        let hlc = ServerHlc::new("test");
+        let realm_id = "cx:realm:01904100-0000-7000-8000-cfc039892036";
+        let board_id = "cx:space:01904100-0000-7000-8000-0000000000b0";
+        let list_id = "cx:space:01904100-0000-7000-8000-0000000000a1";
+        let flow_id = "cx:flow:01904100-0000-7000-8000-0000000000f1";
+
+        state.apply(
+            &make_operation(
+                crate::kinds::CX_SPACE_CONTAINER_CREATE,
+                realm_id,
+                serde_json::json!({
+                    "object": {
+                        "id": board_id,
+                        "realm_id": realm_id,
+                        "kind": "board",
+                        "title": "Sprint",
+                        "created_by": "did:web:alice.example"
+                    }
+                }),
+            ),
+            &hlc,
+        );
+        state.apply(
+            &make_operation(
+                crate::kinds::CX_SPACE_CONTAINER_CREATE,
+                realm_id,
+                serde_json::json!({
+                    "object": {
+                        "id": list_id,
+                        "realm_id": realm_id,
+                        "kind": "list",
+                        "title": "Todo",
+                        "parent_ref": board_id,
+                        "rank": "r001",
+                        "created_by": "did:web:alice.example"
+                    }
+                }),
+            ),
+            &hlc,
+        );
+        state.apply(
+            &make_operation(
+                crate::kinds::CX_FLOW_CREATE,
+                realm_id,
+                serde_json::json!({
+                    "object": {
+                        "id": flow_id,
+                        "space_id": realm_id,
+                        "title": "Review PR",
+                        "fields": {
+                            "board_space_id": board_id,
+                            "list_space_id": list_id,
+                            "rank": "r007"
+                        },
+                        "created_by": "did:web:alice.example"
+                    }
+                }),
+            ),
+            &hlc,
+        );
+
+        state.apply(
+            &make_operation(
+                crate::kinds::CX_SPACE_CONTAINER_ARCHIVE,
+                realm_id,
+                serde_json::json!({ "space_id": list_id, "sender": "did:web:alice.example" }),
+            ),
+            &hlc,
+        );
+        assert_eq!(state.flows[flow_id].state, ObjectLifecycleState::Archived);
+        let relation = state
+            .relations
+            .values()
+            .find(|relation| relation.to_ref.as_deref() == Some(flow_id))
+            .expect("flow position relation");
+        assert_eq!(
+            relation.fields.get("rank").and_then(Value::as_str),
+            Some("r007")
+        );
+        assert_eq!(
+            relation
+                .fields
+                .get("cascade_archived_by")
+                .and_then(Value::as_str),
+            Some(list_id)
+        );
+
+        state.apply(
+            &make_operation(
+                crate::kinds::CX_SPACE_CONTAINER_RESTORE,
+                realm_id,
+                serde_json::json!({ "space_id": list_id, "sender": "did:web:alice.example" }),
+            ),
+            &hlc,
+        );
+        assert_eq!(state.flows[flow_id].state, ObjectLifecycleState::Active);
+        let relation = state
+            .relations
+            .values()
+            .find(|relation| relation.to_ref.as_deref() == Some(flow_id))
+            .expect("flow position relation");
+        assert_eq!(
+            relation.fields.get("rank").and_then(Value::as_str),
+            Some("r007")
+        );
+        assert!(relation.fields.get("cascade_archived_by").is_none());
+    }
+
+    #[test]
+    fn board_archive_cascades_child_lists_and_cards() {
+        let mut state = ProjectionState::new();
+        let hlc = ServerHlc::new("test");
+        let realm_id = "cx:realm:01904100-0000-7000-8000-cfc039892036";
+        let board_id = "cx:space:01904100-0000-7000-8000-0000000000b0";
+        let list_id = "cx:space:01904100-0000-7000-8000-0000000000a1";
+        let flow_id = "cx:flow:01904100-0000-7000-8000-0000000000f1";
+
+        state.apply(
+            &make_operation(
+                crate::kinds::CX_SPACE_CONTAINER_CREATE,
+                realm_id,
+                serde_json::json!({
+                    "object": {
+                        "id": board_id,
+                        "realm_id": realm_id,
+                        "kind": "board",
+                        "title": "Sprint",
+                        "created_by": "did:web:alice.example"
+                    }
+                }),
+            ),
+            &hlc,
+        );
+        state.apply(
+            &make_operation(
+                crate::kinds::CX_SPACE_CONTAINER_CREATE,
+                realm_id,
+                serde_json::json!({
+                    "object": {
+                        "id": list_id,
+                        "realm_id": realm_id,
+                        "kind": "list",
+                        "title": "Todo",
+                        "parent_ref": board_id,
+                        "rank": "r001",
+                        "created_by": "did:web:alice.example"
+                    }
+                }),
+            ),
+            &hlc,
+        );
+        state.apply(
+            &make_operation(
+                crate::kinds::CX_FLOW_CREATE,
+                realm_id,
+                serde_json::json!({
+                    "object": {
+                        "id": flow_id,
+                        "space_id": realm_id,
+                        "title": "Review PR",
+                        "fields": {
+                            "board_space_id": board_id,
+                            "list_space_id": list_id,
+                            "rank": "r007"
+                        },
+                        "created_by": "did:web:alice.example"
+                    }
+                }),
+            ),
+            &hlc,
+        );
+
+        state.apply(
+            &make_operation(
+                crate::kinds::CX_SPACE_CONTAINER_ARCHIVE,
+                realm_id,
+                serde_json::json!({ "space_id": board_id, "sender": "did:web:alice.example" }),
+            ),
+            &hlc,
+        );
+        assert_eq!(
+            state.space_containers[board_id].state,
+            SpaceContainerLifecycleState::Archived
+        );
+        assert_eq!(
+            state.space_containers[list_id].state,
+            SpaceContainerLifecycleState::Archived
+        );
+        assert_eq!(state.flows[flow_id].state, ObjectLifecycleState::Archived);
+
+        state.apply(
+            &make_operation(
+                crate::kinds::CX_SPACE_CONTAINER_RESTORE,
+                realm_id,
+                serde_json::json!({ "space_id": board_id, "sender": "did:web:alice.example" }),
+            ),
+            &hlc,
+        );
+        assert_eq!(
+            state.space_containers[list_id].state,
+            SpaceContainerLifecycleState::Active
+        );
+        assert_eq!(state.flows[flow_id].state, ObjectLifecycleState::Active);
+        let relation = state
+            .relations
+            .values()
+            .find(|relation| relation.to_ref.as_deref() == Some(flow_id))
+            .expect("flow position relation");
+        assert_eq!(
+            relation.fields.get("rank").and_then(Value::as_str),
+            Some("r007")
         );
     }
 
