@@ -246,6 +246,39 @@ fn add_test_realm_member(state: &AppState, realm_id: &str, member: &str) -> Valu
     }
 }
 
+#[tokio::test]
+async fn account_subscribe_projects_realm_encryption_profile() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let alice = dev_token(state.clone()).await;
+    let created = seed_test_realm(
+        &state,
+        "did:web:alice.example",
+        "MLS Sync Realm",
+        Some("encrypted projection metadata"),
+        "listed",
+        &[],
+        &[],
+    );
+    let space_id = created["space_id"].as_str().unwrap();
+
+    let mut meta = state
+        .persistence
+        .realm_meta()
+        .get(space_id)
+        .unwrap()
+        .expect("seeded realm meta");
+    meta.history_visibility = "joined".to_owned();
+    meta.encryption_profile = Some("mls_rfc9420".to_owned());
+    state.persistence.realm_meta().put(space_id, &meta).unwrap();
+
+    let sync = account_subscribe_frame(state.clone(), Some(&alice), "catchup=true").await;
+    let realm = &sync["realms"][space_id];
+    assert_eq!(realm["history_visibility"], "joined");
+    assert_eq!(realm["encryption_profile"], "mls_rfc9420");
+    assert_eq!(realm["summary"]["history_visibility"], "joined");
+    assert_eq!(realm["summary"]["encryption_profile"], "mls_rfc9420");
+}
+
 fn remove_test_realm_member(state: &AppState, realm_id: &str, member: &str) -> Value {
     let typed_realm_id = RealmId::new(realm_id.to_owned()).unwrap();
     let member_did = Did::new(member.to_owned()).unwrap();

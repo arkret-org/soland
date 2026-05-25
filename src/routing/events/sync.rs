@@ -286,6 +286,15 @@ fn build_sync_snapshot(
         let flow_state_after = flow.clone();
         let flow_list_item = flow.clone();
         let summary_members = members.clone();
+        let meta = state.persistence.realm_meta().get(&space_id).ok().flatten();
+        let history_visibility = meta
+            .as_ref()
+            .map(|record| record.history_visibility.clone())
+            .unwrap_or_else(|| "shared".to_owned());
+        let encryption_profile = meta
+            .as_ref()
+            .and_then(|record| record.encryption_profile.clone())
+            .unwrap_or_else(|| "none".to_owned());
         let after_position = after_cursor
             .positions
             .get(&space_id)
@@ -305,7 +314,11 @@ fn build_sync_snapshot(
                     "tags": tags,
                     "category": category,
                     "members": summary_members,
+                    "history_visibility": history_visibility.clone(),
+                    "encryption_profile": encryption_profile.clone(),
                 },
+                "history_visibility": history_visibility,
+                "encryption_profile": encryption_profile,
                 "members": members,
                 "flows": [flow_list_item],
                 "timeline": {"events": timeline_events, "limited": false},
