@@ -58,6 +58,7 @@ use crate::wire::{
 };
 
 const TIMELINE_POSITION_SUBTICKS: i64 = 1024;
+const PERSONAL_BLOCKLIST_DATA_TYPES: &[&str] = &["cx.account.blocklist", "cx.account.blocklist.v1"];
 
 pub(super) fn router() -> Router {
     Router::new()
@@ -514,6 +515,9 @@ fn realm_event_visible_to_session_with_projection(
     if sender.is_some_and(|sender| session.is_some_and(|session| session.actor == sender)) {
         return true;
     }
+    if personal_blocklist_blocks_sender_for_session(state, session, sender) {
+        return false;
+    }
     match realm_history_visibility(state, space_id).as_str() {
         "world_readable" => true,
         "shared" => {
@@ -663,7 +667,7 @@ fn projection_record_visible_to_session(
         event.created_at,
         event.sender.as_deref(),
         session,
-    )
+    ) && !personal_blocklist_blocks_sender_for_session(state, session, event.sender.as_deref())
 }
 
 fn projection_event_value_visible_to_session(
@@ -687,6 +691,90 @@ fn projection_event_value_visible_to_session(
     };
     let sender = event.get("sender").and_then(Value::as_str);
     realm_event_visible_to_session(state, space_id, created_at, sender, session)
+        && !personal_blocklist_blocks_sender_for_session(state, session, sender)
+}
+
+fn canonical_event_visible_to_personal_blocklist(
+    state: &AppState,
+    record: &crate::state::CanonicalEventRecord,
+    session: &SessionRecord,
+) -> bool {
+    !personal_blocklist_blocks_sender_for_session(state, Some(session), Some(&record.actor_id))
+}
+
+fn personal_blocklist_blocks_sender_for_session(
+    state: &AppState,
+    session: Option<&SessionRecord>,
+    sender: Option<&str>,
+) -> bool {
+    let (Some(session), Some(sender)) = (session, sender) else {
+        return false;
+    };
+    if sender == session.actor {
+        return false;
+    }
+    PERSONAL_BLOCKLIST_DATA_TYPES.iter().any(|data_type| {
+        state
+            .persistence
+            .account_data()
+            .get(&session.actor, data_type)
+            .ok()
+            .flatten()
+            .is_some_and(|record| blocklist_payload_blocks_sender(&record.payload, sender))
+    })
+}
+
+fn blocklist_payload_blocks_sender(payload: &Value, sender: &str) -> bool {
+    if let Some(entries) = payload.get("entries").and_then(Value::as_array) {
+        return entries
+            .iter()
+            .any(|entry| blocklist_entry_blocks_sender(entry, sender));
+    }
+    if let Some(entries) = payload.get("blocked").and_then(Value::as_array) {
+        return entries
+            .iter()
+            .any(|entry| blocklist_entry_blocks_sender(entry, sender));
+    }
+    blocklist_entry_blocks_sender(payload, sender)
+}
+
+fn blocklist_entry_blocks_sender(entry: &Value, sender: &str) -> bool {
+    match entry {
+        Value::String(_) => blocklist_value_is_sender(entry, sender),
+        Value::Object(object) => {
+            let mode = object
+                .get("kind")
+                .or_else(|| object.get("action"))
+                .or_else(|| object.get("status"))
+                .and_then(Value::as_str)
+                .unwrap_or("block");
+            if matches!(mode, "allow" | "unblock" | "removed" | "deleted") {
+                return false;
+            }
+            object
+                .get("target")
+                .or_else(|| object.get("did"))
+                .or_else(|| object.get("actor"))
+                .is_some_and(|target| blocklist_entry_target_matches_sender(target, sender))
+        }
+        _ => false,
+    }
+}
+
+fn blocklist_entry_target_matches_sender(target: &Value, sender: &str) -> bool {
+    match target {
+        Value::String(_) => blocklist_value_is_sender(target, sender),
+        Value::Object(object) => object
+            .get("did")
+            .or_else(|| object.get("actor"))
+            .or_else(|| object.get("id"))
+            .is_some_and(|value| blocklist_value_is_sender(value, sender)),
+        _ => false,
+    }
+}
+
+fn blocklist_value_is_sender(value: &Value, sender: &str) -> bool {
+    value.as_str().is_some_and(|value| value == sender)
 }
 
 fn sync_timeline_message_record_json(message: &crate::state::MessageRecord) -> serde_json::Value {
@@ -1819,6 +1907,7 @@ fn durable_events_query_from_parts(
             actor_match || space_match
         })
         .filter(|record| super::event_log::event_visible_to_session(state, record, session))
+        .filter(|record| canonical_event_visible_to_personal_blocklist(state, record, session))
         .collect::<Vec<_>>();
     records.sort_by(|left, right| {
         left.received_at

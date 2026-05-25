@@ -42,6 +42,7 @@ use crate::wire::{
 /// can swap to a longer constant or env-driven value once the persistent
 /// release ledger lands.
 pub const HANDLE_GRACE_PERIOD_SECONDS: i64 = 5;
+const PERSONAL_BLOCKLIST_DATA_TYPES: &[&str] = &["cx.account.blocklist", "cx.account.blocklist.v1"];
 
 fn handle_in_grace_period(state: &AppState, handle: &str) -> bool {
     let releases = state.handle_releases.lock().expect("handle_releases lock");
@@ -1101,6 +1102,7 @@ async fn list_notifications(
             .filter(|message| {
                 message.sender != session.actor
                     && realm_has_member(state, &message.space_id, &session.actor)
+                    && !personal_blocklist_blocks_sender(state, &session.actor, &message.sender)
                     && (!content_has_explicit_mention(&message.content)
                         || content_mentions_actor(
                             &message.content,
@@ -1139,6 +1141,71 @@ async fn list_notifications(
         "unread_count": unread_count,
         "last_read_at": last_read_at.map(|dt| dt.to_rfc3339()),
     }))
+}
+
+fn personal_blocklist_blocks_sender(state: &AppState, actor: &str, sender: &str) -> bool {
+    PERSONAL_BLOCKLIST_DATA_TYPES.iter().any(|data_type| {
+        state
+            .persistence
+            .account_data()
+            .get(actor, data_type)
+            .ok()
+            .flatten()
+            .is_some_and(|record| blocklist_payload_blocks_sender(&record.payload, sender))
+    })
+}
+
+fn blocklist_payload_blocks_sender(payload: &Value, sender: &str) -> bool {
+    if let Some(entries) = payload.get("entries").and_then(Value::as_array) {
+        return entries
+            .iter()
+            .any(|entry| blocklist_entry_blocks_sender(entry, sender));
+    }
+    if let Some(entries) = payload.get("blocked").and_then(Value::as_array) {
+        return entries
+            .iter()
+            .any(|entry| blocklist_entry_blocks_sender(entry, sender));
+    }
+    blocklist_entry_blocks_sender(payload, sender)
+}
+
+fn blocklist_entry_blocks_sender(entry: &Value, sender: &str) -> bool {
+    match entry {
+        Value::String(_) => blocklist_value_is_sender(entry, sender),
+        Value::Object(object) => {
+            let mode = object
+                .get("kind")
+                .or_else(|| object.get("action"))
+                .or_else(|| object.get("status"))
+                .and_then(Value::as_str)
+                .unwrap_or("block");
+            if matches!(mode, "allow" | "unblock" | "removed" | "deleted") {
+                return false;
+            }
+            object
+                .get("target")
+                .or_else(|| object.get("did"))
+                .or_else(|| object.get("actor"))
+                .is_some_and(|target| blocklist_entry_target_matches_sender(target, sender))
+        }
+        _ => false,
+    }
+}
+
+fn blocklist_entry_target_matches_sender(target: &Value, sender: &str) -> bool {
+    match target {
+        Value::String(_) => blocklist_value_is_sender(target, sender),
+        Value::Object(object) => object
+            .get("did")
+            .or_else(|| object.get("actor"))
+            .or_else(|| object.get("id"))
+            .is_some_and(|value| blocklist_value_is_sender(value, sender)),
+        _ => false,
+    }
+}
+
+fn blocklist_value_is_sender(value: &Value, sender: &str) -> bool {
+    value.as_str().is_some_and(|value| value == sender)
 }
 
 fn notification_from_message(

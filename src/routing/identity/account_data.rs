@@ -149,6 +149,10 @@ async fn put_account_data(
         payload: body.content,
         updated_at: now(),
     };
+    let is_blocklist_update = matches!(
+        data_type.as_str(),
+        "cx.account.blocklist" | "cx.account.blocklist.v1"
+    );
     state
         .persistence
         .account_data()
@@ -174,6 +178,13 @@ async fn put_account_data(
             "updated_at": record.updated_at,
         }),
     );
+    if is_blocklist_update {
+        crate::routing::federation::federation::fanout_blocklist_hints_to_peers(
+            state,
+            &session.actor,
+            &record.payload,
+        );
+    }
 
     if !existed {
         res.status_code(StatusCode::CREATED);

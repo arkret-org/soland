@@ -340,6 +340,11 @@ pub struct AppState {
     /// stable event_id and remain in the canonical/projection stores; render
     /// paths redact the content to `[expired]`.
     pub retention_tombstones: Arc<Mutex<BTreeMap<String, RetentionTombstoneRecord>>>,
+    /// Best-effort federation block hints keyed by `(actor, blocked, source)`.
+    /// These hints are not Realm facts; they let a peer suppress unnecessary
+    /// push fanout for `blocked -> actor` without leaking anything into public
+    /// membership or moderation state.
+    pub federation_block_hints: Arc<Mutex<BTreeMap<String, FederationBlockHintRecord>>>,
     pub did_resolver: Arc<Mutex<CompositeDidResolver>>,
     /// Move/Anchor/Lattice runtime stores.
     /// In-memory backends from the SDK; production deployments will
@@ -913,6 +918,14 @@ pub struct RetentionTombstoneRecord {
     pub anchored: bool,
 }
 
+#[derive(Clone, Debug)]
+pub struct FederationBlockHintRecord {
+    pub actor: String,
+    pub blocked: String,
+    pub source: String,
+    pub received_at: chrono::DateTime<chrono::Utc>,
+}
+
 impl AppState {
     /// Snapshot the persistent Ed25519 signing key shared by
     /// the AnchorerWorker and all admin signing paths. Returns a fresh
@@ -1175,6 +1188,7 @@ impl AppState {
             })),
             retention_policies: Arc::new(Mutex::new(BTreeMap::new())),
             retention_tombstones: Arc::new(Mutex::new(BTreeMap::new())),
+            federation_block_hints: Arc::new(Mutex::new(BTreeMap::new())),
             did_resolver,
             move_store: Arc::new(contrix_sdk::state_res::MemoryMoveStore::default()),
             anchor_store: Arc::new(contrix_sdk::state_res::MemoryAnchorStore::default()),

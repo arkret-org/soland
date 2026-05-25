@@ -9,7 +9,7 @@ pub(crate) use federation::fanout_accepted_operations_to_peers;
 
 use super::{
     AuthArgs, ingest_federation_operations, now, operation_is_visible,
-    redaction_targets_from_operations, sha256_hex, sync_token, validate_space_id,
+    redaction_targets_from_operations, sha256_hex, sync_token, validate_did, validate_space_id,
 };
 
 pub fn router() -> Router {
@@ -24,6 +24,8 @@ pub fn router() -> Router {
             Router::with_path("federation/push-operations")
                 .post(federation::federation_push_operations),
         )
+        .push(Router::with_path("federation/block-hint").post(federation::federation_block_hint))
+        .push(Router::with_path("federation/block-hints").get(federation::federation_block_hints))
         .push(
             Router::with_path("federation/pull-operations")
                 .get(federation::federation_pull_operations),
