@@ -325,6 +325,12 @@ pub struct AppState {
     /// gate; durable Move/Anchor cell hydration can replace the backing map
     /// without changing the routing contract.
     pub consent_cells: Arc<Mutex<BTreeMap<ConsentCellKey, ConsentCellRecord>>>,
+    /// Runtime state for sovereign-main / enclave deployment handshakes,
+    /// trust-root decisions, boundary audit, and store-and-forward queues.
+    /// The P2-056 implementation keeps this in memory so the dual-soland
+    /// conformance harness can exercise the protocol shape locally; a durable
+    /// store can replace the backing map without changing the HTTP contract.
+    pub sovereign_deployment: Arc<Mutex<SovereignDeploymentState>>,
     pub did_resolver: Arc<Mutex<CompositeDidResolver>>,
     /// Move/Anchor/Lattice runtime stores.
     /// In-memory backends from the SDK; production deployments will
@@ -801,6 +807,84 @@ pub struct PolicyDocumentRecord {
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
+#[derive(Clone, Debug, Default)]
+pub struct SovereignDeploymentState {
+    pub profile_override: Option<String>,
+    pub upstream_main: Option<String>,
+    pub trust_roots: Vec<String>,
+    pub allow_external_via_enclave: bool,
+    pub trusted_enclaves: BTreeMap<String, SovereignEnclaveRecord>,
+    pub enclave_realms: BTreeMap<String, SovereignRealmRecord>,
+    pub external_invites: BTreeMap<String, SovereignExternalInviteRecord>,
+    pub external_accounts: BTreeMap<String, SovereignExternalAccountRecord>,
+    pub audit_log: Vec<SovereignAuditRecord>,
+    pub upstream_available: bool,
+    pub store_forward_queue: Vec<SovereignStoreForwardRecord>,
+    pub received_store_forward: Vec<SovereignStoreForwardRecord>,
+}
+
+#[derive(Clone, Debug)]
+pub struct SovereignEnclaveRecord {
+    pub server_id: String,
+    pub base_url: String,
+    pub trust_chain: Vec<String>,
+    pub registered_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Clone, Debug)]
+pub struct SovereignRealmRecord {
+    pub realm_id: String,
+    pub deployment_profile: String,
+    pub hosted_on: String,
+    pub external_invite_policy: String,
+    pub created_by: String,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub enclave_frontier: i64,
+    pub main_frontier: i64,
+}
+
+#[derive(Clone, Debug)]
+pub struct SovereignExternalInviteRecord {
+    pub invite_token: String,
+    pub target_realm: String,
+    pub target_host: String,
+    pub invitee: String,
+    pub inviter: String,
+    pub accepted: bool,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Clone, Debug)]
+pub struct SovereignExternalAccountRecord {
+    pub did: String,
+    pub realm_id: String,
+    pub bound_node: String,
+    pub trust_chain_profile: String,
+    pub active: bool,
+    pub joined_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Clone, Debug)]
+pub struct SovereignAuditRecord {
+    pub subject: String,
+    pub action: String,
+    pub realm_id: Option<String>,
+    pub status: String,
+    pub detail: Value,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Clone, Debug)]
+pub struct SovereignStoreForwardRecord {
+    pub id: String,
+    pub realm_id: String,
+    pub actor: String,
+    pub content: Value,
+    pub state: String,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub forwarded_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
 impl AppState {
     /// Snapshot the persistent Ed25519 signing key shared by
     /// the AnchorerWorker and all admin signing paths. Returns a fresh
@@ -1057,6 +1141,10 @@ impl AppState {
             sync_cursor_handles: Arc::new(Mutex::new(BTreeMap::new())),
             to_device_position_counter: Arc::new(AtomicI64::new(now.timestamp_micros())),
             consent_cells: Arc::new(Mutex::new(BTreeMap::new())),
+            sovereign_deployment: Arc::new(Mutex::new(SovereignDeploymentState {
+                upstream_available: true,
+                ..Default::default()
+            })),
             did_resolver,
             move_store: Arc::new(contrix_sdk::state_res::MemoryMoveStore::default()),
             anchor_store: Arc::new(contrix_sdk::state_res::MemoryAnchorStore::default()),

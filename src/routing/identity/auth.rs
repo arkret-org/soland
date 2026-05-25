@@ -125,6 +125,7 @@ async fn dev_login(
             "actor must be a DID and device_id is required",
         ));
     }
+    crate::routing::extensions::sovereign::validate_sovereign_did_registration(state, &body.actor)?;
     let account = state
         .persistence
         .accounts()

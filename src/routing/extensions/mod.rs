@@ -35,8 +35,12 @@ pub mod tsp;
 /// Compose the four sub-routers under a shared `/extensions` prefix.
 /// Mounted into the api/v1 router by `routing::mod.rs`.
 pub fn router() -> Router {
-    Router::with_path("extensions")
-        .push(applet_manifest::router())
-        .push(bot_actor::router())
-        .push(tsp::router())
+    Router::new()
+        .push(
+            Router::with_path("extensions")
+                .push(applet_manifest::router())
+                .push(bot_actor::router())
+                .push(tsp::router()),
+        )
+        .push(sovereign::router())
 }

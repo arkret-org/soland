@@ -102,6 +102,7 @@ async fn account_register(
     if validate_did(&body.did).is_err() {
         return Err(AppError::invalid_param("invalid did"));
     }
+    crate::routing::extensions::sovereign::validate_sovereign_did_registration(state, &body.did)?;
     if !is_valid_handle(&body.handle) {
         return Err(AppError::invalid_param("invalid handle"));
     }
