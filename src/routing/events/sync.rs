@@ -35,6 +35,7 @@ use salvo::prelude::*;
 use serde_json::{Value, json};
 use tokio::sync::broadcast::error::RecvError;
 
+use super::projection::{actor_erased_in_space, tombstone_timeline_event_value};
 use super::{
     augment_timeline_message_json, authenticated_session, backfill_gap_events,
     default_discussion_track, device_message_events_after, flow_id_from_space_id,
@@ -456,12 +457,7 @@ fn timeline_events_for_space(
         }
         timeline_entries.push((
             position,
-            augment_timeline_message_json(
-                sync_timeline_message_record_json(&message),
-                &message.event_id,
-                &message.content,
-                projection,
-            ),
+            sync_timeline_message_record_json_with_projection(&message, projection),
         ));
     }
 
@@ -645,6 +641,17 @@ fn sync_timeline_message_record_json(message: &crate::state::MessageRecord) -> s
         "decryption_state": if message.encrypted { "opaque" } else { "cleartext" },
         "created_at": message.created_at,
     })
+}
+
+fn sync_timeline_message_record_json_with_projection(
+    message: &crate::state::MessageRecord,
+    projection: &ProjectionState,
+) -> serde_json::Value {
+    let mut event = sync_timeline_message_record_json(message);
+    if actor_erased_in_space(projection, &message.sender, &message.space_id) {
+        tombstone_timeline_event_value(&mut event);
+    }
+    augment_timeline_message_json(event, &message.event_id, &message.content, projection)
 }
 
 #[derive(Debug, Default)]

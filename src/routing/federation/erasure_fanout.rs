@@ -38,7 +38,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::Utc;
-use serde_json::json;
+use contrix_sdk::{Did, Operation, OperationId, RealmId, SpaceId};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use crate::reducer::FanoutPeerStatus;
@@ -56,6 +57,12 @@ pub const DEFAULT_SWEEP_INTERVAL: Duration = Duration::from_secs(60 * 60); // 1 
 /// projection.
 const ERASURE_RECEIPT_OUTBOX_ENDPOINT: &str = "/api/v1/federation/push-operations";
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ErasurePeerTarget {
+    url: String,
+    did: String,
+}
+
 /// Stream-F (Wave 2C) — federation fanout for a freshly-recorded
 /// `cx.audit.erasure_receipt`. Enqueues one outbox row per
 /// federation peer and seeds the receipt's `peer_status` map. No-op
@@ -67,11 +74,58 @@ const ERASURE_RECEIPT_OUTBOX_ENDPOINT: &str = "/api/v1/federation/push-operation
 /// conservative super-set; per-Realm peer-set tracking ships when
 /// the federation membership projection grows that surface.
 pub fn fanout_erasure_receipt(state: &AppState, receipt_id: &str) {
+    let receipt_snapshot = {
+        let Ok(proj) = state.projection.lock() else {
+            return;
+        };
+        proj.erasure_receipts
+            .iter()
+            .rev()
+            .find(|r| r.receipt_id.as_deref() == Some(receipt_id))
+            .cloned()
+    };
+    let Some(receipt) = receipt_snapshot else {
+        tracing::debug!(
+            target = "erasure_fanout",
+            receipt_id,
+            "no matching receipt in projection — skipping fanout"
+        );
+        return;
+    };
+    let Some(scope_realm_id) = receipt.scope_realm_id.clone() else {
+        return;
+    };
+    let Ok(operation_id) = OperationId::new(crate::ids::generate_operation_id()) else {
+        return;
+    };
+    let Ok(realm_id) = RealmId::new(scope_realm_id) else {
+        return;
+    };
+    let operation = Operation::create(
+        operation_id,
+        realm_id,
+        crate::kinds::CX_AUDIT_ERASURE_RECEIPT,
+        receipt.payload,
+    );
+    fanout_erasure_receipt_operation(state, &operation);
+}
+
+/// Fan out a durable `cx.audit.erasure_receipt` operation through the normal
+/// federation push batch wire shape.
+pub fn fanout_erasure_receipt_operation(state: &AppState, operation: &Operation) {
     if state.config.federation_peers.is_empty() {
         return;
     }
     let now = Utc::now();
-    let peers: Vec<String> = state.config.federation_peers.clone();
+    let peers = configured_erasure_peer_targets(state);
+    if peers.is_empty() {
+        return;
+    }
+    let receipt_id = operation
+        .payload
+        .get("receipt_id")
+        .and_then(Value::as_str)
+        .unwrap_or(operation.operation_id.as_str());
 
     // Snapshot the receipt we're acting on. Done under lock so the
     // peer_status seed observes the same record the reducer just
@@ -100,50 +154,47 @@ pub fn fanout_erasure_receipt(state: &AppState, receipt_id: &str) {
     if receipt.scope_realm_id.is_none() {
         return;
     }
-
-    // Build the federated envelope. We retransmit the canonical
-    // erasure receipt payload verbatim so the peer's reducer applies
-    // the identical scope/outcome/proof bundle the local reducer
-    // already accepted.
-    let envelope = json!({
-        "schema": "cx.federation.outbound.audit_erasure_receipt.v1",
-        "origin": state.config.service_did,
-        "kind": crate::kinds::CX_AUDIT_ERASURE_RECEIPT,
-        "receipt": receipt.payload,
-    });
+    persist_erasure_operation_for_pull(state, operation);
 
     let mut sent_statuses: std::collections::BTreeMap<String, FanoutPeerStatus> =
         std::collections::BTreeMap::new();
     for peer in &peers {
+        let Some(payload_json) = erasure_push_payload(state, operation, peer) else {
+            sent_statuses.insert(
+                peer.did.clone(),
+                FanoutPeerStatus {
+                    sent_at: None,
+                    acked_at: None,
+                    outcome: Some("encode_failed".to_owned()),
+                },
+            );
+            continue;
+        };
         // Deterministic idempotency key — `sha256(origin || peer ||
-        // "erasure_receipt" || receipt_id)`. A restart-time replay
+        // "erasure_receipt" || operation_id)`. A restart-time replay
         // of the same receipt collapses onto the pre-existing
         // outbox row instead of double-pushing.
         let mut hasher = Sha256::new();
         hasher.update(state.config.service_did.as_bytes());
         hasher.update(b"|");
-        hasher.update(peer.as_bytes());
+        hasher.update(peer.did.as_bytes());
         hasher.update(b"|");
         hasher.update(b"erasure_receipt");
         hasher.update(b"|");
-        hasher.update(receipt_id.as_bytes());
+        hasher.update(operation.operation_id.as_str().as_bytes());
         let idempotency_key = format!("cx:outbox:erasure_receipt:{:x}", hasher.finalize());
 
-        let payload_bytes =
-            contrix_sdk::canonical::canonical_json_bytes(&envelope).unwrap_or_default();
-        let payload_json =
-            String::from_utf8(payload_bytes).unwrap_or_else(|_| envelope.to_string());
         match crate::routing::federation::outbox::enqueue_outbound(
             state,
-            peer,
-            peer,
+            peer.url.as_str(),
+            peer.did.as_str(),
             ERASURE_RECEIPT_OUTBOX_ENDPOINT,
             &idempotency_key,
             &payload_json,
         ) {
             Ok(_row) => {
                 sent_statuses.insert(
-                    peer.clone(),
+                    peer.did.clone(),
                     FanoutPeerStatus {
                         sent_at: Some(now),
                         acked_at: None,
@@ -153,7 +204,8 @@ pub fn fanout_erasure_receipt(state: &AppState, receipt_id: &str) {
                 tracing::info!(
                     target = "erasure_fanout",
                     receipt_id,
-                    %peer,
+                    peer = %peer.url,
+                    peer_did = %peer.did,
                     "erasure receipt enqueued for federation peer"
                 );
             }
@@ -164,7 +216,7 @@ pub fn fanout_erasure_receipt(state: &AppState, receipt_id: &str) {
                 // ops can tell the difference between "never enqueued"
                 // and "enqueued but unacked".
                 sent_statuses.insert(
-                    peer.clone(),
+                    peer.did.clone(),
                     FanoutPeerStatus {
                         sent_at: None,
                         acked_at: None,
@@ -174,7 +226,8 @@ pub fn fanout_erasure_receipt(state: &AppState, receipt_id: &str) {
                 tracing::warn!(
                     target = "erasure_fanout",
                     receipt_id,
-                    %peer,
+                    peer = %peer.url,
+                    peer_did = %peer.did,
                     %error,
                     "failed to enqueue erasure receipt for federation peer"
                 );
@@ -191,6 +244,97 @@ pub fn fanout_erasure_receipt(state: &AppState, receipt_id: &str) {
             .find(|r| r.receipt_id.as_deref() == Some(receipt_id))
     {
         record.peer_status = sent_statuses;
+    }
+}
+
+fn erasure_push_payload(
+    state: &AppState,
+    operation: &Operation,
+    peer: &ErasurePeerTarget,
+) -> Option<String> {
+    let origin = Did::new(state.config.service_did.clone()).ok()?;
+    let destination = Did::new(peer.did.clone()).ok()?;
+    let space_id = SpaceId::new(operation.realm_id.to_string()).ok()?;
+    let body = contrix_sdk::FederationPushOperationsReqBody {
+        origin,
+        destination,
+        space_id,
+        service_binding_ref: format!(
+            "{}#federation-erasure-receipt:{}",
+            state.config.service_did,
+            operation.operation_id.as_str()
+        ),
+        operations: vec![operation.clone()],
+    };
+    serde_json::to_value(&body)
+        .ok()
+        .and_then(|value| contrix_sdk::canonical::canonical_json_bytes(&value).ok())
+        .and_then(|bytes| String::from_utf8(bytes).ok())
+}
+
+fn persist_erasure_operation_for_pull(state: &AppState, operation: &Operation) {
+    let store = state.persistence.federation_operations();
+    match store.contains(operation.operation_id.as_str()) {
+        Ok(true) => {}
+        Ok(false) => {
+            if let Err(error) = store.append(operation.clone()) {
+                tracing::warn!(
+                    %error,
+                    operation_id = %operation.operation_id,
+                    "failed to persist erasure receipt operation in federation pull log"
+                );
+            }
+        }
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                operation_id = %operation.operation_id,
+                "failed to check erasure receipt operation in federation pull log"
+            );
+        }
+    }
+}
+
+fn configured_erasure_peer_targets(state: &AppState) -> Vec<ErasurePeerTarget> {
+    use crate::config::FederationPolicy;
+    let entries: Vec<String> = match state.config.federation_policy {
+        FederationPolicy::Mesh => state.config.federation_peers.clone(),
+        FederationPolicy::Hub => state
+            .config
+            .federation_peers
+            .first()
+            .cloned()
+            .into_iter()
+            .collect(),
+    };
+    entries
+        .into_iter()
+        .filter_map(|entry| parse_erasure_peer_target(&entry))
+        .collect()
+}
+
+fn parse_erasure_peer_target(entry: &str) -> Option<ErasurePeerTarget> {
+    let entry = entry.trim();
+    if entry.is_empty() {
+        return None;
+    }
+    let (left, right) = entry
+        .split_once('|')
+        .map(|(left, right)| (left.trim(), right.trim()))
+        .unwrap_or((entry, entry));
+    if left.is_empty() || right.is_empty() {
+        return None;
+    }
+    if left.starts_with("did:") && !right.starts_with("did:") {
+        Some(ErasurePeerTarget {
+            url: right.trim_end_matches('/').to_owned(),
+            did: left.to_owned(),
+        })
+    } else {
+        Some(ErasurePeerTarget {
+            url: left.trim_end_matches('/').to_owned(),
+            did: right.to_owned(),
+        })
     }
 }
 
@@ -280,6 +424,7 @@ pub fn spawn(state: AppState) -> Option<Arc<tokio::task::JoinHandle<()>>> {
 mod tests {
     use super::*;
     use crate::reducer::ErasureReceiptRecord;
+    use serde_json::json;
 
     fn fake_state() -> AppState {
         // Reuse the federation::tests config builder via a thin
@@ -288,7 +433,7 @@ mod tests {
         // inject federation_peers + erasure_propagation_window_ms
         // for the test.
         crate::routing::federation::federation::test_app_state_with_peers(
-            vec!["did:web:peer1.example".to_owned()],
+            vec!["http://127.0.0.1:9|did:web:peer1.example".to_owned()],
             500,
         )
     }
@@ -312,6 +457,8 @@ mod tests {
                 recorded_at: Utc::now(),
                 payload: json!({
                     "receipt_id": "r1",
+                    "schema": "cx.schema.erasure_receipt.v1",
+                    "subject": {"kind": "principal", "ref": "did:web:alice.example"},
                     "outcome": "completed",
                     "scope": {
                         "storage_boundary": "projection_store",
@@ -331,6 +478,21 @@ mod tests {
         let peer = record.peer_status.get("did:web:peer1.example").unwrap();
         assert!(peer.sent_at.is_some(), "sent_at must be stamped on enqueue");
         assert!(peer.acked_at.is_none());
+        let outbox = state
+            .persistence
+            .federation_outbox()
+            .snapshot_all()
+            .unwrap();
+        assert_eq!(outbox.len(), 1);
+        assert_eq!(outbox[0].peer_url, "http://127.0.0.1:9");
+        assert_eq!(outbox[0].peer_did, "did:web:peer1.example");
+        let body: serde_json::Value = serde_json::from_str(&outbox[0].payload_json).unwrap();
+        assert_eq!(body["origin"], "did:web:test.local");
+        assert_eq!(body["destination"], "did:web:peer1.example");
+        assert_eq!(
+            body["operations"][0]["object_type"],
+            crate::kinds::CX_AUDIT_ERASURE_RECEIPT
+        );
     }
 
     #[test]

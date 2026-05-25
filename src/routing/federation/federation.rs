@@ -279,6 +279,76 @@ pub(super) async fn federation_push_operations(
     })
 }
 
+#[endpoint(
+    operation_id = "cx.extension.soland.federation.actor_events",
+    tags("federation"),
+    summary = "Debug/read model: list projection events for a federated actor"
+)]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.federation.actor_events"))]
+pub(super) async fn federation_actor_events(
+    actor_did: PathParam<String>,
+    depot: &mut Depot,
+) -> JsonResult<Value> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let actor = actor_did.into_inner();
+    if Did::new(actor.clone()).is_err() {
+        return Err(AppError::invalid_param("invalid actor_did"));
+    }
+    let mut events = state
+        .persistence
+        .projection_events()
+        .snapshot_all()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|event| projection_event_matches_actor(event, &actor))
+        .collect::<Vec<_>>();
+    events.sort_by(|left, right| {
+        left.created_at
+            .cmp(&right.created_at)
+            .then_with(|| left.event_id.cmp(&right.event_id))
+    });
+
+    let erasure_receipts = if let Ok(projection) = state.projection.lock() {
+        for event in &mut events {
+            crate::routing::events::projection::tombstone_projection_event_for_erased_actor(
+                &projection,
+                event,
+            );
+        }
+        projection
+            .erasure_receipts
+            .iter()
+            .filter(|receipt| receipt.subject_ref.as_deref() == Some(actor.as_str()))
+            .map(|receipt| receipt.payload.clone())
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
+    let events = events
+        .iter()
+        .map(crate::routing::events::projection::projection_event_json)
+        .collect::<Vec<_>>();
+    json_ok(json!({
+        "actor": actor,
+        "events": events,
+        "erasure_receipts": erasure_receipts,
+    }))
+}
+
+fn projection_event_matches_actor(
+    event: &crate::state::ProjectionEventRecord,
+    actor: &str,
+) -> bool {
+    crate::routing::events::projection::projection_event_actor(event) == Some(actor)
+        || event
+            .payload
+            .get("subject")
+            .and_then(Value::as_object)
+            .and_then(|subject| subject.get("ref"))
+            .and_then(Value::as_str)
+            == Some(actor)
+}
+
 /// Fan out locally-accepted timeline / membership operations to configured
 /// federation peers. Each operation is persisted in the local federation log
 /// first, so peer pull/backfill can replay the same item if the live push path

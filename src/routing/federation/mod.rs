@@ -37,6 +37,10 @@ pub fn router() -> Router {
                 .get(federation::federation_operation_frontier),
         )
         .push(
+            Router::with_path("federation/actors/{actor_did}/events")
+                .get(federation::federation_actor_events),
+        )
+        .push(
             Router::with_path("federation/space-members").get(federation::federation_space_members),
         )
         .push(

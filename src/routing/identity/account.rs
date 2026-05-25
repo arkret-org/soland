@@ -740,6 +740,7 @@ async fn erase_account(
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req)?;
     let actor = session.actor.clone();
+    let affected_realms = affected_erasure_realms_for_actor(state, &actor);
 
     append_audit_log(
         state,
@@ -859,6 +860,18 @@ async fn erase_account(
             "signature_input": "soland-erasure-receipt-proof-v1"
         }]
     });
+    let realm_erasure_receipts = affected_realms
+        .iter()
+        .map(|realm_id| {
+            realm_erasure_receipt(
+                state,
+                &actor,
+                realm_id,
+                &retained_stub_digest,
+                &completed_at_wire,
+            )
+        })
+        .collect::<Vec<_>>();
     append_audit_log(
         state,
         Some(&actor),
@@ -866,6 +879,34 @@ async fn erase_account(
         erasure_receipt.clone(),
         "accepted",
     );
+    let realm_operations = realm_erasure_receipts
+        .iter()
+        .filter_map(|receipt| erasure_receipt_operation(receipt.clone()))
+        .collect::<Vec<_>>();
+    if !realm_operations.is_empty()
+        && let Err(error) = crate::routing::events::projection::accept_local_operations(
+            state,
+            &actor,
+            &realm_operations,
+        )
+    {
+        tracing::warn!(
+            %error,
+            actor = %actor,
+            "failed to accept realm-scoped erasure receipt operations"
+        );
+        append_audit_log(
+            state,
+            Some(&actor),
+            "cx.audit.erasure_receipt.fanout_failed",
+            json!({
+                "actor": actor.clone(),
+                "affected_realms": affected_realms,
+                "reason": error,
+            }),
+            "failed",
+        );
+    }
     // Snapshot the audit log inline so the response is the canonical
     // last-known-good view of the actor's audit trail — subsequent
     // authenticated reads will 401 with `account_erased`, making this
@@ -880,8 +921,113 @@ async fn erase_account(
         "state": "erased",
         "erased_at": completed_at_wire,
         "erasure_receipt": erasure_receipt,
+        "realm_erasure_receipts": realm_erasure_receipts,
         "audit_log": audit_log,
     }))
+}
+
+fn affected_erasure_realms_for_actor(state: &AppState, actor: &str) -> Vec<String> {
+    let mut realms = std::collections::BTreeSet::new();
+    for event in state
+        .persistence
+        .projection_events()
+        .snapshot_all()
+        .unwrap_or_default()
+    {
+        if projection_event_belongs_to_actor(&event, actor) {
+            realms.insert(event.space_id.replacen("cx:space:", "cx:realm:", 1));
+        }
+    }
+    if let Ok(projection) = state.projection.lock() {
+        for message in projection.messages.values() {
+            if message.sender == actor {
+                realms.insert(message.space_id.replacen("cx:space:", "cx:realm:", 1));
+            }
+        }
+    }
+    realms.into_iter().collect()
+}
+
+fn projection_event_belongs_to_actor(
+    event: &crate::state::ProjectionEventRecord,
+    actor: &str,
+) -> bool {
+    event.sender.as_deref() == Some(actor)
+        || event.payload.get("sender").and_then(Value::as_str) == Some(actor)
+        || event.payload.get("actor_id").and_then(Value::as_str) == Some(actor)
+        || event.payload.get("actor").and_then(Value::as_str) == Some(actor)
+        || event
+            .payload
+            .get("object")
+            .and_then(Value::as_object)
+            .and_then(|object| object.get("created_by_principal"))
+            .and_then(Value::as_str)
+            == Some(actor)
+}
+
+fn realm_erasure_receipt(
+    state: &AppState,
+    actor: &str,
+    realm_id: &str,
+    retained_stub_digest: &str,
+    completed_at_wire: &str,
+) -> Value {
+    let receipt_id = crate::ids::generate("receipt");
+    let proof_payload = json!({
+        "receipt_id": receipt_id.clone(),
+        "subject": actor,
+        "realm_id": realm_id,
+        "retained_stub_digest": retained_stub_digest,
+        "completed_at": completed_at_wire,
+    });
+    let proof_hash = erasure_receipt_payload_digest(&proof_payload);
+    let proof_signature = erasure_receipt_proof_signature(state, &proof_payload);
+    json!({
+        "receipt_id": receipt_id,
+        "schema": "cx.schema.erasure_receipt.v1",
+        "issuer": state.config.service_did.clone(),
+        "subject": {
+            "kind": "principal",
+            "ref": actor
+        },
+        "scope": {
+            "storage_boundary": "projection_store",
+            "service_scope": "soland.account.erase.federation",
+            "realm_id": realm_id,
+            "target_refs": [actor]
+        },
+        "outcome": "completed",
+        "erased_classes": [
+            "projection_rows",
+            "federated_plaintext_timeline"
+        ],
+        "retained_stub_digest": retained_stub_digest,
+        "completed_at": completed_at_wire,
+        "issued_at": completed_at_wire,
+        "proofs": [{
+            "verification_method": format!("{}#erasure-receipt", state.config.service_did),
+            "payload_digest": proof_hash,
+            "alg": "EdDSA",
+            "signature": proof_signature,
+            "signature_input": "soland-erasure-receipt-proof-v1"
+        }]
+    })
+}
+
+fn erasure_receipt_operation(receipt: Value) -> Option<contrix_sdk::Operation> {
+    let realm_id = receipt
+        .get("scope")
+        .and_then(Value::as_object)
+        .and_then(|scope| scope.get("realm_id"))
+        .and_then(Value::as_str)?;
+    let operation_id = contrix_sdk::OperationId::new(crate::ids::generate_operation_id()).ok()?;
+    let realm_id = contrix_sdk::RealmId::new(realm_id.to_owned()).ok()?;
+    Some(contrix_sdk::Operation::create(
+        operation_id,
+        realm_id,
+        crate::kinds::CX_AUDIT_ERASURE_RECEIPT,
+        receipt,
+    ))
 }
 
 fn erasure_receipt_payload_digest(payload: &Value) -> String {

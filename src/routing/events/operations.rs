@@ -443,6 +443,12 @@ const CONSENT_REVOKE_REQUIREMENTS: &[PayloadRequirement] = &[
     PayloadRequirement::Required("consent_id", "consent revoke requires consent_id"),
     PayloadRequirement::Required("observed_dots", "consent revoke requires observed_dots"),
 ];
+const ERASURE_RECEIPT_REQUIREMENTS: &[PayloadRequirement] = &[
+    PayloadRequirement::Required("receipt_id", "erasure receipt requires receipt_id"),
+    PayloadRequirement::Required("subject", "erasure receipt requires subject"),
+    PayloadRequirement::Required("scope", "erasure receipt requires scope"),
+    PayloadRequirement::Required("outcome", "erasure receipt requires outcome"),
+];
 
 pub fn validate_operation_semantics(
     _state: &AppState,
@@ -673,6 +679,10 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
         },
         kinds::CX_INVITE_CREATE => OperationPayloadSchema {
             requirements: INVITE_CREATE_REQUIREMENTS,
+            validate: None,
+        },
+        kinds::CX_AUDIT_ERASURE_RECEIPT => OperationPayloadSchema {
+            requirements: ERASURE_RECEIPT_REQUIREMENTS,
             validate: None,
         },
         kind if kinds::is_invite_kind(kind) => OperationPayloadSchema {

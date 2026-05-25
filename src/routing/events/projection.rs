@@ -97,6 +97,8 @@ pub fn projection_event_json(event: &ProjectionEventRecord) -> serde_json::Value
     value
 }
 
+pub const ERASED_USER_PLACEHOLDER: &str = "[user erased]";
+
 pub fn operation_event_id(operation: &Operation) -> String {
     operation
         .payload
@@ -230,12 +232,11 @@ pub fn sync_timeline_message_json_with_projection(
     message: &crate::reducer::MessageState,
     projection: &crate::reducer::ProjectionState,
 ) -> serde_json::Value {
-    augment_timeline_message_json(
-        sync_timeline_message_json(message),
-        &message.event_id,
-        &message.content,
-        projection,
-    )
+    let mut event = sync_timeline_message_json(message);
+    if actor_erased_in_space(projection, &message.sender, &message.space_id) {
+        tombstone_timeline_event_value(&mut event);
+    }
+    augment_timeline_message_json(event, &message.event_id, &message.content, projection)
 }
 
 pub fn augment_timeline_message_json(
@@ -460,6 +461,108 @@ pub fn event_is_visible(event: &ProjectionEventRecord, redacted: &HashSet<String
     !kinds::is_redaction_kind(&event.event_kind) && !redacted.contains(&event.event_id)
 }
 
+pub fn actor_erased_in_space(
+    projection: &crate::reducer::ProjectionState,
+    actor: &str,
+    space_id: &str,
+) -> bool {
+    let space_id = normalize_realm_scope(space_id);
+    projection.erasure_receipts.iter().any(|receipt| {
+        receipt.outcome == "completed"
+            && receipt.subject_kind.as_deref() == Some("principal")
+            && receipt.subject_ref.as_deref() == Some(actor)
+            && receipt
+                .scope_realm_id
+                .as_deref()
+                .is_some_and(|scope| normalize_realm_scope(scope) == space_id)
+    })
+}
+
+pub fn projection_event_actor(event: &ProjectionEventRecord) -> Option<&str> {
+    event.sender.as_deref().or_else(|| {
+        event
+            .payload
+            .get("sender")
+            .or_else(|| event.payload.get("actor_id"))
+            .or_else(|| event.payload.get("actor"))
+            .and_then(Value::as_str)
+            .or_else(|| {
+                event
+                    .payload
+                    .get("object")
+                    .and_then(Value::as_object)
+                    .and_then(|object| object.get("created_by_principal"))
+                    .and_then(Value::as_str)
+            })
+    })
+}
+
+pub fn tombstone_projection_event_for_erased_actor(
+    projection: &crate::reducer::ProjectionState,
+    event: &mut ProjectionEventRecord,
+) {
+    if event.event_kind == kinds::CX_AUDIT_ERASURE_RECEIPT {
+        return;
+    }
+    let Some(actor) = projection_event_actor(event) else {
+        return;
+    };
+    if !actor_erased_in_space(projection, actor, &event.space_id) {
+        return;
+    }
+    event.sender = Some(ERASED_USER_PLACEHOLDER.to_owned());
+    event.payload = tombstone_payload_value(&event.payload);
+}
+
+pub fn tombstone_timeline_event_value(event: &mut Value) {
+    let Some(object) = event.as_object_mut() else {
+        return;
+    };
+    object.insert("sender".to_owned(), json!(ERASED_USER_PLACEHOLDER));
+    object.insert("erasure_tombstone".to_owned(), json!(true));
+    object.insert(
+        "content".to_owned(),
+        json!({
+            "kind": "cx.content.text",
+            "body": ERASED_USER_PLACEHOLDER,
+        }),
+    );
+    object.insert("encrypted".to_owned(), json!(false));
+    object.insert("decryption_state".to_owned(), json!("cleartext"));
+}
+
+fn tombstone_payload_value(payload: &Value) -> Value {
+    let mut value = payload.clone();
+    let Some(object) = value.as_object_mut() else {
+        return json!({
+            "content": {
+                "kind": "cx.content.text",
+                "body": ERASED_USER_PLACEHOLDER,
+            },
+            "erasure_tombstone": true,
+        });
+    };
+    for key in ["sender", "actor_id", "actor", "member"] {
+        if object.contains_key(key) {
+            object.insert(key.to_owned(), json!(ERASED_USER_PLACEHOLDER));
+        }
+    }
+    object.insert("erasure_tombstone".to_owned(), json!(true));
+    object.insert(
+        "content".to_owned(),
+        json!({
+            "kind": "cx.content.text",
+            "body": ERASED_USER_PLACEHOLDER,
+        }),
+    );
+    object.insert("encrypted".to_owned(), json!(false));
+    value
+}
+
+fn normalize_realm_scope(value: &str) -> String {
+    value.replacen("cx:space:", "cx:realm:", 1)
+}
+
 pub fn append_projection_event(state: &AppState, event: ProjectionEventRecord) {
     let store = state.persistence.projection_events();
     let exists = store
@@ -514,6 +617,11 @@ pub fn projected_event_page(
         .skip(start)
         .filter(|event| event_is_visible(event, &redacted))
         .collect::<Vec<_>>();
+    if let Ok(projection) = state.projection.lock() {
+        for event in &mut page_items {
+            tombstone_projection_event_for_erased_actor(&projection, event);
+        }
+    }
     let has_more = page_items.len() > limit;
     if has_more {
         page_items.truncate(limit);
@@ -1114,9 +1222,15 @@ pub fn project_accepted_operations(state: &AppState, origin: &str, operations: &
         // and seeds the per-peer `peer_status` map.
         // Spec realm-and-space.md §2.5.2.
         if kinds::canonical_kind_string(operation) == kinds::CX_AUDIT_ERASURE_RECEIPT
-            && let Some(receipt_id) = operation.payload.get("receipt_id").and_then(|v| v.as_str())
+            && operation
+                .payload
+                .get("receipt_id")
+                .and_then(|v| v.as_str())
+                .is_some()
         {
-            crate::routing::federation::erasure_fanout::fanout_erasure_receipt(state, receipt_id);
+            crate::routing::federation::erasure_fanout::fanout_erasure_receipt_operation(
+                state, operation,
+            );
         }
         // Write through Space-container/Flow/Morph projection changes to durable
         // persistence. Captures the in-memory projection snapshot
