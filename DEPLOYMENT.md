@@ -13,7 +13,7 @@ before serving real users.
 | PostgreSQL | 16+ | `pq-src` builds libpq inline; the runtime image only needs the network reachability |
 | Reverse proxy | nginx, Caddy, or Traefik | TLS termination is **expected** to live in the reverse proxy, not soland itself |
 | Object storage | local volume or S3-compatible bucket | Local disk is fine for one node; production should prefer S3/MinIO/R2-style object storage |
-| Container runtime | Docker / containerd / Podman | Image is published to `ghcr.io/contrix/soland` on every tagged release |
+| Container runtime | Docker / containerd / Podman | Build or load the image locally; this readiness workflow does not push registry images or tags |
 
 ## 1. Provision PostgreSQL
 
@@ -342,7 +342,7 @@ pre-upgrade backup if you need to roll back.
   budget when more than one soland replica is running. soland's built-in
   limiter is per-process and must not be treated as a distributed quota.
 - `cargo deny check` runs in CI on every dependabot bump.
-- soland process runs as a non-root user (UID 10001 in the published image).
+- soland process runs as a non-root user (UID 10001 in the local container image).
 - Rate-limit configuration matches your anticipated traffic and is enforced
   at the shared gateway when more than one soland replica is running.
 

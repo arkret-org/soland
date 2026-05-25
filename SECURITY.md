@@ -7,8 +7,8 @@ in mind when assessing security posture.
 
 ## Supported versions
 
-soland is pre-1.0. Only the latest tagged release on the `main` branch is
-supported. Older tags receive no backports.
+soland is pre-1.0. The local readiness branch is supported for this workspace;
+remote release tags are not part of this development campaign.
 
 ## Reporting a vulnerability
 
