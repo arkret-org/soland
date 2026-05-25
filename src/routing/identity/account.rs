@@ -20,9 +20,11 @@ use serde_json::{Value, json};
 use super::consent::{has_active_consent_for_scope, normalize_scope, record_pending_request};
 use super::device_messages::{NOTIFICATION_READ_MARKER_UPDATE_TYPE, fanout_actor_private_update};
 use super::{
-    AuthArgs, append_audit_log, is_valid_handle, normalize_handle, now, sha256_hex, validate_did,
+    AuthArgs, append_audit_log, handle_for_did, is_valid_handle, normalize_handle, now, sha256_hex,
+    validate_did,
 };
 use crate::error::AppError;
+use crate::routing::spaces::space::realm_has_member;
 use crate::state::{AccountRecord, AppState, ContactRecord, DeviceInventoryRecord};
 use crate::wire::{
     AccountResponse, ClaimHandleRequest, ClaimHandleResponse, ContactRequestRequest,
@@ -726,23 +728,217 @@ async fn list_notifications(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<serde_json::Value> {
-    // v1 surfaces an empty notifications list with `last_read_at` so
-    // clients can render the read-state badge correctly. The actual
-    // notification projection (fan-out from `cx.message.create` /
-    // `cx.audit.*` etc.) lands when the notification reducer ships.
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req)?;
+    let actor_handle = state
+        .persistence
+        .accounts()
+        .get(&session.actor)
+        .map_err(|error| AppError::internal(error.to_string()))?
+        .map(|account| account.handle)
+        .unwrap_or_else(|| handle_for_did(&session.actor));
     let last_read_at = state
         .notification_read_cursors
         .lock()
         .expect("notification_read_cursors lock")
         .get(&session.actor)
         .copied();
+    let mut items = {
+        let projection = state.projection.lock().expect("projection lock");
+        projection
+            .messages
+            .values()
+            .filter(|message| {
+                message.sender != session.actor
+                    && realm_has_member(state, &message.space_id, &session.actor)
+                    && (!content_has_explicit_mention(&message.content)
+                        || content_mentions_actor(&message.content, &session.actor, &actor_handle))
+            })
+            .map(|message| {
+                notification_from_message(
+                    message,
+                    &session.actor,
+                    &actor_handle,
+                    last_read_at.as_ref(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    items.sort_by(|left, right| {
+        right
+            .get("timestamp")
+            .and_then(serde_json::Value::as_str)
+            .cmp(&left.get("timestamp").and_then(serde_json::Value::as_str))
+    });
+    let unread_count = items
+        .iter()
+        .filter(|item| {
+            !item
+                .get("read")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false)
+        })
+        .count();
     json_ok(json!({
-        "items": serde_json::Value::Array(Vec::new()),
-        "unread_count": 0,
+        "items": items,
+        "unread_count": unread_count,
         "last_read_at": last_read_at.map(|dt| dt.to_rfc3339()),
     }))
+}
+
+fn notification_from_message(
+    message: &crate::reducer::MessageState,
+    actor: &str,
+    actor_handle: &str,
+    last_read_at: Option<&chrono::DateTime<chrono::Utc>>,
+) -> serde_json::Value {
+    let mentions_actor = content_mentions_actor(&message.content, actor, actor_handle);
+    let priority = notification_priority(&message.content);
+    let notification_kind = if mentions_actor { "mention" } else { "message" };
+    let read = last_read_at.is_some_and(|marker| message.created_at <= *marker);
+    json!({
+        "id": format!("cx:notification:{}", message.event_id),
+        "notification_id": format!("cx:notification:{}", message.event_id),
+        "event_id": message.event_id,
+        "event_kind": "cx.message.create",
+        "notification_type": notification_kind,
+        "notification_kind": notification_kind,
+        "kind": notification_kind,
+        "title": if mentions_actor { "You were mentioned" } else { "New message" },
+        "body": notification_body(&message.content),
+        "space_id": message.space_id,
+        "sender": message.sender,
+        "sender_did": message.sender,
+        "thread_id": message.thread_id,
+        "timestamp": message.created_at.to_rfc3339_opts(SecondsFormat::Millis, true),
+        "created_at": message.created_at.to_rfc3339_opts(SecondsFormat::Millis, true),
+        "read": read,
+        "mentions_actor": mentions_actor,
+        "priority": priority,
+        "priority_override": priority.as_deref().is_some_and(notification_priority_overrides),
+        "encrypted": message.encrypted,
+    })
+}
+
+fn notification_body(content: &serde_json::Value) -> String {
+    content
+        .as_str()
+        .or_else(|| {
+            content
+                .get("body")
+                .or_else(|| content.get("text"))
+                .or_else(|| content.get("summary"))
+                .and_then(serde_json::Value::as_str)
+        })
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| "New message".to_owned())
+}
+
+fn notification_priority(content: &serde_json::Value) -> Option<String> {
+    content
+        .get("priority")
+        .or_else(|| content.get("notification_priority"))
+        .or_else(|| {
+            content
+                .get("notification")
+                .and_then(|notification| notification.get("priority"))
+        })
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_ascii_lowercase())
+}
+
+fn notification_priority_overrides(priority: &str) -> bool {
+    matches!(priority, "critical" | "high" | "urgent" | "priority")
+}
+
+fn content_mentions_actor(content: &serde_json::Value, actor: &str, actor_handle: &str) -> bool {
+    let handle = actor_handle.trim();
+    let handle_without_at = handle.trim_start_matches('@');
+    if content
+        .get("mentions")
+        .is_some_and(|mentions| mention_value_targets_actor(mentions, actor, handle))
+    {
+        return true;
+    }
+    notification_body(content)
+        .to_ascii_lowercase()
+        .split(|ch: char| {
+            !(ch.is_ascii_alphanumeric()
+                || ch == ':'
+                || ch == '@'
+                || ch == '-'
+                || ch == '_'
+                || ch == '.')
+        })
+        .any(|token| {
+            token == actor.to_ascii_lowercase()
+                || (!handle.is_empty() && token == handle.to_ascii_lowercase())
+                || (!handle_without_at.is_empty()
+                    && token == format!("@{}", handle_without_at.to_ascii_lowercase()))
+                || (!handle_without_at.is_empty()
+                    && token == handle_without_at.to_ascii_lowercase())
+        })
+}
+
+fn content_has_explicit_mention(content: &serde_json::Value) -> bool {
+    if content
+        .get("mentions")
+        .is_some_and(|mentions| !mentions.as_array().is_some_and(Vec::is_empty))
+    {
+        return true;
+    }
+    notification_body(content)
+        .to_ascii_lowercase()
+        .split(|ch: char| {
+            !(ch.is_ascii_alphanumeric()
+                || ch == ':'
+                || ch == '@'
+                || ch == '-'
+                || ch == '_'
+                || ch == '.')
+        })
+        .any(|token| token.starts_with('@') && token.len() > 1)
+}
+
+fn mention_value_targets_actor(value: &serde_json::Value, actor: &str, actor_handle: &str) -> bool {
+    match value {
+        serde_json::Value::String(text) => mention_token_matches(text, actor, actor_handle),
+        serde_json::Value::Array(items) => items
+            .iter()
+            .any(|item| mention_value_targets_actor(item, actor, actor_handle)),
+        serde_json::Value::Object(object) => [
+            "target",
+            "target_did",
+            "did",
+            "actor",
+            "actor_id",
+            "user_id",
+            "handle",
+        ]
+        .iter()
+        .any(|key| {
+            object
+                .get(*key)
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|text| mention_token_matches(text, actor, actor_handle))
+        }),
+        _ => false,
+    }
+}
+
+fn mention_token_matches(text: &str, actor: &str, actor_handle: &str) -> bool {
+    let token = text.trim().to_ascii_lowercase();
+    let actor = actor.to_ascii_lowercase();
+    let handle = actor_handle.trim().to_ascii_lowercase();
+    let handle_without_at = handle.trim_start_matches('@');
+    token == actor
+        || (!handle.is_empty() && token == handle)
+        || (!handle_without_at.is_empty() && token == handle_without_at)
+        || (!handle_without_at.is_empty() && token == format!("@{handle_without_at}"))
 }
 
 #[endpoint(
