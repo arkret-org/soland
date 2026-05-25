@@ -5419,6 +5419,37 @@ impl ProjectionState {
         check_flow_status_patch(flow, &operation.payload).map(|_| ())
     }
 
+    /// Return the audit payload for an accepted Flow `fields.status`
+    /// transition. Callers invoke this before projection is applied so
+    /// `from` is read from the current reducer state.
+    pub fn flow_status_transition_audit_payload(
+        &self,
+        operation: &Operation,
+        actor_id: &str,
+    ) -> Option<Value> {
+        if crate::kinds::canonical_kind_for_operation(operation) != Some(crate::kinds::CX_FLOW_UPDATE)
+        {
+            return None;
+        }
+        let flow_id = flow_id_from_payload(&operation.payload)?;
+        let flow = self.flows.get(flow_id)?;
+        let next_status = flow_status_patch_target(&operation.payload).ok().flatten()?;
+        let current_status = flow.fields.get("status").and_then(Value::as_str)?;
+        if current_status == next_status {
+            return None;
+        }
+        Some(serde_json::json!({
+            "actor": actor_id,
+            "flow_id": flow_id,
+            "incident_id": flow_id,
+            "space_id": flow.space_id,
+            "from": current_status,
+            "to": next_status,
+            "timestamp": operation.created_at.to_rfc3339(),
+            "kind": "incident.status.transition",
+        }))
+    }
+
     /// Read-only preflight for `cx.redaction` events that
     /// target a Flow / Morph via `object_ref`. Per spec common-fields.md
     /// §5.1, redaction is legal only from `active` or `archived` source;

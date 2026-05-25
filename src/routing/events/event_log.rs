@@ -1082,6 +1082,7 @@ fn submit_event_value(
         has_projection = projection_operation.is_some(),
         "submit_event"
     );
+    let mut flow_status_audit_payload = None;
     if let Some(operation) = projection_operation.as_ref() {
         if let Err(message) = validate_operation_semantics(state, std::slice::from_ref(operation)) {
             return Err(SubmitOneError::new(
@@ -1119,6 +1120,8 @@ fn submit_event_value(
                     reason,
                 ));
             }
+            flow_status_audit_payload =
+                proj.flow_status_transition_audit_payload(operation, &parsed.actor_id);
             if let Err(reason) = proj.check_morph_lifecycle_transition(operation) {
                 return Err(SubmitOneError::new(
                     StatusCode::PRECONDITION_FAILED,
@@ -1177,6 +1180,15 @@ fn submit_event_value(
     }
     if let Some(operation) = projection_operation {
         project_accepted_operations(state, &parsed.actor_id, &[operation]);
+    }
+    if let Some(payload) = flow_status_audit_payload {
+        append_audit_log(
+            state,
+            Some(&parsed.actor_id),
+            "incident.status.transition",
+            payload,
+            "accepted",
+        );
     }
     if parsed.kind == "cx.realm.create"
         && let Some(space_id_str) = parsed.space_id.as_deref()

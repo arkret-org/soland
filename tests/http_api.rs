@@ -6703,6 +6703,46 @@ async fn flow_update_status_fsm_rejects_skipped_terminal_transitions() {
     assert_eq!(resp.status_code.unwrap().as_u16(), 412);
     let body: Value = resp.take_json().await.unwrap();
     assert_eq!(body["error"]["code"], "flow_status_transition_invalid");
+
+    let audit_events: Value =
+        TestClient::get("http://server/api/v1/audit/events?actor=did:web:alice.example&limit=50")
+            .add_header("authorization", format!("Bearer {token}"), true)
+            .send(&app_from_state(state.clone()))
+            .await
+            .take_json()
+            .await
+            .unwrap();
+    let status_transitions: Vec<&Value> = audit_events["events"]
+        .as_array()
+        .expect("audit events array")
+        .iter()
+        .filter(|event| event["action"] == "incident.status.transition")
+        .collect();
+    assert_eq!(
+        status_transitions.len(),
+        2,
+        "only accepted status transitions should be audited"
+    );
+    let first_transition = &status_transitions[0]["payload"];
+    assert_eq!(status_transitions[0]["actor"], "did:web:alice.example");
+    assert_eq!(status_transitions[0]["outcome"], "accepted");
+    assert_eq!(first_transition["kind"], "incident.status.transition");
+    assert_eq!(first_transition["actor"], "did:web:alice.example");
+    assert_eq!(first_transition["flow_id"], task_flow_id);
+    assert_eq!(first_transition["incident_id"], task_flow_id);
+    assert_eq!(first_transition["space_id"], DEMO_REALM_ID);
+    assert_eq!(first_transition["from"], "todo");
+    assert_eq!(first_transition["to"], "in_progress");
+    assert_eq!(first_transition["timestamp"], "2026-05-17T00:00:00+00:00");
+
+    let second_transition = &status_transitions[1]["payload"];
+    assert_eq!(second_transition["actor"], "did:web:alice.example");
+    assert_eq!(second_transition["flow_id"], task_flow_id);
+    assert_eq!(second_transition["incident_id"], task_flow_id);
+    assert_eq!(second_transition["space_id"], DEMO_REALM_ID);
+    assert_eq!(second_transition["from"], "in_progress");
+    assert_eq!(second_transition["to"], "done");
+    assert_eq!(second_transition["timestamp"], "2026-05-17T00:00:00+00:00");
 }
 
 /// Build a signed `cx.redaction` event envelope, used by round 14b to
