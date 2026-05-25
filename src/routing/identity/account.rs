@@ -752,7 +752,12 @@ async fn list_notifications(
                 message.sender != session.actor
                     && realm_has_member(state, &message.space_id, &session.actor)
                     && (!content_has_explicit_mention(&message.content)
-                        || content_mentions_actor(&message.content, &session.actor, &actor_handle))
+                        || content_mentions_actor(
+                            &message.content,
+                            &message.space_id,
+                            &session.actor,
+                            &actor_handle,
+                        ))
             })
             .map(|message| {
                 notification_from_message(
@@ -792,10 +797,14 @@ fn notification_from_message(
     actor_handle: &str,
     last_read_at: Option<&chrono::DateTime<chrono::Utc>>,
 ) -> serde_json::Value {
-    let mentions_actor = content_mentions_actor(&message.content, actor, actor_handle);
+    let mentions_actor =
+        content_mentions_actor(&message.content, &message.space_id, actor, actor_handle);
     let priority = notification_priority(&message.content);
     let notification_kind = if mentions_actor { "mention" } else { "message" };
     let read = last_read_at.is_some_and(|marker| message.created_at <= *marker);
+    if message.encrypted {
+        return encrypted_notification_from_message(message, notification_kind, read);
+    }
     json!({
         "id": format!("cx:notification:{}", message.event_id),
         "notification_id": format!("cx:notification:{}", message.event_id),
@@ -818,6 +827,38 @@ fn notification_from_message(
         "priority_override": priority.as_deref().is_some_and(notification_priority_overrides),
         "encrypted": message.encrypted,
     })
+}
+
+fn encrypted_notification_from_message(
+    message: &crate::reducer::MessageState,
+    notification_kind: &str,
+    read: bool,
+) -> serde_json::Value {
+    let mut item = json!({
+        "id": format!("cx:notification:{}", message.event_id),
+        "notification_id": format!("cx:notification:{}", message.event_id),
+        "event_id": message.event_id,
+        "event_kind": "cx.message.create",
+        "notification_type": "blind_wakeup",
+        "notification_kind": notification_kind,
+        "kind": "blind_wakeup",
+        "space_id": message.space_id,
+        "sender_did": message.sender,
+        "thread_id": message.thread_id,
+        "timestamp": message.created_at.to_rfc3339_opts(SecondsFormat::Millis, true),
+        "created_at": message.created_at.to_rfc3339_opts(SecondsFormat::Millis, true),
+        "read": read,
+        "encrypted": true,
+        "privacy_mode": "blind_wakeup",
+        "wakeup_kind": "encrypted_message",
+        "local_decrypted": false,
+    });
+    if let Some(sidecar) = message.content.get("mention_sidecar_hash")
+        && let Some(object) = item.as_object_mut()
+    {
+        object.insert("mention_sidecar_hash".to_owned(), sidecar.clone());
+    }
+    item
 }
 
 fn notification_body(content: &serde_json::Value) -> String {
@@ -855,7 +896,18 @@ fn notification_priority_overrides(priority: &str) -> bool {
     matches!(priority, "critical" | "high" | "urgent" | "priority")
 }
 
-fn content_mentions_actor(content: &serde_json::Value, actor: &str, actor_handle: &str) -> bool {
+fn content_mentions_actor(
+    content: &serde_json::Value,
+    space_id: &str,
+    actor: &str,
+    actor_handle: &str,
+) -> bool {
+    if content
+        .get("mention_sidecar_hash")
+        .is_some_and(|sidecar| mention_sidecar_targets_actor(sidecar, space_id, actor))
+    {
+        return true;
+    }
     let handle = actor_handle.trim();
     let handle_without_at = handle.trim_start_matches('@');
     if content
@@ -886,6 +938,12 @@ fn content_mentions_actor(content: &serde_json::Value, actor: &str, actor_handle
 
 fn content_has_explicit_mention(content: &serde_json::Value) -> bool {
     if content
+        .get("mention_sidecar_hash")
+        .is_some_and(|sidecar| !sidecar.as_array().is_some_and(Vec::is_empty))
+    {
+        return true;
+    }
+    if content
         .get("mentions")
         .is_some_and(|mentions| !mentions.as_array().is_some_and(Vec::is_empty))
     {
@@ -902,6 +960,28 @@ fn content_has_explicit_mention(content: &serde_json::Value) -> bool {
                 || ch == '.')
         })
         .any(|token| token.starts_with('@') && token.len() > 1)
+}
+
+fn mention_sidecar_targets_actor(sidecar: &serde_json::Value, space_id: &str, actor: &str) -> bool {
+    let expected = mention_sidecar_hash(space_id, actor);
+    match sidecar {
+        serde_json::Value::String(value) => value == &expected,
+        serde_json::Value::Array(values) => values
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .any(|value| value == expected),
+        _ => false,
+    }
+}
+
+fn mention_sidecar_hash(space_id: &str, actor: &str) -> String {
+    use sha2::{Digest as _, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(space_id.as_bytes());
+    hasher.update(b"|");
+    hasher.update(actor.as_bytes());
+    let digest = hasher.finalize();
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 fn mention_value_targets_actor(value: &serde_json::Value, actor: &str, actor_handle: &str) -> bool {
