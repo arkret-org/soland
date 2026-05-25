@@ -30,8 +30,9 @@ use crate::ids;
 // live in the SDK so yougen and sodmin admin can call them client-side. See
 // `contrix_sdk::authz::delegation` (crates/sdk/src/authz/delegation.rs).
 pub use contrix_sdk::authz::delegation::{
-    DelegationError, Grant, GrantConstraint as Constraint, GrantReqBody, delegation_chain_intact,
-    grant_effective_expiry, is_grant_expired, resource_within, revoke_with_cascade,
+    DelegationError, Grant, GrantConstraint as Constraint, GrantDecisionVerdict, GrantReqBody,
+    delegation_chain_intact, grant_effective_expiry, is_grant_expired, resource_within,
+    revoke_with_cascade,
 };
 
 /// Result of an authorization check.
@@ -484,23 +485,13 @@ fn is_decision_constraint(constraint: &Constraint) -> bool {
 }
 
 fn decision_from_constraint(constraint: &Constraint) -> Option<GrantDecision> {
-    if !matches!(
-        constraint.constraint_type.as_str(),
-        "decision" | "effect" | "policy"
-    ) {
-        return None;
-    }
-    let value = constraint
-        .value
-        .get("decision")
-        .or_else(|| constraint.value.get("effect"))
-        .or_else(|| constraint.value.get("value"))
-        .and_then(|value| value.as_str())?;
-    match value {
-        "deny" => Some(GrantDecision::Deny),
-        "quarantine" => Some(GrantDecision::Quarantine),
-        "allow" => Some(GrantDecision::Allow),
-        "require_review" => Some(GrantDecision::RequireReview),
+    match constraint {
+        Constraint::Decision { decision } => Some(match decision {
+            GrantDecisionVerdict::Deny => GrantDecision::Deny,
+            GrantDecisionVerdict::Quarantine => GrantDecision::Quarantine,
+            GrantDecisionVerdict::Allow => GrantDecision::Allow,
+            GrantDecisionVerdict::RequireReview => GrantDecision::RequireReview,
+        }),
         _ => None,
     }
 }
@@ -510,16 +501,14 @@ fn decision_from_constraint(constraint: &Constraint) -> Option<GrantDecision> {
 fn evaluate_constraint(
     constraint: &Constraint,
     _actor: &str,
-    _resource: &str,
+    resource: &str,
     resource_facets: &[String],
 ) -> Option<String> {
-    match constraint.constraint_type.as_str() {
-        "temporal" => {
+    match constraint {
+        Constraint::Temporal { expires_at } => {
             // Check if the grant hasn't expired
-            if let Some(expires_at) = constraint.value.get("expires_at").and_then(|v| v.as_str())
-                && let Ok(expires) = chrono::DateTime::parse_from_rfc3339(expires_at)
-            {
-                return if chrono::Utc::now() < expires.with_timezone(&chrono::Utc) {
+            if let Some(expires) = expires_at {
+                return if chrono::Utc::now() < *expires {
                     None
                 } else {
                     Some("temporal constraint expired".to_owned())
@@ -527,7 +516,45 @@ fn evaluate_constraint(
             }
             None
         }
-        "allowed_object_facets" => {
+        Constraint::AllowedCircleRefs { allowed_circle_refs } => {
+            // CXP-0007 (spec b7d35be) — narrow a Circle-management
+            // capability (`cx.circle.manage`, `cx.circle.member.manage`,
+            // `cx.circle.member.add.others`, `cx.circle.audit`) to a
+            // specific Circle id set. The spec
+            // `capability-action-registry.json` declares
+            // `required_constraints=["allowed_circle_refs"]` on each
+            // gated action; unconstrained Realm-wide grants for these
+            // actions MUST be rejected (a separate guard at grant-issue
+            // time).
+            //
+            // Evaluation contract: the resource selector for a Circle
+            // capability is of the form `cx:circle:<uuid>` (mirrors the
+            // `cx:space:<uuid>` pattern used by `realm.*` / `space.*`
+            // grants). If the resource looks like a Circle id, it MUST
+            // be a member of the allowed set; otherwise the constraint
+            // does not apply and silently passes (caller-policy: any
+            // non-Circle resource is out of this constraint's scope).
+            if allowed_circle_refs.is_empty() {
+                return Some(
+                    "allowed_circle_refs constraint requires a non-empty allow list".to_owned(),
+                );
+            }
+            if !resource.starts_with("cx:circle:") {
+                // Constraint is Circle-scoped — non-Circle resources are
+                // out of scope; pass through.
+                return None;
+            }
+            if allowed_circle_refs.iter().any(|c| c.as_ref() == resource) {
+                None
+            } else {
+                let allowed: Vec<&str> =
+                    allowed_circle_refs.iter().map(AsRef::as_ref).collect();
+                Some(format!(
+                    "allowed_circle_refs constraint not satisfied: {resource:?} not in {allowed:?}"
+                ))
+            }
+        }
+        Constraint::AllowedObjectFacets { facets: allowed } => {
             // Resource must carry at least one of the listed facets. When the
             // resource itself reports no facets, fail-closed — the grant is
             // facet-bound and an unfaceted target falls outside its scope.
@@ -536,17 +563,6 @@ fn evaluate_constraint(
             // carries a `facets` field; `cx:flow:` / `cx:space:` /
             // `cx:morph:` projections all surface facets through the
             // same cell-family registry.
-            let allowed: Vec<String> = constraint
-                .value
-                .get("facets")
-                .and_then(|value| value.as_array())
-                .map(|array| {
-                    array
-                        .iter()
-                        .filter_map(|value| value.as_str().map(ToOwned::to_owned))
-                        .collect()
-                })
-                .unwrap_or_default();
             if allowed.is_empty() {
                 return None;
             }
@@ -561,11 +577,16 @@ fn evaluate_constraint(
                 ))
             }
         }
-        "delegation_control" => {
+        Constraint::DelegationControl { .. } => {
             // Check delegation depth
-            None // v1: always pass
+            None // v1: always pass (depth enforced at chain-walk level)
         }
-        _ => None, // Unknown constraints pass
+        Constraint::Decision { .. } => {
+            // Decision constraints are evaluated separately via
+            // `decision_from_constraint`; treat as satisfied here so they
+            // never fail the satisfaction check.
+            None
+        }
     }
 }
 
@@ -776,10 +797,7 @@ mod tests {
             "did:web:bob".to_owned(),
             "*".to_owned(),
             vec!["send".to_owned()],
-            vec![Constraint {
-                constraint_type: "decision".to_owned(),
-                value: serde_json::json!({"decision": "allow"}),
-            }],
+            vec![Constraint::Decision { decision: GrantDecisionVerdict::Allow }],
         );
         engine.create_grant(
             "cx:space:1".to_owned(),
@@ -787,10 +805,7 @@ mod tests {
             "did:web:bob".to_owned(),
             "*".to_owned(),
             vec!["send".to_owned()],
-            vec![Constraint {
-                constraint_type: "decision".to_owned(),
-                value: serde_json::json!({"decision": "deny"}),
-            }],
+            vec![Constraint::Decision { decision: GrantDecisionVerdict::Deny }],
         );
         let result = engine.check(
             "did:web:bob",
@@ -816,10 +831,7 @@ mod tests {
             "did:web:bob".to_owned(),
             "*".to_owned(),
             vec!["send".to_owned()],
-            vec![Constraint {
-                constraint_type: "decision".to_owned(),
-                value: serde_json::json!({"decision": "require_review"}),
-            }],
+            vec![Constraint::Decision { decision: GrantDecisionVerdict::RequireReview }],
         );
         engine.create_grant(
             "cx:space:1".to_owned(),
@@ -827,10 +839,7 @@ mod tests {
             "did:web:bob".to_owned(),
             "*".to_owned(),
             vec!["send".to_owned()],
-            vec![Constraint {
-                constraint_type: "decision".to_owned(),
-                value: serde_json::json!({"decision": "allow"}),
-            }],
+            vec![Constraint::Decision { decision: GrantDecisionVerdict::Allow }],
         );
         let reviewed = engine.check(
             "did:web:bob",
@@ -850,10 +859,7 @@ mod tests {
             "did:web:bob".to_owned(),
             "*".to_owned(),
             vec!["send".to_owned()],
-            vec![Constraint {
-                constraint_type: "decision".to_owned(),
-                value: serde_json::json!({"decision": "quarantine"}),
-            }],
+            vec![Constraint::Decision { decision: GrantDecisionVerdict::Quarantine }],
         );
         let quarantined = engine.check(
             "did:web:bob",

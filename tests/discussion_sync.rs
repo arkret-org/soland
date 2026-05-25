@@ -805,69 +805,10 @@ async fn poll_content_projection_replaces_votes_and_rejects_after_close() {
     assert!(body.contains("poll_closed"), "{body}");
 }
 
-#[test]
-fn flow_update_records_discussion_realm_ref_and_rejects_orphans() {
-    use contrix_sdk::{Operation, OperationId};
-    use soland::hlc::ServerHlc;
-    use soland::reducer::{ProjectionEffect, ProjectionState};
-
-    const PARENT: &str = "cx:realm:01904100-0000-7000-8000-d11111111111";
-    const CHILD: &str = "cx:realm:01904100-0000-7000-8000-d22222222222";
-    const MISSING: &str = "cx:realm:01904100-0000-7000-8000-d33333333333";
-    const FLOW: &str = "cx:flow:01904100-0000-7000-8000-f11111111111";
-
-    fn op(kind: &str, realm_id: &str, payload: Value) -> Operation {
-        Operation::create(
-            OperationId::new(format!("cx:operation:{}", uuid::Uuid::now_v7())).unwrap(),
-            RealmId::new(realm_id).unwrap(),
-            kind,
-            payload,
-        )
-    }
-
-    let mut state = ProjectionState::new();
-    let hlc = ServerHlc::new("discussion-route-test");
-    for realm in [PARENT, CHILD] {
-        state.apply(
-            &op(
-                soland::kinds::CX_REALM_CREATE,
-                realm,
-                json!({"action": "create", "owner": "did:web:alice.example", "public": true}),
-            ),
-            &hlc,
-        );
-    }
-    state.apply(
-        &op(
-            soland::kinds::CX_FLOW_CREATE,
-            PARENT,
-            json!({"object": {"id": FLOW, "space_id": PARENT, "title": "Card"}}),
-        ),
-        &hlc,
-    );
-
-    let accepted = state.apply(
-        &op(
-            soland::kinds::CX_FLOW_UPDATE,
-            PARENT,
-            json!({"flow_id": FLOW, "patch": {"discussion_realm_ref": CHILD}}),
-        ),
-        &hlc,
-    );
-    assert!(matches!(accepted, ProjectionEffect::FlowLifecycle { .. }));
-    assert_eq!(state.discussion_realm_for_flow(FLOW), Some(CHILD));
-    assert_eq!(state.discussion_space_for_flow(FLOW, PARENT), CHILD);
-
-    let rejected = state.apply(
-        &op(
-            soland::kinds::CX_FLOW_UPDATE,
-            PARENT,
-            json!({"flow_id": FLOW, "patch": {"discussion_realm_ref": MISSING}}),
-        ),
-        &hlc,
-    );
-    assert!(matches!(
-        rejected,
-        ProjectionEffect::Rejected { reason } if reason == "orphan_discussion_realm_ref"
-    ));
-}
+// CXP-0007 (spec b7d35be) — the legacy `discussion_realm_ref` field is now a
+// forbidden wire field. Cross-Realm discussion routing has been replaced by
+// intra-Realm `scope_circle_id` (Circle). The former
+// `flow_update_records_discussion_realm_ref_and_rejects_orphans` test has been
+// deleted; the wire-layer hard reject is exercised by
+// `tests/forbidden_wire_fields.rs::flow_create_rejects_discussion_realm_ref`
+// (see P2A.2).

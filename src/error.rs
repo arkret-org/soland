@@ -139,6 +139,32 @@ pub mod reasons {
         core_error::REASON_RANGE_COMPLETENESS_ROOT_MISMATCH;
     pub const RANGE_COMPLETENESS_ACTOR_SEQ_GAP: &str =
         core_error::REASON_RANGE_COMPLETENESS_ACTOR_SEQ_GAP;
+
+    // ── CXP-0007 (spec b7d35be / floor 2b0d70d) — Circle reason codes.
+    //
+    // The six new sub-reasons registered against `failed_precondition`
+    // / `schema_violation` for the Circle invariants in
+    // `zh/models/circle.md`. The sixth top-level Circle code is the
+    // existing `delivery_binding_handed_over`, which is already
+    // surfaced via the round-4 ErrorCode variant.
+    pub const CIRCLE_REALM_MISMATCH: &str = core_error::REASON_CIRCLE_REALM_MISMATCH;
+    pub const CIRCLE_NOT_ACTIVE: &str = core_error::REASON_CIRCLE_NOT_ACTIVE;
+    pub const CIRCLE_MEMBER_MUST_BE_REALM_MEMBER: &str =
+        core_error::REASON_CIRCLE_MEMBER_MUST_BE_REALM_MEMBER;
+    pub const SCOPE_REBIND_FORBIDDEN: &str = core_error::REASON_SCOPE_REBIND_FORBIDDEN;
+    pub const METADATA_ENCRYPTION_FLOOR_VIOLATION: &str =
+        core_error::REASON_METADATA_ENCRYPTION_FLOOR_VIOLATION;
+
+    /// CXP-0007 reason codes registered in this round. Test scaffolding
+    /// uses this slice to assert the full set is surfaced through
+    /// `crate::error::reasons`.
+    pub const CXP_0007: &[&str] = &[
+        CIRCLE_REALM_MISMATCH,
+        CIRCLE_NOT_ACTIVE,
+        CIRCLE_MEMBER_MUST_BE_REALM_MEMBER,
+        SCOPE_REBIND_FORBIDDEN,
+        METADATA_ENCRYPTION_FLOOR_VIOLATION,
+    ];
 }
 use salvo::async_trait;
 use salvo::http::StatusCode;

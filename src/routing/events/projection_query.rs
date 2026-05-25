@@ -352,7 +352,17 @@ async fn list_space_container_projections(
                 realm_id: parse_projection_id::<RealmId>(&p.space_id, "realm_id")?,
                 kind: p.kind.clone(),
                 title: p.title.clone(),
-                parent_ref: p.parent_ref.clone(),
+                parent_space_id: p
+                    .parent_ref
+                    .as_deref()
+                    .map(|s| {
+                        SpaceId::new(s.to_owned()).map_err(|err| {
+                            AppError::internal(format!(
+                                "stored parent_space_id is not a typed SpaceId: {err}"
+                            ))
+                        })
+                    })
+                    .transpose()?,
                 rank: p.rank.clone(),
                 state: projection_space_state(p.state),
                 created_by: Some(parse_projection_id::<Did>(&p.created_by, "created_by")?),

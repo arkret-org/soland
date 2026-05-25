@@ -58,6 +58,31 @@ pub const CX_FLOW_WATCH_SET: &str = "cx.flow.watch.set";
 // FlowProjection doesn't carry `tracks` server-side; the touch just
 // bumps `updated_at` (mirror of cx.flow.move/reorder pattern).
 pub const CX_FLOW_TRACKS_UPDATE: &str = "cx.flow.tracks.update";
+// CXP-0007 (spec b7d35be) — Circle lifecycle / membership events. Seven
+// active durable kinds registered in
+// `spec/v1/artifacts/registry/event-kind-registry.json`. The reducer
+// dispatch is wired in `src/reducer.rs`; the wire-layer admission check
+// runs through the generic `active_durable_event_kinds` registry.
+//
+// `cx.circle.anchor_commit` is reducer-DERIVED (sub-anchor emitted on
+// the Circle's profile cadence) and MUST NOT be submitted directly via
+// `cx.events.submit`. The SDK gates this in
+// `kinds::is_reducer_input_event_kind`.
+pub const CX_CIRCLE_CREATE: &str = "cx.circle.create";
+pub const CX_CIRCLE_UPDATE: &str = "cx.circle.update";
+pub const CX_CIRCLE_ARCHIVE: &str = "cx.circle.archive";
+pub const CX_CIRCLE_RESTORE: &str = "cx.circle.restore";
+pub const CX_CIRCLE_TOMBSTONE: &str = "cx.circle.tombstone";
+pub const CX_CIRCLE_MEMBER_STATE: &str = "cx.circle.member.state";
+pub const CX_CIRCLE_ANCHOR_COMMIT: &str = "cx.circle.anchor_commit";
+
+// CXP-0007 — typed Relation kind couples a "wide synthesis" Flow (often
+// Realm-default scope) to a "narrow discussion" Flow bound to a
+// `scope_circle_id` Circle. Stored on `cx.relation.create` /
+// `cx.relation.update` payloads as `relation_kind`. Spec
+// `zh/models/circle.md` §7.2.
+pub const RELATION_KIND_CONFIDENTIAL_DISCUSSION_OF: &str = "confidential_discussion_of";
+
 // Morph lifecycle (round 13). Same shape as Flow — no dedicated tombstone.
 pub const CX_MORPH_CREATE: &str = "cx.morph.create";
 pub const CX_MORPH_UPDATE: &str = "cx.morph.update";
@@ -163,19 +188,35 @@ pub const CX_REALM_DELIVERY_BINDING_POLICY: &str = "cx.realm.delivery_binding_po
 // `cx.device.push_route` is device-scoped.
 pub const CX_DEVICE_PUSH_ROUTE: &str = "cx.device.push_route";
 
-// Realm graph + capability derivation event kinds. Wire-accept + projection
-// no-op stubs; full semantics are TODO.
+// Realm graph + capability derivation event kinds. Reducer dispatch
+// (`apply_realm_link` / `apply_realm_inheritance_policy` /
+// `apply_capability_derived`) is fully wired in `src/reducer.rs`;
+// validators and HTTP surfaces live in `src/routing/realms.rs`.
 //
-// `cx.realm.link` (realm / reducer_input): typed link between Realm boundaries.
-// Canonical `link_kind` handling is TODO(realm-rework).
+// `cx.realm.link` (realm / reducer_input): typed link between Realm
+// boundaries. Canonical `link_kind` parsing + cycle/self-reference
+// rejection runs in `reducer::realm_links::check_realm_link_admissible`
+// (R3.1). The CXP-0007 P2A.4 pass lifts the previous TODO(realm-rework)
+// marker: the canonical link kinds (`governed_by`, `inherits_policy_from`,
+// `mirror_of`, `references`, `audited_by`) all evaluate, and the
+// `/api/v1/realms/{realm_id}/effective-policy` surface walks the
+// ancestor chain per the inheritance declaration. Outstanding
+// follow-up: rich `link_kind`-specific authz constraints (TODO(P2B.x)).
 pub const CX_REALM_LINK: &str = "cx.realm.link";
 // `cx.realm.inheritance_policy` (realm / reducer_input): declares which
 // realm-scoped policies a child Realm inherits from its parent boundary.
-// Drives capability derivation alongside `cx.capability.derived`.
+// Reducer maintains a `cx.component.realm.inheritance_policy.v1`
+// cas-register cell; capability derivation runs against the projected
+// chain alongside `cx.capability.derived`.
 pub const CX_REALM_INHERITANCE_POLICY: &str = "cx.realm.inheritance_policy";
-// `cx.capability.derived` (capability / reducer_input): records a capability
-// derived from a parent Realm's policy + a child Realm's inheritance
-// declaration. Full derive logic is TODO(realm-rework).
+// `cx.capability.derived` (capability / reducer_input): records a
+// capability derived from a parent Realm's policy + a child Realm's
+// inheritance declaration. Reducer projects into
+// `cx.component.capability.derived.v1`; full derive logic now runs
+// through the same chain as the rest of the Realm-graph family. Any
+// remaining cross-Realm derivation gaps are tracked as
+// TODO(circle-rollout-P2A.4): cross-Realm `allowed_circle_refs`
+// derivation under audited-high-risk policies.
 pub const CX_CAPABILITY_DERIVED: &str = "cx.capability.derived";
 
 // G3.S2 — `cx.realm.policy_server` (realm / reducer_input): declares the

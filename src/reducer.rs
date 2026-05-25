@@ -129,10 +129,13 @@ pub struct ProjectionState {
     /// is reached via `cx.redaction`. Mirror table is `projection_flows`
     /// (durable).
     pub flows: BTreeMap<String, FlowProjection>,
-    /// Flow discussion routing override. When a Flow carries
-    /// `discussion_realm_ref`, discussion-track messages are hosted by
-    /// that linked Realm instead of the Flow's source Realm.
-    pub flow_discussion_realms: BTreeMap<String, String>,
+    /// CXP-0007 — server-side Circle projection. Mirrors the canonical
+    /// state-machine for `cx.circle.*` lifecycle / membership events
+    /// (spec b7d35be `zh/models/circle.md`). Keyed by `circle_id`
+    /// (`cx:circle:<uuid>`); membership and parent-Realm binding live in
+    /// the struct so the wire layer can enforce
+    /// `Circle.members ⊆ Realm.members` without an extra DB hop.
+    pub circles: BTreeMap<String, CircleProjection>,
     /// Server-side Morph projection. Same shape as Flow. Mirror table
     /// is `projection_morphs` (durable).
     pub morphs: BTreeMap<String, MorphProjection>,
@@ -544,6 +547,69 @@ pub struct FlowProjection {
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_by: Option<String>,
     pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+/// CXP-0007 — server-side Circle state cache. Mirrors `projection_circles` +
+/// `projection_circle_members` (see migration
+/// `20260526010000_add_circles`).
+///
+/// `members` is the authoritative active-member set; the wire validator and
+/// the `cx.circle.member.state` handler use it to enforce the
+/// `Circle.members ⊆ Realm.members` invariant
+/// (`circle_member_must_be_realm_member`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CircleProjection {
+    pub circle_id: String,
+    /// Parent Realm id. Create-locked — a Circle never re-binds to another
+    /// Realm. Spec `circle.schema.json` §`realm_id`.
+    pub realm_id: String,
+    pub title: String,
+    pub summary: Option<String>,
+    pub directory_visibility: String,
+    pub join_rule: String,
+    pub history_visibility: String,
+    /// Optional tightening of metadata-encryption floor; `None` inherits
+    /// parent Realm. Reducer enforces "MAY only tighten" against the
+    /// projected Realm floor.
+    pub metadata_encryption_floor: Option<String>,
+    pub encryption_profile: String,
+    /// Reducer-derived MLS group binding. Populated when the independent
+    /// Circle MLS group is set up; the wire actor MUST NOT submit this.
+    pub mls_group_ref: Option<String>,
+    pub state: CircleLifecycleState,
+    pub state_changed_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub created_by: String,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub updated_by: Option<String>,
+    pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// Active Circle members. Maintained by `cx.circle.member.state`
+    /// transitions (`active` -> insert, `removed`/`banned`/`left` ->
+    /// remove). Always a strict subset of the parent Realm's active
+    /// member set.
+    pub members: BTreeSet<String>,
+}
+
+/// CXP-0007 — Circle lifecycle state. Matches spec `circle.schema.json`
+/// `state` enum (active / archived / tombstoned). Distinct from
+/// [`ObjectLifecycleState`] (which carries the redacted/deleted forms used
+/// by Flow / Morph); Circle has no redaction path because the canonical
+/// terminal action is `cx.circle.tombstone`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CircleLifecycleState {
+    #[default]
+    Active,
+    Archived,
+    Tombstoned,
+}
+
+impl CircleLifecycleState {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Archived => "archived",
+            Self::Tombstoned => "tombstoned",
+        }
+    }
 }
 
 /// Server-side Morph state cache. Mirrors `projection_morphs` table.
@@ -1032,6 +1098,25 @@ pub enum ProjectionEffect {
         morph_id: String,
         new_state: ObjectLifecycleState,
     },
+    /// CXP-0007 — Circle lifecycle transition accepted. Reflects
+    /// `cx.circle.create` / `update` / `archive` / `restore` / `tombstone`
+    /// projection writes; new state is reflected in
+    /// `ProjectionState::circles` (and the durable `projection_circles`
+    /// mirror once persistence is wired).
+    CircleLifecycle {
+        circle_id: String,
+        new_state: CircleLifecycleState,
+    },
+    /// CXP-0007 — Circle membership transition. `target_state` is the
+    /// `cx.circle.member.state` payload's `state` value (active / removed /
+    /// banned / left / invited). The reducer applies the membership write
+    /// only after the strict-subset invariant
+    /// (`Circle.members ⊆ Realm.members`) has been satisfied.
+    CircleMemberStateChanged {
+        circle_id: String,
+        member: String,
+        target_state: String,
+    },
     /// Flow watch cell touched. Cell write itself is owned by the
     /// Move/Anchor pipeline (cas-register at SDK layer); the projection
     /// only records that a watch change happened for `(flow_id, actor_did)`
@@ -1437,29 +1522,6 @@ fn apply_flow_track_touch_dispatch(
     s.apply_flow_track_touch(op, op.created_at)
 }
 
-fn discussion_realm_patch(payload: &Value) -> Option<Option<String>> {
-    if let Some(value) = payload.get("discussion_realm_ref") {
-        return Some(value.as_str().map(ToOwned::to_owned));
-    }
-    let patch_value = payload
-        .get("patch")
-        .and_then(Value::as_object)
-        .and_then(|patch| patch.get("discussion_realm_ref"))?;
-    match patch_value {
-        Value::Null => Some(None),
-        Value::String(value) => Some(Some(value.clone())),
-        Value::Object(op) => match op.get("$op").and_then(Value::as_str) {
-            Some("unset") => Some(None),
-            Some("set") => op
-                .get("value")
-                .and_then(Value::as_str)
-                .map(|value| Some(value.to_owned())),
-            _ => None,
-        },
-        _ => None,
-    }
-}
-
 fn apply_morph_create_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
@@ -1488,6 +1550,51 @@ fn apply_morph_restore_dispatch(
 ) -> ProjectionEffect {
     s.apply_morph_lifecycle(op, op.created_at, ObjectLifecycleTransition::Restore)
 }
+
+// CXP-0007 — Circle dispatch wrappers.
+fn apply_circle_create_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_circle_create(op, op.created_at)
+}
+fn apply_circle_update_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_circle_update(op, op.created_at)
+}
+fn apply_circle_archive_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_circle_lifecycle(op, op.created_at, CircleLifecycleState::Archived)
+}
+fn apply_circle_restore_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_circle_lifecycle(op, op.created_at, CircleLifecycleState::Active)
+}
+fn apply_circle_tombstone_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_circle_lifecycle(op, op.created_at, CircleLifecycleState::Tombstoned)
+}
+fn apply_circle_member_state_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_circle_member_state(op, op.created_at)
+}
+
 fn apply_applet_registration_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
@@ -2272,6 +2379,17 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
     m.insert(CX_MORPH_UPDATE, apply_morph_update_dispatch);
     m.insert(CX_MORPH_ARCHIVE, apply_morph_archive_dispatch);
     m.insert(CX_MORPH_RESTORE, apply_morph_restore_dispatch);
+    // CXP-0007 — Circle lifecycle / membership dispatch. The seventh
+    // active kind, `cx.circle.anchor_commit`, is reducer-derived (sub-
+    // anchor on the Circle's profile cadence) and listed in the SDK's
+    // `NON_REDUCER_EVENT_KINDS` set, so no dispatch entry is added for
+    // it here.
+    m.insert(CX_CIRCLE_CREATE, apply_circle_create_dispatch);
+    m.insert(CX_CIRCLE_UPDATE, apply_circle_update_dispatch);
+    m.insert(CX_CIRCLE_ARCHIVE, apply_circle_archive_dispatch);
+    m.insert(CX_CIRCLE_RESTORE, apply_circle_restore_dispatch);
+    m.insert(CX_CIRCLE_TOMBSTONE, apply_circle_tombstone_dispatch);
+    m.insert(CX_CIRCLE_MEMBER_STATE, apply_circle_member_state_dispatch);
     m.insert(CX_APPLET_REGISTRATION, apply_applet_registration_dispatch);
     m.insert(CX_APPLET_DISCOVERY, apply_applet_discovery_dispatch);
     m.insert(CX_AGENT_ENDPOINT, apply_agent_endpoint_dispatch);
@@ -5130,10 +5248,10 @@ impl ProjectionState {
     ///      parent edge is downgraded so membership / capability /
     ///      history / E2EE / retention stops propagating across the
     ///      destroy frontier.
-    ///   ¶7 `Flow.discussion_realm_ref` either direction → drop the
-    ///      discussion edge so further `cx.message.*` writes on that
-    ///      track fail-closed (the discussion projection treats a
-    ///      missing entry as the default fail-closed state).
+    /// CXP-0007: the legacy `Flow.discussion_realm_ref` cross-Realm edge
+    /// has been removed; intra-Realm discussion boundaries now live on a
+    /// Circle (`scope_circle_id`) and never cross the Realm frontier, so
+    /// no cross-Realm discussion cascade is required here.
     ///
     /// The terminal-state admission check (event_log.rs) prevents
     /// further writes against the destroyed Realm itself, which is the
@@ -5197,36 +5315,15 @@ impl ProjectionState {
             }
         }
 
-        // ¶7 discussion_realm_ref cascade — both directions:
-        //   (a) destroyed Realm is the LINKED discussion Realm
-        //       (`flow_discussion_realms` value)
-        //   (b) destroyed Realm is the SOURCE Flow's home Realm
-        //       (`FlowProjection.space_id`)
-        // We collect the affected flow_ids first to avoid the
-        // borrow-checker double-borrow on `self`.
-        let to_remove: Vec<String> = self
-            .flow_discussion_realms
-            .iter()
-            .filter_map(|(flow_id, target_realm)| {
-                if target_realm == destroyed_realm_id {
-                    Some(flow_id.clone())
-                } else {
-                    self.flows
-                        .get(flow_id)
-                        .filter(|f| f.space_id == destroyed_realm_id)
-                        .map(|_| flow_id.clone())
-                }
-            })
-            .collect();
-        for flow_id in &to_remove {
-            self.flow_discussion_realms.remove(flow_id);
-        }
+        // CXP-0007: no cross-Realm discussion edges to sever — Circles
+        // are intra-Realm and `cx.realm.destroy` already tombstones their
+        // parent Realm; further Circle writes fall under the terminal
+        // admission check in `event_log::validate_event_envelope`.
 
         tracing::info!(
             destroyed_realm_id = %destroyed_realm_id,
             orphaned_space_containers = orphaned_count,
             cross_realm_parent_refs_locked = parent_lock_count,
-            severed_discussion_edges = to_remove.len(),
             "stream-F realm.destroy cascade applied"
         );
     }
@@ -5451,6 +5548,19 @@ impl ProjectionState {
                 reason: "place_create_missing_id".to_owned(),
             };
         };
+        // CXP-0007 — validate optional `scope_circle_id` /
+        // `default_scope_circle_id` against the Realm + Circle state.
+        // Either field MUST reference an active Circle in this Realm.
+        for field in ["scope_circle_id", "default_scope_circle_id"] {
+            if let Some(scope_circle_id) = object.get(field).and_then(Value::as_str)
+                && let Err(reason) =
+                    self.validate_scope_circle_id(scope_circle_id, &operation.realm_id.to_string())
+            {
+                return ProjectionEffect::Rejected {
+                    reason: reason.to_owned(),
+                };
+            }
+        }
         let kind = object
             .get("kind")
             .and_then(|v| v.as_str())
@@ -5997,16 +6107,16 @@ impl ProjectionState {
                     .collect::<BTreeMap<_, _>>()
             })
             .unwrap_or_default();
-        let discussion_realm_ref = object
-            .get("discussion_realm_ref")
-            .and_then(|v| v.as_str())
-            .filter(|value| !value.trim().is_empty())
-            .map(ToOwned::to_owned);
-        if let Some(realm_id) = discussion_realm_ref.as_deref()
-            && !self.realm_exists_for_discussion_ref(realm_id)
+        // CXP-0007: `discussion_realm_ref` is now a forbidden wire field
+        // hard-rejected at the envelope validator. Intra-Realm discussion
+        // boundaries are expressed via `scope_circle_id` (Circle); when
+        // present, validate the Circle is in this Realm and active.
+        if let Some(scope_circle_id) = object.get("scope_circle_id").and_then(Value::as_str)
+            && let Err(reason) =
+                self.validate_scope_circle_id(scope_circle_id, &operation.realm_id.to_string())
         {
             return ProjectionEffect::Rejected {
-                reason: "orphan_discussion_realm_ref".to_owned(),
+                reason: reason.to_owned(),
             };
         }
         let space_id = object
@@ -6041,12 +6151,6 @@ impl ProjectionState {
             updated_at: None,
         };
         self.flows.insert(flow_id.clone(), projection);
-        if let Some(realm_id) = discussion_realm_ref {
-            self.flow_discussion_realms
-                .insert(flow_id.clone(), realm_id);
-        } else {
-            self.flow_discussion_realms.remove(&flow_id);
-        }
         if let Some((board_space_id, list_space_id, rank)) =
             flow_position_from_create_payload(&operation.payload, object)
         {
@@ -6079,14 +6183,10 @@ impl ProjectionState {
                 reason: "flow_update_missing_flow_id".to_owned(),
             };
         };
-        let discussion_update = discussion_realm_patch(&operation.payload);
-        if let Some(Some(realm_id)) = discussion_update.as_ref()
-            && !self.realm_exists_for_discussion_ref(realm_id)
-        {
-            return ProjectionEffect::Rejected {
-                reason: "orphan_discussion_realm_ref".to_owned(),
-            };
-        }
+        // CXP-0007: `discussion_realm_ref` is now a forbidden wire field
+        // hard-rejected at the envelope validator before reaching the
+        // reducer; the patch handler below intentionally drops any legacy
+        // path.
         let Some(flow) = self.flows.get_mut(&flow_id) else {
             return ProjectionEffect::Ignored;
         };
@@ -6109,17 +6209,6 @@ impl ProjectionState {
                 flow.summary = summary;
             }
             apply_flow_fields_patch(&mut flow.fields, patch);
-        }
-        if let Some(update) = discussion_update {
-            match update {
-                Some(realm_id) => {
-                    self.flow_discussion_realms
-                        .insert(flow_id.clone(), realm_id);
-                }
-                None => {
-                    self.flow_discussion_realms.remove(&flow_id);
-                }
-            }
         }
         flow.updated_by = operation
             .payload
@@ -6394,6 +6483,17 @@ impl ProjectionState {
                 reason: "morph_create_missing_id".to_owned(),
             };
         };
+        // CXP-0007 — when the Morph carries a `scope_circle_id`, the
+        // Circle MUST belong to this Realm and be active. Mirrors the
+        // Flow.scope_circle_id validation.
+        if let Some(scope_circle_id) = object.get("scope_circle_id").and_then(Value::as_str)
+            && let Err(reason) =
+                self.validate_scope_circle_id(scope_circle_id, &operation.realm_id.to_string())
+        {
+            return ProjectionEffect::Rejected {
+                reason: reason.to_owned(),
+            };
+        }
         let morph_type = object
             .get("morph_type")
             .and_then(|v| v.as_str())
@@ -6559,6 +6659,388 @@ impl ProjectionState {
         }
     }
 
+    // ── CXP-0007 Circle reducer ─────────────────────────────────────────
+    //
+    // Spec source: `contrix-spec/spec/v1/zh/models/circle.md` +
+    // `spec/v1/artifacts/schemas/circle.schema.json`. The six on-wire
+    // reducer-input kinds are dispatched here (the seventh,
+    // `cx.circle.anchor_commit`, is reducer-derived and emitted by the
+    // anchorer cadence, not accepted as a submitted event).
+
+    fn apply_circle_create(
+        &mut self,
+        operation: &Operation,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> ProjectionEffect {
+        let payload = &operation.payload;
+        let Some(object) = payload.get("object").and_then(Value::as_object) else {
+            return ProjectionEffect::Rejected {
+                reason: "circle_create_missing_object".to_owned(),
+            };
+        };
+        let Some(circle_id) = object.get("id").and_then(Value::as_str) else {
+            return ProjectionEffect::Rejected {
+                reason: "circle_create_missing_id".to_owned(),
+            };
+        };
+        if !circle_id.starts_with("cx:circle:") {
+            return ProjectionEffect::Rejected {
+                reason: "circle_create_invalid_id_prefix".to_owned(),
+            };
+        }
+        // Spec invariant: Circle.realm_id MUST match the surrounding
+        // operation's realm scope; the wire validator already binds
+        // `operation.realm_id` to the envelope `realm_id`, so a mismatch
+        // surfaces as the registered CXP-0007 schema_violation reason
+        // (`circle_realm_mismatch`).
+        let realm_id = operation.realm_id.to_string();
+        if let Some(payload_realm) = object.get("realm_id").and_then(Value::as_str)
+            && payload_realm != realm_id
+        {
+            return ProjectionEffect::Rejected {
+                reason: "circle_realm_mismatch".to_owned(),
+            };
+        }
+        // Parent Realm MUST exist and not be in a terminal state — both
+        // checks rely on the same projection cache the Flow create path
+        // uses.
+        if self.space_is_destroyed(&realm_id) {
+            return ProjectionEffect::Rejected {
+                reason: "circle_realm_terminal".to_owned(),
+            };
+        }
+        if !self.space_states.contains_key(&realm_id)
+            && self.space_create_log(&realm_id).is_none()
+        {
+            return ProjectionEffect::Rejected {
+                reason: "circle_realm_unknown".to_owned(),
+            };
+        }
+        let title = object
+            .get("title")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_owned();
+        let summary = object
+            .get("summary")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
+        let directory_visibility = object
+            .get("directory_visibility")
+            .and_then(Value::as_str)
+            .unwrap_or("members")
+            .to_owned();
+        let join_rule = object
+            .get("join_rule")
+            .and_then(Value::as_str)
+            .unwrap_or("invite")
+            .to_owned();
+        let history_visibility = object
+            .get("history_visibility")
+            .and_then(Value::as_str)
+            .unwrap_or("joined")
+            .to_owned();
+        let metadata_encryption_floor = object
+            .get("metadata_encryption_floor")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
+        let encryption_profile = object
+            .get("encryption_profile")
+            .and_then(Value::as_str)
+            .unwrap_or("mls_rfc9420")
+            .to_owned();
+        let created_by = object
+            .get("created_by")
+            .and_then(Value::as_str)
+            .or_else(|| payload.get("sender").and_then(Value::as_str))
+            .unwrap_or("")
+            .to_owned();
+        let projection = CircleProjection {
+            circle_id: circle_id.to_owned(),
+            realm_id: realm_id.clone(),
+            title,
+            summary,
+            directory_visibility,
+            join_rule,
+            history_visibility,
+            metadata_encryption_floor,
+            encryption_profile,
+            mls_group_ref: None,
+            state: CircleLifecycleState::Active,
+            state_changed_at: None,
+            created_by,
+            created_at: now,
+            updated_by: None,
+            updated_at: None,
+            members: BTreeSet::new(),
+        };
+        self.circles.insert(circle_id.to_owned(), projection);
+        ProjectionEffect::CircleLifecycle {
+            circle_id: circle_id.to_owned(),
+            new_state: CircleLifecycleState::Active,
+        }
+    }
+
+    fn apply_circle_update(
+        &mut self,
+        operation: &Operation,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> ProjectionEffect {
+        let payload = &operation.payload;
+        let Some(circle_id) = payload
+            .get("circle_id")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned)
+        else {
+            return ProjectionEffect::Rejected {
+                reason: "circle_update_missing_circle_id".to_owned(),
+            };
+        };
+        let Some(circle) = self.circles.get_mut(&circle_id) else {
+            return ProjectionEffect::Ignored;
+        };
+        if circle.state != CircleLifecycleState::Active {
+            return ProjectionEffect::Rejected {
+                reason: "circle_not_active".to_owned(),
+            };
+        }
+        if let Some(patch) = payload.get("patch").and_then(Value::as_object) {
+            if let Some(title) = patch.get("title").and_then(Value::as_str) {
+                circle.title = title.to_owned();
+            }
+            if let Some(summary) = patch.get("summary") {
+                circle.summary = summary.as_str().map(ToOwned::to_owned);
+            }
+            if let Some(visibility) = patch.get("directory_visibility").and_then(Value::as_str)
+            {
+                circle.directory_visibility = visibility.to_owned();
+            }
+            if let Some(join_rule) = patch.get("join_rule").and_then(Value::as_str) {
+                circle.join_rule = join_rule.to_owned();
+            }
+            if let Some(history) = patch.get("history_visibility").and_then(Value::as_str) {
+                circle.history_visibility = history.to_owned();
+            }
+            if let Some(floor) = patch.get("metadata_encryption_floor") {
+                circle.metadata_encryption_floor = floor.as_str().map(ToOwned::to_owned);
+            }
+        }
+        circle.updated_by = payload
+            .get("sender")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
+        circle.updated_at = Some(now);
+        ProjectionEffect::CircleLifecycle {
+            circle_id,
+            new_state: CircleLifecycleState::Active,
+        }
+    }
+
+    fn apply_circle_lifecycle(
+        &mut self,
+        operation: &Operation,
+        now: chrono::DateTime<chrono::Utc>,
+        target: CircleLifecycleState,
+    ) -> ProjectionEffect {
+        let payload = &operation.payload;
+        let Some(circle_id) = payload
+            .get("circle_id")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned)
+        else {
+            return ProjectionEffect::Rejected {
+                reason: "circle_lifecycle_missing_circle_id".to_owned(),
+            };
+        };
+        let Some(circle) = self.circles.get_mut(&circle_id) else {
+            return ProjectionEffect::Ignored;
+        };
+        // CXP-0007 transition matrix:
+        //   active -> archived   (cx.circle.archive)
+        //   archived -> active   (cx.circle.restore)
+        //   active | archived -> tombstoned   (cx.circle.tombstone)
+        let allowed = match target {
+            CircleLifecycleState::Archived => circle.state == CircleLifecycleState::Active,
+            CircleLifecycleState::Active => circle.state == CircleLifecycleState::Archived,
+            CircleLifecycleState::Tombstoned => matches!(
+                circle.state,
+                CircleLifecycleState::Active | CircleLifecycleState::Archived
+            ),
+        };
+        if !allowed {
+            let reason = match target {
+                CircleLifecycleState::Archived => "circle_not_active",
+                CircleLifecycleState::Active => "circle_not_archived",
+                CircleLifecycleState::Tombstoned => "circle_already_terminal",
+            };
+            return ProjectionEffect::Rejected {
+                reason: reason.to_owned(),
+            };
+        }
+        circle.state = target;
+        circle.state_changed_at = Some(now);
+        circle.updated_by = payload
+            .get("sender")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
+        circle.updated_at = Some(now);
+        if target == CircleLifecycleState::Tombstoned {
+            // Membership is invalidated when the Circle is tombstoned.
+            circle.members.clear();
+        }
+        ProjectionEffect::CircleLifecycle {
+            circle_id,
+            new_state: target,
+        }
+    }
+
+    fn apply_circle_member_state(
+        &mut self,
+        operation: &Operation,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> ProjectionEffect {
+        let payload = &operation.payload;
+        let Some(circle_id) = payload
+            .get("circle_id")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned)
+        else {
+            return ProjectionEffect::Rejected {
+                reason: "circle_member_state_missing_circle_id".to_owned(),
+            };
+        };
+        let Some(actor) = payload
+            .get("actor")
+            .and_then(Value::as_str)
+            .or_else(|| payload.get("actor_id").and_then(Value::as_str))
+            .map(ToOwned::to_owned)
+        else {
+            return ProjectionEffect::Rejected {
+                reason: "circle_member_state_missing_actor".to_owned(),
+            };
+        };
+        let target_state = payload
+            .get("state")
+            .and_then(Value::as_str)
+            .unwrap_or("active")
+            .to_owned();
+        // Snapshot the parent Realm id BEFORE taking a mutable borrow on
+        // the Circle entry so we can run the strict-subset check against
+        // the parent Realm's membership set.
+        let realm_id = match self.circles.get(&circle_id) {
+            Some(c) => c.realm_id.clone(),
+            None => return ProjectionEffect::Ignored,
+        };
+        if target_state == "active" {
+            // CXP-0007 strict subset invariant: Circle.members ⊆
+            // Realm.members. Reducer reason
+            // `circle_member_must_be_realm_member`.
+            let parent_joined = self
+                .member(&realm_id, &actor)
+                .map(|m| m.state == "join")
+                .unwrap_or(false);
+            if !parent_joined {
+                return ProjectionEffect::Rejected {
+                    reason: "circle_member_must_be_realm_member".to_owned(),
+                };
+            }
+        }
+        let Some(circle) = self.circles.get_mut(&circle_id) else {
+            return ProjectionEffect::Ignored;
+        };
+        if circle.state == CircleLifecycleState::Tombstoned {
+            return ProjectionEffect::Rejected {
+                reason: "circle_already_terminal".to_owned(),
+            };
+        }
+        if circle.state == CircleLifecycleState::Archived {
+            return ProjectionEffect::Rejected {
+                reason: "circle_not_active".to_owned(),
+            };
+        }
+        match target_state.as_str() {
+            "active" => {
+                circle.members.insert(actor.clone());
+            }
+            "removed" | "banned" | "left" => {
+                circle.members.remove(&actor);
+            }
+            "invited" => {
+                // Invited members are not yet active; no projection-side
+                // membership change. Wire effect is still emitted so the
+                // notification dispatcher can react.
+            }
+            _ => {
+                return ProjectionEffect::Rejected {
+                    reason: "circle_member_state_unknown".to_owned(),
+                };
+            }
+        }
+        circle.updated_by = payload
+            .get("sender")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
+        circle.updated_at = Some(now);
+        ProjectionEffect::CircleMemberStateChanged {
+            circle_id,
+            member: actor,
+            target_state,
+        }
+    }
+
+    /// CXP-0007 — validate that `scope_circle_id` references an active
+    /// Circle whose `realm_id` matches the writer's surrounding Realm
+    /// scope. Returns the canonical CXP-0007 reason code on failure:
+    ///
+    /// - `circle_realm_mismatch`     — Circle belongs to a different Realm
+    /// - `circle_not_active`         — Circle is archived
+    /// - `circle_already_terminal`   — Circle is tombstoned
+    /// - `circle_unknown`            — `circle_id` is not projected
+    ///
+    /// Called from Flow / Morph / Space create + update paths whenever
+    /// the wire object carries a non-null `scope_circle_id`.
+    pub(crate) fn validate_scope_circle_id(
+        &self,
+        scope_circle_id: &str,
+        operation_realm_id: &str,
+    ) -> Result<(), &'static str> {
+        let Some(circle) = self.circles.get(scope_circle_id) else {
+            return Err("circle_unknown");
+        };
+        match circle.state {
+            CircleLifecycleState::Tombstoned => return Err("circle_already_terminal"),
+            CircleLifecycleState::Archived => return Err("circle_not_active"),
+            CircleLifecycleState::Active => {}
+        }
+        if circle.realm_id != operation_realm_id {
+            return Err("circle_realm_mismatch");
+        }
+        Ok(())
+    }
+
+    /// CXP-0007 read helper — return the Circle projection for `circle_id`,
+    /// or `None` when the Circle is unknown or already tombstoned. Used by
+    /// `/api/v1/circles/*` route handlers and by `scope_circle_id`
+    /// validators that need to confirm the Circle is alive before allowing
+    /// Flow / Space / Morph writes against it.
+    pub fn circle(&self, circle_id: &str) -> Option<&CircleProjection> {
+        let circle = self.circles.get(circle_id)?;
+        (circle.state != CircleLifecycleState::Tombstoned).then_some(circle)
+    }
+
+    /// CXP-0007 — list all live Circles bound to `realm_id`. Excludes
+    /// tombstoned entries; archived Circles are included so the admin UI
+    /// can offer a restore path. Stable iteration order
+    /// (BTreeMap key ordering).
+    pub fn circles_for_realm(&self, realm_id: &str) -> Vec<&CircleProjection> {
+        self.circles
+            .values()
+            .filter(|c| {
+                c.realm_id == realm_id && c.state != CircleLifecycleState::Tombstoned
+            })
+            .collect()
+    }
+
     /// Apply `cx.applet.registration`. Upserts the
     /// AppletProjection keyed by `service_did`. Re-registration with
     /// the same DID is allowed (replace capabilities + bump
@@ -6692,30 +7174,6 @@ impl ProjectionState {
 
     // ── Query helpers ──
 
-    fn realm_exists_for_discussion_ref(&self, realm_id: &str) -> bool {
-        if self.space_is_destroyed(realm_id) {
-            return false;
-        }
-        self.space_states.contains_key(realm_id) || self.space_create_log(realm_id).is_some()
-    }
-
-    /// Return the linked Realm that hosts `flow_id`'s discussion track,
-    /// when the Flow has been upgraded to an independent discussion Realm.
-    pub fn discussion_realm_for_flow(&self, flow_id: &str) -> Option<&str> {
-        self.flow_discussion_realms.get(flow_id).map(String::as_str)
-    }
-
-    /// Resolve the effective Realm for discussion-track writes. Without a
-    /// linked Realm override, discussion messages stay in the source Realm.
-    pub fn discussion_space_for_flow<'a>(
-        &'a self,
-        flow_id: &str,
-        source_space_id: &'a str,
-    ) -> &'a str {
-        self.discussion_realm_for_flow(flow_id)
-            .unwrap_or(source_space_id)
-    }
-
     /// Get all non-redacted messages for a space, sorted by creation time.
     pub fn messages_for_space(&self, space_id: &str) -> Vec<&MessageState> {
         let mut msgs: Vec<_> = self
@@ -6815,6 +7273,22 @@ impl ProjectionState {
             .values()
             .filter(|r| {
                 r.space_id == space_id && !r.deleted && kind.is_none_or(|k| r.relation_kind == k)
+            })
+            .collect()
+    }
+
+    /// CXP-0007 — list the Flows that point AT `flow_id` via a
+    /// `confidential_discussion_of` Relation. Useful for the discovery
+    /// surface that resolves the "narrow discussion" companion of a
+    /// "wide synthesis" Flow. Returns the `from_ref` side of each live
+    /// matching relation.
+    pub fn confidential_discussions_of(&self, flow_id: &str) -> Vec<&RelationState> {
+        self.relations
+            .values()
+            .filter(|r| {
+                !r.deleted
+                    && r.relation_kind == crate::kinds::RELATION_KIND_CONFIDENTIAL_DISCUSSION_OF
+                    && r.to_ref.as_deref() == Some(flow_id)
             })
             .collect()
     }

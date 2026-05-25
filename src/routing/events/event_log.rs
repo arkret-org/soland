@@ -1539,6 +1539,20 @@ fn validate_event_envelope(
         ));
     }
     require_object_field(object, "payload")?;
+    // CXP-0007 (spec b7d35be) — hard-reject any wire payload that carries a
+    // field listed in `forbidden-wire-fields.json` (sourced from the SDK's
+    // `is_forbidden_wire_field`). Receivers MUST refuse the legacy field
+    // names outright; no compat path. Spec floor 2b0d70d.
+    if let Some(field) = first_forbidden_wire_field(object.get("payload")) {
+        return Err(event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "forbidden_wire_field",
+            &format!(
+                "payload carries forbidden wire field {field:?} \
+                 (spec/v1/artifacts/registry/forbidden-wire-fields.json)"
+            ),
+        ));
+    }
     validate_event_schema_and_payload(state, &kind, &schema_id, envelope, object)?;
     validate_audit_accessed_payload(&kind, object)?;
     validate_sender_commitment_binding(object)?;
@@ -2910,6 +2924,42 @@ fn bootstrap_realm_member_index(
     }
 }
 
+/// CXP-0007 — recursively scan `value` for the first key listed in the SDK's
+/// [`contrix_sdk::forbidden_wire_fields::FORBIDDEN_WIRE_FIELDS`] hard-reject
+/// set. Receivers MUST refuse the legacy field names outright. Returns the
+/// offending field name when one is present, otherwise `None`.
+///
+/// The walk descends into nested objects and arrays so a forbidden key carried
+/// inside `patch`, `object`, or any other sub-tree also fails. Callers that
+/// need to inspect only the top-level payload object can pass
+/// `value.as_object()` directly — the recursive form handles both shapes.
+fn first_forbidden_wire_field(value: Option<&Value>) -> Option<&'static str> {
+    fn walk(value: &Value) -> Option<&'static str> {
+        match value {
+            Value::Object(map) => {
+                for (key, child) in map {
+                    if contrix_sdk::forbidden_wire_fields::is_forbidden_wire_field(key) {
+                        // Translate the wire key back to the SDK's canonical
+                        // &'static str so the caller's error message uses a
+                        // stable identifier.
+                        return contrix_sdk::forbidden_wire_fields::FORBIDDEN_WIRE_FIELDS
+                            .iter()
+                            .copied()
+                            .find(|name| *name == key.as_str());
+                    }
+                    if let Some(found) = walk(child) {
+                        return Some(found);
+                    }
+                }
+                None
+            }
+            Value::Array(items) => items.iter().find_map(walk),
+            _ => None,
+        }
+    }
+    value.and_then(walk)
+}
+
 fn require_object_field(
     object: &serde_json::Map<String, Value>,
     key: &'static str,
@@ -3200,20 +3250,56 @@ fn event_operation_id(envelope: &Value, event_id: &str) -> Option<OperationId> {
 
 pub(super) fn event_read_response(record: &CanonicalEventRecord) -> EventReadResponse {
     let realm_id = canonical_realm_id_for_record(record);
+    // CXP-0007 (spec b7d35be) — surface `effective_scope` on read so
+    // clients can branch on Circle vs Realm-default scope without
+    // re-deriving from the envelope. The field is sourced from either
+    // the envelope's top-level `effective_scope` or the payload-side
+    // `scope_circle_id`, whichever the writer populated.
+    let effective_scope = effective_scope_for_envelope(&record.envelope);
+    let mut metadata = json!({
+        "event_id": record.event_id.clone(),
+        "actor_id": record.actor_id.clone(),
+        "actor_seq": record.actor_seq,
+        "realm_id": realm_id,
+        "space_id": record.space_id.clone(),
+        "kind": record.kind.clone(),
+        "schema_id": record.schema_id.clone(),
+        "canonical_digest": record.canonical_digest.clone(),
+        "received_at": record.received_at,
+    });
+    if let Some(scope) = effective_scope {
+        metadata
+            .as_object_mut()
+            .expect("metadata is object")
+            .insert("effective_scope".to_owned(), Value::String(scope));
+    }
     EventReadResponse {
         event: record.envelope.clone(),
-        metadata: json!({
-            "event_id": record.event_id.clone(),
-            "actor_id": record.actor_id.clone(),
-            "actor_seq": record.actor_seq,
-            "realm_id": realm_id,
-            "space_id": record.space_id.clone(),
-            "kind": record.kind.clone(),
-            "schema_id": record.schema_id.clone(),
-            "canonical_digest": record.canonical_digest.clone(),
-            "received_at": record.received_at
-        }),
+        metadata,
     }
+}
+
+/// CXP-0007 — resolve the canonical `effective_scope` for an Event
+/// Envelope on read. Returns `Some(circle_id)` when the envelope (or its
+/// payload) names a Circle scope, `Some("realm:<realm_id>")` when the
+/// scope is the Realm default, or `None` when neither can be derived.
+fn effective_scope_for_envelope(envelope: &Value) -> Option<String> {
+    let Some(object) = envelope.as_object() else {
+        return None;
+    };
+    if let Some(scope) = object.get("effective_scope").and_then(Value::as_str) {
+        return Some(scope.to_owned());
+    }
+    let payload = object.get("payload").and_then(Value::as_object)?;
+    if let Some(scope_circle_id) = payload.get("scope_circle_id").and_then(Value::as_str) {
+        return Some(scope_circle_id.to_owned());
+    }
+    if let Some(payload_object) = payload.get("object").and_then(Value::as_object)
+        && let Some(scope_circle_id) = payload_object.get("scope_circle_id").and_then(Value::as_str)
+    {
+        return Some(scope_circle_id.to_owned());
+    }
+    None
 }
 
 pub(super) fn event_read_response_for_state(

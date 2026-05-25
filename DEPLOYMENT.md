@@ -350,6 +350,40 @@ pre-upgrade backup if you need to roll back.
 
 - **Rate limiting**: the built-in limiter is per-process. Multi-replica
   deployments need a shared reverse-proxy/API-gateway quota in front of soland.
+  Until an external Redis (or equivalent) backend is wired in, treat the
+  per-process quota as a single-instance soft floor; production fleets MUST
+  front soland with nginx/Caddy/Traefik `limit_req` or an API gateway that
+  shares state across replicas.
+
+### CXP-0007 (Circle primitive) — migration & sizing notes
+
+- **Migrations**: the Circle rollout adds three new diesel migrations that
+  run automatically on startup —
+  `20260526000000_drop_discussion_realm_ref`,
+  `20260526010000_add_circles`, and
+  `20260526020000_add_scope_circle_id`. The first is a defensive
+  `DROP COLUMN IF EXISTS` for vendor forks that persisted the legacy
+  cross-Realm discussion routing column; the next two land the
+  `projection_circles` / `projection_circle_members` mirror tables and the
+  `scope_circle_id` / `default_scope_circle_id` / `child_scope_policy` /
+  `effective_scope` columns on the Flow / Morph / Space / Events mirrors.
+  All three are forward-only in spirit — the down migrations are provided
+  for diesel symmetry but reintroducing `discussion_realm_ref` after the
+  CXP-0007 cutover would violate the forbidden-wire-fields contract.
+- **Disk sizing**: `effective_scope` adds one nullable `TEXT` column per
+  projected Event. For a typical `cx:circle:<uuid>` value the on-wire form
+  is 46 bytes; PostgreSQL's `TEXT` overhead pushes the stored cost to ~50
+  bytes per row, plus an additional ~20 bytes for the BTREE index entry on
+  `projection_events_effective_scope_idx`. A 100M-event projection grows
+  by ~7 GiB total (table + index). Drop the index if your deployment never
+  filters projection reads by Circle scope.
+- **Multi-replica + Circle membership**: the Circle membership FSM lives
+  on the durable event log, so cross-replica consistency comes for free
+  once the underlying Postgres replication is healthy. The
+  `circle_member_must_be_realm_member` invariant is checked in-reducer; a
+  replica that hasn't replayed the parent Realm's latest `cx.member.state`
+  events will fail-closed on Circle membership writes — the canonical fix
+  is to gate writes behind the federation outbox acknowledgement.
 - **Metrics**: Prometheus text metrics are exposed on the separate
   `SOLAND_METRICS_BIND` listener (default `127.0.0.1:9090`) at `/metrics`.
 - **OpenTelemetry**: OTLP trace export is disabled unless the binary is built
