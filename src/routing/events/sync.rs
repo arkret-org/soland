@@ -304,6 +304,7 @@ fn build_sync_snapshot(
         let (timeline_events, space_position) =
             timeline_events_for_space(state, &projection, &space_id, after_position, session);
         let bottom_cells = bottom_cells_for_space(&projection, &space_id);
+        let anchor_view = anchor_view_for_space(&bottom_cells);
         positions.insert(space_id.clone(), space_position);
         sync_spaces.insert(
             space_id.clone(),
@@ -326,6 +327,7 @@ fn build_sync_snapshot(
                 "state": [],
                 "state_after": {"events": [flow_state_after]},
                 "bottom_cells": bottom_cells,
+                "anchor_view": anchor_view,
                 "ephemeral": typing_ephemeral_for_space(state, &space_id, session),
                 "unread": {"notification_count": 0, "highlight_count": 0}
             }),
@@ -578,6 +580,70 @@ fn bottom_cells_for_space(projection: &ProjectionState, space_id: &str) -> Vec<V
                 "bottom": bottom,
             }))
         })
+        .collect()
+}
+
+fn anchor_view_for_space(bottom_cells: &[Value]) -> Value {
+    let cells = bottom_cells
+        .iter()
+        .filter_map(|entry| {
+            let cell_id = entry.get("cell_id").and_then(Value::as_str)?;
+            let bottom = entry.get("bottom")?;
+            let status = match bottom.get("kind").and_then(Value::as_str) {
+                Some("Conflict") | Some("conflict") => "expose",
+                _ => "reject",
+            };
+            let heads = bottom_heads_for_sync(bottom);
+            Some((
+                cell_id.to_owned(),
+                json!({
+                    "bottom": status,
+                    "heads": heads,
+                    "diagnostic": bottom,
+                }),
+            ))
+        })
+        .collect::<serde_json::Map<_, _>>();
+    json!({
+        "frontier": [],
+        "leaves": [],
+        "state_root": Value::Null,
+        "cells": cells,
+    })
+}
+
+fn bottom_heads_for_sync(bottom: &Value) -> Vec<Value> {
+    if let Some(heads) = bottom.get("heads").and_then(Value::as_array)
+        && !heads.is_empty()
+    {
+        return heads
+            .iter()
+            .filter_map(|head| {
+                if let Some(object) = head.as_object() {
+                    let move_id = object
+                        .get("move_id")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    if move_id.is_empty() {
+                        return None;
+                    }
+                    return Some(json!({
+                        "move_id": move_id,
+                        "value": object.get("value").cloned().unwrap_or(Value::Null),
+                    }));
+                }
+                let move_id = head.as_str()?;
+                Some(json!({"move_id": move_id, "value": Value::Null}))
+            })
+            .collect();
+    }
+    bottom
+        .get("move_ids")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|move_id| move_id.as_str())
+        .map(|move_id| json!({"move_id": move_id, "value": Value::Null}))
         .collect()
 }
 

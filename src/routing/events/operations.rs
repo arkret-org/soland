@@ -173,6 +173,10 @@ const REALM_CREATE_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::R
     "object",
     "cx.realm.create operation requires payload.object",
 )];
+const REALM_UPDATE_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::Required(
+    "patch",
+    "cx.realm.update operation requires patch",
+)];
 // `cx.realm.update` / `cx.realm.destroy` carry an `action` string +
 // per-action fields (mirrors space-container / morph lifecycle for non-create
 // paths).
@@ -180,6 +184,15 @@ const SPACE_LIFECYCLE_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement
     "action",
     "space lifecycle operation requires action",
 )];
+const CONFLICT_REPAIR_REQUIREMENTS: &[PayloadRequirement] = &[
+    PayloadRequirement::Required("cell_id", "conflict repair requires cell_id"),
+    PayloadRequirement::Required("conflict_heads", "conflict repair requires conflict_heads"),
+    PayloadRequirement::Required("winner_value", "conflict repair requires winner_value"),
+    PayloadRequirement::Required(
+        "recovery_capability_ref",
+        "conflict repair requires recovery_capability_ref",
+    ),
+];
 // `cx.space.archive` / `cx.space.restore` / `cx.space.tombstone` share the
 // spec-canonical `space_id` target field.
 const SPACE_CONTAINER_LIFECYCLE_ID_FIELDS: &[&str] = &["space_id"];
@@ -701,6 +714,14 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
             requirements: REALM_CREATE_REQUIREMENTS,
             validate: None,
         },
+        kinds::CX_REALM_UPDATE => OperationPayloadSchema {
+            requirements: REALM_UPDATE_REQUIREMENTS,
+            validate: None,
+        },
+        kinds::CX_CONFLICT_REPAIR => OperationPayloadSchema {
+            requirements: CONFLICT_REPAIR_REQUIREMENTS,
+            validate: Some(validate_conflict_repair_payload),
+        },
         kind if kinds::is_realm_lifecycle_kind(kind) => OperationPayloadSchema {
             requirements: SPACE_LIFECYCLE_REQUIREMENTS,
             validate: None,
@@ -963,6 +984,43 @@ fn validate_observed_dots_payload(operation: &Operation) -> Result<(), &'static 
     } else {
         Err("consent revoke observed_dots must be a non-empty array")
     }
+}
+
+fn validate_conflict_repair_payload(operation: &Operation) -> Result<(), &'static str> {
+    let cell_id = operation
+        .payload
+        .get("cell_id")
+        .and_then(serde_json::Value::as_str)
+        .ok_or("conflict repair requires cell_id")?;
+    if !cell_id.starts_with("cx:cell:") {
+        return Err("conflict repair cell_id must use cx:cell:");
+    }
+    let heads = operation
+        .payload
+        .get("conflict_heads")
+        .and_then(serde_json::Value::as_array)
+        .ok_or("conflict repair requires conflict_heads")?;
+    if heads.len() < 2 {
+        return Err("conflict repair requires at least two conflict_heads");
+    }
+    if heads
+        .iter()
+        .any(|head| head.as_str().is_none_or(|value| value.trim().is_empty()))
+    {
+        return Err("conflict repair heads must be non-empty strings");
+    }
+    let recovery = operation
+        .payload
+        .get("recovery_capability_ref")
+        .and_then(serde_json::Value::as_str)
+        .ok_or("conflict repair requires recovery_capability_ref")?;
+    if recovery.trim().is_empty() {
+        return Err("conflict repair recovery_capability_ref must be non-empty");
+    }
+    if operation.payload.get("winner_value").is_none() {
+        return Err("conflict repair requires winner_value");
+    }
+    Ok(())
 }
 
 fn validate_read_scope_track(track: &str) -> Result<(), &'static str> {

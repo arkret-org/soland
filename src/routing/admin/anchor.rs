@@ -45,6 +45,7 @@ use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use std::collections::BTreeSet;
 
 use super::AuthArgs;
 use crate::app_error;
@@ -606,14 +607,22 @@ fn collect_bottom_entries_for_space(state: &AppState, space_id: &str) -> Vec<Bot
     let Ok(space) = SpaceId::new(space_id.to_owned()) else {
         return Vec::new();
     };
-    let cells = match state.cell_store.list_cells(&space) {
-        Ok(c) => c,
-        Err(_) => return Vec::new(),
-    };
     let proj = match state.projection.lock() {
         Ok(p) => p,
         Err(_) => return Vec::new(),
     };
+    let mut cells: BTreeSet<CellRef> = state
+        .cell_store
+        .list_cells(&space)
+        .unwrap_or_default()
+        .into_iter()
+        .collect();
+    cells.extend(
+        proj.cells
+            .keys()
+            .filter(|cell| cell.as_str().contains(space_id))
+            .cloned(),
+    );
     let mut out = Vec::new();
     for cell in cells {
         let Some(cell_state) = proj.cell(&cell) else {

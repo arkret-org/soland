@@ -1143,6 +1143,13 @@ fn submit_event_value(
                     reason,
                 ));
             }
+            if let Err(reason) = proj.check_bottom_cell_transition(operation) {
+                return Err(SubmitOneError::new(
+                    StatusCode::PRECONDITION_FAILED,
+                    reason,
+                    reason,
+                ));
+            }
             if let Some(reason) = preflight_mls_projection_reject(&proj, operation) {
                 return Err(SubmitOneError::new(
                     StatusCode::PRECONDITION_FAILED,
@@ -1373,7 +1380,8 @@ fn validate_event_envelope(
             reason,
         ));
     }
-    if !artifacts::active_durable_event_kinds().contains(&kind) {
+    if !artifacts::active_durable_event_kinds().contains(&kind) && kind != kinds::CX_CONFLICT_REPAIR
+    {
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
             "unknown_event_kind",
@@ -2287,6 +2295,9 @@ fn validate_event_schema_and_payload(
             "event payload is required",
         )
     })?;
+    if kind == kinds::CX_CONFLICT_REPAIR {
+        return validate_conflict_repair_event_payload(payload);
+    }
     if matches!(
         kind,
         kinds::CX_SPACE_CONTAINER_ARCHIVE
@@ -2305,6 +2316,73 @@ fn validate_event_schema_and_payload(
             )
         })?;
     validate_realm_create_policy_constraints(kind, payload)?;
+    Ok(())
+}
+
+fn validate_conflict_repair_event_payload(payload: &Value) -> Result<(), EventValidationError> {
+    let Some(object) = payload.as_object() else {
+        return Err(event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            "conflict repair payload must be an object",
+        ));
+    };
+    let cell_id = object
+        .get("cell_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            event_validation_error(
+                StatusCode::BAD_REQUEST,
+                "schema_violation",
+                "conflict repair payload requires cell_id",
+            )
+        })?;
+    if !cell_id.starts_with("cx:cell:") {
+        return Err(event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            "conflict repair cell_id must use cx:cell:",
+        ));
+    }
+    let heads = object
+        .get("conflict_heads")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            event_validation_error(
+                StatusCode::BAD_REQUEST,
+                "schema_violation",
+                "conflict repair payload requires conflict_heads",
+            )
+        })?;
+    if heads.len() < 2
+        || heads
+            .iter()
+            .any(|head| head.as_str().is_none_or(|value| value.trim().is_empty()))
+    {
+        return Err(event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            "conflict repair conflict_heads must contain at least two non-empty strings",
+        ));
+    }
+    if object
+        .get("recovery_capability_ref")
+        .and_then(Value::as_str)
+        .is_none_or(|value| value.trim().is_empty())
+    {
+        return Err(event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            "conflict repair payload requires recovery_capability_ref",
+        ));
+    }
+    if !object.contains_key("winner_value") {
+        return Err(event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            "conflict repair payload requires winner_value",
+        ));
+    }
     Ok(())
 }
 
@@ -3005,6 +3083,11 @@ fn projection_operation_from_event(
         payload_object
             .entry("capability_action".to_owned())
             .or_insert_with(|| Value::String("cx.morph.schema.migrate".to_owned()));
+    }
+    if let Some(anchor_ref) = envelope.get("anchor_ref").and_then(Value::as_str) {
+        payload_object
+            .entry("anchor_ref".to_owned())
+            .or_insert_with(|| Value::String(anchor_ref.to_owned()));
     }
 
     let Some(operation_id) = event_operation_id(envelope, &parsed.event_id) else {

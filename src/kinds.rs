@@ -88,6 +88,7 @@ pub const CX_REALM_CREATE: &str = "cx.realm.create";
 pub const CX_REALM_UPDATE: &str = "cx.realm.update";
 pub const CX_REALM_DESTROY: &str = "cx.realm.destroy";
 pub const CX_REALM_TOMBSTONE: &str = "cx.realm.tombstone";
+pub const CX_CONFLICT_REPAIR: &str = "cx.conflict.repair";
 pub const CX_AUDIT_ERASURE_RECEIPT: &str = "cx.audit.erasure_receipt";
 pub const CX_REDACTION: &str = "cx.redaction";
 // Round 14e+ (2026-05-16) — Applet protocol family. Spec
@@ -328,7 +329,9 @@ pub fn canonical_kind_for_payload<'a>(object_type: &'a str, _payload: &Value) ->
 }
 
 fn canonical_registered_kind(object_type: &str) -> Option<&str> {
-    if !artifacts::active_local_operation_event_kinds().contains(object_type) {
+    if !artifacts::active_local_operation_event_kinds().contains(object_type)
+        && object_type != CX_CONFLICT_REPAIR
+    {
         return None;
     }
     let kind = match object_type {
@@ -376,6 +379,7 @@ fn canonical_registered_kind(object_type: &str) -> Option<&str> {
                 _ => CX_REALM_UPDATE,
             })
         }
+        CX_CONFLICT_REPAIR => Some(CX_CONFLICT_REPAIR),
         CX_AUDIT_ERASURE_RECEIPT => Some(CX_AUDIT_ERASURE_RECEIPT),
         CX_MEMBER_STATE => Some(CX_MEMBER_STATE),
         // Applet protocol family (round 14e+).

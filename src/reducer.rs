@@ -1326,6 +1326,13 @@ fn apply_erasure_receipt_dispatch(
 ) -> ProjectionEffect {
     s.apply_audit_erasure_receipt(op, op.created_at)
 }
+fn apply_conflict_repair_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_conflict_repair(op, op.created_at)
+}
 fn apply_space_container_create_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
@@ -2223,6 +2230,7 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
     m.insert(CX_REALM_UPDATE, apply_realm_update_dispatch);
     m.insert(CX_REALM_TOMBSTONE, apply_realm_tombstone_dispatch);
     m.insert(CX_REALM_DESTROY, apply_realm_destroy_dispatch);
+    m.insert(CX_CONFLICT_REPAIR, apply_conflict_repair_dispatch);
     m.insert(CX_AUDIT_ERASURE_RECEIPT, apply_erasure_receipt_dispatch);
     m.insert(
         CX_SPACE_CONTAINER_CREATE,
@@ -2312,6 +2320,64 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
     // G3.S2: policy server cell
     m.insert(CX_REALM_POLICY_SERVER, apply_realm_policy_server_dispatch);
     m
+}
+
+fn conflict_heads_from_payload(payload: &Value) -> Vec<String> {
+    payload
+        .get("conflict_heads")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|head| head.as_str().map(ToOwned::to_owned))
+        .filter(|head| !head.trim().is_empty())
+        .collect()
+}
+
+fn bottom_head_ids(bottom: &contrix_sdk::Bottom) -> BTreeSet<String> {
+    bottom
+        .heads
+        .iter()
+        .filter_map(|head| head.get("move_id").and_then(Value::as_str))
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+fn augment_repair_winner_value(
+    winner: Value,
+    heads: &[String],
+    operation_id: &str,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Value {
+    let repair_of = Value::Array(heads.iter().cloned().map(Value::String).collect());
+    let updated_at = utc_timestamp_z(now);
+    match winner {
+        Value::Object(mut object) => {
+            object.insert("repair_of".to_owned(), repair_of);
+            object.insert(
+                "operation_id".to_owned(),
+                Value::String(operation_id.to_owned()),
+            );
+            object.insert("updated_at".to_owned(), Value::String(updated_at));
+            Value::Object(object)
+        }
+        other => serde_json::json!({
+            "value": other,
+            "repair_of": repair_of,
+            "operation_id": operation_id,
+            "updated_at": updated_at,
+        }),
+    }
+}
+
+fn utc_timestamp_z(now: chrono::DateTime<chrono::Utc>) -> String {
+    now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+}
+
+fn realm_organization_space_id_from_cell(cell_id: &str) -> Option<String> {
+    cell_id
+        .strip_prefix("cx:cell:cx.component.realm.organization.v1:")
+        .filter(|space_id| space_id.starts_with("cx:realm:"))
+        .map(ToOwned::to_owned)
 }
 
 // G3.S2: dispatch adapter for `cx.realm.policy_server`. The reducer
@@ -4424,6 +4490,235 @@ impl ProjectionState {
         }
     }
 
+    fn realm_organization_cell_id(space_id: &str) -> Option<CellRef> {
+        CellRef::new(format!(
+            "cx:cell:cx.component.realm.organization.v1:{space_id}"
+        ))
+        .ok()
+    }
+
+    fn realm_update_conflict_basis(operation: &Operation) -> Option<String> {
+        operation
+            .payload
+            .get("anchor_ref")
+            .or_else(|| operation.payload.get("conflict_basis"))
+            .or_else(|| operation.payload.get("state_witness"))
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .map(ToOwned::to_owned)
+    }
+
+    fn realm_update_candidate_value(
+        &self,
+        cell_id: &CellRef,
+        operation: &Operation,
+        now: chrono::DateTime<chrono::Utc>,
+        owner: Option<&String>,
+        title: Option<&String>,
+        security_class: Option<&String>,
+        federation_policy: Option<&String>,
+    ) -> Value {
+        let mut value = match self.cells.get(cell_id) {
+            Some(CellState::Value(Value::Object(existing))) => existing.clone(),
+            _ => serde_json::Map::new(),
+        };
+        if let Some(o) = owner {
+            value.insert("owner".to_owned(), Value::String(o.clone()));
+        }
+        if let Some(t) = title {
+            value.insert("title".to_owned(), Value::String(t.clone()));
+        }
+        if let Some(sc) = security_class {
+            value.insert("security_class".to_owned(), Value::String(sc.clone()));
+        }
+        if let Some(fp) = federation_policy {
+            value.insert("federation_policy".to_owned(), Value::String(fp.clone()));
+        }
+        value.insert("updated_at".to_owned(), Value::String(utc_timestamp_z(now)));
+        value.insert(
+            "operation_id".to_owned(),
+            Value::String(operation.operation_id.as_str().to_owned()),
+        );
+        Value::Object(value)
+    }
+
+    fn maybe_project_realm_update_bottom(
+        &mut self,
+        operation: &Operation,
+        now: chrono::DateTime<chrono::Utc>,
+        space_id: &str,
+        owner: Option<&String>,
+        title: Option<&String>,
+        security_class: Option<&String>,
+        federation_policy: Option<&String>,
+    ) -> Option<ProjectionEffect> {
+        let cell_id = Self::realm_organization_cell_id(space_id)?;
+        match self.cells.get(&cell_id) {
+            Some(CellState::Bottom(_)) => {
+                return Some(ProjectionEffect::Rejected {
+                    reason: "cell_bottom_state".to_owned(),
+                });
+            }
+            Some(CellState::Value(existing)) => {
+                let basis = Self::realm_update_conflict_basis(operation)?;
+                let current_operation = existing
+                    .get("operation_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                if current_operation.is_empty()
+                    || current_operation == basis
+                    || current_operation == operation.operation_id.as_str()
+                {
+                    return None;
+                }
+                let incoming = self.realm_update_candidate_value(
+                    &cell_id,
+                    operation,
+                    now,
+                    owner,
+                    title,
+                    security_class,
+                    federation_policy,
+                );
+                let bottom = contrix_sdk::Bottom {
+                    kind: contrix_sdk::BottomKind::Conflict,
+                    cells: vec![cell_id.clone()],
+                    move_ids: Vec::new(),
+                    anchor_view: None,
+                    heads: vec![
+                        serde_json::json!({
+                            "move_id": current_operation,
+                            "value": existing,
+                        }),
+                        serde_json::json!({
+                            "move_id": operation.operation_id.as_str(),
+                            "value": incoming,
+                        }),
+                    ],
+                    details: Some(serde_json::json!({
+                        "reason": "concurrent_realm_update",
+                        "basis": basis,
+                    })),
+                    escalated_at: None,
+                };
+                self.cells.insert(cell_id, CellState::Bottom(bottom));
+                return Some(ProjectionEffect::SpaceLifecycle {
+                    space_id: space_id.to_owned(),
+                    action: "bottom_expose".to_owned(),
+                });
+            }
+            None => {}
+        }
+        None
+    }
+
+    pub fn check_bottom_cell_transition(&self, operation: &Operation) -> Result<(), &'static str> {
+        match crate::kinds::canonical_kind_for_operation(operation) {
+            Some(crate::kinds::CX_REALM_UPDATE) => {
+                let space_id = operation.realm_id.to_string();
+                if let Some(cell_id) = Self::realm_organization_cell_id(&space_id)
+                    && matches!(self.cells.get(&cell_id), Some(CellState::Bottom(_)))
+                {
+                    return Err("cell_bottom_state");
+                }
+                Ok(())
+            }
+            Some(crate::kinds::CX_CONFLICT_REPAIR) => {
+                self.validate_conflict_repair_operation(operation)
+            }
+            _ => Ok(()),
+        }
+    }
+
+    fn validate_conflict_repair_operation(
+        &self,
+        operation: &Operation,
+    ) -> Result<(), &'static str> {
+        let cell_id = operation
+            .payload
+            .get("cell_id")
+            .and_then(Value::as_str)
+            .ok_or("conflict_repair_missing_cell")?;
+        let cell = CellRef::new(cell_id.to_owned()).map_err(|_| "conflict_repair_invalid_cell")?;
+        let Some(CellState::Bottom(bottom)) = self.cells.get(&cell) else {
+            return Err("cell_not_bottom");
+        };
+        let declared = conflict_heads_from_payload(&operation.payload);
+        if declared.len() < 2 {
+            return Err("repair_head_in_missing");
+        }
+        let actual = bottom_head_ids(bottom);
+        if actual.len() < 2 || declared.iter().any(|head| !actual.contains(head)) {
+            return Err("repair_head_in_drift");
+        }
+        if let Some(witness) = operation
+            .payload
+            .get("state_witness")
+            .and_then(Value::as_str)
+            && !witness.starts_with("cx:anchor:sha256:")
+        {
+            return Err("repair_state_witness_invalid");
+        }
+        Ok(())
+    }
+
+    fn apply_conflict_repair(
+        &mut self,
+        operation: &Operation,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> ProjectionEffect {
+        if let Err(reason) = self.validate_conflict_repair_operation(operation) {
+            return ProjectionEffect::Rejected {
+                reason: reason.to_owned(),
+            };
+        }
+        let cell_id = operation
+            .payload
+            .get("cell_id")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+        let Ok(cell) = CellRef::new(cell_id.clone()) else {
+            return ProjectionEffect::Rejected {
+                reason: "conflict_repair_invalid_cell".to_owned(),
+            };
+        };
+        let heads = conflict_heads_from_payload(&operation.payload);
+        let winner = operation
+            .payload
+            .get("winner_value")
+            .cloned()
+            .unwrap_or(Value::Null);
+        let value =
+            augment_repair_winner_value(winner, &heads, operation.operation_id.as_str(), now);
+        self.cells.insert(cell, CellState::Value(value.clone()));
+        if let Some(space_id) = realm_organization_space_id_from_cell(&cell_id) {
+            if let Some(title) = value.get("title").and_then(Value::as_str) {
+                let entry = self
+                    .space_states
+                    .entry(space_id.clone())
+                    .or_insert_with(|| SpaceState {
+                        space_id: space_id.clone(),
+                        owner: None,
+                        title: Some(title.to_owned()),
+                        deleted: false,
+                        created_at: now,
+                        updated_at: now,
+                        trust_domain: None,
+                        terminal_state: None,
+                        successor_realm_id: None,
+                    });
+                entry.title = Some(title.to_owned());
+                entry.updated_at = now;
+            }
+            return ProjectionEffect::SpaceLifecycle {
+                space_id,
+                action: "conflict_repair".to_owned(),
+            };
+        }
+        ProjectionEffect::Ignored
+    }
+
     /// Apply a `cx.realm.*` lifecycle event. Stream-F (Wave 1B) rewrite
     /// of the former `apply_space_lifecycle`: the function is now
     /// restricted to the four canonical Realm lifecycle kinds
@@ -4647,6 +4942,20 @@ impl ProjectionState {
             };
         }
 
+        if kind == crate::kinds::CX_REALM_UPDATE
+            && let Some(effect) = self.maybe_project_realm_update_bottom(
+                operation,
+                now,
+                &space_id,
+                owner.as_ref(),
+                title.as_ref(),
+                payload_security_class.as_ref(),
+                payload_federation_policy.as_ref(),
+            )
+        {
+            return effect;
+        }
+
         // Structured cache mirror.
         let space = self
             .space_states
@@ -4754,7 +5063,11 @@ impl ProjectionState {
                     if let Some(fp) = payload_federation_policy.as_ref() {
                         value.insert("federation_policy".to_owned(), Value::String(fp.clone()));
                     }
-                    value.insert("updated_at".to_owned(), Value::String(now.to_rfc3339()));
+                    value.insert("updated_at".to_owned(), Value::String(utc_timestamp_z(now)));
+                    value.insert(
+                        "operation_id".to_owned(),
+                        Value::String(operation.operation_id.as_str().to_owned()),
+                    );
                     self.cells
                         .insert(cell_id, CellState::Value(Value::Object(value)));
                 }
@@ -7389,6 +7702,87 @@ mod tests {
         );
         // updated_at is a server-side timestamp present on every update.
         assert!(value.get("updated_at").is_some());
+    }
+
+    #[test]
+    fn concurrent_realm_updates_with_same_basis_expose_bottom_and_repair_clears() {
+        let mut state = ProjectionState::new();
+        let hlc = ServerHlc::new("test");
+        let realm = "cx:realm:01904100-0000-7000-8000-cfc039892036";
+        let basis =
+            "cx:anchor:sha256:0000000000000000000000000000000000000000000000000000000000000000";
+        let first = make_operation(
+            crate::kinds::CX_REALM_UPDATE,
+            realm,
+            serde_json::json!({
+                "patch": {"title": {"$op": "set", "value": "renamed by alice"}},
+                "anchor_ref": basis,
+            }),
+        );
+        let first_id = first.operation_id.as_str().to_owned();
+        state.apply(&first, &hlc);
+
+        let second = make_operation(
+            crate::kinds::CX_REALM_UPDATE,
+            realm,
+            serde_json::json!({
+                "patch": {"title": {"$op": "set", "value": "renamed by bob"}},
+                "anchor_ref": basis,
+            }),
+        );
+        let second_id = second.operation_id.as_str().to_owned();
+        state.apply(&second, &hlc);
+
+        let cell = ProjectionState::realm_organization_cell_id(realm).unwrap();
+        let bottom = match state.cell(&cell) {
+            Some(CellState::Bottom(bottom)) => bottom,
+            other => panic!("expected bottom cell, got {other:?}"),
+        };
+        assert_eq!(bottom.heads.len(), 2);
+        assert_eq!(
+            bottom.heads[0].get("move_id").and_then(Value::as_str),
+            Some(first_id.as_str())
+        );
+        assert_eq!(
+            bottom.heads[1].get("move_id").and_then(Value::as_str),
+            Some(second_id.as_str())
+        );
+        assert_eq!(
+            state.check_bottom_cell_transition(&make_operation(
+                crate::kinds::CX_REALM_UPDATE,
+                realm,
+                serde_json::json!({
+                    "patch": {"title": {"$op": "set", "value": "blocked while bottom"}},
+                }),
+            )),
+            Err("cell_bottom_state")
+        );
+
+        let repair = make_operation(
+            crate::kinds::CX_CONFLICT_REPAIR,
+            realm,
+            serde_json::json!({
+                "cell_id": cell.as_str(),
+                "conflict_heads": [first_id, second_id],
+                "recovery_capability_ref": "cap.recovery-01",
+                "winner_value": {"title": "renamed by alice"},
+                "state_witness": basis,
+            }),
+        );
+        state.apply(&repair, &hlc);
+        let repaired = state
+            .space_organization_cell_value(realm)
+            .expect("repair should restore cell value");
+        assert_eq!(
+            repaired.get("title").and_then(Value::as_str),
+            Some("renamed by alice")
+        );
+        assert!(
+            repaired
+                .get("repair_of")
+                .and_then(Value::as_array)
+                .is_some()
+        );
     }
 
     #[test]
