@@ -39,9 +39,15 @@ async fn main() -> anyhow::Result<()> {
     // active. The configured URL remains visible in `/identity/describe` even
     // when the probe fails so coauth can show the operator's intended setup.
     if let Some(url) = config.external_webvh_provider_url.clone() {
+        let expected_service_did = std::env::var("SOLAND_EXTERNAL_WEBVH_PROVIDER_SERVICE_DID").ok();
+        let expected_trust_domain = std::env::var("SOLAND_EXTERNAL_WEBVH_PROVIDER_TRUST_DOMAIN")
+            .ok()
+            .unwrap_or_else(|| config.trust_domain.clone());
         match soland::state::did_resolver_chain::probe_webvh_provider_describe(
             &url,
             std::time::Duration::from_secs(3),
+            expected_service_did.as_deref(),
+            Some(expected_trust_domain.as_str()),
         )
         .await
         {

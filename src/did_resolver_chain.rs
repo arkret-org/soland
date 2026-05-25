@@ -30,6 +30,7 @@ use contrix_sdk::identity::{
     DidWebvhResolver,
 };
 use contrix_sdk::{Did, Error};
+use serde_json::Value;
 
 use crate::config::AppConfig;
 use crate::persistence::PersistenceStore;
@@ -119,10 +120,16 @@ fn method_allowed(config: &AppConfig, method: &str) -> bool {
         .any(|allowed| allowed.eq_ignore_ascii_case(method))
 }
 
-/// Probe an external webvh provider `<URL>/describe` endpoint. The configured
-/// URL records admin intent and is still advertised when the probe fails; this
+/// Probe an external webvh provider `<URL>/describe` endpoint and validate
+/// the trust-root handshake before marking it active. The configured URL
+/// records admin intent and is still advertised when the probe fails; this
 /// function only controls runtime liveness.
-pub async fn probe_webvh_provider_describe(url: &str, timeout: Duration) -> Result<(), String> {
+pub async fn probe_webvh_provider_describe(
+    url: &str,
+    timeout: Duration,
+    expected_service_did: Option<&str>,
+    expected_trust_domain: Option<&str>,
+) -> Result<(), String> {
     let trimmed = url.trim_end_matches('/');
     let describe_url = format!("{trimmed}/describe");
     let client = reqwest::Client::builder()
@@ -140,7 +147,93 @@ pub async fn probe_webvh_provider_describe(url: &str, timeout: Duration) -> Resu
             resp.status()
         ));
     }
+    let body = resp
+        .json::<Value>()
+        .await
+        .map_err(|e| format!("webvh provider /describe JSON decode failed: {e}"))?;
+    validate_webvh_provider_describe(&body, expected_service_did, expected_trust_domain)?;
     Ok(())
+}
+
+fn validate_webvh_provider_describe(
+    body: &Value,
+    expected_service_did: Option<&str>,
+    expected_trust_domain: Option<&str>,
+) -> Result<(), String> {
+    let service = body
+        .get("service")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "webvh provider /describe missing service".to_owned())?;
+    if service != "starid" {
+        return Err(format!(
+            "webvh provider service must be starid, got {service:?}"
+        ));
+    }
+    let service_did = body
+        .get("service_did")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "webvh provider /describe missing service_did".to_owned())?;
+    Did::new(service_did.to_owned())
+        .map_err(|error| format!("webvh provider service_did is invalid: {error}"))?;
+    if let Some(expected) = expected_service_did
+        && service_did != expected
+    {
+        return Err(format!(
+            "webvh provider service_did mismatch: expected {expected}, got {service_did}"
+        ));
+    }
+    let trust_domain = body
+        .get("trust_domain")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "webvh provider /describe missing trust_domain".to_owned())?;
+    if !valid_trust_domain(trust_domain) {
+        return Err(format!(
+            "webvh provider trust_domain is invalid: {trust_domain}"
+        ));
+    }
+    if let Some(expected) = expected_trust_domain
+        && trust_domain != expected
+    {
+        return Err(format!(
+            "webvh provider trust_domain mismatch: expected {expected}, got {trust_domain}"
+        ));
+    }
+    if body
+        .get("development_mode")
+        .and_then(Value::as_bool)
+        .unwrap_or(true)
+    {
+        return Err("webvh provider is in development_mode".to_owned());
+    }
+    if !string_array_contains(body.get("supported_methods"), "did:webvh") {
+        return Err("webvh provider does not advertise did:webvh".to_owned());
+    }
+    if !string_array_contains(body.get("supported_method_versions"), "did:webvh:1.0") {
+        return Err("webvh provider does not advertise did:webvh:1.0".to_owned());
+    }
+    Ok(())
+}
+
+fn string_array_contains(value: Option<&Value>, needle: &str) -> bool {
+    value
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .any(|value| value.as_str() == Some(needle))
+}
+
+fn valid_trust_domain(value: &str) -> bool {
+    let Some(scope) = value.strip_prefix("cx:trust_domain:") else {
+        return false;
+    };
+    if scope.is_empty() || scope.len() > 128 {
+        return false;
+    }
+    let bytes = scope.as_bytes();
+    matches!(bytes[0], b'a'..=b'z' | b'0'..=b'9')
+        && scope
+            .bytes()
+            .all(|b| matches!(b, b'a'..=b'z' | b'0'..=b'9' | b'.' | b'_' | b'-' | b':'))
 }
 
 #[cfg(test)]
@@ -149,6 +242,7 @@ mod tests {
 
     use contrix_sdk::Did;
     use contrix_sdk::identity::DidResolver;
+    use serde_json::json;
 
     use super::*;
     use crate::config::ObjectStorageConfig;
@@ -321,5 +415,51 @@ mod tests {
         let chain = build_did_resolver_chain(&config);
         assert!(!chain.supports(&sample_webvh_did()));
         assert!(!chain.supports(&sample_web_did()));
+    }
+
+    #[test]
+    fn provider_describe_trust_handshake_accepts_production_starid() {
+        let describe = json!({
+            "service": "starid",
+            "service_did": "did:web:starid.example",
+            "trust_domain": "cx:trust_domain:example.net",
+            "development_mode": false,
+            "supported_methods": ["did:webvh", "did:web"],
+            "supported_method_versions": ["did:webvh:1.0"]
+        });
+        validate_webvh_provider_describe(
+            &describe,
+            Some("did:web:starid.example"),
+            Some("cx:trust_domain:example.net"),
+        )
+        .expect("valid starid provider describe should pass");
+    }
+
+    #[test]
+    fn provider_describe_trust_handshake_rejects_mismatch_and_dev() {
+        let mut describe = json!({
+            "service": "starid",
+            "service_did": "did:web:starid.example",
+            "trust_domain": "cx:trust_domain:example.net",
+            "development_mode": false,
+            "supported_methods": ["did:webvh", "did:web"],
+            "supported_method_versions": ["did:webvh:1.0"]
+        });
+        let err = validate_webvh_provider_describe(
+            &describe,
+            Some("did:web:starid.example"),
+            Some("cx:trust_domain:other.example"),
+        )
+        .expect_err("trust-domain mismatch must fail closed");
+        assert!(err.contains("trust_domain mismatch"), "{err}");
+
+        describe["development_mode"] = json!(true);
+        let err = validate_webvh_provider_describe(
+            &describe,
+            Some("did:web:starid.example"),
+            Some("cx:trust_domain:example.net"),
+        )
+        .expect_err("development-mode provider must fail closed");
+        assert!(err.contains("development_mode"), "{err}");
     }
 }

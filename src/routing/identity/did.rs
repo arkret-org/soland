@@ -832,6 +832,7 @@ fn resolver_trust_roots(state: &AppState, did_webvh: &Value) -> Value {
                 "profile": provider.get("profile").cloned().unwrap_or_else(|| json!("cx.identity.webvh.provider.v1")),
                 "base_url": provider.get("base_url").cloned(),
                 "active": provider.get("active").cloned().unwrap_or_else(|| json!(false)),
+                "expected_trust_domain": state.config.trust_domain.clone(),
                 "document_url_template": provider.get("document_url_template").cloned(),
                 "log_url_template": provider.get("log_url_template").cloned(),
                 "freshness_probe": "/describe"
