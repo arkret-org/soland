@@ -7045,6 +7045,8 @@ async fn projection_flows_endpoint_reports_lifecycle_state() {
     let token = dev_token(state.clone()).await;
     let space_id = DEMO_REALM_ID;
     let flow_id = "cx:flow:01904100-0000-7000-8000-f20dc0000001";
+    let board_space_id = "cx:space:01904100-0000-7000-8000-f20dc0000100";
+    let list_space_id = "cx:space:01904100-0000-7000-8000-f20dc0000200";
 
     let create_event = signed_flow_event(
         "cx:event:01904100-0000-7000-8000-f20ec0000001",
@@ -7055,6 +7057,11 @@ async fn projection_flows_endpoint_reports_lifecycle_state() {
                 "id": flow_id,
                 "space_id": space_id,
                 "title": "Hydration flow",
+                "fields": {
+                    "board_space_id": board_space_id,
+                    "list_space_id": list_space_id,
+                    "rank": "r007",
+                },
                 "created_by": "did:web:alice.example",
             }
         }),
@@ -7103,6 +7110,9 @@ async fn projection_flows_endpoint_reports_lifecycle_state() {
         .find(|f| f["flow_id"] == flow_id)
         .expect("flow not in projection response");
     assert_eq!(row["state"], "archived");
+    assert_eq!(row["board_space_id"], board_space_id);
+    assert_eq!(row["list_space_id"], list_space_id);
+    assert_eq!(row["rank"], "r007");
 }
 
 /// `cx.flow.tracks.update` is accepted against an Active Flow (server-side

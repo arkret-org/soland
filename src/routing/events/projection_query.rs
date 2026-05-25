@@ -41,7 +41,9 @@ use salvo::prelude::*;
 
 use super::realm_id_accessible;
 use crate::error::{AppError, ErrorCode};
-use crate::reducer::{ObjectLifecycleState, SpaceContainerLifecycleState};
+use crate::reducer::{
+    ObjectLifecycleState, ProjectionState, RelationState, SpaceContainerLifecycleState,
+};
 use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
@@ -98,6 +100,55 @@ where
 
 fn total_count(len: usize) -> Result<u64, AppError> {
     u64::try_from(len).map_err(|_| AppError::internal("projection row count overflow"))
+}
+
+fn relation_string_field<'a>(relation: &'a RelationState, field_name: &str) -> Option<&'a str> {
+    relation
+        .fields
+        .get(field_name)
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+}
+
+fn flow_position_relation<'a>(
+    projection: &'a ProjectionState,
+    flow_id: &str,
+) -> Option<&'a RelationState> {
+    projection
+        .relations
+        .values()
+        .filter(|relation| !relation.deleted)
+        .filter(|relation| relation.relation_kind == "contains")
+        .filter(|relation| relation.to_ref.as_deref() == Some(flow_id))
+        .filter(|relation| relation_string_field(relation, "board_space_id").is_some())
+        .filter(|relation| {
+            relation_string_field(relation, "list_space_id")
+                .or(relation.from_ref.as_deref())
+                .is_some()
+        })
+        .max_by(|left, right| {
+            left.updated_at
+                .cmp(&right.updated_at)
+                .then(left.relation_id.cmp(&right.relation_id))
+        })
+}
+
+fn flow_position_fields(
+    projection: &ProjectionState,
+    flow_id: &str,
+) -> Result<(Option<SpaceId>, Option<SpaceId>, Option<String>), AppError> {
+    let Some(relation) = flow_position_relation(projection, flow_id) else {
+        return Ok((None, None, None));
+    };
+    let board_space_id = relation_string_field(relation, "board_space_id")
+        .map(|value| parse_projection_id::<SpaceId>(value, "board_space_id"))
+        .transpose()?;
+    let list_space_id = relation_string_field(relation, "list_space_id")
+        .or(relation.from_ref.as_deref())
+        .map(|value| parse_projection_id::<SpaceId>(value, "list_space_id"))
+        .transpose()?;
+    let rank = relation_string_field(relation, "rank").map(ToOwned::to_owned);
+    Ok((board_space_id, list_space_id, rank))
 }
 
 // ── Handlers ───────────────────────────────────────────────────────────
@@ -204,12 +255,16 @@ async fn list_flow_projections(
         .filter(|f| f.space_id == realm_id)
         .filter(|f| include_terminal || !is_object_terminal(f.state))
         .map(|f| {
+            let (board_space_id, list_space_id, rank) = flow_position_fields(&proj, &f.flow_id)?;
             Ok(ProjectionFlowRow {
                 flow_id: parse_projection_id::<FlowId>(&f.flow_id, "flow_id")?,
                 realm_id: parse_projection_id::<RealmId>(&f.space_id, "realm_id")?,
                 state: projection_object_state(f.state),
                 title: Some(f.title.clone()),
                 summary: f.summary.clone(),
+                board_space_id,
+                list_space_id,
+                rank,
                 created_by: Some(parse_projection_id::<Did>(&f.created_by, "created_by")?),
                 created_at: Some(f.created_at),
                 updated_at: f.updated_at,
