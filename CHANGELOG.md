@@ -29,6 +29,39 @@ reason codes registered in `contrix-spec` `9cb47c1..2b0d70d`.
   legacy `projection_flows.discussion_realm_ref` column when present (the
   main-line schema never persisted it; this protects vendor deployments that
   carried it in a prior fork).
+- New `/api/v1/circles/*` admin surface
+  (`POST/GET/DELETE` Circle CRUD + members + scope-rotate / archive /
+  tombstone). Reducer enforces the strict-subset invariant
+  `Circle.members ⊆ Realm.members` and the four canonical CXP-0007
+  reasons (`circle_realm_mismatch`, `circle_not_active`,
+  `circle_already_terminal`, `circle_member_must_be_realm_member`).
+- 7 active `cx.circle.*` event kinds (`create` / `update` / `archive` /
+  `restore` / `tombstone` / `member.state` / `anchor_commit`) wired into
+  the reducer dispatch (`anchor_commit` is reducer-derived per
+  `NON_REDUCER_EVENT_KINDS`).
+- New diesel migrations:
+  `20260526010000_add_circles` (`projection_circles` +
+  `projection_circle_members`), `20260526020000_add_scope_circle_id`
+  (`scope_circle_id` on Flow / Morph / Space; `default_scope_circle_id`
+  + `child_scope_policy` on Space; `effective_scope` on
+  `projection_events`). Bidirectional migrations; `down` is provided for
+  diesel symmetry only — see `DEPLOYMENT.md` §11 for the disk-sizing
+  estimate.
+- Authz: `allowed_circle_refs` constraint type added to the local
+  evaluator. Required by the six `cx.circle.*` capability actions per
+  the spec's `required_constraints` declaration.
+- 6 CXP-0007 sub-reason codes re-exported via `crate::error::reasons::*`
+  (`circle_realm_mismatch`, `circle_not_active`,
+  `circle_member_must_be_realm_member`, `scope_rebind_forbidden`,
+  `metadata_encryption_floor_violation`; the 6th, top-level
+  `delivery_binding_handed_over`, was registered in round 4).
+- Read path now surfaces `effective_scope` on event metadata when the
+  envelope or payload pins a `scope_circle_id`.
+- `confidential_discussion_of` Relation kind accepted by the reducer
+  with a new `confidential_discussions_of(flow_id)` query helper.
+- Dockerfile gains `HEALTHCHECK`, `tini` PID-1 init, and a
+  `SOLAND_METRICS_BIND` default so the metrics endpoint surfaces under
+  the new sidecar port `9698`.
 
 ### Round R4 — protocol review closures (2026-05-20; contrix-spec `2a4d39b..a77b995`)
 
