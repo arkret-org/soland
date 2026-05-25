@@ -249,18 +249,17 @@ async fn create_grant(
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req)?;
     let body = body.into_inner();
+    // CXP-0007 P1.3.4: parse the typed `GrantConstraint` enum from each
+    // raw JSON object on the wire. The SDK's typed enum uses
+    // `constraint_type` as its tag; unknown variants are hard-rejected.
     let constraints: Vec<crate::authz::Constraint> = body
         .constraints
         .into_iter()
-        .map(|v| crate::authz::Constraint {
-            constraint_type: v
-                .get("type")
-                .and_then(|t| t.as_str())
-                .unwrap_or("unknown")
-                .to_owned(),
-            value: v,
-        })
-        .collect();
+        .map(serde_json::from_value::<crate::authz::Constraint>)
+        .collect::<Result<_, _>>()
+        .map_err(|err| {
+            AppError::invalid_param(format!("invalid grant constraint: {err}"))
+        })?;
     let expires_at = parse_expires_at(body.expires_at.as_deref())?;
     let grant = if let Some(parent_grant_id) = body.delegated_from.as_deref() {
         match state.authz.create_delegated_grant(
