@@ -29,6 +29,14 @@ pub fn router() -> Router {
                 .get(federation::federation_pull_operations),
         )
         .push(
+            Router::with_path("federation/backfill-operations")
+                .post(federation::federation_backfill_operations),
+        )
+        .push(
+            Router::with_path("federation/operation-frontier")
+                .get(federation::federation_operation_frontier),
+        )
+        .push(
             Router::with_path("federation/space-members").get(federation::federation_space_members),
         )
         .push(

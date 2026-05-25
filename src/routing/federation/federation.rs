@@ -381,6 +381,112 @@ pub(super) async fn federation_pull_operations(
 }
 
 #[endpoint(
+    operation_id = "cx.extension.soland.federation.backfill_operations",
+    tags("federation"),
+    summary = "Pull missing operations from a configured federation peer and ingest them locally"
+)]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "cx.extension.soland.federation.backfill_operations")
+)]
+pub(super) async fn federation_backfill_operations(
+    body: JsonBody<Value>,
+    depot: &mut Depot,
+) -> JsonResult<Value> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let body = body.into_inner();
+    let space_id = required_json_string(&body, "space_id")?;
+    if validate_space_id(space_id).is_err() {
+        return Err(AppError::invalid_param("invalid space_id"));
+    }
+    let peer = configured_peer_from_backfill_body(state, &body)?;
+    let limit = body
+        .get("limit")
+        .and_then(Value::as_u64)
+        .unwrap_or(100)
+        .clamp(1, 100) as usize;
+    let max_pages = body
+        .get("max_pages")
+        .and_then(Value::as_u64)
+        .unwrap_or(16)
+        .clamp(1, 64) as usize;
+    let mut after_cursor = body
+        .get("after_cursor")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
+    let frontier_before = operation_frontier_value(state, space_id);
+    let client = reqwest::Client::builder()
+        .connect_timeout(crate::routing::federation::outbox::CONNECT_TIMEOUT)
+        .timeout(crate::routing::federation::outbox::REQUEST_TIMEOUT)
+        .build()
+        .map_err(|error| {
+            AppError::internal(format!("build federation backfill client: {error}"))
+        })?;
+
+    let mut accepted = Vec::new();
+    let mut rejected = Vec::new();
+    let mut pulled = 0usize;
+    let mut pages = 0usize;
+    let mut peer_next_cursor = None;
+    let mut peer_has_more = false;
+    for _ in 0..max_pages {
+        pages += 1;
+        let page =
+            pull_operations_page(&client, &peer, space_id, after_cursor.as_deref(), limit).await?;
+        pulled += page.operations.len();
+        peer_next_cursor = page.next_cursor.clone();
+        peer_has_more = page.has_more;
+        let result = ingest_federation_operations(state, peer.did.as_str(), page.operations);
+        accepted.extend(
+            result
+                .accepted
+                .into_iter()
+                .map(|operation_id| operation_id.to_string()),
+        );
+        rejected.extend(result.rejected);
+        after_cursor = peer_next_cursor.clone();
+        if !peer_has_more {
+            break;
+        }
+    }
+    let frontier_after = operation_frontier_value(state, space_id);
+    json_ok(json!({
+        "peer_url": peer.url,
+        "peer_did": peer.did,
+        "space_id": space_id,
+        "pulled": pulled,
+        "accepted": accepted,
+        "rejected": rejected,
+        "pages": pages,
+        "next_cursor": peer_next_cursor,
+        "has_more": peer_has_more,
+        "frontier_before": frontier_before,
+        "frontier_after": frontier_after,
+    }))
+}
+
+#[endpoint(
+    operation_id = "cx.extension.soland.federation.operation_frontier",
+    tags("federation"),
+    summary = "Return the operation frontier used by federation pull/backfill convergence checks"
+)]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "cx.extension.soland.federation.operation_frontier")
+)]
+pub(super) async fn federation_operation_frontier(
+    space_id: QueryParam<String, true>,
+    depot: &mut Depot,
+) -> JsonResult<Value> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let space_id = space_id.into_inner();
+    if validate_space_id(&space_id).is_err() {
+        return Err(AppError::invalid_param("invalid space_id"));
+    }
+    json_ok(operation_frontier_value(state, &space_id))
+}
+
+#[endpoint(
     operation_id = "cx.extension.soland.federation.space_members",
     tags("federation"),
     summary = "List space memberships for a federated space"
@@ -512,6 +618,116 @@ fn verify_federation_origin(origin: &str) -> bool {
 
 fn federation_destination_matches(state: &AppState, destination: &str) -> bool {
     destination == state.config.service_did
+}
+
+fn required_json_string<'a>(body: &'a Value, key: &str) -> Result<&'a str, AppError> {
+    body.get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| AppError::missing_param(format!("{key} is required")))
+}
+
+fn configured_peer_from_backfill_body(
+    state: &AppState,
+    body: &Value,
+) -> Result<FederationPeerTarget, AppError> {
+    let peer_url = body
+        .get("peer_url")
+        .and_then(Value::as_str)
+        .map(|value| value.trim().trim_end_matches('/').to_owned())
+        .filter(|value| !value.is_empty());
+    let peer_did = body
+        .get("peer_did")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let peers = configured_peer_targets(state);
+    let matched = peers.into_iter().find(|peer| {
+        peer_url.as_deref().is_some_and(|url| peer.url == url)
+            || peer_did.is_some_and(|did| peer.did == did)
+    });
+    matched.ok_or_else(|| {
+        AppError::invalid_param(
+            "peer_url or peer_did must match a configured SOLAND_FEDERATION_PEERS entry",
+        )
+    })
+}
+
+async fn pull_operations_page(
+    client: &reqwest::Client,
+    peer: &FederationPeerTarget,
+    space_id: &str,
+    after_cursor: Option<&str>,
+    limit: usize,
+) -> Result<contrix_sdk::FederationPullOperationsResBody, AppError> {
+    let mut url = reqwest::Url::parse(&format!("{}/api/v1/federation/pull-operations", peer.url))
+        .map_err(|error| AppError::invalid_param(format!("invalid peer_url: {error}")))?;
+    {
+        let mut query = url.query_pairs_mut();
+        query.append_pair("space_id", space_id);
+        query.append_pair("limit", &limit.to_string());
+        if let Some(after_cursor) = after_cursor.filter(|value| !value.is_empty()) {
+            query.append_pair("after_cursor", after_cursor);
+        }
+    }
+    let response = client
+        .get(url.clone())
+        .send()
+        .await
+        .map_err(|error| AppError::internal(format!("federation pull from {url}: {error}")))?;
+    let status = response.status();
+    let text = response
+        .text()
+        .await
+        .map_err(|error| AppError::internal(format!("read federation pull response: {error}")))?;
+    if !status.is_success() {
+        return Err(AppError::internal(format!(
+            "federation pull from {url} returned {status}: {text}"
+        )));
+    }
+    serde_json::from_str::<contrix_sdk::FederationPullOperationsResBody>(&text)
+        .map_err(|error| AppError::internal(format!("parse federation pull response: {error}")))
+}
+
+fn operation_frontier_value(state: &AppState, space_id: &str) -> Value {
+    let realm_id = space_id.replacen("cx:space:", "cx:realm:", 1);
+    let operations = state
+        .persistence
+        .federation_operations()
+        .list_for_space(&realm_id)
+        .unwrap_or_default();
+    let mut operation_ids = operations
+        .iter()
+        .map(|operation| operation.operation_id.to_string())
+        .collect::<Vec<_>>();
+    operation_ids.sort();
+    let latest_operation_id = operation_ids.last().cloned();
+    let digest_payload = json!({
+        "space_id": realm_id,
+        "operation_ids": operation_ids,
+    });
+    let frontier_digest = contrix_sdk::canonical::canonical_sha256(&digest_payload)
+        .map(|digest| {
+            if digest.starts_with("sha256:") {
+                digest
+            } else {
+                format!("sha256:{digest}")
+            }
+        })
+        .unwrap_or_else(|_| {
+            format!(
+                "sha256:{}",
+                sha256_hex(digest_payload.to_string().as_bytes())
+            )
+        });
+    json!({
+        "space_id": realm_id,
+        "operation_count": operations.len(),
+        "operation_ids": digest_payload["operation_ids"].clone(),
+        "latest_operation_id": latest_operation_id,
+        "frontier_digest": frontier_digest,
+    })
 }
 
 fn operation_should_fanout(operation: &Operation) -> bool {
@@ -1736,6 +1952,56 @@ mod tests {
                 .len(),
             3,
             "local federation operation log must not duplicate replayed operations"
+        );
+    }
+
+    #[tokio::test]
+    async fn operation_frontier_tracks_persisted_operation_ids() {
+        let cfg = config_with_policy(FederationPolicy::Mesh, Vec::new());
+        let state = AppState::new(cfg, Db { pool: None });
+        let realm_id = RealmId::new("cx:realm:01904100-0000-7000-8000-000000000061").unwrap();
+        let first = Operation::create(
+            contrix_sdk::OperationId::new("cx:operation:01904100-0000-7000-8000-000000000062")
+                .unwrap(),
+            realm_id.clone(),
+            kinds::CX_MESSAGE_CREATE,
+            json!({"content": {"kind": "cx.content.text", "body": "one"}}),
+        );
+        let second = Operation::create(
+            contrix_sdk::OperationId::new("cx:operation:01904100-0000-7000-8000-000000000063")
+                .unwrap(),
+            realm_id,
+            kinds::CX_MESSAGE_CREATE,
+            json!({"content": {"kind": "cx.content.text", "body": "two"}}),
+        );
+        state
+            .persistence
+            .federation_operations()
+            .append(first.clone())
+            .unwrap();
+        let before =
+            operation_frontier_value(&state, "cx:realm:01904100-0000-7000-8000-000000000061");
+        state
+            .persistence
+            .federation_operations()
+            .append(second.clone())
+            .unwrap();
+        let after =
+            operation_frontier_value(&state, "cx:realm:01904100-0000-7000-8000-000000000061");
+
+        assert_eq!(before["operation_count"], 1);
+        assert_eq!(after["operation_count"], 2);
+        assert_eq!(
+            after["latest_operation_id"],
+            second.operation_id.to_string()
+        );
+        assert_ne!(before["frontier_digest"], after["frontier_digest"]);
+        assert!(
+            after["operation_ids"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|value| value == first.operation_id.as_str())
         );
     }
 
