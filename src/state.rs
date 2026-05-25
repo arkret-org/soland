@@ -1519,29 +1519,37 @@ fn hydrate_realm_create_event(
     realms: &mut RealmDirectoryIndex,
     record: &CanonicalEventRecord,
 ) {
+    let payload_object = record
+        .envelope
+        .get("payload")
+        .and_then(|payload| payload.get("object"));
     let Some(space_id) = record
-        .space_id
-        .as_deref()
-        .or_else(|| record.envelope.get("realm_id").and_then(Value::as_str))
+        .envelope
+        .get("realm_id")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            payload_object
+                .and_then(|object| object.get("id"))
+                .and_then(Value::as_str)
+        })
+        .or_else(|| record.envelope.get("space_id").and_then(Value::as_str))
+        .or(record.space_id.as_deref())
+        .map(normalize_persisted_realm_id)
     else {
         return;
     };
-    let Ok(realm_id) = RealmId::new(space_id.to_owned()) else {
-        tracing::warn!(%space_id, "skipping persisted realm.create with invalid realm_id");
+    let Ok(realm_id) = RealmId::new(space_id.clone()) else {
+        tracing::warn!(space_id = %space_id, "skipping persisted realm.create with invalid realm_id");
         return;
     };
     let Ok(actor) = Did::new(record.actor_id.clone()) else {
         tracing::warn!(actor = %record.actor_id, "skipping persisted realm.create with invalid actor");
         return;
     };
-    let payload_object = record
-        .envelope
-        .get("payload")
-        .and_then(|payload| payload.get("object"));
     let title = payload_object
         .and_then(|object| object.get("title"))
         .and_then(Value::as_str)
-        .unwrap_or(space_id);
+        .unwrap_or(space_id.as_str());
     let summary = payload_object
         .and_then(|object| object.get("summary"))
         .and_then(Value::as_str)
@@ -1590,7 +1598,13 @@ fn hydrate_realm_create_event(
         created_at: record.received_at,
         updated_at: record.received_at,
     };
-    if let Err(error) = persistence.realm_meta().put(space_id, &meta) {
-        tracing::warn!(%error, %space_id, "failed to hydrate persisted realm meta");
+    if let Err(error) = persistence.realm_meta().put(&space_id, &meta) {
+        tracing::warn!(%error, space_id = %space_id, "failed to hydrate persisted realm meta");
     }
+}
+
+fn normalize_persisted_realm_id(id: &str) -> String {
+    id.strip_prefix("cx:space:")
+        .map(|suffix| format!("cx:realm:{suffix}"))
+        .unwrap_or_else(|| id.to_owned())
 }
