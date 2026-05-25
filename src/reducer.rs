@@ -697,6 +697,57 @@ pub struct ReactionState {
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
+fn message_event_id_from_ref(value: &str) -> String {
+    value
+        .strip_prefix("cx:message:")
+        .map(|suffix| format!("cx:event:{suffix}"))
+        .unwrap_or_else(|| value.to_owned())
+}
+
+fn reaction_target_event_id(operation: &Operation) -> Option<String> {
+    [
+        "target_ref",
+        "target_event_id",
+        "target",
+        "target_message_id",
+        "message_id",
+        "event_id",
+    ]
+    .into_iter()
+    .find_map(|field| {
+        operation
+            .payload
+            .get(field)
+            .and_then(|v| v.as_str())
+            .filter(|value| !value.is_empty())
+            .map(message_event_id_from_ref)
+    })
+}
+
+fn message_content_from_payload(payload: &Value) -> Value {
+    let mut content = payload
+        .get("content")
+        .or_else(|| payload.get("encrypted_payload"))
+        .cloned()
+        .unwrap_or_else(|| payload.clone());
+    if let Some(object) = content.as_object_mut() {
+        for key in [
+            "reply_to",
+            "in_reply_to",
+            "mentions",
+            "mention_routing_hint",
+            "mention_sidecar_hash",
+        ] {
+            if !object.contains_key(key)
+                && let Some(value) = payload.get(key)
+            {
+                object.insert(key.to_owned(), value.clone());
+            }
+        }
+    }
+    content
+}
+
 #[derive(Clone, Debug)]
 pub struct ReadMarkerState {
     pub actor_id: String,
@@ -2501,11 +2552,7 @@ impl ProjectionState {
             .and_then(|v| v.as_str())
             .unwrap_or(operation.realm_id.as_str())
             .to_owned();
-        let content = operation
-            .payload
-            .get("content")
-            .cloned()
-            .unwrap_or_else(|| operation.payload.clone());
+        let content = message_content_from_payload(&operation.payload);
         let encrypted = operation
             .payload
             .get("encrypted")
@@ -2736,13 +2783,7 @@ impl ProjectionState {
         operation: &Operation,
         now: chrono::DateTime<chrono::Utc>,
     ) -> ProjectionEffect {
-        let event_id = operation
-            .payload
-            .get("event_id")
-            .or_else(|| operation.payload.get("target_event_id"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_owned();
+        let event_id = reaction_target_event_id(operation).unwrap_or_default();
         let actor = operation
             .payload
             .get("actor")
@@ -2784,13 +2825,7 @@ impl ProjectionState {
     }
 
     fn apply_reaction_remove(&mut self, operation: &Operation) -> ProjectionEffect {
-        let event_id = operation
-            .payload
-            .get("event_id")
-            .or_else(|| operation.payload.get("target_event_id"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_owned();
+        let event_id = reaction_target_event_id(operation).unwrap_or_default();
         let actor = operation
             .payload
             .get("actor")
@@ -5556,7 +5591,7 @@ impl ProjectionState {
             .map(|by_actor| {
                 by_actor
                     .values()
-                    .filter_map(|by_key| by_key.values().find(|r| r.active))
+                    .flat_map(|by_key| by_key.values().filter(|r| r.active))
                     .collect()
             })
             .unwrap_or_default()

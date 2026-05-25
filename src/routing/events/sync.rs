@@ -36,13 +36,14 @@ use serde_json::{Value, json};
 use tokio::sync::broadcast::error::RecvError;
 
 use super::{
-    authenticated_session, backfill_gap_events, default_discussion_track,
-    device_message_events_after, flow_id_from_space_id, flow_projection_for_space,
-    is_realm_deleted, now, parse_snapshot_ref, projected_event_page, projection_event_json,
-    prune_acked_device_messages, prune_expired_typing, query_param, realm_discoverability,
-    realm_event_visible_to_session, realm_has_member, realm_history_visibility,
-    realm_id_accessible, realm_visible_to, render_error, sha256_hex, snapshot_bundle_for_space,
-    sync_timeline_message_json, truncate_gap_events, typing_ephemeral_for_space, validate_did,
+    augment_timeline_message_json, authenticated_session, backfill_gap_events,
+    default_discussion_track, device_message_events_after, flow_id_from_space_id,
+    flow_projection_for_space, is_realm_deleted, now, parse_snapshot_ref, projected_event_page,
+    projection_event_json, prune_acked_device_messages, prune_expired_typing, query_param,
+    realm_discoverability, realm_event_visible_to_session, realm_has_member,
+    realm_history_visibility, realm_id_accessible, realm_visible_to, render_error, sha256_hex,
+    snapshot_bundle_for_space, sync_timeline_message_json_with_projection, truncate_gap_events,
+    typing_ephemeral_for_space, validate_did,
 };
 use crate::ids;
 use crate::reducer::ProjectionState;
@@ -413,7 +414,10 @@ fn timeline_events_for_space(
         ) {
             continue;
         }
-        timeline_entries.push((position, sync_timeline_message_json(message)));
+        timeline_entries.push((
+            position,
+            sync_timeline_message_json_with_projection(message, projection),
+        ));
     }
 
     for message in state
@@ -437,7 +441,15 @@ fn timeline_events_for_space(
         ) {
             continue;
         }
-        timeline_entries.push((position, sync_timeline_message_record_json(&message)));
+        timeline_entries.push((
+            position,
+            augment_timeline_message_json(
+                sync_timeline_message_record_json(&message),
+                &message.event_id,
+                &message.content,
+                projection,
+            ),
+        ));
     }
 
     timeline_entries.sort_by(|left, right| left.0.cmp(&right.0));

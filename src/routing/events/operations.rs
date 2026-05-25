@@ -50,6 +50,7 @@ const MESSAGE_TARGET_FIELDS: &[&str] = &["target_event_id", "event_id", "target"
 const MESSAGE_CONTENT_FIELDS: &[&str] = &["content", "body"];
 const REDACTION_TARGET_FIELDS: &[&str] = &["target_event_id", "target", "redacts"];
 const REACTION_TARGET_FIELDS: &[&str] = &[
+    "target_ref",
     "event_id",
     "target_event_id",
     "message_id",

@@ -232,6 +232,55 @@ async fn send_message(state: AppState, token: &str, space_id: &str, body: &str) 
     assert!(sent["event_id"].is_string(), "send failed: {sent:?}");
 }
 
+async fn submit_projection_event(
+    state: AppState,
+    token: &str,
+    actor_did: &str,
+    device_id: &str,
+    realm_id: &str,
+    kind: &str,
+    payload: Value,
+) -> String {
+    let event_id = new_prefixed_uuid7("cx:event:");
+    let mut event = json!({
+        "event_id": event_id.clone(),
+        "kind": kind,
+        "schema_id": "cx.schema.event.v1",
+        "actor_id": actor_did,
+        "actor_seq": TEST_EVENT_SEQ.fetch_add(1, Ordering::Relaxed),
+        "realm_id": realm_id,
+        "device_id": device_id,
+        "audience": "did:web:soland.local",
+        "domain": "did:web:soland.local",
+        "prev_refs": [],
+        "auth_refs": [],
+        "refs": [],
+        "payload": payload,
+        "proofs": [{
+            "type": "dev-proof",
+            "verification_method": format!("{actor_did}#{device_id}"),
+            "device_id": device_id,
+            "audience": "did:web:soland.local",
+            "domain": "did:web:soland.local",
+            "payload_digest": sha256_json(&payload)
+        }]
+    });
+    event["canonical_digest"] = Value::String(event_canonical_digest(&event));
+    let sent: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&event)
+        .send(&app_from_state(state))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert!(
+        sent["event_id"].as_str() == Some(event_id.as_str()),
+        "{kind} submit failed: {sent:?}"
+    );
+    event_id
+}
+
 fn sha256_json(value: &Value) -> String {
     let bytes = contrix_sdk::canonical::canonical_json_bytes(value).expect("json canonicalizes");
     let mut hasher = Sha256::new();
@@ -375,6 +424,163 @@ async fn shared_history_allows_late_joiner_to_backfill_prior_messages() {
     assert!(
         event_query_bodies(&events).contains(&"shared before join".to_owned()),
         "{events:?}"
+    );
+}
+
+#[tokio::test]
+async fn chat_projection_exposes_reactions_reply_and_mention_routing() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let alice_did = "did:web:alice.example";
+    let alice_device_id = "cx:device:01904100-0000-7000-8000-a11ce0000001";
+    let alice = dev_token(state.clone(), alice_did, "a11ce0000001").await;
+    let bob_did = "did:web:bob.example";
+    let bob_device_id = "cx:device:01904100-0000-7000-8000-b0b000000011";
+    let bob = dev_token(state.clone(), bob_did, "b0b000000011").await;
+    let space_id = seed_realm(&state, alice_did, "chat projection metadata", "shared");
+    admit_member(
+        state.clone(),
+        &alice,
+        alice_did,
+        alice_device_id,
+        bob_did,
+        &space_id,
+    )
+    .await;
+
+    let root_event_id = submit_projection_event(
+        state.clone(),
+        &alice,
+        alice_did,
+        alice_device_id,
+        &space_id,
+        "cx.message.create",
+        json!({
+            "flow_id": flow_id_for_realm(&space_id),
+            "track": "discussion",
+            "thread_id": "discussion",
+            "content": {
+                "kind": "cx.content.text",
+                "body": "root mentions bob",
+                "mentions": [{
+                    "type": "actor",
+                    "did": bob_did,
+                    "handle": "@bob"
+                }]
+            },
+            "mention_routing_hint": {
+                "mentioned": [bob_did]
+            },
+            "encrypted": false
+        }),
+    )
+    .await;
+    let root_message_ref = root_event_id.replacen("cx:event:", "cx:message:", 1);
+    let reply_event_id = submit_projection_event(
+        state.clone(),
+        &bob,
+        bob_did,
+        bob_device_id,
+        &space_id,
+        "cx.message.create",
+        json!({
+            "flow_id": flow_id_for_realm(&space_id),
+            "track": "discussion",
+            "thread_id": "discussion",
+            "reply_to": root_message_ref.clone(),
+            "content": {
+                "kind": "cx.content.text",
+                "body": "reply to root"
+            },
+            "encrypted": false
+        }),
+    )
+    .await;
+    submit_projection_event(
+        state.clone(),
+        &alice,
+        alice_did,
+        alice_device_id,
+        &space_id,
+        "cx.reaction.add",
+        json!({
+            "target_ref": root_message_ref.clone(),
+            "actor": alice_did,
+            "key": "+1"
+        }),
+    )
+    .await;
+    submit_projection_event(
+        state.clone(),
+        &bob,
+        bob_did,
+        bob_device_id,
+        &space_id,
+        "cx.reaction.add",
+        json!({
+            "target_ref": root_message_ref.clone(),
+            "actor": bob_did,
+            "key": "+1"
+        }),
+    )
+    .await;
+    submit_projection_event(
+        state.clone(),
+        &bob,
+        bob_did,
+        bob_device_id,
+        &space_id,
+        "cx.reaction.remove",
+        json!({
+            "target_ref": root_message_ref.clone(),
+            "actor": bob_did,
+            "key": "+1"
+        }),
+    )
+    .await;
+
+    let sync = account_subscribe_frame(state.clone(), &alice, "catchup=true").await;
+    let timeline = sync["realms"][&space_id]["timeline"]["events"]
+        .as_array()
+        .expect("timeline events");
+    let root = timeline
+        .iter()
+        .find(|event| event["event_id"] == root_event_id)
+        .unwrap_or_else(|| panic!("root message missing from sync projection: {timeline:?}"));
+    assert_eq!(root["mention_routing_hint"]["mentioned"], json!([bob_did]));
+    assert_eq!(root["mentions"][0]["did"], bob_did);
+    assert_eq!(root["reaction_summary"]["+1"], json!([alice_did]));
+    assert!(
+        !root["reaction_summary"]["+1"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|actor| actor.as_str() == Some(bob_did)),
+        "{root:?}"
+    );
+    assert!(
+        root["reactions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|reaction| {
+                reaction["actor"] == alice_did
+                    && reaction["key"] == "+1"
+                    && reaction["active"] == true
+            }),
+        "{root:?}"
+    );
+
+    let reply = timeline
+        .iter()
+        .find(|event| event["event_id"] == reply_event_id)
+        .unwrap_or_else(|| panic!("reply message missing from sync projection: {timeline:?}"));
+    assert_eq!(reply["reply_to"], root_message_ref);
+    assert_eq!(
+        reply["relations"][0],
+        json!({
+            "kind": "reply_to",
+            "target_ref": root_message_ref.clone()
+        })
     );
 }
 

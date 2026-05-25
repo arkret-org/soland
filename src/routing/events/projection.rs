@@ -21,7 +21,7 @@
 //! Persistence: `projection_events` is in-memory plus a Pg mirror via
 //! `space_state_events` + `space_members`.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 use contrix_sdk::{Did, Operation, OperationId, RealmId};
 use diesel::sql_types::{Jsonb, Nullable, Text, Timestamptz, Uuid as SqlUuid};
@@ -223,6 +223,135 @@ pub fn sync_timeline_message_json(message: &crate::reducer::MessageState) -> ser
         "decryption_state": if message.encrypted { "opaque" } else { "cleartext" },
         "created_at": message.created_at,
     })
+}
+
+pub fn sync_timeline_message_json_with_projection(
+    message: &crate::reducer::MessageState,
+    projection: &crate::reducer::ProjectionState,
+) -> serde_json::Value {
+    augment_timeline_message_json(
+        sync_timeline_message_json(message),
+        &message.event_id,
+        &message.content,
+        projection,
+    )
+}
+
+pub fn augment_timeline_message_json(
+    mut event: serde_json::Value,
+    event_id: &str,
+    content: &serde_json::Value,
+    projection: &crate::reducer::ProjectionState,
+) -> serde_json::Value {
+    let Some(object) = event.as_object_mut() else {
+        return event;
+    };
+
+    let mut reactions = projection.reactions_for_event(event_id);
+    reactions.sort_by(|left, right| {
+        left.key
+            .cmp(&right.key)
+            .then_with(|| left.actor.cmp(&right.actor))
+    });
+    object.insert(
+        "reactions".to_owned(),
+        serde_json::Value::Array(
+            reactions
+                .iter()
+                .map(|reaction| {
+                    json!({
+                        "actor": reaction.actor.clone(),
+                        "key": reaction.key.clone(),
+                        "active": reaction.active,
+                        "created_at": reaction.created_at.clone(),
+                    })
+                })
+                .collect(),
+        ),
+    );
+    object.insert(
+        "reaction_summary".to_owned(),
+        reaction_summary_json(&reactions),
+    );
+
+    if let Some(reply_to) = reply_to_from_content(content) {
+        object.insert(
+            "reply_to".to_owned(),
+            serde_json::Value::String(reply_to.clone()),
+        );
+        object.insert(
+            "relations".to_owned(),
+            json!([{
+                "kind": "reply_to",
+                "target_ref": reply_to,
+            }]),
+        );
+    }
+    if let Some(mentions) = content.get("mentions").cloned() {
+        object.insert("mentions".to_owned(), mentions.clone());
+        if !object.contains_key("mention_routing_hint")
+            && let Some(hint) = mention_routing_hint_from_mentions(&mentions)
+        {
+            object.insert("mention_routing_hint".to_owned(), hint);
+        }
+    }
+    if let Some(hint) = mention_routing_hint_from_content(content) {
+        object.insert("mention_routing_hint".to_owned(), hint);
+    }
+    event
+}
+
+fn reaction_summary_json(reactions: &[&crate::reducer::ReactionState]) -> serde_json::Value {
+    let mut summary: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for reaction in reactions {
+        summary
+            .entry(reaction.key.clone())
+            .or_default()
+            .push(reaction.actor.clone());
+    }
+    json!(summary)
+}
+
+fn reply_to_from_content(content: &serde_json::Value) -> Option<String> {
+    content
+        .get("reply_to")
+        .or_else(|| content.get("in_reply_to"))
+        .and_then(|value| value.as_str())
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn mention_routing_hint_from_content(content: &serde_json::Value) -> Option<serde_json::Value> {
+    content.get("mention_routing_hint").cloned().or_else(|| {
+        content.get("mention_sidecar_hash").map(|hash| {
+            json!({
+                "mention_sidecar_hash": hash,
+            })
+        })
+    })
+}
+
+fn mention_routing_hint_from_mentions(mentions: &serde_json::Value) -> Option<serde_json::Value> {
+    let mentioned: Vec<String> = mentions
+        .as_array()?
+        .iter()
+        .filter_map(|mention| {
+            mention
+                .get("did")
+                .or_else(|| mention.get("actor_id"))
+                .and_then(|value| value.as_str())
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+        })
+        .collect();
+    if mentioned.is_empty() {
+        None
+    } else {
+        Some(json!({
+            "mentioned": mentioned,
+            "source": "content.mentions",
+        }))
+    }
 }
 
 pub fn projection_event_from_operation(
@@ -1286,12 +1415,7 @@ pub fn project_federated_message(state: &AppState, origin: &str, operation: &Ope
     if matches!(store.get(&event_id), Ok(Some(_))) {
         return;
     }
-    let content = operation
-        .payload
-        .get("content")
-        .or_else(|| operation.payload.get("encrypted_payload"))
-        .cloned()
-        .unwrap_or_else(|| operation.payload.clone());
+    let content = message_content_from_payload(&operation.payload);
     let sender = operation
         .payload
         .get("sender")
@@ -1320,6 +1444,30 @@ pub fn project_federated_message(state: &AppState, origin: &str, operation: &Ope
     }) {
         tracing::warn!(%error, "failed to persist projected message");
     }
+}
+
+fn message_content_from_payload(payload: &Value) -> Value {
+    let mut content = payload
+        .get("content")
+        .or_else(|| payload.get("encrypted_payload"))
+        .cloned()
+        .unwrap_or_else(|| payload.clone());
+    if let Some(object) = content.as_object_mut() {
+        for key in [
+            "reply_to",
+            "in_reply_to",
+            "mentions",
+            "mention_routing_hint",
+            "mention_sidecar_hash",
+        ] {
+            if !object.contains_key(key)
+                && let Some(value) = payload.get(key)
+            {
+                object.insert(key.to_owned(), value.clone());
+            }
+        }
+    }
+    content
 }
 
 #[cfg(test)]
