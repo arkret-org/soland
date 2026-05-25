@@ -16,7 +16,9 @@ use serde_json::{Value, json};
 use super::{now, validate_did};
 use crate::error::AppError;
 use crate::result::{JsonResult, json_ok};
-use crate::state::AppState;
+use crate::state::{AppState, PresenceRecord};
+
+const PRESENCE_ONLINE_TTL_SECONDS: i64 = 3;
 
 pub(super) fn router() -> Router {
     Router::with_path("profile/presence").get(profile_presence)
@@ -54,12 +56,7 @@ async fn profile_presence(
         .map_err(|error| AppError::internal(error.to_string()))?;
     let presence = state.persistence.presence().get(&did).ok().flatten();
     let presence_json = presence
-        .map(|record| {
-            json!({
-                "status": record.status,
-                "updated_at": record.updated_at,
-            })
-        })
+        .map(presence_record_json)
         .unwrap_or_else(|| json!({"status": "offline", "updated_at": now()}));
     json_ok(ProfilePresenceResponse {
         actor: did.clone(),
@@ -69,4 +66,22 @@ async fn profile_presence(
         avatar_url: None,
         presence: presence_json,
     })
+}
+
+fn presence_record_json(record: PresenceRecord) -> Value {
+    let is_stale_online = record.status == "online"
+        && now().signed_duration_since(record.updated_at)
+            > chrono::Duration::seconds(PRESENCE_ONLINE_TTL_SECONDS);
+    if is_stale_online {
+        json!({
+            "status": "offline",
+            "updated_at": record.updated_at,
+            "last_seen": record.updated_at,
+        })
+    } else {
+        json!({
+            "status": record.status,
+            "updated_at": record.updated_at,
+        })
+    }
 }

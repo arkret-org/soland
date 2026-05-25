@@ -14,7 +14,9 @@ use sha2::{Digest, Sha256};
 use soland::config::{AppConfig, ObjectStorageConfig};
 use soland::db::Db;
 use soland::ratelimit::RateLimiterConfig;
-use soland::state::{AppState, RealmDirectoryEntry, RealmMetaRecord, SpaceInviteRecord};
+use soland::state::{
+    AppState, PresenceRecord, RealmDirectoryEntry, RealmMetaRecord, SpaceInviteRecord,
+};
 use soland::{
     artifacts, kinds, service, service_with_rate_limiter_config, service_with_request_size_limit,
 };
@@ -656,10 +658,7 @@ async fn oversized_json_body_is_rejected_before_handler() {
         .send(&service_with_request_size_limit(state, 64))
         .await;
 
-    assert_eq!(
-        response.status_code.unwrap(),
-        StatusCode::PAYLOAD_TOO_LARGE
-    );
+    assert_eq!(response.status_code.unwrap(), StatusCode::PAYLOAD_TOO_LARGE);
 }
 
 #[tokio::test]
@@ -3936,8 +3935,14 @@ async fn directory_product_endpoints_return_demo_projection_shapes() {
         .await
         .unwrap();
     assert_eq!(handle["did"], "did:web:alice.example");
-    assert_eq!(handle["handle_claim"]["schema"], "cx.schema.handle_claim.v1");
-    assert_eq!(handle["handle_claim"]["handle_uri"], "contrix://soland.local/users/alice");
+    assert_eq!(
+        handle["handle_claim"]["schema"],
+        "cx.schema.handle_claim.v1"
+    );
+    assert_eq!(
+        handle["handle_claim"]["handle_uri"],
+        "contrix://soland.local/users/alice"
+    );
     assert_eq!(
         handle["handle_claim"]["member_delivery_binding"]["recipient_service_did"],
         "did:web:soland.local"
@@ -4688,6 +4693,25 @@ async fn push_profile_and_moderation_contracts_work() {
             .unwrap();
     assert_eq!(profile["actor"], "did:web:alice.example");
     assert_eq!(profile["presence"]["status"], "unavailable");
+
+    state
+        .persistence
+        .presence()
+        .put(PresenceRecord {
+            actor: "did:web:alice.example".to_owned(),
+            status: "online".to_owned(),
+            updated_at: chrono::Utc::now() - chrono::Duration::seconds(10),
+        })
+        .unwrap();
+    let stale_profile: Value =
+        TestClient::get("http://server/api/v1/profile/presence?did=did:web:alice.example")
+            .send(&app_from_state(state.clone()))
+            .await
+            .take_json()
+            .await
+            .unwrap();
+    assert_eq!(stale_profile["presence"]["status"], "offline");
+    assert!(stale_profile["presence"]["last_seen"].is_string());
 
     let unauth_typing = TestClient::post("http://server/api/v1/ephemeral")
         .json(&serde_json::json!({
@@ -5683,7 +5707,12 @@ async fn to_device_messages_survive_duplicate_sync_until_cursor_ack() {
         acked["to_device"]["messages"].is_array(),
         "acked sync response must be a sync body: {acked}"
     );
-    assert!(acked["to_device"]["messages"].as_array().unwrap().is_empty());
+    assert!(
+        acked["to_device"]["messages"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[tokio::test]
