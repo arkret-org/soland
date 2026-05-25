@@ -11,7 +11,7 @@ use salvo::oapi::extract::{JsonBody, QueryParam};
 use salvo::prelude::*;
 use serde_json::{Value, json};
 
-use super::now;
+use super::{now, sha256_hex, space_has_member};
 use crate::error::AppError;
 use crate::ids;
 use crate::result::{JsonResult, json_ok};
@@ -21,8 +21,39 @@ use crate::state::AppState;
 pub(super) fn router() -> Router {
     Router::new()
         .push(Router::with_path("audit/events").get(audit_events))
+        .push(Router::with_path("audit/franking/verify").post(verify_franking_proof))
         .push(Router::with_path("audit/user-action").post(post_user_action))
         .push(Router::with_path("audit/erasure-receipts").get(audit_erasure_receipts))
+}
+
+#[endpoint(
+    operation_id = "cx.extension.soland.audit.franking.verify",
+    tags("audit"),
+    summary = "Verify a cx.moderation.franking_proof integrity digest"
+)]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.audit.franking.verify"))]
+async fn verify_franking_proof(
+    aa: AuthArgs,
+    body: JsonBody<Value>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<Value> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let _session = aa.authenticated_session(state, req)?;
+    let proof = body.into_inner();
+    let declared = proof
+        .get("proof_digest")
+        .and_then(Value::as_str)
+        .ok_or_else(|| AppError::invalid_param("proof_digest is required"))?;
+    let expected = franking_proof_digest(&proof);
+    if declared != expected {
+        return Err(AppError::conflict("franking proof digest mismatch")
+            .with_wire_code("franking_tampered"));
+    }
+    json_ok(json!({
+        "ok": true,
+        "proof_digest": expected,
+    }))
 }
 
 /// Spec `realm-and-space.md` §2.5.2 — exposes the
@@ -173,24 +204,46 @@ async fn audit_events(
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req)?;
-    let actor = query_param(req, "actor")
-        .or_else(|| actor.into_inner())
-        .unwrap_or_else(|| session.actor.clone());
-    if actor != session.actor {
-        return Err(AppError::capability_denied(
-            "audit queries are limited to the authenticated actor",
-        ));
-    }
+    let space_id_filter = query_param(req, "space_id");
+    let kind_filter = query_param(req, "kind");
     let limit = limit.into_inner().unwrap_or(100).clamp(1, 500);
     let cursor = query_param(req, "cursor").or_else(|| cursor.into_inner());
-    let mut events = state
-        .persistence
-        .audit()
-        .list_for_actor(&actor)
-        .map_err(|error| {
-            tracing::error!(%error, "failed to read audit log");
-            AppError::internal("audit store unavailable")
-        })?;
+    let mut events = if let Some(space_id) = space_id_filter.as_deref() {
+        if !space_has_member(state, space_id, &session.actor) {
+            return Err(AppError::not_found("audit space not found"));
+        }
+        state
+            .persistence
+            .audit()
+            .snapshot_all()
+            .map_err(|error| {
+                tracing::error!(%error, "failed to read audit log");
+                AppError::internal("audit store unavailable")
+            })?
+            .into_iter()
+            .filter(|event| audit_event_matches_space(event, space_id))
+            .collect()
+    } else {
+        let actor = query_param(req, "actor")
+            .or_else(|| actor.into_inner())
+            .unwrap_or_else(|| session.actor.clone());
+        if actor != session.actor {
+            return Err(AppError::capability_denied(
+                "audit queries are limited to the authenticated actor",
+            ));
+        }
+        state
+            .persistence
+            .audit()
+            .list_for_actor(&actor)
+            .map_err(|error| {
+                tracing::error!(%error, "failed to read audit log");
+                AppError::internal("audit store unavailable")
+            })?
+    };
+    if let Some(kind) = kind_filter.as_deref() {
+        events.retain(|event| audit_event_matches_kind(event, kind));
+    }
     let start = cursor
         .as_deref()
         .and_then(|cursor| {
@@ -219,6 +272,46 @@ async fn audit_events(
         "events": events,
         "next_cursor": next_cursor,
     }))
+}
+
+fn audit_event_matches_space(event: &Value, space_id: &str) -> bool {
+    [
+        event.get("space_id"),
+        event.pointer("/payload/space_id"),
+        event.pointer("/payload/realm_id"),
+        event.pointer("/target/space_id"),
+        event.pointer("/target/realm_id"),
+    ]
+    .into_iter()
+    .flatten()
+    .any(|value| value.as_str() == Some(space_id))
+}
+
+fn audit_event_matches_kind(event: &Value, kind: &str) -> bool {
+    [
+        event.get("action"),
+        event.get("kind"),
+        event.pointer("/payload/kind"),
+        event.pointer("/payload/type"),
+        event.pointer("/target/kind"),
+        event.pointer("/target/type"),
+    ]
+    .into_iter()
+    .flatten()
+    .any(|value| value.as_str() == Some(kind))
+}
+
+fn franking_proof_digest(proof: &Value) -> String {
+    let material = json!({
+        "kind": proof.get("kind").and_then(Value::as_str).unwrap_or("cx.moderation.franking_proof"),
+        "target_event_id": proof.get("target_event_id").and_then(Value::as_str).unwrap_or_default(),
+        "sender_did": proof.get("sender_did").and_then(Value::as_str).unwrap_or_default(),
+        "receiving_service_did": proof.get("receiving_service_did").and_then(Value::as_str).unwrap_or_default(),
+        "ciphertext_digest": proof.get("ciphertext_digest").and_then(Value::as_str).unwrap_or_default(),
+        "event_canonical_digest": proof.get("event_canonical_digest").and_then(Value::as_str).unwrap_or_default(),
+    });
+    let bytes = serde_json::to_vec(&material).unwrap_or_default();
+    format!("sha256:{}", sha256_hex(&bytes))
 }
 
 pub fn append_audit_log(

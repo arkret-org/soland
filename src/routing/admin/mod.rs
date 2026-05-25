@@ -21,7 +21,7 @@ use super::system::util;
 use super::{
     AuthArgs, demo_actors, device_inventory_to_json, discussion_track_for_projection_event,
     flow_id_for_projection_event, flow_id_from_space_id, flow_projection_for_space, now,
-    policy_document_to_response, projection_event_from_operation, sha256_hex,
+    policy_document_to_response, projection_event_from_operation, sha256_hex, space_has_member,
 };
 
 /// Salvo middleware that gates an admin route on an OAuth-style admin

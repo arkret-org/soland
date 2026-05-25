@@ -14,6 +14,7 @@ use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use std::time::Duration;
 
 use contrix_sdk::RealmId;
 
@@ -61,6 +62,7 @@ async fn moderation_report(
     }
     let report_id = ids::generate_report_id();
     let moderation_service = format!("{}#moderation", state.config.service_did);
+    let audit_policy = audit_disclosure_policy_for_realm(state, &body.realm_id);
     let report_payload = json!({
         "report_id": report_id,
         "realm_id": body.realm_id,
@@ -113,11 +115,228 @@ async fn moderation_report(
         json!({"report_id": report_id.clone(), "id": queue_item_ref}),
         "queued",
     );
+    let mut routed_to = vec![moderation_service];
+    if let Some(agent_did) =
+        notify_audit_agent_for_report(state, audit_policy.as_ref(), &report_payload).await
+    {
+        routed_to.push(agent_did);
+    }
     json_ok(ModerationReportResBody {
         report_id,
         status: "queued".to_owned(),
-        routed_to: vec![moderation_service],
+        routed_to,
     })
+}
+
+async fn notify_audit_agent_for_report(
+    state: &AppState,
+    policy: Option<&Value>,
+    report_payload: &Value,
+) -> Option<String> {
+    let policy = policy?;
+    if policy.get("enabled").and_then(Value::as_bool) == Some(false)
+        || policy.get("trigger").and_then(Value::as_str) != Some("report_filed")
+    {
+        return None;
+    }
+    let agent_url = policy.get("agent_url").and_then(Value::as_str)?.trim();
+    if agent_url.is_empty() {
+        return None;
+    }
+    let agent_url = agent_url.trim_end_matches('/');
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(3))
+        .build()
+        .ok()?;
+    let identity = match client
+        .get(format!("{agent_url}/api/v1/audit-agent/identity"))
+        .send()
+        .await
+    {
+        Ok(response) if response.status().is_success() => {
+            response.json::<Value>().await.unwrap_or(Value::Null)
+        }
+        _ => Value::Null,
+    };
+    let agent_did = identity
+        .get("did")
+        .and_then(Value::as_str)
+        .or_else(|| policy.get("agent_did").and_then(Value::as_str))
+        .unwrap_or("did:web:audit-agent.unknown")
+        .to_owned();
+    let realm_id = report_payload
+        .get("realm_id")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let report_id = report_payload
+        .get("report_id")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let target_ref = report_payload
+        .get("target_ref")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+
+    let invite_body = json!({
+        "space_id": realm_id,
+        "invite": {
+            "event_id": target_ref,
+            "report_id": report_id,
+            "reason": "moderation_report",
+        },
+        "mls_key_package": identity.get("key_package").cloned().unwrap_or(Value::Null),
+    });
+    match client
+        .post(format!("{agent_url}/api/v1/audit-agent/invite"))
+        .json(&invite_body)
+        .send()
+        .await
+    {
+        Ok(response) if response.status().is_success() => {
+            if let Ok(body) = response.json::<Value>().await {
+                append_audit_agent_invite_log(state, &agent_did, report_payload, &body);
+                append_agent_accessed_if_present(state, &agent_did, report_payload, &body);
+            }
+        }
+        Ok(response) => append_audit_log(
+            state,
+            None,
+            "cx.audit.agent_invite",
+            json!({
+                "space_id": realm_id,
+                "report_id": report_id,
+                "agent_did": agent_did,
+                "status": response.status().as_u16(),
+            }),
+            "failed",
+        ),
+        Err(error) => append_audit_log(
+            state,
+            None,
+            "cx.audit.agent_invite",
+            json!({
+                "space_id": realm_id,
+                "report_id": report_id,
+                "agent_did": agent_did,
+                "error": error.to_string(),
+            }),
+            "failed",
+        ),
+    }
+
+    let event_body = json!({
+        "kind": "cx.audit.report",
+        "event": report_payload,
+    });
+    match client
+        .post(format!("{agent_url}/api/v1/audit-agent/events"))
+        .json(&event_body)
+        .send()
+        .await
+    {
+        Ok(response) if response.status().is_success() => {
+            if let Ok(body) = response.json::<Value>().await {
+                append_agent_accessed_if_present(state, &agent_did, report_payload, &body);
+            }
+        }
+        Ok(response) => append_audit_log(
+            state,
+            None,
+            "cx.audit.report",
+            json!({
+                "space_id": realm_id,
+                "report_id": report_id,
+                "agent_did": agent_did,
+                "status": response.status().as_u16(),
+            }),
+            "failed",
+        ),
+        Err(error) => append_audit_log(
+            state,
+            None,
+            "cx.audit.report",
+            json!({
+                "space_id": realm_id,
+                "report_id": report_id,
+                "agent_did": agent_did,
+                "error": error.to_string(),
+            }),
+            "failed",
+        ),
+    }
+    Some(agent_did)
+}
+
+fn append_audit_agent_invite_log(
+    state: &AppState,
+    agent_did: &str,
+    report_payload: &Value,
+    response_body: &Value,
+) {
+    append_audit_log(
+        state,
+        None,
+        "cx.audit.agent_invite",
+        json!({
+            "kind": "cx.audit.agent_invite",
+            "space_id": report_payload.get("realm_id").cloned().unwrap_or(Value::Null),
+            "report_id": report_payload.get("report_id").cloned().unwrap_or(Value::Null),
+            "target_ref": report_payload.get("target_ref").cloned().unwrap_or(Value::Null),
+            "agent_did": agent_did,
+            "mls_key_package": response_body.get("mls_key_package").cloned().unwrap_or(Value::Null),
+        }),
+        "accepted",
+    );
+}
+
+fn append_agent_accessed_if_present(
+    state: &AppState,
+    agent_did: &str,
+    report_payload: &Value,
+    response_body: &Value,
+) {
+    let Some(emitted) = response_body.get("emitted") else {
+        return;
+    };
+    append_audit_log(
+        state,
+        Some(agent_did),
+        "cx.audit.accessed",
+        json!({
+            "kind": "cx.audit.accessed",
+            "space_id": report_payload.get("realm_id").cloned().unwrap_or(Value::Null),
+            "report_id": report_payload.get("report_id").cloned().unwrap_or(Value::Null),
+            "target_ref": report_payload.get("target_ref").cloned().unwrap_or(Value::Null),
+            "audit_agent_did": agent_did,
+            "access_kind": "e2ee_plaintext_release",
+            "purpose": "moderation_report",
+            "accessed_at": emitted.get("occurred_at").cloned().unwrap_or_else(|| json!(now())),
+            "binding_proof": emitted.get("binding_proof").cloned().unwrap_or(Value::Null),
+            "emitted": emitted,
+        }),
+        "accepted",
+    );
+}
+
+fn audit_disclosure_policy_for_realm(state: &AppState, realm_id: &str) -> Option<Value> {
+    state
+        .persistence
+        .events()
+        .snapshot_all()
+        .ok()?
+        .into_iter()
+        .filter(|record| {
+            record.kind == crate::kinds::CX_REALM_CREATE
+                && record.space_id.as_deref() == Some(realm_id)
+        })
+        .rev()
+        .find_map(|record| {
+            record
+                .envelope
+                .pointer("/payload/object/audit_disclosure_policy")
+                .or_else(|| record.envelope.pointer("/payload/audit_disclosure_policy"))
+                .cloned()
+        })
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]

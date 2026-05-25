@@ -1191,6 +1191,7 @@ fn submit_event_value(
     {
         bootstrap_realm_member_index(state, space_id_str, &parsed.actor_id, envelope_object);
     }
+    append_encrypted_message_franking(state, &parsed, &envelope_for_bootstrap);
     append_audit_log(
         state,
         Some(&session.actor),
@@ -1721,7 +1722,101 @@ fn validate_event_critical_features(
 
 const SENDER_COMMITMENT_FEATURE: &str = "cx.profile.franking.sender_commitment.v1";
 const CX_AUDIT_ACCESSED: &str = "cx.audit.accessed";
+const CX_MODERATION_FRANKING_PROOF: &str = "cx.moderation.franking_proof";
 const MANAGE_OTHERS_AUDIT_MISSING: &str = "manage_others_audit_missing";
+
+fn append_encrypted_message_franking(
+    state: &AppState,
+    parsed: &ValidatedEventEnvelope,
+    envelope: &Value,
+) {
+    if parsed.kind != "cx.message.create" {
+        return;
+    }
+    let Some(policy) = audit_disclosure_policy_for_realm(state, &parsed.realm_id) else {
+        return;
+    };
+    if policy.get("enabled").and_then(Value::as_bool) == Some(false) {
+        return;
+    }
+    let Some(ciphertext_digest) = encrypted_message_ciphertext_digest(envelope) else {
+        return;
+    };
+    let mut proof = json!({
+        "kind": CX_MODERATION_FRANKING_PROOF,
+        "space_id": parsed.realm_id,
+        "target_event_id": parsed.event_id,
+        "sender_did": parsed.actor_id,
+        "receiving_service_did": state.config.service_did,
+        "ciphertext_digest": ciphertext_digest,
+        "event_canonical_digest": parsed.canonical_digest,
+        "timestamp": now(),
+        "audit_disclosure_policy": {
+            "agent_did": policy.get("agent_did").cloned().unwrap_or(Value::Null),
+            "trigger": policy.get("trigger").cloned().unwrap_or(Value::Null),
+        },
+    });
+    let proof_digest = franking_proof_digest(&proof);
+    proof["proof_digest"] = json!(proof_digest);
+    append_audit_log(
+        state,
+        Some(&parsed.actor_id),
+        CX_MODERATION_FRANKING_PROOF,
+        proof,
+        "accepted",
+    );
+}
+
+fn encrypted_message_ciphertext_digest(envelope: &Value) -> Option<String> {
+    for pointer in [
+        "/payload/encrypted_payload/digests/ciphertext",
+        "/payload/encrypted_payload/ciphertext_digest",
+        "/payload/ciphertext_digest",
+    ] {
+        if let Some(digest) = envelope.pointer(pointer).and_then(Value::as_str)
+            && is_valid_sha256_digest(digest)
+        {
+            return Some(digest.to_owned());
+        }
+    }
+    envelope
+        .pointer("/payload/encrypted_payload/ciphertext")
+        .and_then(Value::as_str)
+        .map(|ciphertext| format!("sha256:{}", sha256_hex(ciphertext.as_bytes())))
+}
+
+fn audit_disclosure_policy_for_realm(state: &AppState, realm_id: &str) -> Option<Value> {
+    state
+        .persistence
+        .events()
+        .snapshot_all()
+        .ok()?
+        .into_iter()
+        .filter(|record| {
+            record.kind == kinds::CX_REALM_CREATE && record.space_id.as_deref() == Some(realm_id)
+        })
+        .rev()
+        .find_map(|record| {
+            record
+                .envelope
+                .pointer("/payload/object/audit_disclosure_policy")
+                .or_else(|| record.envelope.pointer("/payload/audit_disclosure_policy"))
+                .cloned()
+        })
+}
+
+fn franking_proof_digest(proof: &Value) -> String {
+    let material = json!({
+        "kind": proof.get("kind").and_then(Value::as_str).unwrap_or(CX_MODERATION_FRANKING_PROOF),
+        "target_event_id": proof.get("target_event_id").and_then(Value::as_str).unwrap_or_default(),
+        "sender_did": proof.get("sender_did").and_then(Value::as_str).unwrap_or_default(),
+        "receiving_service_did": proof.get("receiving_service_did").and_then(Value::as_str).unwrap_or_default(),
+        "ciphertext_digest": proof.get("ciphertext_digest").and_then(Value::as_str).unwrap_or_default(),
+        "event_canonical_digest": proof.get("event_canonical_digest").and_then(Value::as_str).unwrap_or_default(),
+    });
+    let bytes = serde_json::to_vec(&material).unwrap_or_default();
+    format!("sha256:{}", sha256_hex(&bytes))
+}
 
 fn validate_sender_commitment_binding(
     object: &serde_json::Map<String, Value>,
