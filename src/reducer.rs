@@ -40,6 +40,8 @@ use serde_json::Value;
 use crate::hlc::ServerHlc;
 use crate::wire::{ReadCursorPositionWire, ReadScopeWire};
 
+pub const CHILD_ORDER_CELL_FAMILY: &str = "cx.component.child_order.v1";
+
 /// In-memory projection state produced by the reducer.
 #[derive(Clone, Debug, Default)]
 pub struct ProjectionState {
@@ -2542,6 +2544,46 @@ impl ProjectionState {
             CellState::Value(v) => Some(v),
             CellState::Bottom(_) => None,
         }
+    }
+
+    pub fn child_order_cell_value(&self, parent_space_id: &str) -> Value {
+        let mut children = self
+            .space_containers
+            .values()
+            .filter(|container| container.parent_ref.as_deref() == Some(parent_space_id))
+            .filter(|container| container.state == SpaceContainerLifecycleState::Active)
+            .collect::<Vec<_>>();
+        children.sort_by(|left, right| {
+            left.rank
+                .cmp(&right.rank)
+                .then(left.title.cmp(&right.title))
+                .then(left.container_space_id.cmp(&right.container_space_id))
+        });
+        let order = children
+            .iter()
+            .map(|container| container.container_space_id.clone())
+            .collect::<Vec<_>>();
+        let entries = children
+            .iter()
+            .enumerate()
+            .map(|(index, container)| {
+                serde_json::json!({
+                    "index": index,
+                    "space_id": container.container_space_id,
+                    "realm_id": container.space_id,
+                    "kind": container.kind,
+                    "title": container.title,
+                    "rank": container.rank,
+                    "state": container.state.as_str(),
+                })
+            })
+            .collect::<Vec<_>>();
+        serde_json::json!({
+            "schema": CHILD_ORDER_CELL_FAMILY,
+            "parent_space_id": parent_space_id,
+            "order": order,
+            "children": entries,
+        })
     }
 
     /// Reload the cells map for one Space from the SDK CellStore + apply
@@ -7303,6 +7345,83 @@ mod tests {
                 .get(container_space_id)
                 .and_then(|projection| projection.parent_ref.as_deref()),
             None
+        );
+    }
+
+    #[test]
+    fn space_container_child_order_tracks_rank_updates() {
+        let mut state = ProjectionState::new();
+        let hlc = ServerHlc::new("test");
+        let realm_id = "cx:realm:01904100-0000-7000-8000-cfc039892036";
+        let board_id = "cx:space:01904100-0000-7000-8000-0000000000b0";
+        let first_id = "cx:space:01904100-0000-7000-8000-0000000000a1";
+        let second_id = "cx:space:01904100-0000-7000-8000-0000000000a2";
+        let third_id = "cx:space:01904100-0000-7000-8000-0000000000a3";
+
+        state.apply(
+            &make_operation(
+                crate::kinds::CX_SPACE_CONTAINER_CREATE,
+                realm_id,
+                serde_json::json!({
+                    "object": {
+                        "id": board_id,
+                        "realm_id": realm_id,
+                        "kind": "board",
+                        "title": "Sprint",
+                        "created_by": "did:web:alice.example"
+                    }
+                }),
+            ),
+            &hlc,
+        );
+        for (space_id, title, rank) in [
+            (first_id, "First", "r001"),
+            (second_id, "Second", "r002"),
+            (third_id, "Third", "r003"),
+        ] {
+            state.apply(
+                &make_operation(
+                    crate::kinds::CX_SPACE_CONTAINER_CREATE,
+                    realm_id,
+                    serde_json::json!({
+                        "object": {
+                            "id": space_id,
+                            "realm_id": realm_id,
+                            "kind": "list",
+                            "title": title,
+                            "parent_ref": board_id,
+                            "rank": rank,
+                            "created_by": "did:web:alice.example"
+                        }
+                    }),
+                ),
+                &hlc,
+            );
+        }
+
+        state.apply(
+            &make_operation(
+                crate::kinds::CX_SPACE_CONTAINER_UPDATE,
+                realm_id,
+                serde_json::json!({
+                    "space_id": third_id,
+                    "patch": { "rank": "r000" }
+                }),
+            ),
+            &hlc,
+        );
+
+        let value = state.child_order_cell_value(board_id);
+        let titles = value["children"]
+            .as_array()
+            .expect("children array")
+            .iter()
+            .map(|entry| entry["title"].as_str().expect("title"))
+            .collect::<Vec<_>>();
+        assert_eq!(titles, ["Third", "First", "Second"]);
+        assert_eq!(
+            value["order"].as_array().expect("order array")[0].as_str(),
+            Some(third_id)
         );
     }
 

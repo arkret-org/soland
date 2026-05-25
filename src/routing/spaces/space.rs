@@ -17,13 +17,14 @@
 //! write to this Space?".
 
 use chrono::{DateTime, Utc};
-use contrix_sdk::{Did, RealmId};
+use contrix_sdk::{Did, RealmId, SpaceId};
 use salvo::oapi::extract::PathParam;
 use salvo::prelude::*;
 use serde_json::{Value, json};
 
 use super::AuthArgs;
 use crate::error::AppError;
+use crate::reducer::CHILD_ORDER_CELL_FAMILY;
 use crate::state::{AppState, RealmDirectoryEntry, SessionRecord};
 use crate::wire::{SpaceLifecycleResponse, now};
 use crate::{JsonResult, json_ok};
@@ -32,6 +33,7 @@ pub(super) fn router() -> Router {
     Router::with_path("spaces").push(
         Router::with_path("{space_id}")
             .get(get_space)
+            .push(Router::with_path("cells/{cell_family}").get(get_space_cell))
             .push(Router::with_path("export").get(export_space)),
     )
 }
@@ -52,6 +54,59 @@ async fn get_space(
     let _session = aa.authenticated_session(state, req)?;
     let space_id = space_id.into_inner();
     space_lifecycle_response(state, &space_id).map(salvo::prelude::Json)
+}
+
+#[endpoint(
+    operation_id = "cx.extension.soland.spaces.cells.get",
+    tags("spaces", "cells"),
+    summary = "Get a projected Space-container child-order cell"
+)]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.spaces.cells.get"))]
+async fn get_space_cell(
+    aa: AuthArgs,
+    depot: &mut Depot,
+    req: &mut Request,
+    space_id: PathParam<String>,
+    cell_family: PathParam<String>,
+) -> JsonResult<Value> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req)?;
+    let space_id = space_id.into_inner();
+    let cell_family = cell_family.into_inner();
+    if cell_family != CHILD_ORDER_CELL_FAMILY {
+        return Err(AppError::not_found("cell family not found"));
+    }
+    validate_child_order_subject(&space_id)?;
+
+    let proj = state
+        .projection
+        .lock()
+        .map_err(|_| AppError::internal("projection state unavailable"))?;
+    let realm_id = proj
+        .space_containers
+        .get(&space_id)
+        .map(|container| container.space_id.clone())
+        .unwrap_or_else(|| space_id.clone());
+    if !space_id_accessible(state, &realm_id, Some(&session)) {
+        return Err(AppError::not_found("not found"));
+    }
+    let value = proj.child_order_cell_value(&space_id);
+    let total = value
+        .get("children")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or_default();
+    drop(proj);
+
+    json_ok(json!({
+        "cell_id": format!("cx:cell:{CHILD_ORDER_CELL_FAMILY}:{space_id}"),
+        "cell_family": CHILD_ORDER_CELL_FAMILY,
+        "space_id": space_id,
+        "state": "value",
+        "lattice": "ordered-log",
+        "value": value,
+        "total": total,
+    }))
 }
 
 #[endpoint(
@@ -114,6 +169,15 @@ async fn export_space(
         "operations": operations,
         "events": events,
     }))
+}
+
+fn validate_child_order_subject(space_id: &str) -> Result<(), AppError> {
+    if space_id.starts_with("cx:space:") {
+        SpaceId::new(space_id.to_owned()).map_err(|_| AppError::invalid_param("invalid space_id"))?;
+        return Ok(());
+    }
+    RealmId::new(space_id.to_owned()).map_err(|_| AppError::invalid_param("invalid space_id"))?;
+    Ok(())
 }
 
 // ── Helpers shared with the parent module ───────────────────────────────────
