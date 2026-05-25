@@ -18,6 +18,8 @@ use crate::wire::now;
 
 mod access;
 mod admin;
+// CXP-0007 (P2A.3) — `/api/v1/circles/*` admin surface.
+pub(crate) mod circles;
 pub(crate) mod conformance;
 pub(crate) mod events;
 // G3.S9: extensions (applet manifest verifier, bot/ghost actor, TSP, sovereign enclave).
@@ -138,6 +140,8 @@ fn api_v1_router() -> Router {
         .push(identity::router())
         .push(spaces::router())
         .push(realms::router())
+        // CXP-0007 — Circle administration (`/api/v1/circles/*`).
+        .push(circles::router())
         .push(organizations::router())
         .push(federation::router())
         .push(events::router())
@@ -332,6 +336,64 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "server",
         "cx.server.describe",
         "server feature description",
+    ),
+    // CXP-0007 (P2A.3) — Circle admin surface. Operation ids align with
+    // `cx.circles.*` (sibling of `cx.realms.*` / `cx.spaces.*`).
+    (
+        "/api/v1/circles",
+        PathItemType::Post,
+        "circles",
+        "cx.circles.create",
+        "create a Circle (cx.circle.create)",
+    ),
+    (
+        "/api/v1/circles",
+        PathItemType::Get,
+        "circles",
+        "cx.circles.list",
+        "list Circles for a Realm",
+    ),
+    (
+        "/api/v1/circles/{circle_id}",
+        PathItemType::Get,
+        "circles",
+        "cx.circles.get",
+        "fetch a Circle by id",
+    ),
+    (
+        "/api/v1/circles/{circle_id}/members",
+        PathItemType::Post,
+        "circles",
+        "cx.circles.members.add",
+        "add or change a Circle member",
+    ),
+    (
+        "/api/v1/circles/{circle_id}/members/{actor_did}",
+        PathItemType::Delete,
+        "circles",
+        "cx.circles.members.remove",
+        "remove a Circle member",
+    ),
+    (
+        "/api/v1/circles/{circle_id}/scope-rotate",
+        PathItemType::Post,
+        "circles",
+        "cx.circles.scope_rotate",
+        "rotate the Circle's bound MLS group",
+    ),
+    (
+        "/api/v1/circles/{circle_id}/archive",
+        PathItemType::Post,
+        "circles",
+        "cx.circles.archive",
+        "archive a Circle (cx.circle.archive)",
+    ),
+    (
+        "/api/v1/circles/{circle_id}/tombstone",
+        PathItemType::Post,
+        "circles",
+        "cx.circles.tombstone",
+        "tombstone a Circle (cx.circle.tombstone)",
     ),
     (
         "/api/v1/events/describe",

@@ -58,6 +58,24 @@ pub const CX_FLOW_WATCH_SET: &str = "cx.flow.watch.set";
 // FlowProjection doesn't carry `tracks` server-side; the touch just
 // bumps `updated_at` (mirror of cx.flow.move/reorder pattern).
 pub const CX_FLOW_TRACKS_UPDATE: &str = "cx.flow.tracks.update";
+// CXP-0007 (spec b7d35be) — Circle lifecycle / membership events. Seven
+// active durable kinds registered in
+// `spec/v1/artifacts/registry/event-kind-registry.json`. The reducer
+// dispatch is wired in `src/reducer.rs`; the wire-layer admission check
+// runs through the generic `active_durable_event_kinds` registry.
+//
+// `cx.circle.anchor_commit` is reducer-DERIVED (sub-anchor emitted on
+// the Circle's profile cadence) and MUST NOT be submitted directly via
+// `cx.events.submit`. The SDK gates this in
+// `kinds::is_reducer_input_event_kind`.
+pub const CX_CIRCLE_CREATE: &str = "cx.circle.create";
+pub const CX_CIRCLE_UPDATE: &str = "cx.circle.update";
+pub const CX_CIRCLE_ARCHIVE: &str = "cx.circle.archive";
+pub const CX_CIRCLE_RESTORE: &str = "cx.circle.restore";
+pub const CX_CIRCLE_TOMBSTONE: &str = "cx.circle.tombstone";
+pub const CX_CIRCLE_MEMBER_STATE: &str = "cx.circle.member.state";
+pub const CX_CIRCLE_ANCHOR_COMMIT: &str = "cx.circle.anchor_commit";
+
 // Morph lifecycle (round 13). Same shape as Flow — no dedicated tombstone.
 pub const CX_MORPH_CREATE: &str = "cx.morph.create";
 pub const CX_MORPH_UPDATE: &str = "cx.morph.update";
