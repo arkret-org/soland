@@ -1140,6 +1140,13 @@ pub enum MlsEffect {
         recipient_device_id: String,
         group_id: String,
     },
+    /// `apply_group_genesis` — the group was initialized at epoch 0.
+    GroupGenesis {
+        group_id: String,
+        epoch: u64,
+        creator_actor_did: String,
+        covered_frontier: Vec<String>,
+    },
     /// `apply_commit_epoch` — the group's epoch was bumped from
     /// `previous_epoch` to `new_epoch` and the attested governance
     /// frontier was merged into the group's covered-frontier accumulator.
@@ -2093,6 +2100,14 @@ fn apply_mls_welcome_dispatch(
     mls::apply_welcome_enqueue(s, op)
 }
 
+fn apply_mls_genesis_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    mls::apply_group_genesis(s, op)
+}
+
 fn apply_mls_commit_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
@@ -2283,6 +2298,7 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
     // `reducer/mls.rs`.
     m.insert(CX_MLS_KEYPACKAGE, apply_mls_keypackage_dispatch);
     m.insert(CX_MLS_WELCOME, apply_mls_welcome_dispatch);
+    m.insert(CX_MLS_GENESIS, apply_mls_genesis_dispatch);
     m.insert(CX_MLS_COMMIT, apply_mls_commit_dispatch);
     // G3.S9: extensions (applet/bot/tsp)
     m.insert(CX_EXTENSIONS_BOT_REGISTER, apply_bot_register);

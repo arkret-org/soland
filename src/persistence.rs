@@ -834,6 +834,16 @@ pub trait MlsWelcomeStore: Send + Sync {
 /// G3.S1 — per-group MLS commit epoch store.
 pub trait MlsCommitStore: Send + Sync {
     fn get(&self, group_id: &str) -> PersistenceResult<Option<MlsCommitEpochRecord>>;
+    /// Initialize a group at epoch 0. Returns `Ok(None)` when the group
+    /// already has an epoch row.
+    fn initialize_genesis(
+        &self,
+        group_id: &str,
+        leader_actor_did: &str,
+        covered_frontier: &[String],
+        governance_binding: &Value,
+        committed_at: i64,
+    ) -> PersistenceResult<Option<MlsCommitEpochRecord>>;
     /// Atomically advance the group's epoch IFF `expected_prev_epoch`
     /// matches the row's current epoch (or 0 for a never-seen group).
     /// Returns `Ok(Some(new_record))` on success, `Ok(None)` on a
@@ -3096,6 +3106,33 @@ impl MlsCommitStore for MemoryMlsCommitStore {
             .cloned())
     }
 
+    fn initialize_genesis(
+        &self,
+        group_id: &str,
+        leader_actor_did: &str,
+        covered_frontier: &[String],
+        governance_binding: &Value,
+        committed_at: i64,
+    ) -> PersistenceResult<Option<MlsCommitEpochRecord>> {
+        let mut rows = self.rows.lock().expect("mls commit lock");
+        if rows.contains_key(group_id) {
+            return Ok(None);
+        }
+        let mut covered_frontier = covered_frontier.to_vec();
+        covered_frontier.sort();
+        covered_frontier.dedup();
+        let record = MlsCommitEpochRecord {
+            group_id: group_id.to_owned(),
+            epoch: 0,
+            leader_actor_did: leader_actor_did.to_owned(),
+            covered_frontier,
+            governance_binding: governance_binding.clone(),
+            committed_at,
+        };
+        rows.insert(group_id.to_owned(), record.clone());
+        Ok(Some(record))
+    }
+
     fn try_bump(
         &self,
         group_id: &str,
@@ -3735,6 +3772,36 @@ impl MlsCommitStore for PgMlsCommitStore {
              FROM mls_commits WHERE group_id = $1",
         )
         .bind::<Text, _>(group_id)
+        .get_result::<MlsCommitEpochRow>(&mut conn)
+        .optional()
+        .map(|row| row.map(MlsCommitEpochRecord::from))
+        .map_err(PersistenceError::from)
+    }
+
+    fn initialize_genesis(
+        &self,
+        group_id: &str,
+        leader_actor_did: &str,
+        covered_frontier: &[String],
+        governance_binding: &Value,
+        committed_at: i64,
+    ) -> PersistenceResult<Option<MlsCommitEpochRecord>> {
+        let mut frontier = covered_frontier.to_vec();
+        frontier.sort();
+        frontier.dedup();
+        let mut conn = pg_conn(&self.pool)?;
+        sql_query(
+            "INSERT INTO mls_commits \
+             (group_id, epoch, leader_actor_did, covered_frontier, governance_binding, committed_at) \
+             VALUES ($1, 0, $2, $3, $4, $5) \
+             ON CONFLICT (group_id) DO NOTHING \
+             RETURNING group_id, epoch, leader_actor_did, covered_frontier, governance_binding, committed_at",
+        )
+        .bind::<Text, _>(group_id)
+        .bind::<Text, _>(leader_actor_did)
+        .bind::<Jsonb, _>(serde_json::json!(frontier))
+        .bind::<Jsonb, _>(governance_binding)
+        .bind::<BigInt, _>(committed_at)
         .get_result::<MlsCommitEpochRow>(&mut conn)
         .optional()
         .map(|row| row.map(MlsCommitEpochRecord::from))

@@ -199,8 +199,8 @@ pub const CX_REALM_POLICY_SERVER: &str = "cx.realm.policy_server";
 //                              not in the kind suffix.
 //   - `cx.mls.proposal`      — MLS proposal (wire-only; no reducer projection
 //                              yet).
-//   - `cx.mls.genesis`       — MLS group genesis (wire-only; no reducer
-//                              projection yet).
+//   - `cx.mls.genesis`       — MLS group genesis (initializes epoch 0
+//                              and the covered-frontier accumulator).
 //   - `cx.mls.commit_failed` — diagnostic of a failed commit / Welcome
 //                              processing path (wire-only; no reducer
 //                              projection yet).
@@ -227,6 +227,7 @@ pub fn validate_mls_governance_binding(payload: &Value) -> Result<(), &'static s
         .ok_or("mls_governance_binding_missing")?;
     let expected_prev_epoch = payload
         .get("expected_prev_epoch")
+        .or_else(|| payload.get("base_epoch"))
         .and_then(Value::as_u64)
         .ok_or("mls_commit_expected_prev_epoch_missing")?;
     if binding.get("previous_epoch").and_then(Value::as_u64) != Some(expected_prev_epoch) {

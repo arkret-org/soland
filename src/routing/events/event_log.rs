@@ -1143,17 +1143,12 @@ fn submit_event_value(
                     reason,
                 ));
             }
-            if kinds::canonical_kind_string(operation) == kinds::CX_MLS_COMMIT {
-                let mut snapshot = proj.clone();
-                if let crate::reducer::ProjectionEffect::Rejected { reason } =
-                    crate::reducer::mls::apply_commit_epoch(&mut snapshot, operation)
-                {
-                    return Err(SubmitOneError::new(
-                        StatusCode::PRECONDITION_FAILED,
-                        reason.clone(),
-                        reason,
-                    ));
-                }
+            if let Some(reason) = preflight_mls_projection_reject(&proj, operation) {
+                return Err(SubmitOneError::new(
+                    StatusCode::PRECONDITION_FAILED,
+                    reason.clone(),
+                    reason,
+                ));
             }
         }
     }
@@ -1217,6 +1212,54 @@ fn submit_event_value(
         received_at,
         false,
     ))
+}
+
+fn preflight_mls_projection_reject(
+    proj: &crate::reducer::ProjectionState,
+    operation: &Operation,
+) -> Option<String> {
+    let kind = kinds::canonical_kind_string(operation);
+    match kind.as_str() {
+        kinds::CX_MLS_KEYPACKAGE
+        | kinds::CX_MLS_WELCOME
+        | kinds::CX_MLS_GENESIS
+        | kinds::CX_MLS_COMMIT => {
+            let mut snapshot = proj.clone();
+            let effect = match kind.as_str() {
+                kinds::CX_MLS_KEYPACKAGE => {
+                    match operation.payload.get("action").and_then(Value::as_str) {
+                        Some("publish") => {
+                            crate::reducer::mls::apply_keypackage_publish(&mut snapshot, operation)
+                        }
+                        Some("claim") => {
+                            crate::reducer::mls::apply_keypackage_claim(&mut snapshot, operation)
+                        }
+                        Some(other) => crate::reducer::ProjectionEffect::Rejected {
+                            reason: format!("mls_keypackage_action_unknown:{other}"),
+                        },
+                        None => crate::reducer::ProjectionEffect::Rejected {
+                            reason: "mls_keypackage_action_missing".to_owned(),
+                        },
+                    }
+                }
+                kinds::CX_MLS_WELCOME => {
+                    crate::reducer::mls::apply_welcome_enqueue(&mut snapshot, operation)
+                }
+                kinds::CX_MLS_GENESIS => {
+                    crate::reducer::mls::apply_group_genesis(&mut snapshot, operation)
+                }
+                kinds::CX_MLS_COMMIT => {
+                    crate::reducer::mls::apply_commit_epoch(&mut snapshot, operation)
+                }
+                _ => crate::reducer::ProjectionEffect::Ignored,
+            };
+            match effect {
+                crate::reducer::ProjectionEffect::Rejected { reason } => Some(reason),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
 }
 
 fn event_scope_ids(

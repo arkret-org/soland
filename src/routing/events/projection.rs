@@ -36,6 +36,7 @@ use super::{
 };
 use crate::ids;
 use crate::kinds;
+use crate::persistence::{MlsKeyPackageRecord, MlsWelcomeRecord};
 use crate::state::{
     AppState, MessageRecord, ProjectionEventRecord, RealmDirectoryEntry, RealmMetaRecord,
     SpaceInviteRecord,
@@ -677,9 +678,14 @@ pub fn project_federation_operation(state: &AppState, origin: &str, operation: &
     {
         project_membership_operation(state, origin, operation);
     }
-    // Also apply to the deterministic reducer
-    if let Ok(mut proj) = state.projection.lock() {
-        apply_via_lattice_registry(state, &mut proj, operation);
+    // Also apply to the deterministic reducer.
+    let reducer_effect = state
+        .projection
+        .lock()
+        .ok()
+        .map(|mut proj| apply_via_lattice_registry(state, &mut proj, operation));
+    if let Some(effect) = reducer_effect {
+        mirror_mls_effect_to_persistence(state, operation, &effect);
     }
     append_projection_event(
         state,
@@ -702,9 +708,137 @@ fn apply_via_lattice_registry(
     state: &AppState,
     proj: &mut crate::reducer::ProjectionState,
     operation: &Operation,
-) {
+) -> crate::reducer::ProjectionEffect {
     let registry = crate::reducer::lattice_kinds::default_lattice_registry();
-    proj.apply_via_lattice_registry(operation, &state.hlc, &registry);
+    proj.apply_via_lattice_registry(operation, &state.hlc, &registry)
+}
+
+fn mirror_mls_effect_to_persistence(
+    state: &AppState,
+    operation: &Operation,
+    effect: &crate::reducer::ProjectionEffect,
+) {
+    let crate::reducer::ProjectionEffect::Mls(effect) = effect else {
+        return;
+    };
+
+    match effect {
+        crate::reducer::MlsEffect::KeyPackagePublished { keypackage_id, .. } => {
+            let record = state
+                .projection
+                .lock()
+                .ok()
+                .and_then(|projection| projection.mls_key_packages.get(keypackage_id).cloned())
+                .map(|kp| MlsKeyPackageRecord {
+                    id: kp.id,
+                    actor_did: kp.actor_did,
+                    device_id: kp.device_id,
+                    lifetime_not_before: kp.lifetime.not_before,
+                    lifetime_not_after: kp.lifetime.not_after,
+                    key_package_bytes: kp.key_package_bytes,
+                    claimed_by_group_id: kp.claimed_by,
+                    consumed_at: kp.consumed_at,
+                    created_at: kp.created_at,
+                });
+            if let Some(record) = record {
+                if let Err(error) = state.persistence.mls_key_packages().put(&record) {
+                    tracing::warn!(%error, keypackage_id = %keypackage_id, "failed to mirror MLS KeyPackage publish");
+                }
+            }
+        }
+        crate::reducer::MlsEffect::KeyPackageClaimed {
+            keypackage_id,
+            group_id,
+            consumed_at,
+        } => {
+            if let Err(error) = state.persistence.mls_key_packages().try_claim(
+                keypackage_id,
+                group_id,
+                *consumed_at,
+            ) {
+                tracing::warn!(%error, keypackage_id = %keypackage_id, "failed to mirror MLS KeyPackage claim");
+            }
+        }
+        crate::reducer::MlsEffect::WelcomeEnqueued {
+            welcome_id,
+            recipient_actor_did,
+            recipient_device_id,
+            ..
+        } => {
+            let record = state
+                .projection
+                .lock()
+                .ok()
+                .and_then(|projection| {
+                    projection
+                        .mls_welcomes
+                        .get(&(recipient_actor_did.clone(), recipient_device_id.clone()))
+                        .and_then(|queue| queue.iter().find(|row| row.id == *welcome_id))
+                        .cloned()
+                })
+                .map(|welcome| MlsWelcomeRecord {
+                    id: welcome.id,
+                    group_id: welcome.group_id,
+                    recipient_actor_did: welcome.recipient_actor_did,
+                    recipient_device_id: welcome.recipient_device_id,
+                    welcome_bytes: welcome.welcome_bytes,
+                    key_package_id: welcome.key_package_id,
+                    enqueued_at: welcome.enqueued_at,
+                    delivered_at: welcome.delivered_at,
+                });
+            if let Some(record) = record {
+                if let Err(error) = state.persistence.mls_welcomes().enqueue(&record) {
+                    tracing::warn!(%error, welcome_id = %welcome_id, "failed to mirror MLS Welcome enqueue");
+                }
+            }
+        }
+        crate::reducer::MlsEffect::GroupGenesis {
+            group_id,
+            creator_actor_did,
+            covered_frontier,
+            ..
+        } => {
+            let binding = operation
+                .payload
+                .get("governance_binding")
+                .or_else(|| operation.payload.get("mls_governance_binding"))
+                .cloned()
+                .unwrap_or(Value::Null);
+            if let Err(error) = state.persistence.mls_commits().initialize_genesis(
+                group_id,
+                creator_actor_did,
+                covered_frontier,
+                &binding,
+                operation.created_at.timestamp(),
+            ) {
+                tracing::warn!(%error, group_id = %group_id, "failed to mirror MLS genesis epoch");
+            }
+        }
+        crate::reducer::MlsEffect::CommitEpochAdvanced {
+            group_id,
+            previous_epoch,
+            leader_actor_did,
+            covered_frontier,
+            ..
+        } => {
+            let binding = operation
+                .payload
+                .get("governance_binding")
+                .or_else(|| operation.payload.get("mls_governance_binding"))
+                .cloned()
+                .unwrap_or(Value::Null);
+            if let Err(error) = state.persistence.mls_commits().try_bump(
+                group_id,
+                *previous_epoch,
+                leader_actor_did,
+                covered_frontier,
+                &binding,
+                operation.created_at.timestamp(),
+            ) {
+                tracing::warn!(%error, group_id = %group_id, "failed to mirror MLS commit epoch");
+            }
+        }
+    }
 }
 
 /// After the deterministic reducer mutates the in-memory
@@ -962,9 +1096,14 @@ pub fn project_accepted_operations(state: &AppState, origin: &str, operations: &
             project_read_receipt_policy(state, operation);
         }
         crate::routing::identity::consent::project_consent_operation(state, operation);
-        // Also apply to the deterministic reducer
-        if let Ok(mut proj) = state.projection.lock() {
-            apply_via_lattice_registry(state, &mut proj, operation);
+        // Also apply to the deterministic reducer.
+        let reducer_effect = state
+            .projection
+            .lock()
+            .ok()
+            .map(|mut proj| apply_via_lattice_registry(state, &mut proj, operation));
+        if let Some(effect) = reducer_effect {
+            mirror_mls_effect_to_persistence(state, operation, &effect);
         }
         // Stream-F (Wave 2C) — `cx.audit.erasure_receipt` federation
         // fanout. The reducer has already pushed the receipt into the

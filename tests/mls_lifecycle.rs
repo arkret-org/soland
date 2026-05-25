@@ -3,10 +3,8 @@
 //!
 //!   1. upload a KeyPackage,
 //!   2. claim it atomically (and assert a second claim returns 409),
-//!   3. enqueue a Welcome (driven from the same test process, since
-//!      the public Welcome-fanout route lives behind a federation
-//!      receive path that's out-of-scope for this slice — we simulate
-//!      it by writing through `MlsWelcomeStore::enqueue`),
+//!   3. submit canonical `cx.mls.genesis` and `cx.mls.welcome` events
+//!      and assert they mirror into the MLS epoch / Welcome stores,
 //!   4. drain the calling device's queue via
 //!      `GET /api/v1/keys/keypackages/welcomes/pending`.
 //!
@@ -26,15 +24,16 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use salvo::http::StatusCode;
 use salvo::test::{ResponseExt, TestClient};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use soland::config::{AppConfig, FederationPolicy, ObjectStorageConfig};
 use soland::db::Db;
-use soland::persistence::MlsWelcomeRecord;
 use soland::service;
 use soland::state::AppState;
 
 fn test_config() -> AppConfig {
     AppConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
+        metrics_bind: "127.0.0.1:0".parse().unwrap(),
         public_base_url: "http://server".to_owned(),
         service_did: "did:web:soland-mls-test.local".to_owned(),
         tls_cert_path: None,
@@ -87,6 +86,58 @@ fn app_from_state(state: AppState) -> salvo::Service {
 
 fn b64(bytes: &[u8]) -> String {
     URL_SAFE_NO_PAD.encode(bytes)
+}
+
+fn sha256_json(value: &Value) -> String {
+    let bytes = contrix_sdk::canonical::canonical_json_bytes(value)
+        .unwrap_or_else(|_| serde_json::to_vec(value).unwrap());
+    format!("sha256:{:x}", Sha256::digest(&bytes))
+}
+
+fn event_canonical_digest(event: &Value) -> String {
+    let mut canonical = event.clone();
+    if let Value::Object(object) = &mut canonical {
+        object.remove("proofs");
+        object.remove("unsigned");
+        object.remove("canonical_digest");
+        object.remove("canonical_hash");
+    }
+    sha256_json(&canonical)
+}
+
+fn signed_event(
+    event_id: &str,
+    actor_seq: u64,
+    actor: &str,
+    device_id: &str,
+    realm_id: &str,
+    kind: &str,
+    payload: Value,
+) -> Value {
+    let mut event = json!({
+        "event_id": event_id,
+        "kind": kind,
+        "schema_id": "cx.schema.event.v1",
+        "actor_id": actor,
+        "actor_seq": actor_seq,
+        "realm_id": realm_id,
+        "device_id": device_id,
+        "audience": "did:web:soland-mls-test.local",
+        "domain": "did:web:soland-mls-test.local",
+        "prev_refs": [],
+        "auth_refs": [],
+        "payload": payload,
+        "proofs": [{
+            "type": "dev-proof",
+            "verification_method": format!("{actor}#{device_id}"),
+            "device_id": device_id,
+            "audience": "did:web:soland-mls-test.local",
+            "domain": "did:web:soland-mls-test.local",
+            "payload_digest": sha256_json(&payload),
+        }],
+    });
+    event["canonical_digest"] = Value::String(event_canonical_digest(&event));
+    event
 }
 
 async fn dev_token(state: AppState, actor: &str, device_id: &str, display: &str) -> String {
@@ -179,30 +230,217 @@ async fn mls_lifecycle_end_to_end() {
         "second claim must surface the wire reason: {collide_json}"
     );
 
-    // ── 3. simulate a Welcome enqueue for Bob's device ──────────
-    //
-    // The public Welcome fanout path is fed by federation receive
-    // (see TODO(G3.S1-followup): governance_binding / covered_frontier
-    // for the routes that emit cx.mls.welcome from the public
-    // /api/v1/federation surface). For this integration test we
-    // drive the persistence store directly to set up the precondition
-    // for the GET /welcomes/pending drain in step 4.
     let bob_did = "did:web:bob.example";
     let bob_device = "cx:device:01904100-0000-7000-8000-b0b0e0000001";
-    state
-        .persistence
-        .mls_welcomes()
-        .enqueue(&MlsWelcomeRecord {
-            id: "cx:mls_welcome:w-01".to_owned(),
-            group_id: "cx:mls_group:abc".to_owned(),
-            recipient_actor_did: bob_did.to_owned(),
-            recipient_device_id: bob_device.to_owned(),
-            welcome_bytes: b"opaque-mls-welcome".to_vec(),
-            key_package_id: keypackage_id.to_owned(),
-            enqueued_at: 1_700_000_000,
-            delivered_at: None,
-        })
-        .expect("enqueue welcome");
+    let realm_id = "cx:realm:01904100-0000-7000-8000-00000000e2ee";
+    let group_id = "cx:mls_group:abc";
+    let frontier_ref = "cx:event:01904100-0000-7000-8000-00000000f00d";
+    let governance_binding = json!({
+        "binding_version": 1,
+        "encoding_profile": "cbor-deterministic-rfc8949-v1",
+        "realm_id": realm_id,
+        "mls_group_id": group_id,
+        "previous_epoch": 0,
+        "next_epoch": 0,
+        "membership_frontier": [frontier_ref],
+        "policy_root": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+        "threshold": {
+            "k": 2,
+            "n": 3,
+            "signers": [alice_did, bob_did, "did:web:mls-auditor.example"]
+        },
+        "signatures": [
+            {"signer_did": alice_did, "signature_b64": b64(b"alice-genesis")},
+            {"signer_did": bob_did, "signature_b64": b64(b"bob-genesis")}
+        ]
+    });
+
+    // ── 3a. Realm + MLS group genesis enter through canonical events ─
+    let realm_create = signed_event(
+        "cx:event:01904100-0000-7000-8000-00000000e2e0",
+        1,
+        alice_did,
+        alice_device,
+        realm_id,
+        "cx.realm.create",
+        json!({
+            "object": {
+                "id": realm_id,
+                "schema": "cx.schema.realm.v1",
+                "title": "MLS lifecycle",
+                "created_by_principal": alice_did,
+                "trust_domain": "cx:trust_domain:soland-mls-test.local",
+                "schema_refs": ["cx.schema.realm.v1"],
+                "default_discoverability": "listed",
+                "default_join_rule": "invite",
+                "history_visibility": "joined",
+                "encryption_profile": "mls_rfc9420",
+                "security_class": "standard",
+                "federation_policy": "restricted",
+                "anchor_profile": "single_did",
+                "digest_algorithm": "sha256",
+                "anchorer": {
+                    "type": "single_did",
+                    "did": alice_did,
+                    "recovery_members": ["did:web:recovery.example"],
+                    "controller_organization": "did:web:organization.primary.example",
+                    "recovery_controller_organizations": ["did:web:organization.recovery.example"]
+                },
+                "created_at": "2026-05-25T00:00:00Z"
+            }
+        }),
+    );
+    let create_resp = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {alice_token}"), true)
+        .json(&realm_create)
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(create_resp.status_code, Some(StatusCode::OK));
+
+    let genesis = signed_event(
+        "cx:event:01904100-0000-7000-8000-00000000e2e1",
+        2,
+        alice_did,
+        alice_device,
+        realm_id,
+        "cx.mls.genesis",
+        json!({
+            "mls_group_id": group_id,
+            "realm_key_scope": {
+                "realm_id": realm_id,
+                "policy_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+            },
+            "epoch": 0,
+            "creator_principal_id": alice_did,
+            "creator_device_id": alice_device,
+            "cipher_suite": "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
+            "group_info_digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+            "ratchet_tree_digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+            "governance_binding": governance_binding,
+            "created_at": "2026-05-25T00:00:01Z"
+        }),
+    );
+    let genesis_resp = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {alice_token}"), true)
+        .json(&genesis)
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(genesis_resp.status_code, Some(StatusCode::OK));
+    assert_eq!(
+        state
+            .persistence
+            .mls_commits()
+            .get(group_id)
+            .unwrap()
+            .expect("genesis persisted")
+            .epoch,
+        0
+    );
+
+    // ── 3b. Welcome is a durable event and mirrors into the pending queue ─
+    let welcome = signed_event(
+        "cx:event:01904100-0000-7000-8000-00000000e2e2",
+        3,
+        alice_did,
+        alice_device,
+        realm_id,
+        "cx.mls.welcome",
+        json!({
+            "welcome_id": "cx:mls_welcome:w-01",
+            "mls_group_id": group_id,
+            "epoch": 1,
+            "recipient_principal_id": bob_did,
+            "recipient_device_id": bob_device,
+            "key_package_id": keypackage_id,
+            "keypackage_ref": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+            "keypackage_digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+            "claim_id": "claim-01",
+            "claim_ref": {
+                "claim_id": "claim-01",
+                "keypackage_ref": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+                "keypackage_digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+                "capabilities_digest": "sha256:6666666666666666666666666666666666666666666666666666666666666666",
+                "ssk_generation": 1
+            },
+            "ciphertext": "opaque-mls-welcome",
+            "expires_at": "2026-05-25T01:00:00Z",
+            "commit_ref": "cx:event:01904100-0000-7000-8000-00000000e2e3",
+            "governance_binding": governance_binding
+        }),
+    );
+    let welcome_resp = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {alice_token}"), true)
+        .json(&welcome)
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(welcome_resp.status_code, Some(StatusCode::OK));
+    assert_eq!(
+        state
+            .persistence
+            .mls_welcomes()
+            .snapshot_all()
+            .unwrap()
+            .len(),
+        1
+    );
+
+    // ── 3c. Canonical commit event advances the durable epoch row ─
+    let commit_binding = json!({
+        "binding_version": 1,
+        "encoding_profile": "cbor-deterministic-rfc8949-v1",
+        "realm_id": realm_id,
+        "mls_group_id": group_id,
+        "previous_epoch": 0,
+        "next_epoch": 1,
+        "membership_frontier": [frontier_ref],
+        "policy_root": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+        "threshold": {
+            "k": 2,
+            "n": 3,
+            "signers": [alice_did, bob_did, "did:web:mls-auditor.example"]
+        },
+        "signatures": [
+            {"signer_did": alice_did, "signature_b64": b64(b"alice-commit")},
+            {"signer_did": bob_did, "signature_b64": b64(b"bob-commit")}
+        ]
+    });
+    let commit = signed_event(
+        "cx:event:01904100-0000-7000-8000-00000000e2e3",
+        4,
+        alice_did,
+        alice_device,
+        realm_id,
+        "cx.mls.commit",
+        json!({
+            "group_id": group_id,
+            "mls_group_id": group_id,
+            "expected_prev_epoch": 0,
+            "base_epoch": 0,
+            "base_epoch_ref": "cx:event:01904100-0000-7000-8000-00000000e2e1",
+            "proposal_refs": [],
+            "next_epoch": 1,
+            "leader_actor_did": alice_did,
+            "commit_bytes_b64": b64(b"opaque-commit"),
+            "commit_digest": "sha256:7777777777777777777777777777777777777777777777777777777777777777",
+            "governance_binding": commit_binding
+        }),
+    );
+    let commit_resp = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {alice_token}"), true)
+        .json(&commit)
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(commit_resp.status_code, Some(StatusCode::OK));
+    assert_eq!(
+        state
+            .persistence
+            .mls_commits()
+            .get(group_id)
+            .unwrap()
+            .expect("commit persisted")
+            .epoch,
+        1
+    );
 
     // ── 4. Bob drains his Welcome queue via the HTTP route ──────
     let bob_token = dev_token(state.clone(), bob_did, bob_device, "Bob").await;

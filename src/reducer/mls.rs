@@ -17,7 +17,10 @@
 //!    rows with `delivered_at = now()` so subsequent polls don't
 //!    redeliver.
 //!
-//! 3. **commit_epoch increment** — `apply_commit_epoch`. The reducer
+//! 3. **group genesis** — `apply_group_genesis`. Installs epoch 0 for
+//!    a new MLS group and initializes its covered-frontier accumulator.
+//!
+//! 4. **commit_epoch increment** — `apply_commit_epoch`. The reducer
 //!    only accepts a commit whose `expected_prev_epoch` matches the
 //!    group's current stored epoch (0 for a brand-new group). Stale /
 //!    out-of-order commits are rejected with `mls_epoch_skew`. Accepted
@@ -53,6 +56,8 @@ pub const REASON_WELCOME_METADATA_LEAK: &str = "mls_welcome_metadata_leak";
 /// Reject code for commits whose governance binding does not name an
 /// attested frontier to add into the covered-frontier accumulator.
 pub const REASON_COMMIT_COVERED_FRONTIER_MISSING: &str = "mls_covered_frontier_missing";
+/// Reject code for a second genesis against an already initialized group.
+pub const REASON_GENESIS_ALREADY_EXISTS: &str = "mls_genesis_already_exists";
 
 /// G3.S1 — project a `cx.mls.keypackage` event with
 /// `payload.action == "publish"`.
@@ -194,13 +199,26 @@ pub fn apply_welcome_enqueue(state: &mut ProjectionState, op: &Operation) -> Pro
     if welcome_payload_contains_forbidden_metadata(payload) {
         return reject(REASON_WELCOME_METADATA_LEAK);
     }
-    let Some(welcome_id) = payload.get("welcome_id").and_then(Value::as_str) else {
+    let Some(welcome_id) = payload
+        .get("welcome_id")
+        .or_else(|| payload.get("welcome_ref"))
+        .or_else(|| payload.get("encrypted_welcome_ref"))
+        .or_else(|| payload.get("claim_id"))
+        .and_then(Value::as_str)
+    else {
         return reject("mls_welcome_id_missing");
     };
-    let Some(group_id) = payload.get("group_id").and_then(Value::as_str) else {
+    let Some(group_id) = payload
+        .get("group_id")
+        .or_else(|| payload.get("mls_group_id"))
+        .and_then(Value::as_str)
+    else {
         return reject("mls_welcome_group_missing");
     };
-    let Some(recipient_actor_did) = payload.get("recipient_actor_did").and_then(Value::as_str)
+    let Some(recipient_actor_did) = payload
+        .get("recipient_actor_did")
+        .or_else(|| payload.get("recipient_principal_id"))
+        .and_then(Value::as_str)
     else {
         return reject("mls_welcome_recipient_actor_missing");
     };
@@ -208,18 +226,24 @@ pub fn apply_welcome_enqueue(state: &mut ProjectionState, op: &Operation) -> Pro
     else {
         return reject("mls_welcome_recipient_device_missing");
     };
-    let Some(key_package_id) = payload.get("key_package_id").and_then(Value::as_str) else {
+    let Some(key_package_id) = payload
+        .get("key_package_id")
+        .or_else(|| payload.get("keypackage_ref"))
+        .and_then(Value::as_str)
+    else {
         return reject("mls_welcome_key_package_id_missing");
     };
-    let welcome_bytes = match payload
-        .get("welcome_bytes_b64")
-        .and_then(Value::as_str)
-        .map(decode_base64_loose)
-    {
-        Some(Ok(bytes)) if !bytes.is_empty() => bytes,
-        Some(Ok(_)) => return reject("mls_welcome_bytes_empty"),
-        Some(Err(_)) => return reject("mls_welcome_bytes_invalid_b64"),
-        None => return reject("mls_welcome_bytes_missing"),
+    let welcome_bytes = match (
+        payload.get("welcome_bytes_b64").and_then(Value::as_str),
+        payload.get("ciphertext").and_then(Value::as_str),
+    ) {
+        (Some(encoded), _) => match decode_base64_loose(encoded) {
+            Ok(bytes) if !bytes.is_empty() => bytes,
+            Ok(_) => return reject("mls_welcome_bytes_empty"),
+            Err(_) => return reject("mls_welcome_bytes_invalid_b64"),
+        },
+        (None, Some(ciphertext)) if !ciphertext.is_empty() => ciphertext.as_bytes().to_vec(),
+        _ => return reject("mls_welcome_bytes_missing"),
     };
 
     let row = MlsWelcome {
@@ -249,6 +273,62 @@ pub fn apply_welcome_enqueue(state: &mut ProjectionState, op: &Operation) -> Pro
     })
 }
 
+/// G3.S1 — initialize a new MLS group at epoch 0.
+///
+/// The canonical payload is `mls_genesis_payload` from the spec
+/// registry. The reducer stores the epoch and covered-frontier summary
+/// only; opaque GroupInfo / ratchet tree material remains in the
+/// durable event payload and object store references.
+pub fn apply_group_genesis(state: &mut ProjectionState, op: &Operation) -> ProjectionEffectOut {
+    let payload = &op.payload;
+    let Some(group_id) = payload
+        .get("group_id")
+        .or_else(|| payload.get("mls_group_id"))
+        .and_then(Value::as_str)
+    else {
+        return reject("mls_genesis_group_missing");
+    };
+    let epoch = payload.get("epoch").and_then(Value::as_u64).unwrap_or(0);
+    if epoch != 0 {
+        return reject("mls_genesis_epoch_invalid");
+    }
+    let Some(creator_actor_did) = payload
+        .get("creator_actor_did")
+        .or_else(|| payload.get("creator_principal_id"))
+        .and_then(Value::as_str)
+    else {
+        return reject("mls_genesis_creator_missing");
+    };
+    if payload
+        .get("governance_binding")
+        .or_else(|| payload.get("mls_governance_binding"))
+        .is_none()
+    {
+        return reject("mls_genesis_governance_binding_missing");
+    }
+    if state.mls_commit_epochs.contains_key(group_id) {
+        return reject(REASON_GENESIS_ALREADY_EXISTS);
+    }
+    let covered_frontier = extract_covered_frontier(payload).unwrap_or_default();
+    state.mls_commit_epochs.insert(
+        group_id.to_owned(),
+        MlsCommitEpoch {
+            group_id: group_id.to_owned(),
+            epoch: 0,
+            leader_actor_did: creator_actor_did.to_owned(),
+            covered_frontier: covered_frontier.clone(),
+            committed_at: op.created_at.timestamp(),
+        },
+    );
+
+    ProjectionEffectOut::Mls(MlsEffect::GroupGenesis {
+        group_id: group_id.to_owned(),
+        epoch: 0,
+        creator_actor_did: creator_actor_did.to_owned(),
+        covered_frontier,
+    })
+}
+
 /// G3.S1 — bump an MLS group's commit epoch.
 ///
 /// Payload shape:
@@ -270,10 +350,18 @@ pub fn apply_welcome_enqueue(state: &mut ProjectionState, op: &Operation) -> Pro
 ///
 pub fn apply_commit_epoch(state: &mut ProjectionState, op: &Operation) -> ProjectionEffectOut {
     let payload = &op.payload;
-    let Some(group_id) = payload.get("group_id").and_then(Value::as_str) else {
+    let Some(group_id) = payload
+        .get("group_id")
+        .or_else(|| payload.get("mls_group_id"))
+        .and_then(Value::as_str)
+    else {
         return reject("mls_commit_group_missing");
     };
-    let expected_prev_epoch = match payload.get("expected_prev_epoch").and_then(Value::as_u64) {
+    let expected_prev_epoch = match payload
+        .get("expected_prev_epoch")
+        .or_else(|| payload.get("base_epoch"))
+        .and_then(Value::as_u64)
+    {
         Some(v) => v,
         None => return reject("mls_commit_expected_prev_epoch_missing"),
     };
@@ -284,6 +372,8 @@ pub fn apply_commit_epoch(state: &mut ProjectionState, op: &Operation) -> Projec
     // presence check; the routing layer logs the digest for audit.
     if !payload
         .get("commit_bytes_b64")
+        .or_else(|| payload.get("commit_message_ref"))
+        .or_else(|| payload.get("commit_digest"))
         .and_then(Value::as_str)
         .map(|s| !s.is_empty())
         .unwrap_or(false)

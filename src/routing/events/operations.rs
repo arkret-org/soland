@@ -66,10 +66,32 @@ const MEMBER_ACTOR_FIELDS: &[&str] = &["actor_id", "member", "actor", "sender"];
 const READ_MARKER_ACTOR_FIELDS: &[&str] = &["actor_id"];
 const CONSENT_PEER_FIELDS: &[&str] = &["peer", "peer_did", "grantee_did"];
 const CONSENT_SCOPE_FIELDS: &[&str] = &["consent_scope", "scope"];
-const MLS_COMMIT_GROUP_FIELDS: &[&str] = &["group_id"];
+const MLS_COMMIT_GROUP_FIELDS: &[&str] = &["group_id", "mls_group_id"];
 const MLS_COMMIT_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::AnyOf(
     MLS_COMMIT_GROUP_FIELDS,
     "cx.mls.commit requires group_id for reducer projection",
+)];
+const MLS_GENESIS_GROUP_FIELDS: &[&str] = &["group_id", "mls_group_id"];
+const MLS_GENESIS_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::AnyOf(
+    MLS_GENESIS_GROUP_FIELDS,
+    "cx.mls.genesis requires mls_group_id for reducer projection",
+)];
+const MLS_WELCOME_GROUP_FIELDS: &[&str] = &["group_id", "mls_group_id"];
+const MLS_WELCOME_RECIPIENT_FIELDS: &[&str] = &["recipient_actor_did", "recipient_principal_id"];
+const MLS_WELCOME_REQUIREMENTS: &[PayloadRequirement] = &[
+    PayloadRequirement::AnyOf(
+        MLS_WELCOME_GROUP_FIELDS,
+        "cx.mls.welcome requires mls_group_id for reducer projection",
+    ),
+    PayloadRequirement::AnyOf(
+        MLS_WELCOME_RECIPIENT_FIELDS,
+        "cx.mls.welcome requires recipient principal for reducer projection",
+    ),
+];
+const MLS_KEYPACKAGE_ACTION_FIELDS: &[&str] = &["action", "state"];
+const MLS_KEYPACKAGE_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::AnyOf(
+    MLS_KEYPACKAGE_ACTION_FIELDS,
+    "cx.mls.keypackage requires action/state for reducer projection",
 )];
 
 const MESSAGE_CREATE_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::AnyOf(
@@ -606,6 +628,18 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
         },
         kinds::CX_MLS_COMMIT => OperationPayloadSchema {
             requirements: MLS_COMMIT_REQUIREMENTS,
+            validate: None,
+        },
+        kinds::CX_MLS_GENESIS => OperationPayloadSchema {
+            requirements: MLS_GENESIS_REQUIREMENTS,
+            validate: None,
+        },
+        kinds::CX_MLS_WELCOME => OperationPayloadSchema {
+            requirements: MLS_WELCOME_REQUIREMENTS,
+            validate: None,
+        },
+        kinds::CX_MLS_KEYPACKAGE => OperationPayloadSchema {
+            requirements: MLS_KEYPACKAGE_REQUIREMENTS,
             validate: None,
         },
         kinds::CX_VIEW_CREATE | kinds::CX_VIEW_UPDATE | kinds::CX_VIEW_RECONCILE => {
