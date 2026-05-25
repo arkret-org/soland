@@ -63,6 +63,7 @@ const RELATION_KIND_FIELDS: &[&str] = &["relation_kind", "kind"];
 const RELATION_FROM_FIELDS: &[&str] = &["from_ref", "from"];
 const RELATION_TO_FIELDS: &[&str] = &["to_ref", "to"];
 const MEMBER_ACTOR_FIELDS: &[&str] = &["actor_id", "member", "actor", "sender"];
+const INVITE_CREATE_TARGET_FIELDS: &[&str] = &["invitee", "actor_id", "member"];
 const READ_MARKER_ACTOR_FIELDS: &[&str] = &["actor_id"];
 const CONSENT_PEER_FIELDS: &[&str] = &["peer", "peer_did", "grantee_did"];
 const CONSENT_SCOPE_FIELDS: &[&str] = &["consent_scope", "scope"];
@@ -163,6 +164,11 @@ const MEMBERSHIP_REQUIREMENTS: &[PayloadRequirement] = &[
         "membership operation requires member and membership",
     ),
 ];
+const INVITE_CREATE_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::AnyOf(
+    INVITE_CREATE_TARGET_FIELDS,
+    "cx.invite.create operation requires invitee",
+)];
+const INVITE_STATE_REQUIREMENTS: &[PayloadRequirement] = &[];
 const REALM_CREATE_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::Required(
     "object",
     "cx.realm.create operation requires payload.object",
@@ -664,6 +670,14 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
         "cx.consent.revoke" => OperationPayloadSchema {
             requirements: CONSENT_REVOKE_REQUIREMENTS,
             validate: Some(validate_observed_dots_payload),
+        },
+        kinds::CX_INVITE_CREATE => OperationPayloadSchema {
+            requirements: INVITE_CREATE_REQUIREMENTS,
+            validate: None,
+        },
+        kind if kinds::is_invite_kind(kind) => OperationPayloadSchema {
+            requirements: INVITE_STATE_REQUIREMENTS,
+            validate: None,
         },
         kind if kinds::is_membership_kind(kind) => OperationPayloadSchema {
             requirements: MEMBERSHIP_REQUIREMENTS,

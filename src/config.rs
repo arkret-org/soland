@@ -133,8 +133,10 @@ pub struct AppConfig {
     /// - [`FederationPolicy::Hub`] — push only to a single configured upstream hub; rely on the
     ///   hub for outbound dissemination.
     pub federation_policy: FederationPolicy,
-    /// Peer DIDs the federation outbound layer
-    /// considers as broadcast targets (mesh) or hub upstream (hub). Empty
+    /// Federation peers the outbound layer considers as broadcast targets
+    /// (mesh) or hub upstream (hub). Entries may be plain base URLs for
+    /// legacy Move/Anchor replication, or `base_url|service_did` when
+    /// operation push needs a DID-bound destination body/header. Empty
     /// disables federation outbound.
     pub federation_peers: Vec<String>,
     /// G3.S0 — when true (default), `main.rs` spawns the

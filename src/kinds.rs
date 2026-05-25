@@ -72,6 +72,9 @@ pub const CX_MORPH_RESTORE: &str = "cx.morph.restore";
 // rejects them because they no longer appear in `active_durable_event_kinds`.
 pub const CX_CONTAINER_MOVE_ITEM: &str = "cx.container.move_item";
 pub const CX_CONTAINER_REBALANCE: &str = "cx.container.rebalance";
+pub const CX_INVITE_CREATE: &str = "cx.invite.create";
+pub const CX_INVITE_ACCEPT: &str = "cx.invite.accept";
+pub const CX_INVITE_CANCEL: &str = "cx.invite.cancel";
 pub const CX_MEMBER_STATE: &str = "cx.member.state";
 pub const CX_READ_MARKER: &str = "cx.read_cursor.advance";
 // Realm security-boundary lifecycle (`cx.realm.*`). Spec
@@ -361,6 +364,9 @@ fn canonical_registered_kind(object_type: &str) -> Option<&str> {
         CX_MORPH_RESTORE => Some(CX_MORPH_RESTORE),
         CX_CONTAINER_MOVE_ITEM => Some(CX_CONTAINER_MOVE_ITEM),
         CX_CONTAINER_REBALANCE => Some(CX_CONTAINER_REBALANCE),
+        CX_INVITE_CREATE => Some(CX_INVITE_CREATE),
+        CX_INVITE_ACCEPT => Some(CX_INVITE_ACCEPT),
+        CX_INVITE_CANCEL => Some(CX_INVITE_CANCEL),
         CX_READ_MARKER => Some(CX_READ_MARKER),
         CX_REALM_CREATE | CX_REALM_UPDATE | CX_REALM_DESTROY | CX_REALM_TOMBSTONE => {
             Some(match object_type {
@@ -461,6 +467,14 @@ pub fn operation_is_membership(operation: &Operation) -> bool {
     canonical_kind_for_operation(operation) == Some(CX_MEMBER_STATE)
 }
 
+pub fn operation_is_invite(operation: &Operation) -> bool {
+    canonical_kind_for_operation(operation).is_some_and(is_invite_kind)
+}
+
+pub fn operation_is_invite_create(operation: &Operation) -> bool {
+    canonical_kind_for_operation(operation) == Some(CX_INVITE_CREATE)
+}
+
 pub fn operation_is_realm_lifecycle(operation: &Operation) -> bool {
     canonical_kind_for_operation(operation).is_some_and(is_realm_lifecycle_kind)
 }
@@ -471,6 +485,10 @@ pub fn is_redaction_kind(kind: &str) -> bool {
 
 pub fn is_membership_kind(kind: &str) -> bool {
     kind == CX_MEMBER_STATE
+}
+
+pub fn is_invite_kind(kind: &str) -> bool {
+    matches!(kind, CX_INVITE_CREATE | CX_INVITE_ACCEPT | CX_INVITE_CANCEL)
 }
 
 pub fn is_realm_lifecycle_kind(kind: &str) -> bool {

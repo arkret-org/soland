@@ -23,7 +23,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use chrono::{DateTime, Duration, Utc};
 use contrix_sdk::state_res::AnchorStore;
-use contrix_sdk::{Anchor, RealmId, SpaceId};
+use contrix_sdk::{Anchor, Did, Operation, RealmId, SpaceId};
 use ed25519_dalek::Signer as _;
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
@@ -37,9 +37,15 @@ use super::{
     sha256_hex, sync_token, validate_space_id,
 };
 use crate::error::AppError;
-use crate::ids;
 use crate::result::{JsonResult, json_ok};
 use crate::state::{AppState, FederationTransactionRecord};
+use crate::{ids, kinds};
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct FederationPeerTarget {
+    url: String,
+    did: String,
+}
 
 #[endpoint(
     operation_id = "cx.extension.soland.federation.transaction",
@@ -271,6 +277,31 @@ pub(super) async fn federation_push_operations(
     })
 }
 
+/// Fan out locally-accepted timeline / membership operations to configured
+/// federation peers. Each operation is persisted in the local federation log
+/// first, so peer pull/backfill can replay the same item if the live push path
+/// is partitioned. Outbox rows are deterministic on `(origin, destination,
+/// operation_id)`, making restart-time replays idempotent.
+pub(crate) fn fanout_accepted_operations_to_peers(state: &AppState, operations: &[Operation]) {
+    if operations.is_empty() || state.config.federation_peers.is_empty() {
+        return;
+    }
+    let peers = configured_peer_targets(state);
+    if peers.is_empty() {
+        return;
+    }
+
+    for operation in operations
+        .iter()
+        .filter(|operation| operation_should_fanout(operation))
+    {
+        persist_local_federation_operation(state, operation);
+        for peer in &peers {
+            enqueue_operation_push(state, operation, peer);
+        }
+    }
+}
+
 #[endpoint(
     operation_id = "cx.extension.soland.federation.pull_operations",
     tags("federation"),
@@ -483,6 +514,120 @@ fn federation_destination_matches(state: &AppState, destination: &str) -> bool {
     destination == state.config.service_did
 }
 
+fn operation_should_fanout(operation: &Operation) -> bool {
+    kinds::operation_is_message_create(operation)
+        || kinds::operation_is_invite(operation)
+        || kinds::operation_is_membership(operation)
+        || kinds::operation_is_realm_lifecycle(operation)
+}
+
+fn persist_local_federation_operation(state: &AppState, operation: &Operation) {
+    let store = state.persistence.federation_operations();
+    match store.contains(operation.operation_id.as_str()) {
+        Ok(true) => {}
+        Ok(false) => {
+            if let Err(error) = store.append(operation.clone()) {
+                tracing::warn!(
+                    %error,
+                    operation_id = %operation.operation_id,
+                    "failed to persist local federation operation"
+                );
+            }
+        }
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                operation_id = %operation.operation_id,
+                "failed to check local federation operation log"
+            );
+        }
+    }
+}
+
+fn enqueue_operation_push(state: &AppState, operation: &Operation, peer: &FederationPeerTarget) {
+    let Ok(origin) = Did::new(state.config.service_did.clone()) else {
+        tracing::warn!(
+            service_did = %state.config.service_did,
+            "local service_did is not a DID; skipping federation operation fanout"
+        );
+        return;
+    };
+    let Ok(destination) = Did::new(peer.did.clone()) else {
+        tracing::warn!(
+            peer = %peer.url,
+            peer_did = %peer.did,
+            operation_id = %operation.operation_id,
+            "federation peer entry lacks a valid destination DID; use base_url|did"
+        );
+        return;
+    };
+    let Ok(space_id) = SpaceId::new(operation.realm_id.to_string()) else {
+        tracing::warn!(
+            operation_id = %operation.operation_id,
+            realm_id = %operation.realm_id,
+            "operation realm_id is not federation-addressable"
+        );
+        return;
+    };
+
+    let body = contrix_sdk::FederationPushOperationsReqBody {
+        origin,
+        destination,
+        space_id,
+        service_binding_ref: format!(
+            "{}#federation-push-operations:{}",
+            state.config.service_did,
+            operation.operation_id.as_str()
+        ),
+        operations: vec![operation.clone()],
+    };
+    let payload = match serde_json::to_value(&body)
+        .ok()
+        .and_then(|value| contrix_sdk::canonical::canonical_json_bytes(&value).ok())
+        .and_then(|bytes| String::from_utf8(bytes).ok())
+    {
+        Some(payload) => payload,
+        None => {
+            tracing::warn!(
+                operation_id = %operation.operation_id,
+                "failed to encode federation operation push body"
+            );
+            return;
+        }
+    };
+
+    let mut hasher = Sha256::new();
+    hasher.update(state.config.service_did.as_bytes());
+    hasher.update(b"|");
+    hasher.update(peer.did.as_bytes());
+    hasher.update(b"|operation|");
+    hasher.update(operation.operation_id.as_str().as_bytes());
+    let idempotency_key = format!("cx:outbox:operation:{:x}", hasher.finalize());
+
+    record_outbound_fanout_attempt(
+        state,
+        "operation",
+        operation.operation_id.as_str(),
+        peer.url.as_str(),
+    );
+    if let Err(error) = crate::routing::federation::outbox::enqueue_outbound(
+        state,
+        peer.url.as_str(),
+        peer.did.as_str(),
+        "/api/v1/federation/push-operations",
+        &idempotency_key,
+        &payload,
+    ) {
+        tracing::warn!(
+            %error,
+            peer = %peer.url,
+            peer_did = %peer.did,
+            operation_id = %operation.operation_id,
+            "failed to enqueue federation operation push"
+        );
+    }
+}
+
 fn is_valid_federation_txn_id(value: &str) -> bool {
     let value = value.trim();
     !value.is_empty()
@@ -607,19 +752,9 @@ pub(super) async fn federation_anchors_push(
 /// tokio task so the inbound write path never blocks on a slow peer.
 #[allow(dead_code)]
 pub fn broadcast_move_to_peers(state: &AppState, move_id: &str) -> Vec<String> {
-    use crate::config::FederationPolicy;
-    let peers: Vec<String> = match state.config.federation_policy {
-        FederationPolicy::Mesh => state.config.federation_peers.clone(),
-        FederationPolicy::Hub => state
-            .config
-            .federation_peers
-            .first()
-            .cloned()
-            .into_iter()
-            .collect(),
-    };
+    let peers = configured_peer_targets(state);
     for peer in &peers {
-        record_outbound_fanout_attempt(state, "move", move_id, peer);
+        record_outbound_fanout_attempt(state, "move", move_id, peer.url.as_str());
         // G3.S0 — durable enqueue. The transcript persisted above remains
         // the human-readable audit record; the outbox row is what the
         // background dispatcher (`routing::federation::outbox`) actually
@@ -627,18 +762,18 @@ pub fn broadcast_move_to_peers(state: &AppState, move_id: &str) -> Vec<String> {
         // inbound write — the transcript still gives operators a way to
         // re-trigger delivery once the storage hiccup clears.
         enqueue_outbound_for(state, "move", move_id, peer);
-        let peer = peer.clone();
+        let peer_url = peer.url.clone();
         let move_id_owned = move_id.to_owned();
         tokio::spawn(async move {
             tracing::debug!(
                 worker = "federation_outbox_enqueue",
-                %peer,
+                peer = %peer_url,
                 move_id = %move_id_owned,
                 "federation broadcast move signed request transcript persisted for retry worker"
             );
         });
     }
-    peers
+    peers.into_iter().map(|peer| peer.url).collect()
 }
 
 /// Symmetric helper for Anchor replication. The hub policy still pushes
@@ -646,8 +781,28 @@ pub fn broadcast_move_to_peers(state: &AppState, move_id: &str) -> Vec<String> {
 /// to every peer.
 #[allow(dead_code)]
 pub fn broadcast_anchor_to_peers(state: &AppState, anchor_id: &str) -> Vec<String> {
+    let peers = configured_peer_targets(state);
+    for peer in &peers {
+        record_outbound_fanout_attempt(state, "anchor", anchor_id, peer.url.as_str());
+        // G3.S0 — durable enqueue (see broadcast_move_to_peers).
+        enqueue_outbound_for(state, "anchor", anchor_id, peer);
+        let peer_url = peer.url.clone();
+        let anchor_id_owned = anchor_id.to_owned();
+        tokio::spawn(async move {
+            tracing::debug!(
+                worker = "federation_outbox_enqueue",
+                peer = %peer_url,
+                anchor_id = %anchor_id_owned,
+                "federation broadcast anchor signed request transcript persisted for retry worker"
+            );
+        });
+    }
+    peers.into_iter().map(|peer| peer.url).collect()
+}
+
+fn configured_peer_targets(state: &AppState) -> Vec<FederationPeerTarget> {
     use crate::config::FederationPolicy;
-    let peers: Vec<String> = match state.config.federation_policy {
+    let entries: Vec<String> = match state.config.federation_policy {
         FederationPolicy::Mesh => state.config.federation_peers.clone(),
         FederationPolicy::Hub => state
             .config
@@ -657,22 +812,35 @@ pub fn broadcast_anchor_to_peers(state: &AppState, anchor_id: &str) -> Vec<Strin
             .into_iter()
             .collect(),
     };
-    for peer in &peers {
-        record_outbound_fanout_attempt(state, "anchor", anchor_id, peer);
-        // G3.S0 — durable enqueue (see broadcast_move_to_peers).
-        enqueue_outbound_for(state, "anchor", anchor_id, peer);
-        let peer = peer.clone();
-        let anchor_id_owned = anchor_id.to_owned();
-        tokio::spawn(async move {
-            tracing::debug!(
-                worker = "federation_outbox_enqueue",
-                %peer,
-                anchor_id = %anchor_id_owned,
-                "federation broadcast anchor signed request transcript persisted for retry worker"
-            );
-        });
+    entries
+        .into_iter()
+        .filter_map(|entry| parse_peer_target(&entry))
+        .collect()
+}
+
+fn parse_peer_target(entry: &str) -> Option<FederationPeerTarget> {
+    let entry = entry.trim();
+    if entry.is_empty() {
+        return None;
     }
-    peers
+    let (left, right) = entry
+        .split_once('|')
+        .map(|(left, right)| (left.trim(), right.trim()))
+        .unwrap_or((entry, entry));
+    if left.is_empty() || right.is_empty() {
+        return None;
+    }
+    if left.starts_with("did:") && !right.starts_with("did:") {
+        Some(FederationPeerTarget {
+            url: right.trim_end_matches('/').to_owned(),
+            did: left.to_owned(),
+        })
+    } else {
+        Some(FederationPeerTarget {
+            url: left.trim_end_matches('/').to_owned(),
+            did: right.to_owned(),
+        })
+    }
 }
 
 /// G3.S0 — bridge from the existing broadcast_*_to_peers helpers to the
@@ -682,7 +850,12 @@ pub fn broadcast_anchor_to_peers(state: &AppState, anchor_id: &str) -> Vec<Strin
 /// deterministic so a restart-time re-broadcast collapses onto the
 /// existing row (UNIQUE INDEX on `peer_did, idempotency_key`) instead
 /// of creating a duplicate.
-fn enqueue_outbound_for(state: &AppState, resource_kind: &str, resource_id: &str, peer: &str) {
+fn enqueue_outbound_for(
+    state: &AppState,
+    resource_kind: &str,
+    resource_id: &str,
+    peer: &FederationPeerTarget,
+) {
     let endpoint = match resource_kind {
         "anchor" => "/api/v1/federation/anchors",
         _ => "/api/v1/federation/push-operations",
@@ -690,7 +863,7 @@ fn enqueue_outbound_for(state: &AppState, resource_kind: &str, resource_id: &str
     let payload = json!({
         "schema": format!("cx.federation.outbound.{resource_kind}.v1"),
         "origin": state.config.service_did,
-        "destination": peer,
+        "destination": peer.did.as_str(),
         "resource_kind": resource_kind,
         "resource_id": resource_id,
         "endpoint": endpoint,
@@ -711,7 +884,7 @@ fn enqueue_outbound_for(state: &AppState, resource_kind: &str, resource_id: &str
     let mut hasher = Sha256::new();
     hasher.update(state.config.service_did.as_bytes());
     hasher.update(b"|");
-    hasher.update(peer.as_bytes());
+    hasher.update(peer.did.as_bytes());
     hasher.update(b"|");
     hasher.update(resource_kind.as_bytes());
     hasher.update(b"|");
@@ -719,15 +892,16 @@ fn enqueue_outbound_for(state: &AppState, resource_kind: &str, resource_id: &str
     let idempotency_key = format!("cx:outbox:{:x}", hasher.finalize());
     if let Err(error) = crate::routing::federation::outbox::enqueue_outbound(
         state,
-        peer,
-        peer,
+        peer.url.as_str(),
+        peer.did.as_str(),
         endpoint,
         &idempotency_key,
         &payload_json,
     ) {
         tracing::warn!(
             %error,
-            %peer,
+            peer = %peer.url,
+            peer_did = %peer.did,
             resource_kind,
             resource_id,
             "failed to enqueue federation outbox row (transcript still persisted)"
@@ -1437,6 +1611,132 @@ mod tests {
         let state = AppState::new(cfg, Db { pool: None });
         let targets = broadcast_anchor_to_peers(&state, "cx:anchor:sha256:01");
         assert!(targets.is_empty());
+    }
+
+    #[tokio::test]
+    async fn local_invite_membership_and_message_operations_enqueue_push_bodies_idempotently() {
+        let cfg = config_with_policy(
+            FederationPolicy::Mesh,
+            vec!["http://127.0.0.1:9|did:web:peer.example".to_owned()],
+        );
+        let state = AppState::new(cfg, Db { pool: None });
+        let realm_id = RealmId::new("cx:realm:01904100-0000-7000-8000-000000000051").unwrap();
+        let invite = Operation::create(
+            contrix_sdk::OperationId::new("cx:operation:01904100-0000-7000-8000-000000000052")
+                .unwrap(),
+            realm_id.clone(),
+            kinds::CX_MEMBER_STATE,
+            json!({
+                "actor_id": "did:web:bob.example",
+                "member": "did:web:bob.example",
+                "membership": "invite"
+            }),
+        );
+        let invite_create = Operation::create(
+            contrix_sdk::OperationId::new("cx:operation:01904100-0000-7000-8000-000000000055")
+                .unwrap(),
+            realm_id.clone(),
+            kinds::CX_INVITE_CREATE,
+            json!({
+                "invite_id": "cx:invite:01904100-0000-7000-8000-000000000056",
+                "invitee": "did:web:carol.example",
+                "sender": "did:web:alice.example",
+                "expires_at": "2030-01-01T00:00:00Z"
+            }),
+        );
+        let message = Operation::create(
+            contrix_sdk::OperationId::new("cx:operation:01904100-0000-7000-8000-000000000053")
+                .unwrap(),
+            realm_id,
+            kinds::CX_MESSAGE_CREATE,
+            json!({
+                "event_id": "cx:event:01904100-0000-7000-8000-000000000054",
+                "sender": "did:web:alice.example",
+                "thread_id": "cx:flow:01904100-0000-7000-8000-000000000051",
+                "content": {"kind": "cx.content.text", "body": "hello federation"}
+            }),
+        );
+
+        crate::routing::events::projection::project_accepted_operations(
+            &state,
+            "did:web:alice.example",
+            &[invite.clone(), invite_create.clone(), message.clone()],
+        );
+
+        let outbox = state
+            .persistence
+            .federation_outbox()
+            .snapshot_all()
+            .unwrap();
+        assert_eq!(outbox.len(), 3);
+        assert!(outbox.iter().all(|row| row.peer_url == "http://127.0.0.1:9"
+            && row.peer_did == "did:web:peer.example"
+            && row.endpoint == "/api/v1/federation/push-operations"));
+        let payloads = outbox
+            .iter()
+            .map(|row| serde_json::from_str::<Value>(&row.payload_json).unwrap())
+            .collect::<Vec<_>>();
+        assert!(
+            payloads
+                .iter()
+                .all(|body| body["origin"] == "did:web:test.local"
+                    && body["destination"] == "did:web:peer.example"
+                    && body["space_id"] == "cx:realm:01904100-0000-7000-8000-000000000051")
+        );
+        let pushed_ids = payloads
+            .iter()
+            .flat_map(|body| body["operations"].as_array().unwrap().iter())
+            .map(|operation| operation["operation_id"].as_str().unwrap().to_owned())
+            .collect::<std::collections::BTreeSet<_>>();
+        assert!(pushed_ids.contains(invite.operation_id.as_str()));
+        assert!(pushed_ids.contains(invite_create.operation_id.as_str()));
+        assert!(pushed_ids.contains(message.operation_id.as_str()));
+
+        let projected_invite = state
+            .persistence
+            .space_invites()
+            .get("cx:invite:01904100-0000-7000-8000-000000000056")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            projected_invite.invitee.as_deref(),
+            Some("did:web:carol.example")
+        );
+        assert_eq!(projected_invite.inviter, "did:web:alice.example");
+        assert_eq!(projected_invite.status, "pending");
+
+        let federation_log = state
+            .persistence
+            .federation_operations()
+            .snapshot_all()
+            .unwrap();
+        assert_eq!(federation_log.len(), 3);
+
+        crate::routing::events::projection::project_accepted_operations(
+            &state,
+            "did:web:alice.example",
+            &[invite, invite_create, message],
+        );
+        assert_eq!(
+            state
+                .persistence
+                .federation_outbox()
+                .snapshot_all()
+                .unwrap()
+                .len(),
+            3,
+            "operation fanout replays must collapse on deterministic outbox keys"
+        );
+        assert_eq!(
+            state
+                .persistence
+                .federation_operations()
+                .snapshot_all()
+                .unwrap()
+                .len(),
+            3,
+            "local federation operation log must not duplicate replayed operations"
+        );
     }
 
     #[tokio::test]

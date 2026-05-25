@@ -1452,7 +1452,12 @@ fn validate_event_envelope(
     let is_realm_create_bootstrap = kind == "cx.realm.create"
         && realm_create_actor_is_creator(object, &session.actor)
         && !space_exists_in_index(state, &space_id);
-    if !is_realm_create_bootstrap && !realm_has_member(state, &space_id, &session.actor) {
+    let is_invite_acceptance_join =
+        member_join_accepts_pending_invite(state, object, &session.actor, &space_id);
+    if !is_realm_create_bootstrap
+        && !is_invite_acceptance_join
+        && !realm_has_member(state, &space_id, &session.actor)
+    {
         return Err(event_validation_error(
             StatusCode::FORBIDDEN,
             "capability_denied",
@@ -2614,6 +2619,51 @@ fn realm_create_actor_is_creator(object: &serde_json::Map<String, Value>, actor:
         .and_then(|create_object| create_object.get("created_by_principal"))
         .and_then(Value::as_str)
         .is_some_and(|creator| creator == actor)
+}
+
+fn member_join_accepts_pending_invite(
+    state: &AppState,
+    object: &serde_json::Map<String, Value>,
+    actor: &str,
+    space_id: &str,
+) -> bool {
+    if object.get("kind").and_then(Value::as_str) != Some(kinds::CX_MEMBER_STATE) {
+        return false;
+    }
+    let Some(payload) = object.get("payload") else {
+        return false;
+    };
+    if payload.get("membership").and_then(Value::as_str) != Some("join") {
+        return false;
+    }
+    let target_actor = payload
+        .get("actor_id")
+        .or_else(|| payload.get("member"))
+        .and_then(Value::as_str)
+        .unwrap_or(actor);
+    if target_actor != actor {
+        return false;
+    }
+    let Some(invite_id) = payload.get("invite_id").and_then(Value::as_str) else {
+        return false;
+    };
+    if crate::ids::parse_typed_uuid(invite_id, "invite").is_none() {
+        return false;
+    }
+    let Ok(Some(invite)) = state.persistence.space_invites().get(invite_id) else {
+        return false;
+    };
+    if invite.status != "pending" || invite.invitee.as_deref() != Some(actor) {
+        return false;
+    }
+    if invite
+        .expires_at
+        .is_some_and(|expires_at| expires_at <= now())
+    {
+        return false;
+    }
+    invite.space_id.replacen("cx:space:", "cx:realm:", 1)
+        == space_id.replacen("cx:space:", "cx:realm:", 1)
 }
 
 /// Quick existence probe against the in-memory `state.realms` index used

@@ -4455,7 +4455,7 @@ async fn webrtc_signaling_contracts_work() {
 }
 
 #[tokio::test]
-async fn federation_rejects_replayed_operations() {
+async fn federation_accepts_idempotent_replayed_operations() {
     let state = AppState::new(test_config(), Db { pool: None });
     let operation = Operation::create(
         OperationId::new("cx:operation:01904100-0000-7000-8000-4b147e97831e").unwrap(),
@@ -4533,12 +4533,24 @@ async fn federation_rejects_replayed_operations() {
         .take_json()
         .await
         .unwrap();
-    assert!(replay["accepted"].as_array().unwrap().is_empty());
     assert_eq!(
-        replay["rejected"][0]["operation_id"],
+        replay["accepted"][0],
         "cx:operation:01904100-0000-7000-8000-4b147e97831e"
     );
-    assert_eq!(replay["rejected"][0]["reason"], "replay");
+    assert!(replay["rejected"].as_array().unwrap().is_empty());
+    let after_replay: Value = TestClient::get(
+        "http://server/api/v1/federation/pull-operations?space_id=cx:realm:01904100-0000-7000-8000-20d6cfd24be6",
+    )
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    assert_eq!(
+        after_replay["operations"].as_array().unwrap().len(),
+        1,
+        "idempotent replay must not duplicate the stored operation"
+    );
 
     let invalid_operation = Operation::create(
         OperationId::new("cx:operation:01904100-0000-7000-8000-1cac81a395b6").unwrap(),

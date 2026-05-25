@@ -620,10 +620,7 @@ pub fn ingest_federation_operations(
             .contains(operation_id.as_str())
             .unwrap_or(false)
         {
-            rejected.push(json!({
-                "operation_id": operation_id,
-                "reason": "replay",
-            }));
+            accepted.push(operation_id);
             continue;
         }
         if operation.validate_payload_object().is_err() {
@@ -673,6 +670,8 @@ pub fn project_federation_operation(state: &AppState, origin: &str, operation: &
     ensure_projected_space(state, origin, operation);
     if kinds::operation_is_message_create(operation) {
         project_federated_message(state, origin, operation);
+    } else if kinds::operation_is_invite_create(operation) {
+        project_invite_create_operation(state, origin, operation);
     } else if kinds::operation_is_membership(operation)
         || kinds::operation_is_realm_lifecycle(operation)
     {
@@ -1071,6 +1070,7 @@ fn write_through_projection(state: &AppState, operation: &Operation) {
 }
 
 pub fn project_accepted_operations(state: &AppState, origin: &str, operations: &[Operation]) {
+    crate::routing::federation::fanout_accepted_operations_to_peers(state, operations);
     for operation in operations {
         tracing::debug!(
             kind = ?crate::kinds::canonical_kind_for_operation(operation),
@@ -1081,6 +1081,8 @@ pub fn project_accepted_operations(state: &AppState, origin: &str, operations: &
         ensure_projected_space(state, origin, operation);
         if kinds::operation_is_message_create(operation) {
             project_federated_message(state, origin, operation);
+        } else if kinds::operation_is_invite_create(operation) {
+            project_invite_create_operation(state, origin, operation);
         } else if kinds::canonical_kind_string(operation) == "cx.realm.plaintext_visible_services" {
             project_plaintext_visible_services_operation(state, operation);
         } else if kinds::operation_is_membership(operation)
@@ -1396,50 +1398,96 @@ pub fn ensure_projected_space(state: &AppState, origin: &str, operation: &Operat
 
     let now = now();
     let store = state.persistence.realm_meta();
-    if matches!(store.get(space_id.as_str()), Ok(None)) {
-        let record = RealmMetaRecord {
-            owner: origin.to_owned(),
-            deleted: false,
-            discoverability: operation_realm_discoverability(operation)
+    match store.get(space_id.as_str()) {
+        Ok(None) => {
+            let record = RealmMetaRecord {
+                owner: origin.to_owned(),
+                deleted: false,
+                discoverability: operation_realm_discoverability(operation)
+                    .filter(|value| is_valid_discoverability(value))
+                    .unwrap_or_else(|| {
+                        if operation
+                            .payload
+                            .get("public")
+                            .and_then(|value| value.as_bool())
+                            .unwrap_or(false)
+                        {
+                            "public"
+                        } else {
+                            "invite_only"
+                        }
+                    })
+                    .to_owned(),
+                history_visibility: operation_realm_history_visibility(operation)
+                    .filter(|value| {
+                        matches!(*value, "shared" | "joined" | "invited" | "world_readable")
+                    })
+                    .unwrap_or("joined")
+                    .to_owned(),
+                encryption_profile: operation_realm_encryption_profile(operation)
+                    .map(ToOwned::to_owned),
+                plaintext_visible_services: operation
+                    .payload
+                    .get("plaintext_visible_services")
+                    .and_then(|value| value.as_array())
+                    .map(|services| {
+                        services
+                            .iter()
+                            .filter_map(|service| service.as_str().map(ToOwned::to_owned))
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                created_at: now,
+                updated_at: now,
+            };
+            if let Err(error) = store.put(space_id.as_str(), &record) {
+                tracing::warn!(%error, "failed to persist projected space meta");
+            }
+        }
+        Ok(Some(mut record)) => {
+            let mut changed = false;
+            if let Some(discoverability) = operation_realm_discoverability(operation)
                 .filter(|value| is_valid_discoverability(value))
-                .unwrap_or_else(|| {
-                    if operation
-                        .payload
-                        .get("public")
-                        .and_then(|value| value.as_bool())
-                        .unwrap_or(false)
-                    {
-                        "public"
-                    } else {
-                        "invite_only"
-                    }
-                })
-                .to_owned(),
-            history_visibility: operation_realm_history_visibility(operation)
-                .filter(|value| {
+            {
+                if record.discoverability != discoverability {
+                    record.discoverability = discoverability.to_owned();
+                    changed = true;
+                }
+            }
+            if let Some(history_visibility) =
+                operation_realm_history_visibility(operation).filter(|value| {
                     matches!(*value, "shared" | "joined" | "invited" | "world_readable")
                 })
-                .unwrap_or("joined")
-                .to_owned(),
-            encryption_profile: operation_realm_encryption_profile(operation)
-                .map(ToOwned::to_owned),
-            plaintext_visible_services: operation
-                .payload
-                .get("plaintext_visible_services")
-                .and_then(|value| value.as_array())
-                .map(|services| {
-                    services
-                        .iter()
-                        .filter_map(|service| service.as_str().map(ToOwned::to_owned))
-                        .collect()
-                })
-                .unwrap_or_default(),
-            created_at: now,
-            updated_at: now,
-        };
-        if let Err(error) = store.put(space_id.as_str(), &record) {
-            tracing::warn!(%error, "failed to persist projected space meta");
+            {
+                if record.history_visibility != history_visibility {
+                    record.history_visibility = history_visibility.to_owned();
+                    changed = true;
+                }
+            }
+            if let Some(encryption_profile) = operation_realm_encryption_profile(operation) {
+                if record.encryption_profile.as_deref() != Some(encryption_profile) {
+                    record.encryption_profile = Some(encryption_profile.to_owned());
+                    changed = true;
+                }
+            }
+            for service in plaintext_services_from_operation(operation) {
+                if !record
+                    .plaintext_visible_services
+                    .iter()
+                    .any(|existing| existing == &service)
+                {
+                    record.plaintext_visible_services.insert(service);
+                    changed = true;
+                }
+            }
+            if changed {
+                record.updated_at = now;
+                if let Err(error) = store.put(space_id.as_str(), &record) {
+                    tracing::warn!(%error, "failed to update projected space meta");
+                }
+            }
         }
+        Err(error) => tracing::warn!(%error, "failed to read projected space meta"),
     }
     project_membership_operation(state, origin, operation);
 }
@@ -1530,6 +1578,9 @@ pub fn project_membership_operation(state: &AppState, origin: &str, operation: &
             );
         }
     }
+    if membership == Some("join") {
+        project_invite_acceptance(state, member, operation);
+    }
 
     let mut spaces = state.realms.lock().expect("spaces lock");
     let Some(mut entry) = spaces.get(&realm_id).cloned() else {
@@ -1545,6 +1596,150 @@ pub fn project_membership_operation(state: &AppState, origin: &str, operation: &
     spaces.upsert(entry);
     drop(spaces);
     touch_realm(state, operation.realm_id.as_str());
+}
+
+fn project_invite_acceptance(state: &AppState, member: &str, operation: &Operation) {
+    let Some(invite_id) = operation
+        .payload
+        .get("invite_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return;
+    };
+    if ids::parse_typed_uuid(invite_id, "invite").is_none() {
+        return;
+    }
+    let invites = state.persistence.space_invites();
+    let Ok(Some(mut record)) = invites.get(invite_id) else {
+        return;
+    };
+    if record.invitee.as_deref() != Some(member) {
+        return;
+    }
+    if record.status == "accepted" {
+        return;
+    }
+    record.status = "accepted".to_owned();
+    if let Err(error) = invites.put(record) {
+        tracing::warn!(%error, invite_id = %invite_id, "failed to mark invite accepted");
+    }
+}
+
+fn project_invite_create_operation(state: &AppState, origin: &str, operation: &Operation) {
+    if !kinds::operation_is_invite_create(operation) {
+        return;
+    }
+    let Some(invitee) = invitee_for_operation(operation) else {
+        tracing::warn!(
+            operation_id = %operation.operation_id,
+            space_id = %operation.realm_id,
+            "cx.invite.create missing valid invitee DID"
+        );
+        return;
+    };
+    let Some(invite_id) = invite_id_for_operation(operation) else {
+        tracing::warn!(
+            operation_id = %operation.operation_id,
+            space_id = %operation.realm_id,
+            "cx.invite.create missing valid invite id"
+        );
+        return;
+    };
+
+    let invites = state.persistence.space_invites();
+    match invites.get(&invite_id) {
+        Ok(Some(existing)) => {
+            tracing::debug!(
+                invite_id = %invite_id,
+                status = %existing.status,
+                "cx.invite.create projection replay skipped"
+            );
+            return;
+        }
+        Ok(None) => {}
+        Err(error) => {
+            tracing::warn!(%error, invite_id = %invite_id, "failed to read projected invite");
+            return;
+        }
+    }
+
+    let inviter = operation
+        .payload
+        .get("sender")
+        .or_else(|| operation.payload.get("inviter"))
+        .or_else(|| operation.payload.get("issuer"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(origin);
+    let expires_at = operation
+        .payload
+        .get("expires_at")
+        .and_then(Value::as_str)
+        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+        .map(|value| value.with_timezone(&chrono::Utc))
+        .or_else(|| Some(operation.created_at + chrono::Duration::days(7)));
+    let invite_token = super::super::generate_invite_token(
+        &invite_id,
+        operation.realm_id.as_str(),
+        invitee.as_str(),
+    );
+    let record = SpaceInviteRecord {
+        invite_id: invite_id.clone(),
+        space_id: operation.realm_id.to_string(),
+        inviter: inviter.to_owned(),
+        invitee: Some(invitee.as_str().to_owned()),
+        invite_token,
+        status: "pending".to_owned(),
+        expires_at,
+        created_at: operation.created_at,
+    };
+    match invites.put(record) {
+        Ok(()) => {
+            tracing::info!(
+                invite_id = %invite_id,
+                invitee = %invitee.as_str(),
+                space_id = %operation.realm_id,
+                "projected invite via cx.invite.create event"
+            );
+            touch_realm(state, operation.realm_id.as_str());
+        }
+        Err(error) => tracing::warn!(%error, invite_id = %invite_id, "failed to project invite"),
+    }
+}
+
+fn invite_id_for_operation(operation: &Operation) -> Option<String> {
+    if let Some(invite_id) = operation
+        .payload
+        .get("invite_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        if ids::parse_typed_uuid(invite_id, "invite").is_some() {
+            return Some(invite_id.to_owned());
+        }
+        tracing::warn!(
+            operation_id = %operation.operation_id,
+            invite_id = %invite_id,
+            "cx.invite.create supplied malformed invite_id; deriving stable invite id"
+        );
+    }
+    ids::typed_uuid_part(operation.operation_id.as_str())
+        .map(|uuid| ids::format_typed_uuid("invite", &uuid))
+}
+
+fn invitee_for_operation(operation: &Operation) -> Option<Did> {
+    operation
+        .payload
+        .get("invitee")
+        .or_else(|| operation.payload.get("actor_id"))
+        .or_else(|| operation.payload.get("member"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .and_then(|value| Did::new(value.to_owned()).ok())
 }
 
 fn plaintext_services_from_operation(operation: &Operation) -> Vec<String> {
