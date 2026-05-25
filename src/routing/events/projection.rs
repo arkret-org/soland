@@ -39,7 +39,7 @@ use crate::kinds;
 use crate::persistence::{MlsKeyPackageRecord, MlsWelcomeRecord};
 use crate::state::{
     AppState, MessageRecord, ProjectionEventRecord, RealmDirectoryEntry, RealmMetaRecord,
-    SpaceInviteRecord,
+    RetentionPolicyRecord, RetentionTombstoneRecord, SpaceInviteRecord,
 };
 
 #[derive(Clone, Debug)]
@@ -98,6 +98,7 @@ pub fn projection_event_json(event: &ProjectionEventRecord) -> serde_json::Value
 }
 
 pub const ERASED_USER_PLACEHOLDER: &str = "[user erased]";
+pub const RETENTION_EXPIRED_PLACEHOLDER: &str = "[expired]";
 
 pub fn operation_event_id(operation: &Operation) -> String {
     operation
@@ -201,6 +202,97 @@ fn operation_realm_encryption_profile(operation: &Operation) -> Option<&str> {
     first_string_field(&operation.payload, &["encryption_profile"])
         .or_else(|| object_string_field(operation, &["encryption_profile"]))
         .or_else(|| patch_string_field(operation, "encryption_profile"))
+}
+
+pub fn retention_ttl_seconds_from_value(value: &Value) -> Option<i64> {
+    if let Some(seconds) = value.get("ttl_seconds").and_then(Value::as_i64) {
+        return (seconds > 0).then_some(seconds);
+    }
+    if let Some(days) = value.get("ttl_days").and_then(Value::as_i64) {
+        return (days > 0).then_some(days.saturating_mul(86_400));
+    }
+    if let Some(ttl) = value.get("ttl").and_then(Value::as_str) {
+        return parse_retention_ttl_string(ttl);
+    }
+    if let Some(ttl) = value.as_str() {
+        return parse_retention_ttl_string(ttl);
+    }
+    None
+}
+
+fn parse_retention_ttl_string(value: &str) -> Option<i64> {
+    let value = value.trim();
+    if value.is_empty() {
+        return None;
+    }
+    let (digits, multiplier) = if let Some(days) = value.strip_suffix('d') {
+        (days, 86_400)
+    } else if let Some(hours) = value.strip_suffix('h') {
+        (hours, 3_600)
+    } else if let Some(minutes) = value.strip_suffix('m') {
+        (minutes, 60)
+    } else if let Some(seconds) = value.strip_suffix('s') {
+        (seconds, 1)
+    } else if let Some(days) = value
+        .strip_prefix('P')
+        .and_then(|rest| rest.strip_suffix('D'))
+    {
+        (days, 86_400)
+    } else {
+        (value, 1)
+    };
+    let amount = digits.trim().parse::<i64>().ok()?;
+    (amount > 0).then_some(amount.saturating_mul(multiplier))
+}
+
+fn operation_retention_ttl_seconds(operation: &Operation) -> Option<i64> {
+    operation
+        .payload
+        .get("retention_policy")
+        .and_then(retention_ttl_seconds_from_value)
+        .or_else(|| {
+            operation
+                .payload
+                .get("object")
+                .and_then(|object| object.get("retention_policy"))
+                .and_then(retention_ttl_seconds_from_value)
+        })
+        .or_else(|| {
+            operation
+                .payload
+                .get("patch")
+                .and_then(|patch| patch.get("retention_policy"))
+                .and_then(|patch_value| {
+                    if patch_value.get("$op").and_then(Value::as_str) == Some("set") {
+                        patch_value
+                            .get("value")
+                            .and_then(retention_ttl_seconds_from_value)
+                    } else {
+                        retention_ttl_seconds_from_value(patch_value)
+                    }
+                })
+        })
+}
+
+pub fn project_retention_policy_from_operation(
+    state: &AppState,
+    origin: &str,
+    operation: &Operation,
+) {
+    let Some(ttl_seconds) = operation_retention_ttl_seconds(operation) else {
+        return;
+    };
+    let record = RetentionPolicyRecord {
+        space_id: operation.realm_id.to_string(),
+        ttl_seconds,
+        updated_by: origin.to_owned(),
+        updated_at: operation.created_at,
+    };
+    state
+        .retention_policies
+        .lock()
+        .expect("retention policies lock")
+        .insert(record.space_id.clone(), record);
 }
 
 pub fn sync_timeline_message_json(message: &crate::reducer::MessageState) -> serde_json::Value {
@@ -531,6 +623,112 @@ pub fn tombstone_timeline_event_value(event: &mut Value) {
     object.insert("decryption_state".to_owned(), json!("cleartext"));
 }
 
+pub fn retention_tombstone_for_event(
+    state: &AppState,
+    event_id: &str,
+) -> Option<RetentionTombstoneRecord> {
+    state
+        .retention_tombstones
+        .lock()
+        .expect("retention tombstones lock")
+        .get(event_id)
+        .cloned()
+}
+
+pub fn tombstone_projection_event_for_retention(
+    event: &mut ProjectionEventRecord,
+    tombstone: &RetentionTombstoneRecord,
+) {
+    event.payload = retention_tombstone_payload_value(&event.payload, tombstone);
+}
+
+pub fn tombstone_timeline_event_for_retention(
+    event: &mut Value,
+    tombstone: &RetentionTombstoneRecord,
+) {
+    let Some(object) = event.as_object_mut() else {
+        return;
+    };
+    object.insert("retention_tombstone".to_owned(), json!(true));
+    object.insert("retention_state".to_owned(), json!("tombstoned"));
+    object.insert(
+        "retention_reason".to_owned(),
+        json!(tombstone.reason.as_str()),
+    );
+    object.insert(
+        "retention_expired_at".to_owned(),
+        json!(tombstone.expired_at.to_rfc3339()),
+    );
+    object.insert(
+        "retention_tombstoned_at".to_owned(),
+        json!(tombstone.tombstoned_at.to_rfc3339()),
+    );
+    object.insert(
+        "retention_anchor_preserved".to_owned(),
+        json!(tombstone.anchored),
+    );
+    object.insert("physical_delete".to_owned(), json!(false));
+    object.insert(
+        "content".to_owned(),
+        json!({
+            "kind": "cx.content.text",
+            "body": RETENTION_EXPIRED_PLACEHOLDER,
+        }),
+    );
+    object.insert("encrypted".to_owned(), json!(false));
+    object.insert("decryption_state".to_owned(), json!("cleartext"));
+}
+
+pub fn retention_tombstone_payload_value(
+    payload: &Value,
+    tombstone: &RetentionTombstoneRecord,
+) -> Value {
+    let mut value = payload.clone();
+    let Some(object) = value.as_object_mut() else {
+        return json!({
+            "content": {
+                "kind": "cx.content.text",
+                "body": RETENTION_EXPIRED_PLACEHOLDER,
+            },
+            "retention_tombstone": true,
+            "retention_state": "tombstoned",
+            "retention_reason": tombstone.reason.as_str(),
+            "retention_expired_at": tombstone.expired_at.to_rfc3339(),
+            "retention_tombstoned_at": tombstone.tombstoned_at.to_rfc3339(),
+            "retention_anchor_preserved": tombstone.anchored,
+            "physical_delete": false,
+        });
+    };
+    object.insert("retention_tombstone".to_owned(), json!(true));
+    object.insert("retention_state".to_owned(), json!("tombstoned"));
+    object.insert(
+        "retention_reason".to_owned(),
+        json!(tombstone.reason.as_str()),
+    );
+    object.insert(
+        "retention_expired_at".to_owned(),
+        json!(tombstone.expired_at.to_rfc3339()),
+    );
+    object.insert(
+        "retention_tombstoned_at".to_owned(),
+        json!(tombstone.tombstoned_at.to_rfc3339()),
+    );
+    object.insert(
+        "retention_anchor_preserved".to_owned(),
+        json!(tombstone.anchored),
+    );
+    object.insert("physical_delete".to_owned(), json!(false));
+    object.insert(
+        "content".to_owned(),
+        json!({
+            "kind": "cx.content.text",
+            "body": RETENTION_EXPIRED_PLACEHOLDER,
+        }),
+    );
+    object.insert("encrypted".to_owned(), json!(false));
+    value
+}
+
 fn tombstone_payload_value(payload: &Value) -> Value {
     let mut value = payload.clone();
     let Some(object) = value.as_object_mut() else {
@@ -620,6 +818,11 @@ pub fn projected_event_page(
     if let Ok(projection) = state.projection.lock() {
         for event in &mut page_items {
             tombstone_projection_event_for_erased_actor(&projection, event);
+        }
+    }
+    for event in &mut page_items {
+        if let Some(tombstone) = retention_tombstone_for_event(state, &event.event_id) {
+            tombstone_projection_event_for_retention(event, &tombstone);
         }
     }
     let has_more = page_items.len() > limit;
@@ -1509,6 +1712,7 @@ pub fn ensure_projected_space(state: &AppState, origin: &str, operation: &Operat
         spaces.upsert(entry);
     }
     drop(spaces);
+    project_retention_policy_from_operation(state, origin, operation);
 
     let now = now();
     let store = state.persistence.realm_meta();
@@ -2036,6 +2240,22 @@ mod tests {
             operation_realm_encryption_profile(&operation),
             Some("plaintext")
         );
+    }
+
+    #[test]
+    fn retention_policy_ttl_reads_canonical_object_fields() {
+        let operation = op(
+            kinds::CX_REALM_CREATE,
+            json!({
+                "object": {
+                    "id": REALM_ID,
+                    "title": "Short-lived Room",
+                    "retention_policy": { "ttl": "30d" }
+                }
+            }),
+        );
+
+        assert_eq!(operation_retention_ttl_seconds(&operation), Some(2_592_000));
     }
 
     #[test]

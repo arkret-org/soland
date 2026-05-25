@@ -331,6 +331,15 @@ pub struct AppState {
     /// conformance harness can exercise the protocol shape locally; a durable
     /// store can replace the backing map without changing the HTTP contract.
     pub sovereign_deployment: Arc<Mutex<SovereignDeploymentState>>,
+    /// Per-Realm retention policy projection. The policy is derived from
+    /// `retention_policy` fields on accepted Realm events and can be driven
+    /// by the local admin/test sweeper. A durable store can replace this
+    /// in-memory map without changing the read-side tombstone contract.
+    pub retention_policies: Arc<Mutex<BTreeMap<String, RetentionPolicyRecord>>>,
+    /// Retention tombstones keyed by event_id. Tombstoned events keep their
+    /// stable event_id and remain in the canonical/projection stores; render
+    /// paths redact the content to `[expired]`.
+    pub retention_tombstones: Arc<Mutex<BTreeMap<String, RetentionTombstoneRecord>>>,
     pub did_resolver: Arc<Mutex<CompositeDidResolver>>,
     /// Move/Anchor/Lattice runtime stores.
     /// In-memory backends from the SDK; production deployments will
@@ -885,6 +894,25 @@ pub struct SovereignStoreForwardRecord {
     pub forwarded_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
+#[derive(Clone, Debug)]
+pub struct RetentionPolicyRecord {
+    pub space_id: String,
+    pub ttl_seconds: i64,
+    pub updated_by: String,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Clone, Debug)]
+pub struct RetentionTombstoneRecord {
+    pub event_id: String,
+    pub space_id: String,
+    pub reason: String,
+    pub policy_ttl_seconds: i64,
+    pub expired_at: chrono::DateTime<chrono::Utc>,
+    pub tombstoned_at: chrono::DateTime<chrono::Utc>,
+    pub anchored: bool,
+}
+
 impl AppState {
     /// Snapshot the persistent Ed25519 signing key shared by
     /// the AnchorerWorker and all admin signing paths. Returns a fresh
@@ -1145,6 +1173,8 @@ impl AppState {
                 upstream_available: true,
                 ..Default::default()
             })),
+            retention_policies: Arc::new(Mutex::new(BTreeMap::new())),
+            retention_tombstones: Arc::new(Mutex::new(BTreeMap::new())),
             did_resolver,
             move_store: Arc::new(contrix_sdk::state_res::MemoryMoveStore::default()),
             anchor_store: Arc::new(contrix_sdk::state_res::MemoryAnchorStore::default()),

@@ -35,7 +35,10 @@ use salvo::prelude::*;
 use serde_json::{Value, json};
 use tokio::sync::broadcast::error::RecvError;
 
-use super::projection::{actor_erased_in_space, tombstone_timeline_event_value};
+use super::projection::{
+    actor_erased_in_space, retention_tombstone_for_event, tombstone_timeline_event_for_retention,
+    tombstone_timeline_event_value,
+};
 use super::{
     augment_timeline_message_json, authenticated_session, backfill_gap_events,
     default_discussion_track, device_message_events_after, flow_id_from_space_id,
@@ -430,10 +433,11 @@ fn timeline_events_for_space(
         ) {
             continue;
         }
-        timeline_entries.push((
-            position,
-            sync_timeline_message_json_with_projection(message, projection),
-        ));
+        let mut event = sync_timeline_message_json_with_projection(message, projection);
+        if let Some(tombstone) = retention_tombstone_for_event(state, &message.event_id) {
+            tombstone_timeline_event_for_retention(&mut event, &tombstone);
+        }
+        timeline_entries.push((position, event));
     }
 
     for message in state
@@ -457,10 +461,11 @@ fn timeline_events_for_space(
         ) {
             continue;
         }
-        timeline_entries.push((
-            position,
-            sync_timeline_message_record_json_with_projection(&message, projection),
-        ));
+        let mut event = sync_timeline_message_record_json_with_projection(&message, projection);
+        if let Some(tombstone) = retention_tombstone_for_event(state, &message.event_id) {
+            tombstone_timeline_event_for_retention(&mut event, &tombstone);
+        }
+        timeline_entries.push((position, event));
     }
 
     timeline_entries.sort_by(|left, right| left.0.cmp(&right.0));
@@ -1851,7 +1856,7 @@ fn durable_events_query_from_parts(
     let frontier = super::event_log::events_frontier_json(&page);
     let events = page
         .iter()
-        .map(super::event_log::event_read_response)
+        .map(|record| super::event_log::event_read_response_for_state(state, record))
         .collect();
     crate::wire::EventsPageResponse {
         events,

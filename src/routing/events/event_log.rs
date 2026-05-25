@@ -25,6 +25,7 @@ use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde_json::{Value, json};
 
+use super::projection::{retention_tombstone_for_event, retention_tombstone_payload_value};
 use super::{
     append_audit_log, auth_or_render, is_valid_sha256_digest, now, project_accepted_operations,
     query_param, query_param_all, realm_allows_plaintext_service, realm_event_visible_to_session,
@@ -224,7 +225,7 @@ async fn get_event(
     if !event_visible_to_session(state, &record, &session) {
         return Err(AppError::not_found("event not found"));
     }
-    json_ok(event_read_response(&record))
+    json_ok(event_read_response_for_state(state, &record))
 }
 
 #[endpoint(
@@ -254,7 +255,7 @@ async fn resolve_events(
     for event_id in body.event_ids {
         match store.get(&event_id).ok().flatten() {
             Some(record) if event_visible_to_session(state, &record, &session) => {
-                found.push(event_read_response(&record));
+                found.push(event_read_response_for_state(state, &record));
             }
             _ => missing.push(event_id),
         }
@@ -386,7 +387,10 @@ pub(super) async fn events_query_durable_scope_impl(
         .then(|| page.last().map(|record| record.event_id.clone()))
         .flatten();
     let frontier = events_frontier_json(&page);
-    let events = page.iter().map(event_read_response).collect();
+    let events = page
+        .iter()
+        .map(|record| event_read_response_for_state(state, record))
+        .collect();
     Ok(EventsPageResponse {
         events,
         next_cursor,
@@ -3148,6 +3152,44 @@ pub(super) fn event_read_response(record: &CanonicalEventRecord) -> EventReadRes
             "received_at": record.received_at
         }),
     }
+}
+
+pub(super) fn event_read_response_for_state(
+    state: &AppState,
+    record: &CanonicalEventRecord,
+) -> EventReadResponse {
+    let mut response = event_read_response(record);
+    if let Some(tombstone) = retention_tombstone_for_event(state, &record.event_id) {
+        if let Some(object) = response.event.as_object_mut() {
+            let payload = object.get("payload").cloned().unwrap_or(Value::Null);
+            object.insert(
+                "payload".to_owned(),
+                retention_tombstone_payload_value(&payload, &tombstone),
+            );
+            object.insert("retention_tombstone".to_owned(), json!(true));
+        }
+        if let Some(metadata) = response.metadata.as_object_mut() {
+            metadata.insert("retention_state".to_owned(), json!("tombstoned"));
+            metadata.insert(
+                "retention_reason".to_owned(),
+                json!(tombstone.reason.as_str()),
+            );
+            metadata.insert(
+                "retention_expired_at".to_owned(),
+                json!(tombstone.expired_at.to_rfc3339()),
+            );
+            metadata.insert(
+                "retention_tombstoned_at".to_owned(),
+                json!(tombstone.tombstoned_at.to_rfc3339()),
+            );
+            metadata.insert(
+                "retention_anchor_preserved".to_owned(),
+                json!(tombstone.anchored),
+            );
+            metadata.insert("physical_delete".to_owned(), json!(false));
+        }
+    }
+    response
 }
 
 pub(super) fn events_frontier_json(records: &[CanonicalEventRecord]) -> Value {

@@ -8,6 +8,7 @@ mod control;
 mod delivery_binding;
 mod introspect;
 mod moderation;
+mod retention;
 mod spec;
 
 pub(super) use introspect::{introspect_admin_scopes, require_admin_scope};
@@ -94,7 +95,8 @@ pub fn router() -> Router {
             .hoop(RequireAdmin::scope(contrix_sdk::admin_scopes::ADMIN_READ))
             .push(cells::router())
             .push(Router::with_path("admin/{resource}").get(collection::admin_collection))
-            .push(control::router()),
+            .push(control::router())
+            .push(retention::router()),
     )
 }
 
