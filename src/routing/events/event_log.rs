@@ -1112,6 +1112,13 @@ fn submit_event_value(
                     reason,
                 ));
             }
+            if let Err(reason) = proj.check_flow_status_transition(operation) {
+                return Err(SubmitOneError::new(
+                    StatusCode::PRECONDITION_FAILED,
+                    reason,
+                    reason,
+                ));
+            }
             if let Err(reason) = proj.check_morph_lifecycle_transition(operation) {
                 return Err(SubmitOneError::new(
                     StatusCode::PRECONDITION_FAILED,

@@ -1239,6 +1239,7 @@ fn hydrate_projections_from_persistence(
                     space_id: record.space_id,
                     title: record.title,
                     summary: record.summary,
+                    fields: Default::default(),
                     state,
                     state_changed_at: record.state_changed_at,
                     created_by: record.created_by,

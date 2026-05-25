@@ -6447,7 +6447,11 @@ async fn flow_morph_lifecycle_state_machine_returns_412_for_illegal_transitions(
         "cx:event:01904100-0000-7000-8000-e10ec0000005",
         5,
         "cx.flow.update",
-        serde_json::json!({ "flow_id": flow_id, "patch": { "title": "Edit while archived" } }),
+        serde_json::json!({
+            "target_ref": flow_id,
+            "flow_id": flow_id,
+            "patch": { "title": "Edit while archived" }
+        }),
         vec!["cx:event:01904100-0000-7000-8000-e10ec0000003"],
     );
     let mut resp = TestClient::post("http://server/api/v1/events")
@@ -6544,7 +6548,11 @@ async fn flow_morph_lifecycle_state_machine_returns_412_for_illegal_transitions(
         "cx:event:01904100-0000-7000-8000-e20ec0000004",
         10,
         "cx.morph.update",
-        serde_json::json!({ "morph_id": morph_id, "patch": { "title": "Renamed" } }),
+        serde_json::json!({
+            "target_ref": morph_id,
+            "morph_id": morph_id,
+            "patch": { "title": "Renamed" }
+        }),
         vec!["cx:event:01904100-0000-7000-8000-e20ec0000003"],
     );
     let mut resp = TestClient::post("http://server/api/v1/events")
@@ -6555,6 +6563,146 @@ async fn flow_morph_lifecycle_state_machine_returns_412_for_illegal_transitions(
     assert_eq!(resp.status_code.unwrap().as_u16(), 412);
     let body: Value = resp.take_json().await.unwrap();
     assert_eq!(body["error"]["code"], "morph_not_active");
+}
+
+#[tokio::test]
+async fn flow_update_status_fsm_rejects_skipped_terminal_transitions() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+    let task_flow_id = "cx:flow:01904100-0000-7000-8000-f51dc0000001";
+    let incident_flow_id = "cx:flow:01904100-0000-7000-8000-f51dc0000002";
+
+    let create_task = signed_flow_event(
+        "cx:event:01904100-0000-7000-8000-f51ec0000001",
+        1,
+        "cx.flow.create",
+        serde_json::json!({
+            "object": {
+                "id": task_flow_id,
+                "space_id": DEMO_REALM_ID,
+                "title": "Implement login",
+                "fields": { "status": "todo" },
+                "created_by": "did:web:alice.example",
+            }
+        }),
+        Vec::new(),
+    );
+    let resp: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&create_task)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(resp["status"], "accepted");
+
+    let bad_done = signed_flow_event(
+        "cx:event:01904100-0000-7000-8000-f51ec0000002",
+        2,
+        "cx.flow.update",
+        serde_json::json!({
+            "target_ref": task_flow_id,
+            "flow_id": task_flow_id,
+            "patch": { "fields": { "status": "done" } }
+        }),
+        vec!["cx:event:01904100-0000-7000-8000-f51ec0000001"],
+    );
+    let mut resp = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&bad_done)
+        .send(&app_from_state(state.clone()))
+        .await;
+    let body: Value = resp.take_json().await.unwrap();
+    assert_eq!(resp.status_code.unwrap().as_u16(), 412, "{body}");
+    assert_eq!(body["error"]["code"], "flow_status_transition_invalid");
+
+    let good_in_progress = signed_flow_event(
+        "cx:event:01904100-0000-7000-8000-f51ec0000003",
+        3,
+        "cx.flow.update",
+        serde_json::json!({
+            "target_ref": task_flow_id,
+            "flow_id": task_flow_id,
+            "patch": { "fields": { "status": "in_progress" } }
+        }),
+        vec!["cx:event:01904100-0000-7000-8000-f51ec0000001"],
+    );
+    let resp: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&good_in_progress)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(resp["status"], "accepted");
+
+    let good_done = signed_flow_event(
+        "cx:event:01904100-0000-7000-8000-f51ec0000004",
+        4,
+        "cx.flow.update",
+        serde_json::json!({
+            "target_ref": task_flow_id,
+            "flow_id": task_flow_id,
+            "patch": { "fields": { "status": "done" } }
+        }),
+        vec!["cx:event:01904100-0000-7000-8000-f51ec0000003"],
+    );
+    let resp: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&good_done)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(resp["status"], "accepted");
+
+    let create_incident = signed_flow_event(
+        "cx:event:01904100-0000-7000-8000-f51ec0000005",
+        5,
+        "cx.flow.create",
+        serde_json::json!({
+            "object": {
+                "id": incident_flow_id,
+                "space_id": DEMO_REALM_ID,
+                "title": "SEV-2 checkout outage",
+                "fields": { "status": "investigating" },
+                "created_by": "did:web:alice.example",
+            }
+        }),
+        vec!["cx:event:01904100-0000-7000-8000-f51ec0000004"],
+    );
+    let resp: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&create_incident)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(resp["status"], "accepted");
+
+    let bad_resolved = signed_flow_event(
+        "cx:event:01904100-0000-7000-8000-f51ec0000006",
+        6,
+        "cx.flow.update",
+        serde_json::json!({
+            "target_ref": incident_flow_id,
+            "flow_id": incident_flow_id,
+            "patch": { "fields": { "status": "resolved" } }
+        }),
+        vec!["cx:event:01904100-0000-7000-8000-f51ec0000005"],
+    );
+    let mut resp = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&bad_resolved)
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(resp.status_code.unwrap().as_u16(), 412);
+    let body: Value = resp.take_json().await.unwrap();
+    assert_eq!(body["error"]["code"], "flow_status_transition_invalid");
 }
 
 /// Build a signed `cx.redaction` event envelope, used by round 14b to

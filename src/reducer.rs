@@ -536,6 +536,7 @@ pub struct FlowProjection {
     pub space_id: String,
     pub title: String,
     pub summary: Option<String>,
+    pub fields: BTreeMap<String, Value>,
     pub state: ObjectLifecycleState,
     pub state_changed_at: Option<chrono::DateTime<chrono::Utc>>,
     pub created_by: String,
@@ -2425,6 +2426,143 @@ fn flow_position_from_lifecycle_payload(payload: &Value) -> Option<(String, Stri
         .filter(|value| !value.trim().is_empty())
         .map(ToOwned::to_owned);
     Some((board_space_id, list_space_id, rank))
+}
+
+enum PatchAction<'a> {
+    Set(&'a Value),
+    Unset,
+    Ignore,
+}
+
+fn patch_action(value: &Value) -> PatchAction<'_> {
+    let Some(object) = value.as_object() else {
+        return PatchAction::Set(value);
+    };
+    let Some(op) = object.get("$op").and_then(Value::as_str) else {
+        return PatchAction::Set(value);
+    };
+    match op {
+        "set" | "add" => object
+            .get("value")
+            .map(PatchAction::Set)
+            .unwrap_or(PatchAction::Ignore),
+        "unset" | "remove" => PatchAction::Unset,
+        _ => PatchAction::Ignore,
+    }
+}
+
+fn patch_string_value(
+    patch: &serde_json::Map<String, Value>,
+    path: &str,
+) -> Option<Option<String>> {
+    match patch.get(path).map(patch_action)? {
+        PatchAction::Set(value) => value
+            .as_str()
+            .filter(|value| !value.trim().is_empty())
+            .map(|value| Some(value.to_owned())),
+        PatchAction::Unset => Some(None),
+        PatchAction::Ignore => None,
+    }
+}
+
+fn flow_status_patch_target(payload: &Value) -> Result<Option<String>, &'static str> {
+    let Some(patch) = payload.get("patch").and_then(Value::as_object) else {
+        return Ok(None);
+    };
+    let value = patch.get("fields.status").or_else(|| {
+        patch.get("fields").and_then(|fields_patch| match patch_action(fields_patch) {
+            PatchAction::Set(value) => value.get("status"),
+            PatchAction::Unset | PatchAction::Ignore => None,
+        })
+    });
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    match patch_action(value) {
+        PatchAction::Set(value) => value
+            .as_str()
+            .filter(|value| !value.trim().is_empty())
+            .map(|value| Some(value.to_owned()))
+            .ok_or("flow_status_invalid"),
+        PatchAction::Unset => Err("flow_status_invalid"),
+        PatchAction::Ignore => Ok(None),
+    }
+}
+
+fn flow_status_transition_allowed(current: &str, next: &str) -> bool {
+    if current == next {
+        return true;
+    }
+    match current {
+        "todo" => next == "in_progress",
+        "in_progress" => matches!(next, "done" | "blocked"),
+        "blocked" => matches!(next, "in_progress" | "cancelled"),
+        "investigating" => next == "mitigated",
+        "mitigated" => next == "resolved",
+        _ => true,
+    }
+}
+
+fn flow_id_from_payload(payload: &Value) -> Option<&str> {
+    payload
+        .get("flow_id")
+        .or_else(|| payload.get("target_ref"))
+        .or_else(|| payload.get("object_ref"))
+        .and_then(Value::as_str)
+        .filter(|value| value.starts_with("cx:flow:"))
+}
+
+fn check_flow_status_patch(
+    flow: &FlowProjection,
+    payload: &Value,
+) -> Result<Option<String>, &'static str> {
+    let Some(next_status) = flow_status_patch_target(payload)? else {
+        return Ok(None);
+    };
+    let Some(current_status) = flow.fields.get("status").and_then(Value::as_str) else {
+        return Ok(Some(next_status));
+    };
+    if flow_status_transition_allowed(current_status, &next_status) {
+        return Ok(Some(next_status));
+    }
+    Err("flow_status_transition_invalid")
+}
+
+fn apply_flow_fields_patch(
+    fields: &mut BTreeMap<String, Value>,
+    patch: &serde_json::Map<String, Value>,
+) {
+    for (path, value) in patch {
+        if path == "fields" {
+            match patch_action(value) {
+                PatchAction::Set(Value::Object(values)) => {
+                    for (field_name, field_value) in values {
+                        fields.insert(field_name.clone(), field_value.clone());
+                    }
+                }
+                PatchAction::Unset => {
+                    fields.clear();
+                }
+                PatchAction::Set(_) | PatchAction::Ignore => {}
+            }
+            continue;
+        }
+        let Some(field_name) = path.strip_prefix("fields.") else {
+            continue;
+        };
+        if field_name.is_empty() {
+            continue;
+        }
+        match patch_action(value) {
+            PatchAction::Set(value) => {
+                fields.insert(field_name.to_owned(), value.clone());
+            }
+            PatchAction::Unset => {
+                fields.remove(field_name);
+            }
+            PatchAction::Ignore => {}
+        }
+    }
 }
 
 impl ProjectionState {
@@ -5246,7 +5384,7 @@ impl ProjectionState {
             CX_FLOW_RESTORE => (&[ObjectLifecycleState::Archived], "flow_not_archived"),
             _ => return Ok(()),
         };
-        let Some(flow_id) = operation.payload.get("flow_id").and_then(|v| v.as_str()) else {
+        let Some(flow_id) = flow_id_from_payload(&operation.payload) else {
             // Missing flow_id is caught upstream by the operation-schema
             // validator; preflight tolerates absence to keep responsibilities
             // separate.
@@ -5259,6 +5397,26 @@ impl ProjectionState {
             return Err(reason);
         }
         Ok(())
+    }
+
+    /// Read-only preflight for profile-level Flow status FSM stored at
+    /// `fields.status`. This guards common workflow statuses while leaving
+    /// unknown/custom statuses to Realm profiles.
+    pub fn check_flow_status_transition(
+        &self,
+        operation: &Operation,
+    ) -> Result<(), &'static str> {
+        if crate::kinds::canonical_kind_for_operation(operation) != Some(crate::kinds::CX_FLOW_UPDATE)
+        {
+            return Ok(());
+        }
+        let Some(flow_id) = flow_id_from_payload(&operation.payload) else {
+            return Ok(());
+        };
+        let Some(flow) = self.flows.get(flow_id) else {
+            return Ok(());
+        };
+        check_flow_status_patch(flow, &operation.payload).map(|_| ())
     }
 
     /// Read-only preflight for `cx.redaction` events that
@@ -5357,6 +5515,16 @@ impl ProjectionState {
             .get("summary")
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned);
+        let fields = object
+            .get("fields")
+            .and_then(Value::as_object)
+            .map(|fields| {
+                fields
+                    .iter()
+                    .map(|(key, value)| (key.clone(), value.clone()))
+                    .collect::<BTreeMap<_, _>>()
+            })
+            .unwrap_or_default();
         let discussion_realm_ref = object
             .get("discussion_realm_ref")
             .and_then(|v| v.as_str())
@@ -5392,6 +5560,7 @@ impl ProjectionState {
             space_id,
             title,
             summary,
+            fields,
             state: ObjectLifecycleState::Active,
             state_changed_at: None,
             created_by,
@@ -5433,11 +5602,7 @@ impl ProjectionState {
         operation: &Operation,
         now: chrono::DateTime<chrono::Utc>,
     ) -> ProjectionEffect {
-        let Some(flow_id) = operation
-            .payload
-            .get("flow_id")
-            .and_then(|v| v.as_str())
-            .map(ToOwned::to_owned)
+        let Some(flow_id) = flow_id_from_payload(&operation.payload).map(ToOwned::to_owned)
         else {
             return ProjectionEffect::Rejected {
                 reason: "flow_update_missing_flow_id".to_owned(),
@@ -5459,14 +5624,20 @@ impl ProjectionState {
                 reason: "flow_not_active".to_owned(),
             };
         }
+        if let Err(reason) = check_flow_status_patch(flow, &operation.payload) {
+            return ProjectionEffect::Rejected {
+                reason: reason.to_owned(),
+            };
+        }
         let patch = operation.payload.get("patch").and_then(|v| v.as_object());
         if let Some(patch) = patch {
-            if let Some(title) = patch.get("title").and_then(|v| v.as_str()) {
-                flow.title = title.to_owned();
+            if let Some(title) = patch_string_value(patch, "title") {
+                flow.title = title.unwrap_or_default();
             }
-            if let Some(summary) = patch.get("summary").and_then(|v| v.as_str()) {
-                flow.summary = Some(summary.to_owned());
+            if let Some(summary) = patch_string_value(patch, "summary") {
+                flow.summary = summary;
             }
+            apply_flow_fields_patch(&mut flow.fields, patch);
         }
         if let Some(update) = discussion_update {
             match update {
