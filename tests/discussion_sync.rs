@@ -281,6 +281,50 @@ async fn submit_projection_event(
     event_id
 }
 
+async fn submit_projection_event_status(
+    state: AppState,
+    token: &str,
+    actor_did: &str,
+    device_id: &str,
+    realm_id: &str,
+    kind: &str,
+    payload: Value,
+) -> (u16, String) {
+    let event_id = new_prefixed_uuid7("cx:event:");
+    let mut event = json!({
+        "event_id": event_id.clone(),
+        "kind": kind,
+        "schema_id": "cx.schema.event.v1",
+        "actor_id": actor_did,
+        "actor_seq": TEST_EVENT_SEQ.fetch_add(1, Ordering::Relaxed),
+        "realm_id": realm_id,
+        "device_id": device_id,
+        "audience": "did:web:soland.local",
+        "domain": "did:web:soland.local",
+        "prev_refs": [],
+        "auth_refs": [],
+        "refs": [],
+        "payload": payload,
+        "proofs": [{
+            "type": "dev-proof",
+            "verification_method": format!("{actor_did}#{device_id}"),
+            "device_id": device_id,
+            "audience": "did:web:soland.local",
+            "domain": "did:web:soland.local",
+            "payload_digest": sha256_json(&payload)
+        }]
+    });
+    event["canonical_digest"] = Value::String(event_canonical_digest(&event));
+    let mut response = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&event)
+        .send(&app_from_state(state))
+        .await;
+    let status = response.status_code.unwrap().as_u16();
+    let body = response.take_string().await.unwrap_or_default();
+    (status, body)
+}
+
 fn sha256_json(value: &Value) -> String {
     let bytes = contrix_sdk::canonical::canonical_json_bytes(value).expect("json canonicalizes");
     let mut hasher = Sha256::new();
@@ -582,6 +626,183 @@ async fn chat_projection_exposes_reactions_reply_and_mention_routing() {
             "target_ref": root_message_ref.clone()
         })
     );
+}
+
+#[tokio::test]
+async fn poll_content_projection_replaces_votes_and_rejects_after_close() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let alice_did = "did:web:alice.example";
+    let alice_device_id = "cx:device:01904100-0000-7000-8000-a11ce0000001";
+    let alice = dev_token(state.clone(), alice_did, "a11ce0000001").await;
+    let bob_did = "did:web:bob.example";
+    let bob_device_id = "cx:device:01904100-0000-7000-8000-b0b000000022";
+    let bob = dev_token(state.clone(), bob_did, "b0b000000022").await;
+    let carol_did = "did:web:carol.example";
+    let carol_device_id = "cx:device:01904100-0000-7000-8000-ca2010000022";
+    let carol = dev_token(state.clone(), carol_did, "ca2010000022").await;
+    let space_id = seed_realm(&state, alice_did, "poll content reducer", "shared");
+    admit_member(
+        state.clone(),
+        &alice,
+        alice_did,
+        alice_device_id,
+        bob_did,
+        &space_id,
+    )
+    .await;
+    admit_member(
+        state.clone(),
+        &alice,
+        alice_did,
+        alice_device_id,
+        carol_did,
+        &space_id,
+    )
+    .await;
+
+    let poll_id = "poll-content-fixture";
+    let poll_event_id = submit_projection_event(
+        state.clone(),
+        &alice,
+        alice_did,
+        alice_device_id,
+        &space_id,
+        "cx.message.create",
+        json!({
+            "flow_id": flow_id_for_realm(&space_id),
+            "track": "discussion",
+            "content": {
+                "kind": "cx.content.poll",
+                "body": "Which window?",
+                "poll_id": poll_id,
+                "question": "Which window?",
+                "options": [
+                    {"id": "now", "label": "Now"},
+                    {"id": "backup", "label": "After backup"}
+                ],
+                "max_selections": 1
+            },
+            "encrypted": false
+        }),
+    )
+    .await;
+    submit_projection_event(
+        state.clone(),
+        &bob,
+        bob_did,
+        bob_device_id,
+        &space_id,
+        "cx.message.create",
+        json!({
+            "flow_id": flow_id_for_realm(&space_id),
+            "track": "discussion",
+            "content": {
+                "kind": "cx.content.poll.response",
+                "body": "poll response",
+                "poll_id": poll_id,
+                "choice": "now"
+            },
+            "encrypted": false
+        }),
+    )
+    .await;
+    submit_projection_event(
+        state.clone(),
+        &bob,
+        bob_did,
+        bob_device_id,
+        &space_id,
+        "cx.message.create",
+        json!({
+            "flow_id": flow_id_for_realm(&space_id),
+            "track": "discussion",
+            "content": {
+                "kind": "cx.content.poll.response",
+                "body": "poll response",
+                "poll_id": poll_id,
+                "choice": "backup"
+            },
+            "encrypted": false
+        }),
+    )
+    .await;
+    submit_projection_event(
+        state.clone(),
+        &carol,
+        carol_did,
+        carol_device_id,
+        &space_id,
+        "cx.message.create",
+        json!({
+            "flow_id": flow_id_for_realm(&space_id),
+            "track": "discussion",
+            "content": {
+                "kind": "cx.content.poll.response",
+                "body": "poll response",
+                "poll_id": poll_id,
+                "choice": "backup"
+            },
+            "encrypted": false
+        }),
+    )
+    .await;
+
+    let sync = account_subscribe_frame(state.clone(), &alice, "catchup=true").await;
+    let timeline = sync["realms"][&space_id]["timeline"]["events"]
+        .as_array()
+        .expect("timeline events");
+    let poll = timeline
+        .iter()
+        .find(|event| event["event_id"] == poll_event_id)
+        .unwrap_or_else(|| panic!("poll missing from sync projection: {timeline:?}"));
+    assert_eq!(poll["poll"]["results"][0]["count"], 0);
+    assert_eq!(poll["poll"]["results"][1]["count"], 2);
+    assert_eq!(
+        poll["poll"]["results"][1]["voters"],
+        json!([bob_did, carol_did])
+    );
+
+    submit_projection_event(
+        state.clone(),
+        &alice,
+        alice_did,
+        alice_device_id,
+        &space_id,
+        "cx.message.create",
+        json!({
+            "flow_id": flow_id_for_realm(&space_id),
+            "track": "discussion",
+            "content": {
+                "kind": "cx.content.poll.close",
+                "body": "poll closed",
+                "poll_id": poll_id
+            },
+            "encrypted": false
+        }),
+    )
+    .await;
+    let (status, body) = submit_projection_event_status(
+        state.clone(),
+        &bob,
+        bob_did,
+        bob_device_id,
+        &space_id,
+        "cx.message.create",
+        json!({
+            "flow_id": flow_id_for_realm(&space_id),
+            "track": "discussion",
+            "content": {
+                "kind": "cx.content.poll.response",
+                "body": "poll response",
+                "poll_id": poll_id,
+                "choice": "now"
+            },
+            "encrypted": false
+        }),
+    )
+    .await;
+    assert_eq!(status, 403, "{body}");
+    assert!(body.contains("poll_closed"), "{body}");
 }
 
 #[test]

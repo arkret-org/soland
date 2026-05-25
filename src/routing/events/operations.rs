@@ -1053,10 +1053,7 @@ fn validate_cross_signing_reset_replay_batch(operations: &[Operation]) -> Result
     Ok(())
 }
 
-pub fn validate_operation_policy(
-    state: &AppState,
-    operations: &[Operation],
-) -> Result<(), &'static str> {
+pub fn validate_operation_policy(state: &AppState, operations: &[Operation]) -> Result<(), &'static str> {
     for operation in operations {
         if kinds::operation_is_message_create(operation)
             && !message_operation_is_encrypted(operation)
@@ -1069,8 +1066,37 @@ pub fn validate_operation_policy(
         if kinds::canonical_kind_for_operation(operation) == Some(kinds::CX_MORPH_SCHEMA_MIGRATE) {
             validate_morph_schema_migrate_capability(operation)?;
         }
+        validate_poll_operation_policy(state, operation)?;
     }
     Ok(())
+}
+
+fn validate_poll_operation_policy(
+    state: &AppState,
+    operation: &Operation,
+) -> Result<(), &'static str> {
+    if !kinds::operation_is_message_create(operation) {
+        return Ok(());
+    }
+    let Some(content) = operation.payload.get("content") else {
+        return Ok(());
+    };
+    if content.get("kind").and_then(serde_json::Value::as_str)
+        != Some("cx.content.poll.response")
+    {
+        return Ok(());
+    }
+    let Some(poll_id) = content.get("poll_id").and_then(serde_json::Value::as_str) else {
+        return Ok(());
+    };
+    let Ok(projection) = state.projection.lock() else {
+        return Ok(());
+    };
+    if projection.poll(poll_id).is_some_and(|poll| poll.closed) {
+        Err("poll_closed")
+    } else {
+        Ok(())
+    }
 }
 
 fn validate_morph_schema_migrate_capability(operation: &Operation) -> Result<(), &'static str> {
@@ -1371,6 +1397,29 @@ pub fn validate_content_block(block: &serde_json::Value) -> Result<(), &'static 
                     .is_some_and(|options| options.len() >= 2)
             {
                 return Err("poll content block requires question and at least two options");
+            }
+        }
+        "poll.response" => {
+            if !block
+                .get("poll_id")
+                .and_then(|value| value.as_str())
+                .is_some_and(|value| !value.trim().is_empty())
+                || !(block.get("choice").and_then(|value| value.as_str()).is_some()
+                    || block
+                        .get("choices")
+                        .and_then(|value| value.as_array())
+                        .is_some_and(|choices| !choices.is_empty()))
+            {
+                return Err("poll response content block requires poll_id and choice");
+            }
+        }
+        "poll.close" => {
+            if !block
+                .get("poll_id")
+                .and_then(|value| value.as_str())
+                .is_some_and(|value| !value.trim().is_empty())
+            {
+                return Err("poll close content block requires poll_id");
             }
         }
         _ => return Err("unsupported content block type"),

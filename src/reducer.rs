@@ -51,6 +51,9 @@ pub struct ProjectionState {
     pub read_cursors: BTreeMap<(String, String, String), ReadMarkerState>,
     /// Relations keyed by relation_id. LWW by HLC.
     pub relations: BTreeMap<String, RelationState>,
+    /// Poll projections keyed by poll_id. Poll create is a message content
+    /// block; responses are per-actor replacements until the poll is closed.
+    pub polls: BTreeMap<String, PollState>,
     /// Structured side-band cache keyed by
     /// `(space_id, actor_did)`. Holds the FSM state value plus `role` /
     /// `joined_at` / `updated_at` side-band data that doesn't fit in the
@@ -697,6 +700,26 @@ pub struct ReactionState {
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
+#[derive(Clone, Debug)]
+pub struct PollOptionState {
+    pub id: String,
+    pub label: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct PollState {
+    pub poll_id: String,
+    pub message_event_id: String,
+    pub space_id: String,
+    pub question: String,
+    pub options: Vec<PollOptionState>,
+    pub votes: BTreeMap<String, BTreeSet<String>>,
+    pub max_selections: u32,
+    pub closed: bool,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
 fn message_event_id_from_ref(value: &str) -> String {
     value
         .strip_prefix("cx:message:")
@@ -746,6 +769,116 @@ fn message_content_from_payload(payload: &Value) -> Value {
         }
     }
     content
+}
+
+fn content_kind(content: &Value) -> Option<&str> {
+    content.get("kind").and_then(Value::as_str)
+}
+
+fn poll_id_from_content(content: &Value) -> Option<String> {
+    content
+        .get("poll_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            content
+                .get("poll")
+                .and_then(|poll| poll.get("id"))
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .map(ToOwned::to_owned)
+        })
+}
+
+fn text_body(value: &Value) -> Option<&str> {
+    value.as_str().or_else(|| {
+        value
+            .get("body")
+            .or_else(|| value.get("label"))
+            .and_then(Value::as_str)
+    })
+}
+
+fn poll_question_from_content(content: &Value) -> Option<String> {
+    content
+        .get("question")
+        .and_then(Value::as_str)
+        .or_else(|| content.get("body").and_then(Value::as_str))
+        .or_else(|| {
+            content
+                .get("poll")
+                .and_then(|poll| poll.get("question"))
+                .and_then(text_body)
+        })
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| value.trim().to_owned())
+}
+
+fn poll_options_from_content(content: &Value) -> Vec<PollOptionState> {
+    let options = content
+        .get("options")
+        .and_then(Value::as_array)
+        .or_else(|| {
+            content
+                .get("poll")
+                .and_then(|poll| poll.get("answers"))
+                .and_then(Value::as_array)
+        });
+    options
+        .map(|items| {
+            items
+                .iter()
+                .enumerate()
+                .filter_map(|(idx, item)| {
+                    if let Some(label) = item.as_str().filter(|value| !value.trim().is_empty()) {
+                        return Some(PollOptionState {
+                            id: format!("opt-{idx}"),
+                            label: label.trim().to_owned(),
+                        });
+                    }
+                    let id = item
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .map(ToOwned::to_owned)
+                        .unwrap_or_else(|| format!("opt-{idx}"));
+                    let label = item
+                        .get("label")
+                        .and_then(Value::as_str)
+                        .or_else(|| item.get("text").and_then(text_body))?
+                        .trim()
+                        .to_owned();
+                    if label.is_empty() {
+                        None
+                    } else {
+                        Some(PollOptionState { id, label })
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn poll_choices_from_content(content: &Value) -> Vec<String> {
+    content
+        .get("choices")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>()
+        })
+        .or_else(|| {
+            content
+                .get("choice")
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .map(|choice| vec![choice.to_owned()])
+        })
+        .unwrap_or_default()
 }
 
 #[derive(Clone, Debug)]
@@ -2559,6 +2692,17 @@ impl ProjectionState {
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
+        match content_kind(&content) {
+            Some("cx.content.poll.response") => {
+                return self.apply_poll_response(&content, &sender, now);
+            }
+            Some("cx.content.poll.close") => {
+                return self.apply_poll_close(&content, now);
+            }
+            _ => {}
+        }
+
+        let is_poll_create = content_kind(&content) == Some("cx.content.poll");
         let state = MessageState {
             event_id: event_id.clone(),
             space_id: operation.realm_id.to_string(),
@@ -2572,8 +2716,107 @@ impl ProjectionState {
             redacted_at: None,
         };
         let effect = ProjectionEffect::MessageCreated(state.clone());
+        if is_poll_create {
+            self.apply_poll_create(&state);
+        }
         self.messages.insert(event_id, state);
         effect
+    }
+
+    fn apply_poll_create(&mut self, message: &MessageState) {
+        let poll_id = poll_id_from_content(&message.content).unwrap_or_else(|| {
+            message
+                .event_id
+                .replacen("cx:event:", "cx:message:", 1)
+        });
+        let Some(question) = poll_question_from_content(&message.content) else {
+            return;
+        };
+        let options = poll_options_from_content(&message.content);
+        if options.len() < 2 {
+            return;
+        }
+        self.polls.insert(
+            poll_id.clone(),
+            PollState {
+                poll_id,
+                message_event_id: message.event_id.clone(),
+                space_id: message.space_id.clone(),
+                question,
+                options,
+                votes: BTreeMap::new(),
+                max_selections: message
+                    .content
+                    .get("max_selections")
+                    .and_then(Value::as_u64)
+                    .or_else(|| {
+                        message
+                            .content
+                            .get("poll")
+                            .and_then(|poll| poll.get("max_selections"))
+                            .and_then(Value::as_u64)
+                    })
+                    .unwrap_or(1)
+                    .max(1) as u32,
+                closed: message
+                    .content
+                    .get("closed")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+                created_at: message.created_at,
+                updated_at: message.created_at,
+            },
+        );
+    }
+
+    fn apply_poll_response(
+        &mut self,
+        content: &Value,
+        actor: &str,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> ProjectionEffect {
+        let Some(poll_id) = poll_id_from_content(content) else {
+            return ProjectionEffect::Ignored;
+        };
+        let choices = poll_choices_from_content(content);
+        if choices.is_empty() {
+            return ProjectionEffect::Ignored;
+        }
+        let Some(poll) = self.polls.get_mut(&poll_id) else {
+            return ProjectionEffect::Ignored;
+        };
+        if poll.closed {
+            return ProjectionEffect::Rejected {
+                reason: "poll_closed".to_owned(),
+            };
+        }
+        let valid: BTreeSet<String> = poll.options.iter().map(|option| option.id.clone()).collect();
+        let selected: BTreeSet<String> = choices
+            .into_iter()
+            .filter(|choice| valid.contains(choice))
+            .take(poll.max_selections.max(1) as usize)
+            .collect();
+        if selected.is_empty() {
+            return ProjectionEffect::Ignored;
+        }
+        poll.votes.insert(actor.to_owned(), selected);
+        poll.updated_at = now;
+        ProjectionEffect::Ignored
+    }
+
+    fn apply_poll_close(
+        &mut self,
+        content: &Value,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> ProjectionEffect {
+        let Some(poll_id) = poll_id_from_content(content) else {
+            return ProjectionEffect::Ignored;
+        };
+        if let Some(poll) = self.polls.get_mut(&poll_id) {
+            poll.closed = true;
+            poll.updated_at = now;
+        }
+        ProjectionEffect::Ignored
     }
 
     fn apply_message_revise(
@@ -5595,6 +5838,10 @@ impl ProjectionState {
                     .collect()
             })
             .unwrap_or_default()
+    }
+
+    pub fn poll(&self, poll_id: &str) -> Option<&PollState> {
+        self.polls.get(poll_id)
     }
 
     /// Get relations for a space, optionally filtered by kind.

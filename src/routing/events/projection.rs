@@ -298,6 +298,9 @@ pub fn augment_timeline_message_json(
     if let Some(hint) = mention_routing_hint_from_content(content) {
         object.insert("mention_routing_hint".to_owned(), hint);
     }
+    if let Some(poll) = poll_projection_json(content, event_id, projection) {
+        object.insert("poll".to_owned(), poll);
+    }
     event
 }
 
@@ -352,6 +355,61 @@ fn mention_routing_hint_from_mentions(mentions: &serde_json::Value) -> Option<se
             "source": "content.mentions",
         }))
     }
+}
+
+fn poll_projection_json(
+    content: &serde_json::Value,
+    event_id: &str,
+    projection: &crate::reducer::ProjectionState,
+) -> Option<serde_json::Value> {
+    if content.get("kind").and_then(serde_json::Value::as_str) != Some("cx.content.poll") {
+        return None;
+    }
+    let poll_id = content
+        .get("poll_id")
+        .and_then(serde_json::Value::as_str)
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| event_id.replacen("cx:event:", "cx:message:", 1));
+    let Some(poll) = projection.poll(&poll_id) else {
+        return Some(json!({
+            "poll_id": poll_id,
+            "state": "open",
+            "results": [],
+        }));
+    };
+    let results = poll
+        .options
+        .iter()
+        .map(|option| {
+            let voters = poll
+                .votes
+                .iter()
+                .filter_map(|(actor, choices)| {
+                    if choices.contains(&option.id) {
+                        Some(actor.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>();
+            json!({
+                "id": option.id.clone(),
+                "label": option.label.clone(),
+                "count": voters.len(),
+                "voters": voters,
+            })
+        })
+        .collect::<Vec<_>>();
+    Some(json!({
+        "poll_id": poll.poll_id.clone(),
+        "message_event_id": poll.message_event_id.clone(),
+        "question": poll.question.clone(),
+        "state": if poll.closed { "closed" } else { "open" },
+        "closed": poll.closed,
+        "max_selections": poll.max_selections,
+        "results": results,
+        "updated_at": poll.updated_at.clone(),
+    }))
 }
 
 pub fn projection_event_from_operation(
@@ -1416,6 +1474,12 @@ pub fn project_federated_message(state: &AppState, origin: &str, operation: &Ope
         return;
     }
     let content = message_content_from_payload(&operation.payload);
+    if matches!(
+        content.get("kind").and_then(Value::as_str),
+        Some("cx.content.poll.response" | "cx.content.poll.close")
+    ) {
+        return;
+    }
     let sender = operation
         .payload
         .get("sender")
