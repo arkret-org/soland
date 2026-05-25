@@ -21,6 +21,7 @@ use soland::{routing, service};
 fn test_config() -> AppConfig {
     AppConfig {
         bind: "127.0.0.1:0".parse::<SocketAddr>().unwrap(),
+        metrics_bind: "127.0.0.1:0".parse::<SocketAddr>().unwrap(),
         public_base_url: "http://server".to_owned(),
         service_did: "did:web:soland.local".to_owned(),
         tls_cert_path: None,
@@ -196,6 +197,155 @@ async fn bot_actor_register_then_list_smoke() {
 }
 
 #[tokio::test]
+async fn applet_bridge_register_ghost_route_revoke_smoke() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+    let app = service(state.clone());
+    let suffix = uuid::Uuid::now_v7().simple().to_string();
+    let signer_did = "did:web:registry.example";
+    let applet_id = format!("applet:bridge:smoke-{suffix}");
+    let namespace = format!("bridge.smoke.{suffix}");
+    let manifest = signed_applet_manifest(&applet_id, &namespace, signer_did);
+
+    let register: Value = TestClient::post("http://server/api/v1/extensions/applets/register")
+        .add_header("Authorization", format!("Bearer {token}"), true)
+        .add_header("Idempotency-Key", format!("idem-{suffix}"), true)
+        .json(&json!({
+            "manifest": manifest,
+            "trusted_registry_did": signer_did,
+        }))
+        .send(&app)
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(register["applet_id"], json!(applet_id));
+    assert_eq!(register["namespace"], json!(namespace));
+    assert_eq!(register["status"], json!("registered"));
+    let bot_actor_did = register["bot_actor_did"].as_str().unwrap().to_owned();
+    assert!(bot_actor_did.starts_with("did:web:bot-bridge-smoke-"));
+    assert!(
+        register["portal_realm_id"]
+            .as_str()
+            .unwrap()
+            .starts_with("cx:realm:portal:bridge-smoke-")
+    );
+
+    let space_id = format!("cx:realm:applet-bridge-smoke-{suffix}");
+    let ghost: Value = TestClient::post(format!(
+        "http://server/api/v1/extensions/applets/{applet_id}/ghosts"
+    ))
+    .add_header("Authorization", format!("Bearer {token}"), true)
+    .json(&json!({
+        "space_id": space_id,
+        "external_user": {"id": "ext-user-x", "display_name": "External X"},
+        "payload": {"kind": "message", "text": format!("hi from outside {suffix}")},
+    }))
+    .send(&app)
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    let ghost_actor_did = ghost["ghost_actor_did"].as_str().unwrap().to_owned();
+    assert!(ghost_actor_did.starts_with("did:web:ghost-ext-user-x-"));
+    assert!(
+        ghost["message_id"]
+            .as_str()
+            .unwrap()
+            .starts_with("cx:message:")
+    );
+    assert!(
+        ghost["accountability"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["kind"] == "bot_actor" && entry["did"] == bot_actor_did)
+    );
+    let messages = state
+        .persistence
+        .messages()
+        .list_for_space(&space_id, 10)
+        .unwrap();
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].sender, ghost_actor_did);
+    assert_eq!(
+        messages[0].content["portal"]["bot_actor_did"],
+        json!(bot_actor_did)
+    );
+
+    let ghost_doc: Value = TestClient::get(format!(
+        "http://server/api/v1/identity/{ghost_actor_did}/did-document"
+    ))
+    .send(&app)
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    assert_eq!(ghost_doc["id"], json!(ghost_actor_did));
+    assert_eq!(ghost_doc["status"], json!("active"));
+    assert!(
+        ghost_doc["accountability"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["kind"] == "applet_registry" && entry["did"] == signer_did)
+    );
+
+    let revoke: Value = TestClient::post(format!(
+        "http://server/api/v1/extensions/applets/{applet_id}/revoke"
+    ))
+    .add_header("Authorization", format!("Bearer {token}"), true)
+    .json(&json!({}))
+    .send(&app)
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    assert_eq!(revoke["status"], json!("revoked"));
+
+    let rejected: Value = TestClient::post(format!(
+        "http://server/api/v1/extensions/applets/{applet_id}/ghosts"
+    ))
+    .add_header("Authorization", format!("Bearer {token}"), true)
+    .json(&json!({
+        "space_id": space_id,
+        "external_id": "ext-user-x",
+        "payload": {"kind": "message", "text": "after revoke"},
+    }))
+    .send(&app)
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    assert_eq!(rejected["error"]["code"], json!("applet_revoked"));
+
+    let revoked_doc: Value = TestClient::get(format!(
+        "http://server/api/v1/identity/{ghost_actor_did}/did-document"
+    ))
+    .send(&app)
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    assert_eq!(revoked_doc["status"], json!("revoked"));
+
+    let bot_rejected: Value = TestClient::post(format!(
+        "http://server/api/v1/extensions/applets/{applet_id}/bot/messages"
+    ))
+    .add_header("Authorization", format!("Bearer {token}"), true)
+    .json(&json!({
+        "space_id": space_id,
+        "payload": {"kind": "message", "text": "bot after revoke"},
+    }))
+    .send(&app)
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    assert_eq!(bot_rejected["error"]["code"], json!("bot_actor_revoked"));
+}
+
+#[tokio::test]
 async fn tsp_transport_route_audit_smoke() {
     // Smoke test uses unique transport_id / route_id strings
     // (`tspt:alice-smoke`, `rt:alice-bob-smoke`) so it doesn't
@@ -268,4 +418,34 @@ async fn tsp_transport_route_audit_smoke() {
         "audit chain should have at least the route_established entry"
     );
     assert_eq!(entries[0]["event_kind"], json!("route_established"));
+}
+
+fn signed_applet_manifest(applet_id: &str, namespace: &str, signer_did: &str) -> Value {
+    let signing = SigningKey::from_bytes(&[13u8; 32]);
+    let pubkey = signing.verifying_key();
+    let signer_public_key = URL_SAFE_NO_PAD.encode(pubkey.as_bytes());
+    let mut manifest = json!({
+        "id": applet_id,
+        "version": "1.0.0",
+        "signer_did": signer_did,
+        "signature": "",
+        "signer_public_key": signer_public_key,
+        "requested_capabilities": [
+            "realm:portal",
+            "message:write",
+            "actor:provision-ghost",
+            "actor:provision-bot"
+        ],
+        "schema_hash": routing::extensions::applet_manifest::current_applet_schema_hash(),
+        "metadata": {
+            "namespace": namespace,
+            "display_name": "Smoke Bridge Applet"
+        },
+    });
+    let manifest_struct: routing::extensions::applet_manifest::AppletManifest =
+        serde_json::from_value(manifest.clone()).unwrap();
+    let signing_bytes =
+        routing::extensions::applet_manifest::manifest_signing_bytes(&manifest_struct);
+    manifest["signature"] = json!(URL_SAFE_NO_PAD.encode(signing.sign(&signing_bytes).to_bytes()));
+    manifest
 }

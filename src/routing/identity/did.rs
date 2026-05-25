@@ -453,6 +453,32 @@ pub(super) async fn identity_document(
 }
 
 #[endpoint(
+    operation_id = "cx.identity.get_path_did_document",
+    tags("identity"),
+    summary = "Fetch a DID document by DID path segment"
+)]
+#[tracing::instrument(skip_all, fields(op = "cx.identity.get_path_did_document"))]
+pub(super) async fn identity_did_document(
+    req: &mut Request,
+    depot: &mut Depot,
+) -> JsonResult<Value> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let did = req
+        .param::<String>("did")
+        .ok_or_else(|| AppError::missing_param("did path segment required"))?;
+    if validate_did(&did).is_err() {
+        return Err(AppError::invalid_param("invalid did"));
+    }
+    if let Some(document) =
+        crate::routing::extensions::applet_bridge::did_document_for_extension_actor(&did)
+    {
+        return json_ok(document);
+    }
+    let record = identity_document_record(state, &did);
+    json_ok(record.did_document)
+}
+
+#[endpoint(
     operation_id = "cx.identity.get_log",
     tags("identity"),
     summary = "Return the local webvh key-log events for a DID"

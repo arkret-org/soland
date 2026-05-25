@@ -27,6 +27,7 @@
 
 use salvo::prelude::*;
 
+pub mod applet_bridge;
 pub mod applet_manifest;
 pub mod bot_actor;
 pub mod sovereign;
@@ -38,6 +39,7 @@ pub fn router() -> Router {
     Router::new()
         .push(
             Router::with_path("extensions")
+                .push(applet_bridge::router())
                 .push(applet_manifest::router())
                 .push(bot_actor::router())
                 .push(tsp::router()),

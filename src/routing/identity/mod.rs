@@ -31,6 +31,7 @@ pub fn router() -> Router {
                 .push(Router::with_path("describe").get(did::identity_describe))
                 .push(Router::with_path("resolve").post(did::identity_resolve))
                 .push(Router::with_path("document").get(did::identity_document))
+                .push(Router::with_path("{did}/did-document").get(did::identity_did_document))
                 .push(Router::with_path("log").get(did::identity_log))
                 .push(
                     Router::with_path("submit-did-operation")
