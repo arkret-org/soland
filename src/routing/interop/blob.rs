@@ -52,13 +52,13 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
             return;
         }
     };
-    let media_type = req
+    let requested_media_type = req
         .headers()
         .get("content-type")
         .and_then(|value| value.to_str().ok())
         .and_then(sanitize_media_type)
         .unwrap_or_else(|| "application/octet-stream".to_owned());
-    let filename = match sanitized_blob_filename(req) {
+    let requested_filename = match sanitized_blob_filename(req) {
         Ok(filename) => filename,
         Err(message) => {
             render_error(res, StatusCode::BAD_REQUEST, "invalid_param", message);
@@ -146,6 +146,12 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         );
         return;
     }
+    let media_type = if encrypted {
+        "application/octet-stream".to_owned()
+    } else {
+        requested_media_type
+    };
+    let filename = if encrypted { None } else { requested_filename };
     if !encrypted
         && space_id
             .as_deref()
@@ -173,6 +179,22 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         Ok(_) => {}
         Err(message) => {
             render_error(res, StatusCode::BAD_REQUEST, "invalid_param", message);
+            return;
+        }
+    }
+    if let Some(encryption) = encryption.as_ref() {
+        let expected = format!("sha256:{sha256}");
+        if encryption
+            .get("ciphertext_digest")
+            .and_then(Value::as_str)
+            .is_some_and(|digest| digest != expected)
+        {
+            render_error(
+                res,
+                StatusCode::CONFLICT,
+                "digest_mismatch",
+                "attachment ciphertext_digest does not match blob content",
+            );
             return;
         }
     }
@@ -212,19 +234,22 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         );
         return;
     }
+    let mut upload_receipt = json!({
+        "service_did": state.config.service_did.clone(),
+        "created_at": now(),
+        "encrypted_attachment": encryption,
+        "encrypted": encrypted,
+        "space_id": space_id,
+    });
+    if !encrypted && let Some(filename) = filename {
+        upload_receipt["filename"] = json!(filename);
+    }
     res.render(Json(crate::wire::BlobUploadResBody {
         blob_ref,
         size,
         media_type,
         sha256,
-        upload_receipt: json!({
-            "service_did": state.config.service_did.clone(),
-            "created_at": now(),
-            "encrypted_attachment": encryption,
-            "encrypted": encrypted,
-            "filename": filename,
-            "space_id": space_id,
-        }),
+        upload_receipt,
     }));
 }
 
@@ -294,26 +319,24 @@ async fn blob_get(depot: &mut Depot, req: &mut Request, res: &mut Response) {
             // direct-serve path. TODO(round23-T11): wire dedicated presign
             // endpoint once object storage backend supports it; for now
             // direct-serve carries the same response shape requirements.
-            let blob_value = serde_json::json!({
-                "encryption": blob.encryption,
-                "uploaded_by": blob.uploaded_by,
-                "legal_hold": false,
-                "redacted": false,
-                "visibility": null,
-            });
+            let blob_value = presign_blob_policy_value(blob);
             let actor = session
                 .as_ref()
                 .map(|session| session.actor.as_str())
                 .unwrap_or("presigned");
             if let Some(block) = crate::round23::classify_presign_blob_block(&blob_value, actor) {
-                let (code, reason) = block.as_error();
-                render_error(
-                    res,
-                    crate::error::error_http_status(code),
-                    code.as_str(),
-                    reason,
-                );
-                return;
+                let direct_member_e2ee_download =
+                    session.is_some() && matches!(block, crate::round23::PresignBlobBlock::E2ee);
+                if !direct_member_e2ee_download {
+                    let (code, reason) = block.as_error();
+                    render_error(
+                        res,
+                        crate::error::error_http_status(code),
+                        code.as_str(),
+                        reason,
+                    );
+                    return;
+                }
             }
             // Response headers per T11.
             res.headers_mut().insert(
@@ -479,6 +502,11 @@ async fn blob_presign(
     ) {
         return Err(AppError::not_found("blob not found"));
     }
+    let blob_value = presign_blob_policy_value(&blob);
+    if let Some(block) = crate::round23::classify_presign_blob_block(&blob_value, &session.actor) {
+        let (code, reason) = block.as_error();
+        return Err(AppError::new(code, reason));
+    }
     let ttl_seconds = body
         .get("ttl_seconds")
         .and_then(Value::as_u64)
@@ -528,6 +556,16 @@ fn presign_token(state: &AppState, blob_ref: &str, purpose: &str, expires_at: i6
         )
         .as_bytes(),
     )
+}
+
+fn presign_blob_policy_value(blob: &BlobRecord) -> Value {
+    json!({
+        "encryption": blob.encryption.clone(),
+        "uploaded_by": blob.uploaded_by.clone(),
+        "legal_hold": false,
+        "redacted": false,
+        "visibility": null,
+    })
 }
 
 fn query_escape(value: &str) -> String {

@@ -5217,17 +5217,26 @@ async fn auth_keys_device_messages_and_blobs_work() {
         .await;
     assert_eq!(plaintext_private_blob.status_code.unwrap().as_u16(), 403);
 
+    let encrypted_bytes = b"encrypted-bytes";
+    let ciphertext_digest = format!("sha256:{:x}", Sha256::digest(encrypted_bytes));
     let blob: Value = TestClient::post("http://server/api/v1/blob/upload")
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header("content-type", "Text/Plain; charset=utf-8", true)
         .add_header("x-contrix-filename", "..\\danger<script>.txt", true)
+        .add_header("x-contrix-blob-encrypted", "true", true)
+        .add_header(
+            "x-contrix-space-id",
+            locked_space["space_id"].as_str().unwrap(),
+            true,
+        )
+        .add_header("x-contrix-sha256", ciphertext_digest.clone(), true)
         .add_header(
             "x-contrix-attachment-envelope",
             serde_json::json!({
                 "algorithm": "mls-rfc9420",
                 "nonce": "nonce",
                 "key_ref": {"kid": "did:web:alice.example#device"},
-                "ciphertext_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+                "ciphertext_digest": ciphertext_digest
             })
             .to_string(),
             true,
@@ -5239,8 +5248,11 @@ async fn auth_keys_device_messages_and_blobs_work() {
         .await
         .unwrap();
     assert_eq!(blob["size"], 15);
-    assert_eq!(blob["media_type"], "text/plain");
-    assert_eq!(blob["upload_receipt"]["filename"], "danger_script_.txt");
+    assert_eq!(blob["media_type"], "application/octet-stream");
+    assert!(blob["upload_receipt"].get("filename").is_none());
+    let upload_receipt = blob["upload_receipt"].to_string();
+    assert!(!upload_receipt.contains("danger"));
+    assert!(!upload_receipt.to_ascii_lowercase().contains("text/plain"));
     assert!(
         blob["blob_ref"]
             .as_str()
@@ -5255,7 +5267,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
         panic!("test config uses local object storage");
     };
     let blob_path = root.join("sha256").join(blob["sha256"].as_str().unwrap());
-    assert_eq!(std::fs::read(blob_path).unwrap(), b"encrypted-bytes");
+    assert_eq!(std::fs::read(blob_path).unwrap(), encrypted_bytes);
 
     let anonymous_blob = TestClient::get(format!(
         "http://server/api/v1/blob/get?blob_ref={}&purpose=message_attachment",
@@ -5265,28 +5277,27 @@ async fn auth_keys_device_messages_and_blobs_work() {
     .await;
     assert_eq!(anonymous_blob.status_code.unwrap().as_u16(), 401);
 
-    let mut blocked_blob = TestClient::get(format!(
+    let mut alice_blob = TestClient::get(format!(
         "http://server/api/v1/blob/get?blob_ref={}&purpose=message_attachment",
         blob["blob_ref"].as_str().unwrap()
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
     .await;
-    assert_eq!(blocked_blob.status_code.unwrap().as_u16(), 403);
-    let body: Value = blocked_blob.take_json().await.unwrap();
-    assert_eq!(body["error"]["code"], "capability_denied");
-
-    let mut range = TestClient::get(format!(
-        "http://server/api/v1/blob/get?blob_ref={}&purpose=message_attachment",
-        blob["blob_ref"].as_str().unwrap()
-    ))
-    .add_header("authorization", format!("Bearer {token}"), true)
-    .add_header("range", "bytes=0-8", true)
-    .send(&app_from_state(state.clone()))
-    .await;
-    assert_eq!(range.status_code.unwrap().as_u16(), 403);
-    let body: Value = range.take_json().await.unwrap();
-    assert_eq!(body["error"]["code"], "capability_denied");
+    assert_eq!(alice_blob.status_code.unwrap().as_u16(), 200);
+    assert_eq!(
+        alice_blob
+            .headers()
+            .get("content-type")
+            .unwrap()
+            .to_str()
+            .unwrap(),
+        "application/octet-stream"
+    );
+    assert_eq!(
+        alice_blob.take_string().await.unwrap().as_bytes(),
+        encrypted_bytes
+    );
 
     let bob = register_account(
         state.clone(),
@@ -5295,7 +5306,30 @@ async fn auth_keys_device_messages_and_blobs_work() {
         "cx:device:01904100-0000-7000-8000-b10bb0000003",
     )
     .await;
-    let invisible_blob = TestClient::get(format!(
+    add_test_realm_member(
+        &state,
+        locked_space["space_id"].as_str().unwrap(),
+        "did:web:blob-bob.example",
+    );
+
+    let mut bob_blob = TestClient::get(format!(
+        "http://server/api/v1/blob/get?blob_ref={}&purpose=message_attachment",
+        blob["blob_ref"].as_str().unwrap()
+    ))
+    .add_header("authorization", format!("Bearer {bob}"), true)
+    .send(&app_from_state(state.clone()))
+    .await;
+    assert_eq!(bob_blob.status_code.unwrap().as_u16(), 200);
+    let bob_body = bob_blob.take_string().await.unwrap();
+    assert_eq!(bob_body.as_bytes(), encrypted_bytes);
+    assert_eq!(
+        format!("sha256:{:x}", Sha256::digest(bob_body.as_bytes())),
+        blob["upload_receipt"]["encrypted_attachment"]["ciphertext_digest"]
+            .as_str()
+            .unwrap()
+    );
+
+    let mut range = TestClient::get(format!(
         "http://server/api/v1/blob/get?blob_ref={}&purpose=message_attachment",
         blob["blob_ref"].as_str().unwrap()
     ))
@@ -5303,9 +5337,53 @@ async fn auth_keys_device_messages_and_blobs_work() {
     .add_header("range", "bytes=0-8", true)
     .send(&app_from_state(state.clone()))
     .await;
+    assert_eq!(range.status_code.unwrap().as_u16(), 206);
+    assert_eq!(
+        range
+            .headers()
+            .get("content-range")
+            .unwrap()
+            .to_str()
+            .unwrap(),
+        "bytes 0-8/15"
+    );
+    assert_eq!(range.take_string().await.unwrap(), "encrypted");
+
+    let mut presign = TestClient::post("http://server/api/v1/blob/presign")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({
+            "blob_ref": blob["blob_ref"].as_str().unwrap(),
+            "purpose": "message_attachment"
+        }))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(presign.status_code.unwrap().as_u16(), 403);
+    let presign_body: Value = presign.take_json().await.unwrap();
+    assert_eq!(presign_body["error"]["code"], "capability_denied");
+
+    let mallory = register_account(
+        state.clone(),
+        "did:web:blob-mallory.example",
+        "@blob-mallory",
+        "cx:device:01904100-0000-7000-8000-a11000000004",
+    )
+    .await;
+    let mut invisible_blob = TestClient::get(format!(
+        "http://server/api/v1/blob/get?blob_ref={}&purpose=message_attachment",
+        blob["blob_ref"].as_str().unwrap()
+    ))
+    .add_header("authorization", format!("Bearer {mallory}"), true)
+    .add_header("range", "bytes=0-8", true)
+    .send(&app_from_state(state.clone()))
+    .await;
     assert_eq!(invisible_blob.status_code.unwrap().as_u16(), 404);
     assert!(invisible_blob.headers().get("content-range").is_none());
     assert!(invisible_blob.headers().get("accept-ranges").is_none());
+    let invisible_body: Value = invisible_blob.take_json().await.unwrap();
+    assert_eq!(invisible_body["error"]["code"], "not_found");
+    let invisible_text = invisible_body.to_string();
+    assert!(!invisible_text.contains(locked_space["space_id"].as_str().unwrap()));
+    assert!(!invisible_text.contains(blob["blob_ref"].as_str().unwrap()));
 
     let push_registration: Value = TestClient::post("http://server/api/v1/push/register-device")
         .add_header("authorization", format!("Bearer {token}"), true)
