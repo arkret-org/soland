@@ -6143,6 +6143,28 @@ impl WebrtcSessionRow {
             space_id: ids::format_typed_uuid("space", &self.space_id),
             created_by: self.initiator_did,
             participants,
+            mode: self
+                .signaling_state
+                .get("mode")
+                .and_then(Value::as_str)
+                .unwrap_or("p2p")
+                .to_owned(),
+            recording_policy: self
+                .signaling_state
+                .get("recording_policy")
+                .and_then(Value::as_str)
+                .unwrap_or("none")
+                .to_owned(),
+            recording_started_by: self
+                .signaling_state
+                .get("recording_started_by")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned),
+            recording_blob_ref: self
+                .signaling_state
+                .get("recording_blob_ref")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned),
             expires_at: self.expires_at,
             created_at: self.created_at,
             next_seq,
@@ -6154,6 +6176,10 @@ impl WebrtcSessionRow {
 fn webrtc_signaling_state(record: &WebrtcSessionRecord) -> Value {
     serde_json::json!({
         "participants": record.participants.iter().cloned().collect::<Vec<_>>(),
+        "mode": record.mode.clone(),
+        "recording_policy": record.recording_policy.clone(),
+        "recording_started_by": record.recording_started_by.clone(),
+        "recording_blob_ref": record.recording_blob_ref.clone(),
         "next_seq": record.next_seq,
         "signals": record
             .signals
@@ -7965,6 +7991,10 @@ mod tests {
             space_id: "cx:space:0196419b-0000-7000-8000-000000000001".to_owned(),
             created_by: "did:web:alice.example".to_owned(),
             participants,
+            mode: "p2p".to_owned(),
+            recording_policy: "none".to_owned(),
+            recording_started_by: None,
+            recording_blob_ref: None,
             expires_at: now + chrono::Duration::minutes(30),
             created_at: now,
             next_seq: 0,

@@ -1361,6 +1361,10 @@ pub struct CreateWebrtcSessionRequest {
     #[serde(default)]
     pub participants: Vec<String>,
     #[serde(default)]
+    pub mode: Option<String>,
+    #[serde(default)]
+    pub recording_policy: Option<String>,
+    #[serde(default)]
     pub ttl_ms: Option<u64>,
 }
 
@@ -1369,6 +1373,8 @@ pub struct CreateWebrtcSessionResponse {
     pub session_id: String,
     pub space_id: String,
     pub participants: Vec<String>,
+    pub mode: String,
+    pub recording_policy: String,
     pub call_state: String,
     pub expires_at: DateTime<Utc>,
     pub created_at: DateTime<Utc>,

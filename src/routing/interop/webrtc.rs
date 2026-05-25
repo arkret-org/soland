@@ -25,11 +25,11 @@ use super::{
     now, sha256_hex, space_has_member, validate_canonical_json_value, validate_device_id,
     validate_did, validate_space_id,
 };
-use crate::error::AppError;
+use crate::error::{AppError, ErrorCode};
 use crate::ids;
 use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
-use crate::state::{AppState, WebrtcSessionRecord, WebrtcSignalRecord};
+use crate::state::{AppState, SessionRecord, WebrtcSessionRecord, WebrtcSignalRecord};
 use crate::wire::{
     CreateWebrtcSessionRequest, CreateWebrtcSessionResponse, OkResBody, WebrtcSignalRequest,
     WebrtcSignalResponse, WebrtcSignalsResponse,
@@ -37,6 +37,9 @@ use crate::wire::{
 
 pub(super) fn router() -> Router {
     Router::new()
+        .push(Router::with_path("calls/ice-config").post(api_ice_config))
+        .push(Router::with_path("calls/{call_id}/ice-config/refresh").post(refresh_ice_config))
+        .push(Router::with_path("calls/{call_id}/recording/start").post(start_recording))
         .push(Router::with_path("webrtc/sessions").post(create_webrtc_session))
         .push(
             Router::with_path("webrtc/sessions/{session_id}/signals")
@@ -47,7 +50,7 @@ pub(super) fn router() -> Router {
 }
 
 pub(super) fn contrix_router() -> Router {
-    Router::with_path("contrix/v1/ice-config").post(ice_config)
+    Router::with_path("contrix/v1/ice-config").post(contrix_ice_config)
 }
 
 #[endpoint(
@@ -56,7 +59,7 @@ pub(super) fn contrix_router() -> Router {
     summary = "Issue signed ICE config"
 )]
 #[tracing::instrument(skip_all, fields(op = "cx.media.ice_config"))]
-async fn ice_config(
+async fn contrix_ice_config(
     aa: AuthArgs,
     body: JsonBody<Value>,
     depot: &mut Depot,
@@ -64,23 +67,74 @@ async fn ice_config(
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req)?;
-    let body = body.into_inner();
+    issue_ice_config(state, &session, body.into_inner(), None, false)
+}
+
+#[endpoint(
+    operation_id = "cx.extension.soland.calls.ice_config",
+    tags("media", "calls"),
+    summary = "Issue signed ICE config through the API namespace"
+)]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.calls.ice_config"))]
+async fn api_ice_config(
+    aa: AuthArgs,
+    body: JsonBody<Value>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<Value> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req)?;
+    issue_ice_config(state, &session, body.into_inner(), None, false)
+}
+
+#[endpoint(
+    operation_id = "cx.extension.soland.calls.ice_config.refresh",
+    tags("media", "calls"),
+    summary = "Refresh signed ICE / TURN credentials for an active call"
+)]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.calls.ice_config.refresh"))]
+async fn refresh_ice_config(
+    aa: AuthArgs,
+    call_id: PathParam<String>,
+    body: JsonBody<Value>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<Value> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req)?;
+    issue_ice_config(
+        state,
+        &session,
+        body.into_inner(),
+        Some(call_id.into_inner()),
+        true,
+    )
+}
+
+fn issue_ice_config(
+    state: &AppState,
+    session: &SessionRecord,
+    body: Value,
+    path_call_id: Option<String>,
+    refresh: bool,
+) -> JsonResult<Value> {
     let realm_id = body
         .get("realm_id")
+        .or_else(|| body.get("space_id"))
         .and_then(Value::as_str)
-        .ok_or_else(|| AppError::missing_param("realm_id is required"))?;
-    let call_id = body
-        .get("call_id")
-        .and_then(Value::as_str)
+        .ok_or_else(|| AppError::missing_param("realm_id or space_id is required"))?;
+    let call_id = path_call_id
+        .as_deref()
+        .or_else(|| body.get("call_id").and_then(Value::as_str))
         .ok_or_else(|| AppError::missing_param("call_id is required"))?;
     let actor_id = body
         .get("actor_id")
         .and_then(Value::as_str)
-        .ok_or_else(|| AppError::missing_param("actor_id is required"))?;
+        .unwrap_or(session.actor.as_str());
     let device_id = body
         .get("device_id")
         .and_then(Value::as_str)
-        .ok_or_else(|| AppError::missing_param("device_id is required"))?;
+        .unwrap_or(session.device_id.as_str());
 
     if RealmId::new(realm_id.to_owned()).is_err() {
         return Err(AppError::invalid_param("invalid realm_id"));
@@ -103,22 +157,60 @@ async fn ice_config(
             "actor is not a joined member of the realm",
         ));
     }
+    if let Some(record) = state.persistence.webrtc().get(call_id).ok().flatten() {
+        if record.space_id != realm_id {
+            return Err(AppError::invalid_param(
+                "call_id does not belong to the requested realm",
+            ));
+        }
+        if !record.participants.contains(actor_id) {
+            return Err(AppError::capability_denied(
+                "actor is not a participant of the call",
+            ));
+        }
+    } else if refresh {
+        return Err(AppError::not_found("call session not found"));
+    }
 
     let issued_at = now();
     let ttl_seconds = 300;
     let refresh_lead_seconds = 75;
     let expires_at = issued_at + Duration::seconds(ttl_seconds);
+    let force_turn = body
+        .get("force_turn")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let turn_username = pairwise_turn_username(state, realm_id, call_id, actor_id, device_id);
+    let turn_credential = turn_credential(
+        state, realm_id, call_id, actor_id, device_id, &issued_at, refresh,
+    );
+    let turn_server = json!({
+        "urls": ["turn:turn.soland.local:3478?transport=udp"],
+        "username": turn_username.clone(),
+        "credential": turn_credential,
+        "credential_type": "password",
+        "expires_at": expires_at,
+    });
+    let mut ice_servers = vec![json!({"urls": ["stun:stun.l.google.com:19302"]})];
+    ice_servers.push(turn_server.clone());
+    if force_turn {
+        ice_servers = vec![turn_server.clone()];
+    }
     let mut response = json!({
         "realm_id": realm_id,
+        "space_id": realm_id,
         "call_id": call_id,
         "actor_id": actor_id,
         "device_id": device_id,
-        "ice_servers": [{"urls": ["stun:stun.l.google.com:19302"]}],
+        "ice_servers": ice_servers,
+        "turn_servers": [turn_server],
         "ttl_seconds": ttl_seconds,
         "refresh_lead_seconds": refresh_lead_seconds,
         "issued_at": issued_at,
         "expires_at": expires_at,
-        "force_turn": false,
+        "force_turn": force_turn,
+        "pairwise_pseudonym": turn_username,
+        "refreshed": refresh,
     });
     let payload_digest = ice_config_payload_digest(&response);
     let signature = ice_config_signature(state, &response);
@@ -126,15 +218,46 @@ async fn ice_config(
         object.insert(
             "signature".to_owned(),
             json!({
-            "alg": "EdDSA",
-            "kid": format!("{}#media-ice", state.config.service_did),
+                "alg": "EdDSA",
+                "kid": format!("{}#media-ice", state.config.service_did),
                 "payload_digest": payload_digest,
-            "sig": signature,
-            "signature_input": "soland-media-ice-config-v1"
+                "sig": signature,
+                "signature_input": "soland-media-ice-config-v1"
             }),
         );
     }
     json_ok(response)
+}
+
+fn pairwise_turn_username(
+    state: &AppState,
+    realm_id: &str,
+    call_id: &str,
+    actor_id: &str,
+    device_id: &str,
+) -> String {
+    let material = format!(
+        "soland-turn-user-v1\0{}\0{realm_id}\0{call_id}\0{actor_id}\0{device_id}",
+        state.config.service_did
+    );
+    format!("cx-turn-{}", &sha256_hex(material.as_bytes())[..24])
+}
+
+fn turn_credential(
+    state: &AppState,
+    realm_id: &str,
+    call_id: &str,
+    actor_id: &str,
+    device_id: &str,
+    issued_at: &chrono::DateTime<chrono::Utc>,
+    refresh: bool,
+) -> String {
+    let material = format!(
+        "soland-turn-credential-v1\0{}\0{realm_id}\0{call_id}\0{actor_id}\0{device_id}\0{}\0{refresh}",
+        state.config.service_did,
+        issued_at.to_rfc3339()
+    );
+    URL_SAFE_NO_PAD.encode(sha256_hex(material.as_bytes()))
 }
 
 fn ice_config_payload_digest(payload: &Value) -> String {
@@ -184,6 +307,8 @@ async fn create_webrtc_session(
             "actor is not a joined member of the space",
         ));
     }
+    let mode = normalize_call_mode(body.mode.as_deref())?.to_owned();
+    let recording_policy = normalize_recording_policy(body.recording_policy.as_deref())?.to_owned();
 
     let mut participants = BTreeSet::new();
     participants.insert(session.actor.clone());
@@ -210,6 +335,10 @@ async fn create_webrtc_session(
         space_id: body.space_id.clone(),
         created_by: session.actor,
         participants,
+        mode: mode.clone(),
+        recording_policy: recording_policy.clone(),
+        recording_started_by: None,
+        recording_blob_ref: None,
         expires_at,
         created_at,
         next_seq: 1,
@@ -224,6 +353,8 @@ async fn create_webrtc_session(
         session_id,
         space_id: body.space_id,
         participants: participant_list,
+        mode,
+        recording_policy,
         call_state: "ringing".to_owned(),
         expires_at,
         created_at,
@@ -420,6 +551,79 @@ async fn delete_webrtc_session(
     json_ok(OkResBody { ok: true })
 }
 
+#[endpoint(
+    operation_id = "cx.extension.soland.calls.recording.start",
+    tags("media", "calls"),
+    summary = "Start recording for a call when recording_policy allows it"
+)]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.calls.recording.start"))]
+async fn start_recording(
+    aa: AuthArgs,
+    call_id: PathParam<String>,
+    body: JsonBody<Value>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<Value> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req)?;
+    let call_id = call_id.into_inner();
+    if !is_valid_webrtc_session_id(&call_id) {
+        return Err(AppError::invalid_param("invalid call_id"));
+    }
+    prune_expired_webrtc_sessions(state);
+    let mut record = state
+        .persistence
+        .webrtc()
+        .get(&call_id)
+        .map_err(|error| AppError::internal(error.to_string()))?
+        .ok_or_else(|| AppError::not_found("call session not found"))?;
+    if !record.participants.contains(&session.actor) {
+        return Err(AppError::capability_denied(
+            "actor is not a participant of the call",
+        ));
+    }
+    let body = body.into_inner();
+    if let Some(space_id) = body.get("space_id").and_then(Value::as_str)
+        && space_id != record.space_id
+    {
+        return Err(AppError::invalid_param(
+            "space_id does not match the call session",
+        ));
+    }
+    if record.recording_policy != "allow" {
+        return Err(
+            AppError::new(ErrorCode::FailedPrecondition, "recording_policy_violation")
+                .with_status(StatusCode::PRECONDITION_FAILED)
+                .with_wire_code("recording_policy_violation"),
+        );
+    }
+    let recording_id = body
+        .get("recording_id")
+        .and_then(Value::as_str)
+        .filter(|id| id.starts_with("cx:recording:"))
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| ids::generate("recording"));
+    let blob_digest =
+        sha256_hex(format!("{}:{}:{}", record.session_id, recording_id, session.actor).as_bytes());
+    let recording_blob_ref = format!("cx:blob:sha256:{blob_digest}");
+    record.recording_started_by = Some(session.actor.clone());
+    record.recording_blob_ref = Some(recording_blob_ref.clone());
+    state
+        .persistence
+        .webrtc()
+        .put(record.clone())
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    json_ok(json!({
+        "ok": true,
+        "call_id": call_id,
+        "space_id": record.space_id,
+        "recording_policy": record.recording_policy,
+        "recording_id": recording_id,
+        "recording_started_by": session.actor,
+        "recording_blob_ref": recording_blob_ref,
+    }))
+}
+
 fn prune_expired_webrtc_sessions(state: &AppState) {
     if let Err(error) = state.persistence.webrtc().prune_expired() {
         tracing::warn!(%error, "failed to prune expired webrtc sessions");
@@ -479,6 +683,25 @@ fn is_supported_webrtc_signal_type(value: &str) -> bool {
             | "cx.call.signal.device_change"
             | "cx.call.signal.renegotiate"
     )
+}
+
+fn normalize_call_mode(value: Option<&str>) -> Result<&'static str, AppError> {
+    match value.unwrap_or("p2p").trim() {
+        "" | "p2p" => Ok("p2p"),
+        "sfu" => Ok("sfu"),
+        "mcu" => Ok("mcu"),
+        _ => Err(AppError::invalid_param("mode must be p2p, sfu, or mcu")),
+    }
+}
+
+fn normalize_recording_policy(value: Option<&str>) -> Result<&'static str, AppError> {
+    match value.unwrap_or("none").trim() {
+        "" | "none" => Ok("none"),
+        "allow" => Ok("allow"),
+        _ => Err(AppError::invalid_param(
+            "recording_policy must be none or allow",
+        )),
+    }
 }
 
 fn normalized_webrtc_signal_type(value: &str) -> &str {
