@@ -129,10 +129,6 @@ pub struct ProjectionState {
     /// is reached via `cx.redaction`. Mirror table is `projection_flows`
     /// (durable).
     pub flows: BTreeMap<String, FlowProjection>,
-    /// Flow discussion routing override. When a Flow carries
-    /// `discussion_realm_ref`, discussion-track messages are hosted by
-    /// that linked Realm instead of the Flow's source Realm.
-    pub flow_discussion_realms: BTreeMap<String, String>,
     /// Server-side Morph projection. Same shape as Flow. Mirror table
     /// is `projection_morphs` (durable).
     pub morphs: BTreeMap<String, MorphProjection>,
@@ -1435,29 +1431,6 @@ fn apply_flow_track_touch_dispatch(
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
     s.apply_flow_track_touch(op, op.created_at)
-}
-
-fn discussion_realm_patch(payload: &Value) -> Option<Option<String>> {
-    if let Some(value) = payload.get("discussion_realm_ref") {
-        return Some(value.as_str().map(ToOwned::to_owned));
-    }
-    let patch_value = payload
-        .get("patch")
-        .and_then(Value::as_object)
-        .and_then(|patch| patch.get("discussion_realm_ref"))?;
-    match patch_value {
-        Value::Null => Some(None),
-        Value::String(value) => Some(Some(value.clone())),
-        Value::Object(op) => match op.get("$op").and_then(Value::as_str) {
-            Some("unset") => Some(None),
-            Some("set") => op
-                .get("value")
-                .and_then(Value::as_str)
-                .map(|value| Some(value.to_owned())),
-            _ => None,
-        },
-        _ => None,
-    }
 }
 
 fn apply_morph_create_dispatch(
@@ -5130,10 +5103,10 @@ impl ProjectionState {
     ///      parent edge is downgraded so membership / capability /
     ///      history / E2EE / retention stops propagating across the
     ///      destroy frontier.
-    ///   ¶7 `Flow.discussion_realm_ref` either direction → drop the
-    ///      discussion edge so further `cx.message.*` writes on that
-    ///      track fail-closed (the discussion projection treats a
-    ///      missing entry as the default fail-closed state).
+    /// CXP-0007: the legacy `Flow.discussion_realm_ref` cross-Realm edge
+    /// has been removed; intra-Realm discussion boundaries now live on a
+    /// Circle (`scope_circle_id`) and never cross the Realm frontier, so
+    /// no cross-Realm discussion cascade is required here.
     ///
     /// The terminal-state admission check (event_log.rs) prevents
     /// further writes against the destroyed Realm itself, which is the
@@ -5197,36 +5170,15 @@ impl ProjectionState {
             }
         }
 
-        // ¶7 discussion_realm_ref cascade — both directions:
-        //   (a) destroyed Realm is the LINKED discussion Realm
-        //       (`flow_discussion_realms` value)
-        //   (b) destroyed Realm is the SOURCE Flow's home Realm
-        //       (`FlowProjection.space_id`)
-        // We collect the affected flow_ids first to avoid the
-        // borrow-checker double-borrow on `self`.
-        let to_remove: Vec<String> = self
-            .flow_discussion_realms
-            .iter()
-            .filter_map(|(flow_id, target_realm)| {
-                if target_realm == destroyed_realm_id {
-                    Some(flow_id.clone())
-                } else {
-                    self.flows
-                        .get(flow_id)
-                        .filter(|f| f.space_id == destroyed_realm_id)
-                        .map(|_| flow_id.clone())
-                }
-            })
-            .collect();
-        for flow_id in &to_remove {
-            self.flow_discussion_realms.remove(flow_id);
-        }
+        // CXP-0007: no cross-Realm discussion edges to sever — Circles
+        // are intra-Realm and `cx.realm.destroy` already tombstones their
+        // parent Realm; further Circle writes fall under the terminal
+        // admission check in `event_log::validate_event_envelope`.
 
         tracing::info!(
             destroyed_realm_id = %destroyed_realm_id,
             orphaned_space_containers = orphaned_count,
             cross_realm_parent_refs_locked = parent_lock_count,
-            severed_discussion_edges = to_remove.len(),
             "stream-F realm.destroy cascade applied"
         );
     }
@@ -5997,18 +5949,9 @@ impl ProjectionState {
                     .collect::<BTreeMap<_, _>>()
             })
             .unwrap_or_default();
-        let discussion_realm_ref = object
-            .get("discussion_realm_ref")
-            .and_then(|v| v.as_str())
-            .filter(|value| !value.trim().is_empty())
-            .map(ToOwned::to_owned);
-        if let Some(realm_id) = discussion_realm_ref.as_deref()
-            && !self.realm_exists_for_discussion_ref(realm_id)
-        {
-            return ProjectionEffect::Rejected {
-                reason: "orphan_discussion_realm_ref".to_owned(),
-            };
-        }
+        // CXP-0007: `discussion_realm_ref` is now a forbidden wire field
+        // hard-rejected at the envelope validator. Intra-Realm discussion
+        // boundaries are expressed via `scope_circle_id` (Circle).
         let space_id = object
             .get("space_id")
             .and_then(|v| v.as_str())
@@ -6041,12 +5984,6 @@ impl ProjectionState {
             updated_at: None,
         };
         self.flows.insert(flow_id.clone(), projection);
-        if let Some(realm_id) = discussion_realm_ref {
-            self.flow_discussion_realms
-                .insert(flow_id.clone(), realm_id);
-        } else {
-            self.flow_discussion_realms.remove(&flow_id);
-        }
         if let Some((board_space_id, list_space_id, rank)) =
             flow_position_from_create_payload(&operation.payload, object)
         {
@@ -6079,14 +6016,10 @@ impl ProjectionState {
                 reason: "flow_update_missing_flow_id".to_owned(),
             };
         };
-        let discussion_update = discussion_realm_patch(&operation.payload);
-        if let Some(Some(realm_id)) = discussion_update.as_ref()
-            && !self.realm_exists_for_discussion_ref(realm_id)
-        {
-            return ProjectionEffect::Rejected {
-                reason: "orphan_discussion_realm_ref".to_owned(),
-            };
-        }
+        // CXP-0007: `discussion_realm_ref` is now a forbidden wire field
+        // hard-rejected at the envelope validator before reaching the
+        // reducer; the patch handler below intentionally drops any legacy
+        // path.
         let Some(flow) = self.flows.get_mut(&flow_id) else {
             return ProjectionEffect::Ignored;
         };
@@ -6109,17 +6042,6 @@ impl ProjectionState {
                 flow.summary = summary;
             }
             apply_flow_fields_patch(&mut flow.fields, patch);
-        }
-        if let Some(update) = discussion_update {
-            match update {
-                Some(realm_id) => {
-                    self.flow_discussion_realms
-                        .insert(flow_id.clone(), realm_id);
-                }
-                None => {
-                    self.flow_discussion_realms.remove(&flow_id);
-                }
-            }
         }
         flow.updated_by = operation
             .payload
@@ -6691,30 +6613,6 @@ impl ProjectionState {
     }
 
     // ── Query helpers ──
-
-    fn realm_exists_for_discussion_ref(&self, realm_id: &str) -> bool {
-        if self.space_is_destroyed(realm_id) {
-            return false;
-        }
-        self.space_states.contains_key(realm_id) || self.space_create_log(realm_id).is_some()
-    }
-
-    /// Return the linked Realm that hosts `flow_id`'s discussion track,
-    /// when the Flow has been upgraded to an independent discussion Realm.
-    pub fn discussion_realm_for_flow(&self, flow_id: &str) -> Option<&str> {
-        self.flow_discussion_realms.get(flow_id).map(String::as_str)
-    }
-
-    /// Resolve the effective Realm for discussion-track writes. Without a
-    /// linked Realm override, discussion messages stay in the source Realm.
-    pub fn discussion_space_for_flow<'a>(
-        &'a self,
-        flow_id: &str,
-        source_space_id: &'a str,
-    ) -> &'a str {
-        self.discussion_realm_for_flow(flow_id)
-            .unwrap_or(source_space_id)
-    }
 
     /// Get all non-redacted messages for a space, sorted by creation time.
     pub fn messages_for_space(&self, space_id: &str) -> Vec<&MessageState> {

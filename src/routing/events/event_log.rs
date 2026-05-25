@@ -1539,6 +1539,20 @@ fn validate_event_envelope(
         ));
     }
     require_object_field(object, "payload")?;
+    // CXP-0007 (spec b7d35be) — hard-reject any wire payload that carries a
+    // field listed in `forbidden-wire-fields.json` (sourced from the SDK's
+    // `is_forbidden_wire_field`). Receivers MUST refuse the legacy field
+    // names outright; no compat path. Spec floor 2b0d70d.
+    if let Some(field) = first_forbidden_wire_field(object.get("payload")) {
+        return Err(event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "forbidden_wire_field",
+            &format!(
+                "payload carries forbidden wire field {field:?} \
+                 (spec/v1/artifacts/registry/forbidden-wire-fields.json)"
+            ),
+        ));
+    }
     validate_event_schema_and_payload(state, &kind, &schema_id, envelope, object)?;
     validate_audit_accessed_payload(&kind, object)?;
     validate_sender_commitment_binding(object)?;
@@ -2908,6 +2922,42 @@ fn bootstrap_realm_member_index(
     if let Err(error) = state.persistence.realm_meta().put(space_id, &meta) {
         tracing::error!(%error, %space_id, "bootstrap_realm_member_index: failed to persist Realm meta record");
     }
+}
+
+/// CXP-0007 — recursively scan `value` for the first key listed in the SDK's
+/// [`contrix_sdk::forbidden_wire_fields::FORBIDDEN_WIRE_FIELDS`] hard-reject
+/// set. Receivers MUST refuse the legacy field names outright. Returns the
+/// offending field name when one is present, otherwise `None`.
+///
+/// The walk descends into nested objects and arrays so a forbidden key carried
+/// inside `patch`, `object`, or any other sub-tree also fails. Callers that
+/// need to inspect only the top-level payload object can pass
+/// `value.as_object()` directly — the recursive form handles both shapes.
+fn first_forbidden_wire_field(value: Option<&Value>) -> Option<&'static str> {
+    fn walk(value: &Value) -> Option<&'static str> {
+        match value {
+            Value::Object(map) => {
+                for (key, child) in map {
+                    if contrix_sdk::forbidden_wire_fields::is_forbidden_wire_field(key) {
+                        // Translate the wire key back to the SDK's canonical
+                        // &'static str so the caller's error message uses a
+                        // stable identifier.
+                        return contrix_sdk::forbidden_wire_fields::FORBIDDEN_WIRE_FIELDS
+                            .iter()
+                            .copied()
+                            .find(|name| *name == key.as_str());
+                    }
+                    if let Some(found) = walk(child) {
+                        return Some(found);
+                    }
+                }
+                None
+            }
+            Value::Array(items) => items.iter().find_map(walk),
+            _ => None,
+        }
+    }
+    value.and_then(walk)
 }
 
 fn require_object_field(

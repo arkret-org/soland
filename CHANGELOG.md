@@ -6,6 +6,30 @@ and the project tracks Contrix v1 spec revisions.
 
 ## [Unreleased]
 
+### CXP-0007 — Circle primitive rollout (P2A; contrix-spec floor `2b0d70d`)
+
+Aggressive mode; no compatibility shim. Tracks the SDK's P1 baseline
+(`circle-rollout` branch) and consumes the seven `cx.circle.*` durable event
+kinds, six `cx.circle.*` capability actions, and six new failed-precondition
+reason codes registered in `contrix-spec` `9cb47c1..2b0d70d`.
+
+- **BREAKING** `Flow.discussion_realm_ref` is no longer accepted on the wire.
+  The legacy cross-Realm discussion routing has been removed (CXP-0007 hard
+  delete; intra-Realm discussion boundaries now live on a Circle via
+  `scope_circle_id`). The reducer's `flow_discussion_realms` projection
+  field, the `discussion_realm_patch` dispatch, and the `cx.realm.destroy`
+  cross-Realm discussion-edge cascade have all been deleted outright.
+- The wire validator (`POST /api/v1/events`) now hard-rejects any payload
+  whose object/patch sub-tree carries a key listed in the SDK's
+  `forbidden-wire-fields` set (`discussion_realm_ref`,
+  `discussion_space_ref`, `parent_ref`, `default_realm_ref`, `scope_ref`,
+  `default_scope_ref`, `retention_policy_ref`, `disclosure_policy_ref`,
+  `rate_limit_policy_ref`). Returns 400 `forbidden_wire_field`.
+- Migration `20260526000000_drop_discussion_realm_ref` defensively drops the
+  legacy `projection_flows.discussion_realm_ref` column when present (the
+  main-line schema never persisted it; this protects vendor deployments that
+  carried it in a prior fork).
+
 ### Round R4 — protocol review closures (2026-05-20; contrix-spec `2a4d39b..a77b995`)
 
 Aggressive mode; no compatibility shim. Closes 8 protocol-review commits

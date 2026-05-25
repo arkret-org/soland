@@ -286,8 +286,7 @@ fn build_sync_snapshot(
     let mut sync_spaces = std::collections::BTreeMap::new();
     let mut positions = BTreeMap::new();
     for (space_id, title, summary, tags, category, members) in visible_spaces {
-        let mut flow = flow_projection_for_space(state, &space_id, &title, summary.as_deref());
-        attach_discussion_realm_ref(&projection, &mut flow);
+        let flow = flow_projection_for_space(state, &space_id, &title, summary.as_deref());
         let flow_state_after = flow.clone();
         let flow_list_item = flow.clone();
         let summary_members = members.clone();
@@ -548,25 +547,6 @@ fn realm_event_visible_to_session_with_projection(
             joined_at.is_some_and(|joined_at| event_created_at >= joined_at)
         }
         _ => false,
-    }
-}
-
-fn attach_discussion_realm_ref(projection: &ProjectionState, flow: &mut Value) {
-    let Some(flow_id) = flow.get("flow_id").and_then(Value::as_str) else {
-        return;
-    };
-    let Some(realm_id) = projection.discussion_realm_for_flow(flow_id) else {
-        return;
-    };
-    if let Some(object) = flow.as_object_mut() {
-        object.insert("discussion_realm_ref".to_owned(), json!(realm_id));
-        if let Some(track) = object
-            .get_mut("tracks")
-            .and_then(|tracks| tracks.get_mut("discussion"))
-            .and_then(Value::as_object_mut)
-        {
-            track.insert("realm_id".to_owned(), json!(realm_id));
-        }
     }
 }
 
