@@ -195,10 +195,66 @@ async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Response) 
         );
         return;
     }
+    let envelope_for_chaos = envelope.clone();
     match submit_event_value(state, &session, envelope) {
-        Ok(response) => res.render(Json(response)),
+        Ok(response) => {
+            maybe_delay_test_chaos_breakpoint(state, &envelope_for_chaos, &response).await;
+            res.render(Json(response));
+        }
         Err(error) => render_submit_one_error(res, error),
     }
+}
+
+async fn maybe_delay_test_chaos_breakpoint(
+    state: &AppState,
+    envelope: &Value,
+    response: &EventSubmitResponse,
+) {
+    if !state.config.development_mode {
+        return;
+    }
+    let Ok(breakpoint) = std::env::var("SOLAND_TEST_CHAOS_BREAKPOINT") else {
+        return;
+    };
+    if !matches!(
+        breakpoint.as_str(),
+        "post_commit_pre_response" | "post_wal_pre_response"
+    ) {
+        return;
+    }
+    let delay_ms = std::env::var("SOLAND_TEST_CHAOS_DELAY_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(0);
+    if delay_ms == 0 {
+        return;
+    }
+    let operation_id = envelope_operation_id(envelope);
+    if let Ok(expected) = std::env::var("SOLAND_TEST_CHAOS_OPERATION_ID")
+        && Some(expected.as_str()) != operation_id.as_deref()
+        && expected != response.event_id
+    {
+        return;
+    }
+    tracing::warn!(
+        breakpoint = %breakpoint,
+        delay_ms,
+        event_id = %response.event_id,
+        operation_id = ?operation_id,
+        "test chaos delay before event response"
+    );
+    tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+}
+
+fn envelope_operation_id(envelope: &Value) -> Option<String> {
+    envelope
+        .get("unsigned")
+        .and_then(Value::as_object)
+        .and_then(|unsigned| unsigned.get("local_operation_idempotency_alias"))
+        .and_then(Value::as_str)
+        .filter(|value| value.starts_with("cx:operation:"))
+        .map(ToOwned::to_owned)
 }
 
 #[endpoint(

@@ -36,6 +36,8 @@ use super::util::{
     CursorShape, canonical_json, encode_cursor_shape, order_hlc_clocks, sha256_prefixed,
 };
 use crate::error::{AppError, ErrorCode};
+use crate::routing::system::util::query_param;
+use crate::state::{AppState, CanonicalEventRecord, ProjectionEventRecord};
 use crate::{JsonResult, json_ok};
 
 /// Pull `vector_id` from a body — used by every endpoint to detect the
@@ -329,6 +331,56 @@ pub async fn redact(body: JsonBody<Value>) -> JsonResult<Value> {
     json_ok(json!({ "projected_event": projected }))
 }
 
+#[endpoint(
+    operation_id = "cx.extension.soland.conformance.chaos_operation",
+    tags("conformance"),
+    summary = "Inspect a committed operation during local chaos testing"
+)]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "cx.extension.soland.conformance.chaos_operation")
+)]
+pub async fn chaos_operation(depot: &mut Depot, req: &Request) -> JsonResult<Value> {
+    super::ensure_enabled()?;
+    let state = depot.obtain::<AppState>().expect("state injected");
+    if !state.config.development_mode {
+        return Err(AppError::not_found(
+            "chaos diagnostics are only available in development_mode",
+        ));
+    }
+    let operation_id = query_param(req, "operation_id")
+        .ok_or_else(|| AppError::missing_param("missing operation_id"))?;
+    if !operation_id.starts_with("cx:operation:") {
+        return Err(AppError::invalid_param(
+            "operation_id must use cx:operation:",
+        ));
+    }
+
+    let canonical_event = state
+        .persistence
+        .events()
+        .snapshot_all()
+        .map_err(|error| AppError::new(ErrorCode::InternalError, error.to_string()))?
+        .into_iter()
+        .find(|record| canonical_event_operation_id(record).as_deref() == Some(&operation_id));
+    let projection_event = state
+        .persistence
+        .projection_events()
+        .snapshot_all()
+        .map_err(|error| AppError::new(ErrorCode::InternalError, error.to_string()))?
+        .into_iter()
+        .find(|record| record.operation_id.as_deref() == Some(&operation_id));
+    let canonical_json = canonical_event.as_ref().map(canonical_event_diagnostic);
+    let projection_json = projection_event.as_ref().map(projection_event_diagnostic);
+
+    json_ok(json!({
+        "operation_id": operation_id,
+        "canonical_event": canonical_json,
+        "projection_event": projection_json,
+        "consistent": canonical_event.is_some() == projection_event.is_some(),
+    }))
+}
+
 /// Drop `path` from `object`, supporting dotted paths like `"payload.content"`.
 fn strip_path(object: &mut Map<String, Value>, path: &str) {
     if let Some((head, rest)) = path.split_once('.') {
@@ -338,6 +390,47 @@ fn strip_path(object: &mut Map<String, Value>, path: &str) {
     } else {
         object.remove(path);
     }
+}
+
+fn canonical_event_operation_id(record: &CanonicalEventRecord) -> Option<String> {
+    record
+        .envelope
+        .get("unsigned")
+        .and_then(Value::as_object)
+        .and_then(|unsigned| unsigned.get("local_operation_idempotency_alias"))
+        .and_then(Value::as_str)
+        .filter(|value| value.starts_with("cx:operation:"))
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            record
+                .event_id
+                .strip_prefix("cx:event:")
+                .map(|suffix| format!("cx:operation:{suffix}"))
+        })
+}
+
+fn canonical_event_diagnostic(record: &CanonicalEventRecord) -> Value {
+    json!({
+        "event_id": &record.event_id,
+        "actor_id": &record.actor_id,
+        "actor_seq": record.actor_seq,
+        "space_id": &record.space_id,
+        "kind": &record.kind,
+        "canonical_digest": &record.canonical_digest,
+        "received_at": record.received_at,
+    })
+}
+
+fn projection_event_diagnostic(record: &ProjectionEventRecord) -> Value {
+    json!({
+        "event_id": &record.event_id,
+        "space_id": &record.space_id,
+        "event_kind": &record.event_kind,
+        "operation_type": &record.operation_type,
+        "operation_id": &record.operation_id,
+        "sender": &record.sender,
+        "created_at": record.created_at,
+    })
 }
 
 #[cfg(test)]

@@ -45,6 +45,7 @@ pub fn router() -> Router {
         .push(Router::with_path("cursor").post(handlers::cursor))
         .push(Router::with_path("envelope").post(handlers::envelope))
         .push(Router::with_path("redact").post(handlers::redact))
+        .push(Router::with_path("chaos/operation").get(handlers::chaos_operation))
 }
 
 /// Returns `true` when conformance endpoints should respond with real data.
