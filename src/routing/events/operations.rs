@@ -24,6 +24,7 @@
 //! around the 100+ event kinds the reducer doesn't cover yet).
 
 use contrix_sdk::{Hash, Operation, schema::event_payload_validator_catalog};
+use serde_json::Value;
 
 use super::{is_json_integer, is_valid_sha256_digest, validate_did};
 use crate::kinds;
@@ -1218,9 +1219,42 @@ pub fn validate_operation_policy(
         if kinds::canonical_kind_for_operation(operation) == Some(kinds::CX_MORPH_SCHEMA_MIGRATE) {
             validate_morph_schema_migrate_capability(operation)?;
         }
+        validate_member_state_policy(state, operation)?;
         validate_poll_operation_policy(state, operation)?;
     }
     Ok(())
+}
+
+fn validate_member_state_policy(
+    state: &AppState,
+    operation: &Operation,
+) -> Result<(), &'static str> {
+    if kinds::canonical_kind_for_operation(operation) != Some(kinds::CX_MEMBER_STATE) {
+        return Ok(());
+    }
+    if operation.payload.get("membership").and_then(Value::as_str) != Some("ban") {
+        return Ok(());
+    }
+    let Some(actor) = operation.payload.get("sender").and_then(Value::as_str) else {
+        // Peer/service-originated federation operations predate a typed actor
+        // envelope. They stay accepted so existing convergence/backfill
+        // paths keep working; direct client submits always carry `sender`.
+        return Ok(());
+    };
+    if realm_owner_matches(state, operation.realm_id.as_str(), actor) {
+        return Ok(());
+    }
+    Err("missing_capability")
+}
+
+fn realm_owner_matches(state: &AppState, realm_id: &str, actor: &str) -> bool {
+    state
+        .persistence
+        .realm_meta()
+        .get(realm_id)
+        .ok()
+        .flatten()
+        .is_some_and(|meta| meta.owner == actor)
 }
 
 fn validate_poll_operation_policy(
