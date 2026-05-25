@@ -64,6 +64,8 @@ const RELATION_FROM_FIELDS: &[&str] = &["from_ref", "from"];
 const RELATION_TO_FIELDS: &[&str] = &["to_ref", "to"];
 const MEMBER_ACTOR_FIELDS: &[&str] = &["actor_id", "member", "actor", "sender"];
 const READ_MARKER_ACTOR_FIELDS: &[&str] = &["actor_id"];
+const CONSENT_PEER_FIELDS: &[&str] = &["peer", "peer_did", "grantee_did"];
+const CONSENT_SCOPE_FIELDS: &[&str] = &["consent_scope", "scope"];
 const MLS_COMMIT_GROUP_FIELDS: &[&str] = &["group_id"];
 const MLS_COMMIT_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::AnyOf(
     MLS_COMMIT_GROUP_FIELDS,
@@ -404,6 +406,15 @@ const READ_MARKER_REQUIREMENTS: &[PayloadRequirement] = &[
     PayloadRequirement::Required("read_scope", "read marker operation requires read_scope"),
     PayloadRequirement::Required("position", "read marker operation requires position"),
 ];
+const CONSENT_GRANT_REQUIREMENTS: &[PayloadRequirement] = &[
+    PayloadRequirement::Required("consent_id", "consent grant requires consent_id"),
+    PayloadRequirement::AnyOf(CONSENT_PEER_FIELDS, "consent grant requires peer"),
+    PayloadRequirement::AnyOf(CONSENT_SCOPE_FIELDS, "consent grant requires scope"),
+];
+const CONSENT_REVOKE_REQUIREMENTS: &[PayloadRequirement] = &[
+    PayloadRequirement::Required("consent_id", "consent revoke requires consent_id"),
+    PayloadRequirement::Required("observed_dots", "consent revoke requires observed_dots"),
+];
 
 pub fn validate_operation_semantics(
     _state: &AppState,
@@ -476,6 +487,7 @@ fn round4_validate_payload(kind: &str, operation: &Operation) -> Result<(), &'st
             }
             crate::round4::validate_consent_revoke_payload(&operation.payload)
                 .map(|_| ())
+                .or_else(|_| validate_observed_dots_payload(operation))
                 .map_err(|_| "cx.consent.revoke payload violates round-4 observed_dots requirement")
         }
         // cx.cross_signing.publish — round 4 CAS-register cell with
@@ -610,6 +622,14 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
         kinds::CX_READ_MARKER => OperationPayloadSchema {
             requirements: READ_MARKER_REQUIREMENTS,
             validate: Some(validate_read_marker_payload),
+        },
+        "cx.consent.grant" => OperationPayloadSchema {
+            requirements: CONSENT_GRANT_REQUIREMENTS,
+            validate: None,
+        },
+        "cx.consent.revoke" => OperationPayloadSchema {
+            requirements: CONSENT_REVOKE_REQUIREMENTS,
+            validate: Some(validate_observed_dots_payload),
         },
         kind if kinds::is_membership_kind(kind) => OperationPayloadSchema {
             requirements: MEMBERSHIP_REQUIREMENTS,
@@ -874,6 +894,19 @@ fn validate_read_marker_payload(operation: &Operation) -> Result<(), &'static st
     Ok(())
 }
 
+fn validate_observed_dots_payload(operation: &Operation) -> Result<(), &'static str> {
+    if operation
+        .payload
+        .get("observed_dots")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|dots| !dots.is_empty())
+    {
+        Ok(())
+    } else {
+        Err("consent revoke observed_dots must be a non-empty array")
+    }
+}
+
 fn validate_read_scope_track(track: &str) -> Result<(), &'static str> {
     let mut bytes = track.bytes();
     let Some(first) = bytes.next() else {
@@ -1053,7 +1086,10 @@ fn validate_cross_signing_reset_replay_batch(operations: &[Operation]) -> Result
     Ok(())
 }
 
-pub fn validate_operation_policy(state: &AppState, operations: &[Operation]) -> Result<(), &'static str> {
+pub fn validate_operation_policy(
+    state: &AppState,
+    operations: &[Operation],
+) -> Result<(), &'static str> {
     for operation in operations {
         if kinds::operation_is_message_create(operation)
             && !message_operation_is_encrypted(operation)
@@ -1081,9 +1117,7 @@ fn validate_poll_operation_policy(
     let Some(content) = operation.payload.get("content") else {
         return Ok(());
     };
-    if content.get("kind").and_then(serde_json::Value::as_str)
-        != Some("cx.content.poll.response")
-    {
+    if content.get("kind").and_then(serde_json::Value::as_str) != Some("cx.content.poll.response") {
         return Ok(());
     }
     let Some(poll_id) = content.get("poll_id").and_then(serde_json::Value::as_str) else {
@@ -1404,7 +1438,10 @@ pub fn validate_content_block(block: &serde_json::Value) -> Result<(), &'static 
                 .get("poll_id")
                 .and_then(|value| value.as_str())
                 .is_some_and(|value| !value.trim().is_empty())
-                || !(block.get("choice").and_then(|value| value.as_str()).is_some()
+                || !(block
+                    .get("choice")
+                    .and_then(|value| value.as_str())
+                    .is_some()
                     || block
                         .get("choices")
                         .and_then(|value| value.as_array())

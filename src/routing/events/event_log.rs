@@ -2781,6 +2781,14 @@ fn projection_operation_from_event(
     payload_object
         .entry("sender".to_owned())
         .or_insert_with(|| Value::String(parsed.actor_id.clone()));
+    if matches!(
+        parsed.kind.as_str(),
+        "cx.consent.grant" | "cx.consent.revoke"
+    ) {
+        payload_object
+            .entry("actor_seq".to_owned())
+            .or_insert_with(|| Value::from(parsed.actor_seq));
+    }
     if parsed.kind == kinds::CX_MORPH_SCHEMA_MIGRATE {
         if let Some(authorization_ref) = parsed.authorized_refs.first() {
             payload_object

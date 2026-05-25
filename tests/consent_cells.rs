@@ -1,14 +1,18 @@
-use chrono::{Duration, Utc};
+use chrono::{Duration, SecondsFormat, Utc};
+use salvo::http::StatusCode;
 use salvo::test::{ResponseExt, TestClient};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use soland::config::{AppConfig, ObjectStorageConfig};
 use soland::db::Db;
+use soland::ids;
 use soland::service;
 use soland::state::AppState;
 
 fn test_config() -> AppConfig {
     AppConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
+        metrics_bind: "127.0.0.1:0".parse().unwrap(),
         public_base_url: "http://server".to_owned(),
         service_did: "did:web:soland.local".to_owned(),
         tls_cert_path: None,
@@ -140,6 +144,127 @@ async fn revoke_cell(
     .unwrap()
 }
 
+fn sha256_json(value: &Value) -> String {
+    let bytes = contrix_sdk::canonical::canonical_json_bytes(value)
+        .unwrap_or_else(|_| serde_json::to_vec(value).unwrap());
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    format!("sha256:{:x}", hasher.finalize())
+}
+
+fn event_canonical_digest(event: &Value) -> String {
+    let mut canonical = event.clone();
+    if let Value::Object(object) = &mut canonical {
+        object.remove("proofs");
+        object.remove("unsigned");
+        object.remove("canonical_digest");
+        object.remove("canonical_hash");
+    }
+    sha256_json(&canonical)
+}
+
+fn iso_now() -> String {
+    Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true)
+}
+
+fn signed_event(actor: &str, realm_id: &str, kind: &str, actor_seq: u64, payload: Value) -> Value {
+    let operation_id = ids::generate_operation_id();
+    let mut event = serde_json::json!({
+        "event_id": ids::generate_event_id(),
+        "kind": kind,
+        "schema_id": "cx.schema.event.v1",
+        "actor_id": actor,
+        "actor_seq": actor_seq,
+        "realm_id": realm_id,
+        "prev_refs": [],
+        "refs": [],
+        "requirements": {
+            "schema": ["cx.schema.event.v1"],
+            "features": [],
+            "critical_extensions": []
+        },
+        "created_at": iso_now(),
+        "payload": payload,
+        "unsigned": {
+            "local_operation_idempotency_alias": operation_id
+        },
+        "proofs": [{
+            "type": "dev-proof",
+            "verification_method": format!("{actor}#device"),
+            "payload_digest": sha256_json(&payload)
+        }]
+    });
+    event["canonical_digest"] = Value::String(event_canonical_digest(&event));
+    event
+}
+
+async fn submit_event(
+    app: &salvo::Service,
+    token: &str,
+    actor: &str,
+    realm_id: &str,
+    kind: &str,
+    actor_seq: u64,
+    payload: Value,
+) -> Value {
+    let event = signed_event(actor, realm_id, kind, actor_seq, payload);
+    let mut response = TestClient::post("http://server/api/v1/events")
+        .add_header("Authorization", format!("Bearer {token}"), true)
+        .json(&event)
+        .send(app)
+        .await;
+    let status = response.status_code.unwrap();
+    let body = response.take_string().await.unwrap_or_default();
+    assert!(
+        matches!(status, StatusCode::OK | StatusCode::CREATED),
+        "submit {kind} failed with {status}: {body}"
+    );
+    serde_json::from_str(&body).unwrap()
+}
+
+async fn create_realm(app: &salvo::Service, token: &str, actor: &str) -> String {
+    let realm_id = ids::generate_realm_id();
+    let created_at = iso_now();
+    submit_event(
+        app,
+        token,
+        actor,
+        &realm_id,
+        "cx.realm.create",
+        1,
+        serde_json::json!({
+            "object": {
+                "id": realm_id,
+                "schema": "cx.schema.realm.v1",
+                "title": "Consent event projection",
+                "summary": "Consent reducer test realm",
+                "created_by_principal": actor,
+                "trust_domain": "cx:trust_domain:soland.local",
+                "schema_refs": ["cx.schema.realm.v1"],
+                "default_discoverability": "listed",
+                "default_join_rule": "invite",
+                "history_visibility": "shared",
+                "encryption_profile": "none",
+                "plaintext_visible_services": ["did:web:soland.local"],
+                "security_class": "standard",
+                "federation_policy": "restricted",
+                "anchor_profile": "single_did",
+                "digest_algorithm": "sha256",
+                "anchorer": {
+                    "type": "single_did",
+                    "did": actor,
+                    "recovery_members": ["did:web:recovery.soland.local"],
+                    "controller_organization": "did:web:organization.primary.soland.local",
+                    "recovery_controller_organizations": ["did:web:organization.recovery.soland.local"]
+                },
+                "created_at": created_at
+            }
+        }),
+    )
+    .await;
+    realm_id
+}
+
 #[tokio::test]
 async fn consent_pending_grant_revoke_regrant_controls_contact_gate() {
     let state = AppState::new(test_config(), Db { pool: None });
@@ -171,6 +296,83 @@ async fn consent_pending_grant_revoke_regrant_controls_contact_gate() {
     assert_eq!(regranted["state"], "granted");
     let accepted_again = request_contact(&app, &bob_token, alice, "message").await;
     assert_eq!(accepted_again["status"], "accepted");
+}
+
+#[tokio::test]
+async fn consent_events_project_cells_and_contact_gate() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let app = service(state);
+    let alice = "did:web:event-consent-alice.example";
+    let bob = "did:web:event-consent-bob.example";
+    let alice_token = dev_token(&app, alice).await;
+    let bob_token = dev_token(&app, bob).await;
+    let realm_id = create_realm(&app, &alice_token, alice).await;
+
+    let pending_contact = request_contact(&app, &bob_token, alice, "message").await;
+    assert_eq!(pending_contact["status"], "pending");
+
+    let consent_id = ids::generate("consent");
+    let grant_seq = 2_u64;
+    let grant_response = submit_event(
+        &app,
+        &alice_token,
+        alice,
+        &realm_id,
+        "cx.consent.grant",
+        grant_seq,
+        serde_json::json!({
+            "consent_id": consent_id,
+            "peer": bob,
+            "consent_scope": "direct_message",
+            "expires_at": (Utc::now() + Duration::days(1)).to_rfc3339_opts(SecondsFormat::Secs, true),
+        }),
+    )
+    .await;
+    let grant_event_id = grant_response["event_id"].as_str().unwrap();
+    let grant_dot = format!("{grant_event_id}:{grant_seq}");
+
+    let granted = get_cell(&app, &alice_token, alice, bob, "message").await;
+    assert_eq!(granted["state"], "granted");
+    assert_eq!(
+        granted["cell_id"],
+        format!("cx:cell:cx.component.consent.grant.v1:{consent_id}")
+    );
+    assert!(
+        granted["grant_dots"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|dot| dot.as_str() == Some(&grant_dot))
+    );
+    let accepted_contact = request_contact(&app, &bob_token, alice, "message").await;
+    assert_eq!(accepted_contact["status"], "accepted");
+
+    submit_event(
+        &app,
+        &alice_token,
+        alice,
+        &realm_id,
+        "cx.consent.revoke",
+        3,
+        serde_json::json!({
+            "consent_id": consent_id,
+            "observed_dots": [grant_dot],
+            "revoked_at": (Utc::now() + Duration::seconds(1)).to_rfc3339_opts(SecondsFormat::Secs, true),
+        }),
+    )
+    .await;
+
+    let revoked = get_cell(&app, &alice_token, alice, bob, "message").await;
+    assert_eq!(revoked["state"], "revoked");
+    assert!(
+        revoked["revoked_dots"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|dot| dot.as_str() == Some(&grant_dot))
+    );
+    let blocked_contact = request_contact(&app, &bob_token, alice, "message").await;
+    assert_eq!(blocked_contact["status"], "pending");
 }
 
 #[tokio::test]

@@ -952,6 +952,7 @@ pub fn project_accepted_operations(state: &AppState, origin: &str, operations: &
         if kinds::canonical_kind_string(operation) == "cx.realm.read_receipt_policy" {
             project_read_receipt_policy(state, operation);
         }
+        crate::routing::identity::consent::project_consent_operation(state, operation);
         // Also apply to the deterministic reducer
         if let Ok(mut proj) = state.projection.lock() {
             apply_via_lattice_registry(state, &mut proj, operation);

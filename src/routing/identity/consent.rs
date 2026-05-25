@@ -6,11 +6,12 @@
 //! requests consult that projection before opening or accepting a request.
 
 use chrono::{DateTime, Utc};
+use contrix_sdk::Operation;
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{Value, json};
 
 use super::{AuthArgs, append_audit_log, now, query_param, sha256_hex, validate_did};
 use crate::error::AppError;
@@ -65,6 +66,73 @@ pub struct ConsentUpdateBody {
     pub scope: Option<String>,
     #[serde(default)]
     pub valid_until: Option<DateTime<Utc>>,
+}
+
+pub(crate) fn project_consent_operation(state: &AppState, operation: &Operation) {
+    let kind = crate::kinds::canonical_kind_string(operation);
+    let projected = match kind.as_str() {
+        "cx.consent.grant" => project_consent_grant_operation(state, operation),
+        "cx.consent.revoke" => project_consent_revoke_operation(state, operation),
+        _ => return,
+    };
+    if let Err(error) = projected {
+        tracing::warn!(
+            %error,
+            operation_id = %operation.operation_id,
+            kind = %kind,
+            "accepted consent event could not be projected into consent cells"
+        );
+    }
+}
+
+fn project_consent_grant_operation(
+    state: &AppState,
+    operation: &Operation,
+) -> Result<(), AppError> {
+    let holder = consent_holder(operation)?;
+    let peer = consent_peer(&operation.payload)?;
+    validate_holder_update(&holder, &holder, &peer)?;
+    let scope = consent_scope(&operation.payload)?;
+    let consent_id = consent_id(&operation.payload)?;
+    let valid_until = consent_valid_until(&operation.payload)?;
+    let dot = consent_grant_dot(operation, &consent_id);
+    let updated = grant_cell_with_dot(
+        state,
+        &holder,
+        &peer,
+        &scope,
+        dot,
+        Some(consent_cell_id_for_consent_id(&consent_id)),
+        valid_until,
+        operation.created_at,
+    );
+    let contact_status = if effective_state(&updated, operation.created_at) == "granted" {
+        "accepted"
+    } else {
+        "pending"
+    };
+    upsert_contact_status_at(
+        state,
+        &peer,
+        &holder,
+        &scope,
+        contact_status,
+        operation.created_at,
+    )
+}
+
+fn project_consent_revoke_operation(
+    state: &AppState,
+    operation: &Operation,
+) -> Result<(), AppError> {
+    let holder = consent_holder(operation)?;
+    let consent_id = consent_id(&operation.payload)?;
+    let (peer, scope) = consent_revoke_target(state, &holder, &operation.payload, &consent_id)?;
+    validate_holder_update(&holder, &holder, &peer)?;
+    let observed_dots = observed_dots(&operation.payload)?;
+    let revoked_at = consent_revoked_at(&operation.payload)?.unwrap_or(operation.created_at);
+    revoke_cell_with_dots(state, &holder, &peer, &scope, &observed_dots, revoked_at);
+    upsert_contact_status_at(state, &peer, &holder, &scope, "pending", revoked_at)
 }
 
 #[endpoint(
@@ -271,12 +339,15 @@ pub(super) fn normalize_scope(input: Option<&str>) -> Result<String, AppError> {
         return Ok("message".to_owned());
     }
     let normalized = raw.to_ascii_lowercase();
-    if matches!(normalized.as_str(), "invite" | "message" | "call") {
-        Ok(normalized)
-    } else {
-        Err(AppError::invalid_param(
-            "scope must be invite, message, or call",
-        ))
+    match normalized.as_str() {
+        "invite" => Ok("invite".to_owned()),
+        "message" | "direct_message" | "messaging" | "dm" => Ok("message".to_owned()),
+        "call" | "voice_call" | "video_call" => Ok("call".to_owned()),
+        "presence" => Ok("presence".to_owned()),
+        "any" => Ok("any".to_owned()),
+        _ => Err(AppError::invalid_param(
+            "scope must be invite, message, call, presence, or any",
+        )),
     }
 }
 
@@ -304,13 +375,14 @@ pub(super) fn has_active_consent_for_scope(
     scope: &str,
     at: DateTime<Utc>,
 ) -> bool {
-    let key = consent_key(holder, peer, scope);
-    state
-        .consent_cells
-        .lock()
-        .expect("consent_cells lock")
-        .get(&key)
-        .is_some_and(|cell| effective_state(cell, at) == "granted")
+    let cells = state.consent_cells.lock().expect("consent_cells lock");
+    let exact_key = consent_key(holder, peer, scope);
+    let any_key = consent_key(holder, peer, "any");
+    [exact_key, any_key].iter().any(|key| {
+        cells
+            .get(key)
+            .is_some_and(|cell| effective_state(cell, at) == "granted")
+    })
 }
 
 fn grant_cell(
@@ -321,12 +393,36 @@ fn grant_cell(
     valid_until: Option<DateTime<Utc>>,
     granted_at: DateTime<Utc>,
 ) -> ConsentCellRecord {
+    grant_cell_with_dot(
+        state,
+        holder,
+        peer,
+        scope,
+        ids::generate("consent"),
+        None,
+        valid_until,
+        granted_at,
+    )
+}
+
+fn grant_cell_with_dot(
+    state: &AppState,
+    holder: &str,
+    peer: &str,
+    scope: &str,
+    dot: String,
+    cell_id: Option<String>,
+    valid_until: Option<DateTime<Utc>>,
+    granted_at: DateTime<Utc>,
+) -> ConsentCellRecord {
     let key = consent_key(holder, peer, scope);
     let mut cells = state.consent_cells.lock().expect("consent_cells lock");
     let cell = cells
         .entry(key)
         .or_insert_with(|| empty_cell(holder, peer, scope, granted_at));
-    let dot = ids::generate("consent");
+    if let Some(cell_id) = cell_id {
+        cell.cell_id = cell_id;
+    }
     cell.grant_dots.insert(
         dot.clone(),
         ConsentGrantDot {
@@ -347,12 +443,33 @@ fn revoke_cell(
     scope: &str,
     revoked_at: DateTime<Utc>,
 ) -> ConsentCellRecord {
+    let observed_dots = {
+        let key = consent_key(holder, peer, scope);
+        state
+            .consent_cells
+            .lock()
+            .expect("consent_cells lock")
+            .get(&key)
+            .map(|cell| cell.grant_dots.keys().cloned().collect::<Vec<_>>())
+            .unwrap_or_default()
+    };
+    revoke_cell_with_dots(state, holder, peer, scope, &observed_dots, revoked_at)
+}
+
+fn revoke_cell_with_dots(
+    state: &AppState,
+    holder: &str,
+    peer: &str,
+    scope: &str,
+    observed_dots: &[String],
+    revoked_at: DateTime<Utc>,
+) -> ConsentCellRecord {
     let key = consent_key(holder, peer, scope);
     let mut cells = state.consent_cells.lock().expect("consent_cells lock");
     let cell = cells
         .entry(key)
         .or_insert_with(|| empty_cell(holder, peer, scope, revoked_at));
-    for dot in cell.grant_dots.keys() {
+    for dot in observed_dots {
         cell.revoked_dots.insert(dot.clone());
     }
     cell.revoked_at = Some(revoked_at);
@@ -367,6 +484,17 @@ fn upsert_contact_status(
     scope: &str,
     status: &str,
 ) -> Result<(), AppError> {
+    upsert_contact_status_at(state, requester, target, scope, status, now())
+}
+
+fn upsert_contact_status_at(
+    state: &AppState,
+    requester: &str,
+    target: &str,
+    scope: &str,
+    status: &str,
+    updated_at: DateTime<Utc>,
+) -> Result<(), AppError> {
     let store = state.persistence.contacts();
     let mut contact = store
         .get_scoped(requester, target, scope)
@@ -376,11 +504,11 @@ fn upsert_contact_status(
             target: target.to_owned(),
             scope: scope.to_owned(),
             status: status.to_owned(),
-            created_at: now(),
-            updated_at: now(),
+            created_at: updated_at,
+            updated_at,
         });
     contact.status = status.to_owned();
-    contact.updated_at = now();
+    contact.updated_at = updated_at;
     store
         .put(&contact)
         .map_err(|error| AppError::internal(error.to_string()))
@@ -446,6 +574,173 @@ fn consent_key(holder: &str, peer: &str, scope: &str) -> ConsentCellKey {
 fn consent_cell_id(holder: &str, peer: &str, scope: &str) -> String {
     let digest = sha256_hex(format!("{holder}\0{peer}\0{scope}").as_bytes());
     format!("cx:cell:cx.component.consent.grant.v1:{}", &digest[..32])
+}
+
+fn consent_cell_id_for_consent_id(consent_id: &str) -> String {
+    if consent_id.starts_with("cx:cell:") {
+        consent_id.to_owned()
+    } else {
+        format!("cx:cell:cx.component.consent.grant.v1:{consent_id}")
+    }
+}
+
+fn consent_id(payload: &Value) -> Result<String, AppError> {
+    first_payload_string(payload, &["consent_id", "cell_subject", "cell_id"])
+        .ok_or_else(|| AppError::missing_param("consent_id is required"))
+}
+
+fn consent_holder(operation: &Operation) -> Result<String, AppError> {
+    let sender = operation
+        .payload
+        .get("sender")
+        .and_then(Value::as_str)
+        .ok_or_else(|| AppError::missing_param("event sender is required"))?;
+    let holder = first_payload_string(
+        &operation.payload,
+        &["holder_did", "holder", "consenter", "issuer"],
+    )
+    .unwrap_or_else(|| sender.to_owned());
+    if holder != sender {
+        return Err(AppError::capability_denied(
+            "consent holder must match event sender",
+        ));
+    }
+    Ok(holder)
+}
+
+fn consent_peer(payload: &Value) -> Result<String, AppError> {
+    first_payload_string(
+        payload,
+        &["peer", "peer_did", "grantee_did", "target_did", "target"],
+    )
+    .or_else(|| {
+        payload
+            .get("tag")
+            .and_then(Value::as_object)
+            .and_then(|tag| {
+                tag.get("peer")
+                    .or_else(|| tag.get("peer_did"))
+                    .and_then(Value::as_str)
+            })
+            .map(ToOwned::to_owned)
+    })
+    .ok_or_else(|| AppError::missing_param("peer is required"))
+}
+
+fn consent_scope(payload: &Value) -> Result<String, AppError> {
+    let scope = first_payload_string(payload, &["consent_scope", "scope"]).or_else(|| {
+        payload
+            .get("tag")
+            .and_then(Value::as_object)
+            .and_then(|tag| {
+                tag.get("scope")
+                    .or_else(|| tag.get("consent_scope"))
+                    .and_then(Value::as_str)
+            })
+            .map(ToOwned::to_owned)
+    });
+    normalize_scope(scope.as_deref())
+}
+
+fn consent_revoke_target(
+    state: &AppState,
+    holder: &str,
+    payload: &Value,
+    consent_id: &str,
+) -> Result<(String, String), AppError> {
+    if let (Ok(peer), Ok(scope)) = (consent_peer(payload), consent_scope(payload)) {
+        return Ok((peer, scope));
+    }
+    let cell_id = consent_cell_id_for_consent_id(consent_id);
+    state
+        .consent_cells
+        .lock()
+        .expect("consent_cells lock")
+        .values()
+        .find(|cell| cell.holder == holder && cell.cell_id == cell_id)
+        .map(|cell| (cell.peer.clone(), cell.scope.clone()))
+        .ok_or_else(|| {
+            AppError::missing_param("revoke requires peer/scope or an existing consent_id cell")
+        })
+}
+
+fn consent_valid_until(payload: &Value) -> Result<Option<DateTime<Utc>>, AppError> {
+    optional_timestamp(payload, &["valid_until", "expires_at"])
+}
+
+fn consent_revoked_at(payload: &Value) -> Result<Option<DateTime<Utc>>, AppError> {
+    optional_timestamp(payload, &["revoked_at"])
+}
+
+fn optional_timestamp(payload: &Value, keys: &[&str]) -> Result<Option<DateTime<Utc>>, AppError> {
+    let Some(value) = keys
+        .iter()
+        .find_map(|key| payload.get(*key).and_then(Value::as_str))
+    else {
+        return Ok(None);
+    };
+    DateTime::parse_from_rfc3339(value)
+        .map(|value| Some(value.with_timezone(&Utc)))
+        .map_err(|_| AppError::invalid_param("timestamp must be RFC3339"))
+}
+
+fn first_payload_string(payload: &Value, keys: &[&str]) -> Option<String> {
+    keys.iter()
+        .find_map(|key| payload.get(*key).and_then(Value::as_str))
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn consent_grant_dot(operation: &Operation, consent_id: &str) -> String {
+    match (
+        operation.payload.get("event_id").and_then(Value::as_str),
+        operation.payload.get("actor_seq").and_then(Value::as_u64),
+    ) {
+        (Some(event_id), Some(actor_seq)) => format!("{event_id}:{actor_seq}"),
+        _ => match (
+            operation.payload.get("sender").and_then(Value::as_str),
+            operation.payload.get("actor_seq").and_then(Value::as_u64),
+        ) {
+            (Some(actor), Some(actor_seq)) => format!("{actor}#{actor_seq}"),
+            _ => format!("{consent_id}#{}", operation.operation_id),
+        },
+    }
+}
+
+fn observed_dots(payload: &Value) -> Result<Vec<String>, AppError> {
+    let observed = payload
+        .get("observed_dots")
+        .and_then(Value::as_array)
+        .ok_or_else(|| AppError::missing_param("observed_dots is required"))?;
+    let dots = observed
+        .iter()
+        .filter_map(observed_dot_string)
+        .collect::<Vec<_>>();
+    if dots.is_empty() {
+        return Err(AppError::invalid_param("observed_dots must not be empty"));
+    }
+    Ok(dots)
+}
+
+fn observed_dot_string(value: &Value) -> Option<String> {
+    if let Some(dot) = value.as_str() {
+        return Some(dot.to_owned());
+    }
+    let object = value.as_object()?;
+    if let (Some(actor), Some(actor_seq)) = (
+        object.get("actor_id").and_then(Value::as_str),
+        object.get("actor_seq").and_then(Value::as_u64),
+    ) {
+        return Some(format!("{actor}#{actor_seq}"));
+    }
+    if let (Some(event_id), Some(actor_seq)) = (
+        object.get("event_id").and_then(Value::as_str),
+        object.get("actor_seq").and_then(Value::as_u64),
+    ) {
+        return Some(format!("{event_id}:{actor_seq}"));
+    }
+    None
 }
 
 fn consent_response(cell: &ConsentCellRecord, at: DateTime<Utc>) -> ConsentCellResponse {

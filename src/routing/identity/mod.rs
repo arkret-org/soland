@@ -3,7 +3,7 @@ use salvo::prelude::*;
 pub(super) mod account;
 pub(super) mod account_data;
 pub(crate) mod auth;
-mod consent;
+pub(crate) mod consent;
 mod device;
 pub(super) mod device_messages;
 pub(super) mod did;
