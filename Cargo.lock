@@ -514,7 +514,7 @@ dependencies = [
 
 [[package]]
 name = "contrix"
-version = "0.7.0"
+version = "1.0.0"
 dependencies = [
  "base64",
  "chacha20poly1305",
@@ -550,7 +550,7 @@ dependencies = [
 
 [[package]]
 name = "contrix-api"
-version = "0.7.0"
+version = "1.0.0"
 dependencies = [
  "chrono",
  "contrix-core",
@@ -563,11 +563,12 @@ dependencies = [
 
 [[package]]
 name = "contrix-core"
-version = "0.7.0"
+version = "1.0.0"
 dependencies = [
  "base64",
  "chrono",
  "contrix-identifiers",
+ "getrandom 0.3.4",
  "regex",
  "reqwest 0.12.28",
  "salvo",
@@ -581,7 +582,7 @@ dependencies = [
 
 [[package]]
 name = "contrix-crypto"
-version = "0.7.0"
+version = "1.0.0"
 dependencies = [
  "chrono",
  "contrix-core",
@@ -593,7 +594,7 @@ dependencies = [
 
 [[package]]
 name = "contrix-ffi"
-version = "0.7.0"
+version = "1.0.0"
 dependencies = [
  "contrix-core",
  "serde",
@@ -602,7 +603,7 @@ dependencies = [
 
 [[package]]
 name = "contrix-html"
-version = "0.7.0"
+version = "1.0.0"
 dependencies = [
  "contrix-core",
  "serde",
@@ -611,7 +612,7 @@ dependencies = [
 
 [[package]]
 name = "contrix-http-client"
-version = "0.7.0"
+version = "1.0.0"
 dependencies = [
  "contrix-core",
  "reqwest 0.12.28",
@@ -623,7 +624,7 @@ dependencies = [
 
 [[package]]
 name = "contrix-identifiers"
-version = "0.7.0"
+version = "1.0.0"
 dependencies = [
  "getrandom 0.2.17",
  "getrandom 0.3.4",
@@ -637,7 +638,7 @@ dependencies = [
 
 [[package]]
 name = "contrix-server"
-version = "0.7.0"
+version = "1.0.0"
 dependencies = [
  "contrix-api",
  "contrix-core",
@@ -648,7 +649,7 @@ dependencies = [
 
 [[package]]
 name = "contrix-signatures"
-version = "0.7.0"
+version = "1.0.0"
 dependencies = [
  "base64",
  "chrono",
@@ -662,7 +663,7 @@ dependencies = [
 
 [[package]]
 name = "contrix-testing"
-version = "0.7.0"
+version = "1.0.0"
 dependencies = [
  "chrono",
  "contrix-api",
@@ -1737,6 +1738,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "hyper-timeout"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2b90d566bffbce6a75bd8b09a05aa8c2cb1fabb6cb348f8840c9e4c90a0d83b0"
+dependencies = [
+ "hyper",
+ "hyper-util",
+ "pin-project-lite",
+ "tokio",
+ "tower-service",
+]
+
+[[package]]
 name = "hyper-util"
 version = "0.1.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2659,6 +2673,65 @@ dependencies = [
 ]
 
 [[package]]
+name = "opentelemetry"
+version = "0.31.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b84bcd6ae87133e903af7ef497404dda70c60d0ea14895fc8a5e6722754fc2a0"
+dependencies = [
+ "futures-core",
+ "futures-sink",
+ "js-sys",
+ "pin-project-lite",
+ "thiserror",
+]
+
+[[package]]
+name = "opentelemetry-otlp"
+version = "0.31.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1f69cd6acbb9af919df949cd1ec9e5e7fdc2ef15d234b6b795aaa525cc02f71f"
+dependencies = [
+ "http",
+ "opentelemetry",
+ "opentelemetry-proto",
+ "opentelemetry_sdk",
+ "prost",
+ "thiserror",
+ "tokio",
+ "tonic",
+]
+
+[[package]]
+name = "opentelemetry-proto"
+version = "0.31.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a7175df06de5eaee9909d4805a3d07e28bb752c34cab57fa9cff549da596b30f"
+dependencies = [
+ "opentelemetry",
+ "opentelemetry_sdk",
+ "prost",
+ "tonic",
+ "tonic-prost",
+]
+
+[[package]]
+name = "opentelemetry_sdk"
+version = "0.31.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e14ae4f5991976fd48df6d843de219ca6d31b01daaab2dad5af2badeded372bd"
+dependencies = [
+ "futures-channel",
+ "futures-executor",
+ "futures-util",
+ "opentelemetry",
+ "percent-encoding",
+ "rand 0.9.4",
+ "thiserror",
+ "tokio",
+ "tokio-stream",
+]
+
+[[package]]
 name = "p256"
 version = "0.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2953,6 +3026,29 @@ dependencies = [
  "syn 2.0.117",
  "version_check",
  "yansi",
+]
+
+[[package]]
+name = "prost"
+version = "0.14.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d2ea70524a2f82d518bce41317d0fae74151505651af45faf1ffbd6fd33f0568"
+dependencies = [
+ "bytes",
+ "prost-derive",
+]
+
+[[package]]
+name = "prost-derive"
+version = "0.14.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "27c6023962132f4b30eb4c172c91ce92d933da334c59c23cddee82358ddafb0b"
+dependencies = [
+ "anyhow",
+ "itertools",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
 ]
 
 [[package]]
@@ -4046,6 +4142,9 @@ dependencies = [
  "ed25519-dalek",
  "futures-util",
  "object_store",
+ "opentelemetry",
+ "opentelemetry-otlp",
+ "opentelemetry_sdk",
  "rand 0.8.6",
  "regex",
  "reqwest 0.12.28",
@@ -4058,6 +4157,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-appender",
+ "tracing-opentelemetry",
  "tracing-subscriber",
  "uuid",
  "walkdir",
@@ -4321,6 +4421,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "tokio-stream"
+version = "0.1.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32da49809aab5c3bc678af03902d4ccddea2a87d028d86392a4b1560c6906c70"
+dependencies = [
+ "futures-core",
+ "pin-project-lite",
+ "tokio",
+]
+
+[[package]]
 name = "tokio-tungstenite"
 version = "0.29.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4398,6 +4509,43 @@ dependencies = [
 ]
 
 [[package]]
+name = "tonic"
+version = "0.14.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fec7c61a0695dc1887c1b53952990f3ad2e3a31453e1f49f10e75424943a93ec"
+dependencies = [
+ "async-trait",
+ "base64",
+ "bytes",
+ "http",
+ "http-body",
+ "http-body-util",
+ "hyper",
+ "hyper-timeout",
+ "hyper-util",
+ "percent-encoding",
+ "pin-project",
+ "sync_wrapper",
+ "tokio",
+ "tokio-stream",
+ "tower",
+ "tower-layer",
+ "tower-service",
+ "tracing",
+]
+
+[[package]]
+name = "tonic-prost"
+version = "0.14.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a55376a0bbaa4975a3f10d009ad763d8f4108f067c7c2e74f3001fb49778d309"
+dependencies = [
+ "bytes",
+ "prost",
+ "tonic",
+]
+
+[[package]]
 name = "tower"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4405,7 +4553,9 @@ checksum = "ebe5ef63511595f1344e2d5cfa636d973292adc0eec1f0ad45fae9f0851ab1d4"
 dependencies = [
  "futures-core",
  "futures-util",
+ "indexmap",
  "pin-project-lite",
+ "slab",
  "sync_wrapper",
  "tokio",
  "tokio-util",
@@ -4503,6 +4653,20 @@ dependencies = [
  "log",
  "once_cell",
  "tracing-core",
+]
+
+[[package]]
+name = "tracing-opentelemetry"
+version = "0.32.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1ac28f2d093c6c477eaa76b23525478f38de514fa9aeb1285738d4b97a9552fc"
+dependencies = [
+ "js-sys",
+ "opentelemetry",
+ "tracing",
+ "tracing-core",
+ "tracing-subscriber",
+ "web-time",
 ]
 
 [[package]]
