@@ -27,6 +27,7 @@ mod identity;
 mod interop;
 // G3.S1: MLS lifecycle (KeyPackage claim, Welcome to-device, commit_epoch).
 pub(crate) mod mls;
+pub(crate) mod organizations;
 pub(crate) mod realms;
 pub(crate) mod spaces;
 pub(crate) mod system;
@@ -137,6 +138,7 @@ fn api_v1_router() -> Router {
         .push(identity::router())
         .push(spaces::router())
         .push(realms::router())
+        .push(organizations::router())
         .push(federation::router())
         .push(events::router())
         .push(access::router())

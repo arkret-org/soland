@@ -30,6 +30,7 @@ use super::{
 use crate::error::AppError;
 use crate::ids;
 use crate::result::{JsonResult, json_ok};
+use crate::routing::organizations;
 use crate::state::{AppState, RealmDirectoryEntry, RealmDirectoryQuery, SessionRecord};
 use crate::wire::{
     DirectoryDescribeResBody, DirectoryValueSearchResponse, HandleClaim,
@@ -193,9 +194,12 @@ async fn search_organizations(
     depot: &mut Depot,
 ) -> JsonResult<DirectoryValueSearchResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    require_demo_directory_provider(state)?;
     let body = body.into_inner();
     let limit = checked_limit(body.limit)?;
+    let mut results = organizations::organization_records_for_directory(state)
+        .into_iter()
+        .filter(|organization| query_matches(organization, body.query.as_deref()))
+        .collect::<Vec<_>>();
     let spaces = state.realms.lock().expect("spaces lock");
     let space_entries: Vec<_> = spaces
         .search(Default::default())
@@ -203,11 +207,9 @@ async fn search_organizations(
         .filter(|space| !is_space_deleted(state, space.realm_id.as_str()))
         .collect();
     let organization = demo_organization(&space_entries, &state.config.service_did);
-    let results = if query_matches(&organization, body.query.as_deref()) {
-        vec![organization]
-    } else {
-        Vec::new()
-    };
+    if state.config.development_mode && query_matches(&organization, body.query.as_deref()) {
+        results.push(organization);
+    }
     json_ok(DirectoryValueSearchResponse {
         results: results.into_iter().take(limit).collect(),
         next_cursor: None,
@@ -225,12 +227,39 @@ async fn resolve_organization(
     depot: &mut Depot,
 ) -> JsonResult<ResolveOrganizationResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    require_demo_directory_provider(state)?;
     let body = body.into_inner();
     if body.organization_id.is_none() && body.handle.is_none() {
         return Err(AppError::missing_param(
             "organization_id or handle is required",
         ));
+    }
+    if let Some(organization) = organizations::organization_records_for_directory(state)
+        .into_iter()
+        .find(|organization| {
+            body.organization_id.as_deref().is_some_and(|id| {
+                organization["organization_id"].as_str() == Some(id)
+                    || organization["organization_did"].as_str() == Some(id)
+            }) || body.handle.as_deref().is_some_and(|handle| {
+                organization["handle"]
+                    .as_str()
+                    .is_some_and(|candidate| candidate.eq_ignore_ascii_case(handle))
+            })
+        })
+    {
+        let spaces = organization["spaces"]
+            .as_array()
+            .into_iter()
+            .flat_map(|array| array.iter())
+            .filter_map(Value::as_str)
+            .map(|realm_id| json!({ "realm_id": realm_id }))
+            .collect();
+        return json_ok(ResolveOrganizationResponse {
+            organization,
+            spaces,
+        });
+    }
+    if !state.config.development_mode {
+        return Err(AppError::not_found("not found"));
     }
 
     let spaces = state.realms.lock().expect("spaces lock");

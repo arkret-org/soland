@@ -34,6 +34,7 @@ use super::{
 };
 use crate::error::{AppError, ErrorCode, error_http_status};
 use crate::result::{JsonResult, json_ok};
+use crate::routing::organizations;
 use crate::routing::system::extract::AuthArgs;
 use crate::state::{AppState, CanonicalEventRecord, SessionRecord};
 use crate::wire::{
@@ -1201,6 +1202,11 @@ fn submit_event_value(
         && let Some(envelope_object) = envelope_for_bootstrap.as_object()
     {
         bootstrap_realm_member_index(state, space_id_str, &parsed.actor_id, envelope_object);
+        organizations::record_realm_organizations_from_event(
+            state,
+            space_id_str,
+            &envelope_for_bootstrap,
+        );
     }
     append_encrypted_message_franking(state, &parsed, &envelope_for_bootstrap);
     append_audit_log(

@@ -18,13 +18,14 @@
 
 use chrono::{DateTime, Utc};
 use contrix_sdk::{Did, RealmId, SpaceId};
-use salvo::oapi::extract::PathParam;
+use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde_json::{Value, json};
 
 use super::AuthArgs;
 use crate::error::AppError;
 use crate::reducer::CHILD_ORDER_CELL_FAMILY;
+use crate::routing::organizations;
 use crate::state::{AppState, RealmDirectoryEntry, SessionRecord};
 use crate::wire::{SpaceLifecycleResponse, now};
 use crate::{JsonResult, json_ok};
@@ -34,6 +35,8 @@ pub(super) fn router() -> Router {
         Router::with_path("{space_id}")
             .get(get_space)
             .push(Router::with_path("cells/{cell_family}").get(get_space_cell))
+            .push(Router::with_path("effective-policy").get(get_space_effective_policy))
+            .push(Router::with_path("moderation-policy").post(upsert_space_moderation_policy))
             .push(Router::with_path("export").get(export_space)),
     )
 }
@@ -54,6 +57,79 @@ async fn get_space(
     let _session = aa.authenticated_session(state, req)?;
     let space_id = space_id.into_inner();
     space_lifecycle_response(state, &space_id).map(salvo::prelude::Json)
+}
+
+#[endpoint(
+    operation_id = "cx.extension.soland.spaces.effective_policy.get",
+    tags("spaces", "policy"),
+    summary = "Get organization-inherited effective moderation policy"
+)]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "cx.extension.soland.spaces.effective_policy.get")
+)]
+async fn get_space_effective_policy(
+    aa: AuthArgs,
+    depot: &mut Depot,
+    req: &mut Request,
+    space_id: PathParam<String>,
+) -> JsonResult<Value> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req)?;
+    let space_id = space_id.into_inner();
+    RealmId::new(space_id.clone()).map_err(|_| AppError::invalid_param("invalid realm_id"))?;
+    if !space_id_accessible(state, &space_id, Some(&session)) {
+        return Err(AppError::not_found("not found"));
+    }
+    json_ok(organizations::effective_policy_for_space_json(
+        state, &space_id,
+    ))
+}
+
+#[endpoint(
+    operation_id = "cx.extension.soland.spaces.moderation_policy.upsert",
+    tags("spaces", "policy"),
+    summary = "Set a Space moderation-policy override"
+)]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "cx.extension.soland.spaces.moderation_policy.upsert")
+)]
+async fn upsert_space_moderation_policy(
+    aa: AuthArgs,
+    depot: &mut Depot,
+    req: &mut Request,
+    space_id: PathParam<String>,
+    body: JsonBody<Value>,
+) -> JsonResult<Value> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req)?;
+    let space_id = space_id.into_inner();
+    RealmId::new(space_id.clone()).map_err(|_| AppError::invalid_param("invalid realm_id"))?;
+    let record = state
+        .persistence
+        .realm_meta()
+        .get(&space_id)
+        .map_err(|error| AppError::internal(error.to_string()))?
+        .ok_or_else(|| AppError::not_found("not found"))?;
+    if record.owner != session.actor {
+        return Err(AppError::capability_denied("missing_capability"));
+    }
+    let payload = body.into_inner();
+    if organizations::space_policy_override_requires_approval(state, &space_id, &payload)
+        && !organizations::space_policy_override_has_approval(state, &space_id, &payload)
+    {
+        return Err(organizations::requires_organization_approval_error());
+    }
+    let policy =
+        organizations::persist_space_moderation_policy(state, &space_id, payload, &session.actor);
+    json_ok(json!({
+        "kind": "cx.realm.moderation_policy",
+        "space_id": policy.space_id,
+        "policy": policy.payload,
+        "updated_by": policy.updated_by,
+        "updated_at": policy.updated_at.to_rfc3339(),
+    }))
 }
 
 #[endpoint(
@@ -173,7 +249,8 @@ async fn export_space(
 
 fn validate_child_order_subject(space_id: &str) -> Result<(), AppError> {
     if space_id.starts_with("cx:space:") {
-        SpaceId::new(space_id.to_owned()).map_err(|_| AppError::invalid_param("invalid space_id"))?;
+        SpaceId::new(space_id.to_owned())
+            .map_err(|_| AppError::invalid_param("invalid space_id"))?;
         return Ok(());
     }
     RealmId::new(space_id.to_owned()).map_err(|_| AppError::invalid_param("invalid space_id"))?;

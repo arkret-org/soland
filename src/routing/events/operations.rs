@@ -178,6 +178,7 @@ const REALM_UPDATE_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::R
     "patch",
     "cx.realm.update operation requires patch",
 )];
+const REALM_MODERATION_POLICY_REQUIREMENTS: &[PayloadRequirement] = &[];
 // `cx.realm.update` / `cx.realm.destroy` carry an `action` string +
 // per-action fields (mirrors space-container / morph lifecycle for non-create
 // paths).
@@ -719,6 +720,10 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
             requirements: REALM_UPDATE_REQUIREMENTS,
             validate: None,
         },
+        kinds::CX_REALM_MODERATION_POLICY => OperationPayloadSchema {
+            requirements: REALM_MODERATION_POLICY_REQUIREMENTS,
+            validate: None,
+        },
         kinds::CX_CONFLICT_REPAIR => OperationPayloadSchema {
             requirements: CONFLICT_REPAIR_REQUIREMENTS,
             validate: Some(validate_conflict_repair_payload),
@@ -1220,6 +1225,7 @@ pub fn validate_operation_policy(
             validate_morph_schema_migrate_capability(operation)?;
         }
         validate_member_state_policy(state, operation)?;
+        validate_realm_moderation_policy(state, operation)?;
         validate_poll_operation_policy(state, operation)?;
     }
     Ok(())
@@ -1230,6 +1236,18 @@ fn validate_member_state_policy(
     operation: &Operation,
 ) -> Result<(), &'static str> {
     if kinds::canonical_kind_for_operation(operation) != Some(kinds::CX_MEMBER_STATE) {
+        return Ok(());
+    }
+    if operation.payload.get("membership").and_then(Value::as_str) == Some("join") {
+        if let Some(member) = membership_target(operation)
+            && crate::routing::organizations::organization_policy_blocks_join(
+                state,
+                operation.realm_id.as_str(),
+                member,
+            )
+        {
+            return Err("organization_policy_denied");
+        }
         return Ok(());
     }
     if operation.payload.get("membership").and_then(Value::as_str) != Some("ban") {
@@ -1245,6 +1263,38 @@ fn validate_member_state_policy(
         return Ok(());
     }
     Err("missing_capability")
+}
+
+fn membership_target(operation: &Operation) -> Option<&str> {
+    operation
+        .payload
+        .get("actor_id")
+        .or_else(|| operation.payload.get("member"))
+        .or_else(|| operation.payload.get("actor"))
+        .or_else(|| operation.payload.get("sender"))
+        .and_then(Value::as_str)
+}
+
+fn validate_realm_moderation_policy(
+    state: &AppState,
+    operation: &Operation,
+) -> Result<(), &'static str> {
+    if kinds::canonical_kind_for_operation(operation) != Some(kinds::CX_REALM_MODERATION_POLICY) {
+        return Ok(());
+    }
+    let realm_id = operation.realm_id.as_str();
+    if crate::routing::organizations::space_policy_override_requires_approval(
+        state,
+        realm_id,
+        &operation.payload,
+    ) && !crate::routing::organizations::space_policy_override_has_approval(
+        state,
+        realm_id,
+        &operation.payload,
+    ) {
+        return Err("requires_organization_approval");
+    }
+    Ok(())
 }
 
 fn realm_owner_matches(state: &AppState, realm_id: &str, actor: &str) -> bool {

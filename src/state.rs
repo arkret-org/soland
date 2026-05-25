@@ -345,6 +345,20 @@ pub struct AppState {
     /// push fanout for `blocked -> actor` without leaking anything into public
     /// membership or moderation state.
     pub federation_block_hints: Arc<Mutex<BTreeMap<String, FederationBlockHintRecord>>>,
+    /// Local organization directory rows keyed by organization DID/id. This is
+    /// the P2 governance projection surface used by organization moderation
+    /// policy and directory reads until a durable organization table lands.
+    pub organizations: Arc<Mutex<BTreeMap<String, OrganizationRecord>>>,
+    /// Current organization moderation policy per organization.
+    pub organization_policies: Arc<Mutex<BTreeMap<String, OrganizationPolicyRecord>>>,
+    /// Space -> organizations declared by `cx.realm.create.owning_organizations`
+    /// or the local organization link endpoint.
+    pub space_organizations: Arc<Mutex<BTreeMap<String, BTreeSet<String>>>>,
+    /// Organization -> member Realm ids. This is the read-side fanout index:
+    /// policy updates do not rewrite per-space rows.
+    pub organization_spaces: Arc<Mutex<BTreeMap<String, BTreeSet<String>>>>,
+    /// Accepted Space-level moderation-policy overrides keyed by Realm id.
+    pub space_moderation_policies: Arc<Mutex<BTreeMap<String, SpaceModerationPolicyRecord>>>,
     pub did_resolver: Arc<Mutex<CompositeDidResolver>>,
     /// Move/Anchor/Lattice runtime stores.
     /// In-memory backends from the SDK; production deployments will
@@ -821,6 +835,38 @@ pub struct PolicyDocumentRecord {
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
+#[derive(Clone, Debug)]
+pub struct OrganizationRecord {
+    pub organization_id: String,
+    pub organization_did: String,
+    pub handle: Option<String>,
+    pub display_name: String,
+    pub verified: bool,
+    pub members: BTreeSet<String>,
+    pub member_count: usize,
+    pub created_by: String,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Clone, Debug)]
+pub struct OrganizationPolicyRecord {
+    pub organization_id: String,
+    pub policy_id: String,
+    pub payload: Value,
+    pub version: u64,
+    pub updated_by: String,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Clone, Debug)]
+pub struct SpaceModerationPolicyRecord {
+    pub space_id: String,
+    pub payload: Value,
+    pub updated_by: String,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct SovereignDeploymentState {
     pub profile_override: Option<String>,
@@ -1189,6 +1235,11 @@ impl AppState {
             retention_policies: Arc::new(Mutex::new(BTreeMap::new())),
             retention_tombstones: Arc::new(Mutex::new(BTreeMap::new())),
             federation_block_hints: Arc::new(Mutex::new(BTreeMap::new())),
+            organizations: Arc::new(Mutex::new(BTreeMap::new())),
+            organization_policies: Arc::new(Mutex::new(BTreeMap::new())),
+            space_organizations: Arc::new(Mutex::new(BTreeMap::new())),
+            organization_spaces: Arc::new(Mutex::new(BTreeMap::new())),
+            space_moderation_policies: Arc::new(Mutex::new(BTreeMap::new())),
             did_resolver,
             move_store: Arc::new(contrix_sdk::state_res::MemoryMoveStore::default()),
             anchor_store: Arc::new(contrix_sdk::state_res::MemoryAnchorStore::default()),

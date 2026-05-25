@@ -88,6 +88,7 @@ pub const CX_REALM_CREATE: &str = "cx.realm.create";
 pub const CX_REALM_UPDATE: &str = "cx.realm.update";
 pub const CX_REALM_DESTROY: &str = "cx.realm.destroy";
 pub const CX_REALM_TOMBSTONE: &str = "cx.realm.tombstone";
+pub const CX_REALM_MODERATION_POLICY: &str = "cx.realm.moderation_policy";
 pub const CX_CONFLICT_REPAIR: &str = "cx.conflict.repair";
 pub const CX_AUDIT_ERASURE_RECEIPT: &str = "cx.audit.erasure_receipt";
 pub const CX_REDACTION: &str = "cx.redaction";
@@ -182,6 +183,7 @@ pub const CX_CAPABILITY_DERIVED: &str = "cx.capability.derived";
 // `cx.component.realm.policy_server.v1` (cas-register per SDK lattice
 // registry). Spec `contrix-spec/spec/v1/zh/authz/policy-server.md` §2.
 pub const CX_REALM_POLICY_SERVER: &str = "cx.realm.policy_server";
+pub const CX_ORGANIZATION_MODERATION_POLICY: &str = "cx.organization.moderation_policy";
 
 // G3.S1 — MLS / E2EE lifecycle event kinds.
 //
@@ -379,6 +381,7 @@ fn canonical_registered_kind(object_type: &str) -> Option<&str> {
                 _ => CX_REALM_UPDATE,
             })
         }
+        CX_REALM_MODERATION_POLICY => Some(CX_REALM_MODERATION_POLICY),
         CX_CONFLICT_REPAIR => Some(CX_CONFLICT_REPAIR),
         CX_AUDIT_ERASURE_RECEIPT => Some(CX_AUDIT_ERASURE_RECEIPT),
         CX_MEMBER_STATE => Some(CX_MEMBER_STATE),
@@ -418,6 +421,7 @@ fn canonical_registered_kind(object_type: &str) -> Option<&str> {
         CX_CAPABILITY_DERIVED => Some(CX_CAPABILITY_DERIVED),
         // G3.S2 — policy server declaration.
         CX_REALM_POLICY_SERVER => Some(CX_REALM_POLICY_SERVER),
+        CX_ORGANIZATION_MODERATION_POLICY => Some(CX_ORGANIZATION_MODERATION_POLICY),
         _ => Some(object_type),
     };
     kind
