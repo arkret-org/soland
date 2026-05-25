@@ -725,11 +725,6 @@ pub fn demo_actors(state: &AppState) -> Vec<Value> {
     })];
 
     let accounts = state.persistence.accounts().list().unwrap_or_default();
-    let erased = state
-        .erased_actors
-        .lock()
-        .expect("erased_actors lock")
-        .clone();
     for account in accounts {
         if actors
             .iter()
@@ -737,15 +732,18 @@ pub fn demo_actors(state: &AppState) -> Vec<Value> {
         {
             continue;
         }
-        // GDPR erasure (account-lifecycle.md §3): erased actors MUST NOT
-        // surface in directory results.
-        if erased.contains(&account.did) {
+        let account_state = state.account_lifecycle_state(&account.did);
+        // GDPR erasure / deactivation: terminal account states MUST NOT
+        // surface in directory search results.
+        if matches!(account_state.as_str(), "deactivated" | "erased") {
             continue;
         }
         actors.push(json!({
             "did": account.did,
             "handle": account.handle,
             "display_name": account.display_name.as_deref().unwrap_or(account.did.as_str()),
+            "state": account_state.clone(),
+            "account_state": account_state,
             "bio": account.bio,
             "organization_id": "cx:org:demo",
             "avatar_url": account.avatar_url,
@@ -769,6 +767,10 @@ pub fn demo_actors(state: &AppState) -> Vec<Value> {
         })
         .unwrap_or_default();
     for (did, actor_devices) in devices.iter() {
+        let account_state = state.account_lifecycle_state(did);
+        if matches!(account_state.as_str(), "deactivated" | "erased") {
+            continue;
+        }
         if actors
             .iter()
             .any(|actor| actor["did"].as_str().is_some_and(|known| known == did))
@@ -783,6 +785,8 @@ pub fn demo_actors(state: &AppState) -> Vec<Value> {
             "did": did,
             "handle": handle_for_did(did),
             "display_name": display_name,
+            "state": account_state.clone(),
+            "account_state": account_state,
             "organization_id": "cx:org:demo",
             "avatar_url": null,
             "presence": {"status": "offline", "updated_at": now()},

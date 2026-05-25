@@ -1025,6 +1025,7 @@ pub struct AccountResponse {
     pub did: String,
     pub handle: String,
     pub display_name: Option<String>,
+    pub state: String,
     pub created_at: DateTime<Utc>,
 }
 
@@ -1980,7 +1981,8 @@ mod tests {
                 alg: Some("EdDSA".to_owned()),
                 verification_method: Some("did:web:acme.example#key-1".to_owned()),
                 payload_digest: Some(
-                    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
+                    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                        .to_owned(),
                 ),
                 created_at: Some("2026-05-19T00:00:00Z".to_owned()),
                 jws: Some("aaa.bbb.ccc".to_owned()),

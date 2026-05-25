@@ -295,6 +295,11 @@ pub struct AppState {
     /// (handle release cooldown). The map is server-process-local; persistent
     /// storage lands when the handle CRDT projection ships.
     pub handle_releases: Arc<Mutex<BTreeMap<String, chrono::DateTime<chrono::Utc>>>>,
+    /// Account lifecycle state projection keyed by actor DID. Missing rows
+    /// mean `active`; non-active rows gate auth/session issuance and directory
+    /// visibility. Kept beside `erased_actors` until the durable account-state
+    /// projection lands.
+    pub account_lifecycle: Arc<Mutex<BTreeMap<String, AccountLifecycleRecord>>>,
     /// Erased actors — DID set. Once an actor `erase`s itself, every
     /// subsequent authenticated request from that bearer returns 401
     /// `account_erased` (and directory hits skip the row). Same in-memory
@@ -417,6 +422,14 @@ pub struct AccountRecord {
     /// link verbatim — no transcoding or caching.
     pub avatar_url: Option<String>,
     pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Clone, Debug)]
+pub struct AccountLifecycleRecord {
+    pub state: String,
+    pub reason: Option<String>,
+    pub changed_by: Option<String>,
+    pub changed_at: chrono::DateTime<chrono::Utc>,
 }
 
 #[derive(Clone, Debug)]
@@ -1038,6 +1051,7 @@ impl AppState {
             object_storage,
             realms: Arc::new(Mutex::new(realms)),
             handle_releases: Arc::new(Mutex::new(BTreeMap::new())),
+            account_lifecycle: Arc::new(Mutex::new(BTreeMap::new())),
             erased_actors: Arc::new(Mutex::new(BTreeSet::new())),
             notification_read_cursors: Arc::new(Mutex::new(BTreeMap::new())),
             sync_cursor_handles: Arc::new(Mutex::new(BTreeMap::new())),
@@ -1083,6 +1097,49 @@ impl AppState {
                 Ok(_) => return next,
                 Err(_) => continue,
             }
+        }
+    }
+
+    pub fn account_lifecycle_record(&self, did: &str) -> AccountLifecycleRecord {
+        if self
+            .erased_actors
+            .lock()
+            .expect("erased_actors lock")
+            .contains(did)
+        {
+            return AccountLifecycleRecord {
+                state: "erased".to_owned(),
+                reason: Some("account_erased".to_owned()),
+                changed_by: None,
+                changed_at: chrono::Utc::now(),
+            };
+        }
+        self.account_lifecycle
+            .lock()
+            .expect("account_lifecycle lock")
+            .get(did)
+            .cloned()
+            .unwrap_or_else(|| AccountLifecycleRecord {
+                state: "active".to_owned(),
+                reason: None,
+                changed_by: None,
+                changed_at: chrono::Utc::now(),
+            })
+    }
+
+    pub fn account_lifecycle_state(&self, did: &str) -> String {
+        self.account_lifecycle_record(did).state
+    }
+
+    pub fn set_account_lifecycle_record(&self, did: &str, record: AccountLifecycleRecord) {
+        let mut lifecycle = self
+            .account_lifecycle
+            .lock()
+            .expect("account_lifecycle lock");
+        if record.state == "active" {
+            lifecycle.remove(did);
+        } else {
+            lifecycle.insert(did.to_owned(), record);
         }
     }
 }

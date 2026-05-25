@@ -48,6 +48,63 @@ pub(super) fn router() -> Router {
         .push(Router::with_path("logout").post(logout))
 }
 
+fn account_new_session_error(state: &AppState, actor: &str) -> Option<AppError> {
+    account_new_session_tuple(state, actor).map(|(status, code, message)| {
+        AppError::capability_denied(message)
+            .with_status(status)
+            .with_wire_code(code)
+    })
+}
+
+fn account_new_session_tuple(
+    state: &AppState,
+    actor: &str,
+) -> Option<(StatusCode, &'static str, &'static str)> {
+    match state.account_lifecycle_state(actor).as_str() {
+        "locked" => Some((StatusCode::FORBIDDEN, "account_locked", "account is locked")),
+        "suspended" => Some((
+            StatusCode::FORBIDDEN,
+            "account_suspended",
+            "account is suspended",
+        )),
+        "deactivated" => Some((
+            StatusCode::FORBIDDEN,
+            "account_deactivated",
+            "account has been deactivated",
+        )),
+        "erased" => Some((
+            StatusCode::FORBIDDEN,
+            "account_erased",
+            "account has been erased",
+        )),
+        _ => None,
+    }
+}
+
+fn account_existing_session_error(
+    state: &AppState,
+    actor: &str,
+) -> Option<(StatusCode, &'static str, &'static str)> {
+    match state.account_lifecycle_state(actor).as_str() {
+        "locked" => Some((
+            StatusCode::UNAUTHORIZED,
+            "account_locked",
+            "account is locked",
+        )),
+        "deactivated" => Some((
+            StatusCode::UNAUTHORIZED,
+            "account_deactivated",
+            "account has been deactivated",
+        )),
+        "erased" => Some((
+            StatusCode::UNAUTHORIZED,
+            "account_erased",
+            "account has been erased",
+        )),
+        _ => None,
+    }
+}
+
 #[endpoint(
     operation_id = "cx.auth.dev_login",
     tags("auth"),
@@ -73,6 +130,9 @@ async fn dev_login(
         .accounts()
         .get(&body.actor)
         .map_err(|error| AppError::internal(error.to_string()))?;
+    if let Some(error) = account_new_session_error(state, &body.actor) {
+        return Err(error);
+    }
     if account.is_none() {
         let synthetic_handle = handle_for_did(&body.actor);
         let synthetic_display = body
@@ -184,6 +244,9 @@ async fn exchange_session_grant(
         .map_err(|error| AppError::internal(error.to_string()))?;
     if account.is_none() {
         return Err(AppError::not_found("account is not registered"));
+    }
+    if let Some(error) = account_new_session_error(state, &body.principal_did) {
+        return Err(error);
     }
 
     let grant = validate_session_grant_binding(
@@ -531,27 +594,14 @@ pub fn authenticated_session(
             "session audience does not match this service",
         ));
     }
+    if let Some(error) = account_existing_session_error(state, &session.actor) {
+        return Err(error);
+    }
     if session.revoked_at.is_some() {
         return Err((
             StatusCode::UNAUTHORIZED,
             "unauthenticated",
             "session revoked",
-        ));
-    }
-    // GDPR erasure surfaces ahead of device-revocation so callers get the
-    // spec-precise `account_erased` code rather than the generic
-    // `unauthenticated`/`device revoked` fallback that erase() triggers
-    // as a side effect.
-    if state
-        .erased_actors
-        .lock()
-        .expect("erased_actors lock")
-        .contains(&session.actor)
-    {
-        return Err((
-            StatusCode::UNAUTHORIZED,
-            "account_erased",
-            "account has been erased",
         ));
     }
     if is_device_revoked(state, &session.actor, &session.device_id) {
@@ -593,6 +643,9 @@ fn authenticated_oauth_session(
     let value = request_oauth_introspection(introspection_url, introspection_bearer, token)?;
     let oauth = parse_oauth_introspection(&value, token)?;
     ensure_oauth_account(state, &oauth)?;
+    if let Some(error) = account_new_session_tuple(state, &oauth.actor) {
+        return Err(error);
+    }
     ensure_oauth_device(state, &oauth)?;
 
     Ok(SessionRecord {
@@ -919,6 +972,55 @@ fn derived_oauth_device_id(value: &Value, token: &str) -> String {
 fn short_hex(bytes: &[u8], len: usize) -> String {
     let digest = Sha256::digest(bytes);
     format!("{digest:x}").chars().take(len).collect()
+}
+
+/// Revoke every active bearer session for an actor.
+pub fn revoke_sessions_for_actor(state: &AppState, actor: &str) -> Result<usize, String> {
+    let revoked_at = now();
+    let sessions = state
+        .persistence
+        .sessions()
+        .snapshot_all()
+        .map_err(|error| error.to_string())?;
+    let mut count = 0usize;
+    for mut session in sessions
+        .into_iter()
+        .filter(|session| session.actor == actor && session.revoked_at.is_none())
+    {
+        session.revoked_at = Some(revoked_at);
+        state
+            .persistence
+            .sessions()
+            .put(&session)
+            .map_err(|error| error.to_string())?;
+        count += 1;
+    }
+    Ok(count)
+}
+
+/// Revoke every active device record for an actor.
+pub fn revoke_devices_for_actor(state: &AppState, actor: &str) -> Result<usize, String> {
+    let revoked_at = now();
+    let devices = state
+        .persistence
+        .devices()
+        .list()
+        .map_err(|error| error.to_string())?;
+    let mut count = 0usize;
+    for mut device in devices
+        .into_iter()
+        .filter(|device| device.actor == actor && device.revoked_at.is_none())
+    {
+        device.revoked_at = Some(revoked_at);
+        device.updated_at = revoked_at;
+        state
+            .persistence
+            .devices()
+            .put(&device)
+            .map_err(|error| error.to_string())?;
+        count += 1;
+    }
+    Ok(count)
 }
 
 /// Persist that the device is revoked. Used by `logout` and by the

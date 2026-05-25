@@ -140,6 +140,7 @@ fn api_v1_router() -> Router {
         .push(federation::router())
         .push(events::router())
         .push(access::router())
+        .push(admin::spec_router())
         .push(admin::router())
         .push(interop::router())
         .push(conformance::router())

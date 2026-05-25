@@ -17,6 +17,7 @@ use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use super::auth::{revoke_devices_for_actor, revoke_sessions_for_actor};
 use super::consent::{has_active_consent_for_scope, normalize_scope, record_pending_request};
 use super::device_messages::{NOTIFICATION_READ_MARKER_UPDATE_TYPE, fanout_actor_private_update};
 use super::{
@@ -25,7 +26,9 @@ use super::{
 };
 use crate::error::AppError;
 use crate::routing::spaces::space::realm_has_member;
-use crate::state::{AccountRecord, AppState, ContactRecord, DeviceInventoryRecord};
+use crate::state::{
+    AccountLifecycleRecord, AccountRecord, AppState, ContactRecord, DeviceInventoryRecord,
+};
 use crate::wire::{
     AccountResponse, ClaimHandleRequest, ClaimHandleResponse, ContactRequestRequest,
     ContactRespondRequest, ContactResponse, ContactsResponse, RegisterAccountRequest,
@@ -65,6 +68,7 @@ pub(super) fn router() -> Router {
                 .push(Router::with_path("handle/transfer").post(transfer_handle))
                 .push(Router::with_path("profile").post(update_profile))
                 .push(Router::with_path("export").post(export_account))
+                .push(Router::with_path("deactivate").post(deactivate_account))
                 .push(Router::with_path("erase").post(erase_account))
                 .push(Router::with_path("{did}/principal-space").get(account_principal_space)),
         )
@@ -166,7 +170,7 @@ async fn account_register(
         "accepted",
     );
     res.status_code(StatusCode::CREATED);
-    json_ok(account_response(account))
+    json_ok(account_response(account, state))
 }
 
 #[endpoint(
@@ -188,7 +192,7 @@ async fn account_me(
         .get(&session.actor)
         .map_err(|error| AppError::internal(error.to_string()))?
     {
-        Some(account) => json_ok(account_response(account)),
+        Some(account) => json_ok(account_response(account, state)),
         None => Err(AppError::not_found("not found")),
     }
 }
@@ -471,7 +475,7 @@ async fn export_account(
             "avatar_url": account.avatar_url,
         })
     });
-    let account_payload = account.map(|account| account_response(account));
+    let account_payload = account.map(|account| account_response(account, state));
 
     let devices = state
         .persistence
@@ -541,6 +545,180 @@ async fn export_account(
     json_ok(bundle)
 }
 
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct AccountLifecycleChange {
+    pub did: String,
+    pub previous_state: String,
+    pub state: String,
+    pub changed_by: String,
+    pub reason: Option<String>,
+    pub changed_at: chrono::DateTime<chrono::Utc>,
+    pub sessions_revoked: usize,
+    pub devices_revoked: usize,
+}
+
+pub(crate) fn set_account_lifecycle_state(
+    state: &AppState,
+    did: &str,
+    next_state: &str,
+    changed_by: &str,
+    reason: Option<String>,
+) -> Result<AccountLifecycleChange, AppError> {
+    if validate_did(did).is_err() {
+        return Err(AppError::invalid_param("invalid account DID"));
+    }
+    if validate_did(changed_by).is_err() {
+        return Err(AppError::invalid_param("invalid state-change actor DID"));
+    }
+    if !matches!(
+        next_state,
+        "active" | "locked" | "suspended" | "deactivated"
+    ) {
+        return Err(AppError::invalid_param(
+            "state must be active, locked, suspended, or deactivated",
+        ));
+    }
+    if state
+        .persistence
+        .accounts()
+        .get(did)
+        .map_err(|error| AppError::internal(error.to_string()))?
+        .is_none()
+    {
+        return Err(AppError::not_found("account not found"));
+    }
+
+    let previous_state = state.account_lifecycle_state(did);
+    if previous_state == "erased" {
+        return Err(
+            AppError::conflict("erased accounts cannot transition state")
+                .with_wire_code("account_erased"),
+        );
+    }
+    if previous_state == "deactivated" && next_state == "active" {
+        return Err(
+            AppError::conflict("deactivated accounts cannot be reactivated")
+                .with_wire_code("account_deactivated"),
+        );
+    }
+
+    let changed_at = now();
+    let mut sessions_revoked = 0;
+    let mut devices_revoked = 0;
+    if previous_state != next_state {
+        state.set_account_lifecycle_record(
+            did,
+            AccountLifecycleRecord {
+                state: next_state.to_owned(),
+                reason: reason.clone(),
+                changed_by: Some(changed_by.to_owned()),
+                changed_at,
+            },
+        );
+        if matches!(next_state, "locked" | "deactivated") {
+            sessions_revoked = revoke_sessions_for_actor(state, did).map_err(AppError::internal)?;
+        }
+        if matches!(next_state, "locked" | "deactivated") {
+            devices_revoked = revoke_devices_for_actor(state, did).map_err(AppError::internal)?;
+        }
+        append_account_state_change_audit(
+            state,
+            did,
+            changed_by,
+            &previous_state,
+            next_state,
+            reason.clone(),
+            changed_at,
+            sessions_revoked,
+            devices_revoked,
+        );
+    }
+
+    Ok(AccountLifecycleChange {
+        did: did.to_owned(),
+        previous_state,
+        state: next_state.to_owned(),
+        changed_by: changed_by.to_owned(),
+        reason,
+        changed_at,
+        sessions_revoked,
+        devices_revoked,
+    })
+}
+
+fn append_account_state_change_audit(
+    state: &AppState,
+    did: &str,
+    changed_by: &str,
+    previous_state: &str,
+    next_state: &str,
+    reason: Option<String>,
+    changed_at: chrono::DateTime<chrono::Utc>,
+    sessions_revoked: usize,
+    devices_revoked: usize,
+) {
+    let payload = json!({
+        "schema": "cx.account.state_change.v1",
+        "actor": did,
+        "subject": did,
+        "from": previous_state,
+        "to": next_state,
+        "changed_by": changed_by,
+        "reason": reason,
+        "timestamp": changed_at.to_rfc3339_opts(SecondsFormat::Millis, true),
+        "sessions_revoked": sessions_revoked,
+        "devices_revoked": devices_revoked,
+    });
+    append_audit_log(
+        state,
+        Some(did),
+        "cx.account.state_change",
+        payload.clone(),
+        "accepted",
+    );
+    if changed_by != did {
+        append_audit_log(
+            state,
+            Some(changed_by),
+            "cx.account.state_change",
+            payload,
+            "accepted",
+        );
+    }
+}
+
+#[endpoint(
+    operation_id = "cx.extension.soland.account.deactivate",
+    tags("account"),
+    summary = "Deactivate the authenticated principal and revoke active access",
+    status_codes(200, 401, 409, 500)
+)]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.account.deactivate"))]
+async fn deactivate_account(
+    aa: AuthArgs,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<serde_json::Value> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req)?;
+    let actor = session.actor.clone();
+    let change = set_account_lifecycle_state(
+        state,
+        &actor,
+        "deactivated",
+        &actor,
+        Some("user_deactivate".to_owned()),
+    )?;
+    json_ok(json!({
+        "did": change.did,
+        "previous_state": change.previous_state,
+        "state": change.state,
+        "deactivated_at": change.changed_at.to_rfc3339_opts(SecondsFormat::Millis, true),
+        "sessions_revoked": change.sessions_revoked,
+        "devices_revoked": change.devices_revoked,
+    }))
+}
+
 #[endpoint(
     operation_id = "cx.extension.soland.account.erase",
     tags("account"),
@@ -586,6 +764,7 @@ async fn erase_account(
 
     // Revoke every device record so other surfaces (key delivery,
     // device lookup) can treat the actor as a fully revoked principal.
+    let mut devices_revoked = 0usize;
     let devices = state.persistence.devices().list().unwrap_or_default();
     for mut device in devices.into_iter().filter(|d| d.actor == actor) {
         if device.revoked_at.is_some() {
@@ -594,8 +773,21 @@ async fn erase_account(
         device.revoked_at = Some(now());
         device.updated_at = now();
         let _ = state.persistence.devices().put(&device);
+        devices_revoked += 1;
     }
 
+    let sessions_revoked = revoke_sessions_for_actor(state, &actor).unwrap_or(0);
+    let previous_state = state.account_lifecycle_state(&actor);
+    let changed_at = now();
+    state.set_account_lifecycle_record(
+        &actor,
+        AccountLifecycleRecord {
+            state: "erased".to_owned(),
+            reason: Some("account_erasure".to_owned()),
+            changed_by: Some(actor.clone()),
+            changed_at,
+        },
+    );
     // Mark the actor as erased in-process; the `authenticated_session`
     // path checks this set and returns 401 `account_erased` for any
     // future request bearing a still-valid session token.
@@ -604,6 +796,17 @@ async fn erase_account(
         .lock()
         .expect("erased_actors lock")
         .insert(actor.clone());
+    append_account_state_change_audit(
+        state,
+        &actor,
+        &actor,
+        &previous_state,
+        "erased",
+        Some("account_erasure".to_owned()),
+        changed_at,
+        sessions_revoked,
+        devices_revoked,
+    );
 
     let completed_at = now();
     let completed_at_wire = completed_at.to_rfc3339_opts(SecondsFormat::Millis, true);
@@ -1327,11 +1530,13 @@ pub fn principal_space_for_did(holder_did: &str) -> String {
     )
 }
 
-fn account_response(account: AccountRecord) -> AccountResponse {
+fn account_response(account: AccountRecord, state: &AppState) -> AccountResponse {
+    let lifecycle_state = state.account_lifecycle_state(&account.did);
     AccountResponse {
         did: account.did,
         handle: account.handle,
         display_name: account.display_name,
+        state: lifecycle_state,
         created_at: account.created_at,
     }
 }

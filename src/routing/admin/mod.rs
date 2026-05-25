@@ -89,15 +89,13 @@ pub(super) fn require_admin_principal(
 }
 
 pub fn router() -> Router {
-    Router::new()
-        .push(audit::router())
-        .push(
-            Router::new()
-                .hoop(RequireAdmin::scope(contrix_sdk::admin_scopes::ADMIN_READ))
-                .push(cells::router())
-                .push(Router::with_path("admin/{resource}").get(collection::admin_collection))
-                .push(control::router()),
-        )
+    Router::new().push(audit::router()).push(
+        Router::new()
+            .hoop(RequireAdmin::scope(contrix_sdk::admin_scopes::ADMIN_READ))
+            .push(cells::router())
+            .push(Router::with_path("admin/{resource}").get(collection::admin_collection))
+            .push(control::router()),
+    )
 }
 
 pub fn spec_router() -> Router {
