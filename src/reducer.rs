@@ -7277,6 +7277,22 @@ impl ProjectionState {
             .collect()
     }
 
+    /// CXP-0007 — list the Flows that point AT `flow_id` via a
+    /// `confidential_discussion_of` Relation. Useful for the discovery
+    /// surface that resolves the "narrow discussion" companion of a
+    /// "wide synthesis" Flow. Returns the `from_ref` side of each live
+    /// matching relation.
+    pub fn confidential_discussions_of(&self, flow_id: &str) -> Vec<&RelationState> {
+        self.relations
+            .values()
+            .filter(|r| {
+                !r.deleted
+                    && r.relation_kind == crate::kinds::RELATION_KIND_CONFIDENTIAL_DISCUSSION_OF
+                    && r.to_ref.as_deref() == Some(flow_id)
+            })
+            .collect()
+    }
+
     /// Get members of a space currently in `state="join"`.
     /// For state-specific queries use [`members_in_state`].
     pub fn members_of_space(&self, space_id: &str) -> Vec<&MembershipState> {

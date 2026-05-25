@@ -76,6 +76,13 @@ pub const CX_CIRCLE_TOMBSTONE: &str = "cx.circle.tombstone";
 pub const CX_CIRCLE_MEMBER_STATE: &str = "cx.circle.member.state";
 pub const CX_CIRCLE_ANCHOR_COMMIT: &str = "cx.circle.anchor_commit";
 
+// CXP-0007 — typed Relation kind couples a "wide synthesis" Flow (often
+// Realm-default scope) to a "narrow discussion" Flow bound to a
+// `scope_circle_id` Circle. Stored on `cx.relation.create` /
+// `cx.relation.update` payloads as `relation_kind`. Spec
+// `zh/models/circle.md` §7.2.
+pub const RELATION_KIND_CONFIDENTIAL_DISCUSSION_OF: &str = "confidential_discussion_of";
+
 // Morph lifecycle (round 13). Same shape as Flow — no dedicated tombstone.
 pub const CX_MORPH_CREATE: &str = "cx.morph.create";
 pub const CX_MORPH_UPDATE: &str = "cx.morph.update";

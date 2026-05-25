@@ -3250,20 +3250,56 @@ fn event_operation_id(envelope: &Value, event_id: &str) -> Option<OperationId> {
 
 pub(super) fn event_read_response(record: &CanonicalEventRecord) -> EventReadResponse {
     let realm_id = canonical_realm_id_for_record(record);
+    // CXP-0007 (spec b7d35be) — surface `effective_scope` on read so
+    // clients can branch on Circle vs Realm-default scope without
+    // re-deriving from the envelope. The field is sourced from either
+    // the envelope's top-level `effective_scope` or the payload-side
+    // `scope_circle_id`, whichever the writer populated.
+    let effective_scope = effective_scope_for_envelope(&record.envelope);
+    let mut metadata = json!({
+        "event_id": record.event_id.clone(),
+        "actor_id": record.actor_id.clone(),
+        "actor_seq": record.actor_seq,
+        "realm_id": realm_id,
+        "space_id": record.space_id.clone(),
+        "kind": record.kind.clone(),
+        "schema_id": record.schema_id.clone(),
+        "canonical_digest": record.canonical_digest.clone(),
+        "received_at": record.received_at,
+    });
+    if let Some(scope) = effective_scope {
+        metadata
+            .as_object_mut()
+            .expect("metadata is object")
+            .insert("effective_scope".to_owned(), Value::String(scope));
+    }
     EventReadResponse {
         event: record.envelope.clone(),
-        metadata: json!({
-            "event_id": record.event_id.clone(),
-            "actor_id": record.actor_id.clone(),
-            "actor_seq": record.actor_seq,
-            "realm_id": realm_id,
-            "space_id": record.space_id.clone(),
-            "kind": record.kind.clone(),
-            "schema_id": record.schema_id.clone(),
-            "canonical_digest": record.canonical_digest.clone(),
-            "received_at": record.received_at
-        }),
+        metadata,
     }
+}
+
+/// CXP-0007 — resolve the canonical `effective_scope` for an Event
+/// Envelope on read. Returns `Some(circle_id)` when the envelope (or its
+/// payload) names a Circle scope, `Some("realm:<realm_id>")` when the
+/// scope is the Realm default, or `None` when neither can be derived.
+fn effective_scope_for_envelope(envelope: &Value) -> Option<String> {
+    let Some(object) = envelope.as_object() else {
+        return None;
+    };
+    if let Some(scope) = object.get("effective_scope").and_then(Value::as_str) {
+        return Some(scope.to_owned());
+    }
+    let payload = object.get("payload").and_then(Value::as_object)?;
+    if let Some(scope_circle_id) = payload.get("scope_circle_id").and_then(Value::as_str) {
+        return Some(scope_circle_id.to_owned());
+    }
+    if let Some(payload_object) = payload.get("object").and_then(Value::as_object)
+        && let Some(scope_circle_id) = payload_object.get("scope_circle_id").and_then(Value::as_str)
+    {
+        return Some(scope_circle_id.to_owned());
+    }
+    None
 }
 
 pub(super) fn event_read_response_for_state(
