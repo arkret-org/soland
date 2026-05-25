@@ -1369,6 +1369,7 @@ pub struct CreateWebrtcSessionResponse {
     pub session_id: String,
     pub space_id: String,
     pub participants: Vec<String>,
+    pub call_state: String,
     pub expires_at: DateTime<Utc>,
     pub created_at: DateTime<Utc>,
 }
@@ -1390,11 +1391,13 @@ pub struct WebrtcSignalResponse {
     pub session_id: String,
     pub seq: u64,
     pub next_cursor: String,
+    pub call_state: String,
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct WebrtcSignalsResponse {
     pub session_id: String,
+    pub call_state: String,
     pub events: Vec<Value>,
     pub next_cursor: String,
     pub limited: bool,

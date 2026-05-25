@@ -4455,6 +4455,7 @@ async fn webrtc_signaling_contracts_work() {
     let session_id = session["session_id"].as_str().unwrap().to_owned();
     assert!(session_id.starts_with("cx:call:"));
     assert_eq!(session["participants"].as_array().unwrap().len(), 1);
+    assert_eq!(session["call_state"], "ringing");
 
     let unsigned_signal = TestClient::post(format!(
         "http://server/api/v1/webrtc/sessions/{session_id}/signals"
@@ -4487,6 +4488,7 @@ async fn webrtc_signaling_contracts_work() {
     .unwrap();
     assert_eq!(signal["seq"], 1);
     assert_eq!(signal["next_cursor"], "1");
+    assert_eq!(signal["call_state"], "connecting");
 
     let events: Value = TestClient::get(format!(
         "http://server/api/v1/webrtc/sessions/{session_id}/signals?since=0"
@@ -4500,9 +4502,47 @@ async fn webrtc_signaling_contracts_work() {
     assert_eq!(events["events"].as_array().unwrap().len(), 1);
     assert_eq!(events["events"][0]["type"], "offer");
     assert_eq!(events["events"][0]["sender"], "did:web:alice.example");
+    assert_eq!(events["events"][0]["call_state_after"], "connecting");
+    assert_eq!(events["call_state"], "connecting");
+
+    let answer: Value = TestClient::post(format!(
+        "http://server/api/v1/webrtc/sessions/{session_id}/signals"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .json(&serde_json::json!({
+        "message_type": "answer",
+        "payload": {
+            "description_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "proofs": [{"kid": "did:web:alice.example#device", "sig": "dev"}]
+    }))
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    assert_eq!(answer["seq"], 2);
+    assert_eq!(answer["call_state"], "active");
+
+    let hangup: Value = TestClient::post(format!(
+        "http://server/api/v1/webrtc/sessions/{session_id}/signals"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .json(&serde_json::json!({
+        "message_type": "hangup",
+        "payload": {"reason": "test-end"},
+        "proofs": [{"kid": "did:web:alice.example#device", "sig": "dev"}]
+    }))
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    assert_eq!(hangup["seq"], 3);
+    assert_eq!(hangup["call_state"], "ended");
 
     let empty_events: Value = TestClient::get(format!(
-        "http://server/api/v1/webrtc/sessions/{session_id}/signals?since=1"
+        "http://server/api/v1/webrtc/sessions/{session_id}/signals?since=3"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))

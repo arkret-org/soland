@@ -224,6 +224,7 @@ async fn create_webrtc_session(
         session_id,
         space_id: body.space_id,
         participants: participant_list,
+        call_state: "ringing".to_owned(),
         expires_at,
         created_at,
     })
@@ -296,12 +297,23 @@ async fn put_webrtc_signal(
         .webrtc()
         .append_signal(&session_id, &session.actor, builder)
     {
-        Ok(appended) => json_ok(WebrtcSignalResponse {
-            ok: true,
-            session_id: session_id.clone(),
-            seq: appended.seq,
-            next_cursor: appended.seq.to_string(),
-        }),
+        Ok(appended) => {
+            let call_state = state
+                .persistence
+                .webrtc()
+                .get(&session_id)
+                .ok()
+                .flatten()
+                .map(|record| call_state_for_webrtc_session(&record).to_owned())
+                .unwrap_or_else(|| "ringing".to_owned());
+            json_ok(WebrtcSignalResponse {
+                ok: true,
+                session_id: session_id.clone(),
+                seq: appended.seq,
+                next_cursor: appended.seq.to_string(),
+                call_state,
+            })
+        }
         Err(crate::persistence::PersistenceError::NotFound(_)) => {
             Err(AppError::not_found("session not found"))
         }
@@ -344,11 +356,19 @@ async fn get_webrtc_signals(
             "actor is not a participant of the webrtc session",
         ));
     }
+    let call_state = call_state_for_webrtc_session(&record).to_owned();
+    let state_by_seq = webrtc_state_by_seq(&record);
     let mut events = record
         .signals
         .iter()
         .filter(|signal| signal.seq > since)
-        .map(webrtc_signal_to_json)
+        .map(|signal| {
+            let state_after = state_by_seq
+                .iter()
+                .find_map(|(seq, state)| (*seq == signal.seq).then_some(*state))
+                .unwrap_or("ringing");
+            webrtc_signal_to_json(signal, state_after)
+        })
         .collect::<Vec<_>>();
     let limited = events.len() > limit;
     if limited {
@@ -361,6 +381,7 @@ async fn get_webrtc_signals(
         .to_string();
     json_ok(WebrtcSignalsResponse {
         session_id,
+        call_state,
         events,
         next_cursor,
         limited,
@@ -422,7 +443,8 @@ fn is_valid_webrtc_session_id(value: &str) -> bool {
 fn is_supported_webrtc_signal_type(value: &str) -> bool {
     matches!(
         value,
-        "offer"
+        "invite"
+            | "offer"
             | "answer"
             | "ice"
             | "hangup"
@@ -442,6 +464,7 @@ fn is_supported_webrtc_signal_type(value: &str) -> bool {
             | "cx.webrtc.ice"
             | "cx.webrtc.renegotiate"
             | "cx.webrtc.hangup"
+            | "cx.call.signal.invite"
             | "cx.call.signal.offer"
             | "cx.call.signal.answer"
             | "cx.call.signal.ice"
@@ -456,6 +479,47 @@ fn is_supported_webrtc_signal_type(value: &str) -> bool {
             | "cx.call.signal.device_change"
             | "cx.call.signal.renegotiate"
     )
+}
+
+fn normalized_webrtc_signal_type(value: &str) -> &str {
+    value.rsplit('.').next().unwrap_or(value)
+}
+
+fn call_state_for_webrtc_session(record: &WebrtcSessionRecord) -> &'static str {
+    webrtc_state_by_seq(record)
+        .last()
+        .map(|(_, state)| *state)
+        .unwrap_or("ringing")
+}
+
+fn webrtc_state_by_seq(record: &WebrtcSessionRecord) -> Vec<(u64, &'static str)> {
+    let mut saw_connecting = false;
+    let mut saw_active = false;
+    let mut saw_ended = false;
+    record
+        .signals
+        .iter()
+        .map(|signal| {
+            match normalized_webrtc_signal_type(&signal.message_type) {
+                "hangup" | "reject" => saw_ended = true,
+                "answer" | "focus_join" => saw_active = true,
+                "invite" | "offer" | "candidate" | "ice" | "renegotiate" | "device_change" => {
+                    saw_connecting = true;
+                }
+                _ => {}
+            }
+            let state = if saw_ended {
+                "ended"
+            } else if saw_active {
+                "active"
+            } else if saw_connecting {
+                "connecting"
+            } else {
+                "ringing"
+            };
+            (signal.seq, state)
+        })
+        .collect()
 }
 
 fn webrtc_signal_proof_matches_actor(proofs: &[Value], actor: &str) -> bool {
@@ -480,11 +544,12 @@ fn webrtc_signal_proof_matches_actor(proofs: &[Value], actor: &str) -> bool {
         })
 }
 
-fn webrtc_signal_to_json(signal: &WebrtcSignalRecord) -> Value {
+fn webrtc_signal_to_json(signal: &WebrtcSignalRecord, call_state_after: &str) -> Value {
     json!({
         "seq": signal.seq,
         "sender": signal.sender,
         "type": signal.message_type,
+        "call_state_after": call_state_after,
         "payload": signal.payload,
         "proofs": signal.proofs,
         "device_proof": signal.proofs.first().cloned().unwrap_or(Value::Null),
