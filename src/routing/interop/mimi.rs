@@ -39,10 +39,10 @@ pub(super) fn router() -> Router {
     Router::with_path("mimi")
         .push(Router::with_path("provider-directory").get(mimi_provider_directory))
         .push(Router::with_path("key-material").post(mimi_key_material))
-        .push(Router::with_path("rooms/{flow_id}/update").put(mimi_room_update))
-        .push(Router::with_path("rooms/{flow_id}/notify").post(mimi_room_notify))
-        .push(Router::with_path("rooms/{flow_id}/messages").post(mimi_room_message))
-        .push(Router::with_path("rooms/{flow_id}/group-info").get(mimi_group_info))
+        .push(Router::with_path("flows/{flow_id}/update").put(mimi_room_update))
+        .push(Router::with_path("flows/{flow_id}/notify").post(mimi_room_notify))
+        .push(Router::with_path("flows/{flow_id}/messages").post(mimi_room_message))
+        .push(Router::with_path("flows/{flow_id}/group-info").get(mimi_group_info))
         .push(Router::with_path("consent/request").post(mimi_consent_request))
         .push(Router::with_path("consent/update").post(mimi_consent_update))
         .push(Router::with_path("identifiers/query").post(mimi_identifiers_query))
@@ -285,15 +285,7 @@ async fn mimi_room_message(
             // mapping layer per spec §10.
             format!("{}#mimi-anonymous", state.config.service_did,)
         });
-    let content = body.get("content").cloned().unwrap_or_else(|| {
-        // MIMI text/plain fallback so a minimal body still
-        // renders something in the Contrix timeline.
-        json!({
-            "kind": "cx.content.text",
-            "body": "",
-            "raw_mimi_source_format": source_format,
-        })
-    });
+    let mapped_content = map_mimi_message_content(&body, source_format)?;
     let thread_id = body
         .get("thread_id")
         .and_then(Value::as_str)
@@ -315,8 +307,8 @@ async fn mimi_room_message(
         space_id: space_id.clone(),
         sender: sender.clone(),
         thread_id: thread_id.clone(),
-        content: content.clone(),
-        encrypted: false,
+        content: mapped_content.content.clone(),
+        encrypted: mapped_content.encrypted,
         created_at,
     };
     if let Err(error) = state.persistence.messages().put(&message_record) {
@@ -331,9 +323,11 @@ async fn mimi_room_message(
         sender: Some(sender.clone()),
         payload: json!({
             "thread_id": thread_id.clone(),
-            "content": content,
-            "encrypted": false,
+            "content": mapped_content.content.clone(),
+            "encrypted": mapped_content.encrypted,
             "mimi_provenance": mimi_provenance,
+            "mimi_policy": mapped_content.policy.clone(),
+            "quarantine": mapped_content.quarantine.clone(),
         }),
         created_at,
     };
@@ -366,6 +360,9 @@ async fn mimi_room_message(
             "mimi_message_id": mimi_message_id,
             "truth_source": "contrix_signed_event_reducer",
             "reducer_chain": "wired",
+            "status": mapped_content.status,
+            "mimi_policy": mapped_content.policy.clone(),
+            "quarantine": mapped_content.quarantine.clone(),
         }),
     );
     append_audit_log(
@@ -379,11 +376,14 @@ async fn mimi_room_message(
             "event_id": event_id,
             "source_format": source_format,
             "mimi_message_id": mimi_message_id,
+            "mimi_policy": mapped_content.policy,
+            "quarantine": mapped_content.quarantine,
         }),
-        "mapped",
+        &mapped_content.status,
     );
     json_ok(json!({
         "ok": true,
+        "status": mapped_content.status,
         "mimi_message_id": mimi_message_id,
         "mapped_operation_id": operation_id,
         "contrix_event_id": event_id,
@@ -741,6 +741,245 @@ fn mimi_receipt(state: &AppState, operation_id: &str, body: &Value, extra: Value
         },
         "extra": extra
     })
+}
+
+struct MimiMappedContent {
+    content: Value,
+    encrypted: bool,
+    policy: Value,
+    quarantine: Option<Value>,
+    status: &'static str,
+}
+
+fn map_mimi_message_content(
+    body: &Value,
+    source_format: &str,
+) -> Result<MimiMappedContent, AppError> {
+    let mut content = mimi_content_payload(body, source_format);
+    let content_kind = mimi_content_kind(body, &content).map(str::to_owned);
+    let e2ee_boundary = mimi_e2ee_boundary(body, &content);
+    let plaintext_detected = mimi_plaintext_detected(body) || mimi_plaintext_detected(&content);
+    let transcript_binding = mimi_transcript_binding(body, &content).cloned();
+    let explicit_downgrade = mimi_explicit_downgrade(body, &content);
+
+    if e2ee_boundary && plaintext_detected && transcript_binding.is_none() && !explicit_downgrade {
+        return Err(AppError::invalid_param(
+            "MIMI E2EE plaintext requires transcript_binding or explicit e2ee_downgrade marker",
+        )
+        .with_wire_code("mimi_e2ee_boundary_unmarked"));
+    }
+
+    let mut policy = json!({
+        "profile": "cx.profile.mimi_interop.v1",
+        "e2ee_boundary": "none",
+        "plaintext_detected": plaintext_detected,
+        "plaintext_guard": "not_e2ee",
+    });
+    let mut encrypted = e2ee_boundary && !explicit_downgrade;
+
+    if e2ee_boundary && explicit_downgrade {
+        ensure_content_object(&mut content);
+        let object = content.as_object_mut().expect("content object");
+        object.insert(
+            "cx.morph.e2ee_downgrade".to_owned(),
+            Value::String("mimi_bridge".to_owned()),
+        );
+        object.insert(
+            "e2ee_downgrade".to_owned(),
+            Value::String("mimi_bridge".to_owned()),
+        );
+        policy = json!({
+            "profile": "cx.profile.mimi_interop.v1",
+            "e2ee_boundary": "explicit_downgrade",
+            "plaintext_detected": plaintext_detected,
+            "plaintext_guard": "marked_explicit_downgrade",
+            "downgrade_marker": "mimi_bridge",
+        });
+        encrypted = false;
+    } else if e2ee_boundary {
+        if let Some(binding) = transcript_binding {
+            ensure_content_object(&mut content);
+            let object = content.as_object_mut().expect("content object");
+            object.insert("transcript_binding".to_owned(), binding.clone());
+            object.insert(
+                "cx.morph.e2ee_boundary".to_owned(),
+                Value::String("transcript_bound".to_owned()),
+            );
+            policy = json!({
+                "profile": "cx.profile.mimi_interop.v1",
+                "e2ee_boundary": "transcript_bound",
+                "plaintext_detected": plaintext_detected,
+                "plaintext_guard": "transcript_binding",
+                "transcript_binding": binding,
+            });
+        } else {
+            policy = json!({
+                "profile": "cx.profile.mimi_interop.v1",
+                "e2ee_boundary": "opaque_ciphertext",
+                "plaintext_detected": false,
+                "plaintext_guard": "opaque_ciphertext_only",
+            });
+        }
+    }
+
+    if let Some(kind) = content_kind
+        .as_deref()
+        .filter(|kind| !valid_mimi_content_kind(kind))
+    {
+        let quarantine_id = ids::generate("mimi_quarantine");
+        let quarantine = json!({
+            "quarantine_id": quarantine_id,
+            "unknown_content_kind": kind,
+            "reason": "unknown_mimi_content_kind",
+            "raw_payload_hash": format!("sha256:{}", sha256_hex(content.to_string().as_bytes())),
+        });
+        let content = json!({
+            "kind": "cx.content.unsupported",
+            "body": "unsupported content from MIMI",
+            "cx.morph.unknown_content_kind": kind,
+            "quarantine": quarantine.clone(),
+        });
+        let mut policy = policy;
+        if let Some(object) = policy.as_object_mut() {
+            object.insert(
+                "content_quarantine".to_owned(),
+                Value::String("unknown_mimi_content_kind".to_owned()),
+            );
+        }
+        return Ok(MimiMappedContent {
+            content,
+            encrypted: false,
+            policy,
+            quarantine: Some(quarantine),
+            status: "quarantined",
+        });
+    }
+
+    Ok(MimiMappedContent {
+        content,
+        encrypted,
+        policy,
+        quarantine: None,
+        status: "mapped",
+    })
+}
+
+fn mimi_content_payload(body: &Value, source_format: &str) -> Value {
+    body.get("content").cloned().unwrap_or_else(|| {
+        let text = body
+            .get("body")
+            .or_else(|| body.get("text"))
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        json!({
+            "kind": "cx.content.text",
+            "body": text,
+            "raw_mimi_source_format": source_format,
+        })
+    })
+}
+
+fn ensure_content_object(content: &mut Value) {
+    if !content.is_object() {
+        let raw = content.clone();
+        *content = json!({
+            "kind": "cx.content.opaque",
+            "raw_mimi_content": raw,
+        });
+    }
+}
+
+fn mimi_content_kind<'a>(body: &'a Value, content: &'a Value) -> Option<&'a str> {
+    body.get("content_kind")
+        .or_else(|| body.get("mimi_content_kind"))
+        .and_then(Value::as_str)
+        .or_else(|| content.get("kind").and_then(Value::as_str))
+}
+
+fn valid_mimi_content_kind(kind: &str) -> bool {
+    matches!(
+        kind,
+        "m.text"
+            | "text/plain"
+            | "text/markdown"
+            | "m.markdown"
+            | "cx.message.text"
+            | "cx.message.revise"
+            | "cx.message.redact"
+            | "cx.content.text"
+            | "cx.content.composite"
+            | "cx.content.markdown"
+    )
+}
+
+fn mimi_e2ee_boundary(body: &Value, content: &Value) -> bool {
+    truthy_field(body, "e2ee")
+        || truthy_field(body, "encrypted")
+        || truthy_field(content, "e2ee")
+        || truthy_field(content, "encrypted")
+        || encryption_profile_enabled(body.get("encryption_profile"))
+        || encryption_profile_enabled(body.get("source_encryption"))
+        || encryption_profile_enabled(content.get("encryption_profile"))
+        || encryption_profile_enabled(content.get("source_encryption"))
+}
+
+fn truthy_field(value: &Value, key: &str) -> bool {
+    match value.get(key) {
+        Some(Value::Bool(value)) => *value,
+        Some(Value::String(value)) => matches!(
+            value.as_str(),
+            "true" | "e2ee" | "encrypted" | "mls" | "mls_rfc9420" | "mimi_mls"
+        ),
+        _ => false,
+    }
+}
+
+fn encryption_profile_enabled(value: Option<&Value>) -> bool {
+    value
+        .and_then(Value::as_str)
+        .is_some_and(|profile| !matches!(profile, "" | "none" | "plaintext" | "unencrypted"))
+}
+
+fn mimi_transcript_binding<'a>(body: &'a Value, content: &'a Value) -> Option<&'a Value> {
+    body.get("transcript_binding")
+        .or_else(|| body.get("mls_transcript_binding"))
+        .or_else(|| content.get("transcript_binding"))
+        .or_else(|| content.get("mls_transcript_binding"))
+}
+
+fn mimi_explicit_downgrade(body: &Value, content: &Value) -> bool {
+    downgrade_marker(body.get("e2ee_downgrade"))
+        || downgrade_marker(body.get("cx.morph.e2ee_downgrade"))
+        || downgrade_marker(content.get("e2ee_downgrade"))
+        || downgrade_marker(content.get("cx.morph.e2ee_downgrade"))
+}
+
+fn downgrade_marker(value: Option<&Value>) -> bool {
+    value
+        .and_then(Value::as_str)
+        .is_some_and(|marker| marker == "mimi_bridge" || marker == "explicit")
+}
+
+fn mimi_plaintext_detected(value: &Value) -> bool {
+    match value {
+        Value::Object(object) => object.iter().any(|(key, value)| {
+            if matches!(
+                key.as_str(),
+                "body" | "text" | "plain_text" | "markdown" | "html"
+            ) {
+                value.as_str().is_some_and(|text| !text.trim().is_empty())
+            } else if matches!(
+                key.as_str(),
+                "ciphertext" | "ciphertext_hash" | "digest" | "hash" | "original_envelope_hash"
+            ) {
+                false
+            } else {
+                mimi_plaintext_detected(value)
+            }
+        }),
+        Value::Array(values) => values.iter().any(mimi_plaintext_detected),
+        _ => false,
+    }
 }
 
 /// Look up which Contrix `space_id` (if any) the MIMI `room_id` is

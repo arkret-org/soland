@@ -2302,6 +2302,205 @@ async fn mimi_facade_writes_flow_into_canonical_reducer_chain() {
 }
 
 #[tokio::test]
+async fn mimi_facade_enforces_e2ee_boundary_and_quarantines_unknown_content() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+    let service = app_from_state(state.clone());
+    let space_id = DEMO_REALM_ID;
+    let room_id = "01JSMIMI-P75-POLICY";
+
+    let update_resp: Value =
+        TestClient::put(format!("http://server/api/v1/mimi/flows/{room_id}/update"))
+            .json(&serde_json::json!({
+                "room_binding": {
+                    "profile": "cx.profile.mimi_interop.v1",
+                    "mimi_room_uri": format!("mimi://soland.local/rooms/{room_id}"),
+                    "binding_scope": {
+                        "space_id": space_id,
+                        "flow_id": null,
+                    },
+                    "content_profile": "application/mimi-content",
+                },
+                "protocol_draft": "draft-ietf-mimi-protocol-06",
+            }))
+            .send(&service)
+            .await
+            .take_json()
+            .await
+            .unwrap();
+    assert_eq!(update_resp["ok"], true);
+
+    let mut unmarked = TestClient::post(format!(
+        "http://server/api/v1/mimi/flows/{room_id}/messages"
+    ))
+    .json(&serde_json::json!({
+        "source_format": "application/mimi-content",
+        "e2ee": true,
+        "content": {
+            "kind": "cx.content.text",
+            "body": "this plaintext must not cross silently"
+        },
+        "sender_did": "did:web:mimi.example",
+        "mimi_message_id": "mimi-msg-policy-unmarked",
+        "protocol_draft": "draft-ietf-mimi-protocol-06",
+        "content_draft": "draft-ietf-mimi-content-08",
+    }))
+    .send(&service)
+    .await;
+    assert_eq!(unmarked.status_code.unwrap().as_u16(), 400);
+    let unmarked_body: Value = unmarked.take_json().await.unwrap();
+    assert_eq!(
+        unmarked_body["error"]["code"],
+        "mimi_e2ee_boundary_unmarked"
+    );
+
+    let downgrade_resp: Value = TestClient::post(format!(
+        "http://server/api/v1/mimi/flows/{room_id}/messages"
+    ))
+    .json(&serde_json::json!({
+        "source_format": "application/mimi-content",
+        "e2ee": true,
+        "e2ee_downgrade": "mimi_bridge",
+        "content": {
+            "kind": "cx.content.text",
+            "body": "explicitly downgraded plaintext"
+        },
+        "sender_did": "did:web:mimi.example",
+        "mimi_message_id": "mimi-msg-policy-downgrade",
+        "protocol_draft": "draft-ietf-mimi-protocol-06",
+        "content_draft": "draft-ietf-mimi-content-08",
+    }))
+    .send(&service)
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    assert_eq!(downgrade_resp["ok"], true);
+    assert_eq!(downgrade_resp["status"], "mapped");
+    assert_eq!(
+        downgrade_resp["receipt"]["extra"]["mimi_policy"]["e2ee_boundary"],
+        "explicit_downgrade"
+    );
+    let downgrade_event_id = downgrade_resp["contrix_event_id"]
+        .as_str()
+        .expect("downgrade event id")
+        .to_owned();
+
+    let transcript_resp: Value = TestClient::post(format!(
+        "http://server/api/v1/mimi/flows/{room_id}/messages"
+    ))
+    .json(&serde_json::json!({
+        "source_format": "application/mimi-content",
+        "encrypted": true,
+        "transcript_binding": {
+            "profile": "mls-via-ietf-mimi",
+            "transcript_hash": "sha256:transcript-bound"
+        },
+        "content": {
+            "kind": "cx.content.text",
+            "body": "transcript-bound plaintext"
+        },
+        "sender_did": "did:web:mimi.example",
+        "mimi_message_id": "mimi-msg-policy-transcript",
+        "protocol_draft": "draft-ietf-mimi-protocol-06",
+        "content_draft": "draft-ietf-mimi-content-08",
+    }))
+    .send(&service)
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    assert_eq!(transcript_resp["ok"], true);
+    assert_eq!(
+        transcript_resp["receipt"]["extra"]["mimi_policy"]["e2ee_boundary"],
+        "transcript_bound"
+    );
+    let transcript_event_id = transcript_resp["contrix_event_id"]
+        .as_str()
+        .expect("transcript event id")
+        .to_owned();
+
+    let quarantine_resp: Value = TestClient::post(format!(
+        "http://server/api/v1/mimi/flows/{room_id}/messages"
+    ))
+    .json(&serde_json::json!({
+        "source_format": "application/mimi-content",
+        "content_kind": "m.location.share.live",
+        "content": {
+            "kind": "m.location.share.live",
+            "geo_uri": "geo:31.2304,121.4737;u=10",
+            "body": "raw live location payload"
+        },
+        "sender_did": "did:web:mimi.example",
+        "mimi_message_id": "mimi-msg-policy-quarantine",
+        "protocol_draft": "draft-ietf-mimi-protocol-06",
+        "content_draft": "draft-ietf-mimi-content-08",
+    }))
+    .send(&service)
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    assert_eq!(quarantine_resp["ok"], true);
+    assert_eq!(quarantine_resp["status"], "quarantined");
+    assert_eq!(
+        quarantine_resp["receipt"]["extra"]["quarantine"]["unknown_content_kind"],
+        "m.location.share.live"
+    );
+    let quarantine_event_id = quarantine_resp["contrix_event_id"]
+        .as_str()
+        .expect("quarantine event id")
+        .to_owned();
+
+    let events: Value = TestClient::get(format!("http://server/api/v1/events?realms={space_id}"))
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .send(&service)
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    let list = events["events"].as_array().expect("events array");
+    let find = |event_id: &str| {
+        list.iter()
+            .find(|event| event["event_id"] == event_id)
+            .unwrap_or_else(|| panic!("missing event {event_id}"))
+    };
+    let downgrade_event = find(&downgrade_event_id);
+    assert_eq!(
+        downgrade_event["payload"]["content"]["cx.morph.e2ee_downgrade"],
+        "mimi_bridge"
+    );
+    assert_eq!(
+        downgrade_event["payload"]["mimi_policy"]["e2ee_boundary"],
+        "explicit_downgrade"
+    );
+
+    let transcript_event = find(&transcript_event_id);
+    assert_eq!(
+        transcript_event["payload"]["content"]["transcript_binding"]["transcript_hash"],
+        "sha256:transcript-bound"
+    );
+    assert_eq!(
+        transcript_event["payload"]["mimi_policy"]["e2ee_boundary"],
+        "transcript_bound"
+    );
+
+    let quarantine_event = find(&quarantine_event_id);
+    assert_eq!(
+        quarantine_event["payload"]["content"]["kind"],
+        "cx.content.unsupported"
+    );
+    assert_eq!(
+        quarantine_event["payload"]["content"]["body"],
+        "unsupported content from MIMI"
+    );
+    assert_eq!(
+        quarantine_event["payload"]["content"]["cx.morph.unknown_content_kind"],
+        "m.location.share.live"
+    );
+}
+
+#[tokio::test]
 async fn configured_cors_allows_only_explicit_origin() {
     let mut config = test_config();
     config.cors_allow_origin = Some("https://app.example".to_owned());
