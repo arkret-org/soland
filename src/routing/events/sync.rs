@@ -239,12 +239,18 @@ fn build_sync_snapshot(
             .into_iter()
             .filter(|space| realm_visible_to(state, space, session))
             .map(|space| {
+                let members = space
+                    .members
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>();
                 (
                     space.realm_id.to_string(),
                     space.name.clone(),
                     space.description.clone(),
                     space.tags.clone(),
                     space.category.clone(),
+                    members,
                 )
             })
             .collect()
@@ -256,7 +262,7 @@ fn build_sync_snapshot(
     // omission from `spaces` as authoritative there.
     let visible_space_ids: BTreeSet<&str> = visible_spaces
         .iter()
-        .map(|(id, _, _, _, _)| id.as_str())
+        .map(|(id, _, _, _, _, _)| id.as_str())
         .collect();
     let left_spaces: Vec<String> = if body.after.is_some() {
         after_cursor
@@ -273,11 +279,12 @@ fn build_sync_snapshot(
     let projection = state.projection.lock().expect("projection lock");
     let mut sync_spaces = std::collections::BTreeMap::new();
     let mut positions = BTreeMap::new();
-    for (space_id, title, summary, tags, category) in visible_spaces {
+    for (space_id, title, summary, tags, category, members) in visible_spaces {
         let mut flow = flow_projection_for_space(state, &space_id, &title, summary.as_deref());
         attach_discussion_realm_ref(&projection, &mut flow);
         let flow_state_after = flow.clone();
         let flow_list_item = flow.clone();
+        let summary_members = members.clone();
         let after_position = after_cursor
             .positions
             .get(&space_id)
@@ -296,7 +303,9 @@ fn build_sync_snapshot(
                     "summary": summary,
                     "tags": tags,
                     "category": category,
+                    "members": summary_members,
                 },
+                "members": members,
                 "flows": [flow_list_item],
                 "timeline": {"events": timeline_events, "limited": false},
                 "state": [],

@@ -3027,6 +3027,23 @@ async fn account_contacts_and_space_lifecycle_workflow() {
 
     let sync_with_message =
         account_subscribe_frame(state.clone(), Some(&alice), "catchup=true").await;
+    let synced_members = sync_with_message["realms"][&space_id]["members"]
+        .as_array()
+        .unwrap();
+    assert!(
+        synced_members
+            .iter()
+            .any(|member| member == "did:web:alice.example")
+    );
+    assert!(
+        synced_members
+            .iter()
+            .any(|member| member == "did:web:bob.example")
+    );
+    assert_eq!(
+        sync_with_message["realms"][&space_id]["summary"]["members"],
+        sync_with_message["realms"][&space_id]["members"]
+    );
     let cursor = decode_cursor(
         sync_with_message["cursor"]
             .as_str()
