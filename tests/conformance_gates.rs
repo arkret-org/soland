@@ -396,3 +396,212 @@ fn line_byte_offset(source: &str, line_index: usize) -> usize {
     }
     source.len()
 }
+
+// ── CXP-0007 (P2A.6) conformance gates ─────────────────────────────────
+//
+// These gates anchor the P2A circle-rollout work to the spec's
+// `event-kind-registry.json`, `forbidden-wire-fields.json`, and the
+// `_ref` / `_id` naming alignment introduced in CXP-0007. They are
+// pure file-system / fixture scans — no soland code is linked — so
+// they stay green during dev workflows.
+
+/// CXP-0007 — every active `cx.circle.*` event kind in the spec
+/// registry MUST be wired into soland's reducer dispatch table
+/// (`src/reducer.rs`). The reducer's dispatch helper for each kind
+/// follows the convention `apply_<verb>_dispatch`; this gate checks
+/// the source file for each expected `m.insert(CX_CIRCLE_…, …)`
+/// registration so a new spec-registered kind cannot be silently
+/// ignored.
+#[test]
+fn cxp_0007_circle_event_kinds_are_dispatched() {
+    let registry_path = spec_artifact("registry/event-kind-registry.json");
+    let raw = fs::read_to_string(&registry_path)
+        .unwrap_or_else(|err| panic!("read {}: {err}", registry_path.display()));
+    let value: Value = serde_json::from_str(&raw).expect("parse event-kind-registry.json");
+    let entries = value
+        .get("event_kinds")
+        .and_then(Value::as_array)
+        .expect("event-kind-registry.json has `event_kinds` array");
+
+    let mut circle_kinds: Vec<String> = entries
+        .iter()
+        .filter(|entry| entry.get("status").and_then(Value::as_str) == Some("active"))
+        .filter(|entry| entry.get("wire_scope").and_then(Value::as_str) == Some("durable_event"))
+        .filter_map(|entry| entry.get("event_kind").and_then(Value::as_str))
+        .filter(|kind| kind.starts_with("cx.circle."))
+        .map(ToOwned::to_owned)
+        .collect();
+    circle_kinds.sort();
+
+    // The 7 spec-active Circle kinds; `cx.circle.anchor_commit` is
+    // reducer-DERIVED (sub-anchor on the Circle's profile cadence) and
+    // therefore MUST NOT appear as a reducer-INPUT dispatch entry. See
+    // SDK `events::kinds::NON_REDUCER_EVENT_KINDS`.
+    let expected: Vec<&str> = vec![
+        "cx.circle.anchor_commit",
+        "cx.circle.archive",
+        "cx.circle.create",
+        "cx.circle.member.state",
+        "cx.circle.restore",
+        "cx.circle.tombstone",
+        "cx.circle.update",
+    ];
+    assert_eq!(
+        circle_kinds.iter().map(String::as_str).collect::<Vec<_>>(),
+        expected,
+        "spec registry's active cx.circle.* kinds drifted from the expected set"
+    );
+
+    let reducer_src = fs::read_to_string(soland_src_root().join("reducer.rs"))
+        .expect("read src/reducer.rs");
+
+    // Constants the dispatch must reference. Anchor-commit is excluded
+    // (reducer-derived, no dispatch entry).
+    let required_consts = [
+        "CX_CIRCLE_CREATE",
+        "CX_CIRCLE_UPDATE",
+        "CX_CIRCLE_ARCHIVE",
+        "CX_CIRCLE_RESTORE",
+        "CX_CIRCLE_TOMBSTONE",
+        "CX_CIRCLE_MEMBER_STATE",
+    ];
+    for name in required_consts {
+        let needle = format!("m.insert({name},");
+        assert!(
+            reducer_src.contains(&needle),
+            "reducer dispatch table missing entry for {name} (`{needle}` not found in src/reducer.rs)"
+        );
+    }
+}
+
+/// CXP-0007 — Event Envelopes MUST surface an `effective_scope` on read
+/// when the underlying envelope or payload pins a `scope_circle_id`.
+/// This gate confirms the read-side projector
+/// (`effective_scope_for_envelope` in
+/// `src/routing/events/event_log.rs`) still exists and is invoked from
+/// the canonical `event_read_response`.
+#[test]
+fn cxp_0007_event_envelope_surfaces_effective_scope() {
+    let event_log_src =
+        fs::read_to_string(soland_src_root().join("routing/events/event_log.rs"))
+            .expect("read routing/events/event_log.rs");
+    assert!(
+        event_log_src.contains("fn effective_scope_for_envelope"),
+        "effective_scope_for_envelope helper has been removed; the \
+         CXP-0007 envelope projection contract requires the read path to \
+         expose this field"
+    );
+    assert!(
+        event_log_src.contains("effective_scope_for_envelope(&record.envelope)"),
+        "event_read_response no longer invokes effective_scope_for_envelope; \
+         clients depend on the metadata-side `effective_scope` field being \
+         populated whenever the envelope or payload names a Circle scope"
+    );
+    assert!(
+        event_log_src.contains("\"effective_scope\""),
+        "event_read_response should write the resolved scope under the \
+         `effective_scope` metadata key"
+    );
+}
+
+/// CXP-0007 — the soland envelope validator MUST hard-reject any wire
+/// payload that carries a key listed in
+/// `spec/v1/artifacts/registry/forbidden-wire-fields.json`. The gate
+/// scans `src/routing/events/event_log.rs` for both the SDK predicate
+/// (`is_forbidden_wire_field`) and the canonical error code
+/// (`forbidden_wire_field`) the wire surface returns on a hit.
+#[test]
+fn cxp_0007_forbidden_wire_fields_hard_rejected() {
+    let event_log_src =
+        fs::read_to_string(soland_src_root().join("routing/events/event_log.rs"))
+            .expect("read routing/events/event_log.rs");
+    assert!(
+        event_log_src.contains("first_forbidden_wire_field"),
+        "first_forbidden_wire_field helper removed; the wire validator no \
+         longer enforces forbidden-wire-fields"
+    );
+    assert!(
+        event_log_src.contains("is_forbidden_wire_field"),
+        "soland no longer depends on the SDK's is_forbidden_wire_field \
+         predicate; the spec's forbidden-wire-fields set MUST be sourced \
+         from the SDK, not redeclared locally"
+    );
+    assert!(
+        event_log_src.contains("\"forbidden_wire_field\""),
+        "wire validator no longer returns `forbidden_wire_field` as the \
+         error code; clients depend on the canonical reason string"
+    );
+}
+
+/// CXP-0007 batch rename — soland production code MUST NOT mint new
+/// references to the legacy `*_ref` fields that were renamed to the
+/// canonical `*_id` / `scope_circle_id` set. This is a regression
+/// guard: a contributor accidentally typing `discussion_realm_ref`,
+/// `scope_ref`, or `default_realm_ref` in a payload literal would
+/// re-introduce a forbidden-wire-field surface and silently break
+/// downstream clients.
+///
+/// Comments, doc-strings, and `#[cfg(test)]` blocks are exempted
+/// (legacy names appear there as documentation of the deletion).
+#[test]
+fn cxp_0007_legacy_ref_fields_have_no_runtime_references() {
+    // The legacy `*_ref` set explicitly forbidden as wire field names
+    // by `spec/v1/artifacts/registry/forbidden-wire-fields.json`.
+    // `parent_ref` is intentionally NOT in this list — soland still
+    // uses `parent_ref` as a Space-container projection field name
+    // (legacy from pre-CXP-0007); the wire form is rejected at the
+    // envelope validator instead.
+    let banned = [
+        "discussion_realm_ref",
+        "discussion_space_ref",
+        "default_realm_ref",
+    ];
+
+    let root = soland_src_root();
+    let mut offenders: Vec<String> = Vec::new();
+    for entry in WalkDir::new(&root)
+        .into_iter()
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_type().is_file())
+        .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "rs"))
+    {
+        let path = entry.path();
+        let source = match fs::read_to_string(path) {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+        let cfg_test_ranges = cfg_test_ranges(&source);
+        for (line_idx, line) in source.lines().enumerate() {
+            let trimmed = line.trim_start();
+            // Skip comments + docstrings — legacy names appear there as
+            // "removed by CXP-0007" notes.
+            if trimmed.starts_with("//") || trimmed.starts_with("///") {
+                continue;
+            }
+            for term in banned {
+                if line.contains(term) {
+                    let line_offset = line_byte_offset(&source, line_idx);
+                    let in_cfg_test = cfg_test_ranges
+                        .iter()
+                        .any(|(start, end)| line_offset >= *start && line_offset < *end);
+                    if in_cfg_test {
+                        continue;
+                    }
+                    offenders.push(format!(
+                        "{}:{}: {trimmed}",
+                        path.display(),
+                        line_idx + 1
+                    ));
+                }
+            }
+        }
+    }
+
+    assert!(
+        offenders.is_empty(),
+        "soland production code contains legacy `*_ref` fields \
+         renamed by CXP-0007 (use `_id` / `scope_circle_id` / equivalent \
+         canonical form instead):\n  {}",
+        offenders.join("\n  ")
+    );
+}
