@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, Utc};
-use contrix_sdk::{ClaimedProfileEntry, CompatSurfaceEntry, CompatSurfaceKind, ServerDescription};
+use contrix_sdk::{ClaimedProfileEntry, ServerDescription};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -1583,17 +1583,7 @@ pub fn describe(
         "admin.bottom.manual_repair".to_owned(),
         "index.query.local_projection".to_owned(),
     ];
-    let compat_surfaces = vec![CompatSurfaceEntry {
-        name: "mimi_provider_facade".to_owned(),
-        kind: CompatSurfaceKind::MimiPassthrough,
-        since: None,
-        notes: Some(
-            "MIMI provider directory + room binding facade; not a Contrix v1 core conformance \
-             surface"
-                .to_owned(),
-        ),
-        extra: Default::default(),
-    }];
+    let compat_surfaces = Vec::new();
     let plaintext_visibility = serde_json::json!({
         "default": "encrypted",
         "services": [],

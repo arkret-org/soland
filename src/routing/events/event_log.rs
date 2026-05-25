@@ -3430,7 +3430,10 @@ mod proof_strictness_tests {
                     "digest_algorithm": "sha256",
                     "anchorer": {
                         "type": "single_did",
-                        "did": "did:web:alice.example"
+                        "did": "did:web:alice.example",
+                        "recovery_members": ["did:web:recovery.example"],
+                        "controller_organization": "did:web:organization.primary.example",
+                        "recovery_controller_organizations": ["did:web:organization.recovery.example"]
                     },
                     "created_at": "2026-05-17T00:00:00Z"
                 }

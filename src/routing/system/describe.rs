@@ -371,20 +371,7 @@ pub(crate) fn apply_claim_level_partition(
         "index.query.local_projection",
     ]);
 
-    // compat_surfaces: explicit external-interop passthroughs.
-    let compat_surface = contrix_sdk::CompatSurfaceEntry {
-        name: "mimi_provider_facade".to_owned(),
-        kind: contrix_sdk::CompatSurfaceKind::MimiPassthrough,
-        since: None,
-        notes: Some(
-            "MIMI provider directory + room binding facade; not a Contrix v1 core conformance \
-             surface"
-                .to_owned(),
-        ),
-        extra: Default::default(),
-    };
-    value["compat_surfaces"] =
-        serde_json::to_value(vec![compat_surface]).expect("compat_surfaces serializes");
+    value["compat_surfaces"] = json!([]);
 }
 
 #[endpoint(

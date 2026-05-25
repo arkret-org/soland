@@ -15,7 +15,7 @@ use super::now;
 use crate::error::AppError;
 use crate::ids;
 use crate::result::{JsonResult, json_ok};
-use crate::routing::system::extract::AuthArgs;
+use crate::routing::system::{extract::AuthArgs, util::query_param};
 use crate::state::AppState;
 
 pub(super) fn router() -> Router {
@@ -173,14 +173,16 @@ async fn audit_events(
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req)?;
-    let actor = actor.into_inner().unwrap_or_else(|| session.actor.clone());
+    let actor = query_param(req, "actor")
+        .or_else(|| actor.into_inner())
+        .unwrap_or_else(|| session.actor.clone());
     if actor != session.actor {
         return Err(AppError::capability_denied(
             "audit queries are limited to the authenticated actor",
         ));
     }
     let limit = limit.into_inner().unwrap_or(100).clamp(1, 500);
-    let cursor = cursor.into_inner();
+    let cursor = query_param(req, "cursor").or_else(|| cursor.into_inner());
     let mut events = state
         .persistence
         .audit()

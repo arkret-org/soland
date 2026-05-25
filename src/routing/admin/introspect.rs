@@ -105,20 +105,21 @@ fn synthetic_dev_grant(state: &AppState, session: &SessionRecord) -> SessionGran
     }
 }
 
-/// Resolve the caller's [`SessionGrantIntrospection`]. When the
-/// principal-server has `session_grant_introspection_url` configured we
-/// POST the caller's bearer token there; otherwise (development mode) we
-/// synthesize a grant that mirrors `admin_principal_dids` + every known
-/// scope so local smoke tests keep working.
+/// Resolve the caller's [`SessionGrantIntrospection`]. Development mode
+/// uses a local synthetic grant even when the joint harness also wires a
+/// coauth introspection URL; dev-login bearers are local soland sessions,
+/// not upstream session-grant tokens. Production mode POSTs the caller's
+/// bearer token to `session_grant_introspection_url`.
 pub(crate) async fn introspect_admin_scopes(
     state: &AppState,
     req: &Request,
     session: &SessionRecord,
 ) -> Result<SessionGrantIntrospection, AppError> {
+    if state.config.development_mode {
+        return Ok(synthetic_dev_grant(state, session));
+    }
+
     let Some(url) = state.config.session_grant_introspection_url.as_deref() else {
-        if state.config.development_mode {
-            return Ok(synthetic_dev_grant(state, session));
-        }
         return Err(AppError::new(
             ErrorCode::CapabilityDenied,
             "admin scope check requires SOLAND_SESSION_GRANT_INTROSPECTION_URL outside development mode"

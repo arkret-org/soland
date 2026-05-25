@@ -1551,12 +1551,18 @@ mod operation_conformance_tests {
                     "default_discoverability": "invite",
                     "default_join_rule": "invite",
                     "history_visibility": "joined",
-                    "encryption_profile": "e2ee_required",
+                    "encryption_profile": "mls_rfc9420",
                     "security_class": "standard",
                     "federation_policy": "restricted",
                     "anchor_profile": "single_did",
                     "digest_algorithm": "sha256",
-                    "anchorer": {"type": "single_did", "did": "did:web:alice.example"},
+                    "anchorer": {
+                        "type": "single_did",
+                        "did": "did:web:alice.example",
+                        "recovery_members": ["did:web:recovery.example"],
+                        "controller_organization": "did:web:organization.primary.example",
+                        "recovery_controller_organizations": ["did:web:organization.recovery.example"]
+                    },
                     "created_at": "2026-05-20T00:00:00Z"
                 }}),
                 valid: true,
