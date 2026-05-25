@@ -392,3 +392,10 @@ The same list is computed at runtime and surfaced on
 ## License
 
 Apache-2.0 — see [LICENSE](LICENSE).
+
+---
+
+<!-- circle-rollout milestone pointer -->
+> **Active milestone tracking** (local-only, gitignored): see
+> `_soland_todos.md` in the parent `contrix-dev/` directory for the
+> circle-rollout (CXP-0007) work item list and per-stage checkpoints.
