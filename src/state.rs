@@ -1075,6 +1075,7 @@ impl AppState {
                 tracing::warn!(%error, "failed to seed demo Realm metadata into persistence store");
             }
         }
+        hydrate_realms_from_canonical_events(persistence.as_ref(), &mut realms);
 
         // Build the production DID resolver chain before the struct literal
         // so we can still
@@ -1496,5 +1497,100 @@ fn hydrate_projections_from_persistence(
                 },
             );
         }
+    }
+}
+
+fn hydrate_realms_from_canonical_events(
+    persistence: &dyn crate::persistence::PersistenceStore,
+    realms: &mut RealmDirectoryIndex,
+) {
+    let Ok(events) = persistence.events().snapshot_all() else {
+        return;
+    };
+    for record in events {
+        if record.kind == "cx.realm.create" {
+            hydrate_realm_create_event(persistence, realms, &record);
+        }
+    }
+}
+
+fn hydrate_realm_create_event(
+    persistence: &dyn crate::persistence::PersistenceStore,
+    realms: &mut RealmDirectoryIndex,
+    record: &CanonicalEventRecord,
+) {
+    let Some(space_id) = record
+        .space_id
+        .as_deref()
+        .or_else(|| record.envelope.get("realm_id").and_then(Value::as_str))
+    else {
+        return;
+    };
+    let Ok(realm_id) = RealmId::new(space_id.to_owned()) else {
+        tracing::warn!(%space_id, "skipping persisted realm.create with invalid realm_id");
+        return;
+    };
+    let Ok(actor) = Did::new(record.actor_id.clone()) else {
+        tracing::warn!(actor = %record.actor_id, "skipping persisted realm.create with invalid actor");
+        return;
+    };
+    let payload_object = record
+        .envelope
+        .get("payload")
+        .and_then(|payload| payload.get("object"));
+    let title = payload_object
+        .and_then(|object| object.get("title"))
+        .and_then(Value::as_str)
+        .unwrap_or(space_id);
+    let summary = payload_object
+        .and_then(|object| object.get("summary"))
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
+    let discoverability = payload_object
+        .and_then(|object| object.get("default_discoverability"))
+        .and_then(Value::as_str)
+        .unwrap_or("invite_only")
+        .to_owned();
+    let history_visibility = payload_object
+        .and_then(|object| object.get("history_visibility"))
+        .and_then(Value::as_str)
+        .unwrap_or("shared")
+        .to_owned();
+    let encryption_profile = payload_object
+        .and_then(|object| object.get("encryption_profile"))
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
+    let plaintext_visible_services = record
+        .envelope
+        .get("payload")
+        .and_then(|payload| payload.get("plaintext_visible_services"))
+        .or_else(|| payload_object.and_then(|object| object.get("plaintext_visible_services")))
+        .and_then(Value::as_array)
+        .map(|services| {
+            services
+                .iter()
+                .filter_map(|service| service.as_str().map(ToOwned::to_owned))
+                .collect::<BTreeSet<_>>()
+        })
+        .unwrap_or_default();
+
+    let mut entry = RealmDirectoryEntry::new(realm_id, title);
+    entry.description = summary.clone();
+    entry.public = discoverability == "public";
+    entry.members.insert(actor);
+    realms.upsert(entry);
+
+    let meta = RealmMetaRecord {
+        owner: record.actor_id.clone(),
+        deleted: false,
+        discoverability,
+        history_visibility,
+        encryption_profile,
+        plaintext_visible_services,
+        created_at: record.received_at,
+        updated_at: record.received_at,
+    };
+    if let Err(error) = persistence.realm_meta().put(space_id, &meta) {
+        tracing::warn!(%error, %space_id, "failed to hydrate persisted realm meta");
     }
 }
