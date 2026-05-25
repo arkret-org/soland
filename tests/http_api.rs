@@ -3743,6 +3743,27 @@ async fn identity_surface_works() {
         describe["resolver_policy"]["allow_methods"],
         serde_json::json!(["web", "key", "uuid"])
     );
+    assert_eq!(describe["todos"], serde_json::json!([]));
+    let trust_roots = describe["resolver_policy"]["trust_roots"]
+        .as_array()
+        .expect("resolver trust roots");
+    assert!(
+        trust_roots
+            .iter()
+            .any(|root| root["id"] == "did:web:soland.local"
+                && root["kind"] == "local_identity_store"
+                && root["proof_verification"]["webvh_witness_quorum"]
+                    == "required_when_policy_present"),
+        "identity describe must publish the local resolver trust root and proof-validation policy: {describe}"
+    );
+    assert_eq!(
+        describe["resolver_policy"]["freshness_receipts"]["endpoint_template"],
+        "/api/v1/identity/receipts?did={did}"
+    );
+    assert_eq!(
+        describe["resolver_policy"]["webvh_validation"]["witness_quorum"],
+        "enforced_for_local_webvh_records"
+    );
     assert_eq!(describe["did_webvh"]["enabled"], false);
 
     let resolved: Value = TestClient::post("http://server/api/v1/identity/resolve")
@@ -3807,6 +3828,16 @@ async fn identity_describe_exposes_external_webvh_provider() {
     assert_eq!(
         describe["did_webvh"]["providers"][0]["health"]["probe"],
         "ok"
+    );
+    assert!(
+        describe["resolver_policy"]["trust_roots"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|root| root["id"] == "external.webvh"
+                && root["base_url"] == "http://webvh.local"
+                && root["freshness_probe"] == "/describe"),
+        "external webvh provider must be present in resolver trust roots: {describe}"
     );
     assert!(
         describe["profiles"]

@@ -65,10 +65,23 @@ pub(super) async fn identity_describe(depot: &mut Depot, res: &mut Response) {
             } else {
                 "fail_closed"
             },
-            "trust_roots": [],
+            "trust_roots": resolver_trust_roots(state, &did_webvh),
+            "freshness_receipts": {
+                "supported": true,
+                "endpoint_template": "/api/v1/identity/receipts?did={did}",
+                "issuer": state.config.service_did.clone(),
+                "threshold_mode": "local_single_issuer",
+                "evidence_fields": ["service_did", "did", "head_event_digest", "seq", "issued_at"]
+            },
+            "webvh_validation": {
+                "log_chain": "enforced_for_local_webvh_records",
+                "scid": "enforced_for_local_webvh_records",
+                "witness_quorum": "enforced_for_local_webvh_records",
+                "degraded_no_witness_max_seconds": super::webvh_validation::WEBVH_DEGRADED_NO_WITNESS_MAX_SECS
+            }
         }),
         did_webvh,
-        todos: vec!["publish resolver trust roots and freshness receipts".to_owned()],
+        todos: Vec::new(),
     }));
 }
 
@@ -793,6 +806,40 @@ fn did_webvh_descriptor(state: &AppState) -> Value {
             "required_when_default_missing": default_missing,
         },
     })
+}
+
+fn resolver_trust_roots(state: &AppState, did_webvh: &Value) -> Value {
+    let mut roots = Vec::new();
+    roots.push(json!({
+        "id": state.config.service_did.clone(),
+        "kind": "local_identity_store",
+        "trust_domain": state.config.trust_domain.clone(),
+        "methods": state.config.did_resolver_allow_methods.clone(),
+        "freshness_receipt_endpoint": "/api/v1/identity/receipts",
+        "proof_verification": {
+            "controller_proof": "eddsa-jcs-2022",
+            "webvh_log_chain": "required",
+            "webvh_scid": "required",
+            "webvh_witness_quorum": "required_when_policy_present"
+        }
+    }));
+
+    if let Some(providers) = did_webvh.get("providers").and_then(Value::as_array) {
+        for provider in providers {
+            roots.push(json!({
+                "id": provider.get("id").cloned().unwrap_or_else(|| json!("unknown")),
+                "kind": provider.get("kind").cloned().unwrap_or_else(|| json!("unknown")),
+                "profile": provider.get("profile").cloned().unwrap_or_else(|| json!("cx.identity.webvh.provider.v1")),
+                "base_url": provider.get("base_url").cloned(),
+                "active": provider.get("active").cloned().unwrap_or_else(|| json!(false)),
+                "document_url_template": provider.get("document_url_template").cloned(),
+                "log_url_template": provider.get("log_url_template").cloned(),
+                "freshness_probe": "/describe"
+            }));
+        }
+    }
+
+    Value::Array(roots)
 }
 
 fn require_embedded_webvh_registration_bearer(
