@@ -22,6 +22,7 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
+use serde_json::Value;
 
 use crate::ids;
 
@@ -510,7 +511,7 @@ fn decision_from_constraint(constraint: &Constraint) -> Option<GrantDecision> {
 fn evaluate_constraint(
     constraint: &Constraint,
     _actor: &str,
-    _resource: &str,
+    resource: &str,
     resource_facets: &[String],
 ) -> Option<String> {
     match constraint.constraint_type.as_str() {
@@ -526,6 +527,54 @@ fn evaluate_constraint(
                 };
             }
             None
+        }
+        "allowed_circle_refs" => {
+            // CXP-0007 (spec b7d35be) — narrow a Circle-management
+            // capability (`cx.circle.manage`, `cx.circle.member.manage`,
+            // `cx.circle.member.add.others`, `cx.circle.audit`) to a
+            // specific Circle id set. The spec
+            // `capability-action-registry.json` declares
+            // `required_constraints=["allowed_circle_refs"]` on each
+            // gated action; unconstrained Realm-wide grants for these
+            // actions MUST be rejected (a separate guard at grant-issue
+            // time).
+            //
+            // Evaluation contract: the resource selector for a Circle
+            // capability is of the form `cx:circle:<uuid>` (mirrors the
+            // `cx:space:<uuid>` pattern used by `realm.*` / `space.*`
+            // grants). If the resource looks like a Circle id, it MUST
+            // be a member of the allowed set; otherwise the constraint
+            // does not apply and silently passes (caller-policy: any
+            // non-Circle resource is out of this constraint's scope).
+            let allowed: Vec<String> = constraint
+                .value
+                .get("allowed_circle_refs")
+                .or_else(|| constraint.value.get("circle_refs"))
+                .and_then(Value::as_array)
+                .map(|array| {
+                    array
+                        .iter()
+                        .filter_map(|value| value.as_str().map(ToOwned::to_owned))
+                        .collect()
+                })
+                .unwrap_or_default();
+            if allowed.is_empty() {
+                return Some(
+                    "allowed_circle_refs constraint requires a non-empty allow list".to_owned(),
+                );
+            }
+            if !resource.starts_with("cx:circle:") {
+                // Constraint is Circle-scoped — non-Circle resources are
+                // out of scope; pass through.
+                return None;
+            }
+            if allowed.iter().any(|c| c == resource) {
+                None
+            } else {
+                Some(format!(
+                    "allowed_circle_refs constraint not satisfied: {resource:?} not in {allowed:?}"
+                ))
+            }
         }
         "allowed_object_facets" => {
             // Resource must carry at least one of the listed facets. When the
