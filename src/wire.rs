@@ -1341,6 +1341,146 @@ pub struct DeviceMessagesSendReqBody {
     pub messages: std::collections::BTreeMap<String, std::collections::BTreeMap<String, Value>>,
 }
 
+// CXP-0008 / CXP-0009 (spec head 37ce729) — Personal Agent 11 operations.
+//
+// The shapes below carry the cross-project HTTP contract for sodmin /
+// yougen / cotest; reducer-side semantics are P2-impl TODO stubs in
+// `routing::events::agents`.
+
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
+pub struct AgentKeyPairReqBody {
+    pub agent_principal_id: String,
+    pub verification_method: String,
+    #[serde(default)]
+    pub runtime_attestation: Option<Value>,
+}
+
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
+pub struct AgentKeyPairResBody {
+    pub ok: bool,
+    pub agent_principal_id: String,
+    pub verification_method: String,
+    pub authorized_at: String,
+    #[serde(default)]
+    pub todos: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
+pub struct AgentProvisionReqBody {
+    pub display_name: String,
+    #[serde(default)]
+    pub controller_did: Option<String>,
+    #[serde(default)]
+    pub agent_did: Option<String>,
+    #[serde(default)]
+    pub initial_grants: Vec<Value>,
+}
+
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
+pub struct AgentResBody {
+    pub agent_principal_id: String,
+    pub controller_did: String,
+    pub agent_did: String,
+    pub display_name: String,
+    pub state: String,
+    pub created_at: String,
+    pub updated_at: String,
+    #[serde(default)]
+    pub grants: Vec<Value>,
+    #[serde(default)]
+    pub todos: Vec<String>,
+}
+
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
+pub struct AgentListResBody {
+    pub agents: Vec<AgentResBody>,
+    pub next_cursor: Option<String>,
+    #[serde(default)]
+    pub todos: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
+pub struct AgentLifecycleReqBody {
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
+pub struct AgentLifecycleResBody {
+    pub ok: bool,
+    pub agent_principal_id: String,
+    pub state: String,
+    pub at: String,
+    #[serde(default)]
+    pub todos: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
+pub struct AgentRotateKeyReqBody {
+    pub new_verification_method: String,
+    #[serde(default)]
+    pub previous_key_id: Option<String>,
+}
+
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
+pub struct AgentRotateKeyResBody {
+    pub ok: bool,
+    pub agent_principal_id: String,
+    pub authorized_verification_method: String,
+    pub revoked_verification_method: Option<String>,
+    pub at: String,
+    #[serde(default)]
+    pub todos: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
+pub struct AgentGrantAttachReqBody {
+    pub grant_kind: String,
+    pub scope: Value,
+    #[serde(default)]
+    pub expires_at: Option<String>,
+}
+
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
+pub struct AgentGrantResBody {
+    pub ok: bool,
+    pub agent_principal_id: String,
+    pub grant_id: String,
+    pub grant_kind: String,
+    pub scope: Value,
+    pub state: String,
+    pub created_at: String,
+    #[serde(default)]
+    pub todos: Vec<String>,
+}
+
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
+pub struct AgentGrantDetachResBody {
+    pub ok: bool,
+    pub agent_principal_id: String,
+    pub grant_id: String,
+    pub detached_at: String,
+    #[serde(default)]
+    pub todos: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
+pub struct AgentSidecarThreadEnsureReqBody {
+    #[serde(default)]
+    pub context_realm_id: Option<String>,
+}
+
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
+pub struct AgentSidecarThreadEnsureResBody {
+    pub ok: bool,
+    pub agent_principal_id: String,
+    pub sidecar_circle_id: String,
+    pub realm_id: String,
+    pub created: bool,
+    #[serde(default)]
+    pub todos: Vec<String>,
+}
+
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct DeviceMessagesSendResBody {
     pub ok: bool,

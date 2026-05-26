@@ -516,7 +516,9 @@ fn evaluate_constraint(
             }
             None
         }
-        Constraint::AllowedCircleRefs { allowed_circle_refs } => {
+        Constraint::AllowedCircleRefs {
+            allowed_circle_refs,
+        } => {
             // CXP-0007 (spec b7d35be) — narrow a Circle-management
             // capability (`cx.circle.manage`, `cx.circle.member.manage`,
             // `cx.circle.member.add.others`, `cx.circle.audit`) to a
@@ -547,8 +549,7 @@ fn evaluate_constraint(
             if allowed_circle_refs.iter().any(|c| c.as_ref() == resource) {
                 None
             } else {
-                let allowed: Vec<&str> =
-                    allowed_circle_refs.iter().map(AsRef::as_ref).collect();
+                let allowed: Vec<&str> = allowed_circle_refs.iter().map(AsRef::as_ref).collect();
                 Some(format!(
                     "allowed_circle_refs constraint not satisfied: {resource:?} not in {allowed:?}"
                 ))
@@ -797,7 +798,9 @@ mod tests {
             "did:web:bob".to_owned(),
             "*".to_owned(),
             vec!["send".to_owned()],
-            vec![Constraint::Decision { decision: GrantDecisionVerdict::Allow }],
+            vec![Constraint::Decision {
+                decision: GrantDecisionVerdict::Allow,
+            }],
         );
         engine.create_grant(
             "cx:space:1".to_owned(),
@@ -805,7 +808,9 @@ mod tests {
             "did:web:bob".to_owned(),
             "*".to_owned(),
             vec!["send".to_owned()],
-            vec![Constraint::Decision { decision: GrantDecisionVerdict::Deny }],
+            vec![Constraint::Decision {
+                decision: GrantDecisionVerdict::Deny,
+            }],
         );
         let result = engine.check(
             "did:web:bob",
@@ -831,7 +836,9 @@ mod tests {
             "did:web:bob".to_owned(),
             "*".to_owned(),
             vec!["send".to_owned()],
-            vec![Constraint::Decision { decision: GrantDecisionVerdict::RequireReview }],
+            vec![Constraint::Decision {
+                decision: GrantDecisionVerdict::RequireReview,
+            }],
         );
         engine.create_grant(
             "cx:space:1".to_owned(),
@@ -839,7 +846,9 @@ mod tests {
             "did:web:bob".to_owned(),
             "*".to_owned(),
             vec!["send".to_owned()],
-            vec![Constraint::Decision { decision: GrantDecisionVerdict::Allow }],
+            vec![Constraint::Decision {
+                decision: GrantDecisionVerdict::Allow,
+            }],
         );
         let reviewed = engine.check(
             "did:web:bob",
@@ -859,7 +868,9 @@ mod tests {
             "did:web:bob".to_owned(),
             "*".to_owned(),
             vec!["send".to_owned()],
-            vec![Constraint::Decision { decision: GrantDecisionVerdict::Quarantine }],
+            vec![Constraint::Decision {
+                decision: GrantDecisionVerdict::Quarantine,
+            }],
         );
         let quarantined = engine.check(
             "did:web:bob",

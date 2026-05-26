@@ -257,9 +257,7 @@ async fn create_grant(
         .into_iter()
         .map(serde_json::from_value::<crate::authz::Constraint>)
         .collect::<Result<_, _>>()
-        .map_err(|err| {
-            AppError::invalid_param(format!("invalid grant constraint: {err}"))
-        })?;
+        .map_err(|err| AppError::invalid_param(format!("invalid grant constraint: {err}")))?;
     let expires_at = parse_expires_at(body.expires_at.as_deref())?;
     let grant = if let Some(parent_grant_id) = body.delegated_from.as_deref() {
         match state.authz.create_delegated_grant(

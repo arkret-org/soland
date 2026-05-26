@@ -452,8 +452,8 @@ fn cxp_0007_circle_event_kinds_are_dispatched() {
         "spec registry's active cx.circle.* kinds drifted from the expected set"
     );
 
-    let reducer_src = fs::read_to_string(soland_src_root().join("reducer.rs"))
-        .expect("read src/reducer.rs");
+    let reducer_src =
+        fs::read_to_string(soland_src_root().join("reducer.rs")).expect("read src/reducer.rs");
 
     // Constants the dispatch must reference. Anchor-commit is excluded
     // (reducer-derived, no dispatch entry).
@@ -482,9 +482,8 @@ fn cxp_0007_circle_event_kinds_are_dispatched() {
 /// the canonical `event_read_response`.
 #[test]
 fn cxp_0007_event_envelope_surfaces_effective_scope() {
-    let event_log_src =
-        fs::read_to_string(soland_src_root().join("routing/events/event_log.rs"))
-            .expect("read routing/events/event_log.rs");
+    let event_log_src = fs::read_to_string(soland_src_root().join("routing/events/event_log.rs"))
+        .expect("read routing/events/event_log.rs");
     assert!(
         event_log_src.contains("fn effective_scope_for_envelope"),
         "effective_scope_for_envelope helper has been removed; the \
@@ -512,9 +511,8 @@ fn cxp_0007_event_envelope_surfaces_effective_scope() {
 /// (`forbidden_wire_field`) the wire surface returns on a hit.
 #[test]
 fn cxp_0007_forbidden_wire_fields_hard_rejected() {
-    let event_log_src =
-        fs::read_to_string(soland_src_root().join("routing/events/event_log.rs"))
-            .expect("read routing/events/event_log.rs");
+    let event_log_src = fs::read_to_string(soland_src_root().join("routing/events/event_log.rs"))
+        .expect("read routing/events/event_log.rs");
     assert!(
         event_log_src.contains("first_forbidden_wire_field"),
         "first_forbidden_wire_field helper removed; the wire validator no \
@@ -587,11 +585,7 @@ fn cxp_0007_legacy_ref_fields_have_no_runtime_references() {
                     if in_cfg_test {
                         continue;
                     }
-                    offenders.push(format!(
-                        "{}:{}: {trimmed}",
-                        path.display(),
-                        line_idx + 1
-                    ));
+                    offenders.push(format!("{}:{}: {trimmed}", path.display(), line_idx + 1));
                 }
             }
         }

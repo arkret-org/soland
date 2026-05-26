@@ -46,6 +46,11 @@ pub(super) fn router() -> Router {
         .push(Router::with_path("dev-login").post(dev_login))
         .push(Router::with_path("session-grant/exchange").post(exchange_session_grant))
         .push(Router::with_path("logout").post(logout))
+        // CXP-0008 / CXP-0009 — `cx.account.agent_key_pair`. Spec path is
+        // `/auth/account/agent-key-pair`; mounted here so the soland HTTP
+        // tree carries the canonical `/api/v1/auth/account/agent-key-pair`
+        // route the cross-project clients (sodmin, yougen, cotest) expect.
+        .push(Router::with_path("account").push(super::agents::agent_key_pair_router()))
 }
 
 fn account_new_session_error(state: &AppState, actor: &str) -> Option<AppError> {
@@ -143,11 +148,7 @@ fn account_existing_session_error(
     // than a policy-denial signal (matches identity/account-lifecycle.md
     // §3 "subsequent authenticated requests return 401 `account_erased`").
     match state.account_lifecycle_state(actor).as_str() {
-        "locked" => Some((
-            StatusCode::FORBIDDEN,
-            "account_locked",
-            "account is locked",
-        )),
+        "locked" => Some((StatusCode::FORBIDDEN, "account_locked", "account is locked")),
         "deactivated" => Some((
             StatusCode::FORBIDDEN,
             "account_deactivated",
@@ -645,9 +646,7 @@ pub fn authenticated_session(
     req: &Request,
 ) -> Result<SessionRecord, (StatusCode, &'static str, &'static str)> {
     if let Some(query) = req.uri().query()
-        && (query.contains("access_token=")
-            || query.contains("auth=")
-            || query.contains("token="))
+        && (query.contains("access_token=") || query.contains("auth=") || query.contains("token="))
     {
         // Spec: A.3 — auth material MUST NOT appear in query strings.
         // We log a truncated preview of the offending token so on-call
@@ -792,10 +791,8 @@ fn authenticated_oauth_session(
 // `Salvo` extractors give us a sync bridge), gated behind
 // `block_in_place` so a slow upstream cannot starve the runtime.
 const OAUTH_INTROSPECTION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
-const OAUTH_INTROSPECTION_MIN_LATENCY: std::time::Duration =
-    std::time::Duration::from_millis(40);
-const OAUTH_INTROSPECTION_JITTER_MAX: std::time::Duration =
-    std::time::Duration::from_millis(20);
+const OAUTH_INTROSPECTION_MIN_LATENCY: std::time::Duration = std::time::Duration::from_millis(40);
+const OAUTH_INTROSPECTION_JITTER_MAX: std::time::Duration = std::time::Duration::from_millis(20);
 
 fn request_oauth_introspection(
     introspection_url: &str,
@@ -825,12 +822,9 @@ fn request_oauth_introspection(
         runtime_handle.block_on(async move {
             let started = tokio::time::Instant::now();
             let jitter_micros = jitter_micros(OAUTH_INTROSPECTION_JITTER_MAX);
-            let result = perform_oauth_introspection(
-                &introspection_url,
-                &introspection_bearer,
-                &token,
-            )
-            .await;
+            let result =
+                perform_oauth_introspection(&introspection_url, &introspection_bearer, &token)
+                    .await;
             // Constant-time floor: regardless of whether the upstream
             // returned 200, 401, or timed out, sleep until at least
             // `min_latency + jitter` has elapsed. This collapses the
@@ -838,8 +832,8 @@ fn request_oauth_introspection(
             // soland" (fast 401), "token known to coauth, active"
             // (slow round-trip), and "token known to coauth, inactive"
             // (slow round-trip) into a single floor.
-            let floor = OAUTH_INTROSPECTION_MIN_LATENCY
-                + std::time::Duration::from_micros(jitter_micros);
+            let floor =
+                OAUTH_INTROSPECTION_MIN_LATENCY + std::time::Duration::from_micros(jitter_micros);
             let elapsed = started.elapsed();
             if elapsed < floor {
                 tokio::time::sleep(floor - elapsed).await;

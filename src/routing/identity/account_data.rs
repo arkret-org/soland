@@ -29,6 +29,45 @@ use crate::{JsonResult, json_ok};
 const MAX_DATA_TYPE_LEN: usize = 256;
 const MAX_PAYLOAD_BYTES: usize = 64 * 1024;
 
+/// CXP-0008 / CXP-0009 (spec head 37ce729) — controller-private account-data
+/// types. Writers MUST be the controller principal (not their own agent
+/// runtime, not an applet-bound ghost). The `encrypted_at_rest` flag is a
+/// reducer-visible hint; TODO(P2-impl) — the at-rest envelope encryption
+/// transform is not yet wired into the soland persistence layer, so this
+/// table only enforces the controller-only write rule for now.
+struct AccountDataTypeSpec {
+    data_type: &'static str,
+    /// When `true`, only the controller principal may write the entry.
+    /// Agents / applets / service principals are rejected with
+    /// `capability_denied` even if they hold a controller-scoped session.
+    controller_private: bool,
+    /// When `true`, the persistence layer MUST encrypt the payload at
+    /// rest. (Marker only — TODO(P2-impl) wiring lands when the
+    /// at-rest envelope encryption transform is plumbed into the
+    /// soland persistence layer.)
+    #[allow(dead_code)]
+    encrypted_at_rest: bool,
+}
+
+const REGISTERED_ACCOUNT_DATA_TYPES: &[AccountDataTypeSpec] = &[
+    AccountDataTypeSpec {
+        data_type: "cx.agent.draft.v1",
+        controller_private: true,
+        encrypted_at_rest: true,
+    },
+    AccountDataTypeSpec {
+        data_type: "cx.agent.sidecar_projection.v1",
+        controller_private: true,
+        encrypted_at_rest: false,
+    },
+];
+
+fn registered_account_data_type(data_type: &str) -> Option<&'static AccountDataTypeSpec> {
+    REGISTERED_ACCOUNT_DATA_TYPES
+        .iter()
+        .find(|spec| spec.data_type == data_type)
+}
+
 pub(super) fn router() -> Router {
     Router::with_path("account_data")
         .get(list_account_data)
@@ -120,6 +159,25 @@ async fn put_account_data(
     let session = aa.authenticated_session(state, req)?;
     let data_type = data_type.into_inner();
     validate_data_type(&data_type)?;
+
+    // CXP-0008 / CXP-0009 — enforce controller-only writes on the
+    // registered personal-agent account-data types.
+    // TODO(P2-impl): replace the `did:web:agent.` heuristic with a proper
+    // controller-vs-agent classifier sourced from the agent_principal
+    // projection (the bearer session record carries the actor DID; once
+    // the projection lands we can ask the projection "is this session an
+    // agent runtime acting on behalf of a controller?" instead).
+    if let Some(spec) = registered_account_data_type(&data_type) {
+        if spec.controller_private
+            && (session.actor.starts_with("did:web:agent.")
+                || session.actor.starts_with("did:agent:"))
+        {
+            return Err(AppError::capability_denied(format!(
+                "{} is controller-private; agent runtimes cannot write it",
+                spec.data_type
+            )));
+        }
+    }
 
     let body = body.into_inner();
     // Server-side guard against runaway payloads. Canonical serialisation is

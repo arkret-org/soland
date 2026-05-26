@@ -34,6 +34,13 @@ const REQUIRED_KEY_BACKUP_FIELDS: &[&str] = &[
     "ciphertext_digest",
 ];
 
+// CXP-0008 / CXP-0009 (B-C, spec head 37ce729) — series-chain fields are
+// required on every key-backup envelope: `series_id` + `series_seq`. Genesis
+// envelopes use `series_seq == 0` (no `supersedes`); successors carry
+// `supersedes` pointing at the prior backup_id + `supersedes_digest` over
+// the predecessor envelope canonical bytes.
+const REQUIRED_KEY_BACKUP_SERIES_FIELDS: &[&str] = &["series_id", "series_seq"];
+
 const KEY_BACKUP_CLASSES: &[&str] = &["did_recovery", "secret_storage", "mls_history", "external"];
 const KEY_BACKUP_CONTENT_TYPES: &[&str] = &[
     "recovery_key_share",
@@ -147,6 +154,27 @@ fn validate_key_backup_body(
             "key backup payload must be a JSON object",
         ));
     };
+    // CXP-0008 / CXP-0009 — reject the legacy `cx.secret_storage.v1` wire
+    // envelope shape. Senders MUST switch to the chained
+    // `cx.schema.key_backup.v1` form with `series_id` / `series_seq`.
+    if let Some(schema) = object.get("schema").and_then(Value::as_str)
+        && schema == "cx.secret_storage.v1"
+    {
+        return Err(AppError::new(
+            ErrorCode::SchemaViolation,
+            "legacy_secret_storage_wire_form: senders MUST use cx.schema.key_backup.v1",
+        )
+        .with_wire_code("legacy_secret_storage_wire_form"));
+    }
+    // Also reject the embedded `cx:secret_storage:` typed-id form that
+    // marked the pre-series wire envelopes.
+    if backup_id.starts_with("cx:secret_storage:") {
+        return Err(AppError::new(
+            ErrorCode::SchemaViolation,
+            "legacy_secret_storage_wire_form: senders MUST use the chained key-backup envelope",
+        )
+        .with_wire_code("legacy_secret_storage_wire_form"));
+    }
     for field in REQUIRED_KEY_BACKUP_FIELDS {
         if !object.contains_key(*field) {
             return Err(AppError::new(
@@ -154,6 +182,48 @@ fn validate_key_backup_body(
                 format!("key backup payload missing `{field}`"),
             ));
         }
+    }
+    for field in REQUIRED_KEY_BACKUP_SERIES_FIELDS {
+        if !object.contains_key(*field) {
+            return Err(AppError::new(
+                ErrorCode::SchemaViolation,
+                format!("key backup payload missing `{field}`"),
+            ));
+        }
+    }
+    let series_id = object
+        .get("series_id")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if !series_id.starts_with("cx:backup_series:") {
+        return Err(AppError::new(
+            ErrorCode::SchemaViolation,
+            "series_id must be a cx:backup_series:<uuidv7> typed id",
+        ));
+    }
+    let series_seq = object.get("series_seq").and_then(Value::as_u64);
+    if series_seq.is_none() {
+        return Err(AppError::new(
+            ErrorCode::SchemaViolation,
+            "series_seq must be a non-negative integer",
+        ));
+    }
+    // CXP-0008 / CXP-0009 — recovery policy / receipt schemas are first-
+    // class payloads on this surface; accept them when present without
+    // forcing the rest of the chained-envelope shape onto policy-only
+    // documents. TODO(P2-impl): wire to the SDK schema validator.
+    if let Some(payload_schema) = object.get("payload_schema").and_then(Value::as_str)
+        && !matches!(
+            payload_schema,
+            "cx.schema.recovery_policy.v1"
+                | "cx.schema.recovery_receipt.v1"
+                | "cx.schema.key_backup.v1"
+        )
+    {
+        return Err(AppError::new(
+            ErrorCode::SchemaViolation,
+            format!("unsupported key backup payload_schema `{payload_schema}`"),
+        ));
     }
     if backup.get("backup_id").and_then(Value::as_str) != Some(backup_id) {
         return Err(AppError::new(
@@ -201,6 +271,117 @@ fn validate_key_backup_body(
     Ok(())
 }
 
+/// CXP-0008 / CXP-0009 (spec head 37ce729) — series monotonicity check
+/// for `PUT /api/v1/keys/backups/{backup_id}`. Returns one of the three
+/// canonical 409 reasons:
+/// - `series_chain_broken`     — supersedes_digest is missing/empty when
+///   `series_seq > 0`
+/// - `series_seq_not_monotonic`— the new envelope's `series_seq` does not
+///   immediately follow the latest persisted seq for the series
+/// - `series_predecessor_not_found` — the envelope claims a predecessor
+///   (`supersedes`) that is not persisted
+fn enforce_key_backup_series_chain(
+    state: &AppState,
+    actor_id: &str,
+    backup: &Value,
+) -> Result<(), AppError> {
+    let series_id = backup
+        .get("series_id")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let series_seq = backup
+        .get("series_seq")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+
+    let store = state.persistence.key_backups();
+    let mut max_existing_seq: Option<u64> = None;
+    let mut predecessor_present = false;
+    let supersedes = backup
+        .get("supersedes")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    for existing in store.snapshot_all().unwrap_or_default() {
+        if existing.get("actor_id").and_then(Value::as_str) != Some(actor_id) {
+            continue;
+        }
+        if existing.get("series_id").and_then(Value::as_str) != Some(series_id) {
+            continue;
+        }
+        if let Some(seq) = existing.get("series_seq").and_then(Value::as_u64) {
+            max_existing_seq = Some(max_existing_seq.map_or(seq, |current| current.max(seq)));
+        }
+        if let Some(predecessor) = supersedes.as_deref()
+            && existing.get("backup_id").and_then(Value::as_str) == Some(predecessor)
+        {
+            predecessor_present = true;
+        }
+    }
+
+    if series_seq == 0 {
+        // Genesis envelope: MUST NOT carry `supersedes`; if it does the
+        // chain is malformed.
+        if supersedes.is_some() {
+            return Err(AppError::new(
+                ErrorCode::SchemaViolation,
+                "series_chain_broken: genesis envelope (series_seq=0) must not carry `supersedes`",
+            )
+            .with_status(StatusCode::CONFLICT)
+            .with_wire_code("series_chain_broken"));
+        }
+        // Genesis envelope is fine if no prior entries exist for the series.
+        if let Some(existing_seq) = max_existing_seq {
+            return Err(AppError::new(
+                ErrorCode::SchemaViolation,
+                format!(
+                    "series_seq_not_monotonic: genesis envelope for series already has seq={existing_seq} persisted"
+                ),
+            )
+            .with_status(StatusCode::CONFLICT)
+            .with_wire_code("series_seq_not_monotonic"));
+        }
+        return Ok(());
+    }
+
+    // Successor envelope: MUST carry `supersedes` + `supersedes_digest`,
+    // and `series_seq` MUST equal `max(existing) + 1`.
+    let supersedes_digest = backup
+        .get("supersedes_digest")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if supersedes.is_none() || supersedes_digest.is_empty() {
+        return Err(AppError::new(
+            ErrorCode::SchemaViolation,
+            "series_chain_broken: successor envelope requires `supersedes` + `supersedes_digest`",
+        )
+        .with_status(StatusCode::CONFLICT)
+        .with_wire_code("series_chain_broken"));
+    }
+    let expected = max_existing_seq.map(|seq| seq + 1);
+    if expected != Some(series_seq) {
+        return Err(AppError::new(
+            ErrorCode::SchemaViolation,
+            format!(
+                "series_seq_not_monotonic: expected series_seq={} but got {series_seq}",
+                expected
+                    .map(|n| n.to_string())
+                    .unwrap_or_else(|| "1 (no predecessor)".to_owned())
+            ),
+        )
+        .with_status(StatusCode::CONFLICT)
+        .with_wire_code("series_seq_not_monotonic"));
+    }
+    if !predecessor_present {
+        return Err(AppError::new(
+            ErrorCode::SchemaViolation,
+            "series_predecessor_not_found: `supersedes` references a backup_id that is not persisted",
+        )
+        .with_status(StatusCode::CONFLICT)
+        .with_wire_code("series_predecessor_not_found"));
+    }
+    Ok(())
+}
+
 fn delete_ownership_proof_matches(req: &Request, backup_id: &str, actor_id: &str) -> bool {
     let Some(proof) = req
         .headers()
@@ -240,6 +421,7 @@ async fn put_key_backup(
     }
     let backup = backup.into_inner();
     validate_key_backup_body(&backup_id, &session.actor, &backup)?;
+    enforce_key_backup_series_chain(state, &session.actor, &backup)?;
     let ciphertext_digest = backup
         .get("ciphertext_digest")
         .and_then(Value::as_str)
@@ -264,25 +446,57 @@ async fn put_key_backup(
 #[endpoint(
     operation_id = "cx.keys.backups.list",
     tags("keys"),
-    summary = "List encrypted key backups owned by the authenticated actor"
+    summary = "List encrypted key backups owned by the authenticated actor",
+    parameters(
+        ("series_id" = Option<String>, Query, description = "Filter by cx:backup_series:<uuidv7>"),
+        ("backup_class" = Option<String>, Query, description = "Filter by backup_class (did_recovery / secret_storage / mls_history / external)"),
+        ("cursor" = Option<String>, Query, description = "Opaque pagination cursor")
+    )
 )]
 #[tracing::instrument(skip_all, fields(op = "cx.keys.backups.list"))]
 async fn list_key_backups(
     aa: AuthArgs,
     cursor: QueryParam<String, false>,
+    series_id: QueryParam<String, false>,
+    backup_class: QueryParam<String, false>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<KeysBackupsListResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req)?;
-    let backups = state
+    let series_filter = series_id.into_inner();
+    let backup_class_filter = backup_class.into_inner();
+    if let Some(class) = backup_class_filter.as_deref()
+        && !KEY_BACKUP_CLASSES.contains(&class)
+    {
+        return Err(AppError::invalid_param(format!(
+            "unsupported backup_class `{class}`"
+        )));
+    }
+    let mut backups: Vec<Value> = state
         .persistence
         .key_backups()
         .snapshot_all()
         .unwrap_or_default()
         .into_iter()
         .filter(|backup| backup.get("actor_id").and_then(Value::as_str) == Some(&session.actor))
-        .collect::<Vec<_>>();
+        .filter(|backup| match series_filter.as_deref() {
+            Some(series) => backup.get("series_id").and_then(Value::as_str) == Some(series),
+            None => true,
+        })
+        .filter(|backup| match backup_class_filter.as_deref() {
+            Some(class) => backup.get("backup_class").and_then(Value::as_str) == Some(class),
+            None => true,
+        })
+        .collect();
+    // Sort by series_seq ascending so the chain replay order is stable
+    // when callers request `?series_id=`.
+    backups.sort_by_key(|backup| {
+        backup
+            .get("series_seq")
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+    });
     let next_cursor = cursor.into_inner().map(|_| "key-backups-end".to_owned());
     json_ok(KeysBackupsListResBody {
         backups,

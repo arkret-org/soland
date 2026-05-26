@@ -922,6 +922,87 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "cx.mimi.proxy_download",
         "MIMI proxy download",
     ),
+    // CXP-0008 / CXP-0009 (spec head 37ce729) — Personal Agent + Sidecar
+    // operations. Implementation lives at
+    // `routing::identity::agents`; the table here makes the operations
+    // visible to the OpenAPI snapshot + the 404/405 disambiguator.
+    (
+        "/api/v1/auth/account/agent-key-pair",
+        PathItemType::Post,
+        "agents",
+        "cx.account.agent_key_pair",
+        "authorize an agent runtime key pair",
+    ),
+    (
+        "/api/v1/agents",
+        PathItemType::Post,
+        "agents",
+        "cx.agent.provision",
+        "provision a personal agent",
+    ),
+    (
+        "/api/v1/agents",
+        PathItemType::Get,
+        "agents",
+        "cx.agent.list",
+        "list personal agents",
+    ),
+    (
+        "/api/v1/agents/{agent_id}",
+        PathItemType::Get,
+        "agents",
+        "cx.agent.get",
+        "get a personal agent by id",
+    ),
+    (
+        "/api/v1/agents/{agent_id}/pause",
+        PathItemType::Post,
+        "agents",
+        "cx.agent.pause",
+        "pause a personal agent",
+    ),
+    (
+        "/api/v1/agents/{agent_id}/resume",
+        PathItemType::Post,
+        "agents",
+        "cx.agent.resume",
+        "resume a personal agent",
+    ),
+    (
+        "/api/v1/agents/{agent_id}/deactivate",
+        PathItemType::Post,
+        "agents",
+        "cx.agent.deactivate",
+        "deactivate a personal agent",
+    ),
+    (
+        "/api/v1/agents/{agent_id}/rotate-key",
+        PathItemType::Post,
+        "agents",
+        "cx.agent.rotate_key",
+        "rotate a personal agent key",
+    ),
+    (
+        "/api/v1/agents/{agent_id}/grants",
+        PathItemType::Post,
+        "agents",
+        "cx.agent.grant.attach",
+        "attach a capability grant to a personal agent",
+    ),
+    (
+        "/api/v1/agents/{agent_id}/grants/{grant_id}",
+        PathItemType::Delete,
+        "agents",
+        "cx.agent.grant.detach",
+        "detach a capability grant from a personal agent",
+    ),
+    (
+        "/api/v1/agents/{agent_id}/sidecar-thread/ensure",
+        PathItemType::Post,
+        "agents",
+        "cx.agent.sidecar_thread.ensure",
+        "idempotently ensure the controller<->agent sidecar Circle exists",
+    ),
 ];
 
 #[handler]

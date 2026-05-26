@@ -252,11 +252,7 @@ fn circle_tombstone_hides_from_read_helper() {
     assert!(state.circle(CIRCLE_A).is_some(), "live Circle visible");
 
     state.apply(
-        &op(
-            CX_CIRCLE_TOMBSTONE,
-            REALM_A,
-            json!({"circle_id": CIRCLE_A}),
-        ),
+        &op(CX_CIRCLE_TOMBSTONE, REALM_A, json!({"circle_id": CIRCLE_A})),
         &hlc,
     );
     assert!(

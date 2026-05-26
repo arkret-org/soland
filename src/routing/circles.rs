@@ -49,9 +49,7 @@ pub(crate) fn router() -> Router {
         .push(
             Router::with_path("{circle_id}/members")
                 .post(post_circle_member)
-                .push(
-                    Router::with_path("{actor_did}").delete(delete_circle_member),
-                ),
+                .push(Router::with_path("{actor_did}").delete(delete_circle_member)),
         )
         .push(Router::with_path("{circle_id}/scope-rotate").post(post_scope_rotate))
         .push(Router::with_path("{circle_id}/archive").post(post_circle_archive))
@@ -266,10 +264,7 @@ async fn post_circle_member(
     let circle_id = circle_id.into_inner();
     let body = body.into_inner();
     let realm_scope = circle_realm_scope(state, &circle_id)?;
-    let target_state = body
-        .state
-        .clone()
-        .unwrap_or_else(|| "active".to_owned());
+    let target_state = body.state.clone().unwrap_or_else(|| "active".to_owned());
     let payload = json!({
         "circle_id": circle_id,
         "actor": body.actor_did,
@@ -427,14 +422,11 @@ async fn submit_circle_lifecycle(
         .circle(&circle_id)
         .map(CircleResponse::from)
         .or_else(|| {
-            projection
-                .circles
-                .get(&circle_id)
-                .map(|c| CircleResponse {
-                    state: "tombstoned".to_owned(),
-                    members: Vec::new(),
-                    ..CircleResponse::from(c)
-                })
+            projection.circles.get(&circle_id).map(|c| CircleResponse {
+                state: "tombstoned".to_owned(),
+                members: Vec::new(),
+                ..CircleResponse::from(c)
+            })
         })
         .ok_or_else(|| AppError::not_found("circle not found"))?;
     json_ok(response)

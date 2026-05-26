@@ -1479,6 +1479,53 @@ fn validate_event_envelope(
         ));
     }
 
+    // CXP-0008 / CXP-0009 (spec head 37ce729) — Envelope `actor_kind` is
+    // reducer-stamped: reject any client-supplied value. The reducer
+    // self-stamps below after the bearer-session derivation lands.
+    // TODO(P2-impl): once the deep reducer pipeline runs here, stamp the
+    // canonical `EnvelopeActorKind` (Native/Ghost/Service/Agent) onto the
+    // persisted projection envelope.
+    if object.get("actor_kind").is_some() {
+        return Err(event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "actor_kind_self_stamped",
+            "envelope.actor_kind is reducer-stamped; clients MUST NOT supply it",
+        ));
+    }
+
+    // CXP-0008 / CXP-0009 — when `executed_by` is present the reducer MUST
+    // verify the DID resolved from `proof.verification_method` matches
+    // `executed_by` (signs-as-X-on-behalf-of-Y attribution proof). This
+    // check uses the FIRST proof's verification_method as the proxy for
+    // the resolver-derived DID; deep DID-document resolution can replace
+    // the prefix match once the agent runtime authorization plumbing
+    // lands.
+    if let Some(executed_by) = event_string_field(object, &["executed_by"]) {
+        if validate_did(&executed_by).is_err() {
+            return Err(event_validation_error(
+                StatusCode::BAD_REQUEST,
+                "invalid_param",
+                "executed_by must be a DID",
+            ));
+        }
+        let proofs = object
+            .get("proofs")
+            .and_then(Value::as_array)
+            .and_then(|arr| arr.first())
+            .and_then(Value::as_object);
+        let vm = proofs.and_then(|proof| event_string_field(proof, &["verification_method"]));
+        let vm_did = vm
+            .as_deref()
+            .map(|raw| raw.split_once('#').map_or(raw, |(did, _)| did));
+        if vm_did != Some(executed_by.as_str()) {
+            return Err(event_validation_error(
+                StatusCode::FORBIDDEN,
+                "executed_by_mismatch",
+                "envelope.executed_by must match the DID derived from proof.verification_method",
+            ));
+        }
+    }
+
     let actor_seq = object
         .get("actor_seq")
         .and_then(Value::as_u64)
@@ -3295,7 +3342,9 @@ fn effective_scope_for_envelope(envelope: &Value) -> Option<String> {
         return Some(scope_circle_id.to_owned());
     }
     if let Some(payload_object) = payload.get("object").and_then(Value::as_object)
-        && let Some(scope_circle_id) = payload_object.get("scope_circle_id").and_then(Value::as_str)
+        && let Some(scope_circle_id) = payload_object
+            .get("scope_circle_id")
+            .and_then(Value::as_str)
     {
         return Some(scope_circle_id.to_owned());
     }

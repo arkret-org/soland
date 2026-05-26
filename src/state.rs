@@ -1377,10 +1377,7 @@ impl AppState {
     /// the failed-login counter. Stale lockouts (`locked_until <= now`)
     /// auto-clear, so the caller can safely treat a `None` return as
     /// "proceed".
-    pub fn account_lockout_active_until(
-        &self,
-        did: &str,
-    ) -> Option<chrono::DateTime<chrono::Utc>> {
+    pub fn account_lockout_active_until(&self, did: &str) -> Option<chrono::DateTime<chrono::Utc>> {
         let mut map = self
             .failed_login_attempts
             .lock()

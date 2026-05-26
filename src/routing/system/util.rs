@@ -272,3 +272,25 @@ pub fn is_valid_discoverability(value: &str) -> bool {
 pub fn is_json_integer(value: &serde_json::Value) -> bool {
     value.as_i64().is_some() || value.as_u64().is_some()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// CXP-0008 / CXP-0009 (B-D, P2-G) — soland's inbound DID validator
+    /// MUST route through the SDK `Did::new` parser. Regression guard so
+    /// the wire ingress points (event_log envelope, agents.rs handlers,
+    /// account.register, etc.) stay aligned with the spec DID format.
+    #[test]
+    fn validate_did_routes_through_sdk_parser() {
+        assert!(validate_did("did:web:alice.example").is_ok());
+        assert!(validate_did("did:key:z6Mki7v1mC9ATsB4VxAfqgZTLZbDpKpUjk78aWxNqQuqQqQu").is_ok());
+        // Empty / scheme-less / wrong scheme MUST fail. The SDK validator
+        // is the source of truth — we just assert the wrapper bubbles the
+        // error.
+        assert!(validate_did("").is_err());
+        assert!(validate_did("not-a-did").is_err());
+        assert!(validate_did("http://example.com").is_err());
+        assert!(validate_did("did:").is_err());
+    }
+}

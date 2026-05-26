@@ -74,9 +74,7 @@ async fn well_known_contrix(depot: &mut Depot) -> JsonResult<Value> {
     summary = "Outbound federation send-event (stub; returns 501)"
 )]
 #[tracing::instrument(skip_all, fields(op = "cx.extension.soland.federation.send_event"))]
-pub(super) async fn federation_send_event(
-    body: JsonBody<Value>,
-) -> JsonResult<Value> {
+pub(super) async fn federation_send_event(body: JsonBody<Value>) -> JsonResult<Value> {
     // Spec: B.3 — outbound federation send-event endpoint. The active
     // path lands with the federation outbox v2 rewrite; today this
     // returns 501 `unsupported_feature` so peers can probe support

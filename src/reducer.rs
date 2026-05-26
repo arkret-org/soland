@@ -6709,8 +6709,7 @@ impl ProjectionState {
                 reason: "circle_realm_terminal".to_owned(),
             };
         }
-        if !self.space_states.contains_key(&realm_id)
-            && self.space_create_log(&realm_id).is_none()
+        if !self.space_states.contains_key(&realm_id) && self.space_create_log(&realm_id).is_none()
         {
             return ProjectionEffect::Rejected {
                 reason: "circle_realm_unknown".to_owned(),
@@ -6811,8 +6810,7 @@ impl ProjectionState {
             if let Some(summary) = patch.get("summary") {
                 circle.summary = summary.as_str().map(ToOwned::to_owned);
             }
-            if let Some(visibility) = patch.get("directory_visibility").and_then(Value::as_str)
-            {
+            if let Some(visibility) = patch.get("directory_visibility").and_then(Value::as_str) {
                 circle.directory_visibility = visibility.to_owned();
             }
             if let Some(join_rule) = patch.get("join_rule").and_then(Value::as_str) {
@@ -7035,9 +7033,7 @@ impl ProjectionState {
     pub fn circles_for_realm(&self, realm_id: &str) -> Vec<&CircleProjection> {
         self.circles
             .values()
-            .filter(|c| {
-                c.realm_id == realm_id && c.state != CircleLifecycleState::Tombstoned
-            })
+            .filter(|c| c.realm_id == realm_id && c.state != CircleLifecycleState::Tombstoned)
             .collect()
     }
 

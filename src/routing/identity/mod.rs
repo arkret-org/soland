@@ -2,6 +2,7 @@ use salvo::prelude::*;
 
 pub(super) mod account;
 pub(super) mod account_data;
+pub(crate) mod agents;
 pub(crate) mod auth;
 pub(crate) mod consent;
 mod device;
@@ -45,6 +46,8 @@ pub fn router() -> Router {
         .push(key_backup::router())
         .push(device_messages::router())
         .push(profile::router())
+        // CXP-0008 / CXP-0009 — Personal Agent provisioning + lifecycle.
+        .push(agents::router())
 }
 
 pub(super) fn embedded_webvh_public_router() -> Router {

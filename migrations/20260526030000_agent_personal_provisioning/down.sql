@@ -1,0 +1,7 @@
+DROP TABLE IF EXISTS pending_agent_drafts;
+DROP TABLE IF EXISTS recovery_session;
+DROP TABLE IF EXISTS backup_series;
+DROP TABLE IF EXISTS agent_grant;
+DROP TABLE IF EXISTS agent_key;
+DROP TABLE IF EXISTS agent_session;
+DROP TABLE IF EXISTS agent_principal;
