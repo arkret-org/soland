@@ -543,6 +543,19 @@ async fn export_account(
         // per-actor filter. v1 bundle keeps the slot for forward-compat.
         "messages": serde_json::Value::Array(Vec::new()),
         "audit_log": audit_log,
+        // ── v1 forward-compat stub fields (round 2) ─────────────────
+        //
+        // The export bundle's v1 scope is `{ account, devices,
+        // audit_log }` plus the always-empty `messages` and `spaces`
+        // collections; conversation/space history, contacts, and key
+        // backup state will land in a later round once the underlying
+        // stores expose per-actor extracts. The three keys below are
+        // reserved now so downstream tooling can write its
+        // deserializer without a follow-up wire bump — see
+        // `docs/account-lifecycle.md` "v1 export scope".
+        "conversation_history": serde_json::Value::Null,
+        "contacts": Vec::<String>::new(),
+        "key_backup_state": serde_json::Value::Null,
     });
     json_ok(bundle)
 }

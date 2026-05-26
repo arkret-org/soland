@@ -33,6 +33,32 @@ pub fn render_error(res: &mut Response, status: StatusCode, code: &str, message:
     ));
 }
 
+/// Variant of [`render_error`] that also stamps a free-form
+/// `error.details.reason_detail` diagnostic.
+///
+/// Round 2 — used by `AppError::with_reason_detail` to thread an
+/// unstable diagnostic string through the otherwise canonical
+/// envelope. Clients MUST NOT parse this value; the OpenAPI
+/// description on every error response notes the contract.
+pub fn render_error_with_detail(
+    res: &mut Response,
+    status: StatusCode,
+    code: &str,
+    message: &str,
+    reason_detail: &str,
+) {
+    let request_id = ids::generate_request_id();
+    res.status_code(status);
+    res.render(Json(
+        contrix_sdk::ErrorEnvelope::new(code, message)
+            .with_request_id(request_id)
+            .with_detail(
+                "reason_detail",
+                serde_json::Value::String(reason_detail.to_owned()),
+            ),
+    ));
+}
+
 /// Pull a single query-string value, decoding `+` to space and any
 /// `%XX` percent-escapes back to their raw byte form. Required for
 /// typed-id query args like `?space_id=cx:space:...` where browsers

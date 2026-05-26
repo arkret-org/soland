@@ -273,6 +273,16 @@ pub struct AppError {
     /// `<kind>_not_active`, `batch_not_supported`). New code should prefer
     /// a canonical `ErrorCode` variant.
     pub wire_code_override: Option<String>,
+    /// Free-form diagnostic explaining *why* this error fired.
+    ///
+    /// Round 2 — surfaced through the rendered envelope as
+    /// `error.details.reason_detail` so on-call has something more
+    /// specific than the canonical `code` to grep for. The shape is
+    /// intentionally `Option<String>` (no enum, no schema) because the
+    /// string is unstable across releases — see the [`EndpointOutRegister`]
+    /// doc on the response: clients MUST NOT parse this value, only
+    /// log/display it.
+    pub reason_detail: Option<String>,
 }
 
 impl AppError {
@@ -282,6 +292,7 @@ impl AppError {
             message: message.into(),
             status: None,
             wire_code_override: None,
+            reason_detail: None,
         }
     }
 
@@ -294,6 +305,16 @@ impl AppError {
     /// the rationale + caveats.
     pub fn with_wire_code(mut self, wire_code: impl Into<String>) -> Self {
         self.wire_code_override = Some(wire_code.into());
+        self
+    }
+
+    /// Attach a free-form diagnostic. See [`AppError::reason_detail`].
+    ///
+    /// The value is rendered into the wire envelope at
+    /// `error.details.reason_detail` and the OpenAPI schema annotates
+    /// it as unstable / opaque.
+    pub fn with_reason_detail(mut self, reason_detail: impl Into<String>) -> Self {
+        self.reason_detail = Some(reason_detail.into());
         self
     }
 
@@ -362,7 +383,17 @@ impl Writer for AppError {
     async fn write(self, _req: &mut Request, _depot: &mut Depot, res: &mut Response) {
         let status = self.http_status();
         let wire = self.wire_code().to_owned();
-        render_error(res, status, &wire, &self.message);
+        if let Some(reason_detail) = self.reason_detail.as_deref() {
+            crate::routing::system::util::render_error_with_detail(
+                res,
+                status,
+                &wire,
+                &self.message,
+                reason_detail,
+            );
+        } else {
+            render_error(res, status, &wire, &self.message);
+        }
     }
 }
 
@@ -372,9 +403,19 @@ impl EndpointOutRegister for AppError {
         // SDK's `salvo` feature) as the response body schema for every error
         // status. The wire representation is the spec-canonical
         // `{ ok: false, error: { code, message, ... }, request_id }`.
+        //
+        // Round 2 — when an `AppError::reason_detail` is set, the
+        // rendered envelope carries `error.details.reason_detail: string`.
+        // The SDK schema already types `details` as `serde_json::Value`,
+        // so the field is documentation-only — describe its shape and
+        // stability contract in each response's `description` rather
+        // than mutating the SDK-owned schema.
         let envelope_schema = <contrix_sdk::ErrorEnvelope as ToSchema>::to_schema(components);
-        let response = |description: &'static str| {
-            oapi::Response::new(description).add_content(
+        const REASON_DETAIL_DOC: &str = " (envelope `error.details.reason_detail`: \
+            Option<String> — free-form diagnostic; unstable, do not parse)";
+        let response = |description: &'static str| -> oapi::Response {
+            let combined = format!("{description}{REASON_DETAIL_DOC}");
+            oapi::Response::new(combined).add_content(
                 "application/json",
                 oapi::Content::new(envelope_schema.clone()),
             )

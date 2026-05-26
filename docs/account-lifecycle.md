@@ -120,3 +120,24 @@ Renderers MUST treat any audit entry whose `audit_id` appears in a
 later `cx.audit.actor_audit_redacted` row as redacted — replace the
 body with `[redacted]` while preserving `audit_id`, `created_at`, and
 `action` for forensic reconstruction.
+
+## v1 export scope
+
+The `POST /api/v1/account/export` bundle in v1 is authoritative only
+for `{ account, devices, audit_log }` (plus the already-empty
+`messages` and `spaces` collections). The following fields are
+reserved on the response envelope so downstream consumers can compile
+their deserializers today, but v1 leaves them empty / null and they
+will be populated in a later round once the underlying stores expose
+per-actor extracts:
+
+- `conversation_history` — placeholder (`null`); will carry per-Space
+  message/relation history once the projection layer exposes a
+  per-actor filter.
+- `contacts` — placeholder (`[]`); will carry the principal's
+  directory contact set once Contacts ships.
+- `key_backup_state` — placeholder (`null`); will carry the principal's
+  `cx.schema.key_backup.v1` descriptor + recovery commitments once the
+  key-backup endpoint is wired into the export pipeline.
+
+Until then, treat absence as "unsupported in v1" rather than "no data".

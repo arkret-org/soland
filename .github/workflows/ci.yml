@@ -58,3 +58,77 @@ jobs:
       - name: Test
         run: cargo test --locked
         working-directory: soland
+
+  migration-cycle:
+    name: Migration up/down/up cycle (postgres)
+    runs-on: ubuntu-latest
+    # Only run on Linux because the PostgreSQL service container is a
+    # Linux-only feature in GitHub Actions. The cycle itself is
+    # platform-agnostic — running it on one OS is sufficient.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: soland
+          POSTGRES_PASSWORD: soland
+          POSTGRES_DB: soland_cycle
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U soland"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://soland:soland@localhost:5432/soland_cycle
+    steps:
+      - name: Checkout soland
+        uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install diesel_cli (postgres-only)
+        run: |
+          cargo install diesel_cli --no-default-features --features postgres --locked
+
+      - name: Wait for postgres
+        run: |
+          for i in {1..30}; do
+            pg_isready -h localhost -p 5432 -U soland && break
+            sleep 1
+          done
+
+      - name: Apply migrations forwards (baseline schema)
+        run: diesel migration run
+
+      - name: Snapshot baseline schema
+        run: pg_dump --schema-only --no-owner --no-privileges \
+              "$DATABASE_URL" > /tmp/schema.baseline.sql
+        env:
+          PGPASSWORD: soland
+
+      - name: Revert every migration in reverse order
+        run: |
+          # `diesel migration revert` removes the most recent applied
+          # migration. Loop until none remain. The loop guard is the
+          # exit status: revert returns non-zero when there is nothing
+          # left to revert.
+          while diesel migration revert; do :; done
+
+      - name: Re-apply every migration forwards
+        run: diesel migration run
+
+      - name: Snapshot cycled schema
+        run: pg_dump --schema-only --no-owner --no-privileges \
+              "$DATABASE_URL" > /tmp/schema.cycled.sql
+        env:
+          PGPASSWORD: soland
+
+      - name: Diff cycled schema against baseline
+        run: |
+          if ! diff -u /tmp/schema.baseline.sql /tmp/schema.cycled.sql; then
+            echo "::error::Migration up→down→up cycle did not round-trip cleanly."
+            echo "::error::Each migration's down.sql must exactly invert its up.sql."
+            exit 1
+          fi
