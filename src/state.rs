@@ -173,6 +173,13 @@ impl RealmDirectoryIndex {
         self.entries.get(realm_id)
     }
 
+    /// Iterate `(realm_id, entry)` pairs. Used by the erasure cascade
+    /// (`account.rs::remove_realm_memberships_for_actor`) to enumerate
+    /// every realm the erased actor was a member of.
+    pub fn entries_iter(&self) -> impl Iterator<Item = (&RealmId, &RealmDirectoryEntry)> {
+        self.entries.iter()
+    }
+
     pub fn search_by_text(&self, query: &str) -> Vec<&RealmDirectoryEntry> {
         let query = query.to_lowercase();
         self.entries
@@ -306,6 +313,14 @@ pub struct AppState {
     /// trade-off as `handle_releases`: persistent ledger lands with the
     /// account-state projection.
     pub erased_actors: Arc<Mutex<BTreeSet<String>>>,
+    /// In-memory failed-auth counter, keyed by actor DID.
+    /// Spec: A.3 — auth handlers (`dev-login`,
+    /// `session-grant/exchange`) bump the counter on failure; once it
+    /// crosses `ACCOUNT_LOCKOUT_THRESHOLD` (5) within the active window
+    /// the actor is locked out for `ACCOUNT_LOCKOUT_DURATION` (15 min).
+    /// A successful login clears the row. Durable storage lands with
+    /// the account-state projection.
+    pub failed_login_attempts: Arc<Mutex<BTreeMap<String, FailedLoginRecord>>>,
     /// Per-actor notifications read marker. `mark_all_read(actor)` writes
     /// `Utc::now()`; the notifications read-side filter uses it to flag
     /// rows as read. Same in-memory shape as the other two.
@@ -465,6 +480,32 @@ pub struct AccountLifecycleRecord {
     pub changed_by: Option<String>,
     pub changed_at: chrono::DateTime<chrono::Utc>,
 }
+
+/// Per-actor failed-login bookkeeping. Spec: A.3 — five failures within
+/// the active window flip the actor into a 15-minute lockout. The record
+/// is cleared on any successful login.
+#[derive(Clone, Debug)]
+pub struct FailedLoginRecord {
+    /// Number of failed attempts observed in the current window.
+    pub attempts: u32,
+    /// When the most recent failure was recorded. Drives the rolling
+    /// window check: failures older than `ACCOUNT_LOCKOUT_WINDOW` reset
+    /// the counter rather than locking the actor.
+    pub last_failure_at: chrono::DateTime<chrono::Utc>,
+    /// `Some(until)` if the actor is currently locked out — auth
+    /// handlers return `account_locked` until `Utc::now() >= until`.
+    pub locked_until: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+/// Threshold of consecutive failed auth attempts before the actor is
+/// locked out. Spec: A.3.
+pub const ACCOUNT_LOCKOUT_THRESHOLD: u32 = 5;
+/// Lockout window — once the actor crosses [`ACCOUNT_LOCKOUT_THRESHOLD`]
+/// they stay locked for this long. Spec: A.3.
+pub const ACCOUNT_LOCKOUT_DURATION: chrono::Duration = chrono::Duration::minutes(15);
+/// Rolling window over which failed attempts accumulate. Failures older
+/// than this reset the counter rather than escalating to a lockout.
+pub const ACCOUNT_LOCKOUT_WINDOW: chrono::Duration = chrono::Duration::minutes(15);
 
 #[derive(Clone, Debug)]
 pub struct WebvhDocumentRecord {
@@ -1229,6 +1270,7 @@ impl AppState {
             handle_releases: Arc::new(Mutex::new(BTreeMap::new())),
             account_lifecycle: Arc::new(Mutex::new(BTreeMap::new())),
             erased_actors: Arc::new(Mutex::new(BTreeSet::new())),
+            failed_login_attempts: Arc::new(Mutex::new(BTreeMap::new())),
             notification_read_cursors: Arc::new(Mutex::new(BTreeMap::new())),
             sync_cursor_handles: Arc::new(Mutex::new(BTreeMap::new())),
             to_device_position_counter: Arc::new(AtomicI64::new(now.timestamp_micros())),
@@ -1329,6 +1371,70 @@ impl AppState {
         } else {
             lifecycle.insert(did.to_owned(), record);
         }
+    }
+
+    /// Return `Some(locked_until)` if the actor is currently locked out by
+    /// the failed-login counter. Stale lockouts (`locked_until <= now`)
+    /// auto-clear, so the caller can safely treat a `None` return as
+    /// "proceed".
+    pub fn account_lockout_active_until(
+        &self,
+        did: &str,
+    ) -> Option<chrono::DateTime<chrono::Utc>> {
+        let mut map = self
+            .failed_login_attempts
+            .lock()
+            .expect("failed_login_attempts lock");
+        let now = chrono::Utc::now();
+        let Some(record) = map.get(did).cloned() else {
+            return None;
+        };
+        match record.locked_until {
+            Some(until) if until > now => Some(until),
+            Some(_) => {
+                // Lockout window expired — clear the record so the actor
+                // gets a clean slate on the next attempt.
+                map.remove(did);
+                None
+            }
+            None => None,
+        }
+    }
+
+    /// Record a failed auth attempt against the given actor. Returns the
+    /// updated record so the caller can include lockout context in the
+    /// audit trail.
+    pub fn record_failed_login(&self, did: &str) -> FailedLoginRecord {
+        let mut map = self
+            .failed_login_attempts
+            .lock()
+            .expect("failed_login_attempts lock");
+        let now = chrono::Utc::now();
+        let entry = map.entry(did.to_owned()).or_insert(FailedLoginRecord {
+            attempts: 0,
+            last_failure_at: now,
+            locked_until: None,
+        });
+        // Reset the rolling counter if the previous failure aged out.
+        if now - entry.last_failure_at > ACCOUNT_LOCKOUT_WINDOW {
+            entry.attempts = 0;
+            entry.locked_until = None;
+        }
+        entry.attempts = entry.attempts.saturating_add(1);
+        entry.last_failure_at = now;
+        if entry.attempts >= ACCOUNT_LOCKOUT_THRESHOLD {
+            entry.locked_until = Some(now + ACCOUNT_LOCKOUT_DURATION);
+        }
+        entry.clone()
+    }
+
+    /// Clear a successful login's failure history so the rolling counter
+    /// doesn't trip on a future stray failure.
+    pub fn clear_failed_login(&self, did: &str) {
+        self.failed_login_attempts
+            .lock()
+            .expect("failed_login_attempts lock")
+            .remove(did);
     }
 }
 

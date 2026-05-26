@@ -106,7 +106,31 @@ pub fn render_metrics(state: &AppState) -> String {
         "soland_federation_outbox_depth {}\n",
         federation_outbox_depth(state)
     ));
+    output.push_str(
+        "# HELP soland_audit_append_failures_total Audit-log append failures (spec C.3.7).\n",
+    );
+    output.push_str("# TYPE soland_audit_append_failures_total counter\n");
+    output.push_str(&format!(
+        "soland_audit_append_failures_total {}\n",
+        audit_append_failures()
+    ));
     output
+}
+
+/// Increment the audit-append-failure counter. Called from
+/// `routing::admin::audit::append_audit_log` when the persistence layer
+/// rejects the append; the counter feeds the `soland_audit_append_failures_total`
+/// metric for alerting. Spec: C.3.7.
+pub fn record_audit_append_failure() {
+    let mut metrics = metrics_state().lock().expect("metrics lock");
+    metrics.audit_append_failures = metrics.audit_append_failures.saturating_add(1);
+}
+
+fn audit_append_failures() -> u64 {
+    metrics_state()
+        .lock()
+        .expect("metrics lock")
+        .audit_append_failures
 }
 
 fn federation_outbox_depth(state: &AppState) -> usize {
@@ -188,6 +212,10 @@ fn metrics_state() -> &'static Mutex<HttpMetrics> {
 struct HttpMetrics {
     request_totals: BTreeMap<(String, u16), u64>,
     request_durations: BTreeMap<String, HistogramStats>,
+    /// Audit-log append failures since process start. Spec: C.3.7 —
+    /// every `append_audit_log` failure bumps this counter so on-call
+    /// can alert on durable-audit drops.
+    audit_append_failures: u64,
 }
 
 #[derive(Clone)]

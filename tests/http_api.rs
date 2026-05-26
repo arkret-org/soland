@@ -2850,6 +2850,10 @@ async fn rate_limit_errors_use_standard_envelope_with_retry_after() {
         RateLimiterConfig {
             max_requests: 1,
             window: Duration::from_secs(60),
+            // Mirror the strict default class ceilings on the `other` bucket
+            // (`/health` is not under /api/v1/*, so it falls into `other`).
+            auth_max_requests: 1,
+            api_max_requests: 1,
         },
     );
 

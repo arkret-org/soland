@@ -356,6 +356,12 @@ pub fn append_audit_log(
         "created_at": now(),
     });
     if let Err(error) = state.persistence.audit().append(entry) {
-        tracing::error!(%error, "failed to append audit log entry");
+        // Spec: C.3.7 — every audit-append failure MUST surface to
+        // operators. We escalate to ERROR (was previously implicit
+        // here) and bump the `soland_audit_append_failures_total`
+        // metric so on-call can alert on durable-audit drops without
+        // tailing the trace stream.
+        tracing::error!(%error, action, outcome, "failed to append audit log entry");
+        crate::metrics::record_audit_append_failure();
     }
 }

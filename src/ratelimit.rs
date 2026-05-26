@@ -1,4 +1,17 @@
 //! Simple in-memory rate limiter middleware.
+//!
+//! Spec: A.3 — buckets are keyed on `(remote_addr, endpoint_class)` rather
+//! than the raw remote address so a single abusive endpoint cannot starve
+//! a peer's quota across the rest of the API surface. We currently
+//! recognize three endpoint classes:
+//!
+//! - `auth`   — `/api/v1/auth/*` (strict, low ceiling): bearer-issuing
+//!   surface, must be hardened against credential-stuffing.
+//! - `api`    — every other `/api/v1/*` request (moderate ceiling).
+//! - `other`  — anything outside `/api/v1/*` (default ceiling).
+//!
+//! Each class can carry its own quota; absent overrides fall back to the
+//! default (`max_requests` / `window`).
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -9,10 +22,16 @@ use salvo::prelude::*;
 /// Rate limiter configuration.
 #[derive(Clone, Debug)]
 pub struct RateLimiterConfig {
-    /// Maximum requests per window per key.
+    /// Maximum requests per window per key. Used as the fallback for any
+    /// endpoint class that does not have a class-specific override.
     pub max_requests: u32,
     /// Window duration.
     pub window: Duration,
+    /// Strict ceiling for `/api/v1/auth/*` requests; defaults to a low
+    /// value to harden against credential-stuffing.
+    pub auth_max_requests: u32,
+    /// Moderate ceiling for the rest of `/api/v1/*`.
+    pub api_max_requests: u32,
 }
 
 impl Default for RateLimiterConfig {
@@ -24,6 +43,44 @@ impl Default for RateLimiterConfig {
         Self {
             max_requests: 600,
             window: Duration::from_secs(60),
+            // Strict for /auth/*: 60/min ≈ 1/sec. Enough headroom for an
+            // OAuth refresh cycle, but tight enough to stall a guessing
+            // loop.
+            auth_max_requests: 60,
+            // Moderate for the rest of /api/v1/*. Lower than the
+            // advertised `per_minute: 600` so a single endpoint cannot
+            // burn the entire IP-wide budget on its own.
+            api_max_requests: 300,
+        }
+    }
+}
+
+/// Endpoint class — derived from the request path. Each class participates
+/// in a separate `(remote_addr, class)` bucket so a hot endpoint cannot
+/// starve a peer's quota across the rest of the API surface.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum EndpointClass {
+    Auth,
+    Api,
+    Other,
+}
+
+impl EndpointClass {
+    fn classify(path: &str) -> Self {
+        if path.starts_with("/api/v1/auth/") {
+            Self::Auth
+        } else if path.starts_with("/api/v1/") {
+            Self::Api
+        } else {
+            Self::Other
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Auth => "auth",
+            Self::Api => "api",
+            Self::Other => "other",
         }
     }
 }
@@ -43,16 +100,28 @@ impl RateLimiter {
         }
     }
 
+    fn ceiling_for(&self, class: EndpointClass) -> u32 {
+        match class {
+            EndpointClass::Auth => self.config.auth_max_requests,
+            EndpointClass::Api => self.config.api_max_requests,
+            EndpointClass::Other => self.config.max_requests,
+        }
+    }
+
     /// Check if a request is allowed for the given key.
     /// Returns true if allowed, false if rate limited.
     pub fn check(&self, key: &str) -> bool {
+        self.check_with_ceiling(key, self.config.max_requests)
+    }
+
+    fn check_with_ceiling(&self, key: &str, ceiling: u32) -> bool {
         let mut state = self.state.lock().expect("rate limiter lock");
         let now = Instant::now();
 
         if let Some((count, window_start)) = state.get_mut(key)
             && now.duration_since(*window_start) < self.config.window
         {
-            if *count >= self.config.max_requests {
+            if *count >= ceiling {
                 return false;
             }
             *count += 1;
@@ -107,10 +176,15 @@ impl Handler for RateLimiterMiddleware {
         res: &mut Response,
         ctrl: &mut FlowCtrl,
     ) {
-        // Use IP address as rate limit key
-        let key = req.remote_addr().to_string();
+        // Spec: A.3 — buckets are keyed on `(remote_addr, endpoint_class)`
+        // so a hot endpoint (e.g. /auth) cannot starve the rest of the
+        // surface for the same peer, and a low ceiling on /auth/* makes
+        // credential-stuffing prohibitively slow.
+        let class = EndpointClass::classify(req.uri().path());
+        let key = format!("{}:{}", req.remote_addr(), class.label());
+        let ceiling = self.limiter.ceiling_for(class);
 
-        if !self.limiter.check(&key) {
+        if !self.limiter.check_with_ceiling(&key, ceiling) {
             let retry_after = self.limiter.retry_after(&key);
             let retry_after_ms = retry_after.as_millis().try_into().unwrap_or(u64::MAX);
             let retry_after_seconds = retry_after_ms.div_ceil(1000).max(1);
@@ -142,6 +216,8 @@ mod tests {
         let limiter = RateLimiter::new(RateLimiterConfig {
             max_requests: 1,
             window: Duration::from_secs(60),
+            auth_max_requests: 1,
+            api_max_requests: 1,
         });
 
         assert!(limiter.check("client"));

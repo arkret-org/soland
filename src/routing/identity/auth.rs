@@ -81,18 +81,75 @@ fn account_new_session_tuple(
     }
 }
 
+/// Spec: A.3 — auth handlers consult the in-memory failed-login counter
+/// before doing any other work. The lockout response is 403
+/// `account_locked` with a wire body that doesn't reveal which credential
+/// failed, only that the actor is currently locked.
+fn account_lockout_error(state: &AppState, actor: &str) -> Option<AppError> {
+    let until = state.account_lockout_active_until(actor)?;
+    let until_wire = until.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    Some(
+        AppError::capability_denied(format!(
+            "account temporarily locked due to repeated failed auth attempts; \
+             retry after {until_wire}"
+        ))
+        .with_status(StatusCode::FORBIDDEN)
+        .with_wire_code("account_locked"),
+    )
+}
+
+/// Record a failed auth attempt against the actor and emit a single audit
+/// row + warn-level tracing breadcrumb. Called from every auth-failure
+/// branch in the dev-login / session-grant exchange paths.
+pub(super) fn record_failed_login_attempt(state: &AppState, actor: &str, surface: &str) {
+    let record = state.record_failed_login(actor);
+    let locked_until = record
+        .locked_until
+        .map(|until| until.to_rfc3339_opts(chrono::SecondsFormat::Millis, true));
+    append_audit_log(
+        state,
+        Some(actor),
+        "auth.failed_attempt",
+        json!({
+            "surface": surface,
+            "attempts": record.attempts,
+            "locked_until": locked_until,
+        }),
+        "denied",
+    );
+    if record.locked_until.is_some() {
+        tracing::warn!(
+            actor,
+            attempts = record.attempts,
+            locked_until = ?record.locked_until,
+            surface,
+            "account locked after repeated failed auth attempts"
+        );
+    }
+}
+
 fn account_existing_session_error(
     state: &AppState,
     actor: &str,
 ) -> Option<(StatusCode, &'static str, &'static str)> {
+    // Spec: C.3.8 — 401 means "not authenticated"; 403 means
+    // "authenticated, policy denies". A session-bearing request whose
+    // backing account is `locked` / `deactivated` carries a valid
+    // bearer (so the request IS authenticated); the lifecycle gate is
+    // a policy denial and MUST surface as 403.
+    //
+    // `erased` is the exception kept at 401: erasure invalidates the
+    // bearer itself, so the spec calls for a re-auth signal rather
+    // than a policy-denial signal (matches identity/account-lifecycle.md
+    // §3 "subsequent authenticated requests return 401 `account_erased`").
     match state.account_lifecycle_state(actor).as_str() {
         "locked" => Some((
-            StatusCode::UNAUTHORIZED,
+            StatusCode::FORBIDDEN,
             "account_locked",
             "account is locked",
         )),
         "deactivated" => Some((
-            StatusCode::UNAUTHORIZED,
+            StatusCode::FORBIDDEN,
             "account_deactivated",
             "account has been deactivated",
         )),
@@ -126,6 +183,14 @@ async fn dev_login(
         ));
     }
     crate::routing::extensions::sovereign::validate_sovereign_did_registration(state, &body.actor)?;
+    // Spec: A.3 — auth handlers consult the in-memory failed-login
+    // counter before doing anything else. An actor that crossed the
+    // threshold gets a 403 `account_locked` until the lockout window
+    // expires, without revealing whether the credential would otherwise
+    // have been valid.
+    if let Some(error) = account_lockout_error(state, &body.actor) {
+        return Err(error);
+    }
     let account = state
         .persistence
         .accounts()
@@ -208,6 +273,7 @@ async fn dev_login(
         json!({"device_id": body.device_id.clone()}),
         "accepted",
     );
+    state.clear_failed_login(&body.actor);
 
     json_ok(DevLoginResponse {
         access_token: token,
@@ -238,6 +304,9 @@ async fn exchange_session_grant(
             "grant_jwt, principal_did, and device_id are required",
         ));
     }
+    if let Some(error) = account_lockout_error(state, &body.principal_did) {
+        return Err(error);
+    }
     let account = state
         .persistence
         .accounts()
@@ -250,7 +319,7 @@ async fn exchange_session_grant(
         return Err(error);
     }
 
-    let grant = validate_session_grant_binding(
+    let grant = match validate_session_grant_binding(
         state,
         SessionGrantValidationInput {
             grant_jwt: body.grant_jwt.as_str(),
@@ -259,7 +328,18 @@ async fn exchange_session_grant(
             proof: body.introspection_proof.as_ref(),
         },
     )
-    .await?;
+    .await
+    {
+        Ok(grant) => grant,
+        Err(error) => {
+            // Spec: A.3 — session-grant validation failures count toward
+            // the rolling lockout window. Account is locked after 5
+            // failures in 15 min; clearing happens on the success
+            // path below.
+            record_failed_login_attempt(state, &body.principal_did, "session_grant_exchange");
+            return Err(error);
+        }
+    };
     let expires_at = grant
         .as_ref()
         .map(|grant| grant.expires_at)
@@ -319,6 +399,7 @@ async fn exchange_session_grant(
         }),
         "accepted",
     );
+    state.clear_failed_login(&body.principal_did);
 
     json_ok(DevLoginResponse {
         access_token: token,
@@ -563,9 +644,21 @@ pub fn authenticated_session(
     state: &AppState,
     req: &Request,
 ) -> Result<SessionRecord, (StatusCode, &'static str, &'static str)> {
-    if req.uri().query().is_some_and(|query| {
-        query.contains("access_token=") || query.contains("auth=") || query.contains("token=")
-    }) {
+    if let Some(query) = req.uri().query()
+        && (query.contains("access_token=")
+            || query.contains("auth=")
+            || query.contains("token="))
+    {
+        // Spec: A.3 — auth material MUST NOT appear in query strings.
+        // We log a truncated preview of the offending token so on-call
+        // can correlate without persisting the full bearer in tracing
+        // backends. The preview is at most 8 chars of the matched
+        // `<param>=<token>` value; we never log the full token.
+        let preview = query_string_token_preview(query);
+        tracing::warn!(
+            token_preview = %preview,
+            "auth material in query strings rejected (token preview only, full value redacted)"
+        );
         return Err((
             StatusCode::UNAUTHORIZED,
             "unauthenticated",
@@ -618,6 +711,28 @@ pub fn authenticated_session(
     Ok(session)
 }
 
+/// Extract a short, redaction-safe preview of any auth-material parameter
+/// (`access_token=`, `auth=`, or `token=`) found in `query`. Returns at most
+/// the first 8 characters of the parameter value, followed by `…` if the
+/// value was longer. Used by the query-string rejection path so tracing
+/// backends can correlate an offending request without persisting the
+/// full token.
+fn query_string_token_preview(query: &str) -> String {
+    const PREFIXES: &[&str] = &["access_token=", "auth=", "token="];
+    for pair in query.split('&') {
+        for prefix in PREFIXES {
+            if let Some(value) = pair.strip_prefix(prefix) {
+                let preview: String = value.chars().take(8).collect();
+                if value.chars().nth(8).is_some() {
+                    return format!("{preview}…");
+                }
+                return preview;
+            }
+        }
+    }
+    String::new()
+}
+
 fn authenticated_oauth_session(
     state: &AppState,
     token: &str,
@@ -660,6 +775,28 @@ fn authenticated_oauth_session(
     })
 }
 
+// OAuth introspection timing-attack mitigation (Spec: A.3).
+//
+// The introspection call is the dominant signal that distinguishes a known
+// vs unknown bearer token from the caller's perspective. We wrap each call
+// in:
+//   1. A fixed timeout (`OAUTH_INTROSPECTION_TIMEOUT`) so success/failure
+//      both bound at the same upper edge.
+//   2. A constant-time floor: we always wait at least
+//      `OAUTH_INTROSPECTION_MIN_LATENCY` before returning, with a small
+//      random jitter on top so the floor itself is not observable as a
+//      sharp edge.
+//
+// The work is dispatched onto the current tokio runtime (the auth path is
+// reached from `async fn` handlers; this function is sync only because
+// `Salvo` extractors give us a sync bridge), gated behind
+// `block_in_place` so a slow upstream cannot starve the runtime.
+const OAUTH_INTROSPECTION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
+const OAUTH_INTROSPECTION_MIN_LATENCY: std::time::Duration =
+    std::time::Duration::from_millis(40);
+const OAUTH_INTROSPECTION_JITTER_MAX: std::time::Duration =
+    std::time::Duration::from_millis(20);
+
 fn request_oauth_introspection(
     introspection_url: &str,
     introspection_bearer: &str,
@@ -668,53 +805,183 @@ fn request_oauth_introspection(
     let introspection_url = introspection_url.to_owned();
     let introspection_bearer = introspection_bearer.to_owned();
     let token = token.to_owned();
-    std::thread::spawn(move || {
-        let request = OAuthIntrospectionRequest {
-            token: token.as_str(),
-            token_type_hint: OAUTH_INTROSPECTION_TOKEN_TYPE_HINT,
-        };
-        let response = reqwest::blocking::Client::new()
-            .post(introspection_url)
-            .bearer_auth(introspection_bearer)
-            .form(&request)
-            .timeout(std::time::Duration::from_secs(3))
-            .send()
-            .map_err(|error| {
-                tracing::warn!(%error, "OAuth introspection request failed");
-                (
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    "auth_unavailable",
-                    "OAuth introspection service unavailable",
-                )
-            })?;
-        if !response.status().is_success() {
-            tracing::warn!(
-                status = response.status().as_u16(),
-                "OAuth introspection rejected the service bearer"
+
+    let runtime_handle = match tokio::runtime::Handle::try_current() {
+        Ok(handle) => handle,
+        Err(_) => {
+            // Not on a tokio runtime — should only happen in unit tests
+            // that bypass the salvo runtime. Fall back to the legacy
+            // blocking client; the timing-leak window is irrelevant
+            // outside the request-serving runtime.
+            return legacy_blocking_introspection(
+                &introspection_url,
+                &introspection_bearer,
+                &token,
             );
-            return Err((
-                StatusCode::UNAUTHORIZED,
-                "unauthenticated",
-                "invalid bearer token",
-            ));
         }
-        response.json::<Value>().map_err(|error| {
-            tracing::warn!(%error, "OAuth introspection returned invalid JSON");
+    };
+
+    tokio::task::block_in_place(|| {
+        runtime_handle.block_on(async move {
+            let started = tokio::time::Instant::now();
+            let jitter_micros = jitter_micros(OAUTH_INTROSPECTION_JITTER_MAX);
+            let result = perform_oauth_introspection(
+                &introspection_url,
+                &introspection_bearer,
+                &token,
+            )
+            .await;
+            // Constant-time floor: regardless of whether the upstream
+            // returned 200, 401, or timed out, sleep until at least
+            // `min_latency + jitter` has elapsed. This collapses the
+            // observable timing distribution between "token unknown to
+            // soland" (fast 401), "token known to coauth, active"
+            // (slow round-trip), and "token known to coauth, inactive"
+            // (slow round-trip) into a single floor.
+            let floor = OAUTH_INTROSPECTION_MIN_LATENCY
+                + std::time::Duration::from_micros(jitter_micros);
+            let elapsed = started.elapsed();
+            if elapsed < floor {
+                tokio::time::sleep(floor - elapsed).await;
+            }
+            result
+        })
+    })
+}
+
+async fn perform_oauth_introspection(
+    introspection_url: &str,
+    introspection_bearer: &str,
+    token: &str,
+) -> Result<Value, (StatusCode, &'static str, &'static str)> {
+    let request = OAuthIntrospectionRequest {
+        token,
+        token_type_hint: OAUTH_INTROSPECTION_TOKEN_TYPE_HINT,
+    };
+    let client = reqwest::Client::builder()
+        .timeout(OAUTH_INTROSPECTION_TIMEOUT)
+        .build()
+        .map_err(|error| {
+            tracing::warn!(%error, "OAuth introspection client build failed");
             (
                 StatusCode::SERVICE_UNAVAILABLE,
                 "auth_unavailable",
-                "OAuth introspection response was invalid",
+                "OAuth introspection service unavailable",
             )
-        })
-    })
-    .join()
-    .map_err(|_| {
+        })?;
+    let fut = client
+        .post(introspection_url)
+        .bearer_auth(introspection_bearer)
+        .form(&request)
+        .send();
+    let response = match tokio::time::timeout(OAUTH_INTROSPECTION_TIMEOUT, fut).await {
+        Ok(Ok(response)) => response,
+        Ok(Err(error)) => {
+            tracing::warn!(%error, "OAuth introspection request failed");
+            return Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                "auth_unavailable",
+                "OAuth introspection service unavailable",
+            ));
+        }
+        Err(_) => {
+            tracing::warn!("OAuth introspection request timed out");
+            return Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                "auth_unavailable",
+                "OAuth introspection service unavailable",
+            ));
+        }
+    };
+    if !response.status().is_success() {
+        tracing::warn!(
+            status = response.status().as_u16(),
+            "OAuth introspection rejected the service bearer"
+        );
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            "unauthenticated",
+            "invalid bearer token",
+        ));
+    }
+    let parse_fut = response.json::<Value>();
+    match tokio::time::timeout(OAUTH_INTROSPECTION_TIMEOUT, parse_fut).await {
+        Ok(Ok(value)) => Ok(value),
+        Ok(Err(error)) => {
+            tracing::warn!(%error, "OAuth introspection returned invalid JSON");
+            Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                "auth_unavailable",
+                "OAuth introspection response was invalid",
+            ))
+        }
+        Err(_) => {
+            tracing::warn!("OAuth introspection JSON decode timed out");
+            Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                "auth_unavailable",
+                "OAuth introspection response was invalid",
+            ))
+        }
+    }
+}
+
+fn legacy_blocking_introspection(
+    introspection_url: &str,
+    introspection_bearer: &str,
+    token: &str,
+) -> Result<Value, (StatusCode, &'static str, &'static str)> {
+    let request = OAuthIntrospectionRequest {
+        token,
+        token_type_hint: OAUTH_INTROSPECTION_TOKEN_TYPE_HINT,
+    };
+    let response = reqwest::blocking::Client::new()
+        .post(introspection_url)
+        .bearer_auth(introspection_bearer)
+        .form(&request)
+        .timeout(OAUTH_INTROSPECTION_TIMEOUT)
+        .send()
+        .map_err(|error| {
+            tracing::warn!(%error, "OAuth introspection request failed");
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "auth_unavailable",
+                "OAuth introspection service unavailable",
+            )
+        })?;
+    if !response.status().is_success() {
+        tracing::warn!(
+            status = response.status().as_u16(),
+            "OAuth introspection rejected the service bearer"
+        );
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            "unauthenticated",
+            "invalid bearer token",
+        ));
+    }
+    response.json::<Value>().map_err(|error| {
+        tracing::warn!(%error, "OAuth introspection returned invalid JSON");
         (
-            StatusCode::INTERNAL_SERVER_ERROR,
+            StatusCode::SERVICE_UNAVAILABLE,
             "auth_unavailable",
-            "OAuth introspection worker failed",
+            "OAuth introspection response was invalid",
         )
-    })?
+    })
+}
+
+/// Sample a small jitter in microseconds for the introspection constant-time
+/// floor. We pull from `rand::OsRng` rather than a fast PRNG so the floor
+/// itself is not predictable from an external observer.
+fn jitter_micros(max: std::time::Duration) -> u64 {
+    use rand::RngCore;
+    let max_micros = max.as_micros().min(u128::from(u64::MAX)) as u64;
+    if max_micros == 0 {
+        return 0;
+    }
+    let mut buf = [0u8; 8];
+    rand::rngs::OsRng.fill_bytes(&mut buf);
+    u64::from_le_bytes(buf) % max_micros
 }
 
 fn parse_oauth_introspection(

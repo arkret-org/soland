@@ -780,6 +780,10 @@ async fn erase_account(
     }
 
     let sessions_revoked = revoke_sessions_for_actor(state, &actor).unwrap_or(0);
+    // Spec: A.3 GDPR erasure cascade — remove the principal from every
+    // Realm membership index so realm-scoped reads stop yielding the
+    // actor without waiting for the projection rewrite worker.
+    let memberships_removed = remove_realm_memberships_for_actor(state, &actor);
     let previous_state = state.account_lifecycle_state(&actor);
     let changed_at = now();
     state.set_account_lifecycle_record(
@@ -810,6 +814,15 @@ async fn erase_account(
         sessions_revoked,
         devices_revoked,
     );
+
+    // Spec: A.3 GDPR erasure cascade — emit a single audit row that
+    // catalogues every previously-recorded audit entry by `audit_id` +
+    // `created_at` only, marking the body itself as `redacted`. The
+    // append-only audit store still carries the historical rows so the
+    // chain of custody is preserved; downstream consumers honour this
+    // marker by replacing the prior bodies with `[redacted]` on render
+    // (timestamps + audit_ids retained for forensic reconstruction).
+    append_audit_redaction_marker(state, &actor);
 
     let completed_at = now();
     let completed_at_wire = completed_at.to_rfc3339_opts(SecondsFormat::Millis, true);
@@ -925,7 +938,71 @@ async fn erase_account(
         "erasure_receipt": erasure_receipt,
         "realm_erasure_receipts": realm_erasure_receipts,
         "audit_log": audit_log,
+        "memberships_removed": memberships_removed,
+        "sessions_revoked": sessions_revoked,
+        "devices_revoked": devices_revoked,
     }))
+}
+
+/// Remove the erased actor from every in-memory Realm membership set.
+/// Returns the count of realms touched so the audit row + response body
+/// can report it. Durable Realm membership lives in the projection
+/// rewrite worker; this is the v1 "memory ledger" cascade. Spec: A.3
+/// + identity/account-lifecycle.md.
+fn remove_realm_memberships_for_actor(state: &AppState, actor: &str) -> usize {
+    let actor_did = match contrix_sdk::Did::new(actor.to_owned()) {
+        Ok(did) => did,
+        Err(_) => return 0,
+    };
+    let mut realms = state.realms.lock().expect("realms lock");
+    let realm_ids: Vec<contrix_sdk::RealmId> = realms
+        .entries_iter()
+        .filter(|(_id, entry)| entry.members.contains(&actor_did))
+        .map(|(id, _entry)| id.clone())
+        .collect();
+    let mut removed = 0usize;
+    for realm_id in realm_ids {
+        if let Some(entry) = realms.get(&realm_id) {
+            let mut updated = entry.clone();
+            if updated.members.remove(&actor_did) {
+                realms.upsert(updated);
+                removed += 1;
+            }
+        }
+    }
+    removed
+}
+
+/// Append a single audit row that marks every prior entry for `actor` as
+/// `redacted` while preserving timestamps + audit_ids. Spec: A.3.
+fn append_audit_redaction_marker(state: &AppState, actor: &str) {
+    let prior = state
+        .persistence
+        .audit()
+        .list_for_actor(actor)
+        .unwrap_or_default();
+    let entries: Vec<Value> = prior
+        .iter()
+        .map(|entry| {
+            json!({
+                "audit_id": entry.get("audit_id").cloned().unwrap_or(Value::Null),
+                "created_at": entry.get("created_at").cloned().unwrap_or(Value::Null),
+                "action": entry.get("action").cloned().unwrap_or(Value::Null),
+                "redacted": true,
+            })
+        })
+        .collect();
+    append_audit_log(
+        state,
+        Some(actor),
+        "cx.audit.actor_audit_redacted",
+        json!({
+            "actor": actor,
+            "redacted_entry_count": entries.len(),
+            "entries": entries,
+        }),
+        "accepted",
+    );
 }
 
 fn affected_erasure_realms_for_actor(state: &AppState, actor: &str) -> Vec<String> {

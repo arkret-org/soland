@@ -4,8 +4,10 @@ pub mod erasure_fanout;
 pub(crate) mod federation;
 pub(crate) mod move_anchor;
 pub mod outbox;
+pub(crate) mod stubs;
 
 pub(crate) use federation::fanout_accepted_operations_to_peers;
+pub use stubs::well_known_contrix_router;
 
 use super::{
     AuthArgs, ingest_federation_operations, now, operation_is_visible,
@@ -53,4 +55,9 @@ pub fn router() -> Router {
                 .get(federation::federation_anchors_pull)
                 .post(federation::federation_anchors_push),
         )
+        // Spec: B.3 — outbound federation send-event stub. Returns 501
+        // `unsupported_feature` until the active path lands; the route
+        // is mounted today so peers can probe support + the OpenAPI
+        // doc carries the operation id.
+        .push(Router::with_path("federation/send-event").post(stubs::federation_send_event))
 }

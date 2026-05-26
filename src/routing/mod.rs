@@ -107,6 +107,8 @@ pub fn router_with_rate_limiter_and_request_size_config(
     let router = router
         .push(system::health_router())
         .push(interop::well_known_router())
+        // Spec: B.3 — `/.well-known/contrix` server-description stub.
+        .push(federation::well_known_contrix_router())
         .push(identity::embedded_webvh_public_router())
         .push(admin::spec_router())
         .push(api_v1_router())
