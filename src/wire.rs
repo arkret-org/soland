@@ -474,9 +474,15 @@ pub struct ResolveOrganizationResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct HandleClaim {
     pub schema: String,
+    /// Canonical handle in the spec form `<localpart>:<domain>(:<port>)?`
+    /// (handle-claim.schema.json#/properties/handle, contrix-spec @ 7157ee8).
+    /// The retired `contrix://<domain>/users/<localpart>` URI form is gone
+    /// from R3.1 wire — any `acct:<local>@<domain>` interop form is carried
+    /// separately in [`Self::handle_aliases`], NEVER in this field.
     pub handle: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub handle_uri: Option<String>,
+    /// Interop aliases normalized to the canonical [`Self::handle`] above.
+    /// Includes `acct:<local>@<domain>` cross-publication. The retired
+    /// `contrix://` URI form MUST NOT appear here.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub handle_aliases: Vec<String>,
     pub subject: String,
@@ -2220,8 +2226,7 @@ mod tests {
     fn handle_claim_serializes_spec_shape() {
         let claim = HandleClaim {
             schema: "cx.schema.handle_claim.v1".to_owned(),
-            handle: "@alice:acme.example".to_owned(),
-            handle_uri: Some("contrix://acme.example/users/alice".to_owned()),
+            handle: "alice:acme.example".to_owned(),
             handle_aliases: vec!["acct:alice@acme.example".to_owned()],
             subject: "did:web:alice.example".to_owned(),
             issuer: "did:web:acme.example".to_owned(),

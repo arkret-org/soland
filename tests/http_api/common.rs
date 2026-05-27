@@ -340,7 +340,6 @@ pub(crate) fn remove_test_realm_member(state: &AppState, realm_id: &str, member:
     let mut realms = state.realms.lock().unwrap();
     if let Some(mut entry) = realms.get(&typed_realm_id).cloned() {
         entry.members.remove(&member_did);
-        entry.member_handle_uris.remove(member_did.as_str());
         let members = realm_member_roster(&entry);
         realms.upsert(entry);
         serde_json::json!({
@@ -355,6 +354,11 @@ pub(crate) fn remove_test_realm_member(state: &AppState, realm_id: &str, member:
 }
 
 fn realm_member_roster(entry: &RealmDirectoryEntry) -> Vec<Value> {
+    // HDLREN-4/5 (contrix-spec @ 7157ee8) — roster rows MUST NOT carry
+    // `handle` / `handle_uri` directly; identity is resolved through the
+    // `cx.member.identity.update` events surfaced via
+    // `MemberRosterEntry.identity_event_ids[]`. The test helper now only
+    // emits `{did}` to match the spec wire shape.
     entry
         .members
         .iter()
@@ -362,9 +366,6 @@ fn realm_member_roster(entry: &RealmDirectoryEntry) -> Vec<Value> {
             let did_str = did.as_str();
             let mut row = serde_json::Map::new();
             row.insert("did".to_owned(), serde_json::json!(did_str));
-            if let Some(handle_uri) = entry.member_handle_uris.get(did_str) {
-                row.insert("handle_uri".to_owned(), serde_json::json!(handle_uri));
-            }
             Value::Object(row)
         })
         .collect()
