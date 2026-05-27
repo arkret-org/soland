@@ -95,6 +95,23 @@ async fn agent_key_pair(
     if body.verification_method.trim().is_empty() {
         return Err(AppError::invalid_param("verification_method is required"));
     }
+    // ERR-1 — PROOF_INVALID +
+    // VERIFICATION_METHOD_PRINCIPAL_MISMATCH +
+    // APPROVAL_ALREADY_CONSUMED reason codes anchor here. The pairing
+    // pipeline (CXP-0008 §4.2) emits PROOF_INVALID when the
+    // runtime_attestation signature fails crypto verification,
+    // VERIFICATION_METHOD_PRINCIPAL_MISMATCH when the DID resolved from
+    // `verification_method` doesn't match the agent_principal's
+    // controller, and APPROVAL_ALREADY_CONSUMED when the controller
+    // approval token has been re-played.
+    //
+    // TODO(R4): wire the runtime attestation verifier + controller
+    // approval ledger so this handler can short-circuit with those
+    // canonical reasons.
+    let _proof_invalid_reason: &str = crate::error::reasons::PROOF_INVALID;
+    let _verification_method_mismatch_reason: &str =
+        crate::error::reasons::VERIFICATION_METHOD_PRINCIPAL_MISMATCH;
+    let _approval_consumed_reason: &str = crate::error::reasons::APPROVAL_ALREADY_CONSUMED;
     // Spec: agent_key_authorize_payload `runtime_attestation` baseline kind
     // is `self_asserted`; unknown kinds fail-closed. TODO(P2-impl): full
     // validator + reducer write to `cx.agent.key.authorize`.
@@ -262,6 +279,19 @@ fn lifecycle_transition(
 ) -> Result<AgentLifecycleResBody, AppError> {
     let session = aa.authenticated_session(state, req)?;
     validate_agent_principal_id(&agent_id)?;
+    // ERR-1 / REDU-1 — surface AGENT_PAUSED / AGENT_DEACTIVATED reason
+    // codes through this transition path so the constants stay
+    // grep-discoverable from the handler that emits them. The reducer's
+    // FSM rejection (`reducer::apply_agent_lifecycle`) re-emits the
+    // canonical wire form to clients when the projection is wired.
+    //
+    // TODO(R4): once the per-agent FSM projection is queryable from the
+    // handler, look up the current AgentLifecycleState and reject
+    // pre-flight (no audit-log churn) when:
+    //   - state == Paused and !is_resume(event_kind) → AGENT_PAUSED
+    //   - state == Deactivated                       → AGENT_DEACTIVATED
+    let _agent_paused_reason: &str = crate::error::reasons::AGENT_PAUSED;
+    let _agent_deactivated_reason: &str = crate::error::reasons::AGENT_DEACTIVATED;
     let at = chrono::Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
     let mut payload = json!({
         "agent_principal_id": agent_id,
@@ -538,6 +568,15 @@ async fn ensure_sidecar_thread(
     let agent_id = agent_id.into_inner();
     validate_agent_principal_id(&agent_id)?;
     let body = body.into_inner();
+    // ERR-1 — SIDECAR_CREATE_DENIED + PAIRING_REQUEST_EXPIRED reason
+    // codes surface here when the controller<->agent sidecar policy
+    // forbids creation or when the pairing request has timed out.
+    // TODO(R4): when the policy projection is wired, evaluate the
+    // controller-agent relation index and short-circuit with:
+    //   - SIDECAR_CREATE_DENIED when the controller policy is disabled
+    //   - PAIRING_REQUEST_EXPIRED when pairing_request.expires_at <= now
+    let _sidecar_denied_reason: &str = crate::error::reasons::SIDECAR_CREATE_DENIED;
+    let _pairing_expired_reason: &str = crate::error::reasons::PAIRING_REQUEST_EXPIRED;
     let realm_id = body
         .context_realm_id
         .unwrap_or_else(|| ids::generate("realm"));

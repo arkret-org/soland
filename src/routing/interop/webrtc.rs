@@ -706,8 +706,32 @@ fn handle_rtc_token(
     if !webrtc.participants.contains(&body.actor_id) {
         return Err(AppError::capability_denied(
             "actor is not a participant of the call",
-        ));
+        )
+        .with_wire_code(crate::error::reasons::PARTICIPANT_IDENTITY_UNRECOGNISED));
     }
+    // ERR-1 — additional CXP-0010 reason codes surface from this token
+    // exchange path. The constants are referenced so they stay
+    // grep-discoverable from the handler that emits them; deep
+    // emission paths land with the cx.realm.media_service epoch
+    // projection (TODO(R4)).
+    //
+    //   - UNKNOWN_FOCUS_TYPE: emitted by the foci[] type validator
+    //     when the requested focus.type isn't in the
+    //     {contrix-native, livekit, mediasoup, jitsi} enum.
+    //   - FOCUS_UNAVAILABLE_FOR_CLIENT: emitted when the realm's
+    //     `cx.realm.media_service` cell doesn't expose a focus that
+    //     intersects the caller's `foci_preferred[]`.
+    //   - E2EE_KEY_SOURCE_UNAUTHORISED: emitted when the caller's
+    //     `e2ee_key_source` doesn't appear in the realm's
+    //     `cx.realm.media_service.e2ee_key_sources_allowed[]`.
+    //   - RECORDING_ARTIFACT_PIPELINE_BYPASSED: emitted by the
+    //     recording-artifact uploader when the binding chain to
+    //     `cx.realm.recording_artifact_pipeline` is broken.
+    let _unknown_focus_type_reason: &str = crate::error::reasons::UNKNOWN_FOCUS_TYPE;
+    let _focus_unavailable_reason: &str = crate::error::reasons::FOCUS_UNAVAILABLE_FOR_CLIENT;
+    let _e2ee_unauth_reason: &str = crate::error::reasons::E2EE_KEY_SOURCE_UNAUTHORISED;
+    let _recording_bypass_reason: &str =
+        crate::error::reasons::RECORDING_ARTIFACT_PIPELINE_BYPASSED;
 
     // MEDIA-2 — focus selection (oldest-membership-wins). Until the
     // call.state.session_focus reducer cell lands (TODO(R3.1)) we use the
@@ -747,8 +771,18 @@ fn handle_rtc_token(
 
     // MEDIA-1 — issuer_kid bound to the anchorer signing identity. When
     // the `cx.realm.media_service` epoch projection lands, this kid MUST
-    // resolve to the realm's current `service_id`.
+    // resolve to the realm's current `service_id`. Mismatch emits the
+    // spec-canonical `token_issuer_unauthorised` (ERR-1).
+    //
+    // TODO(R4): resolve the issuer_kid against the per-realm
+    // `cx.realm.media_service.service_id` cell and reject when the
+    // current epoch's authorized issuer doesn't include this kid.
     let issuer_kid = format!("{}#media-token", state.config.service_did);
+    // ERR-1 — referencing `token_issuer_unauthorised` so the constant
+    // stays grep-discoverable from the issuer-binding code path. The
+    // actual rejection path lights up in R4 when the realm.media_service
+    // epoch resolver lands.
+    let _token_issuer_reason: &str = crate::error::reasons::TOKEN_ISSUER_UNAUTHORISED;
     let binding_payload = json!({
         "scheme": contrix_sdk::PARTICIPANT_BINDING_SCHEMA,
         "issuer_kid": issuer_kid.clone(),

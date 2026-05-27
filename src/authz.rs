@@ -421,6 +421,14 @@ impl Default for AuthzEngine {
 }
 
 /// Check if a grant resource pattern matches the requested resource.
+///
+/// CXP-0007 / SEL-1 (R3 spec-sync 2026-05-27, contrix-spec b47ff6ec) —
+/// the spec resource-selector enum admits `realm`, `space`, `flow`,
+/// `morph`, `circle`, `actor`. soland's resource matcher accepts the
+/// `cx:circle:<uuid>` typed-id form alongside the existing space /
+/// realm forms, plus a `circle` keyword selector that resolves to
+/// "any cx:circle:<uuid>" so policy-authoring tools can express
+/// circle-wide grants without enumerating each circle.
 fn resource_matches(pattern: &str, resource: &str) -> bool {
     if pattern == "*" {
         return true;
@@ -429,7 +437,31 @@ fn resource_matches(pattern: &str, resource: &str) -> bool {
     if pattern == resource {
         return true;
     }
-    // Prefix match with wildcard: "space:cx:space:123:*"
+    // SEL-1 — selector-kind keyword form. `circle` matches any
+    // `cx:circle:<uuid>` resource (mirrors `realm` / `space` semantics
+    // expected by the resource selector enum). Also support the
+    // namespaced `circle:cx:circle:<uuid>` form for symmetry with the
+    // pre-existing `space:cx:space:<uuid>` pattern.
+    if pattern == "circle" {
+        return resource.starts_with("cx:circle:");
+    }
+    if pattern == "realm" {
+        return resource.starts_with("cx:realm:");
+    }
+    if pattern == "space" {
+        return resource.starts_with("cx:space:");
+    }
+    if pattern == "flow" {
+        return resource.starts_with("cx:flow:");
+    }
+    if pattern == "morph" {
+        return resource.starts_with("cx:morph:");
+    }
+    if pattern == "actor" {
+        return resource.starts_with("did:") || resource.starts_with("cx:actor:");
+    }
+    // Prefix match with wildcard: "space:cx:space:123:*" or
+    // "cx:circle:<uuid>:*".
     if let Some(prefix) = pattern.strip_suffix('*') {
         return resource.starts_with(prefix);
     }

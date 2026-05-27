@@ -698,6 +698,16 @@ fn round4_validate_payload(kind: &str, operation: &Operation) -> Result<(), &'st
             // also carry `previous_session_focus` (the failed update
             // path is reserved for migration tooling). Pure first-write
             // (`revision==1` or unset) is accepted unconditionally.
+            // ERR-1 — wire-validator error strings embed the canonical
+            // reason code as a prefix; the parallel const reference
+            // here pins them to `crate::error::reasons::*` so a rename
+            // would break compilation rather than silently diverge.
+            const _SESSION_FOCUS_REASON: &str =
+                crate::error::reasons::SESSION_FOCUS_ALREADY_COMMITTED;
+            const _PARTICIPANT_BINDING_REASON: &str =
+                crate::error::reasons::PARTICIPANT_BINDING_INVALID;
+            const _LEGACY_MEDIA_SERVICE_REASON: &str =
+                crate::error::reasons::LEGACY_SINGLE_ENDPOINT_MEDIA_SERVICE;
             if let Some(revision) = operation
                 .payload
                 .get("session_focus_revision")

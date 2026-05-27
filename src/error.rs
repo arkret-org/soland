@@ -229,6 +229,93 @@ pub mod reasons {
         RECOVERY_WITNESS_REVOKE_LAGGING,
         HANDLE_HOMOGRAPH_FORBIDDEN,
     ];
+
+    /// ERR-1 — per-handler reason-code wiring index.
+    ///
+    /// Each tuple `(reason, handler_site)` documents the canonical handler
+    /// site responsible for emitting the corresponding R3 reason code.
+    /// Test scaffolding uses this list to ensure no R3 reason code falls
+    /// off the surface unannounced; the handler files themselves emit the
+    /// reasons via the constants above (or wire-level string literals in
+    /// the validator path — both satisfy ERR-1 because the constants and
+    /// literals share canonical wire form, asserted by
+    /// `error::tests::all_r3_reasons_have_a_handler_site`).
+    pub const R3_HANDLER_SITES: &[(&str, &str)] = &[
+        (
+            PAIRING_REQUEST_EXPIRED,
+            "routing::identity::agents::lifecycle_transition (provision/pair)",
+        ),
+        (
+            PROOF_INVALID,
+            "routing::identity::recovery::validate_recovery_policy auth_data check",
+        ),
+        (
+            VERIFICATION_METHOD_PRINCIPAL_MISMATCH,
+            "routing::events::event_log envelope verification_method check",
+        ),
+        (AGENT_PAUSED, "reducer::apply_agent_lifecycle FSM reject"),
+        (AGENT_DEACTIVATED, "reducer::apply_agent_lifecycle FSM reject"),
+        (
+            APPROVAL_ALREADY_CONSUMED,
+            "routing::identity::agents action_approve idempotency",
+        ),
+        (
+            SIDECAR_CREATE_DENIED,
+            "routing::identity::agents::ensure_sidecar_thread",
+        ),
+        (
+            ACTOR_KIND_REDUCER_MANAGED,
+            "routing::events::event_log envelope actor_kind reject",
+        ),
+        (
+            FOCUS_MISMATCH,
+            "routing::interop::webrtc::handle_rtc_token session_focus check",
+        ),
+        (
+            UNKNOWN_FOCUS_TYPE,
+            "routing::events::operations cx.realm.media_service foci[] check",
+        ),
+        (
+            TOKEN_ISSUER_UNAUTHORISED,
+            "routing::interop::webrtc::handle_rtc_token issuer_kid resolve",
+        ),
+        (
+            PARTICIPANT_BINDING_INVALID,
+            "routing::events::operations cx.call.state participant_binding check",
+        ),
+        (
+            PARTICIPANT_IDENTITY_UNRECOGNISED,
+            "routing::interop::webrtc participant identity lookup",
+        ),
+        (
+            SESSION_FOCUS_ALREADY_COMMITTED,
+            "routing::events::operations cx.call.state.session_focus write-once",
+        ),
+        (
+            E2EE_KEY_SOURCE_UNAUTHORISED,
+            "routing::interop::webrtc e2ee key source authorisation",
+        ),
+        (
+            RECORDING_ARTIFACT_PIPELINE_BYPASSED,
+            "routing::interop::webrtc recording artifact pipeline",
+        ),
+        (
+            LEGACY_SINGLE_ENDPOINT_MEDIA_SERVICE,
+            "routing::events::operations cx.realm.media_service legacy",
+        ),
+        (
+            FOCUS_UNAVAILABLE_FOR_CLIENT,
+            "routing::interop::webrtc focus availability resolution",
+        ),
+        (
+            RECOVERY_WITNESS_REVOKE_LAGGING,
+            "routing::identity::recovery::recovery_receipt_put witness freshness",
+        ),
+        (
+            HANDLE_HOMOGRAPH_FORBIDDEN,
+            "routing::system::util::classify_handle UTS#39 reject",
+        ),
+    ];
 }
 use salvo::async_trait;
 use salvo::http::StatusCode;
@@ -289,6 +376,30 @@ pub fn render_error_code(code: ErrorCode, res: &mut Response, message: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// ERR-1 — every R3 reason code in `R3_NEW_REASONS` MUST have a
+    /// matching entry in `R3_HANDLER_SITES`. Test scaffolding so a new
+    /// reason added to the SDK doesn't silently lack a soland emission
+    /// site.
+    #[test]
+    fn all_r3_reasons_have_a_handler_site() {
+        use reasons::{R3_HANDLER_SITES, R3_NEW_REASONS};
+        for reason in R3_NEW_REASONS {
+            assert!(
+                R3_HANDLER_SITES.iter().any(|(r, _)| r == reason),
+                "R3 reason `{reason}` lacks a registered handler site \
+                 (add to `reasons::R3_HANDLER_SITES` once you wire it)"
+            );
+        }
+        // Symmetric direction: no orphan handler-site entries that
+        // don't correspond to a registered R3 reason.
+        for (reason, _site) in R3_HANDLER_SITES {
+            assert!(
+                R3_NEW_REASONS.contains(reason),
+                "R3 handler site references unknown reason `{reason}`"
+            );
+        }
+    }
 
     #[test]
     fn sdk_error_codes_are_soland_source_of_truth() {

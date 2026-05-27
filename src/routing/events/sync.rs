@@ -1039,6 +1039,17 @@ fn stored_sync_cursor_by_handle(state: &AppState, handle: &str) -> Result<Value,
         .ok_or(SyncCursorError::Integrity("sync cursor handle is unknown"))
 }
 
+/// CURSOR-1 — is `cx.profile.stateless_cursor.v1` declared by this
+/// deployment? Toggled by the `SOLAND_PROFILE_STATELESS_CURSOR` env var
+/// (mirrors the gating pattern used by `accountable_to.strict_reject.v1`
+/// in `routing/events/operations.rs`). Default: stateful-only.
+fn is_stateless_cursor_profile_declared(_state: &AppState) -> bool {
+    matches!(
+        std::env::var("SOLAND_PROFILE_STATELESS_CURSOR").as_deref(),
+        Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes")
+    )
+}
+
 pub fn parse_and_validate_sync_cursor(
     token: &str,
     state: &AppState,
@@ -1066,16 +1077,51 @@ pub fn parse_and_validate_sync_cursor(
     if expires_at <= now_ms {
         return Err(SyncCursorError::Expired);
     }
-    if value.get("_mac").is_some()
+    // CURSOR-1 (R3 spec-sync 2026-05-27, contrix-spec b47ff6ec) —
+    // core schema rejects stateless body fields unless the server
+    // declares `cx.profile.stateless_cursor.v1`. Stateless body markers
+    // per `_before_todos.md §0.14`: `_mac`, `_sig`, `s`, `d`, `target`,
+    // `issuer_kid`. Also keeps the existing `_ctx` / `_positions`
+    // rejects which are soland-specific stateful-only fields.
+    let stateless_cursor_declared = is_stateless_cursor_profile_declared(state);
+    let has_stateless_marker = value.get("_mac").is_some()
         || value.get("_sig").is_some()
-        || value.get("issuer_kid").is_some()
-        || value.get("_ctx").is_some()
-        || value.get("_positions").is_some()
-    {
+        || value.get("s").is_some()
+        || value.get("d").is_some()
+        || value.get("target").is_some()
+        || value.get("issuer_kid").is_some();
+    if has_stateless_marker && !stateless_cursor_declared {
+        return Err(SyncCursorError::Integrity(
+            "core cursor must use stateful handle form (stateless body \
+             requires cx.profile.stateless_cursor.v1)",
+        ));
+    }
+    if value.get("_ctx").is_some() || value.get("_positions").is_some() {
         return Err(SyncCursorError::Integrity(
             "core cursor must use stateful handle form",
         ));
     };
+    if stateless_cursor_declared && has_stateless_marker {
+        // CURSOR-1 — stateless cursor path. Integrity binding check:
+        // the cursor MUST carry both `_sig` (or `_mac`) and `issuer_kid`
+        // so the receiver can resolve the issuer's verification key and
+        // verify the integrity tag. Absence of either fails with
+        // `cursor_integrity_invalid`.
+        // TODO(R4): cryptographic verification of `_sig` against the
+        // `issuer_kid`-resolved verification key over canonical-JSON
+        // bytes of the stateless cursor body. Until then we only
+        // enforce the wire-shape contract.
+        if value.get("issuer_kid").and_then(Value::as_str).is_none() {
+            return Err(SyncCursorError::Integrity(
+                "stateless cursor missing issuer_kid binding",
+            ));
+        }
+        if value.get("_sig").is_none() && value.get("_mac").is_none() {
+            return Err(SyncCursorError::Integrity(
+                "stateless cursor missing _sig / _mac integrity tag",
+            ));
+        }
+    }
     let Some(handle) = value.get("h").and_then(|h| h.as_str()) else {
         return Err(SyncCursorError::Integrity("after cursor must contain h"));
     };

@@ -1490,7 +1490,7 @@ fn validate_event_envelope(
     if object.get("actor_kind").is_some() {
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
-            "actor_kind_reducer_managed",
+            crate::error::reasons::ACTOR_KIND_REDUCER_MANAGED,
             "envelope.actor_kind is reducer-managed; clients MUST NOT supply it",
         ));
     }
