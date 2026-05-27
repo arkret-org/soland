@@ -243,6 +243,40 @@ pub struct AppConfig {
     /// `realm-and-space.md` §2.5.2: default 7 days (604_800_000 ms).
     /// Env: `SOLAND_ERASURE_PROPAGATION_WINDOW_MS`.
     pub erasure_propagation_window_ms: u64,
+    /// P5 (5.4) — structured-logging output format. Defaults to
+    /// [`LogFormat::Json`] in production (`SOLAND_DEVELOPMENT_MODE=false`)
+    /// and [`LogFormat::Plain`] in development. Override at any time via
+    /// `SOLAND_LOG_FORMAT=json|plain`. JSON output is the format on-call
+    /// runbooks assume (the `runbook.md` log-search recipes use
+    /// `jq`-friendly field names).
+    pub log_format: LogFormat,
+}
+
+/// Tracing-subscriber output format. See [`AppConfig::log_format`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LogFormat {
+    /// Human-readable ANSI-decorated logs. Default in development mode.
+    Plain,
+    /// One JSON object per event. Default in production so
+    /// log-aggregation pipelines (Loki, OpenSearch, Cloud Logging)
+    /// see structured fields without bespoke parsers.
+    Json,
+}
+
+impl LogFormat {
+    pub fn from_env(development_mode: bool) -> Self {
+        match std::env::var("SOLAND_LOG_FORMAT").ok().as_deref() {
+            Some("json") | Some("JSON") => LogFormat::Json,
+            Some("plain") | Some("PLAIN") | Some("text") | Some("TEXT") => LogFormat::Plain,
+            _ => {
+                if development_mode {
+                    LogFormat::Plain
+                } else {
+                    LogFormat::Json
+                }
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -532,6 +566,7 @@ impl AppConfig {
                 })
                 .unwrap_or_default();
         let trust_domain = derive_trust_domain(&service_did)?;
+        let log_format = LogFormat::from_env(development_mode);
 
         Ok(Self {
             bind,
@@ -580,6 +615,7 @@ impl AppConfig {
             sovereign_enclave_enabled,
             sovereign_enclave_allowed_outbound_hosts,
             erasure_propagation_window_ms,
+            log_format,
         })
     }
 

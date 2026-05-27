@@ -1,0 +1,112 @@
+# soland — Prometheus alert rules.
+#
+# Reader notes:
+#
+# - These rules assume the soland metrics listener
+#   (`SOLAND_METRICS_BIND`, default `127.0.0.1:9090`) is scraped under
+#   the job name `soland`. Adjust the `job=` label below if you use a
+#   different convention.
+# - The `for:` durations are intentionally generous so transient blips
+#   do not page. Override per environment if you need tighter SLOs.
+# - Every alert references a runbook section under `docs/runbook.md`.
+#
+# Load this file via the Prometheus `rule_files:` directive:
+#
+#   rule_files:
+#     - /etc/prometheus/rules/soland-alerts.yml
+#
+# See https://prometheus.io/docs/prometheus/latest/configuration/alerting_rules/
+# for full alert-rule syntax.
+
+groups:
+  - name: soland-core
+    interval: 30s
+    rules:
+      # Spec C.3.7 — every durable audit-log append failure bumps this
+      # counter. Any non-zero rate over 5 m means we are silently
+      # dropping audit rows; on-call MUST investigate before the
+      # window of unsignaled drops grows.
+      - alert: SolandAuditAppendFailures
+        expr: increase(soland_audit_append_failures_total{job="soland"}[5m]) > 0
+        for: 5m
+        labels:
+          severity: critical
+          component: audit
+        annotations:
+          summary: "soland is dropping audit-log appends"
+          description: |
+            soland_audit_append_failures_total has advanced over the last 5
+            minutes. Audit rows are being dropped silently. See
+            docs/runbook.md "Common error codes" → audit_append_failure.
+          runbook: "docs/runbook.md#common-error-codes"
+
+      # Federation outbox dead-letter rate. Non-zero means we have given
+      # up on at least one peer dispatch in the window — typically a
+      # peer outage, but also fires on header / trust-domain
+      # misconfiguration after onboarding a new peer.
+      - alert: SolandFederationDeadLetterRate
+        expr: increase(soland_federation_outbox_dead_letter_total{job="soland"}[5m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+          component: federation
+        annotations:
+          summary: "soland federation outbox is moving rows to the dead-letter ledger"
+          description: |
+            soland_federation_outbox_dead_letter_total has advanced over the
+            last 5 minutes. Inspect the dead-letter rows via
+            GET /api/v1/admin/federation/dead-letters and confirm the peer
+            is reachable. See docs/federation-s2s.md and
+            docs/runbook.md "Fault-injection examples".
+          runbook: "docs/federation-s2s.md"
+
+      # Federation outbox depth — gauge of undelivered rows. Sustained
+      # growth (>500 for >15m) indicates the dispatcher cannot keep up
+      # with intake.
+      - alert: SolandFederationOutboxDepthGrowing
+        expr: soland_federation_outbox_depth{job="soland"} > 500
+        for: 15m
+        labels:
+          severity: warning
+          component: federation
+        annotations:
+          summary: "soland federation outbox depth is sustained > 500 rows"
+          description: |
+            The outbox dispatcher cannot drain rows fast enough. Check
+            peer reachability + your rate-limit budget against the peer's
+            inbound quota. See docs/federation-s2s.md "Peer onboarding".
+
+      # Readiness flapping. /readyz returning 503 for > 5 minutes on a
+      # replica that should be serving traffic typically means the
+      # database probe is failing or the migration batch is wedged.
+      - alert: SolandReadyzDown
+        expr: probe_success{job="blackbox", instance=~".*soland.*/readyz"} == 0
+        for: 5m
+        labels:
+          severity: critical
+          component: lifecycle
+        annotations:
+          summary: "soland replica failing /readyz for 5 minutes"
+          description: |
+            See docs/runbook.md "Common error codes" → migrations_pending
+            / database_unreachable. If the replica was recently restarted,
+            check the diesel boot log for a partial migration.
+          runbook: "docs/runbook.md#common-error-codes"
+
+      # 5xx surge — generic SLO guard, fold into your existing API SLO if
+      # you already track one.
+      - alert: Soland5xxSurge
+        expr: |
+          sum(rate(soland_request_total{job="soland",status=~"5.."}[5m]))
+            /
+          sum(rate(soland_request_total{job="soland"}[5m]))
+          > 0.05
+        for: 10m
+        labels:
+          severity: warning
+          component: http
+        annotations:
+          summary: "soland 5xx rate above 5% for 10 minutes"
+          description: |
+            More than 5% of soland responses are 5xx. Drill into per-op
+            breakdown with `sum by (op) (rate(soland_request_total{status=~"5.."}[5m]))`.

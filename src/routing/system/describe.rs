@@ -87,6 +87,12 @@ async fn health(depot: &mut Depot, res: &mut Response) -> JsonResult<HealthRespo
 async fn readyz(depot: &mut Depot, res: &mut Response) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let database_ok = database_ready(state);
+    // P5 (5.4 readiness gate for migrations) — keep /readyz in 503 until the
+    // embedded diesel batch has been applied. Before this gate landed,
+    // orchestrators that drained traffic onto a still-migrating replica
+    // could observe transient `relation does not exist` errors on the
+    // first few requests; the gate makes that race fail-closed.
+    let migrations_applied = state.db.migrations_applied();
     let oauth_introspection_ready = state.config.oauth_introspection_url.is_none()
         || state.config.oauth_introspection_bearer.is_some();
     let session_grant_introspection_ready = state.config.session_grant_introspection_url.is_none()
@@ -94,21 +100,39 @@ async fn readyz(depot: &mut Depot, res: &mut Response) -> JsonResult<Value> {
     let external_webvh_provider_ready = state.config.external_webvh_provider_url.is_none()
         || state.config.external_webvh_provider_active;
     let ok = database_ok
+        && migrations_applied
         && oauth_introspection_ready
         && session_grant_introspection_ready
         && external_webvh_provider_ready;
     if !ok {
         res.status_code(StatusCode::SERVICE_UNAVAILABLE);
     }
+    // When migrations are the *only* thing blocking readiness, surface a
+    // dedicated reason code at the top level so orchestrators can
+    // distinguish "still booting" from "configured wrong".
+    let reason = if !migrations_applied {
+        Some("migrations_pending")
+    } else if !database_ok {
+        Some("database_unreachable")
+    } else {
+        None
+    };
     json_ok(json!({
         "ok": ok,
         "service": "soland",
         "storage": state.db.mode(),
+        "reason": reason,
         "checks": {
             "database": {
                 "ok": database_ok,
                 "mode": state.db.mode(),
-                "migrations": if state.db.pool.is_some() { "applied_at_boot" } else { "not_required" },
+                "migrations": if state.db.pool.is_some() {
+                    if migrations_applied { "applied" } else { "pending" }
+                } else { "not_required" },
+            },
+            "migrations": {
+                "ok": migrations_applied,
+                "mode": state.db.mode(),
             },
             "oauth_introspection": {
                 "ok": oauth_introspection_ready,

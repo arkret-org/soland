@@ -216,6 +216,22 @@ Scrape `http://127.0.0.1:9090/metrics` for:
 - `soland_request_duration_seconds` histogram buckets
 - `soland_db_pool_in_use`
 - `soland_federation_outbox_depth`
+- `soland_federation_outbox_dead_letter_total` (P5 — counter; alert on
+  any non-zero rate over 5m via `examples/prometheus-alerts.yml`)
+- `soland_audit_append_failures_total` (alert on any non-zero rate over
+  5m — see `examples/prometheus-alerts.yml`)
+
+A copy-pasteable `prometheus-alerts.yml` lives under `examples/`; load
+it via Prometheus' `rule_files:` directive.
+
+### Structured JSON logging
+
+Production deployments default to **JSON logs** when
+`SOLAND_DEVELOPMENT_MODE=false` (the default). One log line per event,
+keyed by the standard `tracing` span / field set, ready for ingestion
+by Loki / OpenSearch / Cloud Logging without a bespoke parser. Force
+the format explicitly with `SOLAND_LOG_FORMAT=json|plain`. The
+runbook log-search recipes in `docs/runbook.md` assume the JSON shape.
 
 OpenTelemetry tracing is build-time opt-in so ordinary local runs do not pull
 an exporter:
@@ -346,10 +362,40 @@ pre-upgrade backup if you need to roll back.
 - Rate-limit configuration matches your anticipated traffic and is enforced
   at the shared gateway when more than one soland replica is running.
 
-## 11. Known limits
+## 11. Anchorer signing-key rotation
+
+The AnchorerWorker signs background sub-anchors with the seed loaded
+from `SOLAND_ANCHORER_SIGNING_KEY` (a 32-byte ed25519 seed,
+base64-standard-padded). Recommended cadence and ceremony:
+
+- **Rotation cadence**: every **90 days** in steady-state. Same cadence
+  on any suspected compromise, with no grace period. Calendar the
+  rotation against your secret-rotation tooling (Vault, AWS Secrets
+  Manager, ...).
+- **Pre-rotation drill**: run
+  `cargo run --bin soland-rotate-drill --release` (see
+  `src/bin/soland-rotate-drill.rs`) against a staging replica. The
+  drill mints a fresh seed, posts it through the live
+  `/api/v1/admin/anchorer/rotate-signing-key` path, and verifies the
+  hot-swap completed without dropping concurrent signing passes.
+- **Production rotation**: stage the new seed in the secret manager,
+  call the rotate-signing-key admin endpoint on each replica in turn,
+  then retire the old seed. With `SOLAND_USE_KEYSTORE=true` the same
+  endpoint also persists the rotated key back into the SDK KeyStore so
+  a future restart picks up the new seed automatically.
+- **Audit**: every rotation emits a sticky-info tracing event on the
+  `anchorer` target with `rotation_id`, `previous_key_origin`, and the
+  new public key's multibase encoding. Capture both the
+  pre-rotation and post-rotation public keys in your operations log
+  so external verifiers can resolve historical anchors.
+- **Cross-link**: the runbook (`docs/runbook.md` "Fault-injection
+  examples" §4) documents the drill from an on-call perspective.
+
+## 12. Known limits
 
 - **Rate limiting**: the built-in limiter is per-process. Multi-replica
-  deployments need a shared reverse-proxy/API-gateway quota in front of soland.
+  deployments **MUST** enforce a shared rate-limit budget at the reverse
+  proxy or API gateway (see SECURITY.md and `docs/architecture.md` §4).
   Until an external Redis (or equivalent) backend is wired in, treat the
   per-process quota as a single-instance soft floor; production fleets MUST
   front soland with nginx/Caddy/Traefik `limit_req` or an API gateway that

@@ -67,8 +67,13 @@ We aim to:
 - The directory surface is backed by demo data, exposing pseudo-real handles
   during development (`_todos.md` Stream-E).
 - The built-in rate limiter is per-instance. Multi-replica production
-  deployments need a shared external limiter in front of soland; otherwise an
-  attacker can multiply the advertised per-minute quota by the replica count.
+  deployments **MUST** enforce shared quotas at the reverse proxy or API
+  gateway layer; the built-in limiter is per-process only. Without an
+  external shared limiter an attacker can multiply the advertised
+  per-minute quota by the replica count. See `docs/architecture.md` §4
+  ("Multi-replica deployment notes") and `DEPLOYMENT.md` §10 — both
+  surfaces restate the MUST so the deployment audit trail is
+  cross-linked.
 
 If you find an issue overlapping a `_todos.md` item, the report is still
 welcome — exploitable severity often differs from the planned scope.

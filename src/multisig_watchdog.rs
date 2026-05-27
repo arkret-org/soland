@@ -425,6 +425,7 @@ mod tests {
             sovereign_enclave_enabled: false,
             sovereign_enclave_allowed_outbound_hosts: Vec::new(),
             erasure_propagation_window_ms: 604_800_000,
+            log_format: crate::config::LogFormat::Plain,
         };
         AppState::new(config, Db { pool: None })
     }

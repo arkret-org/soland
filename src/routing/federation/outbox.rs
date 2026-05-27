@@ -465,6 +465,11 @@ impl FederationDispatcher {
             failed_at,
             reason: reason.to_owned(),
         };
+        // P5 (5.4) — bump the DLQ counter at the *decision* boundary
+        // (we have given up on this row) rather than the persistence
+        // outcome so an alert fires even if the durable ledger write
+        // also failed.
+        crate::metrics::record_federation_outbox_dead_letter();
         if let Err(error) = self
             .state
             .persistence

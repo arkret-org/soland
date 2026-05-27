@@ -14,11 +14,34 @@ use tracing_subscriber::util::SubscriberInitExt;
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     dotenvy::dotenv().ok();
+
+    // P5 (5.5) — `soland healthcheck` subcommand. Distroless / minimal
+    // runtime images cannot rely on an external `curl` binary for the
+    // Docker HEALTHCHECK. Detect the subcommand BEFORE we initialize
+    // tracing so the healthcheck process stays quiet (no startup chatter,
+    // no opening of SOLAND_LOG_FILE), exits with status 0 on probe
+    // success and 1 on failure, and never starts the Salvo listener.
+    let raw_args: Vec<String> = std::env::args().collect();
+    if raw_args
+        .iter()
+        .skip(1)
+        .any(|arg| arg == "healthcheck" || arg == "--healthcheck")
+    {
+        return run_healthcheck(&raw_args).await;
+    }
+
     // Keep this guard alive for the process lifetime so the non-blocking
     // file appender drains its channel on shutdown. Dropping the guard
     // flushes pending writes; storing it in `_file_guard` defers that drop
     // until `main` returns.
-    let _tracing_guards = init_tracing()?;
+    // We need to read SOLAND_DEVELOPMENT_MODE + SOLAND_LOG_FORMAT before
+    // building the subscriber so production deployments get structured JSON
+    // logs by default. Use the same env helper the rest of the loader uses.
+    let dev_mode_for_logging = std::env::var("SOLAND_DEVELOPMENT_MODE")
+        .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes"))
+        .unwrap_or(false);
+    let log_format = soland::config::LogFormat::from_env(dev_mode_for_logging);
+    let _tracing_guards = init_tracing(log_format)?;
 
     // Fail fast at startup if a bundled Contrix artifact is malformed instead
     // of crashing the first request that touches the offending OnceLock.
@@ -226,13 +249,26 @@ struct TracingGuards {
     _otel_guard: soland::otel::OtelGuard,
 }
 
-fn init_tracing() -> anyhow::Result<TracingGuards> {
+fn init_tracing(log_format: soland::config::LogFormat) -> anyhow::Result<TracingGuards> {
+    use soland::config::LogFormat;
     use tracing_subscriber::fmt;
     use tracing_subscriber::{Layer, Registry};
 
     let filter = tracing_subscriber::EnvFilter::from_default_env();
-    let mut layers: Vec<Box<dyn Layer<Registry> + Send + Sync>> =
-        vec![Box::new(fmt::layer().with_writer(std::io::stdout))];
+    // Stdout writer: structured JSON in production, ANSI-decorated text in
+    // development. JSON is required by the runbook log-search recipes; the
+    // operator can force either side via `SOLAND_LOG_FORMAT=json|plain`.
+    let stdout_layer: Box<dyn Layer<Registry> + Send + Sync> = match log_format {
+        LogFormat::Json => Box::new(
+            fmt::layer()
+                .json()
+                .with_current_span(true)
+                .with_span_list(false)
+                .with_writer(std::io::stdout),
+        ),
+        LogFormat::Plain => Box::new(fmt::layer().with_writer(std::io::stdout)),
+    };
+    let mut layers: Vec<Box<dyn Layer<Registry> + Send + Sync>> = vec![stdout_layer];
 
     let log_file = std::env::var("SOLAND_LOG_FILE")
         .ok()
@@ -263,8 +299,17 @@ fn init_tracing() -> anyhow::Result<TracingGuards> {
             None => tracing_appender::rolling::never(".", &file_name),
         };
         let (writer, guard) = tracing_appender::non_blocking(appender);
-        let file_layer = fmt::layer().with_ansi(false).with_writer(writer);
-        layers.push(Box::new(file_layer));
+        let file_layer: Box<dyn Layer<Registry> + Send + Sync> = match log_format {
+            LogFormat::Json => Box::new(
+                fmt::layer()
+                    .json()
+                    .with_current_span(true)
+                    .with_span_list(false)
+                    .with_writer(writer),
+            ),
+            LogFormat::Plain => Box::new(fmt::layer().with_ansi(false).with_writer(writer)),
+        };
+        layers.push(file_layer);
         Some(guard)
     } else {
         None
@@ -334,6 +379,53 @@ async fn shutdown_signal() {
         }
         _ = terminate => {
             tracing::info!(event = "shutdown_signal", signal = "SIGTERM", "shutting down");
+        }
+    }
+}
+
+/// P5 (5.5) — container HEALTHCHECK subcommand. Hits the running
+/// soland's `/health` endpoint over loopback and exits 0 on success,
+/// 1 on any failure. The bind URL is derived from `SOLAND_BIND` (defaults
+/// `127.0.0.1:8698`); operators can override per-invocation with
+/// `SOLAND_HEALTHCHECK_URL` or by passing `--url <url>` after the
+/// subcommand. This eliminates the runtime `curl` dependency the
+/// previous Dockerfile relied on (incompatible with distroless bases).
+async fn run_healthcheck(args: &[String]) -> anyhow::Result<()> {
+    // Allow `soland healthcheck --url https://...` to override the
+    // default. The CLI is intentionally trivial — there is no clap
+    // dependency on the binary's hot path.
+    let url_override = args
+        .windows(2)
+        .find(|pair| pair[0] == "--url")
+        .map(|pair| pair[1].clone());
+    let url = url_override
+        .or_else(|| std::env::var("SOLAND_HEALTHCHECK_URL").ok())
+        .unwrap_or_else(|| {
+            let bind = std::env::var("SOLAND_BIND").unwrap_or_else(|_| "127.0.0.1:8698".to_owned());
+            // SOLAND_BIND uses a `host:port` shape — assume plain HTTP on
+            // loopback, which matches the in-container HEALTHCHECK call
+            // pattern (TLS termination lives at the reverse proxy).
+            format!("http://{bind}/health")
+        });
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()?;
+    match client.get(&url).send().await {
+        Ok(resp) if resp.status().is_success() => {
+            eprintln!("soland healthcheck OK: {url} → {}", resp.status());
+            Ok(())
+        }
+        Ok(resp) => {
+            eprintln!(
+                "soland healthcheck FAIL: {url} → {} (non-success)",
+                resp.status()
+            );
+            std::process::exit(1);
+        }
+        Err(err) => {
+            eprintln!("soland healthcheck FAIL: {url} → {err}");
+            std::process::exit(1);
         }
     }
 }

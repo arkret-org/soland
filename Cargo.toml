@@ -58,7 +58,7 @@ arc-swap = "1.7.1"
 # `rand` for fresh ed25519 seed generation in rotate-signing-key.
 rand = "0.8.5"
 tracing = "0.1.41"
-tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3.20", features = ["env-filter", "json"] }
 opentelemetry = { version = "0.31.0", default-features = false, features = ["trace"], optional = true }
 opentelemetry_sdk = { version = "0.31.0", default-features = false, features = ["trace", "rt-tokio"], optional = true }
 opentelemetry-otlp = { version = "0.31.0", default-features = false, features = ["trace", "grpc-tonic"], optional = true }

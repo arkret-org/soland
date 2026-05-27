@@ -6,7 +6,18 @@ in-memory mode keeps the same API for fast local iteration.
 
 > See [DEPLOYMENT.md](DEPLOYMENT.md) for production guidance, [SECURITY.md](SECURITY.md)
 > for vulnerability disclosure, and [../_todos.md](../_todos.md) for the open
-> task list.
+> task list. Operator-facing internals:
+>
+> - [`docs/architecture.md`](docs/architecture.md) — reducer / projection
+>   pipeline, federation outbox, MLS lifecycle, multi-replica notes.
+> - [`docs/runbook.md`](docs/runbook.md) — common error codes, log-search
+>   recipes, restart strategy, fault-injection drills.
+> - [`docs/federation-s2s.md`](docs/federation-s2s.md) — peer onboarding,
+>   the three signed `Source-Trust-Domain` / `Destination-Trust-Domain` /
+>   `Request-Canonical-Digest` headers, trust-domain immutability.
+> - [`examples/prometheus-alerts.yml`](examples/prometheus-alerts.yml) —
+>   ready-made alert rules (audit-append failures, federation DLQ rate,
+>   /readyz outages).
 
 ## Realm vs Space
 
@@ -198,7 +209,20 @@ All settings can be supplied via environment variables (preferred) or a
 | `SOLAND_METRICS_BIND` | `127.0.0.1:9090` | Separate Prometheus listener; scrape `/metrics` |
 | `SOLAND_OTEL_EXPORTER` | unset | Set to `otlp` when built with `--features otel` to export traces |
 | `SOLAND_OTEL_ENDPOINT` | `http://127.0.0.1:4317` | OTLP gRPC collector endpoint when OTEL export is enabled |
+| `SOLAND_LOG_FORMAT` | `json` in prod, `plain` in dev | Tracing output format. Production deployments default to JSON for structured log aggregation; development defaults to ANSI-decorated text. Force either via `json` / `plain`. |
 | `RUST_LOG` | unset | Tracing subscriber filter, e.g. `soland=info,salvo=warn` |
+
+### OpenTelemetry tracing
+
+OTLP trace export is a build-time opt-in to keep the default binary
+free of the OpenTelemetry SDK. Build with `--features otel`, then set
+`SOLAND_OTEL_EXPORTER=otlp` at runtime to export spans to your
+collector. The recommended local collector setup is the
+[OpenTelemetry Collector Contrib](https://github.com/open-telemetry/opentelemetry-collector-contrib)
+distribution with an `otlp` receiver on `:4317` and your preferred
+backend (Tempo, Jaeger, Honeycomb, ...) as the exporter. See
+[DEPLOYMENT.md §7](DEPLOYMENT.md) for the production env-var matrix and
+sample collector config.
 
 ## Local TLS
 

@@ -14,6 +14,14 @@ const DURATION_BUCKETS: [f64; 11] = [
     0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0,
 ];
 
+/// P5 (5.4 metrics cardinality cap) — soft cap on the number of distinct
+/// `op` label values we will emit on `soland_request_total` /
+/// `soland_request_duration_seconds`. Above this we still record (no
+/// data loss) but emit a sticky warning so on-call can audit whether a
+/// path normalizer regressed and started leaking an unbounded id segment
+/// (e.g. forgot to fold `cx:...` ids in `normalize_path_for_metrics`).
+const REQUEST_OP_LABEL_CARDINALITY_THRESHOLD: usize = 200;
+
 static METRICS: OnceLock<Mutex<HttpMetrics>> = OnceLock::new();
 
 #[derive(Clone)]
@@ -114,6 +122,20 @@ pub fn render_metrics(state: &AppState) -> String {
         "soland_audit_append_failures_total {}\n",
         audit_append_failures()
     ));
+    // P5 (5.4) — federation outbox DLQ counter. The dispatcher
+    // (`routing::federation::outbox`) bumps this every time a row is
+    // moved to the dead-letter ledger (either `terminal_http_status` or
+    // `retry_budget_exhausted`). The counter is a process-lifetime
+    // monotonic; pair with `soland_federation_outbox_depth` for
+    // queue-depth alerts.
+    output.push_str(
+        "# HELP soland_federation_outbox_dead_letter_total Federation outbox rows moved to the dead-letter ledger.\n",
+    );
+    output.push_str("# TYPE soland_federation_outbox_dead_letter_total counter\n");
+    output.push_str(&format!(
+        "soland_federation_outbox_dead_letter_total {}\n",
+        federation_outbox_dead_letter_total()
+    ));
     output
 }
 
@@ -133,6 +155,25 @@ fn audit_append_failures() -> u64 {
         .audit_append_failures
 }
 
+/// P5 (5.4) — bump the federation-outbox dead-letter counter. Called
+/// from `routing::federation::outbox::insert_dead_letter` immediately
+/// after the persistence ledger write (regardless of write outcome —
+/// we count the *decision* to give up on a row, not whether the row
+/// landed in the ledger). Feeds
+/// `soland_federation_outbox_dead_letter_total`.
+pub fn record_federation_outbox_dead_letter() {
+    let mut metrics = metrics_state().lock().expect("metrics lock");
+    metrics.federation_outbox_dead_letters =
+        metrics.federation_outbox_dead_letters.saturating_add(1);
+}
+
+fn federation_outbox_dead_letter_total() -> u64 {
+    metrics_state()
+        .lock()
+        .expect("metrics lock")
+        .federation_outbox_dead_letters
+}
+
 fn federation_outbox_depth(state: &AppState) -> usize {
     state
         .persistence
@@ -143,20 +184,49 @@ fn federation_outbox_depth(state: &AppState) -> usize {
 }
 
 fn record_http_request(op: &str, status: u16, duration: Duration) {
-    let mut metrics = metrics_state().lock().expect("metrics lock");
-    *metrics
-        .request_totals
-        .entry((op.to_owned(), status))
-        .or_insert(0) += 1;
+    let (cardinality_warning_payload, warning_threshold) = {
+        let mut metrics = metrics_state().lock().expect("metrics lock");
+        *metrics
+            .request_totals
+            .entry((op.to_owned(), status))
+            .or_insert(0) += 1;
 
-    let seconds = duration.as_secs_f64();
-    let histogram = metrics.request_durations.entry(op.to_owned()).or_default();
-    histogram.count += 1;
-    histogram.sum_seconds += seconds;
-    for (index, bucket) in DURATION_BUCKETS.iter().enumerate() {
-        if seconds <= *bucket {
-            histogram.bucket_counts[index] += 1;
+        let seconds = duration.as_secs_f64();
+        let histogram = metrics.request_durations.entry(op.to_owned()).or_default();
+        histogram.count += 1;
+        histogram.sum_seconds += seconds;
+        for (index, bucket) in DURATION_BUCKETS.iter().enumerate() {
+            if seconds <= *bucket {
+                histogram.bucket_counts[index] += 1;
+            }
         }
+
+        // Cardinality cap: warn (sticky, once per crossing) when the
+        // unique `op` label count crosses
+        // `REQUEST_OP_LABEL_CARDINALITY_THRESHOLD`. We do not drop any
+        // labels here — the counter still records — but a sustained
+        // upward drift typically means `normalize_path_for_metrics`
+        // failed to fold an id segment and the time-series store is
+        // about to explode.
+        let unique_ops = metrics.request_durations.len();
+        let crossed = unique_ops > REQUEST_OP_LABEL_CARDINALITY_THRESHOLD
+            && !metrics.cardinality_warning_emitted;
+        if crossed {
+            metrics.cardinality_warning_emitted = true;
+            (Some(unique_ops), REQUEST_OP_LABEL_CARDINALITY_THRESHOLD)
+        } else {
+            (None, REQUEST_OP_LABEL_CARDINALITY_THRESHOLD)
+        }
+    };
+
+    if let Some(unique_ops) = cardinality_warning_payload {
+        tracing::warn!(
+            target: "metrics_cardinality",
+            unique_op_labels = unique_ops,
+            threshold = warning_threshold,
+            "soland_request_total operation label cardinality crossed the warning threshold; \
+             audit normalize_path_for_metrics for an id segment that is not being folded"
+        );
     }
 }
 
@@ -216,6 +286,16 @@ struct HttpMetrics {
     /// every `append_audit_log` failure bumps this counter so on-call
     /// can alert on durable-audit drops.
     audit_append_failures: u64,
+    /// P5 (5.4) — federation outbox dead-letter counter. Bumped from
+    /// `routing::federation::outbox::insert_dead_letter` each time a
+    /// row is moved to the DLQ ledger. Pairs with
+    /// `soland_federation_outbox_depth` for queue alerting.
+    federation_outbox_dead_letters: u64,
+    /// P5 (5.4 metrics cardinality cap) — sticky one-shot flag so we
+    /// emit the cardinality-threshold warning once per process even
+    /// when the operator never lowers the cardinality back below the
+    /// threshold. Reset only on process restart.
+    cardinality_warning_emitted: bool,
 }
 
 #[derive(Clone)]
