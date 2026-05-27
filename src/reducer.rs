@@ -4899,7 +4899,7 @@ impl ProjectionState {
         let owner = operation
             .payload
             .get("owner")
-            .or_else(|| payload_object.and_then(|object| object.get("created_by_principal")))
+            .or_else(|| payload_object.and_then(|object| object.get("created_by")))
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned);
         // Realm create carries metadata in `payload.object`; update carries

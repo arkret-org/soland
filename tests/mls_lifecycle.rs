@@ -269,7 +269,7 @@ async fn mls_lifecycle_end_to_end() {
                 "id": realm_id,
                 "schema": "cx.schema.realm.v1",
                 "title": "MLS lifecycle",
-                "created_by_principal": alice_did,
+                "created_by": alice_did,
                 "trust_domain": "cx:trust_domain:soland-mls-test.local",
                 "schema_refs": ["cx.schema.realm.v1"],
                 "default_discoverability": "listed",

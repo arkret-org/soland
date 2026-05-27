@@ -1695,7 +1695,7 @@ mod operation_conformance_tests {
                     "schema": "cx.schema.realm.v1",
                     "title": "Launch",
                     "trust_domain": "cx:trust_domain:local",
-                    "created_by_principal": "did:web:alice.example",
+                    "created_by": "did:web:alice.example",
                     "schema_refs": ["cx.schema.realm.v1"],
                     "default_discoverability": "invite",
                     "default_join_rule": "invite",

@@ -1052,7 +1052,7 @@ fn projection_event_belongs_to_actor(
             .payload
             .get("object")
             .and_then(Value::as_object)
-            .and_then(|object| object.get("created_by_principal"))
+            .and_then(|object| object.get("created_by"))
             .and_then(Value::as_str)
             == Some(actor)
 }

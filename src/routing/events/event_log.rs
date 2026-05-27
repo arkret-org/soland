@@ -1563,7 +1563,7 @@ fn validate_event_envelope(
     }
     // Spec realm-and-space.md §2.6 — `cx.realm.create` is the genesis
     // event for both the Realm metadata cell AND the creator's first
-    // member-state cell. The reducer MUST treat `created_by_principal`
+    // member-state cell. The reducer MUST treat `created_by`
     // as already-a-member when admitting this event; otherwise spec-
     // correct clients can never bootstrap a Realm through the canonical
     // event-submission path. The submit_event commit path (below)
@@ -2813,7 +2813,7 @@ fn event_string_field(object: &serde_json::Map<String, Value>, keys: &[&str]) ->
         .map(ToOwned::to_owned)
 }
 
-/// True iff a `cx.realm.create` event's `payload.object.created_by_principal`
+/// True iff a `cx.realm.create` event's `payload.object.created_by`
 /// matches the session actor. Spec realm-and-space.md §2.6 — this is the
 /// genesis-member condition that lets the create event bypass the regular
 /// `realm_has_member` check.
@@ -2821,7 +2821,7 @@ fn realm_create_actor_is_creator(object: &serde_json::Map<String, Value>, actor:
     object
         .get("payload")
         .and_then(|payload| payload.get("object"))
-        .and_then(|create_object| create_object.get("created_by_principal"))
+        .and_then(|create_object| create_object.get("created_by"))
         .and_then(Value::as_str)
         .is_some_and(|creator| creator == actor)
 }
@@ -3955,7 +3955,7 @@ mod proof_strictness_tests {
                     "id": realm_id,
                     "schema": "cx.schema.realm.v1",
                     "title": "encrypted public history",
-                    "created_by_principal": "did:web:alice.example",
+                    "created_by": "did:web:alice.example",
                     "trust_domain": "cx:trust_domain:soland.local",
                     "schema_refs": ["cx.schema.realm.v1"],
                     "default_discoverability": "listed",

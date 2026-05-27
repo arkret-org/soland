@@ -583,7 +583,7 @@ pub fn projection_event_actor(event: &ProjectionEventRecord) -> Option<&str> {
                     .payload
                     .get("object")
                     .and_then(Value::as_object)
-                    .and_then(|object| object.get("created_by_principal"))
+                    .and_then(|object| object.get("created_by"))
                     .and_then(Value::as_str)
             })
     })

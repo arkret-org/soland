@@ -239,7 +239,7 @@ async fn create_realm(app: &salvo::Service, token: &str, actor: &str) -> String 
                 "schema": "cx.schema.realm.v1",
                 "title": "Consent event projection",
                 "summary": "Consent reducer test realm",
-                "created_by_principal": actor,
+                "created_by": actor,
                 "trust_domain": "cx:trust_domain:soland.local",
                 "schema_refs": ["cx.schema.realm.v1"],
                 "default_discoverability": "listed",
