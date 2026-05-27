@@ -4,6 +4,16 @@ All notable wire-affecting changes to the soland Principal Server are
 recorded here. Format follows [Keep a Changelog](https://keepachangelog.com/)
 and the project tracks Contrix v1 spec revisions.
 
+## R3 — Spec sync 2026-05-27 (contrix-spec @ b47ff6ec)
+
+- HTTP-1: `POST /api/v1/rtc/token` (cx.call.media.token_exchange) mounted as a 501 stub in `src/routing/system/rtc.rs`; real TTL / participant_binding / service_signature issuer logic deferred to R3.1.
+- HTTP-2: agent route canonicalised — `/agents/{id}/deactivate` only, no `/revoke` path remains.
+- HTTP-4: recovery policy / receipt endpoints (`POST /api/v1/identity/recovery-policy`, `POST /api/v1/identity/recovery-receipt`) mounted as 501 stubs in `src/routing/identity/recovery.rs`.
+- ERR-1: all 20 R3 reason codes (`pairing_request_expired`, `proof_invalid`, agent / media-binding / recovery / handle homograph families) exposed as `pub const` strings under `crate::error::reasons` and grouped in `R3_NEW_REASONS`; per-handler wiring deferred to R3.1.
+- PROF-1: `cx.profile.media_service_binding.v1` and `cx.profile.accountable_to.strict_reject.v1` advertised in `cx.server.describe.supported_profiles` (`src/wire.rs`); config-gating deferred to R3.1.
+
+> No version tag, no crates.io / Docker Hub / npm publish — git commit only.
+
 ## [Unreleased]
 
 ### CXP-0007 — Circle primitive rollout (P2A; contrix-spec floor `2b0d70d`)
