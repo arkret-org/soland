@@ -1488,6 +1488,108 @@ pub struct DeviceMessagesSendResBody {
     pub unknown_devices: Value,
 }
 
+// ── CXP-0010 (R3 spec-sync 2026-05-27, contrix-spec b47ff6ec) — media
+// token exchange wire shapes. Mirrors `MediaTokenResponse` /
+// `ParticipantBinding` in `contrix_sdk::media`; soland mints the
+// soland-side ToSchema-friendly copies so salvo-oapi can pick them up.
+
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
+pub struct MediaTokenExchangeReqBody {
+    pub realm_id: String,
+    pub call_id: String,
+    pub actor_id: String,
+    pub device_id: String,
+    /// Focus id chosen by the caller. MUST equal the committed
+    /// `cx.call.state.session_focus`; otherwise the handler rejects with
+    /// `focus_mismatch`.
+    pub focus_id: String,
+}
+
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
+pub struct ParticipantBindingResBody {
+    /// `cx.media.participant_binding.v1`.
+    pub scheme: String,
+    /// Detached signature over the canonical binding body.
+    pub sig: String,
+    /// Key identifier of the signing media-service key. Receivers MUST
+    /// verify this resolves to the current
+    /// `cx.realm.media_service.service_id` epoch (MEDIA-1).
+    pub issuer_kid: String,
+    pub realm_id: String,
+    pub call_id: String,
+    pub focus_id: String,
+    pub actor_id: String,
+    pub device_id: String,
+    pub participant_identity: String,
+    pub expires_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
+pub struct MediaTokenExchangeResBody {
+    pub backend_token: String,
+    pub participant_identity: String,
+    pub participant_binding: ParticipantBindingResBody,
+    pub expires_at: DateTime<Utc>,
+    pub service_signature: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connect_url: Option<String>,
+    #[serde(default)]
+    pub todos: Vec<String>,
+}
+
+// ── B-C (R3 spec-sync 2026-05-27, contrix-spec b47ff6ec) — recovery
+// policy / receipt endpoint wire shapes. Wire-level scaffold only — the
+// internal proof verifier is TODO(R3.1).
+
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
+pub struct RecoveryPolicyReqBody {
+    /// `cx.schema.recovery_policy.v1`.
+    pub schema: String,
+    pub policy_id: String,
+    /// `pending` | `active` | `retired`.
+    pub lifecycle: String,
+    pub epoch: u64,
+    pub body: Value,
+    pub created_at: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retired_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
+pub struct RecoveryPolicyResBody {
+    pub ok: bool,
+    pub policy_id: String,
+    pub policy_version: u64,
+    pub lifecycle: String,
+    pub created_at: DateTime<Utc>,
+    #[serde(default)]
+    pub todos: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
+pub struct RecoveryReceiptReqBody {
+    /// `cx.schema.recovery_receipt.v1`.
+    pub schema: String,
+    pub recovery_session_id: String,
+    pub policy_id: String,
+    pub policy_epoch: u64,
+    pub evidence: Value,
+    pub bound_proof: Value,
+    pub issued_at: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
+pub struct RecoveryReceiptResBody {
+    pub ok: bool,
+    pub recovery_session_id: String,
+    pub policy_id: String,
+    pub issued_at: DateTime<Utc>,
+    #[serde(default)]
+    pub todos: Vec<String>,
+}
+
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct DeviceMessagesReceiveResBody {
     pub events: Vec<Value>,
@@ -1746,23 +1848,30 @@ pub fn describe(
             .expect("trust_domain must be cx:trust_domain:<scope>"),
         service_type: "principal_server".to_owned(),
         protocol_version: contrix_sdk::PROTOCOL_VERSION.to_owned(),
-        supported_profiles: vec![
-            "cx.profile.core_event_store.v1".to_owned(),
-            "cx.profile.principal_server.v1".to_owned(),
-            "cx.profile.principal_server_events_api.v1".to_owned(),
-            "cx.profile.mimi_interop.v1".to_owned(),
-            // R3 (spec b47ff6ec, _before_todos.md §0.10) — new conformance
-            // profiles introduced this round. We advertise the surface so
-            // cross-project consumers (cotest, sodmin, yougen) can probe
-            // for it; the actual conformance requirements (token issuer,
-            // strict_reject reducer path) are stubbed pending R3.1.
-            // TODO(R3.1): gate by config — only advertise
-            // `media_service_binding.v1` when the RTC token endpoint is
-            // wired, and `accountable_to.strict_reject.v1` when the
-            // strict_reject reducer path is enabled.
-            "cx.profile.media_service_binding.v1".to_owned(),
-            "cx.profile.accountable_to.strict_reject.v1".to_owned(),
-        ],
+        supported_profiles: {
+            let mut profiles = vec![
+                "cx.profile.core_event_store.v1".to_owned(),
+                "cx.profile.principal_server.v1".to_owned(),
+                "cx.profile.principal_server_events_api.v1".to_owned(),
+                "cx.profile.mimi_interop.v1".to_owned(),
+            ];
+            // PROF-1 (R3 spec-sync 2026-05-27, contrix-spec b47ff6ec) —
+            // advertise `cx.profile.media_service_binding.v1` whenever the
+            // server exposes the `cx.call.media.token_exchange` handler.
+            // soland mounts the handler unconditionally (see
+            // `routing::interop::webrtc::contrix_router`), so the claim is
+            // unconditional too.
+            profiles.push("cx.profile.media_service_binding.v1".to_owned());
+            // PROF-1 — `cx.profile.accountable_to.strict_reject.v1` is
+            // gated by `SOLAND_ACCOUNTABLE_TO_STRICT_REJECT=true`.
+            if matches!(
+                std::env::var("SOLAND_ACCOUNTABLE_TO_STRICT_REJECT").as_deref(),
+                Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes")
+            ) {
+                profiles.push("cx.profile.accountable_to.strict_reject.v1".to_owned());
+            }
+            profiles
+        },
         plaintext_visibility,
         implemented_features: implemented_features_seed,
         claimed_profiles,

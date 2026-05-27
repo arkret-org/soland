@@ -11,16 +11,16 @@ pub(super) mod did;
 mod key_backup;
 mod keys;
 mod profile;
-// R3 (spec b47ff6ec) — recovery-policy / recovery-receipt stub surface.
-// Real impl deferred to R3.1; see `recovery::router` for the route map.
+// R3 spec-sync (contrix-spec b47ff6ec) — recovery policy / receipt
+// endpoints (HTTP-4 / REC-1).
 mod recovery;
 pub(super) mod webvh_validation;
 
 use super::system::describe;
 use super::{
-    AuthArgs, SyncCursorError, append_audit_log, bearer_token, device_inventory_to_json,
-    handle_for_did, is_device_revoked, is_valid_handle, normalize_handle, now,
-    parse_and_validate_sync_cursor, query_param, render_error, sha256_hex,
+    AuthArgs, SyncCursorError, append_audit_log, bearer_token, classify_handle,
+    device_inventory_to_json, handle_for_did, is_device_revoked, is_valid_handle, normalize_handle,
+    now, parse_and_validate_sync_cursor, query_param, render_error, sha256_hex,
     sync_token_for_client_sync, validate_device_id, validate_device_message_payload, validate_did,
 };
 
@@ -51,8 +51,7 @@ pub fn router() -> Router {
         .push(profile::router())
         // CXP-0008 / CXP-0009 — Personal Agent provisioning + lifecycle.
         .push(agents::router())
-        // R3 (spec b47ff6ec) — recovery-policy / recovery-receipt stubs.
-        // TODO(R3.1): replace with real persistence + reducer wiring.
+        // R3 spec-sync — recovery policy / receipt endpoints.
         .push(recovery::router())
 }
 

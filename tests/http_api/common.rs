@@ -309,7 +309,7 @@ pub(crate) fn seed_test_realm(
         "ok": true,
         "space_id": realm_id,
         "owner": owner,
-        "members": [owner],
+        "members": [{"did": owner}],
         "deleted": false
     })
 }
@@ -320,7 +320,7 @@ pub(crate) fn add_test_realm_member(state: &AppState, realm_id: &str, member: &s
     let mut realms = state.realms.lock().unwrap();
     if let Some(mut entry) = realms.get(&typed_realm_id).cloned() {
         entry.members.insert(member_did);
-        let members: Vec<String> = entry.members.iter().map(ToString::to_string).collect();
+        let members = realm_member_roster(&entry);
         realms.upsert(entry);
         serde_json::json!({
             "ok": true,
@@ -340,7 +340,8 @@ pub(crate) fn remove_test_realm_member(state: &AppState, realm_id: &str, member:
     let mut realms = state.realms.lock().unwrap();
     if let Some(mut entry) = realms.get(&typed_realm_id).cloned() {
         entry.members.remove(&member_did);
-        let members: Vec<String> = entry.members.iter().map(ToString::to_string).collect();
+        entry.member_handle_uris.remove(member_did.as_str());
+        let members = realm_member_roster(&entry);
         realms.upsert(entry);
         serde_json::json!({
             "ok": true,
@@ -351,6 +352,22 @@ pub(crate) fn remove_test_realm_member(state: &AppState, realm_id: &str, member:
     } else {
         serde_json::json!({"ok": false, "error": "realm_not_found"})
     }
+}
+
+fn realm_member_roster(entry: &RealmDirectoryEntry) -> Vec<Value> {
+    entry
+        .members
+        .iter()
+        .map(|did| {
+            let did_str = did.as_str();
+            let mut row = serde_json::Map::new();
+            row.insert("did".to_owned(), serde_json::json!(did_str));
+            if let Some(handle_uri) = entry.member_handle_uris.get(did_str) {
+                row.insert("handle_uri".to_owned(), serde_json::json!(handle_uri));
+            }
+            Value::Object(row)
+        })
+        .collect()
 }
 
 pub(crate) fn delete_test_realm(state: &AppState, realm_id: &str) -> Value {

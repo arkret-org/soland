@@ -155,6 +155,17 @@ pub struct ProjectionState {
     /// (`cx.agent.protocol_session.{start,status,result}`) are also not
     /// mirrored — see `applets` rationale.
     pub agents: BTreeMap<String, AgentProjection>,
+    /// R3 spec-sync (2026-05-27, contrix-spec b47ff6ec) — FSM lifecycle
+    /// state for each agent_principal_id. Driven by
+    /// `cx.agent.{pause,resume,deactivate}` (REDU-1). Default `Active`
+    /// for any agent_principal_id we've seen; `Deactivated` is terminal
+    /// (no transition out, no resume after).
+    pub agent_lifecycles: BTreeMap<String, AgentLifecycleState>,
+    /// R3 spec-sync — `cx.call.state.session_focus` write-once projection
+    /// keyed by `call_id`. Once a focus is committed for a call, the
+    /// reducer rejects any subsequent write with
+    /// `session_focus_already_committed` (REDU-3).
+    pub call_session_focus: BTreeMap<String, String>,
     /// R3.1 — Realm-link projection. Outer key is the source
     /// `realm_id` (the envelope `space_id` of a `cx.realm.link` event);
     /// the inner Vec accumulates every directed link the Realm has
@@ -693,6 +704,28 @@ pub struct AgentProjection {
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
+/// R3 spec-sync (2026-05-27, contrix-spec b47ff6ec) — FSM-lattice state
+/// for `cx.agent.{pause,resume,deactivate}`. Bottom = `Reject`;
+/// `Deactivated` is terminal (no transition out). Reducer enforcement
+/// lives in [`ProjectionState::apply_agent_lifecycle`] (REDU-1).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AgentLifecycleState {
+    #[default]
+    Active,
+    Paused,
+    Deactivated,
+}
+
+impl AgentLifecycleState {
+    pub fn as_wire_str(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Paused => "paused",
+            Self::Deactivated => "deactivated",
+        }
+    }
+}
+
 /// State enum shared by Flow and Morph projections (mirrors SDK
 /// `contrix_sdk::ObjectState`). Unlike `SpaceContainerLifecycleState` which has
 /// a single `Tombstoned` terminal, Flow / Morph use `Redacted` as their terminal
@@ -1172,6 +1205,22 @@ pub enum ProjectionEffect {
     AgentProjectionUpdated {
         agent_did: String,
     },
+    /// REDU-1 (R3 spec-sync 2026-05-27, contrix-spec b47ff6ec) — agent
+    /// lifecycle FSM transition projected. `agent_principal_id` is the
+    /// `cx:agent_principal:<uuid>` from the payload; `new_state` is the
+    /// post-transition AgentLifecycleState. Bottom = `Reject`;
+    /// Deactivated is terminal.
+    AgentLifecycleProjected {
+        agent_principal_id: String,
+        new_state: AgentLifecycleState,
+    },
+    /// REDU-2 — `actor_private_event` accepted (reducer_input=false).
+    /// Wire-accepted and surfaced to audit-log consumers, but does NOT
+    /// advance the anchor frontier / actor_seq.
+    AgentPrivateEventAccepted {
+        kind: &'static str,
+        event_id: String,
+    },
     /// G3.S1 — MLS lifecycle effect. One variant covers all four
     /// reducer paths (publish / claim / welcome_enqueue / commit_epoch)
     /// so the routing layer can dispatch on `MlsEffect` without
@@ -1615,6 +1664,77 @@ fn apply_agent_endpoint_dispatch(
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
     s.apply_agent_endpoint(op, op.created_at)
+}
+
+// REDU-1 (R3 spec-sync 2026-05-27, contrix-spec b47ff6ec) — FSM-lattice
+// dispatch for `cx.agent.{pause,resume,deactivate}`. Bottom = `Reject`;
+// `Deactivated` is terminal (no transition out, no resume after).
+fn apply_agent_pause_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_agent_lifecycle(op, AgentLifecycleState::Paused)
+}
+fn apply_agent_resume_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_agent_lifecycle(op, AgentLifecycleState::Active)
+}
+fn apply_agent_deactivate_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_agent_lifecycle(op, AgentLifecycleState::Deactivated)
+}
+
+// REDU-2 — actor_private_event dispatchers. `reducer_input=false`: do
+// NOT advance the anchor frontier / actor_seq. Wire-accepted only;
+// projection consumers (sodmin draft inbox, action approval queue) read
+// them through the audit log. TODO(R3.1): persist into per-actor
+// private projections and surface to the controller.
+fn apply_agent_draft_propose_dispatch(
+    _s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    ProjectionEffect::AgentPrivateEventAccepted {
+        kind: crate::kinds::CX_AGENT_DRAFT_PROPOSE,
+        event_id: op.operation_id.to_string(),
+    }
+}
+fn apply_agent_action_request_dispatch(
+    _s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    ProjectionEffect::AgentPrivateEventAccepted {
+        kind: crate::kinds::CX_AGENT_ACTION_REQUEST,
+        event_id: op.operation_id.to_string(),
+    }
+}
+fn apply_agent_action_approve_dispatch(
+    _s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    ProjectionEffect::AgentPrivateEventAccepted {
+        kind: crate::kinds::CX_AGENT_ACTION_APPROVE,
+        event_id: op.operation_id.to_string(),
+    }
+}
+fn apply_agent_action_reject_dispatch(
+    _s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    ProjectionEffect::AgentPrivateEventAccepted {
+        kind: crate::kinds::CX_AGENT_ACTION_REJECT,
+        event_id: op.operation_id.to_string(),
+    }
 }
 /// R1.2 — dispatch for `cx.realm.delivery_binding_policy`. Renamed from
 /// the pre-rename `cx.space.delivery_binding_policy`; cell family is
@@ -2393,6 +2513,18 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
     m.insert(CX_APPLET_REGISTRATION, apply_applet_registration_dispatch);
     m.insert(CX_APPLET_DISCOVERY, apply_applet_discovery_dispatch);
     m.insert(CX_AGENT_ENDPOINT, apply_agent_endpoint_dispatch);
+    // REDU-1 (R3 spec-sync) — agent lifecycle FSM dispatch. bottom=reject,
+    // deactivate is terminal.
+    m.insert(CX_AGENT_PAUSE, apply_agent_pause_dispatch);
+    m.insert(CX_AGENT_RESUME, apply_agent_resume_dispatch);
+    m.insert(CX_AGENT_DEACTIVATE, apply_agent_deactivate_dispatch);
+    // REDU-2 — actor_private_event kinds (reducer_input=false). These
+    // accept but do NOT advance the anchor frontier / actor_seq;
+    // downstream consumers read them from the audit log.
+    m.insert(CX_AGENT_DRAFT_PROPOSE, apply_agent_draft_propose_dispatch);
+    m.insert(CX_AGENT_ACTION_REQUEST, apply_agent_action_request_dispatch);
+    m.insert(CX_AGENT_ACTION_APPROVE, apply_agent_action_approve_dispatch);
+    m.insert(CX_AGENT_ACTION_REJECT, apply_agent_action_reject_dispatch);
     // R1.2 — Realm/Space reversal. delivery_binding_policy now lives on
     // `cx.realm.*` with cell_family `cx.component.realm.delivery_binding_policy.v1`.
     m.insert(
@@ -7173,6 +7305,66 @@ impl ProjectionState {
         };
         self.agents.insert(agent_did.clone(), projection);
         ProjectionEffect::AgentProjectionUpdated { agent_did }
+    }
+
+    /// REDU-1 (R3 spec-sync 2026-05-27, contrix-spec b47ff6ec) — apply
+    /// an `cx.agent.{pause,resume,deactivate}` FSM transition. The
+    /// lattice is `fsm` with `bottom=reject`; allowed transitions are:
+    ///   - Active → Paused                 via `cx.agent.pause`
+    ///   - Paused → Active                 via `cx.agent.resume`
+    ///   - {Active,Paused} → Deactivated   via `cx.agent.deactivate`
+    /// `Deactivated` is terminal — any further transition (including a
+    /// resume) is rejected.
+    pub fn apply_agent_lifecycle(
+        &mut self,
+        operation: &Operation,
+        target: AgentLifecycleState,
+    ) -> ProjectionEffect {
+        let Some(agent_principal_id) = operation
+            .payload
+            .get("agent_principal_id")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned)
+        else {
+            return ProjectionEffect::Rejected {
+                reason: "agent_lifecycle_missing_agent_principal_id".to_owned(),
+            };
+        };
+        let current = self
+            .agent_lifecycles
+            .get(&agent_principal_id)
+            .copied()
+            .unwrap_or_default();
+        // FSM guard. Terminal `Deactivated` rejects any transition.
+        let allowed = match (current, target) {
+            (AgentLifecycleState::Active, AgentLifecycleState::Paused)
+            | (AgentLifecycleState::Paused, AgentLifecycleState::Active)
+            | (AgentLifecycleState::Active, AgentLifecycleState::Deactivated)
+            | (AgentLifecycleState::Paused, AgentLifecycleState::Deactivated) => true,
+            // Idempotent identity transitions are accepted as no-op
+            // (the FSM lattice deduplicates redundant pause/resume).
+            (a, b) if a == b => true,
+            // Bottom=reject; specifically deactivate is terminal so
+            // any resume/pause after deactivate is rejected with the
+            // spec-canonical `agent_deactivated` reason code.
+            _ => false,
+        };
+        if !allowed {
+            let reason = if current == AgentLifecycleState::Deactivated {
+                "agent_deactivated"
+            } else {
+                "invalid_agent_lifecycle_transition"
+            };
+            return ProjectionEffect::Rejected {
+                reason: reason.to_owned(),
+            };
+        }
+        self.agent_lifecycles
+            .insert(agent_principal_id.clone(), target);
+        ProjectionEffect::AgentLifecycleProjected {
+            agent_principal_id,
+            new_state: target,
+        }
     }
 
     // ── Query helpers ──

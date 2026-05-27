@@ -31,7 +31,8 @@ use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::{AppState, SessionRecord, WebrtcSessionRecord, WebrtcSignalRecord};
 use crate::wire::{
-    CreateWebrtcSessionRequest, CreateWebrtcSessionResponse, OkResBody, WebrtcSignalRequest,
+    CreateWebrtcSessionRequest, CreateWebrtcSessionResponse, MediaTokenExchangeReqBody,
+    MediaTokenExchangeResBody, OkResBody, ParticipantBindingResBody, WebrtcSignalRequest,
     WebrtcSignalResponse, WebrtcSignalsResponse,
 };
 
@@ -40,6 +41,12 @@ pub(super) fn router() -> Router {
         .push(Router::with_path("calls/ice-config").post(api_ice_config))
         .push(Router::with_path("calls/{call_id}/ice-config/refresh").post(refresh_ice_config))
         .push(Router::with_path("calls/{call_id}/recording/start").post(start_recording))
+        // CXP-0010 (R3 spec-sync) — media token exchange. Spec-canonical
+        // wire-path is `POST /rtc/token` (mounted via `contrix_router`)
+        // but `/api/v1/rtc/token` is also accepted as a deployment-local
+        // alias so admin UIs that namespace everything under `/api/v1/`
+        // can reach the handler without a separate ingress rule.
+        .push(Router::with_path("rtc/token").post(api_rtc_token))
         .push(Router::with_path("webrtc/sessions").post(create_webrtc_session))
         .push(
             Router::with_path("webrtc/sessions/{session_id}/signals")
@@ -50,7 +57,15 @@ pub(super) fn router() -> Router {
 }
 
 pub(super) fn contrix_router() -> Router {
-    Router::with_path("contrix/v1/ice-config").post(contrix_ice_config)
+    Router::new()
+        .push(Router::with_path("contrix/v1/ice-config").post(contrix_ice_config))
+        // CXP-0010 — `POST /rtc/token` per CXP-0010 / contrix-spec
+        // b47ff6ec. Spec path lives at the deployment root (not under
+        // `/contrix/v1/`); both shapes are mounted so deployments behind
+        // an ingress that strips the `/contrix/v1/` prefix can still
+        // reach the handler.
+        .push(Router::with_path("rtc/token").post(contrix_rtc_token))
+        .push(Router::with_path("contrix/v1/rtc/token").post(contrix_rtc_token))
 }
 
 #[endpoint(
@@ -622,6 +637,233 @@ async fn start_recording(
         "recording_started_by": session.actor,
         "recording_blob_ref": recording_blob_ref,
     }))
+}
+
+// ── CXP-0010 (R3 spec-sync 2026-05-27, contrix-spec b47ff6ec) — media
+// token exchange. Issues a backend_token + ParticipantBinding for a
+// caller that already has a committed `cx.call.state.session_focus`.
+//
+// Wire-level checks implemented here:
+//   - `focus_id` must equal the call's committed session_focus →
+//     `focus_mismatch` (MEDIA-2, REDU-3).
+//   - Focus selection is oldest-membership-wins; until the session_focus
+//     cell is wired through the reducer (TODO(R3.1)), the handler
+//     synthesises the focus from the persisted webrtc session record.
+//   - Token TTL ≤ `MEDIA_TOKEN_TTL_MAX_SECS` (600s); default
+//     `MEDIA_TOKEN_TTL_SHOULD_SECS` (300s) (MEDIA-1).
+//   - `service_signature.kid` / `participant_binding.issuer_kid` resolves
+//     to the current `cx.realm.media_service.service_id` epoch →
+//     `token_issuer_unauthorised` (MEDIA-1). Until the realm.media_service
+//     epoch projection is wired, the issuer kid is taken from the
+//     anchorer signing identity.
+//
+// TODO(R3.1): real focus selection (oldest call_member.foci_preferred[0]
+// per `webrtc-signaling.md §10.5`), real LiveKit / Mediasoup token mint,
+// participant_binding signature, e2ee key source resolution.
+fn handle_rtc_token(
+    state: &AppState,
+    session: &SessionRecord,
+    body: MediaTokenExchangeReqBody,
+) -> JsonResult<MediaTokenExchangeResBody> {
+    use crate::error::ErrorCode;
+
+    if validate_space_id(&body.realm_id).is_err() {
+        return Err(AppError::invalid_param("invalid realm_id"));
+    }
+    if !is_valid_webrtc_session_id(&body.call_id) {
+        return Err(AppError::invalid_param("invalid call_id"));
+    }
+    if validate_did(&body.actor_id).is_err() || body.actor_id != session.actor {
+        return Err(AppError::invalid_param(
+            "actor_id must match the authenticated actor",
+        ));
+    }
+    if validate_device_id(&body.device_id).is_err() || body.device_id != session.device_id {
+        return Err(AppError::invalid_param(
+            "device_id must match the authenticated device",
+        ));
+    }
+    if body.focus_id.trim().is_empty() {
+        return Err(AppError::invalid_param("focus_id is required"));
+    }
+    if !space_has_member(state, &body.realm_id, &body.actor_id) {
+        return Err(AppError::capability_denied(
+            "actor is not a joined member of the realm",
+        ));
+    }
+
+    let webrtc = state
+        .persistence
+        .webrtc()
+        .get(&body.call_id)
+        .map_err(|error| AppError::internal(error.to_string()))?
+        .ok_or_else(|| AppError::not_found("call session not found"))?;
+    if webrtc.space_id != body.realm_id {
+        return Err(AppError::invalid_param(
+            "call_id does not belong to the requested realm",
+        ));
+    }
+    if !webrtc.participants.contains(&body.actor_id) {
+        return Err(AppError::capability_denied(
+            "actor is not a participant of the call",
+        ));
+    }
+
+    // MEDIA-2 — focus selection (oldest-membership-wins). Until the
+    // call.state.session_focus reducer cell lands (TODO(R3.1)) we use the
+    // call session's created_by-derived focus as the canonical
+    // session_focus; the caller's `focus_id` MUST match.
+    let session_focus = session_focus_for_call(state, &webrtc);
+    if body.focus_id != session_focus {
+        return Err(AppError::new(
+            ErrorCode::FocusMismatch,
+            format!(
+                "focus_id `{}` does not match committed session_focus `{}`",
+                body.focus_id, session_focus
+            ),
+        ));
+    }
+
+    // MEDIA-1 — token TTL default 300s (cap 600s).
+    let ttl_secs = contrix_sdk::MEDIA_TOKEN_TTL_SHOULD_SECS.min(
+        contrix_sdk::MEDIA_TOKEN_TTL_MAX_SECS,
+    );
+    let issued_at = now();
+    let expires_at = issued_at + Duration::seconds(ttl_secs as i64);
+
+    // TODO(R3.1): mint a real backend-specific token (LiveKit JWT /
+    // Mediasoup ticket / Contrix-native challenge response). For now we
+    // emit a stable deterministic placeholder so cross-project HTTP
+    // smoke tests can exercise the surface.
+    let backend_token_seed = format!(
+        "soland-media-token-v1\0{}\0{}\0{}\0{}\0{}",
+        state.config.service_did, body.realm_id, body.call_id, body.actor_id, body.device_id
+    );
+    let participant_identity = format!(
+        "cx:rtcpart:{}",
+        &sha256_hex(backend_token_seed.as_bytes())[..32]
+    );
+    let backend_token = URL_SAFE_NO_PAD.encode(sha256_hex(backend_token_seed.as_bytes()));
+
+    // MEDIA-1 — issuer_kid bound to the anchorer signing identity. When
+    // the `cx.realm.media_service` epoch projection lands, this kid MUST
+    // resolve to the realm's current `service_id`.
+    let issuer_kid = format!("{}#media-token", state.config.service_did);
+    let binding_payload = json!({
+        "scheme": contrix_sdk::PARTICIPANT_BINDING_SCHEMA,
+        "issuer_kid": issuer_kid.clone(),
+        "realm_id": body.realm_id,
+        "call_id": body.call_id,
+        "focus_id": body.focus_id,
+        "actor_id": body.actor_id,
+        "device_id": body.device_id,
+        "participant_identity": participant_identity,
+        "expires_at": expires_at,
+    });
+    let binding_bytes = contrix_sdk::canonical::canonical_json_bytes(&binding_payload)
+        .unwrap_or_else(|_| binding_payload.to_string().into_bytes());
+    let signing_key = state.anchorer_signing_key();
+    let mut signing_input = Vec::with_capacity(
+        b"soland-media-participant-binding-v1".len() + binding_bytes.len() + 1,
+    );
+    signing_input.extend_from_slice(b"soland-media-participant-binding-v1");
+    signing_input.push(0);
+    signing_input.extend_from_slice(&binding_bytes);
+    let binding_sig = signing_key.sign(&signing_input);
+    let sig = format!(
+        "eddsa-ed25519:{}",
+        URL_SAFE_NO_PAD.encode(binding_sig.to_bytes())
+    );
+
+    let mut service_input = Vec::with_capacity(64 + binding_bytes.len());
+    service_input.extend_from_slice(b"soland-media-token-response-v1");
+    service_input.push(0);
+    service_input.extend_from_slice(&binding_bytes);
+    let service_sig = signing_key.sign(&service_input);
+    let service_signature = format!(
+        "eddsa-ed25519:{}",
+        URL_SAFE_NO_PAD.encode(service_sig.to_bytes())
+    );
+
+    let participant_binding = ParticipantBindingResBody {
+        scheme: contrix_sdk::PARTICIPANT_BINDING_SCHEMA.to_owned(),
+        sig,
+        issuer_kid,
+        realm_id: body.realm_id,
+        call_id: body.call_id,
+        focus_id: body.focus_id,
+        actor_id: body.actor_id,
+        device_id: body.device_id,
+        participant_identity: participant_identity.clone(),
+        expires_at,
+    };
+
+    json_ok(MediaTokenExchangeResBody {
+        backend_token,
+        participant_identity,
+        participant_binding,
+        expires_at,
+        service_signature,
+        connect_url: None,
+        todos: vec![
+            "R3.1: resolve focus from cx.realm.media_service oldest-membership-wins selection".to_owned(),
+            "R3.1: mint real backend_token via livekit/mediasoup/contrix-native binding".to_owned(),
+            "R3.1: validate issuer_kid against current cx.realm.media_service.service_id epoch".to_owned(),
+        ],
+    })
+}
+
+/// MEDIA-2 oldest-membership-wins focus selection.
+///
+/// Stub: until the `cx.realm.media_service.foci[]` + per-participant
+/// `foci_preferred[]` cells are wired through the reducer (TODO(R3.1)),
+/// we derive a deterministic focus id from the call session creator's
+/// identity so the caller can echo it back. The real implementation
+/// consults the call state's `members[]` ordered by join_order and
+/// picks the first preferred focus that's present in the realm
+/// media_service binding.
+fn session_focus_for_call(state: &AppState, webrtc: &WebrtcSessionRecord) -> String {
+    let _ = state;
+    format!(
+        "cx:focus:{}",
+        &sha256_hex(format!("focus\0{}\0{}", webrtc.space_id, webrtc.session_id).as_bytes())[..32]
+    )
+}
+
+#[endpoint(
+    operation_id = "cx.call.media.token_exchange",
+    tags("media", "calls"),
+    summary = "Exchange a session-focus for a backend media token + participant_binding (CXP-0010)",
+    status_codes(200, 400, 401, 403, 404, 500)
+)]
+#[tracing::instrument(skip_all, fields(op = "cx.call.media.token_exchange"))]
+async fn contrix_rtc_token(
+    aa: AuthArgs,
+    body: JsonBody<MediaTokenExchangeReqBody>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<MediaTokenExchangeResBody> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req)?;
+    handle_rtc_token(state, &session, body.into_inner())
+}
+
+#[endpoint(
+    operation_id = "cx.extension.soland.calls.media.token_exchange",
+    tags("media", "calls"),
+    summary = "Exchange session-focus for backend media token (alias under /api/v1)",
+    status_codes(200, 400, 401, 403, 404, 500)
+)]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.calls.media.token_exchange"))]
+async fn api_rtc_token(
+    aa: AuthArgs,
+    body: JsonBody<MediaTokenExchangeReqBody>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<MediaTokenExchangeResBody> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req)?;
+    handle_rtc_token(state, &session, body.into_inner())
 }
 
 fn prune_expired_webrtc_sessions(state: &AppState) {

@@ -137,6 +137,14 @@ pub struct RealmDirectoryEntry {
     pub description: Option<String>,
     pub tags: BTreeSet<String>,
     pub members: BTreeSet<Did>,
+    /// Per-member canonical `handle_uri` (`contrix://<domain>/users/<localpart>`)
+    /// pulled off `cx.member.state.payload.handle_uri` when present. Used by
+    /// the sync `members[]` hint (`zh/sync/client-sync.md` §8.1) so clients
+    /// can render `alice:domain` without a per-DID resolve. Entries are only
+    /// populated when the member's join/invite event carried a handle; bare-
+    /// DID members are absent. Keyed by `Did::as_str()` to mirror the wire DID.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub member_handle_uris: BTreeMap<String, String>,
     pub public: bool,
     pub category: Option<String>,
 }
@@ -149,6 +157,7 @@ impl RealmDirectoryEntry {
             description: None,
             tags: BTreeSet::new(),
             members: BTreeSet::new(),
+            member_handle_uris: BTreeMap::new(),
             public: false,
             category: None,
         }

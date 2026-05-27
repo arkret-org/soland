@@ -21,8 +21,8 @@ use super::auth::{revoke_devices_for_actor, revoke_sessions_for_actor};
 use super::consent::{has_active_consent_for_scope, normalize_scope, record_pending_request};
 use super::device_messages::{NOTIFICATION_READ_MARKER_UPDATE_TYPE, fanout_actor_private_update};
 use super::{
-    AuthArgs, append_audit_log, handle_for_did, is_valid_handle, normalize_handle, now, sha256_hex,
-    validate_did,
+    AuthArgs, append_audit_log, classify_handle, handle_for_did, normalize_handle, now,
+    sha256_hex, validate_did,
 };
 use crate::error::AppError;
 use crate::routing::spaces::space::realm_has_member;
@@ -104,8 +104,8 @@ async fn account_register(
         return Err(AppError::invalid_param("invalid did"));
     }
     crate::routing::extensions::sovereign::validate_sovereign_did_registration(state, &body.did)?;
-    if !is_valid_handle(&body.handle) {
-        return Err(AppError::invalid_param("invalid handle"));
+    if let Err((reason_code, message)) = classify_handle(&body.handle) {
+        return Err(AppError::invalid_param(message).with_wire_code(reason_code));
     }
     if let Some(device_id) = body.device_id.as_deref()
         && device_id.trim().is_empty()
@@ -220,9 +220,8 @@ async fn claim_handle(
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req)?;
     let body = body.into_inner();
-    if !is_valid_handle(&body.handle) {
-        return Err(AppError::invalid_param("invalid handle format")
-            .with_wire_code("handle_invalid_format"));
+    if let Err((reason_code, message)) = classify_handle(&body.handle) {
+        return Err(AppError::invalid_param(message).with_wire_code(reason_code));
     }
     let normalized = normalize_handle(&body.handle);
     let accounts_store = state.persistence.accounts();

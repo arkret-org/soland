@@ -1479,17 +1479,19 @@ fn validate_event_envelope(
         ));
     }
 
-    // CXP-0008 / CXP-0009 (spec head 37ce729) — Envelope `actor_kind` is
-    // reducer-stamped: reject any client-supplied value. The reducer
-    // self-stamps below after the bearer-session derivation lands.
+    // REDU-7 / CXP-0008 / CXP-0009 (R3 spec-sync 2026-05-27,
+    // contrix-spec b47ff6ec) — Envelope `actor_kind` is reducer-managed:
+    // reject any client-supplied value with the spec-canonical
+    // `actor_kind_reducer_managed` reason code. The reducer derives the
+    // canonical `EnvelopeActorKind` (Native/Ghost/Service/Agent) from
+    // the Actor Profile after the bearer-session derivation lands.
     // TODO(P2-impl): once the deep reducer pipeline runs here, stamp the
-    // canonical `EnvelopeActorKind` (Native/Ghost/Service/Agent) onto the
-    // persisted projection envelope.
+    // canonical `EnvelopeActorKind` onto the persisted projection envelope.
     if object.get("actor_kind").is_some() {
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
-            "actor_kind_self_stamped",
-            "envelope.actor_kind is reducer-stamped; clients MUST NOT supply it",
+            "actor_kind_reducer_managed",
+            "envelope.actor_kind is reducer-managed; clients MUST NOT supply it",
         ));
     }
 

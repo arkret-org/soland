@@ -1907,8 +1907,25 @@ pub fn project_membership_operation(state: &AppState, origin: &str, operation: &
     if let Ok(member) = Did::new(member) {
         if matches!(membership, Some("leave" | "ban")) {
             entry.members.remove(&member);
+            entry.member_handle_uris.remove(member.as_str());
         } else if matches!(membership, Some("join" | "invite" | "knock")) {
+            let did_key = member.as_str().to_owned();
             entry.members.insert(member);
+            // `cx.member.state.payload.handle_uri` is optional (spec
+            // `zh/identity/identity-handles.md` §3.2). Cache it so the
+            // sync `members[]` hint can render the canonical handle
+            // without forcing a DID resolve per row.
+            if let Some(handle_uri) = operation
+                .payload
+                .get("handle_uri")
+                .and_then(|value| value.as_str())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                entry
+                    .member_handle_uris
+                    .insert(did_key, handle_uri.to_owned());
+            }
         }
     }
     spaces.upsert(entry);

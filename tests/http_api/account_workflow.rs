@@ -322,7 +322,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|member| member == "did:web:bob.example")
+            .any(|member| member["did"] == "did:web:bob.example")
     );
 
     let sent_message = submit_message_event(
@@ -465,12 +465,12 @@ async fn account_contacts_and_space_lifecycle_workflow() {
     assert!(
         synced_members
             .iter()
-            .any(|member| member == "did:web:alice.example")
+            .any(|member| member["did"] == "did:web:alice.example")
     );
     assert!(
         synced_members
             .iter()
-            .any(|member| member == "did:web:bob.example")
+            .any(|member| member["did"] == "did:web:bob.example")
     );
     assert_eq!(
         sync_with_message["realms"][&space_id]["summary"]["members"],
@@ -692,7 +692,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|member| member == "did:web:bob.example")
+            .any(|member| member["did"] == "did:web:bob.example")
     );
 
     let deleted = delete_test_realm(&state, &space_id);

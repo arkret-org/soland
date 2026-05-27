@@ -321,10 +321,23 @@ fn build_sync_snapshot(
             .into_iter()
             .filter(|space| realm_visible_to(state, space, session))
             .map(|space| {
+                // `zh/sync/client-sync.md` §8.1 — `members[]` is the
+                // flat per-Realm hint shipped alongside `state.events`;
+                // each entry carries `did` + optional canonical
+                // `handle_uri` pulled off the projected
+                // `cx.member.state.payload.handle_uri`.
                 let members = space
                     .members
                     .iter()
-                    .map(ToString::to_string)
+                    .map(|did| {
+                        let did_str = did.as_str();
+                        let mut entry = serde_json::Map::new();
+                        entry.insert("did".to_owned(), json!(did_str));
+                        if let Some(handle_uri) = space.member_handle_uris.get(did_str) {
+                            entry.insert("handle_uri".to_owned(), json!(handle_uri));
+                        }
+                        Value::Object(entry)
+                    })
                     .collect::<Vec<_>>();
                 (
                     space.realm_id.to_string(),

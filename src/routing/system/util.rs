@@ -223,13 +223,56 @@ pub fn validate_space_id(value: &str) -> Result<SpaceId, ()> {
 }
 
 /// `@`-prefixed, lowercase, alphanumeric + `-_.` only.
+///
+/// CXP R3 spec-sync (2026-05-27, contrix-spec b47ff6ec): the wire-level
+/// canonical comparison MUST run through NFC + UTS#39 confusable folding +
+/// script-mix rejection. We delegate that to the SDK helper
+/// (`contrix_core::model::handle::normalize_handle_localpart`) so any
+/// script-mixed or homograph-confusable handle is rejected with the
+/// `handle_homograph_forbidden` reason code before the ASCII allow-list
+/// kicks in. See `_before_todos.md §0.14` for the normative wording.
 pub fn is_valid_handle(handle: &str) -> bool {
+    classify_handle(handle).is_ok()
+}
+
+/// HDL-1 — full handle validity classification.
+///
+/// Returns `Ok(())` for a valid handle. On rejection, returns a tuple
+/// `(reason_code, message)` so the caller can surface the canonical
+/// reason code (`handle_homograph_forbidden` for script-mixed or
+/// confusable handles per UTS#39, otherwise the generic
+/// `handle_invalid_format`).
+///
+/// TODO(R4): when the SDK exposes a richer error breakdown distinguishing
+/// "script-mixed" from "confusable skeleton collision", surface both
+/// reason codes separately; today both fold into
+/// `handle_homograph_forbidden`.
+pub fn classify_handle(handle: &str) -> Result<(), (&'static str, &'static str)> {
     let normalized = normalize_handle(handle);
-    normalized.len() > 1
-        && normalized
-            .trim_start_matches('@')
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+    if normalized.len() <= 1 {
+        return Err(("handle_invalid_format", "handle MUST be non-empty"));
+    }
+    let localpart = normalized.trim_start_matches('@');
+    // Wire-level homograph guard (HDL-1). SDK helper enforces NFC +
+    // UTS#39 confusable skeleton + script-mix reject. Any failure here
+    // is surfaced as `handle_homograph_forbidden` so call sites can
+    // distinguish from the plain ASCII allow-list reject below.
+    if contrix_sdk::model::normalize_handle_localpart(localpart).is_err() {
+        return Err((
+            "handle_homograph_forbidden",
+            "handle localpart fails NFC + UTS#39 confusable skeleton + script-mixed reject",
+        ));
+    }
+    if !localpart
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+    {
+        return Err((
+            "handle_invalid_format",
+            "handle localpart must be lowercase ASCII alphanumeric + `-_.`",
+        ));
+    }
+    Ok(())
 }
 
 /// Lowercase + ensure leading `@`.

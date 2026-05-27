@@ -80,10 +80,24 @@ async fn authz_check(
                     .flatten()
             })
             .unwrap_or_default();
+        // SEL-1 (R3 spec-sync 2026-05-27, contrix-spec b47ff6ec) —
+        // `kind=circle` resources MUST carry a `cx:circle:<uuid>`
+        // identifier; accept either `circle_id` or the canonical `id`
+        // field. The Circle is scoped to its parent Realm; the resource
+        // resolver pairs it with the calling realm_id below.
         let resource = obj
             .get("id")
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned)
+            .or_else(|| {
+                (kind == "circle")
+                    .then(|| {
+                        obj.get("circle_id")
+                            .and_then(|v| v.as_str())
+                            .map(ToOwned::to_owned)
+                    })
+                    .flatten()
+            })
             .unwrap_or_else(|| format!("{kind}:{sid}"));
         let facets = facet_names_from_value(obj.get("facets"));
         (resource, sid, facets)

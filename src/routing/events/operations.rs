@@ -417,6 +417,42 @@ const AGENT_SESSION_RESULT_REQUIREMENTS: &[PayloadRequirement] = &[
     ),
 ];
 
+// R3 spec-sync (2026-05-27) — agent lifecycle FSM payloads. Wire
+// shape per spec `agent_pause_payload` / `agent_resume_payload` /
+// `agent_deactivate_payload`. The FSM transition guard runs in the
+// reducer (REDU-1, `apply_agent_lifecycle`).
+const AGENT_PAUSE_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::Required(
+    "agent_principal_id",
+    "cx.agent.pause requires agent_principal_id",
+)];
+const AGENT_RESUME_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::Required(
+    "agent_principal_id",
+    "cx.agent.resume requires agent_principal_id",
+)];
+const AGENT_DEACTIVATE_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::Required(
+    "agent_principal_id",
+    "cx.agent.deactivate requires agent_principal_id",
+)];
+
+// R3 spec-sync — `actor_private_event` payloads. These do NOT advance
+// the anchor frontier / actor_seq (reducer_input=false).
+const AGENT_DRAFT_PROPOSE_REQUIREMENTS: &[PayloadRequirement] = &[
+    PayloadRequirement::Required("agent_principal_id", "cx.agent.draft.propose requires agent_principal_id"),
+    PayloadRequirement::Required("draft_id", "cx.agent.draft.propose requires draft_id"),
+];
+const AGENT_ACTION_REQUEST_REQUIREMENTS: &[PayloadRequirement] = &[
+    PayloadRequirement::Required("agent_principal_id", "cx.agent.action_request requires agent_principal_id"),
+    PayloadRequirement::Required("request_id", "cx.agent.action_request requires request_id"),
+];
+const AGENT_ACTION_APPROVE_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::Required(
+    "request_id",
+    "cx.agent.action_approve requires request_id",
+)];
+const AGENT_ACTION_REJECT_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::Required(
+    "request_id",
+    "cx.agent.action_reject requires request_id",
+)];
+
 const CROSS_SIGNING_RESET_REQUIREMENTS: &[PayloadRequirement] = &[
     PayloadRequirement::Required("principal_id", "cross_signing reset requires principal_id"),
     PayloadRequirement::Required(
@@ -599,6 +635,202 @@ fn round4_validate_payload(kind: &str, operation: &Operation) -> Result<(), &'st
                 return Err(
                     "cx.audit.policy_access access_kind=e2ee_late_recovery requires \
                      late_recovery_original_event_id (round-4 wire break)",
+                );
+            }
+            Ok(())
+        }
+        // REDU-5 (R3 spec-sync 2026-05-27, contrix-spec b47ff6ec) —
+        // `cx.realm.media_service` legacy single `sfu_endpoint` shape.
+        // Default in v1 is to NORMALIZE the legacy shape into the
+        // canonical `foci=[{focus_id:"legacy", type:"contrix-native",
+        // connect_url: <old sfu_endpoint>, service_did: <issuer>}]`
+        // form + emit an audit-log note. Setting
+        // `SOLAND_MEDIA_SERVICE_LEGACY_REJECT=1` (v1.1 deployments)
+        // flips this to a hard reject with the canonical reason code
+        // `legacy_single_endpoint_media_service`.
+        //
+        // The normalization step is best-effort at the wire layer (we
+        // can only validate shape — actual rewrite happens in the
+        // reducer's project_realm_media_service path); when the legacy
+        // shape passes through here we accept it so the reducer can
+        // emit the canonical `foci[]` projection downstream.
+        //
+        // TODO(R4): wire reducer-side rewrite + audit-log emission
+        // through `apply_realm_media_service`.
+        "cx.realm.media_service" => {
+            if operation.payload.get("sfu_endpoint").is_some()
+                && operation.payload.get("foci").is_none()
+            {
+                let reject_legacy = matches!(
+                    std::env::var("SOLAND_MEDIA_SERVICE_LEGACY_REJECT").as_deref(),
+                    Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes")
+                );
+                if reject_legacy {
+                    return Err(
+                        "legacy_single_endpoint_media_service: cx.realm.media_service must use \
+                         multi-focus foci[] shape",
+                    );
+                }
+                // Default normalize-and-accept path. Reducer projection
+                // will rewrite the legacy `sfu_endpoint` into the
+                // canonical `foci=[{focus_id:"legacy", ...}]` shape.
+                tracing::warn!(
+                    op = "cx.realm.media_service",
+                    "legacy_single_endpoint_media_service: \
+                     normalizing legacy sfu_endpoint into foci[]"
+                );
+            }
+            Ok(())
+        }
+        // REDU-3 / REDU-4 — `cx.call.state` shape checks.
+        //   - `session_focus` is write-once: clients MUST NOT mutate an
+        //     already-committed value. The wire-level check ensures the
+        //     payload doesn't carry a `session_focus_revision` marker
+        //     other than the genesis `1`. The full
+        //     `session_focus_already_committed` deduplication runs in
+        //     the reducer once the per-call cell projection lands.
+        //   - `participants[].participant_binding.scheme` MUST be the
+        //     canonical `cx.media.participant_binding.v1`; otherwise
+        //     reject with `participant_binding_invalid`.
+        "cx.call.state" => {
+            // REDU-3 — write-once `session_focus`. Wire-shape check: a
+            // payload that carries `session_focus_revision > 1` MUST
+            // also carry `previous_session_focus` (the failed update
+            // path is reserved for migration tooling). Pure first-write
+            // (`revision==1` or unset) is accepted unconditionally.
+            if let Some(revision) = operation
+                .payload
+                .get("session_focus_revision")
+                .and_then(|v| v.as_u64())
+                && revision > 1
+                && operation.payload.get("previous_session_focus").is_none()
+            {
+                return Err(
+                    "session_focus_already_committed: cx.call.state.session_focus is write-once",
+                );
+            }
+            if let Some(participants) = operation
+                .payload
+                .get("participants")
+                .and_then(|v| v.as_array())
+            {
+                for participant in participants {
+                    let Some(binding) = participant.get("participant_binding") else {
+                        continue;
+                    };
+                    // REDU-4 — full participant_binding wire-shape check.
+                    // Verifies (a) scheme constant, (b) issuer_kid present,
+                    // (c) expires_at strictly after created_at when both
+                    // are present, (d) signature ("sig") present.
+                    //
+                    // TODO(R4): full crypto verification — resolve
+                    // `issuer_kid` against the current epoch
+                    // `cx.realm.media_service.service_id`, fetch the
+                    // ed25519 verification key, and verify `sig` over the
+                    // canonical-json bytes of the binding payload.
+                    let scheme = binding.get("scheme").and_then(|v| v.as_str());
+                    if scheme != Some(contrix_sdk::PARTICIPANT_BINDING_SCHEMA) {
+                        return Err(
+                            "participant_binding_invalid: participant_binding.scheme must be \
+                             cx.media.participant_binding.v1",
+                        );
+                    }
+                    if binding
+                        .get("issuer_kid")
+                        .and_then(|v| v.as_str())
+                        .is_none_or(str::is_empty)
+                    {
+                        return Err(
+                            "participant_binding_invalid: participant_binding.issuer_kid is \
+                             required",
+                        );
+                    }
+                    if binding
+                        .get("sig")
+                        .and_then(|v| v.as_str())
+                        .is_none_or(str::is_empty)
+                    {
+                        return Err(
+                            "participant_binding_invalid: participant_binding.sig is required",
+                        );
+                    }
+                    if let (Some(created_at), Some(expires_at)) = (
+                        binding.get("created_at").and_then(|v| v.as_str()),
+                        binding.get("expires_at").and_then(|v| v.as_str()),
+                    ) && let (Ok(created), Ok(expires)) = (
+                        chrono::DateTime::parse_from_rfc3339(created_at),
+                        chrono::DateTime::parse_from_rfc3339(expires_at),
+                    ) && expires <= created
+                    {
+                        return Err(
+                            "participant_binding_invalid: participant_binding.expires_at must be \
+                             strictly after created_at",
+                        );
+                    }
+                }
+            }
+            Ok(())
+        }
+        // REDU-8 (R3 spec-sync 2026-05-27, contrix-spec b47ff6ec) — the
+        // `cx.audit.epoch_destruction_failsafe` event cannot serve as a
+        // delayed remediation for an Audit Agent remove batch that lacks
+        // the same-batch `cx.audit.epoch_key_destruction` attestation.
+        // The wire-level check here rejects any failsafe whose payload
+        // names an `epoch_range` that is missing the paired attestation
+        // marker `paired_with_epoch_key_destruction=true`. The full
+        // cross-batch scan (walking prior remove batches in the same
+        // epoch) runs in the reducer once the audit projection lands —
+        // see `_before_todos.md §0.4` for the canonical phrasing.
+        //
+        // TODO(R4): walk the per-epoch remove batch index from the audit
+        // projection and reject when a remove batch lacks an
+        // in-batch attestation AND was committed before this failsafe.
+        "cx.audit.epoch_destruction_failsafe" => {
+            let attestation_paired = operation
+                .payload
+                .get("paired_with_epoch_key_destruction")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            if !attestation_paired {
+                return Err(
+                    "audit_agent_destruction_not_paired_with_remove: \
+                     cx.audit.epoch_destruction_failsafe MUST NOT be accepted as delayed \
+                     remediation for an Audit Agent remove batch lacking same-batch \
+                     cx.audit.epoch_key_destruction",
+                );
+            }
+            Ok(())
+        }
+        // REDU-6 — when `cx.profile.accountable_to.strict_reject.v1` is
+        // declared (env-gated by `SOLAND_ACCOUNTABLE_TO_STRICT_REJECT`),
+        // Actor Profile create/update with unverified `accountable_to[]`
+        // MUST reject the whole event with `failed_precondition
+        // reason=accountability_grant_missing`. Without the profile we
+        // fall back to the default strip + audit behavior.
+        // TODO(R3.1): cross-check each accountable_to[] DID against the
+        // `cx.identity.accountability_grant` projection; for now we
+        // only enforce the wire-shape contract (presence of the
+        // accountable_to[] field implies verification must happen).
+        "cx.profile.create" | "cx.profile.update" => {
+            let strict_reject = matches!(
+                std::env::var("SOLAND_ACCOUNTABLE_TO_STRICT_REJECT").as_deref(),
+                Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes")
+            );
+            if strict_reject
+                && operation
+                    .payload
+                    .get("accountable_to")
+                    .and_then(|v| v.as_array())
+                    .is_some_and(|arr| !arr.is_empty())
+                && operation
+                    .payload
+                    .get("accountability_grant_refs")
+                    .and_then(|v| v.as_array())
+                    .is_none_or(|arr| arr.is_empty())
+            {
+                return Err(
+                    "accountability_grant_missing: strict_reject profile requires \
+                     accountability_grant_refs[] when accountable_to[] is non-empty",
                 );
             }
             Ok(())
@@ -843,6 +1075,36 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
         },
         kinds::CX_AGENT_PROTOCOL_SESSION_RESULT => OperationPayloadSchema {
             requirements: AGENT_SESSION_RESULT_REQUIREMENTS,
+            validate: None,
+        },
+        // R3 spec-sync — agent lifecycle FSM kinds.
+        kinds::CX_AGENT_PAUSE => OperationPayloadSchema {
+            requirements: AGENT_PAUSE_REQUIREMENTS,
+            validate: None,
+        },
+        kinds::CX_AGENT_RESUME => OperationPayloadSchema {
+            requirements: AGENT_RESUME_REQUIREMENTS,
+            validate: None,
+        },
+        kinds::CX_AGENT_DEACTIVATE => OperationPayloadSchema {
+            requirements: AGENT_DEACTIVATE_REQUIREMENTS,
+            validate: None,
+        },
+        // R3 spec-sync — actor_private_event kinds (reducer_input=false).
+        kinds::CX_AGENT_DRAFT_PROPOSE => OperationPayloadSchema {
+            requirements: AGENT_DRAFT_PROPOSE_REQUIREMENTS,
+            validate: None,
+        },
+        kinds::CX_AGENT_ACTION_REQUEST => OperationPayloadSchema {
+            requirements: AGENT_ACTION_REQUEST_REQUIREMENTS,
+            validate: None,
+        },
+        kinds::CX_AGENT_ACTION_APPROVE => OperationPayloadSchema {
+            requirements: AGENT_ACTION_APPROVE_REQUIREMENTS,
+            validate: None,
+        },
+        kinds::CX_AGENT_ACTION_REJECT => OperationPayloadSchema {
+            requirements: AGENT_ACTION_REJECT_REQUIREMENTS,
             validate: None,
         },
         CX_CROSS_SIGNING_RESET => OperationPayloadSchema {

@@ -64,10 +64,10 @@ use spaces::space::{
 };
 use system::extract::AuthArgs;
 use system::util::{
-    bearer_token, handle_for_did, is_json_integer, is_valid_discoverability, is_valid_handle,
-    is_valid_sha256_digest, is_valid_sha256_hex, is_valid_sync_token, normalize_handle,
-    query_param, query_param_all, render_error, sha256_hex, validate_device_id, validate_did,
-    validate_space_id,
+    bearer_token, classify_handle, handle_for_did, is_json_integer, is_valid_discoverability,
+    is_valid_handle, is_valid_sha256_digest, is_valid_sha256_hex, is_valid_sync_token,
+    normalize_handle, query_param, query_param_all, render_error, sha256_hex, validate_device_id,
+    validate_did, validate_space_id,
 };
 
 pub fn router(state: AppState) -> Router {
@@ -1002,6 +1002,46 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "agents",
         "cx.agent.sidecar_thread.ensure",
         "idempotently ensure the controller<->agent sidecar Circle exists",
+    ),
+    // CXP-0010 (R3 spec-sync 2026-05-27, contrix-spec b47ff6ec) — media
+    // token exchange. `/rtc/token` is the spec-canonical wire path; the
+    // `/api/v1/rtc/token` alias is registered for deployments behind an
+    // ingress that strips the deployment-root namespace.
+    (
+        "/rtc/token",
+        PathItemType::Post,
+        "media",
+        "cx.call.media.token_exchange",
+        "exchange session-focus for backend media token + participant_binding",
+    ),
+    (
+        "/contrix/v1/rtc/token",
+        PathItemType::Post,
+        "media",
+        "cx.call.media.token_exchange",
+        "exchange session-focus for backend media token (contrix/v1 alias)",
+    ),
+    (
+        "/api/v1/rtc/token",
+        PathItemType::Post,
+        "media",
+        "cx.extension.soland.calls.media.token_exchange",
+        "exchange session-focus for backend media token (api/v1 alias)",
+    ),
+    // R3 spec-sync — recovery policy / receipt endpoints.
+    (
+        "/api/v1/identity/recovery-policy",
+        PathItemType::Post,
+        "identity",
+        "cx.identity.recovery_policy.put",
+        "submit a cx.schema.recovery_policy.v1 policy",
+    ),
+    (
+        "/api/v1/identity/recovery-receipt",
+        PathItemType::Post,
+        "identity",
+        "cx.identity.recovery_receipt.put",
+        "submit a cx.schema.recovery_receipt.v1 receipt",
     ),
 ];
 

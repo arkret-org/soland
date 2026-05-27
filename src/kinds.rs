@@ -134,6 +134,22 @@ pub const CX_AGENT_PROTOCOL_SESSION_START: &str = "cx.agent.protocol_session.sta
 pub const CX_AGENT_PROTOCOL_SESSION_STATUS: &str = "cx.agent.protocol_session.status";
 pub const CX_AGENT_PROTOCOL_SESSION_RESULT: &str = "cx.agent.protocol_session.result";
 
+// R3 spec-sync (2026-05-27, contrix-spec b47ff6ec) — agent lifecycle FSM
+// event kinds. `lattice` is `fsm` with `bottom=reject`; deactivate is
+// terminal. Reducer enforcement of the (active → paused → active →
+// deactivated) transitions lives in `reducer::apply_agent_lifecycle`
+// (REDU-1).
+pub const CX_AGENT_PAUSE: &str = "cx.agent.pause";
+pub const CX_AGENT_RESUME: &str = "cx.agent.resume";
+pub const CX_AGENT_DEACTIVATE: &str = "cx.agent.deactivate";
+
+// R3 spec-sync — new actor_private_event kinds (reducer_input=false; do
+// NOT advance the anchor frontier / actor_seq). Wire-accepted only.
+pub const CX_AGENT_DRAFT_PROPOSE: &str = "cx.agent.draft.propose";
+pub const CX_AGENT_ACTION_REQUEST: &str = "cx.agent.action_request";
+pub const CX_AGENT_ACTION_APPROVE: &str = "cx.agent.action_approve";
+pub const CX_AGENT_ACTION_REJECT: &str = "cx.agent.action_reject";
+
 // Round C45 (2026-05-18 main; spec 346f347) — registry refactor dropped the
 // `.v1` suffix from these audit event kinds. Wire schema versioning now
 // flows through `requirements.features` (e.g. `cx.feature.audit_destruction_v1`).
@@ -147,6 +163,21 @@ pub const CX_AGENT_PROTOCOL_SESSION_RESULT: &str = "cx.agent.protocol_session.re
 // (still TODO stubs pending full attestation-chain verification).
 pub const CX_AUDIT_EPOCH_KEY_DESTRUCTION: &str = "cx.audit.epoch_key_destruction";
 pub const CX_REALM_AUDIT_POLICY_DOWNGRADE: &str = "cx.realm.audit_policy_downgrade";
+
+// REDU-8 (R3 spec-sync 2026-05-27, contrix-spec b47ff6ec) — the
+// `cx.audit.epoch_destruction_failsafe` event cannot serve as a delayed
+// remediation for a missing same-batch attestation. The spec wording
+// (see _before_todos.md §0.4) is: the failsafe MUST NOT be accepted in
+// place of the in-batch `cx.audit.epoch_key_destruction` paired with
+// the audit agent remove; soland keeps the existing forced
+// `cx.realm.audit_policy_downgrade` write path described above so the
+// downgrade ratchet stays the only correct remediation.
+// TODO(R3.1): when the failsafe kind reaches the reducer admission
+// pipeline, reject it whenever the matching epoch's
+// `cx.audit.epoch_key_destruction` is missing from the same batch with
+// `audit_agent_destruction_proof_missing` / the canonical attested-
+// hardware reason; do NOT silently accept it as remediation.
+pub const CX_AUDIT_EPOCH_DESTRUCTION_FAILSAFE: &str = "cx.audit.epoch_destruction_failsafe";
 
 // Round C45 (2026-05-18 main) — new event kinds.
 //
@@ -437,6 +468,15 @@ fn canonical_registered_kind(object_type: &str) -> Option<&str> {
         CX_AGENT_PROTOCOL_SESSION_START => Some(CX_AGENT_PROTOCOL_SESSION_START),
         CX_AGENT_PROTOCOL_SESSION_STATUS => Some(CX_AGENT_PROTOCOL_SESSION_STATUS),
         CX_AGENT_PROTOCOL_SESSION_RESULT => Some(CX_AGENT_PROTOCOL_SESSION_RESULT),
+        // R3 spec-sync — agent lifecycle (FSM, reducer_input=true).
+        CX_AGENT_PAUSE => Some(CX_AGENT_PAUSE),
+        CX_AGENT_RESUME => Some(CX_AGENT_RESUME),
+        CX_AGENT_DEACTIVATE => Some(CX_AGENT_DEACTIVATE),
+        // R3 spec-sync — actor_private_event kinds (reducer_input=false).
+        CX_AGENT_DRAFT_PROPOSE => Some(CX_AGENT_DRAFT_PROPOSE),
+        CX_AGENT_ACTION_REQUEST => Some(CX_AGENT_ACTION_REQUEST),
+        CX_AGENT_ACTION_APPROVE => Some(CX_AGENT_ACTION_APPROVE),
+        CX_AGENT_ACTION_REJECT => Some(CX_AGENT_ACTION_REJECT),
         // Tier-0 S6 audit kinds (C44 wire-valid, C45 renamed off `.v1`).
         // Projection is currently `Ignored` pending full attestation-chain
         // verification.
@@ -498,6 +538,31 @@ pub fn is_agent_kind(kind: &str) -> bool {
             | CX_AGENT_PROTOCOL_SESSION_START
             | CX_AGENT_PROTOCOL_SESSION_STATUS
             | CX_AGENT_PROTOCOL_SESSION_RESULT
+            | CX_AGENT_PAUSE
+            | CX_AGENT_RESUME
+            | CX_AGENT_DEACTIVATE
+            | CX_AGENT_DRAFT_PROPOSE
+            | CX_AGENT_ACTION_REQUEST
+            | CX_AGENT_ACTION_APPROVE
+            | CX_AGENT_ACTION_REJECT
+    )
+}
+
+/// R3 spec-sync (2026-05-27) — FSM-lattice agent lifecycle kinds.
+pub fn is_agent_lifecycle_kind(kind: &str) -> bool {
+    matches!(kind, CX_AGENT_PAUSE | CX_AGENT_RESUME | CX_AGENT_DEACTIVATE)
+}
+
+/// R3 spec-sync — `actor_private_event` kinds (reducer_input=false).
+/// These MUST NOT advance the anchor frontier / actor_seq; the reducer
+/// dispatches them through the audit-log projection only.
+pub fn is_actor_private_event_kind(kind: &str) -> bool {
+    matches!(
+        kind,
+        CX_AGENT_DRAFT_PROPOSE
+            | CX_AGENT_ACTION_REQUEST
+            | CX_AGENT_ACTION_APPROVE
+            | CX_AGENT_ACTION_REJECT
     )
 }
 
