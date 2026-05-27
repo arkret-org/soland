@@ -5571,8 +5571,15 @@ impl ProjectionState {
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_owned();
+        // CXP-0007 rename batch 2026-05-25: wire field is `parent_space_id`.
+        // The reducer keeps a transitional fallback to `parent_ref` so
+        // soland's own internal reducer tests (which build payloads
+        // directly without going through the wire validator) keep
+        // passing; real wire traffic never carries `parent_ref` because
+        // the envelope validator rejects it as a forbidden wire field.
         let parent_ref = object
-            .get("parent_ref")
+            .get("parent_space_id")
+            .or_else(|| object.get("parent_ref"))
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned);
         let rank = object
