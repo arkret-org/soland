@@ -153,7 +153,7 @@ async fn account_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Respo
                 crate::error::render_error_code(
                     crate::error::ErrorCode::InvalidParam,
                     res,
-                    &message,
+                    message,
                 );
                 return;
             }
@@ -161,7 +161,7 @@ async fn account_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Respo
                 crate::error::render_error_code(
                     crate::error::ErrorCode::CursorIntegrityInvalid,
                     res,
-                    &message,
+                    message,
                 );
                 return;
             }
@@ -369,7 +369,7 @@ fn build_sync_snapshot(
     let is_incremental = body.after.is_some();
     let cursor_issued_at = after_cursor
         .issued_at_ms
-        .and_then(|ms| chrono::DateTime::<Utc>::from_timestamp_millis(ms));
+        .and_then(chrono::DateTime::<Utc>::from_timestamp_millis);
     for (space_id, title, summary, tags, category, members) in visible_spaces {
         let flow = flow_projection_for_space(state, &space_id, &title, summary.as_deref());
         let flow_state_after = flow.clone();
@@ -644,7 +644,7 @@ fn timeline_events_for_space(
         timeline_entries.push((position, event));
     }
 
-    timeline_entries.sort_by(|left, right| left.0.cmp(&right.0));
+    timeline_entries.sort_by_key(|left| left.0);
     (
         timeline_entries
             .into_iter()

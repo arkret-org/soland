@@ -5,24 +5,27 @@
 //! - cotest's `write-verified-profiles.mjs` parses Playwright's junit.xml
 //!   from a joint-e2e run and emits `verified-profiles.json` next to it.
 //!   Schema:
-//!     {
-//!       "version": "1",
-//!       "generated_at": "<RFC3339>",
-//!       "run_id": "<artifacts dir basename>",
-//!       "verified": [
-//!         {
-//!           "profile_id": "...",
-//!           "service_role": "principal_server" | "auth_server" | ...,
-//!           "test_count": <int>,
-//!           "spec_file": "...",
-//!           "artifact_digest": "sha256:<hex>",
-//!           "artifact_ref": "file:///.../verified-profiles.json",
-//!           "cotest_issuer_did": "did:...",
-//!           "signature": "<detached signature>",
-//!           "valid_until": "<RFC3339>"
-//!         }
-//!       ]
-//!     }
+//!
+//!   ```text
+//!   {
+//!     "version": "1",
+//!     "generated_at": "<RFC3339>",
+//!     "run_id": "<artifacts dir basename>",
+//!     "verified": [
+//!       {
+//!         "profile_id": "...",
+//!         "service_role": "principal_server" | "auth_server" | ...,
+//!         "test_count": <int>,
+//!         "spec_file": "...",
+//!         "artifact_digest": "sha256:<hex>",
+//!         "artifact_ref": "file:///.../verified-profiles.json",
+//!         "cotest_issuer_did": "did:...",
+//!         "signature": "<detached signature>",
+//!         "valid_until": "<RFC3339>"
+//!       }
+//!     ]
+//!   }
+//!   ```
 //! - soland reads the path from env var
 //!   [`VERIFIED_PROFILES_ARTIFACT_ENV`] (`SOLAND_VERIFIED_PROFILES_ARTIFACT`)
 //!   at startup, filters to entries whose `service_role` matches

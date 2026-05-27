@@ -382,7 +382,7 @@ pub(crate) fn apply_claim_level_partition(
             .collect()
     };
     debug_assert!(
-        !(development_mode && !verified_profiles.is_empty()),
+        !development_mode || verified_profiles.is_empty(),
         "development_mode=true requires verified_profiles=[] (service-surface.md §3.0)"
     );
     value["verified_profiles"] =

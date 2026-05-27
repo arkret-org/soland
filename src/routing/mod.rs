@@ -1509,8 +1509,6 @@ fn parse_snapshot_ref(snapshot_ref: &str) -> Option<(String, String)> {
     Some((space_id.to_owned(), format!("sha256:{digest}")))
 }
 
-/// Verify federation origin is a valid DID.
-
 fn device_inventory_to_json(device: &DeviceInventoryRecord) -> serde_json::Value {
     json!({
         "actor": device.actor,

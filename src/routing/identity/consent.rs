@@ -405,6 +405,7 @@ fn grant_cell(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn grant_cell_with_dot(
     state: &AppState,
     holder: &str,

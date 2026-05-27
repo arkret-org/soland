@@ -96,7 +96,7 @@ pub(super) async fn admin_collection(
             return Err(AppError::not_found("admin resource not found"));
         }
     };
-    items.sort_by(|left, right| left.to_string().cmp(&right.to_string()));
+    items.sort_by_key(|left| left.to_string());
     let start = match cursor.as_deref() {
         Some(raw) => raw
             .parse::<usize>()

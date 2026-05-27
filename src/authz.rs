@@ -135,6 +135,7 @@ impl AuthzEngine {
     /// engine's grant table, runs the check, assigns a server-issued grant id,
     /// and persists. yougen / sodmin call the SDK helper directly for client-side
     /// pre-validation (skipping the persist step).
+    #[allow(clippy::too_many_arguments)]
     pub fn create_delegated_grant(
         &self,
         parent_grant_id: &str,
@@ -276,6 +277,7 @@ impl AuthzEngine {
     /// - Owner of the space → all actions allowed
     /// - Member of the space → read, send, react, edit_own allowed
     /// - Everyone else → denied
+    #[allow(clippy::too_many_arguments)]
     pub fn check(
         &self,
         actor: &str,

@@ -239,7 +239,7 @@ pub fn frontier_root(
     }
 
     while leaves.len() > 1 {
-        let mut next = Vec::with_capacity((leaves.len() + 1) / 2);
+        let mut next = Vec::with_capacity(leaves.len().div_ceil(2));
         for pair in leaves.chunks(2) {
             let right = pair.get(1).unwrap_or(&pair[0]);
             next.push(canonical_hash(&json!({
@@ -608,12 +608,12 @@ impl HeaderViolation {
 ///
 /// When the *key state* has advanced since the cached response was
 /// minted, the cache should still match (the request_canonical_digest
-/// + idempotency_key are the same) but the receiver MUST mark the
+/// plus idempotency_key are the same) but the receiver MUST mark the
 /// response with `reason_code=historical_only` and MUST NOT trigger
-/// fresh side effects. This is implemented by deriving two keys:
-/// the strict key (with `origin_key_state_digest`) and the
-/// canonical-replay key (without it). The strict key is used for
-/// freshness; the canonical-replay key for historical lookup.
+/// fresh side effects. This is implemented by deriving two keys: the
+/// strict key (with `origin_key_state_digest`) and the canonical-replay
+/// key (without it). The strict key is used for freshness; the
+/// canonical-replay key for historical lookup.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct FederationIdempotencyKey {
     pub source_did: String,

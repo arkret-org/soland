@@ -110,9 +110,9 @@ pub struct ProjectionState {
     ///     metadata) / `cx.component.realm.destroy.v1` (cas-register, terminal). Helpers:
     ///     `space_create_log` / `space_organization_cell_value` / `space_is_destroyed` query cells
     ///     directly.
-    /// Durable-event-only fields (`messages` / `reactions` / `read_cursors`
-    /// / `relations` / `redactions`) stay structured per spec
-    /// (those event kinds have no `cell_family` declaration).
+    ///     Durable-event-only fields (`messages` / `reactions` / `read_cursors`
+    ///     / `relations` / `redactions`) stay structured per spec
+    ///     (those event kinds have no `cell_family` declaration).
     pub cells: BTreeMap<CellRef, CellState>,
     /// Server-side Space-container projection —
     /// `container_space_id -> SpaceContainerProjection`.
@@ -1072,6 +1072,7 @@ pub struct SpaceState {
     ///   - `Some("tombstoned")` — `cx.realm.tombstone` accepted; the
     ///     `successor_realm_id` field carries the migration target.
     ///   - `Some("destroyed")` — `cx.realm.destroy` accepted; no successor.
+    ///
     /// Both terminal states block non-audit writes via
     /// `crate::round23::terminal_realm_check`. Spec
     /// `realm-and-space.md` §2.5 / §2.5.1.
@@ -2435,7 +2436,7 @@ fn enforce_delivery_binding_policy(
         .and_then(Value::as_array)
         .map(|arr| arr.iter().filter_map(Value::as_str).collect())
         .unwrap_or_default();
-    if !allow_sources.iter().any(|s| *s == binding_source) {
+    if !allow_sources.contains(&binding_source) {
         return Err("binding_source_not_allowed");
     }
     // `did_document_default` requires the toggle even if the source list
@@ -2459,11 +2460,7 @@ fn enforce_delivery_binding_policy(
         .and_then(Value::as_array)
         .map(|arr| arr.iter().filter_map(Value::as_str).collect())
         .unwrap_or_default();
-    if !allowed_recipients.is_empty()
-        && !allowed_recipients
-            .iter()
-            .any(|s| *s == recipient_service_did)
-    {
+    if !allowed_recipients.is_empty() && !allowed_recipients.contains(&recipient_service_did) {
         return Err("recipient_service_not_allowed");
     }
 
@@ -3352,8 +3349,9 @@ impl ProjectionState {
 
     /// Reload the cells map for one Space from the SDK CellStore + apply
     /// each cell's lattice. Called after every successful `apply_anchor`
-    /// in the Move/Anchor pipeline (`routing::federation::move_anchor::submit_anchor`
-    /// + `crate::anchorer::AnchorerWorker`) to keep this projection cache
+    /// in the Move/Anchor pipeline
+    /// (`routing::federation::move_anchor::submit_anchor` plus
+    /// `crate::anchorer::AnchorerWorker`) to keep this projection cache
     /// in sync with anchored cell state.
     ///
     /// This is the only write path into [`ProjectionState::cells`]; the
@@ -3681,10 +3679,13 @@ impl ProjectionState {
                                     // `contrix_core::model::patch::Patch`.
                                     Some("add") => {
                                         if let Some(v) = op.get("value") {
-                                            obj.entry(path.clone())
+                                            if let Some(arr) = obj
+                                                .entry(path.clone())
                                                 .or_insert_with(|| Value::Array(Vec::new()))
                                                 .as_array_mut()
-                                                .map(|arr| arr.push(v.clone()));
+                                            {
+                                                arr.push(v.clone());
+                                            }
                                         }
                                     }
                                     Some("remove") => {
@@ -4830,6 +4831,7 @@ impl ProjectionState {
             .map(ToOwned::to_owned)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn realm_update_candidate_value(
         &self,
         cell_id: &CellRef,
@@ -4864,6 +4866,7 @@ impl ProjectionState {
         Value::Object(value)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn maybe_project_realm_update_bottom(
         &mut self,
         operation: &Operation,
@@ -5758,7 +5761,7 @@ impl ProjectionState {
         for field in ["scope_circle_id", "default_scope_circle_id"] {
             if let Some(scope_circle_id) = object.get(field).and_then(Value::as_str)
                 && let Err(reason) =
-                    self.validate_scope_circle_id(scope_circle_id, &operation.realm_id.to_string())
+                    self.validate_scope_circle_id(scope_circle_id, operation.realm_id.as_ref())
             {
                 return ProjectionEffect::Rejected {
                     reason: reason.to_owned(),
@@ -6324,7 +6327,7 @@ impl ProjectionState {
         // present, validate the Circle is in this Realm and active.
         if let Some(scope_circle_id) = object.get("scope_circle_id").and_then(Value::as_str)
             && let Err(reason) =
-                self.validate_scope_circle_id(scope_circle_id, &operation.realm_id.to_string())
+                self.validate_scope_circle_id(scope_circle_id, operation.realm_id.as_ref())
         {
             return ProjectionEffect::Rejected {
                 reason: reason.to_owned(),
@@ -6367,7 +6370,7 @@ impl ProjectionState {
         {
             self.store_flow_position_relation(
                 &flow_id,
-                &operation.realm_id.to_string(),
+                operation.realm_id.as_ref(),
                 &board_space_id,
                 &list_space_id,
                 rank.as_deref(),
@@ -6557,7 +6560,7 @@ impl ProjectionState {
         {
             self.store_flow_position_relation(
                 &flow_id,
-                &operation.realm_id.to_string(),
+                operation.realm_id.as_ref(),
                 &board_space_id,
                 &list_space_id,
                 rank.as_deref(),
@@ -6699,7 +6702,7 @@ impl ProjectionState {
         // Flow.scope_circle_id validation.
         if let Some(scope_circle_id) = object.get("scope_circle_id").and_then(Value::as_str)
             && let Err(reason) =
-                self.validate_scope_circle_id(scope_circle_id, &operation.realm_id.to_string())
+                self.validate_scope_circle_id(scope_circle_id, operation.realm_id.as_ref())
         {
             return ProjectionEffect::Rejected {
                 reason: reason.to_owned(),
@@ -7385,6 +7388,7 @@ impl ProjectionState {
     ///   - Active → Paused                 via `cx.agent.pause`
     ///   - Paused → Active                 via `cx.agent.resume`
     ///   - {Active,Paused} → Deactivated   via `cx.agent.deactivate`
+    ///
     /// `Deactivated` is terminal — any further transition (including a
     /// resume) is rejected.
     pub fn apply_agent_lifecycle(
@@ -9278,7 +9282,7 @@ mod tests {
             relation.fields.get("rank").and_then(Value::as_str),
             Some("r007")
         );
-        assert!(relation.fields.get("cascade_archived_by").is_none());
+        assert!(!relation.fields.contains_key("cascade_archived_by"));
     }
 
     #[test]

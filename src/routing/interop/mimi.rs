@@ -379,7 +379,7 @@ async fn mimi_room_message(
             "mimi_policy": mapped_content.policy,
             "quarantine": mapped_content.quarantine,
         }),
-        &mapped_content.status,
+        mapped_content.status,
     );
     json_ok(json!({
         "ok": true,

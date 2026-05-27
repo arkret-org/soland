@@ -352,11 +352,11 @@ pub(super) async fn federation_block_hints(
         .lock()
         .expect("federation block hints lock")
         .values()
-        .filter(|record| actor.as_deref().map_or(true, |actor| record.actor == actor))
+        .filter(|record| actor.as_deref().is_none_or(|actor| record.actor == actor))
         .filter(|record| {
             blocked
                 .as_deref()
-                .map_or(true, |blocked| record.blocked == blocked)
+                .is_none_or(|blocked| record.blocked == blocked)
         })
         .cloned()
         .collect::<Vec<_>>();
@@ -1736,7 +1736,6 @@ pub(super) async fn federation_anchors_push(
 /// Returns the list of peer URLs the broadcast targeted; the actual HTTP
 /// dispatch is fire-and-forget (best-effort) and runs on a background
 /// tokio task so the inbound write path never blocks on a slow peer.
-#[allow(dead_code)]
 pub fn broadcast_move_to_peers(state: &AppState, move_id: &str) -> Vec<String> {
     let peers = configured_peer_targets(state);
     for peer in &peers {
@@ -1765,7 +1764,6 @@ pub fn broadcast_move_to_peers(state: &AppState, move_id: &str) -> Vec<String> {
 /// Symmetric helper for Anchor replication. The hub policy still pushes
 /// to a single upstream so the broadcast list is `[hub]`; mesh fans out
 /// to every peer.
-#[allow(dead_code)]
 pub fn broadcast_anchor_to_peers(state: &AppState, anchor_id: &str) -> Vec<String> {
     let peers = configured_peer_targets(state);
     for peer in &peers {
@@ -2115,6 +2113,7 @@ fn content_digest_header(bytes: &[u8]) -> String {
     format!("sha-256=:{}:", STANDARD.encode(digest))
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct OutboundFanoutRetryReport {
     pub scanned: usize,
@@ -2124,15 +2123,7 @@ pub struct OutboundFanoutRetryReport {
     pub skipped: usize,
 }
 
-#[allow(dead_code)]
-pub fn run_outbound_fanout_retry_pass(
-    state: &AppState,
-    node_id: &str,
-    limit: usize,
-) -> crate::persistence::PersistenceResult<OutboundFanoutRetryReport> {
-    run_outbound_fanout_retry_pass_at(state, node_id, limit, Utc::now())
-}
-
+#[cfg(test)]
 fn run_outbound_fanout_retry_pass_at(
     state: &AppState,
     node_id: &str,
@@ -2183,6 +2174,7 @@ fn run_outbound_fanout_retry_pass_at(
     Ok(report)
 }
 
+#[cfg(test)]
 fn next_retry_at(response: &Value) -> Option<DateTime<Utc>> {
     response
         .pointer("/per_peer_state/next_retry_at")
@@ -2191,6 +2183,7 @@ fn next_retry_at(response: &Value) -> Option<DateTime<Utc>> {
         .map(|value| value.with_timezone(&Utc))
 }
 
+#[cfg(test)]
 fn update_retry_record(
     record: FederationTransactionRecord,
     node_id: &str,
@@ -2270,6 +2263,7 @@ fn update_retry_record(
     }
 }
 
+#[cfg(test)]
 fn retry_backoff_ms(response: &Value, attempt: u64) -> u64 {
     let initial = response
         .pointer("/retry/policy/initial_backoff_ms")

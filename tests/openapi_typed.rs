@@ -14,6 +14,7 @@ use soland::state::AppState;
 fn test_config() -> AppConfig {
     AppConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
+        metrics_bind: "127.0.0.1:0".parse().unwrap(),
         public_base_url: "http://server".to_owned(),
         service_did: "did:web:soland.local".to_owned(),
         tls_cert_path: None,

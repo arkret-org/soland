@@ -1666,9 +1666,7 @@ impl AppState {
             .lock()
             .expect("failed_login_attempts lock");
         let now = chrono::Utc::now();
-        let Some(record) = map.get(did).cloned() else {
-            return None;
-        };
+        let record = map.get(did).cloned()?;
         match record.locked_until {
             Some(until) if until > now => Some(until),
             Some(_) => {

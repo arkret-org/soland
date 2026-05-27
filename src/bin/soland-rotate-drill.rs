@@ -13,6 +13,7 @@
 //!      - signs a probe Move with the new key,
 //!      - asserts the in-process verifier accepts that probe signature,
 //!      - asserts an old-key signature is rejected.
+//!
 //!    Exit 0 on full PASS, 1 on any assertion fail, 2 on prerequisite/IO.
 //!
 //! 2. `--export-only` — used by `scripts/backup-drill.sh`. Loads the KeyStore-persisted anchorer

@@ -33,10 +33,12 @@ use crate::state::AppState;
 const CX_CROSS_SIGNING_RESET: &str = "cx.cross_signing.reset";
 const CROSS_SIGNING_RESET_MAX_CLOCK_SKEW_SECONDS: i64 = 300;
 
+type OperationValidator = fn(&Operation) -> Result<(), &'static str>;
+
 #[derive(Clone, Copy)]
 pub struct OperationPayloadSchema {
     requirements: &'static [PayloadRequirement],
-    validate: Option<fn(&Operation) -> Result<(), &'static str>>,
+    validate: Option<OperationValidator>,
 }
 
 #[derive(Clone, Copy)]
@@ -1039,11 +1041,7 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
         // `artifacts/registry/removed-event-kinds.json`). The generic
         // unknown-event-kind path in `event_log::submit_event` already
         // hard-rejects these kinds; no operation schema branch is needed.
-        kind if matches!(
-            kind,
-            kinds::CX_CONTAINER_MOVE_ITEM | kinds::CX_CONTAINER_REBALANCE
-        ) =>
-        {
+        kinds::CX_CONTAINER_MOVE_ITEM | kinds::CX_CONTAINER_REBALANCE => {
             OperationPayloadSchema {
                 requirements: RELATION_ID_REQUIREMENTS,
                 validate: None,
@@ -1654,10 +1652,10 @@ pub fn validate_device_message_payload(content: &serde_json::Value) -> Result<()
     let Some(message) = content.as_object() else {
         return Err("device message must be a JSON object");
     };
-    if !message
+    if message
         .get("type")
         .and_then(|value| value.as_str())
-        .is_some_and(|value| !value.trim().is_empty())
+        .is_none_or(|value| value.trim().is_empty())
     {
         return Err("device message requires type");
     }
@@ -1720,10 +1718,10 @@ pub fn validate_canonical_json_value_inner(
     root: bool,
 ) -> Result<(), &'static str> {
     match value {
-        serde_json::Value::Number(number) => {
-            if number.as_i64().is_none() && number.as_u64().is_none() {
-                return Err("canonical JSON does not allow floating point numbers");
-            }
+        serde_json::Value::Number(number)
+            if number.as_i64().is_none() && number.as_u64().is_none() =>
+        {
+            return Err("canonical JSON does not allow floating point numbers");
         }
         serde_json::Value::Array(values) => {
             for value in values {
@@ -1785,10 +1783,8 @@ pub fn validate_canonical_json_value_inner(
         _ => {}
     }
     // At the top level, attempt a canonical byte roundtrip to ensure full compliance.
-    if root {
-        if let Err(_) = contrix_sdk::canonical::canonical_json_bytes(value) {
-            return Err("value fails canonical JSON byte serialization");
-        }
+    if root && contrix_sdk::canonical::canonical_json_bytes(value).is_err() {
+        return Err("value fails canonical JSON byte serialization");
     }
     Ok(())
 }
@@ -1820,7 +1816,6 @@ pub fn validate_rfc3339_utc_z(s: &str) -> Result<(), &'static str> {
 }
 
 /// Compute a canonical SHA-256 digest of a JSON value using SDK canonical encoding.
-#[allow(dead_code)]
 pub fn canonical_json_digest(value: &serde_json::Value) -> Result<Hash, String> {
     contrix_sdk::canonical::canonical_sha256(value)
         .and_then(|digest| {
@@ -1853,21 +1848,21 @@ pub fn validate_content_block(block: &serde_json::Value) -> Result<(), &'static 
             }
         }
         "text" | "formatted_text" => {
-            if !block
+            if block
                 .get("text")
                 .or_else(|| block.get("body"))
                 .and_then(|value| value.as_str())
-                .is_some_and(|value| !value.trim().is_empty())
+                .is_none_or(|value| value.trim().is_empty())
             {
                 return Err("text content block requires text");
             }
         }
         "code" => {
-            if !block
+            if block
                 .get("text")
                 .or_else(|| block.get("body"))
                 .and_then(|value| value.as_str())
-                .is_some_and(|value| !value.is_empty())
+                .is_none_or(str::is_empty)
             {
                 return Err("code content block requires text");
             }
@@ -1893,23 +1888,23 @@ pub fn validate_content_block(block: &serde_json::Value) -> Result<(), &'static 
             }
         }
         "poll" => {
-            if !block
+            if block
                 .get("question")
                 .and_then(|value| value.as_str())
-                .is_some_and(|value| !value.trim().is_empty())
-                || !block
+                .is_none_or(|value| value.trim().is_empty())
+                || block
                     .get("options")
                     .and_then(|value| value.as_array())
-                    .is_some_and(|options| options.len() >= 2)
+                    .is_none_or(|options| options.len() < 2)
             {
                 return Err("poll content block requires question and at least two options");
             }
         }
         "poll.response" => {
-            if !block
+            if block
                 .get("poll_id")
                 .and_then(|value| value.as_str())
-                .is_some_and(|value| !value.trim().is_empty())
+                .is_none_or(|value| value.trim().is_empty())
                 || !(block
                     .get("choice")
                     .and_then(|value| value.as_str())
@@ -1923,10 +1918,10 @@ pub fn validate_content_block(block: &serde_json::Value) -> Result<(), &'static 
             }
         }
         "poll.close" => {
-            if !block
+            if block
                 .get("poll_id")
                 .and_then(|value| value.as_str())
-                .is_some_and(|value| !value.trim().is_empty())
+                .is_none_or(|value| value.trim().is_empty())
             {
                 return Err("poll close content block requires poll_id");
             }
@@ -2385,10 +2380,10 @@ pub fn validate_encrypted_payload_envelope(
         "ciphertext",
         "authentication_tag",
     ] {
-        if !envelope
+        if envelope
             .get(field)
             .and_then(|value| value.as_str())
-            .is_some_and(|value| !value.trim().is_empty())
+            .is_none_or(|value| value.trim().is_empty())
         {
             return Err("encrypted content envelope is missing required string fields");
         }
@@ -2399,13 +2394,13 @@ pub fn validate_encrypted_payload_envelope(
     {
         return Err("encrypted content envelope requires version");
     }
-    if !envelope
+    if envelope
         .get("epoch")
-        .is_some_and(|value| value.as_u64().is_some())
+        .is_none_or(|value| value.as_u64().is_none())
     {
         return Err("encrypted content envelope requires numeric epoch");
     }
-    if !envelope.get("aad").is_some() {
+    if envelope.get("aad").is_none() {
         return Err("encrypted content envelope requires aad");
     }
     if !envelope
@@ -2420,11 +2415,10 @@ pub fn validate_encrypted_payload_envelope(
     if digests.is_empty() {
         return Err("encrypted content envelope requires digests");
     }
-    if !digests.values().all(|value| {
-        value
-            .as_str()
-            .is_some_and(|digest| is_valid_sha256_digest(digest))
-    }) {
+    if !digests
+        .values()
+        .all(|value| value.as_str().is_some_and(is_valid_sha256_digest))
+    {
         return Err("encrypted content envelope digests must be sha256:<64 lowercase hex>");
     }
     Ok(())

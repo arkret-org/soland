@@ -629,10 +629,10 @@ fn validate_encrypted_attachment_metadata(
         return Err("attachment envelope must be a JSON object");
     };
     for field in ["algorithm", "nonce", "ciphertext_digest"] {
-        if !envelope
+        if envelope
             .get(field)
             .and_then(|value| value.as_str())
-            .is_some_and(|value| !value.trim().is_empty())
+            .is_none_or(|value| value.trim().is_empty())
         {
             return Err("attachment envelope is missing required string fields");
         }

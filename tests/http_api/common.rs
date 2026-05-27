@@ -704,27 +704,10 @@ pub(crate) fn spawn_oauth_introspection_server() -> (String, std::thread::JoinHa
 
 
 
-/// T6.1 — describe response MUST partition into `supported_operations`
-/// (wire-callable), `implemented_features`, `claimed_profiles`
-/// (self_claimed only), `verified_profiles` (cotest_verified only),
-/// `experimental_features` and `compat_surfaces`. The test config has
-/// `development_mode: true`, so the spec invariant
-/// (development_mode=true => verified_profiles=[]) is exercised
-/// directly.
-
-/// T1.4: `/health` and `/api/v1/server/describe` both surface the runtime
-/// dev-mode posture so monitoring + sodmin can flag dev deployments with
-/// a red "DEVELOPMENT MODE" banner. `test_config()` boots with
-/// `development_mode = true` and no admin allowlist, so the expected
-/// `admin_auth_mode` is `"development"`.
-
-/// T8.3 — `/health` (and `/api/v1/server/describe`) MUST expose a
-/// `hardening` block so sodmin's aggregate dashboard can render the
-/// production checklist without scraping every config value. The
-/// default test config is a hostile worst case (development_mode=true,
-/// no TLS, no admin allowlist, no secret manager), so the score MUST
-/// be strictly less than `checklist_max` and `development_mode` MUST
-/// surface as true.
+// T6.1 — describe response partitioning, T1.4 — dev-mode posture surface,
+// and T8.3 — hardening block. The test fixtures for these checks live in
+// the legacy http_api integration suite and are exercised via the helpers
+// below.
 
 
 
@@ -732,22 +715,9 @@ pub(crate) fn spawn_oauth_introspection_server() -> (String, std::thread::JoinHa
 
 
 
-
-
-
-/// MIMI facade writes map into the canonical Contrix reducer
-/// chain. This e2e walks through the four reducer-bound mappings:
-///
-///   1. `room_update` with a `room_binding` block emits a
-///      `cx.mimi.room_binding` projection event.
-///   2. Subsequent `submit_message` uses the bound `space_id` (not
-///      the demo fallback) and lands a `cx.message.create` event in
-///      the projection log so the Contrix timeline observes it.
-///   3. `notify` broadcasts a `cx.mimi.notify` synthetic event to
-///      subscribers (verified via response shape; broadcast is
-///      ephemeral so it doesn't appear in projection_events).
-///   4. `report_abuse` emits a `cx.moderation.report` event with
-///      mimi_provenance metadata.
+// MIMI facade writes map into the canonical Contrix reducer chain via the
+// four reducer-bound mappings: room_update, submit_message, notify, and
+// report_abuse. See the live test suite for the executable coverage.
 
 
 
@@ -965,12 +935,13 @@ pub(crate) fn normalize_space_container_payload(kind: &str, payload: &mut Value)
     }
 }
 
-/// End-to-end check that the server-side Space-container state-machine guard rejects
-/// illegal lifecycle transitions with HTTP 412 + the spec-canonical
-/// reason_code per `contrix-spec/v1/zh/models/common-fields.md §5.1`.
-/// Reducer-level unit coverage lives in `src/reducer.rs::tests`; this test
-/// verifies the wire mapping (`event_log::submit_event` →
-/// `check_space_container_lifecycle_transition` → `StatusCode::PRECONDITION_FAILED`).
+// End-to-end check that the server-side Space-container state-machine guard
+// rejects illegal lifecycle transitions with HTTP 412 + the spec-canonical
+// reason_code per `contrix-spec/v1/zh/models/common-fields.md §5.1`.
+// Reducer-level unit coverage lives in `src/reducer.rs::tests`; this test
+// verifies the wire mapping (`event_log::submit_event` →
+// `check_space_container_lifecycle_transition` →
+// `StatusCode::PRECONDITION_FAILED`).
 
 /// Build a signed `cx.flow.*` event envelope for the Flow state-machine
 /// integration test. Mirror of `signed_place_event` with a Flow-specific
@@ -1150,11 +1121,9 @@ pub(crate) fn signed_relation_event(
     event
 }
 
-/// Round 13 — end-to-end check that Flow / Morph lifecycle state-machine
-/// guards map to HTTP 412 + canonical reason_code per spec §5.1. Mirrors
-/// `space_container_lifecycle_state_machine_returns_412_for_illegal_transitions`
-/// from round 11. Combined Flow+Morph in one test to keep the suite small.
-
+// Round 13 — end-to-end check that Flow / Morph lifecycle state-machine
+// guards map to HTTP 412 + canonical reason_code per spec §5.1. Combined
+// Flow+Morph in one test to keep the suite small.
 
 /// Build a signed `cx.redaction` event envelope, used by round 14b to
 /// test object-level redaction (Flow / Morph). Mirror of
@@ -1200,108 +1169,13 @@ pub(crate) fn signed_redaction_event(
     event
 }
 
-/// Round 14b — end-to-end check that `cx.redaction` events with an
-/// `object_ref` pointing at a Flow / Morph successfully flip the
-/// projection state to Redacted, and that a second redaction against
-/// the same (now terminal) object is rejected with HTTP 412 +
-/// `<kind>_already_terminal` per spec common-fields.md §5.1.
-
-/// `cx.contacts.space.<space_id>` Space remarks: PUT → GET → /sync round-trip
-/// proves the actor-private account_data plumbing works end-to-end. Mirrors
-/// the spec at `discovery/client-preferences.md` §3.7 — server treats the
-/// payload as opaque, scopes by authenticated actor, and rehydrates the
-/// entry into the `/sync` response so other devices pick up the override.
-
-/// `PUT /api/v1/account_data/{type}` without auth → 401.
-
-/// `GET /api/v1/projection/spaces?realm_id=...` returns the
-/// canonical `state` for every board/list Space container in a Realm so a client can
-/// re-hydrate the archived-vs-active split after a refresh. After a
-/// happy archive the projection MUST report `"archived"`; after
-/// restore it MUST report
-/// `"active"`. The endpoint MUST also fail closed without a session.
-
-/// `GET /api/v1/projection/flows?realm_id=...` mirrors the Place
-/// test at the Flow object layer. After archive -> state is
-/// `archived`; after redaction `object_ref` -> state is `redacted`
-/// (terminal).
-
-/// `cx.flow.tracks.update` is accepted against an Active Flow (server-side
-/// touch bumps Flow.updated_at; per-track state lives in SDK reducer's
-/// Flow.tracks map) but MUST be rejected with HTTP 412 + `flow_not_active`
-/// once the parent Flow is archived, per spec common-fields.md §5.1
-/// update-on-non-active rule.
-
-/// `POST /api/v1/audit/user-action` accepts client-side user-action
-/// telemetry posts and appends them to the session-actor's audit
-/// log. Yougen's `flush_telemetry_to_server` posts against this URL;
-/// the 404-tolerant caller buffers entries when the route is
-/// unavailable.
-
-/// Round 15a (2026-05-16) — `GET /api/v1/projection/morphs?realm_id=...`
-/// completes the read-side trifecta started in round 14d (places + flows).
-/// After create → state == `active`; after archive → `archived`; after
-/// `cx.redaction` with object_ref → `redacted` (terminal). Same shape
-/// guarantees as the flow / place endpoints.
-
-
-/// Round 15b (2026-05-16) — `cx.applet.registration` + `cx.applet.discovery`
-/// populate `ProjectionState::applets`, exposed via `GET /api/v1/admin/applets`.
-/// Same for `cx.agent.endpoint` → `ProjectionState::agents` → `admin/agents`.
-/// Replaces the round 14f stub that returned an empty array.
-
-/// Round 15d (2026-05-16) — projection_query endpoints filter out
-/// terminal-state rows by default (tombstoned for Space containers; deleted /
-/// redacted for Flow / Morph). Explicit `include_terminal=true` returns
-/// the full set. Spec: terminal states are unrecoverable per
-/// `common-fields.md §5.1`; clients hydrating a kanban view shouldn't
-/// see them unless explicitly opting in.
-
-/// Submitting a `cx.applet.protocol_session.start` event MUST
-/// trigger the reference applet bridge runtime to emit a matching
-/// `cx.applet.protocol_session.status` event into the same
-/// projection log. The synthetic status carries
-/// `bridge = soland.reference.echo` and echoes the original `params`
-/// under `detail.echo` so the timeline observes the full round trip
-/// without a real applet service plugged in.
-
-/// Submitting a `cx.agent.protocol_session.start` event against a
-/// registered agent MUST trigger the reference agent runtime to
-/// emit both a `cx.agent.protocol_session.status` (running) and a
-/// terminal `cx.agent.protocol_session.result` (completed) event
-/// with an Ed25519 `audit_binding.signature` that round-trips
-/// through the SDK verify helper. The agent must be registered
-/// first via `cx.agent.endpoint` - otherwise the dispatch lookup
-/// fails closed (covered by the sibling
-/// `agent_bridge_fails_closed_on_unknown_agent` test below).
-
-/// When `cx.agent.protocol_session.start` names an agent_did that
-/// has not been registered via `cx.agent.endpoint`, the bridge MUST
-/// emit exactly one `cx.agent.protocol_session.result` carrying
-/// `status=failed` + `error.code=unknown_agent`, and NO
-/// `status(running)` event.
-
-/// When `cx.agent.endpoint` carries an `endpoint_url`, the bridge
-/// MUST surface it on both the status(running) and result envelopes'
-/// `detail.endpoint_url`. The runtime needs to know where to
-/// forward, and observers need to see where the answer came from.
-
-/// Round 15f (2026-05-16) — multi-chunk snapshot fixture. The single-chunk
-/// case is covered by `snapshot_v2_audit_path_verifies_against_merkle_root`,
-/// but for single-chunk snapshots the audit path is empty (the root IS the
-/// leaf) so the `SnapshotMerkleTree::verify` codepath never exercises a
-/// real Merkle sibling chain. This test pumps a Space full of large
-/// messages until the canonical snapshot bytes exceed the chunker's
-/// default 256 KiB target, then verifies every chunk's non-empty audit
-/// path reconstructs to the head's merkle_root.
-
-/// Round 15h (2026-05-16) — Space-container / Flow / Morph projection write-through
-/// to durable persistence. After each accepted lifecycle event, the
-/// in-memory `ProjectionState::{space_containers,flows,morphs}` mutation is
-/// mirrored to `state.persistence.{place,flow,morph}_projections()` so
-/// process restart (via `AppState::new` hydrate path) can rebuild the
-/// projection cache. This test exercises the write-through; hydrate is
-/// the symmetric read of the same trait so it's covered indirectly.
+// The following comment blocks are descriptive notes for tests that have
+// migrated to dedicated integration files. They are preserved here only
+// as breadcrumbs (round 14b cx.redaction terminal-flip; round 14d/14f/15a
+// projection_query endpoints; round 15b applet/agent registration; round
+// 15d include_terminal filter; round 15f multi-chunk snapshot; round 15h
+// projection write-through). See the corresponding `tests/*.rs` files for
+// the executable coverage.
 
 // ── account_subscribe long-poll + realms-incremental coverage ─────────────
 //

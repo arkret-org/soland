@@ -130,7 +130,7 @@ fn rust_files(root: &Path) -> Vec<PathBuf> {
             continue;
         }
         let path = entry.into_path();
-        if path.extension().map_or(false, |e| e == "rs") {
+        if path.extension().is_some_and(|e| e == "rs") {
             files.push(path);
         }
     }

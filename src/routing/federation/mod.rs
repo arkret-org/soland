@@ -1,6 +1,7 @@
 use salvo::prelude::*;
 
 pub mod erasure_fanout;
+#[allow(clippy::module_inception)]
 pub(crate) mod federation;
 pub(crate) mod move_anchor;
 pub mod outbox;

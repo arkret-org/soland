@@ -29,6 +29,7 @@ use soland::state::AppState;
 fn test_config() -> AppConfig {
     AppConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
+        metrics_bind: "127.0.0.1:0".parse().unwrap(),
         public_base_url: "http://server".to_owned(),
         service_did: "did:web:soland.local".to_owned(),
         tls_cert_path: None,
@@ -107,7 +108,7 @@ async fn realms_delivery_binding_policy_endpoint_responds() {
     let svc = app();
     let token = dev_token(&svc).await;
     let realm_id = "cx:space:01904100-0000-7000-8000-d00ddeadbeef";
-    let body: Value = TestClient::get(&format!(
+    let body: Value = TestClient::get(format!(
         "http://server/api/admin/v1/realms/{realm_id}/delivery-binding-policy"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
@@ -158,7 +159,7 @@ async fn spaces_delivery_binding_policy_legacy_path_returns_410_gone() {
     let svc = app();
     let token = dev_token(&svc).await;
     let space_id = "cx:space:01904100-0000-7000-8000-d00ddeadbeef";
-    let mut response = TestClient::get(&format!(
+    let mut response = TestClient::get(format!(
         "http://server/api/admin/v1/spaces/{space_id}/delivery-binding-policy"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)

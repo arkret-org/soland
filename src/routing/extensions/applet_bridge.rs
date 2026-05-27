@@ -59,11 +59,6 @@ pub struct GhostActorRecord {
 
 static APPLET_BRIDGE_REGISTRY: Mutex<Vec<AppletBridgeRecord>> = Mutex::new(Vec::new());
 
-#[cfg(test)]
-pub(crate) fn reset_registry_for_test() {
-    APPLET_BRIDGE_REGISTRY.lock().unwrap().clear();
-}
-
 pub(super) fn router() -> Router {
     Router::with_path("applets")
         .push(Router::with_path("register").post(register_endpoint))
@@ -312,7 +307,7 @@ fn register_verified_applet(
             .lock()
             .expect("applet bridge registry poisoned");
         if let Some(existing) = guard.iter().find(|record| record.applet_id == applet_id) {
-            if !idempotency_key.is_none()
+            if idempotency_key.is_some()
                 && existing.idempotency_key.as_deref() == idempotency_key.as_deref()
             {
                 res.status_code(StatusCode::OK);

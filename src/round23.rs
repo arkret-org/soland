@@ -520,15 +520,14 @@ impl DeactivationFanoutProjection {
         }
         self.outcome = if all_completed {
             "completed".to_owned()
-        } else if any_failed && !any_pending {
-            "partially_completed".to_owned()
-        } else if any_pending
-            && self.domain_status.values().any(|s| {
-                matches!(
-                    s,
-                    DeactivationDomainStatus::Completed | DeactivationDomainStatus::Failed
-                )
-            })
+        } else if (any_failed && !any_pending)
+            || (any_pending
+                && self.domain_status.values().any(|s| {
+                    matches!(
+                        s,
+                        DeactivationDomainStatus::Completed | DeactivationDomainStatus::Failed
+                    )
+                }))
         {
             "partially_completed".to_owned()
         } else {

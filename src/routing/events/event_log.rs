@@ -1596,7 +1596,7 @@ fn validate_event_envelope(
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
             "forbidden_wire_field",
-            &format!(
+            format!(
                 "payload carries forbidden wire field {field:?} \
                  (spec/v1/artifacts/registry/forbidden-wire-fields.json)"
             ),
@@ -2008,9 +2008,9 @@ fn validate_sender_commitment_binding(
     Ok(())
 }
 
-fn event_requirements_features<'a>(
-    object: &'a serde_json::Map<String, Value>,
-) -> impl Iterator<Item = &'a str> {
+fn event_requirements_features(
+    object: &serde_json::Map<String, Value>,
+) -> impl Iterator<Item = &str> {
     object
         .get("requirements")
         .and_then(|requirements| requirements.get("features"))
@@ -3333,9 +3333,7 @@ pub(super) fn event_read_response(record: &CanonicalEventRecord) -> EventReadRes
 /// payload) names a Circle scope, `Some("realm:<realm_id>")` when the
 /// scope is the Realm default, or `None` when neither can be derived.
 fn effective_scope_for_envelope(envelope: &Value) -> Option<String> {
-    let Some(object) = envelope.as_object() else {
-        return None;
-    };
+    let object = envelope.as_object()?;
     if let Some(scope) = object.get("effective_scope").and_then(Value::as_str) {
         return Some(scope.to_owned());
     }

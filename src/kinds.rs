@@ -416,7 +416,7 @@ fn canonical_registered_kind(object_type: &str) -> Option<&str> {
     {
         return None;
     }
-    let kind = match object_type {
+    match object_type {
         CX_MESSAGE_CREATE => Some(CX_MESSAGE_CREATE),
         CX_MESSAGE_REVISE => Some(CX_MESSAGE_REVISE),
         CX_MESSAGE_REDACT => Some(CX_MESSAGE_REDACT),
@@ -514,8 +514,7 @@ fn canonical_registered_kind(object_type: &str) -> Option<&str> {
         CX_REALM_POLICY_SERVER => Some(CX_REALM_POLICY_SERVER),
         CX_ORGANIZATION_MODERATION_POLICY => Some(CX_ORGANIZATION_MODERATION_POLICY),
         _ => Some(object_type),
-    };
-    kind
+    }
 }
 
 /// True for any `cx.audit.*` event kind. Used by the Realm terminal-state
@@ -629,6 +628,44 @@ pub fn is_space_container_lifecycle_kind(kind: &str) -> bool {
     )
 }
 
+/// Flow has no dedicated `cx.flow.tombstone` event in the spec event-kind
+/// registry — terminal state is reached via `cx.redaction`. Only archive /
+/// restore are lifecycle state-machine transitions here.
+pub fn is_flow_lifecycle_kind(kind: &str) -> bool {
+    matches!(kind, CX_FLOW_ARCHIVE | CX_FLOW_RESTORE)
+}
+
+/// Morph has no dedicated tombstone event for the same reason as Flow.
+pub fn is_morph_lifecycle_kind(kind: &str) -> bool {
+    matches!(kind, CX_MORPH_ARCHIVE | CX_MORPH_RESTORE)
+}
+
+/// Flow tracks update events. Distinct from lifecycle events
+/// (`is_flow_lifecycle_kind`) because tracks don't transition Flow.state;
+/// they manage entries in `Flow.tracks`. The state guard is "parent Flow
+/// MUST be Active" (spec §5.1 update rule), enforced via
+/// `check_flow_tracks_transition`.
+pub fn is_flow_tracks_kind(kind: &str) -> bool {
+    matches!(kind, CX_FLOW_TRACKS_UPDATE)
+}
+
+// G3.S9: extensions (applet/bot/tsp) — stub event kinds. Wire-accept +
+// reducer no-op projection (we keep the structured caches in
+// `routing::extensions::{bot_actor, tsp}`). Full state-machine semantics
+// land with the protocol implementations themselves; the constants are
+// here so the reducer registry can dispatch.
+//
+// Spec anchors:
+//   - `extensions/applet-integration.md` §3–§5 (bot / ghost actor
+//     accountability model)
+//   - `identity/tsp-integration.md` §3–§5 (transport declaration, route,
+//     audit chain)
+pub const CX_EXTENSIONS_BOT_REGISTER: &str = "cx.extensions.bot_actor.register";
+pub const CX_EXTENSIONS_BOT_REVOKE: &str = "cx.extensions.bot_actor.revoke";
+pub const CX_EXTENSIONS_TSP_TRANSPORT_DECLARE: &str = "cx.extensions.tsp.transport_declare";
+pub const CX_EXTENSIONS_TSP_ROUTE_ESTABLISH: &str = "cx.extensions.tsp.route_establish";
+pub const CX_EXTENSIONS_TSP_AUDIT_APPEND: &str = "cx.extensions.tsp.audit_append";
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -695,41 +732,3 @@ mod tests {
         );
     }
 }
-
-/// Flow has no dedicated `cx.flow.tombstone` event in the spec event-kind
-/// registry — terminal state is reached via `cx.redaction`. Only archive /
-/// restore are lifecycle state-machine transitions here.
-pub fn is_flow_lifecycle_kind(kind: &str) -> bool {
-    matches!(kind, CX_FLOW_ARCHIVE | CX_FLOW_RESTORE)
-}
-
-/// Morph has no dedicated tombstone event for the same reason as Flow.
-pub fn is_morph_lifecycle_kind(kind: &str) -> bool {
-    matches!(kind, CX_MORPH_ARCHIVE | CX_MORPH_RESTORE)
-}
-
-/// Flow tracks update events. Distinct from lifecycle events
-/// (`is_flow_lifecycle_kind`) because tracks don't transition Flow.state;
-/// they manage entries in `Flow.tracks`. The state guard is "parent Flow
-/// MUST be Active" (spec §5.1 update rule), enforced via
-/// `check_flow_tracks_transition`.
-pub fn is_flow_tracks_kind(kind: &str) -> bool {
-    matches!(kind, CX_FLOW_TRACKS_UPDATE)
-}
-
-// G3.S9: extensions (applet/bot/tsp) — stub event kinds. Wire-accept +
-// reducer no-op projection (we keep the structured caches in
-// `routing::extensions::{bot_actor, tsp}`). Full state-machine semantics
-// land with the protocol implementations themselves; the constants are
-// here so the reducer registry can dispatch.
-//
-// Spec anchors:
-//   - `extensions/applet-integration.md` §3–§5 (bot / ghost actor
-//     accountability model)
-//   - `identity/tsp-integration.md` §3–§5 (transport declaration, route,
-//     audit chain)
-pub const CX_EXTENSIONS_BOT_REGISTER: &str = "cx.extensions.bot_actor.register";
-pub const CX_EXTENSIONS_BOT_REVOKE: &str = "cx.extensions.bot_actor.revoke";
-pub const CX_EXTENSIONS_TSP_TRANSPORT_DECLARE: &str = "cx.extensions.tsp.transport_declare";
-pub const CX_EXTENSIONS_TSP_ROUTE_ESTABLISH: &str = "cx.extensions.tsp.route_establish";
-pub const CX_EXTENSIONS_TSP_AUDIT_APPEND: &str = "cx.extensions.tsp.audit_append";

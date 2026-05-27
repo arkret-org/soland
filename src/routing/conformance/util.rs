@@ -116,7 +116,7 @@ pub fn order_hlc_clocks<T: Clone>(clocks: &[(String, String, T)]) -> Vec<(String
 }
 
 /// True when `value` matches the canonical `sha256:<64-lowercase-hex>` shape.
-#[allow(dead_code)]
+#[cfg(test)]
 pub fn looks_like_sha256_digest(value: &str) -> bool {
     value.starts_with("sha256:")
         && value.len() == "sha256:".len() + 64

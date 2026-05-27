@@ -43,10 +43,8 @@ use salvo::prelude::*;
 use serde_json::{Value, json};
 
 use crate::error::{AppError, ErrorCode};
-use crate::persistence::{MlsKeyPackageRecord, MlsWelcomeRecord};
-use crate::reducer::{
-    self, KeyPackageLifetime, MlsEffect, MlsKeyPackage, MlsWelcome, ProjectionEffect,
-};
+use crate::persistence::MlsKeyPackageRecord;
+use crate::reducer::{self, MlsEffect, MlsKeyPackage, ProjectionEffect};
 use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
@@ -508,26 +506,3 @@ fn key_package_to_record(kp: &MlsKeyPackage) -> MlsKeyPackageRecord {
     }
 }
 
-// The conversion helpers below currently aren't called by the routes
-// (the integration test peeks the projection directly), but mirror the
-// `key_package_to_record` shape so the Pg-mirror path is mechanical
-// when production deployments wire it up.
-
-#[allow(dead_code)]
-fn welcome_to_record(w: &MlsWelcome) -> MlsWelcomeRecord {
-    MlsWelcomeRecord {
-        id: w.id.clone(),
-        group_id: w.group_id.clone(),
-        recipient_actor_did: w.recipient_actor_did.clone(),
-        recipient_device_id: w.recipient_device_id.clone(),
-        welcome_bytes: w.welcome_bytes.clone(),
-        key_package_id: w.key_package_id.clone(),
-        enqueued_at: w.enqueued_at,
-        delivered_at: w.delivered_at,
-    }
-}
-
-#[allow(dead_code)]
-fn lifetime_to_pair(l: &KeyPackageLifetime) -> (i64, i64) {
-    (l.not_before, l.not_after)
-}

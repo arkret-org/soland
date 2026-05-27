@@ -25,6 +25,7 @@
 //! `include_terminal=true|false` query parameter. Default is `false`:
 //!   - Space container: tombstoned rows excluded.
 //!   - Flow / Morph: redacted rows excluded.
+//!
 //! Spec rationale: tombstoned / redacted are unrecoverable terminals per
 //! common-fields.md §5.1; clients hydrating a kanban view shouldn't see them by
 //! default. Explicit `include_terminal=true` returns the full set for audit /
@@ -136,10 +137,12 @@ fn flow_position_relation<'a>(
         })
 }
 
+type FlowPositionFields = (Option<SpaceId>, Option<SpaceId>, Option<String>);
+
 fn flow_position_fields(
     projection: &ProjectionState,
     flow_id: &str,
-) -> Result<(Option<SpaceId>, Option<SpaceId>, Option<String>), AppError> {
+) -> Result<FlowPositionFields, AppError> {
     let Some(relation) = flow_position_relation(projection, flow_id) else {
         return Ok((None, None, None));
     };

@@ -20,6 +20,7 @@ use soland::state::AppState;
 fn test_config() -> AppConfig {
     AppConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
+        metrics_bind: "127.0.0.1:0".parse().unwrap(),
         public_base_url: "http://server".to_owned(),
         service_did: "did:web:soland.local".to_owned(),
         tls_cert_path: None,
@@ -127,7 +128,7 @@ async fn realm_links_post_parent_then_effective_policy_walks_chain() {
 
     // 1. POST B → A (`governed_by`, active). HTTP 200, body echoes
     //    the projected status.
-    let body: Value = TestClient::post(&format!("http://server/api/v1/realms/{REALM_B}/links"))
+    let body: Value = TestClient::post(format!("http://server/api/v1/realms/{REALM_B}/links"))
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&json!({
             "target_realm_id": REALM_A,
@@ -150,7 +151,7 @@ async fn realm_links_post_parent_then_effective_policy_walks_chain() {
 
     // 3. GET effective-policy on B. Body shape pinned by the task spec:
     //    `{realm_id, effective_policy, inheritance_chain, inheritance_mode}`.
-    let ep: Value = TestClient::get(&format!(
+    let ep: Value = TestClient::get(format!(
         "http://server/api/v1/realms/{REALM_B}/effective-policy"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
@@ -194,7 +195,7 @@ async fn realm_links_post_cycle_rejected_with_realm_link_cycle() {
     let token = dev_token(&svc).await;
 
     // Edge A → B.
-    let r1 = TestClient::post(&format!("http://server/api/v1/realms/{REALM_A}/links"))
+    let r1 = TestClient::post(format!("http://server/api/v1/realms/{REALM_A}/links"))
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&json!({
             "target_realm_id": REALM_B,
@@ -206,7 +207,7 @@ async fn realm_links_post_cycle_rejected_with_realm_link_cycle() {
     assert_eq!(r1.status_code, Some(StatusCode::OK));
 
     // Edge B → C.
-    let r2 = TestClient::post(&format!("http://server/api/v1/realms/{REALM_B}/links"))
+    let r2 = TestClient::post(format!("http://server/api/v1/realms/{REALM_B}/links"))
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&json!({
             "target_realm_id": REALM_C,
@@ -218,7 +219,7 @@ async fn realm_links_post_cycle_rejected_with_realm_link_cycle() {
     assert_eq!(r2.status_code, Some(StatusCode::OK));
 
     // Edge C → A would close A→B→C→A — MUST be rejected.
-    let mut r3 = TestClient::post(&format!("http://server/api/v1/realms/{REALM_C}/links"))
+    let mut r3 = TestClient::post(format!("http://server/api/v1/realms/{REALM_C}/links"))
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&json!({
             "target_realm_id": REALM_A,
@@ -249,7 +250,7 @@ async fn realm_links_delete_recomputes_effective_policy() {
     let token = dev_token(&svc).await;
 
     // Build D → C → B chain via POSTs, opt-in inheritance at each level.
-    let _ = TestClient::post(&format!("http://server/api/v1/realms/{REALM_D}/links"))
+    let _ = TestClient::post(format!("http://server/api/v1/realms/{REALM_D}/links"))
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&json!({
             "target_realm_id": REALM_C,
@@ -258,7 +259,7 @@ async fn realm_links_delete_recomputes_effective_policy() {
         }))
         .send(&svc)
         .await;
-    let _ = TestClient::post(&format!("http://server/api/v1/realms/{REALM_C}/links"))
+    let _ = TestClient::post(format!("http://server/api/v1/realms/{REALM_C}/links"))
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&json!({
             "target_realm_id": REALM_B,
@@ -272,7 +273,7 @@ async fn realm_links_delete_recomputes_effective_policy() {
     project_inheritance_policy(&state, REALM_B, REALM_B, &["b.policy"]);
 
     // Effective policy on D includes c.policy + b.policy via the walk.
-    let ep1: Value = TestClient::get(&format!(
+    let ep1: Value = TestClient::get(format!(
         "http://server/api/v1/realms/{REALM_D}/effective-policy"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
@@ -299,7 +300,7 @@ async fn realm_links_delete_recomputes_effective_policy() {
     // but cannot transit further because the governed_by edge is
     // tombstoned. C's own `c.policy` still surfaces because D's
     // inheritance_policy explicitly names C as the parent; B drops out.
-    let del = TestClient::delete(&format!(
+    let del = TestClient::delete(format!(
         "http://server/api/v1/realms/{REALM_D}/links/{REALM_C}?link_kind=governed_by"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
@@ -307,7 +308,7 @@ async fn realm_links_delete_recomputes_effective_policy() {
     .await;
     assert_eq!(del.status_code, Some(StatusCode::OK));
 
-    let ep2: Value = TestClient::get(&format!(
+    let ep2: Value = TestClient::get(format!(
         "http://server/api/v1/realms/{REALM_D}/effective-policy"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
@@ -334,7 +335,7 @@ async fn realm_links_delete_recomputes_effective_policy() {
 async fn realm_links_post_self_link_rejected() {
     let svc = app();
     let token = dev_token(&svc).await;
-    let mut r = TestClient::post(&format!("http://server/api/v1/realms/{REALM_A}/links"))
+    let mut r = TestClient::post(format!("http://server/api/v1/realms/{REALM_A}/links"))
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&json!({
             "target_realm_id": REALM_A,
@@ -356,7 +357,7 @@ async fn realm_links_post_self_link_rejected() {
 async fn effective_policy_returns_none_mode_without_explicit_optin() {
     let svc = app();
     let token = dev_token(&svc).await;
-    let body: Value = TestClient::get(&format!(
+    let body: Value = TestClient::get(format!(
         "http://server/api/v1/realms/{REALM_A}/effective-policy"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)

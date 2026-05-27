@@ -127,7 +127,7 @@ fn validate_key_backup_kdf(backup: &Value, encryption: &Value) -> Result<(), App
             if kdf
                 .get("degraded_profile_reason")
                 .and_then(Value::as_str)
-                .map_or(true, str::is_empty)
+                .is_none_or(str::is_empty)
             {
                 return Err(schema_error(
                     "pbkdf2 key backup requires degraded_profile_reason",

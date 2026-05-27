@@ -1278,10 +1278,8 @@ fn write_through_projection(state: &AppState, operation: &Operation) {
             if let Some(ref obj_ref) = object_ref {
                 if let Some(flow) = proj.flows.get(obj_ref) {
                     Some(return_snapshot_flow(flow))
-                } else if let Some(morph) = proj.morphs.get(obj_ref) {
-                    Some(return_snapshot_morph(morph))
                 } else {
-                    None
+                    proj.morphs.get(obj_ref).map(return_snapshot_morph)
                 }
             } else {
                 None

@@ -235,15 +235,14 @@ pub(super) async fn embedded_webvh_register(
         },
         "state": did_document_skeleton,
     });
-    let scid =
-        derive_webvh_scid(&entry_skeleton).map_err(|message| AppError::invalid_param(message))?;
+    let scid = derive_webvh_scid(&entry_skeleton).map_err(AppError::invalid_param)?;
     let location =
         embedded_webvh_location_with_scid(&method_authority, &https_authority, &local_id, &scid);
     let did_key_id = format!("{}#{}", location.did, did_key_fragment);
     let update_key_id = format!("{}#{}", location.did, update_key_fragment);
     let mut log_entry = substitute_webvh_scid(entry_skeleton, &scid);
-    let version_hash = webvh_entry_hash_multibase(&log_entry)
-        .map_err(|message| AppError::invalid_param(message))?;
+    let version_hash =
+        webvh_entry_hash_multibase(&log_entry).map_err(AppError::invalid_param)?;
     let version_id = format!("1-{version_hash}");
     if let Value::Object(map) = &mut log_entry {
         map.insert("versionId".to_owned(), Value::String(version_id.clone()));
@@ -831,7 +830,7 @@ fn resolver_trust_roots(state: &AppState, did_webvh: &Value) -> Value {
                 "kind": provider.get("kind").cloned().unwrap_or_else(|| json!("unknown")),
                 "profile": provider.get("profile").cloned().unwrap_or_else(|| json!("cx.identity.webvh.provider.v1")),
                 "base_url": provider.get("base_url").cloned(),
-                "active": provider.get("active").cloned().unwrap_or_else(|| json!(false)),
+                "active": provider.get("active").cloned().unwrap_or(Value::Bool(false)),
                 "expected_trust_domain": state.config.trust_domain.clone(),
                 "document_url_template": provider.get("document_url_template").cloned(),
                 "log_url_template": provider.get("log_url_template").cloned(),
@@ -1088,7 +1087,7 @@ fn verify_webvh_log_proof(entry: &Value) -> Result<(), String> {
         .and_then(Value::as_array)
         .map(|items| items.iter().filter_map(Value::as_str).collect::<Vec<_>>())
         .unwrap_or_default();
-    if !update_keys.iter().any(|key| *key == public_key_multibase) {
+    if !update_keys.contains(&public_key_multibase) {
         return Err("proof verificationMethod must reference updateKeys[0]".to_owned());
     }
     let public_key = decode_ed25519_public_key(public_key_multibase)?;
@@ -1353,7 +1352,7 @@ pub(in crate::routing) fn validate_did_document_services(
             }
         }
     }
-    if did.starts_with("did:web:") && services.map_or(true, |s| s.is_empty()) && !development_mode {
+    if did.starts_with("did:web:") && services.is_none_or(|s| s.is_empty()) && !development_mode {
         return Err("did:web document must declare at least one service endpoint");
     }
     Ok(())

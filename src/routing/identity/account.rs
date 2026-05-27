@@ -660,6 +660,7 @@ pub(crate) fn set_account_lifecycle_state(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn append_account_state_change_audit(
     state: &AppState,
     did: &str,

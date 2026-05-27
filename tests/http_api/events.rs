@@ -519,7 +519,7 @@ async fn index_query_supports_facet_projection_binding() {
         .take_json()
         .await
         .unwrap();
-    assert!(query["results"].as_array().unwrap().len() >= 1);
+    assert!(!query["results"].as_array().unwrap().is_empty());
     for result in query["results"].as_array().unwrap() {
         assert_eq!(result["renderer"], "collection");
         assert_eq!(

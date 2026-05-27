@@ -311,6 +311,7 @@ async fn forward_to_agent_endpoint(
 
 /// Build the result envelope for the supplied outcome and broadcast
 /// + persist it through the standard projection path.
+#[allow(clippy::too_many_arguments)]
 fn emit_agent_result_envelope(
     state: &AppState,
     space_id: &str,

@@ -1407,8 +1407,10 @@ impl AccountDataStore for MemoryAccountDataStore {
     }
 }
 
+type ContactKey = (String, String, String);
+
 struct MemoryContactStore {
-    data: Arc<Mutex<BTreeMap<(String, String, String), ContactRecord>>>,
+    data: Arc<Mutex<BTreeMap<ContactKey, ContactRecord>>>,
 }
 
 impl MemoryContactStore {
@@ -1896,7 +1898,7 @@ impl FederationOutboxStore for MemoryFederationOutboxStore {
             .filter(|row| row.delivered_at.is_none() && row.next_attempt_at <= now_unix_secs)
             .cloned()
             .collect();
-        rows.sort_by(|a, b| a.next_attempt_at.cmp(&b.next_attempt_at));
+        rows.sort_by_key(|a| a.next_attempt_at);
         rows.truncate(limit);
         Ok(rows)
     }
@@ -6108,32 +6110,30 @@ impl WebrtcSessionRow {
             .and_then(Value::as_array)
             .map(|arr| {
                 arr.iter()
-                    .filter_map(|signal| {
-                        Some(WebrtcSignalRecord {
-                            seq: signal.get("seq").and_then(Value::as_u64).unwrap_or(0),
-                            sender: signal
-                                .get("sender")
-                                .and_then(Value::as_str)
-                                .map(ToOwned::to_owned)
-                                .unwrap_or_default(),
-                            message_type: signal
-                                .get("message_type")
-                                .and_then(Value::as_str)
-                                .map(ToOwned::to_owned)
-                                .unwrap_or_default(),
-                            payload: signal.get("payload").cloned().unwrap_or(Value::Null),
-                            proofs: signal
-                                .get("proofs")
-                                .and_then(Value::as_array)
-                                .cloned()
-                                .unwrap_or_default(),
-                            created_at: signal
-                                .get("created_at")
-                                .and_then(Value::as_str)
-                                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-                                .map(|dt| dt.with_timezone(&chrono::Utc))
-                                .unwrap_or_else(Utc::now),
-                        })
+                    .map(|signal| WebrtcSignalRecord {
+                        seq: signal.get("seq").and_then(Value::as_u64).unwrap_or(0),
+                        sender: signal
+                            .get("sender")
+                            .and_then(Value::as_str)
+                            .map(ToOwned::to_owned)
+                            .unwrap_or_default(),
+                        message_type: signal
+                            .get("message_type")
+                            .and_then(Value::as_str)
+                            .map(ToOwned::to_owned)
+                            .unwrap_or_default(),
+                        payload: signal.get("payload").cloned().unwrap_or(Value::Null),
+                        proofs: signal
+                            .get("proofs")
+                            .and_then(Value::as_array)
+                            .cloned()
+                            .unwrap_or_default(),
+                        created_at: signal
+                            .get("created_at")
+                            .and_then(Value::as_str)
+                            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                            .map(|dt| dt.with_timezone(&chrono::Utc))
+                            .unwrap_or_else(Utc::now),
                     })
                     .collect()
             })
@@ -6282,7 +6282,6 @@ impl WebrtcSessionStore for PgWebrtcSessionStore {
         let mut conn = pg_conn(&self.pool)?;
         sql_query("DELETE FROM webrtc_sessions WHERE expires_at <= NOW()")
             .execute(&mut conn)
-            .map(|n| n as usize)
             .map_err(PersistenceError::from)
     }
 }
