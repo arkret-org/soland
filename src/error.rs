@@ -204,6 +204,28 @@ pub mod reasons {
     pub const RECOVERY_WITNESS_REVOKE_LAGGING: &str = "recovery_witness_revoke_lagging";
     pub const HANDLE_HOMOGRAPH_FORBIDDEN: &str = "handle_homograph_forbidden";
 
+    // ── R3.1 (2026-05-27, contrix-spec @ 7157ee8) — MemberIdentity append-
+    // only replacement event error codes. Re-exported from the SDK's
+    // `ERROR_CODE_MEMBER_IDENTITY_*` constants so soland callsites have a
+    // stable namespace match for the spec wire codes.
+    pub const MEMBER_IDENTITY_STATE_MISMATCH: &str =
+        core_error::ERROR_CODE_MEMBER_IDENTITY_STATE_MISMATCH;
+    pub const MEMBER_IDENTITY_PROOF_INVALID: &str =
+        core_error::ERROR_CODE_MEMBER_IDENTITY_PROOF_INVALID;
+    pub const MEMBER_IDENTITY_REPLACEMENT_DIGEST_MISMATCH: &str =
+        core_error::ERROR_CODE_MEMBER_IDENTITY_REPLACEMENT_DIGEST_MISMATCH;
+    pub const MEMBER_IDENTITY_UNKNOWN_SEGMENT: &str =
+        core_error::ERROR_CODE_MEMBER_IDENTITY_UNKNOWN_SEGMENT;
+
+    /// R3.1 reason codes for the MemberIdentity append-only replacement
+    /// event. Tests use this slice to assert the full set is surfaced.
+    pub const R3_1_MEMBER_IDENTITY_REASONS: &[&str] = &[
+        MEMBER_IDENTITY_STATE_MISMATCH,
+        MEMBER_IDENTITY_PROOF_INVALID,
+        MEMBER_IDENTITY_REPLACEMENT_DIGEST_MISMATCH,
+        MEMBER_IDENTITY_UNKNOWN_SEGMENT,
+    ];
+
     /// R3 reason codes registered in this round. Test scaffolding uses this
     /// slice to assert the full set is surfaced through
     /// `crate::error::reasons`.

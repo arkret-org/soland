@@ -101,6 +101,14 @@ pub const CX_INVITE_CREATE: &str = "cx.invite.create";
 pub const CX_INVITE_ACCEPT: &str = "cx.invite.accept";
 pub const CX_INVITE_CANCEL: &str = "cx.invite.cancel";
 pub const CX_MEMBER_STATE: &str = "cx.member.state";
+// R3.1 spec-sync (2026-05-27, contrix-spec @ 7157ee8) — Realm-scoped
+// MemberIdentity append-only replacement event. Cell family
+// `cx.component.member.identity.v1`; lattice `ordered_log`; bottom
+// `expose`. Composite cell subject is
+// `(payload.realm_id, payload.actor_id, payload.segment)`. Reducer
+// dispatch lives in `reducer::apply_member_identity_update`; persistence
+// is in `state::MemberIdentityRegistry`.
+pub const CX_MEMBER_IDENTITY_UPDATE: &str = "cx.member.identity.update";
 pub const CX_READ_MARKER: &str = "cx.read_cursor.advance";
 // Realm security-boundary lifecycle (`cx.realm.*`). Spec
 // `contrix-spec/spec/v1/zh/models/realm-and-space.md` §1 + §4.
@@ -457,6 +465,8 @@ fn canonical_registered_kind(object_type: &str) -> Option<&str> {
         CX_CONFLICT_REPAIR => Some(CX_CONFLICT_REPAIR),
         CX_AUDIT_ERASURE_RECEIPT => Some(CX_AUDIT_ERASURE_RECEIPT),
         CX_MEMBER_STATE => Some(CX_MEMBER_STATE),
+        // R3.1 — MemberIdentity append-only replacement event.
+        CX_MEMBER_IDENTITY_UPDATE => Some(CX_MEMBER_IDENTITY_UPDATE),
         // Applet protocol family (round 14e+).
         CX_APPLET_REGISTRATION => Some(CX_APPLET_REGISTRATION),
         CX_APPLET_DISCOVERY => Some(CX_APPLET_DISCOVERY),
@@ -598,7 +608,7 @@ pub fn is_redaction_kind(kind: &str) -> bool {
 }
 
 pub fn is_membership_kind(kind: &str) -> bool {
-    kind == CX_MEMBER_STATE
+    matches!(kind, CX_MEMBER_STATE | CX_MEMBER_IDENTITY_UPDATE)
 }
 
 pub fn is_invite_kind(kind: &str) -> bool {

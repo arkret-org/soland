@@ -137,14 +137,6 @@ pub struct RealmDirectoryEntry {
     pub description: Option<String>,
     pub tags: BTreeSet<String>,
     pub members: BTreeSet<Did>,
-    /// Per-member canonical `handle_uri` (`contrix://<domain>/users/<localpart>`)
-    /// pulled off `cx.member.state.payload.handle_uri` when present. Used by
-    /// the sync `members[]` hint (`zh/sync/client-sync.md` §8.1) so clients
-    /// can render `alice:domain` without a per-DID resolve. Entries are only
-    /// populated when the member's join/invite event carried a handle; bare-
-    /// DID members are absent. Keyed by `Did::as_str()` to mirror the wire DID.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub member_handle_uris: BTreeMap<String, String>,
     pub public: bool,
     pub category: Option<String>,
 }
@@ -157,7 +149,6 @@ impl RealmDirectoryEntry {
             description: None,
             tags: BTreeSet::new(),
             members: BTreeSet::new(),
-            member_handle_uris: BTreeMap::new(),
             public: false,
             category: None,
         }
@@ -287,6 +278,216 @@ fn realm_directory_score(entry: &RealmDirectoryEntry, query: &RealmDirectoryQuer
         .count()
         * 2;
     score
+}
+
+/// R3.1 (contrix-spec @ 7157ee8) — Realm-scoped MemberIdentity event
+/// registry. Stores every accepted `cx.member.identity.update` event by
+/// `(realm_id, actor_id, segment)`, computes the current effective set
+/// per the SDK helper `effective_identity_events`, and materializes the
+/// per-actor `identity_state_digest` projection. The reducer
+/// (`reducer::apply_member_identity_update`) consults this for the
+/// optimistic-concurrency guard (`expected_state_digest`) and writes
+/// accepted events back; the sync roster
+/// (`sync::roster_members_for_realm`) reads the resulting snapshot to
+/// emit `MemberRosterEntry`.
+///
+/// Storage is in-memory for now; durable persistence (alongside the
+/// other event-log surfaces) lands when the MID schema migration ships.
+/// Internal proof verification (cryptographic signature on
+/// `MemberIdentityProof`) is `// TODO(R4)`; reducer-shape validation
+/// (segment whitelist, replacement-digest binding, cross-(realm,actor,
+/// segment) guard) IS real per MID-2.
+#[derive(Clone, Debug, Default)]
+pub struct MemberIdentityRegistry {
+    /// All accepted events, keyed by `event_id`.
+    events: BTreeMap<String, MemberIdentityEventRecord>,
+    /// Index from `(realm_id, actor_id, segment)` → event_ids that
+    /// landed against that cell subject, in arrival order.
+    by_subject: BTreeMap<MemberIdentitySubjectKey, Vec<String>>,
+}
+
+/// Cell subject key for [`MemberIdentityRegistry`]. Mirrors the
+/// composite `(payload.realm_id, payload.actor_id, payload.segment)` cell
+/// subject from `event-kind-registry.json`.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct MemberIdentitySubjectKey {
+    pub realm_id: String,
+    pub actor_id: String,
+    pub segment: String,
+}
+
+/// One stored `cx.member.identity.update` event.
+#[derive(Clone, Debug)]
+pub struct MemberIdentityEventRecord {
+    pub event_id: String,
+    pub subject: MemberIdentitySubjectKey,
+    /// SHA-256 over RFC 8785 JCS canonical JSON of the full
+    /// `payload.identity_payload` carrier object (the value goes into
+    /// any subsequent event's `payload.replaces[].payload_digest`).
+    pub payload_digest: String,
+    /// `payload.replaces[]` references as observed on the wire. The
+    /// reducer keeps the raw list so the effective-set filter can match
+    /// each edge's `payload_digest` against the referenced event's stored
+    /// `payload_digest` at projection time (mismatched / cross-subject
+    /// references are dropped as no-op edges per MID-2).
+    pub replaces: Vec<MemberIdentityReplacementEdge>,
+    /// Original Event envelope as received. MID-5: soland MUST store the
+    /// envelope verbatim; no query-time re-encryption, no projection
+    /// rewrite.
+    pub raw_event: Value,
+}
+
+/// One replacement edge resolved from `payload.replaces[]`.
+#[derive(Clone, Debug)]
+pub struct MemberIdentityReplacementEdge {
+    pub event_id: String,
+    pub payload_digest: String,
+}
+
+/// Per-`(realm_id, actor_id)` snapshot derived on demand by
+/// [`MemberIdentityRegistry::snapshot_for_actor`]. Drives the sync
+/// roster projection (`SYNC-MEM-1..3`).
+#[derive(Clone, Debug, Default)]
+pub struct MemberIdentitySnapshot {
+    /// Effective event ids per the replacement-edge filter, sorted by
+    /// `(segment, event_id)`. Matches the wire-side `identity_event_ids[]`.
+    pub identity_event_ids: Vec<String>,
+    /// `sha256:<hex>` digest matching the spec
+    /// `member_identity_update_payload.identity_state_digest` shape.
+    pub identity_state_digest: Option<String>,
+    /// Original Event envelopes for the effective set. Used by
+    /// `SYNC-MEM-3` (inline events when the client lacks them).
+    pub identity_events: Vec<Value>,
+}
+
+impl MemberIdentityRegistry {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Number of stored events. Used by debug surfaces.
+    pub fn len(&self) -> usize {
+        self.events.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.events.is_empty()
+    }
+
+    /// Look up by event_id.
+    pub fn get(&self, event_id: &str) -> Option<&MemberIdentityEventRecord> {
+        self.events.get(event_id)
+    }
+
+    /// Insert an accepted event. Replaces any prior entry under the same
+    /// `event_id` (idempotent re-projection on replay).
+    pub fn insert(&mut self, record: MemberIdentityEventRecord) {
+        let key = record.subject.clone();
+        let event_id = record.event_id.clone();
+        let bucket = self.by_subject.entry(key).or_default();
+        if !bucket.iter().any(|id| id == &event_id) {
+            bucket.push(event_id.clone());
+        }
+        self.events.insert(event_id, record);
+    }
+
+    /// Compute the current `identity_state_digest` for
+    /// `(realm_id, actor_id)` across all stored segments. Returns `None`
+    /// if no events are stored. Mirrors `MID-6`.
+    pub fn current_state_digest_for_actor(
+        &self,
+        realm_id: &str,
+        actor_id: &str,
+    ) -> Option<String> {
+        let snapshot = self.snapshot_for_actor(realm_id, actor_id)?;
+        snapshot.identity_state_digest
+    }
+
+    /// Build a [`MemberIdentitySnapshot`] across all segments under
+    /// `(realm_id, actor_id)`. Applies the replacement-edge filter per
+    /// MID-2/3, sorts by `(segment, event_id)`, and computes the
+    /// projection digest per MID-6.
+    pub fn snapshot_for_actor(
+        &self,
+        realm_id: &str,
+        actor_id: &str,
+    ) -> Option<MemberIdentitySnapshot> {
+        let candidates: Vec<&MemberIdentityEventRecord> = self
+            .by_subject
+            .iter()
+            .filter(|(key, _)| key.realm_id == realm_id && key.actor_id == actor_id)
+            .flat_map(|(_, ids)| ids.iter().filter_map(|id| self.events.get(id.as_str())))
+            .collect();
+        if candidates.is_empty() {
+            return None;
+        }
+        // Drop events that any other valid replacement edge points at —
+        // "valid" meaning the edge's `payload_digest` matches the
+        // referenced event's stored digest AND the edge sits in the same
+        // `(realm_id, actor_id, segment)` cell as the referenced event.
+        let by_id: BTreeMap<&str, &MemberIdentityEventRecord> =
+            candidates.iter().map(|r| (r.event_id.as_str(), *r)).collect();
+        let mut replaced = BTreeSet::<String>::new();
+        for record in &candidates {
+            for edge in &record.replaces {
+                let Some(referenced) = by_id.get(edge.event_id.as_str()) else {
+                    continue;
+                };
+                if referenced.subject != record.subject {
+                    continue; // cross-cell reference is a no-op edge
+                }
+                if referenced.payload_digest != edge.payload_digest {
+                    continue; // mismatched digest is a no-op edge
+                }
+                replaced.insert(edge.event_id.clone());
+            }
+        }
+        let mut effective: Vec<&MemberIdentityEventRecord> = candidates
+            .into_iter()
+            .filter(|r| !replaced.contains(r.event_id.as_str()))
+            .collect();
+        effective.sort_by(|a, b| {
+            a.subject
+                .segment
+                .cmp(&b.subject.segment)
+                .then_with(|| a.event_id.cmp(&b.event_id))
+        });
+
+        // MID-6 — SHA-256 over RFC 8785 JCS canonical JSON of
+        // `{realm_id, actor_id, effective_events: [{event_id, segment,
+        // payload_digest}]}` sorted by (segment, event_id).
+        let projection = serde_json::json!({
+            "realm_id": realm_id,
+            "actor_id": actor_id,
+            "effective_events": effective
+                .iter()
+                .map(|r| serde_json::json!({
+                    "event_id": r.event_id,
+                    "segment": r.subject.segment,
+                    "payload_digest": r.payload_digest,
+                }))
+                .collect::<Vec<_>>(),
+        });
+        let identity_state_digest = match contrix_sdk::canonical::canonical_json_bytes(&projection)
+        {
+            Ok(bytes) => Some(contrix_sdk::canonical::sha256_digest(bytes)),
+            Err(err) => {
+                tracing::warn!(
+                    %err,
+                    %realm_id,
+                    %actor_id,
+                    "member_identity_state_digest canonicalization failed"
+                );
+                None
+            }
+        };
+
+        Some(MemberIdentitySnapshot {
+            identity_event_ids: effective.iter().map(|r| r.event_id.clone()).collect(),
+            identity_state_digest,
+            identity_events: effective.iter().map(|r| r.raw_event.clone()).collect(),
+        })
+    }
 }
 
 /// Single-process service state. Every long-lived data surface lives behind
@@ -453,6 +654,16 @@ pub struct AppState {
     /// `recovery_session_id`. Rejects duplicate session id reuse against
     /// the same principal (spec recovery-receipt.schema.json §3).
     pub recovery_receipts: Arc<Mutex<BTreeMap<String, RecoveryReceiptRecord>>>,
+    /// MID-1..6 (R3.1 spec-sync 2026-05-27, contrix-spec @ 7157ee8) — in-
+    /// memory registry of `cx.member.identity.update` events. Reducer
+    /// dispatch (`apply_member_identity_update`) and the sync roster
+    /// projection (`SYNC-MEM-1..3`) both go through this. See
+    /// [`MemberIdentityRegistry`] above for storage and effective-set
+    /// semantics; durable persistence lands when the MID schema migration
+    /// ships. Internal cryptographic proof verification is TODO(R4);
+    /// reducer-shape validation (digest binding, segment whitelist) IS
+    /// real per MID-2.
+    pub member_identity: Arc<Mutex<MemberIdentityRegistry>>,
 }
 
 #[derive(Clone, Debug)]
@@ -1370,7 +1581,19 @@ impl AppState {
             verified_profiles: crate::verified_profiles::load_from_env(),
             recovery_policies: Arc::new(Mutex::new(BTreeMap::new())),
             recovery_receipts: Arc::new(Mutex::new(BTreeMap::new())),
+            member_identity: Arc::new(Mutex::new(MemberIdentityRegistry::new())),
         }
+    }
+
+    /// MID-1..6 — borrow a clone of the in-memory MemberIdentity
+    /// registry, suitable for read-only projection paths (sync roster,
+    /// describe payload). Callers that need to mutate state must lock
+    /// `self.member_identity` directly.
+    pub fn member_identity_registry(&self) -> MemberIdentityRegistry {
+        self.member_identity
+            .lock()
+            .expect("member_identity lock")
+            .clone()
     }
 
     pub fn next_to_device_position(&self) -> i64 {

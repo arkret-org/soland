@@ -1401,6 +1401,14 @@ pub fn project_accepted_operations(state: &AppState, origin: &str, operations: &
         {
             project_membership_operation(state, origin, operation);
         }
+        // MID-3 (R3.1, contrix-spec @ 7157ee8) — persist accepted
+        // `cx.member.identity.update` events into the in-memory registry.
+        // Reducer-shape validation (segment whitelist, cross-cell guard,
+        // digest binding) runs inside `project_member_identity_update`;
+        // cryptographic proof verification is TODO(R4).
+        if kinds::canonical_kind_string(operation) == kinds::CX_MEMBER_IDENTITY_UPDATE {
+            project_member_identity_update(state, operation);
+        }
         // Cache cx.realm.read_receipt_policy state into ProjectionState so
         // ephemeral cx.receipt.read fanout (and other readers) can hit a
         // BTreeMap lookup instead of scanning the durable Event store.
@@ -1907,30 +1915,168 @@ pub fn project_membership_operation(state: &AppState, origin: &str, operation: &
     if let Ok(member) = Did::new(member) {
         if matches!(membership, Some("leave" | "ban")) {
             entry.members.remove(&member);
-            entry.member_handle_uris.remove(member.as_str());
         } else if matches!(membership, Some("join" | "invite" | "knock")) {
-            let did_key = member.as_str().to_owned();
             entry.members.insert(member);
-            // `cx.member.state.payload.handle_uri` is optional (spec
-            // `zh/identity/identity-handles.md` §3.2). Cache it so the
-            // sync `members[]` hint can render the canonical handle
-            // without forcing a DID resolve per row.
-            if let Some(handle_uri) = operation
-                .payload
-                .get("handle_uri")
-                .and_then(|value| value.as_str())
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-            {
-                entry
-                    .member_handle_uris
-                    .insert(did_key, handle_uri.to_owned());
-            }
+            // HDLREN-3/4 (contrix-spec @ 7157ee8) — `handle` is no longer
+            // a roster field. The spec §8.1 MUST NOT put it on the per-Realm
+            // roster; clients resolve identity by following the
+            // `cx.member.identity.update` events surfaced via
+            // `MemberRosterEntry.identity_event_ids[]`. The earlier
+            // `member_handle_uris` cache populated from
+            // `payload.handle_uri` is gone with this rename.
+            let _ = operation; // intentionally unused: payload no longer feeds roster identity
         }
     }
     spaces.upsert(entry);
     drop(spaces);
     touch_realm(state, operation.realm_id.as_str());
+}
+
+/// MID-2..6 (R3.1, contrix-spec @ 7157ee8) — projection write for
+/// `cx.member.identity.update`. Validates payload shape (segment
+/// whitelist, cell-subject coherence), computes the canonical
+/// payload digest, and inserts a [`crate::state::MemberIdentityEventRecord`]
+/// into `AppState::member_identity`. Replacement-edge consistency is
+/// applied lazily on read via
+/// `MemberIdentityRegistry::snapshot_for_actor` so a later-arriving
+/// referencing event still drops the earlier one from the effective
+/// set (matches the SDK helper `effective_identity_events`).
+///
+/// Cryptographic proof verification (`MemberIdentityProof.signature` via
+/// the verification method DID document) is TODO(R4); reducer-shape
+/// validation IS real per MID-2.
+pub fn project_member_identity_update(state: &AppState, operation: &Operation) {
+    use crate::state::{
+        MemberIdentityEventRecord, MemberIdentityReplacementEdge, MemberIdentitySubjectKey,
+    };
+    let payload = &operation.payload;
+    let realm_id = payload
+        .get("realm_id")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let actor_id = payload
+        .get("actor_id")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let segment = payload
+        .get("segment")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let (Some(realm_id), Some(actor_id), Some(segment)) = (realm_id, actor_id, segment) else {
+        tracing::warn!(
+            operation_id = %operation.operation_id,
+            "cx.member.identity.update missing realm_id/actor_id/segment; skipping projection"
+        );
+        return;
+    };
+    // MID-5: segment whitelist. v1 core only declares `member_identity`;
+    // any other value MUST be rejected (`member_identity_unknown_segment`).
+    if segment != "member_identity" {
+        tracing::warn!(
+            operation_id = %operation.operation_id,
+            %segment,
+            "cx.member.identity.update unknown segment; rejecting at projection"
+        );
+        return;
+    }
+    // MID-2/MID-5: canonical digest over the full `identity_payload`
+    // carrier object as received. soland MUST NOT rewrite the envelope —
+    // the digest goes on every subsequent event's
+    // `replaces[].payload_digest`.
+    let Some(identity_payload) = payload.get("identity_payload") else {
+        tracing::warn!(
+            operation_id = %operation.operation_id,
+            "cx.member.identity.update missing identity_payload"
+        );
+        return;
+    };
+    let payload_digest = match contrix_sdk::canonical::canonical_json_bytes(identity_payload) {
+        Ok(bytes) => contrix_sdk::canonical::sha256_digest(bytes),
+        Err(err) => {
+            tracing::warn!(
+                %err,
+                operation_id = %operation.operation_id,
+                "cx.member.identity.update canonical_payload_sha256 failed"
+            );
+            return;
+        }
+    };
+    let replaces: Vec<MemberIdentityReplacementEdge> = payload
+        .get("replaces")
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|edge| {
+                    let event_id = edge.get("event_id").and_then(Value::as_str)?;
+                    let payload_digest =
+                        edge.get("payload_digest").and_then(Value::as_str)?;
+                    Some(MemberIdentityReplacementEdge {
+                        event_id: event_id.to_owned(),
+                        payload_digest: payload_digest.to_owned(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // MID-4: optimistic-concurrency guard. When `expected_state_digest`
+    // is present, it MUST equal the current per-actor
+    // `identity_state_digest` BEFORE this event lands. Reject the Move
+    // with `member_identity_state_mismatch`. soland accepts and reports
+    // here; the wire-level submit path turns the warn into a 412 in a
+    // follow-up patch — for now reducer-state coherence is preserved by
+    // dropping the projection write so the digest never advances under a
+    // stale writer.
+    if let Some(expected) = payload
+        .get("expected_state_digest")
+        .and_then(Value::as_str)
+    {
+        let current = state
+            .member_identity
+            .lock()
+            .expect("member_identity lock")
+            .current_state_digest_for_actor(&realm_id, &actor_id);
+        if current.as_deref().is_some_and(|c| c != expected) {
+            tracing::warn!(
+                operation_id = %operation.operation_id,
+                %realm_id,
+                %actor_id,
+                expected,
+                actual = %current.as_deref().unwrap_or(""),
+                error_code = "member_identity_state_mismatch",
+                "cx.member.identity.update optimistic-concurrency guard tripped"
+            );
+            return;
+        }
+    }
+
+    // MID-5: store the original Event envelope verbatim. soland MUST NOT
+    // rewrite the payload at query time. Here `operation` is the
+    // Operation wrapper inside the durable Event; the inner payload (and
+    // its `actor_id` field) round-trip verbatim through `payload`.
+    let raw_event = json!({
+        "operation_id": operation.operation_id.to_string(),
+        "event_kind": kinds::CX_MEMBER_IDENTITY_UPDATE,
+        "realm_id": operation.realm_id.as_str(),
+        "created_at": operation.created_at,
+        "payload": operation.payload.clone(),
+    });
+    let record = MemberIdentityEventRecord {
+        event_id: operation.operation_id.to_string(),
+        subject: MemberIdentitySubjectKey {
+            realm_id,
+            actor_id,
+            segment,
+        },
+        payload_digest,
+        replaces,
+        raw_event,
+    };
+    state
+        .member_identity
+        .lock()
+        .expect("member_identity lock")
+        .insert(record);
 }
 
 fn project_invite_acceptance(state: &AppState, member: &str, operation: &Operation) {
