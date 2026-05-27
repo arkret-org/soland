@@ -11,6 +11,9 @@ pub(super) mod did;
 mod key_backup;
 mod keys;
 mod profile;
+// R3 (spec b47ff6ec) — recovery-policy / recovery-receipt stub surface.
+// Real impl deferred to R3.1; see `recovery::router` for the route map.
+mod recovery;
 pub(super) mod webvh_validation;
 
 use super::system::describe;
@@ -48,6 +51,9 @@ pub fn router() -> Router {
         .push(profile::router())
         // CXP-0008 / CXP-0009 — Personal Agent provisioning + lifecycle.
         .push(agents::router())
+        // R3 (spec b47ff6ec) — recovery-policy / recovery-receipt stubs.
+        // TODO(R3.1): replace with real persistence + reducer wiring.
+        .push(recovery::router())
 }
 
 pub(super) fn embedded_webvh_public_router() -> Router {

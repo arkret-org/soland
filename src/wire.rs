@@ -1751,6 +1751,17 @@ pub fn describe(
             "cx.profile.principal_server.v1".to_owned(),
             "cx.profile.principal_server_events_api.v1".to_owned(),
             "cx.profile.mimi_interop.v1".to_owned(),
+            // R3 (spec b47ff6ec, _before_todos.md §0.10) — new conformance
+            // profiles introduced this round. We advertise the surface so
+            // cross-project consumers (cotest, sodmin, yougen) can probe
+            // for it; the actual conformance requirements (token issuer,
+            // strict_reject reducer path) are stubbed pending R3.1.
+            // TODO(R3.1): gate by config — only advertise
+            // `media_service_binding.v1` when the RTC token endpoint is
+            // wired, and `accountable_to.strict_reject.v1` when the
+            // strict_reject reducer path is enabled.
+            "cx.profile.media_service_binding.v1".to_owned(),
+            "cx.profile.accountable_to.strict_reject.v1".to_owned(),
         ],
         plaintext_visibility,
         implemented_features: implemented_features_seed,

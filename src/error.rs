@@ -165,6 +165,70 @@ pub mod reasons {
         SCOPE_REBIND_FORBIDDEN,
         METADATA_ENCRYPTION_FLOOR_VIOLATION,
     ];
+
+    // ── R3 (spec b47ff6ec, _before_todos.md §0.7) — Agent / pairing /
+    // session-grant + media-binding (CXP-0010) + recovery / handle reason
+    // codes. Exposed here so future R3.1 handler work can reference them
+    // through the `crate::error::reasons` namespace without depending on
+    // a parallel SDK PR landing first. Once contrix-rust-sdk adopts the
+    // canonical `REASON_*` constants, swap these `pub const` literals for
+    // re-exports the same way the C44/C45 block above does.
+    //
+    // TODO(R3.1): swap to `core_error::REASON_*` re-exports once SDK
+    // ships the matching registry entries.
+
+    // Agent / pairing / session-grant (8 codes).
+    pub const PAIRING_REQUEST_EXPIRED: &str = "pairing_request_expired";
+    pub const PROOF_INVALID: &str = "proof_invalid";
+    pub const VERIFICATION_METHOD_PRINCIPAL_MISMATCH: &str =
+        "verification_method_principal_mismatch";
+    pub const AGENT_PAUSED: &str = "agent_paused";
+    pub const AGENT_DEACTIVATED: &str = "agent_deactivated";
+    pub const APPROVAL_ALREADY_CONSUMED: &str = "approval_already_consumed";
+    pub const SIDECAR_CREATE_DENIED: &str = "sidecar_create_denied";
+    pub const ACTOR_KIND_REDUCER_MANAGED: &str = "actor_kind_reducer_managed";
+
+    // Media binding / CXP-0010 (10 codes).
+    pub const FOCUS_MISMATCH: &str = "focus_mismatch";
+    pub const UNKNOWN_FOCUS_TYPE: &str = "unknown_focus_type";
+    pub const TOKEN_ISSUER_UNAUTHORISED: &str = "token_issuer_unauthorised";
+    pub const PARTICIPANT_BINDING_INVALID: &str = "participant_binding_invalid";
+    pub const PARTICIPANT_IDENTITY_UNRECOGNISED: &str = "participant_identity_unrecognised";
+    pub const SESSION_FOCUS_ALREADY_COMMITTED: &str = "session_focus_already_committed";
+    pub const E2EE_KEY_SOURCE_UNAUTHORISED: &str = "e2ee_key_source_unauthorised";
+    pub const RECORDING_ARTIFACT_PIPELINE_BYPASSED: &str = "recording_artifact_pipeline_bypassed";
+    pub const LEGACY_SINGLE_ENDPOINT_MEDIA_SERVICE: &str = "legacy_single_endpoint_media_service";
+    pub const FOCUS_UNAVAILABLE_FOR_CLIENT: &str = "focus_unavailable_for_client";
+
+    // Recovery / handle (2 codes).
+    pub const RECOVERY_WITNESS_REVOKE_LAGGING: &str = "recovery_witness_revoke_lagging";
+    pub const HANDLE_HOMOGRAPH_FORBIDDEN: &str = "handle_homograph_forbidden";
+
+    /// R3 reason codes registered in this round. Test scaffolding uses this
+    /// slice to assert the full set is surfaced through
+    /// `crate::error::reasons`.
+    pub const R3_NEW_REASONS: &[&str] = &[
+        PAIRING_REQUEST_EXPIRED,
+        PROOF_INVALID,
+        VERIFICATION_METHOD_PRINCIPAL_MISMATCH,
+        AGENT_PAUSED,
+        AGENT_DEACTIVATED,
+        APPROVAL_ALREADY_CONSUMED,
+        SIDECAR_CREATE_DENIED,
+        ACTOR_KIND_REDUCER_MANAGED,
+        FOCUS_MISMATCH,
+        UNKNOWN_FOCUS_TYPE,
+        TOKEN_ISSUER_UNAUTHORISED,
+        PARTICIPANT_BINDING_INVALID,
+        PARTICIPANT_IDENTITY_UNRECOGNISED,
+        SESSION_FOCUS_ALREADY_COMMITTED,
+        E2EE_KEY_SOURCE_UNAUTHORISED,
+        RECORDING_ARTIFACT_PIPELINE_BYPASSED,
+        LEGACY_SINGLE_ENDPOINT_MEDIA_SERVICE,
+        FOCUS_UNAVAILABLE_FOR_CLIENT,
+        RECOVERY_WITNESS_REVOKE_LAGGING,
+        HANDLE_HOMOGRAPH_FORBIDDEN,
+    ];
 }
 use salvo::async_trait;
 use salvo::http::StatusCode;
