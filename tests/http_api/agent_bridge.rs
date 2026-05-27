@@ -1,0 +1,684 @@
+//! Integration tests — `agent_bridge` domain.
+//!
+//! Helpers live in [`super::common`]; pull them in via `use`.
+
+#![allow(unused_imports)]
+use super::common::*;
+
+#[tokio::test]
+async fn admin_applets_agents_endpoints_reflect_submitted_registry_events() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+    let service_did = "did:web:applet.example";
+    let agent_did = "did:web:agent.example";
+
+    // Build an applet registration event. cx.applet.registration uses
+    // cx.schema.event_payload.v1 since there's no dedicated applet
+    // schema in the spec registry (applet payload is free-form per
+    // spec extensions/applet-integration.md).
+    let registration_payload = serde_json::json!({
+        "service_did": service_did,
+        "namespace": "com.example.applet",
+        "capabilities": ["read", "write"],
+    });
+    let mut registration_event = signed_event_envelope(
+        "cx:event:01904100-0000-7000-8000-ab10de000001",
+        1,
+        Vec::new(),
+    );
+    registration_event["kind"] = Value::String("cx.applet.registration".to_owned());
+    registration_event["schema_id"] = Value::String("cx.schema.event_payload.v1".to_owned());
+    registration_event["payload"] = registration_payload.clone();
+    registration_event["proofs"][0]["payload_digest"] =
+        Value::String(sha256_json(&registration_payload));
+    registration_event["canonical_digest"] =
+        Value::String(event_canonical_digest(&registration_event));
+    let resp: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&registration_event)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(resp["status"], "accepted");
+
+    // Discovery — adds a manifest to the same applet.
+    let discovery_payload = serde_json::json!({
+        "service_did": service_did,
+        "manifest": {"protocol": "http", "endpoint": "https://applet.example"},
+    });
+    let mut discovery_event = signed_event_envelope(
+        "cx:event:01904100-0000-7000-8000-ab10de000002",
+        2,
+        vec!["cx:event:01904100-0000-7000-8000-ab10de000001"],
+    );
+    discovery_event["kind"] = Value::String("cx.applet.discovery".to_owned());
+    discovery_event["schema_id"] = Value::String("cx.schema.event_payload.v1".to_owned());
+    discovery_event["payload"] = discovery_payload.clone();
+    discovery_event["proofs"][0]["payload_digest"] = Value::String(sha256_json(&discovery_payload));
+    discovery_event["canonical_digest"] = Value::String(event_canonical_digest(&discovery_event));
+    let resp: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&discovery_event)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(resp["status"], "accepted");
+
+    // Agent endpoint event.
+    let agent_payload = serde_json::json!({
+        "agent_did": agent_did,
+        "agent_id": agent_did,
+        "protocol": "mcp",
+        "endpoints": [{
+            "protocol": "mcp"
+        }],
+    });
+    let mut agent_event = signed_event_envelope(
+        "cx:event:01904100-0000-7000-8000-ab10de000003",
+        3,
+        vec!["cx:event:01904100-0000-7000-8000-ab10de000002"],
+    );
+    agent_event["kind"] = Value::String("cx.agent.endpoint".to_owned());
+    agent_event["schema_id"] = Value::String("cx.schema.event_payload.v1".to_owned());
+    agent_event["payload"] = agent_payload.clone();
+    agent_event["proofs"][0]["payload_digest"] = Value::String(sha256_json(&agent_payload));
+    agent_event["canonical_digest"] = Value::String(event_canonical_digest(&agent_event));
+    let resp: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&agent_event)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(resp["status"], "accepted");
+
+    // `admin/applets` now reports the registered applet with the manifest.
+    let applets_body: Value = TestClient::get("http://server/api/v1/admin/applets?limit=10")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    let applet_row = applets_body["applets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["service_did"] == service_did)
+        .expect("registered applet missing from admin/applets");
+    assert_eq!(applet_row["namespace"], "com.example.applet");
+    assert_eq!(applet_row["capabilities"][0], "read");
+    assert_eq!(
+        applet_row["manifest"]["endpoint"], "https://applet.example",
+        "discovery manifest must be merged into the applet projection"
+    );
+
+    // `admin/agents` reports the registered agent.
+    let agents_body: Value = TestClient::get("http://server/api/v1/admin/agents?limit=10")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    let agent_row = agents_body["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["agent_did"] == agent_did)
+        .expect("registered agent missing from admin/agents");
+    assert_eq!(agent_row["protocol"], "mcp");
+}
+
+#[tokio::test]
+async fn applet_bridge_emits_synthetic_status_for_session_start() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+    let session_id = "cx:session:01904100-0000-7000-8000-b3b3b3b3b3b3";
+    let applet_id = "cx:applet:01904100-0000-7000-8000-c3c3c3c3c3c3";
+
+    // Submit the start event via the canonical events surface.
+    let mut payload = serde_json::json!({
+        "applet_id": applet_id,
+        "session_id": session_id,
+        "params": {"op": "ping", "tag": "b3-e2e"},
+    });
+    let mut start_event = serde_json::json!({
+        "event_id": "cx:event:01904100-0000-7000-8000-d3d3d3d3d3d3",
+        "kind": "cx.applet.protocol_session.start",
+        "schema_id": "cx.schema.applet.v1",
+        "actor_id": "did:web:alice.example",
+        "actor_seq": 1u64,
+        "realm_id": DEMO_REALM_ID,
+        "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
+        "audience": "did:web:soland.local",
+        "domain": "did:web:soland.local",
+        "prev_refs": Vec::<String>::new(),
+        "auth_refs": Vec::<String>::new(),
+        "payload": payload.clone(),
+        "proofs": [{
+            "type": "dev-proof",
+            "verification_method": "did:web:alice.example#01904100-0000-7000-8000-a11ce0000001",
+            "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
+            "audience": "did:web:soland.local",
+            "domain": "did:web:soland.local",
+            "payload_digest": sha256_json(&payload),
+        }],
+    });
+    start_event["canonical_digest"] = Value::String(event_canonical_digest(&start_event));
+    let _ = &mut payload;
+
+    let resp: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&start_event)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(resp["status"], "accepted", "submit response: {resp}");
+
+    // The reference bridge should have appended a synthetic status
+    // event for the same session_id. Pull it out of the projection
+    // log via the events list endpoint.
+    let events: Value = TestClient::get(format!(
+        "http://server/api/v1/events?realms={DEMO_REALM_ID}"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    let list = events["events"].as_array().expect("events array");
+    let status_event = list
+        .iter()
+        .find(|e| {
+            e["event_kind"] == "cx.applet.protocol_session.status"
+                && e["payload"]["session_id"] == session_id
+        })
+        .expect("synthetic status event missing from projection log");
+    assert_eq!(status_event["payload"]["status"], "completed");
+    assert_eq!(status_event["payload"]["detail"]["echo"]["op"], "ping");
+    assert_eq!(status_event["payload"]["detail"]["echo"]["tag"], "b3-e2e");
+    assert_eq!(
+        status_event["payload"]["detail"]["bridge"],
+        "soland.reference.echo"
+    );
+}
+
+#[tokio::test]
+async fn agent_bridge_emits_status_and_result_for_session_start() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+    // Use the seeded demo Realm — dev_token's actor is a member of
+    // `cx:realm:0196419b-0000-7000-8000-000000000000` so the events
+    // surface accepts writes against it (mirror of the B3 test).
+    let session_id = "cx:agent_session:01904100-0000-7000-8000-b4b4b4b4b4b4";
+    let agent_did = "did:web:agent.example";
+
+    // Register the agent first so B4c's dispatch lookup succeeds.
+    let endpoint_payload = serde_json::json!({
+        "agent_did": agent_did,
+        "agent_id": agent_did,
+        "protocol": "echo",
+        "endpoints": [{
+            "protocol": "echo"
+        }],
+    });
+    let mut endpoint_event = serde_json::json!({
+        "event_id": "cx:event:01904100-0000-7000-8000-e4e4e4e4e4e4",
+        "kind": "cx.agent.endpoint",
+        "schema_id": "cx.schema.agent.v1",
+        "actor_id": "did:web:alice.example",
+        "actor_seq": 1u64,
+        "realm_id": DEMO_REALM_ID,
+        "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
+        "audience": "did:web:soland.local",
+        "domain": "did:web:soland.local",
+        "prev_refs": Vec::<String>::new(),
+        "auth_refs": Vec::<String>::new(),
+        "payload": endpoint_payload.clone(),
+        "proofs": [{
+            "type": "dev-proof",
+            "verification_method": "did:web:alice.example#01904100-0000-7000-8000-a11ce0000001",
+            "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
+            "audience": "did:web:soland.local",
+            "domain": "did:web:soland.local",
+            "payload_digest": sha256_json(&endpoint_payload),
+        }],
+    });
+    endpoint_event["canonical_digest"] = Value::String(event_canonical_digest(&endpoint_event));
+    let endpoint_resp: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&endpoint_event)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(
+        endpoint_resp["status"], "accepted",
+        "endpoint submit response: {endpoint_resp}"
+    );
+
+    let echo_params = serde_json::json!({"op": "summarize", "doc": "b4-e2e"});
+    let mut payload = serde_json::json!({
+        "agent_did": agent_did,
+        "counterparty_agent": agent_did,
+        "session_id": session_id,
+        "protocol": "http_custom",
+        "params": echo_params,
+        "capability_grant": "cx:grant:01904100-0000-7000-8000-000000000099",
+        "capability_proof": {
+            "grant_ref": "cx:grant:01904100-0000-7000-8000-000000000099",
+            "note": "B4 e2e placeholder — reference echo runtime does not verify the proof",
+        },
+    });
+    let mut start_event = serde_json::json!({
+        "event_id": "cx:event:01904100-0000-7000-8000-d4d4d4d4d4d4",
+        "kind": "cx.agent.protocol_session.start",
+        "schema_id": "cx.schema.agent.v1",
+        "actor_id": "did:web:alice.example",
+        "actor_seq": 2u64,
+        "realm_id": DEMO_REALM_ID,
+        "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
+        "audience": "did:web:soland.local",
+        "domain": "did:web:soland.local",
+        "prev_refs": Vec::<String>::new(),
+        "auth_refs": Vec::<String>::new(),
+        "payload": payload.clone(),
+        "proofs": [{
+            "type": "dev-proof",
+            "verification_method": "did:web:alice.example#01904100-0000-7000-8000-a11ce0000001",
+            "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
+            "audience": "did:web:soland.local",
+            "domain": "did:web:soland.local",
+            "payload_digest": sha256_json(&payload),
+        }],
+    });
+    start_event["canonical_digest"] = Value::String(event_canonical_digest(&start_event));
+    let _ = &mut payload;
+
+    let resp: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&start_event)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(resp["status"], "accepted", "submit response: {resp}");
+
+    let events: Value = TestClient::get(format!(
+        "http://server/api/v1/events?realms={DEMO_REALM_ID}"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    let list = events["events"].as_array().expect("events array");
+
+    let status_event = list
+        .iter()
+        .find(|e| {
+            e["event_kind"] == "cx.agent.protocol_session.status"
+                && e["payload"]["session_id"] == session_id
+        })
+        .expect("synthetic agent status event missing from projection log");
+    assert_eq!(status_event["payload"]["status"], "running");
+    assert_eq!(
+        status_event["payload"]["detail"]["bridge"],
+        "soland.reference.agent_echo"
+    );
+
+    let result_event = list
+        .iter()
+        .find(|e| {
+            e["event_kind"] == "cx.agent.protocol_session.result"
+                && e["payload"]["session_id"] == session_id
+        })
+        .expect("synthetic agent result event missing from projection log");
+    assert_eq!(result_event["payload"]["status"], "completed");
+    assert_eq!(result_event["payload"]["result"]["echo"]["op"], "summarize");
+    assert_eq!(result_event["payload"]["result"]["echo"]["doc"], "b4-e2e");
+    assert_eq!(result_event["payload"]["result"]["agent_did"], agent_did);
+    let binding = &result_event["payload"]["audit_binding"];
+    assert_eq!(binding["binding_kind"], "ed25519_v1");
+    assert_eq!(binding["actor_id"], "did:web:alice.example");
+    assert_eq!(
+        binding["key_id"],
+        soland::REFERENCE_AGENT_AUDIT_ED25519_KEY_ID
+    );
+
+    // Verify the Ed25519 signature round-trips against the SDK
+    // helper using the public key the envelope carries. The
+    // verifier needs no access to the signing seed.
+    let sig_b64 = binding["signature"].as_str().expect("signature base64");
+    let public_key_b64 = binding["public_key_b64"].as_str().expect("public_key_b64");
+    let canonical_subject = binding["canonical_subject"]
+        .as_str()
+        .expect("canonical_subject");
+    let echo_value = result_event["payload"]["result"]["echo"].clone();
+    let outcome = contrix_sdk::agent_binding::verify_ed25519_audit_binding(
+        public_key_b64,
+        session_id,
+        agent_did,
+        &echo_value,
+        "did:web:alice.example",
+        sig_b64,
+        canonical_subject,
+    );
+    assert_eq!(
+        outcome,
+        contrix_sdk::agent_binding::Ed25519AuditBindingVerifyOutcome::Valid,
+        "audit_binding Ed25519 signature must verify under the carried public key"
+    );
+}
+
+#[tokio::test]
+async fn agent_bridge_fails_closed_on_unknown_agent() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+    let session_id = "cx:agent_session:01904100-0000-7000-8000-deaddeaddead";
+    let agent_did = "did:web:unregistered-agent.example";
+
+    // Intentionally skip the cx.agent.endpoint step — this is the
+    // dispatch-failure path.
+    let echo_params = serde_json::json!({"op": "ping"});
+    let mut payload = serde_json::json!({
+        "agent_did": agent_did,
+        "counterparty_agent": agent_did,
+        "session_id": session_id,
+        "protocol": "http_custom",
+        "params": echo_params,
+        "capability_grant": "cx:grant:01904100-0000-7000-8000-000000000099",
+        "capability_proof": {
+            "grant_ref": "cx:grant:01904100-0000-7000-8000-000000000099",
+            "note": "B4c e2e placeholder",
+        },
+    });
+    let mut start_event = serde_json::json!({
+        "event_id": "cx:event:01904100-0000-7000-8000-deadbeefdead",
+        "kind": "cx.agent.protocol_session.start",
+        "schema_id": "cx.schema.agent.v1",
+        "actor_id": "did:web:alice.example",
+        "actor_seq": 1u64,
+        "realm_id": DEMO_REALM_ID,
+        "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
+        "audience": "did:web:soland.local",
+        "domain": "did:web:soland.local",
+        "prev_refs": Vec::<String>::new(),
+        "auth_refs": Vec::<String>::new(),
+        "payload": payload.clone(),
+        "proofs": [{
+            "type": "dev-proof",
+            "verification_method": "did:web:alice.example#01904100-0000-7000-8000-a11ce0000001",
+            "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
+            "audience": "did:web:soland.local",
+            "domain": "did:web:soland.local",
+            "payload_digest": sha256_json(&payload),
+        }],
+    });
+    start_event["canonical_digest"] = Value::String(event_canonical_digest(&start_event));
+    let _ = &mut payload;
+
+    let resp: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&start_event)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(resp["status"], "accepted", "submit response: {resp}");
+
+    let events: Value = TestClient::get(format!(
+        "http://server/api/v1/events?realms={DEMO_REALM_ID}"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    let list = events["events"].as_array().expect("events array");
+
+    // No status(running) event should be present.
+    assert!(
+        !list.iter().any(|e| {
+            e["event_kind"] == "cx.agent.protocol_session.status"
+                && e["payload"]["session_id"] == session_id
+        }),
+        "B4c failed-closed dispatch must skip the status(running) event"
+    );
+
+    let result_event = list
+        .iter()
+        .find(|e| {
+            e["event_kind"] == "cx.agent.protocol_session.result"
+                && e["payload"]["session_id"] == session_id
+        })
+        .expect("error result event missing from projection log");
+    assert_eq!(result_event["payload"]["status"], "failed");
+    assert_eq!(result_event["payload"]["error"]["code"], "unknown_agent");
+    assert!(
+        result_event["payload"]["error"]["message"]
+            .as_str()
+            .unwrap_or("")
+            .contains(agent_did),
+        "error message should mention the missing agent_did"
+    );
+    assert!(
+        result_event["payload"].get("audit_binding").is_none(),
+        "failure path must not carry an audit_binding"
+    );
+}
+
+#[tokio::test]
+async fn agent_bridge_plumbs_endpoint_url_through_session_envelopes() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+    let session_id = "cx:agent_session:01904100-0000-7000-8000-c0c0c0c0c0c0";
+    let agent_did = "did:web:b4d-agent.example";
+    let endpoint_url = "https://b4d-agent.example/api/v1/agent";
+
+    let endpoint_payload = serde_json::json!({
+        "agent_did": agent_did,
+        "agent_id": agent_did,
+        "protocol": "echo",
+        "endpoint_url": endpoint_url,
+        "endpoints": [{
+            "protocol": "echo",
+            "url": endpoint_url
+        }],
+    });
+    let mut endpoint_event = serde_json::json!({
+        "event_id": "cx:event:01904100-0000-7000-8000-c1c1c1c1c1c1",
+        "kind": "cx.agent.endpoint",
+        "schema_id": "cx.schema.agent.v1",
+        "actor_id": "did:web:alice.example",
+        "actor_seq": 1u64,
+        "realm_id": DEMO_REALM_ID,
+        "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
+        "audience": "did:web:soland.local",
+        "domain": "did:web:soland.local",
+        "prev_refs": Vec::<String>::new(),
+        "auth_refs": Vec::<String>::new(),
+        "payload": endpoint_payload.clone(),
+        "proofs": [{
+            "type": "dev-proof",
+            "verification_method": "did:web:alice.example#01904100-0000-7000-8000-a11ce0000001",
+            "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
+            "audience": "did:web:soland.local",
+            "domain": "did:web:soland.local",
+            "payload_digest": sha256_json(&endpoint_payload),
+        }],
+    });
+    endpoint_event["canonical_digest"] = Value::String(event_canonical_digest(&endpoint_event));
+    let endpoint_resp: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&endpoint_event)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(
+        endpoint_resp["status"], "accepted",
+        "endpoint submit response: {endpoint_resp}"
+    );
+
+    let echo_params = serde_json::json!({"op": "ping"});
+    let mut payload = serde_json::json!({
+        "agent_did": agent_did,
+        "counterparty_agent": agent_did,
+        "session_id": session_id,
+        "protocol": "http_custom",
+        "params": echo_params,
+        "capability_grant": "cx:grant:01904100-0000-7000-8000-000000000099",
+        "capability_proof": {
+            "grant_ref": "cx:grant:01904100-0000-7000-8000-000000000099",
+            "note": "B4d e2e placeholder",
+        },
+    });
+    let mut start_event = serde_json::json!({
+        "event_id": "cx:event:01904100-0000-7000-8000-c2c2c2c2c2c2",
+        "kind": "cx.agent.protocol_session.start",
+        "schema_id": "cx.schema.agent.v1",
+        "actor_id": "did:web:alice.example",
+        "actor_seq": 2u64,
+        "realm_id": DEMO_REALM_ID,
+        "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
+        "audience": "did:web:soland.local",
+        "domain": "did:web:soland.local",
+        "prev_refs": Vec::<String>::new(),
+        "auth_refs": Vec::<String>::new(),
+        "payload": payload.clone(),
+        "proofs": [{
+            "type": "dev-proof",
+            "verification_method": "did:web:alice.example#01904100-0000-7000-8000-a11ce0000001",
+            "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
+            "audience": "did:web:soland.local",
+            "domain": "did:web:soland.local",
+            "payload_digest": sha256_json(&payload),
+        }],
+    });
+    start_event["canonical_digest"] = Value::String(event_canonical_digest(&start_event));
+    let _ = &mut payload;
+
+    let resp: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&start_event)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(resp["status"], "accepted", "submit response: {resp}");
+
+    // When endpoint_url is set the bridge spawns outbound HTTP and
+    // emits the result event asynchronously. The test endpoint
+    // above resolves but doesn't accept (b4d-agent.example resolves
+    // to AAAA::1 / fail), so the outcome is `upstream_unreachable`.
+    // Poll up to ~5 s for the result event to land.
+    let result_event = {
+        let mut found = None;
+        for _ in 0..50 {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            let events: Value = TestClient::get(format!(
+                "http://server/api/v1/events?realms={DEMO_REALM_ID}"
+            ))
+            .add_header("authorization", format!("Bearer {token}"), true)
+            .send(&app_from_state(state.clone()))
+            .await
+            .take_json()
+            .await
+            .unwrap();
+            if let Some(arr) = events["events"].as_array() {
+                if let Some(e) = arr.iter().find(|e| {
+                    e["event_kind"] == "cx.agent.protocol_session.result"
+                        && e["payload"]["session_id"] == session_id
+                }) {
+                    found = Some(e.clone());
+                    break;
+                }
+            }
+        }
+        found.expect("result event never landed within 5s")
+    };
+
+    let events: Value = TestClient::get(format!(
+        "http://server/api/v1/events?realms={DEMO_REALM_ID}"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    let list = events["events"].as_array().expect("events array");
+
+    let status_event = list
+        .iter()
+        .find(|e| {
+            e["event_kind"] == "cx.agent.protocol_session.status"
+                && e["payload"]["session_id"] == session_id
+        })
+        .expect("status event missing");
+    assert_eq!(
+        status_event["payload"]["detail"]["endpoint_url"], endpoint_url,
+        "status event must echo registered endpoint_url"
+    );
+    assert_eq!(status_event["payload"]["detail"]["protocol"], "echo");
+
+    // Result event MUST carry the registered endpoint_url in detail,
+    // regardless of whether the upstream succeeded (it won't here —
+    // b4d-agent.example doesn't resolve, so we expect the
+    // `upstream_unreachable` fail-closed path).
+    assert_eq!(
+        result_event["payload"]["detail"]["endpoint_url"], endpoint_url,
+        "result event must echo registered endpoint_url"
+    );
+    assert_eq!(
+        result_event["payload"]["status"], "failed",
+        "outbound to unresolved host must fail closed"
+    );
+    assert_eq!(
+        result_event["payload"]["error"]["code"], "upstream_unreachable",
+        "fail-closed code must be upstream_unreachable"
+    );
+    assert_eq!(
+        result_event["payload"]["detail"]["bridge"],
+        "soland.reference.agent_outbound"
+    );
+
+    // The admin agents collection should also surface endpoint_url so
+    // sodmin operators see it.
+    let admin_agents: Value = TestClient::get("http://server/api/v1/admin/agents")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    let agents_list = admin_agents["items"]
+        .as_array()
+        .or_else(|| admin_agents["agents"].as_array())
+        .expect("admin agents list shape");
+    let entry = agents_list
+        .iter()
+        .find(|a| a["agent_did"] == agent_did)
+        .expect("admin agents missing freshly-registered agent");
+    assert_eq!(
+        entry["endpoint_url"], endpoint_url,
+        "admin agents row must surface endpoint_url"
+    );
+}

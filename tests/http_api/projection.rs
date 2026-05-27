@@ -1,0 +1,949 @@
+//! Integration tests — `projection` domain.
+//!
+//! Helpers live in [`super::common`]; pull them in via `use`.
+
+#![allow(unused_imports)]
+use super::common::*;
+
+#[tokio::test]
+async fn projection_space_containers_endpoint_reports_lifecycle_state() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+    let realm_id = "cx:realm:0196419b-0000-7000-8000-000000000000";
+    let container_space_id = "cx:space:01904100-0000-7000-8000-f10dc0000001";
+
+    // ── auth required ──────────────────────────────────────────────────
+    let unauth = TestClient::get(format!(
+        "http://server/api/v1/projection/spaces?realm_id={realm_id}"
+    ))
+    .send(&app_from_state(state.clone()))
+    .await;
+    assert_eq!(unauth.status_code.unwrap().as_u16(), 401);
+
+    // ── seed: create + archive a Space container ────────────────────────
+    let create_event = signed_place_event(
+        "cx:event:01904100-0000-7000-8000-f10ec0000001",
+        1,
+        "cx.space.create",
+        serde_json::json!({
+            "object": {
+                "id": container_space_id,
+                "realm_id": realm_id,
+                "kind": "list",
+                "title": "Hydration target",
+                "created_by": "did:web:alice.example",
+            }
+        }),
+        Vec::new(),
+    );
+    let r: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&create_event)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(
+        r["status"], "accepted",
+        "create space container response: {r}"
+    );
+
+    let archive_event = signed_place_event(
+        "cx:event:01904100-0000-7000-8000-f10ec0000002",
+        2,
+        "cx.space.archive",
+        serde_json::json!({ "space_id": container_space_id }),
+        vec!["cx:event:01904100-0000-7000-8000-f10ec0000001"],
+    );
+    let r: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&archive_event)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(
+        r["status"], "accepted",
+        "archive space container response: {r}"
+    );
+
+    // ── projection now reports archived ───────────────────────────────
+    let body: Value = TestClient::get(format!(
+        "http://server/api/v1/projection/spaces?realm_id={realm_id}"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    assert_eq!(body["realm_id"], realm_id);
+    let spaces = body["spaces"].as_array().unwrap();
+    let row = spaces
+        .iter()
+        .find(|p| p["space_id"] == container_space_id)
+        .expect("place not in projection response");
+    assert_eq!(row["state"], "archived");
+    assert_eq!(row["title"], "Hydration target");
+
+    // ── restore + re-fetch → active ───────────────────────────────────
+    let restore_event = signed_place_event(
+        "cx:event:01904100-0000-7000-8000-f10ec0000003",
+        3,
+        "cx.space.restore",
+        serde_json::json!({ "space_id": container_space_id }),
+        vec!["cx:event:01904100-0000-7000-8000-f10ec0000002"],
+    );
+    let r: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&restore_event)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(
+        r["status"], "accepted",
+        "restore space container response: {r}"
+    );
+
+    let body: Value = TestClient::get(format!(
+        "http://server/api/v1/projection/spaces?realm_id={realm_id}"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    let row = body["spaces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["space_id"] == container_space_id)
+        .expect("place still missing post-restore");
+    assert_eq!(row["state"], "active");
+
+    let legacy_underscore = TestClient::get(format!(
+        "http://server/api/v1/projection/space_containers?realm_id={realm_id}"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .send(&app_from_state(state.clone()))
+    .await;
+    assert_eq!(legacy_underscore.status_code, Some(StatusCode::NOT_FOUND));
+
+    let legacy_hyphen = TestClient::get(format!(
+        "http://server/api/v1/projection/space-containers?realm_id={realm_id}"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .send(&app_from_state(state.clone()))
+    .await;
+    assert_eq!(legacy_hyphen.status_code, Some(StatusCode::NOT_FOUND));
+}
+
+#[tokio::test]
+async fn projection_flows_endpoint_reports_lifecycle_state() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+    let space_id = DEMO_REALM_ID;
+    let flow_id = "cx:flow:01904100-0000-7000-8000-f20dc0000001";
+    let board_space_id = "cx:space:01904100-0000-7000-8000-f20dc0000100";
+    let list_space_id = "cx:space:01904100-0000-7000-8000-f20dc0000200";
+
+    let create_event = signed_flow_event(
+        "cx:event:01904100-0000-7000-8000-f20ec0000001",
+        1,
+        "cx.flow.create",
+        serde_json::json!({
+            "object": {
+                "id": flow_id,
+                "space_id": space_id,
+                "title": "Hydration flow",
+                "fields": {
+                    "board_space_id": board_space_id,
+                    "list_space_id": list_space_id,
+                    "rank": "r007",
+                },
+                "created_by": "did:web:alice.example",
+            }
+        }),
+        Vec::new(),
+    );
+    let r: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&create_event)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(r["status"], "accepted");
+
+    let archive_event = signed_flow_event(
+        "cx:event:01904100-0000-7000-8000-f20ec0000002",
+        2,
+        "cx.flow.archive",
+        serde_json::json!({ "flow_id": flow_id }),
+        vec!["cx:event:01904100-0000-7000-8000-f20ec0000001"],
+    );
+    let r: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&archive_event)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(r["status"], "accepted");
+
+    let body: Value = TestClient::get(format!(
+        "http://server/api/v1/projection/flows?realm_id={space_id}"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    let row = body["flows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["flow_id"] == flow_id)
+        .expect("flow not in projection response");
+    assert_eq!(row["state"], "archived");
+    assert_eq!(row["board_space_id"], board_space_id);
+    assert_eq!(row["list_space_id"], list_space_id);
+    assert_eq!(row["rank"], "r007");
+}
+
+#[tokio::test]
+async fn audit_user_action_endpoint_persists_session_actor_entries_and_rejects_cross_actor() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+    // ── 1. auth required ──────────────────────────────────────────────
+    let unauth = TestClient::post("http://server/api/v1/audit/user-action")
+        .json(&serde_json::json!({
+            "actor": "did:web:alice.example",
+            "action": "ui.button.click",
+            "outcome": "ok",
+        }))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(unauth.status_code.unwrap().as_u16(), 401);
+
+    // ── 2. happy path: session actor posts ────────────────────────────
+    let ok: Value = TestClient::post("http://server/api/v1/audit/user-action")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({
+            "actor": "did:web:alice.example",
+            "action": "ui.kanban.archive_list",
+            "outcome": "ok",
+            "note": "user clicked Archive on list cx:space:demo",
+            "recorded_at": "2026-05-16T12:34:56Z",
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(ok["ok"], true);
+
+    // ── 3. cross-actor post → 403 ─────────────────────────────────────
+    let mut bad = TestClient::post("http://server/api/v1/audit/user-action")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({
+            "actor": "did:web:eve.example",
+            "action": "ui.button.click",
+            "outcome": "ok",
+        }))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(bad.status_code.unwrap().as_u16(), 403);
+    let body: Value = bad.take_json().await.unwrap();
+    assert_eq!(body["error"]["code"], "capability_denied");
+
+    // ── 4. missing actor / action → 400 ──────────────────────────────
+    let mut missing_actor = TestClient::post("http://server/api/v1/audit/user-action")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({"action": "ui.click"}))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(missing_actor.status_code.unwrap().as_u16(), 400);
+    let body: Value = missing_actor.take_json().await.unwrap();
+    assert_eq!(body["error"]["code"], "invalid_param");
+
+    let missing_action = TestClient::post("http://server/api/v1/audit/user-action")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({"actor": "did:web:alice.example"}))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(missing_action.status_code.unwrap().as_u16(), 400);
+
+    // ── 5. entry shows up in GET /audit/events for the same actor ────
+    let events: Value = TestClient::get("http://server/api/v1/audit/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    let rows = events["events"].as_array().unwrap();
+    let posted = rows
+        .iter()
+        .find(|e| e["action"] == "ui.kanban.archive_list")
+        .expect("user-action entry not surfaced through audit/events");
+    assert_eq!(posted["outcome"], "ok");
+    assert_eq!(posted["actor"], "did:web:alice.example");
+}
+
+#[tokio::test]
+async fn projection_morphs_endpoint_reports_lifecycle_state() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+    let space_id = DEMO_REALM_ID;
+    let morph_id = "cx:morph:01904100-0000-7000-8000-d20dc0000001";
+
+    let create_event = signed_morph_event(
+        "cx:event:01904100-0000-7000-8000-d20ec0000001",
+        1,
+        "cx.morph.create",
+        serde_json::json!({
+            "object": {
+                "id": morph_id,
+                "space_id": space_id,
+                "morph_type": "task",
+                "title": "Hydration morph",
+                "created_by": "did:web:alice.example",
+            }
+        }),
+        Vec::new(),
+    );
+    let r: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&create_event)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(r["status"], "accepted");
+
+    // Initial state — Active.
+    let body: Value = TestClient::get(format!(
+        "http://server/api/v1/projection/morphs?realm_id={space_id}"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    let row = body["morphs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["morph_id"] == morph_id)
+        .expect("morph not in projection response");
+    assert_eq!(row["state"], "active");
+    assert_eq!(row["morph_type"], "task");
+
+    // Archive → state flips to `archived`.
+    let archive_event = signed_morph_event(
+        "cx:event:01904100-0000-7000-8000-d20ec0000002",
+        2,
+        "cx.morph.archive",
+        serde_json::json!({ "morph_id": morph_id }),
+        vec!["cx:event:01904100-0000-7000-8000-d20ec0000001"],
+    );
+    let r: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&archive_event)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(r["status"], "accepted");
+
+    let body: Value = TestClient::get(format!(
+        "http://server/api/v1/projection/morphs?realm_id={space_id}"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    let row = body["morphs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["morph_id"] == morph_id)
+        .expect("morph not in projection response");
+    assert_eq!(row["state"], "archived");
+
+    // Unauthenticated → 401, no body leak.
+    let unauth = TestClient::get(format!(
+        "http://server/api/v1/projection/morphs?realm_id={space_id}"
+    ))
+    .send(&app_from_state(state.clone()))
+    .await;
+    assert_eq!(unauth.status_code, Some(StatusCode::UNAUTHORIZED));
+}
+
+#[tokio::test]
+async fn projection_document_endpoint_reports_body_versions_relations_and_range_comments() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+    let realm_id = DEMO_REALM_ID;
+    let morph_id = "cx:morph:01904100-0000-7000-8000-d21dc0000001";
+    let relation_id = "cx:relation:01904100-0000-7000-8000-d21dc0000001";
+    let incident_ref = "cx:flow:01904100-0000-7000-8000-d21dc0000100";
+
+    let initial_body = serde_json::json!({
+        "schema_version": 1,
+        "blocks": [{
+            "id": "b1",
+            "kind": "Paragraph",
+            "content": "abcdefghij"
+        }]
+    });
+    let create_event = signed_morph_event(
+        "cx:event:01904100-0000-7000-8000-d21ec0000001",
+        1,
+        "cx.morph.create",
+        serde_json::json!({
+            "object": {
+                "id": morph_id,
+                "space_id": realm_id,
+                "morph_type": "document",
+                "title": "Postmortem draft",
+                "schema_refs": ["cx.schema.morph.v1"],
+                "facets": {
+                    "documentable": {}
+                },
+                "fields": {
+                    "document": initial_body
+                },
+                "created_by": "did:web:alice.example",
+            }
+        }),
+        Vec::new(),
+    );
+    let create_response: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&create_event)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    if create_response["status"] != "accepted" {
+        panic!("create document morph response: {create_response}");
+    }
+
+    let relation_event = signed_relation_event(
+        "cx:event:01904100-0000-7000-8000-d21ec0000002",
+        2,
+        serde_json::json!({
+            "relation_id": relation_id,
+            "kind": "references",
+            "from_ref": morph_id,
+            "to_ref": incident_ref,
+            "fields": {
+                "role": "postmortem_for"
+            }
+        }),
+        vec!["cx:event:01904100-0000-7000-8000-d21ec0000001"],
+    );
+    let relation_response: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&relation_event)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(
+        relation_response["status"], "accepted",
+        "create document relation response: {relation_response}"
+    );
+
+    let comment_response = submit_message_event(
+        state.clone(),
+        &token,
+        "did:web:alice.example",
+        realm_id,
+        morph_id,
+        serde_json::json!({
+            "kind": "cx.content.text",
+            "morph_id": morph_id,
+            "anchor_range": {
+                "target_ref": morph_id,
+                "start": 2,
+                "end": 9
+            },
+            "body": "tighten this section"
+        }),
+        false,
+    )
+    .await;
+    if comment_response["canonical_event_envelope"] != true {
+        panic!("create document comment response: {comment_response}");
+    }
+
+    let updated_body = serde_json::json!({
+        "schema_version": 1,
+        "blocks": [{
+            "id": "b1",
+            "kind": "Paragraph",
+            "content": "abc"
+        }]
+    });
+    let update_event = signed_morph_event(
+        "cx:event:01904100-0000-7000-8000-d21ec0000003",
+        20_000,
+        "cx.morph.update",
+        serde_json::json!({
+            "morph_id": morph_id,
+            "target_ref": morph_id,
+            "patch": {
+                "fields": {
+                    "$op": "set",
+                    "value": {
+                        "document": updated_body
+                    }
+                }
+            }
+        }),
+        vec!["cx:event:01904100-0000-7000-8000-d21ec0000001"],
+    );
+    let update_response: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&update_event)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(
+        update_response["status"], "accepted",
+        "update document morph response: {update_response}"
+    );
+
+    let body: Value = TestClient::get(format!(
+        "http://server/api/v1/projection/documents/{morph_id}"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    assert_eq!(body["document"]["morph_id"], morph_id);
+    assert_eq!(body["document"]["realm_id"], realm_id);
+    assert_eq!(body["document"]["morph_type"], "document");
+    assert_eq!(body["document"]["body"], updated_body);
+    assert_eq!(body["document"]["fields"]["document"], updated_body);
+    assert_eq!(body["document"]["schema_refs"][0], "cx.schema.morph.v1");
+    assert_eq!(body["document"]["facets"][0], "documentable");
+
+    let versions = body["versions"].as_array().expect("versions array");
+    assert_eq!(versions.len(), 2);
+    assert_eq!(versions[0]["body"], initial_body);
+    assert_eq!(versions[1]["body"], updated_body);
+    assert_ne!(versions[0]["body_digest"], versions[1]["body_digest"]);
+
+    let relation = body["relations"]
+        .as_array()
+        .expect("relations array")
+        .iter()
+        .find(|relation| relation["relation_id"] == relation_id)
+        .expect("document relation projected");
+    assert_eq!(relation["relation_kind"], "references");
+    assert_eq!(relation["from"], morph_id);
+    assert_eq!(relation["to"], incident_ref);
+    assert_eq!(relation["fields"]["role"], "postmortem_for");
+
+    let comment = body["comments"]
+        .as_array()
+        .expect("comments array")
+        .iter()
+        .find(|comment| comment["body"] == "tighten this section")
+        .expect("document range comment projected");
+    assert_eq!(comment["anchor_range"]["start"], 2);
+    assert_eq!(comment["anchor_range"]["end"], 9);
+    assert_eq!(comment["state"], "orphaned");
+    assert_eq!(body["cursor_presence"].as_array().unwrap().len(), 0);
+}
+
+#[tokio::test]
+async fn projection_endpoints_hide_terminal_state_by_default() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+    let realm_id = "cx:realm:0196419b-0000-7000-8000-000000000000";
+    let space_id = realm_id;
+    let container_space_id = "cx:space:01904100-0000-7000-8000-c15d70000001";
+    let flow_id = "cx:flow:01904100-0000-7000-8000-c15d70000002";
+
+    // Create + tombstone a Space container.
+    let create_place = signed_place_event(
+        "cx:event:01904100-0000-7000-8000-c15d70010001",
+        1,
+        "cx.space.create",
+        serde_json::json!({
+            "object": {
+                "id": container_space_id,
+                "realm_id": realm_id,
+                "kind": "list",
+                "title": "Doomed Space",
+                "created_by": "did:web:alice.example",
+            }
+        }),
+        Vec::new(),
+    );
+    let r: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&create_place)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(r["status"], "accepted");
+
+    let tombstone_place = signed_place_event(
+        "cx:event:01904100-0000-7000-8000-c15d70010002",
+        2,
+        "cx.space.tombstone",
+        serde_json::json!({ "space_id": container_space_id }),
+        vec!["cx:event:01904100-0000-7000-8000-c15d70010001"],
+    );
+    let r: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&tombstone_place)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(r["status"], "accepted");
+
+    // Default Space-container projection — tombstoned Space container is hidden.
+    let body: Value = TestClient::get(format!(
+        "http://server/api/v1/projection/spaces?realm_id={realm_id}"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    assert!(
+        body["spaces"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|p| p["space_id"] != container_space_id),
+        "tombstoned Space container MUST be hidden from default projection listing"
+    );
+
+    // Explicit include_terminal=true — tombstoned Space container is visible.
+    let body: Value = TestClient::get(format!(
+        "http://server/api/v1/projection/spaces?realm_id={realm_id}&include_terminal=true"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    let row = body["spaces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["space_id"] == container_space_id)
+        .expect("tombstoned Space container MUST appear when include_terminal=true");
+    assert_eq!(row["state"], "tombstoned");
+
+    // Create a Flow + redact it.
+    let create_flow = signed_flow_event(
+        "cx:event:01904100-0000-7000-8000-c15d70020001",
+        3,
+        "cx.flow.create",
+        serde_json::json!({
+            "object": {
+                "id": flow_id,
+                "space_id": space_id,
+                "title": "Doomed Flow",
+                "created_by": "did:web:alice.example",
+            }
+        }),
+        vec!["cx:event:01904100-0000-7000-8000-c15d70010002"],
+    );
+    let r: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&create_flow)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(r["status"], "accepted");
+
+    let redact_flow = signed_redaction_event(
+        "cx:event:01904100-0000-7000-8000-c15d70020002",
+        4,
+        serde_json::json!({
+            "target_event_id": "cx:event:01904100-0000-7000-8000-c15d70020001",
+            "object_ref": flow_id,
+        }),
+        vec!["cx:event:01904100-0000-7000-8000-c15d70020001"],
+    );
+    let r: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&redact_flow)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(r["status"], "accepted");
+
+    // Default Flow listing — redacted Flow hidden.
+    let body: Value = TestClient::get(format!(
+        "http://server/api/v1/projection/flows?realm_id={space_id}"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    assert!(
+        body["flows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|f| f["flow_id"] != flow_id),
+        "redacted Flow MUST be hidden from default projection listing"
+    );
+
+    // Explicit include_terminal=true — redacted Flow visible.
+    let body: Value = TestClient::get(format!(
+        "http://server/api/v1/projection/flows?realm_id={space_id}&include_terminal=true"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    let row = body["flows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["flow_id"] == flow_id)
+        .expect("redacted Flow MUST appear when include_terminal=true");
+    assert_eq!(row["state"], "redacted");
+}
+
+#[tokio::test]
+async fn projection_persistence_write_through_mirrors_lifecycle_events() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+    let container_space_id = "cx:space:01904100-0000-7000-8000-15a15a000001";
+    let flow_id = "cx:flow:01904100-0000-7000-8000-15a15a000002";
+    let morph_id = "cx:morph:01904100-0000-7000-8000-15a15a000003";
+
+    // Space container: create + archive → persistence has state=archived.
+    let create_place = signed_place_event(
+        "cx:event:01904100-0000-7000-8000-15a15ae00001",
+        1,
+        "cx.space.create",
+        serde_json::json!({
+            "object": {
+                "id": container_space_id,
+                "realm_id": "cx:realm:0196419b-0000-7000-8000-000000000000",
+                "kind": "list",
+                "title": "Persistent Space",
+                "created_by": "did:web:alice.example",
+            }
+        }),
+        Vec::new(),
+    );
+    let r: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&create_place)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(r["status"], "accepted");
+
+    let archive_place = signed_place_event(
+        "cx:event:01904100-0000-7000-8000-15a15ae00002",
+        2,
+        "cx.space.archive",
+        serde_json::json!({ "space_id": container_space_id }),
+        vec!["cx:event:01904100-0000-7000-8000-15a15ae00001"],
+    );
+    let r: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&archive_place)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(r["status"], "accepted");
+
+    let place_row = state
+        .persistence
+        .space_container_projections()
+        .get(container_space_id)
+        .unwrap()
+        .expect("place projection MUST be mirrored to persistence after create+archive");
+    assert_eq!(place_row.state, "archived");
+    assert_eq!(place_row.title, "Persistent Space");
+
+    // list_for_space + snapshot_all reach the same row.
+    let by_space = state
+        .persistence
+        .space_container_projections()
+        .list_for_space(DEMO_REALM_ID)
+        .unwrap();
+    assert!(
+        by_space
+            .iter()
+            .any(|p| p.container_space_id == container_space_id),
+        "list_for_space MUST surface the persisted space container"
+    );
+    let snapshot = state
+        .persistence
+        .space_container_projections()
+        .snapshot_all()
+        .unwrap();
+    assert!(
+        snapshot
+            .iter()
+            .any(|p| p.container_space_id == container_space_id)
+    );
+
+    // Flow: create + redact → persistence has state=redacted.
+    let create_flow = signed_flow_event(
+        "cx:event:01904100-0000-7000-8000-15a15af00001",
+        3,
+        "cx.flow.create",
+        serde_json::json!({
+            "object": {
+                "id": flow_id,
+                "space_id": DEMO_REALM_ID,
+                "title": "Persistent Flow",
+                "created_by": "did:web:alice.example",
+            }
+        }),
+        vec!["cx:event:01904100-0000-7000-8000-15a15ae00002"],
+    );
+    let r: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&create_flow)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(r["status"], "accepted");
+    let flow_row = state
+        .persistence
+        .flow_projections()
+        .get(flow_id)
+        .unwrap()
+        .expect("flow projection MUST be mirrored to persistence after create");
+    assert_eq!(flow_row.state, "active");
+    assert_eq!(flow_row.title, "Persistent Flow");
+
+    let redact_flow = signed_redaction_event(
+        "cx:event:01904100-0000-7000-8000-15a15af00002",
+        4,
+        serde_json::json!({
+            "target_event_id": "cx:event:01904100-0000-7000-8000-15a15af00001",
+            "object_ref": flow_id,
+        }),
+        vec!["cx:event:01904100-0000-7000-8000-15a15af00001"],
+    );
+    let r: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&redact_flow)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(r["status"], "accepted");
+    let flow_row = state
+        .persistence
+        .flow_projections()
+        .get(flow_id)
+        .unwrap()
+        .expect("flow projection MUST still exist after redaction");
+    assert_eq!(
+        flow_row.state, "redacted",
+        "cx.redaction with object_ref MUST flip flow projection in persistence too"
+    );
+
+    // Morph: create + archive → persistence has state=archived.
+    let create_morph = signed_morph_event(
+        "cx:event:01904100-0000-7000-8000-15a15a000004",
+        5,
+        "cx.morph.create",
+        serde_json::json!({
+            "object": {
+                "id": morph_id,
+                "space_id": DEMO_REALM_ID,
+                "morph_type": "task",
+                "title": "Persistent Morph",
+                "created_by": "did:web:alice.example",
+            }
+        }),
+        vec!["cx:event:01904100-0000-7000-8000-15a15af00002"],
+    );
+    let r: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&create_morph)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(r["status"], "accepted");
+
+    let archive_morph = signed_morph_event(
+        "cx:event:01904100-0000-7000-8000-15a15a000005",
+        6,
+        "cx.morph.archive",
+        serde_json::json!({ "morph_id": morph_id }),
+        vec!["cx:event:01904100-0000-7000-8000-15a15a000004"],
+    );
+    let r: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&archive_morph)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(r["status"], "accepted");
+    let morph_row = state
+        .persistence
+        .morph_projections()
+        .get(morph_id)
+        .unwrap()
+        .expect("morph projection MUST be mirrored to persistence");
+    assert_eq!(morph_row.state, "archived");
+    assert_eq!(morph_row.morph_type, "task");
+}
