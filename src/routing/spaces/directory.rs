@@ -352,16 +352,61 @@ async fn search_users(
     let limit = checked_limit(body.limit)?;
     let query = body.query;
     let session = authenticated_session(state, req).ok();
+    // DIR-1 (R3.1, contrix-spec @ 7157ee8) — `cx.directory.search_users`
+    // response rows MUST NOT carry `handle_uri`. Only `handle` (canonical
+    // `<localpart>:<domain>`) + optional `display_name`/`verified`/`subject`
+    // survive the rename. Other actor metadata (presence, organization,
+    // avatar) goes through `cx.directory.search_actors` or
+    // `cx.directory.resolve-handle`.
     let results: Vec<_> = demo_actors(state)
         .into_iter()
         .filter(|actor| actor_visible_to(state, actor, session.as_ref()))
         .filter(|actor| query_matches(actor, query.as_deref()))
         .take(limit)
+        .map(|actor| project_search_users_row(state, &actor))
         .collect();
     json_ok(DirectoryValueSearchResponse {
         results,
         next_cursor: None,
     })
+}
+
+/// DIR-1 — project a [`demo_actors`] row into the spec-shape
+/// `cx.directory.search_users` response entry. Only `handle` (canonical
+/// `<localpart>:<domain>` per handle-claim.schema.json, contrix-spec @
+/// 7157ee8) + optional `display_name`/`verified`/`subject` survive.
+fn project_search_users_row(state: &AppState, actor: &Value) -> Value {
+    let service_domain = state
+        .config
+        .service_did
+        .strip_prefix("did:web:")
+        .map(|value| value.replace(':', "."))
+        .unwrap_or_else(|| "soland.local".to_owned());
+    let raw_handle = actor
+        .get("handle")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim_start_matches('@')
+        .to_ascii_lowercase();
+    let canonical = if raw_handle.is_empty() {
+        String::new()
+    } else if raw_handle.contains(':') {
+        raw_handle
+    } else {
+        format!("{raw_handle}:{service_domain}")
+    };
+    let mut row = serde_json::Map::new();
+    row.insert("handle".to_owned(), json!(canonical));
+    if let Some(display_name) = actor.get("display_name").and_then(Value::as_str) {
+        row.insert("display_name".to_owned(), json!(display_name));
+    }
+    if let Some(did) = actor.get("did").and_then(Value::as_str) {
+        row.insert("subject".to_owned(), json!(did));
+    }
+    if let Some(verified) = actor.get("verified") {
+        row.insert("verified".to_owned(), verified.clone());
+    }
+    Value::Object(row)
 }
 
 #[endpoint(
@@ -401,8 +446,13 @@ async fn resolve_handle(
                 .unwrap_or_else(|| state.config.service_did.clone());
             let did = actor["did"].as_str().unwrap_or_default().to_owned();
             let handle_claim = signed_handle_claim(state, &normalized, &did, &audience)?;
+            // HDLREN-2 — surface the canonical `<localpart>:<domain>` handle
+            // from the freshly signed claim so the top-level response field
+            // matches handle-claim.schema.json (contrix-spec @ 7157ee8). The
+            // request's `@alice` UI form is normalized away here.
+            let canonical_handle = handle_claim.handle.clone();
             json_ok(ResolveHandleResponse {
-                handle: normalized,
+                handle: canonical_handle,
                 did,
                 actor,
                 audience: Some(audience),
@@ -430,13 +480,16 @@ fn signed_handle_claim(
         .next()
         .unwrap_or(handle)
         .to_ascii_lowercase();
-    let handle_uri = format!("contrix://{service_domain}/users/{localpart}");
+    // HDLREN-1 (contrix-spec @ 7157ee8) — canonical handle wire form is
+    // `<localpart>:<domain>`. The retired `contrix://<domain>/users/<localpart>`
+    // URI is dropped from R3.1 wire; `acct:<local>@<domain>` survives as an
+    // interop alias only.
+    let canonical_handle = format!("{localpart}:{service_domain}");
     let created_at = now();
     let expires_at = created_at + chrono::Duration::hours(24);
     let unsigned = json!({
         "schema": "cx.schema.handle_claim.v1",
-        "handle": handle,
-        "handle_uri": handle_uri,
+        "handle": canonical_handle,
         "handle_aliases": [format!("acct:{localpart}@{service_domain}")],
         "subject": did,
         "issuer": service_did,
@@ -470,8 +523,7 @@ fn signed_handle_claim(
 
     Ok(HandleClaim {
         schema: "cx.schema.handle_claim.v1".to_owned(),
-        handle: handle.to_owned(),
-        handle_uri: Some(handle_uri),
+        handle: canonical_handle,
         handle_aliases: vec![format!("acct:{localpart}@{service_domain}")],
         subject: did.to_owned(),
         issuer: service_did.clone(),

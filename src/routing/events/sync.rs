@@ -314,6 +314,15 @@ fn build_sync_snapshot(
     body: &ClientSyncRequest,
     after_cursor: &SyncCursor,
 ) -> contrix_sdk::model::SyncResBody {
+    // SYNC-MEM-1 (contrix-spec @ 7157ee8) — `members[]` is the per-Realm
+    // roster projection from `account-subscribe-frame.schema.json#/$defs/
+    // member_roster_entry`. Each row carries
+    // `{actor_id, membership, identity_event_ids?, identity_state_digest?,
+    // identity_events?}` — `handle` / display name MUST NOT appear here.
+    // Identity is resolved by following `identity_event_ids[]` into the
+    // separately delivered `cx.member.identity.update` event log; servers
+    // that lack the events for the client SHOULD inline them via
+    // `identity_events[]`.
     let visible_spaces: Vec<_> = {
         let spaces = state.realms.lock().expect("spaces lock");
         spaces
@@ -321,24 +330,7 @@ fn build_sync_snapshot(
             .into_iter()
             .filter(|space| realm_visible_to(state, space, session))
             .map(|space| {
-                // `zh/sync/client-sync.md` §8.1 — `members[]` is the
-                // flat per-Realm hint shipped alongside `state.events`;
-                // each entry carries `did` + optional canonical
-                // `handle_uri` pulled off the projected
-                // `cx.member.state.payload.handle_uri`.
-                let members = space
-                    .members
-                    .iter()
-                    .map(|did| {
-                        let did_str = did.as_str();
-                        let mut entry = serde_json::Map::new();
-                        entry.insert("did".to_owned(), json!(did_str));
-                        if let Some(handle_uri) = space.member_handle_uris.get(did_str) {
-                            entry.insert("handle_uri".to_owned(), json!(handle_uri));
-                        }
-                        Value::Object(entry)
-                    })
-                    .collect::<Vec<_>>();
+                let members = roster_members_for_realm(state, space);
                 (
                     space.realm_id.to_string(),
                     space.name.clone(),
@@ -438,12 +430,20 @@ fn build_sync_snapshot(
                     "tags": tags,
                     "category": category,
                     "members": summary_members,
+                    // SYNC-MEM-2/4 — mirror `members_limited` so the two
+                    // `members` views stay byte-equal.
+                    "members_limited": false,
                     "history_visibility": history_visibility.clone(),
                     "encryption_profile": encryption_profile.clone(),
                 },
                 "history_visibility": history_visibility,
                 "encryption_profile": encryption_profile,
                 "members": members,
+                // SYNC-MEM-2 (contrix-spec @ 7157ee8) — `members_limited`
+                // is always `false` until lazy-load truncation lands; the
+                // spec requires the flag to be present so clients can tell
+                // a small roster from a truncated one.
+                "members_limited": false,
                 "flows": [flow_list_item],
                 "timeline": {"events": timeline_events, "limited": false},
                 "state": [],
@@ -523,6 +523,63 @@ fn build_sync_snapshot(
         notifications: serde_json::Value::Null,
         partial: false,
     }
+}
+
+/// SYNC-MEM-1..4 (contrix-spec @ 7157ee8) — build the per-Realm
+/// `members[]` projection from the in-memory `RealmDirectoryEntry` plus
+/// the MemberIdentity registry.
+///
+/// Schema source:
+/// `account-subscribe-frame.schema.json#/$defs/member_roster_entry`. Each
+/// row carries
+/// `{actor_id, membership, identity_event_ids?, identity_state_digest?,
+/// identity_events?}`. The retired R3 shape `{did, handle_uri?}` is gone —
+/// `handle` / display name MUST NOT appear here. Clients resolve identity
+/// by following `identity_event_ids[]` into the separately delivered
+/// `cx.member.identity.update` event log; SYNC-MEM-3 inlines the original
+/// envelopes when the server has them and the client doesn't.
+fn roster_members_for_realm(
+    state: &AppState,
+    space: &crate::state::RealmDirectoryEntry,
+) -> Vec<Value> {
+    let registry = state.member_identity_registry();
+    space
+        .members
+        .iter()
+        .map(|did| {
+            let did_str = did.as_str();
+            let mut entry = serde_json::Map::new();
+            entry.insert("actor_id".to_owned(), json!(did_str));
+            // Wire-side membership state. We do not currently project
+            // invite/knock distinct from join in `RealmDirectoryEntry`; the
+            // structured FSM lives in `ProjectionState::members` and
+            // bare-`members` set here represents "join" rows.
+            entry.insert("membership".to_owned(), json!("join"));
+            if let Some(snapshot) =
+                registry.snapshot_for_actor(space.realm_id.as_str(), did_str)
+            {
+                if !snapshot.identity_event_ids.is_empty() {
+                    entry.insert(
+                        "identity_event_ids".to_owned(),
+                        json!(snapshot.identity_event_ids),
+                    );
+                }
+                if let Some(digest) = snapshot.identity_state_digest {
+                    entry.insert("identity_state_digest".to_owned(), json!(digest));
+                }
+                // SYNC-MEM-3 — inline original Event envelopes when present.
+                // The reducer stores the events as received; we do NOT
+                // rewrite projection on egress.
+                if !snapshot.identity_events.is_empty() {
+                    entry.insert(
+                        "identity_events".to_owned(),
+                        json!(snapshot.identity_events),
+                    );
+                }
+            }
+            Value::Object(entry)
+        })
+        .collect()
 }
 
 fn timeline_events_for_space(

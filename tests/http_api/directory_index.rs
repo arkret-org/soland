@@ -103,7 +103,13 @@ async fn directory_product_endpoints_return_demo_projection_shapes() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(users["results"][0]["handle"], "@alice");
+    // DIR-1 (R3.1, contrix-spec @ 7157ee8) — search_users rows surface the
+    // canonical `<localpart>:<domain>` form (handle-claim.schema.json) and
+    // no longer carry `handle_uri` / `presence` / `organization_id`.
+    assert_eq!(users["results"][0]["handle"], "alice:soland.local");
+    assert!(users["results"][0].get("handle_uri").is_none());
+    assert!(users["results"][0].get("presence").is_none());
+    assert!(users["results"][0].get("organization_id").is_none());
 
     let handle: Value = TestClient::post("http://server/api/v1/directory/resolve-handle")
         .json(&serde_json::json!({"handle": "alice"}))
@@ -117,10 +123,10 @@ async fn directory_product_endpoints_return_demo_projection_shapes() {
         handle["handle_claim"]["schema"],
         "cx.schema.handle_claim.v1"
     );
-    assert_eq!(
-        handle["handle_claim"]["handle_uri"],
-        "contrix://soland.local/users/alice"
-    );
+    // HDLREN-2 (contrix-spec @ 7157ee8) — canonical handle wire form is
+    // `<localpart>:<domain>`. `handle_uri` is gone from the claim shape.
+    assert_eq!(handle["handle_claim"]["handle"], "alice:soland.local");
+    assert!(handle["handle_claim"].get("handle_uri").is_none());
     assert_eq!(
         handle["handle_claim"]["member_delivery_binding"]["recipient_service_did"],
         "did:web:soland.local"
