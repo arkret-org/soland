@@ -5,6 +5,20 @@ principal server; the protocol contract lives in
 [`contrix-spec`](https://github.com/contrix/contrix-spec) and the Rust SDK
 in [`contrix-rust-sdk`](https://github.com/contrix/contrix-rust-sdk).
 
+## Pre-commit hook setup
+
+After cloning, enable the project's pre-commit hooks:
+
+```sh
+git config core.hooksPath .githooks
+```
+
+The hook runs `cargo fmt --all -- --check` plus `cargo clippy --no-deps -- -D
+warnings` on staged Rust changes. If `.githooks/` is missing or you want a
+richer hook, copy `.githooks/pre-commit` from
+[`contrix-rust-sdk`](https://github.com/contrix-dev/contrix-rust-sdk) and
+adapt to your local toolchain.
+
 ## Repository layout
 
 soland depends on the `contrix` SDK at a sibling path. The CI workflows clone
