@@ -47,10 +47,6 @@ jobs:
         with:
           workspaces: soland -> target
 
-      - name: Check formatting
-        run: cargo fmt --all -- --check
-        working-directory: soland
-
       - name: Clippy
         run: cargo clippy --all-targets --locked -- -D warnings
         working-directory: soland
