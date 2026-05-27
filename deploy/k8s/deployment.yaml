@@ -1,0 +1,39 @@
+# Minimal R3 example; production deploys should use Helm.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: soland
+  labels:
+    app: soland
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: soland
+  template:
+    metadata:
+      labels:
+        app: soland
+    spec:
+      containers:
+        - name: soland
+          image: ghcr.io/contrix-dev/soland:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8698
+          env:
+            - name: SOLAND_BIND
+              value: "0.0.0.0:8698"
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20

@@ -1,0 +1,16 @@
+# Minimal R3 example; production deploys should use Helm.
+apiVersion: v1
+kind: Service
+metadata:
+  name: soland
+  labels:
+    app: soland
+spec:
+  type: ClusterIP
+  selector:
+    app: soland
+  ports:
+    - name: http
+      port: 8698
+      targetPort: http
+      protocol: TCP

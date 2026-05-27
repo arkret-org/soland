@@ -47,6 +47,8 @@ jobs:
         with:
           workspaces: soland -> target
 
+      # rustfmt enforcement was dropped intentionally in commit 99aa7a7;
+      # restore via `cargo fmt --all -- --check` before tagging a release.
       - name: Clippy
         run: cargo clippy --all-targets --locked -- -D warnings
         working-directory: soland
