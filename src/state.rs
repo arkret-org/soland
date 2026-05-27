@@ -442,6 +442,17 @@ pub struct AppState {
     /// is unset / file missing / file malformed — that's the dev-mode
     /// invariant in service-surface.md §3.0.
     pub verified_profiles: Arc<Vec<VerifiedProfileDescriptor>>,
+    /// REC-1 (R3 spec-sync 2026-05-27, contrix-spec b47ff6ec) — in-memory
+    /// recovery policy projection keyed by `principal_id`. Each entry
+    /// records the currently-accepted policy snapshot so policy_version
+    /// monotonicity can be enforced. The durable `recovery_session` table
+    /// (migrations/20260526030000_agent_personal_provisioning) is the
+    /// restart mirror; this map is the hot read path.
+    pub recovery_policies: Arc<Mutex<BTreeMap<String, RecoveryPolicyRecord>>>,
+    /// REC-1 — in-memory recovery receipt projection keyed by
+    /// `recovery_session_id`. Rejects duplicate session id reuse against
+    /// the same principal (spec recovery-receipt.schema.json §3).
+    pub recovery_receipts: Arc<Mutex<BTreeMap<String, RecoveryReceiptRecord>>>,
 }
 
 #[derive(Clone, Debug)]
@@ -488,6 +499,44 @@ pub struct AccountLifecycleRecord {
     pub reason: Option<String>,
     pub changed_by: Option<String>,
     pub changed_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// REC-1 (R3 spec-sync 2026-05-27, contrix-spec b47ff6ec) — accepted
+/// recovery policy snapshot. Backs `AppState::recovery_policies`. The
+/// durable `recovery_session` table is the restart mirror.
+///
+/// Spec: `contrix-spec/spec/v1/artifacts/schemas/recovery-policy.schema.json`.
+#[derive(Clone, Debug)]
+pub struct RecoveryPolicyRecord {
+    pub policy_id: String,
+    pub principal_id: String,
+    pub version: u32,
+    pub trust_domain: String,
+    pub allowed_proof_kinds: Vec<String>,
+    pub supersedes: Option<String>,
+    pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub issued_at: chrono::DateTime<chrono::Utc>,
+    pub raw_payload: Value,
+    /// Verification-method DID URL of the issuer. The full proof
+    /// verification (signature + signed_fields enforcement) is flagged
+    /// `TODO(R4): wire principal signing-key resolver + signature
+    /// validation through DidResolver chain`.
+    pub verification_method: String,
+}
+
+/// REC-1 — accepted recovery receipt snapshot.
+///
+/// Spec: `contrix-spec/spec/v1/artifacts/schemas/recovery-receipt.schema.json`.
+#[derive(Clone, Debug)]
+pub struct RecoveryReceiptRecord {
+    pub receipt_id: String,
+    pub principal_id: String,
+    pub recovery_session_id: String,
+    pub policy_id: String,
+    pub policy_version: u32,
+    pub outcome: String,
+    pub completed_at: chrono::DateTime<chrono::Utc>,
+    pub raw_payload: Value,
 }
 
 /// Per-actor failed-login bookkeeping. Spec: A.3 — five failures within
@@ -1319,6 +1368,8 @@ impl AppState {
             // crate::verified_profiles::load_from_env for the file
             // schema and logging policy.
             verified_profiles: crate::verified_profiles::load_from_env(),
+            recovery_policies: Arc::new(Mutex::new(BTreeMap::new())),
+            recovery_receipts: Arc::new(Mutex::new(BTreeMap::new())),
         }
     }
 
