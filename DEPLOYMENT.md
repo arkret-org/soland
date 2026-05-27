@@ -439,3 +439,134 @@ base64-standard-padded). Recommended cadence and ceremony:
   Streams D / E / F for the production rollout.
 - **Pre-1.0 schema drift**: protocol field renames listed in `_todos.md` Q2/Q3
   may require client updates between releases.
+
+## R3 migrations
+
+R3 lands new wire surfaces (agent FSM, recovery policy/receipt, media token
+exchange, and a re-shaped realm media_service shape). None of the R3
+migrations drop columns or tables; everything is additive plus a
+read-side normalization for the legacy `sfu_endpoint` shape.
+
+Run order (each migration is idempotent):
+
+1. `migrations/20260520_realm_media_service_foci.sql`
+2. `migrations/20260521_recovery_policies.sql`
+3. `migrations/20260522_recovery_receipts.sql`
+4. `migrations/20260523_agent_fsm_cell_upgrade.sql`
+
+### `cx.realm.media_service.foci[]` shape
+
+The v1.0 realm media-service shape exposed a single endpoint:
+
+```json
+{
+  "media_service": {
+    "sfu_endpoint": "https://sfu.example.org",
+    "backend": "livekit"
+  }
+}
+```
+
+R3 normalizes to a `foci[]` array so that a realm can advertise multiple
+media foci (e.g. one LiveKit pool and one Mediasoup pool, or
+geo-distributed pools):
+
+```json
+{
+  "media_service": {
+    "foci": [
+      {
+        "focus_id": "cx:focus:livekit:eu-west-1",
+        "backend": "livekit",
+        "connect_url": "https://sfu.eu-west-1.example.org",
+        "issuer_kid": "cx-media-issuer/example/2026-05"
+      }
+    ]
+  }
+}
+```
+
+Migration `20260520_realm_media_service_foci.sql` does **not** drop the
+old column. It:
+
+1. Reads each `realm_media_service.payload` JSONB row.
+2. If `foci` already present and non-empty, no-ops.
+3. Otherwise, projects the legacy `sfu_endpoint` + `backend` pair into a
+   single-entry `foci` array under a derived `focus_id` of
+   `cx:focus:legacy:<realm_short>:<sha256(endpoint)[:8]>`.
+4. Writes the merged payload back. The legacy keys remain available for
+   one full release cycle; reader code accepts either shape and prefers
+   `foci[]` when both are present.
+
+Validation post-migration:
+
+```sql
+SELECT realm_id,
+       payload ? 'foci' AS has_foci,
+       jsonb_array_length(payload->'foci') AS focus_count
+FROM   realm_media_service
+ORDER  BY realm_id
+LIMIT  20;
+```
+
+Realms with `has_foci = false` after the migration ran indicate either an
+empty `media_service` row or a row outside the canonical shape — capture
+the row and escalate; do not delete.
+
+### `recovery_policies` + `recovery_receipts`
+
+R3 introduces two new tables. Both are append-only event projections, not
+truth tables — the durable record is the canonical event stream; these
+projections accelerate reads.
+
+```sql
+CREATE TABLE recovery_policies (
+    policy_id        UUID PRIMARY KEY,
+    principal_id     TEXT NOT NULL,
+    policy_version   INTEGER NOT NULL,
+    proof_kinds      TEXT[] NOT NULL,
+    body             JSONB NOT NULL,
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (principal_id, policy_version)
+);
+CREATE INDEX recovery_policies_principal_idx
+    ON recovery_policies(principal_id, policy_version DESC);
+
+CREATE TABLE recovery_receipts (
+    receipt_id            UUID PRIMARY KEY,
+    recovery_session_id   TEXT NOT NULL,
+    principal_id          TEXT NOT NULL,
+    proof_summary         JSONB NOT NULL,
+    completion_timestamp  TIMESTAMPTZ NOT NULL,
+    inserted_at           TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX recovery_receipts_principal_idx
+    ON recovery_receipts(principal_id, completion_timestamp DESC);
+```
+
+No backfill is required; pre-R3 deployments have zero rows in either
+table. The reducer materializes new rows as events arrive.
+
+### Agent FSM cell upgrade
+
+The agent FSM is owned by a cell (`cx.component.agent_state.v1`). Pre-R3
+deployments don't carry that cell. Migration
+`20260523_agent_fsm_cell_upgrade.sql`:
+
+1. Iterates the existing `agent_principals` projection.
+2. For each row, inserts a synthetic `cx.agent.provision`-equivalent state
+   marker into the cell store with state = `Active` and source =
+   `migration:r3`.
+3. Sets `lattice = fsm, bottom = reject` on the cell metadata.
+
+Migration is safe to re-run: it uses `ON CONFLICT (agent_principal_id) DO
+NOTHING`. Verify:
+
+```sql
+SELECT state, COUNT(*) FROM agent_state_cell GROUP BY state;
+```
+
+Expected post-migration: every existing agent principal has a row in
+`Active`. After the migration, agent operations `pause`, `resume`, and
+`deactivate` (POST /agents/{id}/deactivate — the historical `/revoke`
+alias is gone) transition the FSM.

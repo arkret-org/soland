@@ -126,3 +126,193 @@ cargo run --bin soland-rotate-drill --release
 - `CHANGELOG.md` `[Unreleased]` for the most recent wire deltas.
 - `tests/conformance_gates.rs` — if a CI gate has started failing, this
   is the file that documents the contract.
+
+---
+
+## R3 operational additions
+
+The sections below cover the R3 sync (`contrix-spec @ b47ff6ec`). They are
+intentionally separable from the legacy runbook above so that you can
+on-call a fresh ops engineer who has not seen pre-R3 soland.
+
+### Agent FSM transitions (pause / resume / deactivate)
+
+soland is the canonical owner of the agent FSM. The state machine has three
+nodes:
+
+```text
+  +---------+    pause    +--------+   deactivate  +-------------+
+  | Active  | ----------> | Paused | ------------> | Deactivated |
+  +---------+             +--------+               +-------------+
+       ^                      |  ^                        ^
+       |     resume           |  |                        |
+       +----------------------+  +-- (reject if Deactivated)
+```
+
+Operationally:
+
+- **pause** (`POST /agents/{agent_principal_id}/pause`):
+  - Soft-stop. Outstanding actor-stream events drain through the reducer.
+    No new actor events accepted; the reducer surfaces `agent_paused` on
+    writes.
+  - Audit row goes to `projection_audit` with kind=`agent.pause`.
+  - **Operational triage**: if you see a spike in `agent_paused` rejects on a
+    realm, check whether an admin in `sodmin` flipped the agent runtime
+    profile; do not assume a misbehaving client.
+- **resume** (`POST /agents/{agent_principal_id}/resume`):
+  - Reverse of pause; rejected with `agent_deactivated` if the state is
+    Deactivated (terminal).
+- **deactivate** (`POST /agents/{agent_principal_id}/deactivate`):
+  - Terminal. The historical `/revoke` alias is gone; alerts that still fire
+    on `/revoke` paths are false positives — update the alert.
+  - Inert reads remain allowed (so that auditors can backfill the agent's
+    history). All writes return `agent_deactivated`.
+
+Common ops actions:
+
+| Symptom | Probable cause | Action |
+|---|---|---|
+| `agent_paused` storm on one realm | Admin policy change or pairing drift | Inspect last `cx.agent.pause` event for the principal; confirm with admin in sodmin |
+| `pairing_request_expired` | Pairing window elapsed; default 10 min | Re-issue `cx.account.agent_key_pair`; check NTP drift on client |
+| `proof_invalid` on pairing | Canonical-digest mismatch — usually a client serializer bug | Pull the raw payload from `agent_pairing_attempts` table and diff JCS bytes |
+| `verification_method_principal_mismatch` | DID resolved to a different principal than payload claims | Likely DID-doc misalignment in `coauth`; coordinate with that team |
+
+Recovery flow / migration story for an agent that drifts: see `coauth`
+runbook + `docs/admin-onboarding.md` in sodmin.
+
+### Recovery flow (policy + receipt issuance lifecycle)
+
+R3 surfaces recovery as a first-class wire flow. Lifecycle:
+
+```text
+[client]                  [soland]                              [witnesses]
+   | create policy           |                                       |
+   |------------------------>|  cx.recovery.policy.create             |
+   |                         |---------------------+                 |
+   |                         |  policy_id, version |                 |
+   |<------------------------|                     |                 |
+   |                         |                     |                 |
+   |  start recovery_session |                     |                 |
+   |------------------------>|  cx:recovery_session:<uuid>            |
+   |                         |                                       |
+   |                         |  collect proofs (per proof_kinds)     |
+   |                         |<--------------------------------------|
+   |                         |                                       |
+   |  complete session       |                                       |
+   |------------------------>|  cx.recovery.session.complete          |
+   |                         |   - emits RecoveryReceipt              |
+   |<------------------------|                                       |
+```
+
+Witness types (`RecoveryProofKind`):
+
+- `DeviceQuorum` — N-of-M device signatures.
+- `RecoveryUnlock` — recovery-unlock token; usually a long-lived sealed
+  envelope.
+- `TrustedRecoveryService` — third-party service signature; subject to
+  `recovery_witness_revoke_lagging` if the service's revocation feed is
+  stale relative to the freshness window.
+- `PrincipalSigning` — the principal itself signs (useful for portable
+  migrations where the principal is alive but the device set rotated).
+
+Operational behaviors:
+
+- **`RecoveryReceipt` is the only artifact downstream services trust.**
+  If a service is making decisions based on session-in-progress state, it
+  is doing the wrong thing — file a bug.
+- **Policy versioning is monotonic.** When you rotate a policy, the new
+  policy MUST carry `policy_version = prev + 1`. Concurrent policy writes
+  resolve via the canonical digest; the loser receives a structured reject
+  and re-tries. Operators usually see this only during disaster-recovery
+  drills.
+- **Freshness window for witness revocation** is configured per realm
+  (default 10 minutes). If a witness is revoked but the revocation hasn't
+  propagated, you get `recovery_witness_revoke_lagging`. Triage:
+  1. Confirm the witness revocation actually landed at the source-of-truth
+     (`coauth` for principal-bound witnesses).
+  2. Check `soland_witness_revoke_replication_lag_seconds`.
+  3. If above SLO, the right answer is to widen the window temporarily and
+     escalate to whoever owns the revocation replication, NOT to weaken the
+     proof check.
+
+### Media token issuer (rotating service_signature.kid, focus binding troubleshooting)
+
+soland is the canonical issuer of media tokens. The wire surface is
+`cx.call.media.token_exchange` (`POST /rtc/token`).
+
+`service_signature.kid` rotation:
+
+- KIDs follow `cx-media-issuer/{realm_id_short}/{yyyy}-{NN}` where NN is a
+  monotone counter per realm-year.
+- Active set is **previous + current + next** for at least one rotation
+  cycle; tokens with `expires_at` inside their own kid's validity window
+  are accepted.
+- Rotation cadence: default 30 days; operationally pin shorter if you have
+  evidence of issuer-key exposure.
+- Rotation procedure:
+  1. Generate the new kid offline; stage it in the kid-store with status
+     `staged` (not yet issuing).
+  2. Flip status to `current`; previous current becomes `previous`.
+  3. After max token TTL (10 min hard ceiling), revoke the old `previous`.
+  4. Drill: trigger `cargo run --bin soland-rotate-drill --release` against
+     the rtc-issuer subsystem (mirror of the anchorer drill).
+
+Focus-binding troubleshooting matrix:
+
+| Error | What to check |
+|---|---|
+| `focus_mismatch` | `cx.realm.media_service.foci[]` shape; the focus_id the client picked must be in the realm's current focus set. |
+| `unknown_focus_type` | A backend the realm advertises but the client doesn't profile — confirm `cx.profile.media_service_binding.<backend>.v1` is in the client's declared profile set. |
+| `token_issuer_unauthorised` | The `issuer_kid` decoded to an issuer not bound to this realm — usually a stale soland instance returning tokens for a realm it no longer hosts. |
+| `participant_binding_invalid` | Canonical bytes / signature mismatch. Capture the raw `participant_binding` and re-verify locally; suspect a serializer bug on the issuer. |
+| `participant_identity_unrecognised` | Identity string failed to parse — usually a client passing through a backend-native identity instead of the canonical `cx:participant:<realm>:<actor>:<device>:<call>`. |
+| `session_focus_already_committed` | Call is bound to a different focus already; the client must resume against that focus or end and re-initiate. |
+| `e2ee_key_source_unauthorised` | Backend tried to source SFrame keys outside MLS-Exporter — this is a hard reject. Escalate to yougen if it persists. |
+| `recording_artifact_pipeline_bypassed` | Recording landed outside the canonical pipeline. Check `floria` recording-export hooks. |
+| `legacy_single_endpoint_media_service` | Realm `cx.realm.media_service` still uses the v1.0 `sfu_endpoint` field. Run the migration (DEPLOYMENT.md §R3). |
+| `focus_unavailable_for_client` | Client profile set doesn't include the focus's backend profile. Negotiate down or update the client. |
+
+### Strict-reject profile toggle (`cx.profile.accountable_to.strict_reject.v1`)
+
+The strict-reject profile inverts the default leniency around the
+`accountable_to` chain: instead of softly tolerating unknown / stale
+accountability claims, the realm rejects them.
+
+When to enable:
+
+- Operator has declared a stricter accountability posture (regulated /
+  enterprise customers).
+- Auditor or compliance team is consuming the accountability stream and
+  silently-dropped claims would cause audit gaps.
+- You're investigating accountability drift and want hard rejects rather
+  than soft warnings to make the noise visible.
+
+Fallout:
+
+- Clients that were previously connecting with stale `accountable_to`
+  claims will start to see hard rejects with the error from
+  `accountable_to_*` family. You will see a temporary spike in 4xx;
+  alerting that watches 4xx ratios must be informed.
+- Federation peers that haven't yet upgraded their accountability shape
+  may have their federated events rejected. Coordinate the flip with
+  federation partners.
+- The toggle is realm-scoped, not globally global. Audit `cx.realm.*`
+  events to confirm rollout.
+
+Rollback: flip the profile back off; in-flight in-flight rejects will
+remain audited but no further reject decisions fire. Audit log entries
+under `projection_audit` kind=`profile.accountable_to.strict_reject.flip`
+record both directions.
+
+Pre-flip checklist:
+
+1. Snapshot 24h of `accountable_to` claim arrivals; categorize stale vs
+   fresh.
+2. Decide cutover instant; pre-notify federation peers.
+3. Enable the profile via the admin operation
+   (`cx.realm.profile.update`).
+4. Watch `soland_accountable_to_reject_total{profile="strict"}` for 30
+   minutes; alert if it exceeds the staleness baseline by >20%.
+5. If above threshold, rollback (toggle off), file a bug against the
+   noisiest peer, retry later.
+
