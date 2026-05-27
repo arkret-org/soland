@@ -111,6 +111,16 @@ async fn account_describe(depot: &mut Depot, res: &mut Response) {
     }));
 }
 
+/// Default long-poll window for incremental `account/subscribe` requests
+/// that find the delta empty after building the initial snapshot. Clients
+/// can override with `max_wait_ms=<N>`; `max_wait_ms=0` opts out and
+/// preserves the immediate-return behavior expected by older tests.
+const ACCOUNT_SUBSCRIBE_DEFAULT_WAIT_MS: u64 = 25_000;
+/// Hard ceiling on the long-poll window. Matches `events_subscribe`'s
+/// `max_duration_ms` cap so an idle stream cannot live forever and tie up
+/// connection slots.
+const ACCOUNT_SUBSCRIBE_MAX_WAIT_MS: u64 = 60_000;
+
 #[endpoint(
     operation_id = "cx.account.subscribe",
     tags("sync"),
@@ -118,13 +128,14 @@ async fn account_describe(depot: &mut Depot, res: &mut Response) {
 )]
 #[tracing::instrument(skip_all, fields(op = "cx.account.subscribe"))]
 async fn account_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Response) {
-    let state = depot.obtain::<AppState>().expect("state injected");
+    let state = depot.obtain::<AppState>().expect("state injected").clone();
     let body = account_subscribe_query(req);
-    let session = authenticated_session(state, req).ok();
+    let max_wait_ms = parse_max_wait_ms(req);
+    let session = authenticated_session(&state, req).ok();
     let after_cursor = if let Some(after) = body.after.as_deref() {
         match parse_and_validate_sync_cursor(
             after,
-            state,
+            &state,
             session.as_ref(),
             body.filter.as_ref(),
             chrono::Utc::now().timestamp_millis(),
@@ -186,9 +197,55 @@ async fn account_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Respo
             tracing::error!(%error, "failed to persist presence");
         }
     }
-    prune_expired_typing(state);
+    prune_expired_typing(&state);
 
-    let response = build_sync_snapshot(state, session.as_ref(), &body, &after_cursor);
+    // Subscribe to broadcast BEFORE building the initial snapshot so an
+    // event landing between snapshot-build and long-poll subscribe is not
+    // missed.
+    let mut rx = state.event_broadcast.subscribe();
+    let mut response = build_sync_snapshot(&state, session.as_ref(), &body, &after_cursor);
+
+    // Long-poll only when the client supplied an `after` cursor (true
+    // incremental sync) AND the snapshot is delta-empty. Full sync always
+    // returns immediately because the client needs the baseline. A
+    // `max_wait_ms=0` opt-out preserves the legacy immediate-return
+    // behavior for tests / clients that handle their own polling cadence.
+    if body.after.is_some() && max_wait_ms > 0 && delta_is_empty(&response) {
+        let deadline = tokio::time::Instant::now() + Duration::from_millis(max_wait_ms);
+        loop {
+            tokio::select! {
+                biased;
+                _ = tokio::time::sleep_until(deadline) => break,
+                recv = rx.recv() => {
+                    match recv {
+                        Ok(notification) => {
+                            // Filter on realms visible to the current session.
+                            // For non-event notifications (epoch/frontier/etc.)
+                            // we still rebuild so the client picks up control
+                            // state on its next delta if it surfaces there.
+                            if !realm_id_accessible(&state, &notification.space_id, session.as_ref()) {
+                                continue;
+                            }
+                            response = build_sync_snapshot(&state, session.as_ref(), &body, &after_cursor);
+                            if !delta_is_empty(&response) {
+                                break;
+                            }
+                        }
+                        Err(RecvError::Lagged(_)) => {
+                            // We lost some notifications; rebuild and let the
+                            // delta speak for itself.
+                            response = build_sync_snapshot(&state, session.as_ref(), &body, &after_cursor);
+                            if !delta_is_empty(&response) {
+                                break;
+                            }
+                        }
+                        Err(RecvError::Closed) => break,
+                    }
+                }
+            }
+        }
+    }
+
     let cursor = response.cursor.clone();
     let mut frames = vec![ndjson_line(&account_delta_frame(response))];
     if body.catchup.unwrap_or(false) {
@@ -205,6 +262,25 @@ async fn account_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Respo
     };
     let _ = res.add_header("content-type", "application/x-ndjson", true);
     res.stream(body_stream.boxed());
+}
+
+fn parse_max_wait_ms(req: &mut Request) -> u64 {
+    query_param(req, "max_wait_ms")
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(ACCOUNT_SUBSCRIBE_DEFAULT_WAIT_MS)
+        .min(ACCOUNT_SUBSCRIBE_MAX_WAIT_MS)
+}
+
+/// A snapshot is "delta-empty" when an incremental sync would carry no
+/// new realm state, no membership departure, no queued device messages,
+/// and no presence ticks. `account_data` is intentionally excluded — it
+/// is always emitted in full for authenticated sessions today, so it
+/// would defeat long-poll entirely.
+fn delta_is_empty(response: &contrix_sdk::model::SyncResBody) -> bool {
+    response.spaces.is_empty()
+        && response.left_spaces.is_empty()
+        && response.to_device.is_empty()
+        && response.presence.is_empty()
 }
 
 fn account_subscribe_query(req: &mut Request) -> ClientSyncRequest {
@@ -285,6 +361,10 @@ fn build_sync_snapshot(
     let projection = state.projection.lock().expect("projection lock");
     let mut sync_spaces = std::collections::BTreeMap::new();
     let mut positions = BTreeMap::new();
+    let is_incremental = body.after.is_some();
+    let cursor_issued_at = after_cursor
+        .issued_at_ms
+        .and_then(|ms| chrono::DateTime::<Utc>::from_timestamp_millis(ms));
     for (space_id, title, summary, tags, category, members) in visible_spaces {
         let flow = flow_projection_for_space(state, &space_id, &title, summary.as_deref());
         let flow_state_after = flow.clone();
@@ -299,6 +379,7 @@ fn build_sync_snapshot(
             .as_ref()
             .and_then(|record| record.encryption_profile.clone())
             .unwrap_or_else(|| "none".to_owned());
+        let known_to_cursor = after_cursor.positions.contains_key(&space_id);
         let after_position = after_cursor
             .positions
             .get(&space_id)
@@ -306,9 +387,34 @@ fn build_sync_snapshot(
             .unwrap_or_default();
         let (timeline_events, space_position) =
             timeline_events_for_space(state, &projection, &space_id, after_position, session);
+        positions.insert(space_id.clone(), space_position);
+        // Incremental sync skips realms whose timeline position is
+        // unchanged AND whose meta `updated_at` is at-or-before the
+        // cursor's `issued_at`. This drops the always-full
+        // `summary`/`flows`/`state_after`/`members` baseline from idle
+        // polls — the realm stays in the client's local projection.
+        //
+        // Caveats: membership changes that don't bump `realm_meta.updated_at`
+        // (e.g. raw `cx.realm.member.update` events) will not propagate
+        // through an incremental sync until either (a) a new timeline
+        // event arrives, or (b) the client issues a full sync (no
+        // `after`). This is a known limitation — see follow-up TODO to
+        // add per-realm activity tracking off `event_broadcast`.
+        if is_incremental
+            && known_to_cursor
+            && timeline_events.is_empty()
+            && space_position == after_position
+        {
+            let meta_changed = meta
+                .as_ref()
+                .zip(cursor_issued_at.as_ref())
+                .is_some_and(|(record, issued_at)| record.updated_at > *issued_at);
+            if !meta_changed {
+                continue;
+            }
+        }
         let bottom_cells = bottom_cells_for_space(&projection, &space_id);
         let anchor_view = anchor_view_for_space(&bottom_cells);
-        positions.insert(space_id.clone(), space_position);
         sync_spaces.insert(
             space_id.clone(),
             json!({
@@ -797,6 +903,11 @@ fn sync_timeline_message_record_json_with_projection(
 pub struct SyncCursor {
     pub positions: BTreeMap<String, i64>,
     pub to_device_position: i64,
+    /// `ctx.issued_at_ms` from the stateful handle. Used by
+    /// `build_sync_snapshot` to skip unchanged realms on incremental sync —
+    /// any realm whose meta `updated_at` is at or before this point AND
+    /// whose timeline position is unchanged is "delta-empty" and omitted.
+    pub issued_at_ms: Option<i64>,
 }
 
 #[derive(Debug)]
@@ -1038,9 +1149,13 @@ pub fn parse_and_validate_sync_cursor(
         .get("to_device")
         .and_then(|position| position.as_i64())
         .unwrap_or_default();
+    let issued_at_ms = ctx
+        .get("issued_at_ms")
+        .and_then(|value| value.as_i64());
     Ok(SyncCursor {
         positions,
         to_device_position,
+        issued_at_ms,
     })
 }
 

@@ -15,7 +15,8 @@ use soland::config::{AppConfig, ObjectStorageConfig};
 use soland::db::Db;
 use soland::ratelimit::RateLimiterConfig;
 use soland::state::{
-    AppState, PresenceRecord, RealmDirectoryEntry, RealmMetaRecord, SpaceInviteRecord,
+    AppState, EventNotification, MessageRecord, PresenceRecord, RealmDirectoryEntry,
+    RealmMetaRecord, SpaceInviteRecord,
 };
 use soland::{
     artifacts, kinds, service, service_with_rate_limiter_config, service_with_request_size_limit,
@@ -3390,20 +3391,23 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         "cx.schema.flow.v1"
     );
 
+    // After the realms-incremental optimisation a fully-quiet realm
+    // is omitted from incremental delta frames. The client keeps its
+    // cached projection; only realms that genuinely changed appear.
+    // `max_wait_ms=0` opts out of long-poll so the test returns
+    // immediately instead of holding for the default window.
     let incremental_noop = account_subscribe_frame(
         state.clone(),
         Some(&alice),
         &format!(
-            "catchup=true&after={}",
+            "catchup=true&max_wait_ms=0&after={}",
             sync_with_message["cursor"].as_str().unwrap()
         ),
     )
     .await;
     assert!(
-        incremental_noop["realms"][&space_id]["timeline"]["events"]
-            .as_array()
-            .unwrap()
-            .is_empty()
+        incremental_noop["realms"][&space_id].is_null(),
+        "unchanged realm should be absent from incremental noop delta: {incremental_noop}"
     );
 
     tokio::time::sleep(Duration::from_millis(2)).await;
@@ -3421,7 +3425,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         state.clone(),
         Some(&alice),
         &format!(
-            "catchup=true&after={}",
+            "catchup=true&max_wait_ms=0&after={}",
             sync_with_message["cursor"].as_str().unwrap()
         ),
     )
@@ -6374,7 +6378,10 @@ async fn to_device_messages_survive_duplicate_sync_until_cursor_ack() {
     let acked = account_subscribe_frame(
         state,
         Some(&token),
-        &format!("catchup=true&after={}", first["cursor"].as_str().unwrap()),
+        &format!(
+            "catchup=true&max_wait_ms=0&after={}",
+            first["cursor"].as_str().unwrap()
+        ),
     )
     .await;
     assert!(
@@ -9681,4 +9688,181 @@ async fn projection_persistence_write_through_mirrors_lifecycle_events() {
         .expect("morph projection MUST be mirrored to persistence");
     assert_eq!(morph_row.state, "archived");
     assert_eq!(morph_row.morph_type, "task");
+}
+
+// ── account_subscribe long-poll + realms-incremental coverage ─────────────
+//
+// These tests pin the two behaviors that landed alongside the
+// `realms`-baseline cleanup: idle incremental syncs hold instead of
+// returning immediately, and quiet realms drop out of the delta until
+// they have new state.
+
+fn persist_test_message(
+    state: &AppState,
+    space_id: &str,
+    sender: &str,
+    body: &str,
+) -> MessageRecord {
+    let event_id = new_prefixed_uuid7("cx:event:");
+    let record = MessageRecord {
+        event_id: event_id.clone(),
+        space_id: space_id.to_owned(),
+        sender: sender.to_owned(),
+        thread_id: format!("cx:flow:test-{}", event_id),
+        content: serde_json::json!({"body": body}),
+        encrypted: false,
+        created_at: chrono::Utc::now(),
+    };
+    state.persistence.messages().put(&record).unwrap();
+    record
+}
+
+#[tokio::test]
+async fn incremental_sync_omits_quiet_realm_from_delta() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let alice = dev_token(state.clone()).await;
+
+    let baseline = account_subscribe_frame(state.clone(), Some(&alice), "catchup=true").await;
+    let cursor = baseline["cursor"].as_str().unwrap();
+    assert!(
+        baseline["realms"][DEMO_REALM_ID].is_object(),
+        "full sync MUST include the realm baseline: {baseline}"
+    );
+
+    let quiet = account_subscribe_frame(
+        state.clone(),
+        Some(&alice),
+        &format!("catchup=true&max_wait_ms=0&after={cursor}"),
+    )
+    .await;
+    assert!(
+        quiet["realms"][DEMO_REALM_ID].is_null(),
+        "incremental noop MUST drop the realm baseline: {quiet}"
+    );
+    assert!(
+        quiet["realms"].as_object().is_some_and(|map| map.is_empty()),
+        "no other realm should appear in a quiet delta: {quiet}"
+    );
+}
+
+#[tokio::test]
+async fn incremental_sync_emits_realm_with_new_timeline_event() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let alice = dev_token(state.clone()).await;
+
+    let baseline = account_subscribe_frame(state.clone(), Some(&alice), "catchup=true").await;
+    let cursor = baseline["cursor"].as_str().unwrap().to_owned();
+
+    let message = persist_test_message(
+        &state,
+        DEMO_REALM_ID,
+        "did:web:alice.example",
+        "incremental wake-up",
+    );
+
+    let delta = account_subscribe_frame(
+        state.clone(),
+        Some(&alice),
+        &format!("catchup=true&max_wait_ms=0&after={cursor}"),
+    )
+    .await;
+    let timeline = delta["realms"][DEMO_REALM_ID]["timeline"]["events"]
+        .as_array()
+        .unwrap_or_else(|| panic!("realm should reappear with timeline events: {delta}"));
+    assert!(
+        timeline
+            .iter()
+            .any(|event| event["event_id"] == message.event_id),
+        "delta MUST include the freshly persisted message: {delta}"
+    );
+}
+
+#[tokio::test]
+async fn account_subscribe_long_poll_returns_empty_on_timeout() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let alice = dev_token(state.clone()).await;
+
+    let baseline = account_subscribe_frame(state.clone(), Some(&alice), "catchup=true").await;
+    let cursor = baseline["cursor"].as_str().unwrap().to_owned();
+
+    let start = tokio::time::Instant::now();
+    let timed_out = account_subscribe_frame(
+        state.clone(),
+        Some(&alice),
+        &format!("catchup=true&max_wait_ms=400&after={cursor}"),
+    )
+    .await;
+    let elapsed = start.elapsed();
+
+    assert!(
+        timed_out["realms"].as_object().is_some_and(|map| map.is_empty()),
+        "timed-out long-poll MUST return an empty realms delta: {timed_out}"
+    );
+    assert!(
+        timed_out["cursor"].as_str().is_some_and(|c| c != cursor),
+        "timed-out long-poll MUST mint a fresh cursor: {timed_out}"
+    );
+    assert!(
+        elapsed >= Duration::from_millis(300),
+        "long-poll should hold at least to ~max_wait_ms: {elapsed:?}"
+    );
+    assert!(
+        elapsed < Duration::from_secs(5),
+        "long-poll should not exceed its window by much: {elapsed:?}"
+    );
+}
+
+#[tokio::test]
+async fn account_subscribe_long_poll_wakes_on_broadcast() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let alice = dev_token(state.clone()).await;
+
+    let baseline = account_subscribe_frame(state.clone(), Some(&alice), "catchup=true").await;
+    let cursor = baseline["cursor"].as_str().unwrap().to_owned();
+
+    let waker_state = state.clone();
+    let waker = tokio::spawn(async move {
+        // Give the long-poll a beat to subscribe before we fire.
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        let message = persist_test_message(
+            &waker_state,
+            DEMO_REALM_ID,
+            "did:web:alice.example",
+            "wake up the poll",
+        );
+        let _ = waker_state.event_broadcast.send(EventNotification::event(
+            DEMO_REALM_ID.to_owned(),
+            message.event_id.clone(),
+            serde_json::json!({
+                "kind": "cx.message.create",
+                "event_id": message.event_id,
+                "space_id": DEMO_REALM_ID,
+            }),
+        ));
+        message
+    });
+
+    let start = tokio::time::Instant::now();
+    let woken = account_subscribe_frame(
+        state.clone(),
+        Some(&alice),
+        &format!("catchup=true&max_wait_ms=5000&after={cursor}"),
+    )
+    .await;
+    let elapsed = start.elapsed();
+    let message = waker.await.unwrap();
+
+    assert!(
+        elapsed < Duration::from_secs(3),
+        "broadcast should wake long-poll well before the deadline: {elapsed:?}"
+    );
+    let timeline = woken["realms"][DEMO_REALM_ID]["timeline"]["events"]
+        .as_array()
+        .unwrap_or_else(|| panic!("woken delta MUST include the realm: {woken}"));
+    assert!(
+        timeline
+            .iter()
+            .any(|event| event["event_id"] == message.event_id),
+        "woken delta MUST include the wake-up event: {woken}"
+    );
 }
