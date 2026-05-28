@@ -178,7 +178,7 @@ async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Response) 
     }
     match batch_envelopes_from_submit_body(&envelope) {
         Ok(Some(envelopes)) => {
-            submit_event_batch(state, &session, envelopes, res);
+            submit_event_batch(state, &session, envelopes, res).await;
             return;
         }
         Ok(None) => {}
@@ -1052,7 +1052,8 @@ async fn submit_federation_events(
             "rejected_count": rejected.len()
         }),
         status,
-    );
+    )
+    .await;
     res.render(Json(json!({
         "status": status,
         "accepted": accepted,
@@ -1112,7 +1113,8 @@ async fn submit_event_value(
                 "canonical_digest": parsed.canonical_digest
             }),
             "duplicate_conflict",
-        );
+        )
+        .await;
         return Err(SubmitOneError::new(
             StatusCode::CONFLICT,
             "duplicate_conflict",
@@ -1274,7 +1276,7 @@ async fn submit_event_value(
         ));
     }
     if let Some(operation) = projection_operation {
-        project_accepted_operations(state, &parsed.actor_id, &[operation]);
+        project_accepted_operations(state, &parsed.actor_id, &[operation]).await;
     }
     if let Some(payload) = flow_status_audit_payload {
         append_audit_log(
@@ -1283,20 +1285,21 @@ async fn submit_event_value(
             "incident.status.transition",
             payload,
             "accepted",
-        );
+        )
+        .await;
     }
     if parsed.kind == "cx.realm.create"
         && let Some(space_id_str) = parsed.space_id.as_deref()
         && let Some(envelope_object) = envelope_for_bootstrap.as_object()
     {
-        bootstrap_realm_member_index(state, space_id_str, &parsed.actor_id, envelope_object);
+        bootstrap_realm_member_index(state, space_id_str, &parsed.actor_id, envelope_object).await;
         organizations::record_realm_organizations_from_event(
             state,
             space_id_str,
             &envelope_for_bootstrap,
         );
     }
-    append_encrypted_message_franking(state, &parsed, &envelope_for_bootstrap);
+    append_encrypted_message_franking(state, &parsed, &envelope_for_bootstrap).await;
     append_audit_log(
         state,
         Some(&session.actor),
@@ -1309,7 +1312,8 @@ async fn submit_event_value(
             "canonical_digest": parsed.canonical_digest.clone()
         }),
         "accepted",
-    );
+    )
+    .await;
     Ok(event_submit_response(
         state,
         "accepted",
@@ -1939,7 +1943,8 @@ async fn append_encrypted_message_franking(
         CX_MODERATION_FRANKING_PROOF,
         proof,
         "accepted",
-    );
+    )
+    .await;
 }
 
 fn encrypted_message_ciphertext_digest(envelope: &Value) -> Option<String> {

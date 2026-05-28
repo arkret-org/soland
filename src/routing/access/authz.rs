@@ -322,7 +322,8 @@ async fn create_grant(
             "delegated_from": grant.delegated_from.clone(),
         }),
         "accepted",
-    );
+    )
+    .await;
     json_ok(CreateGrantResponse {
         grant_id: grant.grant_id,
         subject: grant.subject,
@@ -473,7 +474,8 @@ async fn revoke_grant(
                 "cascade_revoked": cascade_revoked.clone(),
             }),
             "accepted",
-        );
+        )
+        .await;
         json_ok(RevokeGrantResponse {
             revoked: true,
             grant_id,

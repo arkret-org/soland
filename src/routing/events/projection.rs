@@ -978,22 +978,22 @@ pub async fn ingest_federation_operations(
             }));
             continue;
         }
-        project_federation_operation(state, origin, &operation);
+        project_federation_operation(state, origin, &operation).await;
         accepted.push(operation_id);
     }
     FederationIngestResult { accepted, rejected }
 }
 
-pub fn project_federation_operation(state: &AppState, origin: &str, operation: &Operation) {
-    ensure_projected_space(state, origin, operation);
+pub async fn project_federation_operation(state: &AppState, origin: &str, operation: &Operation) {
+    ensure_projected_space(state, origin, operation).await;
     if kinds::operation_is_message_create(operation) {
-        project_federated_message(state, origin, operation);
+        project_federated_message(state, origin, operation).await;
     } else if kinds::operation_is_invite_create(operation) {
-        project_invite_create_operation(state, origin, operation);
+        project_invite_create_operation(state, origin, operation).await;
     } else if kinds::operation_is_membership(operation)
         || kinds::operation_is_realm_lifecycle(operation)
     {
-        project_membership_operation(state, origin, operation);
+        project_membership_operation(state, origin, operation).await;
     }
     // Also apply to the deterministic reducer.
     let reducer_effect = state
@@ -1002,12 +1002,13 @@ pub fn project_federation_operation(state: &AppState, origin: &str, operation: &
         .ok()
         .map(|mut proj| apply_via_lattice_registry(state, &mut proj, operation));
     if let Some(effect) = reducer_effect {
-        mirror_mls_effect_to_persistence(state, operation, &effect);
+        mirror_mls_effect_to_persistence(state, operation, &effect).await;
     }
     append_projection_event(
         state,
         projection_event_from_operation(operation, Some(origin)),
-    );
+    )
+    .await;
 }
 
 pub async fn accept_local_operations(
@@ -1411,17 +1412,17 @@ pub async fn project_accepted_operations(state: &AppState, origin: &str, operati
             origin = %origin,
             "project_accepted_operations"
         );
-        ensure_projected_space(state, origin, operation);
+        ensure_projected_space(state, origin, operation).await;
         if kinds::operation_is_message_create(operation) {
-            project_federated_message(state, origin, operation);
+            project_federated_message(state, origin, operation).await;
         } else if kinds::operation_is_invite_create(operation) {
-            project_invite_create_operation(state, origin, operation);
+            project_invite_create_operation(state, origin, operation).await;
         } else if kinds::canonical_kind_string(operation) == "cx.realm.plaintext_visible_services" {
-            project_plaintext_visible_services_operation(state, operation);
+            project_plaintext_visible_services_operation(state, operation).await;
         } else if kinds::operation_is_membership(operation)
             || kinds::operation_is_realm_lifecycle(operation)
         {
-            project_membership_operation(state, origin, operation);
+            project_membership_operation(state, origin, operation).await;
         }
         // MID-3 (R3.1, contrix-spec @ 7157ee8) — persist accepted
         // `cx.member.identity.update` events into the in-memory registry.
@@ -1446,7 +1447,7 @@ pub async fn project_accepted_operations(state: &AppState, origin: &str, operati
             .ok()
             .map(|mut proj| apply_via_lattice_registry(state, &mut proj, operation));
         if let Some(effect) = reducer_effect {
-            mirror_mls_effect_to_persistence(state, operation, &effect);
+            mirror_mls_effect_to_persistence(state, operation, &effect).await;
         }
         // Stream-F (Wave 2C) — `cx.audit.erasure_receipt` federation
         // fanout. The reducer has already pushed the receipt into the
@@ -1463,7 +1464,8 @@ pub async fn project_accepted_operations(state: &AppState, origin: &str, operati
         {
             crate::routing::federation::erasure_fanout::fanout_erasure_receipt_operation(
                 state, operation,
-            );
+            )
+            .await;
         }
         // Write through Space-container/Flow/Morph projection changes to durable
         // persistence. Captures the in-memory projection snapshot
@@ -1471,7 +1473,7 @@ pub async fn project_accepted_operations(state: &AppState, origin: &str, operati
         // lock so any backend latency doesn't block other reducer paths.
         // Mirrors the canonical wire kinds the reducer dispatches into
         // `ProjectionState::{space_containers,flows,morphs}`.
-        write_through_projection(state, operation);
+        write_through_projection(state, operation).await;
         let projected = projection_event_from_operation(operation, Some(origin));
         // Broadcast every accepted projection
         // event to live subscribers on cx.events.subscribe. Subscribers
@@ -1485,7 +1487,7 @@ pub async fn project_accepted_operations(state: &AppState, origin: &str, operati
                 projected.event_id.clone(),
                 projection_event_json(&projected),
             ));
-        append_projection_event(state, projected);
+        append_projection_event(state, projected).await;
         if let Err(error) = persist_projected_operation(state, origin, operation).await {
             tracing::warn!(
                 error = %error,
@@ -1718,30 +1720,31 @@ pub async fn ensure_projected_space(state: &AppState, origin: &str, operation: &
     let Ok(space_id) = RealmId::new(operation.realm_id.to_string()) else {
         return;
     };
-    let mut spaces = state.realms.lock().expect("spaces lock");
-    if spaces.get(&space_id).is_none() {
-        let title = operation_realm_title(operation).unwrap_or_else(|| space_id.as_str());
-        let mut entry = RealmDirectoryEntry::new(space_id.clone(), title);
-        entry.description = operation_realm_summary(operation).map(ToOwned::to_owned);
-        let discoverability = operation_realm_discoverability(operation).unwrap_or_else(|| {
-            if operation
-                .payload
-                .get("public")
-                .and_then(|value| value.as_bool())
-                .unwrap_or(false)
-            {
-                "public"
-            } else {
-                "invite_only"
+    {
+        let mut spaces = state.realms.lock().expect("spaces lock");
+        if spaces.get(&space_id).is_none() {
+            let title = operation_realm_title(operation).unwrap_or_else(|| space_id.as_str());
+            let mut entry = RealmDirectoryEntry::new(space_id.clone(), title);
+            entry.description = operation_realm_summary(operation).map(ToOwned::to_owned);
+            let discoverability = operation_realm_discoverability(operation).unwrap_or_else(|| {
+                if operation
+                    .payload
+                    .get("public")
+                    .and_then(|value| value.as_bool())
+                    .unwrap_or(false)
+                {
+                    "public"
+                } else {
+                    "invite_only"
+                }
+            });
+            entry.public = discoverability == "public";
+            if let Ok(origin) = Did::new(origin.to_owned()) {
+                entry.members.insert(origin);
             }
-        });
-        entry.public = discoverability == "public";
-        if let Ok(origin) = Did::new(origin.to_owned()) {
-            entry.members.insert(origin);
+            spaces.upsert(entry);
         }
-        spaces.upsert(entry);
     }
-    drop(spaces);
     project_retention_policy_from_operation(state, origin, operation);
 
     let now = now();
@@ -1837,7 +1840,7 @@ pub async fn ensure_projected_space(state: &AppState, origin: &str, operation: &
         }
         Err(error) => tracing::warn!(%error, "failed to read projected space meta"),
     }
-    project_membership_operation(state, origin, operation);
+    project_membership_operation(state, origin, operation).await;
 }
 
 pub async fn project_membership_operation(state: &AppState, origin: &str, operation: &Operation) {
@@ -1927,31 +1930,32 @@ pub async fn project_membership_operation(state: &AppState, origin: &str, operat
         }
     }
     if membership == Some("join") {
-        project_invite_acceptance(state, member, operation);
+        project_invite_acceptance(state, member, operation).await;
     }
 
-    let mut spaces = state.realms.lock().expect("spaces lock");
-    let Some(mut entry) = spaces.get(&realm_id).cloned() else {
-        return;
-    };
-    if let Ok(member) = Did::new(member) {
-        if matches!(membership, Some("leave" | "ban")) {
-            entry.members.remove(&member);
-        } else if matches!(membership, Some("join" | "invite" | "knock")) {
-            entry.members.insert(member);
-            // HDLREN-3/4 (contrix-spec @ 7157ee8) — `handle` is no longer
-            // a roster field. The spec §8.1 MUST NOT put it on the per-Realm
-            // roster; clients resolve identity by following the
-            // `cx.member.identity.update` events surfaced via
-            // `MemberRosterEntry.identity_event_ids[]`. The earlier
-            // `member_handle_uris` cache populated from
-            // `payload.handle_uri` is gone with this rename.
-            let _ = operation; // intentionally unused: payload no longer feeds roster identity
+    {
+        let mut spaces = state.realms.lock().expect("spaces lock");
+        let Some(mut entry) = spaces.get(&realm_id).cloned() else {
+            return;
+        };
+        if let Ok(member) = Did::new(member) {
+            if matches!(membership, Some("leave" | "ban")) {
+                entry.members.remove(&member);
+            } else if matches!(membership, Some("join" | "invite" | "knock")) {
+                entry.members.insert(member);
+                // HDLREN-3/4 (contrix-spec @ 7157ee8) — `handle` is no longer
+                // a roster field. The spec §8.1 MUST NOT put it on the per-Realm
+                // roster; clients resolve identity by following the
+                // `cx.member.identity.update` events surfaced via
+                // `MemberRosterEntry.identity_event_ids[]`. The earlier
+                // `member_handle_uris` cache populated from
+                // `payload.handle_uri` is gone with this rename.
+                let _ = operation; // intentionally unused: payload no longer feeds roster identity
+            }
         }
+        spaces.upsert(entry);
     }
-    spaces.upsert(entry);
-    drop(spaces);
-    touch_realm(state, operation.realm_id.as_str());
+    touch_realm(state, operation.realm_id.as_str()).await;
 }
 
 /// MID-2..6 (R3.1, contrix-spec @ 7157ee8) — projection write for

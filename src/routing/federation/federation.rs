@@ -3115,7 +3115,8 @@ mod tests {
             &state,
             "did:web:alice.example",
             &[invite.clone(), invite_create.clone(), message.clone()],
-        );
+        )
+        .await;
 
         let outbox = state
             .persistence
@@ -3173,7 +3174,8 @@ mod tests {
             &state,
             "did:web:alice.example",
             &[invite, invite_create, message],
-        );
+        )
+        .await;
         assert_eq!(
             state
                 .persistence
