@@ -690,7 +690,7 @@ async fn events_frontier(
                 );
                 obj.insert("retry_after_ms".to_owned(), Value::from(60_000));
                 obj.insert(
-                    "cache_until".to_owned(),
+                    "cache_expires_at".to_owned(),
                     Value::String((generated_at + Duration::seconds(60)).to_rfc3339()),
                 );
             }

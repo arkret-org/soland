@@ -1313,7 +1313,7 @@ fn cors_handler_for_origin_spec(raw: &str) -> CorsHandler {
             "idempotency-key",
             "x-contrix-request-id",
             "x-contrix-wait-for",
-            "x-contrix-sha256",
+            "x-contrix-content-digest",
             "range",
         ]);
 

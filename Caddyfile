@@ -4,7 +4,7 @@
 		Access-Control-Allow-Origin "{http.request.header.Origin}"
 		Access-Control-Allow-Credentials "true"
 		Access-Control-Allow-Methods "GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS"
-		Access-Control-Allow-Headers "authorization, content-type, idempotency-key, x-contrix-request-id, x-contrix-wait-for, x-contrix-sha256, range"
+		Access-Control-Allow-Headers "authorization, content-type, idempotency-key, x-contrix-request-id, x-contrix-wait-for, x-contrix-content-digest, range"
 		Access-Control-Expose-Headers "retry-after, x-contrix-wait-for-satisfied, content-range, accept-ranges"
 		Vary "Origin"
 		defer
@@ -21,7 +21,7 @@
 			Access-Control-Allow-Origin "{http.request.header.Origin}"
 			Access-Control-Allow-Credentials "true"
 			Access-Control-Allow-Methods "GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS"
-			Access-Control-Allow-Headers "authorization, content-type, idempotency-key, x-contrix-request-id, x-contrix-wait-for, x-contrix-sha256, range"
+			Access-Control-Allow-Headers "authorization, content-type, idempotency-key, x-contrix-request-id, x-contrix-wait-for, x-contrix-content-digest, range"
 			Access-Control-Expose-Headers "retry-after, x-contrix-wait-for-satisfied, content-range, accept-ranges"
 			Vary "Origin"
 		}

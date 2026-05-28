@@ -16,7 +16,7 @@
 //! - `GET  /api/v1/sync/snapshot-chunk`
 //!
 //! `SyncCursor`, `SyncCursorError`, `parse_and_validate_sync_cursor`,
-//! `decode_sync_cursor_value`, `sync_token_for_client_sync`, `sync_filter_hash`,
+//! `decode_sync_cursor_value`, `sync_token_for_client_sync`, `sync_filter_digest`,
 //! are `pub` because sibling routing modules reuse them. They
 //! live here because the cursor lifecycle is anchored to account subscribe.
 
@@ -1164,7 +1164,7 @@ pub fn sync_token_for_client_sync(
         .map(|session| session.device_id.clone())
         .unwrap_or_else(|| "anonymous".to_owned());
     let device_positions = BTreeMap::from([(device_id.clone(), issued_at.timestamp_micros())]);
-    let filter_hash = sync_filter_hash(filter);
+    let filter_digest = sync_filter_digest(filter);
     let issued_at_ms = issued_at.timestamp_millis();
     let expires_at_ms = expires_at.timestamp_millis();
     let positions = json!({
@@ -1176,7 +1176,7 @@ pub fn sync_token_for_client_sync(
         "principal_id": principal_id,
         "device_id": device_id,
         "service_id": state.config.service_did.clone(),
-        "filter_hash": filter_hash,
+        "filter_digest": filter_digest,
         "issued_at_ms": issued_at_ms
     });
     let handle = store_sync_cursor_handle(
@@ -1395,14 +1395,14 @@ pub fn parse_and_validate_sync_cursor(
             "cursor service does not match this service DID",
         ));
     }
-    let expected_filter_hash = sync_filter_hash(filter);
+    let expected_filter_digest = sync_filter_digest(filter);
     if ctx
-        .get("filter_hash")
-        .and_then(|filter_hash| filter_hash.as_str())
-        .is_none_or(|filter_hash| filter_hash != expected_filter_hash)
+        .get("filter_digest")
+        .and_then(|filter_digest| filter_digest.as_str())
+        .is_none_or(|filter_digest| filter_digest != expected_filter_digest)
     {
         return Err(SyncCursorError::Mismatch(
-            "cursor filter hash does not match request filter",
+            "cursor filter digest does not match request filter",
         ));
     }
     let positions_value = stored.get("positions").ok_or(SyncCursorError::Integrity(
@@ -1524,7 +1524,7 @@ pub async fn resolve_sync_cursor_to_event_id(
     Ok(newest_event_id.map(|(_, event_id)| event_id))
 }
 
-pub fn sync_filter_hash(filter: Option<&serde_json::Value>) -> String {
+pub fn sync_filter_digest(filter: Option<&serde_json::Value>) -> String {
     let empty_filter = json!({});
     let binding = json!({
         "filter": filter.unwrap_or(&empty_filter),

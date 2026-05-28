@@ -477,7 +477,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
     let bad_blob = TestClient::post("http://server/api/v1/blob/upload")
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header(
-            "x-contrix-sha256",
+            "x-contrix-content-digest",
             "sha256:deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
             true,
         )
@@ -522,7 +522,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(large_blob["size"], large_plaintext.len());
+    assert_eq!(large_blob["size_bytes"], large_plaintext.len());
     assert_eq!(large_blob["media_type"], "image/jpeg");
 
     let locked_space = seed_test_realm(
@@ -558,7 +558,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
             locked_space["space_id"].as_str().unwrap(),
             true,
         )
-        .add_header("x-contrix-sha256", ciphertext_digest.clone(), true)
+        .add_header("x-contrix-content-digest", ciphertext_digest.clone(), true)
         .add_header(
             "x-contrix-attachment-envelope",
             serde_json::json!({
@@ -576,7 +576,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(blob["size"], 15);
+    assert_eq!(blob["size_bytes"], 15);
     assert_eq!(blob["media_type"], "application/octet-stream");
     assert!(blob["upload_receipt"].get("filename").is_none());
     let upload_receipt = blob["upload_receipt"].to_string();
@@ -595,7 +595,11 @@ async fn auth_keys_device_messages_and_blobs_work() {
     let ObjectStorageConfig::Local { root, .. } = test_config().object_storage else {
         panic!("test config uses local object storage");
     };
-    let blob_path = root.join("sha256").join(blob["sha256"].as_str().unwrap());
+    let blob_digest = blob["content_digest"]
+        .as_str()
+        .unwrap()
+        .trim_start_matches("sha256:");
+    let blob_path = root.join("sha256").join(blob_digest);
     assert_eq!(std::fs::read(blob_path).unwrap(), encrypted_bytes);
 
     let anonymous_blob = TestClient::get(format!(

@@ -170,13 +170,14 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         return;
     }
     let sha256 = sha256_hex(&bytes);
-    match expected_blob_sha256(req) {
+    let content_digest = format!("sha256:{sha256}");
+    match expected_blob_content_digest(req) {
         Ok(Some(expected_sha256)) if expected_sha256 != sha256 => {
             render_error(
                 res,
                 StatusCode::CONFLICT,
                 "digest_mismatch",
-                "provided sha256 does not match blob content",
+                "provided content_digest does not match blob content",
             );
             return;
         }
@@ -187,11 +188,10 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         }
     }
     if let Some(encryption) = encryption.as_ref() {
-        let expected = format!("sha256:{sha256}");
         if encryption
             .get("ciphertext_digest")
             .and_then(Value::as_str)
-            .is_some_and(|digest| digest != expected)
+            .is_some_and(|digest| digest != content_digest)
         {
             render_error(
                 res,
@@ -244,15 +244,16 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         "encrypted_attachment": encryption,
         "encrypted": encrypted,
         "space_id": space_id,
+        "content_digest": content_digest.clone(),
     });
     if !encrypted && let Some(filename) = filename {
         upload_receipt["filename"] = json!(filename);
     }
     res.render(Json(crate::wire::BlobUploadResBody {
         blob_ref,
-        size,
+        size_bytes: size,
         media_type,
-        sha256,
+        content_digest,
         upload_receipt,
     }));
 }
@@ -595,15 +596,15 @@ fn query_escape(value: &str) -> String {
         .replace('=', "%3D")
 }
 
-fn expected_blob_sha256(req: &Request) -> Result<Option<String>, &'static str> {
+fn expected_blob_content_digest(req: &Request) -> Result<Option<String>, &'static str> {
     if let Some(value) = req
         .headers()
-        .get("x-contrix-sha256")
+        .get("x-contrix-content-digest")
         .and_then(|value| value.to_str().ok())
     {
         let digest = value.trim();
         if !is_valid_sha256_digest(digest) {
-            return Err("x-contrix-sha256 must be sha256:<64 lowercase hex>");
+            return Err("x-contrix-content-digest must be sha256:<64 lowercase hex>");
         }
         return Ok(Some(digest.trim_start_matches("sha256:").to_owned()));
     }

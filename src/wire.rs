@@ -1660,9 +1660,9 @@ pub struct WebrtcSignalsResponse {
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct BlobUploadResBody {
     pub blob_ref: String,
-    pub size: usize,
+    pub size_bytes: usize,
     pub media_type: String,
-    pub sha256: String,
+    pub content_digest: String,
     pub upload_receipt: Value,
 }
 
@@ -1886,6 +1886,7 @@ pub fn describe(
         compat_surfaces,
         development_mode,
         rate_limit: serde_json::json!({"kind": "windowed", "per_minute": 600}),
+        egress_network_policy: Some(contrix_sdk::EgressNetworkPolicy::deny_private_defaults()),
         supported_features: vec![
             "account.register".to_owned(),
             "account.me".to_owned(),
