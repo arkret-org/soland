@@ -111,6 +111,7 @@ async fn create_plaintext_space(state: AppState, _token: &str, title: &str) -> S
                 updated_at: now,
             },
         )
+        .await
         .unwrap();
     realm_id
 }
@@ -242,8 +243,12 @@ async fn blocklist_account_data_fans_out_and_filters_notifications() {
     let blocklist = json!({
         "version": 1,
         "entries": [{
-            "target": "did:web:bob.example",
-            "kind": "block",
+            "target": {
+                "kind": "actor",
+                "did": "did:web:bob.example"
+            },
+            "mode": "block",
+            "applies_to": ["messages", "mentions", "notifications"],
             "created_at": "2026-05-21T00:00:00Z"
         }]
     });
@@ -283,7 +288,7 @@ async fn blocklist_account_data_fans_out_and_filters_notifications() {
         "cx.account.blocklist.v1"
     );
     assert_eq!(
-        blocklist_event["content"]["content"]["content"]["entries"][0]["target"],
+        blocklist_event["content"]["content"]["content"]["entries"][0]["target"]["did"],
         "did:web:bob.example"
     );
 

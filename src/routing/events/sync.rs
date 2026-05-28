@@ -998,7 +998,8 @@ fn blocklist_entry_blocks_sender(entry: &Value, sender: &str) -> bool {
         Value::String(_) => blocklist_value_is_sender(entry, sender),
         Value::Object(object) => {
             let mode = object
-                .get("kind")
+                .get("mode")
+                .or_else(|| object.get("kind"))
                 .or_else(|| object.get("action"))
                 .or_else(|| object.get("status"))
                 .and_then(Value::as_str)

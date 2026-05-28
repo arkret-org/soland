@@ -621,7 +621,8 @@ fn blocklist_hint_target(entry: &Value) -> Option<&str> {
         Value::String(value) => Some(value.as_str()),
         Value::Object(object) => {
             let mode = object
-                .get("kind")
+                .get("mode")
+                .or_else(|| object.get("kind"))
                 .or_else(|| object.get("action"))
                 .or_else(|| object.get("status"))
                 .and_then(Value::as_str)
@@ -2958,8 +2959,9 @@ mod tests {
     fn blocklist_hint_targets_ignore_unblock_entries() {
         let payload = json!({
             "entries": [
-                {"target": "did:web:bob.example", "kind": "block"},
+                {"target": {"kind": "actor", "did": "did:web:bob.example"}, "mode": "block"},
                 {"target": {"did": "did:web:mallory.example"}, "status": "removed"},
+                {"target": {"kind": "actor", "did": "did:web:trent.example"}, "mode": "unblock"},
                 "did:web:carol.example",
                 {"target": "not-a-did", "kind": "block"}
             ]
@@ -2970,6 +2972,7 @@ mod tests {
         assert!(targets.contains("did:web:bob.example"));
         assert!(targets.contains("did:web:carol.example"));
         assert!(!targets.contains("did:web:mallory.example"));
+        assert!(!targets.contains("did:web:trent.example"));
         assert!(!targets.contains("not-a-did"));
     }
 

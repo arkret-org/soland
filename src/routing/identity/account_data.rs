@@ -31,34 +31,23 @@ const MAX_PAYLOAD_BYTES: usize = 64 * 1024;
 
 /// CXP-0008 / CXP-0009 (spec head 37ce729) — controller-private account-data
 /// types. Writers MUST be the controller principal (not their own agent
-/// runtime, not an applet-bound ghost). The `encrypted_at_rest` flag is a
-/// reducer-visible hint; TODO(P2-impl) — the at-rest envelope encryption
-/// transform is not yet wired into the soland persistence layer, so this
-/// table only enforces the controller-only write rule for now.
+/// runtime, not an applet-bound ghost).
 struct AccountDataTypeSpec {
     data_type: &'static str,
     /// When `true`, only the controller principal may write the entry.
     /// Agents / applets / service principals are rejected with
     /// `capability_denied` even if they hold a controller-scoped session.
     controller_private: bool,
-    /// When `true`, the persistence layer MUST encrypt the payload at
-    /// rest. (Marker only — TODO(P2-impl) wiring lands when the
-    /// at-rest envelope encryption transform is plumbed into the
-    /// soland persistence layer.)
-    #[allow(dead_code)]
-    encrypted_at_rest: bool,
 }
 
 const REGISTERED_ACCOUNT_DATA_TYPES: &[AccountDataTypeSpec] = &[
     AccountDataTypeSpec {
         data_type: "cx.agent.draft.v1",
         controller_private: true,
-        encrypted_at_rest: true,
     },
     AccountDataTypeSpec {
         data_type: "cx.agent.sidecar_projection.v1",
         controller_private: true,
-        encrypted_at_rest: false,
     },
 ];
 

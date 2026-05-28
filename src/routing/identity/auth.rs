@@ -430,8 +430,6 @@ struct SessionGrantIntrospectionRequest<'a> {
 struct SessionGrantIntrospectionResponse {
     active: bool,
     status: String,
-    #[allow(dead_code)]
-    proof_required: bool,
     one_time_use_consumed: bool,
     grant: Option<SessionGrantIntrospectionGrant>,
 }
