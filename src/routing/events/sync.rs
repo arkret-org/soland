@@ -314,15 +314,17 @@ fn build_sync_snapshot(
     body: &ClientSyncRequest,
     after_cursor: &SyncCursor,
 ) -> contrix_sdk::model::SyncResBody {
-    // SYNC-MEM-1 (contrix-spec @ 7157ee8) — `members[]` is the per-Realm
-    // roster projection from `account-subscribe-frame.schema.json#/$defs/
-    // member_roster_entry`. Each row carries
-    // `{actor_id, membership, identity_event_ids?, identity_state_digest?,
-    // identity_events?}` — `handle` / display name MUST NOT appear here.
-    // Identity is resolved by following `identity_event_ids[]` into the
-    // separately delivered `cx.member.identity.update` event log; servers
-    // that lack the events for the client SHOULD inline them via
-    // `identity_events[]`.
+    // SYNC-MEM-1 + ROST-SOL-1..3 (contrix-spec @ b56cab1) — `members[]` is
+    // the per-Realm roster v2 projection from
+    // `account-subscribe-frame.schema.json#/$defs/member_roster_entry`. Each
+    // row carries `{actor_id, membership, subject_id?, identity_event_ids?,
+    // member_display_state_digest?, identity_events?, handle_claim_digests?,
+    // handle_claims?, handle_claims_limited?}` — `handle` / display name MUST
+    // NOT appear here. Identity is resolved by following
+    // `identity_event_ids[]` into the separately delivered
+    // `cx.member.identity.update` event log; servers that lack the events for
+    // the client SHOULD inline them via `identity_events[]` (gated on
+    // `subject_id` disclosure).
     let visible_spaces: Vec<_> = {
         let spaces = state.realms.lock().expect("spaces lock");
         spaces
@@ -525,19 +527,30 @@ fn build_sync_snapshot(
     }
 }
 
-/// SYNC-MEM-1..4 (contrix-spec @ 7157ee8) — build the per-Realm
-/// `members[]` projection from the in-memory `RealmDirectoryEntry` plus
-/// the MemberIdentity registry.
+/// SYNC-MEM-1..4 + ROST-SOL-1..3 (contrix-spec @ b56cab1) — build the
+/// per-Realm `members[]` roster v2 projection from the in-memory
+/// `RealmDirectoryEntry` plus the MemberIdentity registry.
 ///
 /// Schema source:
 /// `account-subscribe-frame.schema.json#/$defs/member_roster_entry`. Each
-/// row carries
-/// `{actor_id, membership, identity_event_ids?, identity_state_digest?,
-/// identity_events?}`. The retired R3 shape `{did, handle_uri?}` is gone —
-/// `handle` / display name MUST NOT appear here. Clients resolve identity
-/// by following `identity_event_ids[]` into the separately delivered
-/// `cx.member.identity.update` event log; SYNC-MEM-3 inlines the original
-/// envelopes when the server has them and the client doesn't.
+/// row carries `{actor_id, membership, subject_id?, identity_event_ids?,
+/// member_display_state_digest?, identity_events?, handle_claim_digests?,
+/// handle_claims?, handle_claims_limited?}`. The retired R3 shape
+/// `{did, handle_uri?}` is gone and the R3.1 roster digest field is renamed
+/// to `member_display_state_digest` (R3.2). `handle` / display
+/// name MUST NOT appear here; handle strings may only ride inside signed
+/// `handle_claims[]`.
+///
+/// R3.2 dependentRequired (ROST-SOL-2): the disclosure-gated fields
+/// (`subject_id` plus its companions `identity_events` / `handle_claim_digests`
+/// / `handle_claims` / `handle_claims_limited`) MUST be omitted together
+/// unless `subject_id` is disclosed by Realm policy. Clients resolve
+/// identity by following `identity_event_ids[]` into the separately
+/// delivered `cx.member.identity.update` event log; SYNC-MEM-3 inlines the
+/// original envelopes only when `subject_id` is disclosed.
+///
+/// MIU-SOL-4: the effective set is multi-valued (no last-writer-wins); ALL
+/// effective `identity_event_ids[]` are listed.
 fn roster_members_for_realm(
     state: &AppState,
     space: &crate::state::RealmDirectoryEntry,
@@ -564,22 +577,64 @@ fn roster_members_for_realm(
                         json!(snapshot.identity_event_ids),
                     );
                 }
-                if let Some(digest) = snapshot.identity_state_digest {
-                    entry.insert("identity_state_digest".to_owned(), json!(digest));
-                }
-                // SYNC-MEM-3 — inline original Event envelopes when present.
-                // The reducer stores the events as received; we do NOT
-                // rewrite projection on egress.
-                if !snapshot.identity_events.is_empty() {
+                // ROST-SOL-1 — roster digest field rename to
+                // `member_display_state_digest`. NOT disclosure-gated.
+                if let Some(digest) = snapshot.member_display_state_digest {
                     entry.insert(
-                        "identity_events".to_owned(),
-                        json!(snapshot.identity_events),
+                        "member_display_state_digest".to_owned(),
+                        json!(digest),
                     );
+                }
+                // ROST-SOL-2 — `subject_id` is disclosed only when Realm
+                // policy authorizes the caller to learn the principal /
+                // holder DID. When disclosed, the gated companion fields MAY
+                // be populated; otherwise they MUST all be omitted (the SDK
+                // `MemberRosterEntry::validate` dependentRequired rule).
+                if subject_disclosed_to_caller(state, space, did_str)
+                    && let Some(subject_id) = snapshot.subject_id.as_deref()
+                {
+                    entry.insert("subject_id".to_owned(), json!(subject_id));
+                    // SYNC-MEM-3 — inline original Event envelopes (gated on
+                    // subject disclosure per ROST-SOL-2). The reducer stores
+                    // the events as received; we do NOT rewrite projection
+                    // on egress.
+                    if !snapshot.identity_events.is_empty() {
+                        entry.insert(
+                            "identity_events".to_owned(),
+                            json!(snapshot.identity_events),
+                        );
+                    }
+                    // ROST-SOL-3 — populate real handle-claim evidence from
+                    // the local handle-claim cache once it lands.
+                    // TODO(R3.2.1): select the context-visible claim subset,
+                    // compute `contrix::identity::claim_digest` into
+                    // `handle_claim_digests[]`, inline the signed
+                    // `handle_claims[]` (size-bounded, setting
+                    // `handle_claims_limited=true` on truncation). For now we
+                    // disclose `subject_id` only; the gated claim fields stay
+                    // omitted, which the dependentRequired rule permits.
                 }
             }
             Value::Object(entry)
         })
         .collect()
+}
+
+/// ROST-SOL-2 (R3.2) — decide whether the current Realm discloses the
+/// `subject_id` (principal / holder DID) of `actor_id` to the caller.
+///
+/// TODO(R3.2.1): wire the real Realm disclosure policy (issuer trust /
+/// audience scope / intent). For now soland fails closed — `subject_id`
+/// and every gated companion field are omitted until the disclosure-policy
+/// engine is wired, so principal/holder DIDs never leak across disclosure
+/// boundaries. This is a per-Realm policy hook, not a per-handle one; the
+/// handle-claim evidence remains gated separately (ROST-SOL-3).
+fn subject_disclosed_to_caller(
+    _state: &AppState,
+    _space: &crate::state::RealmDirectoryEntry,
+    _actor_id: &str,
+) -> bool {
+    false
 }
 
 fn timeline_events_for_space(

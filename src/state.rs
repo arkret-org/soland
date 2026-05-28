@@ -280,13 +280,15 @@ fn realm_directory_score(entry: &RealmDirectoryEntry, query: &RealmDirectoryQuer
     score
 }
 
-/// R3.1 (contrix-spec @ 7157ee8) — Realm-scoped MemberIdentity event
+/// R3.1/R3.2 (contrix-spec @ b56cab1) — Realm-scoped MemberIdentity event
 /// registry. Stores every accepted `cx.member.identity.update` event by
 /// `(realm_id, actor_id, segment)`, computes the current effective set
-/// per the SDK helper `effective_identity_events`, and materializes the
-/// per-actor `identity_state_digest` projection. The reducer
-/// (`reducer::apply_member_identity_update`) consults this for the
-/// optimistic-concurrency guard (`expected_state_digest`) and writes
+/// per the SDK helper `effective_identity_events`, and materializes both
+/// R3.2 digests: the `expected_state_digest` guard
+/// (`member_identity_effective_set_digest`, includes `segment`) and the
+/// roster `member_display_state_digest`. The reducer
+/// (`reducer::apply_member_identity_update`) consults the guard for the
+/// optimistic-concurrency check (`expected_state_digest`) and writes
 /// accepted events back; the sync roster
 /// (`sync::roster_members_for_realm`) reads the resulting snapshot to
 /// emit `MemberRosterEntry`.
@@ -344,17 +346,45 @@ pub struct MemberIdentityReplacementEdge {
     pub payload_digest: String,
 }
 
+/// One entry of the effective `(event_id, segment, payload_digest)` set,
+/// surfaced from [`MemberIdentitySnapshot`] so callers (the reducer's
+/// `expected_state_digest` guard and the sync roster's
+/// `member_display_state_digest`) can recompute the R3.2 digests via the
+/// SDK helpers `member_identity_effective_set_digest` /
+/// `member_display_state_digest`.
+#[derive(Clone, Debug)]
+pub struct EffectiveIdentityEntry {
+    pub event_id: String,
+    pub segment: String,
+    pub payload_digest: String,
+}
+
 /// Per-`(realm_id, actor_id)` snapshot derived on demand by
 /// [`MemberIdentityRegistry::snapshot_for_actor`]. Drives the sync
-/// roster projection (`SYNC-MEM-1..3`).
+/// roster projection (`SYNC-MEM-1..3`, R3.2 ROST-SOL-1..3).
+///
+/// MIU-SOL-4 (R3.2): the effective set is exposed verbatim as
+/// `identity_event_ids` / `identity_events` / `effective_entries` with NO
+/// last-writer-wins collapse — a multi-valued effective set (concurrent
+/// un-replaced writes) is returned as-is so the roster lists every
+/// effective event.
 #[derive(Clone, Debug, Default)]
 pub struct MemberIdentitySnapshot {
     /// Effective event ids per the replacement-edge filter, sorted by
     /// `(segment, event_id)`. Matches the wire-side `identity_event_ids[]`.
     pub identity_event_ids: Vec<String>,
-    /// `sha256:<hex>` digest matching the spec
-    /// `member_identity_update_payload.identity_state_digest` shape.
-    pub identity_state_digest: Option<String>,
+    /// Effective `(event_id, segment, payload_digest)` triples, sorted by
+    /// `(segment, event_id)`. Drives the R3.2 digest helpers.
+    pub effective_entries: Vec<EffectiveIdentityEntry>,
+    /// R3.2 ROST-SOL-1 — roster display cache key
+    /// (`member_display_state_digest`). `sha256:<hex>` over the effective
+    /// identity-event set folded with the currently visible handle-claim
+    /// digest set. Equals the SDK `member_display_state_digest` helper.
+    pub member_display_state_digest: Option<String>,
+    /// R3.2 ROST-SOL-2 — disclosed principal / holder `subject_id`, read
+    /// from the effective plaintext `MemberIdentity` carrier when present.
+    /// `None` for an encrypted-only effective set.
+    pub subject_id: Option<String>,
     /// Original Event envelopes for the effective set. Used by
     /// `SYNC-MEM-3` (inline events when the client lacks them).
     pub identity_events: Vec<Value>,
@@ -391,16 +421,24 @@ impl MemberIdentityRegistry {
         self.events.insert(event_id, record);
     }
 
-    /// Compute the current `identity_state_digest` for
-    /// `(realm_id, actor_id)` across all stored segments. Returns `None`
-    /// if no events are stored. Mirrors `MID-6`.
+    /// MIU-SOL-3 (R3.2) — compute the current writer-observed
+    /// effective-set digest for `(realm_id, actor_id)` across all stored
+    /// segments. This is the value an incoming event's
+    /// `expected_state_digest` MUST equal BEFORE it lands (optimistic
+    /// concurrency guard). Returns `None` if no events are stored.
+    ///
+    /// Uses the SDK `member_identity_effective_set_digest` formula
+    /// `sha256(JCS({realm_id, actor_id, segment, effective_events:
+    /// [{event_id, segment, payload_digest}]}))` — note this INCLUDES
+    /// `segment` and is distinct from the roster
+    /// `member_display_state_digest`.
     pub fn current_state_digest_for_actor(
         &self,
         realm_id: &str,
         actor_id: &str,
     ) -> Option<String> {
         let snapshot = self.snapshot_for_actor(realm_id, actor_id)?;
-        snapshot.identity_state_digest
+        effective_set_digest(realm_id, actor_id, &snapshot.effective_entries)
     }
 
     /// Build a [`MemberIdentitySnapshot`] across all segments under
@@ -453,40 +491,125 @@ impl MemberIdentityRegistry {
                 .then_with(|| a.event_id.cmp(&b.event_id))
         });
 
-        // MID-6 — SHA-256 over RFC 8785 JCS canonical JSON of
-        // `{realm_id, actor_id, effective_events: [{event_id, segment,
-        // payload_digest}]}` sorted by (segment, event_id).
-        let projection = serde_json::json!({
-            "realm_id": realm_id,
-            "actor_id": actor_id,
-            "effective_events": effective
-                .iter()
-                .map(|r| serde_json::json!({
-                    "event_id": r.event_id,
-                    "segment": r.subject.segment,
-                    "payload_digest": r.payload_digest,
-                }))
-                .collect::<Vec<_>>(),
+        let effective_entries: Vec<EffectiveIdentityEntry> = effective
+            .iter()
+            .map(|r| EffectiveIdentityEntry {
+                event_id: r.event_id.clone(),
+                segment: r.subject.segment.clone(),
+                payload_digest: r.payload_digest.clone(),
+            })
+            .collect();
+
+        // ROST-SOL-2 (R3.2) — read the disclosed `subject_id` from the
+        // first effective plaintext `MemberIdentity` carrier. Encrypted
+        // carriers do not expose it; `None` then. Disclosure gating
+        // (whether to actually emit it on the wire) is enforced at the
+        // sync layer per Realm policy.
+        let subject_id = effective.iter().find_map(|r| {
+            r.raw_event
+                .get("payload")
+                .and_then(|payload| payload.get("identity_payload"))
+                .and_then(|carrier| carrier.get("member_identity"))
+                .and_then(|identity| identity.get("subject_id"))
+                .and_then(Value::as_str)
+                .map(str::to_owned)
         });
-        let identity_state_digest = match contrix_sdk::canonical::canonical_json_bytes(&projection)
-        {
-            Ok(bytes) => Some(contrix_sdk::canonical::sha256_digest(bytes)),
-            Err(err) => {
-                tracing::warn!(
-                    %err,
-                    %realm_id,
-                    %actor_id,
-                    "member_identity_state_digest canonicalization failed"
-                );
-                None
-            }
-        };
+
+        // ROST-SOL-1 (R3.2) — roster `member_display_state_digest`.
+        // SHA-256 over RFC 8785 JCS canonical JSON of
+        // `{realm_id, actor_id, effective_events:[{event_id, segment,
+        // payload_digest}], handle_claims:[{claim_digest, binding_state,
+        // expires_at}]}` (effective_events sorted by (segment, event_id),
+        // handle_claims sorted by claim_digest). The handle-claim set is
+        // empty until the local handle-claim evidence cache is wired
+        // (TODO(R3.2.1)); the digest inputs are otherwise stable.
+        let member_display_state_digest =
+            display_state_digest(realm_id, actor_id, &effective_entries);
 
         Some(MemberIdentitySnapshot {
             identity_event_ids: effective.iter().map(|r| r.event_id.clone()).collect(),
-            identity_state_digest,
+            effective_entries,
+            member_display_state_digest,
+            subject_id,
             identity_events: effective.iter().map(|r| r.raw_event.clone()).collect(),
         })
+    }
+}
+
+/// JCS-sorted `effective_events` array shared by both R3.2 digest formulas.
+/// Each entry is `{event_id, segment, payload_digest}`; the array is sorted
+/// by `(segment, event_id)` exactly as the SDK helpers do. Kept as raw JSON
+/// (rather than the SDK newtypes) because soland stores `cx:operation:`
+/// event ids, which the strict `EventId` `cx:event:` validator would reject —
+/// the on-the-wire JCS bytes are identical either way.
+fn effective_events_projection(entries: &[EffectiveIdentityEntry]) -> Vec<Value> {
+    let mut sorted: Vec<&EffectiveIdentityEntry> = entries.iter().collect();
+    sorted.sort_by(|a, b| {
+        a.segment
+            .cmp(&b.segment)
+            .then_with(|| a.event_id.cmp(&b.event_id))
+    });
+    sorted
+        .into_iter()
+        .map(|entry| {
+            serde_json::json!({
+                "event_id": entry.event_id,
+                "segment": entry.segment,
+                "payload_digest": entry.payload_digest,
+            })
+        })
+        .collect()
+}
+
+/// MIU-SOL-3 (R3.2) — `expected_state_digest` writer-observed effective-set
+/// digest. SHA-256 over RFC 8785 JCS canonical JSON of
+/// `{realm_id, actor_id, segment, effective_events:[{event_id, segment,
+/// payload_digest}]}`. Byte-compatible with the SDK
+/// `member_identity_effective_set_digest` helper. v1 core declares a single
+/// `member_identity` segment.
+fn effective_set_digest(
+    realm_id: &str,
+    actor_id: &str,
+    entries: &[EffectiveIdentityEntry],
+) -> Option<String> {
+    let projection = serde_json::json!({
+        "realm_id": realm_id,
+        "actor_id": actor_id,
+        "segment": "member_identity",
+        "effective_events": effective_events_projection(entries),
+    });
+    canonical_digest(&projection, realm_id, actor_id, "expected_state_digest")
+}
+
+/// ROST-SOL-1 (R3.2) — roster `member_display_state_digest`. SHA-256 over RFC
+/// 8785 JCS canonical JSON of `{realm_id, actor_id, effective_events:
+/// [{event_id, segment, payload_digest}], handle_claims:[{claim_digest,
+/// binding_state, expires_at}]}` (handle_claims sorted by claim_digest).
+/// Byte-compatible with the SDK `member_display_state_digest` helper. The
+/// handle-claim set is empty until the local evidence cache lands —
+/// TODO(R3.2.1) (ROST-SOL-3).
+fn display_state_digest(
+    realm_id: &str,
+    actor_id: &str,
+    entries: &[EffectiveIdentityEntry],
+) -> Option<String> {
+    let handle_claims: Vec<Value> = Vec::new();
+    let projection = serde_json::json!({
+        "realm_id": realm_id,
+        "actor_id": actor_id,
+        "effective_events": effective_events_projection(entries),
+        "handle_claims": handle_claims,
+    });
+    canonical_digest(&projection, realm_id, actor_id, "member_display_state_digest")
+}
+
+fn canonical_digest(projection: &Value, realm_id: &str, actor_id: &str, label: &str) -> Option<String> {
+    match contrix_sdk::canonical::canonical_json_bytes(projection) {
+        Ok(bytes) => Some(contrix_sdk::canonical::sha256_digest(bytes)),
+        Err(err) => {
+            tracing::warn!(%err, %realm_id, %actor_id, %label, "member identity digest canonicalization failed");
+            None
+        }
     }
 }
 
