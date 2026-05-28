@@ -46,7 +46,7 @@ async fn moderation_report(
     req: &mut Request,
 ) -> JsonResult<ModerationReportResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
     if RealmId::new(body.realm_id.clone()).is_err() || validate_did(&body.reporter).is_err() {
         return Err(AppError::invalid_param("invalid realm_id or reporter"));
@@ -56,14 +56,14 @@ async fn moderation_report(
             "reporter must match authenticated actor",
         ));
     }
-    if !space_has_member(state, &body.realm_id, &session.actor) {
+    if !space_has_member(state, &body.realm_id, &session.actor).await {
         return Err(AppError::capability_denied(
             "reporter cannot see the target realm",
         ));
     }
     let report_id = ids::generate_report_id();
     let moderation_service = format!("{}#moderation", state.config.service_did);
-    let audit_policy = audit_disclosure_policy_for_realm(state, &body.realm_id);
+    let audit_policy = audit_disclosure_policy_for_realm(state, &body.realm_id).await;
     let report_payload = json!({
         "report_id": report_id,
         "realm_id": body.realm_id,
@@ -75,7 +75,7 @@ async fn moderation_report(
     if let Err(error) = state
         .persistence
         .moderation()
-        .append_report(report_payload.clone())
+        .append_report(report_payload.clone()).await
     {
         tracing::error!(%error, "failed to append moderation report");
     }
@@ -87,7 +87,7 @@ async fn moderation_report(
         "status": "open",
         "assigned_to": moderation_service.clone(),
         "created_at": now(),
-    })) {
+    })).await {
         tracing::error!(%error, "failed to append moderation action");
     }
     // Spec triage: each accepted report is wrapped in a
@@ -106,7 +106,7 @@ async fn moderation_report(
         "audit_refs": [],
         "created_at": now(),
     });
-    if let Err(error) = state.persistence.moderation().upsert_queue_item(queue_item) {
+    if let Err(error) = state.persistence.moderation().upsert_queue_item(queue_item).await {
         tracing::warn!(%error, "queue item upsert failed (likely Pg backend stub)");
     }
     append_audit_log(
@@ -141,14 +141,14 @@ async fn moderation_reports(
     req: &mut Request,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let realm_id = query_param(req, "realm_id").or_else(|| query_param(req, "space_id"));
     if let Some(realm_id) = realm_id.as_deref()
         && RealmId::new(realm_id.to_owned()).is_err()
     {
         return Err(AppError::invalid_param("invalid realm_id"));
     }
-    let reports = visible_reports_for_actor(state, &session.actor, realm_id.as_deref());
+    let reports = visible_reports_for_actor(state, &session.actor, realm_id.as_deref()).await;
     let total = reports.len();
     json_ok(json!({
         "reports": reports.clone(),
@@ -158,26 +158,31 @@ async fn moderation_reports(
     }))
 }
 
-pub(crate) fn visible_reports_for_actor(
+pub(crate) async fn visible_reports_for_actor(
     state: &AppState,
     actor: &str,
     realm_filter: Option<&str>,
 ) -> Vec<Value> {
-    state
+    let all = state
         .persistence
         .moderation()
         .list_reports()
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|report| {
-            let realm_id = report_realm_id(report);
-            realm_filter.is_none_or(|filter| realm_id == Some(filter))
-        })
-        .filter(|report| moderation_report_visible_to_actor(state, report, actor))
-        .collect()
+        .await
+        .unwrap_or_default();
+    let mut visible = Vec::new();
+    for report in all {
+        let realm_id = report_realm_id(&report);
+        if !realm_filter.is_none_or(|filter| realm_id == Some(filter)) {
+            continue;
+        }
+        if moderation_report_visible_to_actor(state, &report, actor).await {
+            visible.push(report);
+        }
+    }
+    visible
 }
 
-pub(crate) fn moderation_report_visible_to_actor(
+pub(crate) async fn moderation_report_visible_to_actor(
     state: &AppState,
     report: &Value,
     actor: &str,
@@ -188,7 +193,10 @@ pub(crate) fn moderation_report_visible_to_actor(
     if report.get("reporter").and_then(Value::as_str) == Some(actor) {
         return true;
     }
-    report_realm_id(report).is_some_and(|realm_id| realm_owner_matches(state, realm_id, actor))
+    match report_realm_id(report) {
+        Some(realm_id) => realm_owner_matches(state, realm_id, actor).await,
+        None => false,
+    }
 }
 
 fn report_realm_id(report: &Value) -> Option<&str> {
@@ -198,11 +206,11 @@ fn report_realm_id(report: &Value) -> Option<&str> {
         .and_then(Value::as_str)
 }
 
-fn realm_owner_matches(state: &AppState, realm_id: &str, actor: &str) -> bool {
+async fn realm_owner_matches(state: &AppState, realm_id: &str, actor: &str) -> bool {
     state
         .persistence
         .realm_meta()
-        .get(realm_id)
+        .get(realm_id).await
         .ok()
         .flatten()
         .is_some_and(|meta| meta.owner == actor)
@@ -274,34 +282,40 @@ async fn notify_audit_agent_for_report(
     {
         Ok(response) if response.status().is_success() => {
             if let Ok(body) = response.json::<Value>().await {
-                append_audit_agent_invite_log(state, &agent_did, report_payload, &body);
-                append_agent_accessed_if_present(state, &agent_did, report_payload, &body);
+                append_audit_agent_invite_log(state, &agent_did, report_payload, &body).await;
+                append_agent_accessed_if_present(state, &agent_did, report_payload, &body).await;
             }
         }
-        Ok(response) => append_audit_log(
-            state,
-            None,
-            "cx.audit.agent_invite",
-            json!({
-                "space_id": realm_id,
-                "report_id": report_id,
-                "agent_did": agent_did,
-                "status": response.status().as_u16(),
-            }),
-            "failed",
-        ),
-        Err(error) => append_audit_log(
-            state,
-            None,
-            "cx.audit.agent_invite",
-            json!({
-                "space_id": realm_id,
-                "report_id": report_id,
-                "agent_did": agent_did,
-                "error": error.to_string(),
-            }),
-            "failed",
-        ),
+        Ok(response) => {
+            append_audit_log(
+                state,
+                None,
+                "cx.audit.agent_invite",
+                json!({
+                    "space_id": realm_id,
+                    "report_id": report_id,
+                    "agent_did": agent_did,
+                    "status": response.status().as_u16(),
+                }),
+                "failed",
+            )
+            .await
+        }
+        Err(error) => {
+            append_audit_log(
+                state,
+                None,
+                "cx.audit.agent_invite",
+                json!({
+                    "space_id": realm_id,
+                    "report_id": report_id,
+                    "agent_did": agent_did,
+                    "error": error.to_string(),
+                }),
+                "failed",
+            )
+            .await
+        }
     }
 
     let event_body = json!({
@@ -316,38 +330,44 @@ async fn notify_audit_agent_for_report(
     {
         Ok(response) if response.status().is_success() => {
             if let Ok(body) = response.json::<Value>().await {
-                append_agent_accessed_if_present(state, &agent_did, report_payload, &body);
+                append_agent_accessed_if_present(state, &agent_did, report_payload, &body).await;
             }
         }
-        Ok(response) => append_audit_log(
-            state,
-            None,
-            "cx.audit.report",
-            json!({
-                "space_id": realm_id,
-                "report_id": report_id,
-                "agent_did": agent_did,
-                "status": response.status().as_u16(),
-            }),
-            "failed",
-        ),
-        Err(error) => append_audit_log(
-            state,
-            None,
-            "cx.audit.report",
-            json!({
-                "space_id": realm_id,
-                "report_id": report_id,
-                "agent_did": agent_did,
-                "error": error.to_string(),
-            }),
-            "failed",
-        ),
+        Ok(response) => {
+            append_audit_log(
+                state,
+                None,
+                "cx.audit.report",
+                json!({
+                    "space_id": realm_id,
+                    "report_id": report_id,
+                    "agent_did": agent_did,
+                    "status": response.status().as_u16(),
+                }),
+                "failed",
+            )
+            .await
+        }
+        Err(error) => {
+            append_audit_log(
+                state,
+                None,
+                "cx.audit.report",
+                json!({
+                    "space_id": realm_id,
+                    "report_id": report_id,
+                    "agent_did": agent_did,
+                    "error": error.to_string(),
+                }),
+                "failed",
+            )
+            .await
+        }
     }
     Some(agent_did)
 }
 
-fn append_audit_agent_invite_log(
+async fn append_audit_agent_invite_log(
     state: &AppState,
     agent_did: &str,
     report_payload: &Value,
@@ -366,10 +386,10 @@ fn append_audit_agent_invite_log(
             "mls_key_package": response_body.get("mls_key_package").cloned().unwrap_or(Value::Null),
         }),
         "accepted",
-    );
+    ).await;
 }
 
-fn append_agent_accessed_if_present(
+async fn append_agent_accessed_if_present(
     state: &AppState,
     agent_did: &str,
     report_payload: &Value,
@@ -395,14 +415,14 @@ fn append_agent_accessed_if_present(
             "emitted": emitted,
         }),
         "accepted",
-    );
+    ).await;
 }
 
-fn audit_disclosure_policy_for_realm(state: &AppState, realm_id: &str) -> Option<Value> {
+async fn audit_disclosure_policy_for_realm(state: &AppState, realm_id: &str) -> Option<Value> {
     state
         .persistence
         .events()
-        .snapshot_all()
+        .snapshot_all().await
         .ok()?
         .into_iter()
         .filter(|record| {
@@ -457,7 +477,7 @@ async fn moderation_appeal_submit(
     req: &mut Request,
 ) -> JsonResult<ModerationAppealSubmitResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
     if body.reason_text_ref.trim().is_empty() {
         return Err(AppError::invalid_param("reason_text_ref is required"));
@@ -469,7 +489,7 @@ async fn moderation_appeal_submit(
     let duplicate_active = state
         .persistence
         .moderation()
-        .list_appeals()
+        .list_appeals().await
         .unwrap_or_default()
         .into_iter()
         .any(|appeal| {
@@ -509,7 +529,7 @@ async fn moderation_appeal_submit(
         "event_kind": contrix_sdk::events::MODERATION_APPEAL_SUBMIT,
         "appeal_state": "submitted",
     });
-    if let Err(error) = state.persistence.moderation().append_appeal(event) {
+    if let Err(error) = state.persistence.moderation().append_appeal(event).await {
         tracing::error!(%error, "failed to append moderation appeal");
         return Err(AppError::internal(
             "appeal persistence failed; backend may be a Pg stub",
@@ -534,11 +554,11 @@ async fn moderation_appeal_submit(
 /// Helper for the admin module: read the most recent state of an appeal
 /// by replaying the persisted event history. Returns the last-known
 /// `appeal_state` string, or `None` if the appeal does not exist.
-pub(crate) fn appeal_state(state: &AppState, appeal_id: &str) -> Option<String> {
+pub(crate) async fn appeal_state(state: &AppState, appeal_id: &str) -> Option<String> {
     state
         .persistence
         .moderation()
-        .appeal_history(appeal_id)
+        .appeal_history(appeal_id).await
         .ok()?
         .into_iter()
         .last()

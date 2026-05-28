@@ -149,7 +149,7 @@ pub(super) async fn federation_transaction(
     match state
         .persistence
         .federation_transactions()
-        .get(body.origin.as_str(), &txn_id)
+        .get(body.origin.as_str(), &txn_id).await
     {
         Ok(Some(record)) if record.content_digest == content_digest => {
             // Round R2/R3 (T14) + Round 4 (B1.8) — cache hit MUST re-do
@@ -217,7 +217,7 @@ pub(super) async fn federation_transaction(
             "federation transaction destination does not match this service",
         ));
     }
-    let ingest = ingest_federation_operations(state, body.origin.as_str(), body.operations);
+    let ingest = ingest_federation_operations(state, body.origin.as_str(), body.operations).await;
     let response = contrix_sdk::FederationTransactionResBody {
         ok: true,
         accepted: ingest.accepted,
@@ -241,7 +241,7 @@ pub(super) async fn federation_transaction(
     state
         .persistence
         .federation_transactions()
-        .put(&record)
+        .put(&record).await
         .map_err(|error| AppError::internal(error.to_string()))?;
     json_ok(response)
 }
@@ -273,7 +273,7 @@ pub(super) async fn federation_push_operations(
         ));
     }
     verify_inbound_push_http_signature(state, req, &body)?;
-    let ingest = ingest_federation_operations(state, body.origin.as_str(), body.operations);
+    let ingest = ingest_federation_operations(state, body.origin.as_str(), body.operations).await;
     json_ok(contrix_sdk::FederationPushOperationsResBody {
         accepted: ingest.accepted,
         rejected: ingest.rejected,
@@ -647,7 +647,7 @@ pub(super) async fn federation_actor_events(
     let mut events = state
         .persistence
         .projection_events()
-        .snapshot_all()
+        .snapshot_all().await
         .unwrap_or_default()
         .into_iter()
         .filter(|event| projection_event_matches_actor(event, &actor))
@@ -752,7 +752,7 @@ pub(super) async fn federation_pull_operations(
     let space_operations = state
         .persistence
         .federation_operations()
-        .list_for_space(&realm_id)
+        .list_for_space(&realm_id).await
         .unwrap_or_default();
     let redacted = redaction_targets_from_operations(&space_operations);
     let snapshot_bootstrap = want_snapshot_bootstrap.then(|| {
@@ -836,7 +836,7 @@ pub(super) async fn federation_backfill_operations(
         .get("after_cursor")
         .and_then(Value::as_str)
         .map(ToOwned::to_owned);
-    let frontier_before = operation_frontier_value(state, space_id);
+    let frontier_before = operation_frontier_value(state, space_id).await;
     let client = reqwest::Client::builder()
         .connect_timeout(crate::routing::federation::outbox::CONNECT_TIMEOUT)
         .timeout(crate::routing::federation::outbox::REQUEST_TIMEOUT)
@@ -858,7 +858,7 @@ pub(super) async fn federation_backfill_operations(
         pulled += page.operations.len();
         peer_next_cursor = page.next_cursor.clone();
         peer_has_more = page.has_more;
-        let result = ingest_federation_operations(state, peer.did.as_str(), page.operations);
+        let result = ingest_federation_operations(state, peer.did.as_str(), page.operations).await;
         accepted.extend(
             result
                 .accepted
@@ -871,7 +871,7 @@ pub(super) async fn federation_backfill_operations(
             break;
         }
     }
-    let frontier_after = operation_frontier_value(state, space_id);
+    let frontier_after = operation_frontier_value(state, space_id).await;
     json_ok(json!({
         "peer_url": peer.url,
         "peer_did": peer.did,
@@ -905,7 +905,7 @@ pub(super) async fn federation_operation_frontier(
     if validate_space_id(&space_id).is_err() {
         return Err(AppError::invalid_param("invalid space_id"));
     }
-    json_ok(operation_frontier_value(state, &space_id))
+    json_ok(operation_frontier_value(state, &space_id).await)
 }
 
 #[endpoint(
@@ -1460,12 +1460,12 @@ async fn pull_operations_page(
         .map_err(|error| AppError::internal(format!("parse federation pull response: {error}")))
 }
 
-fn operation_frontier_value(state: &AppState, space_id: &str) -> Value {
+async fn operation_frontier_value(state: &AppState, space_id: &str) -> Value {
     let realm_id = space_id.replacen("cx:space:", "cx:realm:", 1);
     let operations = state
         .persistence
         .federation_operations()
-        .list_for_space(&realm_id)
+        .list_for_space(&realm_id).await
         .unwrap_or_default();
     let mut operation_ids = operations
         .iter()
@@ -1507,12 +1507,12 @@ fn operation_should_fanout(operation: &Operation) -> bool {
         || kinds::operation_is_realm_lifecycle(operation)
 }
 
-fn persist_local_federation_operation(state: &AppState, operation: &Operation) {
+async fn persist_local_federation_operation(state: &AppState, operation: &Operation) {
     let store = state.persistence.federation_operations();
-    match store.contains(operation.operation_id.as_str()) {
+    match store.contains(operation.operation_id.as_str()).await {
         Ok(true) => {}
         Ok(false) => {
-            if let Err(error) = store.append(operation.clone()) {
+            if let Err(error) = store.append(operation.clone()).await {
                 tracing::warn!(
                     %error,
                     operation_id = %operation.operation_id,
@@ -1530,7 +1530,7 @@ fn persist_local_federation_operation(state: &AppState, operation: &Operation) {
     }
 }
 
-fn enqueue_operation_push(state: &AppState, operation: &Operation, peer: &FederationPeerTarget) {
+async fn enqueue_operation_push(state: &AppState, operation: &Operation, peer: &FederationPeerTarget) {
     let Ok(origin) = Did::new(state.config.service_did.clone()) else {
         tracing::warn!(
             service_did = %state.config.service_did,
@@ -1603,7 +1603,9 @@ fn enqueue_operation_push(state: &AppState, operation: &Operation, peer: &Federa
         "/api/v1/federation/push-operations",
         &idempotency_key,
         &payload,
-    ) {
+    )
+    .await
+    {
         tracing::warn!(
             %error,
             peer = %peer.url,
@@ -1834,7 +1836,7 @@ fn parse_peer_target(entry: &str) -> Option<FederationPeerTarget> {
 /// deterministic so a restart-time re-broadcast collapses onto the
 /// existing row (UNIQUE INDEX on `peer_did, idempotency_key`) instead
 /// of creating a duplicate.
-fn enqueue_outbound_for(
+async fn enqueue_outbound_for(
     state: &AppState,
     resource_kind: &str,
     resource_id: &str,
@@ -1881,7 +1883,9 @@ fn enqueue_outbound_for(
         endpoint,
         &idempotency_key,
         &payload_json,
-    ) {
+    )
+    .await
+    {
         tracing::warn!(
             %error,
             peer = %peer.url,
@@ -1893,7 +1897,7 @@ fn enqueue_outbound_for(
     }
 }
 
-fn record_outbound_fanout_attempt(
+async fn record_outbound_fanout_attempt(
     state: &AppState,
     resource_kind: &str,
     resource_id: &str,
@@ -2006,7 +2010,7 @@ fn record_outbound_fanout_attempt(
         received_at: now,
         processed_at: Some(attempted_at),
     };
-    if let Err(error) = state.persistence.federation_transactions().put(&record) {
+    if let Err(error) = state.persistence.federation_transactions().put(&record).await {
         tracing::warn!(
             %error,
             %peer,
@@ -2135,7 +2139,7 @@ fn run_outbound_fanout_retry_pass_at(
         return Ok(report);
     }
 
-    let records = state.persistence.federation_transactions().snapshot_all()?;
+    let records = state.persistence.federation_transactions().snapshot_all().await?;
     for record in records {
         report.scanned += 1;
         if record.origin != state.config.service_did || !record.txn_id.starts_with("outbound_") {
@@ -2168,7 +2172,7 @@ fn run_outbound_fanout_retry_pass_at(
         } else {
             report.retried += 1;
         }
-        state.persistence.federation_transactions().put(&updated)?;
+        state.persistence.federation_transactions().put(&updated).await?;
     }
 
     Ok(report)
@@ -2567,7 +2571,7 @@ mod tests {
         let transcript = state
             .persistence
             .federation_transactions()
-            .get("did:web:test.local", &txn_id)
+            .get("did:web:test.local", &txn_id).await
             .unwrap()
             .expect("outbound transcript persisted");
         assert_eq!(transcript.destination, "https://peer-a.example");
@@ -2694,7 +2698,7 @@ mod tests {
         let outbox = state
             .persistence
             .federation_outbox()
-            .snapshot_all()
+            .snapshot_all().await
             .unwrap();
         assert_eq!(outbox.len(), 3);
         assert!(outbox.iter().all(|row| row.peer_url == "http://127.0.0.1:9"
@@ -2723,7 +2727,7 @@ mod tests {
         let projected_invite = state
             .persistence
             .space_invites()
-            .get("cx:invite:01904100-0000-7000-8000-000000000056")
+            .get("cx:invite:01904100-0000-7000-8000-000000000056").await
             .unwrap()
             .unwrap();
         assert_eq!(
@@ -2736,7 +2740,7 @@ mod tests {
         let federation_log = state
             .persistence
             .federation_operations()
-            .snapshot_all()
+            .snapshot_all().await
             .unwrap();
         assert_eq!(federation_log.len(), 3);
 
@@ -2749,7 +2753,7 @@ mod tests {
             state
                 .persistence
                 .federation_outbox()
-                .snapshot_all()
+                .snapshot_all().await
                 .unwrap()
                 .len(),
             3,
@@ -2759,7 +2763,7 @@ mod tests {
             state
                 .persistence
                 .federation_operations()
-                .snapshot_all()
+                .snapshot_all().await
                 .unwrap()
                 .len(),
             3,
@@ -2789,14 +2793,14 @@ mod tests {
         state
             .persistence
             .federation_operations()
-            .append(first.clone())
+            .append(first.clone()).await
             .unwrap();
         let before =
             operation_frontier_value(&state, "cx:realm:01904100-0000-7000-8000-000000000061");
         state
             .persistence
             .federation_operations()
-            .append(second.clone())
+            .append(second.clone()).await
             .unwrap();
         let after =
             operation_frontier_value(&state, "cx:realm:01904100-0000-7000-8000-000000000061");
@@ -2837,7 +2841,7 @@ mod tests {
         let transcript = state
             .persistence
             .federation_transactions()
-            .get("did:web:test.local", &txn_id)
+            .get("did:web:test.local", &txn_id).await
             .unwrap()
             .expect("outbound anchor transcript persisted");
         assert_eq!(
@@ -2867,7 +2871,7 @@ mod tests {
         let before = state
             .persistence
             .federation_transactions()
-            .get("did:web:test.local", &txn_id)
+            .get("did:web:test.local", &txn_id).await
             .unwrap()
             .expect("outbound transcript persisted");
         let due_at = next_retry_at(&before.response).expect("next retry");
@@ -2882,7 +2886,7 @@ mod tests {
         let after = state
             .persistence
             .federation_transactions()
-            .get("did:web:test.local", &txn_id)
+            .get("did:web:test.local", &txn_id).await
             .unwrap()
             .expect("updated outbound transcript persisted");
         assert_eq!(after.status, "outbound_fanout_retry_scheduled");

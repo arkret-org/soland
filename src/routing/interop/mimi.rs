@@ -126,7 +126,7 @@ async fn mimi_room_update(
     let binding_event_id = match body.get("room_binding") {
         Some(binding) if binding.is_object() => {
             let event_id =
-                emit_mimi_room_binding_event(state, &room_id, binding).ok_or_else(|| {
+                emit_mimi_room_binding_event(state, &room_id, binding).await.ok_or_else(|| {
                     AppError::invalid_param(
                         "room_binding requires `binding_scope.space_id` or a top-level `space_id`",
                     )
@@ -175,7 +175,7 @@ async fn mimi_room_notify(
     // notification. The notify event is an ephemeral signal in the
     // spec's wire_scope taxonomy - we broadcast but don't persist
     // into projection_events so it doesn't pollute durable history.
-    let space_id = mimi_bound_space_id(state, &room_id).ok_or_else(|| {
+    let space_id = mimi_bound_space_id(state, &room_id).await.ok_or_else(|| {
         AppError::not_found("MIMI room is not bound to any Contrix Space")
             .with_wire_code("mimi_room_unbound")
     })?;
@@ -269,7 +269,7 @@ async fn mimi_room_message(
     // MIMI provenance metadata is preserved verbatim under
     // `payload.mimi_provenance` so audit consumers can verify the
     // message arrived through the facade.
-    let space_id = mimi_bound_space_id(state, &room_id).ok_or_else(|| {
+    let space_id = mimi_bound_space_id(state, &room_id).await.ok_or_else(|| {
         AppError::not_found("MIMI room is not bound to any Contrix Space")
             .with_wire_code("mimi_room_unbound")
     })?;
@@ -311,7 +311,7 @@ async fn mimi_room_message(
         encrypted: mapped_content.encrypted,
         created_at,
     };
-    if let Err(error) = state.persistence.messages().put(&message_record) {
+    if let Err(error) = state.persistence.messages().put(&message_record).await {
         tracing::error!(%error, "mimi: failed to persist MessageRecord");
     }
     let projection_record = ProjectionEventRecord {
@@ -339,7 +339,7 @@ async fn mimi_room_message(
     if let Err(error) = state
         .persistence
         .projection_events()
-        .append(projection_record)
+        .append(projection_record).await
     {
         tracing::error!(%error, "mimi: failed to mirror message into projection_events");
     }
@@ -404,7 +404,7 @@ async fn mimi_group_info(flow_id: PathParam<String>, depot: &mut Depot) -> JsonR
     if !valid_mimi_room_id(&room_id) {
         return Err(AppError::invalid_param("invalid MIMI room id"));
     }
-    let space_id = mimi_bound_space_id(state, &room_id).ok_or_else(|| {
+    let space_id = mimi_bound_space_id(state, &room_id).await.ok_or_else(|| {
         AppError::not_found("MIMI room is not bound to any Contrix Space")
             .with_wire_code("mimi_room_unbound")
     })?;
@@ -541,7 +541,7 @@ async fn mimi_report_abuse(body: JsonBody<Value>, depot: &mut Depot) -> JsonResu
         "target_event_digest": body.get("target_event_digest").cloned(),
         "frank": body.get("frank").cloned(),
         "created_at": now(),
-    })) {
+    })).await {
         tracing::error!(%error, "failed to persist mimi abuse report");
     }
 
@@ -549,17 +549,20 @@ async fn mimi_report_abuse(body: JsonBody<Value>, depot: &mut Depot) -> JsonResu
     // audit timeline observes the report in the same shape native
     // Contrix reports use. The MIMI provenance is preserved under
     // `payload.mimi_provenance`.
-    let space_id = if let Some(s) = body.get("space_id").and_then(Value::as_str) {
-        s.to_owned()
-    } else if let Some(bound) = body
+    // Extract room_id segment from MIMI URI
+    // `mimi://provider/rooms/<id>` so we can look up a bound space if any.
+    let mimi_room_id = body
         .get("mimi_room_uri")
         .and_then(Value::as_str)
-        // Extract room_id segment from MIMI URI
-        // `mimi://provider/rooms/<id>` so we can look up a bound
-        // space if any.
         .and_then(|uri| uri.rsplit('/').next())
-        .and_then(|id| mimi_bound_space_id(state, id))
-    {
+        .map(str::to_owned);
+    let bound_space = match mimi_room_id.as_deref() {
+        Some(id) => mimi_bound_space_id(state, id).await,
+        None => None,
+    };
+    let space_id = if let Some(s) = body.get("space_id").and_then(Value::as_str) {
+        s.to_owned()
+    } else if let Some(bound) = bound_space {
         bound
     } else {
         return Err(AppError::invalid_param(
@@ -597,7 +600,7 @@ async fn mimi_report_abuse(body: JsonBody<Value>, depot: &mut Depot) -> JsonResu
         report_record.event_id.clone(),
         crate::routing::events::projection::projection_event_json(&report_record),
     ));
-    if let Err(error) = state.persistence.projection_events().append(report_record) {
+    if let Err(error) = state.persistence.projection_events().append(report_record).await {
         tracing::error!(%error, "mimi: failed to mirror report into projection_events");
     }
 
@@ -636,7 +639,7 @@ async fn mimi_proxy_download(body: JsonBody<Value>, depot: &mut Depot) -> JsonRe
         .get("asset_privacy_policy")
         .and_then(|value| value.as_str())
         .unwrap_or("provider_proxy");
-    let blob = state.persistence.blobs().get(blob_ref).ok().flatten();
+    let blob = state.persistence.blobs().get(blob_ref).await.ok().flatten();
     let proxy_required = matches!(asset_policy, "provider_proxy" | "ohttp_relay");
     json_ok(json!({
         "ok": true,
@@ -989,8 +992,8 @@ fn mimi_plaintext_detected(value: &Value) -> bool {
 /// matches `room_id`. Returns `None` when no binding has been
 /// recorded; callers translate that into a 404/400 rather than
 /// silently routing the request at a hard-coded demo Space.
-fn mimi_bound_space_id(state: &AppState, room_id: &str) -> Option<String> {
-    let entries = state.persistence.projection_events().snapshot_all().ok()?;
+async fn mimi_bound_space_id(state: &AppState, room_id: &str) -> Option<String> {
+    let entries = state.persistence.projection_events().snapshot_all().await.ok()?;
     // Walk in reverse so the most-recently-recorded binding wins.
     for entry in entries.iter().rev() {
         if entry.event_kind != "cx.mimi.room_binding" {
@@ -1036,7 +1039,7 @@ fn mimi_bound_space_id(state: &AppState, room_id: &str) -> Option<String> {
 /// `space_id` (neither under `binding_scope.space_id` nor at the top
 /// level). The caller is expected to surface that to the client as a
 /// 400 rather than implicitly bind the room to some default Space.
-fn emit_mimi_room_binding_event(
+async fn emit_mimi_room_binding_event(
     state: &AppState,
     room_id: &str,
     binding: &Value,
@@ -1086,7 +1089,7 @@ fn emit_mimi_room_binding_event(
         record.event_id.clone(),
         crate::routing::events::projection::projection_event_json(&record),
     ));
-    if let Err(error) = state.persistence.projection_events().append(record) {
+    if let Err(error) = state.persistence.projection_events().append(record).await {
         tracing::error!(%error, "mimi: failed to append room_binding to projection_events");
     }
     Some(event_id)

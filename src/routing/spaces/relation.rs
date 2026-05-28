@@ -48,7 +48,7 @@ async fn create_relation(
     req: &mut Request,
 ) -> JsonResult<RelationResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
     if validate_space_id(&body.space_id).is_err() {
         return Err(AppError::invalid_param("invalid space_id"));
@@ -91,7 +91,7 @@ async fn create_relation(
         payload,
     );
     accept_local_operations(state, &session.actor, std::slice::from_ref(&operation))
-        .map_err(|error| AppError::new(ErrorCode::Conflict, error.to_string()))?;
+        .await.map_err(|error| AppError::new(ErrorCode::Conflict, error.to_string()))?;
     let relation = {
         let proj = state.projection.lock().expect("projection lock");
         proj.relations.get(&relation_id).cloned()
@@ -122,7 +122,7 @@ async fn delete_relation(
     req: &mut Request,
 ) -> JsonResult<DeleteRelationResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let relation_id = relation_id.into_inner();
     let space_id = {
         let proj = state.projection.lock().expect("projection lock");
@@ -137,7 +137,7 @@ async fn delete_relation(
         json!({ "relation_id": relation_id }),
     );
     accept_local_operations(state, &session.actor, std::slice::from_ref(&operation))
-        .map_err(|error| AppError::new(ErrorCode::Conflict, error.to_string()))?;
+        .await.map_err(|error| AppError::new(ErrorCode::Conflict, error.to_string()))?;
     json_ok(DeleteRelationResponse {
         deleted: true,
         relation_id,
@@ -158,7 +158,7 @@ async fn list_relations(
     req: &mut Request,
 ) -> JsonResult<ListRelationsResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let _ = aa.authenticated_session(state, req)?;
+    let _ = aa.authenticated_session(state, req).await?;
     let space_id = space_id.into_inner().unwrap_or_default();
     let kind = kind.into_inner();
     let relations = {

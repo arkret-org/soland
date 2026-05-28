@@ -180,7 +180,7 @@ async fn register_endpoint(
     req: &mut Request,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
     let did = body
         .get("did")
@@ -221,7 +221,7 @@ async fn register_endpoint(
 #[tracing::instrument(skip_all, fields(op = "cx.extension.soland.extensions.bots.list"))]
 async fn list_endpoint(aa: AuthArgs, depot: &mut Depot, req: &mut Request) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let bots = list_bots_owned_by(&session.actor);
     json_ok(json!({ "bots": bots }))
 }
@@ -234,7 +234,7 @@ async fn list_endpoint(aa: AuthArgs, depot: &mut Depot, req: &mut Request) -> Js
 #[tracing::instrument(skip_all, fields(op = "cx.extension.soland.extensions.bots.revoke"))]
 async fn revoke_endpoint(aa: AuthArgs, depot: &mut Depot, req: &mut Request) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let _session = aa.authenticated_session(state, req)?;
+    let _session = aa.authenticated_session(state, req).await?;
     let did = req
         .param::<String>("did")
         .ok_or_else(|| AppError::missing_param("did path segment required"))?;

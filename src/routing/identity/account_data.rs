@@ -156,7 +156,7 @@ async fn put_account_data(
     body: JsonBody<AccountDataSetRequest>,
 ) -> JsonResult<AccountDataEntry> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let data_type = data_type.into_inner();
     validate_data_type(&data_type)?;
 
@@ -197,7 +197,7 @@ async fn put_account_data(
     let existed = state
         .persistence
         .account_data()
-        .get(&session.actor, &data_type)
+        .get(&session.actor, &data_type).await
         .map_err(|error| AppError::internal(error.to_string()))?
         .is_some();
 
@@ -214,7 +214,7 @@ async fn put_account_data(
     state
         .persistence
         .account_data()
-        .put(&record)
+        .put(&record).await
         .map_err(|error| AppError::internal(error.to_string()))?;
 
     super::append_audit_log(
@@ -263,14 +263,14 @@ async fn get_account_data(
     data_type: PathParam<String>,
 ) -> JsonResult<AccountDataEntry> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let data_type = data_type.into_inner();
     validate_data_type(&data_type)?;
 
     match state
         .persistence
         .account_data()
-        .get(&session.actor, &data_type)
+        .get(&session.actor, &data_type).await
         .map_err(|error| AppError::internal(error.to_string()))?
     {
         Some(record) => json_ok(entry_from(record)),
@@ -290,11 +290,11 @@ async fn list_account_data(
     req: &mut Request,
 ) -> JsonResult<AccountDataListResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let entries = state
         .persistence
         .account_data()
-        .list_for_actor(&session.actor)
+        .list_for_actor(&session.actor).await
         .map_err(|error| AppError::internal(error.to_string()))?
         .into_iter()
         .map(entry_from)
@@ -315,14 +315,14 @@ async fn delete_account_data(
     data_type: PathParam<String>,
 ) -> JsonResult<serde_json::Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let data_type = data_type.into_inner();
     validate_data_type(&data_type)?;
 
     state
         .persistence
         .account_data()
-        .delete(&session.actor, &data_type)
+        .delete(&session.actor, &data_type).await
         .map_err(|error| AppError::internal(error.to_string()))?;
 
     super::append_audit_log(

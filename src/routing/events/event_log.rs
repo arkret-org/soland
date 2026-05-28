@@ -160,10 +160,10 @@ async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Response) 
         }
     };
     if envelope.get("service_binding_ref").is_some() {
-        submit_federation_events(state, req, envelope, res);
+        submit_federation_events(state, req, envelope, res).await;
         return;
     }
-    let Some(session) = auth_or_render(state, req, res) else {
+    let Some(session) = auth_or_render(state, req, res).await else {
         return;
     };
     if envelope.get("envelopes").is_some() {
@@ -196,7 +196,7 @@ async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Response) 
         return;
     }
     let envelope_for_chaos = envelope.clone();
-    match submit_event_value(state, &session, envelope) {
+    match submit_event_value(state, &session, envelope).await {
         Ok(response) => {
             maybe_delay_test_chaos_breakpoint(state, &envelope_for_chaos, &response).await;
             res.render(Json(response));
@@ -270,16 +270,16 @@ async fn get_event(
     req: &mut Request,
 ) -> JsonResult<EventReadResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let event_id = event_id.into_inner();
     let record = state
         .persistence
         .events()
-        .get(&event_id)
+        .get(&event_id).await
         .ok()
         .flatten()
         .ok_or_else(|| AppError::not_found("event not found"))?;
-    if !event_visible_to_session(state, &record, &session) {
+    if !event_visible_to_session(state, &record, &session).await {
         return Err(AppError::not_found("event not found"));
     }
     json_ok(event_read_response_for_state(state, &record))
@@ -298,7 +298,7 @@ async fn resolve_events(
     req: &mut Request,
 ) -> JsonResult<EventResolveResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
     if body.event_ids.len() + body.event_digests.len() > MAX_EVENT_RESOLVE {
         return Err(AppError::new(
@@ -310,8 +310,8 @@ async fn resolve_events(
     let mut found = Vec::new();
     let mut missing = Vec::new();
     for event_id in body.event_ids {
-        match store.get(&event_id).ok().flatten() {
-            Some(record) if event_visible_to_session(state, &record, &session) => {
+        match store.get(&event_id).await.ok().flatten() {
+            Some(record) if event_visible_to_session(state, &record, &session).await => {
                 found.push(event_read_response_for_state(state, &record));
             }
             _ => missing.push(event_id),
@@ -396,10 +396,10 @@ pub(super) async fn events_query_durable_scope_impl(
         .clamp(1, 100);
     let actors_set: std::collections::BTreeSet<&str> = actors.iter().map(String::as_str).collect();
     let spaces_set: std::collections::BTreeSet<&str> = spaces.iter().map(String::as_str).collect();
-    let mut records = state
+    let scoped = state
         .persistence
         .events()
-        .snapshot_all()
+        .snapshot_all().await
         .unwrap_or_default()
         .into_iter()
         .filter(|record| {
@@ -415,9 +415,13 @@ pub(super) async fn events_query_durable_scope_impl(
                 .as_deref()
                 .is_some_and(|s| spaces_set.contains(s));
             actor_match || space_match
-        })
-        .filter(|record| event_visible_to_session(state, record, session))
-        .collect::<Vec<_>>();
+        });
+    let mut records = Vec::new();
+    for record in scoped {
+        if event_visible_to_session(state, &record, session).await {
+            records.push(record);
+        }
+    }
     records.sort_by(|left, right| {
         left.received_at
             .cmp(&right.received_at)
@@ -471,7 +475,7 @@ async fn events_query_durable_scope(
     req: &mut Request,
 ) -> JsonResult<EventsPageResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let response = events_query_durable_scope_impl(state, &session, req).await?;
     json_ok(response)
 }
@@ -488,7 +492,7 @@ async fn events_frontier(
     req: &mut Request,
 ) -> crate::result::JsonResult<EventsFrontierResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let actor_id = query_param(req, "actor_id").or_else(|| query_param(req, "actor"));
     let realm_selector = query_param(req, "realm_id");
     let internal_space_selector = match realm_selector.as_deref() {
@@ -514,7 +518,7 @@ async fn events_frontier(
     let events = state
         .persistence
         .events()
-        .snapshot_all()
+        .snapshot_all().await
         .unwrap_or_default();
     let mut actor_frontier: BTreeMap<String, u64> = BTreeMap::new();
     let mut realm_frontier: BTreeMap<String, Value> = BTreeMap::new();
@@ -533,7 +537,7 @@ async fn events_frontier(
         {
             continue;
         }
-        if !event_visible_to_session(state, record, &session) {
+        if !event_visible_to_session(state, record, &session).await {
             continue;
         }
         actor_frontier
@@ -795,7 +799,7 @@ fn batch_envelopes_from_submit_body(body: &Value) -> Result<Option<Vec<Value>>, 
     Ok(Some(envelopes.clone()))
 }
 
-fn submit_event_batch(
+async fn submit_event_batch(
     state: &AppState,
     session: &SessionRecord,
     envelopes: Vec<Value>,
@@ -808,7 +812,7 @@ fn submit_event_batch(
     for envelope in envelopes {
         let id = event_string_field_from_value(&envelope, "event_id")
             .unwrap_or_else(|| "unknown".to_owned());
-        match submit_event_value(state, session, envelope) {
+        match submit_event_value(state, session, envelope).await {
             Ok(response) => {
                 accepted.push(response.event_id.clone());
                 if response.status == "duplicate" {
@@ -839,7 +843,7 @@ fn submit_event_batch(
     })));
 }
 
-fn submit_federation_events(state: &AppState, req: &Request, body: Value, res: &mut Response) {
+async fn submit_federation_events(state: &AppState, req: &Request, body: Value, res: &mut Response) {
     let Some(object) = body.as_object() else {
         render_error(
             res,
@@ -1004,7 +1008,7 @@ fn submit_federation_events(state: &AppState, req: &Request, body: Value, res: &
             created_at,
             revoked_at: None,
         };
-        match submit_event_value(state, &session, envelope) {
+        match submit_event_value(state, &session, envelope).await {
             Ok(response) => {
                 accepted.push(response.event_id.clone());
                 if response.status == "duplicate" {
@@ -1055,7 +1059,7 @@ fn event_string_field_from_value(value: &Value, field: &str) -> Option<String> {
         .and_then(|object| event_string_field(object, &[field]))
 }
 
-fn submit_event_value(
+async fn submit_event_value(
     state: &AppState,
     session: &SessionRecord,
     envelope: Value,
@@ -1075,10 +1079,10 @@ fn submit_event_value(
         ));
     }
 
-    let parsed = validate_event_envelope(state, session, &envelope)?;
+    let parsed = validate_event_envelope(state, session, &envelope).await?;
     let received_at = now();
     let store = state.persistence.events();
-    if let Ok(Some(existing)) = store.get(&parsed.event_id) {
+    if let Ok(Some(existing)) = store.get(&parsed.event_id).await {
         if existing.canonical_bytes == parsed.canonical_bytes {
             return Ok(event_submit_response(
                 state,
@@ -1106,7 +1110,7 @@ fn submit_event_value(
             "event_id already exists with different canonical bytes",
         ));
     }
-    if let Ok(Some(max_seq)) = store.max_actor_seq(&parsed.actor_id)
+    if let Ok(Some(max_seq)) = store.max_actor_seq(&parsed.actor_id).await
         && parsed.actor_seq <= max_seq
     {
         return Err(SubmitOneError::new(
@@ -1116,7 +1120,7 @@ fn submit_event_value(
         ));
     }
     for prev_ref in &parsed.prev_refs {
-        if !store.contains(prev_ref).unwrap_or(false) {
+        if !store.contains(prev_ref).await.unwrap_or(false) {
             return Err(SubmitOneError::new(
                 StatusCode::CONFLICT,
                 "dependency_missing",
@@ -1125,7 +1129,7 @@ fn submit_event_value(
         }
     }
     for authorized_ref in &parsed.authorized_refs {
-        if !store.contains(authorized_ref).unwrap_or(false) {
+        if !store.contains(authorized_ref).await.unwrap_or(false) {
             return Err(SubmitOneError::new(
                 StatusCode::CONFLICT,
                 "dependency_missing",
@@ -1152,7 +1156,7 @@ fn submit_event_value(
                 message,
             ));
         }
-        if let Err(message) = validate_operation_policy(state, std::slice::from_ref(operation)) {
+        if let Err(message) = validate_operation_policy(state, std::slice::from_ref(operation)).await {
             return Err(SubmitOneError::new(
                 StatusCode::FORBIDDEN,
                 "capability_denied",
@@ -1233,7 +1237,7 @@ fn submit_event_value(
         canonical_bytes: parsed.canonical_bytes.clone(),
         envelope,
         received_at,
-    }) {
+    }).await {
         tracing::error!(%error, "failed to persist canonical event");
         return Err(SubmitOneError::new(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -1357,7 +1361,7 @@ fn event_scope_ids(
     ))
 }
 
-fn validate_event_envelope(
+async fn validate_event_envelope(
     state: &AppState,
     session: &SessionRecord,
     envelope: &Value,
@@ -1576,10 +1580,10 @@ fn validate_event_envelope(
         && realm_create_actor_is_creator(object, &session.actor)
         && !space_exists_in_index(state, &space_id);
     let is_invite_acceptance_join =
-        member_join_accepts_pending_invite(state, object, &session.actor, &space_id);
+        member_join_accepts_pending_invite(state, object, &session.actor, &space_id).await;
     if !is_realm_create_bootstrap
         && !is_invite_acceptance_join
-        && !realm_has_member(state, &space_id, &session.actor)
+        && !realm_has_member(state, &space_id, &session.actor).await
     {
         return Err(event_validation_error(
             StatusCode::FORBIDDEN,
@@ -1650,7 +1654,7 @@ fn validate_event_envelope(
             }
         }
         let media_plaintext_service_present =
-            projected_media_plaintext_service_present(state, &space_id, &payload);
+            projected_media_plaintext_service_present(state, &space_id, &payload).await;
         let mls_governance_binding_covers_policy_root =
             projected_mls_governance_binding_covers_policy_root(state, &space_id, &payload);
         if let Err((code, reason)) = crate::round23::realm_policy_components_check(
@@ -1700,7 +1704,7 @@ fn validate_event_envelope(
         &event_id,
         &actor_id,
         &canonical_digest,
-    )?;
+    ).await?;
     validate_event_proofs(
         object,
         state,
@@ -1725,13 +1729,13 @@ fn validate_event_envelope(
     })
 }
 
-fn projected_media_plaintext_service_present(
+async fn projected_media_plaintext_service_present(
     state: &AppState,
     realm_id: &str,
     payload: &Value,
 ) -> bool {
     payload_declares_media_plaintext_service(payload, &state.config.service_did)
-        || realm_allows_plaintext_service(state, realm_id)
+        || realm_allows_plaintext_service(state, realm_id).await
 }
 
 fn payload_declares_media_plaintext_service(payload: &Value, service_did: &str) -> bool {
@@ -1867,7 +1871,7 @@ const CX_AUDIT_ACCESSED: &str = "cx.audit.accessed";
 const CX_MODERATION_FRANKING_PROOF: &str = "cx.moderation.franking_proof";
 const MANAGE_OTHERS_AUDIT_MISSING: &str = "manage_others_audit_missing";
 
-fn append_encrypted_message_franking(
+async fn append_encrypted_message_franking(
     state: &AppState,
     parsed: &ValidatedEventEnvelope,
     envelope: &Value,
@@ -1875,7 +1879,7 @@ fn append_encrypted_message_franking(
     if parsed.kind != "cx.message.create" {
         return;
     }
-    let Some(policy) = audit_disclosure_policy_for_realm(state, &parsed.realm_id) else {
+    let Some(policy) = audit_disclosure_policy_for_realm(state, &parsed.realm_id).await else {
         return;
     };
     if policy.get("enabled").and_then(Value::as_bool) == Some(false) {
@@ -1927,11 +1931,11 @@ fn encrypted_message_ciphertext_digest(envelope: &Value) -> Option<String> {
         .map(|ciphertext| format!("sha256:{}", sha256_hex(ciphertext.as_bytes())))
 }
 
-fn audit_disclosure_policy_for_realm(state: &AppState, realm_id: &str) -> Option<Value> {
+async fn audit_disclosure_policy_for_realm(state: &AppState, realm_id: &str) -> Option<Value> {
     state
         .persistence
         .events()
-        .snapshot_all()
+        .snapshot_all().await
         .ok()?
         .into_iter()
         .filter(|record| {
@@ -2189,7 +2193,7 @@ fn required_payload_string(
         })
 }
 
-fn validate_flow_watch_audit_pair(
+async fn validate_flow_watch_audit_pair(
     state: &AppState,
     kind: &str,
     object: &serde_json::Map<String, Value>,
@@ -2249,7 +2253,7 @@ fn validate_flow_watch_audit_pair(
     let audit_record = state
         .persistence
         .events()
-        .get(audit_ref)
+        .get(audit_ref).await
         .map_err(|_| manage_others_audit_error("audit_pair event lookup failed"))?
         .ok_or_else(|| manage_others_audit_error("audit_pair event is not accepted"))?;
     if audit_record.kind != CX_AUDIT_ACCESSED {
@@ -2868,7 +2872,7 @@ fn realm_create_actor_is_creator(object: &serde_json::Map<String, Value>, actor:
         .is_some_and(|creator| creator == actor)
 }
 
-fn member_join_accepts_pending_invite(
+async fn member_join_accepts_pending_invite(
     state: &AppState,
     object: &serde_json::Map<String, Value>,
     actor: &str,
@@ -2897,7 +2901,7 @@ fn member_join_accepts_pending_invite(
     if crate::ids::parse_typed_uuid(invite_id, "invite").is_none() {
         return false;
     }
-    let Ok(Some(invite)) = state.persistence.space_invites().get(invite_id) else {
+    let Ok(Some(invite)) = state.persistence.space_invites().get(invite_id).await else {
         return false;
     };
     if invite.status != "pending" || invite.invitee.as_deref() != Some(actor) {
@@ -2938,7 +2942,7 @@ fn space_exists_in_index(state: &AppState, space_id: &str) -> bool {
 /// Extracted out of `submit_event` (called once after `store.put`
 /// succeeds for a `cx.realm.create` event) so the canonical Event
 /// Envelope path owns Realm bootstrap state.
-fn bootstrap_realm_member_index(
+async fn bootstrap_realm_member_index(
     state: &AppState,
     space_id: &str,
     actor: &str,
@@ -3008,7 +3012,7 @@ fn bootstrap_realm_member_index(
         created_at: super::now(),
         updated_at: super::now(),
     };
-    if let Err(error) = state.persistence.realm_meta().put(space_id, &meta) {
+    if let Err(error) = state.persistence.realm_meta().put(space_id, &meta).await {
         tracing::error!(%error, %space_id, "bootstrap_realm_member_index: failed to persist Realm meta record");
     }
 }
@@ -3488,7 +3492,7 @@ fn canonical_realm_id_for_record(record: &CanonicalEventRecord) -> Option<String
         .or_else(|| record.space_id.clone())
 }
 
-pub(super) fn event_visible_to_session(
+pub(super) async fn event_visible_to_session(
     state: &AppState,
     record: &CanonicalEventRecord,
     session: &SessionRecord,
@@ -3496,15 +3500,19 @@ pub(super) fn event_visible_to_session(
     if record.actor_id == session.actor {
         return true;
     }
-    record.space_id.as_deref().is_some_and(|space_id| {
-        realm_event_visible_to_session(
-            state,
-            space_id,
-            record.received_at,
-            Some(&record.actor_id),
-            Some(session),
-        )
-    })
+    match record.space_id.as_deref() {
+        Some(space_id) => {
+            realm_event_visible_to_session(
+                state,
+                space_id,
+                record.received_at,
+                Some(&record.actor_id),
+                Some(session),
+            )
+            .await
+        }
+        None => false,
+    }
 }
 
 /// Scan the durable Event store for the most
@@ -3522,7 +3530,7 @@ pub(super) fn event_visible_to_session(
 /// **Note**: this is a linear scan of the durable event store. For the
 /// production fanout path it should be projected into `AppState` once the
 /// reducer kind delegates from `Ignored` to a real projection.
-pub fn effective_read_receipt_policy_for_space(
+pub async fn effective_read_receipt_policy_for_space(
     state: &AppState,
     space_id: &str,
 ) -> Option<(String, String, bool)> {
@@ -3558,7 +3566,7 @@ pub fn effective_read_receipt_policy_for_space(
     // Cold-path fallback: linear scan of the durable Event store. Used at
     // boot before the projection has been rehydrated, or when a server is
     // running with persistence disabled.
-    let records = state.persistence.events().snapshot_all().ok()?;
+    let records = state.persistence.events().snapshot_all().await.ok()?;
     let mut latest: Option<&CanonicalEventRecord> = None;
     for record in &records {
         // CanonicalEventRecord uses `kind` (not event_kind) for the
@@ -3704,7 +3712,7 @@ mod proof_strictness_tests {
                     created_at: now,
                     updated_at: now,
                 },
-            )
+            ).await
             .unwrap();
 
         let payload = json!({ "media_service_decrypts": true });

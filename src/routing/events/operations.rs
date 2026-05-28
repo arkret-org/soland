@@ -1478,14 +1478,14 @@ fn validate_cross_signing_reset_replay_batch(operations: &[Operation]) -> Result
     Ok(())
 }
 
-pub fn validate_operation_policy(
+pub async fn validate_operation_policy(
     state: &AppState,
     operations: &[Operation],
 ) -> Result<(), &'static str> {
     for operation in operations {
         if kinds::operation_is_message_create(operation)
             && !message_operation_is_encrypted(operation)
-            && known_space_denies_plaintext_service(state, operation.realm_id.as_str())
+            && known_space_denies_plaintext_service(state, operation.realm_id.as_str()).await
         {
             return Err(
                 "private plaintext message operations require this service in plaintext_visible_services",
@@ -1494,14 +1494,14 @@ pub fn validate_operation_policy(
         if kinds::canonical_kind_for_operation(operation) == Some(kinds::CX_MORPH_SCHEMA_MIGRATE) {
             validate_morph_schema_migrate_capability(operation)?;
         }
-        validate_member_state_policy(state, operation)?;
+        validate_member_state_policy(state, operation).await?;
         validate_realm_moderation_policy(state, operation)?;
         validate_poll_operation_policy(state, operation)?;
     }
     Ok(())
 }
 
-fn validate_member_state_policy(
+async fn validate_member_state_policy(
     state: &AppState,
     operation: &Operation,
 ) -> Result<(), &'static str> {
@@ -1529,7 +1529,7 @@ fn validate_member_state_policy(
         // paths keep working; direct client submits always carry `sender`.
         return Ok(());
     };
-    if realm_owner_matches(state, operation.realm_id.as_str(), actor) {
+    if realm_owner_matches(state, operation.realm_id.as_str(), actor).await {
         return Ok(());
     }
     Err("missing_capability")
@@ -1567,11 +1567,11 @@ fn validate_realm_moderation_policy(
     Ok(())
 }
 
-fn realm_owner_matches(state: &AppState, realm_id: &str, actor: &str) -> bool {
+async fn realm_owner_matches(state: &AppState, realm_id: &str, actor: &str) -> bool {
     state
         .persistence
         .realm_meta()
-        .get(realm_id)
+        .get(realm_id).await
         .ok()
         .flatten()
         .is_some_and(|meta| meta.owner == actor)
@@ -1633,11 +1633,11 @@ pub fn message_operation_is_encrypted(operation: &Operation) -> bool {
         || operation.payload.get("encrypted_payload").is_some()
 }
 
-pub fn known_space_denies_plaintext_service(state: &AppState, space_id: &str) -> bool {
+pub async fn known_space_denies_plaintext_service(state: &AppState, space_id: &str) -> bool {
     state
         .persistence
         .realm_meta()
-        .get(space_id)
+        .get(space_id).await
         .ok()
         .flatten()
         .is_some_and(|record| {

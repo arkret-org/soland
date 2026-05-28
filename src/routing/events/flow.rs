@@ -62,21 +62,21 @@ pub fn discussion_track_for_projection_event(
     Some(default_discussion_track(flow_id, track_id))
 }
 
-pub fn flow_history_visibility_for_space(state: &AppState, space_id: &str) -> &'static str {
-    if realm_discoverability(state, space_id) == "public" {
+pub async fn flow_history_visibility_for_space(state: &AppState, space_id: &str) -> &'static str {
+    if realm_discoverability(state, space_id).await == "public" {
         "shared"
     } else {
         "joined"
     }
 }
 
-pub fn flow_projection_for_space(
+pub async fn flow_projection_for_space(
     state: &AppState,
     space_id: &str,
     title: &str,
     summary: Option<&str>,
 ) -> serde_json::Value {
-    let meta = state.persistence.realm_meta().get(space_id).ok().flatten();
+    let meta = state.persistence.realm_meta().get(space_id).await.ok().flatten();
     let owner = meta
         .as_ref()
         .map(|meta| meta.owner.clone())
@@ -90,6 +90,7 @@ pub fn flow_projection_for_space(
         .map(|meta| meta.updated_at)
         .unwrap_or(created_at);
     let deleted = meta.as_ref().is_some_and(|meta| meta.deleted);
+    let history_visibility = flow_history_visibility_for_space(state, space_id).await;
     // `kind: "room"` and `room_kind` were removed in revision 0a5ab85
     // (see contrix-spec `artifacts/registry/forbidden-wire-fields.json`
     // entries `kind=room` and `room_kind`); Space is the v1 boundary and
@@ -113,8 +114,8 @@ pub fn flow_projection_for_space(
             "discussion": {
                 "enabled": true,
                 "track_kind": "discussion",
-                "history_visibility": flow_history_visibility_for_space(state, space_id),
-                "encryption_profile": if realm_allows_plaintext_service(state, space_id) { "none" } else { "mls_rfc9420" },
+                "history_visibility": history_visibility,
+                "encryption_profile": if realm_allows_plaintext_service(state, space_id).await { "none" } else { "mls_rfc9420" },
                 "fields": {}
             }
         },

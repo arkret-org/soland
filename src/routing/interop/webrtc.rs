@@ -81,8 +81,8 @@ async fn contrix_ice_config(
     req: &mut Request,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
-    issue_ice_config(state, &session, body.into_inner(), None, false)
+    let session = aa.authenticated_session(state, req).await?;
+    issue_ice_config(state, &session, body.into_inner(), None, false).await
 }
 
 #[endpoint(
@@ -98,8 +98,8 @@ async fn api_ice_config(
     req: &mut Request,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
-    issue_ice_config(state, &session, body.into_inner(), None, false)
+    let session = aa.authenticated_session(state, req).await?;
+    issue_ice_config(state, &session, body.into_inner(), None, false).await
 }
 
 #[endpoint(
@@ -116,7 +116,7 @@ async fn refresh_ice_config(
     req: &mut Request,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     issue_ice_config(
         state,
         &session,
@@ -124,9 +124,10 @@ async fn refresh_ice_config(
         Some(call_id.into_inner()),
         true,
     )
+    .await
 }
 
-fn issue_ice_config(
+async fn issue_ice_config(
     state: &AppState,
     session: &SessionRecord,
     body: Value,
@@ -167,12 +168,12 @@ fn issue_ice_config(
             "device_id must match the authenticated device",
         ));
     }
-    if !space_has_member(state, realm_id, actor_id) {
+    if !space_has_member(state, realm_id, actor_id).await {
         return Err(AppError::capability_denied(
             "actor is not a joined member of the realm",
         ));
     }
-    if let Some(record) = state.persistence.webrtc().get(call_id).ok().flatten() {
+    if let Some(record) = state.persistence.webrtc().get(call_id).await.ok().flatten() {
         if record.space_id != realm_id {
             return Err(AppError::invalid_param(
                 "call_id does not belong to the requested realm",
@@ -312,12 +313,12 @@ async fn create_webrtc_session(
     req: &mut Request,
 ) -> JsonResult<CreateWebrtcSessionResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
     if validate_space_id(&body.space_id).is_err() {
         return Err(AppError::invalid_param("invalid space_id"));
     }
-    if !space_has_member(state, &body.space_id, &session.actor) {
+    if !space_has_member(state, &body.space_id, &session.actor).await {
         return Err(AppError::capability_denied(
             "actor is not a joined member of the space",
         ));
@@ -331,7 +332,7 @@ async fn create_webrtc_session(
         if validate_did(&participant).is_err() {
             return Err(AppError::invalid_param("invalid participant did"));
         }
-        if !space_has_member(state, &body.space_id, &participant) {
+        if !space_has_member(state, &body.space_id, &participant).await {
             return Err(AppError::capability_denied(
                 "participant is not a joined member of the space",
             ));
@@ -362,7 +363,7 @@ async fn create_webrtc_session(
     state
         .persistence
         .webrtc()
-        .put(record)
+        .put(record).await
         .map_err(|error| AppError::internal(error.to_string()))?;
     json_ok(CreateWebrtcSessionResponse {
         session_id,
@@ -390,7 +391,7 @@ async fn put_webrtc_signal(
     req: &mut Request,
 ) -> JsonResult<WebrtcSignalResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let session_id = session_id.into_inner();
     if !is_valid_webrtc_session_id(&session_id) {
         return Err(AppError::invalid_param("invalid webrtc session id"));
@@ -408,7 +409,7 @@ async fn put_webrtc_signal(
         ));
     }
     if let Some(requested_seq) = body.seq {
-        let Some(record) = state.persistence.webrtc().get(&session_id).ok().flatten() else {
+        let Some(record) = state.persistence.webrtc().get(&session_id).await.ok().flatten() else {
             return Err(AppError::not_found("session not found"));
         };
         if !record.participants.contains(&session.actor) {
@@ -441,13 +442,13 @@ async fn put_webrtc_signal(
     match state
         .persistence
         .webrtc()
-        .append_signal(&session_id, &session.actor, builder)
+        .append_signal(&session_id, &session.actor, builder).await
     {
         Ok(appended) => {
             let call_state = state
                 .persistence
                 .webrtc()
-                .get(&session_id)
+                .get(&session_id).await
                 .ok()
                 .flatten()
                 .map(|record| call_state_for_webrtc_session(&record).to_owned())
@@ -485,7 +486,7 @@ async fn get_webrtc_signals(
     req: &mut Request,
 ) -> JsonResult<WebrtcSignalsResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let session_id = session_id.into_inner();
     if !is_valid_webrtc_session_id(&session_id) {
         return Err(AppError::invalid_param("invalid webrtc session id"));
@@ -494,7 +495,7 @@ async fn get_webrtc_signals(
     let limit = limit.into_inner().unwrap_or(50).clamp(1, 100);
 
     prune_expired_webrtc_sessions(state);
-    let Some(record) = state.persistence.webrtc().get(&session_id).ok().flatten() else {
+    let Some(record) = state.persistence.webrtc().get(&session_id).await.ok().flatten() else {
         return Err(AppError::not_found("session not found"));
     };
     if !record.participants.contains(&session.actor) {
@@ -547,14 +548,14 @@ async fn delete_webrtc_session(
     req: &mut Request,
 ) -> JsonResult<OkResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let session_id = session_id.into_inner();
     if !is_valid_webrtc_session_id(&session_id) {
         return Err(AppError::invalid_param("invalid webrtc session id"));
     }
 
     prune_expired_webrtc_sessions(state);
-    let Some(record) = state.persistence.webrtc().get(&session_id).ok().flatten() else {
+    let Some(record) = state.persistence.webrtc().get(&session_id).await.ok().flatten() else {
         return Err(AppError::not_found("session not found"));
     };
     if !record.participants.contains(&session.actor) {
@@ -562,7 +563,7 @@ async fn delete_webrtc_session(
             "actor is not a participant of the webrtc session",
         ));
     }
-    let _ = state.persistence.webrtc().delete(&session_id);
+    let _ = state.persistence.webrtc().delete(&session_id).await;
     json_ok(OkResBody { ok: true })
 }
 
@@ -580,7 +581,7 @@ async fn start_recording(
     req: &mut Request,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let call_id = call_id.into_inner();
     if !is_valid_webrtc_session_id(&call_id) {
         return Err(AppError::invalid_param("invalid call_id"));
@@ -589,7 +590,7 @@ async fn start_recording(
     let mut record = state
         .persistence
         .webrtc()
-        .get(&call_id)
+        .get(&call_id).await
         .map_err(|error| AppError::internal(error.to_string()))?
         .ok_or_else(|| AppError::not_found("call session not found"))?;
     if !record.participants.contains(&session.actor) {
@@ -626,7 +627,7 @@ async fn start_recording(
     state
         .persistence
         .webrtc()
-        .put(record.clone())
+        .put(record.clone()).await
         .map_err(|error| AppError::internal(error.to_string()))?;
     json_ok(json!({
         "ok": true,
@@ -660,7 +661,7 @@ async fn start_recording(
 // TODO(R3.1): real focus selection (oldest call_member.foci_preferred[0]
 // per `webrtc-signaling.md §10.5`), real LiveKit / Mediasoup token mint,
 // participant_binding signature, e2ee key source resolution.
-fn handle_rtc_token(
+async fn handle_rtc_token(
     state: &AppState,
     session: &SessionRecord,
     body: MediaTokenExchangeReqBody,
@@ -686,7 +687,7 @@ fn handle_rtc_token(
     if body.focus_id.trim().is_empty() {
         return Err(AppError::invalid_param("focus_id is required"));
     }
-    if !space_has_member(state, &body.realm_id, &body.actor_id) {
+    if !space_has_member(state, &body.realm_id, &body.actor_id).await {
         return Err(AppError::capability_denied(
             "actor is not a joined member of the realm",
         ));
@@ -695,7 +696,7 @@ fn handle_rtc_token(
     let webrtc = state
         .persistence
         .webrtc()
-        .get(&body.call_id)
+        .get(&body.call_id).await
         .map_err(|error| AppError::internal(error.to_string()))?
         .ok_or_else(|| AppError::not_found("call session not found"))?;
     if webrtc.space_id != body.realm_id {
@@ -878,8 +879,8 @@ async fn contrix_rtc_token(
     req: &mut Request,
 ) -> JsonResult<MediaTokenExchangeResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
-    handle_rtc_token(state, &session, body.into_inner())
+    let session = aa.authenticated_session(state, req).await?;
+    handle_rtc_token(state, &session, body.into_inner()).await
 }
 
 #[endpoint(
@@ -896,12 +897,12 @@ async fn api_rtc_token(
     req: &mut Request,
 ) -> JsonResult<MediaTokenExchangeResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
-    handle_rtc_token(state, &session, body.into_inner())
+    let session = aa.authenticated_session(state, req).await?;
+    handle_rtc_token(state, &session, body.into_inner()).await
 }
 
-fn prune_expired_webrtc_sessions(state: &AppState) {
-    if let Err(error) = state.persistence.webrtc().prune_expired() {
+async fn prune_expired_webrtc_sessions(state: &AppState) {
+    if let Err(error) = state.persistence.webrtc().prune_expired().await {
         tracing::warn!(%error, "failed to prune expired webrtc sessions");
     }
 }

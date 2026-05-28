@@ -125,7 +125,7 @@ pub(super) async fn admin_get_realm_delivery_binding_policy(
     realm_id: PathParam<String>,
 ) -> JsonResult<RealmDeliveryBindingPolicyResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let _admin_session = super::require_admin_principal(state, session)?;
     let realm_id = realm_id.into_inner();
     if validate_space_id(&realm_id).is_err() {

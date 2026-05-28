@@ -117,7 +117,7 @@ async fn account_register(
     let accounts = state
         .persistence
         .accounts()
-        .list()
+        .list().await
         .map_err(|error| AppError::internal(error.to_string()))?;
     if accounts
         .iter()
@@ -139,7 +139,7 @@ async fn account_register(
     state
         .persistence
         .accounts()
-        .put(&account)
+        .put(&account).await
         .map_err(|error| AppError::internal(error.to_string()))?;
     if let Some(device_id) = body.device_id.as_deref() {
         let registered_at = now();
@@ -161,7 +161,7 @@ async fn account_register(
         state
             .persistence
             .devices()
-            .put(&device)
+            .put(&device).await
             .map_err(|error| AppError::internal(error.to_string()))?;
     }
     append_audit_log(
@@ -187,11 +187,11 @@ async fn account_me(
     req: &mut Request,
 ) -> JsonResult<AccountResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     match state
         .persistence
         .accounts()
-        .get(&session.actor)
+        .get(&session.actor).await
         .map_err(|error| AppError::internal(error.to_string()))?
     {
         Some(account) => json_ok(account_response(account, state)),
@@ -218,7 +218,7 @@ async fn claim_handle(
     // recorded in the audit log so other actors can discover the new
     // mapping.
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
     if let Err((reason_code, message)) = classify_handle(&body.handle) {
         return Err(AppError::invalid_param(message).with_wire_code(reason_code));
@@ -227,7 +227,7 @@ async fn claim_handle(
     let accounts_store = state.persistence.accounts();
     let mut current = accounts_store
         .get(&session.actor)
-        .map_err(|error| AppError::internal(error.to_string()))?
+        .await.map_err(|error| AppError::internal(error.to_string()))?
         .ok_or_else(|| AppError::not_found("account not found"))?;
     if current.handle == normalized {
         return json_ok(ClaimHandleResponse {
@@ -238,7 +238,7 @@ async fn claim_handle(
     }
     let all_accounts = accounts_store
         .list()
-        .map_err(|error| AppError::internal(error.to_string()))?;
+        .await.map_err(|error| AppError::internal(error.to_string()))?;
     if all_accounts
         .iter()
         .any(|account| account.did != session.actor && account.handle == normalized)
@@ -260,7 +260,7 @@ async fn claim_handle(
     current.handle = normalized.clone();
     accounts_store
         .put(&current)
-        .map_err(|error| AppError::internal(error.to_string()))?;
+        .await.map_err(|error| AppError::internal(error.to_string()))?;
     record_handle_release(state, &previous_handle);
     append_audit_log(
         state,
@@ -297,12 +297,12 @@ async fn update_profile(
     // updates on the `AccountRecord` directly; `demo_actors()` reads
     // them when serving `/api/v1/directory/search-actors`.
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
     let accounts_store = state.persistence.accounts();
     let mut current = accounts_store
         .get(&session.actor)
-        .map_err(|error| AppError::internal(error.to_string()))?
+        .await.map_err(|error| AppError::internal(error.to_string()))?
         .ok_or_else(|| AppError::not_found("account not found"))?;
     if let Some(value) = body.display_name {
         current.display_name = empty_to_none(value);
@@ -324,7 +324,7 @@ async fn update_profile(
     }
     accounts_store
         .put(&current)
-        .map_err(|error| AppError::internal(error.to_string()))?;
+        .await.map_err(|error| AppError::internal(error.to_string()))?;
     append_audit_log(
         state,
         Some(&session.actor),
@@ -374,7 +374,7 @@ async fn transfer_handle(
     // window as a regular release so stale references don't immediately
     // resolve to the new owner.
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
     if validate_did(&body.target_did).is_err() {
         return Err(AppError::invalid_param("invalid target_did"));
@@ -385,11 +385,11 @@ async fn transfer_handle(
     let accounts_store = state.persistence.accounts();
     let mut source = accounts_store
         .get(&session.actor)
-        .map_err(|error| AppError::internal(error.to_string()))?
+        .await.map_err(|error| AppError::internal(error.to_string()))?
         .ok_or_else(|| AppError::not_found("source account not found"))?;
     let mut target = match accounts_store
         .get(&body.target_did)
-        .map_err(|error| AppError::internal(error.to_string()))?
+        .await.map_err(|error| AppError::internal(error.to_string()))?
     {
         Some(account) => account,
         None => {
@@ -403,7 +403,7 @@ async fn transfer_handle(
     let parked_handle = normalize_handle(&super::handle_for_did(&source.did));
     let all_accounts = accounts_store
         .list()
-        .map_err(|error| AppError::internal(error.to_string()))?;
+        .await.map_err(|error| AppError::internal(error.to_string()))?;
     if all_accounts
         .iter()
         .any(|account| account.did != source.did && account.handle == parked_handle)
@@ -419,10 +419,10 @@ async fn transfer_handle(
     target.handle = transferred.clone();
     accounts_store
         .put(&source)
-        .map_err(|error| AppError::internal(error.to_string()))?;
+        .await.map_err(|error| AppError::internal(error.to_string()))?;
     accounts_store
         .put(&target)
-        .map_err(|error| AppError::internal(error.to_string()))?;
+        .await.map_err(|error| AppError::internal(error.to_string()))?;
     append_audit_log(
         state,
         Some(&session.actor),
@@ -461,13 +461,13 @@ async fn export_account(
     // audit entry records the operation so subsequent governance reviews
     // can see who requested an export.
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let actor = session.actor.clone();
 
     let account = state
         .persistence
         .accounts()
-        .get(&actor)
+        .get(&actor).await
         .map_err(|error| AppError::internal(error.to_string()))?;
     let profile = account.as_ref().map(|account| {
         json!({
@@ -481,7 +481,7 @@ async fn export_account(
     let devices = state
         .persistence
         .devices()
-        .list()
+        .list().await
         .unwrap_or_default()
         .into_iter()
         .filter(|device| device.actor == actor)
@@ -499,7 +499,7 @@ async fn export_account(
     let spaces: Vec<serde_json::Value> = state
         .persistence
         .realm_meta()
-        .list()
+        .list().await
         .unwrap_or_default()
         .into_iter()
         .filter(|(_sid, meta)| meta.owner == actor)
@@ -527,7 +527,7 @@ async fn export_account(
     let audit_log = state
         .persistence
         .audit()
-        .list_for_actor(&actor)
+        .list_for_actor(&actor).await
         .unwrap_or_default();
 
     let bundle = json!({
@@ -571,7 +571,7 @@ pub(crate) struct AccountLifecycleChange {
     pub devices_revoked: usize,
 }
 
-pub(crate) fn set_account_lifecycle_state(
+pub(crate) async fn set_account_lifecycle_state(
     state: &AppState,
     did: &str,
     next_state: &str,
@@ -595,7 +595,7 @@ pub(crate) fn set_account_lifecycle_state(
     if state
         .persistence
         .accounts()
-        .get(did)
+        .get(did).await
         .map_err(|error| AppError::internal(error.to_string()))?
         .is_none()
     {
@@ -630,10 +630,10 @@ pub(crate) fn set_account_lifecycle_state(
             },
         );
         if matches!(next_state, "locked" | "deactivated") {
-            sessions_revoked = revoke_sessions_for_actor(state, did).map_err(AppError::internal)?;
+            sessions_revoked = revoke_sessions_for_actor(state, did).await.map_err(AppError::internal)?;
         }
         if matches!(next_state, "locked" | "deactivated") {
-            devices_revoked = revoke_devices_for_actor(state, did).map_err(AppError::internal)?;
+            devices_revoked = revoke_devices_for_actor(state, did).await.map_err(AppError::internal)?;
         }
         append_account_state_change_audit(
             state,
@@ -715,7 +715,7 @@ async fn deactivate_account(
     req: &mut Request,
 ) -> JsonResult<serde_json::Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let actor = session.actor.clone();
     let change = set_account_lifecycle_state(
         state,
@@ -723,7 +723,7 @@ async fn deactivate_account(
         "deactivated",
         &actor,
         Some("user_deactivate".to_owned()),
-    )?;
+    ).await?;
     json_ok(json!({
         "did": change.did,
         "previous_state": change.previous_state,
@@ -753,9 +753,9 @@ async fn erase_account(
     // variant — full pseudonymization of historical events lands once
     // the projection rewrite worker ships.
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let actor = session.actor.clone();
-    let affected_realms = affected_erasure_realms_for_actor(state, &actor);
+    let affected_realms = affected_erasure_realms_for_actor(state, &actor).await;
 
     append_audit_log(
         state,
@@ -768,31 +768,31 @@ async fn erase_account(
     // Pseudonymize the account record (replace display_name / bio /
     // avatar_url with placeholders; retain DID + a release-marked
     // handle so foreign references resolve cleanly).
-    if let Ok(Some(mut account)) = state.persistence.accounts().get(&actor) {
+    if let Ok(Some(mut account)) = state.persistence.accounts().get(&actor).await {
         let previous_handle = account.handle.clone();
         account.display_name = Some("[user erased]".to_owned());
         account.bio = None;
         account.avatar_url = None;
         account.handle = format!("@erased-{}", short_actor_tag(&actor));
-        let _ = state.persistence.accounts().put(&account);
+        let _ = state.persistence.accounts().put(&account).await;
         record_handle_release(state, &previous_handle);
     }
 
     // Revoke every device record so other surfaces (key delivery,
     // device lookup) can treat the actor as a fully revoked principal.
     let mut devices_revoked = 0usize;
-    let devices = state.persistence.devices().list().unwrap_or_default();
+    let devices = state.persistence.devices().list().await.unwrap_or_default();
     for mut device in devices.into_iter().filter(|d| d.actor == actor) {
         if device.revoked_at.is_some() {
             continue;
         }
         device.revoked_at = Some(now());
         device.updated_at = now();
-        let _ = state.persistence.devices().put(&device);
+        let _ = state.persistence.devices().put(&device).await;
         devices_revoked += 1;
     }
 
-    let sessions_revoked = revoke_sessions_for_actor(state, &actor).unwrap_or(0);
+    let sessions_revoked = revoke_sessions_for_actor(state, &actor).await.unwrap_or(0);
     // Spec: A.3 GDPR erasure cascade — remove the principal from every
     // Realm membership index so realm-scoped reads stop yielding the
     // actor without waiting for the projection rewrite worker.
@@ -917,6 +917,7 @@ async fn erase_account(
             &actor,
             &realm_operations,
         )
+        .await
     {
         tracing::warn!(
             %error,
@@ -942,7 +943,7 @@ async fn erase_account(
     let audit_log = state
         .persistence
         .audit()
-        .list_for_actor(&actor)
+        .list_for_actor(&actor).await
         .unwrap_or_default();
     json_ok(json!({
         "did": actor,
@@ -988,11 +989,11 @@ fn remove_realm_memberships_for_actor(state: &AppState, actor: &str) -> usize {
 
 /// Append a single audit row that marks every prior entry for `actor` as
 /// `redacted` while preserving timestamps + audit_ids. Spec: A.3.
-fn append_audit_redaction_marker(state: &AppState, actor: &str) {
+async fn append_audit_redaction_marker(state: &AppState, actor: &str) {
     let prior = state
         .persistence
         .audit()
-        .list_for_actor(actor)
+        .list_for_actor(actor).await
         .unwrap_or_default();
     let entries: Vec<Value> = prior
         .iter()
@@ -1018,12 +1019,12 @@ fn append_audit_redaction_marker(state: &AppState, actor: &str) {
     );
 }
 
-fn affected_erasure_realms_for_actor(state: &AppState, actor: &str) -> Vec<String> {
+async fn affected_erasure_realms_for_actor(state: &AppState, actor: &str) -> Vec<String> {
     let mut realms = std::collections::BTreeSet::new();
     for event in state
         .persistence
         .projection_events()
-        .snapshot_all()
+        .snapshot_all().await
         .unwrap_or_default()
     {
         if projection_event_belongs_to_actor(&event, actor) {
@@ -1170,11 +1171,11 @@ async fn list_notifications(
     req: &mut Request,
 ) -> JsonResult<serde_json::Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let actor_handle = state
         .persistence
         .accounts()
-        .get(&session.actor)
+        .get(&session.actor).await
         .map_err(|error| AppError::internal(error.to_string()))?
         .map(|account| account.handle)
         .unwrap_or_else(|| handle_for_did(&session.actor));
@@ -1184,33 +1185,39 @@ async fn list_notifications(
         .expect("notification_read_cursors lock")
         .get(&session.actor)
         .copied();
-    let mut items = {
+    // Snapshot the candidate messages off the projection lock first; the
+    // visibility checks below are async and must not run while the (non-Send)
+    // guard is held.
+    let candidate_messages: Vec<_> = {
         let projection = state.projection.lock().expect("projection lock");
         projection
             .messages
             .values()
-            .filter(|message| {
-                message.sender != session.actor
-                    && realm_has_member(state, &message.space_id, &session.actor)
-                    && !personal_blocklist_blocks_sender(state, &session.actor, &message.sender)
-                    && (!content_has_explicit_mention(&message.content)
-                        || content_mentions_actor(
-                            &message.content,
-                            &message.space_id,
-                            &session.actor,
-                            &actor_handle,
-                        ))
-            })
-            .map(|message| {
-                notification_from_message(
-                    message,
-                    &session.actor,
-                    &actor_handle,
-                    last_read_at.as_ref(),
-                )
-            })
-            .collect::<Vec<_>>()
+            .filter(|message| message.sender != session.actor)
+            .cloned()
+            .collect()
     };
+    let mut items = Vec::new();
+    for message in &candidate_messages {
+        let mentioned = !content_has_explicit_mention(&message.content)
+            || content_mentions_actor(
+                &message.content,
+                &message.space_id,
+                &session.actor,
+                &actor_handle,
+            );
+        if mentioned
+            && realm_has_member(state, &message.space_id, &session.actor).await
+            && !personal_blocklist_blocks_sender(state, &session.actor, &message.sender).await
+        {
+            items.push(notification_from_message(
+                message,
+                &session.actor,
+                &actor_handle,
+                last_read_at.as_ref(),
+            ));
+        }
+    }
     items.sort_by(|left, right| {
         right
             .get("timestamp")
@@ -1233,16 +1240,21 @@ async fn list_notifications(
     }))
 }
 
-fn personal_blocklist_blocks_sender(state: &AppState, actor: &str, sender: &str) -> bool {
-    PERSONAL_BLOCKLIST_DATA_TYPES.iter().any(|data_type| {
-        state
+async fn personal_blocklist_blocks_sender(state: &AppState, actor: &str, sender: &str) -> bool {
+    for data_type in PERSONAL_BLOCKLIST_DATA_TYPES.iter() {
+        let blocked = state
             .persistence
             .account_data()
             .get(actor, data_type)
+            .await
             .ok()
             .flatten()
-            .is_some_and(|record| blocklist_payload_blocks_sender(&record.payload, sender))
-    })
+            .is_some_and(|record| blocklist_payload_blocks_sender(&record.payload, sender));
+        if blocked {
+            return true;
+        }
+    }
+    false
 }
 
 fn blocklist_payload_blocks_sender(payload: &Value, sender: &str) -> bool {
@@ -1543,7 +1555,7 @@ async fn notifications_mark_all_read(
     req: &mut Request,
 ) -> JsonResult<serde_json::Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let marked_at = chrono::Utc::now();
     state
         .notification_read_cursors
@@ -1589,7 +1601,7 @@ async fn contact_request(
     body: JsonBody<ContactRequestRequest>,
 ) -> JsonResult<ContactResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
     if validate_did(&body.target).is_err() || body.target == session.actor {
         return Err(AppError::invalid_param("invalid contact target"));
@@ -1597,7 +1609,7 @@ async fn contact_request(
     let target_account = state
         .persistence
         .accounts()
-        .get(&body.target)
+        .get(&body.target).await
         .map_err(|error| AppError::internal(error.to_string()))?;
     if target_account.is_none() {
         return Err(AppError::not_found("not found"));
@@ -1613,7 +1625,7 @@ async fn contact_request(
     let store = state.persistence.contacts();
     if let Some(mut existing) = store
         .get_scoped(&session.actor, &body.target, &scope)
-        .map_err(|error| AppError::internal(error.to_string()))?
+        .await.map_err(|error| AppError::internal(error.to_string()))?
     {
         if existing.status == "rejected" {
             return json_ok(contact_response(existing));
@@ -1623,13 +1635,13 @@ async fn contact_request(
             existing.updated_at = now();
             store
                 .put(&existing)
-                .map_err(|error| AppError::internal(error.to_string()))?;
+                .await.map_err(|error| AppError::internal(error.to_string()))?;
         }
         return json_ok(contact_response(existing));
     }
     if store
         .get_scoped(&body.target, &session.actor, &scope)
-        .map_err(|error| AppError::internal(error.to_string()))?
+        .await.map_err(|error| AppError::internal(error.to_string()))?
         .is_some()
     {
         return Err(AppError::new(
@@ -1647,7 +1659,7 @@ async fn contact_request(
     };
     store
         .put(&contact)
-        .map_err(|error| AppError::internal(error.to_string()))?;
+        .await.map_err(|error| AppError::internal(error.to_string()))?;
     res.status_code(StatusCode::CREATED);
     json_ok(contact_response(contact))
 }
@@ -1665,7 +1677,7 @@ async fn contact_respond(
     body: JsonBody<ContactRespondRequest>,
 ) -> JsonResult<ContactResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
     if !matches!(body.action.as_str(), "accept" | "reject") {
         return Err(AppError::invalid_param("action must be accept or reject"));
@@ -1673,7 +1685,7 @@ async fn contact_respond(
     let store = state.persistence.contacts();
     let Some(mut contact) = store
         .get(&body.requester, &session.actor)
-        .map_err(|error| AppError::internal(error.to_string()))?
+        .await.map_err(|error| AppError::internal(error.to_string()))?
     else {
         return Err(AppError::not_found("not found"));
     };
@@ -1699,7 +1711,7 @@ async fn contact_respond(
     contact.updated_at = now();
     store
         .put(&contact)
-        .map_err(|error| AppError::internal(error.to_string()))?;
+        .await.map_err(|error| AppError::internal(error.to_string()))?;
     json_ok(contact_response(contact))
 }
 
@@ -1715,11 +1727,11 @@ async fn list_contacts(
     req: &mut Request,
 ) -> JsonResult<ContactsResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let result = state
         .persistence
         .contacts()
-        .list_for_actor(&session.actor)
+        .list_for_actor(&session.actor).await
         .map_err(|error| AppError::internal(error.to_string()))?
         .into_iter()
         .map(contact_response)
@@ -1781,7 +1793,7 @@ async fn account_principal_space(
     did: PathParam<String>,
 ) -> JsonResult<PrincipalSpaceResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let _session = aa.authenticated_session(state, req)?;
+    let _session = aa.authenticated_session(state, req).await?;
     let did = did.into_inner();
     if validate_did(&did).is_err() {
         return Err(AppError::invalid_param("invalid did"));

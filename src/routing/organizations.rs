@@ -70,7 +70,7 @@ async fn list_organizations(
     req: &mut Request,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let _session = aa.authenticated_session(state, req)?;
+    let _session = aa.authenticated_session(state, req).await?;
     let mut rows = state
         .organizations
         .lock()
@@ -104,7 +104,7 @@ async fn upsert_organization(
     body: JsonBody<UpsertOrganizationRequest>,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
     validate_did(&body.organization_did)
         .map_err(|_| AppError::invalid_param("organization_did must be a DID"))?;
@@ -157,7 +157,7 @@ async fn get_organization(
     organization_id: PathParam<String>,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let _session = aa.authenticated_session(state, req)?;
+    let _session = aa.authenticated_session(state, req).await?;
     let organization_id = normalized_organization_id(&organization_id.into_inner())?;
     let record = state
         .organizations
@@ -182,7 +182,7 @@ async fn get_organization_policy(
     organization_id: PathParam<String>,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let _session = aa.authenticated_session(state, req)?;
+    let _session = aa.authenticated_session(state, req).await?;
     let organization_id = normalized_organization_id(&organization_id.into_inner())?;
     let policy = state
         .organization_policies
@@ -211,7 +211,7 @@ async fn upsert_organization_policy(
     body: JsonBody<Value>,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let organization_id = normalized_organization_id(&organization_id.into_inner())?;
     ensure_organization_placeholder(state, &organization_id, &session.actor);
     let mut payload = body.into_inner();
@@ -285,7 +285,7 @@ async fn link_organization_space(
     body: JsonBody<LinkOrganizationSpaceRequest>,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let organization_id = normalized_organization_id(&organization_id.into_inner())?;
     let body = body.into_inner();
     ensure_organization_placeholder(state, &organization_id, &session.actor);

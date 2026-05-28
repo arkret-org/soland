@@ -25,7 +25,8 @@ use std::collections::{BTreeMap, HashSet};
 
 use contrix_sdk::{Did, Operation, OperationId, RealmId};
 use diesel::sql_types::{Jsonb, Nullable, Text, Timestamptz, Uuid as SqlUuid};
-use diesel::{QueryableByName, RunQueryDsl, sql_query};
+use diesel::{QueryableByName, sql_query};
+use diesel_async::RunQueryDsl;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
@@ -761,21 +762,22 @@ fn normalize_realm_scope(value: &str) -> String {
     value.replacen("cx:space:", "cx:realm:", 1)
 }
 
-pub fn append_projection_event(state: &AppState, event: ProjectionEventRecord) {
+pub async fn append_projection_event(state: &AppState, event: ProjectionEventRecord) {
     let store = state.persistence.projection_events();
     let exists = store
         .snapshot_all()
+        .await
         .map(|known| known.iter().any(|record| record.event_id == event.event_id))
         .unwrap_or(false);
     if exists {
         return;
     }
-    if let Err(error) = store.append(event) {
+    if let Err(error) = store.append(event).await {
         tracing::warn!(%error, "failed to persist projection event");
     }
 }
 
-pub fn projected_event_page(
+pub async fn projected_event_page(
     state: &AppState,
     space_id: &str,
     cursor: Option<&str>,
@@ -784,13 +786,13 @@ pub fn projected_event_page(
     let mut events = state
         .persistence
         .projection_events()
-        .snapshot_all()
+        .snapshot_all().await
         .unwrap_or_default()
         .into_iter()
         .filter(|event| event.space_id == space_id)
         .collect::<Vec<_>>();
     if events.is_empty() {
-        events = load_projected_events_from_pg(state, space_id)?;
+        events = load_projected_events_from_pg(state, space_id).await?;
     }
     if events.is_empty() {
         return Ok(None);
@@ -841,13 +843,13 @@ pub fn projected_event_page(
     }))
 }
 
-pub fn backfill_gap_events(
+pub async fn backfill_gap_events(
     state: &AppState,
     space_id: &str,
     from_cursor: Option<&str>,
     limit: usize,
 ) -> anyhow::Result<(Vec<Value>, Option<String>, bool)> {
-    if let Some(page) = projected_event_page(state, space_id, from_cursor, limit)? {
+    if let Some(page) = projected_event_page(state, space_id, from_cursor, limit).await? {
         let events = page
             .items
             .iter()
@@ -874,14 +876,14 @@ pub fn truncate_gap_events(mut events: Vec<Value>, to_cursor: Option<&str>) -> (
     (events, true)
 }
 
-pub fn load_projected_events_from_pg(
+pub async fn load_projected_events_from_pg(
     state: &AppState,
     space_id: &str,
 ) -> anyhow::Result<Vec<ProjectionEventRecord>> {
     let Some(pool) = state.db.pool.as_ref() else {
         return Ok(Vec::new());
     };
-    let mut conn = pool.get()?;
+    let mut conn = pool.get().await?;
     let space_id_uuid = ids::typed_uuid_part_or_panic(space_id);
     let rows = sql_query(
         "SELECT id AS event_id, space_id, event_type AS event_kind, 'event' AS operation_type, operation_id, sender, payload, created_at \
@@ -892,7 +894,7 @@ pub fn load_projected_events_from_pg(
          ORDER BY created_at ASC, event_id ASC",
     )
     .bind::<SqlUuid, _>(space_id_uuid)
-    .load::<ProjectionEventRow>(&mut conn)?;
+    .load::<ProjectionEventRow>(&mut *conn).await?;
     Ok(rows
         .into_iter()
         .map(|row| ProjectionEventRecord {
@@ -916,7 +918,7 @@ pub struct FederationIngestResult {
     pub rejected: Vec<Value>,
 }
 
-pub fn ingest_federation_operations(
+pub async fn ingest_federation_operations(
     state: &AppState,
     origin: &str,
     operations: Vec<Operation>,
@@ -928,7 +930,7 @@ pub fn ingest_federation_operations(
         if state
             .persistence
             .federation_operations()
-            .contains(operation_id.as_str())
+            .contains(operation_id.as_str()).await
             .unwrap_or(false)
         {
             accepted.push(operation_id);
@@ -950,7 +952,7 @@ pub fn ingest_federation_operations(
             }));
             continue;
         }
-        if let Err(message) = validate_operation_policy(state, std::slice::from_ref(&operation)) {
+        if let Err(message) = validate_operation_policy(state, std::slice::from_ref(&operation)).await {
             rejected.push(json!({
                 "operation_id": operation_id,
                 "reason": "policy_denied",
@@ -961,7 +963,7 @@ pub fn ingest_federation_operations(
         if let Err(error) = state
             .persistence
             .federation_operations()
-            .append(operation.clone())
+            .append(operation.clone()).await
         {
             tracing::error!(%error, "failed to persist federation operation");
             rejected.push(json!({
@@ -1003,14 +1005,14 @@ pub fn project_federation_operation(state: &AppState, origin: &str, operation: &
     );
 }
 
-pub fn accept_local_operations(
+pub async fn accept_local_operations(
     state: &AppState,
     actor: &str,
     operations: &[Operation],
 ) -> Result<(), &'static str> {
     validate_operation_semantics(state, operations)?;
-    validate_operation_policy(state, operations)?;
-    project_accepted_operations(state, actor, operations);
+    validate_operation_policy(state, operations).await?;
+    project_accepted_operations(state, actor, operations).await;
     Ok(())
 }
 
@@ -1023,7 +1025,7 @@ fn apply_via_lattice_registry(
     proj.apply_via_lattice_registry(operation, &state.hlc, &registry)
 }
 
-fn mirror_mls_effect_to_persistence(
+async fn mirror_mls_effect_to_persistence(
     state: &AppState,
     operation: &Operation,
     effect: &crate::reducer::ProjectionEffect,
@@ -1051,7 +1053,7 @@ fn mirror_mls_effect_to_persistence(
                     created_at: kp.created_at,
                 });
             if let Some(record) = record {
-                if let Err(error) = state.persistence.mls_key_packages().put(&record) {
+                if let Err(error) = state.persistence.mls_key_packages().put(&record).await {
                     tracing::warn!(%error, keypackage_id = %keypackage_id, "failed to mirror MLS KeyPackage publish");
                 }
             }
@@ -1065,7 +1067,7 @@ fn mirror_mls_effect_to_persistence(
                 keypackage_id,
                 group_id,
                 *consumed_at,
-            ) {
+            ).await {
                 tracing::warn!(%error, keypackage_id = %keypackage_id, "failed to mirror MLS KeyPackage claim");
             }
         }
@@ -1097,7 +1099,7 @@ fn mirror_mls_effect_to_persistence(
                     delivered_at: welcome.delivered_at,
                 });
             if let Some(record) = record {
-                if let Err(error) = state.persistence.mls_welcomes().enqueue(&record) {
+                if let Err(error) = state.persistence.mls_welcomes().enqueue(&record).await {
                     tracing::warn!(%error, welcome_id = %welcome_id, "failed to mirror MLS Welcome enqueue");
                 }
             }
@@ -1120,7 +1122,7 @@ fn mirror_mls_effect_to_persistence(
                 covered_frontier,
                 &binding,
                 operation.created_at.timestamp(),
-            ) {
+            ).await {
                 tracing::warn!(%error, group_id = %group_id, "failed to mirror MLS genesis epoch");
             }
         }
@@ -1144,7 +1146,7 @@ fn mirror_mls_effect_to_persistence(
                 covered_frontier,
                 &binding,
                 operation.created_at.timestamp(),
-            ) {
+            ).await {
                 tracing::warn!(%error, group_id = %group_id, "failed to mirror MLS commit epoch");
             }
         }
@@ -1162,7 +1164,7 @@ fn mirror_mls_effect_to_persistence(
 /// Unknown / unrelated kinds are no-ops. Lookup misses (e.g. archive
 /// for an unknown object — reducer tolerates this for causal /
 /// backfill ordering) also produce no write.
-fn write_through_projection(state: &AppState, operation: &Operation) {
+async fn write_through_projection(state: &AppState, operation: &Operation) {
     use crate::kinds;
     use crate::persistence::{
         FlowProjectionRecord, MorphProjectionRecord, SpaceContainerProjectionRecord,
@@ -1365,9 +1367,9 @@ fn write_through_projection(state: &AppState, operation: &Operation) {
     }
 
     let result = match snapshot {
-        Snapshot::SpaceContainer(r) => state.persistence.space_container_projections().put(&r),
-        Snapshot::Flow(r) => state.persistence.flow_projections().put(&r),
-        Snapshot::Morph(r) => state.persistence.morph_projections().put(&r),
+        Snapshot::SpaceContainer(r) => state.persistence.space_container_projections().put(&r).await,
+        Snapshot::Flow(r) => state.persistence.flow_projections().put(&r).await,
+        Snapshot::Morph(r) => state.persistence.morph_projections().put(&r).await,
     };
     if let Err(error) = result {
         tracing::warn!(
@@ -1378,7 +1380,7 @@ fn write_through_projection(state: &AppState, operation: &Operation) {
     }
 }
 
-pub fn project_accepted_operations(state: &AppState, origin: &str, operations: &[Operation]) {
+pub async fn project_accepted_operations(state: &AppState, origin: &str, operations: &[Operation]) {
     crate::routing::federation::fanout_accepted_operations_to_peers(state, operations);
     for operation in operations {
         tracing::debug!(
@@ -1414,7 +1416,7 @@ pub fn project_accepted_operations(state: &AppState, origin: &str, operations: &
         if kinds::canonical_kind_string(operation) == "cx.realm.read_receipt_policy" {
             project_read_receipt_policy(state, operation);
         }
-        crate::routing::identity::consent::project_consent_operation(state, operation);
+        crate::routing::identity::consent::project_consent_operation(state, operation).await;
         // Also apply to the deterministic reducer.
         let reducer_effect = state
             .projection
@@ -1462,7 +1464,7 @@ pub fn project_accepted_operations(state: &AppState, origin: &str, operations: &
                 projection_event_json(&projected),
             ));
         append_projection_event(state, projected);
-        if let Err(error) = persist_projected_operation(state, origin, operation) {
+        if let Err(error) = persist_projected_operation(state, origin, operation).await {
             tracing::warn!(
                 error = %error,
                 operation_id = %operation.operation_id,
@@ -1489,7 +1491,7 @@ pub fn project_accepted_operations(state: &AppState, origin: &str, operations: &
     }
 }
 
-pub fn persist_projected_operation(
+pub async fn persist_projected_operation(
     state: &AppState,
     origin: &str,
     operation: &Operation,
@@ -1497,7 +1499,7 @@ pub fn persist_projected_operation(
     let Some(pool) = state.db.pool.as_ref() else {
         return Ok(());
     };
-    let mut conn = pool.get()?;
+    let mut conn = pool.get().await?;
     let event_type = kinds::canonical_kind_string(operation);
     if kinds::operation_is_message_create(operation) {
         let event_id = operation
@@ -1534,7 +1536,7 @@ pub fn persist_projected_operation(
             .bind::<Nullable<SqlUuid>, _>(Some(operation_id_uuid))
             .bind::<Jsonb, _>(&operation.payload)
             .bind::<Timestamptz, _>(operation.created_at)
-            .execute(&mut conn)?;
+            .execute(&mut *conn).await?;
     } else if kinds::operation_is_membership(operation)
         || kinds::operation_is_realm_lifecycle(operation)
     {
@@ -1568,7 +1570,7 @@ pub fn persist_projected_operation(
                 .bind::<Text, _>(discoverability)
                 .bind::<Jsonb, _>(&operation.payload)
                 .bind::<Timestamptz, _>(operation.created_at)
-                .execute(&mut conn)?;
+                .execute(&mut *conn).await?;
         } else {
             sql_query(
                     "INSERT INTO spaces (id, title, summary, owner, discoverability, payload, created_at, updated_at) \
@@ -1582,7 +1584,7 @@ pub fn persist_projected_operation(
                 .bind::<Text, _>(discoverability)
                 .bind::<Jsonb, _>(&operation.payload)
                 .bind::<Timestamptz, _>(operation.created_at)
-                .execute(&mut conn)?;
+                .execute(&mut *conn).await?;
         }
 
         if let Some(member) = operation
@@ -1605,7 +1607,7 @@ pub fn persist_projected_operation(
                 .bind::<Text, _>(membership)
                 .bind::<Jsonb, _>(&operation.payload)
                 .bind::<Timestamptz, _>(operation.created_at)
-                .execute(&mut conn)?;
+                .execute(&mut *conn).await?;
         }
 
         // The DB column matches the canonical projection-cell key
@@ -1630,7 +1632,7 @@ pub fn persist_projected_operation(
             .bind::<Nullable<Text>, _>(Some(origin))
             .bind::<Jsonb, _>(&operation.payload)
             .bind::<Timestamptz, _>(operation.created_at)
-            .execute(&mut conn)?;
+            .execute(&mut *conn).await?;
     }
     Ok(())
 }
@@ -1690,7 +1692,7 @@ pub fn project_read_receipt_policy(state: &AppState, operation: &Operation) {
     }
 }
 
-pub fn ensure_projected_space(state: &AppState, origin: &str, operation: &Operation) {
+pub async fn ensure_projected_space(state: &AppState, origin: &str, operation: &Operation) {
     let Ok(space_id) = RealmId::new(operation.realm_id.to_string()) else {
         return;
     };
@@ -1722,7 +1724,7 @@ pub fn ensure_projected_space(state: &AppState, origin: &str, operation: &Operat
 
     let now = now();
     let store = state.persistence.realm_meta();
-    match store.get(space_id.as_str()) {
+    match store.get(space_id.as_str()).await {
         Ok(None) => {
             let record = RealmMetaRecord {
                 owner: origin.to_owned(),
@@ -1764,7 +1766,7 @@ pub fn ensure_projected_space(state: &AppState, origin: &str, operation: &Operat
                 created_at: now,
                 updated_at: now,
             };
-            if let Err(error) = store.put(space_id.as_str(), &record) {
+            if let Err(error) = store.put(space_id.as_str(), &record).await {
                 tracing::warn!(%error, "failed to persist projected space meta");
             }
         }
@@ -1806,7 +1808,7 @@ pub fn ensure_projected_space(state: &AppState, origin: &str, operation: &Operat
             }
             if changed {
                 record.updated_at = now;
-                if let Err(error) = store.put(space_id.as_str(), &record) {
+                if let Err(error) = store.put(space_id.as_str(), &record).await {
                     tracing::warn!(%error, "failed to update projected space meta");
                 }
             }
@@ -1816,7 +1818,7 @@ pub fn ensure_projected_space(state: &AppState, origin: &str, operation: &Operat
     project_membership_operation(state, origin, operation);
 }
 
-pub fn project_membership_operation(state: &AppState, origin: &str, operation: &Operation) {
+pub async fn project_membership_operation(state: &AppState, origin: &str, operation: &Operation) {
     let Ok(realm_id) = RealmId::new(operation.realm_id.to_string()) else {
         return;
     };
@@ -1826,10 +1828,10 @@ pub fn project_membership_operation(state: &AppState, origin: &str, operation: &
         .and_then(|value| value.as_str());
     if kinds::canonical_kind_for_operation(operation) == Some(kinds::CX_REALM_DESTROY) {
         let store = state.persistence.realm_meta();
-        if let Ok(Some(mut record)) = store.get(operation.realm_id.as_str()) {
+        if let Ok(Some(mut record)) = store.get(operation.realm_id.as_str()).await {
             record.deleted = true;
             record.updated_at = operation.created_at;
-            if let Err(error) = store.put(operation.realm_id.as_str(), &record) {
+            if let Err(error) = store.put(operation.realm_id.as_str(), &record).await {
                 tracing::warn!(%error, "failed to mark projected space deleted");
             }
         }
@@ -1861,6 +1863,7 @@ pub fn project_membership_operation(state: &AppState, origin: &str, operation: &
         let already_invited =
             invites
                 .snapshot_all()
+                .await
                 .unwrap_or_default()
                 .into_iter()
                 .any(|existing| {
@@ -1885,7 +1888,7 @@ pub fn project_membership_operation(state: &AppState, origin: &str, operation: &
                 expires_at: Some(operation.created_at + chrono::Duration::days(7)),
                 created_at: operation.created_at,
             };
-            match invites.put(record) {
+            match invites.put(record).await {
                 Ok(()) => tracing::info!(
                     %invite_id,
                     invitee = %invitee.as_str(),
@@ -2079,7 +2082,7 @@ pub fn project_member_identity_update(state: &AppState, operation: &Operation) {
         .insert(record);
 }
 
-fn project_invite_acceptance(state: &AppState, member: &str, operation: &Operation) {
+async fn project_invite_acceptance(state: &AppState, member: &str, operation: &Operation) {
     let Some(invite_id) = operation
         .payload
         .get("invite_id")
@@ -2093,7 +2096,7 @@ fn project_invite_acceptance(state: &AppState, member: &str, operation: &Operati
         return;
     }
     let invites = state.persistence.space_invites();
-    let Ok(Some(mut record)) = invites.get(invite_id) else {
+    let Ok(Some(mut record)) = invites.get(invite_id).await else {
         return;
     };
     if record.invitee.as_deref() != Some(member) {
@@ -2103,12 +2106,12 @@ fn project_invite_acceptance(state: &AppState, member: &str, operation: &Operati
         return;
     }
     record.status = "accepted".to_owned();
-    if let Err(error) = invites.put(record) {
+    if let Err(error) = invites.put(record).await {
         tracing::warn!(%error, invite_id = %invite_id, "failed to mark invite accepted");
     }
 }
 
-fn project_invite_create_operation(state: &AppState, origin: &str, operation: &Operation) {
+async fn project_invite_create_operation(state: &AppState, origin: &str, operation: &Operation) {
     if !kinds::operation_is_invite_create(operation) {
         return;
     }
@@ -2130,7 +2133,7 @@ fn project_invite_create_operation(state: &AppState, origin: &str, operation: &O
     };
 
     let invites = state.persistence.space_invites();
-    match invites.get(&invite_id) {
+    match invites.get(&invite_id).await {
         Ok(Some(existing)) => {
             tracing::debug!(
                 invite_id = %invite_id,
@@ -2176,7 +2179,7 @@ fn project_invite_create_operation(state: &AppState, origin: &str, operation: &O
         expires_at,
         created_at: operation.created_at,
     };
-    match invites.put(record) {
+    match invites.put(record).await {
         Ok(()) => {
             tracing::info!(
                 invite_id = %invite_id,
@@ -2184,7 +2187,7 @@ fn project_invite_create_operation(state: &AppState, origin: &str, operation: &O
                 space_id = %operation.realm_id,
                 "projected invite via cx.invite.create event"
             );
-            touch_realm(state, operation.realm_id.as_str());
+            touch_realm(state, operation.realm_id.as_str()).await;
         }
         Err(error) => tracing::warn!(%error, invite_id = %invite_id, "failed to project invite"),
     }
@@ -2258,13 +2261,13 @@ fn plaintext_services_from_operation(operation: &Operation) -> Vec<String> {
     services
 }
 
-fn project_plaintext_visible_services_operation(state: &AppState, operation: &Operation) {
+async fn project_plaintext_visible_services_operation(state: &AppState, operation: &Operation) {
     let services = plaintext_services_from_operation(operation);
     if services.is_empty() {
         return;
     }
     let store = state.persistence.realm_meta();
-    let Ok(Some(mut record)) = store.get(operation.realm_id.as_str()) else {
+    let Ok(Some(mut record)) = store.get(operation.realm_id.as_str()).await else {
         return;
     };
     for service in services {
@@ -2277,12 +2280,12 @@ fn project_plaintext_visible_services_operation(state: &AppState, operation: &Op
         }
     }
     record.updated_at = operation.created_at;
-    if let Err(error) = store.put(operation.realm_id.as_str(), &record) {
+    if let Err(error) = store.put(operation.realm_id.as_str(), &record).await {
         tracing::warn!(%error, "failed to project plaintext visible services");
     }
 }
 
-pub fn project_federated_message(state: &AppState, origin: &str, operation: &Operation) {
+pub async fn project_federated_message(state: &AppState, origin: &str, operation: &Operation) {
     let event_id = operation
         .payload
         .get("event_id")
@@ -2295,7 +2298,7 @@ pub fn project_federated_message(state: &AppState, origin: &str, operation: &Ope
             )
         });
     let store = state.persistence.messages();
-    if matches!(store.get(&event_id), Ok(Some(_))) {
+    if matches!(store.get(&event_id).await, Ok(Some(_))) {
         return;
     }
     let content = message_content_from_payload(&operation.payload);
@@ -2330,7 +2333,7 @@ pub fn project_federated_message(state: &AppState, origin: &str, operation: &Ope
         content,
         encrypted,
         created_at: operation.created_at,
-    }) {
+    }).await {
         tracing::warn!(%error, "failed to persist projected message");
     }
 }

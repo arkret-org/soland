@@ -90,7 +90,10 @@ async fn main() -> anyhow::Result<()> {
             }
         }
     }
-    let state = AppState::new(config.clone(), Db::from_env()?);
+    let state = AppState::new(config.clone(), Db::from_env().await?);
+    // Finish boot: seed demo data + hydrate the Realm directory and
+    // projections from the (now async) persistence store.
+    state.hydrate().await;
 
     // G3.S9 — sovereign enclave profile invariants. When
     // `SOLAND_SOVEREIGN_ENCLAVE=1` the configured posture MUST satisfy:

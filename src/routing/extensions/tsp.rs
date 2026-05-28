@@ -292,7 +292,7 @@ async fn declare_transport_endpoint(
     req: &mut Request,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
     let transport_id = body
         .get("transport_id")
@@ -344,7 +344,7 @@ async fn list_transports_endpoint(
     req: &mut Request,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let transports = list_transports(Some(&session.actor));
     json_ok(json!({ "transports": transports }))
 }
@@ -365,7 +365,7 @@ async fn establish_route_endpoint(
     req: &mut Request,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
     let route_id = body
         .get("route_id")
@@ -412,7 +412,7 @@ async fn establish_route_endpoint(
 )]
 async fn audit_endpoint(aa: AuthArgs, depot: &mut Depot, req: &mut Request) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let _session = aa.authenticated_session(state, req)?;
+    let _session = aa.authenticated_session(state, req).await?;
     let route_id = req
         .param::<String>("id")
         .ok_or_else(|| AppError::missing_param("route_id path segment required"))?;

@@ -51,7 +51,10 @@ use super::{
 };
 use crate::ids;
 use crate::reducer::ProjectionState;
-use crate::state::{AppState, PresenceRecord, ProjectionEventRecord, SessionRecord, TypingRecord};
+use crate::state::{
+    AppState, PresenceRecord, ProjectionEventRecord, RealmDirectoryEntry, SessionRecord,
+    TypingRecord,
+};
 use crate::wire::{
     AccountDescribeResBody, BackfillResBody, ClientSyncRequest, EventsQueryPostRequest,
     SnapshotHeadResponse,
@@ -131,7 +134,7 @@ async fn account_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Respo
     let state = depot.obtain::<AppState>().expect("state injected").clone();
     let body = account_subscribe_query(req);
     let max_wait_ms = parse_max_wait_ms(req);
-    let session = authenticated_session(&state, req).ok();
+    let session = authenticated_session(&state, req).await.ok();
     let after_cursor = if let Some(after) = body.after.as_deref() {
         match parse_and_validate_sync_cursor(
             after,
@@ -193,7 +196,7 @@ async fn account_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Respo
             actor: session.actor.clone(),
             status: presence.to_owned(),
             updated_at: chrono::Utc::now(),
-        }) {
+        }).await {
             tracing::error!(%error, "failed to persist presence");
         }
     }
@@ -203,7 +206,7 @@ async fn account_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Respo
     // event landing between snapshot-build and long-poll subscribe is not
     // missed.
     let mut rx = state.event_broadcast.subscribe();
-    let mut response = build_sync_snapshot(&state, session.as_ref(), &body, &after_cursor);
+    let mut response = build_sync_snapshot(&state, session.as_ref(), &body, &after_cursor).await;
 
     // Long-poll only when the client supplied an `after` cursor (true
     // incremental sync) AND the snapshot is delta-empty. Full sync always
@@ -223,10 +226,10 @@ async fn account_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Respo
                             // For non-event notifications (epoch/frontier/etc.)
                             // we still rebuild so the client picks up control
                             // state on its next delta if it surfaces there.
-                            if !realm_id_accessible(&state, &notification.space_id, session.as_ref()) {
+                            if !realm_id_accessible(&state, &notification.space_id, session.as_ref()).await {
                                 continue;
                             }
-                            response = build_sync_snapshot(&state, session.as_ref(), &body, &after_cursor);
+                            response = build_sync_snapshot(&state, session.as_ref(), &body, &after_cursor).await;
                             if !delta_is_empty(&response) {
                                 break;
                             }
@@ -234,7 +237,7 @@ async fn account_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Respo
                         Err(RecvError::Lagged(_)) => {
                             // We lost some notifications; rebuild and let the
                             // delta speak for itself.
-                            response = build_sync_snapshot(&state, session.as_ref(), &body, &after_cursor);
+                            response = build_sync_snapshot(&state, session.as_ref(), &body, &after_cursor).await;
                             if !delta_is_empty(&response) {
                                 break;
                             }
@@ -308,7 +311,7 @@ fn account_delta_frame(response: contrix_sdk::model::SyncResBody) -> Value {
 
 /// Build one snapshot of the account-aggregate sync response for the next
 /// `cx.account.subscribe` delta frame.
-fn build_sync_snapshot(
+async fn build_sync_snapshot(
     state: &AppState,
     session: Option<&SessionRecord>,
     body: &ClientSyncRequest,
@@ -325,25 +328,25 @@ fn build_sync_snapshot(
     // `cx.member.identity.update` event log; servers that lack the events for
     // the client SHOULD inline them via `identity_events[]` (gated on
     // `subject_id` disclosure).
-    let visible_spaces: Vec<_> = {
+    let candidate_spaces: Vec<RealmDirectoryEntry> = {
         let spaces = state.realms.lock().expect("spaces lock");
-        spaces
-            .search(Default::default())
-            .into_iter()
-            .filter(|space| realm_visible_to(state, space, session))
-            .map(|space| {
-                let members = roster_members_for_realm(state, space);
-                (
-                    space.realm_id.to_string(),
-                    space.name.clone(),
-                    space.description.clone(),
-                    space.tags.clone(),
-                    space.category.clone(),
-                    members,
-                )
-            })
-            .collect()
+        spaces.search(Default::default()).into_iter().cloned().collect()
     };
+    let mut visible_spaces: Vec<(String, String, Option<String>, _, Option<String>, _)> =
+        Vec::new();
+    for space in &candidate_spaces {
+        if realm_visible_to(state, space, session).await {
+            let members = roster_members_for_realm(state, space);
+            visible_spaces.push((
+                space.realm_id.to_string(),
+                space.name.clone(),
+                space.description.clone(),
+                space.tags.clone(),
+                space.category.clone(),
+                members,
+            ));
+        }
+    }
     // Compute "left after last cursor" so incremental syncs can prune
     // client-side caches without forcing a full account baseline.
     // On full sync (no `after` cursor -> empty `after_cursor.positions`)
@@ -365,7 +368,10 @@ fn build_sync_snapshot(
     };
     drop(visible_space_ids);
 
-    let projection = state.projection.lock().expect("projection lock");
+    // Clone the projection so the per-space loop below can `.await` async
+    // visibility/timeline helpers without holding the (non-Send) lock guard
+    // across a suspension point.
+    let projection = state.projection.lock().expect("projection lock").clone();
     let mut sync_spaces = std::collections::BTreeMap::new();
     let mut positions = BTreeMap::new();
     let is_incremental = body.after.is_some();
@@ -373,11 +379,11 @@ fn build_sync_snapshot(
         .issued_at_ms
         .and_then(chrono::DateTime::<Utc>::from_timestamp_millis);
     for (space_id, title, summary, tags, category, members) in visible_spaces {
-        let flow = flow_projection_for_space(state, &space_id, &title, summary.as_deref());
+        let flow = flow_projection_for_space(state, &space_id, &title, summary.as_deref()).await;
         let flow_state_after = flow.clone();
         let flow_list_item = flow.clone();
         let summary_members = members.clone();
-        let meta = state.persistence.realm_meta().get(&space_id).ok().flatten();
+        let meta = state.persistence.realm_meta().get(&space_id).await.ok().flatten();
         let history_visibility = meta
             .as_ref()
             .map(|record| record.history_visibility.clone())
@@ -393,7 +399,7 @@ fn build_sync_snapshot(
             .copied()
             .unwrap_or_default();
         let (timeline_events, space_position) =
-            timeline_events_for_space(state, &projection, &space_id, after_position, session);
+            timeline_events_for_space(state, &projection, &space_id, after_position, session).await;
         positions.insert(space_id.clone(), space_position);
         // Incremental sync skips realms whose timeline position is
         // unchanged AND whose meta `updated_at` is at-or-before the
@@ -422,6 +428,7 @@ fn build_sync_snapshot(
         }
         let bottom_cells = bottom_cells_for_space(&projection, &space_id);
         let anchor_view = anchor_view_for_space(&bottom_cells);
+        let ephemeral = typing_ephemeral_for_space(state, &space_id, session).await;
         sync_spaces.insert(
             space_id.clone(),
             json!({
@@ -452,7 +459,7 @@ fn build_sync_snapshot(
                 "state_after": {"events": [flow_state_after]},
                 "bottom_cells": bottom_cells,
                 "anchor_view": anchor_view,
-                "ephemeral": typing_ephemeral_for_space(state, &space_id, session),
+                "ephemeral": ephemeral,
                 "unread": {"notification_count": 0, "highlight_count": 0}
             }),
         );
@@ -460,53 +467,55 @@ fn build_sync_snapshot(
     drop(projection);
 
     let mut to_device_position = after_cursor.to_device_position;
-    let to_device = session
-        .map(|session| {
-            prune_acked_device_messages(state, session, after_cursor.to_device_position);
-            let queued = state
-                .persistence
-                .device_messages()
-                .list_after(
-                    &session.actor,
-                    &session.device_id,
-                    after_cursor.to_device_position,
-                )
-                .unwrap_or_default();
-            let events = device_message_events_after(&queued);
-            if let Some(max_position) = events
-                .iter()
-                .filter_map(|event| event.get("position").and_then(|position| position.as_i64()))
-                .max()
-            {
-                to_device_position = max_position;
-            }
-            events
-        })
-        .unwrap_or_default();
+    let to_device = if let Some(session) = session {
+        prune_acked_device_messages(state, session, after_cursor.to_device_position);
+        let queued = state
+            .persistence
+            .device_messages()
+            .list_after(
+                &session.actor,
+                &session.device_id,
+                after_cursor.to_device_position,
+            )
+            .await
+            .unwrap_or_default();
+        let events = device_message_events_after(&queued);
+        if let Some(max_position) = events
+            .iter()
+            .filter_map(|event| event.get("position").and_then(|position| position.as_i64()))
+            .max()
+        {
+            to_device_position = max_position;
+        }
+        events
+    } else {
+        Vec::new()
+    };
 
     // Actor-private account data: hydrate every `(actor, data_type)` row
     // owned by the authenticated session so the client can join e.g.
     // `cx.contacts.space.<space_id>` Space remarks against the public
     // Space `title` during render. Spec: discovery/client-preferences.md
     // §2 (storage model) / §3.7 (Space remarks).
-    let account_data = session
-        .map(|session| {
-            state
-                .persistence
-                .account_data()
-                .list_for_actor(&session.actor)
-                .unwrap_or_default()
-                .into_iter()
-                .map(|record| {
-                    json!({
-                        "data_type": record.data_type,
-                        "content": record.payload,
-                        "updated_at": record.updated_at,
-                    })
+    let account_data = if let Some(session) = session {
+        state
+            .persistence
+            .account_data()
+            .list_for_actor(&session.actor)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|record| {
+                json!({
+                    "data_type": record.data_type,
+                    "content": record.payload,
+                    "updated_at": record.updated_at,
                 })
-                .collect()
-        })
-        .unwrap_or_default();
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
 
     contrix_sdk::model::SyncResBody {
         cursor: sync_token_for_client_sync(
@@ -637,7 +646,7 @@ fn subject_disclosed_to_caller(
     false
 }
 
-fn timeline_events_for_space(
+async fn timeline_events_for_space(
     state: &AppState,
     projection: &ProjectionState,
     space_id: &str,
@@ -649,7 +658,7 @@ fn timeline_events_for_space(
     let mut timeline_entries = Vec::new();
 
     for message in projection.messages_for_space(space_id) {
-        let position = timeline_event_position(state, &message.event_id, message.created_at);
+        let position = timeline_event_position(state, &message.event_id, message.created_at).await;
         newest_position = newest_position.max(position);
         if position <= after_position || !seen.insert(message.event_id.clone()) {
             continue;
@@ -661,7 +670,7 @@ fn timeline_events_for_space(
             message.created_at,
             Some(&message.sender),
             session,
-        ) {
+        ).await {
             continue;
         }
         let mut event = sync_timeline_message_json_with_projection(message, projection);
@@ -674,10 +683,10 @@ fn timeline_events_for_space(
     for message in state
         .persistence
         .messages()
-        .list_for_space(space_id, 100)
+        .list_for_space(space_id, 100).await
         .unwrap_or_default()
     {
-        let position = timeline_event_position(state, &message.event_id, message.created_at);
+        let position = timeline_event_position(state, &message.event_id, message.created_at).await;
         newest_position = newest_position.max(position);
         if position <= after_position || !seen.insert(message.event_id.clone()) {
             continue;
@@ -689,7 +698,7 @@ fn timeline_events_for_space(
             message.created_at,
             Some(&message.sender),
             session,
-        ) {
+        ).await {
             continue;
         }
         let mut event = sync_timeline_message_record_json_with_projection(&message, projection);
@@ -709,11 +718,11 @@ fn timeline_events_for_space(
     )
 }
 
-fn timeline_event_position(state: &AppState, event_id: &str, created_at: DateTime<Utc>) -> i64 {
+async fn timeline_event_position(state: &AppState, event_id: &str, created_at: DateTime<Utc>) -> i64 {
     let timestamp = state
         .persistence
         .events()
-        .get(event_id)
+        .get(event_id).await
         .ok()
         .flatten()
         .map(|record| record.received_at)
@@ -734,7 +743,7 @@ fn timeline_event_tie_breaker(event_id: &str) -> i64 {
         .unwrap_or_default()
 }
 
-fn realm_event_visible_to_session_with_projection(
+async fn realm_event_visible_to_session_with_projection(
     state: &AppState,
     projection: &ProjectionState,
     space_id: &str,
@@ -745,36 +754,42 @@ fn realm_event_visible_to_session_with_projection(
     if sender.is_some_and(|sender| session.is_some_and(|session| session.actor == sender)) {
         return true;
     }
-    if personal_blocklist_blocks_sender_for_session(state, session, sender) {
+    if personal_blocklist_blocks_sender_for_session(state, session, sender).await {
         return false;
     }
-    match realm_history_visibility(state, space_id).as_str() {
+    match realm_history_visibility(state, space_id).await.as_str() {
         "world_readable" => true,
         "shared" => {
-            realm_discoverability(state, space_id) == "public"
-                || session.is_some_and(|session| realm_has_member(state, space_id, &session.actor))
+            if realm_discoverability(state, space_id).await == "public" {
+                return true;
+            }
+            match session {
+                Some(session) => realm_has_member(state, space_id, &session.actor).await,
+                None => false,
+            }
         }
         "joined" | "invited" => {
             let Some(session) = session else {
                 return false;
             };
-            let joined_at = projection
+            let mut joined_at = projection
                 .member(space_id, &session.actor)
                 .filter(|member| member.state == "join")
-                .map(|member| member.joined_at)
-                .or_else(|| {
-                    let meta = state
-                        .persistence
-                        .realm_meta()
-                        .get(space_id)
-                        .ok()
-                        .flatten()?;
+                .map(|member| member.joined_at);
+            if joined_at.is_none() {
+                let meta = state
+                    .persistence
+                    .realm_meta()
+                    .get(space_id)
+                    .await
+                    .ok()
+                    .flatten();
+                if let Some(meta) = meta {
                     if meta.owner == session.actor {
-                        Some(meta.created_at)
-                    } else {
-                        None
+                        joined_at = Some(meta.created_at);
                     }
-                });
+                }
+            }
             joined_at.is_some_and(|joined_at| event_created_at >= joined_at)
         }
         _ => false,
@@ -867,7 +882,7 @@ fn bottom_heads_for_sync(bottom: &Value) -> Vec<Value> {
         .collect()
 }
 
-fn projection_record_visible_to_session(
+async fn projection_record_visible_to_session(
     state: &AppState,
     event: &ProjectionEventRecord,
     session: Option<&SessionRecord>,
@@ -878,10 +893,10 @@ fn projection_record_visible_to_session(
         event.created_at,
         event.sender.as_deref(),
         session,
-    ) && !personal_blocklist_blocks_sender_for_session(state, session, event.sender.as_deref())
+    ).await && !personal_blocklist_blocks_sender_for_session(state, session, event.sender.as_deref()).await
 }
 
-fn projection_event_value_visible_to_session(
+async fn projection_event_value_visible_to_session(
     state: &AppState,
     event: &Value,
     session: Option<&SessionRecord>,
@@ -901,19 +916,19 @@ fn projection_event_value_visible_to_session(
         return false;
     };
     let sender = event.get("sender").and_then(Value::as_str);
-    realm_event_visible_to_session(state, space_id, created_at, sender, session)
-        && !personal_blocklist_blocks_sender_for_session(state, session, sender)
+    realm_event_visible_to_session(state, space_id, created_at, sender, session).await
+        && !personal_blocklist_blocks_sender_for_session(state, session, sender).await
 }
 
-fn canonical_event_visible_to_personal_blocklist(
+async fn canonical_event_visible_to_personal_blocklist(
     state: &AppState,
     record: &crate::state::CanonicalEventRecord,
     session: &SessionRecord,
 ) -> bool {
-    !personal_blocklist_blocks_sender_for_session(state, Some(session), Some(&record.actor_id))
+    !personal_blocklist_blocks_sender_for_session(state, Some(session), Some(&record.actor_id)).await
 }
 
-fn personal_blocklist_blocks_sender_for_session(
+async fn personal_blocklist_blocks_sender_for_session(
     state: &AppState,
     session: Option<&SessionRecord>,
     sender: Option<&str>,
@@ -924,15 +939,20 @@ fn personal_blocklist_blocks_sender_for_session(
     if sender == session.actor {
         return false;
     }
-    PERSONAL_BLOCKLIST_DATA_TYPES.iter().any(|data_type| {
-        state
+    for data_type in PERSONAL_BLOCKLIST_DATA_TYPES.iter() {
+        let blocked = state
             .persistence
             .account_data()
             .get(&session.actor, data_type)
+            .await
             .ok()
             .flatten()
-            .is_some_and(|record| blocklist_payload_blocks_sender(&record.payload, sender))
-    })
+            .is_some_and(|record| blocklist_payload_blocks_sender(&record.payload, sender));
+        if blocked {
+            return true;
+        }
+    }
+    false
 }
 
 fn blocklist_payload_blocks_sender(payload: &Value, sender: &str) -> bool {
@@ -1355,7 +1375,7 @@ pub fn decode_sync_cursor_value(token: &str) -> Result<serde_json::Value, SyncCu
 ///   recent event at-or-before that checkpoint and return its
 ///   `event_id`. When no event sits at-or-before the checkpoint, return
 ///   `None` so backfill streams from the start of the space.
-pub fn resolve_sync_cursor_to_event_id(
+pub async fn resolve_sync_cursor_to_event_id(
     state: &AppState,
     space_id: &str,
     cursor: Option<String>,
@@ -1384,24 +1404,32 @@ pub fn resolve_sync_cursor_to_event_id(
     };
 
     let mut newest_event_id: Option<(i64, String)> = None;
-    let projection = state.projection.lock().expect("projection lock");
-    for message in projection.messages_for_space(space_id) {
-        let position = timeline_event_position(state, &message.event_id, message.created_at);
+    // Snapshot the (event_id, created_at) pairs out from under the projection
+    // lock before the async position lookups (guard is not Send).
+    let projected_messages: Vec<(String, DateTime<Utc>)> = {
+        let projection = state.projection.lock().expect("projection lock");
+        projection
+            .messages_for_space(space_id)
+            .into_iter()
+            .map(|message| (message.event_id.clone(), message.created_at))
+            .collect()
+    };
+    for (event_id, created_at) in projected_messages {
+        let position = timeline_event_position(state, &event_id, created_at).await;
         if position <= checkpoint {
             match &newest_event_id {
                 Some((existing_pos, _)) if *existing_pos >= position => {}
-                _ => newest_event_id = Some((position, message.event_id.clone())),
+                _ => newest_event_id = Some((position, event_id.clone())),
             }
         }
     }
-    drop(projection);
     for message in state
         .persistence
         .messages()
-        .list_for_space(space_id, 1000)
+        .list_for_space(space_id, 1000).await
         .unwrap_or_default()
     {
-        let position = timeline_event_position(state, &message.event_id, message.created_at);
+        let position = timeline_event_position(state, &message.event_id, message.created_at).await;
         if position <= checkpoint {
             match &newest_event_id {
                 Some((existing_pos, _)) if *existing_pos >= position => {}
@@ -1434,7 +1462,7 @@ async fn submit_ephemeral(
     req: &mut Request,
 ) -> crate::result::JsonResult<EphemeralSubmitResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let envelope = body.into_inner();
 
     validate_ephemeral_envelope(&envelope)?;
@@ -1447,16 +1475,18 @@ async fn submit_ephemeral(
             "ephemeral actor_id must match the bearer session actor",
         ));
     }
-    if !realm_has_member(state, realm_id_str, &session.actor) {
+    if !realm_has_member(state, realm_id_str, &session.actor).await {
         return Err(crate::error::AppError::capability_denied(
             "actor is not a joined member of the realm",
         ));
     }
 
     match envelope.kind.as_str() {
-        "cx.typing" => persist_ephemeral_typing(state, &session.actor, realm_id_str, &envelope),
-        "cx.presence" => persist_ephemeral_presence(state, &session.actor, &envelope),
-        "cx.receipt.read" => admit_ephemeral_read_receipt(state, realm_id_str, &envelope)?,
+        "cx.typing" => {
+            persist_ephemeral_typing(state, &session.actor, realm_id_str, &envelope).await
+        }
+        "cx.presence" => persist_ephemeral_presence(state, &session.actor, &envelope).await,
+        "cx.receipt.read" => admit_ephemeral_read_receipt(state, realm_id_str, &envelope).await?,
         "cx.call.signal" => {}
         _ => {
             return Err(crate::error::AppError::invalid_param(
@@ -1503,7 +1533,7 @@ fn validate_ephemeral_envelope(
     Ok(())
 }
 
-fn persist_ephemeral_typing(
+async fn persist_ephemeral_typing(
     state: &AppState,
     actor: &str,
     realm_id: &str,
@@ -1528,15 +1558,15 @@ fn persist_ephemeral_typing(
             scope_id,
             expires_at: envelope.expires_at,
             updated_at: chrono::Utc::now(),
-        }) {
+        }).await {
             tracing::error!(%error, "failed to persist ephemeral typing");
         }
     } else {
-        let _ = state.persistence.typing().remove(actor, realm_id);
+        let _ = state.persistence.typing().remove(actor, realm_id).await;
     }
 }
 
-fn persist_ephemeral_presence(
+async fn persist_ephemeral_presence(
     state: &AppState,
     actor: &str,
     envelope: &contrix_sdk::EphemeralEnvelope,
@@ -1552,12 +1582,12 @@ fn persist_ephemeral_presence(
         actor: actor.to_owned(),
         status,
         updated_at: chrono::Utc::now(),
-    }) {
+    }).await {
         tracing::error!(%error, "failed to persist ephemeral presence");
     }
 }
 
-fn admit_ephemeral_read_receipt(
+async fn admit_ephemeral_read_receipt(
     state: &AppState,
     realm_id: &str,
     envelope: &contrix_sdk::EphemeralEnvelope,
@@ -1576,7 +1606,7 @@ fn admit_ephemeral_read_receipt(
 
     let (disclosure, _visibility, _scope_overrides_allowed) =
         super::event_log::effective_read_receipt_policy_for_space(state, realm_id)
-            .unwrap_or_else(|| ("optional".to_owned(), "members".to_owned(), true));
+            .await.unwrap_or_else(|| ("optional".to_owned(), "members".to_owned(), true));
     if disclosure == "disabled" {
         return Err(crate::error::AppError::new(
             crate::error::ErrorCode::PolicyViolation,
@@ -1633,10 +1663,10 @@ pub(super) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
             return;
         }
     };
-    let session = authenticated_session(&state, req).ok();
+    let session = authenticated_session(&state, req).await.ok();
     let mut accessible_spaces: Vec<String> = Vec::with_capacity(spaces.len());
     for space in spaces {
-        if realm_id_accessible(&state, &space, session.as_ref()) {
+        if realm_id_accessible(&state, &space, session.as_ref()).await {
             accessible_spaces.push(space);
         }
     }
@@ -1680,10 +1710,10 @@ pub(super) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
 
     if include_history {
         for space_id in &accessible_spaces {
-            match projected_event_page(&state, space_id, cursor.as_deref(), limit) {
+            match projected_event_page(&state, space_id, cursor.as_deref(), limit).await {
                 Ok(Some(page)) => {
                     for event in page.items {
-                        if !projection_record_visible_to_session(&state, &event, session.as_ref()) {
+                        if !projection_record_visible_to_session(&state, &event, session.as_ref()).await {
                             continue;
                         }
                         seq += 1;
@@ -1769,7 +1799,7 @@ pub(super) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
                                         &state,
                                         &event_payload,
                                         session_for_stream.as_ref(),
-                                    ) {
+                                    ).await {
                                         continue;
                                     }
                                     live_seq += 1;
@@ -2016,18 +2046,18 @@ async fn events_query_impl(
     // Event-store reader in routing/events.rs which builds an actor-keyed
     // `frontier.actors` map. The projection-aware path below is space-keyed.
     if spaces.is_empty() {
-        let session = authenticated_session(state, req).map_err(|(status, code, message)| {
+        let session = authenticated_session(state, req).await.map_err(|(status, code, message)| {
             crate::error::AppError::invalid_param(message)
                 .with_status(status)
                 .with_wire_code(code)
         })?;
-        let response = durable_events_query_from_parts(state, &session, &parts);
+        let response = durable_events_query_from_parts(state, &session, &parts).await;
         return crate::result::json_ok(serde_json::to_value(response).unwrap_or(json!({})));
     }
-    let session = authenticated_session(state, req).ok();
+    let session = authenticated_session(state, req).await.ok();
     let mut accessible_spaces: Vec<String> = Vec::with_capacity(spaces.len());
     for space in spaces {
-        if realm_id_accessible(state, &space, session.as_ref()) {
+        if realm_id_accessible(state, &space, session.as_ref()).await {
             accessible_spaces.push(space);
         }
     }
@@ -2041,16 +2071,14 @@ async fn events_query_impl(
     // for soland's existing test surface (cx.sync.backfill behavior).
     if accessible_spaces.len() == 1 {
         let space_id = &accessible_spaces[0];
-        match projected_event_page(state, space_id, cursor.as_deref(), limit) {
+        match projected_event_page(state, space_id, cursor.as_deref(), limit).await {
             Ok(Some(page)) => {
-                let mut events: Vec<_> = page
-                    .items
-                    .iter()
-                    .filter(|event| {
-                        projection_record_visible_to_session(state, event, session.as_ref())
-                    })
-                    .map(projection_event_json)
-                    .collect();
+                let mut events: Vec<Value> = Vec::new();
+                for event in &page.items {
+                    if projection_record_visible_to_session(state, event, session.as_ref()).await {
+                        events.push(projection_event_json(event));
+                    }
+                }
                 if backward {
                     events.reverse();
                 }
@@ -2092,19 +2120,16 @@ async fn events_query_impl(
     let mut merged: Vec<serde_json::Value> = Vec::new();
     let mut any_has_more = false;
     for space_id in &accessible_spaces {
-        match projected_event_page(state, space_id, cursor.as_deref(), limit) {
+        match projected_event_page(state, space_id, cursor.as_deref(), limit).await {
             Ok(Some(page)) => {
                 if page.has_more {
                     any_has_more = true;
                 }
-                merged.extend(
-                    page.items
-                        .iter()
-                        .filter(|event| {
-                            projection_record_visible_to_session(state, event, session.as_ref())
-                        })
-                        .map(projection_event_json),
-                );
+                for event in &page.items {
+                    if projection_record_visible_to_session(state, event, session.as_ref()).await {
+                        merged.push(projection_event_json(event));
+                    }
+                }
             }
             Ok(None) => {}
             Err(error) => {
@@ -2151,30 +2176,37 @@ async fn events_query_impl(
     )
 }
 
-fn durable_events_query_from_parts(
+async fn durable_events_query_from_parts(
     state: &AppState,
     session: &SessionRecord,
     parts: &EventsQueryParts,
 ) -> crate::wire::EventsPageResponse {
     let actors_set: BTreeSet<&str> = parts.actors.iter().map(String::as_str).collect();
     let spaces_set: BTreeSet<&str> = parts.realms.iter().map(String::as_str).collect();
-    let mut records = state
+    let all_records = state
         .persistence
         .events()
         .snapshot_all()
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|record| {
-            let actor_match = actors_set.contains(record.actor_id.as_str());
-            let space_match = record
-                .space_id
-                .as_deref()
-                .is_some_and(|s| spaces_set.contains(s));
-            actor_match || space_match
-        })
-        .filter(|record| super::event_log::event_visible_to_session(state, record, session))
-        .filter(|record| canonical_event_visible_to_personal_blocklist(state, record, session))
-        .collect::<Vec<_>>();
+        .await
+        .unwrap_or_default();
+    let mut records = Vec::new();
+    for record in all_records {
+        let actor_match = actors_set.contains(record.actor_id.as_str());
+        let space_match = record
+            .space_id
+            .as_deref()
+            .is_some_and(|s| spaces_set.contains(s));
+        if !(actor_match || space_match) {
+            continue;
+        }
+        if !super::event_log::event_visible_to_session(state, &record, session).await {
+            continue;
+        }
+        if !canonical_event_visible_to_personal_blocklist(state, &record, session).await {
+            continue;
+        }
+        records.push(record);
+    }
     records.sort_by(|left, right| {
         left.received_at
             .cmp(&right.received_at)
@@ -2236,8 +2268,8 @@ async fn sync_gap_backfill(
 ) -> crate::result::JsonResult<serde_json::Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let realm_id = scope_selector_to_realm_id(&realm_id.into_inner())?;
-    let session = authenticated_session(state, req).ok();
-    if !realm_id_accessible(state, &realm_id, session.as_ref()) {
+    let session = authenticated_session(state, req).await.ok();
+    if !realm_id_accessible(state, &realm_id, session.as_ref()).await {
         return Err(crate::error::AppError::not_found("not found"));
     }
     let limit = limit.into_inner().unwrap_or(100).clamp(1, 500);
@@ -2246,12 +2278,12 @@ async fn sync_gap_backfill(
 
     // Resolve sync `cx:cursor:` tokens to reducer event cursors.
     let from_cursor = resolve_sync_cursor_to_event_id(state, &realm_id, from_cursor)
-        .map_err(crate::error::AppError::invalid_param)?;
+        .await.map_err(crate::error::AppError::invalid_param)?;
     let to_cursor = resolve_sync_cursor_to_event_id(state, &realm_id, to_cursor)
-        .map_err(crate::error::AppError::invalid_param)?;
+        .await.map_err(crate::error::AppError::invalid_param)?;
 
     let (events, next_cursor, limited) =
-        backfill_gap_events(state, &realm_id, from_cursor.as_deref(), limit).map_err(|error| {
+        backfill_gap_events(state, &realm_id, from_cursor.as_deref(), limit).await.map_err(|error| {
             if error.to_string().contains("invalid_cursor") {
                 crate::error::AppError::invalid_param("cursor not found")
                     .with_wire_code("invalid_cursor")
@@ -2259,10 +2291,13 @@ async fn sync_gap_backfill(
                 crate::error::AppError::internal(error.to_string())
             }
         })?;
-    let events = events
-        .into_iter()
-        .filter(|event| projection_event_value_visible_to_session(state, event, session.as_ref()))
-        .collect::<Vec<_>>();
+    let mut filtered_events = Vec::new();
+    for event in events {
+        if projection_event_value_visible_to_session(state, &event, session.as_ref()).await {
+            filtered_events.push(event);
+        }
+    }
+    let events = filtered_events;
     let (events, gap_complete) = truncate_gap_events(events, to_cursor.as_deref());
     let next_cursor = if gap_complete {
         to_cursor.clone()
@@ -2296,7 +2331,7 @@ async fn snapshot_head(
     let space_id = query_param(req, "realm_id")
         .ok_or_else(|| crate::error::AppError::missing_param("realm_id is required"))?;
     let space_id = scope_selector_to_realm_id(&space_id)?;
-    if is_realm_deleted(state, &space_id) {
+    if is_realm_deleted(state, &space_id).await {
         return Err(crate::error::AppError::not_found("not found"));
     }
     let space_id_value = RealmId::new(space_id.clone())
@@ -2308,7 +2343,7 @@ async fn snapshot_head(
         }
     }
     let bundle = snapshot_bundle_for_space(state, &space_id)
-        .ok_or_else(|| crate::error::AppError::not_found("not found"))?;
+        .await.ok_or_else(|| crate::error::AppError::not_found("not found"))?;
     // Snapshot v2: the manifest already lists per-chunk digests, so
     // `chunks[]` becomes the per-chunk descriptor (id + size + digest)
     // — receivers fetch each chunk via `/sync/snapshot-chunk?chunk_id=N`
@@ -2367,11 +2402,11 @@ async fn snapshot_chunk(
     let chunk_id = chunk_id.into_inner().unwrap_or(0);
     let (space_id, expected_hash) = parse_snapshot_ref(&snapshot_ref)
         .ok_or_else(|| crate::error::AppError::invalid_param("invalid snapshot_ref"))?;
-    if is_realm_deleted(state, &space_id) {
+    if is_realm_deleted(state, &space_id).await {
         return Err(crate::error::AppError::not_found("not found"));
     }
     let bundle = snapshot_bundle_for_space(state, &space_id)
-        .ok_or_else(|| crate::error::AppError::not_found("not found"))?;
+        .await.ok_or_else(|| crate::error::AppError::not_found("not found"))?;
     if bundle.snapshot_ref != snapshot_ref || bundle.state_digest != expected_hash {
         return Err(crate::error::AppError::new(
             crate::error::ErrorCode::StaleFrontier,

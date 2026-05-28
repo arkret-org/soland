@@ -195,7 +195,7 @@ async fn dev_login(
     let account = state
         .persistence
         .accounts()
-        .get(&body.actor)
+        .get(&body.actor).await
         .map_err(|error| AppError::internal(error.to_string()))?;
     if let Some(error) = account_new_session_error(state, &body.actor) {
         return Err(error);
@@ -217,7 +217,7 @@ async fn dev_login(
         state
             .persistence
             .accounts()
-            .put(&record)
+            .put(&record).await
             .map_err(|error| AppError::internal(error.to_string()))?;
         append_audit_log(
             state,
@@ -243,7 +243,7 @@ async fn dev_login(
     state
         .persistence
         .sessions()
-        .put(&session)
+        .put(&session).await
         .map_err(|error| AppError::internal(error.to_string()))?;
     let seen_at = now();
     let device_payload = json!({
@@ -265,7 +265,7 @@ async fn dev_login(
     state
         .persistence
         .devices()
-        .put(&device)
+        .put(&device).await
         .map_err(|error| AppError::internal(error.to_string()))?;
     append_audit_log(
         state,
@@ -311,7 +311,7 @@ async fn exchange_session_grant(
     let account = state
         .persistence
         .accounts()
-        .get(&body.principal_did)
+        .get(&body.principal_did).await
         .map_err(|error| AppError::internal(error.to_string()))?;
     if account.is_none() {
         return Err(AppError::not_found("account is not registered"));
@@ -363,7 +363,7 @@ async fn exchange_session_grant(
     state
         .persistence
         .sessions()
-        .put(&session)
+        .put(&session).await
         .map_err(|error| AppError::internal(error.to_string()))?;
     let seen_at = now();
     let device_payload = json!({
@@ -386,7 +386,7 @@ async fn exchange_session_grant(
     state
         .persistence
         .devices()
-        .put(&device)
+        .put(&device).await
         .map_err(|error| AppError::internal(error.to_string()))?;
     append_audit_log(
         state,
@@ -585,7 +585,7 @@ async fn logout(
     let revoked_session = match state
         .persistence
         .sessions()
-        .get(&token_hash)
+        .get(&token_hash).await
         .map_err(|error| AppError::internal(error.to_string()))?
     {
         Some(mut session) if session.revoked_at.is_none() => {
@@ -593,7 +593,7 @@ async fn logout(
             state
                 .persistence
                 .sessions()
-                .put(&session)
+                .put(&session).await
                 .map_err(|error| AppError::internal(error.to_string()))?;
             Some(session)
         }
@@ -602,7 +602,7 @@ async fn logout(
     let revoked = revoked_session.is_some();
     if let Some(session) = revoked_session {
         revoke_device_record(state, &session.actor, &session.device_id)
-            .map_err(AppError::internal)?;
+            .await.map_err(AppError::internal)?;
         append_audit_log(
             state,
             Some(&session.actor),
@@ -613,7 +613,7 @@ async fn logout(
         let _ = state
             .persistence
             .device_messages()
-            .purge(&session.actor, &session.device_id);
+            .purge(&session.actor, &session.device_id).await;
     }
     json_ok(LogoutResponse { ok: true, revoked })
 }
@@ -622,12 +622,12 @@ async fn logout(
 
 /// Standard "extract authenticated session or render 401" wrapper used by
 /// nearly every protected handler. Returns `None` after rendering an error.
-pub fn auth_or_render(
+pub async fn auth_or_render(
     state: &AppState,
     req: &Request,
     res: &mut Response,
 ) -> Option<SessionRecord> {
-    match authenticated_session(state, req) {
+    match authenticated_session(state, req).await {
         Ok(session) => Some(session),
         Err((status, code, message)) => {
             render_error(res, status, code, message);
@@ -641,7 +641,7 @@ pub fn auth_or_render(
 /// when `SOLAND_OAUTH_INTROSPECTION_URL` is configured, unknown local bearer
 /// tokens are treated as coauth OAuth access tokens and verified through the
 /// Matrix/Palpo-style introspection path.
-pub fn authenticated_session(
+pub async fn authenticated_session(
     state: &AppState,
     req: &Request,
 ) -> Result<SessionRecord, (StatusCode, &'static str, &'static str)> {
@@ -670,7 +670,7 @@ pub fn authenticated_session(
         "missing bearer token",
     ))?;
     let token_hash = session_token_hash(token, &state.config.service_did);
-    let session = state.persistence.sessions().get(&token_hash).map_err(|_| {
+    let session = state.persistence.sessions().get(&token_hash).await.map_err(|_| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             "internal_error",
@@ -678,7 +678,7 @@ pub fn authenticated_session(
         )
     })?;
     let Some(session) = session else {
-        return authenticated_oauth_session(state, token, token_hash);
+        return authenticated_oauth_session(state, token, token_hash).await;
     };
     if session.audience != state.config.service_did {
         return Err((
@@ -697,7 +697,7 @@ pub fn authenticated_session(
             "session revoked",
         ));
     }
-    if is_device_revoked(state, &session.actor, &session.device_id) {
+    if is_device_revoked(state, &session.actor, &session.device_id).await {
         return Err((
             StatusCode::UNAUTHORIZED,
             "unauthenticated",
@@ -732,7 +732,7 @@ fn query_string_token_preview(query: &str) -> String {
     String::new()
 }
 
-fn authenticated_oauth_session(
+async fn authenticated_oauth_session(
     state: &AppState,
     token: &str,
     token_hash: String,
@@ -757,11 +757,11 @@ fn authenticated_oauth_session(
 
     let value = request_oauth_introspection(introspection_url, introspection_bearer, token)?;
     let oauth = parse_oauth_introspection(&value, token)?;
-    ensure_oauth_account(state, &oauth)?;
+    ensure_oauth_account(state, &oauth).await?;
     if let Some(error) = account_new_session_tuple(state, &oauth.actor) {
         return Err(error);
     }
-    ensure_oauth_device(state, &oauth)?;
+    ensure_oauth_device(state, &oauth).await?;
 
     Ok(SessionRecord {
         token_hash,
@@ -1038,14 +1038,14 @@ fn parse_oauth_introspection(
     })
 }
 
-fn ensure_oauth_account(
+async fn ensure_oauth_account(
     state: &AppState,
     oauth: &OAuthIntrospectionSession,
 ) -> Result<(), (StatusCode, &'static str, &'static str)> {
     let accounts = state.persistence.accounts();
     if accounts
         .get(&oauth.actor)
-        .map_err(|_| {
+        .await.map_err(|_| {
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "internal_error",
@@ -1062,7 +1062,7 @@ fn ensure_oauth_account(
         .as_deref()
         .and_then(sanitized_handle)
         .unwrap_or_else(|| handle_for_did(&oauth.actor));
-    let existing = accounts.list().map_err(|_| {
+    let existing = accounts.list().await.map_err(|_| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             "internal_error",
@@ -1083,7 +1083,7 @@ fn ensure_oauth_account(
         avatar_url: None,
         created_at: now(),
     };
-    accounts.put(&account).map_err(|_| {
+    accounts.put(&account).await.map_err(|_| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             "internal_error",
@@ -1100,12 +1100,12 @@ fn ensure_oauth_account(
     Ok(())
 }
 
-fn ensure_oauth_device(
+async fn ensure_oauth_device(
     state: &AppState,
     oauth: &OAuthIntrospectionSession,
 ) -> Result<(), (StatusCode, &'static str, &'static str)> {
     let devices = state.persistence.devices();
-    match devices.get(&oauth.actor, &oauth.device_id).map_err(|_| {
+    match devices.get(&oauth.actor, &oauth.device_id).await.map_err(|_| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             "internal_error",
@@ -1141,7 +1141,7 @@ fn ensure_oauth_device(
         updated_at: seen_at,
         revoked_at: None,
     };
-    devices.put(&device).map_err(|_| {
+    devices.put(&device).await.map_err(|_| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             "internal_error",
@@ -1237,12 +1237,12 @@ fn short_hex(bytes: &[u8], len: usize) -> String {
 }
 
 /// Revoke every active bearer session for an actor.
-pub fn revoke_sessions_for_actor(state: &AppState, actor: &str) -> Result<usize, String> {
+pub async fn revoke_sessions_for_actor(state: &AppState, actor: &str) -> Result<usize, String> {
     let revoked_at = now();
     let sessions = state
         .persistence
         .sessions()
-        .snapshot_all()
+        .snapshot_all().await
         .map_err(|error| error.to_string())?;
     let mut count = 0usize;
     for mut session in sessions
@@ -1253,7 +1253,7 @@ pub fn revoke_sessions_for_actor(state: &AppState, actor: &str) -> Result<usize,
         state
             .persistence
             .sessions()
-            .put(&session)
+            .put(&session).await
             .map_err(|error| error.to_string())?;
         count += 1;
     }
@@ -1261,12 +1261,12 @@ pub fn revoke_sessions_for_actor(state: &AppState, actor: &str) -> Result<usize,
 }
 
 /// Revoke every active device record for an actor.
-pub fn revoke_devices_for_actor(state: &AppState, actor: &str) -> Result<usize, String> {
+pub async fn revoke_devices_for_actor(state: &AppState, actor: &str) -> Result<usize, String> {
     let revoked_at = now();
     let devices = state
         .persistence
         .devices()
-        .list()
+        .list().await
         .map_err(|error| error.to_string())?;
     let mut count = 0usize;
     for mut device in devices
@@ -1278,7 +1278,7 @@ pub fn revoke_devices_for_actor(state: &AppState, actor: &str) -> Result<usize, 
         state
             .persistence
             .devices()
-            .put(&device)
+            .put(&device).await
             .map_err(|error| error.to_string())?;
         count += 1;
     }
@@ -1287,12 +1287,12 @@ pub fn revoke_devices_for_actor(state: &AppState, actor: &str) -> Result<usize, 
 
 /// Persist that the device is revoked. Used by `logout` and by the
 /// device-management handlers in mod.rs.
-pub fn revoke_device_record(state: &AppState, actor: &str, device_id: &str) -> Result<(), String> {
+pub async fn revoke_device_record(state: &AppState, actor: &str, device_id: &str) -> Result<(), String> {
     let revoked_at = now();
     let mut record = state
         .persistence
         .devices()
-        .get(actor, device_id)
+        .get(actor, device_id).await
         .map_err(|error| error.to_string())?
         .unwrap_or_else(|| DeviceInventoryRecord {
             actor: actor.to_owned(),
@@ -1309,17 +1309,17 @@ pub fn revoke_device_record(state: &AppState, actor: &str, device_id: &str) -> R
     state
         .persistence
         .devices()
-        .put(&record)
+        .put(&record).await
         .map_err(|error| error.to_string())?;
     Ok(())
 }
 
 /// Returns true if the persistent device record has a `revoked_at` timestamp,
 /// or if the device cannot be located at all.
-pub fn is_device_revoked(state: &AppState, actor: &str, device_id: &str) -> bool {
-    match state.persistence.devices().get(actor, device_id) {
+pub async fn is_device_revoked(state: &AppState, actor: &str, device_id: &str) -> bool {
+    match state.persistence.devices().get(actor, device_id).await {
         Ok(Some(record)) => record.revoked_at.is_some(),
-        Ok(None) => match state.persistence.devices().list_for_actor(actor) {
+        Ok(None) => match state.persistence.devices().list_for_actor(actor).await {
             Ok(devices) => !devices.iter().any(|record| record.device_id == device_id),
             Err(_) => true,
         },

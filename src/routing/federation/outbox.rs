@@ -88,7 +88,7 @@ fn now_unix_secs() -> i64 {
 ///
 /// Returns the persisted [`FederationOutboxRecord`] so call sites can
 /// log the row id without re-fetching.
-pub fn enqueue_outbound(
+pub async fn enqueue_outbound(
     state: &AppState,
     peer_url: &str,
     peer_did: &str,
@@ -112,7 +112,7 @@ pub fn enqueue_outbound(
         created_at: now,
         delivered_at: None,
     };
-    let inserted = store.enqueue(&candidate)?;
+    let inserted = store.enqueue(&candidate).await?;
     if inserted {
         Ok(candidate)
     } else {
@@ -120,7 +120,7 @@ pub fn enqueue_outbound(
         // return the existing row so callers can still observe the
         // outbox state without a follow-up lookup.
         let existing = store
-            .snapshot_all()?
+            .snapshot_all().await?
             .into_iter()
             .find(|row| {
                 row.peer_did == candidate.peer_did
@@ -319,7 +319,7 @@ impl FederationDispatcher {
             .state
             .persistence
             .federation_outbox()
-            .pending_due(now, POLL_BATCH_LIMIT)
+            .pending_due(now, POLL_BATCH_LIMIT).await
             .map_err(|e| e.to_string())?;
         for row in rows {
             self.deliver_one(row).await;
@@ -403,7 +403,7 @@ impl FederationDispatcher {
             }
         }
 
-        if let Err(error) = self.state.persistence.federation_outbox().update(&row) {
+        if let Err(error) = self.state.persistence.federation_outbox().update(&row).await {
             tracing::warn!(
                 %error,
                 worker = "federation_outbox",
@@ -451,7 +451,7 @@ impl FederationDispatcher {
         );
     }
 
-    fn insert_dead_letter(&self, row: &FederationOutboxRecord, terminal_status: i32, reason: &str) {
+    async fn insert_dead_letter(&self, row: &FederationOutboxRecord, terminal_status: i32, reason: &str) {
         let failed_at = row.delivered_at.unwrap_or_else(now_unix_secs);
         let record = FederationOutboxDeadLetterRecord {
             id: Uuid::new_v4().to_string(),
@@ -474,7 +474,7 @@ impl FederationDispatcher {
             .state
             .persistence
             .federation_outbox()
-            .insert_dead_letter(&record)
+            .insert_dead_letter(&record).await
         {
             tracing::warn!(
                 %error,

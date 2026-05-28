@@ -134,7 +134,7 @@ async fn index_thread(thread_id: QueryParam<String, true>, depot: &mut Depot) ->
     let messages = state
         .persistence
         .messages()
-        .list_for_thread(&thread_id, 100)
+        .list_for_thread(&thread_id, 100).await
         .unwrap_or_default();
     let events: Vec<Value> = messages
         .iter()
@@ -190,13 +190,13 @@ async fn index_notifications(
         let messages = state
             .persistence
             .messages()
-            .list_for_space(space.realm_id.as_str(), 100)
+            .list_for_space(space.realm_id.as_str(), 100).await
             .unwrap_or_default();
         for message in messages {
             if !actor.is_empty() && message.sender == actor {
                 continue;
             }
-            if !actor.is_empty() && personal_blocklist_blocks_sender(state, &actor, &message.sender)
+            if !actor.is_empty() && personal_blocklist_blocks_sender(state, &actor, &message.sender).await
             {
                 continue;
             }
@@ -221,16 +221,21 @@ async fn index_notifications(
     }))
 }
 
-fn personal_blocklist_blocks_sender(state: &AppState, actor: &str, sender: &str) -> bool {
-    PERSONAL_BLOCKLIST_DATA_TYPES.iter().any(|data_type| {
-        state
+async fn personal_blocklist_blocks_sender(state: &AppState, actor: &str, sender: &str) -> bool {
+    for data_type in PERSONAL_BLOCKLIST_DATA_TYPES.iter() {
+        let blocked = state
             .persistence
             .account_data()
             .get(actor, data_type)
+            .await
             .ok()
             .flatten()
-            .is_some_and(|record| blocklist_payload_blocks_sender(&record.payload, sender))
-    })
+            .is_some_and(|record| blocklist_payload_blocks_sender(&record.payload, sender));
+        if blocked {
+            return true;
+        }
+    }
+    false
 }
 
 fn blocklist_payload_blocks_sender(payload: &Value, sender: &str) -> bool {
@@ -362,7 +367,7 @@ async fn index_search(body: JsonBody<Value>, depot: &mut Depot) -> JsonResult<Va
             let messages = state
                 .persistence
                 .messages()
-                .list_for_space(&space_id, 500)
+                .list_for_space(&space_id, 500).await
                 .unwrap_or_default();
             for message in messages {
                 if message.encrypted {
@@ -513,45 +518,41 @@ async fn index_query(body: JsonBody<Value>, depot: &mut Depot) -> JsonResult<Val
         .map(ToOwned::to_owned)
         .collect();
 
-    let mut results: Vec<Value> = space_snapshot
-        .into_iter()
-        .filter(|space| !super::is_space_deleted(state, space.realm_id.as_str()))
-        .filter(|space| {
-            if space_id_filter.is_empty() {
-                return true;
-            }
-            space_id_filter.contains(space.realm_id.as_str())
-        })
-        .filter(|space| {
-            let Some(text) = filter_text.as_deref() else {
-                return true;
-            };
+    let mut results: Vec<Value> = Vec::new();
+    for space in space_snapshot {
+        if super::is_space_deleted(state, space.realm_id.as_str()).await {
+            continue;
+        }
+        if !space_id_filter.is_empty() && !space_id_filter.contains(space.realm_id.as_str()) {
+            continue;
+        }
+        if let Some(text) = filter_text.as_deref() {
             let haystack = format!(
                 "{} {}",
                 space.name.to_lowercase(),
                 space.description.as_deref().unwrap_or("").to_lowercase()
             );
-            haystack.contains(text)
-        })
-        .map(|space| {
-            json!({
-                "kind": "space",
-                "object_id": space.realm_id.as_str(),
-                "realm_id": space.realm_id.as_str(),
-                "title": space.name,
-                "summary": space.description,
-                "tags": space.tags.iter().cloned().collect::<Vec<_>>(),
-                "public": space.public,
-                "renderer": renderer,
-                "facets": facets,
-                "sort": sort_value,
-            })
-        })
-        .collect();
+            if !haystack.contains(text) {
+                continue;
+            }
+        }
+        results.push(json!({
+            "kind": "space",
+            "object_id": space.realm_id.as_str(),
+            "realm_id": space.realm_id.as_str(),
+            "title": space.name,
+            "summary": space.description,
+            "tags": space.tags.iter().cloned().collect::<Vec<_>>(),
+            "public": space.public,
+            "renderer": renderer,
+            "facets": facets,
+            "sort": sort_value,
+        }));
+    }
 
     if results.is_empty() && !space_id_filter.is_empty() {
         for space_id in &space_id_filter {
-            if super::is_space_deleted(state, space_id) {
+            if super::is_space_deleted(state, space_id).await {
                 continue;
             }
             let registry_known = {
@@ -722,7 +723,7 @@ async fn index_debug_reducer(
     let messages = state
         .persistence
         .messages()
-        .list_for_space(&realm_id, limit)
+        .list_for_space(&realm_id, limit).await
         .unwrap_or_default();
     let projection_events: Vec<Value> = messages
         .iter()

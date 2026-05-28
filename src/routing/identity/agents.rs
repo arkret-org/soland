@@ -89,7 +89,7 @@ async fn agent_key_pair(
     req: &mut Request,
 ) -> JsonResult<AgentKeyPairResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
     validate_agent_principal_id(&body.agent_principal_id)?;
     if body.verification_method.trim().is_empty() {
@@ -165,7 +165,7 @@ async fn provision_agent(
     req: &mut Request,
 ) -> JsonResult<AgentResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
     if body.display_name.trim().is_empty() {
         return Err(AppError::invalid_param("display_name is required"));
@@ -230,7 +230,7 @@ async fn list_agents(
     req: &mut Request,
 ) -> JsonResult<AgentListResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let _session = aa.authenticated_session(state, req)?;
+    let _session = aa.authenticated_session(state, req).await?;
     // TODO(P2-impl): query the agent_principal projection scoped to the
     // controller's DID. For now we return an empty stable shape so
     // sodmin/yougen can wire the endpoint without 404.
@@ -258,7 +258,7 @@ async fn get_agent(
     req: &mut Request,
 ) -> JsonResult<AgentResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let _session = aa.authenticated_session(state, req)?;
+    let _session = aa.authenticated_session(state, req).await?;
     let agent_id = agent_id.into_inner();
     validate_agent_principal_id(&agent_id)?;
     // TODO(P2-impl): look up agent_principal row, 404 when absent / not
@@ -268,7 +268,7 @@ async fn get_agent(
     Err(AppError::not_found("agent lookup not yet wired (P2-impl)"))
 }
 
-fn lifecycle_transition(
+async fn lifecycle_transition(
     state: &AppState,
     aa: &AuthArgs,
     req: &Request,
@@ -277,7 +277,7 @@ fn lifecycle_transition(
     event_kind: &str,
     reason: Option<String>,
 ) -> Result<AgentLifecycleResBody, AppError> {
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     validate_agent_principal_id(&agent_id)?;
     // ERR-1 / REDU-1 — surface AGENT_PAUSED / AGENT_DEACTIVATED reason
     // codes through this transition path so the constants stay
@@ -346,7 +346,7 @@ async fn pause_agent(
         "paused",
         "cx.agent.pause",
         body.reason,
-    )?)
+    ).await?)
 }
 
 #[endpoint(
@@ -373,7 +373,7 @@ async fn resume_agent(
         "active",
         "cx.agent.resume",
         body.reason,
-    )?)
+    ).await?)
 }
 
 #[endpoint(
@@ -400,7 +400,7 @@ async fn deactivate_agent(
         "deactivated",
         "cx.agent.deactivate",
         body.reason,
-    )?)
+    ).await?)
 }
 
 #[endpoint(
@@ -418,7 +418,7 @@ async fn rotate_agent_key(
     req: &mut Request,
 ) -> JsonResult<AgentRotateKeyResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let agent_id = agent_id.into_inner();
     validate_agent_principal_id(&agent_id)?;
     let body = body.into_inner();
@@ -469,7 +469,7 @@ async fn attach_agent_grant(
     req: &mut Request,
 ) -> JsonResult<AgentGrantResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let agent_id = agent_id.into_inner();
     validate_agent_principal_id(&agent_id)?;
     let body = body.into_inner();
@@ -520,7 +520,7 @@ async fn detach_agent_grant(
     req: &mut Request,
 ) -> JsonResult<AgentGrantDetachResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let agent_id = agent_id.into_inner();
     let grant_id = grant_id.into_inner();
     validate_agent_principal_id(&agent_id)?;
@@ -564,7 +564,7 @@ async fn ensure_sidecar_thread(
     req: &mut Request,
 ) -> JsonResult<AgentSidecarThreadEnsureResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let agent_id = agent_id.into_inner();
     validate_agent_principal_id(&agent_id)?;
     let body = body.into_inner();

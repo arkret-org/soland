@@ -9,7 +9,8 @@ use soland::db::Db;
 use soland::gc;
 use soland::state::AppState;
 
-fn main() -> anyhow::Result<()> {
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let space_id = arg_value(&args, "--space-id");
     let dry_run = args.iter().any(|a| a == "--dry-run");
@@ -21,8 +22,9 @@ fn main() -> anyhow::Result<()> {
 
     dotenvy::dotenv().ok();
     let config = AppConfig::from_env_and_args()?;
-    let db = Db::from_env()?;
+    let db = Db::from_env().await?;
     let state = AppState::new(config, db);
+    state.hydrate().await;
 
     let candidates = match space_id.as_deref() {
         Some(id) => {

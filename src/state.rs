@@ -1461,10 +1461,17 @@ impl AppState {
             })
             .unwrap_or_else(|| Arc::new(MemoryPersistenceStore::new()));
 
-        // Seed deterministic demo data only when explicitly opted in (tests via
-        // `test_config()`, dev harnesses via `SOLAND_SEED_DEMO_DATA=true`). In
-        // production this stays off so soland deployments don't all advertise
-        // the same hard-coded "Contrix Demo Space" id across federation peers.
+        // Seed the deterministic demo Realm into the in-memory directory index
+        // when explicitly opted in (tests via `test_config()`, dev harnesses via
+        // `SOLAND_SEED_DEMO_DATA=true`). In production this stays off so soland
+        // deployments don't all advertise the same hard-coded "Contrix Demo
+        // Space" id across federation peers.
+        //
+        // The DB-touching half of the demo seed (writing the demo account +
+        // Realm metadata through the now-async persistence store) and the
+        // durable hydration steps run in [`AppState::hydrate`], an explicit
+        // async boot step driven from `main`, so the synchronous constructor
+        // never touches the database.
         if config.seed_demo_data {
             let demo_realm_id = "cx:realm:0196419b-0000-7000-8000-000000000000";
             let mut demo = RealmDirectoryEntry::new(
@@ -1478,37 +1485,7 @@ impl AppState {
             demo.tags.insert("demo".to_owned());
             demo.category = Some("collaboration".to_owned());
             realms.upsert(demo);
-
-            let demo_account = AccountRecord {
-                did: "did:web:alice.example".to_owned(),
-                handle: "@alice".to_owned(),
-                display_name: Some("Alice Example".to_owned()),
-                bio: None,
-                avatar_url: None,
-                created_at: now,
-            };
-            if let Err(error) = persistence.accounts().put(&demo_account) {
-                tracing::warn!(%error, "failed to seed demo account into persistence store");
-            }
-
-            let demo_realm_meta = RealmMetaRecord {
-                owner: "did:web:alice.example".to_owned(),
-                deleted: false,
-                discoverability: "public".to_owned(),
-                history_visibility: "shared".to_owned(),
-                encryption_profile: None,
-                plaintext_visible_services: BTreeSet::new(),
-                created_at: now,
-                updated_at: now,
-            };
-            if let Err(error) = persistence
-                .realm_meta()
-                .put(demo_realm_id, &demo_realm_meta)
-            {
-                tracing::warn!(%error, "failed to seed demo Realm metadata into persistence store");
-            }
         }
-        hydrate_realms_from_canonical_events(persistence.as_ref(), &mut realms);
 
         // Build the production DID resolver chain before the struct literal
         // so we can still
@@ -1642,13 +1619,13 @@ impl AppState {
         }
         let admin_keystore = Arc::new(admin_keystore);
 
-        // Hydrate Space-container/Flow/Morph projections from durable
-        // persistence so process restart doesn't lose lifecycle state.
-        // The write-through path in `routing::events::projection.rs::
-        // write_through_projection` keeps these tables in sync as
-        // reducer apply mutates the in-memory state.
-        let mut hydrated = ProjectionState::new();
-        hydrate_projections_from_persistence(persistence.as_ref(), &mut hydrated);
+        // Space-container/Flow/Morph projections are hydrated from durable
+        // persistence in [`AppState::hydrate`] (an explicit async boot step)
+        // rather than here, because the persistence store is now async. The
+        // write-through path in `routing::events::projection.rs::
+        // write_through_projection` keeps these tables in sync as reducer
+        // apply mutates the in-memory state.
+        let hydrated = ProjectionState::new();
 
         Self {
             config,
@@ -1705,6 +1682,73 @@ impl AppState {
             recovery_policies: Arc::new(Mutex::new(BTreeMap::new())),
             recovery_receipts: Arc::new(Mutex::new(BTreeMap::new())),
             member_identity: Arc::new(Mutex::new(MemberIdentityRegistry::new())),
+        }
+    }
+
+    /// Touch the (now async) persistence store to finish boot:
+    ///   * seed the demo account + Realm metadata when `seed_demo_data` is on,
+    ///   * hydrate the Realm directory from persisted `cx.realm.create` events,
+    ///   * hydrate Space-container/Flow/Morph projections from durable rows.
+    ///
+    /// Extracted out of the synchronous `new` constructor so the DB work runs
+    /// in an async context (driven from `main`); see the diesel-async
+    /// conversion. Safe to call in memory mode — every store read returns an
+    /// empty snapshot, so this is a no-op there.
+    pub async fn hydrate(&self) {
+        let now = chrono::Utc::now();
+        if self.config.seed_demo_data {
+            let demo_realm_id = "cx:realm:0196419b-0000-7000-8000-000000000000";
+            let demo_account = AccountRecord {
+                did: "did:web:alice.example".to_owned(),
+                handle: "@alice".to_owned(),
+                display_name: Some("Alice Example".to_owned()),
+                bio: None,
+                avatar_url: None,
+                created_at: now,
+            };
+            if let Err(error) = self.persistence.accounts().put(&demo_account).await {
+                tracing::warn!(%error, "failed to seed demo account into persistence store");
+            }
+
+            let demo_realm_meta = RealmMetaRecord {
+                owner: "did:web:alice.example".to_owned(),
+                deleted: false,
+                discoverability: "public".to_owned(),
+                history_visibility: "shared".to_owned(),
+                encryption_profile: None,
+                plaintext_visible_services: BTreeSet::new(),
+                created_at: now,
+                updated_at: now,
+            };
+            if let Err(error) = self
+                .persistence
+                .realm_meta()
+                .put(demo_realm_id, &demo_realm_meta)
+                .await
+            {
+                tracing::warn!(%error, "failed to seed demo Realm metadata into persistence store");
+            }
+        }
+
+        // Build the hydrated views off-lock (the async DB reads must not hold
+        // a std::sync Mutex guard across `.await`), then merge under a short
+        // synchronous critical section.
+        let mut realm_updates = RealmDirectoryIndex::new();
+        hydrate_realms_from_canonical_events(self.persistence.as_ref(), &mut realm_updates).await;
+        {
+            let mut realms = self.realms.lock().expect("realms lock");
+            for (_, entry) in realm_updates.entries_iter() {
+                realms.upsert(entry.clone());
+            }
+        }
+
+        let mut proj_updates = ProjectionState::new();
+        hydrate_projections_from_persistence(self.persistence.as_ref(), &mut proj_updates).await;
+        {
+            let mut proj = self.projection.lock().expect("projection lock");
+            proj.space_containers.extend(proj_updates.space_containers);
+            proj.flows.extend(proj_updates.flows);
+            proj.morphs.extend(proj_updates.morphs);
         }
     }
 
@@ -1853,7 +1897,7 @@ pub(crate) fn getrandom_seed(out: &mut [u8; 32]) {
 /// write-through path stamped down on the way in. Unknown state
 /// strings or invalid rows are silently skipped (logged at warn) —
 /// the in-memory state stays authoritative.
-fn hydrate_projections_from_persistence(
+async fn hydrate_projections_from_persistence(
     persistence: &dyn crate::persistence::PersistenceStore,
     proj: &mut ProjectionState,
 ) {
@@ -1879,7 +1923,7 @@ fn hydrate_projections_from_persistence(
         }
     }
 
-    if let Ok(rows) = persistence.space_container_projections().snapshot_all() {
+    if let Ok(rows) = persistence.space_container_projections().snapshot_all().await {
         for record in rows {
             let Some(state) = parse_space_container_state(&record.state) else {
                 tracing::warn!(
@@ -1917,7 +1961,7 @@ fn hydrate_projections_from_persistence(
             );
         }
     }
-    if let Ok(rows) = persistence.flow_projections().snapshot_all() {
+    if let Ok(rows) = persistence.flow_projections().snapshot_all().await {
         for record in rows {
             let Some(state) = parse_object_state(&record.state) else {
                 tracing::warn!(
@@ -1945,7 +1989,7 @@ fn hydrate_projections_from_persistence(
             );
         }
     }
-    if let Ok(rows) = persistence.morph_projections().snapshot_all() {
+    if let Ok(rows) = persistence.morph_projections().snapshot_all().await {
         for record in rows {
             let Some(state) = parse_object_state(&record.state) else {
                 tracing::warn!(
@@ -2007,21 +2051,21 @@ fn hydrate_projections_from_persistence(
     }
 }
 
-fn hydrate_realms_from_canonical_events(
+async fn hydrate_realms_from_canonical_events(
     persistence: &dyn crate::persistence::PersistenceStore,
     realms: &mut RealmDirectoryIndex,
 ) {
-    let Ok(events) = persistence.events().snapshot_all() else {
+    let Ok(events) = persistence.events().snapshot_all().await else {
         return;
     };
     for record in events {
         if record.kind == "cx.realm.create" {
-            hydrate_realm_create_event(persistence, realms, &record);
+            hydrate_realm_create_event(persistence, realms, &record).await;
         }
     }
 }
 
-fn hydrate_realm_create_event(
+async fn hydrate_realm_create_event(
     persistence: &dyn crate::persistence::PersistenceStore,
     realms: &mut RealmDirectoryIndex,
     record: &CanonicalEventRecord,
@@ -2105,7 +2149,7 @@ fn hydrate_realm_create_event(
         created_at: record.received_at,
         updated_at: record.received_at,
     };
-    if let Err(error) = persistence.realm_meta().put(&space_id, &meta) {
+    if let Err(error) = persistence.realm_meta().put(&space_id, &meta).await {
         tracing::warn!(%error, space_id = %space_id, "failed to hydrate persisted realm meta");
     }
 }

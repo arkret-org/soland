@@ -170,7 +170,7 @@ async fn list_circles(
     req: &mut Request,
 ) -> JsonResult<ListCirclesResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let _session = aa.authenticated_session(state, req)?;
+    let _session = aa.authenticated_session(state, req).await?;
     let realm_id = realm_id.into_inner();
     let projection = state.projection.lock().expect("projection mutex");
     let circles = projection
@@ -194,7 +194,7 @@ async fn get_circle(
     req: &mut Request,
 ) -> JsonResult<CircleResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let _session = aa.authenticated_session(state, req)?;
+    let _session = aa.authenticated_session(state, req).await?;
     let circle_id = circle_id.into_inner();
     let projection = state.projection.lock().expect("projection mutex");
     let circle = projection
@@ -216,7 +216,7 @@ async fn post_circle(
     req: &mut Request,
 ) -> JsonResult<CircleResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
     let realm_scope = RealmId::new(body.realm_id.clone())
         .map_err(|e| AppError::invalid_param(format!("realm_id: {e}")))?;
@@ -238,7 +238,7 @@ async fn post_circle(
         .map_err(|e| AppError::invalid_param(format!("operation_id: {e}")))?;
     let operation = Operation::create(op_id, realm_scope, CX_CIRCLE_CREATE, payload);
     accept_local_operations(state, &session.actor, std::slice::from_ref(&operation))
-        .map_err(reducer_reject_to_app_error)?;
+        .await.map_err(reducer_reject_to_app_error)?;
     let projection = state.projection.lock().expect("projection mutex");
     let circle = projection
         .circle(&circle_id)
@@ -260,7 +260,7 @@ async fn post_circle_member(
     req: &mut Request,
 ) -> JsonResult<CircleMembershipResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let circle_id = circle_id.into_inner();
     let body = body.into_inner();
     let realm_scope = circle_realm_scope(state, &circle_id)?;
@@ -275,7 +275,7 @@ async fn post_circle_member(
         .map_err(|e| AppError::invalid_param(format!("operation_id: {e}")))?;
     let operation = Operation::create(op_id, realm_scope, CX_CIRCLE_MEMBER_STATE, payload);
     accept_local_operations(state, &session.actor, std::slice::from_ref(&operation))
-        .map_err(reducer_reject_to_app_error)?;
+        .await.map_err(reducer_reject_to_app_error)?;
     json_ok(CircleMembershipResponse {
         circle_id,
         actor_did: body.actor_did,
@@ -297,7 +297,7 @@ async fn delete_circle_member(
     req: &mut Request,
 ) -> JsonResult<CircleMembershipResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let circle_id = circle_id.into_inner();
     let actor_did = actor_did.into_inner();
     let realm_scope = circle_realm_scope(state, &circle_id)?;
@@ -311,7 +311,7 @@ async fn delete_circle_member(
         .map_err(|e| AppError::invalid_param(format!("operation_id: {e}")))?;
     let operation = Operation::create(op_id, realm_scope, CX_CIRCLE_MEMBER_STATE, payload);
     accept_local_operations(state, &session.actor, std::slice::from_ref(&operation))
-        .map_err(reducer_reject_to_app_error)?;
+        .await.map_err(reducer_reject_to_app_error)?;
     json_ok(CircleMembershipResponse {
         circle_id,
         actor_did,
@@ -332,7 +332,7 @@ async fn post_scope_rotate(
     req: &mut Request,
 ) -> JsonResult<CircleScopeRotateResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let circle_id = circle_id.into_inner();
     let realm_scope = circle_realm_scope(state, &circle_id)?;
     // TODO(circle-rollout-P2A.4): wire the actual MLS group rotation
@@ -350,7 +350,7 @@ async fn post_scope_rotate(
         .map_err(|e| AppError::invalid_param(format!("operation_id: {e}")))?;
     let operation = Operation::create(op_id, realm_scope, CX_CIRCLE_UPDATE, payload);
     accept_local_operations(state, &session.actor, std::slice::from_ref(&operation))
-        .map_err(reducer_reject_to_app_error)?;
+        .await.map_err(reducer_reject_to_app_error)?;
     let projection = state.projection.lock().expect("projection mutex");
     let circle = projection
         .circle(&circle_id)
@@ -404,7 +404,7 @@ async fn submit_circle_lifecycle(
     kind: &'static str,
 ) -> JsonResult<CircleResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let realm_scope = circle_realm_scope(state, &circle_id)?;
     let payload = json!({
         "circle_id": circle_id,
@@ -414,7 +414,7 @@ async fn submit_circle_lifecycle(
         .map_err(|e| AppError::invalid_param(format!("operation_id: {e}")))?;
     let operation = Operation::create(op_id, realm_scope, kind, payload);
     accept_local_operations(state, &session.actor, std::slice::from_ref(&operation))
-        .map_err(reducer_reject_to_app_error)?;
+        .await.map_err(reducer_reject_to_app_error)?;
     let projection = state.projection.lock().expect("projection mutex");
     // For tombstone the read-helper hides the row; fall back to direct
     // map lookup so the response still surfaces the terminal state.

@@ -40,6 +40,24 @@ use crate::wire::{
     SearchRealmsResponse, SearchUsersRequest,
 };
 
+/// Snapshot the in-memory realm directory (under a short lock) and return the
+/// owned entries that are not tombstoned. The deleted check is async (it reads
+/// `realm_meta`), so we must not run it while holding the `realms` lock — we
+/// collect candidates first, drop the guard, then filter with `.await`.
+async fn live_realm_entries(state: &AppState) -> Vec<RealmDirectoryEntry> {
+    let candidates: Vec<RealmDirectoryEntry> = {
+        let spaces = state.realms.lock().expect("spaces lock");
+        spaces.search(Default::default()).into_iter().cloned().collect()
+    };
+    let mut live = Vec::new();
+    for space in candidates {
+        if !is_space_deleted(state, space.realm_id.as_str()).await {
+            live.push(space);
+        }
+    }
+    live
+}
+
 pub(super) fn router() -> Router {
     Router::new()
         .push(Router::with_path("directory/describe").get(directory_describe))
@@ -94,14 +112,17 @@ async fn search_realms(
         limit: body.limit,
         ..Default::default()
     };
-    let session = authenticated_session(state, req).ok();
-    let spaces = state.realms.lock().expect("spaces lock");
-    let results = spaces
-        .search(query)
-        .into_iter()
-        .filter(|space| space_search_visible_to(state, space, session.as_ref()))
-        .cloned()
-        .collect();
+    let session = authenticated_session(state, req).await.ok();
+    let candidates: Vec<RealmDirectoryEntry> = {
+        let spaces = state.realms.lock().expect("spaces lock");
+        spaces.search(query).into_iter().cloned().collect()
+    };
+    let mut results = Vec::new();
+    for space in candidates {
+        if space_search_visible_to(state, &space, session.as_ref()).await {
+            results.push(space);
+        }
+    }
     json_ok(SearchRealmsResponse {
         results,
         next_cursor: None,
@@ -131,20 +152,18 @@ async fn resolve_realm(
         ));
     }
 
-    let session = authenticated_session(state, req).ok();
-    let invite_space_id = body
-        .invite_token
-        .as_deref()
-        .and_then(|token| invite_token_space_id(state, token));
-    let spaces = state.realms.lock().expect("spaces lock");
-    let space = spaces.search(Default::default()).into_iter().find(|entry| {
-        space_resolvable_to(
-            state,
-            entry,
-            session.as_ref(),
-            body.invite_token.as_deref(),
-            body.signed_link.as_deref(),
-        ) && (body
+    let session = authenticated_session(state, req).await.ok();
+    let invite_space_id = match body.invite_token.as_deref() {
+        Some(token) => invite_token_space_id(state, token).await,
+        None => None,
+    };
+    let candidates: Vec<RealmDirectoryEntry> = {
+        let spaces = state.realms.lock().expect("spaces lock");
+        spaces.search(Default::default()).into_iter().cloned().collect()
+    };
+    let mut space = None;
+    for entry in candidates {
+        let matches_query = body
             .realm_id
             .as_deref()
             .is_some_and(|id| id == entry.realm_id.as_str())
@@ -154,31 +173,48 @@ async fn resolve_realm(
             || body
                 .alias
                 .as_deref()
-                .is_some_and(|alias| alias.eq_ignore_ascii_case(&entry.name)))
-    });
+                .is_some_and(|alias| alias.eq_ignore_ascii_case(&entry.name));
+        if matches_query
+            && space_resolvable_to(
+                state,
+                &entry,
+                session.as_ref(),
+                body.invite_token.as_deref(),
+                body.signed_link.as_deref(),
+            )
+            .await
+        {
+            space = Some(entry);
+            break;
+        }
+    }
     match space {
-        Some(space) => json_ok(ResolveRealmResponse {
-            space_preview: space.clone(),
-            stripped_state: vec![json!({
-                // R1.2 (Realm/Space reversal): security-namespace
-                // event renamed from `cx.space.discovery` to
-                // `cx.realm.discovery`.
-                "type": "cx.realm.discovery",
-                "subject": "",
-                "content": {
-                    "discoverability": space_discoverability(state, space.realm_id.as_str()),
-                    "directory_visibility": {
-                        "searchable": space_search_discoverability(state, space.realm_id.as_str())
+        Some(space) => {
+            let discoverability = space_discoverability(state, space.realm_id.as_str()).await;
+            let searchable = space_search_discoverability(state, space.realm_id.as_str()).await;
+            json_ok(ResolveRealmResponse {
+                space_preview: space.clone(),
+                stripped_state: vec![json!({
+                    // R1.2 (Realm/Space reversal): security-namespace
+                    // event renamed from `cx.space.discovery` to
+                    // `cx.realm.discovery`.
+                    "type": "cx.realm.discovery",
+                    "subject": "",
+                    "content": {
+                        "discoverability": discoverability,
+                        "directory_visibility": {
+                            "searchable": searchable
+                        }
                     }
-                }
-            })],
-            join_rule: if space_discoverability(state, space.realm_id.as_str()) == "public" {
-                "public".to_owned()
-            } else {
-                "invite_or_request".to_owned()
-            },
-            via_services: vec![state.config.service_did.clone()],
-        }),
+                })],
+                join_rule: if discoverability == "public" {
+                    "public".to_owned()
+                } else {
+                    "invite_or_request".to_owned()
+                },
+                via_services: vec![state.config.service_did.clone()],
+            })
+        }
         None => Err(AppError::not_found("not found")),
     }
 }
@@ -200,13 +236,9 @@ async fn search_organizations(
         .into_iter()
         .filter(|organization| query_matches(organization, body.query.as_deref()))
         .collect::<Vec<_>>();
-    let spaces = state.realms.lock().expect("spaces lock");
-    let space_entries: Vec<_> = spaces
-        .search(Default::default())
-        .into_iter()
-        .filter(|space| !is_space_deleted(state, space.realm_id.as_str()))
-        .collect();
-    let organization = demo_organization(&space_entries, &state.config.service_did);
+    let space_entries = live_realm_entries(state).await;
+    let space_refs: Vec<&RealmDirectoryEntry> = space_entries.iter().collect();
+    let organization = demo_organization(&space_refs, &state.config.service_did);
     if state.config.development_mode && query_matches(&organization, body.query.as_deref()) {
         results.push(organization);
     }
@@ -262,13 +294,9 @@ async fn resolve_organization(
         return Err(AppError::not_found("not found"));
     }
 
-    let spaces = state.realms.lock().expect("spaces lock");
-    let space_entries: Vec<_> = spaces
-        .search(Default::default())
-        .into_iter()
-        .filter(|space| !is_space_deleted(state, space.realm_id.as_str()))
-        .collect();
-    let organization = demo_organization(&space_entries, &state.config.service_did);
+    let space_entries = live_realm_entries(state).await;
+    let space_refs: Vec<&RealmDirectoryEntry> = space_entries.iter().collect();
+    let organization = demo_organization(&space_refs, &state.config.service_did);
     let matches_id = body
         .organization_id
         .as_deref()
@@ -322,13 +350,18 @@ async fn search_actors(
         });
     }
 
-    let session = authenticated_session(state, req).ok();
-    let results: Vec<_> = demo_actors(state)
-        .into_iter()
-        .filter(|actor| actor_visible_to(state, actor, session.as_ref()))
-        .filter(|actor| query_matches(actor, body.query.as_deref()))
-        .take(limit)
-        .collect();
+    let session = authenticated_session(state, req).await.ok();
+    let mut results: Vec<Value> = Vec::new();
+    for actor in demo_actors(state).await {
+        if results.len() >= limit {
+            break;
+        }
+        if actor_visible_to(state, &actor, session.as_ref()).await
+            && query_matches(&actor, body.query.as_deref())
+        {
+            results.push(actor);
+        }
+    }
     json_ok(DirectoryValueSearchResponse {
         results,
         next_cursor: None,
@@ -351,20 +384,24 @@ async fn search_users(
     let body = body.into_inner();
     let limit = checked_limit(body.limit)?;
     let query = body.query;
-    let session = authenticated_session(state, req).ok();
+    let session = authenticated_session(state, req).await.ok();
     // DIR-1 (R3.1, contrix-spec @ 7157ee8) — `cx.directory.search_users`
     // response rows MUST NOT carry `handle_uri`. Only `handle` (canonical
     // `<localpart>:<domain>`) + optional `display_name`/`verified`/`subject`
     // survive the rename. Other actor metadata (presence, organization,
     // avatar) goes through `cx.directory.search_actors` or
     // `cx.directory.resolve-handle`.
-    let results: Vec<_> = demo_actors(state)
-        .into_iter()
-        .filter(|actor| actor_visible_to(state, actor, session.as_ref()))
-        .filter(|actor| query_matches(actor, query.as_deref()))
-        .take(limit)
-        .map(|actor| project_search_users_row(state, &actor))
-        .collect();
+    let mut results: Vec<Value> = Vec::new();
+    for actor in demo_actors(state).await {
+        if results.len() >= limit {
+            break;
+        }
+        if actor_visible_to(state, &actor, session.as_ref()).await
+            && query_matches(&actor, query.as_deref())
+        {
+            results.push(project_search_users_row(state, &actor));
+        }
+    }
     json_ok(DirectoryValueSearchResponse {
         results,
         next_cursor: None,
@@ -427,13 +464,17 @@ async fn resolve_handle(
         return Err(AppError::missing_param("handle is required"));
     }
     let normalized = normalize_handle(&body.handle);
-    let session = authenticated_session(state, req).ok();
-    let actor = demo_actors(state).into_iter().find(|actor| {
-        actor_visible_to(state, actor, session.as_ref())
-            && actor["handle"]
-                .as_str()
-                .is_some_and(|handle| handle == normalized)
-    });
+    let session = authenticated_session(state, req).await.ok();
+    let mut actor = None;
+    for candidate in demo_actors(state).await {
+        let handle_matches = candidate["handle"]
+            .as_str()
+            .is_some_and(|handle| handle == normalized);
+        if handle_matches && actor_visible_to(state, &candidate, session.as_ref()).await {
+            actor = Some(candidate);
+            break;
+        }
+    }
     match actor {
         Some(actor) => {
             // Spec 0a5ab85: audience-bearing response. The directory MUST
@@ -594,17 +635,19 @@ async fn private_contact_discovery(
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     require_demo_directory_provider(state)?;
-    let session = authenticated_session(state, req).ok();
+    let session = authenticated_session(state, req).await.ok();
     let body = body.into_inner();
     let contacts = body
         .get("contacts")
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
-    let visible = demo_actors(state)
-        .into_iter()
-        .filter(|actor| actor_visible_to(state, actor, session.as_ref()))
-        .collect::<Vec<_>>();
+    let mut visible: Vec<Value> = Vec::new();
+    for actor in demo_actors(state).await {
+        if actor_visible_to(state, &actor, session.as_ref()).await {
+            visible.push(actor);
+        }
+    }
     let mut matches = Vec::new();
     for contact in contacts {
         let needle = contact
@@ -658,7 +701,7 @@ async fn directory_announce(
     req: &mut Request,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = authenticated_session(state, req).map_err(|(status, code, message)| {
+    let session = authenticated_session(state, req).await.map_err(|(status, code, message)| {
         AppError::invalid_param(message)
             .with_status(status)
             .with_wire_code(code)
@@ -673,7 +716,7 @@ async fn directory_announce(
         .or_else(|| body.get("realm_id"))
         .and_then(Value::as_str)
         .ok_or_else(|| AppError::missing_param("resource_id is required"))?;
-    if resource_kind == "realm" && !super::space_has_member(state, resource_id, &session.actor) {
+    if resource_kind == "realm" && !super::space_has_member(state, resource_id, &session.actor).await {
         return Err(AppError::capability_denied(
             "directory announcement requires realm membership",
         ));
@@ -706,7 +749,7 @@ async fn directory_withdraw(
     req: &mut Request,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = authenticated_session(state, req).map_err(|(status, code, message)| {
+    let session = authenticated_session(state, req).await.map_err(|(status, code, message)| {
         AppError::invalid_param(message)
             .with_status(status)
             .with_wire_code(code)
@@ -750,7 +793,7 @@ async fn directory_subscribe(
     req: &mut Request,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = authenticated_session(state, req).ok();
+    let session = authenticated_session(state, req).await.ok();
     let body = body.into_inner();
     json_ok(json!({
         "ok": true,
@@ -767,11 +810,11 @@ async fn directory_subscribe(
 // These remain public for sibling routing modules that share directory
 // authorization and visibility checks.
 
-pub fn has_accepted_contact(state: &AppState, left: &str, right: &str) -> bool {
+pub async fn has_accepted_contact(state: &AppState, left: &str, right: &str) -> bool {
     state
         .persistence
         .contacts()
-        .list_for_actor(left)
+        .list_for_actor(left).await
         .unwrap_or_default()
         .iter()
         .any(|contact| {
@@ -781,16 +824,24 @@ pub fn has_accepted_contact(state: &AppState, left: &str, right: &str) -> bool {
         })
 }
 
-pub fn actor_visible_to(state: &AppState, actor: &Value, session: Option<&SessionRecord>) -> bool {
+pub async fn actor_visible_to(
+    state: &AppState,
+    actor: &Value,
+    session: Option<&SessionRecord>,
+) -> bool {
     let Some(did) = actor["did"].as_str() else {
         return false;
     };
     if did == "did:web:alice.example" {
         return true;
     }
-    session.is_some_and(|session| {
-        session.actor == did || has_accepted_contact(state, &session.actor, did)
-    })
+    match session {
+        Some(session) => {
+            session.actor == did
+                || has_accepted_contact(state, &session.actor, did).await
+        }
+        None => false,
+    }
 }
 
 fn require_demo_directory_provider(state: &AppState) -> Result<(), AppError> {
@@ -812,7 +863,7 @@ pub fn demo_organization(spaces: &[&RealmDirectoryEntry], service_did: &str) -> 
     })
 }
 
-pub fn demo_actors(state: &AppState) -> Vec<Value> {
+pub async fn demo_actors(state: &AppState) -> Vec<Value> {
     let mut actors = vec![json!({
         "did": "did:web:alice.example",
         "handle": "@alice",
@@ -822,7 +873,7 @@ pub fn demo_actors(state: &AppState) -> Vec<Value> {
         "presence": {"status": "online", "updated_at": now()},
     })];
 
-    let accounts = state.persistence.accounts().list().unwrap_or_default();
+    let accounts = state.persistence.accounts().list().await.unwrap_or_default();
     for account in accounts {
         if actors
             .iter()
@@ -852,7 +903,7 @@ pub fn demo_actors(state: &AppState) -> Vec<Value> {
     let devices = state
         .persistence
         .devices()
-        .list()
+        .list().await
         .map(|devices| {
             let mut grouped: BTreeMap<String, BTreeMap<String, Value>> = BTreeMap::new();
             for device in devices {

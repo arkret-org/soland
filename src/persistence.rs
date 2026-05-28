@@ -11,7 +11,11 @@ use contrix_sdk::Operation;
 use diesel::sql_types::{
     Array, BigInt, Binary, Bool, Integer, Jsonb, Nullable, Text, Timestamptz, Uuid as SqlUuid,
 };
-use diesel::{OptionalExtension, QueryableByName, RunQueryDsl, sql_query};
+use diesel::{OptionalExtension, QueryableByName, sql_query};
+use diesel_async::RunQueryDsl;
+use diesel_async::pooled_connection::deadpool::Object;
+use diesel_async::AsyncPgConnection;
+use async_trait::async_trait;
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -43,20 +47,22 @@ pub enum PersistenceError {
 pub type PersistenceResult<T> = Result<T, PersistenceError>;
 
 /// Trait for account storage operations.
+#[async_trait]
 pub trait AccountStore: Send + Sync {
-    fn get(&self, did: &str) -> PersistenceResult<Option<AccountRecord>>;
-    fn put(&self, record: &AccountRecord) -> PersistenceResult<()>;
-    fn list(&self) -> PersistenceResult<Vec<AccountRecord>>;
-    fn delete(&self, did: &str) -> PersistenceResult<()>;
+    async fn get(&self, did: &str) -> PersistenceResult<Option<AccountRecord>>;
+    async fn put(&self, record: &AccountRecord) -> PersistenceResult<()>;
+    async fn list(&self) -> PersistenceResult<Vec<AccountRecord>>;
+    async fn delete(&self, did: &str) -> PersistenceResult<()>;
 }
 
 /// Trait for session storage operations.
+#[async_trait]
 pub trait SessionStore: Send + Sync {
-    fn get(&self, token: &str) -> PersistenceResult<Option<SessionRecord>>;
-    fn put(&self, record: &SessionRecord) -> PersistenceResult<()>;
-    fn delete(&self, token: &str) -> PersistenceResult<()>;
-    fn cleanup_expired(&self) -> PersistenceResult<usize>;
-    fn snapshot_all(&self) -> PersistenceResult<Vec<SessionRecord>>;
+    async fn get(&self, token: &str) -> PersistenceResult<Option<SessionRecord>>;
+    async fn put(&self, record: &SessionRecord) -> PersistenceResult<()>;
+    async fn delete(&self, token: &str) -> PersistenceResult<()>;
+    async fn cleanup_expired(&self) -> PersistenceResult<usize>;
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<SessionRecord>>;
 }
 
 /// Trait for actor-private account data storage.
@@ -68,33 +74,36 @@ pub trait SessionStore: Send + Sync {
 ///
 /// Spec: `discovery/client-preferences.md` §2 (storage model), §3.6
 /// (actor remarks), §3.7 (Space remarks).
+#[async_trait]
 pub trait AccountDataStore: Send + Sync {
-    fn get(&self, actor: &str, data_type: &str) -> PersistenceResult<Option<AccountDataRecord>>;
-    fn put(&self, record: &AccountDataRecord) -> PersistenceResult<()>;
-    fn delete(&self, actor: &str, data_type: &str) -> PersistenceResult<()>;
-    fn list_for_actor(&self, actor: &str) -> PersistenceResult<Vec<AccountDataRecord>>;
+    async fn get(&self, actor: &str, data_type: &str) -> PersistenceResult<Option<AccountDataRecord>>;
+    async fn put(&self, record: &AccountDataRecord) -> PersistenceResult<()>;
+    async fn delete(&self, actor: &str, data_type: &str) -> PersistenceResult<()>;
+    async fn list_for_actor(&self, actor: &str) -> PersistenceResult<Vec<AccountDataRecord>>;
 }
 
 /// Trait for contact storage operations.
+#[async_trait]
 pub trait ContactStore: Send + Sync {
-    fn get(&self, requester: &str, target: &str) -> PersistenceResult<Option<ContactRecord>>;
-    fn get_scoped(
+    async fn get(&self, requester: &str, target: &str) -> PersistenceResult<Option<ContactRecord>>;
+    async fn get_scoped(
         &self,
         requester: &str,
         target: &str,
         scope: &str,
     ) -> PersistenceResult<Option<ContactRecord>>;
-    fn put(&self, record: &ContactRecord) -> PersistenceResult<()>;
-    fn list_for_actor(&self, actor: &str) -> PersistenceResult<Vec<ContactRecord>>;
-    fn delete(&self, requester: &str, target: &str) -> PersistenceResult<()>;
+    async fn put(&self, record: &ContactRecord) -> PersistenceResult<()>;
+    async fn list_for_actor(&self, actor: &str) -> PersistenceResult<Vec<ContactRecord>>;
+    async fn delete(&self, requester: &str, target: &str) -> PersistenceResult<()>;
 }
 
 /// Trait for Realm metadata storage operations.
+#[async_trait]
 pub trait RealmMetaStore: Send + Sync {
-    fn get(&self, space_id: &str) -> PersistenceResult<Option<RealmMetaRecord>>;
-    fn put(&self, space_id: &str, record: &RealmMetaRecord) -> PersistenceResult<()>;
-    fn list(&self) -> PersistenceResult<Vec<(String, RealmMetaRecord)>>;
-    fn delete(&self, space_id: &str) -> PersistenceResult<()>;
+    async fn get(&self, space_id: &str) -> PersistenceResult<Option<RealmMetaRecord>>;
+    async fn put(&self, space_id: &str, record: &RealmMetaRecord) -> PersistenceResult<()>;
+    async fn list(&self) -> PersistenceResult<Vec<(String, RealmMetaRecord)>>;
+    async fn delete(&self, space_id: &str) -> PersistenceResult<()>;
 }
 
 // ── Projection persistence traits ─────────────────────────────────────────
@@ -108,36 +117,39 @@ pub trait RealmMetaStore: Send + Sync {
 
 /// Durable Space-container projection store (mirror of
 /// `projection_space_containers` table).
+#[async_trait]
 pub trait SpaceContainerProjectionStore: Send + Sync {
-    fn get(
+    async fn get(
         &self,
         container_space_id: &str,
     ) -> PersistenceResult<Option<SpaceContainerProjectionRecord>>;
-    fn put(&self, record: &SpaceContainerProjectionRecord) -> PersistenceResult<()>;
-    fn list_for_space(
+    async fn put(&self, record: &SpaceContainerProjectionRecord) -> PersistenceResult<()>;
+    async fn list_for_space(
         &self,
         space_id: &str,
     ) -> PersistenceResult<Vec<SpaceContainerProjectionRecord>>;
-    fn snapshot_all(&self) -> PersistenceResult<Vec<SpaceContainerProjectionRecord>>;
-    fn delete(&self, container_space_id: &str) -> PersistenceResult<()>;
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<SpaceContainerProjectionRecord>>;
+    async fn delete(&self, container_space_id: &str) -> PersistenceResult<()>;
 }
 
 /// Durable Flow projection store (mirror of `projection_flows` table).
+#[async_trait]
 pub trait FlowProjectionStore: Send + Sync {
-    fn get(&self, flow_id: &str) -> PersistenceResult<Option<FlowProjectionRecord>>;
-    fn put(&self, record: &FlowProjectionRecord) -> PersistenceResult<()>;
-    fn list_for_space(&self, space_id: &str) -> PersistenceResult<Vec<FlowProjectionRecord>>;
-    fn snapshot_all(&self) -> PersistenceResult<Vec<FlowProjectionRecord>>;
-    fn delete(&self, flow_id: &str) -> PersistenceResult<()>;
+    async fn get(&self, flow_id: &str) -> PersistenceResult<Option<FlowProjectionRecord>>;
+    async fn put(&self, record: &FlowProjectionRecord) -> PersistenceResult<()>;
+    async fn list_for_space(&self, space_id: &str) -> PersistenceResult<Vec<FlowProjectionRecord>>;
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<FlowProjectionRecord>>;
+    async fn delete(&self, flow_id: &str) -> PersistenceResult<()>;
 }
 
 /// Durable Morph projection store (mirror of `projection_morphs` table).
+#[async_trait]
 pub trait MorphProjectionStore: Send + Sync {
-    fn get(&self, morph_id: &str) -> PersistenceResult<Option<MorphProjectionRecord>>;
-    fn put(&self, record: &MorphProjectionRecord) -> PersistenceResult<()>;
-    fn list_for_space(&self, space_id: &str) -> PersistenceResult<Vec<MorphProjectionRecord>>;
-    fn snapshot_all(&self) -> PersistenceResult<Vec<MorphProjectionRecord>>;
-    fn delete(&self, morph_id: &str) -> PersistenceResult<()>;
+    async fn get(&self, morph_id: &str) -> PersistenceResult<Option<MorphProjectionRecord>>;
+    async fn put(&self, record: &MorphProjectionRecord) -> PersistenceResult<()>;
+    async fn list_for_space(&self, space_id: &str) -> PersistenceResult<Vec<MorphProjectionRecord>>;
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<MorphProjectionRecord>>;
+    async fn delete(&self, morph_id: &str) -> PersistenceResult<()>;
 }
 
 /// Wire / persistence record for a Space-container projection. Mirrors fields on
@@ -195,45 +207,49 @@ pub struct MorphProjectionRecord {
 }
 
 /// Trait for message storage operations.
+#[async_trait]
 pub trait MessageStore: Send + Sync {
-    fn get(&self, event_id: &str) -> PersistenceResult<Option<MessageRecord>>;
-    fn put(&self, record: &MessageRecord) -> PersistenceResult<()>;
-    fn list_for_space(&self, space_id: &str, limit: usize)
+    async fn get(&self, event_id: &str) -> PersistenceResult<Option<MessageRecord>>;
+    async fn put(&self, record: &MessageRecord) -> PersistenceResult<()>;
+    async fn list_for_space(&self, space_id: &str, limit: usize)
     -> PersistenceResult<Vec<MessageRecord>>;
-    fn list_for_thread(
+    async fn list_for_thread(
         &self,
         thread_id: &str,
         limit: usize,
     ) -> PersistenceResult<Vec<MessageRecord>>;
-    fn delete(&self, event_id: &str) -> PersistenceResult<()>;
+    async fn delete(&self, event_id: &str) -> PersistenceResult<()>;
 }
 
 /// Trait for blob storage operations.
+#[async_trait]
 pub trait BlobStore: Send + Sync {
-    fn get(&self, blob_ref: &str) -> PersistenceResult<Option<BlobRecord>>;
-    fn put(&self, blob_ref: &str, record: &BlobRecord) -> PersistenceResult<()>;
-    fn delete(&self, blob_ref: &str) -> PersistenceResult<()>;
-    fn snapshot_all(&self) -> PersistenceResult<Vec<BlobRecord>>;
+    async fn get(&self, blob_ref: &str) -> PersistenceResult<Option<BlobRecord>>;
+    async fn put(&self, blob_ref: &str, record: &BlobRecord) -> PersistenceResult<()>;
+    async fn delete(&self, blob_ref: &str) -> PersistenceResult<()>;
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<BlobRecord>>;
 }
 
 /// Trait for durable device inventory operations.
+#[async_trait]
 pub trait DeviceInventoryStore: Send + Sync {
-    fn get(&self, actor: &str, device_id: &str)
+    async fn get(&self, actor: &str, device_id: &str)
     -> PersistenceResult<Option<DeviceInventoryRecord>>;
-    fn put(&self, record: &DeviceInventoryRecord) -> PersistenceResult<()>;
-    fn list_for_actor(&self, actor: &str) -> PersistenceResult<Vec<DeviceInventoryRecord>>;
-    fn list(&self) -> PersistenceResult<Vec<DeviceInventoryRecord>>;
+    async fn put(&self, record: &DeviceInventoryRecord) -> PersistenceResult<()>;
+    async fn list_for_actor(&self, actor: &str) -> PersistenceResult<Vec<DeviceInventoryRecord>>;
+    async fn list(&self) -> PersistenceResult<Vec<DeviceInventoryRecord>>;
 }
 
 /// Trait for durable federation transaction replay records.
+#[async_trait]
 pub trait FederationTransactionStore: Send + Sync {
-    fn get(
+    async fn get(
         &self,
         origin: &str,
         txn_id: &str,
     ) -> PersistenceResult<Option<FederationTransactionRecord>>;
-    fn put(&self, record: &FederationTransactionRecord) -> PersistenceResult<()>;
-    fn snapshot_all(&self) -> PersistenceResult<Vec<FederationTransactionRecord>>;
+    async fn put(&self, record: &FederationTransactionRecord) -> PersistenceResult<()>;
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<FederationTransactionRecord>>;
 }
 
 /// G3.S0 — durable outbound federation HTTP delivery queue.
@@ -249,17 +265,18 @@ pub trait FederationTransactionStore: Send + Sync {
 /// Anchor on restart) MUST see `enqueue` return `Ok(false)` rather than
 /// a duplicate-row error; the worker treats the existing row as the
 /// authoritative delivery state.
+#[async_trait]
 pub trait FederationOutboxStore: Send + Sync {
     /// Insert a new outbox row. Returns `Ok(true)` if a fresh row was
     /// stored, `Ok(false)` if `(peer_did, idempotency_key)` already
     /// exists (callers MUST treat that as "already enqueued" rather
     /// than an error — see trait-doc idempotency note).
-    fn enqueue(&self, record: &FederationOutboxRecord) -> PersistenceResult<bool>;
+    async fn enqueue(&self, record: &FederationOutboxRecord) -> PersistenceResult<bool>;
     /// Returns rows where `delivered_at IS NULL` and `next_attempt_at
     /// <= now_unix_secs`, ordered by `next_attempt_at` ascending. The
     /// `limit` caps the per-poll batch so a backlog never starves
     /// other workers on the same tokio runtime.
-    fn pending_due(
+    async fn pending_due(
         &self,
         now_unix_secs: i64,
         limit: usize,
@@ -267,31 +284,32 @@ pub trait FederationOutboxStore: Send + Sync {
     /// Replace the row by `id`. Used by the worker after every delivery
     /// attempt to record the new `attempts` / `last_status` /
     /// `next_attempt_at` / `delivered_at` columns.
-    fn update(&self, record: &FederationOutboxRecord) -> PersistenceResult<()>;
+    async fn update(&self, record: &FederationOutboxRecord) -> PersistenceResult<()>;
     /// Fetch a single row by primary key. Used by the integration test
     /// (and the optional admin observability endpoint, not wired in
     /// G3.S0).
-    fn get(&self, id: &str) -> PersistenceResult<Option<FederationOutboxRecord>>;
+    async fn get(&self, id: &str) -> PersistenceResult<Option<FederationOutboxRecord>>;
     /// Snapshot the full table — diagnostics + the integration test
     /// rely on it. Production deployments SHOULD NOT call this on a
     /// large outbox; use `pending_due` instead.
-    fn snapshot_all(&self) -> PersistenceResult<Vec<FederationOutboxRecord>>;
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<FederationOutboxRecord>>;
     /// Append a terminal failure to the dead-letter queue. The outbox row
     /// remains in place for idempotency and diagnostics; this queue is the
     /// operator-facing replay/quarantine surface.
-    fn insert_dead_letter(
+    async fn insert_dead_letter(
         &self,
         record: &FederationOutboxDeadLetterRecord,
     ) -> PersistenceResult<()>;
-    fn dead_letters_snapshot(&self) -> PersistenceResult<Vec<FederationOutboxDeadLetterRecord>>;
+    async fn dead_letters_snapshot(&self) -> PersistenceResult<Vec<FederationOutboxDeadLetterRecord>>;
 }
 
 /// Append-only audit log. Reads are always actor-scoped; the cursor is the
 /// `audit_id` of the last item the caller already saw.
+#[async_trait]
 pub trait AuditStore: Send + Sync {
-    fn append(&self, entry: Value) -> PersistenceResult<()>;
-    fn list_for_actor(&self, actor: &str) -> PersistenceResult<Vec<Value>>;
-    fn snapshot_all(&self) -> PersistenceResult<Vec<Value>>;
+    async fn append(&self, entry: Value) -> PersistenceResult<()>;
+    async fn list_for_actor(&self, actor: &str) -> PersistenceResult<Vec<Value>>;
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<Value>>;
 }
 
 /// Moderation reports + assigned actions + decisions + appeals + queue items.
@@ -306,32 +324,33 @@ pub trait AuditStore: Send + Sync {
 /// `Err(PersistenceError::Internal("not yet wired"))` so production
 /// instances fail loudly until a migration ships; the in-memory backend
 /// implements them fully and is used by dev mode + tests.
+#[async_trait]
 pub trait ModerationStore: Send + Sync {
-    fn append_report(&self, report: Value) -> PersistenceResult<()>;
-    fn append_action(&self, action: Value) -> PersistenceResult<()>;
-    fn list_reports(&self) -> PersistenceResult<Vec<Value>>;
+    async fn append_report(&self, report: Value) -> PersistenceResult<()>;
+    async fn append_action(&self, action: Value) -> PersistenceResult<()>;
+    async fn list_reports(&self) -> PersistenceResult<Vec<Value>>;
     #[allow(dead_code)]
-    fn list_actions(&self) -> PersistenceResult<Vec<Value>>;
+    async fn list_actions(&self) -> PersistenceResult<Vec<Value>>;
 
     /// Append a `cx.moderation.decision` record. The JSON must carry at
     /// least `decision_id`, `target_ref`, `action`, `decided_by`,
     /// `decided_at`. Idempotent on `decision_id`.
-    fn append_decision(&self, _decision: Value) -> PersistenceResult<()> {
+    async fn append_decision(&self, _decision: Value) -> PersistenceResult<()> {
         Err(PersistenceError::Internal(
             "moderation decision append not wired in this backend".to_owned(),
         ))
     }
-    fn list_decisions(&self) -> PersistenceResult<Vec<Value>> {
+    async fn list_decisions(&self) -> PersistenceResult<Vec<Value>> {
         Ok(Vec::new())
     }
-    fn get_decision(&self, _decision_id: &str) -> PersistenceResult<Option<Value>> {
+    async fn get_decision(&self, _decision_id: &str) -> PersistenceResult<Option<Value>> {
         Ok(None)
     }
     /// Mark a decision as lifted (used when an appeal verdict=overturn
     /// is paired with `cx.moderation.decision.lift`). Stores the lift
     /// record verbatim; readers MUST join against `list_decisions` to
     /// determine the current active state.
-    fn append_decision_lift(&self, _lift: Value) -> PersistenceResult<()> {
+    async fn append_decision_lift(&self, _lift: Value) -> PersistenceResult<()> {
         Err(PersistenceError::Internal(
             "moderation decision lift not wired in this backend".to_owned(),
         ))
@@ -339,15 +358,15 @@ pub trait ModerationStore: Send + Sync {
 
     /// Upsert a `ModerationQueueItem` record. The JSON must carry
     /// `id`, `status`, `visibility`, `created_at`.
-    fn upsert_queue_item(&self, _item: Value) -> PersistenceResult<()> {
+    async fn upsert_queue_item(&self, _item: Value) -> PersistenceResult<()> {
         Err(PersistenceError::Internal(
             "moderation queue item upsert not wired in this backend".to_owned(),
         ))
     }
-    fn list_queue_items(&self) -> PersistenceResult<Vec<Value>> {
+    async fn list_queue_items(&self) -> PersistenceResult<Vec<Value>> {
         Ok(Vec::new())
     }
-    fn get_queue_item(&self, _id: &str) -> PersistenceResult<Option<Value>> {
+    async fn get_queue_item(&self, _id: &str) -> PersistenceResult<Option<Value>> {
         Ok(None)
     }
 
@@ -356,18 +375,18 @@ pub trait ModerationStore: Send + Sync {
     /// `contrix_core::round23::ModerationAppealPayload`). The store
     /// keeps an event log per appeal; the current FSM state is derived
     /// by replaying events.
-    fn append_appeal(&self, _appeal: Value) -> PersistenceResult<()> {
+    async fn append_appeal(&self, _appeal: Value) -> PersistenceResult<()> {
         Err(PersistenceError::Internal(
             "moderation appeal append not wired in this backend".to_owned(),
         ))
     }
     /// List the latest known event for each known appeal (one record
     /// per appeal_id). Used by sodmin to render the queue.
-    fn list_appeals(&self) -> PersistenceResult<Vec<Value>> {
+    async fn list_appeals(&self) -> PersistenceResult<Vec<Value>> {
         Ok(Vec::new())
     }
     /// Full event history for one appeal, in append order.
-    fn appeal_history(&self, _appeal_id: &str) -> PersistenceResult<Vec<Value>> {
+    async fn appeal_history(&self, _appeal_id: &str) -> PersistenceResult<Vec<Value>> {
         Ok(Vec::new())
     }
 }
@@ -375,47 +394,52 @@ pub trait ModerationStore: Send + Sync {
 /// Replay log of federation operations the local service has accepted from
 /// peers (and emitted itself). Currently in-memory but the trait shape is
 /// what the durable Pg implementation will follow.
+#[async_trait]
 pub trait FederationOperationsStore: Send + Sync {
-    fn append(&self, operation: Operation) -> PersistenceResult<()>;
-    fn contains(&self, operation_id: &str) -> PersistenceResult<bool>;
-    fn list_for_space(&self, space_id: &str) -> PersistenceResult<Vec<Operation>>;
-    fn snapshot_all(&self) -> PersistenceResult<Vec<Operation>>;
+    async fn append(&self, operation: Operation) -> PersistenceResult<()>;
+    async fn contains(&self, operation_id: &str) -> PersistenceResult<bool>;
+    async fn list_for_space(&self, space_id: &str) -> PersistenceResult<Vec<Operation>>;
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<Operation>>;
 }
 
 /// Push device registrations. Unstructured `Value` while the schema is in
 /// flux; the trait gives us a single point to upgrade later.
+#[async_trait]
 pub trait PushDeviceStore: Send + Sync {
-    fn register(&self, device: Value) -> PersistenceResult<()>;
-    fn unregister(
+    async fn register(&self, device: Value) -> PersistenceResult<()>;
+    async fn unregister(
         &self,
         actor: &str,
         device_id: &str,
         push_key: Option<&str>,
         app_id: Option<&str>,
     ) -> PersistenceResult<usize>;
-    fn snapshot_all(&self) -> PersistenceResult<Vec<Value>>;
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<Value>>;
 }
 
 /// Per-actor push rules.
+#[async_trait]
 pub trait PushRuleStore: Send + Sync {
-    fn put(&self, rule: PushRuleRecord) -> PersistenceResult<()>;
-    fn delete(&self, actor: &str, rule_id: &str) -> PersistenceResult<()>;
-    fn list_for_actor(&self, actor: &str) -> PersistenceResult<Vec<PushRuleRecord>>;
+    async fn put(&self, rule: PushRuleRecord) -> PersistenceResult<()>;
+    async fn delete(&self, actor: &str, rule_id: &str) -> PersistenceResult<()>;
+    async fn list_for_actor(&self, actor: &str) -> PersistenceResult<Vec<PushRuleRecord>>;
 }
 
 /// Presence (online/away/dnd) per actor.
+#[async_trait]
 pub trait PresenceStore: Send + Sync {
-    fn put(&self, presence: PresenceRecord) -> PersistenceResult<()>;
+    async fn put(&self, presence: PresenceRecord) -> PersistenceResult<()>;
     #[allow(dead_code)]
-    fn get(&self, actor: &str) -> PersistenceResult<Option<PresenceRecord>>;
+    async fn get(&self, actor: &str) -> PersistenceResult<Option<PresenceRecord>>;
 }
 
 /// Typing indicators per (actor, space). Auto-prunes expired entries.
+#[async_trait]
 pub trait TypingStore: Send + Sync {
-    fn put(&self, typing: TypingRecord) -> PersistenceResult<()>;
-    fn remove(&self, actor: &str, space_id: &str) -> PersistenceResult<()>;
-    fn list_for_space(&self, space_id: &str) -> PersistenceResult<Vec<TypingRecord>>;
-    fn prune_expired(&self) -> PersistenceResult<usize>;
+    async fn put(&self, typing: TypingRecord) -> PersistenceResult<()>;
+    async fn remove(&self, actor: &str, space_id: &str) -> PersistenceResult<()>;
+    async fn list_for_space(&self, space_id: &str) -> PersistenceResult<Vec<TypingRecord>>;
+    async fn prune_expired(&self) -> PersistenceResult<usize>;
 }
 
 /// Outbound push-bridge contract cache (`bridge_describe_url` → snapshot).
@@ -424,29 +448,30 @@ pub trait TypingStore: Send + Sync {
 /// snapshot. `record_contract_snapshot` lands a digest+etag+trust_level,
 /// `current_contract` reads it back, and `verify_contract_freshness` is the
 /// fail-closed gate the push outbound publish path calls before fan-out.
+#[async_trait]
 pub trait PushBridgeCacheStore: Send + Sync {
-    fn get(
+    async fn get(
         &self,
         bridge_describe_url: &str,
     ) -> PersistenceResult<Option<OutboundPushBridgeCacheRecord>>;
-    fn put(
+    async fn put(
         &self,
         bridge_describe_url: &str,
         record: OutboundPushBridgeCacheRecord,
     ) -> PersistenceResult<()>;
-    fn delete(&self, bridge_describe_url: &str) -> PersistenceResult<bool>;
-    fn clear(&self) -> PersistenceResult<usize>;
-    fn snapshot_all(&self) -> PersistenceResult<Vec<OutboundPushBridgeCacheRecord>>;
-    fn len(&self) -> PersistenceResult<usize>;
-    fn is_empty(&self) -> PersistenceResult<bool> {
-        Ok(self.len()? == 0)
+    async fn delete(&self, bridge_describe_url: &str) -> PersistenceResult<bool>;
+    async fn clear(&self) -> PersistenceResult<usize>;
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<OutboundPushBridgeCacheRecord>>;
+    async fn len(&self) -> PersistenceResult<usize>;
+    async fn is_empty(&self) -> PersistenceResult<bool> {
+        Ok(self.len().await? == 0)
     }
 
     /// Persist a fresh contract snapshot for `gateway_describe_url`. Bumps
     /// `freshness_at` to NOW, sets `trust_level`, and stores `digest`+`etag`.
     /// Creates a new row if no prior snapshot exists; otherwise overwrites
     /// the digest/etag/trust/freshness columns in place (rip-and-replace).
-    fn record_contract_snapshot(
+    async fn record_contract_snapshot(
         &self,
         gateway_describe_url: &str,
         digest: &str,
@@ -455,7 +480,7 @@ pub trait PushBridgeCacheStore: Send + Sync {
     ) -> PersistenceResult<()>;
 
     /// Read the current persisted contract snapshot for a gateway, if any.
-    fn current_contract(
+    async fn current_contract(
         &self,
         gateway_describe_url: &str,
     ) -> PersistenceResult<Option<OutboundPushBridgeCacheRecord>>;
@@ -472,7 +497,7 @@ pub trait PushBridgeCacheStore: Send + Sync {
     ///   trust_level is `revoked`).
     /// * `Unknown`         — no snapshot persisted, OR the snapshot is still `pending` / has empty
     ///   digest. Fail-closed.
-    fn verify_contract_freshness(
+    async fn verify_contract_freshness(
         &self,
         gateway_describe_url: &str,
         observed_digest: &str,
@@ -508,17 +533,18 @@ impl DriftResult {
 }
 
 /// WebRTC sessions + signals. Sessions auto-prune on `expires_at`.
+#[async_trait]
 pub trait WebrtcSessionStore: Send + Sync {
-    fn put(&self, record: WebrtcSessionRecord) -> PersistenceResult<()>;
-    fn get(&self, session_id: &str) -> PersistenceResult<Option<WebrtcSessionRecord>>;
-    fn delete(&self, session_id: &str) -> PersistenceResult<bool>;
-    fn append_signal(
+    async fn put(&self, record: WebrtcSessionRecord) -> PersistenceResult<()>;
+    async fn get(&self, session_id: &str) -> PersistenceResult<Option<WebrtcSessionRecord>>;
+    async fn delete(&self, session_id: &str) -> PersistenceResult<bool>;
+    async fn append_signal(
         &self,
         session_id: &str,
         actor_must_be_participant: &str,
         builder: SignalBuilder<'_>,
     ) -> PersistenceResult<WebrtcAppendSignal>;
-    fn prune_expired(&self) -> PersistenceResult<usize>;
+    async fn prune_expired(&self) -> PersistenceResult<usize>;
 }
 
 /// Closure that fills in a signal once the store has assigned a sequence.
@@ -533,68 +559,75 @@ pub struct WebrtcAppendSignal {
 
 /// DID documents + their key-log events. The two are coupled: every accepted
 /// `submit_did_operation` writes a document and appends a log entry.
+#[async_trait]
 pub trait WebvhStore: Send + Sync {
-    fn get_document(&self, did: &str) -> PersistenceResult<Option<WebvhDocumentRecord>>;
-    fn get_embedded_webvh_document_by_local_id(
+    async fn get_document(&self, did: &str) -> PersistenceResult<Option<WebvhDocumentRecord>>;
+    async fn get_embedded_webvh_document_by_local_id(
         &self,
         local_id: &str,
     ) -> PersistenceResult<Option<WebvhDocumentRecord>>;
-    fn put_document(&self, record: WebvhDocumentRecord) -> PersistenceResult<()>;
-    fn append_log_event(&self, event: WebvhLogRecord) -> PersistenceResult<()>;
-    fn list_log_events(&self, did: &str) -> PersistenceResult<Vec<WebvhLogRecord>>;
+    async fn put_document(&self, record: WebvhDocumentRecord) -> PersistenceResult<()>;
+    async fn append_log_event(&self, event: WebvhLogRecord) -> PersistenceResult<()>;
+    async fn list_log_events(&self, did: &str) -> PersistenceResult<Vec<WebvhLogRecord>>;
 }
 
 /// Space invite tokens.
+#[async_trait]
 pub trait SpaceInviteStore: Send + Sync {
-    fn get(&self, invite_id: &str) -> PersistenceResult<Option<SpaceInviteRecord>>;
-    fn put(&self, record: SpaceInviteRecord) -> PersistenceResult<()>;
-    fn snapshot_all(&self) -> PersistenceResult<Vec<SpaceInviteRecord>>;
+    async fn get(&self, invite_id: &str) -> PersistenceResult<Option<SpaceInviteRecord>>;
+    async fn put(&self, record: SpaceInviteRecord) -> PersistenceResult<()>;
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<SpaceInviteRecord>>;
 }
 
 /// Canonical event log keyed by `event_id`.
+#[async_trait]
 pub trait EventStore: Send + Sync {
-    fn put(&self, record: CanonicalEventRecord) -> PersistenceResult<()>;
-    fn get(&self, event_id: &str) -> PersistenceResult<Option<CanonicalEventRecord>>;
-    fn contains(&self, event_id: &str) -> PersistenceResult<bool>;
-    fn max_actor_seq(&self, actor_id: &str) -> PersistenceResult<Option<u64>>;
-    fn snapshot_all(&self) -> PersistenceResult<Vec<CanonicalEventRecord>>;
+    async fn put(&self, record: CanonicalEventRecord) -> PersistenceResult<()>;
+    async fn get(&self, event_id: &str) -> PersistenceResult<Option<CanonicalEventRecord>>;
+    async fn contains(&self, event_id: &str) -> PersistenceResult<bool>;
+    async fn max_actor_seq(&self, actor_id: &str) -> PersistenceResult<Option<u64>>;
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<CanonicalEventRecord>>;
 }
 
 /// Projection-side event log (append-only, index/debug surfaces).
+#[async_trait]
 pub trait ProjectionEventStore: Send + Sync {
-    fn append(&self, record: ProjectionEventRecord) -> PersistenceResult<()>;
-    fn snapshot_all(&self) -> PersistenceResult<Vec<ProjectionEventRecord>>;
+    async fn append(&self, record: ProjectionEventRecord) -> PersistenceResult<()>;
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<ProjectionEventRecord>>;
 }
 
 /// To-device message queue + idempotency-key set.
+#[async_trait]
 pub trait DeviceMessageStore: Send + Sync {
-    fn append(&self, message: DeviceMessageRecord) -> PersistenceResult<()>;
+    async fn append(&self, message: DeviceMessageRecord) -> PersistenceResult<()>;
     /// Insert a fresh `(actor:idempotency_key)` key — returns `false` if it was already there.
-    fn try_register_txn(&self, key: String) -> PersistenceResult<bool>;
+    async fn try_register_txn(&self, key: String) -> PersistenceResult<bool>;
     /// Remove every queued message for the given recipient+device whose
     /// position is `<= ack_position`. Returns the number removed.
-    fn ack(&self, recipient: &str, device_id: &str, ack_position: i64) -> PersistenceResult<usize>;
+    async fn ack(&self, recipient: &str, device_id: &str, ack_position: i64) -> PersistenceResult<usize>;
     /// List queued messages for a device strictly after `ack_position`.
-    fn list_after(
+    async fn list_after(
         &self,
         recipient: &str,
         device_id: &str,
         ack_position: i64,
     ) -> PersistenceResult<Vec<DeviceMessageRecord>>;
     /// Drop everything queued for the recipient+device (used on session revoke).
-    fn purge(&self, recipient: &str, device_id: &str) -> PersistenceResult<usize>;
+    async fn purge(&self, recipient: &str, device_id: &str) -> PersistenceResult<usize>;
 }
 
 /// Long-term device key bundles (one per `(actor, device_id)`).
+#[async_trait]
 pub trait DeviceKeyStore: Send + Sync {
-    fn put(&self, actor: String, device_id: String, payload: Value) -> PersistenceResult<()>;
-    fn get(&self, actor: &str, device_id: &str) -> PersistenceResult<Option<Value>>;
+    async fn put(&self, actor: String, device_id: String, payload: Value) -> PersistenceResult<()>;
+    async fn get(&self, actor: &str, device_id: &str) -> PersistenceResult<Option<Value>>;
 }
 
 /// One-time prekey pool. Calls to `claim` pop a single key.
+#[async_trait]
 pub trait OneTimeKeyStore: Send + Sync {
-    fn put(&self, actor: String, device_id: String, keys: Vec<Value>) -> PersistenceResult<()>;
-    fn claim(&self, actor: &str, device_id: &str) -> PersistenceResult<Option<Value>>;
+    async fn put(&self, actor: String, device_id: String, keys: Vec<Value>) -> PersistenceResult<()>;
+    async fn claim(&self, actor: &str, device_id: &str) -> PersistenceResult<Option<Value>>;
 }
 
 /// Encrypted key backups + the restore-ticket FSM tables.
@@ -613,30 +646,31 @@ pub trait OneTimeKeyStore: Send + Sync {
 /// every record carries an `actor` field in its envelope and the routing
 /// layer filters in-process. The `delete_*` family is used by the restore-
 /// state import path's `replace_owned` mode.
+#[async_trait]
 pub trait KeyBackupStore: Send + Sync {
-    fn put(&self, backup_id: String, payload: Value) -> PersistenceResult<()>;
-    fn get(&self, backup_id: &str) -> PersistenceResult<Option<Value>>;
-    fn delete(&self, backup_id: &str) -> PersistenceResult<bool>;
-    fn snapshot_all(&self) -> PersistenceResult<Vec<Value>>;
+    async fn put(&self, backup_id: String, payload: Value) -> PersistenceResult<()>;
+    async fn get(&self, backup_id: &str) -> PersistenceResult<Option<Value>>;
+    async fn delete(&self, backup_id: &str) -> PersistenceResult<bool>;
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<Value>>;
 
-    fn put_ticket(&self, ticket_id: String, payload: Value) -> PersistenceResult<()>;
-    fn get_ticket(&self, ticket_id: &str) -> PersistenceResult<Option<Value>>;
-    fn delete_ticket(&self, ticket_id: &str) -> PersistenceResult<bool>;
-    fn snapshot_tickets(&self) -> PersistenceResult<Vec<(String, Value)>>;
+    async fn put_ticket(&self, ticket_id: String, payload: Value) -> PersistenceResult<()>;
+    async fn get_ticket(&self, ticket_id: &str) -> PersistenceResult<Option<Value>>;
+    async fn delete_ticket(&self, ticket_id: &str) -> PersistenceResult<bool>;
+    async fn snapshot_tickets(&self) -> PersistenceResult<Vec<(String, Value)>>;
 
-    fn put_executor_run(&self, ticket_id: String, payload: Value) -> PersistenceResult<()>;
-    fn get_executor_run(&self, ticket_id: &str) -> PersistenceResult<Option<Value>>;
-    fn delete_executor_run(&self, ticket_id: &str) -> PersistenceResult<bool>;
-    fn snapshot_executor_runs(&self) -> PersistenceResult<Vec<(String, Value)>>;
+    async fn put_executor_run(&self, ticket_id: String, payload: Value) -> PersistenceResult<()>;
+    async fn get_executor_run(&self, ticket_id: &str) -> PersistenceResult<Option<Value>>;
+    async fn delete_executor_run(&self, ticket_id: &str) -> PersistenceResult<bool>;
+    async fn snapshot_executor_runs(&self) -> PersistenceResult<Vec<(String, Value)>>;
 
-    fn put_approval_run(&self, ticket_id: String, payload: Value) -> PersistenceResult<()>;
-    fn get_approval_run(&self, ticket_id: &str) -> PersistenceResult<Option<Value>>;
-    fn delete_approval_run(&self, ticket_id: &str) -> PersistenceResult<bool>;
-    fn snapshot_approval_runs(&self) -> PersistenceResult<Vec<(String, Value)>>;
+    async fn put_approval_run(&self, ticket_id: String, payload: Value) -> PersistenceResult<()>;
+    async fn get_approval_run(&self, ticket_id: &str) -> PersistenceResult<Option<Value>>;
+    async fn delete_approval_run(&self, ticket_id: &str) -> PersistenceResult<bool>;
+    async fn snapshot_approval_runs(&self) -> PersistenceResult<Vec<(String, Value)>>;
 
     /// Read the current monotonic fence token for a ticket. Returns 0 when
     /// the row does not exist yet (next put_* will bump to 1).
-    fn ticket_fence_token(&self, ticket_id: &str) -> PersistenceResult<i64>;
+    async fn ticket_fence_token(&self, ticket_id: &str) -> PersistenceResult<i64>;
 
     /// CAS-style transition. Updates `status` to `next_status` IFF the row's
     /// current `fence_token` matches `expected_fence`. On success bumps the
@@ -645,7 +679,7 @@ pub trait KeyBackupStore: Send + Sync {
     /// is NOT touched — callers update `payload` (and approval/executor
     /// envelopes) via `put_ticket` / `put_approval_run` / `put_executor_run`
     /// AFTER a successful CAS.
-    fn cas_ticket_status(
+    async fn cas_ticket_status(
         &self,
         ticket_id: &str,
         expected_fence: i64,
@@ -660,22 +694,23 @@ pub trait KeyBackupStore: Send + Sync {
 /// survive restarts and can be picked up by a leader-election watchdog
 /// once the threshold is met. Memory backend is fine for dev/tests; the
 /// Pg backend writes to the `multisig_pending` table.
+#[async_trait]
 pub trait MultisigPendingStore: Send + Sync {
-    fn upsert(&self, record: MultisigPendingRecord) -> PersistenceResult<()>;
-    fn get(&self, anchor_id: &str) -> PersistenceResult<Option<MultisigPendingRecord>>;
-    fn add_partial(
+    async fn upsert(&self, record: MultisigPendingRecord) -> PersistenceResult<()>;
+    async fn get(&self, anchor_id: &str) -> PersistenceResult<Option<MultisigPendingRecord>>;
+    async fn add_partial(
         &self,
         anchor_id: &str,
         signer_did: &str,
         partial: Value,
     ) -> PersistenceResult<MultisigPendingRecord>;
-    fn list_for_space(&self, space_id: &str) -> PersistenceResult<Vec<MultisigPendingRecord>>;
-    fn delete(&self, anchor_id: &str) -> PersistenceResult<bool>;
+    async fn list_for_space(&self, space_id: &str) -> PersistenceResult<Vec<MultisigPendingRecord>>;
+    async fn delete(&self, anchor_id: &str) -> PersistenceResult<bool>;
 
     /// List every row across all spaces. Used by the leader-election
     /// watchdog to scan for threshold-met rows that need aggregation +
     /// publication.
-    fn snapshot_all(&self) -> PersistenceResult<Vec<MultisigPendingRecord>>;
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<MultisigPendingRecord>>;
 
     /// Atomically claim a row for `node_id` until `claimed_until` if (a)
     /// the row exists, (b) it is currently unclaimed or its existing lease
@@ -690,7 +725,7 @@ pub trait MultisigPendingStore: Send + Sync {
     /// healed) finds its `claim_seq` no longer matches and is rejected
     /// at the row level. Returns `Ok((true, new_seq))` when this caller
     /// now owns the lease, `Ok((false, current_seq))` otherwise.
-    fn try_claim(
+    async fn try_claim(
         &self,
         anchor_id: &str,
         node_id: &str,
@@ -702,7 +737,7 @@ pub trait MultisigPendingStore: Send + Sync {
     /// aggregated + deleted, or when the caller decided to give up
     /// early). Idempotent — safe to call on a row that was already
     /// deleted.
-    fn release_claim(&self, anchor_id: &str, node_id: &str) -> PersistenceResult<()>;
+    async fn release_claim(&self, anchor_id: &str, node_id: &str) -> PersistenceResult<()>;
 
     /// Fenced delete. Only deletes the row when both the lease holder
     /// *and* the fencing token match. A stale leader (one whose lease
@@ -710,7 +745,7 @@ pub trait MultisigPendingStore: Send + Sync {
     /// `claim_seq`, so this returns `Ok(false)` and the row stays intact
     /// for the live leader to publish. Returns `Ok(true)` iff the delete
     /// happened.
-    fn delete_with_fence(
+    async fn delete_with_fence(
         &self,
         anchor_id: &str,
         node_id: &str,
@@ -723,7 +758,7 @@ pub trait MultisigPendingStore: Send + Sync {
     /// when the lease is still held by `node_id` AND the supplied
     /// `claim_seq` matches the row — a stale leader's renewal is
     /// rejected. Returns `Ok(true)` iff the renewal landed.
-    fn renew_claim(
+    async fn renew_claim(
         &self,
         anchor_id: &str,
         node_id: &str,
@@ -792,51 +827,54 @@ pub struct MlsCommitEpochRecord {
 
 /// G3.S1 — KeyPackage store. The `try_claim` CAS path is what
 /// guarantees at-most-one Welcome per published KeyPackage.
+#[async_trait]
 pub trait MlsKeyPackageStore: Send + Sync {
     /// Insert a fresh KeyPackage row. Returns `Ok(false)` if the
     /// `id` is already present (re-publishes of the same id are
     /// idempotent — production fixtures sometimes resubmit on retry).
-    fn put(&self, record: &MlsKeyPackageRecord) -> PersistenceResult<bool>;
-    fn get(&self, id: &str) -> PersistenceResult<Option<MlsKeyPackageRecord>>;
+    async fn put(&self, record: &MlsKeyPackageRecord) -> PersistenceResult<bool>;
+    async fn get(&self, id: &str) -> PersistenceResult<Option<MlsKeyPackageRecord>>;
     /// Atomically claim the named KeyPackage for `group_id`. Returns
     /// `Ok(Some(record))` on success (with `claimed_by_group_id` /
     /// `consumed_at` filled in), `Ok(None)` if the row is already
     /// claimed or does not exist. The CAS check + update happens
     /// inside the store so two concurrent callers see at-most-one win.
-    fn try_claim(
+    async fn try_claim(
         &self,
         id: &str,
         group_id: &str,
         consumed_at: i64,
     ) -> PersistenceResult<Option<MlsKeyPackageRecord>>;
     /// Snapshot all rows. Diagnostics + the integration test rely on it.
-    fn snapshot_all(&self) -> PersistenceResult<Vec<MlsKeyPackageRecord>>;
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<MlsKeyPackageRecord>>;
 }
 
 /// G3.S1 — Welcome to-device queue store. Each recipient device drains
 /// its queue via `drain_pending`, which marks pending rows
 /// `delivered_at = now()` so a re-poll won't redeliver.
+#[async_trait]
 pub trait MlsWelcomeStore: Send + Sync {
-    fn enqueue(&self, record: &MlsWelcomeRecord) -> PersistenceResult<()>;
+    async fn enqueue(&self, record: &MlsWelcomeRecord) -> PersistenceResult<()>;
     /// Return at most `limit` rows where `delivered_at IS NULL`. Marks
     /// each returned row with `delivered_at = now_unix_secs` in the
     /// same call so subsequent polls skip them.
-    fn drain_pending(
+    async fn drain_pending(
         &self,
         recipient_actor_did: &str,
         recipient_device_id: &str,
         now_unix_secs: i64,
         limit: usize,
     ) -> PersistenceResult<Vec<MlsWelcomeRecord>>;
-    fn snapshot_all(&self) -> PersistenceResult<Vec<MlsWelcomeRecord>>;
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<MlsWelcomeRecord>>;
 }
 
 /// G3.S1 — per-group MLS commit epoch store.
+#[async_trait]
 pub trait MlsCommitStore: Send + Sync {
-    fn get(&self, group_id: &str) -> PersistenceResult<Option<MlsCommitEpochRecord>>;
+    async fn get(&self, group_id: &str) -> PersistenceResult<Option<MlsCommitEpochRecord>>;
     /// Initialize a group at epoch 0. Returns `Ok(None)` when the group
     /// already has an epoch row.
-    fn initialize_genesis(
+    async fn initialize_genesis(
         &self,
         group_id: &str,
         leader_actor_did: &str,
@@ -848,7 +886,7 @@ pub trait MlsCommitStore: Send + Sync {
     /// matches the row's current epoch (or 0 for a never-seen group).
     /// Returns `Ok(Some(new_record))` on success, `Ok(None)` on a
     /// stale `expected_prev_epoch` (the "mls_epoch_skew" path).
-    fn try_bump(
+    async fn try_bump(
         &self,
         group_id: &str,
         expected_prev_epoch: u64,
@@ -857,20 +895,21 @@ pub trait MlsCommitStore: Send + Sync {
         governance_binding: &Value,
         committed_at: i64,
     ) -> PersistenceResult<Option<MlsCommitEpochRecord>>;
-    fn snapshot_all(&self) -> PersistenceResult<Vec<MlsCommitEpochRecord>>;
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<MlsCommitEpochRecord>>;
 }
 
 /// Per-owner policy documents.
+#[async_trait]
 pub trait PolicyDocumentStore: Send + Sync {
-    fn get(&self, policy_id: &str) -> PersistenceResult<Option<PolicyDocumentRecord>>;
-    fn put(&self, record: PolicyDocumentRecord) -> PersistenceResult<()>;
-    fn delete(&self, policy_id: &str) -> PersistenceResult<bool>;
-    fn list_for_owner(&self, owner: &str) -> PersistenceResult<Vec<PolicyDocumentRecord>>;
-    fn snapshot_all(&self) -> PersistenceResult<Vec<PolicyDocumentRecord>>;
-    fn find_active(
-        &self,
-        predicate: &dyn Fn(&PolicyDocumentRecord) -> bool,
-    ) -> PersistenceResult<Option<PolicyDocumentRecord>>;
+    async fn get(&self, policy_id: &str) -> PersistenceResult<Option<PolicyDocumentRecord>>;
+    async fn put(&self, record: PolicyDocumentRecord) -> PersistenceResult<()>;
+    async fn delete(&self, policy_id: &str) -> PersistenceResult<bool>;
+    async fn list_for_owner(&self, owner: &str) -> PersistenceResult<Vec<PolicyDocumentRecord>>;
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<PolicyDocumentRecord>>;
+    /// Return every currently-active policy document. Callers apply their own
+    /// match predicate (kept out of the trait so the `#[async_trait]` future
+    /// stays `Send` without higher-ranked closure-lifetime gymnastics).
+    async fn list_active(&self) -> PersistenceResult<Vec<PolicyDocumentRecord>>;
 }
 
 /// Combined persistence store trait. Every state surface that used to live
@@ -1160,19 +1199,20 @@ impl MemoryMultisigPendingStore {
     }
 }
 
+#[async_trait]
 impl MultisigPendingStore for MemoryMultisigPendingStore {
-    fn upsert(&self, record: MultisigPendingRecord) -> PersistenceResult<()> {
+    async fn upsert(&self, record: MultisigPendingRecord) -> PersistenceResult<()> {
         let mut data = self.data.lock().expect("lock");
         data.insert(record.anchor_id.clone(), record);
         Ok(())
     }
 
-    fn get(&self, anchor_id: &str) -> PersistenceResult<Option<MultisigPendingRecord>> {
+    async fn get(&self, anchor_id: &str) -> PersistenceResult<Option<MultisigPendingRecord>> {
         let data = self.data.lock().expect("lock");
         Ok(data.get(anchor_id).cloned())
     }
 
-    fn add_partial(
+    async fn add_partial(
         &self,
         anchor_id: &str,
         signer_did: &str,
@@ -1186,7 +1226,7 @@ impl MultisigPendingStore for MemoryMultisigPendingStore {
         Ok(record.clone())
     }
 
-    fn list_for_space(&self, space_id: &str) -> PersistenceResult<Vec<MultisigPendingRecord>> {
+    async fn list_for_space(&self, space_id: &str) -> PersistenceResult<Vec<MultisigPendingRecord>> {
         let data = self.data.lock().expect("lock");
         Ok(data
             .values()
@@ -1195,17 +1235,17 @@ impl MultisigPendingStore for MemoryMultisigPendingStore {
             .collect())
     }
 
-    fn delete(&self, anchor_id: &str) -> PersistenceResult<bool> {
+    async fn delete(&self, anchor_id: &str) -> PersistenceResult<bool> {
         let mut data = self.data.lock().expect("lock");
         Ok(data.remove(anchor_id).is_some())
     }
 
-    fn snapshot_all(&self) -> PersistenceResult<Vec<MultisigPendingRecord>> {
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<MultisigPendingRecord>> {
         let data = self.data.lock().expect("lock");
         Ok(data.values().cloned().collect())
     }
 
-    fn try_claim(
+    async fn try_claim(
         &self,
         anchor_id: &str,
         node_id: &str,
@@ -1230,7 +1270,7 @@ impl MultisigPendingStore for MemoryMultisigPendingStore {
         Ok((true, record.claim_seq))
     }
 
-    fn release_claim(&self, anchor_id: &str, node_id: &str) -> PersistenceResult<()> {
+    async fn release_claim(&self, anchor_id: &str, node_id: &str) -> PersistenceResult<()> {
         let mut data = self.data.lock().expect("lock");
         if let Some(record) = data.get_mut(anchor_id)
             && record.claimed_by_node_id.as_deref() == Some(node_id)
@@ -1241,7 +1281,7 @@ impl MultisigPendingStore for MemoryMultisigPendingStore {
         Ok(())
     }
 
-    fn delete_with_fence(
+    async fn delete_with_fence(
         &self,
         anchor_id: &str,
         node_id: &str,
@@ -1258,7 +1298,7 @@ impl MultisigPendingStore for MemoryMultisigPendingStore {
         Ok(data.remove(anchor_id).is_some())
     }
 
-    fn renew_claim(
+    async fn renew_claim(
         &self,
         anchor_id: &str,
         node_id: &str,
@@ -1293,24 +1333,25 @@ impl MemoryAccountStore {
     }
 }
 
+#[async_trait]
 impl AccountStore for MemoryAccountStore {
-    fn get(&self, did: &str) -> PersistenceResult<Option<AccountRecord>> {
+    async fn get(&self, did: &str) -> PersistenceResult<Option<AccountRecord>> {
         let data = self.data.lock().expect("lock");
         Ok(data.get(did).cloned())
     }
 
-    fn put(&self, record: &AccountRecord) -> PersistenceResult<()> {
+    async fn put(&self, record: &AccountRecord) -> PersistenceResult<()> {
         let mut data = self.data.lock().expect("lock");
         data.insert(record.did.clone(), record.clone());
         Ok(())
     }
 
-    fn list(&self) -> PersistenceResult<Vec<AccountRecord>> {
+    async fn list(&self) -> PersistenceResult<Vec<AccountRecord>> {
         let data = self.data.lock().expect("lock");
         Ok(data.values().cloned().collect())
     }
 
-    fn delete(&self, did: &str) -> PersistenceResult<()> {
+    async fn delete(&self, did: &str) -> PersistenceResult<()> {
         let mut data = self.data.lock().expect("lock");
         data.remove(did);
         Ok(())
@@ -1330,25 +1371,26 @@ impl MemorySessionStore {
     }
 }
 
+#[async_trait]
 impl SessionStore for MemorySessionStore {
-    fn get(&self, token: &str) -> PersistenceResult<Option<SessionRecord>> {
+    async fn get(&self, token: &str) -> PersistenceResult<Option<SessionRecord>> {
         let data = self.data.lock().expect("lock");
         Ok(data.get(token).cloned())
     }
 
-    fn put(&self, record: &SessionRecord) -> PersistenceResult<()> {
+    async fn put(&self, record: &SessionRecord) -> PersistenceResult<()> {
         let mut data = self.data.lock().expect("lock");
         data.insert(record.token_hash.clone(), record.clone());
         Ok(())
     }
 
-    fn delete(&self, token: &str) -> PersistenceResult<()> {
+    async fn delete(&self, token: &str) -> PersistenceResult<()> {
         let mut data = self.data.lock().expect("lock");
         data.remove(token);
         Ok(())
     }
 
-    fn cleanup_expired(&self) -> PersistenceResult<usize> {
+    async fn cleanup_expired(&self) -> PersistenceResult<usize> {
         let mut data = self.data.lock().expect("lock");
         let now = Utc::now();
         let before = data.len();
@@ -1356,7 +1398,7 @@ impl SessionStore for MemorySessionStore {
         Ok(before - data.len())
     }
 
-    fn snapshot_all(&self) -> PersistenceResult<Vec<SessionRecord>> {
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<SessionRecord>> {
         Ok(self.data.lock().expect("lock").values().cloned().collect())
     }
 }
@@ -1376,13 +1418,14 @@ impl MemoryAccountDataStore {
     }
 }
 
+#[async_trait]
 impl AccountDataStore for MemoryAccountDataStore {
-    fn get(&self, actor: &str, data_type: &str) -> PersistenceResult<Option<AccountDataRecord>> {
+    async fn get(&self, actor: &str, data_type: &str) -> PersistenceResult<Option<AccountDataRecord>> {
         let data = self.data.lock().expect("lock");
         Ok(data.get(&(actor.to_owned(), data_type.to_owned())).cloned())
     }
 
-    fn put(&self, record: &AccountDataRecord) -> PersistenceResult<()> {
+    async fn put(&self, record: &AccountDataRecord) -> PersistenceResult<()> {
         let mut data = self.data.lock().expect("lock");
         data.insert(
             (record.actor.clone(), record.data_type.clone()),
@@ -1391,13 +1434,13 @@ impl AccountDataStore for MemoryAccountDataStore {
         Ok(())
     }
 
-    fn delete(&self, actor: &str, data_type: &str) -> PersistenceResult<()> {
+    async fn delete(&self, actor: &str, data_type: &str) -> PersistenceResult<()> {
         let mut data = self.data.lock().expect("lock");
         data.remove(&(actor.to_owned(), data_type.to_owned()));
         Ok(())
     }
 
-    fn list_for_actor(&self, actor: &str) -> PersistenceResult<Vec<AccountDataRecord>> {
+    async fn list_for_actor(&self, actor: &str) -> PersistenceResult<Vec<AccountDataRecord>> {
         let data = self.data.lock().expect("lock");
         Ok(data
             .iter()
@@ -1421,8 +1464,9 @@ impl MemoryContactStore {
     }
 }
 
+#[async_trait]
 impl ContactStore for MemoryContactStore {
-    fn get(&self, requester: &str, target: &str) -> PersistenceResult<Option<ContactRecord>> {
+    async fn get(&self, requester: &str, target: &str) -> PersistenceResult<Option<ContactRecord>> {
         let data = self.data.lock().expect("lock");
         Ok(data
             .values()
@@ -1438,7 +1482,7 @@ impl ContactStore for MemoryContactStore {
             .cloned())
     }
 
-    fn get_scoped(
+    async fn get_scoped(
         &self,
         requester: &str,
         target: &str,
@@ -1450,7 +1494,7 @@ impl ContactStore for MemoryContactStore {
             .cloned())
     }
 
-    fn put(&self, record: &ContactRecord) -> PersistenceResult<()> {
+    async fn put(&self, record: &ContactRecord) -> PersistenceResult<()> {
         let mut data = self.data.lock().expect("lock");
         data.insert(
             (
@@ -1463,7 +1507,7 @@ impl ContactStore for MemoryContactStore {
         Ok(())
     }
 
-    fn list_for_actor(&self, actor: &str) -> PersistenceResult<Vec<ContactRecord>> {
+    async fn list_for_actor(&self, actor: &str) -> PersistenceResult<Vec<ContactRecord>> {
         let data = self.data.lock().expect("lock");
         Ok(data
             .values()
@@ -1472,7 +1516,7 @@ impl ContactStore for MemoryContactStore {
             .collect())
     }
 
-    fn delete(&self, requester: &str, target: &str) -> PersistenceResult<()> {
+    async fn delete(&self, requester: &str, target: &str) -> PersistenceResult<()> {
         let mut data = self.data.lock().expect("lock");
         data.retain(|(row_requester, row_target, _), _| {
             row_requester != requester || row_target != target
@@ -1494,24 +1538,25 @@ impl MemoryRealmMetaStore {
     }
 }
 
+#[async_trait]
 impl RealmMetaStore for MemoryRealmMetaStore {
-    fn get(&self, space_id: &str) -> PersistenceResult<Option<RealmMetaRecord>> {
+    async fn get(&self, space_id: &str) -> PersistenceResult<Option<RealmMetaRecord>> {
         let data = self.data.lock().expect("lock");
         Ok(data.get(space_id).cloned())
     }
 
-    fn put(&self, space_id: &str, record: &RealmMetaRecord) -> PersistenceResult<()> {
+    async fn put(&self, space_id: &str, record: &RealmMetaRecord) -> PersistenceResult<()> {
         let mut data = self.data.lock().expect("lock");
         data.insert(space_id.to_owned(), record.clone());
         Ok(())
     }
 
-    fn list(&self) -> PersistenceResult<Vec<(String, RealmMetaRecord)>> {
+    async fn list(&self) -> PersistenceResult<Vec<(String, RealmMetaRecord)>> {
         let data = self.data.lock().expect("lock");
         Ok(data.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
     }
 
-    fn delete(&self, space_id: &str) -> PersistenceResult<()> {
+    async fn delete(&self, space_id: &str) -> PersistenceResult<()> {
         let mut data = self.data.lock().expect("lock");
         data.remove(space_id);
         Ok(())
@@ -1532,8 +1577,9 @@ impl MemorySpaceContainerProjectionStore {
     }
 }
 
+#[async_trait]
 impl SpaceContainerProjectionStore for MemorySpaceContainerProjectionStore {
-    fn get(
+    async fn get(
         &self,
         container_space_id: &str,
     ) -> PersistenceResult<Option<SpaceContainerProjectionRecord>> {
@@ -1541,13 +1587,13 @@ impl SpaceContainerProjectionStore for MemorySpaceContainerProjectionStore {
         Ok(data.get(container_space_id).cloned())
     }
 
-    fn put(&self, record: &SpaceContainerProjectionRecord) -> PersistenceResult<()> {
+    async fn put(&self, record: &SpaceContainerProjectionRecord) -> PersistenceResult<()> {
         let mut data = self.data.lock().expect("lock");
         data.insert(record.container_space_id.clone(), record.clone());
         Ok(())
     }
 
-    fn list_for_space(
+    async fn list_for_space(
         &self,
         space_id: &str,
     ) -> PersistenceResult<Vec<SpaceContainerProjectionRecord>> {
@@ -1559,12 +1605,12 @@ impl SpaceContainerProjectionStore for MemorySpaceContainerProjectionStore {
             .collect())
     }
 
-    fn snapshot_all(&self) -> PersistenceResult<Vec<SpaceContainerProjectionRecord>> {
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<SpaceContainerProjectionRecord>> {
         let data = self.data.lock().expect("lock");
         Ok(data.values().cloned().collect())
     }
 
-    fn delete(&self, container_space_id: &str) -> PersistenceResult<()> {
+    async fn delete(&self, container_space_id: &str) -> PersistenceResult<()> {
         let mut data = self.data.lock().expect("lock");
         data.remove(container_space_id);
         Ok(())
@@ -1583,19 +1629,20 @@ impl MemoryFlowProjectionStore {
     }
 }
 
+#[async_trait]
 impl FlowProjectionStore for MemoryFlowProjectionStore {
-    fn get(&self, flow_id: &str) -> PersistenceResult<Option<FlowProjectionRecord>> {
+    async fn get(&self, flow_id: &str) -> PersistenceResult<Option<FlowProjectionRecord>> {
         let data = self.data.lock().expect("lock");
         Ok(data.get(flow_id).cloned())
     }
 
-    fn put(&self, record: &FlowProjectionRecord) -> PersistenceResult<()> {
+    async fn put(&self, record: &FlowProjectionRecord) -> PersistenceResult<()> {
         let mut data = self.data.lock().expect("lock");
         data.insert(record.flow_id.clone(), record.clone());
         Ok(())
     }
 
-    fn list_for_space(&self, space_id: &str) -> PersistenceResult<Vec<FlowProjectionRecord>> {
+    async fn list_for_space(&self, space_id: &str) -> PersistenceResult<Vec<FlowProjectionRecord>> {
         let data = self.data.lock().expect("lock");
         Ok(data
             .values()
@@ -1604,12 +1651,12 @@ impl FlowProjectionStore for MemoryFlowProjectionStore {
             .collect())
     }
 
-    fn snapshot_all(&self) -> PersistenceResult<Vec<FlowProjectionRecord>> {
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<FlowProjectionRecord>> {
         let data = self.data.lock().expect("lock");
         Ok(data.values().cloned().collect())
     }
 
-    fn delete(&self, flow_id: &str) -> PersistenceResult<()> {
+    async fn delete(&self, flow_id: &str) -> PersistenceResult<()> {
         let mut data = self.data.lock().expect("lock");
         data.remove(flow_id);
         Ok(())
@@ -1628,19 +1675,20 @@ impl MemoryMorphProjectionStore {
     }
 }
 
+#[async_trait]
 impl MorphProjectionStore for MemoryMorphProjectionStore {
-    fn get(&self, morph_id: &str) -> PersistenceResult<Option<MorphProjectionRecord>> {
+    async fn get(&self, morph_id: &str) -> PersistenceResult<Option<MorphProjectionRecord>> {
         let data = self.data.lock().expect("lock");
         Ok(data.get(morph_id).cloned())
     }
 
-    fn put(&self, record: &MorphProjectionRecord) -> PersistenceResult<()> {
+    async fn put(&self, record: &MorphProjectionRecord) -> PersistenceResult<()> {
         let mut data = self.data.lock().expect("lock");
         data.insert(record.morph_id.clone(), record.clone());
         Ok(())
     }
 
-    fn list_for_space(&self, space_id: &str) -> PersistenceResult<Vec<MorphProjectionRecord>> {
+    async fn list_for_space(&self, space_id: &str) -> PersistenceResult<Vec<MorphProjectionRecord>> {
         let data = self.data.lock().expect("lock");
         Ok(data
             .values()
@@ -1649,12 +1697,12 @@ impl MorphProjectionStore for MemoryMorphProjectionStore {
             .collect())
     }
 
-    fn snapshot_all(&self) -> PersistenceResult<Vec<MorphProjectionRecord>> {
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<MorphProjectionRecord>> {
         let data = self.data.lock().expect("lock");
         Ok(data.values().cloned().collect())
     }
 
-    fn delete(&self, morph_id: &str) -> PersistenceResult<()> {
+    async fn delete(&self, morph_id: &str) -> PersistenceResult<()> {
         let mut data = self.data.lock().expect("lock");
         data.remove(morph_id);
         Ok(())
@@ -1674,19 +1722,20 @@ impl MemoryMessageStore {
     }
 }
 
+#[async_trait]
 impl MessageStore for MemoryMessageStore {
-    fn get(&self, event_id: &str) -> PersistenceResult<Option<MessageRecord>> {
+    async fn get(&self, event_id: &str) -> PersistenceResult<Option<MessageRecord>> {
         let data = self.data.lock().expect("lock");
         Ok(data.iter().find(|m| m.event_id == event_id).cloned())
     }
 
-    fn put(&self, record: &MessageRecord) -> PersistenceResult<()> {
+    async fn put(&self, record: &MessageRecord) -> PersistenceResult<()> {
         let mut data = self.data.lock().expect("lock");
         data.push(record.clone());
         Ok(())
     }
 
-    fn list_for_space(
+    async fn list_for_space(
         &self,
         space_id: &str,
         limit: usize,
@@ -1702,7 +1751,7 @@ impl MessageStore for MemoryMessageStore {
         Ok(messages)
     }
 
-    fn list_for_thread(
+    async fn list_for_thread(
         &self,
         thread_id: &str,
         limit: usize,
@@ -1719,7 +1768,7 @@ impl MessageStore for MemoryMessageStore {
         Ok(messages)
     }
 
-    fn delete(&self, event_id: &str) -> PersistenceResult<()> {
+    async fn delete(&self, event_id: &str) -> PersistenceResult<()> {
         let mut data = self.data.lock().expect("lock");
         data.retain(|m| m.event_id != event_id);
         Ok(())
@@ -1739,25 +1788,26 @@ impl MemoryBlobStore {
     }
 }
 
+#[async_trait]
 impl BlobStore for MemoryBlobStore {
-    fn get(&self, blob_ref: &str) -> PersistenceResult<Option<BlobRecord>> {
+    async fn get(&self, blob_ref: &str) -> PersistenceResult<Option<BlobRecord>> {
         let data = self.data.lock().expect("lock");
         Ok(data.get(blob_ref).cloned())
     }
 
-    fn put(&self, blob_ref: &str, record: &BlobRecord) -> PersistenceResult<()> {
+    async fn put(&self, blob_ref: &str, record: &BlobRecord) -> PersistenceResult<()> {
         let mut data = self.data.lock().expect("lock");
         data.insert(blob_ref.to_owned(), record.clone());
         Ok(())
     }
 
-    fn delete(&self, blob_ref: &str) -> PersistenceResult<()> {
+    async fn delete(&self, blob_ref: &str) -> PersistenceResult<()> {
         let mut data = self.data.lock().expect("lock");
         data.remove(blob_ref);
         Ok(())
     }
 
-    fn snapshot_all(&self) -> PersistenceResult<Vec<BlobRecord>> {
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<BlobRecord>> {
         Ok(self.data.lock().expect("lock").values().cloned().collect())
     }
 }
@@ -1775,8 +1825,9 @@ impl MemoryDeviceInventoryStore {
     }
 }
 
+#[async_trait]
 impl DeviceInventoryStore for MemoryDeviceInventoryStore {
-    fn get(
+    async fn get(
         &self,
         actor: &str,
         device_id: &str,
@@ -1785,7 +1836,7 @@ impl DeviceInventoryStore for MemoryDeviceInventoryStore {
         Ok(data.get(&(actor.to_owned(), device_id.to_owned())).cloned())
     }
 
-    fn put(&self, record: &DeviceInventoryRecord) -> PersistenceResult<()> {
+    async fn put(&self, record: &DeviceInventoryRecord) -> PersistenceResult<()> {
         let mut data = self.data.lock().expect("lock");
         data.insert(
             (record.actor.clone(), record.device_id.clone()),
@@ -1794,7 +1845,7 @@ impl DeviceInventoryStore for MemoryDeviceInventoryStore {
         Ok(())
     }
 
-    fn list_for_actor(&self, actor: &str) -> PersistenceResult<Vec<DeviceInventoryRecord>> {
+    async fn list_for_actor(&self, actor: &str) -> PersistenceResult<Vec<DeviceInventoryRecord>> {
         let data = self.data.lock().expect("lock");
         Ok(data
             .values()
@@ -1803,7 +1854,7 @@ impl DeviceInventoryStore for MemoryDeviceInventoryStore {
             .collect())
     }
 
-    fn list(&self) -> PersistenceResult<Vec<DeviceInventoryRecord>> {
+    async fn list(&self) -> PersistenceResult<Vec<DeviceInventoryRecord>> {
         let data = self.data.lock().expect("lock");
         Ok(data
             .values()
@@ -1826,8 +1877,9 @@ impl MemoryFederationTransactionStore {
     }
 }
 
+#[async_trait]
 impl FederationTransactionStore for MemoryFederationTransactionStore {
-    fn get(
+    async fn get(
         &self,
         origin: &str,
         txn_id: &str,
@@ -1836,7 +1888,7 @@ impl FederationTransactionStore for MemoryFederationTransactionStore {
         Ok(data.get(&(origin.to_owned(), txn_id.to_owned())).cloned())
     }
 
-    fn put(&self, record: &FederationTransactionRecord) -> PersistenceResult<()> {
+    async fn put(&self, record: &FederationTransactionRecord) -> PersistenceResult<()> {
         let mut data = self.data.lock().expect("lock");
         data.insert(
             (record.origin.clone(), record.txn_id.clone()),
@@ -1845,7 +1897,7 @@ impl FederationTransactionStore for MemoryFederationTransactionStore {
         Ok(())
     }
 
-    fn snapshot_all(&self) -> PersistenceResult<Vec<FederationTransactionRecord>> {
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<FederationTransactionRecord>> {
         let data = self.data.lock().expect("lock");
         Ok(data.values().cloned().collect())
     }
@@ -1870,8 +1922,9 @@ impl MemoryFederationOutboxStore {
     }
 }
 
+#[async_trait]
 impl FederationOutboxStore for MemoryFederationOutboxStore {
-    fn enqueue(&self, record: &FederationOutboxRecord) -> PersistenceResult<bool> {
+    async fn enqueue(&self, record: &FederationOutboxRecord) -> PersistenceResult<bool> {
         let mut data = self.data.lock().expect("federation_outbox lock");
         // Match the Pg `(peer_did, idempotency_key)` UNIQUE INDEX —
         // duplicate enqueue returns Ok(false) so re-broadcast on
@@ -1887,7 +1940,7 @@ impl FederationOutboxStore for MemoryFederationOutboxStore {
         Ok(true)
     }
 
-    fn pending_due(
+    async fn pending_due(
         &self,
         now_unix_secs: i64,
         limit: usize,
@@ -1903,23 +1956,23 @@ impl FederationOutboxStore for MemoryFederationOutboxStore {
         Ok(rows)
     }
 
-    fn update(&self, record: &FederationOutboxRecord) -> PersistenceResult<()> {
+    async fn update(&self, record: &FederationOutboxRecord) -> PersistenceResult<()> {
         let mut data = self.data.lock().expect("federation_outbox lock");
         data.insert(record.id.clone(), record.clone());
         Ok(())
     }
 
-    fn get(&self, id: &str) -> PersistenceResult<Option<FederationOutboxRecord>> {
+    async fn get(&self, id: &str) -> PersistenceResult<Option<FederationOutboxRecord>> {
         let data = self.data.lock().expect("federation_outbox lock");
         Ok(data.get(id).cloned())
     }
 
-    fn snapshot_all(&self) -> PersistenceResult<Vec<FederationOutboxRecord>> {
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<FederationOutboxRecord>> {
         let data = self.data.lock().expect("federation_outbox lock");
         Ok(data.values().cloned().collect())
     }
 
-    fn insert_dead_letter(
+    async fn insert_dead_letter(
         &self,
         record: &FederationOutboxDeadLetterRecord,
     ) -> PersistenceResult<()> {
@@ -1931,7 +1984,7 @@ impl FederationOutboxStore for MemoryFederationOutboxStore {
         Ok(())
     }
 
-    fn dead_letters_snapshot(&self) -> PersistenceResult<Vec<FederationOutboxDeadLetterRecord>> {
+    async fn dead_letters_snapshot(&self) -> PersistenceResult<Vec<FederationOutboxDeadLetterRecord>> {
         let dead_letters = self
             .dead_letters
             .lock()
@@ -1957,13 +2010,14 @@ impl MemoryAuditStore {
     }
 }
 
+#[async_trait]
 impl AuditStore for MemoryAuditStore {
-    fn append(&self, entry: Value) -> PersistenceResult<()> {
+    async fn append(&self, entry: Value) -> PersistenceResult<()> {
         self.data.lock().expect("audit lock").push(entry);
         Ok(())
     }
 
-    fn list_for_actor(&self, actor: &str) -> PersistenceResult<Vec<Value>> {
+    async fn list_for_actor(&self, actor: &str) -> PersistenceResult<Vec<Value>> {
         Ok(self
             .data
             .lock()
@@ -1974,7 +2028,7 @@ impl AuditStore for MemoryAuditStore {
             .collect())
     }
 
-    fn snapshot_all(&self) -> PersistenceResult<Vec<Value>> {
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<Value>> {
         Ok(self.data.lock().expect("audit lock").clone())
     }
 }
@@ -1995,13 +2049,14 @@ impl MemoryModerationStore {
     }
 }
 
+#[async_trait]
 impl ModerationStore for MemoryModerationStore {
-    fn append_report(&self, report: Value) -> PersistenceResult<()> {
+    async fn append_report(&self, report: Value) -> PersistenceResult<()> {
         self.reports.lock().expect("moderation lock").push(report);
         Ok(())
     }
 
-    fn append_action(&self, action: Value) -> PersistenceResult<()> {
+    async fn append_action(&self, action: Value) -> PersistenceResult<()> {
         self.actions
             .lock()
             .expect("moderation action lock")
@@ -2009,15 +2064,15 @@ impl ModerationStore for MemoryModerationStore {
         Ok(())
     }
 
-    fn list_reports(&self) -> PersistenceResult<Vec<Value>> {
+    async fn list_reports(&self) -> PersistenceResult<Vec<Value>> {
         Ok(self.reports.lock().expect("moderation lock").clone())
     }
 
-    fn list_actions(&self) -> PersistenceResult<Vec<Value>> {
+    async fn list_actions(&self) -> PersistenceResult<Vec<Value>> {
         Ok(self.actions.lock().expect("moderation action lock").clone())
     }
 
-    fn append_decision(&self, decision: Value) -> PersistenceResult<()> {
+    async fn append_decision(&self, decision: Value) -> PersistenceResult<()> {
         let id = decision
             .get("decision_id")
             .and_then(Value::as_str)
@@ -2035,7 +2090,7 @@ impl ModerationStore for MemoryModerationStore {
         Ok(())
     }
 
-    fn list_decisions(&self) -> PersistenceResult<Vec<Value>> {
+    async fn list_decisions(&self) -> PersistenceResult<Vec<Value>> {
         Ok(self
             .decisions
             .lock()
@@ -2043,7 +2098,7 @@ impl ModerationStore for MemoryModerationStore {
             .clone())
     }
 
-    fn get_decision(&self, decision_id: &str) -> PersistenceResult<Option<Value>> {
+    async fn get_decision(&self, decision_id: &str) -> PersistenceResult<Option<Value>> {
         Ok(self
             .decisions
             .lock()
@@ -2053,7 +2108,7 @@ impl ModerationStore for MemoryModerationStore {
             .cloned())
     }
 
-    fn append_decision_lift(&self, lift: Value) -> PersistenceResult<()> {
+    async fn append_decision_lift(&self, lift: Value) -> PersistenceResult<()> {
         self.decision_lifts
             .lock()
             .expect("moderation decision lifts lock")
@@ -2061,7 +2116,7 @@ impl ModerationStore for MemoryModerationStore {
         Ok(())
     }
 
-    fn upsert_queue_item(&self, item: Value) -> PersistenceResult<()> {
+    async fn upsert_queue_item(&self, item: Value) -> PersistenceResult<()> {
         let id = item
             .get("id")
             .and_then(Value::as_str)
@@ -2081,7 +2136,7 @@ impl ModerationStore for MemoryModerationStore {
         Ok(())
     }
 
-    fn list_queue_items(&self) -> PersistenceResult<Vec<Value>> {
+    async fn list_queue_items(&self) -> PersistenceResult<Vec<Value>> {
         Ok(self
             .queue_items
             .lock()
@@ -2089,7 +2144,7 @@ impl ModerationStore for MemoryModerationStore {
             .clone())
     }
 
-    fn get_queue_item(&self, id: &str) -> PersistenceResult<Option<Value>> {
+    async fn get_queue_item(&self, id: &str) -> PersistenceResult<Option<Value>> {
         Ok(self
             .queue_items
             .lock()
@@ -2099,7 +2154,7 @@ impl ModerationStore for MemoryModerationStore {
             .cloned())
     }
 
-    fn append_appeal(&self, appeal: Value) -> PersistenceResult<()> {
+    async fn append_appeal(&self, appeal: Value) -> PersistenceResult<()> {
         if appeal.get("appeal_id").and_then(Value::as_str).is_none() {
             return Err(PersistenceError::Internal(
                 "moderation appeal missing appeal_id".to_owned(),
@@ -2112,7 +2167,7 @@ impl ModerationStore for MemoryModerationStore {
         Ok(())
     }
 
-    fn list_appeals(&self) -> PersistenceResult<Vec<Value>> {
+    async fn list_appeals(&self) -> PersistenceResult<Vec<Value>> {
         // Collapse history → one record per appeal_id, keeping the
         // last-appended event (insertion order = chronological).
         let all = self
@@ -2130,7 +2185,7 @@ impl ModerationStore for MemoryModerationStore {
         Ok(latest.into_values().collect())
     }
 
-    fn appeal_history(&self, appeal_id: &str) -> PersistenceResult<Vec<Value>> {
+    async fn appeal_history(&self, appeal_id: &str) -> PersistenceResult<Vec<Value>> {
         Ok(self
             .appeals
             .lock()
@@ -2153,13 +2208,14 @@ impl MemoryFederationOperationsStore {
     }
 }
 
+#[async_trait]
 impl FederationOperationsStore for MemoryFederationOperationsStore {
-    fn append(&self, operation: Operation) -> PersistenceResult<()> {
+    async fn append(&self, operation: Operation) -> PersistenceResult<()> {
         self.data.lock().expect("federation lock").push(operation);
         Ok(())
     }
 
-    fn contains(&self, operation_id: &str) -> PersistenceResult<bool> {
+    async fn contains(&self, operation_id: &str) -> PersistenceResult<bool> {
         Ok(self
             .data
             .lock()
@@ -2168,7 +2224,7 @@ impl FederationOperationsStore for MemoryFederationOperationsStore {
             .any(|known| known.operation_id.as_str() == operation_id))
     }
 
-    fn list_for_space(&self, space_id: &str) -> PersistenceResult<Vec<Operation>> {
+    async fn list_for_space(&self, space_id: &str) -> PersistenceResult<Vec<Operation>> {
         Ok(self
             .data
             .lock()
@@ -2179,7 +2235,7 @@ impl FederationOperationsStore for MemoryFederationOperationsStore {
             .collect())
     }
 
-    fn snapshot_all(&self) -> PersistenceResult<Vec<Operation>> {
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<Operation>> {
         Ok(self.data.lock().expect("federation lock").clone())
     }
 }
@@ -2195,13 +2251,14 @@ impl MemoryPushDeviceStore {
     }
 }
 
+#[async_trait]
 impl PushDeviceStore for MemoryPushDeviceStore {
-    fn register(&self, device: Value) -> PersistenceResult<()> {
+    async fn register(&self, device: Value) -> PersistenceResult<()> {
         self.data.lock().expect("push devices lock").push(device);
         Ok(())
     }
 
-    fn unregister(
+    async fn unregister(
         &self,
         actor: &str,
         device_id: &str,
@@ -2224,7 +2281,7 @@ impl PushDeviceStore for MemoryPushDeviceStore {
         Ok(before.saturating_sub(data.len()))
     }
 
-    fn snapshot_all(&self) -> PersistenceResult<Vec<Value>> {
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<Value>> {
         Ok(self.data.lock().expect("push devices lock").clone())
     }
 }
@@ -2240,14 +2297,15 @@ impl MemoryPushRuleStore {
     }
 }
 
+#[async_trait]
 impl PushRuleStore for MemoryPushRuleStore {
-    fn put(&self, rule: PushRuleRecord) -> PersistenceResult<()> {
+    async fn put(&self, rule: PushRuleRecord) -> PersistenceResult<()> {
         let key = (rule.actor.clone(), rule.rule_id.clone());
         self.data.lock().expect("push rules lock").insert(key, rule);
         Ok(())
     }
 
-    fn delete(&self, actor: &str, rule_id: &str) -> PersistenceResult<()> {
+    async fn delete(&self, actor: &str, rule_id: &str) -> PersistenceResult<()> {
         self.data
             .lock()
             .expect("push rules lock")
@@ -2255,7 +2313,7 @@ impl PushRuleStore for MemoryPushRuleStore {
         Ok(())
     }
 
-    fn list_for_actor(&self, actor: &str) -> PersistenceResult<Vec<PushRuleRecord>> {
+    async fn list_for_actor(&self, actor: &str) -> PersistenceResult<Vec<PushRuleRecord>> {
         Ok(self
             .data
             .lock()
@@ -2278,8 +2336,9 @@ impl MemoryPresenceStore {
     }
 }
 
+#[async_trait]
 impl PresenceStore for MemoryPresenceStore {
-    fn put(&self, presence: PresenceRecord) -> PersistenceResult<()> {
+    async fn put(&self, presence: PresenceRecord) -> PersistenceResult<()> {
         let actor = presence.actor.clone();
         self.data
             .lock()
@@ -2288,7 +2347,7 @@ impl PresenceStore for MemoryPresenceStore {
         Ok(())
     }
 
-    fn get(&self, actor: &str) -> PersistenceResult<Option<PresenceRecord>> {
+    async fn get(&self, actor: &str) -> PersistenceResult<Option<PresenceRecord>> {
         Ok(self.data.lock().expect("presence lock").get(actor).cloned())
     }
 }
@@ -2304,14 +2363,15 @@ impl MemoryTypingStore {
     }
 }
 
+#[async_trait]
 impl TypingStore for MemoryTypingStore {
-    fn put(&self, typing: TypingRecord) -> PersistenceResult<()> {
+    async fn put(&self, typing: TypingRecord) -> PersistenceResult<()> {
         let key = (typing.actor.clone(), typing.space_id.clone());
         self.data.lock().expect("typing lock").insert(key, typing);
         Ok(())
     }
 
-    fn remove(&self, actor: &str, space_id: &str) -> PersistenceResult<()> {
+    async fn remove(&self, actor: &str, space_id: &str) -> PersistenceResult<()> {
         self.data
             .lock()
             .expect("typing lock")
@@ -2319,7 +2379,7 @@ impl TypingStore for MemoryTypingStore {
         Ok(())
     }
 
-    fn list_for_space(&self, space_id: &str) -> PersistenceResult<Vec<TypingRecord>> {
+    async fn list_for_space(&self, space_id: &str) -> PersistenceResult<Vec<TypingRecord>> {
         let now = Utc::now();
         Ok(self
             .data
@@ -2331,7 +2391,7 @@ impl TypingStore for MemoryTypingStore {
             .collect())
     }
 
-    fn prune_expired(&self) -> PersistenceResult<usize> {
+    async fn prune_expired(&self) -> PersistenceResult<usize> {
         let now = Utc::now();
         let mut data = self.data.lock().expect("typing lock");
         let before = data.len();
@@ -2351,8 +2411,9 @@ impl MemoryPushBridgeCacheStore {
     }
 }
 
+#[async_trait]
 impl PushBridgeCacheStore for MemoryPushBridgeCacheStore {
-    fn get(
+    async fn get(
         &self,
         bridge_describe_url: &str,
     ) -> PersistenceResult<Option<OutboundPushBridgeCacheRecord>> {
@@ -2364,7 +2425,7 @@ impl PushBridgeCacheStore for MemoryPushBridgeCacheStore {
             .cloned())
     }
 
-    fn put(
+    async fn put(
         &self,
         bridge_describe_url: &str,
         record: OutboundPushBridgeCacheRecord,
@@ -2376,7 +2437,7 @@ impl PushBridgeCacheStore for MemoryPushBridgeCacheStore {
         Ok(())
     }
 
-    fn delete(&self, bridge_describe_url: &str) -> PersistenceResult<bool> {
+    async fn delete(&self, bridge_describe_url: &str) -> PersistenceResult<bool> {
         Ok(self
             .data
             .lock()
@@ -2385,14 +2446,14 @@ impl PushBridgeCacheStore for MemoryPushBridgeCacheStore {
             .is_some())
     }
 
-    fn clear(&self) -> PersistenceResult<usize> {
+    async fn clear(&self) -> PersistenceResult<usize> {
         let mut data = self.data.lock().expect("push bridge cache lock");
         let removed = data.len();
         data.clear();
         Ok(removed)
     }
 
-    fn snapshot_all(&self) -> PersistenceResult<Vec<OutboundPushBridgeCacheRecord>> {
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<OutboundPushBridgeCacheRecord>> {
         Ok(self
             .data
             .lock()
@@ -2402,11 +2463,11 @@ impl PushBridgeCacheStore for MemoryPushBridgeCacheStore {
             .collect())
     }
 
-    fn len(&self) -> PersistenceResult<usize> {
+    async fn len(&self) -> PersistenceResult<usize> {
         Ok(self.data.lock().expect("push bridge cache lock").len())
     }
 
-    fn record_contract_snapshot(
+    async fn record_contract_snapshot(
         &self,
         gateway_describe_url: &str,
         digest: &str,
@@ -2441,7 +2502,7 @@ impl PushBridgeCacheStore for MemoryPushBridgeCacheStore {
         Ok(())
     }
 
-    fn current_contract(
+    async fn current_contract(
         &self,
         gateway_describe_url: &str,
     ) -> PersistenceResult<Option<OutboundPushBridgeCacheRecord>> {
@@ -2453,7 +2514,7 @@ impl PushBridgeCacheStore for MemoryPushBridgeCacheStore {
             .cloned())
     }
 
-    fn verify_contract_freshness(
+    async fn verify_contract_freshness(
         &self,
         gateway_describe_url: &str,
         observed_digest: &str,
@@ -2506,14 +2567,15 @@ impl MemoryWebrtcSessionStore {
     }
 }
 
+#[async_trait]
 impl WebrtcSessionStore for MemoryWebrtcSessionStore {
-    fn put(&self, record: WebrtcSessionRecord) -> PersistenceResult<()> {
+    async fn put(&self, record: WebrtcSessionRecord) -> PersistenceResult<()> {
         let id = record.session_id.clone();
         self.data.lock().expect("webrtc lock").insert(id, record);
         Ok(())
     }
 
-    fn get(&self, session_id: &str) -> PersistenceResult<Option<WebrtcSessionRecord>> {
+    async fn get(&self, session_id: &str) -> PersistenceResult<Option<WebrtcSessionRecord>> {
         Ok(self
             .data
             .lock()
@@ -2522,7 +2584,7 @@ impl WebrtcSessionStore for MemoryWebrtcSessionStore {
             .cloned())
     }
 
-    fn delete(&self, session_id: &str) -> PersistenceResult<bool> {
+    async fn delete(&self, session_id: &str) -> PersistenceResult<bool> {
         Ok(self
             .data
             .lock()
@@ -2531,7 +2593,7 @@ impl WebrtcSessionStore for MemoryWebrtcSessionStore {
             .is_some())
     }
 
-    fn append_signal(
+    async fn append_signal(
         &self,
         session_id: &str,
         actor_must_be_participant: &str,
@@ -2552,7 +2614,7 @@ impl WebrtcSessionStore for MemoryWebrtcSessionStore {
         Ok(WebrtcAppendSignal { seq })
     }
 
-    fn prune_expired(&self) -> PersistenceResult<usize> {
+    async fn prune_expired(&self) -> PersistenceResult<usize> {
         let now = Utc::now();
         let mut data = self.data.lock().expect("webrtc lock");
         let before = data.len();
@@ -2572,8 +2634,9 @@ impl MemoryPolicyDocumentStore {
     }
 }
 
+#[async_trait]
 impl PolicyDocumentStore for MemoryPolicyDocumentStore {
-    fn get(&self, policy_id: &str) -> PersistenceResult<Option<PolicyDocumentRecord>> {
+    async fn get(&self, policy_id: &str) -> PersistenceResult<Option<PolicyDocumentRecord>> {
         Ok(self
             .data
             .lock()
@@ -2582,7 +2645,7 @@ impl PolicyDocumentStore for MemoryPolicyDocumentStore {
             .cloned())
     }
 
-    fn put(&self, record: PolicyDocumentRecord) -> PersistenceResult<()> {
+    async fn put(&self, record: PolicyDocumentRecord) -> PersistenceResult<()> {
         let id = record.policy_id.clone();
         self.data
             .lock()
@@ -2591,7 +2654,7 @@ impl PolicyDocumentStore for MemoryPolicyDocumentStore {
         Ok(())
     }
 
-    fn delete(&self, policy_id: &str) -> PersistenceResult<bool> {
+    async fn delete(&self, policy_id: &str) -> PersistenceResult<bool> {
         Ok(self
             .data
             .lock()
@@ -2600,7 +2663,7 @@ impl PolicyDocumentStore for MemoryPolicyDocumentStore {
             .is_some())
     }
 
-    fn list_for_owner(&self, owner: &str) -> PersistenceResult<Vec<PolicyDocumentRecord>> {
+    async fn list_for_owner(&self, owner: &str) -> PersistenceResult<Vec<PolicyDocumentRecord>> {
         Ok(self
             .data
             .lock()
@@ -2611,7 +2674,7 @@ impl PolicyDocumentStore for MemoryPolicyDocumentStore {
             .collect())
     }
 
-    fn snapshot_all(&self) -> PersistenceResult<Vec<PolicyDocumentRecord>> {
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<PolicyDocumentRecord>> {
         Ok(self
             .data
             .lock()
@@ -2621,18 +2684,13 @@ impl PolicyDocumentStore for MemoryPolicyDocumentStore {
             .collect())
     }
 
-    fn find_active(
-        &self,
-        predicate: &dyn Fn(&PolicyDocumentRecord) -> bool,
-    ) -> PersistenceResult<Option<PolicyDocumentRecord>> {
-        Ok(self
-            .data
-            .lock()
-            .expect("policy documents lock")
+    async fn list_active(&self) -> PersistenceResult<Vec<PolicyDocumentRecord>> {
+        let guard = self.data.lock().expect("policy documents lock");
+        Ok(guard
             .values()
             .filter(|record| record.active)
-            .find(|record| predicate(record))
-            .cloned())
+            .cloned()
+            .collect())
     }
 }
 
@@ -2650,8 +2708,9 @@ impl MemoryWebvhStore {
     }
 }
 
+#[async_trait]
 impl WebvhStore for MemoryWebvhStore {
-    fn get_document(&self, did: &str) -> PersistenceResult<Option<WebvhDocumentRecord>> {
+    async fn get_document(&self, did: &str) -> PersistenceResult<Option<WebvhDocumentRecord>> {
         Ok(self
             .documents
             .lock()
@@ -2660,7 +2719,7 @@ impl WebvhStore for MemoryWebvhStore {
             .cloned())
     }
 
-    fn get_embedded_webvh_document_by_local_id(
+    async fn get_embedded_webvh_document_by_local_id(
         &self,
         local_id: &str,
     ) -> PersistenceResult<Option<WebvhDocumentRecord>> {
@@ -2684,7 +2743,7 @@ impl WebvhStore for MemoryWebvhStore {
             .cloned())
     }
 
-    fn put_document(&self, record: WebvhDocumentRecord) -> PersistenceResult<()> {
+    async fn put_document(&self, record: WebvhDocumentRecord) -> PersistenceResult<()> {
         let did = record.did.clone();
         self.documents
             .lock()
@@ -2693,7 +2752,7 @@ impl WebvhStore for MemoryWebvhStore {
         Ok(())
     }
 
-    fn append_log_event(&self, event: WebvhLogRecord) -> PersistenceResult<()> {
+    async fn append_log_event(&self, event: WebvhLogRecord) -> PersistenceResult<()> {
         let did = event.did.clone();
         self.log
             .lock()
@@ -2704,7 +2763,7 @@ impl WebvhStore for MemoryWebvhStore {
         Ok(())
     }
 
-    fn list_log_events(&self, did: &str) -> PersistenceResult<Vec<WebvhLogRecord>> {
+    async fn list_log_events(&self, did: &str) -> PersistenceResult<Vec<WebvhLogRecord>> {
         Ok(self
             .log
             .lock()
@@ -2726,8 +2785,9 @@ impl MemorySpaceInviteStore {
     }
 }
 
+#[async_trait]
 impl SpaceInviteStore for MemorySpaceInviteStore {
-    fn get(&self, invite_id: &str) -> PersistenceResult<Option<SpaceInviteRecord>> {
+    async fn get(&self, invite_id: &str) -> PersistenceResult<Option<SpaceInviteRecord>> {
         Ok(self
             .data
             .lock()
@@ -2736,7 +2796,7 @@ impl SpaceInviteStore for MemorySpaceInviteStore {
             .cloned())
     }
 
-    fn put(&self, record: SpaceInviteRecord) -> PersistenceResult<()> {
+    async fn put(&self, record: SpaceInviteRecord) -> PersistenceResult<()> {
         let id = record.invite_id.clone();
         self.data
             .lock()
@@ -2745,7 +2805,7 @@ impl SpaceInviteStore for MemorySpaceInviteStore {
         Ok(())
     }
 
-    fn snapshot_all(&self) -> PersistenceResult<Vec<SpaceInviteRecord>> {
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<SpaceInviteRecord>> {
         Ok(self
             .data
             .lock()
@@ -2767,14 +2827,15 @@ impl MemoryEventStore {
     }
 }
 
+#[async_trait]
 impl EventStore for MemoryEventStore {
-    fn put(&self, record: CanonicalEventRecord) -> PersistenceResult<()> {
+    async fn put(&self, record: CanonicalEventRecord) -> PersistenceResult<()> {
         let id = record.event_id.clone();
         self.data.lock().expect("events lock").insert(id, record);
         Ok(())
     }
 
-    fn get(&self, event_id: &str) -> PersistenceResult<Option<CanonicalEventRecord>> {
+    async fn get(&self, event_id: &str) -> PersistenceResult<Option<CanonicalEventRecord>> {
         Ok(self
             .data
             .lock()
@@ -2783,7 +2844,7 @@ impl EventStore for MemoryEventStore {
             .cloned())
     }
 
-    fn contains(&self, event_id: &str) -> PersistenceResult<bool> {
+    async fn contains(&self, event_id: &str) -> PersistenceResult<bool> {
         Ok(self
             .data
             .lock()
@@ -2791,7 +2852,7 @@ impl EventStore for MemoryEventStore {
             .contains_key(event_id))
     }
 
-    fn max_actor_seq(&self, actor_id: &str) -> PersistenceResult<Option<u64>> {
+    async fn max_actor_seq(&self, actor_id: &str) -> PersistenceResult<Option<u64>> {
         Ok(self
             .data
             .lock()
@@ -2802,7 +2863,7 @@ impl EventStore for MemoryEventStore {
             .max())
     }
 
-    fn snapshot_all(&self) -> PersistenceResult<Vec<CanonicalEventRecord>> {
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<CanonicalEventRecord>> {
         Ok(self
             .data
             .lock()
@@ -2824,8 +2885,9 @@ impl MemoryProjectionEventStore {
     }
 }
 
+#[async_trait]
 impl ProjectionEventStore for MemoryProjectionEventStore {
-    fn append(&self, record: ProjectionEventRecord) -> PersistenceResult<()> {
+    async fn append(&self, record: ProjectionEventRecord) -> PersistenceResult<()> {
         self.data
             .lock()
             .expect("projection events lock")
@@ -2833,7 +2895,7 @@ impl ProjectionEventStore for MemoryProjectionEventStore {
         Ok(())
     }
 
-    fn snapshot_all(&self) -> PersistenceResult<Vec<ProjectionEventRecord>> {
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<ProjectionEventRecord>> {
         Ok(self.data.lock().expect("projection events lock").clone())
     }
 }
@@ -2850,8 +2912,9 @@ impl MemoryDeviceMessageStore {
     }
 }
 
+#[async_trait]
 impl DeviceMessageStore for MemoryDeviceMessageStore {
-    fn append(&self, message: DeviceMessageRecord) -> PersistenceResult<()> {
+    async fn append(&self, message: DeviceMessageRecord) -> PersistenceResult<()> {
         self.queue
             .lock()
             .expect("device message lock")
@@ -2859,7 +2922,7 @@ impl DeviceMessageStore for MemoryDeviceMessageStore {
         Ok(())
     }
 
-    fn try_register_txn(&self, key: String) -> PersistenceResult<bool> {
+    async fn try_register_txn(&self, key: String) -> PersistenceResult<bool> {
         Ok(self
             .txns
             .lock()
@@ -2867,7 +2930,7 @@ impl DeviceMessageStore for MemoryDeviceMessageStore {
             .insert(key))
     }
 
-    fn ack(&self, recipient: &str, device_id: &str, ack_position: i64) -> PersistenceResult<usize> {
+    async fn ack(&self, recipient: &str, device_id: &str, ack_position: i64) -> PersistenceResult<usize> {
         if ack_position <= 0 {
             return Ok(0);
         }
@@ -2881,7 +2944,7 @@ impl DeviceMessageStore for MemoryDeviceMessageStore {
         Ok(before - queue.len())
     }
 
-    fn list_after(
+    async fn list_after(
         &self,
         recipient: &str,
         device_id: &str,
@@ -2901,7 +2964,7 @@ impl DeviceMessageStore for MemoryDeviceMessageStore {
             .collect())
     }
 
-    fn purge(&self, recipient: &str, device_id: &str) -> PersistenceResult<usize> {
+    async fn purge(&self, recipient: &str, device_id: &str) -> PersistenceResult<usize> {
         let mut queue = self.queue.lock().expect("device message lock");
         let before = queue.len();
         queue.retain(|message| !(message.recipient == recipient && message.device_id == device_id));
@@ -2920,8 +2983,9 @@ impl MemoryDeviceKeyStore {
     }
 }
 
+#[async_trait]
 impl DeviceKeyStore for MemoryDeviceKeyStore {
-    fn put(&self, actor: String, device_id: String, payload: Value) -> PersistenceResult<()> {
+    async fn put(&self, actor: String, device_id: String, payload: Value) -> PersistenceResult<()> {
         self.data
             .lock()
             .expect("device keys lock")
@@ -2929,7 +2993,7 @@ impl DeviceKeyStore for MemoryDeviceKeyStore {
         Ok(())
     }
 
-    fn get(&self, actor: &str, device_id: &str) -> PersistenceResult<Option<Value>> {
+    async fn get(&self, actor: &str, device_id: &str) -> PersistenceResult<Option<Value>> {
         Ok(self
             .data
             .lock()
@@ -2950,8 +3014,9 @@ impl MemoryOneTimeKeyStore {
     }
 }
 
+#[async_trait]
 impl OneTimeKeyStore for MemoryOneTimeKeyStore {
-    fn put(&self, actor: String, device_id: String, keys: Vec<Value>) -> PersistenceResult<()> {
+    async fn put(&self, actor: String, device_id: String, keys: Vec<Value>) -> PersistenceResult<()> {
         self.data
             .lock()
             .expect("one time keys lock")
@@ -2959,7 +3024,7 @@ impl OneTimeKeyStore for MemoryOneTimeKeyStore {
         Ok(())
     }
 
-    fn claim(&self, actor: &str, device_id: &str) -> PersistenceResult<Option<Value>> {
+    async fn claim(&self, actor: &str, device_id: &str) -> PersistenceResult<Option<Value>> {
         Ok(self
             .data
             .lock()
@@ -2982,15 +3047,16 @@ impl MemoryMlsKeyPackageStore {
     }
 }
 
+#[async_trait]
 impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
-    fn put(&self, record: &MlsKeyPackageRecord) -> PersistenceResult<bool> {
+    async fn put(&self, record: &MlsKeyPackageRecord) -> PersistenceResult<bool> {
         let mut rows = self.rows.lock().expect("mls keypackage lock");
         let fresh = !rows.contains_key(&record.id);
         rows.insert(record.id.clone(), record.clone());
         Ok(fresh)
     }
 
-    fn get(&self, id: &str) -> PersistenceResult<Option<MlsKeyPackageRecord>> {
+    async fn get(&self, id: &str) -> PersistenceResult<Option<MlsKeyPackageRecord>> {
         Ok(self
             .rows
             .lock()
@@ -2999,7 +3065,7 @@ impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
             .cloned())
     }
 
-    fn try_claim(
+    async fn try_claim(
         &self,
         id: &str,
         group_id: &str,
@@ -3018,7 +3084,7 @@ impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
         Ok(Some(row.clone()))
     }
 
-    fn snapshot_all(&self) -> PersistenceResult<Vec<MlsKeyPackageRecord>> {
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<MlsKeyPackageRecord>> {
         Ok(self
             .rows
             .lock()
@@ -3040,8 +3106,9 @@ impl MemoryMlsWelcomeStore {
     }
 }
 
+#[async_trait]
 impl MlsWelcomeStore for MemoryMlsWelcomeStore {
-    fn enqueue(&self, record: &MlsWelcomeRecord) -> PersistenceResult<()> {
+    async fn enqueue(&self, record: &MlsWelcomeRecord) -> PersistenceResult<()> {
         self.queue
             .lock()
             .expect("mls welcome lock")
@@ -3049,7 +3116,7 @@ impl MlsWelcomeStore for MemoryMlsWelcomeStore {
         Ok(())
     }
 
-    fn drain_pending(
+    async fn drain_pending(
         &self,
         recipient_actor_did: &str,
         recipient_device_id: &str,
@@ -3076,7 +3143,7 @@ impl MlsWelcomeStore for MemoryMlsWelcomeStore {
         Ok(drained)
     }
 
-    fn snapshot_all(&self) -> PersistenceResult<Vec<MlsWelcomeRecord>> {
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<MlsWelcomeRecord>> {
         Ok(self
             .queue
             .lock()
@@ -3098,8 +3165,9 @@ impl MemoryMlsCommitStore {
     }
 }
 
+#[async_trait]
 impl MlsCommitStore for MemoryMlsCommitStore {
-    fn get(&self, group_id: &str) -> PersistenceResult<Option<MlsCommitEpochRecord>> {
+    async fn get(&self, group_id: &str) -> PersistenceResult<Option<MlsCommitEpochRecord>> {
         Ok(self
             .rows
             .lock()
@@ -3108,7 +3176,7 @@ impl MlsCommitStore for MemoryMlsCommitStore {
             .cloned())
     }
 
-    fn initialize_genesis(
+    async fn initialize_genesis(
         &self,
         group_id: &str,
         leader_actor_did: &str,
@@ -3135,7 +3203,7 @@ impl MlsCommitStore for MemoryMlsCommitStore {
         Ok(Some(record))
     }
 
-    fn try_bump(
+    async fn try_bump(
         &self,
         group_id: &str,
         expected_prev_epoch: u64,
@@ -3168,7 +3236,7 @@ impl MlsCommitStore for MemoryMlsCommitStore {
         Ok(Some(new_record))
     }
 
-    fn snapshot_all(&self) -> PersistenceResult<Vec<MlsCommitEpochRecord>> {
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<MlsCommitEpochRecord>> {
         Ok(self
             .rows
             .lock()
@@ -3207,8 +3275,9 @@ impl MemoryKeyBackupStore {
     }
 }
 
+#[async_trait]
 impl KeyBackupStore for MemoryKeyBackupStore {
-    fn put(&self, backup_id: String, payload: Value) -> PersistenceResult<()> {
+    async fn put(&self, backup_id: String, payload: Value) -> PersistenceResult<()> {
         self.backups
             .lock()
             .expect("key backup lock")
@@ -3216,7 +3285,7 @@ impl KeyBackupStore for MemoryKeyBackupStore {
         Ok(())
     }
 
-    fn get(&self, backup_id: &str) -> PersistenceResult<Option<Value>> {
+    async fn get(&self, backup_id: &str) -> PersistenceResult<Option<Value>> {
         Ok(self
             .backups
             .lock()
@@ -3225,7 +3294,7 @@ impl KeyBackupStore for MemoryKeyBackupStore {
             .cloned())
     }
 
-    fn delete(&self, backup_id: &str) -> PersistenceResult<bool> {
+    async fn delete(&self, backup_id: &str) -> PersistenceResult<bool> {
         Ok(self
             .backups
             .lock()
@@ -3234,7 +3303,7 @@ impl KeyBackupStore for MemoryKeyBackupStore {
             .is_some())
     }
 
-    fn snapshot_all(&self) -> PersistenceResult<Vec<Value>> {
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<Value>> {
         Ok(self
             .backups
             .lock()
@@ -3244,7 +3313,7 @@ impl KeyBackupStore for MemoryKeyBackupStore {
             .collect())
     }
 
-    fn put_ticket(&self, ticket_id: String, payload: Value) -> PersistenceResult<()> {
+    async fn put_ticket(&self, ticket_id: String, payload: Value) -> PersistenceResult<()> {
         let mut tickets = self.tickets.lock().expect("restore tickets lock");
         let row = tickets.entry(ticket_id).or_default();
         let status = payload
@@ -3264,7 +3333,7 @@ impl KeyBackupStore for MemoryKeyBackupStore {
         Ok(())
     }
 
-    fn get_ticket(&self, ticket_id: &str) -> PersistenceResult<Option<Value>> {
+    async fn get_ticket(&self, ticket_id: &str) -> PersistenceResult<Option<Value>> {
         Ok(self
             .tickets
             .lock()
@@ -3273,7 +3342,7 @@ impl KeyBackupStore for MemoryKeyBackupStore {
             .map(|row| row.payload.clone()))
     }
 
-    fn delete_ticket(&self, ticket_id: &str) -> PersistenceResult<bool> {
+    async fn delete_ticket(&self, ticket_id: &str) -> PersistenceResult<bool> {
         Ok(self
             .tickets
             .lock()
@@ -3282,7 +3351,7 @@ impl KeyBackupStore for MemoryKeyBackupStore {
             .is_some())
     }
 
-    fn snapshot_tickets(&self) -> PersistenceResult<Vec<(String, Value)>> {
+    async fn snapshot_tickets(&self) -> PersistenceResult<Vec<(String, Value)>> {
         Ok(self
             .tickets
             .lock()
@@ -3292,7 +3361,7 @@ impl KeyBackupStore for MemoryKeyBackupStore {
             .collect())
     }
 
-    fn put_executor_run(&self, ticket_id: String, payload: Value) -> PersistenceResult<()> {
+    async fn put_executor_run(&self, ticket_id: String, payload: Value) -> PersistenceResult<()> {
         let mut tickets = self.tickets.lock().expect("restore tickets lock");
         let row = tickets.entry(ticket_id).or_default();
         if row.status.is_empty() {
@@ -3302,7 +3371,7 @@ impl KeyBackupStore for MemoryKeyBackupStore {
         Ok(())
     }
 
-    fn get_executor_run(&self, ticket_id: &str) -> PersistenceResult<Option<Value>> {
+    async fn get_executor_run(&self, ticket_id: &str) -> PersistenceResult<Option<Value>> {
         Ok(self
             .tickets
             .lock()
@@ -3311,7 +3380,7 @@ impl KeyBackupStore for MemoryKeyBackupStore {
             .and_then(|row| row.executor_state.clone()))
     }
 
-    fn delete_executor_run(&self, ticket_id: &str) -> PersistenceResult<bool> {
+    async fn delete_executor_run(&self, ticket_id: &str) -> PersistenceResult<bool> {
         let mut tickets = self.tickets.lock().expect("restore tickets lock");
         if let Some(row) = tickets.get_mut(ticket_id) {
             let had = row.executor_state.is_some();
@@ -3322,7 +3391,7 @@ impl KeyBackupStore for MemoryKeyBackupStore {
         }
     }
 
-    fn snapshot_executor_runs(&self) -> PersistenceResult<Vec<(String, Value)>> {
+    async fn snapshot_executor_runs(&self) -> PersistenceResult<Vec<(String, Value)>> {
         Ok(self
             .tickets
             .lock()
@@ -3332,7 +3401,7 @@ impl KeyBackupStore for MemoryKeyBackupStore {
             .collect())
     }
 
-    fn put_approval_run(&self, ticket_id: String, payload: Value) -> PersistenceResult<()> {
+    async fn put_approval_run(&self, ticket_id: String, payload: Value) -> PersistenceResult<()> {
         let mut tickets = self.tickets.lock().expect("restore tickets lock");
         let row = tickets.entry(ticket_id).or_default();
         if row.status.is_empty() {
@@ -3342,7 +3411,7 @@ impl KeyBackupStore for MemoryKeyBackupStore {
         Ok(())
     }
 
-    fn get_approval_run(&self, ticket_id: &str) -> PersistenceResult<Option<Value>> {
+    async fn get_approval_run(&self, ticket_id: &str) -> PersistenceResult<Option<Value>> {
         Ok(self
             .tickets
             .lock()
@@ -3351,7 +3420,7 @@ impl KeyBackupStore for MemoryKeyBackupStore {
             .and_then(|row| row.approval_state.clone()))
     }
 
-    fn delete_approval_run(&self, ticket_id: &str) -> PersistenceResult<bool> {
+    async fn delete_approval_run(&self, ticket_id: &str) -> PersistenceResult<bool> {
         let mut tickets = self.tickets.lock().expect("restore tickets lock");
         if let Some(row) = tickets.get_mut(ticket_id) {
             let had = row.approval_state.is_some();
@@ -3362,7 +3431,7 @@ impl KeyBackupStore for MemoryKeyBackupStore {
         }
     }
 
-    fn snapshot_approval_runs(&self) -> PersistenceResult<Vec<(String, Value)>> {
+    async fn snapshot_approval_runs(&self) -> PersistenceResult<Vec<(String, Value)>> {
         Ok(self
             .tickets
             .lock()
@@ -3372,7 +3441,7 @@ impl KeyBackupStore for MemoryKeyBackupStore {
             .collect())
     }
 
-    fn ticket_fence_token(&self, ticket_id: &str) -> PersistenceResult<i64> {
+    async fn ticket_fence_token(&self, ticket_id: &str) -> PersistenceResult<i64> {
         Ok(self
             .tickets
             .lock()
@@ -3382,7 +3451,7 @@ impl KeyBackupStore for MemoryKeyBackupStore {
             .unwrap_or(0))
     }
 
-    fn cas_ticket_status(
+    async fn cas_ticket_status(
         &self,
         ticket_id: &str,
         expected_fence: i64,
@@ -3623,9 +3692,10 @@ struct PgMlsCommitStore {
     pool: PgPool,
 }
 
+#[async_trait]
 impl MlsKeyPackageStore for PgMlsKeyPackageStore {
-    fn put(&self, record: &MlsKeyPackageRecord) -> PersistenceResult<bool> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn put(&self, record: &MlsKeyPackageRecord) -> PersistenceResult<bool> {
+        let mut conn = pg_conn(&self.pool).await?;
         let inserted = sql_query(
             "INSERT INTO mls_key_packages \
              (id, actor_did, device_id, lifetime_not_before, lifetime_not_after, \
@@ -3642,31 +3712,31 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
         .bind::<Nullable<Text>, _>(&record.claimed_by_group_id)
         .bind::<Nullable<BigInt>, _>(record.consumed_at)
         .bind::<BigInt, _>(record.created_at)
-        .execute(&mut conn)?;
+        .execute(&mut *conn).await?;
         Ok(inserted > 0)
     }
 
-    fn get(&self, id: &str) -> PersistenceResult<Option<MlsKeyPackageRecord>> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn get(&self, id: &str) -> PersistenceResult<Option<MlsKeyPackageRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "SELECT id, actor_did, device_id, lifetime_not_before, lifetime_not_after, \
              key_package_bytes, claimed_by_group_id, consumed_at, created_at \
              FROM mls_key_packages WHERE id = $1",
         )
         .bind::<Text, _>(id)
-        .get_result::<MlsKeyPackageRow>(&mut conn)
+        .get_result::<MlsKeyPackageRow>(&mut *conn).await
         .optional()
         .map(|row| row.map(MlsKeyPackageRecord::from))
         .map_err(PersistenceError::from)
     }
 
-    fn try_claim(
+    async fn try_claim(
         &self,
         id: &str,
         group_id: &str,
         consumed_at: i64,
     ) -> PersistenceResult<Option<MlsKeyPackageRecord>> {
-        let mut conn = pg_conn(&self.pool)?;
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "UPDATE mls_key_packages \
              SET claimed_by_group_id = $2, consumed_at = $3 \
@@ -3677,28 +3747,29 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
         .bind::<Text, _>(id)
         .bind::<Text, _>(group_id)
         .bind::<BigInt, _>(consumed_at)
-        .get_result::<MlsKeyPackageRow>(&mut conn)
+        .get_result::<MlsKeyPackageRow>(&mut *conn).await
         .optional()
         .map(|row| row.map(MlsKeyPackageRecord::from))
         .map_err(PersistenceError::from)
     }
 
-    fn snapshot_all(&self) -> PersistenceResult<Vec<MlsKeyPackageRecord>> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<MlsKeyPackageRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "SELECT id, actor_did, device_id, lifetime_not_before, lifetime_not_after, \
              key_package_bytes, claimed_by_group_id, consumed_at, created_at \
              FROM mls_key_packages ORDER BY created_at ASC, id ASC",
         )
-        .load::<MlsKeyPackageRow>(&mut conn)
+        .load::<MlsKeyPackageRow>(&mut *conn).await
         .map(|rows| rows.into_iter().map(MlsKeyPackageRecord::from).collect())
         .map_err(PersistenceError::from)
     }
 }
 
+#[async_trait]
 impl MlsWelcomeStore for PgMlsWelcomeStore {
-    fn enqueue(&self, record: &MlsWelcomeRecord) -> PersistenceResult<()> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn enqueue(&self, record: &MlsWelcomeRecord) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "INSERT INTO mls_welcomes \
              (id, group_id, recipient_actor_did, recipient_device_id, welcome_bytes, \
@@ -3714,18 +3785,18 @@ impl MlsWelcomeStore for PgMlsWelcomeStore {
         .bind::<Text, _>(&record.key_package_id)
         .bind::<BigInt, _>(record.enqueued_at)
         .bind::<Nullable<BigInt>, _>(record.delivered_at)
-        .execute(&mut conn)?;
+        .execute(&mut *conn).await?;
         Ok(())
     }
 
-    fn drain_pending(
+    async fn drain_pending(
         &self,
         recipient_actor_did: &str,
         recipient_device_id: &str,
         now_unix_secs: i64,
         limit: usize,
     ) -> PersistenceResult<Vec<MlsWelcomeRecord>> {
-        let mut conn = pg_conn(&self.pool)?;
+        let mut conn = pg_conn(&self.pool).await?;
         let limit = i64::try_from(limit).unwrap_or(i64::MAX).max(0);
         sql_query(
             "WITH picked AS ( \
@@ -3748,39 +3819,40 @@ impl MlsWelcomeStore for PgMlsWelcomeStore {
         .bind::<Text, _>(recipient_device_id)
         .bind::<BigInt, _>(now_unix_secs)
         .bind::<BigInt, _>(limit)
-        .load::<MlsWelcomeRow>(&mut conn)
+        .load::<MlsWelcomeRow>(&mut *conn).await
         .map(|rows| rows.into_iter().map(MlsWelcomeRecord::from).collect())
         .map_err(PersistenceError::from)
     }
 
-    fn snapshot_all(&self) -> PersistenceResult<Vec<MlsWelcomeRecord>> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<MlsWelcomeRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "SELECT id, group_id, recipient_actor_did, recipient_device_id, welcome_bytes, \
              key_package_id, enqueued_at, delivered_at \
              FROM mls_welcomes ORDER BY enqueued_at ASC, id ASC",
         )
-        .load::<MlsWelcomeRow>(&mut conn)
+        .load::<MlsWelcomeRow>(&mut *conn).await
         .map(|rows| rows.into_iter().map(MlsWelcomeRecord::from).collect())
         .map_err(PersistenceError::from)
     }
 }
 
+#[async_trait]
 impl MlsCommitStore for PgMlsCommitStore {
-    fn get(&self, group_id: &str) -> PersistenceResult<Option<MlsCommitEpochRecord>> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn get(&self, group_id: &str) -> PersistenceResult<Option<MlsCommitEpochRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "SELECT group_id, epoch, leader_actor_did, covered_frontier, governance_binding, committed_at \
              FROM mls_commits WHERE group_id = $1",
         )
         .bind::<Text, _>(group_id)
-        .get_result::<MlsCommitEpochRow>(&mut conn)
+        .get_result::<MlsCommitEpochRow>(&mut *conn).await
         .optional()
         .map(|row| row.map(MlsCommitEpochRecord::from))
         .map_err(PersistenceError::from)
     }
 
-    fn initialize_genesis(
+    async fn initialize_genesis(
         &self,
         group_id: &str,
         leader_actor_did: &str,
@@ -3791,7 +3863,7 @@ impl MlsCommitStore for PgMlsCommitStore {
         let mut frontier = covered_frontier.to_vec();
         frontier.sort();
         frontier.dedup();
-        let mut conn = pg_conn(&self.pool)?;
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "INSERT INTO mls_commits \
              (group_id, epoch, leader_actor_did, covered_frontier, governance_binding, committed_at) \
@@ -3804,13 +3876,13 @@ impl MlsCommitStore for PgMlsCommitStore {
         .bind::<Jsonb, _>(serde_json::json!(frontier))
         .bind::<Jsonb, _>(governance_binding)
         .bind::<BigInt, _>(committed_at)
-        .get_result::<MlsCommitEpochRow>(&mut conn)
+        .get_result::<MlsCommitEpochRow>(&mut *conn).await
         .optional()
         .map(|row| row.map(MlsCommitEpochRecord::from))
         .map_err(PersistenceError::from)
     }
 
-    fn try_bump(
+    async fn try_bump(
         &self,
         group_id: &str,
         expected_prev_epoch: u64,
@@ -3825,7 +3897,7 @@ impl MlsCommitStore for PgMlsCommitStore {
             .checked_add(1)
             .and_then(|epoch| i64::try_from(epoch).ok())
             .ok_or_else(|| PersistenceError::Internal("MLS epoch overflow".to_owned()))?;
-        let mut conn = pg_conn(&self.pool)?;
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "INSERT INTO mls_commits (group_id, epoch, leader_actor_did, covered_frontier, governance_binding, committed_at) \
              SELECT $1, $3, $4, $5, $6, $7 WHERE $2 = 0 \
@@ -3848,19 +3920,19 @@ impl MlsCommitStore for PgMlsCommitStore {
         .bind::<Jsonb, _>(serde_json::json!(covered_frontier))
         .bind::<Jsonb, _>(governance_binding)
         .bind::<BigInt, _>(committed_at)
-        .get_result::<MlsCommitEpochRow>(&mut conn)
+        .get_result::<MlsCommitEpochRow>(&mut *conn).await
         .optional()
         .map(|row| row.map(MlsCommitEpochRecord::from))
         .map_err(PersistenceError::from)
     }
 
-    fn snapshot_all(&self) -> PersistenceResult<Vec<MlsCommitEpochRecord>> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<MlsCommitEpochRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "SELECT group_id, epoch, leader_actor_did, covered_frontier, governance_binding, committed_at \
              FROM mls_commits ORDER BY group_id ASC",
         )
-        .load::<MlsCommitEpochRow>(&mut conn)
+        .load::<MlsCommitEpochRow>(&mut *conn).await
         .map(|rows| rows.into_iter().map(MlsCommitEpochRecord::from).collect())
         .map_err(PersistenceError::from)
     }
@@ -3982,21 +4054,22 @@ struct PgAccountStore {
     pool: PgPool,
 }
 
+#[async_trait]
 impl AccountStore for PgAccountStore {
-    fn get(&self, did: &str) -> PersistenceResult<Option<AccountRecord>> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn get(&self, did: &str) -> PersistenceResult<Option<AccountRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "SELECT actor AS did, handle, display_name, created_at FROM accounts WHERE actor = $1",
         )
         .bind::<Text, _>(did)
-        .get_result::<AccountRow>(&mut conn)
+        .get_result::<AccountRow>(&mut *conn).await
         .optional()
         .map(|row| row.map(AccountRecord::from))
         .map_err(PersistenceError::from)
     }
 
-    fn put(&self, record: &AccountRecord) -> PersistenceResult<()> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn put(&self, record: &AccountRecord) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "INSERT INTO accounts (actor, handle, display_name, payload, created_at, updated_at) \
              VALUES ($1, $2, $3, '{}'::jsonb, $4, $4) \
@@ -4007,26 +4080,26 @@ impl AccountStore for PgAccountStore {
         .bind::<Text, _>(&record.handle)
         .bind::<Nullable<Text>, _>(&record.display_name)
         .bind::<Timestamptz, _>(record.created_at)
-        .execute(&mut conn)
+        .execute(&mut *conn).await
         .map(|_| ())
         .map_err(PersistenceError::from)
     }
 
-    fn list(&self) -> PersistenceResult<Vec<AccountRecord>> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn list(&self) -> PersistenceResult<Vec<AccountRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "SELECT actor AS did, handle, display_name, created_at FROM accounts ORDER BY actor",
         )
-        .load::<AccountRow>(&mut conn)
+        .load::<AccountRow>(&mut *conn).await
         .map(|rows| rows.into_iter().map(AccountRecord::from).collect())
         .map_err(PersistenceError::from)
     }
 
-    fn delete(&self, did: &str) -> PersistenceResult<()> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn delete(&self, did: &str) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query("DELETE FROM accounts WHERE actor = $1")
             .bind::<Text, _>(did)
-            .execute(&mut conn)
+            .execute(&mut *conn).await
             .map(|_| ())
             .map_err(PersistenceError::from)
     }
@@ -4036,22 +4109,23 @@ struct PgSessionStore {
     pool: PgPool,
 }
 
+#[async_trait]
 impl SessionStore for PgSessionStore {
-    fn get(&self, token: &str) -> PersistenceResult<Option<SessionRecord>> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn get(&self, token: &str) -> PersistenceResult<Option<SessionRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "SELECT token_hash, actor, device_id, audience, expires_at, created_at, revoked_at \
              FROM sessions WHERE token_hash = $1",
         )
         .bind::<Text, _>(token)
-        .get_result::<SessionRow>(&mut conn)
+        .get_result::<SessionRow>(&mut *conn).await
         .optional()
         .map(|row| row.map(SessionRecord::from))
         .map_err(PersistenceError::from)
     }
 
-    fn put(&self, record: &SessionRecord) -> PersistenceResult<()> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn put(&self, record: &SessionRecord) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "INSERT INTO sessions (token_hash, actor, device_id, audience, payload, expires_at, revoked_at, created_at, updated_at) \
              VALUES ($1, $2, $3, $4, '{}'::jsonb, $5, $6, $7, NOW()) \
@@ -4065,34 +4139,34 @@ impl SessionStore for PgSessionStore {
         .bind::<Timestamptz, _>(record.expires_at)
         .bind::<Nullable<Timestamptz>, _>(record.revoked_at)
         .bind::<Timestamptz, _>(record.created_at)
-        .execute(&mut conn)
+        .execute(&mut *conn).await
         .map(|_| ())
         .map_err(PersistenceError::from)
     }
 
-    fn delete(&self, token: &str) -> PersistenceResult<()> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn delete(&self, token: &str) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query("DELETE FROM sessions WHERE token_hash = $1")
             .bind::<Text, _>(token)
-            .execute(&mut conn)
+            .execute(&mut *conn).await
             .map(|_| ())
             .map_err(PersistenceError::from)
     }
 
-    fn cleanup_expired(&self) -> PersistenceResult<usize> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn cleanup_expired(&self) -> PersistenceResult<usize> {
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query("DELETE FROM sessions WHERE expires_at <= NOW()")
-            .execute(&mut conn)
+            .execute(&mut *conn).await
             .map_err(PersistenceError::from)
     }
 
-    fn snapshot_all(&self) -> PersistenceResult<Vec<SessionRecord>> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<SessionRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "SELECT token_hash, actor, device_id, audience, expires_at, created_at, revoked_at \
              FROM sessions",
         )
-        .load::<SessionRow>(&mut conn)
+        .load::<SessionRow>(&mut *conn).await
         .map(|rows| rows.into_iter().map(SessionRecord::from).collect())
         .map_err(PersistenceError::from)
     }
@@ -4102,23 +4176,24 @@ struct PgAccountDataStore {
     pool: PgPool,
 }
 
+#[async_trait]
 impl AccountDataStore for PgAccountDataStore {
-    fn get(&self, actor: &str, data_type: &str) -> PersistenceResult<Option<AccountDataRecord>> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn get(&self, actor: &str, data_type: &str) -> PersistenceResult<Option<AccountDataRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "SELECT actor, data_type, payload, updated_at \
              FROM account_datas WHERE actor = $1 AND data_type = $2",
         )
         .bind::<Text, _>(actor)
         .bind::<Text, _>(data_type)
-        .get_result::<AccountDataRow>(&mut conn)
+        .get_result::<AccountDataRow>(&mut *conn).await
         .optional()
         .map(|row| row.map(AccountDataRecord::from))
         .map_err(PersistenceError::from)
     }
 
-    fn put(&self, record: &AccountDataRecord) -> PersistenceResult<()> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn put(&self, record: &AccountDataRecord) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "INSERT INTO account_datas (actor, data_type, payload, updated_at) \
              VALUES ($1, $2, $3, $4) \
@@ -4129,29 +4204,29 @@ impl AccountDataStore for PgAccountDataStore {
         .bind::<Text, _>(&record.data_type)
         .bind::<Jsonb, _>(&record.payload)
         .bind::<Timestamptz, _>(record.updated_at)
-        .execute(&mut conn)
+        .execute(&mut *conn).await
         .map(|_| ())
         .map_err(PersistenceError::from)
     }
 
-    fn delete(&self, actor: &str, data_type: &str) -> PersistenceResult<()> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn delete(&self, actor: &str, data_type: &str) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query("DELETE FROM account_datas WHERE actor = $1 AND data_type = $2")
             .bind::<Text, _>(actor)
             .bind::<Text, _>(data_type)
-            .execute(&mut conn)
+            .execute(&mut *conn).await
             .map(|_| ())
             .map_err(PersistenceError::from)
     }
 
-    fn list_for_actor(&self, actor: &str) -> PersistenceResult<Vec<AccountDataRecord>> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn list_for_actor(&self, actor: &str) -> PersistenceResult<Vec<AccountDataRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "SELECT actor, data_type, payload, updated_at \
              FROM account_datas WHERE actor = $1 ORDER BY data_type",
         )
         .bind::<Text, _>(actor)
-        .load::<AccountDataRow>(&mut conn)
+        .load::<AccountDataRow>(&mut *conn).await
         .map(|rows| rows.into_iter().map(AccountDataRecord::from).collect())
         .map_err(PersistenceError::from)
     }
@@ -4161,27 +4236,28 @@ struct PgDeviceInventoryStore {
     pool: PgPool,
 }
 
+#[async_trait]
 impl DeviceInventoryStore for PgDeviceInventoryStore {
-    fn get(
+    async fn get(
         &self,
         actor: &str,
         device_id: &str,
     ) -> PersistenceResult<Option<DeviceInventoryRecord>> {
-        let mut conn = pg_conn(&self.pool)?;
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "SELECT actor, device_id, payload, verification_state, created_at, updated_at, revoked_at \
              FROM devices WHERE actor = $1 AND device_id = $2 AND revoked_at IS NULL",
         )
             .bind::<Text, _>(actor)
             .bind::<Text, _>(device_id)
-            .get_result::<DeviceRow>(&mut conn)
+            .get_result::<DeviceRow>(&mut *conn).await
             .optional()
             .map(|row| row.map(DeviceInventoryRecord::from))
             .map_err(PersistenceError::from)
     }
 
-    fn put(&self, record: &DeviceInventoryRecord) -> PersistenceResult<()> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn put(&self, record: &DeviceInventoryRecord) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "INSERT INTO devices (actor, device_id, payload, verification_state, created_at, updated_at, revoked_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7) \
@@ -4195,30 +4271,30 @@ impl DeviceInventoryStore for PgDeviceInventoryStore {
         .bind::<Timestamptz, _>(record.created_at)
         .bind::<Timestamptz, _>(record.updated_at)
         .bind::<Nullable<Timestamptz>, _>(record.revoked_at)
-        .execute(&mut conn)
+        .execute(&mut *conn).await
         .map(|_| ())
         .map_err(PersistenceError::from)
     }
 
-    fn list_for_actor(&self, actor: &str) -> PersistenceResult<Vec<DeviceInventoryRecord>> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn list_for_actor(&self, actor: &str) -> PersistenceResult<Vec<DeviceInventoryRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
         let rows = sql_query(
             "SELECT actor, device_id, payload, verification_state, created_at, updated_at, revoked_at \
              FROM devices WHERE actor = $1 AND revoked_at IS NULL ORDER BY device_id",
         )
         .bind::<Text, _>(actor)
-        .load::<DeviceRow>(&mut conn)
+        .load::<DeviceRow>(&mut *conn).await
         .map_err(PersistenceError::from)?;
         Ok(rows.into_iter().map(DeviceInventoryRecord::from).collect())
     }
 
-    fn list(&self) -> PersistenceResult<Vec<DeviceInventoryRecord>> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn list(&self) -> PersistenceResult<Vec<DeviceInventoryRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
         let rows = sql_query(
             "SELECT actor, device_id, payload, verification_state, created_at, updated_at, revoked_at \
              FROM devices WHERE revoked_at IS NULL ORDER BY actor, device_id",
         )
-        .load::<DeviceRow>(&mut conn)
+        .load::<DeviceRow>(&mut *conn).await
         .map_err(PersistenceError::from)?;
         Ok(rows.into_iter().map(DeviceInventoryRecord::from).collect())
     }
@@ -4228,13 +4304,14 @@ struct PgFederationTransactionStore {
     pool: PgPool,
 }
 
+#[async_trait]
 impl FederationTransactionStore for PgFederationTransactionStore {
-    fn get(
+    async fn get(
         &self,
         origin: &str,
         txn_id: &str,
     ) -> PersistenceResult<Option<FederationTransactionRecord>> {
-        let mut conn = pg_conn(&self.pool)?;
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "SELECT source_service AS origin, txn_id, destination_service AS destination, \
              space_id, content_digest, status, payload AS response, received_at, processed_at \
@@ -4242,14 +4319,14 @@ impl FederationTransactionStore for PgFederationTransactionStore {
         )
         .bind::<Text, _>(origin)
         .bind::<Text, _>(txn_id)
-        .get_result::<FederationTransactionRow>(&mut conn)
+        .get_result::<FederationTransactionRow>(&mut *conn).await
         .optional()
         .map(|row| row.map(FederationTransactionRecord::from))
         .map_err(PersistenceError::from)
     }
 
-    fn put(&self, record: &FederationTransactionRecord) -> PersistenceResult<()> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn put(&self, record: &FederationTransactionRecord) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool).await?;
         let space_id_uuid: Option<Uuid> = record
             .space_id
             .as_deref()
@@ -4276,19 +4353,19 @@ impl FederationTransactionStore for PgFederationTransactionStore {
         .bind::<Jsonb, _>(&record.response)
         .bind::<Timestamptz, _>(record.received_at)
         .bind::<Nullable<Timestamptz>, _>(record.processed_at)
-        .execute(&mut conn)
+        .execute(&mut *conn).await
         .map(|_| ())
         .map_err(PersistenceError::from)
     }
 
-    fn snapshot_all(&self) -> PersistenceResult<Vec<FederationTransactionRecord>> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<FederationTransactionRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
         let rows = sql_query(
             "SELECT source_service AS origin, txn_id, destination_service AS destination, \
              space_id, content_digest, status, payload AS response, received_at, processed_at \
              FROM federation_transactions ORDER BY received_at ASC, txn_id ASC",
         )
-        .load::<FederationTransactionRow>(&mut conn)
+        .load::<FederationTransactionRow>(&mut *conn).await
         .map_err(PersistenceError::from)?;
         Ok(rows
             .into_iter()
@@ -4306,9 +4383,10 @@ struct PgFederationOutboxStore {
     pool: PgPool,
 }
 
+#[async_trait]
 impl FederationOutboxStore for PgFederationOutboxStore {
-    fn enqueue(&self, record: &FederationOutboxRecord) -> PersistenceResult<bool> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn enqueue(&self, record: &FederationOutboxRecord) -> PersistenceResult<bool> {
+        let mut conn = pg_conn(&self.pool).await?;
         let inserted = sql_query(
             "INSERT INTO federation_outbox \
              (id, peer_did, peer_url, endpoint, idempotency_key, payload_json, attempts, \
@@ -4328,17 +4406,17 @@ impl FederationOutboxStore for PgFederationOutboxStore {
         .bind::<Nullable<Text>, _>(record.last_response_excerpt.as_deref())
         .bind::<BigInt, _>(record.created_at)
         .bind::<Nullable<BigInt>, _>(record.delivered_at)
-        .execute(&mut conn)
+        .execute(&mut *conn).await
         .map_err(PersistenceError::from)?;
         Ok(inserted > 0)
     }
 
-    fn pending_due(
+    async fn pending_due(
         &self,
         now_unix_secs: i64,
         limit: usize,
     ) -> PersistenceResult<Vec<FederationOutboxRecord>> {
-        let mut conn = pg_conn(&self.pool)?;
+        let mut conn = pg_conn(&self.pool).await?;
         let rows = sql_query(
             "SELECT id, peer_did, peer_url, endpoint, idempotency_key, payload_json, attempts, \
              next_attempt_at, last_status, last_response_excerpt, created_at, delivered_at \
@@ -4348,13 +4426,13 @@ impl FederationOutboxStore for PgFederationOutboxStore {
         )
         .bind::<BigInt, _>(now_unix_secs)
         .bind::<BigInt, _>(limit as i64)
-        .load::<FederationOutboxRow>(&mut conn)
+        .load::<FederationOutboxRow>(&mut *conn).await
         .map_err(PersistenceError::from)?;
         Ok(rows.into_iter().map(FederationOutboxRecord::from).collect())
     }
 
-    fn update(&self, record: &FederationOutboxRecord) -> PersistenceResult<()> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn update(&self, record: &FederationOutboxRecord) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "UPDATE federation_outbox SET \
              attempts = $2, next_attempt_at = $3, last_status = $4, \
@@ -4367,42 +4445,42 @@ impl FederationOutboxStore for PgFederationOutboxStore {
         .bind::<Nullable<Integer>, _>(record.last_status)
         .bind::<Nullable<Text>, _>(record.last_response_excerpt.as_deref())
         .bind::<Nullable<BigInt>, _>(record.delivered_at)
-        .execute(&mut conn)
+        .execute(&mut *conn).await
         .map(|_| ())
         .map_err(PersistenceError::from)
     }
 
-    fn get(&self, id: &str) -> PersistenceResult<Option<FederationOutboxRecord>> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn get(&self, id: &str) -> PersistenceResult<Option<FederationOutboxRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "SELECT id, peer_did, peer_url, endpoint, idempotency_key, payload_json, attempts, \
              next_attempt_at, last_status, last_response_excerpt, created_at, delivered_at \
              FROM federation_outbox WHERE id = $1",
         )
         .bind::<Text, _>(id)
-        .get_result::<FederationOutboxRow>(&mut conn)
+        .get_result::<FederationOutboxRow>(&mut *conn).await
         .optional()
         .map(|row| row.map(FederationOutboxRecord::from))
         .map_err(PersistenceError::from)
     }
 
-    fn snapshot_all(&self) -> PersistenceResult<Vec<FederationOutboxRecord>> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<FederationOutboxRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
         let rows = sql_query(
             "SELECT id, peer_did, peer_url, endpoint, idempotency_key, payload_json, attempts, \
              next_attempt_at, last_status, last_response_excerpt, created_at, delivered_at \
              FROM federation_outbox ORDER BY created_at ASC, id ASC",
         )
-        .load::<FederationOutboxRow>(&mut conn)
+        .load::<FederationOutboxRow>(&mut *conn).await
         .map_err(PersistenceError::from)?;
         Ok(rows.into_iter().map(FederationOutboxRecord::from).collect())
     }
 
-    fn insert_dead_letter(
+    async fn insert_dead_letter(
         &self,
         record: &FederationOutboxDeadLetterRecord,
     ) -> PersistenceResult<()> {
-        let mut conn = pg_conn(&self.pool)?;
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "INSERT INTO federation_outbox_dead_letter \
              (id, outbox_id, peer_did, endpoint, idempotency_key, terminal_status, attempts, \
@@ -4420,19 +4498,19 @@ impl FederationOutboxStore for PgFederationOutboxStore {
         .bind::<Nullable<Text>, _>(record.response_excerpt.as_deref())
         .bind::<BigInt, _>(record.failed_at)
         .bind::<Text, _>(&record.reason)
-        .execute(&mut conn)
+        .execute(&mut *conn).await
         .map(|_| ())
         .map_err(PersistenceError::from)
     }
 
-    fn dead_letters_snapshot(&self) -> PersistenceResult<Vec<FederationOutboxDeadLetterRecord>> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn dead_letters_snapshot(&self) -> PersistenceResult<Vec<FederationOutboxDeadLetterRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
         let rows = sql_query(
             "SELECT id, outbox_id, peer_did, endpoint, idempotency_key, terminal_status, \
              attempts, response_excerpt, failed_at, reason \
              FROM federation_outbox_dead_letter ORDER BY failed_at ASC, id ASC",
         )
-        .load::<FederationOutboxDeadLetterRow>(&mut conn)
+        .load::<FederationOutboxDeadLetterRow>(&mut *conn).await
         .map_err(PersistenceError::from)?;
         Ok(rows
             .into_iter()
@@ -4445,12 +4523,13 @@ struct PgPushBridgeCacheStore {
     pool: PgPool,
 }
 
+#[async_trait]
 impl PushBridgeCacheStore for PgPushBridgeCacheStore {
-    fn get(
+    async fn get(
         &self,
         bridge_describe_url: &str,
     ) -> PersistenceResult<Option<OutboundPushBridgeCacheRecord>> {
-        let mut conn = pg_conn(&self.pool)?;
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "SELECT push_gateway_url, service_base_url, bridge_describe_url, fetch_state, \
              cache_state, contract_digest, fetched_at, remote_contract, \
@@ -4458,18 +4537,18 @@ impl PushBridgeCacheStore for PgPushBridgeCacheStore {
              FROM push_bridge_cache WHERE cache_key = $1",
         )
         .bind::<Text, _>(bridge_describe_url)
-        .get_result::<PushBridgeCacheRow>(&mut conn)
+        .get_result::<PushBridgeCacheRow>(&mut *conn).await
         .optional()
         .map(|row| row.map(OutboundPushBridgeCacheRecord::from))
         .map_err(PersistenceError::from)
     }
 
-    fn put(
+    async fn put(
         &self,
         bridge_describe_url: &str,
         record: OutboundPushBridgeCacheRecord,
     ) -> PersistenceResult<()> {
-        let mut conn = pg_conn(&self.pool)?;
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "INSERT INTO push_bridge_cache \
              (cache_key, push_gateway_url, service_base_url, bridge_describe_url, fetch_state, \
@@ -4502,36 +4581,36 @@ impl PushBridgeCacheStore for PgPushBridgeCacheStore {
         .bind::<Text, _>(&record.trust_level)
         .bind::<Timestamptz, _>(record.freshness_at)
         .bind::<Text, _>(&record.etag)
-        .execute(&mut conn)
+        .execute(&mut *conn).await
         .map(|_| ())
         .map_err(PersistenceError::from)
     }
 
-    fn delete(&self, bridge_describe_url: &str) -> PersistenceResult<bool> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn delete(&self, bridge_describe_url: &str) -> PersistenceResult<bool> {
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query("DELETE FROM push_bridge_cache WHERE cache_key = $1")
             .bind::<Text, _>(bridge_describe_url)
-            .execute(&mut conn)
+            .execute(&mut *conn).await
             .map(|affected| affected > 0)
             .map_err(PersistenceError::from)
     }
 
-    fn clear(&self) -> PersistenceResult<usize> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn clear(&self) -> PersistenceResult<usize> {
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query("DELETE FROM push_bridge_cache")
-            .execute(&mut conn)
+            .execute(&mut *conn).await
             .map_err(PersistenceError::from)
     }
 
-    fn snapshot_all(&self) -> PersistenceResult<Vec<OutboundPushBridgeCacheRecord>> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<OutboundPushBridgeCacheRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "SELECT push_gateway_url, service_base_url, bridge_describe_url, fetch_state, \
              cache_state, contract_digest, fetched_at, remote_contract, \
              trust_level, freshness_at, etag \
              FROM push_bridge_cache ORDER BY cache_key",
         )
-        .load::<PushBridgeCacheRow>(&mut conn)
+        .load::<PushBridgeCacheRow>(&mut *conn).await
         .map(|rows| {
             rows.into_iter()
                 .map(OutboundPushBridgeCacheRecord::from)
@@ -4540,27 +4619,27 @@ impl PushBridgeCacheStore for PgPushBridgeCacheStore {
         .map_err(PersistenceError::from)
     }
 
-    fn len(&self) -> PersistenceResult<usize> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn len(&self) -> PersistenceResult<usize> {
+        let mut conn = pg_conn(&self.pool).await?;
         #[derive(QueryableByName)]
         struct CountRow {
             #[diesel(sql_type = diesel::sql_types::BigInt)]
             count: i64,
         }
         sql_query("SELECT COUNT(*) AS count FROM push_bridge_cache")
-            .get_result::<CountRow>(&mut conn)
+            .get_result::<CountRow>(&mut *conn).await
             .map(|row| row.count as usize)
             .map_err(PersistenceError::from)
     }
 
-    fn record_contract_snapshot(
+    async fn record_contract_snapshot(
         &self,
         gateway_describe_url: &str,
         digest: &str,
         etag: &str,
         trust_level: &str,
     ) -> PersistenceResult<()> {
-        let mut conn = pg_conn(&self.pool)?;
+        let mut conn = pg_conn(&self.pool).await?;
         // Upsert: if a row already exists, only bump digest/etag/trust/freshness;
         // otherwise create a stub row that mirrors the gateway URL into the
         // describe-URL columns until the next live fetch fills in the contract.
@@ -4582,27 +4661,27 @@ impl PushBridgeCacheStore for PgPushBridgeCacheStore {
         .bind::<Text, _>(digest)
         .bind::<Text, _>(etag)
         .bind::<Text, _>(trust_level)
-        .execute(&mut conn)
+        .execute(&mut *conn).await
         .map(|_| ())
         .map_err(PersistenceError::from)
     }
 
-    fn current_contract(
+    async fn current_contract(
         &self,
         gateway_describe_url: &str,
     ) -> PersistenceResult<Option<OutboundPushBridgeCacheRecord>> {
         // Same projection as `get`; named separately so the call site reads
         // intent (drift verification, not raw cache lookup).
-        self.get(gateway_describe_url)
+        self.get(gateway_describe_url).await
     }
 
-    fn verify_contract_freshness(
+    async fn verify_contract_freshness(
         &self,
         gateway_describe_url: &str,
         observed_digest: &str,
         max_age: chrono::Duration,
     ) -> PersistenceResult<DriftResult> {
-        let snapshot = self.current_contract(gateway_describe_url)?;
+        let snapshot = self.current_contract(gateway_describe_url).await?;
         Ok(evaluate_drift(snapshot.as_ref(), observed_digest, max_age))
     }
 }
@@ -4670,9 +4749,10 @@ fn partials_to_jsonb(partials: &BTreeMap<String, Value>) -> Value {
     Value::Object(map)
 }
 
+#[async_trait]
 impl MultisigPendingStore for PgMultisigPendingStore {
-    fn upsert(&self, record: MultisigPendingRecord) -> PersistenceResult<()> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn upsert(&self, record: MultisigPendingRecord) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool).await?;
         let space_id_uuid = ids::typed_uuid_part_or_panic(&record.space_id);
         sql_query(
             "INSERT INTO multisig_pending \
@@ -4695,32 +4775,32 @@ impl MultisigPendingStore for PgMultisigPendingStore {
         .bind::<Jsonb, _>(partials_to_jsonb(&record.partials))
         .bind::<Timestamptz, _>(record.created_at)
         .bind::<Timestamptz, _>(record.expires_at)
-        .execute(&mut conn)
+        .execute(&mut *conn).await
         .map(|_| ())
         .map_err(PersistenceError::from)
     }
 
-    fn get(&self, anchor_id: &str) -> PersistenceResult<Option<MultisigPendingRecord>> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn get(&self, anchor_id: &str) -> PersistenceResult<Option<MultisigPendingRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "SELECT anchor_id, space_id, threshold_k, threshold_n, members, canonical_b64, \
              partials, created_at, expires_at, claimed_by_node_id, claimed_until, claim_seq \
              FROM multisig_pending WHERE anchor_id = $1",
         )
         .bind::<Text, _>(anchor_id)
-        .get_result::<MultisigPendingRow>(&mut conn)
+        .get_result::<MultisigPendingRow>(&mut *conn).await
         .optional()
         .map(|row| row.map(MultisigPendingRecord::from))
         .map_err(PersistenceError::from)
     }
 
-    fn add_partial(
+    async fn add_partial(
         &self,
         anchor_id: &str,
         signer_did: &str,
         partial: Value,
     ) -> PersistenceResult<MultisigPendingRecord> {
-        let mut conn = pg_conn(&self.pool)?;
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "UPDATE multisig_pending \
              SET partials = jsonb_set(partials, ARRAY[$2]::text[], $3, true) \
@@ -4729,15 +4809,15 @@ impl MultisigPendingStore for PgMultisigPendingStore {
         .bind::<Text, _>(anchor_id)
         .bind::<Text, _>(signer_did)
         .bind::<Jsonb, _>(&partial)
-        .execute(&mut conn)
+        .execute(&mut *conn).await
         .map_err(PersistenceError::from)?;
-        self.get(anchor_id)?.ok_or_else(|| {
+        self.get(anchor_id).await?.ok_or_else(|| {
             PersistenceError::NotFound(format!("multisig_pending row {anchor_id} not found"))
         })
     }
 
-    fn list_for_space(&self, space_id: &str) -> PersistenceResult<Vec<MultisigPendingRecord>> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn list_for_space(&self, space_id: &str) -> PersistenceResult<Vec<MultisigPendingRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
         let space_id_uuid = ids::typed_uuid_part_or_panic(space_id);
         sql_query(
             "SELECT anchor_id, space_id, threshold_k, threshold_n, members, canonical_b64, \
@@ -4746,40 +4826,40 @@ impl MultisigPendingStore for PgMultisigPendingStore {
              ORDER BY created_at ASC",
         )
         .bind::<SqlUuid, _>(space_id_uuid)
-        .load::<MultisigPendingRow>(&mut conn)
+        .load::<MultisigPendingRow>(&mut *conn).await
         .map(|rows| rows.into_iter().map(MultisigPendingRecord::from).collect())
         .map_err(PersistenceError::from)
     }
 
-    fn delete(&self, anchor_id: &str) -> PersistenceResult<bool> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn delete(&self, anchor_id: &str) -> PersistenceResult<bool> {
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query("DELETE FROM multisig_pending WHERE anchor_id = $1")
             .bind::<Text, _>(anchor_id)
-            .execute(&mut conn)
+            .execute(&mut *conn).await
             .map(|n| n > 0)
             .map_err(PersistenceError::from)
     }
 
-    fn snapshot_all(&self) -> PersistenceResult<Vec<MultisigPendingRecord>> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<MultisigPendingRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "SELECT anchor_id, space_id, threshold_k, threshold_n, members, canonical_b64, \
              partials, created_at, expires_at, claimed_by_node_id, claimed_until, claim_seq \
              FROM multisig_pending ORDER BY created_at ASC",
         )
-        .load::<MultisigPendingRow>(&mut conn)
+        .load::<MultisigPendingRow>(&mut *conn).await
         .map(|rows| rows.into_iter().map(MultisigPendingRecord::from).collect())
         .map_err(PersistenceError::from)
     }
 
-    fn try_claim(
+    async fn try_claim(
         &self,
         anchor_id: &str,
         node_id: &str,
         now: chrono::DateTime<chrono::Utc>,
         claimed_until: chrono::DateTime<chrono::Utc>,
     ) -> PersistenceResult<(bool, i64)> {
-        let mut conn = pg_conn(&self.pool)?;
+        let mut conn = pg_conn(&self.pool).await?;
         // Atomic claim: only succeed when the row is unclaimed or its
         // existing lease has expired. Bumps `claim_seq` on every
         // successful claim and `RETURNING` the new value so the watchdog
@@ -4805,7 +4885,7 @@ impl MultisigPendingStore for PgMultisigPendingStore {
         .bind::<Text, _>(node_id)
         .bind::<Timestamptz, _>(now)
         .bind::<Timestamptz, _>(claimed_until)
-        .get_result::<ClaimSeqRow>(&mut conn)
+        .get_result::<ClaimSeqRow>(&mut *conn).await
         .optional()
         .map_err(PersistenceError::from)?;
 
@@ -4818,15 +4898,15 @@ impl MultisigPendingStore for PgMultisigPendingStore {
             let cur: Option<ClaimSeqRow> =
                 sql_query("SELECT claim_seq FROM multisig_pending WHERE anchor_id = $1")
                     .bind::<Text, _>(anchor_id)
-                    .get_result::<ClaimSeqRow>(&mut conn)
+                    .get_result::<ClaimSeqRow>(&mut *conn).await
                     .optional()
                     .map_err(PersistenceError::from)?;
             Ok((false, cur.map(|r| r.claim_seq).unwrap_or(0)))
         }
     }
 
-    fn release_claim(&self, anchor_id: &str, node_id: &str) -> PersistenceResult<()> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn release_claim(&self, anchor_id: &str, node_id: &str) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "UPDATE multisig_pending \
              SET claimed_by_node_id = NULL, claimed_until = NULL \
@@ -4834,18 +4914,18 @@ impl MultisigPendingStore for PgMultisigPendingStore {
         )
         .bind::<Text, _>(anchor_id)
         .bind::<Text, _>(node_id)
-        .execute(&mut conn)
+        .execute(&mut *conn).await
         .map(|_| ())
         .map_err(PersistenceError::from)
     }
 
-    fn delete_with_fence(
+    async fn delete_with_fence(
         &self,
         anchor_id: &str,
         node_id: &str,
         claim_seq: i64,
     ) -> PersistenceResult<bool> {
-        let mut conn = pg_conn(&self.pool)?;
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "DELETE FROM multisig_pending \
              WHERE anchor_id = $1 \
@@ -4855,19 +4935,19 @@ impl MultisigPendingStore for PgMultisigPendingStore {
         .bind::<Text, _>(anchor_id)
         .bind::<Text, _>(node_id)
         .bind::<BigInt, _>(claim_seq)
-        .execute(&mut conn)
+        .execute(&mut *conn).await
         .map(|n| n > 0)
         .map_err(PersistenceError::from)
     }
 
-    fn renew_claim(
+    async fn renew_claim(
         &self,
         anchor_id: &str,
         node_id: &str,
         claim_seq: i64,
         new_claimed_until: chrono::DateTime<chrono::Utc>,
     ) -> PersistenceResult<bool> {
-        let mut conn = pg_conn(&self.pool)?;
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "UPDATE multisig_pending \
              SET claimed_until = $4 \
@@ -4879,7 +4959,7 @@ impl MultisigPendingStore for PgMultisigPendingStore {
         .bind::<Text, _>(node_id)
         .bind::<BigInt, _>(claim_seq)
         .bind::<Timestamptz, _>(new_claimed_until)
-        .execute(&mut conn)
+        .execute(&mut *conn).await
         .map(|n| n > 0)
         .map_err(PersistenceError::from)
     }
@@ -4897,9 +4977,10 @@ struct AuditPayloadRow {
     payload: Value,
 }
 
+#[async_trait]
 impl AuditStore for PgAuditStore {
-    fn append(&self, entry: Value) -> PersistenceResult<()> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn append(&self, entry: Value) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool).await?;
         let extract = |key: &str| -> Option<String> {
             entry
                 .get(key)
@@ -4938,24 +5019,24 @@ impl AuditStore for PgAuditStore {
         .bind::<Nullable<SqlUuid>, _>(operation_id_uuid)
         .bind::<Nullable<Text>, _>(&device_id)
         .bind::<Jsonb, _>(&entry)
-        .execute(&mut conn)
+        .execute(&mut *conn).await
         .map(|_| ())
         .map_err(PersistenceError::from)
     }
 
-    fn list_for_actor(&self, actor: &str) -> PersistenceResult<Vec<Value>> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn list_for_actor(&self, actor: &str) -> PersistenceResult<Vec<Value>> {
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query("SELECT payload FROM audit_logs WHERE actor = $1 ORDER BY created_at ASC, id ASC")
             .bind::<Text, _>(actor)
-            .load::<AuditPayloadRow>(&mut conn)
+            .load::<AuditPayloadRow>(&mut *conn).await
             .map(|rows| rows.into_iter().map(|row| row.payload).collect())
             .map_err(PersistenceError::from)
     }
 
-    fn snapshot_all(&self) -> PersistenceResult<Vec<Value>> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<Value>> {
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query("SELECT payload FROM audit_logs ORDER BY created_at ASC, id ASC")
-            .load::<AuditPayloadRow>(&mut conn)
+            .load::<AuditPayloadRow>(&mut *conn).await
             .map(|rows| rows.into_iter().map(|row| row.payload).collect())
             .map_err(PersistenceError::from)
     }
@@ -4971,9 +5052,10 @@ struct PushDevicePayloadRow {
     payload: Value,
 }
 
+#[async_trait]
 impl PushDeviceStore for PgPushDeviceStore {
-    fn register(&self, device: Value) -> PersistenceResult<()> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn register(&self, device: Value) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool).await?;
         let extract = |key: &str| -> Option<String> {
             device
                 .get(key)
@@ -5015,19 +5097,19 @@ impl PushDeviceStore for PgPushDeviceStore {
         .bind::<Nullable<Text>, _>(&platform)
         .bind::<Nullable<Text>, _>(&app_id)
         .bind::<Jsonb, _>(&device)
-        .execute(&mut conn)
+        .execute(&mut *conn).await
         .map(|_| ())
         .map_err(PersistenceError::from)
     }
 
-    fn unregister(
+    async fn unregister(
         &self,
         actor: &str,
         device_id: &str,
         push_key: Option<&str>,
         app_id: Option<&str>,
     ) -> PersistenceResult<usize> {
-        let mut conn = pg_conn(&self.pool)?;
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "DELETE FROM push_devices \
              WHERE actor = $1 \
@@ -5039,14 +5121,14 @@ impl PushDeviceStore for PgPushDeviceStore {
         .bind::<Text, _>(device_id)
         .bind::<Nullable<Text>, _>(push_key)
         .bind::<Nullable<Text>, _>(app_id)
-        .execute(&mut conn)
+        .execute(&mut *conn).await
         .map_err(PersistenceError::from)
     }
 
-    fn snapshot_all(&self) -> PersistenceResult<Vec<Value>> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<Value>> {
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query("SELECT payload FROM push_devices ORDER BY updated_at ASC, registration_id ASC")
-            .load::<PushDevicePayloadRow>(&mut conn)
+            .load::<PushDevicePayloadRow>(&mut *conn).await
             .map(|rows| rows.into_iter().map(|row| row.payload).collect())
             .map_err(PersistenceError::from)
     }
@@ -5100,9 +5182,10 @@ impl From<CanonicalEventRow> for CanonicalEventRecord {
     }
 }
 
+#[async_trait]
 impl EventStore for PgEventStore {
-    fn put(&self, record: CanonicalEventRecord) -> PersistenceResult<()> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn put(&self, record: CanonicalEventRecord) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool).await?;
         let event_id_uuid = ids::typed_uuid_part_or_panic(&record.event_id);
         let space_id_uuid: Option<Uuid> = record
             .space_id
@@ -5124,27 +5207,27 @@ impl EventStore for PgEventStore {
         .bind::<Binary, _>(&record.canonical_bytes)
         .bind::<Jsonb, _>(&record.envelope)
         .bind::<Timestamptz, _>(record.received_at)
-        .execute(&mut conn)
+        .execute(&mut *conn).await
         .map(|_| ())
         .map_err(PersistenceError::from)
     }
 
-    fn get(&self, event_id: &str) -> PersistenceResult<Option<CanonicalEventRecord>> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn get(&self, event_id: &str) -> PersistenceResult<Option<CanonicalEventRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
         let event_id_uuid = ids::typed_uuid_part_or_panic(event_id);
         sql_query(
             "SELECT id, actor_id, actor_seq, space_id, kind, schema_id, canonical_digest, canonical_bytes, envelope, received_at \
              FROM canonical_events WHERE id = $1",
         )
         .bind::<SqlUuid, _>(event_id_uuid)
-        .get_result::<CanonicalEventRow>(&mut conn)
+        .get_result::<CanonicalEventRow>(&mut *conn).await
         .optional()
         .map(|row| row.map(CanonicalEventRecord::from))
         .map_err(PersistenceError::from)
     }
 
-    fn contains(&self, event_id: &str) -> PersistenceResult<bool> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn contains(&self, event_id: &str) -> PersistenceResult<bool> {
+        let mut conn = pg_conn(&self.pool).await?;
         #[derive(QueryableByName)]
         struct ExistsRow {
             #[diesel(sql_type = diesel::sql_types::Bool)]
@@ -5153,13 +5236,13 @@ impl EventStore for PgEventStore {
         let event_id_uuid = ids::typed_uuid_part_or_panic(event_id);
         sql_query("SELECT EXISTS(SELECT 1 FROM canonical_events WHERE id = $1) AS present")
             .bind::<SqlUuid, _>(event_id_uuid)
-            .get_result::<ExistsRow>(&mut conn)
+            .get_result::<ExistsRow>(&mut *conn).await
             .map(|row| row.present)
             .map_err(PersistenceError::from)
     }
 
-    fn max_actor_seq(&self, actor_id: &str) -> PersistenceResult<Option<u64>> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn max_actor_seq(&self, actor_id: &str) -> PersistenceResult<Option<u64>> {
+        let mut conn = pg_conn(&self.pool).await?;
         #[derive(QueryableByName)]
         struct MaxRow {
             #[diesel(sql_type = Nullable<BigInt>)]
@@ -5167,18 +5250,18 @@ impl EventStore for PgEventStore {
         }
         sql_query("SELECT MAX(actor_seq) AS max_seq FROM canonical_events WHERE actor_id = $1")
             .bind::<Text, _>(actor_id)
-            .get_result::<MaxRow>(&mut conn)
+            .get_result::<MaxRow>(&mut *conn).await
             .map(|row| row.max_seq.map(|n| n.max(0) as u64))
             .map_err(PersistenceError::from)
     }
 
-    fn snapshot_all(&self) -> PersistenceResult<Vec<CanonicalEventRecord>> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<CanonicalEventRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "SELECT id, actor_id, actor_seq, space_id, kind, schema_id, canonical_digest, canonical_bytes, envelope, received_at \
              FROM canonical_events ORDER BY received_at ASC, id ASC",
         )
-        .load::<CanonicalEventRow>(&mut conn)
+        .load::<CanonicalEventRow>(&mut *conn).await
         .map(|rows| rows.into_iter().map(CanonicalEventRecord::from).collect())
         .map_err(PersistenceError::from)
     }
@@ -5196,9 +5279,10 @@ struct FederationOperationRow {
     payload: Value,
 }
 
+#[async_trait]
 impl FederationOperationsStore for PgFederationOperationsStore {
-    fn append(&self, operation: Operation) -> PersistenceResult<()> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn append(&self, operation: Operation) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool).await?;
         let payload = serde_json::to_value(&operation).map_err(|error| {
             PersistenceError::Internal(format!("federation operation serialize: {error}"))
         })?;
@@ -5222,13 +5306,13 @@ impl FederationOperationsStore for PgFederationOperationsStore {
         .bind::<Text, _>(&operation_type)
         .bind::<Jsonb, _>(&payload)
         .bind::<Timestamptz, _>(operation.created_at)
-        .execute(&mut conn)
+        .execute(&mut *conn).await
         .map(|_| ())
         .map_err(PersistenceError::from)
     }
 
-    fn contains(&self, operation_id: &str) -> PersistenceResult<bool> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn contains(&self, operation_id: &str) -> PersistenceResult<bool> {
+        let mut conn = pg_conn(&self.pool).await?;
         #[derive(QueryableByName)]
         struct ExistsRow {
             #[diesel(sql_type = diesel::sql_types::Bool)]
@@ -5237,20 +5321,20 @@ impl FederationOperationsStore for PgFederationOperationsStore {
         let operation_id_uuid = ids::typed_uuid_part_or_panic(operation_id);
         sql_query("SELECT EXISTS(SELECT 1 FROM federation_operations WHERE id = $1) AS present")
             .bind::<SqlUuid, _>(operation_id_uuid)
-            .get_result::<ExistsRow>(&mut conn)
+            .get_result::<ExistsRow>(&mut *conn).await
             .map(|row| row.present)
             .map_err(PersistenceError::from)
     }
 
-    fn list_for_space(&self, space_id: &str) -> PersistenceResult<Vec<Operation>> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn list_for_space(&self, space_id: &str) -> PersistenceResult<Vec<Operation>> {
+        let mut conn = pg_conn(&self.pool).await?;
         let space_id_uuid = ids::typed_uuid_part_or_panic(space_id);
         let rows: Vec<FederationOperationRow> = sql_query(
             "SELECT payload FROM federation_operations \
              WHERE space_id = $1 ORDER BY created_at ASC, id ASC",
         )
         .bind::<SqlUuid, _>(space_id_uuid)
-        .load::<FederationOperationRow>(&mut conn)
+        .load::<FederationOperationRow>(&mut *conn).await
         .map_err(PersistenceError::from)?;
         rows.into_iter()
             .map(|row| {
@@ -5261,13 +5345,13 @@ impl FederationOperationsStore for PgFederationOperationsStore {
             .collect()
     }
 
-    fn snapshot_all(&self) -> PersistenceResult<Vec<Operation>> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<Operation>> {
+        let mut conn = pg_conn(&self.pool).await?;
         let rows: Vec<FederationOperationRow> = sql_query(
             "SELECT payload FROM federation_operations \
              ORDER BY created_at ASC, id ASC",
         )
-        .load::<FederationOperationRow>(&mut conn)
+        .load::<FederationOperationRow>(&mut *conn).await
         .map_err(PersistenceError::from)?;
         rows.into_iter()
             .map(|row| {
@@ -5297,9 +5381,10 @@ struct ModerationPayloadRow {
     payload: Value,
 }
 
+#[async_trait]
 impl ModerationStore for PgModerationStore {
-    fn append_report(&self, report: Value) -> PersistenceResult<()> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn append_report(&self, report: Value) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool).await?;
         let extract = |key: &str| -> Option<String> {
             report
                 .get(key)
@@ -5330,13 +5415,13 @@ impl ModerationStore for PgModerationStore {
         .bind::<Nullable<SqlUuid>, _>(target_event_id_uuid)
         .bind::<Nullable<SqlUuid>, _>(space_id_uuid)
         .bind::<Jsonb, _>(&report)
-        .execute(&mut conn)
+        .execute(&mut *conn).await
         .map(|_| ())
         .map_err(PersistenceError::from)
     }
 
-    fn append_action(&self, action: Value) -> PersistenceResult<()> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn append_action(&self, action: Value) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool).await?;
         let extract = |key: &str| -> Option<String> {
             action
                 .get(key)
@@ -5364,23 +5449,23 @@ impl ModerationStore for PgModerationStore {
         .bind::<Nullable<Text>, _>(&action_kind)
         .bind::<Nullable<SqlUuid>, _>(space_id_uuid)
         .bind::<Jsonb, _>(&action)
-        .execute(&mut conn)
+        .execute(&mut *conn).await
         .map(|_| ())
         .map_err(PersistenceError::from)
     }
 
-    fn list_reports(&self) -> PersistenceResult<Vec<Value>> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn list_reports(&self) -> PersistenceResult<Vec<Value>> {
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query("SELECT payload FROM moderation_reports ORDER BY created_at ASC, id ASC")
-            .load::<ModerationPayloadRow>(&mut conn)
+            .load::<ModerationPayloadRow>(&mut *conn).await
             .map(|rows| rows.into_iter().map(|row| row.payload).collect())
             .map_err(PersistenceError::from)
     }
 
-    fn list_actions(&self) -> PersistenceResult<Vec<Value>> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn list_actions(&self) -> PersistenceResult<Vec<Value>> {
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query("SELECT payload FROM moderation_actions ORDER BY created_at ASC, id ASC")
-            .load::<ModerationPayloadRow>(&mut conn)
+            .load::<ModerationPayloadRow>(&mut *conn).await
             .map(|rows| rows.into_iter().map(|row| row.payload).collect())
             .map_err(PersistenceError::from)
     }
@@ -5410,9 +5495,10 @@ impl From<PresenceRow> for PresenceRecord {
     }
 }
 
+#[async_trait]
 impl PresenceStore for PgPresenceStore {
-    fn put(&self, presence: PresenceRecord) -> PersistenceResult<()> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn put(&self, presence: PresenceRecord) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "INSERT INTO presence (actor, status, updated_at) \
              VALUES ($1, $2, $3) \
@@ -5423,16 +5509,16 @@ impl PresenceStore for PgPresenceStore {
         .bind::<Text, _>(&presence.actor)
         .bind::<Text, _>(&presence.status)
         .bind::<Timestamptz, _>(presence.updated_at)
-        .execute(&mut conn)
+        .execute(&mut *conn).await
         .map(|_| ())
         .map_err(PersistenceError::from)
     }
 
-    fn get(&self, actor: &str) -> PersistenceResult<Option<PresenceRecord>> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn get(&self, actor: &str) -> PersistenceResult<Option<PresenceRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query("SELECT actor, status, updated_at FROM presence WHERE actor = $1")
             .bind::<Text, _>(actor)
-            .get_result::<PresenceRow>(&mut conn)
+            .get_result::<PresenceRow>(&mut *conn).await
             .optional()
             .map(|row| row.map(PresenceRecord::from))
             .map_err(PersistenceError::from)
@@ -5498,25 +5584,26 @@ impl From<WebvhLogRow> for WebvhLogRecord {
     }
 }
 
+#[async_trait]
 impl WebvhStore for PgWebvhStore {
-    fn get_document(&self, did: &str) -> PersistenceResult<Option<WebvhDocumentRecord>> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn get_document(&self, did: &str) -> PersistenceResult<Option<WebvhDocumentRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "SELECT did, did_document, key_log_head, seq, method_evidence, updated_at \
              FROM webvh_documents WHERE did = $1",
         )
         .bind::<Text, _>(did)
-        .get_result::<WebvhDocumentRow>(&mut conn)
+        .get_result::<WebvhDocumentRow>(&mut *conn).await
         .optional()
         .map(|row| row.map(WebvhDocumentRecord::from))
         .map_err(PersistenceError::from)
     }
 
-    fn get_embedded_webvh_document_by_local_id(
+    async fn get_embedded_webvh_document_by_local_id(
         &self,
         local_id: &str,
     ) -> PersistenceResult<Option<WebvhDocumentRecord>> {
-        let mut conn = pg_conn(&self.pool)?;
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "SELECT did, did_document, key_log_head, seq, method_evidence, updated_at \
              FROM webvh_documents \
@@ -5526,14 +5613,14 @@ impl WebvhStore for PgWebvhStore {
              LIMIT 1",
         )
         .bind::<Text, _>(local_id)
-        .get_result::<WebvhDocumentRow>(&mut conn)
+        .get_result::<WebvhDocumentRow>(&mut *conn).await
         .optional()
         .map(|row| row.map(WebvhDocumentRecord::from))
         .map_err(PersistenceError::from)
     }
 
-    fn put_document(&self, record: WebvhDocumentRecord) -> PersistenceResult<()> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn put_document(&self, record: WebvhDocumentRecord) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "INSERT INTO webvh_documents \
              (did, did_document, key_log_head, seq, method_evidence, updated_at) \
@@ -5551,13 +5638,13 @@ impl WebvhStore for PgWebvhStore {
         .bind::<BigInt, _>(record.seq as i64)
         .bind::<Jsonb, _>(&record.method_evidence)
         .bind::<Timestamptz, _>(record.updated_at)
-        .execute(&mut conn)
+        .execute(&mut *conn).await
         .map(|_| ())
         .map_err(PersistenceError::from)
     }
 
-    fn append_log_event(&self, event: WebvhLogRecord) -> PersistenceResult<()> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn append_log_event(&self, event: WebvhLogRecord) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "INSERT INTO webvh_log_events \
              (event_digest, did, seq, operation, created_at) \
@@ -5569,19 +5656,19 @@ impl WebvhStore for PgWebvhStore {
         .bind::<BigInt, _>(event.seq as i64)
         .bind::<Jsonb, _>(&event.operation)
         .bind::<Timestamptz, _>(event.created_at)
-        .execute(&mut conn)
+        .execute(&mut *conn).await
         .map(|_| ())
         .map_err(PersistenceError::from)
     }
 
-    fn list_log_events(&self, did: &str) -> PersistenceResult<Vec<WebvhLogRecord>> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn list_log_events(&self, did: &str) -> PersistenceResult<Vec<WebvhLogRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "SELECT event_digest, did, seq, operation, created_at \
              FROM webvh_log_events WHERE did = $1 ORDER BY seq ASC, event_digest ASC",
         )
         .bind::<Text, _>(did)
-        .load::<WebvhLogRow>(&mut conn)
+        .load::<WebvhLogRow>(&mut *conn).await
         .map(|rows| rows.into_iter().map(WebvhLogRecord::from).collect())
         .map_err(PersistenceError::from)
     }
@@ -5626,23 +5713,24 @@ impl From<SpaceInviteRow> for SpaceInviteRecord {
     }
 }
 
+#[async_trait]
 impl SpaceInviteStore for PgSpaceInviteStore {
-    fn get(&self, invite_id: &str) -> PersistenceResult<Option<SpaceInviteRecord>> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn get(&self, invite_id: &str) -> PersistenceResult<Option<SpaceInviteRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
         let invite_id_uuid = ids::typed_uuid_part_or_panic(invite_id);
         sql_query(
             "SELECT id, space_id, inviter, invitee, invite_token, status, expires_at, created_at \
              FROM space_invites WHERE id = $1",
         )
         .bind::<SqlUuid, _>(invite_id_uuid)
-        .get_result::<SpaceInviteRow>(&mut conn)
+        .get_result::<SpaceInviteRow>(&mut *conn).await
         .optional()
         .map(|row| row.map(SpaceInviteRecord::from))
         .map_err(PersistenceError::from)
     }
 
-    fn put(&self, record: SpaceInviteRecord) -> PersistenceResult<()> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn put(&self, record: SpaceInviteRecord) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool).await?;
         let invite_id_uuid = ids::typed_uuid_part_or_panic(&record.invite_id);
         let space_id_uuid = ids::typed_uuid_part_or_panic(&record.space_id);
         sql_query(
@@ -5665,18 +5753,18 @@ impl SpaceInviteStore for PgSpaceInviteStore {
         .bind::<Text, _>(&record.status)
         .bind::<Nullable<Timestamptz>, _>(record.expires_at)
         .bind::<Timestamptz, _>(record.created_at)
-        .execute(&mut conn)
+        .execute(&mut *conn).await
         .map(|_| ())
         .map_err(PersistenceError::from)
     }
 
-    fn snapshot_all(&self) -> PersistenceResult<Vec<SpaceInviteRecord>> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<SpaceInviteRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "SELECT id, space_id, inviter, invitee, invite_token, status, expires_at, created_at \
              FROM space_invites ORDER BY created_at ASC, id ASC",
         )
-        .load::<SpaceInviteRow>(&mut conn)
+        .load::<SpaceInviteRow>(&mut *conn).await
         .map(|rows| rows.into_iter().map(SpaceInviteRecord::from).collect())
         .map_err(PersistenceError::from)
     }
@@ -5709,9 +5797,10 @@ struct KeyBackupPayloadRow {
     payload: Value,
 }
 
+#[async_trait]
 impl KeyBackupStore for PgKeyBackupStore {
-    fn put(&self, backup_id: String, payload: Value) -> PersistenceResult<()> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn put(&self, backup_id: String, payload: Value) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool).await?;
         let extract_str = |key: &str| -> Option<String> {
             payload
                 .get(key)
@@ -5756,45 +5845,45 @@ impl KeyBackupStore for PgKeyBackupStore {
         .bind::<Integer, _>(version)
         .bind::<Nullable<Binary>, _>(key_material.as_deref())
         .bind::<Jsonb, _>(&payload)
-        .execute(&mut conn)
+        .execute(&mut *conn).await
         .map(|_| ())
         .map_err(PersistenceError::from)
     }
 
-    fn get(&self, backup_id: &str) -> PersistenceResult<Option<Value>> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn get(&self, backup_id: &str) -> PersistenceResult<Option<Value>> {
+        let mut conn = pg_conn(&self.pool).await?;
         // last_accessed_at side-effect on read is informational; failure here
         // must not crash the get path.
         let _ = sql_query("UPDATE key_backups SET last_accessed_at = NOW() WHERE backup_id = $1")
             .bind::<Text, _>(backup_id)
-            .execute(&mut conn);
+            .execute(&mut *conn).await;
         sql_query("SELECT payload FROM key_backups WHERE backup_id = $1")
             .bind::<Text, _>(backup_id)
-            .get_result::<KeyBackupPayloadRow>(&mut conn)
+            .get_result::<KeyBackupPayloadRow>(&mut *conn).await
             .optional()
             .map(|row| row.map(|r| r.payload))
             .map_err(PersistenceError::from)
     }
 
-    fn delete(&self, backup_id: &str) -> PersistenceResult<bool> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn delete(&self, backup_id: &str) -> PersistenceResult<bool> {
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query("DELETE FROM key_backups WHERE backup_id = $1")
             .bind::<Text, _>(backup_id)
-            .execute(&mut conn)
+            .execute(&mut *conn).await
             .map(|n| n > 0)
             .map_err(PersistenceError::from)
     }
 
-    fn snapshot_all(&self) -> PersistenceResult<Vec<Value>> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<Value>> {
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query("SELECT payload FROM key_backups ORDER BY created_at ASC, backup_id ASC")
-            .load::<KeyBackupPayloadRow>(&mut conn)
+            .load::<KeyBackupPayloadRow>(&mut *conn).await
             .map(|rows| rows.into_iter().map(|r| r.payload).collect())
             .map_err(PersistenceError::from)
     }
 
-    fn put_ticket(&self, ticket_id: String, payload: Value) -> PersistenceResult<()> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn put_ticket(&self, ticket_id: String, payload: Value) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool).await?;
         let account_id = payload
             .get("account_id")
             .and_then(Value::as_str)
@@ -5818,23 +5907,23 @@ impl KeyBackupStore for PgKeyBackupStore {
         .bind::<Nullable<Text>, _>(&account_id)
         .bind::<Text, _>(&status)
         .bind::<Jsonb, _>(&payload)
-        .execute(&mut conn)
+        .execute(&mut *conn).await
         .map(|_| ())
         .map_err(PersistenceError::from)
     }
 
-    fn get_ticket(&self, ticket_id: &str) -> PersistenceResult<Option<Value>> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn get_ticket(&self, ticket_id: &str) -> PersistenceResult<Option<Value>> {
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query("SELECT payload FROM restore_tickets WHERE ticket_id = $1")
             .bind::<Text, _>(ticket_id)
-            .get_result::<KeyBackupPayloadRow>(&mut conn)
+            .get_result::<KeyBackupPayloadRow>(&mut *conn).await
             .optional()
             .map(|row| row.map(|r| r.payload))
             .map_err(PersistenceError::from)
     }
 
-    fn put_executor_run(&self, ticket_id: String, payload: Value) -> PersistenceResult<()> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn put_executor_run(&self, ticket_id: String, payload: Value) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool).await?;
         // Insert-or-update the per-ticket row, setting `executor_state`. If
         // the ticket envelope was never written (rare smoke path), seed
         // `payload` with the executor blob itself so the row remains valid.
@@ -5849,13 +5938,13 @@ impl KeyBackupStore for PgKeyBackupStore {
         )
         .bind::<Text, _>(&ticket_id)
         .bind::<Jsonb, _>(&payload)
-        .execute(&mut conn)
+        .execute(&mut *conn).await
         .map(|_| ())
         .map_err(PersistenceError::from)
     }
 
-    fn get_executor_run(&self, ticket_id: &str) -> PersistenceResult<Option<Value>> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn get_executor_run(&self, ticket_id: &str) -> PersistenceResult<Option<Value>> {
+        let mut conn = pg_conn(&self.pool).await?;
         #[derive(QueryableByName)]
         struct ExecRow {
             #[diesel(sql_type = Nullable<Jsonb>)]
@@ -5863,14 +5952,14 @@ impl KeyBackupStore for PgKeyBackupStore {
         }
         sql_query("SELECT executor_state FROM restore_tickets WHERE ticket_id = $1")
             .bind::<Text, _>(ticket_id)
-            .get_result::<ExecRow>(&mut conn)
+            .get_result::<ExecRow>(&mut *conn).await
             .optional()
             .map(|row| row.and_then(|r| r.executor_state))
             .map_err(PersistenceError::from)
     }
 
-    fn put_approval_run(&self, ticket_id: String, payload: Value) -> PersistenceResult<()> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn put_approval_run(&self, ticket_id: String, payload: Value) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "INSERT INTO restore_tickets \
              (ticket_id, status, payload, approval_state, created_at, updated_at) \
@@ -5881,13 +5970,13 @@ impl KeyBackupStore for PgKeyBackupStore {
         )
         .bind::<Text, _>(&ticket_id)
         .bind::<Jsonb, _>(&payload)
-        .execute(&mut conn)
+        .execute(&mut *conn).await
         .map(|_| ())
         .map_err(PersistenceError::from)
     }
 
-    fn get_approval_run(&self, ticket_id: &str) -> PersistenceResult<Option<Value>> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn get_approval_run(&self, ticket_id: &str) -> PersistenceResult<Option<Value>> {
+        let mut conn = pg_conn(&self.pool).await?;
         #[derive(QueryableByName)]
         struct ApprovalRow {
             #[diesel(sql_type = Nullable<Jsonb>)]
@@ -5895,23 +5984,23 @@ impl KeyBackupStore for PgKeyBackupStore {
         }
         sql_query("SELECT approval_state FROM restore_tickets WHERE ticket_id = $1")
             .bind::<Text, _>(ticket_id)
-            .get_result::<ApprovalRow>(&mut conn)
+            .get_result::<ApprovalRow>(&mut *conn).await
             .optional()
             .map(|row| row.and_then(|r| r.approval_state))
             .map_err(PersistenceError::from)
     }
 
-    fn delete_ticket(&self, ticket_id: &str) -> PersistenceResult<bool> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn delete_ticket(&self, ticket_id: &str) -> PersistenceResult<bool> {
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query("DELETE FROM restore_tickets WHERE ticket_id = $1")
             .bind::<Text, _>(ticket_id)
-            .execute(&mut conn)
+            .execute(&mut *conn).await
             .map(|n| n > 0)
             .map_err(PersistenceError::from)
     }
 
-    fn snapshot_tickets(&self) -> PersistenceResult<Vec<(String, Value)>> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn snapshot_tickets(&self) -> PersistenceResult<Vec<(String, Value)>> {
+        let mut conn = pg_conn(&self.pool).await?;
         #[derive(QueryableByName)]
         struct TicketIdPayload {
             #[diesel(sql_type = Text)]
@@ -5922,25 +6011,25 @@ impl KeyBackupStore for PgKeyBackupStore {
         sql_query(
             "SELECT ticket_id, payload FROM restore_tickets ORDER BY created_at ASC, ticket_id ASC",
         )
-        .load::<TicketIdPayload>(&mut conn)
+        .load::<TicketIdPayload>(&mut *conn).await
         .map(|rows| rows.into_iter().map(|r| (r.ticket_id, r.payload)).collect())
         .map_err(PersistenceError::from)
     }
 
-    fn delete_executor_run(&self, ticket_id: &str) -> PersistenceResult<bool> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn delete_executor_run(&self, ticket_id: &str) -> PersistenceResult<bool> {
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "UPDATE restore_tickets SET executor_state = NULL, updated_at = NOW() \
              WHERE ticket_id = $1 AND executor_state IS NOT NULL",
         )
         .bind::<Text, _>(ticket_id)
-        .execute(&mut conn)
+        .execute(&mut *conn).await
         .map(|n| n > 0)
         .map_err(PersistenceError::from)
     }
 
-    fn snapshot_executor_runs(&self) -> PersistenceResult<Vec<(String, Value)>> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn snapshot_executor_runs(&self) -> PersistenceResult<Vec<(String, Value)>> {
+        let mut conn = pg_conn(&self.pool).await?;
         #[derive(QueryableByName)]
         struct ExecRow {
             #[diesel(sql_type = Text)]
@@ -5952,7 +6041,7 @@ impl KeyBackupStore for PgKeyBackupStore {
             "SELECT ticket_id, executor_state FROM restore_tickets \
              WHERE executor_state IS NOT NULL ORDER BY created_at ASC, ticket_id ASC",
         )
-        .load::<ExecRow>(&mut conn)
+        .load::<ExecRow>(&mut *conn).await
         .map(|rows| {
             rows.into_iter()
                 .map(|r| (r.ticket_id, r.executor_state))
@@ -5961,20 +6050,20 @@ impl KeyBackupStore for PgKeyBackupStore {
         .map_err(PersistenceError::from)
     }
 
-    fn delete_approval_run(&self, ticket_id: &str) -> PersistenceResult<bool> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn delete_approval_run(&self, ticket_id: &str) -> PersistenceResult<bool> {
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "UPDATE restore_tickets SET approval_state = NULL, updated_at = NOW() \
              WHERE ticket_id = $1 AND approval_state IS NOT NULL",
         )
         .bind::<Text, _>(ticket_id)
-        .execute(&mut conn)
+        .execute(&mut *conn).await
         .map(|n| n > 0)
         .map_err(PersistenceError::from)
     }
 
-    fn snapshot_approval_runs(&self) -> PersistenceResult<Vec<(String, Value)>> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn snapshot_approval_runs(&self) -> PersistenceResult<Vec<(String, Value)>> {
+        let mut conn = pg_conn(&self.pool).await?;
         #[derive(QueryableByName)]
         struct ApprRow {
             #[diesel(sql_type = Text)]
@@ -5986,7 +6075,7 @@ impl KeyBackupStore for PgKeyBackupStore {
             "SELECT ticket_id, approval_state FROM restore_tickets \
              WHERE approval_state IS NOT NULL ORDER BY created_at ASC, ticket_id ASC",
         )
-        .load::<ApprRow>(&mut conn)
+        .load::<ApprRow>(&mut *conn).await
         .map(|rows| {
             rows.into_iter()
                 .map(|r| (r.ticket_id, r.approval_state))
@@ -5995,8 +6084,8 @@ impl KeyBackupStore for PgKeyBackupStore {
         .map_err(PersistenceError::from)
     }
 
-    fn ticket_fence_token(&self, ticket_id: &str) -> PersistenceResult<i64> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn ticket_fence_token(&self, ticket_id: &str) -> PersistenceResult<i64> {
+        let mut conn = pg_conn(&self.pool).await?;
         #[derive(QueryableByName)]
         struct FenceRow {
             #[diesel(sql_type = BigInt)]
@@ -6004,19 +6093,19 @@ impl KeyBackupStore for PgKeyBackupStore {
         }
         sql_query("SELECT fence_token FROM restore_tickets WHERE ticket_id = $1")
             .bind::<Text, _>(ticket_id)
-            .get_result::<FenceRow>(&mut conn)
+            .get_result::<FenceRow>(&mut *conn).await
             .optional()
             .map(|row| row.map(|r| r.fence_token).unwrap_or(0))
             .map_err(PersistenceError::from)
     }
 
-    fn cas_ticket_status(
+    async fn cas_ticket_status(
         &self,
         ticket_id: &str,
         expected_fence: i64,
         next_status: &str,
     ) -> PersistenceResult<Option<i64>> {
-        let mut conn = pg_conn(&self.pool)?;
+        let mut conn = pg_conn(&self.pool).await?;
         #[derive(QueryableByName)]
         struct FenceRow {
             #[diesel(sql_type = BigInt)]
@@ -6036,7 +6125,7 @@ impl KeyBackupStore for PgKeyBackupStore {
         .bind::<Text, _>(next_status)
         .bind::<Text, _>(ticket_id)
         .bind::<BigInt, _>(expected_fence)
-        .get_result::<FenceRow>(&mut conn)
+        .get_result::<FenceRow>(&mut *conn).await
         .optional()
         .map_err(PersistenceError::from)?;
         if let Some(row) = updated {
@@ -6055,7 +6144,7 @@ impl KeyBackupStore for PgKeyBackupStore {
             )
             .bind::<Text, _>(ticket_id)
             .bind::<Text, _>(next_status)
-            .get_result::<FenceRow>(&mut conn)
+            .get_result::<FenceRow>(&mut *conn).await
             .optional()
             .map_err(PersistenceError::from)?;
             return Ok(inserted.map(|r| r.fence_token));
@@ -6085,7 +6174,7 @@ struct WebrtcSessionRow {
 }
 
 impl WebrtcSessionRow {
-    fn into_record(self) -> PersistenceResult<WebrtcSessionRecord> {
+    async fn into_record(self) -> PersistenceResult<WebrtcSessionRecord> {
         // The `signaling_state` envelope carries the live participants set,
         // signals vec, and next_seq counter — round-tripped via serde_json.
         let participants: BTreeSet<String> = self
@@ -6196,9 +6285,10 @@ fn webrtc_signaling_state(record: &WebrtcSessionRecord) -> Value {
     })
 }
 
+#[async_trait]
 impl WebrtcSessionStore for PgWebrtcSessionStore {
-    fn put(&self, record: WebrtcSessionRecord) -> PersistenceResult<()> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn put(&self, record: WebrtcSessionRecord) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool).await?;
         let signaling_state = webrtc_signaling_state(&record);
         let ice_config: Value = serde_json::json!({});
         let session_id_uuid = ids::typed_uuid_part_or_panic(&record.session_id);
@@ -6221,39 +6311,39 @@ impl WebrtcSessionStore for PgWebrtcSessionStore {
         .bind::<Jsonb, _>(&signaling_state)
         .bind::<Timestamptz, _>(record.created_at)
         .bind::<Timestamptz, _>(record.expires_at)
-        .execute(&mut conn)
+        .execute(&mut *conn).await
         .map(|_| ())
         .map_err(PersistenceError::from)
     }
 
-    fn get(&self, session_id: &str) -> PersistenceResult<Option<WebrtcSessionRecord>> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn get(&self, session_id: &str) -> PersistenceResult<Option<WebrtcSessionRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
         let session_id_uuid = ids::typed_uuid_part_or_panic(session_id);
         let row = sql_query(
             "SELECT id, space_id, initiator_did, signaling_state, created_at, expires_at \
              FROM webrtc_sessions WHERE id = $1",
         )
         .bind::<SqlUuid, _>(session_id_uuid)
-        .get_result::<WebrtcSessionRow>(&mut conn)
+        .get_result::<WebrtcSessionRow>(&mut *conn).await
         .optional()
         .map_err(PersistenceError::from)?;
         match row {
-            Some(r) => Ok(Some(r.into_record()?)),
+            Some(r) => Ok(Some(r.into_record().await?)),
             None => Ok(None),
         }
     }
 
-    fn delete(&self, session_id: &str) -> PersistenceResult<bool> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn delete(&self, session_id: &str) -> PersistenceResult<bool> {
+        let mut conn = pg_conn(&self.pool).await?;
         let session_id_uuid = ids::typed_uuid_part_or_panic(session_id);
         sql_query("DELETE FROM webrtc_sessions WHERE id = $1")
             .bind::<SqlUuid, _>(session_id_uuid)
-            .execute(&mut conn)
+            .execute(&mut *conn).await
             .map(|n| n > 0)
             .map_err(PersistenceError::from)
     }
 
-    fn append_signal(
+    async fn append_signal(
         &self,
         session_id: &str,
         actor_must_be_participant: &str,
@@ -6262,7 +6352,7 @@ impl WebrtcSessionStore for PgWebrtcSessionStore {
         // Read-modify-write inside a single conn — acceptable since callers
         // serialize on the WebRTC routing handler and the conflict surface
         // is bounded by the active call session.
-        let mut record = match self.get(session_id)? {
+        let mut record = match self.get(session_id).await? {
             Some(r) => r,
             None => return Err(PersistenceError::NotFound(session_id.to_owned())),
         };
@@ -6274,14 +6364,14 @@ impl WebrtcSessionStore for PgWebrtcSessionStore {
         let seq = record.next_seq;
         record.next_seq += 1;
         record.signals.push(builder(seq));
-        self.put(record)?;
+        self.put(record).await?;
         Ok(WebrtcAppendSignal { seq })
     }
 
-    fn prune_expired(&self) -> PersistenceResult<usize> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn prune_expired(&self) -> PersistenceResult<usize> {
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query("DELETE FROM webrtc_sessions WHERE expires_at <= NOW()")
-            .execute(&mut conn)
+            .execute(&mut *conn).await
             .map_err(PersistenceError::from)
     }
 }
@@ -6325,22 +6415,23 @@ impl From<PolicyDocumentRow> for PolicyDocumentRecord {
     }
 }
 
+#[async_trait]
 impl PolicyDocumentStore for PgPolicyDocumentStore {
-    fn get(&self, policy_id: &str) -> PersistenceResult<Option<PolicyDocumentRecord>> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn get(&self, policy_id: &str) -> PersistenceResult<Option<PolicyDocumentRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "SELECT policy_id, owner, scope, subject_ref, policy_type, document, active, updated_at \
              FROM policy_documents WHERE policy_id = $1",
         )
         .bind::<Text, _>(policy_id)
-        .get_result::<PolicyDocumentRow>(&mut conn)
+        .get_result::<PolicyDocumentRow>(&mut *conn).await
         .optional()
         .map(|row| row.map(PolicyDocumentRecord::from))
         .map_err(PersistenceError::from)
     }
 
-    fn put(&self, record: PolicyDocumentRecord) -> PersistenceResult<()> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn put(&self, record: PolicyDocumentRecord) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool).await?;
         let version: i32 = record
             .payload
             .get("version")
@@ -6377,65 +6468,56 @@ impl PolicyDocumentStore for PgPolicyDocumentStore {
         .bind::<Nullable<Text>, _>(&signed_by)
         .bind::<Bool, _>(record.active)
         .bind::<Timestamptz, _>(record.updated_at)
-        .execute(&mut conn)
+        .execute(&mut *conn).await
         .map(|_| ())
         .map_err(PersistenceError::from)
     }
 
-    fn delete(&self, policy_id: &str) -> PersistenceResult<bool> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn delete(&self, policy_id: &str) -> PersistenceResult<bool> {
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query("DELETE FROM policy_documents WHERE policy_id = $1")
             .bind::<Text, _>(policy_id)
-            .execute(&mut conn)
+            .execute(&mut *conn).await
             .map(|n| n > 0)
             .map_err(PersistenceError::from)
     }
 
-    fn list_for_owner(&self, owner: &str) -> PersistenceResult<Vec<PolicyDocumentRecord>> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn list_for_owner(&self, owner: &str) -> PersistenceResult<Vec<PolicyDocumentRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "SELECT policy_id, owner, scope, subject_ref, policy_type, document, active, updated_at \
              FROM policy_documents WHERE owner = $1 ORDER BY updated_at ASC, policy_id ASC",
         )
         .bind::<Text, _>(owner)
-        .load::<PolicyDocumentRow>(&mut conn)
+        .load::<PolicyDocumentRow>(&mut *conn).await
         .map(|rows| rows.into_iter().map(PolicyDocumentRecord::from).collect())
         .map_err(PersistenceError::from)
     }
 
-    fn snapshot_all(&self) -> PersistenceResult<Vec<PolicyDocumentRecord>> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<PolicyDocumentRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "SELECT policy_id, owner, scope, subject_ref, policy_type, document, active, updated_at \
              FROM policy_documents ORDER BY updated_at ASC, policy_id ASC",
         )
-        .load::<PolicyDocumentRow>(&mut conn)
+        .load::<PolicyDocumentRow>(&mut *conn).await
         .map(|rows| rows.into_iter().map(PolicyDocumentRecord::from).collect())
         .map_err(PersistenceError::from)
     }
 
-    fn find_active(
-        &self,
-        predicate: &dyn Fn(&PolicyDocumentRecord) -> bool,
-    ) -> PersistenceResult<Option<PolicyDocumentRecord>> {
+    async fn list_active(&self) -> PersistenceResult<Vec<PolicyDocumentRecord>> {
         // Linear scan in Pg — same semantics as Memory backend but driven by
         // a SELECT. The row count is small (per-Space policy documents) so a
-        // full table walk is acceptable; pushing the predicate into SQL
-        // would require turning the closure into a typed query DSL.
-        let mut conn = pg_conn(&self.pool)?;
+        // full table walk is acceptable. Callers apply their own match
+        // predicate on the returned rows.
+        let mut conn = pg_conn(&self.pool).await?;
         let rows: Vec<PolicyDocumentRow> = sql_query(
             "SELECT policy_id, owner, scope, subject_ref, policy_type, document, active, updated_at \
              FROM policy_documents WHERE active = TRUE ORDER BY updated_at ASC, policy_id ASC",
         )
-        .load::<PolicyDocumentRow>(&mut conn)
+        .load::<PolicyDocumentRow>(&mut *conn).await
         .map_err(PersistenceError::from)?;
-        for row in rows {
-            let record: PolicyDocumentRecord = row.into();
-            if predicate(&record) {
-                return Ok(Some(record));
-            }
-        }
-        Ok(None)
+        Ok(rows.into_iter().map(PolicyDocumentRecord::from).collect())
     }
 }
 
@@ -6733,12 +6815,9 @@ impl From<PushBridgeCacheRow> for OutboundPushBridgeCacheRecord {
     }
 }
 
-fn pg_conn(
-    pool: &PgPool,
-) -> PersistenceResult<
-    diesel::r2d2::PooledConnection<diesel::r2d2::ConnectionManager<diesel::PgConnection>>,
-> {
+async fn pg_conn(pool: &PgPool) -> PersistenceResult<Object<AsyncPgConnection>> {
     pool.get()
+        .await
         .map_err(|error| PersistenceError::Internal(format!("database pool error: {error}")))
 }
 
@@ -6801,24 +6880,25 @@ impl From<SpaceContainerProjectionRow> for SpaceContainerProjectionRecord {
 const SPACE_CONTAINER_PROJECTION_COLUMNS: &str = "container_space_id, realm_id, kind, title, parent_ref, rank, state, \
      state_changed_at, created_by, created_at, updated_by, updated_at";
 
+#[async_trait]
 impl SpaceContainerProjectionStore for PgSpaceContainerProjectionStore {
-    fn get(
+    async fn get(
         &self,
         container_space_id: &str,
     ) -> PersistenceResult<Option<SpaceContainerProjectionRecord>> {
-        let mut conn = pg_conn(&self.pool)?;
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query(format!(
             "SELECT {SPACE_CONTAINER_PROJECTION_COLUMNS} FROM projection_space_containers WHERE container_space_id = $1"
         ))
         .bind::<Text, _>(container_space_id)
-        .get_result::<SpaceContainerProjectionRow>(&mut conn)
+        .get_result::<SpaceContainerProjectionRow>(&mut *conn).await
         .optional()
         .map(|row| row.map(SpaceContainerProjectionRecord::from))
         .map_err(PersistenceError::from)
     }
 
-    fn put(&self, record: &SpaceContainerProjectionRecord) -> PersistenceResult<()> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn put(&self, record: &SpaceContainerProjectionRecord) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "INSERT INTO projection_space_containers \
              (container_space_id, realm_id, kind, title, parent_ref, rank, state, \
@@ -6847,22 +6927,22 @@ impl SpaceContainerProjectionStore for PgSpaceContainerProjectionStore {
         .bind::<Timestamptz, _>(record.created_at)
         .bind::<Nullable<Text>, _>(&record.updated_by)
         .bind::<Nullable<Timestamptz>, _>(record.updated_at)
-        .execute(&mut conn)
+        .execute(&mut *conn).await
         .map(|_| ())
         .map_err(PersistenceError::from)
     }
 
-    fn list_for_space(
+    async fn list_for_space(
         &self,
         space_id: &str,
     ) -> PersistenceResult<Vec<SpaceContainerProjectionRecord>> {
-        let mut conn = pg_conn(&self.pool)?;
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query(format!(
             "SELECT {SPACE_CONTAINER_PROJECTION_COLUMNS} FROM projection_space_containers \
              WHERE realm_id = $1 ORDER BY container_space_id"
         ))
         .bind::<Text, _>(space_id)
-        .load::<SpaceContainerProjectionRow>(&mut conn)
+        .load::<SpaceContainerProjectionRow>(&mut *conn).await
         .map(|rows| {
             rows.into_iter()
                 .map(SpaceContainerProjectionRecord::from)
@@ -6871,12 +6951,12 @@ impl SpaceContainerProjectionStore for PgSpaceContainerProjectionStore {
         .map_err(PersistenceError::from)
     }
 
-    fn snapshot_all(&self) -> PersistenceResult<Vec<SpaceContainerProjectionRecord>> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<SpaceContainerProjectionRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query(format!(
             "SELECT {SPACE_CONTAINER_PROJECTION_COLUMNS} FROM projection_space_containers ORDER BY container_space_id"
         ))
-        .load::<SpaceContainerProjectionRow>(&mut conn)
+        .load::<SpaceContainerProjectionRow>(&mut *conn).await
         .map(|rows| {
             rows.into_iter()
                 .map(SpaceContainerProjectionRecord::from)
@@ -6885,11 +6965,11 @@ impl SpaceContainerProjectionStore for PgSpaceContainerProjectionStore {
         .map_err(PersistenceError::from)
     }
 
-    fn delete(&self, container_space_id: &str) -> PersistenceResult<()> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn delete(&self, container_space_id: &str) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query("DELETE FROM projection_space_containers WHERE container_space_id = $1")
             .bind::<Text, _>(container_space_id)
-            .execute(&mut conn)
+            .execute(&mut *conn).await
             .map(|_| ())
             .map_err(PersistenceError::from)
     }
@@ -6943,21 +7023,22 @@ impl From<FlowProjectionRow> for FlowProjectionRecord {
 const FLOW_PROJECTION_COLUMNS: &str = "flow_id, space_id, title, summary, state, \
      state_changed_at, created_by, created_at, updated_by, updated_at";
 
+#[async_trait]
 impl FlowProjectionStore for PgFlowProjectionStore {
-    fn get(&self, flow_id: &str) -> PersistenceResult<Option<FlowProjectionRecord>> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn get(&self, flow_id: &str) -> PersistenceResult<Option<FlowProjectionRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query(format!(
             "SELECT {FLOW_PROJECTION_COLUMNS} FROM projection_flows WHERE flow_id = $1"
         ))
         .bind::<Text, _>(flow_id)
-        .get_result::<FlowProjectionRow>(&mut conn)
+        .get_result::<FlowProjectionRow>(&mut *conn).await
         .optional()
         .map(|row| row.map(FlowProjectionRecord::from))
         .map_err(PersistenceError::from)
     }
 
-    fn put(&self, record: &FlowProjectionRecord) -> PersistenceResult<()> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn put(&self, record: &FlowProjectionRecord) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "INSERT INTO projection_flows \
              (flow_id, space_id, title, summary, state, state_changed_at, \
@@ -6982,38 +7063,38 @@ impl FlowProjectionStore for PgFlowProjectionStore {
         .bind::<Timestamptz, _>(record.created_at)
         .bind::<Nullable<Text>, _>(&record.updated_by)
         .bind::<Nullable<Timestamptz>, _>(record.updated_at)
-        .execute(&mut conn)
+        .execute(&mut *conn).await
         .map(|_| ())
         .map_err(PersistenceError::from)
     }
 
-    fn list_for_space(&self, space_id: &str) -> PersistenceResult<Vec<FlowProjectionRecord>> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn list_for_space(&self, space_id: &str) -> PersistenceResult<Vec<FlowProjectionRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query(format!(
             "SELECT {FLOW_PROJECTION_COLUMNS} FROM projection_flows \
              WHERE space_id = $1 ORDER BY flow_id"
         ))
         .bind::<Text, _>(space_id)
-        .load::<FlowProjectionRow>(&mut conn)
+        .load::<FlowProjectionRow>(&mut *conn).await
         .map(|rows| rows.into_iter().map(FlowProjectionRecord::from).collect())
         .map_err(PersistenceError::from)
     }
 
-    fn snapshot_all(&self) -> PersistenceResult<Vec<FlowProjectionRecord>> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<FlowProjectionRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query(format!(
             "SELECT {FLOW_PROJECTION_COLUMNS} FROM projection_flows ORDER BY flow_id"
         ))
-        .load::<FlowProjectionRow>(&mut conn)
+        .load::<FlowProjectionRow>(&mut *conn).await
         .map(|rows| rows.into_iter().map(FlowProjectionRecord::from).collect())
         .map_err(PersistenceError::from)
     }
 
-    fn delete(&self, flow_id: &str) -> PersistenceResult<()> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn delete(&self, flow_id: &str) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query("DELETE FROM projection_flows WHERE flow_id = $1")
             .bind::<Text, _>(flow_id)
-            .execute(&mut conn)
+            .execute(&mut *conn).await
             .map(|_| ())
             .map_err(PersistenceError::from)
     }
@@ -7080,21 +7161,22 @@ const MORPH_PROJECTION_COLUMNS: &str = "morph_id, space_id, morph_type, title, f
      schema_refs, facets, versions, state, state_changed_at, created_by, created_at, updated_by, \
      updated_at";
 
+#[async_trait]
 impl MorphProjectionStore for PgMorphProjectionStore {
-    fn get(&self, morph_id: &str) -> PersistenceResult<Option<MorphProjectionRecord>> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn get(&self, morph_id: &str) -> PersistenceResult<Option<MorphProjectionRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query(format!(
             "SELECT {MORPH_PROJECTION_COLUMNS} FROM projection_morphs WHERE morph_id = $1"
         ))
         .bind::<Text, _>(morph_id)
-        .get_result::<MorphProjectionRow>(&mut conn)
+        .get_result::<MorphProjectionRow>(&mut *conn).await
         .optional()
         .map(|row| row.map(MorphProjectionRecord::from))
         .map_err(PersistenceError::from)
     }
 
-    fn put(&self, record: &MorphProjectionRecord) -> PersistenceResult<()> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn put(&self, record: &MorphProjectionRecord) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "INSERT INTO projection_morphs \
              (morph_id, space_id, morph_type, title, fields, schema_refs, facets, versions, \
@@ -7127,38 +7209,38 @@ impl MorphProjectionStore for PgMorphProjectionStore {
         .bind::<Timestamptz, _>(record.created_at)
         .bind::<Nullable<Text>, _>(&record.updated_by)
         .bind::<Nullable<Timestamptz>, _>(record.updated_at)
-        .execute(&mut conn)
+        .execute(&mut *conn).await
         .map(|_| ())
         .map_err(PersistenceError::from)
     }
 
-    fn list_for_space(&self, space_id: &str) -> PersistenceResult<Vec<MorphProjectionRecord>> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn list_for_space(&self, space_id: &str) -> PersistenceResult<Vec<MorphProjectionRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query(format!(
             "SELECT {MORPH_PROJECTION_COLUMNS} FROM projection_morphs \
              WHERE space_id = $1 ORDER BY morph_id"
         ))
         .bind::<Text, _>(space_id)
-        .load::<MorphProjectionRow>(&mut conn)
+        .load::<MorphProjectionRow>(&mut *conn).await
         .map(|rows| rows.into_iter().map(MorphProjectionRecord::from).collect())
         .map_err(PersistenceError::from)
     }
 
-    fn snapshot_all(&self) -> PersistenceResult<Vec<MorphProjectionRecord>> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<MorphProjectionRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query(format!(
             "SELECT {MORPH_PROJECTION_COLUMNS} FROM projection_morphs ORDER BY morph_id"
         ))
-        .load::<MorphProjectionRow>(&mut conn)
+        .load::<MorphProjectionRow>(&mut *conn).await
         .map(|rows| rows.into_iter().map(MorphProjectionRecord::from).collect())
         .map_err(PersistenceError::from)
     }
 
-    fn delete(&self, morph_id: &str) -> PersistenceResult<()> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn delete(&self, morph_id: &str) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query("DELETE FROM projection_morphs WHERE morph_id = $1")
             .bind::<Text, _>(morph_id)
-            .execute(&mut conn)
+            .execute(&mut *conn).await
             .map(|_| ())
             .map_err(PersistenceError::from)
     }
@@ -7210,9 +7292,10 @@ impl From<ProjectionEventRow> for ProjectionEventRecord {
     }
 }
 
+#[async_trait]
 impl ProjectionEventStore for PgProjectionEventStore {
-    fn append(&self, record: ProjectionEventRecord) -> PersistenceResult<()> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn append(&self, record: ProjectionEventRecord) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "INSERT INTO projection_events \
              (event_id, space_id, event_kind, operation_type, operation_id, sender, payload, created_at) \
@@ -7226,18 +7309,18 @@ impl ProjectionEventStore for PgProjectionEventStore {
         .bind::<Nullable<Text>, _>(&record.sender)
         .bind::<Jsonb, _>(&record.payload)
         .bind::<Timestamptz, _>(record.created_at)
-        .execute(&mut conn)
+        .execute(&mut *conn).await
         .map(|_| ())
         .map_err(PersistenceError::from)
     }
 
-    fn snapshot_all(&self) -> PersistenceResult<Vec<ProjectionEventRecord>> {
-        let mut conn = pg_conn(&self.pool)?;
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<ProjectionEventRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "SELECT event_id, space_id, event_kind, operation_type, operation_id, sender, payload, created_at \
              FROM projection_events ORDER BY ordinal",
         )
-        .load::<ProjectionEventRow>(&mut conn)
+        .load::<ProjectionEventRow>(&mut *conn).await
         .map(|rows| rows.into_iter().map(ProjectionEventRecord::from).collect())
         .map_err(PersistenceError::from)
     }
@@ -7248,7 +7331,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn memory_account_store_crud() {
+    async fn memory_account_store_crud() {
         let store = MemoryAccountStore::new();
         let record = AccountRecord {
             did: "did:web:test".to_owned(),
@@ -7276,7 +7359,7 @@ mod tests {
     }
 
     #[test]
-    fn memory_session_store_expiry() {
+    async fn memory_session_store_expiry() {
         let store = MemorySessionStore::new();
         let expired = SessionRecord {
             token_hash: "expired".to_owned(),
@@ -7307,7 +7390,7 @@ mod tests {
     }
 
     #[test]
-    fn memory_contact_store_filtering() {
+    async fn memory_contact_store_filtering() {
         let store = MemoryContactStore::new();
         let now = Utc::now();
 
@@ -7341,7 +7424,7 @@ mod tests {
     }
 
     #[test]
-    fn memory_device_inventory_store_crud() {
+    async fn memory_device_inventory_store_crud() {
         let store = MemoryDeviceInventoryStore::new();
         let now = Utc::now();
         let record = DeviceInventoryRecord {
@@ -7374,7 +7457,7 @@ mod tests {
     }
 
     #[test]
-    fn memory_federation_transaction_store_is_origin_scoped() {
+    async fn memory_federation_transaction_store_is_origin_scoped() {
         let store = MemoryFederationTransactionStore::new();
         let now = Utc::now();
         let record = FederationTransactionRecord {
@@ -7408,7 +7491,7 @@ mod tests {
     }
 
     #[test]
-    fn memory_push_bridge_cache_store_crud() {
+    async fn memory_push_bridge_cache_store_crud() {
         let store = MemoryPushBridgeCacheStore::new();
         let now = Utc::now();
         let url = "https://floria.example/api/v1/push/bridge/describe";
@@ -7464,7 +7547,7 @@ mod tests {
     // trait surface (same `evaluate_drift` callee).
 
     #[test]
-    fn push_bridge_record_contract_snapshot_first_time_stored_pending_then_trusted() {
+    async fn push_bridge_record_contract_snapshot_first_time_stored_pending_then_trusted() {
         let store = MemoryPushBridgeCacheStore::new();
         let url = "https://floria.example/api/v1/push/bridge/describe";
 
@@ -7497,7 +7580,7 @@ mod tests {
     }
 
     #[test]
-    fn push_bridge_verify_contract_freshness_digest_match() {
+    async fn push_bridge_verify_contract_freshness_digest_match() {
         let store = MemoryPushBridgeCacheStore::new();
         let url = "https://floria.example/api/v1/push/bridge/describe";
         store
@@ -7510,7 +7593,7 @@ mod tests {
     }
 
     #[test]
-    fn push_bridge_verify_contract_freshness_digest_mismatch_rejected() {
+    async fn push_bridge_verify_contract_freshness_digest_mismatch_rejected() {
         let store = MemoryPushBridgeCacheStore::new();
         let url = "https://floria.example/api/v1/push/bridge/describe";
         store
@@ -7527,7 +7610,7 @@ mod tests {
     }
 
     #[test]
-    fn push_bridge_verify_contract_freshness_stale_rejected() {
+    async fn push_bridge_verify_contract_freshness_stale_rejected() {
         let store = MemoryPushBridgeCacheStore::new();
         let url = "https://floria.example/api/v1/push/bridge/describe";
         store
@@ -7552,7 +7635,7 @@ mod tests {
     }
 
     #[test]
-    fn push_bridge_verify_contract_freshness_unknown_gateway_rejected() {
+    async fn push_bridge_verify_contract_freshness_unknown_gateway_rejected() {
         let store = MemoryPushBridgeCacheStore::new();
         let result = store
             .verify_contract_freshness(
@@ -7569,7 +7652,7 @@ mod tests {
     }
 
     #[test]
-    fn push_bridge_verify_contract_freshness_revoked_snapshot_rejected() {
+    async fn push_bridge_verify_contract_freshness_revoked_snapshot_rejected() {
         let store = MemoryPushBridgeCacheStore::new();
         let url = "https://floria.example/api/v1/push/bridge/describe";
         store
@@ -7586,7 +7669,7 @@ mod tests {
     }
 
     #[test]
-    fn push_bridge_drift_result_label_is_stable_for_audit() {
+    async fn push_bridge_drift_result_label_is_stable_for_audit() {
         // Audit consumers key off `DriftResult::as_str`; lock the labels so a
         // future rename doesn't silently break dashboards.
         assert_eq!(DriftResult::Match.as_str(), "match");
@@ -7604,7 +7687,7 @@ mod tests {
     // without Pg.
 
     #[test]
-    fn memory_audit_store_actor_scoped_filter_matches_trait() {
+    async fn memory_audit_store_actor_scoped_filter_matches_trait() {
         let store = MemoryAuditStore::new();
         let alice_a =
             serde_json::json!({"audit_id": "a1", "actor": "alice", "action": "x", "outcome": "ok"});
@@ -7630,7 +7713,7 @@ mod tests {
     }
 
     #[test]
-    fn memory_push_device_store_register_unregister_and_snapshot() {
+    async fn memory_push_device_store_register_unregister_and_snapshot() {
         let store = MemoryPushDeviceStore::new();
         let dev1 = serde_json::json!({
             "registration_id": "cx:push:dev-1",
@@ -7668,7 +7751,7 @@ mod tests {
     }
 
     #[test]
-    fn memory_event_store_round_trip_with_actor_seq() {
+    async fn memory_event_store_round_trip_with_actor_seq() {
         let store = MemoryEventStore::new();
         let now = Utc::now();
         let make = |event_id: &str, actor: &str, seq: u64| CanonicalEventRecord {
@@ -7700,7 +7783,7 @@ mod tests {
     // MAL-11 leader-election columns. Pg parity is enforced by the trait
     // surface itself.
 
-    fn make_test_operation(operation_id: &str, space_id: &str) -> Operation {
+    async fn make_test_operation(operation_id: &str, space_id: &str) -> Operation {
         use contrix_sdk::{OperationId, RealmId};
         let mut op = Operation::create(
             OperationId::new(operation_id.to_owned()).unwrap(),
@@ -7713,7 +7796,7 @@ mod tests {
     }
 
     #[test]
-    fn memory_federation_operations_store_dedups_and_filters_by_space() {
+    async fn memory_federation_operations_store_dedups_and_filters_by_space() {
         let store = MemoryFederationOperationsStore::new();
         let space_a = "cx:realm:0196419b-0000-7000-8000-00000000aaaa";
         let space_b = "cx:realm:0196419b-0000-7000-8000-00000000bbbb";
@@ -7733,7 +7816,7 @@ mod tests {
     }
 
     #[test]
-    fn memory_multisig_pending_lease_acquire_release_round_trip() {
+    async fn memory_multisig_pending_lease_acquire_release_round_trip() {
         let store = MemoryMultisigPendingStore::new();
         let now = Utc::now();
         let record = MultisigPendingRecord {
@@ -7802,7 +7885,7 @@ mod tests {
     // `tests/http_api.rs` exercise the Pg path when `DATABASE_URL` is set.
 
     #[test]
-    fn memory_moderation_store_append_and_list_matches_trait() {
+    async fn memory_moderation_store_append_and_list_matches_trait() {
         let store = MemoryModerationStore::new();
         let report = serde_json::json!({
             "report_id": "cx:report:01",
@@ -7830,7 +7913,7 @@ mod tests {
     }
 
     #[test]
-    fn memory_presence_store_put_get_matches_trait() {
+    async fn memory_presence_store_put_get_matches_trait() {
         let store = MemoryPresenceStore::new();
         let now = Utc::now();
         let record = PresenceRecord {
@@ -7859,7 +7942,7 @@ mod tests {
     }
 
     #[test]
-    fn memory_webvh_store_document_and_log_round_trip_matches_trait() {
+    async fn memory_webvh_store_document_and_log_round_trip_matches_trait() {
         let store = MemoryWebvhStore::new();
         let now = Utc::now();
         let doc = WebvhDocumentRecord {
@@ -7912,7 +7995,7 @@ mod tests {
     }
 
     #[test]
-    fn memory_space_invite_store_put_get_snapshot_matches_trait() {
+    async fn memory_space_invite_store_put_get_snapshot_matches_trait() {
         let store = MemorySpaceInviteStore::new();
         let now = Utc::now();
         let record = SpaceInviteRecord {
@@ -7952,7 +8035,7 @@ mod tests {
     // `tests/http_api.rs` exercise the Pg path when `DATABASE_URL` is set.
 
     #[test]
-    fn memory_key_backup_store_put_get_snapshot_matches_trait() {
+    async fn memory_key_backup_store_put_get_snapshot_matches_trait() {
         let store = MemoryKeyBackupStore::new();
         let envelope = serde_json::json!({
             "backup_id": "cx:backup:01",
@@ -7979,7 +8062,7 @@ mod tests {
     }
 
     #[test]
-    fn memory_webrtc_store_put_get_append_signal_matches_trait() {
+    async fn memory_webrtc_store_put_get_append_signal_matches_trait() {
         let store = MemoryWebrtcSessionStore::new();
         let now = Utc::now();
         let mut participants = BTreeSet::new();
@@ -8052,7 +8135,7 @@ mod tests {
     }
 
     #[test]
-    fn memory_policy_document_store_put_list_owner_matches_trait() {
+    async fn memory_policy_document_store_put_list_owner_matches_trait() {
         let store = MemoryPolicyDocumentStore::new();
         let now = Utc::now();
         let alice_doc = PolicyDocumentRecord {
@@ -8107,7 +8190,7 @@ mod tests {
     }
 
     #[test]
-    fn memory_restore_store_ticket_executor_approval_round_trip_matches_trait() {
+    async fn memory_restore_store_ticket_executor_approval_round_trip_matches_trait() {
         // The restore-ticket FSM is reachable via KeyBackupStore's
         // `put_ticket / put_executor_run / put_approval_run` triple. Each
         // method targets a distinct sub-table on the Pg side; in the memory
@@ -8197,7 +8280,7 @@ mod tests {
     // concurrent writer carrying the pre-bump token finds its CAS rejected
     // (returns `Ok(None)`).
     #[test]
-    fn memory_key_backup_store_cas_ticket_status_bumps_fence_and_blocks_stale_writer() {
+    async fn memory_key_backup_store_cas_ticket_status_bumps_fence_and_blocks_stale_writer() {
         let store = MemoryKeyBackupStore::new();
         // Brand-new ticket: fence starts at 0; first transition seeds the
         // row at fence=1.

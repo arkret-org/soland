@@ -20,7 +20,8 @@
 //! `sync_describe` is still in `mod.rs` pending sync-module extraction.
 
 use diesel::sql_types::Integer;
-use diesel::{QueryableByName, RunQueryDsl, sql_query};
+use diesel::{QueryableByName, sql_query};
+use diesel_async::RunQueryDsl;
 use salvo::http::StatusCode;
 use salvo::prelude::*;
 use serde_json::{Value, json};
@@ -53,7 +54,7 @@ pub(super) fn router() -> Router {
 #[tracing::instrument(skip_all, fields(op = "cx.system.health"))]
 async fn health(depot: &mut Depot, res: &mut Response) -> JsonResult<HealthResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let database_ok = database_ready(state);
+    let database_ok = database_ready(state).await;
     let ok = database_ok;
     if !ok {
         res.status_code(StatusCode::SERVICE_UNAVAILABLE);
@@ -86,7 +87,7 @@ async fn health(depot: &mut Depot, res: &mut Response) -> JsonResult<HealthRespo
 #[tracing::instrument(skip_all, fields(op = "cx.system.readyz"))]
 async fn readyz(depot: &mut Depot, res: &mut Response) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let database_ok = database_ready(state);
+    let database_ok = database_ready(state).await;
     // P5 (5.4 readiness gate for migrations) — keep /readyz in 503 until the
     // embedded diesel batch has been applied. Before this gate landed,
     // orchestrators that drained traffic onto a still-migrating replica
@@ -151,11 +152,12 @@ async fn readyz(depot: &mut Depot, res: &mut Response) -> JsonResult<Value> {
     }))
 }
 
-fn database_ready(state: &AppState) -> bool {
+async fn database_ready(state: &AppState) -> bool {
     match state.db.pool.as_ref() {
-        Some(pool) => match pool.get() {
+        Some(pool) => match pool.get().await {
             Ok(mut conn) => sql_query("SELECT 1 AS ok")
-                .get_result::<HealthCheckRow>(&mut conn)
+                .get_result::<HealthCheckRow>(&mut *conn)
+                .await
                 .is_ok_and(|row| row.ok == 1),
             Err(_) => false,
         },

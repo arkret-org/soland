@@ -37,7 +37,7 @@ async fn add_reaction(
     body: JsonBody<AddReactionRequest>,
 ) -> JsonResult<ReactionResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
     let operation_id = ids::generate_operation_id();
     let payload = json!({
@@ -52,7 +52,7 @@ async fn add_reaction(
         payload,
     );
     accept_local_operations(state, &session.actor, &[operation])
-        .map_err(AppError::invalid_param)?;
+        .await.map_err(AppError::invalid_param)?;
     json_ok(ReactionResponse {
         event_id: body.event_id,
         actor: session.actor.clone(),
@@ -74,7 +74,7 @@ async fn remove_reaction(
     body: JsonBody<RemoveReactionRequest>,
 ) -> JsonResult<ReactionResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
     let operation_id = ids::generate_operation_id();
     let payload = json!({
@@ -89,7 +89,7 @@ async fn remove_reaction(
         payload,
     );
     accept_local_operations(state, &session.actor, &[operation])
-        .map_err(AppError::invalid_param)?;
+        .await.map_err(AppError::invalid_param)?;
     json_ok(ReactionResponse {
         event_id: body.event_id,
         actor: session.actor.clone(),

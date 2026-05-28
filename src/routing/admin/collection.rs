@@ -42,7 +42,7 @@ pub(super) async fn admin_collection(
     req: &mut Request,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     if !state.config.development_mode && !state.config.is_admin_principal(&session.actor) {
         return Err(AppError::capability_denied(
             "admin collection API requires the caller DID to be listed in SOLAND_ADMIN_PRINCIPAL_DIDS",
@@ -70,11 +70,11 @@ pub(super) async fn admin_collection(
     let cursor = cursor.into_inner();
 
     let (field, mut items) = match resource.as_str() {
-        "actors" => ("actors", admin_actor_items(state)),
-        "spaces" => ("spaces", admin_space_items(state)),
-        "devices" => ("devices", admin_device_items(state)),
+        "actors" => ("actors", admin_actor_items(state).await),
+        "spaces" => ("spaces", admin_space_items(state).await),
+        "devices" => ("devices", admin_device_items(state).await),
         "capabilities" => ("capabilities", admin_capability_items(state)),
-        "federation" => ("federation", admin_federation_items(state)),
+        "federation" => ("federation", admin_federation_items(state).await),
         "applets" => ("applets", admin_applet_items(state)),
         "agents" => ("agents", admin_agent_items(state)),
         "reports" => (
@@ -83,15 +83,16 @@ pub(super) async fn admin_collection(
                 state,
                 &session.actor,
                 None,
-            ),
+            )
+            .await,
         ),
-        "invite-tokens" => ("invite_tokens", admin_invite_items(state)),
+        "invite-tokens" => ("invite_tokens", admin_invite_items(state).await),
         "audit" => (
             "audit",
-            state.persistence.audit().snapshot_all().unwrap_or_default(),
+            state.persistence.audit().snapshot_all().await.unwrap_or_default(),
         ),
-        "policy" => ("policy", admin_policy_items(state)),
-        "media" => ("media", admin_media_items(state)),
+        "policy" => ("policy", admin_policy_items(state).await),
+        "media" => ("media", admin_media_items(state).await),
         _ => {
             return Err(AppError::not_found("admin resource not found"));
         }
@@ -136,8 +137,9 @@ pub(super) async fn admin_collection(
     json_ok(Value::Object(body))
 }
 
-fn admin_actor_items(state: &AppState) -> Vec<Value> {
+async fn admin_actor_items(state: &AppState) -> Vec<Value> {
     demo_actors(state)
+        .await
         .into_iter()
         .map(|mut actor| {
             if let Some(object) = actor.as_object_mut() {
@@ -148,11 +150,11 @@ fn admin_actor_items(state: &AppState) -> Vec<Value> {
         .collect()
 }
 
-fn admin_space_items(state: &AppState) -> Vec<Value> {
+async fn admin_space_items(state: &AppState) -> Vec<Value> {
     let meta: BTreeMap<String, _> = state
         .persistence
         .realm_meta()
-        .list()
+        .list().await
         .unwrap_or_default()
         .into_iter()
         .collect();
@@ -168,46 +170,46 @@ fn admin_space_items(state: &AppState) -> Vec<Value> {
             .cloned()
             .collect()
     };
-    space_snapshot
-        .into_iter()
-        .map(|space| {
-            let space_id = space.realm_id.as_str().to_owned();
-            let space_meta = meta.get(&space_id);
-            let flow = flow_projection_for_space(
-                state,
-                &space_id,
-                &space.name,
-                space.description.as_deref(),
-            );
-            json!({
-                "kind": "space",
-                "flow": flow,
-                "flow_id": flow_id_from_space_id(&space_id),
-                "space_id": space_id,
-                "title": space.name,
-                "summary": space.description,
-                "category": space.category,
-                "tags": space.tags,
-                "public": space.public,
-                "members": space.members.iter().map(ToString::to_string).collect::<Vec<_>>(),
-                "owner": space_meta.map(|meta| meta.owner.clone()),
-                "discoverability": space_meta.map(|meta| meta.discoverability.clone()),
-                "plaintext_visible_services": space_meta
-                    .map(|meta| meta.plaintext_visible_services.iter().cloned().collect::<Vec<_>>())
-                    .unwrap_or_default(),
-                "deleted": space_meta.is_some_and(|meta| meta.deleted),
-                "created_at": space_meta.map(|meta| meta.created_at),
-                "updated_at": space_meta.map(|meta| meta.updated_at),
-            })
-        })
-        .collect()
+    let mut items = Vec::new();
+    for space in space_snapshot {
+        let space_id = space.realm_id.as_str().to_owned();
+        let space_meta = meta.get(&space_id);
+        let flow = flow_projection_for_space(
+            state,
+            &space_id,
+            &space.name,
+            space.description.as_deref(),
+        )
+        .await;
+        items.push(json!({
+            "kind": "space",
+            "flow": flow,
+            "flow_id": flow_id_from_space_id(&space_id),
+            "space_id": space_id,
+            "title": space.name,
+            "summary": space.description,
+            "category": space.category,
+            "tags": space.tags,
+            "public": space.public,
+            "members": space.members.iter().map(ToString::to_string).collect::<Vec<_>>(),
+            "owner": space_meta.map(|meta| meta.owner.clone()),
+            "discoverability": space_meta.map(|meta| meta.discoverability.clone()),
+            "plaintext_visible_services": space_meta
+                .map(|meta| meta.plaintext_visible_services.iter().cloned().collect::<Vec<_>>())
+                .unwrap_or_default(),
+            "deleted": space_meta.is_some_and(|meta| meta.deleted),
+            "created_at": space_meta.map(|meta| meta.created_at),
+            "updated_at": space_meta.map(|meta| meta.updated_at),
+        }));
+    }
+    items
 }
 
-fn admin_device_items(state: &AppState) -> Vec<Value> {
+async fn admin_device_items(state: &AppState) -> Vec<Value> {
     state
         .persistence
         .devices()
-        .list()
+        .list().await
         .map(|devices| {
             devices
                 .into_iter()
@@ -255,11 +257,11 @@ fn admin_capability_items(state: &AppState) -> Vec<Value> {
         .collect()
 }
 
-fn admin_federation_items(state: &AppState) -> Vec<Value> {
+async fn admin_federation_items(state: &AppState) -> Vec<Value> {
     state
         .persistence
         .federation_operations()
-        .snapshot_all()
+        .snapshot_all().await
         .unwrap_or_default()
         .into_iter()
         .map(|operation| {
@@ -330,11 +332,11 @@ fn admin_agent_items(state: &AppState) -> Vec<Value> {
         .collect()
 }
 
-fn admin_invite_items(state: &AppState) -> Vec<Value> {
+async fn admin_invite_items(state: &AppState) -> Vec<Value> {
     state
         .persistence
         .space_invites()
-        .snapshot_all()
+        .snapshot_all().await
         .unwrap_or_default()
         .iter()
         .map(|invite| {
@@ -353,22 +355,22 @@ fn admin_invite_items(state: &AppState) -> Vec<Value> {
         .collect()
 }
 
-fn admin_policy_items(state: &AppState) -> Vec<Value> {
+async fn admin_policy_items(state: &AppState) -> Vec<Value> {
     state
         .persistence
         .policy_documents()
-        .snapshot_all()
+        .snapshot_all().await
         .unwrap_or_default()
         .iter()
         .map(|policy| json!(policy_document_to_response(policy)))
         .collect()
 }
 
-fn admin_media_items(state: &AppState) -> Vec<Value> {
+async fn admin_media_items(state: &AppState) -> Vec<Value> {
     state
         .persistence
         .blobs()
-        .snapshot_all()
+        .snapshot_all().await
         .unwrap_or_default()
         .iter()
         .map(|blob| {

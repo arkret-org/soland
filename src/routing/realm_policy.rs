@@ -78,7 +78,7 @@ async fn get_realm_policy_server(
     req: &mut Request,
 ) -> JsonResult<RealmPolicyServerResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let _session = aa.authenticated_session(state, req)?;
+    let _session = aa.authenticated_session(state, req).await?;
     let realm_id = realm_id.into_inner();
     let projection = state.projection.lock().expect("projection mutex");
     let direct = projection.realm_policy_servers.get(&realm_id);
@@ -119,7 +119,7 @@ async fn put_realm_policy_server(
     req: &mut Request,
 ) -> JsonResult<RealmPolicyServerResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let realm_id = realm_id.into_inner();
     let body = body.into_inner();
 
@@ -143,7 +143,7 @@ async fn put_realm_policy_server(
         .map_err(|e| AppError::invalid_param(format!("operation_id: {e}")))?;
     let operation = Operation::create(op_id, realm_scope, CX_REALM_POLICY_SERVER, payload);
     accept_local_operations(state, &session.actor, std::slice::from_ref(&operation))
-        .map_err(reducer_reject_to_app_error)?;
+        .await.map_err(reducer_reject_to_app_error)?;
 
     let projection = state.projection.lock().expect("projection mutex");
     let cfg = projection
@@ -181,7 +181,7 @@ async fn delete_realm_policy_server(
     req: &mut Request,
 ) -> EmptyResult {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let realm_id = realm_id.into_inner();
 
     // Tombstone marker payload — the reducer's validator rejects it as

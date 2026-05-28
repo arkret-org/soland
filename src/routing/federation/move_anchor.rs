@@ -204,7 +204,7 @@ async fn submit_move(
     body: JsonBody<Move>,
 ) -> JsonResult<SubmitMoveResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let _session = aa.authenticated_session(state, req)?;
+    let _session = aa.authenticated_session(state, req).await?;
     let move_obj = body.into_inner();
 
     // Verifier needs the per-Anchor pre-state. For the submit-time
@@ -285,7 +285,7 @@ async fn submit_anchor(
     body: JsonBody<Anchor>,
 ) -> JsonResult<SubmitAnchorResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let _session = aa.authenticated_session(state, req)?;
+    let _session = aa.authenticated_session(state, req).await?;
     let anchor = body.into_inner();
 
     // Round R2/R3 (T04) — frontier entries MUST be sha256:<hex>; reject the
@@ -452,7 +452,7 @@ async fn admin_sign_anchor(
     body: JsonBody<SignAnchorRequest>,
 ) -> JsonResult<SignAnchorResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let _session = aa.authenticated_session(state, req)?;
+    let _session = aa.authenticated_session(state, req).await?;
     let SignAnchorRequest {
         space_id,
         max_moves,

@@ -199,7 +199,7 @@ pub(super) async fn embedded_webvh_register(
     if state
         .persistence
         .webvh()
-        .get_embedded_webvh_document_by_local_id(&local_id)
+        .get_embedded_webvh_document_by_local_id(&local_id).await
         .ok()
         .flatten()
         .is_some()
@@ -271,7 +271,7 @@ pub(super) async fn embedded_webvh_register(
             "updateKeys": [body.update_public_key_multibase.clone()],
         }),
         updated_at: now,
-    }) {
+    }).await {
         tracing::error!(%error, "failed to persist embedded webvh document");
         return Err(AppError::internal(
             "failed to persist embedded webvh document",
@@ -283,7 +283,7 @@ pub(super) async fn embedded_webvh_register(
         seq: 1,
         operation: log_entry.clone(),
         created_at: now,
-    }) {
+    }).await {
         tracing::error!(%error, "failed to append embedded webvh log entry");
         return Err(AppError::internal(
             "failed to append embedded webvh log entry",
@@ -327,7 +327,7 @@ pub(super) async fn embedded_webvh_document(
     res: &mut Response,
 ) {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let Some(record) = embedded_webvh_record_for_request(state, req, res) else {
+    let Some(record) = embedded_webvh_record_for_request(state, req, res).await else {
         return;
     };
     render_json_bytes(
@@ -341,13 +341,13 @@ pub(super) async fn embedded_webvh_document(
 #[tracing::instrument(skip_all, fields(op = "embedded_webvh_log"))]
 pub(super) async fn embedded_webvh_log(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let Some(record) = embedded_webvh_record_for_request(state, req, res) else {
+    let Some(record) = embedded_webvh_record_for_request(state, req, res).await else {
         return;
     };
     let events = state
         .persistence
         .webvh()
-        .list_log_events(&record.did)
+        .list_log_events(&record.did).await
         .unwrap_or_default();
     if events.is_empty() {
         render_error(res, StatusCode::NOT_FOUND, "not_found", "did log not found");
@@ -384,7 +384,7 @@ pub(super) async fn identity_resolve(
     if validate_did(&body.did).is_err() {
         return Err(AppError::invalid_param("invalid did"));
     }
-    if let Ok(Some(record)) = state.persistence.webvh().get_document(&body.did) {
+    if let Ok(Some(record)) = state.persistence.webvh().get_document(&body.did).await {
         // G3.S3: every did:webvh resolution MUST first re-validate the
         // log chain, SCID derivation, and configured witness quorum.
         // Rotation entries fail closed when witness quorum is missing;
@@ -397,7 +397,7 @@ pub(super) async fn identity_resolve(
         // must be controller-signed; recovery-key-only rotations are
         // not yet accepted.
         if body.did.starts_with("did:webvh:") {
-            run_webvh_resolution_checks(state, &body.did)?;
+            run_webvh_resolution_checks(state, &body.did).await?;
         }
         return json_ok(IdentityResolveResBody {
             did_document: record.did_document,
@@ -429,7 +429,7 @@ pub(super) async fn identity_resolve(
             method_evidence: json!({"mode": "sdk_resolver", "source": "did_resolver"}),
         });
     }
-    let record = identity_document_record(state, &body.did);
+    let record = identity_document_record(state, &body.did).await;
     json_ok(IdentityResolveResBody {
         did_document: record.did_document,
         key_log_head: record.key_log_head,
@@ -454,7 +454,7 @@ pub(super) async fn identity_document(
     if validate_did(&did).is_err() {
         return Err(AppError::invalid_param("invalid did"));
     }
-    let record = identity_document_record(state, &did);
+    let record = identity_document_record(state, &did).await;
     json_ok(IdentityResolveResBody {
         did_document: record.did_document,
         key_log_head: record.key_log_head,
@@ -486,7 +486,7 @@ pub(super) async fn identity_did_document(
     {
         return json_ok(document);
     }
-    let record = identity_document_record(state, &did);
+    let record = identity_document_record(state, &did).await;
     json_ok(record.did_document)
 }
 
@@ -508,7 +508,7 @@ pub(super) async fn identity_log(
     let events = state
         .persistence
         .webvh()
-        .list_log_events(&did)
+        .list_log_events(&did).await
         .unwrap_or_default()
         .into_iter()
         .map(|event| {
@@ -543,7 +543,7 @@ pub(super) async fn identity_receipts(
     if validate_did(&did).is_err() {
         return Err(AppError::invalid_param("invalid did"));
     }
-    let record = state.persistence.webvh().get_document(&did).ok().flatten();
+    let record = state.persistence.webvh().get_document(&did).await.ok().flatten();
     json_ok(IdentityReceiptsResBody {
         receipts: record
             .map(|record| {
@@ -599,7 +599,7 @@ pub(super) async fn identity_submit_did_operation(
     let existing = state
         .persistence
         .webvh()
-        .get_document(&did)
+        .get_document(&did).await
         .map_err(|error| AppError::internal(error.to_string()))?;
     let next_seq = body
         .get("seq")
@@ -648,7 +648,7 @@ pub(super) async fn identity_submit_did_operation(
             seq: next_seq,
             method_evidence,
             updated_at: submitted_at,
-        })
+        }).await
         .map_err(|error| AppError::internal(error.to_string()))?;
     state
         .persistence
@@ -659,7 +659,7 @@ pub(super) async fn identity_submit_did_operation(
             seq: next_seq,
             operation: event_payload,
             created_at: submitted_at,
-        })
+        }).await
         .map_err(|error| AppError::internal(error.to_string()))?;
     append_audit_log(
         state,
@@ -875,7 +875,7 @@ fn require_embedded_webvh_registration_bearer(
     Ok(())
 }
 
-fn embedded_webvh_record_for_request(
+async fn embedded_webvh_record_for_request(
     state: &AppState,
     req: &mut Request,
     res: &mut Response,
@@ -910,7 +910,7 @@ fn embedded_webvh_record_for_request(
     match state
         .persistence
         .webvh()
-        .get_embedded_webvh_document_by_local_id(&local_id)
+        .get_embedded_webvh_document_by_local_id(&local_id).await
     {
         Ok(Some(record)) => Some(record),
         Ok(None) => {
@@ -1182,11 +1182,11 @@ fn render_json_bytes(res: &mut Response, content_type: &str, value: &Value) {
 /// log before trusting the resolved document. Spec: identity-did.md
 /// §3.4 / §4.2.1 / §3 ("DNS hijack protection") / §3.4 "controller
 /// proof".
-fn run_webvh_resolution_checks(state: &AppState, did: &str) -> Result<(), AppError> {
+async fn run_webvh_resolution_checks(state: &AppState, did: &str) -> Result<(), AppError> {
     let events = state
         .persistence
         .webvh()
-        .list_log_events(did)
+        .list_log_events(did).await
         .map_err(|error| {
             tracing::error!(%error, %did, "failed to read webvh log during resolution checks");
             AppError::internal("failed to read did:webvh log")
@@ -1209,11 +1209,11 @@ fn run_webvh_resolution_checks(state: &AppState, did: &str) -> Result<(), AppErr
     Ok(())
 }
 
-fn identity_document_record(state: &AppState, did: &str) -> WebvhDocumentRecord {
+async fn identity_document_record(state: &AppState, did: &str) -> WebvhDocumentRecord {
     state
         .persistence
         .webvh()
-        .get_document(did)
+        .get_document(did).await
         .ok()
         .flatten()
         .unwrap_or_else(|| WebvhDocumentRecord {

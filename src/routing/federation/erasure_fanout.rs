@@ -112,7 +112,7 @@ pub fn fanout_erasure_receipt(state: &AppState, receipt_id: &str) {
 
 /// Fan out a durable `cx.audit.erasure_receipt` operation through the normal
 /// federation push batch wire shape.
-pub fn fanout_erasure_receipt_operation(state: &AppState, operation: &Operation) {
+pub async fn fanout_erasure_receipt_operation(state: &AppState, operation: &Operation) {
     if state.config.federation_peers.is_empty() {
         return;
     }
@@ -191,7 +191,9 @@ pub fn fanout_erasure_receipt_operation(state: &AppState, operation: &Operation)
             ERASURE_RECEIPT_OUTBOX_ENDPOINT,
             &idempotency_key,
             &payload_json,
-        ) {
+        )
+        .await
+        {
             Ok(_row) => {
                 sent_statuses.insert(
                     peer.did.clone(),
@@ -272,12 +274,12 @@ fn erasure_push_payload(
         .and_then(|bytes| String::from_utf8(bytes).ok())
 }
 
-fn persist_erasure_operation_for_pull(state: &AppState, operation: &Operation) {
+async fn persist_erasure_operation_for_pull(state: &AppState, operation: &Operation) {
     let store = state.persistence.federation_operations();
-    match store.contains(operation.operation_id.as_str()) {
+    match store.contains(operation.operation_id.as_str()).await {
         Ok(true) => {}
         Ok(false) => {
-            if let Err(error) = store.append(operation.clone()) {
+            if let Err(error) = store.append(operation.clone()).await {
                 tracing::warn!(
                     %error,
                     operation_id = %operation.operation_id,
@@ -481,7 +483,7 @@ mod tests {
         let outbox = state
             .persistence
             .federation_outbox()
-            .snapshot_all()
+            .snapshot_all().await
             .unwrap();
         assert_eq!(outbox.len(), 1);
         assert_eq!(outbox[0].peer_url, "http://127.0.0.1:9");

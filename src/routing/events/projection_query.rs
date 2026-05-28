@@ -325,12 +325,12 @@ async fn list_space_container_projections(
     include_terminal: QueryParam<bool, false>,
 ) -> JsonResult<ProjectionSpacesResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let realm_id = validate_realm_id(realm_id.into_inner())?;
     let response_realm_id = RealmId::new(realm_id.clone())
         .map_err(|_| AppError::invalid_param("invalid realm_id format"))?;
     let include_terminal = include_terminal.into_inner().unwrap_or(false);
-    if !realm_id_accessible(state, &realm_id, Some(&session)) {
+    if !realm_id_accessible(state, &realm_id, Some(&session)).await {
         return Err(AppError::new(
             ErrorCode::CapabilityDenied,
             "Space not visible to this actor",
@@ -398,12 +398,12 @@ async fn list_flow_projections(
     include_terminal: QueryParam<bool, false>,
 ) -> JsonResult<ProjectionFlowsResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let realm_id = validate_realm_id(realm_id.into_inner())?;
     let response_realm_id = RealmId::new(realm_id.clone())
         .map_err(|_| AppError::invalid_param("invalid realm_id format"))?;
     let include_terminal = include_terminal.into_inner().unwrap_or(false);
-    if !realm_id_accessible(state, &realm_id, Some(&session)) {
+    if !realm_id_accessible(state, &realm_id, Some(&session)).await {
         return Err(AppError::new(
             ErrorCode::CapabilityDenied,
             "Space not visible to this actor",
@@ -463,12 +463,12 @@ async fn list_morph_projections(
     include_terminal: QueryParam<bool, false>,
 ) -> JsonResult<ProjectionMorphsResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let realm_id = validate_realm_id(realm_id.into_inner())?;
     let response_realm_id = RealmId::new(realm_id.clone())
         .map_err(|_| AppError::invalid_param("invalid realm_id format"))?;
     let include_terminal = include_terminal.into_inner().unwrap_or(false);
-    if !realm_id_accessible(state, &realm_id, Some(&session)) {
+    if !realm_id_accessible(state, &realm_id, Some(&session)).await {
         return Err(AppError::new(
             ErrorCode::CapabilityDenied,
             "Space not visible to this actor",
@@ -523,32 +523,38 @@ async fn read_document_projection(
     morph_id: PathParam<String>,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let morph_id = morph_id.into_inner();
     let _ = parse_projection_id::<MorphId>(&morph_id, "morph_id")?;
-    let proj = state.projection.lock().map_err(|_| {
-        AppError::new(
-            ErrorCode::TemporarilyUnavailable,
-            "projection state unavailable",
-        )
-        .with_status(StatusCode::INTERNAL_SERVER_ERROR)
-    })?;
-    let morph = proj
-        .morphs
-        .get(&morph_id)
-        .cloned()
-        .ok_or_else(|| AppError::not_found("document Morph not found"))?;
-    if !realm_id_accessible(state, &morph.space_id, Some(&session)) {
+    // Snapshot the morph + derived comments/relations out from under the
+    // projection lock before the async access check (the guard is not Send
+    // and must not cross an `.await`).
+    let (morph, body, comments, relations) = {
+        let proj = state.projection.lock().map_err(|_| {
+            AppError::new(
+                ErrorCode::TemporarilyUnavailable,
+                "projection state unavailable",
+            )
+            .with_status(StatusCode::INTERNAL_SERVER_ERROR)
+        })?;
+        let morph = proj
+            .morphs
+            .get(&morph_id)
+            .cloned()
+            .ok_or_else(|| AppError::not_found("document Morph not found"))?;
+        let body = document_body_from_morph(&morph);
+        let document_len = document_text_len(&body);
+        let comments = document_comments_json(&proj, &morph_id, document_len);
+        let relations = document_relations_json(&proj, &morph_id);
+        (morph, body, comments, relations)
+    };
+    if !realm_id_accessible(state, &morph.space_id, Some(&session)).await {
         return Err(AppError::new(
             ErrorCode::CapabilityDenied,
             "Document not visible to this actor",
         )
         .with_status(StatusCode::FORBIDDEN));
     }
-    let body = document_body_from_morph(&morph);
-    let document_len = document_text_len(&body);
-    let comments = document_comments_json(&proj, &morph_id, document_len);
-    let relations = document_relations_json(&proj, &morph_id);
     let versions = morph
         .versions
         .iter()
@@ -585,6 +591,5 @@ async fn read_document_projection(
         "comments": comments,
         "cursor_presence": [],
     });
-    drop(proj);
     json_ok(response)
 }

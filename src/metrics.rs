@@ -81,7 +81,7 @@ async fn handle_metrics_connection(mut stream: TcpStream, state: AppState) -> an
     let path = parts.next().unwrap_or_default();
 
     let (status, body) = if (method == "GET" || method == "HEAD") && path == "/metrics" {
-        ("200 OK", render_metrics(&state))
+        ("200 OK", render_metrics(&state).await)
     } else {
         ("404 Not Found", "not found\n".to_owned())
     };
@@ -98,7 +98,7 @@ async fn handle_metrics_connection(mut stream: TcpStream, state: AppState) -> an
     Ok(())
 }
 
-pub fn render_metrics(state: &AppState) -> String {
+pub async fn render_metrics(state: &AppState) -> String {
     let mut output = render_http_metrics();
     output.push_str(
         "# HELP soland_db_pool_in_use PostgreSQL pool connections currently checked out.\n",
@@ -112,7 +112,7 @@ pub fn render_metrics(state: &AppState) -> String {
     output.push_str("# TYPE soland_federation_outbox_depth gauge\n");
     output.push_str(&format!(
         "soland_federation_outbox_depth {}\n",
-        federation_outbox_depth(state)
+        federation_outbox_depth(state).await
     ));
     output.push_str(
         "# HELP soland_audit_append_failures_total Audit-log append failures (spec C.3.7).\n",
@@ -174,11 +174,11 @@ fn federation_outbox_dead_letter_total() -> u64 {
         .federation_outbox_dead_letters
 }
 
-fn federation_outbox_depth(state: &AppState) -> usize {
+async fn federation_outbox_depth(state: &AppState) -> usize {
     state
         .persistence
         .federation_outbox()
-        .snapshot_all()
+        .snapshot_all().await
         .map(|rows| rows.iter().filter(|row| row.delivered_at.is_none()).count())
         .unwrap_or(0)
 }

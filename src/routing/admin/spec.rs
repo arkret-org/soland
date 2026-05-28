@@ -42,18 +42,18 @@ async fn get_server_status(
     req: &mut Request,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let session = require_admin_principal(state, session)?;
     let account_count = state
         .persistence
         .accounts()
-        .list()
+        .list().await
         .map(|items| items.len())
         .ok();
     let device_count = state
         .persistence
         .devices()
-        .list()
+        .list().await
         .map(|items| items.len())
         .ok();
     let realm_count = state
@@ -92,7 +92,7 @@ async fn update_account_status(
     body: JsonBody<Value>,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let session = require_admin_principal(state, session)?;
     let account_id = account_id.into_inner();
     let body = body.into_inner();
@@ -103,7 +103,7 @@ async fn update_account_status(
         .filter(|value| !value.is_empty())
         .map(str::to_owned)
         .ok_or_else(|| AppError::invalid_param("status is required"))?;
-    admin_set_account_status(state, &session.actor, &account_id, &status, body)
+    admin_set_account_status(state, &session.actor, &account_id, &status, body).await
 }
 
 #[endpoint(
@@ -200,7 +200,7 @@ async fn admin_account_state_action(
     next_state: &str,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let session = require_admin_principal(state, session)?;
     admin_set_account_status(
         state,
@@ -209,9 +209,10 @@ async fn admin_account_state_action(
         next_state,
         body.into_inner(),
     )
+    .await
 }
 
-fn admin_set_account_status(
+async fn admin_set_account_status(
     state: &AppState,
     admin_actor: &str,
     account_id: &str,
@@ -225,7 +226,7 @@ fn admin_set_account_status(
         .filter(|value| !value.is_empty())
         .map(str::to_owned);
     let change =
-        set_account_lifecycle_state(state, account_id, next_state, admin_actor, reason.clone())?;
+        set_account_lifecycle_state(state, account_id, next_state, admin_actor, reason.clone()).await?;
     append_audit_log(
         state,
         Some(admin_actor),
@@ -276,25 +277,25 @@ async fn revoke_device(
     body: JsonBody<Value>,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let session = require_admin_principal(state, session)?;
     let device_id = device_id.into_inner();
     let body = body.into_inner();
-    let target_actor = body
+    let mut target_actor = body
         .get("actor")
         .or_else(|| body.get("account_id"))
         .and_then(Value::as_str)
-        .map(str::to_owned)
-        .or_else(|| {
-            state.persistence.devices().list().ok().and_then(|devices| {
-                devices
-                    .into_iter()
-                    .find(|record| record.device_id == device_id)
-                    .map(|record| record.actor)
-            })
-        })
-        .ok_or_else(|| AppError::not_found("device not found"))?;
-    revoke_device_record(state, &target_actor, &device_id).map_err(AppError::internal)?;
+        .map(str::to_owned);
+    if target_actor.is_none() {
+        target_actor = state.persistence.devices().list().await.ok().and_then(|devices| {
+            devices
+                .into_iter()
+                .find(|record| record.device_id == device_id)
+                .map(|record| record.actor)
+        });
+    }
+    let target_actor = target_actor.ok_or_else(|| AppError::not_found("device not found"))?;
+    revoke_device_record(state, &target_actor, &device_id).await.map_err(AppError::internal)?;
     append_audit_log(
         state,
         Some(&session.actor),
@@ -327,12 +328,12 @@ async fn get_moderation_queue(
     req: &mut Request,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let _ = require_admin_principal(state, session)?;
     let items = state
         .persistence
         .moderation()
-        .list_queue_items()
+        .list_queue_items().await
         .map_err(|error| AppError::internal(error.to_string()))?;
     let total = items.len();
     json_ok(json!({

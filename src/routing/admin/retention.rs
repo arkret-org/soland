@@ -43,7 +43,7 @@ async fn configure_retention_policy(
     body: JsonBody<Value>,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
     let space_id = required_string(&body, "space_id")?;
     let ttl_seconds = ttl_seconds_from_body(&body)?;
@@ -85,7 +85,7 @@ async fn sweep_retention_policy(
     body: JsonBody<Value>,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
     let space_id = required_string(&body, "space_id")?;
     let now = optional_now(&body)?.unwrap_or_else(Utc::now);
@@ -100,7 +100,7 @@ async fn sweep_retention_policy(
     let events = state
         .persistence
         .projection_events()
-        .snapshot_all()
+        .snapshot_all().await
         .unwrap_or_default()
         .into_iter()
         .filter(|event| event.space_id == space_id)
@@ -108,32 +108,48 @@ async fn sweep_retention_policy(
         .collect::<Vec<_>>();
     let examined = events.len();
     let mut created = Vec::new();
-    {
-        let mut tombstones = state
+    // Filter out already-tombstoned / not-yet-expired events under a short
+    // lock, then release it before doing the async `contains` reads (the
+    // MutexGuard is not Send and cannot cross an `.await`).
+    let pending: Vec<_> = {
+        let tombstones = state
             .retention_tombstones
             .lock()
             .expect("retention tombstones lock");
-        for event in events {
-            if event.created_at > cutoff || tombstones.contains_key(&event.event_id) {
+        events
+            .into_iter()
+            .filter(|event| {
+                event.created_at <= cutoff && !tombstones.contains_key(&event.event_id)
+            })
+            .collect()
+    };
+    for event in pending {
+        let anchored = state
+            .persistence
+            .events()
+            .contains(&event.event_id)
+            .await
+            .unwrap_or(false);
+        let tombstone = RetentionTombstoneRecord {
+            event_id: event.event_id.clone(),
+            space_id: event.space_id.clone(),
+            reason: "retention_policy.ttl".to_owned(),
+            policy_ttl_seconds: policy.ttl_seconds,
+            expired_at: event.created_at + Duration::seconds(policy.ttl_seconds),
+            tombstoned_at: now,
+            anchored,
+        };
+        {
+            let mut tombstones = state
+                .retention_tombstones
+                .lock()
+                .expect("retention tombstones lock");
+            if tombstones.contains_key(&event.event_id) {
                 continue;
             }
-            let anchored = state
-                .persistence
-                .events()
-                .contains(&event.event_id)
-                .unwrap_or(false);
-            let tombstone = RetentionTombstoneRecord {
-                event_id: event.event_id.clone(),
-                space_id: event.space_id.clone(),
-                reason: "retention_policy.ttl".to_owned(),
-                policy_ttl_seconds: policy.ttl_seconds,
-                expired_at: event.created_at + Duration::seconds(policy.ttl_seconds),
-                tombstoned_at: now,
-                anchored,
-            };
             tombstones.insert(event.event_id.clone(), tombstone.clone());
-            created.push(tombstone);
         }
+        created.push(tombstone);
     }
     if !created.is_empty() {
         let _ = state.event_broadcast.send(EventNotification {

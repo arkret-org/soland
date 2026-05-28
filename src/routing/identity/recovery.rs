@@ -59,7 +59,7 @@ async fn recovery_policy_put(
     req: &mut Request,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let payload = body.into_inner();
 
     let record = validate_recovery_policy(&payload)?;
@@ -145,7 +145,7 @@ async fn recovery_receipt_put(
     req: &mut Request,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let payload = body.into_inner();
 
     let record = validate_recovery_receipt(&payload)?;

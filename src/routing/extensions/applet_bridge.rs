@@ -86,7 +86,7 @@ async fn register_endpoint(
     res: &mut Response,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
     let manifest = parse_manifest(&body)?;
     let trusted_registry_did = string_field(&body, "trusted_registry_did")
@@ -134,7 +134,7 @@ async fn ghost_endpoint(
     req: &mut Request,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let _session = aa.authenticated_session(state, req)?;
+    let _session = aa.authenticated_session(state, req).await?;
     let applet_id = applet_id_param(req)?;
     let body = body.into_inner();
     let (external_id, display_name) = external_user_from_body(&body)?;
@@ -151,7 +151,7 @@ async fn ghost_endpoint(
     });
     if let Some(space_id) = space_id {
         if let Some(message) = portal_message_payload(&payload)? {
-            let message_result = append_portal_message(state, &record, &ghost, &space_id, message)?;
+            let message_result = append_portal_message(state, &record, &ghost, &space_id, message).await?;
             merge_object(&mut response, message_result);
         }
     }
@@ -171,7 +171,7 @@ async fn bot_message_endpoint(
     req: &mut Request,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let _session = aa.authenticated_session(state, req)?;
+    let _session = aa.authenticated_session(state, req).await?;
     let applet_id = applet_id_param(req)?;
     let body = body.into_inner();
     let record =
@@ -195,7 +195,7 @@ async fn bot_message_endpoint(
         revoked_at: None,
     };
     let message_result =
-        append_portal_message(state, &record, &synthetic_ghost, space_id, content)?;
+        append_portal_message(state, &record, &synthetic_ghost, space_id, content).await?;
     json_ok(message_result)
 }
 
@@ -207,7 +207,7 @@ async fn bot_message_endpoint(
 #[tracing::instrument(skip_all, fields(op = "cx.extension.soland.applets.revoke"))]
 async fn revoke_endpoint(aa: AuthArgs, depot: &mut Depot, req: &mut Request) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let applet_id = applet_id_param(req)?;
     let now = chrono::Utc::now();
     let record = {
@@ -428,7 +428,7 @@ fn provision_ghost(
     Ok((record.clone(), ghost))
 }
 
-fn append_portal_message(
+async fn append_portal_message(
     state: &AppState,
     applet: &AppletBridgeRecord,
     ghost: &GhostActorRecord,
@@ -454,7 +454,7 @@ fn append_portal_message(
         encrypted: false,
         created_at,
     };
-    if let Err(error) = state.persistence.messages().put(&message_record) {
+    if let Err(error) = state.persistence.messages().put(&message_record).await {
         tracing::error!(%error, "applet bridge: failed to persist portal MessageRecord");
         return Err(AppError::internal("failed to persist portal message"));
     }
@@ -485,7 +485,7 @@ fn append_portal_message(
     if let Err(error) = state
         .persistence
         .projection_events()
-        .append(projection_record)
+        .append(projection_record).await
     {
         tracing::error!(%error, "applet bridge: failed to append projection event");
         return Err(AppError::internal("failed to persist portal projection"));

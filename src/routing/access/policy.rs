@@ -65,14 +65,14 @@ async fn list_policy_documents(
     req: &mut Request,
 ) -> JsonResult<PolicyDocumentsResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let scope = scope.into_inner();
     let subject_ref = subject_ref.into_inner();
     let include_inactive = include_inactive.into_inner().unwrap_or(false);
     let policies = state
         .persistence
         .policy_documents()
-        .list_for_owner(&session.actor)
+        .list_for_owner(&session.actor).await
         .unwrap_or_default()
         .into_iter()
         .filter(|policy| include_inactive || policy.active)
@@ -103,12 +103,12 @@ async fn get_policy_document(
     req: &mut Request,
 ) -> JsonResult<PolicyDocumentResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let policy_id = policy_id.into_inner();
     state
         .persistence
         .policy_documents()
-        .get(&policy_id)
+        .get(&policy_id).await
         .ok()
         .flatten()
         .filter(|policy| policy.owner == session.actor)
@@ -129,7 +129,7 @@ async fn upsert_policy_document(
     req: &mut Request,
 ) -> JsonResult<PolicyDocumentResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
     if !is_valid_policy_scope(&body.scope) {
         return Err(AppError::invalid_param("invalid policy scope"));
@@ -164,7 +164,7 @@ async fn upsert_policy_document(
         return Err(AppError::invalid_param("invalid policy_id"));
     }
     let store = state.persistence.policy_documents();
-    if let Ok(Some(existing)) = store.get(&policy_id)
+    if let Ok(Some(existing)) = store.get(&policy_id).await
         && existing.owner != session.actor
     {
         return Err(AppError::capability_denied(
@@ -188,7 +188,7 @@ async fn upsert_policy_document(
     };
     store
         .put(record.clone())
-        .map_err(|error| AppError::internal(error.to_string()))?;
+        .await.map_err(|error| AppError::internal(error.to_string()))?;
     json_ok(policy_document_to_response(&record))
 }
 
@@ -219,10 +219,10 @@ async fn patch_policy_document(
     req: &mut Request,
 ) -> JsonResult<PolicyDocumentResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let policy_id = policy_id.into_inner();
     let store = state.persistence.policy_documents();
-    let Ok(Some(mut record)) = store.get(&policy_id) else {
+    let Ok(Some(mut record)) = store.get(&policy_id).await else {
         return Err(AppError::not_found("policy not found"));
     };
     if record.owner != session.actor {
@@ -284,7 +284,7 @@ async fn patch_policy_document(
     record.updated_at = now();
     store
         .put(record.clone())
-        .map_err(|error| AppError::internal(error.to_string()))?;
+        .await.map_err(|error| AppError::internal(error.to_string()))?;
     json_ok(policy_document_to_response(&record))
 }
 
@@ -301,10 +301,10 @@ async fn delete_policy_document(
     req: &mut Request,
 ) -> JsonResult<OkResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let policy_id = policy_id.into_inner();
     let store = state.persistence.policy_documents();
-    let Ok(Some(policy)) = store.get(&policy_id) else {
+    let Ok(Some(policy)) = store.get(&policy_id).await else {
         return Err(AppError::not_found("policy not found"));
     };
     if policy.owner != session.actor {
@@ -343,7 +343,7 @@ async fn policy_check(
             "request_canonical_digest must be sha256:<64 lowercase hex>",
         ));
     }
-    let policy_decision = matching_policy_decision(state, &body);
+    let policy_decision = matching_policy_decision(state, &body).await;
     let (decision, reason_code, policy_id, obligations) =
         if let Some(policy_decision) = policy_decision {
             (
@@ -381,7 +381,7 @@ async fn policy_check(
     let mut policy_doc_ids: Vec<String> = state
         .persistence
         .policy_documents()
-        .list_for_owner(&body.actor)
+        .list_for_owner(&body.actor).await
         .unwrap_or_default()
         .into_iter()
         .filter(|policy| policy.active)
@@ -525,16 +525,18 @@ struct MatchedPolicyDecision {
     obligations: Vec<Value>,
 }
 
-fn matching_policy_decision(
+async fn matching_policy_decision(
     state: &AppState,
     request: &PolicyCheckReqBody,
 ) -> Option<MatchedPolicyDecision> {
     state
         .persistence
         .policy_documents()
-        .find_active(&|policy| policy_matches_check(policy, request))
+        .list_active().await
         .ok()
-        .flatten()
+        .unwrap_or_default()
+        .into_iter()
+        .find(|policy| policy_matches_check(policy, request))
         .map(|policy| {
             let decision = policy
                 .payload

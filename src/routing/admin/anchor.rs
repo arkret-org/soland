@@ -653,7 +653,7 @@ pub(super) async fn admin_get_anchorer(
     space_id: PathParam<String>,
 ) -> JsonResult<AnchorerValueResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let _session = aa.authenticated_session(state, req)?;
+    let _session = aa.authenticated_session(state, req).await?;
     let space_id = space_id.into_inner();
     let cell = anchorer_cell_for(&space_id)?;
     let value = state
@@ -701,7 +701,7 @@ pub(super) async fn admin_reconfigure_anchorer(
     body: JsonBody<AnchorerReconfigBody>,
 ) -> JsonResult<AdminSubmitMoveResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let admin_session = super::require_admin_principal(state, session)?;
     super::require_admin_scope(
         state,
@@ -846,7 +846,7 @@ pub(super) async fn admin_list_space_bottom(
     space_id: PathParam<String>,
 ) -> JsonResult<Vec<BottomEntryResponse>> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let _session = aa.authenticated_session(state, req)?;
+    let _session = aa.authenticated_session(state, req).await?;
     let space_id = space_id.into_inner();
     let _ = SpaceId::new(space_id.clone()).map_err(|e| {
         app_error!(InvalidParam, "invalid space_id: {e}").with_status(StatusCode::BAD_REQUEST)
@@ -867,7 +867,7 @@ pub(super) async fn admin_list_bottom_global(
     req: &mut Request,
 ) -> JsonResult<Vec<BottomEntryResponse>> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let _session = aa.authenticated_session(state, req)?;
+    let _session = aa.authenticated_session(state, req).await?;
     let mut out = Vec::new();
     let space_ids: Vec<String> = {
         let spaces = state.realms.lock().expect("spaces lock");
@@ -912,7 +912,7 @@ pub(super) async fn admin_repair_bottom(
     body: JsonBody<BottomRepairStrategyBody>,
 ) -> JsonResult<AdminSubmitMoveResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let admin_session = super::require_admin_principal(state, session)?;
     super::require_admin_scope(
         state,
@@ -1121,7 +1121,7 @@ pub(super) async fn admin_get_anchor_dag(
     space_id: PathParam<String>,
 ) -> JsonResult<AnchorDagSnapshotResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let _session = aa.authenticated_session(state, req)?;
+    let _session = aa.authenticated_session(state, req).await?;
     let space_id = space_id.into_inner();
     let space = SpaceId::new(space_id.clone()).map_err(|e| {
         AppError::new(ErrorCode::InvalidParam, format!("invalid space_id: {e}"))
@@ -1212,7 +1212,7 @@ pub(super) async fn admin_compact_anchor_dag(
     body: JsonBody<CompactionRequestBody>,
 ) -> JsonResult<CompactionResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let admin_session = super::require_admin_principal(state, session)?;
     super::require_admin_scope(
         state,
@@ -1346,7 +1346,7 @@ pub(super) async fn admin_prune_anchor_dag(
     body: JsonBody<AnchorPruneRequestBody>,
 ) -> JsonResult<AnchorPruneResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let admin_session = super::require_admin_principal(state, session)?;
     super::require_admin_scope(
         state,
@@ -1588,7 +1588,7 @@ pub(super) async fn admin_submit_multisig_partial(
     body: JsonBody<PartialSignatureBody>,
 ) -> JsonResult<PartialSubmitResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let _session = super::require_admin_principal(state, session)?;
     let space_id_str = space_id.into_inner();
     let _space_id = SpaceId::new(space_id_str.clone()).map_err(|e| {
@@ -1616,7 +1616,7 @@ pub(super) async fn admin_submit_multisig_partial(
     // defaulted row lets the H'9 UI exercise the full path against a fresh
     // anchor_id in dev/test without an explicit pre-create dance.
     let store = state.persistence.multisig_pending();
-    let mut record = match store.get(&anchor_id_str).map_err(persistence_to_app_err)? {
+    let mut record = match store.get(&anchor_id_str).await.map_err(persistence_to_app_err)? {
         Some(r) => r,
         None => crate::state::MultisigPendingRecord {
             anchor_id: anchor_id_str.clone(),
@@ -1658,7 +1658,7 @@ pub(super) async fn admin_submit_multisig_partial(
     );
     store
         .upsert(record.clone())
-        .map_err(persistence_to_app_err)?;
+        .await.map_err(persistence_to_app_err)?;
 
     let collected = record.partials.len() as u32;
     let threshold = record.threshold_k;
@@ -1701,7 +1701,7 @@ pub(super) async fn admin_list_multisig_pending(
     space_id: PathParam<String>,
 ) -> JsonResult<MultisigPendingResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let _session = aa.authenticated_session(state, req)?;
+    let _session = aa.authenticated_session(state, req).await?;
     let space_id_str = space_id.into_inner();
     let _space_id = SpaceId::new(space_id_str.clone()).map_err(|e| {
         AppError::new(ErrorCode::InvalidParam, format!("invalid space_id: {e}"))
@@ -1711,7 +1711,7 @@ pub(super) async fn admin_list_multisig_pending(
     let rows = state
         .persistence
         .multisig_pending()
-        .list_for_space(&space_id_str)
+        .list_for_space(&space_id_str).await
         .map_err(persistence_to_app_err)?;
 
     let entries = rows
@@ -1790,7 +1790,7 @@ pub(super) async fn admin_rotate_signing_key(
     _body: JsonBody<serde_json::Value>,
 ) -> JsonResult<RotateSigningKeyResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let admin_session = super::require_admin_principal(state, session)?;
     super::require_admin_scope(
         state,
@@ -1953,7 +1953,7 @@ pub(super) async fn admin_list_gc_candidates(
     space_id: PathParam<String>,
 ) -> JsonResult<GcCandidatesResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let _session = aa.authenticated_session(state, req)?;
+    let _session = aa.authenticated_session(state, req).await?;
     let space_id_str = space_id.into_inner();
     let space = SpaceId::new(space_id_str.clone()).map_err(|e| {
         AppError::new(ErrorCode::InvalidParam, format!("invalid space_id: {e}"))

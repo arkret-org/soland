@@ -85,11 +85,19 @@ impl LocalIdentityResolver {
         if !self.method_allowed(did.method()) {
             return Err(Error::Protocol("DID method not allowed".to_owned()));
         }
-        let Some(record) = self
-            .persistence
-            .webvh()
-            .get_document(did.as_str())
-            .map_err(|e| Error::Protocol(format!("local DID store read failed: {e}")))?
+        // The SDK `DidResolver` trait is synchronous, but the persistence
+        // store is now async. Bridge by blocking the current multi-thread
+        // runtime worker on the store read; `block_in_place` keeps the rest
+        // of the runtime live while this thread parks. Same pattern as the
+        // OAuth-introspection bridge in `routing::identity::auth`.
+        let persistence = self.persistence.clone();
+        let did_str = did.as_str().to_owned();
+        let lookup = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current()
+                .block_on(async move { persistence.webvh().get_document(&did_str).await })
+        });
+        let Some(record) =
+            lookup.map_err(|e| Error::Protocol(format!("local DID store read failed: {e}")))?
         else {
             return Err(Error::Protocol("local DID document not found".to_owned()));
         };

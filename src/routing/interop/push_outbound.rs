@@ -193,7 +193,7 @@ async fn outbound_push_bridge_resolve(
     let cached = state
         .persistence
         .push_bridge_cache()
-        .get(&bridge_describe_url)
+        .get(&bridge_describe_url).await
         .ok()
         .flatten();
     let fetched_contract = cached
@@ -260,7 +260,7 @@ async fn outbound_push_bridge_fetch(
     let existing_cache = state
         .persistence
         .push_bridge_cache()
-        .get(&bridge_describe_url)
+        .get(&bridge_describe_url).await
         .ok()
         .flatten();
 
@@ -324,7 +324,7 @@ async fn outbound_push_bridge_fetch(
                     if let Err(error) = state
                         .persistence
                         .push_bridge_cache()
-                        .put(&bridge_describe_url, record.clone())
+                        .put(&bridge_describe_url, record.clone()).await
                     {
                         tracing::error!(%error, "failed to persist push bridge cache entry");
                     }
@@ -379,7 +379,7 @@ async fn outbound_push_bridge_cache_status(depot: &mut Depot, res: &mut Response
     let entries = state
         .persistence
         .push_bridge_cache()
-        .snapshot_all()
+        .snapshot_all().await
         .unwrap_or_default()
         .into_iter()
         .map(outbound_push_bridge_cache_entry)
@@ -394,7 +394,7 @@ async fn outbound_push_bridge_cache_export(depot: &mut Depot, res: &mut Response
     let entries = state
         .persistence
         .push_bridge_cache()
-        .snapshot_all()
+        .snapshot_all().await
         .unwrap_or_default()
         .into_iter()
         .map(outbound_push_bridge_cache_snapshot)
@@ -428,6 +428,7 @@ async fn outbound_push_bridge_cache_import(
     for snapshot in body.entries {
         let exists = cache
             .get(&snapshot.bridge_describe_url)
+            .await
             .ok()
             .flatten()
             .is_some();
@@ -449,13 +450,13 @@ async fn outbound_push_bridge_cache_import(
         if resolved_trust != "trusted" && record.trust_level == "trusted" {
             record.trust_level = "pending".to_owned();
         }
-        if let Err(error) = cache.put(&url, record) {
+        if let Err(error) = cache.put(&url, record).await {
             tracing::error!(%error, "failed to persist imported push bridge cache entry");
             continue;
         }
         imported_count += 1;
     }
-    let total_entries = cache.len().unwrap_or(0);
+    let total_entries = cache.len().await.unwrap_or(0);
     json_ok(OutboundPushBridgeCacheImportResponse {
         imported_count,
         skipped_count,
@@ -497,14 +498,14 @@ async fn outbound_push_bridge_cache_invalidate(
         if let Some(service_base_url) = derive_push_gateway_service_base_url(push_gateway_url) {
             let bridge_describe_url =
                 join_api_v1_url(&service_base_url, "/api/v1/push/bridge/describe");
-            usize::from(cache.delete(&bridge_describe_url).unwrap_or(false))
+            usize::from(cache.delete(&bridge_describe_url).await.unwrap_or(false))
         } else {
             0
         }
     } else {
-        cache.clear().unwrap_or(0)
+        cache.clear().await.unwrap_or(0)
     };
-    let remaining_entries = cache.len().unwrap_or(0);
+    let remaining_entries = cache.len().await.unwrap_or(0);
     json_ok(OutboundPushBridgeCacheInvalidateResponse {
         removed_count,
         remaining_entries,

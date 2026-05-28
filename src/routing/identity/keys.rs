@@ -40,8 +40,8 @@ async fn keys_upload(
     req: &mut Request,
 ) -> JsonResult<KeysUploadResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
-    if is_device_revoked(state, &session.actor, &session.device_id) {
+    let session = aa.authenticated_session(state, req).await?;
+    if is_device_revoked(state, &session.actor, &session.device_id).await {
         return Err(AppError::unauthenticated("device revoked"));
     }
 
@@ -84,14 +84,14 @@ async fn keys_upload(
         session.actor.clone(),
         body.device_id.clone(),
         key_payload.clone(),
-    ) {
+    ).await {
         tracing::error!(%error, "failed to persist device keys");
     }
 
     let current_device = state
         .persistence
         .devices()
-        .get(&session.actor, &body.device_id)
+        .get(&session.actor, &body.device_id).await
         .map_err(|error| AppError::internal(error.to_string()))?;
     let updated_at = now();
     let previous_payload = current_device
@@ -130,14 +130,14 @@ async fn keys_upload(
     state
         .persistence
         .devices()
-        .put(&device)
+        .put(&device).await
         .map_err(|error| AppError::internal(error.to_string()))?;
 
     if let Err(error) =
         state
             .persistence
             .one_time_keys()
-            .put(session.actor, body.device_id, body.one_time_keys)
+            .put(session.actor, body.device_id, body.one_time_keys).await
     {
         tracing::error!(%error, "failed to persist one-time keys");
     }
@@ -166,7 +166,7 @@ async fn keys_query(
     req: &mut Request,
 ) -> JsonResult<KeysQueryResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let _ = aa.authenticated_session(state, req)?;
+    let _ = aa.authenticated_session(state, req).await?;
 
     let body = body.into_inner();
     let store = state.persistence.device_keys();
@@ -174,10 +174,10 @@ async fn keys_query(
     for (actor, devices) in body.device_keys {
         let mut actor_keys = serde_json::Map::new();
         for device_id in devices {
-            if is_device_revoked(state, &actor, &device_id) {
+            if is_device_revoked(state, &actor, &device_id).await {
                 continue;
             }
-            if let Ok(Some(key)) = store.get(&actor, &device_id) {
+            if let Ok(Some(key)) = store.get(&actor, &device_id).await {
                 actor_keys.insert(device_id, key);
             }
         }
@@ -202,7 +202,7 @@ async fn keys_claim(
     req: &mut Request,
 ) -> JsonResult<KeysClaimResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let _ = aa.authenticated_session(state, req)?;
+    let _ = aa.authenticated_session(state, req).await?;
 
     let body = body.into_inner();
     let store = state.persistence.one_time_keys();
@@ -210,7 +210,7 @@ async fn keys_claim(
     for (actor, devices) in body.one_time_keys {
         let mut device_map = serde_json::Map::new();
         for (device_id, _algorithm) in devices {
-            if let Ok(Some(key)) = store.claim(&actor, &device_id) {
+            if let Ok(Some(key)) = store.claim(&actor, &device_id).await {
                 device_map.insert(device_id, key);
             }
         }

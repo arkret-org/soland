@@ -132,7 +132,7 @@ async fn list_realm_links(
     req: &mut Request,
 ) -> JsonResult<ListRealmLinksResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let _session = aa.authenticated_session(state, req)?;
+    let _session = aa.authenticated_session(state, req).await?;
     let realm_id = realm_id.into_inner();
     let direction_str = direction.into_inner().unwrap_or_else(|| "both".to_owned());
     let direction_enum = contrix_sdk::RealmLinkDirection::parse(&direction_str)
@@ -190,7 +190,7 @@ async fn post_realm_link(
     req: &mut Request,
 ) -> JsonResult<RealmLinkMutationResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let realm_id = realm_id.into_inner();
     let body = body.into_inner();
     if contrix_sdk::RealmLinkKind::parse(&body.link_kind).is_none() {
@@ -232,7 +232,7 @@ async fn post_realm_link(
         .map_err(|e| AppError::invalid_param(format!("operation_id: {e}")))?;
     let operation = Operation::create(op_id, realm_scope, CX_REALM_LINK, payload);
     accept_local_operations(state, &session.actor, std::slice::from_ref(&operation))
-        .map_err(reducer_reject_to_app_error)?;
+        .await.map_err(reducer_reject_to_app_error)?;
     json_ok(RealmLinkMutationResponse {
         realm_id,
         target_realm_id: body.target_realm_id,
@@ -275,7 +275,7 @@ async fn delete_realm_link(
     req: &mut Request,
 ) -> JsonResult<RealmLinkMutationResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let realm_id = realm_id.into_inner();
     let target_realm_id = target_realm_id.into_inner();
     let link_kind = link_kind
@@ -310,7 +310,7 @@ async fn delete_realm_link(
         .map_err(|e| AppError::invalid_param(format!("operation_id: {e}")))?;
     let operation = Operation::create(op_id, realm_scope, CX_REALM_LINK, payload);
     accept_local_operations(state, &session.actor, std::slice::from_ref(&operation))
-        .map_err(reducer_reject_to_app_error)?;
+        .await.map_err(reducer_reject_to_app_error)?;
     json_ok(RealmLinkMutationResponse {
         realm_id,
         target_realm_id,
@@ -348,7 +348,7 @@ async fn get_effective_policy(
     req: &mut Request,
 ) -> JsonResult<EffectivePolicyResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let _session = aa.authenticated_session(state, req)?;
+    let _session = aa.authenticated_session(state, req).await?;
     let realm_id = realm_id.into_inner();
     let projection = state.projection.lock().expect("projection mutex");
     let ep = effective_policy_for_realm(&projection, &realm_id);

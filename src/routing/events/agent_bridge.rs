@@ -536,7 +536,7 @@ mod tests {
         let projections = state
             .persistence
             .projection_events()
-            .snapshot_all()
+            .snapshot_all().await
             .expect("snapshot");
         let status_entry = projections
             .iter()
@@ -609,7 +609,7 @@ mod tests {
         let projections = state
             .persistence
             .projection_events()
-            .snapshot_all()
+            .snapshot_all().await
             .expect("snapshot");
         // No status(running) event should be present — the runtime
         // failed before acknowledging the invocation.
@@ -668,7 +668,7 @@ mod tests {
         let projections = state
             .persistence
             .projection_events()
-            .snapshot_all()
+            .snapshot_all().await
             .expect("snapshot");
         let result_entry = projections
             .iter()
@@ -736,7 +736,7 @@ mod tests {
                 let projections = state
                     .persistence
                     .projection_events()
-                    .snapshot_all()
+                    .snapshot_all().await
                     .expect("snapshot");
                 if let Some(e) = projections.into_iter().find(|e| {
                     e.event_kind == kinds::CX_AGENT_PROTOCOL_SESSION_RESULT
@@ -764,7 +764,7 @@ mod tests {
         let projections = state
             .persistence
             .projection_events()
-            .snapshot_all()
+            .snapshot_all().await
             .expect("snapshot");
         let status_entry = projections
             .iter()
@@ -792,7 +792,7 @@ mod tests {
         let projections = state
             .persistence
             .projection_events()
-            .snapshot_all()
+            .snapshot_all().await
             .expect("snapshot");
         let result_entry = projections
             .iter()
@@ -823,7 +823,7 @@ mod tests {
         let projections = state
             .persistence
             .projection_events()
-            .snapshot_all()
+            .snapshot_all().await
             .expect("snapshot");
         assert!(
             !projections.iter().any(|e| {
@@ -849,7 +849,7 @@ mod tests {
         let projections = state
             .persistence
             .projection_events()
-            .snapshot_all()
+            .snapshot_all().await
             .expect("snapshot");
         assert!(
             !projections.iter().any(|e| {

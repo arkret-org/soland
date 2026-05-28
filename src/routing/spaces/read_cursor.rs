@@ -36,7 +36,7 @@ pub(super) async fn set_read_cursor(
     body: JsonBody<SetReadMarkerRequest>,
 ) -> JsonResult<ReadMarkerResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
     let realm_id = body.realm_id.clone();
     if RealmId::new(realm_id.clone()).is_err() {
@@ -62,7 +62,7 @@ pub(super) async fn set_read_cursor(
         kinds::CX_READ_MARKER,
         payload,
     );
-    accept_local_operations(state, &session.actor, &[operation]).map_err(|error| {
+    accept_local_operations(state, &session.actor, &[operation]).await.map_err(|error| {
         AppError::new(ErrorCode::Conflict, error.to_string()).with_status(StatusCode::CONFLICT)
     })?;
     fanout_actor_private_update(
@@ -104,7 +104,7 @@ pub(super) async fn get_read_cursors(
     realm_id: QueryParam<String, false>,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let realm_id = realm_id.into_inner().or_else(|| space_id.into_inner());
     let realm_id = realm_id.unwrap_or_default();
     let markers = {

@@ -39,7 +39,7 @@ async fn verify_franking_proof(
     req: &mut Request,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let _session = aa.authenticated_session(state, req)?;
+    let _session = aa.authenticated_session(state, req).await?;
     let proof = body.into_inner();
     let declared = proof
         .get("proof_digest")
@@ -84,7 +84,7 @@ async fn audit_erasure_receipts(
     // Authenticate the session so the endpoint isn't usable
     // unauthenticated; we don't restrict cross-actor reads because the
     // receipt list is the auditable surface (see method doc above).
-    let _session = aa.authenticated_session(state, req)?;
+    let _session = aa.authenticated_session(state, req).await?;
     let receipts: Vec<Value> = {
         let Ok(proj) = state.projection.lock() else {
             return Err(AppError::internal("projection lock poisoned"));
@@ -151,7 +151,7 @@ async fn post_user_action(
     req: &mut Request,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
     let actor = body
         .get("actor")
@@ -203,19 +203,19 @@ async fn audit_events(
     req: &mut Request,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let space_id_filter = query_param(req, "space_id");
     let kind_filter = query_param(req, "kind");
     let limit = limit.into_inner().unwrap_or(100).clamp(1, 500);
     let cursor = query_param(req, "cursor").or_else(|| cursor.into_inner());
     let mut events = if let Some(space_id) = space_id_filter.as_deref() {
-        if !space_has_member(state, space_id, &session.actor) {
+        if !space_has_member(state, space_id, &session.actor).await {
             return Err(AppError::not_found("audit space not found"));
         }
         state
             .persistence
             .audit()
-            .snapshot_all()
+            .snapshot_all().await
             .map_err(|error| {
                 tracing::error!(%error, "failed to read audit log");
                 AppError::internal("audit store unavailable")
@@ -235,7 +235,7 @@ async fn audit_events(
         state
             .persistence
             .audit()
-            .list_for_actor(&actor)
+            .list_for_actor(&actor).await
             .map_err(|error| {
                 tracing::error!(%error, "failed to read audit log");
                 AppError::internal("audit store unavailable")
@@ -314,7 +314,7 @@ fn franking_proof_digest(proof: &Value) -> String {
     format!("sha256:{}", sha256_hex(&bytes))
 }
 
-pub fn append_audit_log(
+pub async fn append_audit_log(
     state: &AppState,
     actor: Option<&str>,
     action: &str,
@@ -355,7 +355,7 @@ pub fn append_audit_log(
         "outcome": outcome,
         "created_at": now(),
     });
-    if let Err(error) = state.persistence.audit().append(entry) {
+    if let Err(error) = state.persistence.audit().append(entry).await {
         // Spec: C.3.7 — every audit-append failure MUST surface to
         // operators. We escalate to ERROR (was previously implicit
         // here) and bump the `soland_audit_append_failures_total`

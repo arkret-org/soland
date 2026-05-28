@@ -78,12 +78,12 @@ pub(super) fn router() -> Router {
 )]
 async fn list_queue(aa: AuthArgs, depot: &mut Depot, req: &mut Request) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let _ = require_admin_principal(state, session)?;
     let items = state
         .persistence
         .moderation()
-        .list_queue_items()
+        .list_queue_items().await
         .unwrap_or_default();
     json_ok(json!({ "items": items, "total": items.len() }))
 }
@@ -112,12 +112,12 @@ async fn assign_queue_item(
         .param::<String>("id")
         .ok_or_else(|| AppError::invalid_param("id required"))?;
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let session = require_admin_principal(state, session)?;
     let mut item = state
         .persistence
         .moderation()
-        .get_queue_item(&item_id)
+        .get_queue_item(&item_id).await
         .ok()
         .flatten()
         .ok_or_else(|| AppError::not_found("queue item"))?;
@@ -129,7 +129,7 @@ async fn assign_queue_item(
     state
         .persistence
         .moderation()
-        .upsert_queue_item(item.clone())
+        .upsert_queue_item(item.clone()).await
         .map_err(|err| AppError::internal(err.to_string()))?;
     append_audit_log(
         state,
@@ -166,7 +166,7 @@ async fn prioritise_queue_item(
         .param::<String>("id")
         .ok_or_else(|| AppError::invalid_param("id required"))?;
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let session = require_admin_principal(state, session)?;
     let priority = body.into_inner().priority;
     if !matches!(priority.as_str(), "low" | "normal" | "high" | "urgent") {
@@ -177,7 +177,7 @@ async fn prioritise_queue_item(
     let mut item = state
         .persistence
         .moderation()
-        .get_queue_item(&item_id)
+        .get_queue_item(&item_id).await
         .ok()
         .flatten()
         .ok_or_else(|| AppError::not_found("queue item"))?;
@@ -188,7 +188,7 @@ async fn prioritise_queue_item(
     state
         .persistence
         .moderation()
-        .upsert_queue_item(item.clone())
+        .upsert_queue_item(item.clone()).await
         .map_err(|err| AppError::internal(err.to_string()))?;
     append_audit_log(
         state,
@@ -234,7 +234,7 @@ async fn issue_decision(
     body: JsonBody<IssueDecisionReq>,
 ) -> JsonResult<DecisionResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let session = require_admin_principal(state, session)?;
     let body = body.into_inner();
     if body.target_ref.is_empty() || body.realm_id.is_empty() || body.action.is_empty() {
@@ -256,10 +256,10 @@ async fn issue_decision(
     state
         .persistence
         .moderation()
-        .append_decision(decision)
+        .append_decision(decision).await
         .map_err(|err| AppError::internal(err.to_string()))?;
     if let Some(item_id) = body.queue_item_ref.clone() {
-        if let Ok(Some(mut item)) = state.persistence.moderation().get_queue_item(&item_id) {
+        if let Ok(Some(mut item)) = state.persistence.moderation().get_queue_item(&item_id).await {
             if let Some(obj) = item.as_object_mut() {
                 obj.insert("status".to_owned(), json!("actioned"));
                 obj.insert("updated_at".to_owned(), json!(Utc::now().to_rfc3339()));
@@ -271,7 +271,7 @@ async fn issue_decision(
                 audit_refs.push(json!(decision_id));
                 obj.insert("audit_refs".to_owned(), json!(audit_refs));
             }
-            let _ = state.persistence.moderation().upsert_queue_item(item);
+            let _ = state.persistence.moderation().upsert_queue_item(item).await;
         }
     }
     append_audit_log(
@@ -313,13 +313,13 @@ async fn lift_decision(
         .param::<String>("decision_id")
         .ok_or_else(|| AppError::invalid_param("decision_id required"))?;
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let session = require_admin_principal(state, session)?;
     let body = body.into_inner();
     let existing = state
         .persistence
         .moderation()
-        .get_decision(&decision_id)
+        .get_decision(&decision_id).await
         .ok()
         .flatten()
         .ok_or_else(|| AppError::not_found("decision"))?;
@@ -335,7 +335,7 @@ async fn lift_decision(
     state
         .persistence
         .moderation()
-        .append_decision_lift(lift.clone())
+        .append_decision_lift(lift.clone()).await
         .map_err(|err| AppError::internal(err.to_string()))?;
     append_audit_log(
         state,
@@ -360,12 +360,12 @@ async fn lift_decision(
 )]
 async fn list_appeals(aa: AuthArgs, depot: &mut Depot, req: &mut Request) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let _ = require_admin_principal(state, session)?;
     let items = state
         .persistence
         .moderation()
-        .list_appeals()
+        .list_appeals().await
         .unwrap_or_default();
     json_ok(json!({ "items": items, "total": items.len() }))
 }
@@ -384,12 +384,12 @@ async fn get_appeal(aa: AuthArgs, depot: &mut Depot, req: &mut Request) -> JsonR
         .param::<String>("appeal_id")
         .ok_or_else(|| AppError::invalid_param("appeal_id required"))?;
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let _ = require_admin_principal(state, session)?;
     let history = state
         .persistence
         .moderation()
-        .appeal_history(&appeal_id)
+        .appeal_history(&appeal_id).await
         .map_err(|err| AppError::internal(err.to_string()))?;
     if history.is_empty() {
         return Err(AppError::not_found("appeal"));
@@ -397,9 +397,9 @@ async fn get_appeal(aa: AuthArgs, depot: &mut Depot, req: &mut Request) -> JsonR
     json_ok(json!({ "appeal_id": appeal_id, "history": history }))
 }
 
-fn current_appeal_state(state: &AppState, appeal_id: &str) -> Result<AppealState, AppError> {
+async fn current_appeal_state(state: &AppState, appeal_id: &str) -> Result<AppealState, AppError> {
     let raw = super::super::interop::moderation::appeal_state(state, appeal_id)
-        .ok_or_else(|| AppError::not_found("appeal"))?;
+        .await.ok_or_else(|| AppError::not_found("appeal"))?;
     match raw.as_str() {
         "submitted" => Ok(AppealState::Submitted),
         "under_review" => Ok(AppealState::UnderReview),
@@ -411,11 +411,11 @@ fn current_appeal_state(state: &AppState, appeal_id: &str) -> Result<AppealState
     }
 }
 
-fn append_appeal_or_500(state: &AppState, event: Value) -> Result<(), AppError> {
+async fn append_appeal_or_500(state: &AppState, event: Value) -> Result<(), AppError> {
     state
         .persistence
         .moderation()
-        .append_appeal(event)
+        .append_appeal(event).await
         .map_err(|err| AppError::internal(err.to_string()))
 }
 
@@ -444,9 +444,9 @@ async fn review_appeal(
         .param::<String>("appeal_id")
         .ok_or_else(|| AppError::invalid_param("appeal_id required"))?;
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let session = require_admin_principal(state, session)?;
-    let current = current_appeal_state(state, &appeal_id)?;
+    let current = current_appeal_state(state, &appeal_id).await?;
     if !current.can_transition_to(AppealState::UnderReview) {
         return Err(AppError::new(
             ErrorCode::FailedPrecondition,
@@ -458,7 +458,7 @@ async fn review_appeal(
     let submit_event = state
         .persistence
         .moderation()
-        .appeal_history(&appeal_id)
+        .appeal_history(&appeal_id).await
         .ok()
         .and_then(|h| h.into_iter().next())
         .ok_or_else(|| AppError::not_found("appeal"))?;
@@ -468,7 +468,7 @@ async fn review_appeal(
         .unwrap_or_default()
         .to_owned();
     if !decision_ref.is_empty() {
-        if let Ok(Some(decision)) = state.persistence.moderation().get_decision(&decision_ref) {
+        if let Ok(Some(decision)) = state.persistence.moderation().get_decision(&decision_ref).await {
             let decided_by = decision
                 .get("decided_by")
                 .and_then(Value::as_str)
@@ -486,7 +486,7 @@ async fn review_appeal(
         "notes_ref": body.into_inner().notes_ref,
         "appeal_state": "under_review",
     });
-    append_appeal_or_500(state, event.clone())?;
+    append_appeal_or_500(state, event.clone()).await?;
     append_audit_log(
         state,
         Some(&session.actor),
@@ -530,7 +530,7 @@ async fn decide_appeal(
         .param::<String>("appeal_id")
         .ok_or_else(|| AppError::invalid_param("appeal_id required"))?;
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let session = require_admin_principal(state, session)?;
     let body = body.into_inner();
     if !matches!(body.verdict.as_str(), "uphold" | "overturn" | "modify") {
@@ -541,7 +541,7 @@ async fn decide_appeal(
     if body.reason_text_ref.trim().is_empty() {
         return Err(AppError::invalid_param("reason_text_ref required"));
     }
-    let current = current_appeal_state(state, &appeal_id)?;
+    let current = current_appeal_state(state, &appeal_id).await?;
     if !current.can_transition_to(AppealState::Decided) {
         return Err(AppError::new(
             ErrorCode::FailedPrecondition,
@@ -568,7 +568,7 @@ async fn decide_appeal(
     let original_decision_ref = state
         .persistence
         .moderation()
-        .appeal_history(&appeal_id)
+        .appeal_history(&appeal_id).await
         .ok()
         .and_then(|h| h.into_iter().next())
         .and_then(|submit| {
@@ -600,7 +600,7 @@ async fn decide_appeal(
         let lifts_found = state
             .persistence
             .moderation()
-            .appeal_history(&appeal_id)
+            .appeal_history(&appeal_id).await
             .ok()
             .map(|h| h.into_iter().any(|_| false))
             .unwrap_or(false);
@@ -624,7 +624,7 @@ async fn decide_appeal(
         "decided_at": Utc::now().to_rfc3339(),
         "appeal_state": "decided",
     });
-    append_appeal_or_500(state, event.clone())?;
+    append_appeal_or_500(state, event.clone()).await?;
     append_audit_log(
         state,
         Some(&session.actor),
@@ -662,10 +662,10 @@ async fn close_appeal(
         .param::<String>("appeal_id")
         .ok_or_else(|| AppError::invalid_param("appeal_id required"))?;
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let session = require_admin_principal(state, session)?;
     let body = body.into_inner();
-    let current = current_appeal_state(state, &appeal_id)?;
+    let current = current_appeal_state(state, &appeal_id).await?;
     if !current.can_transition_to(AppealState::Closed) {
         return Err(AppError::new(
             ErrorCode::FailedPrecondition,
@@ -680,7 +680,7 @@ async fn close_appeal(
         "auto_closed": body.auto_closed,
         "appeal_state": "closed",
     });
-    append_appeal_or_500(state, event.clone())?;
+    append_appeal_or_500(state, event.clone()).await?;
     append_audit_log(
         state,
         Some(&session.actor),

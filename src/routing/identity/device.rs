@@ -37,11 +37,11 @@ pub(super) fn router() -> Router {
 #[tracing::instrument(skip_all, fields(op = "cx.devices.list"))]
 async fn device_list(aa: AuthArgs, depot: &mut Depot, req: &mut Request) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let devices = state
         .persistence
         .devices()
-        .list_for_actor(&session.actor)
+        .list_for_actor(&session.actor).await
         .map_err(|error| AppError::internal(error.to_string()))?
         .into_iter()
         .map(|record| {
@@ -79,7 +79,7 @@ async fn device_revoke(
     // itself (avoids self-lockout); revocation MUST be issued from a
     // peer / sibling device that is still controlled by the principal.
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let target_device_id = device_id.into_inner();
     if target_device_id == session.device_id {
         return Err(AppError::invalid_param(
@@ -90,13 +90,13 @@ async fn device_revoke(
     let existing = state
         .persistence
         .devices()
-        .get(&session.actor, &target_device_id)
+        .get(&session.actor, &target_device_id).await
         .map_err(|error| AppError::internal(error.to_string()))?;
     let Some(_record) = existing else {
         return Err(AppError::not_found("device not found"));
     };
     super::auth::revoke_device_record(state, &session.actor, &target_device_id)
-        .map_err(AppError::internal)?;
+        .await.map_err(AppError::internal)?;
     append_audit_log(
         state,
         Some(&session.actor),
@@ -126,7 +126,7 @@ async fn device_pairing_challenge(
     body: JsonBody<Value>,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
     let device_id = body
         .get("device_id")
@@ -186,7 +186,7 @@ async fn device_authorize_pairing(
     body: JsonBody<Value>,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
     let device_id = body
         .get("device_id")
@@ -222,7 +222,7 @@ async fn device_authorize_pairing(
     state
         .persistence
         .devices()
-        .put(&device)
+        .put(&device).await
         .map_err(|error| AppError::internal(error.to_string()))?;
     let device_json = device_inventory_to_json(&device);
     let authorization_event = json!({

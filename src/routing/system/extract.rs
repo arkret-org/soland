@@ -46,12 +46,12 @@ impl AuthArgs {
     /// `SessionRecord`. The same checks as `authenticated_session` run here:
     /// query-string auth-material rejection, audience match, session not
     /// revoked, device not revoked, expiry not yet hit.
-    pub fn authenticated_session(
+    pub async fn authenticated_session(
         &self,
         state: &AppState,
         req: &Request,
     ) -> Result<SessionRecord, AppError> {
-        match authenticated_session_inner(state, req) {
+        match authenticated_session_inner(state, req).await {
             Ok(session) => Ok(session),
             Err((status, code, message)) => {
                 // The auth inner returns a wire-code string. Map it to a

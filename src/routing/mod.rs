@@ -1368,7 +1368,7 @@ pub(crate) struct SnapshotBundle {
     pub generator_proof: Value,
 }
 
-pub(crate) fn snapshot_bundle_for_space(
+pub(crate) async fn snapshot_bundle_for_space(
     state: &AppState,
     space_id: &str,
 ) -> Option<SnapshotBundle> {
@@ -1387,11 +1387,11 @@ pub(crate) fn snapshot_bundle_for_space(
             space.tags.iter().cloned().collect::<Vec<_>>(),
         )
     };
-    let meta = state.persistence.realm_meta().get(space_id).ok().flatten();
+    let meta = state.persistence.realm_meta().get(space_id).await.ok().flatten();
     let messages = state
         .persistence
         .messages()
-        .list_for_space(space_id, 1024)
+        .list_for_space(space_id, 1024).await
         .unwrap_or_default();
     let generated_at = messages
         .iter()

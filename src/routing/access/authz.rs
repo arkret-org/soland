@@ -109,7 +109,7 @@ async fn authz_check(
         let owner = state
             .persistence
             .realm_meta()
-            .get(&realm_id)
+            .get(&realm_id).await
             .ok()
             .flatten()
             .map(|m| m.owner);
@@ -198,7 +198,7 @@ async fn effective_grants(
         state
             .persistence
             .realm_meta()
-            .list()
+            .list().await
             .unwrap_or_default()
             .into_iter()
             .flat_map(|(sid, _)| state.authz.grants_for_subject(&subject, &sid))
@@ -261,7 +261,7 @@ async fn create_grant(
     req: &mut Request,
 ) -> JsonResult<CreateGrantResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
     // CXP-0007 P1.3.4: parse the typed `GrantConstraint` enum from each
     // raw JSON object on the wire. The SDK's typed enum uses
@@ -289,7 +289,7 @@ async fn create_grant(
     } else {
         // Root grant: only the space owner MAY issue. capabilities.md §3
         // (Grant 由 issuer 持有,且 issuer MUST hold the action — owner does).
-        require_space_owner(state, &body.space_id, &session.actor)?;
+        require_space_owner(state, &body.space_id, &session.actor).await?;
         state.authz.create_grant_with_options(
             body.space_id,
             session.actor.clone(),
@@ -347,11 +347,11 @@ fn parse_expires_at(
         .map_err(|_| AppError::invalid_param("expires_at must be RFC 3339"))
 }
 
-fn require_space_owner(state: &AppState, space_id: &str, actor: &str) -> Result<(), AppError> {
+async fn require_space_owner(state: &AppState, space_id: &str, actor: &str) -> Result<(), AppError> {
     let owner = state
         .persistence
         .realm_meta()
-        .get(space_id)
+        .get(space_id).await
         .ok()
         .flatten()
         .map(|meta| meta.owner);
@@ -429,7 +429,7 @@ async fn revoke_grant(
     req: &mut Request,
 ) -> JsonResult<RevokeGrantResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let grant_id = grant_id.into_inner();
     // Only the grant's issuer OR the space owner may revoke. capabilities.md
     // §12 — revocation is explicit, but limited to the chain of trust that
@@ -441,7 +441,7 @@ async fn revoke_grant(
         let owner = state
             .persistence
             .realm_meta()
-            .get(&grant.space_id)
+            .get(&grant.space_id).await
             .ok()
             .flatten()
             .map(|meta| meta.owner);
@@ -488,12 +488,12 @@ async fn invites(
     req: &mut Request,
 ) -> crate::result::JsonResult<InvitesResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let now = now();
     let invite_list = state
         .persistence
         .space_invites()
-        .snapshot_all()
+        .snapshot_all().await
         .unwrap_or_default()
         .into_iter()
         .filter(|invite| {

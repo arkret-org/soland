@@ -280,7 +280,7 @@ fn validate_key_backup_body(
 ///   immediately follow the latest persisted seq for the series
 /// - `series_predecessor_not_found` — the envelope claims a predecessor
 ///   (`supersedes`) that is not persisted
-fn enforce_key_backup_series_chain(
+async fn enforce_key_backup_series_chain(
     state: &AppState,
     actor_id: &str,
     backup: &Value,
@@ -301,7 +301,7 @@ fn enforce_key_backup_series_chain(
         .get("supersedes")
         .and_then(Value::as_str)
         .map(str::to_owned);
-    for existing in store.snapshot_all().unwrap_or_default() {
+    for existing in store.snapshot_all().await.unwrap_or_default() {
         if existing.get("actor_id").and_then(Value::as_str) != Some(actor_id) {
             continue;
         }
@@ -414,24 +414,24 @@ async fn put_key_backup(
     req: &mut Request,
 ) -> JsonResult<KeysBackupsPutResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let backup_id = backup_id.into_inner();
     if backup_id.trim().is_empty() {
         return Err(AppError::invalid_param("backup_id is required"));
     }
     let backup = backup.into_inner();
     validate_key_backup_body(&backup_id, &session.actor, &backup)?;
-    enforce_key_backup_series_chain(state, &session.actor, &backup)?;
+    enforce_key_backup_series_chain(state, &session.actor, &backup).await?;
     let ciphertext_digest = backup
         .get("ciphertext_digest")
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_owned();
     let store = state.persistence.key_backups();
-    let duplicate = store.get(&backup_id).ok().flatten().is_some();
+    let duplicate = store.get(&backup_id).await.ok().flatten().is_some();
     store
         .put(backup_id.clone(), backup.clone())
-        .map_err(|error| AppError::internal(error.to_string()))?;
+        .await.map_err(|error| AppError::internal(error.to_string()))?;
     json_ok(KeysBackupsPutResBody {
         ok: true,
         backup: serde_json::json!({
@@ -463,7 +463,7 @@ async fn list_key_backups(
     req: &mut Request,
 ) -> JsonResult<KeysBackupsListResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let series_filter = series_id.into_inner();
     let backup_class_filter = backup_class.into_inner();
     if let Some(class) = backup_class_filter.as_deref()
@@ -476,7 +476,7 @@ async fn list_key_backups(
     let mut backups: Vec<Value> = state
         .persistence
         .key_backups()
-        .snapshot_all()
+        .snapshot_all().await
         .unwrap_or_default()
         .into_iter()
         .filter(|backup| backup.get("actor_id").and_then(Value::as_str) == Some(&session.actor))
@@ -519,12 +519,12 @@ async fn get_key_backup(
     req: &mut Request,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let backup_id = backup_id.into_inner();
     let Some(backup) = state
         .persistence
         .key_backups()
-        .get(&backup_id)
+        .get(&backup_id).await
         .ok()
         .flatten()
     else {
@@ -549,11 +549,12 @@ async fn delete_key_backup(
     req: &mut Request,
 ) -> JsonResult<KeysBackupsDeleteResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let backup_id = backup_id.into_inner();
     let store = state.persistence.key_backups();
     let owns_backup = store
         .get(&backup_id)
+        .await
         .ok()
         .flatten()
         .filter(|backup| backup.get("actor_id").and_then(Value::as_str) == Some(&session.actor))
@@ -572,7 +573,7 @@ async fn delete_key_backup(
             "key backup delete requires `{DELETE_PROOF_HEADER}` ownership proof"
         )));
     }
-    let deleted = store.delete(&backup_id).unwrap_or(false);
+    let deleted = store.delete(&backup_id).await.unwrap_or(false);
     json_ok(KeysBackupsDeleteResBody {
         ok: true,
         backup_id,

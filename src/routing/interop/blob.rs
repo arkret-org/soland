@@ -36,7 +36,7 @@ pub(super) fn router() -> Router {
 #[tracing::instrument(skip_all, fields(op = "blob_upload"))]
 async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let Some(session) = auth_or_render(state, req, res) else {
+    let Some(session) = auth_or_render(state, req, res).await else {
         return;
     };
     req.set_secure_max_size(MAX_BLOB_UPLOAD_BYTES);
@@ -81,7 +81,7 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
                 );
                 return;
             }
-            if !space_has_member(state, &space_id, &session.actor) {
+            if !space_has_member(state, &space_id, &session.actor).await {
                 render_error(
                     res,
                     StatusCode::FORBIDDEN,
@@ -104,7 +104,7 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         );
         return;
     }
-    if let Err(message) = enforce_blob_quota(state, &session.actor, space_id.as_deref(), size) {
+    if let Err(message) = enforce_blob_quota(state, &session.actor, space_id.as_deref(), size).await {
         render_error(
             res,
             StatusCode::PAYLOAD_TOO_LARGE,
@@ -152,11 +152,14 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         requested_media_type
     };
     let filename = if encrypted { None } else { requested_filename };
-    if !encrypted
-        && space_id
-            .as_deref()
-            .is_some_and(|space_id| !space_allows_plaintext_service(state, space_id))
-    {
+    let plaintext_denied = if encrypted {
+        false
+    } else if let Some(space_id) = space_id.as_deref() {
+        !space_allows_plaintext_service(state, space_id).await
+    } else {
+        false
+    };
+    if plaintext_denied {
         render_error(
             res,
             StatusCode::FORBIDDEN,
@@ -221,7 +224,7 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         uploaded_by: session.actor,
         created_at: now(),
     };
-    if let Err(error) = state.persistence.blobs().put(&blob_ref, &record) {
+    if let Err(error) = state.persistence.blobs().put(&blob_ref, &record).await {
         tracing::error!(%error, "failed to persist blob");
         if let Err(delete_error) = state.object_storage.delete(&storage_key).await {
             tracing::warn!(%delete_error, %storage_key, "failed to clean up blob after metadata write failure");
@@ -285,7 +288,7 @@ async fn blob_get(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         return;
     }
     let presigned = validate_presign_query(state, req, &blob_ref, &purpose);
-    let session = match authenticated_session(state, req) {
+    let session = match authenticated_session(state, req).await {
         Ok(session) => Some(session),
         Err(_) if presigned => None,
         Err(_) => {
@@ -298,17 +301,21 @@ async fn blob_get(depot: &mut Depot, req: &mut Request, res: &mut Response) {
             return;
         }
     };
-    let blob = state.persistence.blobs().get(&blob_ref).ok().flatten();
+    let blob = state.persistence.blobs().get(&blob_ref).await.ok().flatten();
     match blob.as_ref() {
         Some(blob) => {
-            if session.as_ref().is_some_and(|session| {
+            let denied = if let Some(session) = session.as_ref() {
                 !blob_visible_to_session(
                     state,
                     blob,
                     session,
                     query_param(req, "space_id").as_deref(),
                 )
-            }) {
+                .await
+            } else {
+                false
+            };
+            if denied {
                 render_error(res, StatusCode::NOT_FOUND, "not_found", "not found");
                 return;
             }
@@ -474,7 +481,7 @@ async fn blob_presign(
     req: &mut Request,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
     let blob_ref = body
         .get("blob_ref")
@@ -490,7 +497,7 @@ async fn blob_presign(
     let blob = state
         .persistence
         .blobs()
-        .get(blob_ref)
+        .get(blob_ref).await
         .ok()
         .flatten()
         .ok_or_else(|| AppError::not_found("blob not found"))?;
@@ -499,7 +506,7 @@ async fn blob_presign(
         &blob,
         &session,
         body.get("space_id").and_then(Value::as_str),
-    ) {
+    ).await {
         return Err(AppError::not_found("blob not found"));
     }
     let blob_value = presign_blob_policy_value(&blob);
@@ -768,7 +775,7 @@ fn blob_encrypted_flag(req: &Request) -> Result<Option<bool>, &'static str> {
     }
 }
 
-fn enforce_blob_quota(
+async fn enforce_blob_quota(
     state: &AppState,
     actor: &str,
     space_id: Option<&str>,
@@ -777,7 +784,7 @@ fn enforce_blob_quota(
     let blobs = state
         .persistence
         .blobs()
-        .snapshot_all()
+        .snapshot_all().await
         .map_err(|_| "blob store unavailable")?;
     let actor_bytes: usize = blobs
         .iter()
@@ -809,7 +816,7 @@ fn is_valid_blob_purpose(value: &str) -> bool {
             .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | ':'))
 }
 
-fn blob_visible_to_session(
+async fn blob_visible_to_session(
     state: &AppState,
     blob: &BlobRecord,
     session: &SessionRecord,
@@ -827,5 +834,5 @@ fn blob_visible_to_session(
     if requested_space_id.is_some_and(|requested| requested != space_id) {
         return false;
     }
-    space_has_member(state, space_id, &session.actor)
+    space_has_member(state, space_id, &session.actor).await
 }

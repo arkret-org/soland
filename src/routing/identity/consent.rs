@@ -68,11 +68,11 @@ pub struct ConsentUpdateBody {
     pub valid_until: Option<DateTime<Utc>>,
 }
 
-pub(crate) fn project_consent_operation(state: &AppState, operation: &Operation) {
+pub(crate) async fn project_consent_operation(state: &AppState, operation: &Operation) {
     let kind = crate::kinds::canonical_kind_string(operation);
     let projected = match kind.as_str() {
-        "cx.consent.grant" => project_consent_grant_operation(state, operation),
-        "cx.consent.revoke" => project_consent_revoke_operation(state, operation),
+        "cx.consent.grant" => project_consent_grant_operation(state, operation).await,
+        "cx.consent.revoke" => project_consent_revoke_operation(state, operation).await,
         _ => return,
     };
     if let Err(error) = projected {
@@ -85,7 +85,7 @@ pub(crate) fn project_consent_operation(state: &AppState, operation: &Operation)
     }
 }
 
-fn project_consent_grant_operation(
+async fn project_consent_grant_operation(
     state: &AppState,
     operation: &Operation,
 ) -> Result<(), AppError> {
@@ -119,9 +119,10 @@ fn project_consent_grant_operation(
         contact_status,
         operation.created_at,
     )
+    .await
 }
 
-fn project_consent_revoke_operation(
+async fn project_consent_revoke_operation(
     state: &AppState,
     operation: &Operation,
 ) -> Result<(), AppError> {
@@ -132,7 +133,7 @@ fn project_consent_revoke_operation(
     let observed_dots = observed_dots(&operation.payload)?;
     let revoked_at = consent_revoked_at(&operation.payload)?.unwrap_or(operation.created_at);
     revoke_cell_with_dots(state, &holder, &peer, &scope, &observed_dots, revoked_at);
-    upsert_contact_status_at(state, &peer, &holder, &scope, "pending", revoked_at)
+    upsert_contact_status_at(state, &peer, &holder, &scope, "pending", revoked_at).await
 }
 
 #[endpoint(
@@ -147,7 +148,7 @@ async fn list_consent_cells(
     req: &mut Request,
 ) -> JsonResult<ConsentCellsResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let now = now();
     let mut cells = state
         .consent_cells
@@ -180,7 +181,7 @@ async fn get_consent_cell(
     holder_did: PathParam<String>,
 ) -> JsonResult<ConsentCellResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let holder = holder_did.into_inner();
     if validate_did(&holder).is_err() {
         return Err(AppError::invalid_param("invalid holder DID"));
@@ -222,7 +223,7 @@ async fn grant_consent_cell(
     body: JsonBody<ConsentUpdateBody>,
 ) -> JsonResult<ConsentCellResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let holder = holder_did.into_inner();
     let body = body.into_inner();
     validate_holder_update(&session.actor, &holder, &body.peer_did)?;
@@ -240,7 +241,7 @@ async fn grant_consent_cell(
     } else {
         "pending"
     };
-    upsert_contact_status(state, &body.peer_did, &holder, &scope, contact_status)?;
+    upsert_contact_status(state, &body.peer_did, &holder, &scope, contact_status).await?;
     append_audit_log(
         state,
         Some(&holder),
@@ -271,13 +272,13 @@ async fn revoke_consent_cell(
     body: JsonBody<ConsentUpdateBody>,
 ) -> JsonResult<ConsentCellResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let holder = holder_did.into_inner();
     let body = body.into_inner();
     validate_holder_update(&session.actor, &holder, &body.peer_did)?;
     let scope = normalize_scope(body.scope.as_deref())?;
     let updated = revoke_cell(state, &holder, &body.peer_did, &scope, now());
-    upsert_contact_status(state, &body.peer_did, &holder, &scope, "pending")?;
+    upsert_contact_status(state, &body.peer_did, &holder, &scope, "pending").await?;
     append_audit_log(
         state,
         Some(&holder),
@@ -308,7 +309,7 @@ async fn request_consent_cell(
     body: JsonBody<ConsentRequestBody>,
 ) -> JsonResult<ConsentCellResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
     if validate_did(&body.holder_did).is_err() {
         return Err(AppError::invalid_param("invalid holder DID"));
@@ -322,7 +323,7 @@ async fn request_consent_cell(
     let holder_account = state
         .persistence
         .accounts()
-        .get(&body.holder_did)
+        .get(&body.holder_did).await
         .map_err(|error| AppError::internal(error.to_string()))?;
     if holder_account.is_none() {
         return Err(AppError::not_found("holder account not found"));
@@ -478,17 +479,17 @@ fn revoke_cell_with_dots(
     cell.clone()
 }
 
-fn upsert_contact_status(
+async fn upsert_contact_status(
     state: &AppState,
     requester: &str,
     target: &str,
     scope: &str,
     status: &str,
 ) -> Result<(), AppError> {
-    upsert_contact_status_at(state, requester, target, scope, status, now())
+    upsert_contact_status_at(state, requester, target, scope, status, now()).await
 }
 
-fn upsert_contact_status_at(
+async fn upsert_contact_status_at(
     state: &AppState,
     requester: &str,
     target: &str,
@@ -499,7 +500,7 @@ fn upsert_contact_status_at(
     let store = state.persistence.contacts();
     let mut contact = store
         .get_scoped(requester, target, scope)
-        .map_err(|error| AppError::internal(error.to_string()))?
+        .await.map_err(|error| AppError::internal(error.to_string()))?
         .unwrap_or_else(|| ContactRecord {
             requester: requester.to_owned(),
             target: target.to_owned(),
@@ -512,7 +513,7 @@ fn upsert_contact_status_at(
     contact.updated_at = updated_at;
     store
         .put(&contact)
-        .map_err(|error| AppError::internal(error.to_string()))
+        .await.map_err(|error| AppError::internal(error.to_string()))
 }
 
 fn validate_holder_update(session_actor: &str, holder: &str, peer: &str) -> Result<(), AppError> {

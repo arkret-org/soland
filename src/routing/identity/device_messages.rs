@@ -58,7 +58,7 @@ async fn send_device_messages(
     req: &mut Request,
 ) -> JsonResult<DeviceMessagesSendResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let idempotency_key = req
         .headers()
         .get("Idempotency-Key")
@@ -82,6 +82,7 @@ async fn send_device_messages(
     let device_messages = state.persistence.device_messages();
     let registered = device_messages
         .try_register_txn(format!("{}:{idempotency_key}", session.actor))
+        .await
         .unwrap_or(false);
     if !registered {
         return json_ok(DeviceMessagesSendResBody {
@@ -104,7 +105,7 @@ async fn send_device_messages(
                 position,
                 content,
                 created_at,
-            }) {
+            }).await {
                 tracing::error!(%error, "failed to append device message");
             }
             delivered_devices.push(device_id);
@@ -118,7 +119,7 @@ async fn send_device_messages(
     })
 }
 
-pub(crate) fn fanout_actor_private_update(
+pub(crate) async fn fanout_actor_private_update(
     state: &AppState,
     actor: &str,
     origin_device_id: &str,
@@ -128,7 +129,7 @@ pub(crate) fn fanout_actor_private_update(
     let devices = state
         .persistence
         .devices()
-        .list_for_actor(actor)
+        .list_for_actor(actor).await
         .unwrap_or_default();
     let mut delivered = 0;
     for device in devices {
@@ -155,7 +156,7 @@ pub(crate) fn fanout_actor_private_update(
                 position,
                 content: envelope,
                 created_at,
-            }) {
+            }).await {
             Ok(()) => delivered += 1,
             Err(error) => tracing::error!(%error, actor, "failed to fan out actor-private update"),
         }
@@ -176,7 +177,7 @@ async fn get_device_messages(
     req: &mut Request,
 ) -> JsonResult<DeviceMessagesReceiveResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let cursor = from.into_inner();
     let ack_position = match cursor {
         Some(cursor) => match parse_and_validate_sync_cursor(
@@ -209,11 +210,11 @@ async fn get_device_messages(
         state
             .persistence
             .device_messages()
-            .ack(&session.actor, &session.device_id, ack_position);
+            .ack(&session.actor, &session.device_id, ack_position).await;
     let queued = state
         .persistence
         .device_messages()
-        .list_after(&session.actor, &session.device_id, ack_position)
+        .list_after(&session.actor, &session.device_id, ack_position).await
         .unwrap_or_default();
     let events = device_message_events_after(&queued);
     let to_device_position = events
@@ -234,12 +235,12 @@ async fn get_device_messages(
     })
 }
 
-pub fn prune_acked_device_messages(state: &AppState, session: &SessionRecord, ack_position: i64) {
+pub async fn prune_acked_device_messages(state: &AppState, session: &SessionRecord, ack_position: i64) {
     let _ =
         state
             .persistence
             .device_messages()
-            .ack(&session.actor, &session.device_id, ack_position);
+            .ack(&session.actor, &session.device_id, ack_position).await;
 }
 
 pub fn device_message_events_after(messages: &[DeviceMessageRecord]) -> Vec<Value> {

@@ -62,7 +62,7 @@ pub(super) async fn push_register(
     let state = depot.obtain::<AppState>().expect("state injected");
     let auth_result = authenticated_session(state, req);
     let body = body.into_inner();
-    let (session, auth_warning) = match auth_result {
+    let (session, auth_warning) = match auth_result.await {
         Ok(session) => (session, None),
         Err((status, code, message)) => match push_register_session_grant_bridge(state, req, &body)
             .await
@@ -114,7 +114,7 @@ pub(super) async fn push_register(
         "idempotency_key": idempotency_key,
         "proof_present": proof_present,
         "auth_mode": if warnings.is_empty() { "bearer" } else { "session_grant_bridge" },
-    })) {
+    })).await {
         tracing::error!(%error, "failed to persist push device registration");
     }
     json_ok(PushRegisterResponse {
@@ -154,7 +154,7 @@ pub(super) async fn push_unregister(
     req: &mut Request,
 ) -> JsonResult<OkResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
     if body.device_id.trim().is_empty() {
         return Err(AppError::invalid_param("invalid device_id"));
@@ -167,7 +167,7 @@ pub(super) async fn push_unregister(
             &body.device_id,
             body.push_key.as_deref(),
             body.app_id.as_deref(),
-        )
+        ).await
         .map_err(|error| AppError::internal(error.to_string()))?;
     append_audit_log(
         state,
@@ -195,11 +195,11 @@ pub(super) async fn push_rules(
     req: &mut Request,
 ) -> JsonResult<PushRulesResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let rules = state
         .persistence
         .push_rules()
-        .list_for_actor(&session.actor)
+        .list_for_actor(&session.actor).await
         .unwrap_or_default()
         .iter()
         .map(push_rule_to_json)
@@ -223,7 +223,7 @@ pub(super) async fn upsert_push_rule(
     req: &mut Request,
 ) -> JsonResult<UpsertPushRuleResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
     if !is_valid_push_rule_id(&body.rule_id) {
         return Err(AppError::invalid_param("invalid push rule id"));
@@ -255,7 +255,7 @@ pub(super) async fn upsert_push_rule(
     state
         .persistence
         .push_rules()
-        .put(rule.clone())
+        .put(rule.clone()).await
         .map_err(|error| AppError::internal(error.to_string()))?;
     json_ok(UpsertPushRuleResponse {
         ok: true,
@@ -276,7 +276,7 @@ pub(super) async fn delete_push_rule(
     req: &mut Request,
 ) -> JsonResult<OkResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req)?;
+    let session = aa.authenticated_session(state, req).await?;
     let rule_id = rule_id.into_inner();
     if !is_valid_push_rule_id(&rule_id) {
         return Err(AppError::invalid_param("invalid push rule id"));
@@ -284,7 +284,7 @@ pub(super) async fn delete_push_rule(
     let _ = state
         .persistence
         .push_rules()
-        .delete(&session.actor, &rule_id);
+        .delete(&session.actor, &rule_id).await;
     json_ok(OkResBody { ok: true })
 }
 
@@ -314,7 +314,7 @@ pub(super) async fn push_notify(
     let registered = state
         .persistence
         .push_devices()
-        .snapshot_all()
+        .snapshot_all().await
         .unwrap_or_default();
     let mut rejected = Vec::new();
     let max_age = chrono::Duration::hours(PUSH_GATEWAY_CONTRACT_MAX_AGE_HOURS);
@@ -343,7 +343,7 @@ pub(super) async fn push_notify(
             .get("push_gateway")
             .and_then(|value| value.as_str())
             .unwrap_or_default();
-        let drift = verify_push_gateway_contract_drift(state, push_gateway_url, max_age);
+        let drift = verify_push_gateway_contract_drift(state, push_gateway_url, max_age).await;
         // C33.1 fail-closed semantics — production must reject anything but
         // `Match`. Development mode (which has no real push bridge cache
         // warmed) treats `Unknown` as a soft pass so local fixtures don't
@@ -375,7 +375,7 @@ pub(super) async fn push_notify(
         }
 
         if let Some(rule_id) =
-            push_device_suppressed_by_rule(state, actor, &body.notification, registered_device)
+            push_device_suppressed_by_rule(state, actor, &body.notification, registered_device).await
         {
             rejected.push(push_rejection(device, "push_rule", Some(rule_id)));
         }
@@ -388,7 +388,7 @@ pub(super) async fn push_notify(
 /// persisted snapshot is trusted + fresh + matches its own digest. Returns
 /// `Unknown` (fail-closed) when the gateway URL is empty or doesn't parse,
 /// and when no snapshot has been persisted yet.
-fn verify_push_gateway_contract_drift(
+async fn verify_push_gateway_contract_drift(
     state: &AppState,
     push_gateway_url: &str,
     max_age: chrono::Duration,
@@ -402,7 +402,7 @@ fn verify_push_gateway_contract_drift(
     };
     let bridge_describe_url = join_api_v1_url(&service_base_url, "/api/v1/push/bridge/describe");
     let cache = state.persistence.push_bridge_cache();
-    let snapshot_digest = match cache.current_contract(&bridge_describe_url) {
+    let snapshot_digest = match cache.current_contract(&bridge_describe_url).await {
         Ok(Some(record)) => record.contract_digest,
         Ok(None) => return DriftResult::Unknown,
         Err(error) => {
@@ -415,6 +415,7 @@ fn verify_push_gateway_contract_drift(
     }
     cache
         .verify_contract_freshness(&bridge_describe_url, &snapshot_digest, max_age)
+        .await
         .unwrap_or(DriftResult::Unknown)
 }
 
@@ -579,7 +580,7 @@ fn push_rule_to_json(rule: &PushRuleRecord) -> Value {
     })
 }
 
-fn push_device_suppressed_by_rule(
+async fn push_device_suppressed_by_rule(
     state: &AppState,
     actor: &str,
     notification: &Value,
@@ -588,7 +589,7 @@ fn push_device_suppressed_by_rule(
     state
         .persistence
         .push_rules()
-        .list_for_actor(actor)
+        .list_for_actor(actor).await
         .ok()?
         .into_iter()
         .filter(|rule| rule.enabled)
