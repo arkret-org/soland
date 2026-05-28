@@ -1,6 +1,6 @@
 # soland
 
-> **Spec target**: [contrix-spec @ b47ff6ec](../contrix-spec) (R3 sync 2026-05-27)
+> **Spec target**: [contrix-spec @ b56cab1](../contrix-spec) (R3.2 sync 2026-05-28)
 
 Reference Contrix v1 principal server, built with Salvo, Diesel, and
 PostgreSQL. The HTTP surface mirrors `contrix-spec/spec/v1/artifacts/openapi/contrix-service-api.openapi.yaml`;

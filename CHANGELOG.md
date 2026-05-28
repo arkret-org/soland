@@ -4,6 +4,14 @@ All notable wire-affecting changes to the soland Principal Server are
 recorded here. Format follows [Keep a Changelog](https://keepachangelog.com/)
 and the project tracks Contrix v1 spec revisions.
 
+## R3.2 — Spec sync 2026-05-28 (contrix-spec @ b56cab1)
+
+- Roster v2: `identity_state_digest` → `member_display_state_digest`; added disclosure-gated `subject_id` / `handle_claim_digests` / `handle_claims` / `handle_claims_limited` (omitted together unless subject disclosed).
+- `cx.member.identity.update` payload `identity_state_digest` → `identity_payload_digest`; `expected_state_digest` uses the segment-inclusive effective-set formula; effective set stays multi-valued (no last-writer-wins).
+- New wire validators reject MemberIdentity `primary_handle`/`handles[]` (`member_identity_handle_field_forbidden`), handle-claim `service_handle` / non-principal subject, and legacy mention shape (`mention_reference_legacy_shape`).
+- Real handle-claim evidence population + Realm subject_id disclosure policy deferred `TODO(R3.2.1)` (fails closed).
+
+> No version tag, no crates.io / Docker Hub / npm publish — git commit only.
 ## R3 — Spec sync 2026-05-27 (contrix-spec @ b47ff6ec)
 
 - HTTP-1: `POST /api/v1/rtc/token` (cx.call.media.token_exchange) mounted as a 501 stub in `src/routing/system/rtc.rs`; real TTL / participant_binding / service_signature issuer logic deferred to R3.1.
