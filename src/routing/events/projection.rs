@@ -2017,10 +2017,12 @@ pub fn project_member_identity_update(state: &AppState, operation: &Operation) {
         })
         .unwrap_or_default();
 
-    // MID-4: optimistic-concurrency guard. When `expected_state_digest`
-    // is present, it MUST equal the current per-actor
-    // `identity_state_digest` BEFORE this event lands. Reject the Move
-    // with `member_identity_state_mismatch`. soland accepts and reports
+    // MID-4 / MIU-SOL-3 (R3.2): optimistic-concurrency guard. When
+    // `expected_state_digest` is present, it MUST equal the current
+    // per-actor writer-observed effective-set digest
+    // (`member_identity_effective_set_digest`, which folds `segment`) BEFORE
+    // this event lands. Reject the Move with `member_identity_state_mismatch`.
+    // soland accepts and reports
     // here; the wire-level submit path turns the warn into a 412 in a
     // follow-up patch — for now reducer-state coherence is preserved by
     // dropping the projection write so the digest never advances under a

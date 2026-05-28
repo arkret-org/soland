@@ -1222,12 +1222,13 @@ pub enum ProjectionEffect {
         kind: &'static str,
         event_id: String,
     },
-    /// MID-1..6 (R3.1, contrix-spec @ 7157ee8) — `cx.member.identity.update`
-    /// accepted into the ordered-log `cx.component.member.identity.v1`
-    /// cell. The actual replacement-edge filter + per-actor
-    /// `identity_state_digest` materialization live on the
-    /// `MemberIdentityRegistry` (`AppState::member_identity`) because they
-    /// span cells; this effect just signals that an event landed.
+    /// MID-1..6 (R3.1/R3.2, contrix-spec @ b56cab1) —
+    /// `cx.member.identity.update` accepted into the ordered-log
+    /// `cx.component.member.identity.v1` cell. The actual replacement-edge
+    /// filter + per-actor effective-set / `member_display_state_digest`
+    /// materialization live on the `MemberIdentityRegistry`
+    /// (`AppState::member_identity`) because they span cells; this effect
+    /// just signals that an event landed.
     MemberIdentityProjected {
         realm_id: String,
         actor_id: String,
@@ -1749,10 +1750,10 @@ fn apply_agent_action_reject_dispatch(
         event_id: op.operation_id.to_string(),
     }
 }
-/// MID-1..6 (R3.1, contrix-spec @ 7157ee8) — reducer-side dispatch for
+/// MID-1..6 (R3.1/R3.2, contrix-spec @ b56cab1) — reducer-side dispatch for
 /// `cx.member.identity.update`. The full ordered-log projection +
-/// per-actor `identity_state_digest` materialization happens on
-/// `AppState::member_identity` (see
+/// per-actor effective-set / `member_display_state_digest` materialization
+/// happens on `AppState::member_identity` (see
 /// `routing::events::projection::project_member_identity_update`);
 /// `ProjectionState` itself doesn't hold a MemberIdentity facet, so this
 /// dispatcher only emits the lifecycle effect.
@@ -2510,11 +2511,12 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
     m.insert(CX_CONTAINER_MOVE_ITEM, apply_container_position_dispatch);
     m.insert(CX_CONTAINER_REBALANCE, apply_container_position_dispatch);
     m.insert(CX_MEMBER_STATE, apply_membership_dispatch);
-    // MID-1..6 (R3.1 spec-sync 2026-05-27, contrix-spec @ 7157ee8) —
+    // MID-1..6 (R3.1/R3.2 spec-sync, contrix-spec @ b56cab1) —
     // `cx.member.identity.update`. Cell family
     // `cx.component.member.identity.v1`, lattice `ordered_log`, bottom
     // `expose`. The ordered-log projection (effective-set filter,
-    // identity_state_digest materialization) lives on `AppState::member_identity`
+    // member_display_state_digest materialization) lives on
+    // `AppState::member_identity`
     // (see `routing::events::projection::project_member_identity_update`)
     // because it spans cells; the in-process reducer just records that
     // the event was accepted so subscribers observe the lifecycle effect.

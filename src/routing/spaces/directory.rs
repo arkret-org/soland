@@ -469,6 +469,17 @@ fn signed_handle_claim(
     did: &str,
     audience: &str,
 ) -> Result<HandleClaim, AppError> {
+    // HC-SOL-2 (R3.2) — never issue a claim whose `subject` is not a
+    // holder/principal DID (e.g. a `cx:actor:` / `cx:account:` typed id).
+    // Delegates to the SDK rejection rule via the shared wire validator.
+    if let Err(rejection) = crate::wire_validators::handle_claim_subject::validate_subject(
+        &json!({ "subject": did }),
+    ) {
+        return Err(AppError::new(
+            crate::error::ErrorCode::SchemaViolation,
+            rejection.message,
+        ));
+    }
     let service_did = state.config.service_did.clone();
     let service_domain = service_did
         .strip_prefix("did:web:")
@@ -495,7 +506,11 @@ fn signed_handle_claim(
         "issuer": service_did,
         "issuer_service_did": service_did,
         "binding_state": "verified",
-        "claim_type": "service_handle",
+        // HC-SOL-1 (R3.2, contrix-spec @ b56cab1) — `claim_type=service_handle`
+        // is removed from `cx.schema.handle_claim.v1`. The demo directory
+        // issues a user/principal handle claim, so `user_handle` is the
+        // correct class here.
+        "claim_type": "user_handle",
         "visibility": "public",
         "audience": audience,
         "member_delivery_binding": {
@@ -529,7 +544,9 @@ fn signed_handle_claim(
         issuer: service_did.clone(),
         issuer_service_did: Some(service_did.clone()),
         binding_state: "verified".to_owned(),
-        claim_type: Some("service_handle".to_owned()),
+        // HC-SOL-1 — see the unsigned-projection comment above; v1 dropped
+        // `service_handle`.
+        claim_type: Some("user_handle".to_owned()),
         visibility: Some("public".to_owned()),
         audience: Some(audience.to_owned()),
         challenge: None,

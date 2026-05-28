@@ -30,6 +30,7 @@ pub mod schema;
 pub mod state;
 pub mod verified_profiles;
 pub mod wire;
+pub mod wire_validators;
 
 pub use error::AppError;
 pub use result::{AppResult, EmptyResponse, EmptyResult, JsonResult, empty_ok, json_ok};

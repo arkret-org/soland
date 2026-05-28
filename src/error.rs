@@ -226,6 +226,40 @@ pub mod reasons {
         MEMBER_IDENTITY_UNKNOWN_SEGMENT,
     ];
 
+    // ── R3.2 (2026-05-28, contrix-spec @ b56cab1) — wire-breaking
+    // member-identity / handle-claim / mention reason codes. Defined as
+    // soland-local `pub const` literals (canonical wire form) until the SDK
+    // ships the matching `REASON_*` registry entries; once it does, swap to
+    // `core_error::REASON_*` re-exports the same way the C44/C45 block does.
+    // TODO(R3.2.1): swap to SDK re-exports once the registry lands.
+
+    /// MIU-SOL-1 — `cx.member.identity.update` payload carried a forbidden
+    /// handle field (`primary_handle` / `handles[]` / `verified_handle`).
+    /// MemberIdentity no longer carries handle lifecycle; it lives solely on
+    /// `cx.schema.handle_claim.v1`.
+    pub const MEMBER_IDENTITY_HANDLE_FIELD_FORBIDDEN: &str =
+        "member_identity_handle_field_forbidden";
+    /// HC-SOL-1 — handle claim used the removed `claim_type=service_handle`.
+    pub const CLAIM_TYPE_UNSUPPORTED: &str = "claim_type_unsupported";
+    /// HC-SOL-2 — handle claim `subject` was not a holder/principal DID
+    /// (e.g. `cx:actor:` / `cx:account:` / non-DID).
+    pub const HANDLE_CLAIM_SUBJECT_NOT_PRINCIPAL_DID: &str =
+        "handle_claim_subject_not_principal_did";
+    /// HC-SOL-3 — a mention reference carried the legacy pre-R3.2 shape
+    /// (`subject` / `handle` / `display_snapshot`) instead of the v2 shape
+    /// (`subject_id` authoritative + audit metadata).
+    pub const MENTION_REFERENCE_LEGACY_SHAPE: &str = "mention_reference_legacy_shape";
+
+    /// R3.2 reason codes registered in this round. Test scaffolding uses
+    /// this slice to assert the full set is surfaced through
+    /// `crate::error::reasons`.
+    pub const R3_2_REASONS: &[&str] = &[
+        MEMBER_IDENTITY_HANDLE_FIELD_FORBIDDEN,
+        CLAIM_TYPE_UNSUPPORTED,
+        HANDLE_CLAIM_SUBJECT_NOT_PRINCIPAL_DID,
+        MENTION_REFERENCE_LEGACY_SHAPE,
+    ];
+
     /// R3 reason codes registered in this round. Test scaffolding uses this
     /// slice to assert the full set is surfaced through
     /// `crate::error::reasons`.
