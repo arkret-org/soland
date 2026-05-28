@@ -212,6 +212,7 @@ async fn policy_server_integration_hits_mock() {
     let url = format!("http://{addr}/api/v1/policy/check");
     let cfg = config_for(&url, 2000);
     let client = PolicyClient::new(reqwest::Client::new(), "did:web:soland.local")
+        .with_private_network_egress(true)
         .with_policy_did_resolver(policy_resolver(&signing));
     let engine = AuthzEngine::new();
 
@@ -271,7 +272,8 @@ async fn policy_server_integration_timeout_fails_closed() {
 
     let url = format!("http://{addr}/api/v1/policy/check");
     let cfg = config_for(&url, 250);
-    let client = PolicyClient::new(reqwest::Client::new(), "did:web:soland.local");
+    let client = PolicyClient::new(reqwest::Client::new(), "did:web:soland.local")
+        .with_private_network_egress(true);
     let engine = AuthzEngine::new();
 
     let mut ctx = RequestContext {

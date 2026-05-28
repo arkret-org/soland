@@ -363,7 +363,8 @@ async fn create_webrtc_session(
     state
         .persistence
         .webrtc()
-        .put(record).await
+        .put(record)
+        .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     json_ok(CreateWebrtcSessionResponse {
         session_id,
@@ -409,7 +410,14 @@ async fn put_webrtc_signal(
         ));
     }
     if let Some(requested_seq) = body.seq {
-        let Some(record) = state.persistence.webrtc().get(&session_id).await.ok().flatten() else {
+        let Some(record) = state
+            .persistence
+            .webrtc()
+            .get(&session_id)
+            .await
+            .ok()
+            .flatten()
+        else {
             return Err(AppError::not_found("session not found"));
         };
         if !record.participants.contains(&session.actor) {
@@ -442,13 +450,15 @@ async fn put_webrtc_signal(
     match state
         .persistence
         .webrtc()
-        .append_signal(&session_id, &session.actor, builder).await
+        .append_signal(&session_id, &session.actor, builder)
+        .await
     {
         Ok(appended) => {
             let call_state = state
                 .persistence
                 .webrtc()
-                .get(&session_id).await
+                .get(&session_id)
+                .await
                 .ok()
                 .flatten()
                 .map(|record| call_state_for_webrtc_session(&record).to_owned())
@@ -495,7 +505,14 @@ async fn get_webrtc_signals(
     let limit = limit.into_inner().unwrap_or(50).clamp(1, 100);
 
     prune_expired_webrtc_sessions(state);
-    let Some(record) = state.persistence.webrtc().get(&session_id).await.ok().flatten() else {
+    let Some(record) = state
+        .persistence
+        .webrtc()
+        .get(&session_id)
+        .await
+        .ok()
+        .flatten()
+    else {
         return Err(AppError::not_found("session not found"));
     };
     if !record.participants.contains(&session.actor) {
@@ -555,7 +572,14 @@ async fn delete_webrtc_session(
     }
 
     prune_expired_webrtc_sessions(state);
-    let Some(record) = state.persistence.webrtc().get(&session_id).await.ok().flatten() else {
+    let Some(record) = state
+        .persistence
+        .webrtc()
+        .get(&session_id)
+        .await
+        .ok()
+        .flatten()
+    else {
         return Err(AppError::not_found("session not found"));
     };
     if !record.participants.contains(&session.actor) {
@@ -590,7 +614,8 @@ async fn start_recording(
     let mut record = state
         .persistence
         .webrtc()
-        .get(&call_id).await
+        .get(&call_id)
+        .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .ok_or_else(|| AppError::not_found("call session not found"))?;
     if !record.participants.contains(&session.actor) {
@@ -627,7 +652,8 @@ async fn start_recording(
     state
         .persistence
         .webrtc()
-        .put(record.clone()).await
+        .put(record.clone())
+        .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     json_ok(json!({
         "ok": true,
@@ -696,7 +722,8 @@ async fn handle_rtc_token(
     let webrtc = state
         .persistence
         .webrtc()
-        .get(&body.call_id).await
+        .get(&body.call_id)
+        .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .ok_or_else(|| AppError::not_found("call session not found"))?;
     if webrtc.space_id != body.realm_id {
@@ -705,10 +732,10 @@ async fn handle_rtc_token(
         ));
     }
     if !webrtc.participants.contains(&body.actor_id) {
-        return Err(AppError::capability_denied(
-            "actor is not a participant of the call",
-        )
-        .with_wire_code(crate::error::reasons::PARTICIPANT_IDENTITY_UNRECOGNISED));
+        return Err(
+            AppError::capability_denied("actor is not a participant of the call")
+                .with_wire_code(crate::error::reasons::PARTICIPANT_IDENTITY_UNRECOGNISED),
+        );
     }
     // ERR-1 — additional CXP-0010 reason codes surface from this token
     // exchange path. The constants are referenced so they stay
@@ -750,9 +777,8 @@ async fn handle_rtc_token(
     }
 
     // MEDIA-1 — token TTL default 300s (cap 600s).
-    let ttl_secs = contrix_sdk::MEDIA_TOKEN_TTL_SHOULD_SECS.min(
-        contrix_sdk::MEDIA_TOKEN_TTL_MAX_SECS,
-    );
+    let ttl_secs =
+        contrix_sdk::MEDIA_TOKEN_TTL_SHOULD_SECS.min(contrix_sdk::MEDIA_TOKEN_TTL_MAX_SECS);
     let issued_at = now();
     let expires_at = issued_at + Duration::seconds(ttl_secs as i64);
 
@@ -798,9 +824,8 @@ async fn handle_rtc_token(
     let binding_bytes = contrix_sdk::canonical::canonical_json_bytes(&binding_payload)
         .unwrap_or_else(|_| binding_payload.to_string().into_bytes());
     let signing_key = state.anchorer_signing_key();
-    let mut signing_input = Vec::with_capacity(
-        b"soland-media-participant-binding-v1".len() + binding_bytes.len() + 1,
-    );
+    let mut signing_input =
+        Vec::with_capacity(b"soland-media-participant-binding-v1".len() + binding_bytes.len() + 1);
     signing_input.extend_from_slice(b"soland-media-participant-binding-v1");
     signing_input.push(0);
     signing_input.extend_from_slice(&binding_bytes);
@@ -841,9 +866,11 @@ async fn handle_rtc_token(
         service_signature,
         connect_url: None,
         todos: vec![
-            "R3.1: resolve focus from cx.realm.media_service oldest-membership-wins selection".to_owned(),
+            "R3.1: resolve focus from cx.realm.media_service oldest-membership-wins selection"
+                .to_owned(),
             "R3.1: mint real backend_token via livekit/mediasoup/contrix-native binding".to_owned(),
-            "R3.1: validate issuer_kid against current cx.realm.media_service.service_id epoch".to_owned(),
+            "R3.1: validate issuer_kid against current cx.realm.media_service.service_id epoch"
+                .to_owned(),
         ],
     })
 }
@@ -889,7 +916,10 @@ async fn contrix_rtc_token(
     summary = "Exchange session-focus for backend media token (alias under /api/v1)",
     status_codes(200, 400, 401, 403, 404, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.calls.media.token_exchange"))]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "cx.extension.soland.calls.media.token_exchange")
+)]
 async fn api_rtc_token(
     aa: AuthArgs,
     body: JsonBody<MediaTokenExchangeReqBody>,

@@ -199,7 +199,8 @@ pub(super) async fn embedded_webvh_register(
     if state
         .persistence
         .webvh()
-        .get_embedded_webvh_document_by_local_id(&local_id).await
+        .get_embedded_webvh_document_by_local_id(&local_id)
+        .await
         .ok()
         .flatten()
         .is_some()
@@ -241,8 +242,7 @@ pub(super) async fn embedded_webvh_register(
     let did_key_id = format!("{}#{}", location.did, did_key_fragment);
     let update_key_id = format!("{}#{}", location.did, update_key_fragment);
     let mut log_entry = substitute_webvh_scid(entry_skeleton, &scid);
-    let version_hash =
-        webvh_entry_hash_multibase(&log_entry).map_err(AppError::invalid_param)?;
+    let version_hash = webvh_entry_hash_multibase(&log_entry).map_err(AppError::invalid_param)?;
     let version_id = format!("1-{version_hash}");
     if let Value::Object(map) = &mut log_entry {
         map.insert("versionId".to_owned(), Value::String(version_id.clone()));
@@ -256,34 +256,44 @@ pub(super) async fn embedded_webvh_register(
         return Err(AppError::new(ErrorCode::InvalidSignature, message)
             .with_status(StatusCode::UNAUTHORIZED));
     }
-    if let Err(error) = state.persistence.webvh().put_document(WebvhDocumentRecord {
-        did: location.did.clone(),
-        did_document: did_document.clone(),
-        key_log_head: Some(version_id.clone()),
-        seq: 1,
-        method_evidence: json!({
-            "mode": "embedded_webvh_provider",
-            "provider_id": "soland.embedded",
-            "local_id": local_id,
-            "document_url": location.document_url,
-            "log_url": location.log_url,
-            "scid": location.scid,
-            "updateKeys": [body.update_public_key_multibase.clone()],
-        }),
-        updated_at: now,
-    }).await {
+    if let Err(error) = state
+        .persistence
+        .webvh()
+        .put_document(WebvhDocumentRecord {
+            did: location.did.clone(),
+            did_document: did_document.clone(),
+            key_log_head: Some(version_id.clone()),
+            seq: 1,
+            method_evidence: json!({
+                "mode": "embedded_webvh_provider",
+                "provider_id": "soland.embedded",
+                "local_id": local_id,
+                "document_url": location.document_url,
+                "log_url": location.log_url,
+                "scid": location.scid,
+                "updateKeys": [body.update_public_key_multibase.clone()],
+            }),
+            updated_at: now,
+        })
+        .await
+    {
         tracing::error!(%error, "failed to persist embedded webvh document");
         return Err(AppError::internal(
             "failed to persist embedded webvh document",
         ));
     }
-    if let Err(error) = state.persistence.webvh().append_log_event(WebvhLogRecord {
-        event_digest: version_id.clone(),
-        did: location.did.clone(),
-        seq: 1,
-        operation: log_entry.clone(),
-        created_at: now,
-    }).await {
+    if let Err(error) = state
+        .persistence
+        .webvh()
+        .append_log_event(WebvhLogRecord {
+            event_digest: version_id.clone(),
+            did: location.did.clone(),
+            seq: 1,
+            operation: log_entry.clone(),
+            created_at: now,
+        })
+        .await
+    {
         tracing::error!(%error, "failed to append embedded webvh log entry");
         return Err(AppError::internal(
             "failed to append embedded webvh log entry",
@@ -347,7 +357,8 @@ pub(super) async fn embedded_webvh_log(depot: &mut Depot, req: &mut Request, res
     let events = state
         .persistence
         .webvh()
-        .list_log_events(&record.did).await
+        .list_log_events(&record.did)
+        .await
         .unwrap_or_default();
     if events.is_empty() {
         render_error(res, StatusCode::NOT_FOUND, "not_found", "did log not found");
@@ -508,7 +519,8 @@ pub(super) async fn identity_log(
     let events = state
         .persistence
         .webvh()
-        .list_log_events(&did).await
+        .list_log_events(&did)
+        .await
         .unwrap_or_default()
         .into_iter()
         .map(|event| {
@@ -543,7 +555,13 @@ pub(super) async fn identity_receipts(
     if validate_did(&did).is_err() {
         return Err(AppError::invalid_param("invalid did"));
     }
-    let record = state.persistence.webvh().get_document(&did).await.ok().flatten();
+    let record = state
+        .persistence
+        .webvh()
+        .get_document(&did)
+        .await
+        .ok()
+        .flatten();
     json_ok(IdentityReceiptsResBody {
         receipts: record
             .map(|record| {
@@ -599,7 +617,8 @@ pub(super) async fn identity_submit_did_operation(
     let existing = state
         .persistence
         .webvh()
-        .get_document(&did).await
+        .get_document(&did)
+        .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     let next_seq = body
         .get("seq")
@@ -648,7 +667,8 @@ pub(super) async fn identity_submit_did_operation(
             seq: next_seq,
             method_evidence,
             updated_at: submitted_at,
-        }).await
+        })
+        .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     state
         .persistence
@@ -659,7 +679,8 @@ pub(super) async fn identity_submit_did_operation(
             seq: next_seq,
             operation: event_payload,
             created_at: submitted_at,
-        }).await
+        })
+        .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     append_audit_log(
         state,
@@ -910,7 +931,8 @@ async fn embedded_webvh_record_for_request(
     match state
         .persistence
         .webvh()
-        .get_embedded_webvh_document_by_local_id(&local_id).await
+        .get_embedded_webvh_document_by_local_id(&local_id)
+        .await
     {
         Ok(Some(record)) => Some(record),
         Ok(None) => {
@@ -1186,7 +1208,8 @@ async fn run_webvh_resolution_checks(state: &AppState, did: &str) -> Result<(), 
     let events = state
         .persistence
         .webvh()
-        .list_log_events(did).await
+        .list_log_events(did)
+        .await
         .map_err(|error| {
             tracing::error!(%error, %did, "failed to read webvh log during resolution checks");
             AppError::internal("failed to read did:webvh log")
@@ -1213,7 +1236,8 @@ async fn identity_document_record(state: &AppState, did: &str) -> WebvhDocumentR
     state
         .persistence
         .webvh()
-        .get_document(did).await
+        .get_document(did)
+        .await
         .ok()
         .flatten()
         .unwrap_or_else(|| WebvhDocumentRecord {

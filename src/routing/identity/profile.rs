@@ -52,7 +52,8 @@ async fn profile_presence(
     let account = state
         .persistence
         .accounts()
-        .get(&did).await
+        .get(&did)
+        .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     let presence = state.persistence.presence().get(&did).await.ok().flatten();
     let presence_json = presence

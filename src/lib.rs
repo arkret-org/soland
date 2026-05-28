@@ -27,6 +27,7 @@ pub mod round23;
 pub mod round4;
 pub mod routing;
 pub mod schema;
+pub mod security;
 pub mod state;
 pub mod verified_profiles;
 pub mod wire;

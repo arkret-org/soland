@@ -215,7 +215,8 @@ async fn audit_events(
         state
             .persistence
             .audit()
-            .snapshot_all().await
+            .snapshot_all()
+            .await
             .map_err(|error| {
                 tracing::error!(%error, "failed to read audit log");
                 AppError::internal("audit store unavailable")
@@ -235,7 +236,8 @@ async fn audit_events(
         state
             .persistence
             .audit()
-            .list_for_actor(&actor).await
+            .list_for_actor(&actor)
+            .await
             .map_err(|error| {
                 tracing::error!(%error, "failed to read audit log");
                 AppError::internal("audit store unavailable")

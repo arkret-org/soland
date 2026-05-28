@@ -100,7 +100,8 @@ async fn sweep_retention_policy(
     let events = state
         .persistence
         .projection_events()
-        .snapshot_all().await
+        .snapshot_all()
+        .await
         .unwrap_or_default()
         .into_iter()
         .filter(|event| event.space_id == space_id)
@@ -118,9 +119,7 @@ async fn sweep_retention_policy(
             .expect("retention tombstones lock");
         events
             .into_iter()
-            .filter(|event| {
-                event.created_at <= cutoff && !tombstones.contains_key(&event.event_id)
-            })
+            .filter(|event| event.created_at <= cutoff && !tombstones.contains_key(&event.event_id))
             .collect()
     };
     for event in pending {

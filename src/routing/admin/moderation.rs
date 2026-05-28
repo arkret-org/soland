@@ -83,7 +83,8 @@ async fn list_queue(aa: AuthArgs, depot: &mut Depot, req: &mut Request) -> JsonR
     let items = state
         .persistence
         .moderation()
-        .list_queue_items().await
+        .list_queue_items()
+        .await
         .unwrap_or_default();
     json_ok(json!({ "items": items, "total": items.len() }))
 }
@@ -117,7 +118,8 @@ async fn assign_queue_item(
     let mut item = state
         .persistence
         .moderation()
-        .get_queue_item(&item_id).await
+        .get_queue_item(&item_id)
+        .await
         .ok()
         .flatten()
         .ok_or_else(|| AppError::not_found("queue item"))?;
@@ -129,7 +131,8 @@ async fn assign_queue_item(
     state
         .persistence
         .moderation()
-        .upsert_queue_item(item.clone()).await
+        .upsert_queue_item(item.clone())
+        .await
         .map_err(|err| AppError::internal(err.to_string()))?;
     append_audit_log(
         state,
@@ -177,7 +180,8 @@ async fn prioritise_queue_item(
     let mut item = state
         .persistence
         .moderation()
-        .get_queue_item(&item_id).await
+        .get_queue_item(&item_id)
+        .await
         .ok()
         .flatten()
         .ok_or_else(|| AppError::not_found("queue item"))?;
@@ -188,7 +192,8 @@ async fn prioritise_queue_item(
     state
         .persistence
         .moderation()
-        .upsert_queue_item(item.clone()).await
+        .upsert_queue_item(item.clone())
+        .await
         .map_err(|err| AppError::internal(err.to_string()))?;
     append_audit_log(
         state,
@@ -256,10 +261,16 @@ async fn issue_decision(
     state
         .persistence
         .moderation()
-        .append_decision(decision).await
+        .append_decision(decision)
+        .await
         .map_err(|err| AppError::internal(err.to_string()))?;
     if let Some(item_id) = body.queue_item_ref.clone() {
-        if let Ok(Some(mut item)) = state.persistence.moderation().get_queue_item(&item_id).await {
+        if let Ok(Some(mut item)) = state
+            .persistence
+            .moderation()
+            .get_queue_item(&item_id)
+            .await
+        {
             if let Some(obj) = item.as_object_mut() {
                 obj.insert("status".to_owned(), json!("actioned"));
                 obj.insert("updated_at".to_owned(), json!(Utc::now().to_rfc3339()));
@@ -319,7 +330,8 @@ async fn lift_decision(
     let existing = state
         .persistence
         .moderation()
-        .get_decision(&decision_id).await
+        .get_decision(&decision_id)
+        .await
         .ok()
         .flatten()
         .ok_or_else(|| AppError::not_found("decision"))?;
@@ -335,7 +347,8 @@ async fn lift_decision(
     state
         .persistence
         .moderation()
-        .append_decision_lift(lift.clone()).await
+        .append_decision_lift(lift.clone())
+        .await
         .map_err(|err| AppError::internal(err.to_string()))?;
     append_audit_log(
         state,
@@ -365,7 +378,8 @@ async fn list_appeals(aa: AuthArgs, depot: &mut Depot, req: &mut Request) -> Jso
     let items = state
         .persistence
         .moderation()
-        .list_appeals().await
+        .list_appeals()
+        .await
         .unwrap_or_default();
     json_ok(json!({ "items": items, "total": items.len() }))
 }
@@ -389,7 +403,8 @@ async fn get_appeal(aa: AuthArgs, depot: &mut Depot, req: &mut Request) -> JsonR
     let history = state
         .persistence
         .moderation()
-        .appeal_history(&appeal_id).await
+        .appeal_history(&appeal_id)
+        .await
         .map_err(|err| AppError::internal(err.to_string()))?;
     if history.is_empty() {
         return Err(AppError::not_found("appeal"));
@@ -399,7 +414,8 @@ async fn get_appeal(aa: AuthArgs, depot: &mut Depot, req: &mut Request) -> JsonR
 
 async fn current_appeal_state(state: &AppState, appeal_id: &str) -> Result<AppealState, AppError> {
     let raw = super::super::interop::moderation::appeal_state(state, appeal_id)
-        .await.ok_or_else(|| AppError::not_found("appeal"))?;
+        .await
+        .ok_or_else(|| AppError::not_found("appeal"))?;
     match raw.as_str() {
         "submitted" => Ok(AppealState::Submitted),
         "under_review" => Ok(AppealState::UnderReview),
@@ -415,7 +431,8 @@ async fn append_appeal_or_500(state: &AppState, event: Value) -> Result<(), AppE
     state
         .persistence
         .moderation()
-        .append_appeal(event).await
+        .append_appeal(event)
+        .await
         .map_err(|err| AppError::internal(err.to_string()))
 }
 
@@ -458,7 +475,8 @@ async fn review_appeal(
     let submit_event = state
         .persistence
         .moderation()
-        .appeal_history(&appeal_id).await
+        .appeal_history(&appeal_id)
+        .await
         .ok()
         .and_then(|h| h.into_iter().next())
         .ok_or_else(|| AppError::not_found("appeal"))?;
@@ -468,7 +486,12 @@ async fn review_appeal(
         .unwrap_or_default()
         .to_owned();
     if !decision_ref.is_empty() {
-        if let Ok(Some(decision)) = state.persistence.moderation().get_decision(&decision_ref).await {
+        if let Ok(Some(decision)) = state
+            .persistence
+            .moderation()
+            .get_decision(&decision_ref)
+            .await
+        {
             let decided_by = decision
                 .get("decided_by")
                 .and_then(Value::as_str)
@@ -568,7 +591,8 @@ async fn decide_appeal(
     let original_decision_ref = state
         .persistence
         .moderation()
-        .appeal_history(&appeal_id).await
+        .appeal_history(&appeal_id)
+        .await
         .ok()
         .and_then(|h| h.into_iter().next())
         .and_then(|submit| {
@@ -600,7 +624,8 @@ async fn decide_appeal(
         let lifts_found = state
             .persistence
             .moderation()
-            .appeal_history(&appeal_id).await
+            .appeal_history(&appeal_id)
+            .await
             .ok()
             .map(|h| h.into_iter().any(|_| false))
             .unwrap_or(false);

@@ -76,7 +76,13 @@ pub async fn flow_projection_for_space(
     title: &str,
     summary: Option<&str>,
 ) -> serde_json::Value {
-    let meta = state.persistence.realm_meta().get(space_id).await.ok().flatten();
+    let meta = state
+        .persistence
+        .realm_meta()
+        .get(space_id)
+        .await
+        .ok()
+        .flatten();
     let owner = meta
         .as_ref()
         .map(|meta| meta.owner.clone())

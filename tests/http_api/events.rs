@@ -752,7 +752,9 @@ async fn incremental_sync_omits_quiet_realm_from_delta() {
         "incremental noop MUST drop the realm baseline: {quiet}"
     );
     assert!(
-        quiet["realms"].as_object().is_some_and(|map| map.is_empty()),
+        quiet["realms"]
+            .as_object()
+            .is_some_and(|map| map.is_empty()),
         "no other realm should appear in a quiet delta: {quiet}"
     );
 }
@@ -807,7 +809,9 @@ async fn account_subscribe_long_poll_returns_empty_on_timeout() {
     let elapsed = start.elapsed();
 
     assert!(
-        timed_out["realms"].as_object().is_some_and(|map| map.is_empty()),
+        timed_out["realms"]
+            .as_object()
+            .is_some_and(|map| map.is_empty()),
         "timed-out long-poll MUST return an empty realms delta: {timed_out}"
     );
     assert!(

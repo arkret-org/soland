@@ -100,21 +100,26 @@ pub(super) async fn push_register(
     if let Some(auth_warning) = auth_warning {
         warnings.push(auth_warning);
     }
-    if let Err(error) = state.persistence.push_devices().register(json!({
-        "registration_id": registration_id,
-        "actor": session.actor,
-        "principal_did": principal_did,
-        "device_id": device_id,
-        "platform": platform,
-        "app_id": app_id,
-        "push_gateway": push_gateway,
-        "push_key": push_key,
-        "request_id": request_id,
-        "operation_id": operation_id,
-        "idempotency_key": idempotency_key,
-        "proof_present": proof_present,
-        "auth_mode": if warnings.is_empty() { "bearer" } else { "session_grant_bridge" },
-    })).await {
+    if let Err(error) = state
+        .persistence
+        .push_devices()
+        .register(json!({
+            "registration_id": registration_id,
+            "actor": session.actor,
+            "principal_did": principal_did,
+            "device_id": device_id,
+            "platform": platform,
+            "app_id": app_id,
+            "push_gateway": push_gateway,
+            "push_key": push_key,
+            "request_id": request_id,
+            "operation_id": operation_id,
+            "idempotency_key": idempotency_key,
+            "proof_present": proof_present,
+            "auth_mode": if warnings.is_empty() { "bearer" } else { "session_grant_bridge" },
+        }))
+        .await
+    {
         tracing::error!(%error, "failed to persist push device registration");
     }
     json_ok(PushRegisterResponse {
@@ -167,7 +172,8 @@ pub(super) async fn push_unregister(
             &body.device_id,
             body.push_key.as_deref(),
             body.app_id.as_deref(),
-        ).await
+        )
+        .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     append_audit_log(
         state,
@@ -199,7 +205,8 @@ pub(super) async fn push_rules(
     let rules = state
         .persistence
         .push_rules()
-        .list_for_actor(&session.actor).await
+        .list_for_actor(&session.actor)
+        .await
         .unwrap_or_default()
         .iter()
         .map(push_rule_to_json)
@@ -255,7 +262,8 @@ pub(super) async fn upsert_push_rule(
     state
         .persistence
         .push_rules()
-        .put(rule.clone()).await
+        .put(rule.clone())
+        .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     json_ok(UpsertPushRuleResponse {
         ok: true,
@@ -284,7 +292,8 @@ pub(super) async fn delete_push_rule(
     let _ = state
         .persistence
         .push_rules()
-        .delete(&session.actor, &rule_id).await;
+        .delete(&session.actor, &rule_id)
+        .await;
     json_ok(OkResBody { ok: true })
 }
 
@@ -314,7 +323,8 @@ pub(super) async fn push_notify(
     let registered = state
         .persistence
         .push_devices()
-        .snapshot_all().await
+        .snapshot_all()
+        .await
         .unwrap_or_default();
     let mut rejected = Vec::new();
     let max_age = chrono::Duration::hours(PUSH_GATEWAY_CONTRACT_MAX_AGE_HOURS);
@@ -375,7 +385,8 @@ pub(super) async fn push_notify(
         }
 
         if let Some(rule_id) =
-            push_device_suppressed_by_rule(state, actor, &body.notification, registered_device).await
+            push_device_suppressed_by_rule(state, actor, &body.notification, registered_device)
+                .await
         {
             rejected.push(push_rejection(device, "push_rule", Some(rule_id)));
         }
@@ -589,7 +600,8 @@ async fn push_device_suppressed_by_rule(
     state
         .persistence
         .push_rules()
-        .list_for_actor(actor).await
+        .list_for_actor(actor)
+        .await
         .ok()?
         .into_iter()
         .filter(|rule| rule.enabled)

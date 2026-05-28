@@ -153,7 +153,8 @@ async fn upload_keypackage(
     state
         .persistence
         .mls_key_packages()
-        .put(&record).await
+        .put(&record)
+        .await
         .map_err(|err| AppError::internal(format!("mls_key_packages.put: {err}")))?;
 
     json_ok(json!({
@@ -244,7 +245,8 @@ async fn claim_keypackage(
     let updated = state
         .persistence
         .mls_key_packages()
-        .try_claim(&claimed_keypackage_id, &claimed_group_id, consumed_at).await
+        .try_claim(&claimed_keypackage_id, &claimed_group_id, consumed_at)
+        .await
         .map_err(|err| AppError::internal(format!("mls_key_packages.try_claim: {err}")))?;
     if updated.is_none() {
         // Persistence said "already claimed" but the reducer didn't —
@@ -292,7 +294,8 @@ async fn consume_keypackages(
         match state
             .persistence
             .mls_key_packages()
-            .try_claim(&keypackage_id, group_id, consumed_at).await
+            .try_claim(&keypackage_id, group_id, consumed_at)
+            .await
         {
             Ok(Some(_)) => consumed.push(keypackage_id),
             Ok(None) => {
@@ -331,7 +334,12 @@ async fn revoke_keypackages(
     let mut revoked = Vec::new();
     let mut failures = serde_json::Map::new();
     for keypackage_id in refs {
-        match state.persistence.mls_key_packages().get(&keypackage_id).await {
+        match state
+            .persistence
+            .mls_key_packages()
+            .get(&keypackage_id)
+            .await
+        {
             Ok(Some(record)) if record.actor_did != session.actor => {
                 failures.insert(keypackage_id, json!("not_owner"));
             }
@@ -339,11 +347,12 @@ async fn revoke_keypackages(
                 failures.insert(keypackage_id, json!("already_consumed"));
             }
             Ok(Some(_)) => {
-                match state.persistence.mls_key_packages().try_claim(
-                    &keypackage_id,
-                    "revoked",
-                    revoked_at,
-                ).await {
+                match state
+                    .persistence
+                    .mls_key_packages()
+                    .try_claim(&keypackage_id, "revoked", revoked_at)
+                    .await
+                {
                     Ok(Some(_)) => revoked.push(keypackage_id),
                     Ok(None) => {
                         failures.insert(keypackage_id, json!("already_consumed_or_missing"));
@@ -399,7 +408,8 @@ async fn pending_welcomes(
     let drained = state
         .persistence
         .mls_welcomes()
-        .drain_pending(&session.actor, &session.device_id, now_secs, cap).await
+        .drain_pending(&session.actor, &session.device_id, now_secs, cap)
+        .await
         .map_err(|err| AppError::internal(format!("mls_welcomes.drain_pending: {err}")))?;
 
     {
@@ -505,4 +515,3 @@ fn key_package_to_record(kp: &MlsKeyPackage) -> MlsKeyPackageRecord {
         created_at: kp.created_at,
     }
 }
-

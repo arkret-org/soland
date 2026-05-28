@@ -67,6 +67,9 @@ pub const MAX_ATTEMPTS: i32 = 10;
 /// Sentinel `last_status` written when the worker gives up after the
 /// attempts cap. Negative so it cannot collide with any real HTTP code.
 pub const GAVE_UP_STATUS_SENTINEL: i32 = -1;
+/// Sentinel `last_status` written when a row is suppressed by the
+/// deployment egress policy before any socket is opened.
+pub const EGRESS_POLICY_DENIED_STATUS_SENTINEL: i32 = -2;
 /// Cap on the response excerpt we persist. 1 KiB matches the spec's
 /// postmortem-evidence size budget.
 const RESPONSE_EXCERPT_BYTES: usize = 1024;
@@ -120,7 +123,8 @@ pub async fn enqueue_outbound(
         // return the existing row so callers can still observe the
         // outbox state without a follow-up lookup.
         let existing = store
-            .snapshot_all().await?
+            .snapshot_all()
+            .await?
             .into_iter()
             .find(|row| {
                 row.peer_did == candidate.peer_did
@@ -272,6 +276,7 @@ fn build_http_client() -> reqwest::Client {
     reqwest::Client::builder()
         .connect_timeout(CONNECT_TIMEOUT)
         .timeout(REQUEST_TIMEOUT)
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .expect("federation dispatcher reqwest client must build")
 }
@@ -319,7 +324,8 @@ impl FederationDispatcher {
             .state
             .persistence
             .federation_outbox()
-            .pending_due(now, POLL_BATCH_LIMIT).await
+            .pending_due(now, POLL_BATCH_LIMIT)
+            .await
             .map_err(|e| e.to_string())?;
         for row in rows {
             self.deliver_one(row).await;
@@ -331,6 +337,45 @@ impl FederationDispatcher {
     async fn deliver_one(&self, mut row: FederationOutboxRecord) {
         let url = format!("{}{}", row.peer_url, row.endpoint);
         let body_bytes = row.payload_json.as_bytes().to_vec();
+        let parsed_url = match crate::security::validate_http_url_for_egress(
+            &url,
+            "federation outbox",
+            self.state.config.development_mode,
+        ) {
+            Ok(url) => url,
+            Err(error) => {
+                row.attempts = row.attempts.saturating_add(1);
+                row.delivered_at = Some(now_unix_secs());
+                row.last_status = Some(EGRESS_POLICY_DENIED_STATUS_SENTINEL);
+                row.last_response_excerpt =
+                    Some(excerpt(&format!("egress_policy_denied: {error}")));
+                tracing::warn!(
+                    target = "federation_outbox",
+                    worker = "federation_outbox",
+                    outbox_id = %row.id,
+                    peer_did = %row.peer_did,
+                    endpoint = %row.endpoint,
+                    %error,
+                    "federation outbox delivery denied by egress policy"
+                );
+                if let Err(error) = self
+                    .state
+                    .persistence
+                    .federation_outbox()
+                    .update(&row)
+                    .await
+                {
+                    tracing::warn!(
+                        %error,
+                        worker = "federation_outbox",
+                        outbox_id = %row.id,
+                        target = "federation_outbox",
+                        "failed to persist federation outbox egress-policy denial"
+                    );
+                }
+                return;
+            }
+        };
 
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert(
@@ -364,7 +409,7 @@ impl FederationDispatcher {
 
         let response = self
             .client
-            .post(&url)
+            .post(parsed_url)
             .headers(headers)
             .body(body_bytes)
             .send()
@@ -403,7 +448,13 @@ impl FederationDispatcher {
             }
         }
 
-        if let Err(error) = self.state.persistence.federation_outbox().update(&row).await {
+        if let Err(error) = self
+            .state
+            .persistence
+            .federation_outbox()
+            .update(&row)
+            .await
+        {
             tracing::warn!(
                 %error,
                 worker = "federation_outbox",
@@ -451,7 +502,12 @@ impl FederationDispatcher {
         );
     }
 
-    async fn insert_dead_letter(&self, row: &FederationOutboxRecord, terminal_status: i32, reason: &str) {
+    async fn insert_dead_letter(
+        &self,
+        row: &FederationOutboxRecord,
+        terminal_status: i32,
+        reason: &str,
+    ) {
         let failed_at = row.delivered_at.unwrap_or_else(now_unix_secs);
         let record = FederationOutboxDeadLetterRecord {
             id: Uuid::new_v4().to_string(),
@@ -474,7 +530,8 @@ impl FederationDispatcher {
             .state
             .persistence
             .federation_outbox()
-            .insert_dead_letter(&record).await
+            .insert_dead_letter(&record)
+            .await
         {
             tracing::warn!(
                 %error,

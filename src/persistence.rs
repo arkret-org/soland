@@ -6,16 +6,16 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::{Arc, Mutex};
 
+use async_trait::async_trait;
 use chrono::Utc;
 use contrix_sdk::Operation;
 use diesel::sql_types::{
     Array, BigInt, Binary, Bool, Integer, Jsonb, Nullable, Text, Timestamptz, Uuid as SqlUuid,
 };
 use diesel::{OptionalExtension, QueryableByName, sql_query};
+use diesel_async::AsyncPgConnection;
 use diesel_async::RunQueryDsl;
 use diesel_async::pooled_connection::deadpool::Object;
-use diesel_async::AsyncPgConnection;
-use async_trait::async_trait;
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -76,7 +76,11 @@ pub trait SessionStore: Send + Sync {
 /// (actor remarks), §3.7 (Space remarks).
 #[async_trait]
 pub trait AccountDataStore: Send + Sync {
-    async fn get(&self, actor: &str, data_type: &str) -> PersistenceResult<Option<AccountDataRecord>>;
+    async fn get(
+        &self,
+        actor: &str,
+        data_type: &str,
+    ) -> PersistenceResult<Option<AccountDataRecord>>;
     async fn put(&self, record: &AccountDataRecord) -> PersistenceResult<()>;
     async fn delete(&self, actor: &str, data_type: &str) -> PersistenceResult<()>;
     async fn list_for_actor(&self, actor: &str) -> PersistenceResult<Vec<AccountDataRecord>>;
@@ -147,7 +151,8 @@ pub trait FlowProjectionStore: Send + Sync {
 pub trait MorphProjectionStore: Send + Sync {
     async fn get(&self, morph_id: &str) -> PersistenceResult<Option<MorphProjectionRecord>>;
     async fn put(&self, record: &MorphProjectionRecord) -> PersistenceResult<()>;
-    async fn list_for_space(&self, space_id: &str) -> PersistenceResult<Vec<MorphProjectionRecord>>;
+    async fn list_for_space(&self, space_id: &str)
+    -> PersistenceResult<Vec<MorphProjectionRecord>>;
     async fn snapshot_all(&self) -> PersistenceResult<Vec<MorphProjectionRecord>>;
     async fn delete(&self, morph_id: &str) -> PersistenceResult<()>;
 }
@@ -211,8 +216,11 @@ pub struct MorphProjectionRecord {
 pub trait MessageStore: Send + Sync {
     async fn get(&self, event_id: &str) -> PersistenceResult<Option<MessageRecord>>;
     async fn put(&self, record: &MessageRecord) -> PersistenceResult<()>;
-    async fn list_for_space(&self, space_id: &str, limit: usize)
-    -> PersistenceResult<Vec<MessageRecord>>;
+    async fn list_for_space(
+        &self,
+        space_id: &str,
+        limit: usize,
+    ) -> PersistenceResult<Vec<MessageRecord>>;
     async fn list_for_thread(
         &self,
         thread_id: &str,
@@ -233,8 +241,11 @@ pub trait BlobStore: Send + Sync {
 /// Trait for durable device inventory operations.
 #[async_trait]
 pub trait DeviceInventoryStore: Send + Sync {
-    async fn get(&self, actor: &str, device_id: &str)
-    -> PersistenceResult<Option<DeviceInventoryRecord>>;
+    async fn get(
+        &self,
+        actor: &str,
+        device_id: &str,
+    ) -> PersistenceResult<Option<DeviceInventoryRecord>>;
     async fn put(&self, record: &DeviceInventoryRecord) -> PersistenceResult<()>;
     async fn list_for_actor(&self, actor: &str) -> PersistenceResult<Vec<DeviceInventoryRecord>>;
     async fn list(&self) -> PersistenceResult<Vec<DeviceInventoryRecord>>;
@@ -300,7 +311,9 @@ pub trait FederationOutboxStore: Send + Sync {
         &self,
         record: &FederationOutboxDeadLetterRecord,
     ) -> PersistenceResult<()>;
-    async fn dead_letters_snapshot(&self) -> PersistenceResult<Vec<FederationOutboxDeadLetterRecord>>;
+    async fn dead_letters_snapshot(
+        &self,
+    ) -> PersistenceResult<Vec<FederationOutboxDeadLetterRecord>>;
 }
 
 /// Append-only audit log. Reads are always actor-scoped; the cursor is the
@@ -604,7 +617,12 @@ pub trait DeviceMessageStore: Send + Sync {
     async fn try_register_txn(&self, key: String) -> PersistenceResult<bool>;
     /// Remove every queued message for the given recipient+device whose
     /// position is `<= ack_position`. Returns the number removed.
-    async fn ack(&self, recipient: &str, device_id: &str, ack_position: i64) -> PersistenceResult<usize>;
+    async fn ack(
+        &self,
+        recipient: &str,
+        device_id: &str,
+        ack_position: i64,
+    ) -> PersistenceResult<usize>;
     /// List queued messages for a device strictly after `ack_position`.
     async fn list_after(
         &self,
@@ -626,7 +644,12 @@ pub trait DeviceKeyStore: Send + Sync {
 /// One-time prekey pool. Calls to `claim` pop a single key.
 #[async_trait]
 pub trait OneTimeKeyStore: Send + Sync {
-    async fn put(&self, actor: String, device_id: String, keys: Vec<Value>) -> PersistenceResult<()>;
+    async fn put(
+        &self,
+        actor: String,
+        device_id: String,
+        keys: Vec<Value>,
+    ) -> PersistenceResult<()>;
     async fn claim(&self, actor: &str, device_id: &str) -> PersistenceResult<Option<Value>>;
 }
 
@@ -704,7 +727,8 @@ pub trait MultisigPendingStore: Send + Sync {
         signer_did: &str,
         partial: Value,
     ) -> PersistenceResult<MultisigPendingRecord>;
-    async fn list_for_space(&self, space_id: &str) -> PersistenceResult<Vec<MultisigPendingRecord>>;
+    async fn list_for_space(&self, space_id: &str)
+    -> PersistenceResult<Vec<MultisigPendingRecord>>;
     async fn delete(&self, anchor_id: &str) -> PersistenceResult<bool>;
 
     /// List every row across all spaces. Used by the leader-election
@@ -1226,7 +1250,10 @@ impl MultisigPendingStore for MemoryMultisigPendingStore {
         Ok(record.clone())
     }
 
-    async fn list_for_space(&self, space_id: &str) -> PersistenceResult<Vec<MultisigPendingRecord>> {
+    async fn list_for_space(
+        &self,
+        space_id: &str,
+    ) -> PersistenceResult<Vec<MultisigPendingRecord>> {
         let data = self.data.lock().expect("lock");
         Ok(data
             .values()
@@ -1420,7 +1447,11 @@ impl MemoryAccountDataStore {
 
 #[async_trait]
 impl AccountDataStore for MemoryAccountDataStore {
-    async fn get(&self, actor: &str, data_type: &str) -> PersistenceResult<Option<AccountDataRecord>> {
+    async fn get(
+        &self,
+        actor: &str,
+        data_type: &str,
+    ) -> PersistenceResult<Option<AccountDataRecord>> {
         let data = self.data.lock().expect("lock");
         Ok(data.get(&(actor.to_owned(), data_type.to_owned())).cloned())
     }
@@ -1688,7 +1719,10 @@ impl MorphProjectionStore for MemoryMorphProjectionStore {
         Ok(())
     }
 
-    async fn list_for_space(&self, space_id: &str) -> PersistenceResult<Vec<MorphProjectionRecord>> {
+    async fn list_for_space(
+        &self,
+        space_id: &str,
+    ) -> PersistenceResult<Vec<MorphProjectionRecord>> {
         let data = self.data.lock().expect("lock");
         Ok(data
             .values()
@@ -1984,7 +2018,9 @@ impl FederationOutboxStore for MemoryFederationOutboxStore {
         Ok(())
     }
 
-    async fn dead_letters_snapshot(&self) -> PersistenceResult<Vec<FederationOutboxDeadLetterRecord>> {
+    async fn dead_letters_snapshot(
+        &self,
+    ) -> PersistenceResult<Vec<FederationOutboxDeadLetterRecord>> {
         let dead_letters = self
             .dead_letters
             .lock()
@@ -2930,7 +2966,12 @@ impl DeviceMessageStore for MemoryDeviceMessageStore {
             .insert(key))
     }
 
-    async fn ack(&self, recipient: &str, device_id: &str, ack_position: i64) -> PersistenceResult<usize> {
+    async fn ack(
+        &self,
+        recipient: &str,
+        device_id: &str,
+        ack_position: i64,
+    ) -> PersistenceResult<usize> {
         if ack_position <= 0 {
             return Ok(0);
         }
@@ -3016,7 +3057,12 @@ impl MemoryOneTimeKeyStore {
 
 #[async_trait]
 impl OneTimeKeyStore for MemoryOneTimeKeyStore {
-    async fn put(&self, actor: String, device_id: String, keys: Vec<Value>) -> PersistenceResult<()> {
+    async fn put(
+        &self,
+        actor: String,
+        device_id: String,
+        keys: Vec<Value>,
+    ) -> PersistenceResult<()> {
         self.data
             .lock()
             .expect("one time keys lock")
@@ -3712,7 +3758,8 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
         .bind::<Nullable<Text>, _>(&record.claimed_by_group_id)
         .bind::<Nullable<BigInt>, _>(record.consumed_at)
         .bind::<BigInt, _>(record.created_at)
-        .execute(&mut *conn).await?;
+        .execute(&mut *conn)
+        .await?;
         Ok(inserted > 0)
     }
 
@@ -3724,7 +3771,8 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
              FROM mls_key_packages WHERE id = $1",
         )
         .bind::<Text, _>(id)
-        .get_result::<MlsKeyPackageRow>(&mut *conn).await
+        .get_result::<MlsKeyPackageRow>(&mut *conn)
+        .await
         .optional()
         .map(|row| row.map(MlsKeyPackageRecord::from))
         .map_err(PersistenceError::from)
@@ -3747,7 +3795,8 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
         .bind::<Text, _>(id)
         .bind::<Text, _>(group_id)
         .bind::<BigInt, _>(consumed_at)
-        .get_result::<MlsKeyPackageRow>(&mut *conn).await
+        .get_result::<MlsKeyPackageRow>(&mut *conn)
+        .await
         .optional()
         .map(|row| row.map(MlsKeyPackageRecord::from))
         .map_err(PersistenceError::from)
@@ -3760,7 +3809,8 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
              key_package_bytes, claimed_by_group_id, consumed_at, created_at \
              FROM mls_key_packages ORDER BY created_at ASC, id ASC",
         )
-        .load::<MlsKeyPackageRow>(&mut *conn).await
+        .load::<MlsKeyPackageRow>(&mut *conn)
+        .await
         .map(|rows| rows.into_iter().map(MlsKeyPackageRecord::from).collect())
         .map_err(PersistenceError::from)
     }
@@ -3785,7 +3835,8 @@ impl MlsWelcomeStore for PgMlsWelcomeStore {
         .bind::<Text, _>(&record.key_package_id)
         .bind::<BigInt, _>(record.enqueued_at)
         .bind::<Nullable<BigInt>, _>(record.delivered_at)
-        .execute(&mut *conn).await?;
+        .execute(&mut *conn)
+        .await?;
         Ok(())
     }
 
@@ -3819,7 +3870,8 @@ impl MlsWelcomeStore for PgMlsWelcomeStore {
         .bind::<Text, _>(recipient_device_id)
         .bind::<BigInt, _>(now_unix_secs)
         .bind::<BigInt, _>(limit)
-        .load::<MlsWelcomeRow>(&mut *conn).await
+        .load::<MlsWelcomeRow>(&mut *conn)
+        .await
         .map(|rows| rows.into_iter().map(MlsWelcomeRecord::from).collect())
         .map_err(PersistenceError::from)
     }
@@ -3831,7 +3883,8 @@ impl MlsWelcomeStore for PgMlsWelcomeStore {
              key_package_id, enqueued_at, delivered_at \
              FROM mls_welcomes ORDER BY enqueued_at ASC, id ASC",
         )
-        .load::<MlsWelcomeRow>(&mut *conn).await
+        .load::<MlsWelcomeRow>(&mut *conn)
+        .await
         .map(|rows| rows.into_iter().map(MlsWelcomeRecord::from).collect())
         .map_err(PersistenceError::from)
     }
@@ -4062,7 +4115,8 @@ impl AccountStore for PgAccountStore {
             "SELECT actor AS did, handle, display_name, created_at FROM accounts WHERE actor = $1",
         )
         .bind::<Text, _>(did)
-        .get_result::<AccountRow>(&mut *conn).await
+        .get_result::<AccountRow>(&mut *conn)
+        .await
         .optional()
         .map(|row| row.map(AccountRecord::from))
         .map_err(PersistenceError::from)
@@ -4080,7 +4134,8 @@ impl AccountStore for PgAccountStore {
         .bind::<Text, _>(&record.handle)
         .bind::<Nullable<Text>, _>(&record.display_name)
         .bind::<Timestamptz, _>(record.created_at)
-        .execute(&mut *conn).await
+        .execute(&mut *conn)
+        .await
         .map(|_| ())
         .map_err(PersistenceError::from)
     }
@@ -4090,7 +4145,8 @@ impl AccountStore for PgAccountStore {
         sql_query(
             "SELECT actor AS did, handle, display_name, created_at FROM accounts ORDER BY actor",
         )
-        .load::<AccountRow>(&mut *conn).await
+        .load::<AccountRow>(&mut *conn)
+        .await
         .map(|rows| rows.into_iter().map(AccountRecord::from).collect())
         .map_err(PersistenceError::from)
     }
@@ -4099,7 +4155,8 @@ impl AccountStore for PgAccountStore {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query("DELETE FROM accounts WHERE actor = $1")
             .bind::<Text, _>(did)
-            .execute(&mut *conn).await
+            .execute(&mut *conn)
+            .await
             .map(|_| ())
             .map_err(PersistenceError::from)
     }
@@ -4118,7 +4175,8 @@ impl SessionStore for PgSessionStore {
              FROM sessions WHERE token_hash = $1",
         )
         .bind::<Text, _>(token)
-        .get_result::<SessionRow>(&mut *conn).await
+        .get_result::<SessionRow>(&mut *conn)
+        .await
         .optional()
         .map(|row| row.map(SessionRecord::from))
         .map_err(PersistenceError::from)
@@ -4148,7 +4206,8 @@ impl SessionStore for PgSessionStore {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query("DELETE FROM sessions WHERE token_hash = $1")
             .bind::<Text, _>(token)
-            .execute(&mut *conn).await
+            .execute(&mut *conn)
+            .await
             .map(|_| ())
             .map_err(PersistenceError::from)
     }
@@ -4156,7 +4215,8 @@ impl SessionStore for PgSessionStore {
     async fn cleanup_expired(&self) -> PersistenceResult<usize> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query("DELETE FROM sessions WHERE expires_at <= NOW()")
-            .execute(&mut *conn).await
+            .execute(&mut *conn)
+            .await
             .map_err(PersistenceError::from)
     }
 
@@ -4166,7 +4226,8 @@ impl SessionStore for PgSessionStore {
             "SELECT token_hash, actor, device_id, audience, expires_at, created_at, revoked_at \
              FROM sessions",
         )
-        .load::<SessionRow>(&mut *conn).await
+        .load::<SessionRow>(&mut *conn)
+        .await
         .map(|rows| rows.into_iter().map(SessionRecord::from).collect())
         .map_err(PersistenceError::from)
     }
@@ -4178,7 +4239,11 @@ struct PgAccountDataStore {
 
 #[async_trait]
 impl AccountDataStore for PgAccountDataStore {
-    async fn get(&self, actor: &str, data_type: &str) -> PersistenceResult<Option<AccountDataRecord>> {
+    async fn get(
+        &self,
+        actor: &str,
+        data_type: &str,
+    ) -> PersistenceResult<Option<AccountDataRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "SELECT actor, data_type, payload, updated_at \
@@ -4186,7 +4251,8 @@ impl AccountDataStore for PgAccountDataStore {
         )
         .bind::<Text, _>(actor)
         .bind::<Text, _>(data_type)
-        .get_result::<AccountDataRow>(&mut *conn).await
+        .get_result::<AccountDataRow>(&mut *conn)
+        .await
         .optional()
         .map(|row| row.map(AccountDataRecord::from))
         .map_err(PersistenceError::from)
@@ -4204,7 +4270,8 @@ impl AccountDataStore for PgAccountDataStore {
         .bind::<Text, _>(&record.data_type)
         .bind::<Jsonb, _>(&record.payload)
         .bind::<Timestamptz, _>(record.updated_at)
-        .execute(&mut *conn).await
+        .execute(&mut *conn)
+        .await
         .map(|_| ())
         .map_err(PersistenceError::from)
     }
@@ -4214,7 +4281,8 @@ impl AccountDataStore for PgAccountDataStore {
         sql_query("DELETE FROM account_datas WHERE actor = $1 AND data_type = $2")
             .bind::<Text, _>(actor)
             .bind::<Text, _>(data_type)
-            .execute(&mut *conn).await
+            .execute(&mut *conn)
+            .await
             .map(|_| ())
             .map_err(PersistenceError::from)
     }
@@ -4226,7 +4294,8 @@ impl AccountDataStore for PgAccountDataStore {
              FROM account_datas WHERE actor = $1 ORDER BY data_type",
         )
         .bind::<Text, _>(actor)
-        .load::<AccountDataRow>(&mut *conn).await
+        .load::<AccountDataRow>(&mut *conn)
+        .await
         .map(|rows| rows.into_iter().map(AccountDataRecord::from).collect())
         .map_err(PersistenceError::from)
     }
@@ -4319,7 +4388,8 @@ impl FederationTransactionStore for PgFederationTransactionStore {
         )
         .bind::<Text, _>(origin)
         .bind::<Text, _>(txn_id)
-        .get_result::<FederationTransactionRow>(&mut *conn).await
+        .get_result::<FederationTransactionRow>(&mut *conn)
+        .await
         .optional()
         .map(|row| row.map(FederationTransactionRecord::from))
         .map_err(PersistenceError::from)
@@ -4365,7 +4435,8 @@ impl FederationTransactionStore for PgFederationTransactionStore {
              space_id, content_digest, status, payload AS response, received_at, processed_at \
              FROM federation_transactions ORDER BY received_at ASC, txn_id ASC",
         )
-        .load::<FederationTransactionRow>(&mut *conn).await
+        .load::<FederationTransactionRow>(&mut *conn)
+        .await
         .map_err(PersistenceError::from)?;
         Ok(rows
             .into_iter()
@@ -4406,7 +4477,8 @@ impl FederationOutboxStore for PgFederationOutboxStore {
         .bind::<Nullable<Text>, _>(record.last_response_excerpt.as_deref())
         .bind::<BigInt, _>(record.created_at)
         .bind::<Nullable<BigInt>, _>(record.delivered_at)
-        .execute(&mut *conn).await
+        .execute(&mut *conn)
+        .await
         .map_err(PersistenceError::from)?;
         Ok(inserted > 0)
     }
@@ -4426,7 +4498,8 @@ impl FederationOutboxStore for PgFederationOutboxStore {
         )
         .bind::<BigInt, _>(now_unix_secs)
         .bind::<BigInt, _>(limit as i64)
-        .load::<FederationOutboxRow>(&mut *conn).await
+        .load::<FederationOutboxRow>(&mut *conn)
+        .await
         .map_err(PersistenceError::from)?;
         Ok(rows.into_iter().map(FederationOutboxRecord::from).collect())
     }
@@ -4445,7 +4518,8 @@ impl FederationOutboxStore for PgFederationOutboxStore {
         .bind::<Nullable<Integer>, _>(record.last_status)
         .bind::<Nullable<Text>, _>(record.last_response_excerpt.as_deref())
         .bind::<Nullable<BigInt>, _>(record.delivered_at)
-        .execute(&mut *conn).await
+        .execute(&mut *conn)
+        .await
         .map(|_| ())
         .map_err(PersistenceError::from)
     }
@@ -4458,7 +4532,8 @@ impl FederationOutboxStore for PgFederationOutboxStore {
              FROM federation_outbox WHERE id = $1",
         )
         .bind::<Text, _>(id)
-        .get_result::<FederationOutboxRow>(&mut *conn).await
+        .get_result::<FederationOutboxRow>(&mut *conn)
+        .await
         .optional()
         .map(|row| row.map(FederationOutboxRecord::from))
         .map_err(PersistenceError::from)
@@ -4471,7 +4546,8 @@ impl FederationOutboxStore for PgFederationOutboxStore {
              next_attempt_at, last_status, last_response_excerpt, created_at, delivered_at \
              FROM federation_outbox ORDER BY created_at ASC, id ASC",
         )
-        .load::<FederationOutboxRow>(&mut *conn).await
+        .load::<FederationOutboxRow>(&mut *conn)
+        .await
         .map_err(PersistenceError::from)?;
         Ok(rows.into_iter().map(FederationOutboxRecord::from).collect())
     }
@@ -4498,19 +4574,23 @@ impl FederationOutboxStore for PgFederationOutboxStore {
         .bind::<Nullable<Text>, _>(record.response_excerpt.as_deref())
         .bind::<BigInt, _>(record.failed_at)
         .bind::<Text, _>(&record.reason)
-        .execute(&mut *conn).await
+        .execute(&mut *conn)
+        .await
         .map(|_| ())
         .map_err(PersistenceError::from)
     }
 
-    async fn dead_letters_snapshot(&self) -> PersistenceResult<Vec<FederationOutboxDeadLetterRecord>> {
+    async fn dead_letters_snapshot(
+        &self,
+    ) -> PersistenceResult<Vec<FederationOutboxDeadLetterRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         let rows = sql_query(
             "SELECT id, outbox_id, peer_did, endpoint, idempotency_key, terminal_status, \
              attempts, response_excerpt, failed_at, reason \
              FROM federation_outbox_dead_letter ORDER BY failed_at ASC, id ASC",
         )
-        .load::<FederationOutboxDeadLetterRow>(&mut *conn).await
+        .load::<FederationOutboxDeadLetterRow>(&mut *conn)
+        .await
         .map_err(PersistenceError::from)?;
         Ok(rows
             .into_iter()
@@ -4537,7 +4617,8 @@ impl PushBridgeCacheStore for PgPushBridgeCacheStore {
              FROM push_bridge_cache WHERE cache_key = $1",
         )
         .bind::<Text, _>(bridge_describe_url)
-        .get_result::<PushBridgeCacheRow>(&mut *conn).await
+        .get_result::<PushBridgeCacheRow>(&mut *conn)
+        .await
         .optional()
         .map(|row| row.map(OutboundPushBridgeCacheRecord::from))
         .map_err(PersistenceError::from)
@@ -4581,7 +4662,8 @@ impl PushBridgeCacheStore for PgPushBridgeCacheStore {
         .bind::<Text, _>(&record.trust_level)
         .bind::<Timestamptz, _>(record.freshness_at)
         .bind::<Text, _>(&record.etag)
-        .execute(&mut *conn).await
+        .execute(&mut *conn)
+        .await
         .map(|_| ())
         .map_err(PersistenceError::from)
     }
@@ -4590,7 +4672,8 @@ impl PushBridgeCacheStore for PgPushBridgeCacheStore {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query("DELETE FROM push_bridge_cache WHERE cache_key = $1")
             .bind::<Text, _>(bridge_describe_url)
-            .execute(&mut *conn).await
+            .execute(&mut *conn)
+            .await
             .map(|affected| affected > 0)
             .map_err(PersistenceError::from)
     }
@@ -4598,7 +4681,8 @@ impl PushBridgeCacheStore for PgPushBridgeCacheStore {
     async fn clear(&self) -> PersistenceResult<usize> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query("DELETE FROM push_bridge_cache")
-            .execute(&mut *conn).await
+            .execute(&mut *conn)
+            .await
             .map_err(PersistenceError::from)
     }
 
@@ -4610,7 +4694,8 @@ impl PushBridgeCacheStore for PgPushBridgeCacheStore {
              trust_level, freshness_at, etag \
              FROM push_bridge_cache ORDER BY cache_key",
         )
-        .load::<PushBridgeCacheRow>(&mut *conn).await
+        .load::<PushBridgeCacheRow>(&mut *conn)
+        .await
         .map(|rows| {
             rows.into_iter()
                 .map(OutboundPushBridgeCacheRecord::from)
@@ -4627,7 +4712,8 @@ impl PushBridgeCacheStore for PgPushBridgeCacheStore {
             count: i64,
         }
         sql_query("SELECT COUNT(*) AS count FROM push_bridge_cache")
-            .get_result::<CountRow>(&mut *conn).await
+            .get_result::<CountRow>(&mut *conn)
+            .await
             .map(|row| row.count as usize)
             .map_err(PersistenceError::from)
     }
@@ -4661,7 +4747,8 @@ impl PushBridgeCacheStore for PgPushBridgeCacheStore {
         .bind::<Text, _>(digest)
         .bind::<Text, _>(etag)
         .bind::<Text, _>(trust_level)
-        .execute(&mut *conn).await
+        .execute(&mut *conn)
+        .await
         .map(|_| ())
         .map_err(PersistenceError::from)
     }
@@ -4788,7 +4875,8 @@ impl MultisigPendingStore for PgMultisigPendingStore {
              FROM multisig_pending WHERE anchor_id = $1",
         )
         .bind::<Text, _>(anchor_id)
-        .get_result::<MultisigPendingRow>(&mut *conn).await
+        .get_result::<MultisigPendingRow>(&mut *conn)
+        .await
         .optional()
         .map(|row| row.map(MultisigPendingRecord::from))
         .map_err(PersistenceError::from)
@@ -4809,14 +4897,18 @@ impl MultisigPendingStore for PgMultisigPendingStore {
         .bind::<Text, _>(anchor_id)
         .bind::<Text, _>(signer_did)
         .bind::<Jsonb, _>(&partial)
-        .execute(&mut *conn).await
+        .execute(&mut *conn)
+        .await
         .map_err(PersistenceError::from)?;
         self.get(anchor_id).await?.ok_or_else(|| {
             PersistenceError::NotFound(format!("multisig_pending row {anchor_id} not found"))
         })
     }
 
-    async fn list_for_space(&self, space_id: &str) -> PersistenceResult<Vec<MultisigPendingRecord>> {
+    async fn list_for_space(
+        &self,
+        space_id: &str,
+    ) -> PersistenceResult<Vec<MultisigPendingRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         let space_id_uuid = ids::typed_uuid_part_or_panic(space_id);
         sql_query(
@@ -4826,7 +4918,8 @@ impl MultisigPendingStore for PgMultisigPendingStore {
              ORDER BY created_at ASC",
         )
         .bind::<SqlUuid, _>(space_id_uuid)
-        .load::<MultisigPendingRow>(&mut *conn).await
+        .load::<MultisigPendingRow>(&mut *conn)
+        .await
         .map(|rows| rows.into_iter().map(MultisigPendingRecord::from).collect())
         .map_err(PersistenceError::from)
     }
@@ -4835,7 +4928,8 @@ impl MultisigPendingStore for PgMultisigPendingStore {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query("DELETE FROM multisig_pending WHERE anchor_id = $1")
             .bind::<Text, _>(anchor_id)
-            .execute(&mut *conn).await
+            .execute(&mut *conn)
+            .await
             .map(|n| n > 0)
             .map_err(PersistenceError::from)
     }
@@ -4847,7 +4941,8 @@ impl MultisigPendingStore for PgMultisigPendingStore {
              partials, created_at, expires_at, claimed_by_node_id, claimed_until, claim_seq \
              FROM multisig_pending ORDER BY created_at ASC",
         )
-        .load::<MultisigPendingRow>(&mut *conn).await
+        .load::<MultisigPendingRow>(&mut *conn)
+        .await
         .map(|rows| rows.into_iter().map(MultisigPendingRecord::from).collect())
         .map_err(PersistenceError::from)
     }
@@ -4885,7 +4980,8 @@ impl MultisigPendingStore for PgMultisigPendingStore {
         .bind::<Text, _>(node_id)
         .bind::<Timestamptz, _>(now)
         .bind::<Timestamptz, _>(claimed_until)
-        .get_result::<ClaimSeqRow>(&mut *conn).await
+        .get_result::<ClaimSeqRow>(&mut *conn)
+        .await
         .optional()
         .map_err(PersistenceError::from)?;
 
@@ -4898,7 +4994,8 @@ impl MultisigPendingStore for PgMultisigPendingStore {
             let cur: Option<ClaimSeqRow> =
                 sql_query("SELECT claim_seq FROM multisig_pending WHERE anchor_id = $1")
                     .bind::<Text, _>(anchor_id)
-                    .get_result::<ClaimSeqRow>(&mut *conn).await
+                    .get_result::<ClaimSeqRow>(&mut *conn)
+                    .await
                     .optional()
                     .map_err(PersistenceError::from)?;
             Ok((false, cur.map(|r| r.claim_seq).unwrap_or(0)))
@@ -4914,7 +5011,8 @@ impl MultisigPendingStore for PgMultisigPendingStore {
         )
         .bind::<Text, _>(anchor_id)
         .bind::<Text, _>(node_id)
-        .execute(&mut *conn).await
+        .execute(&mut *conn)
+        .await
         .map(|_| ())
         .map_err(PersistenceError::from)
     }
@@ -4935,7 +5033,8 @@ impl MultisigPendingStore for PgMultisigPendingStore {
         .bind::<Text, _>(anchor_id)
         .bind::<Text, _>(node_id)
         .bind::<BigInt, _>(claim_seq)
-        .execute(&mut *conn).await
+        .execute(&mut *conn)
+        .await
         .map(|n| n > 0)
         .map_err(PersistenceError::from)
     }
@@ -4959,7 +5058,8 @@ impl MultisigPendingStore for PgMultisigPendingStore {
         .bind::<Text, _>(node_id)
         .bind::<BigInt, _>(claim_seq)
         .bind::<Timestamptz, _>(new_claimed_until)
-        .execute(&mut *conn).await
+        .execute(&mut *conn)
+        .await
         .map(|n| n > 0)
         .map_err(PersistenceError::from)
     }
@@ -5028,7 +5128,8 @@ impl AuditStore for PgAuditStore {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query("SELECT payload FROM audit_logs WHERE actor = $1 ORDER BY created_at ASC, id ASC")
             .bind::<Text, _>(actor)
-            .load::<AuditPayloadRow>(&mut *conn).await
+            .load::<AuditPayloadRow>(&mut *conn)
+            .await
             .map(|rows| rows.into_iter().map(|row| row.payload).collect())
             .map_err(PersistenceError::from)
     }
@@ -5036,7 +5137,8 @@ impl AuditStore for PgAuditStore {
     async fn snapshot_all(&self) -> PersistenceResult<Vec<Value>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query("SELECT payload FROM audit_logs ORDER BY created_at ASC, id ASC")
-            .load::<AuditPayloadRow>(&mut *conn).await
+            .load::<AuditPayloadRow>(&mut *conn)
+            .await
             .map(|rows| rows.into_iter().map(|row| row.payload).collect())
             .map_err(PersistenceError::from)
     }
@@ -5121,14 +5223,16 @@ impl PushDeviceStore for PgPushDeviceStore {
         .bind::<Text, _>(device_id)
         .bind::<Nullable<Text>, _>(push_key)
         .bind::<Nullable<Text>, _>(app_id)
-        .execute(&mut *conn).await
+        .execute(&mut *conn)
+        .await
         .map_err(PersistenceError::from)
     }
 
     async fn snapshot_all(&self) -> PersistenceResult<Vec<Value>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query("SELECT payload FROM push_devices ORDER BY updated_at ASC, registration_id ASC")
-            .load::<PushDevicePayloadRow>(&mut *conn).await
+            .load::<PushDevicePayloadRow>(&mut *conn)
+            .await
             .map(|rows| rows.into_iter().map(|row| row.payload).collect())
             .map_err(PersistenceError::from)
     }
@@ -5236,7 +5340,8 @@ impl EventStore for PgEventStore {
         let event_id_uuid = ids::typed_uuid_part_or_panic(event_id);
         sql_query("SELECT EXISTS(SELECT 1 FROM canonical_events WHERE id = $1) AS present")
             .bind::<SqlUuid, _>(event_id_uuid)
-            .get_result::<ExistsRow>(&mut *conn).await
+            .get_result::<ExistsRow>(&mut *conn)
+            .await
             .map(|row| row.present)
             .map_err(PersistenceError::from)
     }
@@ -5250,7 +5355,8 @@ impl EventStore for PgEventStore {
         }
         sql_query("SELECT MAX(actor_seq) AS max_seq FROM canonical_events WHERE actor_id = $1")
             .bind::<Text, _>(actor_id)
-            .get_result::<MaxRow>(&mut *conn).await
+            .get_result::<MaxRow>(&mut *conn)
+            .await
             .map(|row| row.max_seq.map(|n| n.max(0) as u64))
             .map_err(PersistenceError::from)
     }
@@ -5306,7 +5412,8 @@ impl FederationOperationsStore for PgFederationOperationsStore {
         .bind::<Text, _>(&operation_type)
         .bind::<Jsonb, _>(&payload)
         .bind::<Timestamptz, _>(operation.created_at)
-        .execute(&mut *conn).await
+        .execute(&mut *conn)
+        .await
         .map(|_| ())
         .map_err(PersistenceError::from)
     }
@@ -5321,7 +5428,8 @@ impl FederationOperationsStore for PgFederationOperationsStore {
         let operation_id_uuid = ids::typed_uuid_part_or_panic(operation_id);
         sql_query("SELECT EXISTS(SELECT 1 FROM federation_operations WHERE id = $1) AS present")
             .bind::<SqlUuid, _>(operation_id_uuid)
-            .get_result::<ExistsRow>(&mut *conn).await
+            .get_result::<ExistsRow>(&mut *conn)
+            .await
             .map(|row| row.present)
             .map_err(PersistenceError::from)
     }
@@ -5334,7 +5442,8 @@ impl FederationOperationsStore for PgFederationOperationsStore {
              WHERE space_id = $1 ORDER BY created_at ASC, id ASC",
         )
         .bind::<SqlUuid, _>(space_id_uuid)
-        .load::<FederationOperationRow>(&mut *conn).await
+        .load::<FederationOperationRow>(&mut *conn)
+        .await
         .map_err(PersistenceError::from)?;
         rows.into_iter()
             .map(|row| {
@@ -5351,7 +5460,8 @@ impl FederationOperationsStore for PgFederationOperationsStore {
             "SELECT payload FROM federation_operations \
              ORDER BY created_at ASC, id ASC",
         )
-        .load::<FederationOperationRow>(&mut *conn).await
+        .load::<FederationOperationRow>(&mut *conn)
+        .await
         .map_err(PersistenceError::from)?;
         rows.into_iter()
             .map(|row| {
@@ -5415,7 +5525,8 @@ impl ModerationStore for PgModerationStore {
         .bind::<Nullable<SqlUuid>, _>(target_event_id_uuid)
         .bind::<Nullable<SqlUuid>, _>(space_id_uuid)
         .bind::<Jsonb, _>(&report)
-        .execute(&mut *conn).await
+        .execute(&mut *conn)
+        .await
         .map(|_| ())
         .map_err(PersistenceError::from)
     }
@@ -5449,7 +5560,8 @@ impl ModerationStore for PgModerationStore {
         .bind::<Nullable<Text>, _>(&action_kind)
         .bind::<Nullable<SqlUuid>, _>(space_id_uuid)
         .bind::<Jsonb, _>(&action)
-        .execute(&mut *conn).await
+        .execute(&mut *conn)
+        .await
         .map(|_| ())
         .map_err(PersistenceError::from)
     }
@@ -5457,7 +5569,8 @@ impl ModerationStore for PgModerationStore {
     async fn list_reports(&self) -> PersistenceResult<Vec<Value>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query("SELECT payload FROM moderation_reports ORDER BY created_at ASC, id ASC")
-            .load::<ModerationPayloadRow>(&mut *conn).await
+            .load::<ModerationPayloadRow>(&mut *conn)
+            .await
             .map(|rows| rows.into_iter().map(|row| row.payload).collect())
             .map_err(PersistenceError::from)
     }
@@ -5465,7 +5578,8 @@ impl ModerationStore for PgModerationStore {
     async fn list_actions(&self) -> PersistenceResult<Vec<Value>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query("SELECT payload FROM moderation_actions ORDER BY created_at ASC, id ASC")
-            .load::<ModerationPayloadRow>(&mut *conn).await
+            .load::<ModerationPayloadRow>(&mut *conn)
+            .await
             .map(|rows| rows.into_iter().map(|row| row.payload).collect())
             .map_err(PersistenceError::from)
     }
@@ -5509,7 +5623,8 @@ impl PresenceStore for PgPresenceStore {
         .bind::<Text, _>(&presence.actor)
         .bind::<Text, _>(&presence.status)
         .bind::<Timestamptz, _>(presence.updated_at)
-        .execute(&mut *conn).await
+        .execute(&mut *conn)
+        .await
         .map(|_| ())
         .map_err(PersistenceError::from)
     }
@@ -5518,7 +5633,8 @@ impl PresenceStore for PgPresenceStore {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query("SELECT actor, status, updated_at FROM presence WHERE actor = $1")
             .bind::<Text, _>(actor)
-            .get_result::<PresenceRow>(&mut *conn).await
+            .get_result::<PresenceRow>(&mut *conn)
+            .await
             .optional()
             .map(|row| row.map(PresenceRecord::from))
             .map_err(PersistenceError::from)
@@ -5593,7 +5709,8 @@ impl WebvhStore for PgWebvhStore {
              FROM webvh_documents WHERE did = $1",
         )
         .bind::<Text, _>(did)
-        .get_result::<WebvhDocumentRow>(&mut *conn).await
+        .get_result::<WebvhDocumentRow>(&mut *conn)
+        .await
         .optional()
         .map(|row| row.map(WebvhDocumentRecord::from))
         .map_err(PersistenceError::from)
@@ -5613,7 +5730,8 @@ impl WebvhStore for PgWebvhStore {
              LIMIT 1",
         )
         .bind::<Text, _>(local_id)
-        .get_result::<WebvhDocumentRow>(&mut *conn).await
+        .get_result::<WebvhDocumentRow>(&mut *conn)
+        .await
         .optional()
         .map(|row| row.map(WebvhDocumentRecord::from))
         .map_err(PersistenceError::from)
@@ -5638,7 +5756,8 @@ impl WebvhStore for PgWebvhStore {
         .bind::<BigInt, _>(record.seq as i64)
         .bind::<Jsonb, _>(&record.method_evidence)
         .bind::<Timestamptz, _>(record.updated_at)
-        .execute(&mut *conn).await
+        .execute(&mut *conn)
+        .await
         .map(|_| ())
         .map_err(PersistenceError::from)
     }
@@ -5656,7 +5775,8 @@ impl WebvhStore for PgWebvhStore {
         .bind::<BigInt, _>(event.seq as i64)
         .bind::<Jsonb, _>(&event.operation)
         .bind::<Timestamptz, _>(event.created_at)
-        .execute(&mut *conn).await
+        .execute(&mut *conn)
+        .await
         .map(|_| ())
         .map_err(PersistenceError::from)
     }
@@ -5668,7 +5788,8 @@ impl WebvhStore for PgWebvhStore {
              FROM webvh_log_events WHERE did = $1 ORDER BY seq ASC, event_digest ASC",
         )
         .bind::<Text, _>(did)
-        .load::<WebvhLogRow>(&mut *conn).await
+        .load::<WebvhLogRow>(&mut *conn)
+        .await
         .map(|rows| rows.into_iter().map(WebvhLogRecord::from).collect())
         .map_err(PersistenceError::from)
     }
@@ -5723,7 +5844,8 @@ impl SpaceInviteStore for PgSpaceInviteStore {
              FROM space_invites WHERE id = $1",
         )
         .bind::<SqlUuid, _>(invite_id_uuid)
-        .get_result::<SpaceInviteRow>(&mut *conn).await
+        .get_result::<SpaceInviteRow>(&mut *conn)
+        .await
         .optional()
         .map(|row| row.map(SpaceInviteRecord::from))
         .map_err(PersistenceError::from)
@@ -5753,7 +5875,8 @@ impl SpaceInviteStore for PgSpaceInviteStore {
         .bind::<Text, _>(&record.status)
         .bind::<Nullable<Timestamptz>, _>(record.expires_at)
         .bind::<Timestamptz, _>(record.created_at)
-        .execute(&mut *conn).await
+        .execute(&mut *conn)
+        .await
         .map(|_| ())
         .map_err(PersistenceError::from)
     }
@@ -5764,7 +5887,8 @@ impl SpaceInviteStore for PgSpaceInviteStore {
             "SELECT id, space_id, inviter, invitee, invite_token, status, expires_at, created_at \
              FROM space_invites ORDER BY created_at ASC, id ASC",
         )
-        .load::<SpaceInviteRow>(&mut *conn).await
+        .load::<SpaceInviteRow>(&mut *conn)
+        .await
         .map(|rows| rows.into_iter().map(SpaceInviteRecord::from).collect())
         .map_err(PersistenceError::from)
     }
@@ -5856,10 +5980,12 @@ impl KeyBackupStore for PgKeyBackupStore {
         // must not crash the get path.
         let _ = sql_query("UPDATE key_backups SET last_accessed_at = NOW() WHERE backup_id = $1")
             .bind::<Text, _>(backup_id)
-            .execute(&mut *conn).await;
+            .execute(&mut *conn)
+            .await;
         sql_query("SELECT payload FROM key_backups WHERE backup_id = $1")
             .bind::<Text, _>(backup_id)
-            .get_result::<KeyBackupPayloadRow>(&mut *conn).await
+            .get_result::<KeyBackupPayloadRow>(&mut *conn)
+            .await
             .optional()
             .map(|row| row.map(|r| r.payload))
             .map_err(PersistenceError::from)
@@ -5869,7 +5995,8 @@ impl KeyBackupStore for PgKeyBackupStore {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query("DELETE FROM key_backups WHERE backup_id = $1")
             .bind::<Text, _>(backup_id)
-            .execute(&mut *conn).await
+            .execute(&mut *conn)
+            .await
             .map(|n| n > 0)
             .map_err(PersistenceError::from)
     }
@@ -5877,7 +6004,8 @@ impl KeyBackupStore for PgKeyBackupStore {
     async fn snapshot_all(&self) -> PersistenceResult<Vec<Value>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query("SELECT payload FROM key_backups ORDER BY created_at ASC, backup_id ASC")
-            .load::<KeyBackupPayloadRow>(&mut *conn).await
+            .load::<KeyBackupPayloadRow>(&mut *conn)
+            .await
             .map(|rows| rows.into_iter().map(|r| r.payload).collect())
             .map_err(PersistenceError::from)
     }
@@ -5916,7 +6044,8 @@ impl KeyBackupStore for PgKeyBackupStore {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query("SELECT payload FROM restore_tickets WHERE ticket_id = $1")
             .bind::<Text, _>(ticket_id)
-            .get_result::<KeyBackupPayloadRow>(&mut *conn).await
+            .get_result::<KeyBackupPayloadRow>(&mut *conn)
+            .await
             .optional()
             .map(|row| row.map(|r| r.payload))
             .map_err(PersistenceError::from)
@@ -5938,7 +6067,8 @@ impl KeyBackupStore for PgKeyBackupStore {
         )
         .bind::<Text, _>(&ticket_id)
         .bind::<Jsonb, _>(&payload)
-        .execute(&mut *conn).await
+        .execute(&mut *conn)
+        .await
         .map(|_| ())
         .map_err(PersistenceError::from)
     }
@@ -5952,7 +6082,8 @@ impl KeyBackupStore for PgKeyBackupStore {
         }
         sql_query("SELECT executor_state FROM restore_tickets WHERE ticket_id = $1")
             .bind::<Text, _>(ticket_id)
-            .get_result::<ExecRow>(&mut *conn).await
+            .get_result::<ExecRow>(&mut *conn)
+            .await
             .optional()
             .map(|row| row.and_then(|r| r.executor_state))
             .map_err(PersistenceError::from)
@@ -5970,7 +6101,8 @@ impl KeyBackupStore for PgKeyBackupStore {
         )
         .bind::<Text, _>(&ticket_id)
         .bind::<Jsonb, _>(&payload)
-        .execute(&mut *conn).await
+        .execute(&mut *conn)
+        .await
         .map(|_| ())
         .map_err(PersistenceError::from)
     }
@@ -5984,7 +6116,8 @@ impl KeyBackupStore for PgKeyBackupStore {
         }
         sql_query("SELECT approval_state FROM restore_tickets WHERE ticket_id = $1")
             .bind::<Text, _>(ticket_id)
-            .get_result::<ApprovalRow>(&mut *conn).await
+            .get_result::<ApprovalRow>(&mut *conn)
+            .await
             .optional()
             .map(|row| row.and_then(|r| r.approval_state))
             .map_err(PersistenceError::from)
@@ -5994,7 +6127,8 @@ impl KeyBackupStore for PgKeyBackupStore {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query("DELETE FROM restore_tickets WHERE ticket_id = $1")
             .bind::<Text, _>(ticket_id)
-            .execute(&mut *conn).await
+            .execute(&mut *conn)
+            .await
             .map(|n| n > 0)
             .map_err(PersistenceError::from)
     }
@@ -6011,7 +6145,8 @@ impl KeyBackupStore for PgKeyBackupStore {
         sql_query(
             "SELECT ticket_id, payload FROM restore_tickets ORDER BY created_at ASC, ticket_id ASC",
         )
-        .load::<TicketIdPayload>(&mut *conn).await
+        .load::<TicketIdPayload>(&mut *conn)
+        .await
         .map(|rows| rows.into_iter().map(|r| (r.ticket_id, r.payload)).collect())
         .map_err(PersistenceError::from)
     }
@@ -6023,7 +6158,8 @@ impl KeyBackupStore for PgKeyBackupStore {
              WHERE ticket_id = $1 AND executor_state IS NOT NULL",
         )
         .bind::<Text, _>(ticket_id)
-        .execute(&mut *conn).await
+        .execute(&mut *conn)
+        .await
         .map(|n| n > 0)
         .map_err(PersistenceError::from)
     }
@@ -6041,7 +6177,8 @@ impl KeyBackupStore for PgKeyBackupStore {
             "SELECT ticket_id, executor_state FROM restore_tickets \
              WHERE executor_state IS NOT NULL ORDER BY created_at ASC, ticket_id ASC",
         )
-        .load::<ExecRow>(&mut *conn).await
+        .load::<ExecRow>(&mut *conn)
+        .await
         .map(|rows| {
             rows.into_iter()
                 .map(|r| (r.ticket_id, r.executor_state))
@@ -6057,7 +6194,8 @@ impl KeyBackupStore for PgKeyBackupStore {
              WHERE ticket_id = $1 AND approval_state IS NOT NULL",
         )
         .bind::<Text, _>(ticket_id)
-        .execute(&mut *conn).await
+        .execute(&mut *conn)
+        .await
         .map(|n| n > 0)
         .map_err(PersistenceError::from)
     }
@@ -6075,7 +6213,8 @@ impl KeyBackupStore for PgKeyBackupStore {
             "SELECT ticket_id, approval_state FROM restore_tickets \
              WHERE approval_state IS NOT NULL ORDER BY created_at ASC, ticket_id ASC",
         )
-        .load::<ApprRow>(&mut *conn).await
+        .load::<ApprRow>(&mut *conn)
+        .await
         .map(|rows| {
             rows.into_iter()
                 .map(|r| (r.ticket_id, r.approval_state))
@@ -6093,7 +6232,8 @@ impl KeyBackupStore for PgKeyBackupStore {
         }
         sql_query("SELECT fence_token FROM restore_tickets WHERE ticket_id = $1")
             .bind::<Text, _>(ticket_id)
-            .get_result::<FenceRow>(&mut *conn).await
+            .get_result::<FenceRow>(&mut *conn)
+            .await
             .optional()
             .map(|row| row.map(|r| r.fence_token).unwrap_or(0))
             .map_err(PersistenceError::from)
@@ -6125,7 +6265,8 @@ impl KeyBackupStore for PgKeyBackupStore {
         .bind::<Text, _>(next_status)
         .bind::<Text, _>(ticket_id)
         .bind::<BigInt, _>(expected_fence)
-        .get_result::<FenceRow>(&mut *conn).await
+        .get_result::<FenceRow>(&mut *conn)
+        .await
         .optional()
         .map_err(PersistenceError::from)?;
         if let Some(row) = updated {
@@ -6144,7 +6285,8 @@ impl KeyBackupStore for PgKeyBackupStore {
             )
             .bind::<Text, _>(ticket_id)
             .bind::<Text, _>(next_status)
-            .get_result::<FenceRow>(&mut *conn).await
+            .get_result::<FenceRow>(&mut *conn)
+            .await
             .optional()
             .map_err(PersistenceError::from)?;
             return Ok(inserted.map(|r| r.fence_token));
@@ -6311,7 +6453,8 @@ impl WebrtcSessionStore for PgWebrtcSessionStore {
         .bind::<Jsonb, _>(&signaling_state)
         .bind::<Timestamptz, _>(record.created_at)
         .bind::<Timestamptz, _>(record.expires_at)
-        .execute(&mut *conn).await
+        .execute(&mut *conn)
+        .await
         .map(|_| ())
         .map_err(PersistenceError::from)
     }
@@ -6324,7 +6467,8 @@ impl WebrtcSessionStore for PgWebrtcSessionStore {
              FROM webrtc_sessions WHERE id = $1",
         )
         .bind::<SqlUuid, _>(session_id_uuid)
-        .get_result::<WebrtcSessionRow>(&mut *conn).await
+        .get_result::<WebrtcSessionRow>(&mut *conn)
+        .await
         .optional()
         .map_err(PersistenceError::from)?;
         match row {
@@ -6338,7 +6482,8 @@ impl WebrtcSessionStore for PgWebrtcSessionStore {
         let session_id_uuid = ids::typed_uuid_part_or_panic(session_id);
         sql_query("DELETE FROM webrtc_sessions WHERE id = $1")
             .bind::<SqlUuid, _>(session_id_uuid)
-            .execute(&mut *conn).await
+            .execute(&mut *conn)
+            .await
             .map(|n| n > 0)
             .map_err(PersistenceError::from)
     }
@@ -6371,7 +6516,8 @@ impl WebrtcSessionStore for PgWebrtcSessionStore {
     async fn prune_expired(&self) -> PersistenceResult<usize> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query("DELETE FROM webrtc_sessions WHERE expires_at <= NOW()")
-            .execute(&mut *conn).await
+            .execute(&mut *conn)
+            .await
             .map_err(PersistenceError::from)
     }
 }
@@ -6477,7 +6623,8 @@ impl PolicyDocumentStore for PgPolicyDocumentStore {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query("DELETE FROM policy_documents WHERE policy_id = $1")
             .bind::<Text, _>(policy_id)
-            .execute(&mut *conn).await
+            .execute(&mut *conn)
+            .await
             .map(|n| n > 0)
             .map_err(PersistenceError::from)
     }
@@ -6927,7 +7074,8 @@ impl SpaceContainerProjectionStore for PgSpaceContainerProjectionStore {
         .bind::<Timestamptz, _>(record.created_at)
         .bind::<Nullable<Text>, _>(&record.updated_by)
         .bind::<Nullable<Timestamptz>, _>(record.updated_at)
-        .execute(&mut *conn).await
+        .execute(&mut *conn)
+        .await
         .map(|_| ())
         .map_err(PersistenceError::from)
     }
@@ -6942,7 +7090,8 @@ impl SpaceContainerProjectionStore for PgSpaceContainerProjectionStore {
              WHERE realm_id = $1 ORDER BY container_space_id"
         ))
         .bind::<Text, _>(space_id)
-        .load::<SpaceContainerProjectionRow>(&mut *conn).await
+        .load::<SpaceContainerProjectionRow>(&mut *conn)
+        .await
         .map(|rows| {
             rows.into_iter()
                 .map(SpaceContainerProjectionRecord::from)
@@ -6969,7 +7118,8 @@ impl SpaceContainerProjectionStore for PgSpaceContainerProjectionStore {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query("DELETE FROM projection_space_containers WHERE container_space_id = $1")
             .bind::<Text, _>(container_space_id)
-            .execute(&mut *conn).await
+            .execute(&mut *conn)
+            .await
             .map(|_| ())
             .map_err(PersistenceError::from)
     }
@@ -7031,7 +7181,8 @@ impl FlowProjectionStore for PgFlowProjectionStore {
             "SELECT {FLOW_PROJECTION_COLUMNS} FROM projection_flows WHERE flow_id = $1"
         ))
         .bind::<Text, _>(flow_id)
-        .get_result::<FlowProjectionRow>(&mut *conn).await
+        .get_result::<FlowProjectionRow>(&mut *conn)
+        .await
         .optional()
         .map(|row| row.map(FlowProjectionRecord::from))
         .map_err(PersistenceError::from)
@@ -7063,7 +7214,8 @@ impl FlowProjectionStore for PgFlowProjectionStore {
         .bind::<Timestamptz, _>(record.created_at)
         .bind::<Nullable<Text>, _>(&record.updated_by)
         .bind::<Nullable<Timestamptz>, _>(record.updated_at)
-        .execute(&mut *conn).await
+        .execute(&mut *conn)
+        .await
         .map(|_| ())
         .map_err(PersistenceError::from)
     }
@@ -7075,7 +7227,8 @@ impl FlowProjectionStore for PgFlowProjectionStore {
              WHERE space_id = $1 ORDER BY flow_id"
         ))
         .bind::<Text, _>(space_id)
-        .load::<FlowProjectionRow>(&mut *conn).await
+        .load::<FlowProjectionRow>(&mut *conn)
+        .await
         .map(|rows| rows.into_iter().map(FlowProjectionRecord::from).collect())
         .map_err(PersistenceError::from)
     }
@@ -7085,7 +7238,8 @@ impl FlowProjectionStore for PgFlowProjectionStore {
         sql_query(format!(
             "SELECT {FLOW_PROJECTION_COLUMNS} FROM projection_flows ORDER BY flow_id"
         ))
-        .load::<FlowProjectionRow>(&mut *conn).await
+        .load::<FlowProjectionRow>(&mut *conn)
+        .await
         .map(|rows| rows.into_iter().map(FlowProjectionRecord::from).collect())
         .map_err(PersistenceError::from)
     }
@@ -7094,7 +7248,8 @@ impl FlowProjectionStore for PgFlowProjectionStore {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query("DELETE FROM projection_flows WHERE flow_id = $1")
             .bind::<Text, _>(flow_id)
-            .execute(&mut *conn).await
+            .execute(&mut *conn)
+            .await
             .map(|_| ())
             .map_err(PersistenceError::from)
     }
@@ -7169,7 +7324,8 @@ impl MorphProjectionStore for PgMorphProjectionStore {
             "SELECT {MORPH_PROJECTION_COLUMNS} FROM projection_morphs WHERE morph_id = $1"
         ))
         .bind::<Text, _>(morph_id)
-        .get_result::<MorphProjectionRow>(&mut *conn).await
+        .get_result::<MorphProjectionRow>(&mut *conn)
+        .await
         .optional()
         .map(|row| row.map(MorphProjectionRecord::from))
         .map_err(PersistenceError::from)
@@ -7209,19 +7365,24 @@ impl MorphProjectionStore for PgMorphProjectionStore {
         .bind::<Timestamptz, _>(record.created_at)
         .bind::<Nullable<Text>, _>(&record.updated_by)
         .bind::<Nullable<Timestamptz>, _>(record.updated_at)
-        .execute(&mut *conn).await
+        .execute(&mut *conn)
+        .await
         .map(|_| ())
         .map_err(PersistenceError::from)
     }
 
-    async fn list_for_space(&self, space_id: &str) -> PersistenceResult<Vec<MorphProjectionRecord>> {
+    async fn list_for_space(
+        &self,
+        space_id: &str,
+    ) -> PersistenceResult<Vec<MorphProjectionRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(format!(
             "SELECT {MORPH_PROJECTION_COLUMNS} FROM projection_morphs \
              WHERE space_id = $1 ORDER BY morph_id"
         ))
         .bind::<Text, _>(space_id)
-        .load::<MorphProjectionRow>(&mut *conn).await
+        .load::<MorphProjectionRow>(&mut *conn)
+        .await
         .map(|rows| rows.into_iter().map(MorphProjectionRecord::from).collect())
         .map_err(PersistenceError::from)
     }
@@ -7231,7 +7392,8 @@ impl MorphProjectionStore for PgMorphProjectionStore {
         sql_query(format!(
             "SELECT {MORPH_PROJECTION_COLUMNS} FROM projection_morphs ORDER BY morph_id"
         ))
-        .load::<MorphProjectionRow>(&mut *conn).await
+        .load::<MorphProjectionRow>(&mut *conn)
+        .await
         .map(|rows| rows.into_iter().map(MorphProjectionRecord::from).collect())
         .map_err(PersistenceError::from)
     }
@@ -7240,7 +7402,8 @@ impl MorphProjectionStore for PgMorphProjectionStore {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query("DELETE FROM projection_morphs WHERE morph_id = $1")
             .bind::<Text, _>(morph_id)
-            .execute(&mut *conn).await
+            .execute(&mut *conn)
+            .await
             .map(|_| ())
             .map_err(PersistenceError::from)
     }

@@ -359,14 +359,16 @@ pub async fn chaos_operation(depot: &mut Depot, req: &Request) -> JsonResult<Val
     let canonical_event = state
         .persistence
         .events()
-        .snapshot_all().await
+        .snapshot_all()
+        .await
         .map_err(|error| AppError::new(ErrorCode::InternalError, error.to_string()))?
         .into_iter()
         .find(|record| canonical_event_operation_id(record).as_deref() == Some(&operation_id));
     let projection_event = state
         .persistence
         .projection_events()
-        .snapshot_all().await
+        .snapshot_all()
+        .await
         .map_err(|error| AppError::new(ErrorCode::InternalError, error.to_string()))?
         .into_iter()
         .find(|record| record.operation_id.as_deref() == Some(&operation_id));

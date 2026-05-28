@@ -178,7 +178,8 @@ async fn federation_outbox_depth(state: &AppState) -> usize {
     state
         .persistence
         .federation_outbox()
-        .snapshot_all().await
+        .snapshot_all()
+        .await
         .map(|rows| rows.iter().filter(|row| row.delivered_at.is_none()).count())
         .unwrap_or(0)
 }

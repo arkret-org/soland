@@ -1616,7 +1616,11 @@ pub(super) async fn admin_submit_multisig_partial(
     // defaulted row lets the H'9 UI exercise the full path against a fresh
     // anchor_id in dev/test without an explicit pre-create dance.
     let store = state.persistence.multisig_pending();
-    let mut record = match store.get(&anchor_id_str).await.map_err(persistence_to_app_err)? {
+    let mut record = match store
+        .get(&anchor_id_str)
+        .await
+        .map_err(persistence_to_app_err)?
+    {
         Some(r) => r,
         None => crate::state::MultisigPendingRecord {
             anchor_id: anchor_id_str.clone(),
@@ -1658,7 +1662,8 @@ pub(super) async fn admin_submit_multisig_partial(
     );
     store
         .upsert(record.clone())
-        .await.map_err(persistence_to_app_err)?;
+        .await
+        .map_err(persistence_to_app_err)?;
 
     let collected = record.partials.len() as u32;
     let threshold = record.threshold_k;
@@ -1711,7 +1716,8 @@ pub(super) async fn admin_list_multisig_pending(
     let rows = state
         .persistence
         .multisig_pending()
-        .list_for_space(&space_id_str).await
+        .list_for_space(&space_id_str)
+        .await
         .map_err(persistence_to_app_err)?;
 
     let entries = rows

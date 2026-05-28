@@ -80,18 +80,24 @@ async fn keys_upload(
         "device_signature": body.device_signature.clone(),
         "updated_at": now(),
     });
-    if let Err(error) = state.persistence.device_keys().put(
-        session.actor.clone(),
-        body.device_id.clone(),
-        key_payload.clone(),
-    ).await {
+    if let Err(error) = state
+        .persistence
+        .device_keys()
+        .put(
+            session.actor.clone(),
+            body.device_id.clone(),
+            key_payload.clone(),
+        )
+        .await
+    {
         tracing::error!(%error, "failed to persist device keys");
     }
 
     let current_device = state
         .persistence
         .devices()
-        .get(&session.actor, &body.device_id).await
+        .get(&session.actor, &body.device_id)
+        .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     let updated_at = now();
     let previous_payload = current_device
@@ -130,14 +136,15 @@ async fn keys_upload(
     state
         .persistence
         .devices()
-        .put(&device).await
+        .put(&device)
+        .await
         .map_err(|error| AppError::internal(error.to_string()))?;
 
-    if let Err(error) =
-        state
-            .persistence
-            .one_time_keys()
-            .put(session.actor, body.device_id, body.one_time_keys).await
+    if let Err(error) = state
+        .persistence
+        .one_time_keys()
+        .put(session.actor, body.device_id, body.one_time_keys)
+        .await
     {
         tracing::error!(%error, "failed to persist one-time keys");
     }

@@ -52,7 +52,8 @@ async fn add_reaction(
         payload,
     );
     accept_local_operations(state, &session.actor, &[operation])
-        .await.map_err(AppError::invalid_param)?;
+        .await
+        .map_err(AppError::invalid_param)?;
     json_ok(ReactionResponse {
         event_id: body.event_id,
         actor: session.actor.clone(),
@@ -89,7 +90,8 @@ async fn remove_reaction(
         payload,
     );
     accept_local_operations(state, &session.actor, &[operation])
-        .await.map_err(AppError::invalid_param)?;
+        .await
+        .map_err(AppError::invalid_param)?;
     json_ok(ReactionResponse {
         event_id: body.event_id,
         actor: session.actor.clone(),

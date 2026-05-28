@@ -71,6 +71,7 @@ async fn main() -> anyhow::Result<()> {
             std::time::Duration::from_secs(3),
             expected_service_did.as_deref(),
             Some(expected_trust_domain.as_str()),
+            config.development_mode,
         )
         .await
         {
@@ -413,6 +414,7 @@ async fn run_healthcheck(args: &[String]) -> anyhow::Result<()> {
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
+        .redirect(reqwest::redirect::Policy::none())
         .build()?;
     match client.get(&url).send().await {
         Ok(resp) if resp.status().is_success() => {

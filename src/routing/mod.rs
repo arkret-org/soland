@@ -30,6 +30,7 @@ mod interop;
 // G3.S1: MLS lifecycle (KeyPackage claim, Welcome to-device, commit_epoch).
 pub(crate) mod mls;
 pub(crate) mod organizations;
+pub(crate) mod policy_gate;
 pub(crate) mod realms;
 pub(crate) mod spaces;
 pub(crate) mod system;
@@ -1387,11 +1388,18 @@ pub(crate) async fn snapshot_bundle_for_space(
             space.tags.iter().cloned().collect::<Vec<_>>(),
         )
     };
-    let meta = state.persistence.realm_meta().get(space_id).await.ok().flatten();
+    let meta = state
+        .persistence
+        .realm_meta()
+        .get(space_id)
+        .await
+        .ok()
+        .flatten();
     let messages = state
         .persistence
         .messages()
-        .list_for_space(space_id, 1024).await
+        .list_for_space(space_id, 1024)
+        .await
         .unwrap_or_default();
     let generated_at = messages
         .iter()

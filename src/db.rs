@@ -100,8 +100,10 @@ async fn run_migrations(database_url: &str) -> anyhow::Result<()> {
     let url = database_url.to_owned();
     tokio::task::spawn_blocking(move || {
         use diesel::Connection;
-        let mut wrapper = AsyncConnectionWrapper::<AsyncPgConnection>::establish(&url)
-            .map_err(|error| anyhow::anyhow!("failed to establish migration connection: {error}"))?;
+        let mut wrapper =
+            AsyncConnectionWrapper::<AsyncPgConnection>::establish(&url).map_err(|error| {
+                anyhow::anyhow!("failed to establish migration connection: {error}")
+            })?;
         wrapper
             .run_pending_migrations(MIGRATIONS)
             .map_err(|error| anyhow::anyhow!("failed to run database migrations: {error}"))?;

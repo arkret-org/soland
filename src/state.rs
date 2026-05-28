@@ -432,11 +432,7 @@ impl MemberIdentityRegistry {
     /// [{event_id, segment, payload_digest}]}))` — note this INCLUDES
     /// `segment` and is distinct from the roster
     /// `member_display_state_digest`.
-    pub fn current_state_digest_for_actor(
-        &self,
-        realm_id: &str,
-        actor_id: &str,
-    ) -> Option<String> {
+    pub fn current_state_digest_for_actor(&self, realm_id: &str, actor_id: &str) -> Option<String> {
         let snapshot = self.snapshot_for_actor(realm_id, actor_id)?;
         effective_set_digest(realm_id, actor_id, &snapshot.effective_entries)
     }
@@ -463,8 +459,10 @@ impl MemberIdentityRegistry {
         // "valid" meaning the edge's `payload_digest` matches the
         // referenced event's stored digest AND the edge sits in the same
         // `(realm_id, actor_id, segment)` cell as the referenced event.
-        let by_id: BTreeMap<&str, &MemberIdentityEventRecord> =
-            candidates.iter().map(|r| (r.event_id.as_str(), *r)).collect();
+        let by_id: BTreeMap<&str, &MemberIdentityEventRecord> = candidates
+            .iter()
+            .map(|r| (r.event_id.as_str(), *r))
+            .collect();
         let mut replaced = BTreeSet::<String>::new();
         for record in &candidates {
             for edge in &record.replaces {
@@ -600,10 +598,20 @@ fn display_state_digest(
         "effective_events": effective_events_projection(entries),
         "handle_claims": handle_claims,
     });
-    canonical_digest(&projection, realm_id, actor_id, "member_display_state_digest")
+    canonical_digest(
+        &projection,
+        realm_id,
+        actor_id,
+        "member_display_state_digest",
+    )
 }
 
-fn canonical_digest(projection: &Value, realm_id: &str, actor_id: &str, label: &str) -> Option<String> {
+fn canonical_digest(
+    projection: &Value,
+    realm_id: &str,
+    actor_id: &str,
+    label: &str,
+) -> Option<String> {
     match contrix_sdk::canonical::canonical_json_bytes(projection) {
         Ok(bytes) => Some(contrix_sdk::canonical::sha256_digest(bytes)),
         Err(err) => {
@@ -1923,7 +1931,11 @@ async fn hydrate_projections_from_persistence(
         }
     }
 
-    if let Ok(rows) = persistence.space_container_projections().snapshot_all().await {
+    if let Ok(rows) = persistence
+        .space_container_projections()
+        .snapshot_all()
+        .await
+    {
         for record in rows {
             let Some(state) = parse_space_container_state(&record.state) else {
                 tracing::warn!(

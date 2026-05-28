@@ -72,7 +72,8 @@ async fn list_policy_documents(
     let policies = state
         .persistence
         .policy_documents()
-        .list_for_owner(&session.actor).await
+        .list_for_owner(&session.actor)
+        .await
         .unwrap_or_default()
         .into_iter()
         .filter(|policy| include_inactive || policy.active)
@@ -108,7 +109,8 @@ async fn get_policy_document(
     state
         .persistence
         .policy_documents()
-        .get(&policy_id).await
+        .get(&policy_id)
+        .await
         .ok()
         .flatten()
         .filter(|policy| policy.owner == session.actor)
@@ -188,7 +190,8 @@ async fn upsert_policy_document(
     };
     store
         .put(record.clone())
-        .await.map_err(|error| AppError::internal(error.to_string()))?;
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
     json_ok(policy_document_to_response(&record))
 }
 
@@ -284,7 +287,8 @@ async fn patch_policy_document(
     record.updated_at = now();
     store
         .put(record.clone())
-        .await.map_err(|error| AppError::internal(error.to_string()))?;
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
     json_ok(policy_document_to_response(&record))
 }
 
@@ -381,7 +385,8 @@ async fn policy_check(
     let mut policy_doc_ids: Vec<String> = state
         .persistence
         .policy_documents()
-        .list_for_owner(&body.actor).await
+        .list_for_owner(&body.actor)
+        .await
         .unwrap_or_default()
         .into_iter()
         .filter(|policy| policy.active)
@@ -532,7 +537,8 @@ async fn matching_policy_decision(
     state
         .persistence
         .policy_documents()
-        .list_active().await
+        .list_active()
+        .await
         .ok()
         .unwrap_or_default()
         .into_iter()

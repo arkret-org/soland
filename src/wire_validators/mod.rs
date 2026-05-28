@@ -29,6 +29,9 @@ pub struct WireRejection {
 
 impl WireRejection {
     pub fn new(reason: &'static str, message: impl Into<String>) -> Self {
-        Self { reason, message: message.into() }
+        Self {
+            reason,
+            message: message.into(),
+        }
     }
 }

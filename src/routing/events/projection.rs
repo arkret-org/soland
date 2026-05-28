@@ -786,7 +786,8 @@ pub async fn projected_event_page(
     let mut events = state
         .persistence
         .projection_events()
-        .snapshot_all().await
+        .snapshot_all()
+        .await
         .unwrap_or_default()
         .into_iter()
         .filter(|event| event.space_id == space_id)
@@ -930,7 +931,8 @@ pub async fn ingest_federation_operations(
         if state
             .persistence
             .federation_operations()
-            .contains(operation_id.as_str()).await
+            .contains(operation_id.as_str())
+            .await
             .unwrap_or(false)
         {
             accepted.push(operation_id);
@@ -952,7 +954,9 @@ pub async fn ingest_federation_operations(
             }));
             continue;
         }
-        if let Err(message) = validate_operation_policy(state, std::slice::from_ref(&operation)).await {
+        if let Err(message) =
+            validate_operation_policy(state, std::slice::from_ref(&operation)).await
+        {
             rejected.push(json!({
                 "operation_id": operation_id,
                 "reason": "policy_denied",
@@ -963,7 +967,8 @@ pub async fn ingest_federation_operations(
         if let Err(error) = state
             .persistence
             .federation_operations()
-            .append(operation.clone()).await
+            .append(operation.clone())
+            .await
         {
             tracing::error!(%error, "failed to persist federation operation");
             rejected.push(json!({
@@ -1063,11 +1068,12 @@ async fn mirror_mls_effect_to_persistence(
             group_id,
             consumed_at,
         } => {
-            if let Err(error) = state.persistence.mls_key_packages().try_claim(
-                keypackage_id,
-                group_id,
-                *consumed_at,
-            ).await {
+            if let Err(error) = state
+                .persistence
+                .mls_key_packages()
+                .try_claim(keypackage_id, group_id, *consumed_at)
+                .await
+            {
                 tracing::warn!(%error, keypackage_id = %keypackage_id, "failed to mirror MLS KeyPackage claim");
             }
         }
@@ -1116,13 +1122,18 @@ async fn mirror_mls_effect_to_persistence(
                 .or_else(|| operation.payload.get("mls_governance_binding"))
                 .cloned()
                 .unwrap_or(Value::Null);
-            if let Err(error) = state.persistence.mls_commits().initialize_genesis(
-                group_id,
-                creator_actor_did,
-                covered_frontier,
-                &binding,
-                operation.created_at.timestamp(),
-            ).await {
+            if let Err(error) = state
+                .persistence
+                .mls_commits()
+                .initialize_genesis(
+                    group_id,
+                    creator_actor_did,
+                    covered_frontier,
+                    &binding,
+                    operation.created_at.timestamp(),
+                )
+                .await
+            {
                 tracing::warn!(%error, group_id = %group_id, "failed to mirror MLS genesis epoch");
             }
         }
@@ -1139,14 +1150,19 @@ async fn mirror_mls_effect_to_persistence(
                 .or_else(|| operation.payload.get("mls_governance_binding"))
                 .cloned()
                 .unwrap_or(Value::Null);
-            if let Err(error) = state.persistence.mls_commits().try_bump(
-                group_id,
-                *previous_epoch,
-                leader_actor_did,
-                covered_frontier,
-                &binding,
-                operation.created_at.timestamp(),
-            ).await {
+            if let Err(error) = state
+                .persistence
+                .mls_commits()
+                .try_bump(
+                    group_id,
+                    *previous_epoch,
+                    leader_actor_did,
+                    covered_frontier,
+                    &binding,
+                    operation.created_at.timestamp(),
+                )
+                .await
+            {
                 tracing::warn!(%error, group_id = %group_id, "failed to mirror MLS commit epoch");
             }
         }
@@ -1367,7 +1383,13 @@ async fn write_through_projection(state: &AppState, operation: &Operation) {
     }
 
     let result = match snapshot {
-        Snapshot::SpaceContainer(r) => state.persistence.space_container_projections().put(&r).await,
+        Snapshot::SpaceContainer(r) => {
+            state
+                .persistence
+                .space_container_projections()
+                .put(&r)
+                .await
+        }
         Snapshot::Flow(r) => state.persistence.flow_projections().put(&r).await,
         Snapshot::Morph(r) => state.persistence.morph_projections().put(&r).await,
     };
@@ -1860,17 +1882,16 @@ pub async fn project_membership_operation(state: &AppState, origin: &str, operat
         && let Ok(invitee) = Did::new(member)
     {
         let invites = state.persistence.space_invites();
-        let already_invited =
-            invites
-                .snapshot_all()
-                .await
-                .unwrap_or_default()
-                .into_iter()
-                .any(|existing| {
-                    existing.space_id == operation.realm_id.as_str()
-                        && existing.invitee.as_deref() == Some(invitee.as_str())
-                        && existing.status == "pending"
-                });
+        let already_invited = invites
+            .snapshot_all()
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .any(|existing| {
+                existing.space_id == operation.realm_id.as_str()
+                    && existing.invitee.as_deref() == Some(invitee.as_str())
+                    && existing.status == "pending"
+            });
         if !already_invited {
             let invite_id = ids::generate_invite_id();
             let invite_token = super::super::generate_invite_token(
@@ -2009,8 +2030,7 @@ pub fn project_member_identity_update(state: &AppState, operation: &Operation) {
             arr.iter()
                 .filter_map(|edge| {
                     let event_id = edge.get("event_id").and_then(Value::as_str)?;
-                    let payload_digest =
-                        edge.get("payload_digest").and_then(Value::as_str)?;
+                    let payload_digest = edge.get("payload_digest").and_then(Value::as_str)?;
                     Some(MemberIdentityReplacementEdge {
                         event_id: event_id.to_owned(),
                         payload_digest: payload_digest.to_owned(),
@@ -2030,10 +2050,7 @@ pub fn project_member_identity_update(state: &AppState, operation: &Operation) {
     // follow-up patch — for now reducer-state coherence is preserved by
     // dropping the projection write so the digest never advances under a
     // stale writer.
-    if let Some(expected) = payload
-        .get("expected_state_digest")
-        .and_then(Value::as_str)
-    {
+    if let Some(expected) = payload.get("expected_state_digest").and_then(Value::as_str) {
         let current = state
             .member_identity
             .lock()
@@ -2325,15 +2342,18 @@ pub async fn project_federated_message(state: &AppState, origin: &str, operation
         .get("encrypted")
         .and_then(|value| value.as_bool())
         .unwrap_or_else(|| operation.payload.get("encrypted_payload").is_some());
-    if let Err(error) = store.put(&MessageRecord {
-        event_id,
-        space_id: operation.realm_id.to_string(),
-        sender,
-        thread_id,
-        content,
-        encrypted,
-        created_at: operation.created_at,
-    }).await {
+    if let Err(error) = store
+        .put(&MessageRecord {
+            event_id,
+            space_id: operation.realm_id.to_string(),
+            sender,
+            thread_id,
+            content,
+            encrypted,
+            created_at: operation.created_at,
+        })
+        .await
+    {
         tracing::warn!(%error, "failed to persist projected message");
     }
 }

@@ -151,7 +151,8 @@ async fn ghost_endpoint(
     });
     if let Some(space_id) = space_id {
         if let Some(message) = portal_message_payload(&payload)? {
-            let message_result = append_portal_message(state, &record, &ghost, &space_id, message).await?;
+            let message_result =
+                append_portal_message(state, &record, &ghost, &space_id, message).await?;
             merge_object(&mut response, message_result);
         }
     }
@@ -485,7 +486,8 @@ async fn append_portal_message(
     if let Err(error) = state
         .persistence
         .projection_events()
-        .append(projection_record).await
+        .append(projection_record)
+        .await
     {
         tracing::error!(%error, "applet bridge: failed to append projection event");
         return Err(AppError::internal("failed to persist portal projection"));

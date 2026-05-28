@@ -306,7 +306,9 @@ fn validate_recovery_policy(payload: &Value) -> Result<RecoveryPolicyRecord, App
             Some(parsed.with_timezone(&chrono::Utc))
         }
         _ => {
-            return Err(AppError::invalid_param("expires_at must be null or rfc3339"));
+            return Err(AppError::invalid_param(
+                "expires_at must be null or rfc3339",
+            ));
         }
     };
     if allowed_proof_kinds.is_empty() && expires_at.is_none() {
@@ -380,10 +382,8 @@ fn validate_recovery_receipt(payload: &Value) -> Result<RecoveryReceiptRecord, A
         .strip_prefix("cx:recovery_session:")
         .unwrap_or("");
     let parsed = uuid::Uuid::parse_str(session_uuid).map_err(|_| {
-        AppError::invalid_param(
-            "recovery_session_id MUST be cx:recovery_session:<uuidv7> per spec",
-        )
-        .with_wire_code(crate::error::reasons::CURSOR_INTEGRITY_INVALID)
+        AppError::invalid_param("recovery_session_id MUST be cx:recovery_session:<uuidv7> per spec")
+            .with_wire_code(crate::error::reasons::CURSOR_INTEGRITY_INVALID)
     })?;
     if parsed.get_version_num() != 7 {
         return Err(AppError::invalid_param(

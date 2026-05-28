@@ -143,7 +143,8 @@ async fn put_realm_policy_server(
         .map_err(|e| AppError::invalid_param(format!("operation_id: {e}")))?;
     let operation = Operation::create(op_id, realm_scope, CX_REALM_POLICY_SERVER, payload);
     accept_local_operations(state, &session.actor, std::slice::from_ref(&operation))
-        .await.map_err(reducer_reject_to_app_error)?;
+        .await
+        .map_err(reducer_reject_to_app_error)?;
 
     let projection = state.projection.lock().expect("projection mutex");
     let cfg = projection

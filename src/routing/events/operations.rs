@@ -439,11 +439,17 @@ const AGENT_DEACTIVATE_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequiremen
 // R3 spec-sync — `actor_private_event` payloads. These do NOT advance
 // the anchor frontier / actor_seq (reducer_input=false).
 const AGENT_DRAFT_PROPOSE_REQUIREMENTS: &[PayloadRequirement] = &[
-    PayloadRequirement::Required("agent_principal_id", "cx.agent.draft.propose requires agent_principal_id"),
+    PayloadRequirement::Required(
+        "agent_principal_id",
+        "cx.agent.draft.propose requires agent_principal_id",
+    ),
     PayloadRequirement::Required("draft_id", "cx.agent.draft.propose requires draft_id"),
 ];
 const AGENT_ACTION_REQUEST_REQUIREMENTS: &[PayloadRequirement] = &[
-    PayloadRequirement::Required("agent_principal_id", "cx.agent.action_request requires agent_principal_id"),
+    PayloadRequirement::Required(
+        "agent_principal_id",
+        "cx.agent.action_request requires agent_principal_id",
+    ),
     PayloadRequirement::Required("request_id", "cx.agent.action_request requires request_id"),
 ];
 const AGENT_ACTION_APPROVE_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::Required(
@@ -804,12 +810,10 @@ fn round4_validate_payload(kind: &str, operation: &Operation) -> Result<(), &'st
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
             if !attestation_paired {
-                return Err(
-                    "audit_agent_destruction_not_paired_with_remove: \
+                return Err("audit_agent_destruction_not_paired_with_remove: \
                      cx.audit.epoch_destruction_failsafe MUST NOT be accepted as delayed \
                      remediation for an Audit Agent remove batch lacking same-batch \
-                     cx.audit.epoch_key_destruction",
-                );
+                     cx.audit.epoch_key_destruction");
             }
             Ok(())
         }
@@ -1041,12 +1045,10 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
         // `artifacts/registry/removed-event-kinds.json`). The generic
         // unknown-event-kind path in `event_log::submit_event` already
         // hard-rejects these kinds; no operation schema branch is needed.
-        kinds::CX_CONTAINER_MOVE_ITEM | kinds::CX_CONTAINER_REBALANCE => {
-            OperationPayloadSchema {
-                requirements: RELATION_ID_REQUIREMENTS,
-                validate: None,
-            }
-        }
+        kinds::CX_CONTAINER_MOVE_ITEM | kinds::CX_CONTAINER_REBALANCE => OperationPayloadSchema {
+            requirements: RELATION_ID_REQUIREMENTS,
+            validate: None,
+        },
         // Applet protocol family.
         kinds::CX_APPLET_REGISTRATION => OperationPayloadSchema {
             requirements: APPLET_REGISTRATION_REQUIREMENTS,
@@ -1571,7 +1573,8 @@ async fn realm_owner_matches(state: &AppState, realm_id: &str, actor: &str) -> b
     state
         .persistence
         .realm_meta()
-        .get(realm_id).await
+        .get(realm_id)
+        .await
         .ok()
         .flatten()
         .is_some_and(|meta| meta.owner == actor)
@@ -1637,7 +1640,8 @@ pub async fn known_space_denies_plaintext_service(state: &AppState, space_id: &s
     state
         .persistence
         .realm_meta()
-        .get(space_id).await
+        .get(space_id)
+        .await
         .ok()
         .flatten()
         .is_some_and(|record| {

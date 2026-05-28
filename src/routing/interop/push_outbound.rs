@@ -193,7 +193,8 @@ async fn outbound_push_bridge_resolve(
     let cached = state
         .persistence
         .push_bridge_cache()
-        .get(&bridge_describe_url).await
+        .get(&bridge_describe_url)
+        .await
         .ok()
         .flatten();
     let fetched_contract = cached
@@ -257,10 +258,17 @@ async fn outbound_push_bridge_fetch(
             AppError::invalid_param("push_gateway_url must be an absolute push gateway URL")
         })?;
     let bridge_describe_url = join_api_v1_url(&service_base_url, "/api/v1/push/bridge/describe");
+    let bridge_describe_target = crate::security::validate_http_url_for_egress(
+        &bridge_describe_url,
+        "push bridge describe",
+        state.config.development_mode,
+    )
+    .map_err(AppError::capability_denied)?;
     let existing_cache = state
         .persistence
         .push_bridge_cache()
-        .get(&bridge_describe_url).await
+        .get(&bridge_describe_url)
+        .await
         .ok()
         .flatten();
 
@@ -275,8 +283,12 @@ async fn outbound_push_bridge_fetch(
         }
     }
 
-    let response = reqwest::Client::new()
-        .get(&bridge_describe_url)
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|error| AppError::internal(format!("build push bridge client: {error}")))?;
+    let response = client
+        .get(bridge_describe_target)
         .header("accept", "application/json")
         .send()
         .await;
@@ -324,7 +336,8 @@ async fn outbound_push_bridge_fetch(
                     if let Err(error) = state
                         .persistence
                         .push_bridge_cache()
-                        .put(&bridge_describe_url, record.clone()).await
+                        .put(&bridge_describe_url, record.clone())
+                        .await
                     {
                         tracing::error!(%error, "failed to persist push bridge cache entry");
                     }
@@ -379,7 +392,8 @@ async fn outbound_push_bridge_cache_status(depot: &mut Depot, res: &mut Response
     let entries = state
         .persistence
         .push_bridge_cache()
-        .snapshot_all().await
+        .snapshot_all()
+        .await
         .unwrap_or_default()
         .into_iter()
         .map(outbound_push_bridge_cache_entry)
@@ -394,7 +408,8 @@ async fn outbound_push_bridge_cache_export(depot: &mut Depot, res: &mut Response
     let entries = state
         .persistence
         .push_bridge_cache()
-        .snapshot_all().await
+        .snapshot_all()
+        .await
         .unwrap_or_default()
         .into_iter()
         .map(outbound_push_bridge_cache_snapshot)

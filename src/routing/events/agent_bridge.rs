@@ -195,12 +195,14 @@ pub fn maybe_emit_echo_result_for_session_start(
         let space_clone = space_id_str.clone();
         let agent_protocol_clone = agent_protocol.clone();
         let endpoint_url_for_detail = endpoint_url.clone();
+        let development_mode = state.config.development_mode;
         tokio::spawn(async move {
             let outcome = forward_to_agent_endpoint(
                 &endpoint_url,
                 &session_id_clone,
                 &agent_did_clone,
                 &echo_value,
+                development_mode,
             )
             .await;
             emit_agent_result_envelope(
@@ -264,9 +266,24 @@ async fn forward_to_agent_endpoint(
     session_id: &str,
     agent_did: &str,
     params: &Value,
+    development_mode: bool,
 ) -> AgentInvocationOutcome {
+    let endpoint_url = match crate::security::validate_http_url_for_egress(
+        endpoint_url,
+        "agent endpoint",
+        development_mode,
+    ) {
+        Ok(url) => url,
+        Err(error) => {
+            return AgentInvocationOutcome::UpstreamFailure {
+                code: "egress_policy_denied".to_owned(),
+                message: error,
+            };
+        }
+    };
     let client = match reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
+        .redirect(reqwest::redirect::Policy::none())
         .build()
     {
         Ok(c) => c,
@@ -282,7 +299,7 @@ async fn forward_to_agent_endpoint(
         "agent_did": agent_did,
         "params": params,
     });
-    let response = match client.post(endpoint_url).json(&body).send().await {
+    let response = match client.post(endpoint_url.clone()).json(&body).send().await {
         Ok(r) => r,
         Err(err) => {
             return AgentInvocationOutcome::UpstreamFailure {
@@ -536,7 +553,8 @@ mod tests {
         let projections = state
             .persistence
             .projection_events()
-            .snapshot_all().await
+            .snapshot_all()
+            .await
             .expect("snapshot");
         let status_entry = projections
             .iter()
@@ -609,7 +627,8 @@ mod tests {
         let projections = state
             .persistence
             .projection_events()
-            .snapshot_all().await
+            .snapshot_all()
+            .await
             .expect("snapshot");
         // No status(running) event should be present — the runtime
         // failed before acknowledging the invocation.
@@ -668,7 +687,8 @@ mod tests {
         let projections = state
             .persistence
             .projection_events()
-            .snapshot_all().await
+            .snapshot_all()
+            .await
             .expect("snapshot");
         let result_entry = projections
             .iter()
@@ -736,7 +756,8 @@ mod tests {
                 let projections = state
                     .persistence
                     .projection_events()
-                    .snapshot_all().await
+                    .snapshot_all()
+                    .await
                     .expect("snapshot");
                 if let Some(e) = projections.into_iter().find(|e| {
                     e.event_kind == kinds::CX_AGENT_PROTOCOL_SESSION_RESULT
@@ -764,7 +785,8 @@ mod tests {
         let projections = state
             .persistence
             .projection_events()
-            .snapshot_all().await
+            .snapshot_all()
+            .await
             .expect("snapshot");
         let status_entry = projections
             .iter()
@@ -792,7 +814,8 @@ mod tests {
         let projections = state
             .persistence
             .projection_events()
-            .snapshot_all().await
+            .snapshot_all()
+            .await
             .expect("snapshot");
         let result_entry = projections
             .iter()
@@ -823,7 +846,8 @@ mod tests {
         let projections = state
             .persistence
             .projection_events()
-            .snapshot_all().await
+            .snapshot_all()
+            .await
             .expect("snapshot");
         assert!(
             !projections.iter().any(|e| {
@@ -849,7 +873,8 @@ mod tests {
         let projections = state
             .persistence
             .projection_events()
-            .snapshot_all().await
+            .snapshot_all()
+            .await
             .expect("snapshot");
         assert!(
             !projections.iter().any(|e| {

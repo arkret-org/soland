@@ -338,15 +338,18 @@ async fn pause_agent(
 ) -> JsonResult<AgentLifecycleResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
-    json_ok(lifecycle_transition(
-        state,
-        &aa,
-        req,
-        agent_id.into_inner(),
-        "paused",
-        "cx.agent.pause",
-        body.reason,
-    ).await?)
+    json_ok(
+        lifecycle_transition(
+            state,
+            &aa,
+            req,
+            agent_id.into_inner(),
+            "paused",
+            "cx.agent.pause",
+            body.reason,
+        )
+        .await?,
+    )
 }
 
 #[endpoint(
@@ -365,15 +368,18 @@ async fn resume_agent(
 ) -> JsonResult<AgentLifecycleResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
-    json_ok(lifecycle_transition(
-        state,
-        &aa,
-        req,
-        agent_id.into_inner(),
-        "active",
-        "cx.agent.resume",
-        body.reason,
-    ).await?)
+    json_ok(
+        lifecycle_transition(
+            state,
+            &aa,
+            req,
+            agent_id.into_inner(),
+            "active",
+            "cx.agent.resume",
+            body.reason,
+        )
+        .await?,
+    )
 }
 
 #[endpoint(
@@ -392,15 +398,18 @@ async fn deactivate_agent(
 ) -> JsonResult<AgentLifecycleResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
-    json_ok(lifecycle_transition(
-        state,
-        &aa,
-        req,
-        agent_id.into_inner(),
-        "deactivated",
-        "cx.agent.deactivate",
-        body.reason,
-    ).await?)
+    json_ok(
+        lifecycle_transition(
+            state,
+            &aa,
+            req,
+            agent_id.into_inner(),
+            "deactivated",
+            "cx.agent.deactivate",
+            body.reason,
+        )
+        .await?,
+    )
 }
 
 #[endpoint(

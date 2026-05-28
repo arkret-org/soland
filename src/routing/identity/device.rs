@@ -41,7 +41,8 @@ async fn device_list(aa: AuthArgs, depot: &mut Depot, req: &mut Request) -> Json
     let devices = state
         .persistence
         .devices()
-        .list_for_actor(&session.actor).await
+        .list_for_actor(&session.actor)
+        .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .into_iter()
         .map(|record| {
@@ -90,13 +91,15 @@ async fn device_revoke(
     let existing = state
         .persistence
         .devices()
-        .get(&session.actor, &target_device_id).await
+        .get(&session.actor, &target_device_id)
+        .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     let Some(_record) = existing else {
         return Err(AppError::not_found("device not found"));
     };
     super::auth::revoke_device_record(state, &session.actor, &target_device_id)
-        .await.map_err(AppError::internal)?;
+        .await
+        .map_err(AppError::internal)?;
     append_audit_log(
         state,
         Some(&session.actor),
@@ -222,7 +225,8 @@ async fn device_authorize_pairing(
     state
         .persistence
         .devices()
-        .put(&device).await
+        .put(&device)
+        .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     let device_json = device_inventory_to_json(&device);
     let authorization_event = json!({

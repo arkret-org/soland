@@ -75,19 +75,25 @@ async fn moderation_report(
     if let Err(error) = state
         .persistence
         .moderation()
-        .append_report(report_payload.clone()).await
+        .append_report(report_payload.clone())
+        .await
     {
         tracing::error!(%error, "failed to append moderation report");
     }
-    if let Err(error) = state.persistence.moderation().append_action(json!({
-        "action_id": ids::generate("moderation_action"),
-        "report_id": report_id,
-        "realm_id": body.realm_id,
-        "target_ref": body.target_ref,
-        "status": "open",
-        "assigned_to": moderation_service.clone(),
-        "created_at": now(),
-    })).await {
+    if let Err(error) = state
+        .persistence
+        .moderation()
+        .append_action(json!({
+            "action_id": ids::generate("moderation_action"),
+            "report_id": report_id,
+            "realm_id": body.realm_id,
+            "target_ref": body.target_ref,
+            "status": "open",
+            "assigned_to": moderation_service.clone(),
+            "created_at": now(),
+        }))
+        .await
+    {
         tracing::error!(%error, "failed to append moderation action");
     }
     // Spec triage: each accepted report is wrapped in a
@@ -106,7 +112,12 @@ async fn moderation_report(
         "audit_refs": [],
         "created_at": now(),
     });
-    if let Err(error) = state.persistence.moderation().upsert_queue_item(queue_item).await {
+    if let Err(error) = state
+        .persistence
+        .moderation()
+        .upsert_queue_item(queue_item)
+        .await
+    {
         tracing::warn!(%error, "queue item upsert failed (likely Pg backend stub)");
     }
     append_audit_log(
@@ -210,7 +221,8 @@ async fn realm_owner_matches(state: &AppState, realm_id: &str, actor: &str) -> b
     state
         .persistence
         .realm_meta()
-        .get(realm_id).await
+        .get(realm_id)
+        .await
         .ok()
         .flatten()
         .is_some_and(|meta| meta.owner == actor)
@@ -232,15 +244,45 @@ async fn notify_audit_agent_for_report(
         return None;
     }
     let agent_url = agent_url.trim_end_matches('/');
+    let identity_url = match crate::security::validate_http_url_for_egress(
+        &format!("{agent_url}/api/v1/audit-agent/identity"),
+        "audit agent identity",
+        state.config.development_mode,
+    ) {
+        Ok(url) => url,
+        Err(error) => {
+            tracing::warn!(%error, "audit agent identity request denied by egress policy");
+            return None;
+        }
+    };
+    let invite_url = match crate::security::validate_http_url_for_egress(
+        &format!("{agent_url}/api/v1/audit-agent/invite"),
+        "audit agent invite",
+        state.config.development_mode,
+    ) {
+        Ok(url) => url,
+        Err(error) => {
+            tracing::warn!(%error, "audit agent invite request denied by egress policy");
+            return None;
+        }
+    };
+    let events_url = match crate::security::validate_http_url_for_egress(
+        &format!("{agent_url}/api/v1/audit-agent/events"),
+        "audit agent events",
+        state.config.development_mode,
+    ) {
+        Ok(url) => url,
+        Err(error) => {
+            tracing::warn!(%error, "audit agent events request denied by egress policy");
+            return None;
+        }
+    };
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(3))
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .ok()?;
-    let identity = match client
-        .get(format!("{agent_url}/api/v1/audit-agent/identity"))
-        .send()
-        .await
-    {
+    let identity = match client.get(identity_url).send().await {
         Ok(response) if response.status().is_success() => {
             response.json::<Value>().await.unwrap_or(Value::Null)
         }
@@ -274,12 +316,7 @@ async fn notify_audit_agent_for_report(
         },
         "mls_key_package": identity.get("key_package").cloned().unwrap_or(Value::Null),
     });
-    match client
-        .post(format!("{agent_url}/api/v1/audit-agent/invite"))
-        .json(&invite_body)
-        .send()
-        .await
-    {
+    match client.post(invite_url).json(&invite_body).send().await {
         Ok(response) if response.status().is_success() => {
             if let Ok(body) = response.json::<Value>().await {
                 append_audit_agent_invite_log(state, &agent_did, report_payload, &body).await;
@@ -322,12 +359,7 @@ async fn notify_audit_agent_for_report(
         "kind": "cx.audit.report",
         "event": report_payload,
     });
-    match client
-        .post(format!("{agent_url}/api/v1/audit-agent/events"))
-        .json(&event_body)
-        .send()
-        .await
-    {
+    match client.post(events_url).json(&event_body).send().await {
         Ok(response) if response.status().is_success() => {
             if let Ok(body) = response.json::<Value>().await {
                 append_agent_accessed_if_present(state, &agent_did, report_payload, &body).await;
@@ -386,7 +418,8 @@ async fn append_audit_agent_invite_log(
             "mls_key_package": response_body.get("mls_key_package").cloned().unwrap_or(Value::Null),
         }),
         "accepted",
-    ).await;
+    )
+    .await;
 }
 
 async fn append_agent_accessed_if_present(
@@ -415,14 +448,16 @@ async fn append_agent_accessed_if_present(
             "emitted": emitted,
         }),
         "accepted",
-    ).await;
+    )
+    .await;
 }
 
 async fn audit_disclosure_policy_for_realm(state: &AppState, realm_id: &str) -> Option<Value> {
     state
         .persistence
         .events()
-        .snapshot_all().await
+        .snapshot_all()
+        .await
         .ok()?
         .into_iter()
         .filter(|record| {
@@ -489,7 +524,8 @@ async fn moderation_appeal_submit(
     let duplicate_active = state
         .persistence
         .moderation()
-        .list_appeals().await
+        .list_appeals()
+        .await
         .unwrap_or_default()
         .into_iter()
         .any(|appeal| {
@@ -558,7 +594,8 @@ pub(crate) async fn appeal_state(state: &AppState, appeal_id: &str) -> Option<St
     state
         .persistence
         .moderation()
-        .appeal_history(appeal_id).await
+        .appeal_history(appeal_id)
+        .await
         .ok()?
         .into_iter()
         .last()

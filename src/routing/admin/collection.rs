@@ -89,7 +89,12 @@ pub(super) async fn admin_collection(
         "invite-tokens" => ("invite_tokens", admin_invite_items(state).await),
         "audit" => (
             "audit",
-            state.persistence.audit().snapshot_all().await.unwrap_or_default(),
+            state
+                .persistence
+                .audit()
+                .snapshot_all()
+                .await
+                .unwrap_or_default(),
         ),
         "policy" => ("policy", admin_policy_items(state).await),
         "media" => ("media", admin_media_items(state).await),
@@ -154,7 +159,8 @@ async fn admin_space_items(state: &AppState) -> Vec<Value> {
     let meta: BTreeMap<String, _> = state
         .persistence
         .realm_meta()
-        .list().await
+        .list()
+        .await
         .unwrap_or_default()
         .into_iter()
         .collect();
@@ -174,13 +180,9 @@ async fn admin_space_items(state: &AppState) -> Vec<Value> {
     for space in space_snapshot {
         let space_id = space.realm_id.as_str().to_owned();
         let space_meta = meta.get(&space_id);
-        let flow = flow_projection_for_space(
-            state,
-            &space_id,
-            &space.name,
-            space.description.as_deref(),
-        )
-        .await;
+        let flow =
+            flow_projection_for_space(state, &space_id, &space.name, space.description.as_deref())
+                .await;
         items.push(json!({
             "kind": "space",
             "flow": flow,
@@ -209,7 +211,8 @@ async fn admin_device_items(state: &AppState) -> Vec<Value> {
     state
         .persistence
         .devices()
-        .list().await
+        .list()
+        .await
         .map(|devices| {
             devices
                 .into_iter()
@@ -261,7 +264,8 @@ async fn admin_federation_items(state: &AppState) -> Vec<Value> {
     state
         .persistence
         .federation_operations()
-        .snapshot_all().await
+        .snapshot_all()
+        .await
         .unwrap_or_default()
         .into_iter()
         .map(|operation| {
@@ -336,7 +340,8 @@ async fn admin_invite_items(state: &AppState) -> Vec<Value> {
     state
         .persistence
         .space_invites()
-        .snapshot_all().await
+        .snapshot_all()
+        .await
         .unwrap_or_default()
         .iter()
         .map(|invite| {
@@ -359,7 +364,8 @@ async fn admin_policy_items(state: &AppState) -> Vec<Value> {
     state
         .persistence
         .policy_documents()
-        .snapshot_all().await
+        .snapshot_all()
+        .await
         .unwrap_or_default()
         .iter()
         .map(|policy| json!(policy_document_to_response(policy)))
@@ -370,7 +376,8 @@ async fn admin_media_items(state: &AppState) -> Vec<Value> {
     state
         .persistence
         .blobs()
-        .snapshot_all().await
+        .snapshot_all()
+        .await
         .unwrap_or_default()
         .iter()
         .map(|blob| {

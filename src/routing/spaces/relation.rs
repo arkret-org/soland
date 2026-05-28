@@ -91,7 +91,8 @@ async fn create_relation(
         payload,
     );
     accept_local_operations(state, &session.actor, std::slice::from_ref(&operation))
-        .await.map_err(|error| AppError::new(ErrorCode::Conflict, error.to_string()))?;
+        .await
+        .map_err(|error| AppError::new(ErrorCode::Conflict, error.to_string()))?;
     let relation = {
         let proj = state.projection.lock().expect("projection lock");
         proj.relations.get(&relation_id).cloned()
@@ -137,7 +138,8 @@ async fn delete_relation(
         json!({ "relation_id": relation_id }),
     );
     accept_local_operations(state, &session.actor, std::slice::from_ref(&operation))
-        .await.map_err(|error| AppError::new(ErrorCode::Conflict, error.to_string()))?;
+        .await
+        .map_err(|error| AppError::new(ErrorCode::Conflict, error.to_string()))?;
     json_ok(DeleteRelationResponse {
         deleted: true,
         relation_id,

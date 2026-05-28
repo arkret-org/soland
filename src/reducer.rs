@@ -7833,6 +7833,32 @@ impl ProjectionState {
         }
         None
     }
+
+    /// R3.4 — read the effective Realm federation policy. The mutable
+    /// organization cas-register wins; when no update has landed, fall
+    /// back to the latest `cx.realm.create` log entry that carried an
+    /// initial `federation_policy`.
+    pub fn realm_federation_policy(&self, realm_id: &str) -> Option<String> {
+        if let Ok(org_cell) = contrix_sdk::CellRef::new(format!(
+            "cx:cell:cx.component.realm.organization.v1:{realm_id}"
+        )) {
+            if let Some(v) = self
+                .cell_value(&org_cell)
+                .and_then(|c| c.get("federation_policy"))
+                .and_then(Value::as_str)
+            {
+                return Some(v.to_owned());
+            }
+        }
+        self.space_create_log(realm_id).and_then(|entries| {
+            entries.iter().rev().find_map(|entry| {
+                entry
+                    .get("federation_policy")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned)
+            })
+        })
+    }
 }
 
 #[cfg(test)]

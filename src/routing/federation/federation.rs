@@ -40,6 +40,7 @@ use super::{
 };
 use crate::error::AppError;
 use crate::result::{JsonResult, json_ok};
+use crate::routing::policy_gate::{self, PolicyGateSurface};
 use crate::state::{AppState, FederationBlockHintRecord, FederationTransactionRecord};
 use crate::{ids, kinds};
 
@@ -63,49 +64,30 @@ pub(super) async fn federation_transaction(
 ) -> JsonResult<contrix_sdk::FederationTransactionResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let txn_id = txn_id.into_inner();
-    // Round 4 (B1.7) — verify the three federation trust-domain headers
-    // (`Source-Trust-Domain` / `Destination-Trust-Domain` /
-    // `Request-Canonical-Digest`). Missing / malformed headers are
-    // schema_violation; a destination mismatch is
-    // cross_domain_replay_rejected. The configured
-    // `state.config.trust_domain` is the canonical receiver value.
-    let trust_headers = match crate::round4::FederationTrustHeaders::from_salvo_request(req) {
-        Ok(headers) => Some(headers),
-        Err(violation) => {
-            // Headers are advisory until cotest C3 lands the full
-            // multi-server scenario; we log + continue rather than
-            // hard-reject. TODO(round4-fed-headers): flip to
-            // hard-reject after teabay + soland + cotest agree on
-            // the header transcript.
-            tracing::warn!(
-                error = %violation.message(),
-                "federation request missing/malformed round-4 trust-domain headers"
-            );
-            None
-        }
-    };
-    if let Some(ref headers) = trust_headers {
-        let expected = contrix_sdk::TypedTrustDomainId::new(state.config.trust_domain.clone());
-        if let Ok(expected) = expected
-            && headers.verify_destination(&expected).is_err()
-        {
-            return Err(AppError::new(
-                crate::error::ErrorCode::CrossDomainReplayRejected,
-                "federation Destination-Trust-Domain header does not match this service",
-            ));
-        }
-        // Append to the signing transcript for downstream verifier.
-        // TODO(round4-fed-transcript): wire into the RFC 9421
-        // signature base. For now we just compute the fragment so the
-        // helper is exercised + the trace fields are emitted.
-        let fragment = headers.transcript_fragment();
-        tracing::trace!(transcript_fragment = %fragment, "round-4 federation transcript fragment");
-    }
     if !is_valid_federation_txn_id(&txn_id) {
         return Err(AppError::invalid_param("invalid federation transaction id"));
     }
     let body = body.into_inner();
     let content_digest = federation_request_digest(&body).map_err(AppError::invalid_param)?;
+    // Round 4 (B1.7) — federation trust-domain headers are now part
+    // of the hard admission boundary. Missing / malformed headers are
+    // schema_violation; destination or request-digest mismatch is
+    // cross_domain_replay_rejected.
+    let trust_headers =
+        crate::round4::FederationTrustHeaders::from_salvo_request(req).map_err(|violation| {
+            AppError::new(
+                crate::error::ErrorCode::SchemaViolation,
+                violation.message(),
+            )
+            .with_status(StatusCode::BAD_REQUEST)
+        })?;
+    let expected_destination = contrix_sdk::TypedTrustDomainId::new(
+        state.config.trust_domain.clone(),
+    )
+    .map_err(|error| AppError::internal(format!("configured trust_domain invalid: {error}")))?;
+    validate_round4_federation_headers(&trust_headers, &expected_destination, &content_digest)?;
+    let fragment = trust_headers.transcript_fragment();
+    tracing::trace!(transcript_fragment = %fragment, "round-4 federation transcript fragment");
     // Round 4 (B1.8) — round-4 federation idempotency cache key. The
     // composite carries (source_did, dest_did, request_canonical_digest,
     // idempotency_key, origin_key_state_digest). When the strict key
@@ -121,16 +103,13 @@ pub(super) async fn federation_transaction(
     // TODO(round4-fed-binding-verify): wire origin_key_state_digest from
     // the resolver chain's last observed cross-signing publish for the
     // origin DID.
-    let r4_idem_key =
-        trust_headers
-            .as_ref()
-            .map(|headers| crate::round4::FederationIdempotencyKey {
-                source_did: body.origin.to_string(),
-                dest_did: body.destination.to_string(),
-                request_canonical_digest: headers.request_canonical_digest.as_str().to_owned(),
-                idempotency_key: txn_id.clone(),
-                origin_key_state_digest: "sha256:0000".to_owned(),
-            });
+    let r4_idem_key = Some(crate::round4::FederationIdempotencyKey {
+        source_did: body.origin.to_string(),
+        dest_did: body.destination.to_string(),
+        request_canonical_digest: trust_headers.request_canonical_digest.as_str().to_owned(),
+        idempotency_key: txn_id.clone(),
+        origin_key_state_digest: "sha256:0000".to_owned(),
+    });
     let _service_binding = crate::round23::FederationIdempotencyServiceBinding {
         source_service_did: body.origin.to_string(),
         verification_method: r4_idem_key
@@ -149,7 +128,8 @@ pub(super) async fn federation_transaction(
     match state
         .persistence
         .federation_transactions()
-        .get(body.origin.as_str(), &txn_id).await
+        .get(body.origin.as_str(), &txn_id)
+        .await
     {
         Ok(Some(record)) if record.content_digest == content_digest => {
             // Round R2/R3 (T14) + Round 4 (B1.8) — cache hit MUST re-do
@@ -159,6 +139,12 @@ pub(super) async fn federation_transaction(
             if !verify_federation_origin(body.origin.as_str()) {
                 return Err(AppError::unauthenticated(
                     "federation origin must be a valid DID (cache re-verification)",
+                ));
+            }
+            if crate::security::federation_origin_denied(body.origin.as_str()) {
+                return Err(AppError::capability_denied(
+                    "federation origin is denied by deployment peer policy \
+                     (cache re-verification)",
                 ));
             }
             if !federation_destination_matches(state, body.destination.as_str()) {
@@ -212,12 +198,21 @@ pub(super) async fn federation_transaction(
             "federation origin must be a valid DID",
         ));
     }
+    if crate::security::federation_origin_denied(body.origin.as_str()) {
+        return Err(AppError::capability_denied(
+            "federation origin is denied by deployment peer policy",
+        ));
+    }
     if !federation_destination_matches(state, body.destination.as_str()) {
         return Err(AppError::capability_denied(
             "federation transaction destination does not match this service",
         ));
     }
-    let ingest = ingest_federation_operations(state, body.origin.as_str(), body.operations).await;
+    let origin = body.origin.to_string();
+    let destination = body.destination.to_string();
+    let operations = body.operations;
+    enforce_inbound_operation_batch_policy(state, &origin, &operations).await?;
+    let ingest = ingest_federation_operations(state, &origin, operations).await;
     let response = contrix_sdk::FederationTransactionResBody {
         ok: true,
         accepted: ingest.accepted,
@@ -228,9 +223,9 @@ pub(super) async fn federation_transaction(
         serde_json::to_value(&response).map_err(|error| AppError::internal(error.to_string()))?;
     let now = now();
     let record = FederationTransactionRecord {
-        origin: body.origin.to_string(),
+        origin,
         txn_id,
-        destination: body.destination.to_string(),
+        destination,
         space_id: None,
         content_digest,
         status: "accepted".to_owned(),
@@ -241,7 +236,8 @@ pub(super) async fn federation_transaction(
     state
         .persistence
         .federation_transactions()
-        .put(&record).await
+        .put(&record)
+        .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     json_ok(response)
 }
@@ -267,13 +263,21 @@ pub(super) async fn federation_push_operations(
             "federation origin must be a valid DID",
         ));
     }
+    if crate::security::federation_origin_denied(body.origin.as_str()) {
+        return Err(AppError::capability_denied(
+            "federation origin is denied by deployment peer policy",
+        ));
+    }
     if !federation_destination_matches(state, body.destination.as_str()) {
         return Err(AppError::capability_denied(
             "federation push destination does not match this service",
         ));
     }
     verify_inbound_push_http_signature(state, req, &body)?;
-    let ingest = ingest_federation_operations(state, body.origin.as_str(), body.operations).await;
+    let origin = body.origin.to_string();
+    let operations = body.operations;
+    enforce_inbound_operation_batch_policy(state, &origin, &operations).await?;
+    let ingest = ingest_federation_operations(state, &origin, operations).await;
     json_ok(contrix_sdk::FederationPushOperationsResBody {
         accepted: ingest.accepted,
         rejected: ingest.rejected,
@@ -458,6 +462,7 @@ pub(crate) fn fanout_blocklist_hints_to_peers(state: &AppState, actor: &str, pay
     let client = match reqwest::Client::builder()
         .connect_timeout(crate::routing::federation::outbox::CONNECT_TIMEOUT)
         .timeout(crate::routing::federation::outbox::REQUEST_TIMEOUT)
+        .redirect(reqwest::redirect::Policy::none())
         .build()
     {
         Ok(client) => client,
@@ -475,6 +480,7 @@ pub(crate) fn fanout_blocklist_hints_to_peers(state: &AppState, actor: &str, pay
                 blocked.clone(),
                 source.clone(),
                 "block",
+                state.config.development_mode,
             );
         }
     }
@@ -487,6 +493,7 @@ pub(crate) fn fanout_blocklist_hints_to_peers(state: &AppState, actor: &str, pay
                 blocked.clone(),
                 source.clone(),
                 "unblock",
+                state.config.development_mode,
             );
         }
     }
@@ -541,6 +548,7 @@ fn spawn_block_hint_push(
     blocked: String,
     source: String,
     action: &'static str,
+    development_mode: bool,
 ) {
     let body = json!({
         "actor": actor,
@@ -553,7 +561,22 @@ fn spawn_block_hint_push(
             "{}/api/v1/federation/block-hint",
             peer_url.trim_end_matches('/')
         );
-        match client.post(&target).json(&body).send().await {
+        let target_url = match crate::security::validate_http_url_for_egress(
+            &target,
+            "federation block-hint",
+            development_mode,
+        ) {
+            Ok(url) => url,
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    peer = %peer_url,
+                    "federation block-hint peer push denied by egress policy"
+                );
+                return;
+            }
+        };
+        match client.post(target_url).json(&body).send().await {
             Ok(response) if response.status().is_success() => {}
             Ok(response) => {
                 tracing::debug!(
@@ -647,7 +670,8 @@ pub(super) async fn federation_actor_events(
     let mut events = state
         .persistence
         .projection_events()
-        .snapshot_all().await
+        .snapshot_all()
+        .await
         .unwrap_or_default()
         .into_iter()
         .filter(|event| projection_event_matches_actor(event, &actor))
@@ -717,11 +741,308 @@ pub(crate) fn fanout_accepted_operations_to_peers(state: &AppState, operations: 
         .iter()
         .filter(|operation| operation_should_fanout(operation))
     {
-        persist_local_federation_operation(state, operation);
-        for peer in &peers {
-            enqueue_operation_push(state, operation, peer);
+        let state = state.clone();
+        let operation = operation.clone();
+        let peers = peers.clone();
+        tokio::spawn(async move {
+            persist_local_federation_operation(&state, &operation).await;
+            for peer in peers {
+                if outbound_operation_allowed(&state, &operation, &peer).await {
+                    enqueue_operation_push(&state, &operation, &peer).await;
+                }
+            }
+        });
+    }
+}
+
+async fn enforce_inbound_operation_batch_policy(
+    state: &AppState,
+    origin_service_did: &str,
+    operations: &[Operation],
+) -> Result<(), AppError> {
+    for operation in operations {
+        enforce_realm_federation_policy(
+            state,
+            operation.realm_id.as_str(),
+            origin_service_did,
+            None,
+            FederationDirection::Inbound,
+        )?;
+        enforce_realm_moderation_federation_policy(
+            state,
+            operation.realm_id.as_str(),
+            origin_service_did,
+            None,
+            FederationDirection::Inbound,
+        )?;
+        policy_gate::enforce_operation_policy_server(
+            state,
+            operation_actor_did(operation).unwrap_or(origin_service_did),
+            operation,
+            PolicyGateSurface::FederationInbound {
+                origin_service_did: origin_service_did.to_owned(),
+            },
+        )
+        .await
+        .map_err(app_error_from_policy_gate)?;
+    }
+    Ok(())
+}
+
+async fn outbound_operation_allowed(
+    state: &AppState,
+    operation: &Operation,
+    peer: &FederationPeerTarget,
+) -> bool {
+    let result = async {
+        enforce_realm_federation_policy(
+            state,
+            operation.realm_id.as_str(),
+            peer.did.as_str(),
+            Some(peer.url.as_str()),
+            FederationDirection::Outbound,
+        )?;
+        enforce_realm_moderation_federation_policy(
+            state,
+            operation.realm_id.as_str(),
+            peer.did.as_str(),
+            Some(peer.url.as_str()),
+            FederationDirection::Outbound,
+        )?;
+        policy_gate::enforce_operation_policy_server(
+            state,
+            operation_actor_did(operation).unwrap_or(state.config.service_did.as_str()),
+            operation,
+            PolicyGateSurface::FederationOutbound {
+                destination_service_did: peer.did.clone(),
+            },
+        )
+        .await
+        .map_err(app_error_from_policy_gate)
+    }
+    .await;
+
+    if let Err(error) = result {
+        tracing::warn!(
+            error_code = %error.wire_code(),
+            message = %error.message,
+            peer = %peer.url,
+            peer_did = %peer.did,
+            operation_id = %operation.operation_id,
+            "federation operation fanout suppressed by realm policy"
+        );
+        return false;
+    }
+    true
+}
+
+fn app_error_from_policy_gate(rejection: policy_gate::PolicyGateRejection) -> AppError {
+    AppError::new(crate::error::ErrorCode::CapabilityDenied, rejection.message)
+        .with_status(rejection.status)
+        .with_wire_code(rejection.code)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FederationDirection {
+    Inbound,
+    Outbound,
+}
+
+fn enforce_realm_federation_policy(
+    state: &AppState,
+    realm_id: &str,
+    peer_did: &str,
+    peer_url: Option<&str>,
+    direction: FederationDirection,
+) -> Result<(), AppError> {
+    let policy = state
+        .projection
+        .lock()
+        .map_err(|error| AppError::internal(format!("projection lock: {error}")))?
+        .realm_federation_policy(realm_id)
+        .unwrap_or_else(|| "open".to_owned());
+    match policy.as_str() {
+        "open" | "mesh" | "hub" => Ok(()),
+        "closed" | "disabled" => Err(AppError::capability_denied(
+            "realm federation_policy forbids federation",
+        )
+        .with_wire_code("realm_federation_policy_closed")),
+        "quarantine" => Err(AppError::capability_denied(
+            "realm federation_policy is quarantine; live federation is blocked",
+        )
+        .with_wire_code("realm_federation_policy_quarantine")),
+        "restricted" => {
+            if direction == FederationDirection::Outbound
+                || configured_peer_matches(state, peer_did, peer_url)
+            {
+                Ok(())
+            } else {
+                Err(AppError::capability_denied(
+                    "realm federation_policy=restricted requires a configured peer",
+                )
+                .with_wire_code("realm_federation_policy_restricted"))
+            }
+        }
+        _ => Err(
+            AppError::capability_denied("realm federation_policy has an unsupported value")
+                .with_wire_code("realm_federation_policy_invalid"),
+        ),
+    }
+}
+
+fn enforce_realm_moderation_federation_policy(
+    state: &AppState,
+    realm_id: &str,
+    peer_did: &str,
+    peer_url: Option<&str>,
+    direction: FederationDirection,
+) -> Result<(), AppError> {
+    let record = state
+        .space_moderation_policies
+        .lock()
+        .expect("space moderation policies lock")
+        .get(realm_id)
+        .cloned();
+    let Some(record) = record else {
+        return Ok(());
+    };
+    if let Some(reason) =
+        moderation_policy_denies_federation(&record.payload, peer_did, peer_url, direction)
+    {
+        return Err(
+            AppError::capability_denied(reason).with_wire_code("realm_moderation_policy_denied")
+        );
+    }
+    Ok(())
+}
+
+fn moderation_policy_denies_federation(
+    policy: &Value,
+    peer_did: &str,
+    peer_url: Option<&str>,
+    direction: FederationDirection,
+) -> Option<String> {
+    let allowlist_enforced = ["allowlist_enforced", "federation_allowlist_enforced"]
+        .iter()
+        .any(|key| policy.get(key).and_then(Value::as_bool) == Some(true));
+    let mut explicitly_allowed = false;
+
+    for key in ["rules", "targets", "server_targets", "federation_targets"] {
+        let Some(entries) = policy.get(key).and_then(Value::as_array) else {
+            continue;
+        };
+        for entry in entries {
+            if !moderation_target_matches_peer(entry, peer_did, peer_url) {
+                continue;
+            }
+            let action = moderation_action(entry);
+            if moderation_action_allows_federation(action, direction) {
+                explicitly_allowed = true;
+            }
+            if moderation_action_denies_federation(action, direction) {
+                return Some(format!(
+                    "realm moderation policy blocks federation peer {peer_did}"
+                ));
+            }
         }
     }
+
+    if allowlist_enforced && !explicitly_allowed {
+        return Some(format!(
+            "realm moderation policy allowlist does not include federation peer {peer_did}"
+        ));
+    }
+    None
+}
+
+fn moderation_action(entry: &Value) -> &str {
+    entry
+        .get("action")
+        .or_else(|| entry.get("effect"))
+        .or_else(|| entry.get("polarity"))
+        .or_else(|| entry.get("mode"))
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+}
+
+fn moderation_action_denies_federation(action: &str, direction: FederationDirection) -> bool {
+    matches!(
+        action,
+        "deny" | "block" | "defederate" | "deny_federation" | "block_federation"
+    ) || matches!(
+        (direction, action),
+        (
+            FederationDirection::Inbound,
+            "deny_inbound" | "block_inbound"
+        ) | (
+            FederationDirection::Outbound,
+            "deny_outbound" | "block_outbound"
+        )
+    )
+}
+
+fn moderation_action_allows_federation(action: &str, direction: FederationDirection) -> bool {
+    matches!(
+        action,
+        "allow" | "allow_federation" | "allow_peer" | "allow_server"
+    ) || matches!(
+        (direction, action),
+        (FederationDirection::Inbound, "allow_inbound")
+            | (FederationDirection::Outbound, "allow_outbound")
+    )
+}
+
+fn moderation_target_matches_peer(entry: &Value, peer_did: &str, peer_url: Option<&str>) -> bool {
+    let target = entry.get("target").unwrap_or(entry);
+    let kind = target
+        .get("kind")
+        .or_else(|| entry.get("kind"))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let server_kind = matches!(
+        kind,
+        "server" | "service" | "service_did" | "peer" | "federation_peer" | "federation_server"
+    );
+    let did_matches = ["did", "service_did", "server_did", "peer_did", "target_did"]
+        .iter()
+        .filter_map(|key| target.get(*key).or_else(|| entry.get(*key)))
+        .any(|value| value.as_str() == Some(peer_did));
+    let string_target_matches = target.as_str() == Some(peer_did);
+    let url_matches = peer_url.is_some_and(|peer_url| {
+        ["url", "base_url", "peer_url", "server_url"]
+            .iter()
+            .filter_map(|key| target.get(*key).or_else(|| entry.get(*key)))
+            .any(|value| value.as_str() == Some(peer_url))
+    });
+    server_kind && (did_matches || string_target_matches || url_matches)
+}
+
+fn configured_peer_matches(state: &AppState, peer_did: &str, peer_url: Option<&str>) -> bool {
+    state
+        .config
+        .federation_peers
+        .iter()
+        .filter_map(|entry| parse_peer_target(entry))
+        .any(|peer| {
+            peer.did == peer_did
+                || peer_url
+                    .is_some_and(|url| peer.url.trim_end_matches('/') == url.trim_end_matches('/'))
+        })
+}
+
+fn operation_actor_did(operation: &Operation) -> Option<&str> {
+    [
+        "sender",
+        "actor",
+        "actor_id",
+        "member",
+        "subject",
+        "created_by",
+        "updated_by",
+    ]
+    .iter()
+    .find_map(|field| operation.payload.get(*field).and_then(Value::as_str))
+    .filter(|did| validate_did(did).is_ok())
 }
 
 #[endpoint(
@@ -752,7 +1073,8 @@ pub(super) async fn federation_pull_operations(
     let space_operations = state
         .persistence
         .federation_operations()
-        .list_for_space(&realm_id).await
+        .list_for_space(&realm_id)
+        .await
         .unwrap_or_default();
     let redacted = redaction_targets_from_operations(&space_operations);
     let snapshot_bootstrap = want_snapshot_bootstrap.then(|| {
@@ -840,6 +1162,7 @@ pub(super) async fn federation_backfill_operations(
     let client = reqwest::Client::builder()
         .connect_timeout(crate::routing::federation::outbox::CONNECT_TIMEOUT)
         .timeout(crate::routing::federation::outbox::REQUEST_TIMEOUT)
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|error| {
             AppError::internal(format!("build federation backfill client: {error}"))
@@ -853,8 +1176,15 @@ pub(super) async fn federation_backfill_operations(
     let mut peer_has_more = false;
     for _ in 0..max_pages {
         pages += 1;
-        let page =
-            pull_operations_page(&client, &peer, space_id, after_cursor.as_deref(), limit).await?;
+        let page = pull_operations_page(
+            state,
+            &client,
+            &peer,
+            space_id,
+            after_cursor.as_deref(),
+            limit,
+        )
+        .await?;
         pulled += page.operations.len();
         peer_next_cursor = page.next_cursor.clone();
         peer_has_more = page.has_more;
@@ -1035,6 +1365,11 @@ fn verify_inbound_push_http_signature(
         })?;
     let expected_content_digest = content_digest_header(&body_bytes);
     let expected_request_digest = format!("sha256:{}", sha256_hex(&body_bytes));
+    validate_round4_federation_request_binding(
+        &state.config.trust_domain,
+        req,
+        &expected_request_digest,
+    )?;
 
     let content_digest = required_header(req, "content-digest")?;
     if content_digest != expected_content_digest {
@@ -1286,12 +1621,62 @@ fn verifying_key_for_service_did(
     if service_did == state.config.service_did {
         return Ok(state.anchorer_signing_key().verifying_key());
     }
+    if let Some(key) = configured_peer_verifying_key(service_did)? {
+        return Ok(key);
+    }
+    let verification_method = format!("{service_did}#federation-fanout-key");
+    if let Ok(key) = crate::jws_verify::resolve_ed25519_pubkey(state, &verification_method) {
+        return Ok(key);
+    }
     if state.config.development_mode {
         return Ok(development_service_signing_key(service_did).verifying_key());
     }
     Err(signature_error(
         "source service key unavailable; key_rotation_hint=refresh_origin_service_did",
     ))
+}
+
+fn configured_peer_verifying_key(service_did: &str) -> Result<Option<VerifyingKey>, AppError> {
+    let Ok(raw) = std::env::var("SOLAND_FEDERATION_PEER_PUBLIC_KEYS") else {
+        return Ok(None);
+    };
+    let expected_method = format!("{service_did}#federation-fanout-key");
+    for entry in raw.split([',', ';', '\n']) {
+        let entry = entry.trim();
+        if entry.is_empty() {
+            continue;
+        }
+        let Some((id, material)) = entry
+            .split_once('=')
+            .or_else(|| entry.split_once(':'))
+            .map(|(id, material)| (id.trim(), material.trim()))
+        else {
+            continue;
+        };
+        if id != service_did && id != expected_method {
+            continue;
+        }
+        return decode_peer_verifying_key(material)
+            .map(Some)
+            .map_err(|message| signature_error(format!("peer public key invalid: {message}")));
+    }
+    Ok(None)
+}
+
+fn decode_peer_verifying_key(material: &str) -> Result<VerifyingKey, String> {
+    let bytes = URL_SAFE_NO_PAD
+        .decode(material.as_bytes())
+        .or_else(|_| STANDARD.decode(material.as_bytes()))
+        .map_err(|error| format!("public key is not base64/base64url: {error}"))?;
+    if bytes.len() != 32 {
+        return Err(format!(
+            "Ed25519 public key must be 32 bytes, got {}",
+            bytes.len()
+        ));
+    }
+    let mut raw = [0u8; 32];
+    raw.copy_from_slice(&bytes);
+    VerifyingKey::from_bytes(&raw).map_err(|error| format!("invalid Ed25519 key: {error}"))
 }
 
 fn development_service_signing_key(service_did: &str) -> SigningKey {
@@ -1425,6 +1810,7 @@ fn configured_peer_from_backfill_body(
 }
 
 async fn pull_operations_page(
+    state: &AppState,
     client: &reqwest::Client,
     peer: &FederationPeerTarget,
     space_id: &str,
@@ -1441,6 +1827,12 @@ async fn pull_operations_page(
             query.append_pair("after_cursor", after_cursor);
         }
     }
+    crate::security::validate_url_for_egress(
+        &url,
+        "federation pull-operations",
+        crate::security::private_networks_allowed(state.config.development_mode),
+    )
+    .map_err(AppError::capability_denied)?;
     let response = client
         .get(url.clone())
         .send()
@@ -1465,7 +1857,8 @@ async fn operation_frontier_value(state: &AppState, space_id: &str) -> Value {
     let operations = state
         .persistence
         .federation_operations()
-        .list_for_space(&realm_id).await
+        .list_for_space(&realm_id)
+        .await
         .unwrap_or_default();
     let mut operation_ids = operations
         .iter()
@@ -1530,7 +1923,11 @@ async fn persist_local_federation_operation(state: &AppState, operation: &Operat
     }
 }
 
-async fn enqueue_operation_push(state: &AppState, operation: &Operation, peer: &FederationPeerTarget) {
+async fn enqueue_operation_push(
+    state: &AppState,
+    operation: &Operation,
+    peer: &FederationPeerTarget,
+) {
     let Ok(origin) = Did::new(state.config.service_did.clone()) else {
         tracing::warn!(
             service_did = %state.config.service_did,
@@ -1801,6 +2198,17 @@ fn configured_peer_targets(state: &AppState) -> Vec<FederationPeerTarget> {
     entries
         .into_iter()
         .filter_map(|entry| parse_peer_target(&entry))
+        .filter(|peer| {
+            let denied = crate::security::federation_peer_denied(&peer.url, &peer.did);
+            if denied {
+                tracing::warn!(
+                    peer_url = %peer.url,
+                    peer_did = %peer.did,
+                    "configured federation peer denied by deployment peer policy"
+                );
+            }
+            !denied
+        })
         .collect()
 }
 
@@ -2010,7 +2418,12 @@ async fn record_outbound_fanout_attempt(
         received_at: now,
         processed_at: Some(attempted_at),
     };
-    if let Err(error) = state.persistence.federation_transactions().put(&record).await {
+    if let Err(error) = state
+        .persistence
+        .federation_transactions()
+        .put(&record)
+        .await
+    {
         tracing::warn!(
             %error,
             %peer,
@@ -2139,7 +2552,11 @@ fn run_outbound_fanout_retry_pass_at(
         return Ok(report);
     }
 
-    let records = state.persistence.federation_transactions().snapshot_all().await?;
+    let records = state
+        .persistence
+        .federation_transactions()
+        .snapshot_all()
+        .await?;
     for record in records {
         report.scanned += 1;
         if record.origin != state.config.service_did || !record.txn_id.starts_with("outbound_") {
@@ -2172,7 +2589,11 @@ fn run_outbound_fanout_retry_pass_at(
         } else {
             report.retried += 1;
         }
-        state.persistence.federation_transactions().put(&updated).await?;
+        state
+            .persistence
+            .federation_transactions()
+            .put(&updated)
+            .await?;
     }
 
     Ok(report)
@@ -2571,7 +2992,8 @@ mod tests {
         let transcript = state
             .persistence
             .federation_transactions()
-            .get("did:web:test.local", &txn_id).await
+            .get("did:web:test.local", &txn_id)
+            .await
             .unwrap()
             .expect("outbound transcript persisted");
         assert_eq!(transcript.destination, "https://peer-a.example");
@@ -2698,7 +3120,8 @@ mod tests {
         let outbox = state
             .persistence
             .federation_outbox()
-            .snapshot_all().await
+            .snapshot_all()
+            .await
             .unwrap();
         assert_eq!(outbox.len(), 3);
         assert!(outbox.iter().all(|row| row.peer_url == "http://127.0.0.1:9"
@@ -2727,7 +3150,8 @@ mod tests {
         let projected_invite = state
             .persistence
             .space_invites()
-            .get("cx:invite:01904100-0000-7000-8000-000000000056").await
+            .get("cx:invite:01904100-0000-7000-8000-000000000056")
+            .await
             .unwrap()
             .unwrap();
         assert_eq!(
@@ -2740,7 +3164,8 @@ mod tests {
         let federation_log = state
             .persistence
             .federation_operations()
-            .snapshot_all().await
+            .snapshot_all()
+            .await
             .unwrap();
         assert_eq!(federation_log.len(), 3);
 
@@ -2753,7 +3178,8 @@ mod tests {
             state
                 .persistence
                 .federation_outbox()
-                .snapshot_all().await
+                .snapshot_all()
+                .await
                 .unwrap()
                 .len(),
             3,
@@ -2763,7 +3189,8 @@ mod tests {
             state
                 .persistence
                 .federation_operations()
-                .snapshot_all().await
+                .snapshot_all()
+                .await
                 .unwrap()
                 .len(),
             3,
@@ -2793,14 +3220,16 @@ mod tests {
         state
             .persistence
             .federation_operations()
-            .append(first.clone()).await
+            .append(first.clone())
+            .await
             .unwrap();
         let before =
             operation_frontier_value(&state, "cx:realm:01904100-0000-7000-8000-000000000061");
         state
             .persistence
             .federation_operations()
-            .append(second.clone()).await
+            .append(second.clone())
+            .await
             .unwrap();
         let after =
             operation_frontier_value(&state, "cx:realm:01904100-0000-7000-8000-000000000061");
@@ -2841,7 +3270,8 @@ mod tests {
         let transcript = state
             .persistence
             .federation_transactions()
-            .get("did:web:test.local", &txn_id).await
+            .get("did:web:test.local", &txn_id)
+            .await
             .unwrap()
             .expect("outbound anchor transcript persisted");
         assert_eq!(
@@ -2871,7 +3301,8 @@ mod tests {
         let before = state
             .persistence
             .federation_transactions()
-            .get("did:web:test.local", &txn_id).await
+            .get("did:web:test.local", &txn_id)
+            .await
             .unwrap()
             .expect("outbound transcript persisted");
         let due_at = next_retry_at(&before.response).expect("next retry");
@@ -2886,7 +3317,8 @@ mod tests {
         let after = state
             .persistence
             .federation_transactions()
-            .get("did:web:test.local", &txn_id).await
+            .get("did:web:test.local", &txn_id)
+            .await
             .unwrap()
             .expect("updated outbound transcript persisted");
         assert_eq!(after.status, "outbound_fanout_retry_scheduled");

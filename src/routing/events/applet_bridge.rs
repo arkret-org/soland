@@ -99,12 +99,14 @@ pub fn maybe_emit_echo_status_for_session_start(
         let applet_clone = applet_id.clone();
         let params_clone = params.clone();
         let bridge_url_clone = bridge_url.clone();
+        let development_mode = state.config.development_mode;
         tokio::spawn(async move {
             let outcome = forward_to_applet_bridge(
                 &bridge_url_clone,
                 &session_clone,
                 &applet_clone,
                 &params_clone,
+                development_mode,
             )
             .await;
             emit_applet_outcome_event(
@@ -172,9 +174,24 @@ async fn forward_to_applet_bridge(
     session_id: &str,
     applet_id: &str,
     params: &Value,
+    development_mode: bool,
 ) -> AppletBridgeOutcome {
+    let bridge_url = match crate::security::validate_http_url_for_egress(
+        bridge_url,
+        "applet bridge",
+        development_mode,
+    ) {
+        Ok(url) => url,
+        Err(error) => {
+            return AppletBridgeOutcome::UpstreamFailure {
+                code: "egress_policy_denied".to_owned(),
+                message: error,
+            };
+        }
+    };
     let client = match reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
+        .redirect(reqwest::redirect::Policy::none())
         .build()
     {
         Ok(c) => c,
@@ -190,7 +207,7 @@ async fn forward_to_applet_bridge(
         "applet_id": applet_id,
         "params": params,
     });
-    let response = match client.post(bridge_url).json(&body).send().await {
+    let response = match client.post(bridge_url.clone()).json(&body).send().await {
         Ok(r) => r,
         Err(err) => {
             return AppletBridgeOutcome::UpstreamFailure {

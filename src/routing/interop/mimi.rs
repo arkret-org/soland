@@ -125,8 +125,9 @@ async fn mimi_room_update(
     // is rejected — we never implicitly route to a default Space.
     let binding_event_id = match body.get("room_binding") {
         Some(binding) if binding.is_object() => {
-            let event_id =
-                emit_mimi_room_binding_event(state, &room_id, binding).await.ok_or_else(|| {
+            let event_id = emit_mimi_room_binding_event(state, &room_id, binding)
+                .await
+                .ok_or_else(|| {
                     AppError::invalid_param(
                         "room_binding requires `binding_scope.space_id` or a top-level `space_id`",
                     )
@@ -339,7 +340,8 @@ async fn mimi_room_message(
     if let Err(error) = state
         .persistence
         .projection_events()
-        .append(projection_record).await
+        .append(projection_record)
+        .await
     {
         tracing::error!(%error, "mimi: failed to mirror message into projection_events");
     }
@@ -533,15 +535,20 @@ async fn mimi_report_abuse(body: JsonBody<Value>, depot: &mut Depot) -> JsonResu
         return Err(AppError::invalid_param(message).with_wire_code("unsupported_draft"));
     }
     let report_id = ids::generate_report_id();
-    if let Err(error) = state.persistence.moderation().append_report(json!({
-        "report_id": report_id,
-        "kind": "mimi_abuse_report",
-        "mimi_room_uri": body.get("mimi_room_uri").cloned(),
-        "provider_id": body.get("provider_id").cloned(),
-        "target_event_digest": body.get("target_event_digest").cloned(),
-        "frank": body.get("frank").cloned(),
-        "created_at": now(),
-    })).await {
+    if let Err(error) = state
+        .persistence
+        .moderation()
+        .append_report(json!({
+            "report_id": report_id,
+            "kind": "mimi_abuse_report",
+            "mimi_room_uri": body.get("mimi_room_uri").cloned(),
+            "provider_id": body.get("provider_id").cloned(),
+            "target_event_digest": body.get("target_event_digest").cloned(),
+            "frank": body.get("frank").cloned(),
+            "created_at": now(),
+        }))
+        .await
+    {
         tracing::error!(%error, "failed to persist mimi abuse report");
     }
 
@@ -600,7 +607,12 @@ async fn mimi_report_abuse(body: JsonBody<Value>, depot: &mut Depot) -> JsonResu
         report_record.event_id.clone(),
         crate::routing::events::projection::projection_event_json(&report_record),
     ));
-    if let Err(error) = state.persistence.projection_events().append(report_record).await {
+    if let Err(error) = state
+        .persistence
+        .projection_events()
+        .append(report_record)
+        .await
+    {
         tracing::error!(%error, "mimi: failed to mirror report into projection_events");
     }
 
@@ -993,7 +1005,12 @@ fn mimi_plaintext_detected(value: &Value) -> bool {
 /// recorded; callers translate that into a 404/400 rather than
 /// silently routing the request at a hard-coded demo Space.
 async fn mimi_bound_space_id(state: &AppState, room_id: &str) -> Option<String> {
-    let entries = state.persistence.projection_events().snapshot_all().await.ok()?;
+    let entries = state
+        .persistence
+        .projection_events()
+        .snapshot_all()
+        .await
+        .ok()?;
     // Walk in reverse so the most-recently-recorded binding wins.
     for entry in entries.iter().rev() {
         if entry.event_kind != "cx.mimi.room_binding" {

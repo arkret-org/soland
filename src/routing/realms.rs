@@ -232,7 +232,8 @@ async fn post_realm_link(
         .map_err(|e| AppError::invalid_param(format!("operation_id: {e}")))?;
     let operation = Operation::create(op_id, realm_scope, CX_REALM_LINK, payload);
     accept_local_operations(state, &session.actor, std::slice::from_ref(&operation))
-        .await.map_err(reducer_reject_to_app_error)?;
+        .await
+        .map_err(reducer_reject_to_app_error)?;
     json_ok(RealmLinkMutationResponse {
         realm_id,
         target_realm_id: body.target_realm_id,
@@ -310,7 +311,8 @@ async fn delete_realm_link(
         .map_err(|e| AppError::invalid_param(format!("operation_id: {e}")))?;
     let operation = Operation::create(op_id, realm_scope, CX_REALM_LINK, payload);
     accept_local_operations(state, &session.actor, std::slice::from_ref(&operation))
-        .await.map_err(reducer_reject_to_app_error)?;
+        .await
+        .map_err(reducer_reject_to_app_error)?;
     json_ok(RealmLinkMutationResponse {
         realm_id,
         target_realm_id,

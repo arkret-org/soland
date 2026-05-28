@@ -192,11 +192,16 @@ async fn account_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Respo
             );
             return;
         };
-        if let Err(error) = state.persistence.presence().put(PresenceRecord {
-            actor: session.actor.clone(),
-            status: presence.to_owned(),
-            updated_at: chrono::Utc::now(),
-        }).await {
+        if let Err(error) = state
+            .persistence
+            .presence()
+            .put(PresenceRecord {
+                actor: session.actor.clone(),
+                status: presence.to_owned(),
+                updated_at: chrono::Utc::now(),
+            })
+            .await
+        {
             tracing::error!(%error, "failed to persist presence");
         }
     }
@@ -330,7 +335,11 @@ async fn build_sync_snapshot(
     // `subject_id` disclosure).
     let candidate_spaces: Vec<RealmDirectoryEntry> = {
         let spaces = state.realms.lock().expect("spaces lock");
-        spaces.search(Default::default()).into_iter().cloned().collect()
+        spaces
+            .search(Default::default())
+            .into_iter()
+            .cloned()
+            .collect()
     };
     let mut visible_spaces: Vec<(String, String, Option<String>, _, Option<String>, _)> =
         Vec::new();
@@ -383,7 +392,13 @@ async fn build_sync_snapshot(
         let flow_state_after = flow.clone();
         let flow_list_item = flow.clone();
         let summary_members = members.clone();
-        let meta = state.persistence.realm_meta().get(&space_id).await.ok().flatten();
+        let meta = state
+            .persistence
+            .realm_meta()
+            .get(&space_id)
+            .await
+            .ok()
+            .flatten();
         let history_visibility = meta
             .as_ref()
             .map(|record| record.history_visibility.clone())
@@ -577,9 +592,7 @@ fn roster_members_for_realm(
             // structured FSM lives in `ProjectionState::members` and
             // bare-`members` set here represents "join" rows.
             entry.insert("membership".to_owned(), json!("join"));
-            if let Some(snapshot) =
-                registry.snapshot_for_actor(space.realm_id.as_str(), did_str)
-            {
+            if let Some(snapshot) = registry.snapshot_for_actor(space.realm_id.as_str(), did_str) {
                 if !snapshot.identity_event_ids.is_empty() {
                     entry.insert(
                         "identity_event_ids".to_owned(),
@@ -589,10 +602,7 @@ fn roster_members_for_realm(
                 // ROST-SOL-1 — roster digest field rename to
                 // `member_display_state_digest`. NOT disclosure-gated.
                 if let Some(digest) = snapshot.member_display_state_digest {
-                    entry.insert(
-                        "member_display_state_digest".to_owned(),
-                        json!(digest),
-                    );
+                    entry.insert("member_display_state_digest".to_owned(), json!(digest));
                 }
                 // ROST-SOL-2 — `subject_id` is disclosed only when Realm
                 // policy authorizes the caller to learn the principal /
@@ -670,7 +680,9 @@ async fn timeline_events_for_space(
             message.created_at,
             Some(&message.sender),
             session,
-        ).await {
+        )
+        .await
+        {
             continue;
         }
         let mut event = sync_timeline_message_json_with_projection(message, projection);
@@ -683,7 +695,8 @@ async fn timeline_events_for_space(
     for message in state
         .persistence
         .messages()
-        .list_for_space(space_id, 100).await
+        .list_for_space(space_id, 100)
+        .await
         .unwrap_or_default()
     {
         let position = timeline_event_position(state, &message.event_id, message.created_at).await;
@@ -698,7 +711,9 @@ async fn timeline_events_for_space(
             message.created_at,
             Some(&message.sender),
             session,
-        ).await {
+        )
+        .await
+        {
             continue;
         }
         let mut event = sync_timeline_message_record_json_with_projection(&message, projection);
@@ -718,11 +733,16 @@ async fn timeline_events_for_space(
     )
 }
 
-async fn timeline_event_position(state: &AppState, event_id: &str, created_at: DateTime<Utc>) -> i64 {
+async fn timeline_event_position(
+    state: &AppState,
+    event_id: &str,
+    created_at: DateTime<Utc>,
+) -> i64 {
     let timestamp = state
         .persistence
         .events()
-        .get(event_id).await
+        .get(event_id)
+        .await
         .ok()
         .flatten()
         .map(|record| record.received_at)
@@ -893,7 +913,10 @@ async fn projection_record_visible_to_session(
         event.created_at,
         event.sender.as_deref(),
         session,
-    ).await && !personal_blocklist_blocks_sender_for_session(state, session, event.sender.as_deref()).await
+    )
+    .await
+        && !personal_blocklist_blocks_sender_for_session(state, session, event.sender.as_deref())
+            .await
 }
 
 async fn projection_event_value_visible_to_session(
@@ -925,7 +948,8 @@ async fn canonical_event_visible_to_personal_blocklist(
     record: &crate::state::CanonicalEventRecord,
     session: &SessionRecord,
 ) -> bool {
-    !personal_blocklist_blocks_sender_for_session(state, Some(session), Some(&record.actor_id)).await
+    !personal_blocklist_blocks_sender_for_session(state, Some(session), Some(&record.actor_id))
+        .await
 }
 
 async fn personal_blocklist_blocks_sender_for_session(
@@ -1340,9 +1364,7 @@ pub fn parse_and_validate_sync_cursor(
         .get("to_device")
         .and_then(|position| position.as_i64())
         .unwrap_or_default();
-    let issued_at_ms = ctx
-        .get("issued_at_ms")
-        .and_then(|value| value.as_i64());
+    let issued_at_ms = ctx.get("issued_at_ms").and_then(|value| value.as_i64());
     Ok(SyncCursor {
         positions,
         to_device_position,
@@ -1426,7 +1448,8 @@ pub async fn resolve_sync_cursor_to_event_id(
     for message in state
         .persistence
         .messages()
-        .list_for_space(space_id, 1000).await
+        .list_for_space(space_id, 1000)
+        .await
         .unwrap_or_default()
     {
         let position = timeline_event_position(state, &message.event_id, message.created_at).await;
@@ -1552,13 +1575,18 @@ async fn persist_ephemeral_typing(
             .and_then(Value::as_str)
             .filter(|value| !value.trim().is_empty())
             .map(ToOwned::to_owned);
-        if let Err(error) = state.persistence.typing().put(TypingRecord {
-            actor: actor.to_owned(),
-            space_id: realm_id.to_owned(),
-            scope_id,
-            expires_at: envelope.expires_at,
-            updated_at: chrono::Utc::now(),
-        }).await {
+        if let Err(error) = state
+            .persistence
+            .typing()
+            .put(TypingRecord {
+                actor: actor.to_owned(),
+                space_id: realm_id.to_owned(),
+                scope_id,
+                expires_at: envelope.expires_at,
+                updated_at: chrono::Utc::now(),
+            })
+            .await
+        {
             tracing::error!(%error, "failed to persist ephemeral typing");
         }
     } else {
@@ -1578,11 +1606,16 @@ async fn persist_ephemeral_presence(
         .and_then(Value::as_str)
         .unwrap_or("online")
         .to_owned();
-    if let Err(error) = state.persistence.presence().put(PresenceRecord {
-        actor: actor.to_owned(),
-        status,
-        updated_at: chrono::Utc::now(),
-    }).await {
+    if let Err(error) = state
+        .persistence
+        .presence()
+        .put(PresenceRecord {
+            actor: actor.to_owned(),
+            status,
+            updated_at: chrono::Utc::now(),
+        })
+        .await
+    {
         tracing::error!(%error, "failed to persist ephemeral presence");
     }
 }
@@ -1606,7 +1639,8 @@ async fn admit_ephemeral_read_receipt(
 
     let (disclosure, _visibility, _scope_overrides_allowed) =
         super::event_log::effective_read_receipt_policy_for_space(state, realm_id)
-            .await.unwrap_or_else(|| ("optional".to_owned(), "members".to_owned(), true));
+            .await
+            .unwrap_or_else(|| ("optional".to_owned(), "members".to_owned(), true));
     if disclosure == "disabled" {
         return Err(crate::error::AppError::new(
             crate::error::ErrorCode::PolicyViolation,
@@ -1713,7 +1747,9 @@ pub(super) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
             match projected_event_page(&state, space_id, cursor.as_deref(), limit).await {
                 Ok(Some(page)) => {
                     for event in page.items {
-                        if !projection_record_visible_to_session(&state, &event, session.as_ref()).await {
+                        if !projection_record_visible_to_session(&state, &event, session.as_ref())
+                            .await
+                        {
                             continue;
                         }
                         seq += 1;
@@ -2046,11 +2082,14 @@ async fn events_query_impl(
     // Event-store reader in routing/events.rs which builds an actor-keyed
     // `frontier.actors` map. The projection-aware path below is space-keyed.
     if spaces.is_empty() {
-        let session = authenticated_session(state, req).await.map_err(|(status, code, message)| {
-            crate::error::AppError::invalid_param(message)
-                .with_status(status)
-                .with_wire_code(code)
-        })?;
+        let session =
+            authenticated_session(state, req)
+                .await
+                .map_err(|(status, code, message)| {
+                    crate::error::AppError::invalid_param(message)
+                        .with_status(status)
+                        .with_wire_code(code)
+                })?;
         let response = durable_events_query_from_parts(state, &session, &parts).await;
         return crate::result::json_ok(serde_json::to_value(response).unwrap_or(json!({})));
     }
@@ -2278,19 +2317,23 @@ async fn sync_gap_backfill(
 
     // Resolve sync `cx:cursor:` tokens to reducer event cursors.
     let from_cursor = resolve_sync_cursor_to_event_id(state, &realm_id, from_cursor)
-        .await.map_err(crate::error::AppError::invalid_param)?;
+        .await
+        .map_err(crate::error::AppError::invalid_param)?;
     let to_cursor = resolve_sync_cursor_to_event_id(state, &realm_id, to_cursor)
-        .await.map_err(crate::error::AppError::invalid_param)?;
+        .await
+        .map_err(crate::error::AppError::invalid_param)?;
 
     let (events, next_cursor, limited) =
-        backfill_gap_events(state, &realm_id, from_cursor.as_deref(), limit).await.map_err(|error| {
-            if error.to_string().contains("invalid_cursor") {
-                crate::error::AppError::invalid_param("cursor not found")
-                    .with_wire_code("invalid_cursor")
-            } else {
-                crate::error::AppError::internal(error.to_string())
-            }
-        })?;
+        backfill_gap_events(state, &realm_id, from_cursor.as_deref(), limit)
+            .await
+            .map_err(|error| {
+                if error.to_string().contains("invalid_cursor") {
+                    crate::error::AppError::invalid_param("cursor not found")
+                        .with_wire_code("invalid_cursor")
+                } else {
+                    crate::error::AppError::internal(error.to_string())
+                }
+            })?;
     let mut filtered_events = Vec::new();
     for event in events {
         if projection_event_value_visible_to_session(state, &event, session.as_ref()).await {
@@ -2343,7 +2386,8 @@ async fn snapshot_head(
         }
     }
     let bundle = snapshot_bundle_for_space(state, &space_id)
-        .await.ok_or_else(|| crate::error::AppError::not_found("not found"))?;
+        .await
+        .ok_or_else(|| crate::error::AppError::not_found("not found"))?;
     // Snapshot v2: the manifest already lists per-chunk digests, so
     // `chunks[]` becomes the per-chunk descriptor (id + size + digest)
     // — receivers fetch each chunk via `/sync/snapshot-chunk?chunk_id=N`
@@ -2406,7 +2450,8 @@ async fn snapshot_chunk(
         return Err(crate::error::AppError::not_found("not found"));
     }
     let bundle = snapshot_bundle_for_space(state, &space_id)
-        .await.ok_or_else(|| crate::error::AppError::not_found("not found"))?;
+        .await
+        .ok_or_else(|| crate::error::AppError::not_found("not found"))?;
     if bundle.snapshot_ref != snapshot_ref || bundle.state_digest != expected_hash {
         return Err(crate::error::AppError::new(
             crate::error::ErrorCode::StaleFrontier,

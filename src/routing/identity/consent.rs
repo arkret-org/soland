@@ -323,7 +323,8 @@ async fn request_consent_cell(
     let holder_account = state
         .persistence
         .accounts()
-        .get(&body.holder_did).await
+        .get(&body.holder_did)
+        .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     if holder_account.is_none() {
         return Err(AppError::not_found("holder account not found"));
@@ -500,7 +501,8 @@ async fn upsert_contact_status_at(
     let store = state.persistence.contacts();
     let mut contact = store
         .get_scoped(requester, target, scope)
-        .await.map_err(|error| AppError::internal(error.to_string()))?
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?
         .unwrap_or_else(|| ContactRecord {
             requester: requester.to_owned(),
             target: target.to_owned(),
@@ -513,7 +515,8 @@ async fn upsert_contact_status_at(
     contact.updated_at = updated_at;
     store
         .put(&contact)
-        .await.map_err(|error| AppError::internal(error.to_string()))
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))
 }
 
 fn validate_holder_update(session_actor: &str, holder: &str, peer: &str) -> Result<(), AppError> {

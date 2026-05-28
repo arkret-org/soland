@@ -197,7 +197,8 @@ async fn put_account_data(
     let existed = state
         .persistence
         .account_data()
-        .get(&session.actor, &data_type).await
+        .get(&session.actor, &data_type)
+        .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .is_some();
 
@@ -214,7 +215,8 @@ async fn put_account_data(
     state
         .persistence
         .account_data()
-        .put(&record).await
+        .put(&record)
+        .await
         .map_err(|error| AppError::internal(error.to_string()))?;
 
     super::append_audit_log(
@@ -270,7 +272,8 @@ async fn get_account_data(
     match state
         .persistence
         .account_data()
-        .get(&session.actor, &data_type).await
+        .get(&session.actor, &data_type)
+        .await
         .map_err(|error| AppError::internal(error.to_string()))?
     {
         Some(record) => json_ok(entry_from(record)),
@@ -294,7 +297,8 @@ async fn list_account_data(
     let entries = state
         .persistence
         .account_data()
-        .list_for_actor(&session.actor).await
+        .list_for_actor(&session.actor)
+        .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .into_iter()
         .map(entry_from)
@@ -322,7 +326,8 @@ async fn delete_account_data(
     state
         .persistence
         .account_data()
-        .delete(&session.actor, &data_type).await
+        .delete(&session.actor, &data_type)
+        .await
         .map_err(|error| AppError::internal(error.to_string()))?;
 
     super::append_audit_log(

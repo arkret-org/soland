@@ -137,15 +137,22 @@ pub async fn probe_webvh_provider_describe(
     timeout: Duration,
     expected_service_did: Option<&str>,
     expected_trust_domain: Option<&str>,
+    development_mode: bool,
 ) -> Result<(), String> {
     let trimmed = url.trim_end_matches('/');
     let describe_url = format!("{trimmed}/describe");
+    let describe_url = crate::security::validate_http_url_for_egress(
+        &describe_url,
+        "external webvh provider describe",
+        development_mode,
+    )?;
     let client = reqwest::Client::builder()
         .timeout(timeout)
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|e| format!("failed to build reqwest client: {e}"))?;
     let resp = client
-        .get(&describe_url)
+        .get(describe_url)
         .send()
         .await
         .map_err(|e| format!("webvh provider /describe request failed: {e}"))?;

@@ -238,7 +238,8 @@ async fn post_circle(
         .map_err(|e| AppError::invalid_param(format!("operation_id: {e}")))?;
     let operation = Operation::create(op_id, realm_scope, CX_CIRCLE_CREATE, payload);
     accept_local_operations(state, &session.actor, std::slice::from_ref(&operation))
-        .await.map_err(reducer_reject_to_app_error)?;
+        .await
+        .map_err(reducer_reject_to_app_error)?;
     let projection = state.projection.lock().expect("projection mutex");
     let circle = projection
         .circle(&circle_id)
@@ -275,7 +276,8 @@ async fn post_circle_member(
         .map_err(|e| AppError::invalid_param(format!("operation_id: {e}")))?;
     let operation = Operation::create(op_id, realm_scope, CX_CIRCLE_MEMBER_STATE, payload);
     accept_local_operations(state, &session.actor, std::slice::from_ref(&operation))
-        .await.map_err(reducer_reject_to_app_error)?;
+        .await
+        .map_err(reducer_reject_to_app_error)?;
     json_ok(CircleMembershipResponse {
         circle_id,
         actor_did: body.actor_did,
@@ -311,7 +313,8 @@ async fn delete_circle_member(
         .map_err(|e| AppError::invalid_param(format!("operation_id: {e}")))?;
     let operation = Operation::create(op_id, realm_scope, CX_CIRCLE_MEMBER_STATE, payload);
     accept_local_operations(state, &session.actor, std::slice::from_ref(&operation))
-        .await.map_err(reducer_reject_to_app_error)?;
+        .await
+        .map_err(reducer_reject_to_app_error)?;
     json_ok(CircleMembershipResponse {
         circle_id,
         actor_did,
@@ -350,7 +353,8 @@ async fn post_scope_rotate(
         .map_err(|e| AppError::invalid_param(format!("operation_id: {e}")))?;
     let operation = Operation::create(op_id, realm_scope, CX_CIRCLE_UPDATE, payload);
     accept_local_operations(state, &session.actor, std::slice::from_ref(&operation))
-        .await.map_err(reducer_reject_to_app_error)?;
+        .await
+        .map_err(reducer_reject_to_app_error)?;
     let projection = state.projection.lock().expect("projection mutex");
     let circle = projection
         .circle(&circle_id)
@@ -414,7 +418,8 @@ async fn submit_circle_lifecycle(
         .map_err(|e| AppError::invalid_param(format!("operation_id: {e}")))?;
     let operation = Operation::create(op_id, realm_scope, kind, payload);
     accept_local_operations(state, &session.actor, std::slice::from_ref(&operation))
-        .await.map_err(reducer_reject_to_app_error)?;
+        .await
+        .map_err(reducer_reject_to_app_error)?;
     let projection = state.projection.lock().expect("projection mutex");
     // For tombstone the read-helper hides the row; fall back to direct
     // map lookup so the response still surfaces the terminal state.

@@ -333,7 +333,6 @@ pub(crate) fn add_test_realm_member(state: &AppState, realm_id: &str, member: &s
     }
 }
 
-
 pub(crate) fn remove_test_realm_member(state: &AppState, realm_id: &str, member: &str) -> Value {
     let typed_realm_id = RealmId::new(realm_id.to_owned()).unwrap();
     let member_did = Did::new(member.to_owned()).unwrap();
@@ -626,7 +625,12 @@ pub(crate) async fn submit_message_event(
     response
 }
 
-pub(crate) async fn register_account(state: AppState, did: &str, handle: &str, device_id: &str) -> String {
+pub(crate) async fn register_account(
+    state: AppState,
+    did: &str,
+    handle: &str,
+    device_id: &str,
+) -> String {
     let registered: Value = TestClient::post("http://server/api/v1/account/register")
         .json(&serde_json::json!({
             "did": did,
@@ -699,40 +703,14 @@ pub(crate) fn spawn_oauth_introspection_server() -> (String, std::thread::JoinHa
     (url, handle)
 }
 
-
-
-
-
-
 // T6.1 — describe response partitioning, T1.4 — dev-mode posture surface,
 // and T8.3 — hardening block. The test fixtures for these checks live in
 // the legacy http_api integration suite and are exercised via the helpers
 // below.
 
-
-
-
-
-
-
 // MIMI facade writes map into the canonical Contrix reducer chain via the
 // four reducer-bound mappings: room_update, submit_message, notify, and
 // report_abuse. See the live test suite for the executable coverage.
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 pub(crate) fn test_ed25519_multibase_public(signing: &SigningKey) -> String {
     let mut bytes = Vec::with_capacity(34);
@@ -846,9 +824,6 @@ pub(crate) fn test_sha256_multihash_multibase(bytes: &[u8]) -> String {
     format!("z{}", bs58::encode(multihash).into_string())
 }
 
-
-
-
 // `standard_entity_types_and_reverse_domain_custom_types_work` and
 // `view_endpoints_project_common_presentation_shapes` were deleted in
 // round 6: the `entity` / `view` abstraction they exercised never landed in
@@ -857,24 +832,6 @@ pub(crate) fn test_sha256_multihash_multibase(bytes: &[u8]) -> String {
 // event kind; presentation concerns belong on `cx.view.*` events going
 // through the reducer, not on a free-form `/api/v1/entities` /
 // `/api/v1/views` scaffold.
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 /// Build a signed container `cx.space.*` event envelope for the Space
 /// (container) state-machine integration test. Post-R1.2 the container
@@ -1203,7 +1160,3 @@ pub(crate) fn persist_test_message(
     state.persistence.messages().put(&record).unwrap();
     record
 }
-
-
-
-

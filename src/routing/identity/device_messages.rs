@@ -97,15 +97,18 @@ async fn send_device_messages(
         for (device_id, content) in devices {
             let created_at = now();
             let position = state.next_to_device_position();
-            if let Err(error) = device_messages.append(DeviceMessageRecord {
-                idempotency_key: idempotency_key.clone(),
-                sender: session.actor.clone(),
-                recipient: recipient.clone(),
-                device_id: device_id.clone(),
-                position,
-                content,
-                created_at,
-            }).await {
+            if let Err(error) = device_messages
+                .append(DeviceMessageRecord {
+                    idempotency_key: idempotency_key.clone(),
+                    sender: session.actor.clone(),
+                    recipient: recipient.clone(),
+                    device_id: device_id.clone(),
+                    position,
+                    content,
+                    created_at,
+                })
+                .await
+            {
                 tracing::error!(%error, "failed to append device message");
             }
             delivered_devices.push(device_id);
@@ -129,7 +132,8 @@ pub(crate) async fn fanout_actor_private_update(
     let devices = state
         .persistence
         .devices()
-        .list_for_actor(actor).await
+        .list_for_actor(actor)
+        .await
         .unwrap_or_default();
     let mut delivered = 0;
     for device in devices {
@@ -156,7 +160,9 @@ pub(crate) async fn fanout_actor_private_update(
                 position,
                 content: envelope,
                 created_at,
-            }).await {
+            })
+            .await
+        {
             Ok(()) => delivered += 1,
             Err(error) => tracing::error!(%error, actor, "failed to fan out actor-private update"),
         }
@@ -206,15 +212,16 @@ async fn get_device_messages(
         },
         None => 0,
     };
-    let _ =
-        state
-            .persistence
-            .device_messages()
-            .ack(&session.actor, &session.device_id, ack_position).await;
+    let _ = state
+        .persistence
+        .device_messages()
+        .ack(&session.actor, &session.device_id, ack_position)
+        .await;
     let queued = state
         .persistence
         .device_messages()
-        .list_after(&session.actor, &session.device_id, ack_position).await
+        .list_after(&session.actor, &session.device_id, ack_position)
+        .await
         .unwrap_or_default();
     let events = device_message_events_after(&queued);
     let to_device_position = events
@@ -235,12 +242,16 @@ async fn get_device_messages(
     })
 }
 
-pub async fn prune_acked_device_messages(state: &AppState, session: &SessionRecord, ack_position: i64) {
-    let _ =
-        state
-            .persistence
-            .device_messages()
-            .ack(&session.actor, &session.device_id, ack_position).await;
+pub async fn prune_acked_device_messages(
+    state: &AppState,
+    session: &SessionRecord,
+    ack_position: i64,
+) {
+    let _ = state
+        .persistence
+        .device_messages()
+        .ack(&session.actor, &session.device_id, ack_position)
+        .await;
 }
 
 pub fn device_message_events_after(messages: &[DeviceMessageRecord]) -> Vec<Value> {

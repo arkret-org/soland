@@ -47,13 +47,15 @@ async fn get_server_status(
     let account_count = state
         .persistence
         .accounts()
-        .list().await
+        .list()
+        .await
         .map(|items| items.len())
         .ok();
     let device_count = state
         .persistence
         .devices()
-        .list().await
+        .list()
+        .await
         .map(|items| items.len())
         .ok();
     let realm_count = state
@@ -226,7 +228,8 @@ async fn admin_set_account_status(
         .filter(|value| !value.is_empty())
         .map(str::to_owned);
     let change =
-        set_account_lifecycle_state(state, account_id, next_state, admin_actor, reason.clone()).await?;
+        set_account_lifecycle_state(state, account_id, next_state, admin_actor, reason.clone())
+            .await?;
     append_audit_log(
         state,
         Some(admin_actor),
@@ -287,15 +290,23 @@ async fn revoke_device(
         .and_then(Value::as_str)
         .map(str::to_owned);
     if target_actor.is_none() {
-        target_actor = state.persistence.devices().list().await.ok().and_then(|devices| {
-            devices
-                .into_iter()
-                .find(|record| record.device_id == device_id)
-                .map(|record| record.actor)
-        });
+        target_actor = state
+            .persistence
+            .devices()
+            .list()
+            .await
+            .ok()
+            .and_then(|devices| {
+                devices
+                    .into_iter()
+                    .find(|record| record.device_id == device_id)
+                    .map(|record| record.actor)
+            });
     }
     let target_actor = target_actor.ok_or_else(|| AppError::not_found("device not found"))?;
-    revoke_device_record(state, &target_actor, &device_id).await.map_err(AppError::internal)?;
+    revoke_device_record(state, &target_actor, &device_id)
+        .await
+        .map_err(AppError::internal)?;
     append_audit_log(
         state,
         Some(&session.actor),
@@ -333,7 +344,8 @@ async fn get_moderation_queue(
     let items = state
         .persistence
         .moderation()
-        .list_queue_items().await
+        .list_queue_items()
+        .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     let total = items.len();
     json_ok(json!({

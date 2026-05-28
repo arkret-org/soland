@@ -62,9 +62,11 @@ pub(super) async fn set_read_cursor(
         kinds::CX_READ_MARKER,
         payload,
     );
-    accept_local_operations(state, &session.actor, &[operation]).await.map_err(|error| {
-        AppError::new(ErrorCode::Conflict, error.to_string()).with_status(StatusCode::CONFLICT)
-    })?;
+    accept_local_operations(state, &session.actor, &[operation])
+        .await
+        .map_err(|error| {
+            AppError::new(ErrorCode::Conflict, error.to_string()).with_status(StatusCode::CONFLICT)
+        })?;
     fanout_actor_private_update(
         state,
         &session.actor,

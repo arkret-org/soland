@@ -109,7 +109,8 @@ async fn authz_check(
         let owner = state
             .persistence
             .realm_meta()
-            .get(&realm_id).await
+            .get(&realm_id)
+            .await
             .ok()
             .flatten()
             .map(|m| m.owner);
@@ -198,7 +199,8 @@ async fn effective_grants(
         state
             .persistence
             .realm_meta()
-            .list().await
+            .list()
+            .await
             .unwrap_or_default()
             .into_iter()
             .flat_map(|(sid, _)| state.authz.grants_for_subject(&subject, &sid))
@@ -347,11 +349,16 @@ fn parse_expires_at(
         .map_err(|_| AppError::invalid_param("expires_at must be RFC 3339"))
 }
 
-async fn require_space_owner(state: &AppState, space_id: &str, actor: &str) -> Result<(), AppError> {
+async fn require_space_owner(
+    state: &AppState,
+    space_id: &str,
+    actor: &str,
+) -> Result<(), AppError> {
     let owner = state
         .persistence
         .realm_meta()
-        .get(space_id).await
+        .get(space_id)
+        .await
         .ok()
         .flatten()
         .map(|meta| meta.owner);
@@ -441,7 +448,8 @@ async fn revoke_grant(
         let owner = state
             .persistence
             .realm_meta()
-            .get(&grant.space_id).await
+            .get(&grant.space_id)
+            .await
             .ok()
             .flatten()
             .map(|meta| meta.owner);
@@ -493,7 +501,8 @@ async fn invites(
     let invite_list = state
         .persistence
         .space_invites()
-        .snapshot_all().await
+        .snapshot_all()
+        .await
         .unwrap_or_default()
         .into_iter()
         .filter(|invite| {

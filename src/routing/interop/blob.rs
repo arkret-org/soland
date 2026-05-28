@@ -104,7 +104,8 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         );
         return;
     }
-    if let Err(message) = enforce_blob_quota(state, &session.actor, space_id.as_deref(), size).await {
+    if let Err(message) = enforce_blob_quota(state, &session.actor, space_id.as_deref(), size).await
+    {
         render_error(
             res,
             StatusCode::PAYLOAD_TOO_LARGE,
@@ -301,7 +302,13 @@ async fn blob_get(depot: &mut Depot, req: &mut Request, res: &mut Response) {
             return;
         }
     };
-    let blob = state.persistence.blobs().get(&blob_ref).await.ok().flatten();
+    let blob = state
+        .persistence
+        .blobs()
+        .get(&blob_ref)
+        .await
+        .ok()
+        .flatten();
     match blob.as_ref() {
         Some(blob) => {
             let denied = if let Some(session) = session.as_ref() {
@@ -497,7 +504,8 @@ async fn blob_presign(
     let blob = state
         .persistence
         .blobs()
-        .get(blob_ref).await
+        .get(blob_ref)
+        .await
         .ok()
         .flatten()
         .ok_or_else(|| AppError::not_found("blob not found"))?;
@@ -506,7 +514,9 @@ async fn blob_presign(
         &blob,
         &session,
         body.get("space_id").and_then(Value::as_str),
-    ).await {
+    )
+    .await
+    {
         return Err(AppError::not_found("blob not found"));
     }
     let blob_value = presign_blob_policy_value(&blob);
@@ -784,7 +794,8 @@ async fn enforce_blob_quota(
     let blobs = state
         .persistence
         .blobs()
-        .snapshot_all().await
+        .snapshot_all()
+        .await
         .map_err(|_| "blob store unavailable")?;
     let actor_bytes: usize = blobs
         .iter()

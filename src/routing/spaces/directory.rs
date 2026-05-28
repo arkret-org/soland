@@ -47,7 +47,11 @@ use crate::wire::{
 async fn live_realm_entries(state: &AppState) -> Vec<RealmDirectoryEntry> {
     let candidates: Vec<RealmDirectoryEntry> = {
         let spaces = state.realms.lock().expect("spaces lock");
-        spaces.search(Default::default()).into_iter().cloned().collect()
+        spaces
+            .search(Default::default())
+            .into_iter()
+            .cloned()
+            .collect()
     };
     let mut live = Vec::new();
     for space in candidates {
@@ -159,7 +163,11 @@ async fn resolve_realm(
     };
     let candidates: Vec<RealmDirectoryEntry> = {
         let spaces = state.realms.lock().expect("spaces lock");
-        spaces.search(Default::default()).into_iter().cloned().collect()
+        spaces
+            .search(Default::default())
+            .into_iter()
+            .cloned()
+            .collect()
     };
     let mut space = None;
     for entry in candidates {
@@ -513,9 +521,9 @@ fn signed_handle_claim(
     // HC-SOL-2 (R3.2) — never issue a claim whose `subject` is not a
     // holder/principal DID (e.g. a `cx:actor:` / `cx:account:` typed id).
     // Delegates to the SDK rejection rule via the shared wire validator.
-    if let Err(rejection) = crate::wire_validators::handle_claim_subject::validate_subject(
-        &json!({ "subject": did }),
-    ) {
+    if let Err(rejection) =
+        crate::wire_validators::handle_claim_subject::validate_subject(&json!({ "subject": did }))
+    {
         return Err(AppError::new(
             crate::error::ErrorCode::SchemaViolation,
             rejection.message,
@@ -701,11 +709,13 @@ async fn directory_announce(
     req: &mut Request,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = authenticated_session(state, req).await.map_err(|(status, code, message)| {
-        AppError::invalid_param(message)
-            .with_status(status)
-            .with_wire_code(code)
-    })?;
+    let session = authenticated_session(state, req)
+        .await
+        .map_err(|(status, code, message)| {
+            AppError::invalid_param(message)
+                .with_status(status)
+                .with_wire_code(code)
+        })?;
     let body = body.into_inner();
     let resource_kind = body
         .get("resource_kind")
@@ -716,7 +726,9 @@ async fn directory_announce(
         .or_else(|| body.get("realm_id"))
         .and_then(Value::as_str)
         .ok_or_else(|| AppError::missing_param("resource_id is required"))?;
-    if resource_kind == "realm" && !super::space_has_member(state, resource_id, &session.actor).await {
+    if resource_kind == "realm"
+        && !super::space_has_member(state, resource_id, &session.actor).await
+    {
         return Err(AppError::capability_denied(
             "directory announcement requires realm membership",
         ));
@@ -749,11 +761,13 @@ async fn directory_withdraw(
     req: &mut Request,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = authenticated_session(state, req).await.map_err(|(status, code, message)| {
-        AppError::invalid_param(message)
-            .with_status(status)
-            .with_wire_code(code)
-    })?;
+    let session = authenticated_session(state, req)
+        .await
+        .map_err(|(status, code, message)| {
+            AppError::invalid_param(message)
+                .with_status(status)
+                .with_wire_code(code)
+        })?;
     let body = body.into_inner();
     let announcement_id = body
         .get("announcement_id")
@@ -814,7 +828,8 @@ pub async fn has_accepted_contact(state: &AppState, left: &str, right: &str) -> 
     state
         .persistence
         .contacts()
-        .list_for_actor(left).await
+        .list_for_actor(left)
+        .await
         .unwrap_or_default()
         .iter()
         .any(|contact| {
@@ -837,8 +852,7 @@ pub async fn actor_visible_to(
     }
     match session {
         Some(session) => {
-            session.actor == did
-                || has_accepted_contact(state, &session.actor, did).await
+            session.actor == did || has_accepted_contact(state, &session.actor, did).await
         }
         None => false,
     }
@@ -873,7 +887,12 @@ pub async fn demo_actors(state: &AppState) -> Vec<Value> {
         "presence": {"status": "online", "updated_at": now()},
     })];
 
-    let accounts = state.persistence.accounts().list().await.unwrap_or_default();
+    let accounts = state
+        .persistence
+        .accounts()
+        .list()
+        .await
+        .unwrap_or_default();
     for account in accounts {
         if actors
             .iter()
@@ -903,7 +922,8 @@ pub async fn demo_actors(state: &AppState) -> Vec<Value> {
     let devices = state
         .persistence
         .devices()
-        .list().await
+        .list()
+        .await
         .map(|devices| {
             let mut grouped: BTreeMap<String, BTreeMap<String, Value>> = BTreeMap::new();
             for device in devices {

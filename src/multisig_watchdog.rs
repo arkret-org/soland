@@ -118,7 +118,10 @@ impl MultisigWatchdog {
 /// Run one watchdog pass synchronously. Pulled out of the spawn loop so
 /// unit tests can drive deterministic single-tick behavior without a
 /// running tokio runtime.
-pub async fn run_watchdog_pass(state: &AppState, config: &MultisigWatchdogConfig) -> WatchdogPassReport {
+pub async fn run_watchdog_pass(
+    state: &AppState,
+    config: &MultisigWatchdogConfig,
+) -> WatchdogPassReport {
     let store = state.persistence.multisig_pending();
     let now = Utc::now();
     let lease_expiry = now
@@ -175,7 +178,10 @@ pub async fn run_watchdog_pass(state: &AppState, config: &MultisigWatchdogConfig
                 // (whose lease was silently re-issued after a partition
                 // heal) tries to publish here, its `delete_with_fence`
                 // returns false and the row stays for the live leader.
-                match store.delete_with_fence(&record.anchor_id, &config.node_id, fence_seq).await {
+                match store
+                    .delete_with_fence(&record.anchor_id, &config.node_id, fence_seq)
+                    .await
+                {
                     Ok(true) => report.aggregated.push(record.anchor_id.clone()),
                     Ok(false) => {
                         report.fenced_rejections.push(record.anchor_id.clone());
@@ -193,7 +199,9 @@ pub async fn run_watchdog_pass(state: &AppState, config: &MultisigWatchdogConfig
                 }
             }
             Err(error) => {
-                let _ = store.release_claim(&record.anchor_id, &config.node_id).await;
+                let _ = store
+                    .release_claim(&record.anchor_id, &config.node_id)
+                    .await;
                 report
                     .failed
                     .push((record.anchor_id.clone(), error.clone()));
@@ -226,7 +234,8 @@ pub async fn renew_lease_during_aggregation(
             .unwrap_or_else(|_| chrono::Duration::seconds(LEASE_DURATION_SECS as i64));
     store
         .renew_claim(anchor_id, &config.node_id, fence_seq, new_until)
-        .await.map_err(|e| e.to_string())
+        .await
+        .map_err(|e| e.to_string())
 }
 
 fn is_threshold_met(record: &MultisigPendingRecord) -> bool {
@@ -468,7 +477,12 @@ mod tests {
         let state = test_state();
         let cfg = MultisigWatchdogConfig::for_service(&state.config.service_did);
         let record = make_record("cx:anchor:sha256:01", 3, 1);
-        state.persistence.multisig_pending().upsert(record).await.unwrap();
+        state
+            .persistence
+            .multisig_pending()
+            .upsert(record)
+            .await
+            .unwrap();
         let report = run_watchdog_pass(&state, &cfg);
         assert_eq!(report.scanned, 1);
         assert!(report.claimed.is_empty());
@@ -481,7 +495,12 @@ mod tests {
         let cfg = MultisigWatchdogConfig::for_service(&state.config.service_did);
         let mut record = make_record("cx:anchor:sha256:02", 1, 1);
         record.canonical_b64 = String::new();
-        state.persistence.multisig_pending().upsert(record).await.unwrap();
+        state
+            .persistence
+            .multisig_pending()
+            .upsert(record)
+            .await
+            .unwrap();
         let report = run_watchdog_pass(&state, &cfg);
         assert!(report.claimed.is_empty());
     }
@@ -491,7 +510,12 @@ mod tests {
         let state = test_state();
         let cfg = MultisigWatchdogConfig::for_service(&state.config.service_did);
         let record = make_record("cx:anchor:sha256:03", 1, 1);
-        state.persistence.multisig_pending().upsert(record).await.unwrap();
+        state
+            .persistence
+            .multisig_pending()
+            .upsert(record)
+            .await
+            .unwrap();
         let report = run_watchdog_pass(&state, &cfg);
         // canonical_b64 decodes to bytes "empty" — not valid JSON, so the
         // aggregate path fails, the claim is released, and the row stays.
@@ -502,7 +526,8 @@ mod tests {
         let row_back = state
             .persistence
             .multisig_pending()
-            .get("cx:anchor:sha256:03").await
+            .get("cx:anchor:sha256:03")
+            .await
             .unwrap()
             .unwrap();
         assert!(row_back.claimed_by_node_id.is_none());
@@ -515,7 +540,12 @@ mod tests {
         let mut record = make_record("cx:anchor:sha256:04", 1, 1);
         record.claimed_by_node_id = Some("other-node".to_owned());
         record.claimed_until = Some(Utc::now() + chrono::Duration::seconds(120));
-        state.persistence.multisig_pending().upsert(record).await.unwrap();
+        state
+            .persistence
+            .multisig_pending()
+            .upsert(record)
+            .await
+            .unwrap();
         let report = run_watchdog_pass(&state, &cfg);
         assert!(report.claimed.is_empty());
     }

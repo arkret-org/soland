@@ -56,7 +56,9 @@ async fn get_space(
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     let space_id = space_id.into_inner();
-    space_lifecycle_response(state, &space_id).await.map(salvo::prelude::Json)
+    space_lifecycle_response(state, &space_id)
+        .await
+        .map(salvo::prelude::Json)
 }
 
 #[endpoint(
@@ -109,7 +111,8 @@ async fn upsert_space_moderation_policy(
     let record = state
         .persistence
         .realm_meta()
-        .get(&space_id).await
+        .get(&space_id)
+        .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .ok_or_else(|| AppError::not_found("not found"))?;
     if record.owner != session.actor {
@@ -211,7 +214,8 @@ async fn export_space(
     let events = state
         .persistence
         .projection_events()
-        .snapshot_all().await
+        .snapshot_all()
+        .await
         .unwrap_or_default()
         .into_iter()
         .filter(|event| event.space_id == space_id)
@@ -284,7 +288,8 @@ pub async fn space_lifecycle_response(
     let record = state
         .persistence
         .realm_meta()
-        .get(space_id).await
+        .get(space_id)
+        .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .ok_or_else(|| AppError::not_found("not found"))?;
     Ok(SpaceLifecycleResponse {
@@ -388,7 +393,10 @@ pub async fn realm_event_visible_to_session(
     if sender.is_some_and(|sender| session.is_some_and(|session| session.actor == sender)) {
         return true;
     }
-    match realm_history_visibility(state, realm_or_internal_id).await.as_str() {
+    match realm_history_visibility(state, realm_or_internal_id)
+        .await
+        .as_str()
+    {
         "world_readable" => true,
         "shared" => {
             if realm_discoverability(state, realm_or_internal_id).await == "public" {
@@ -424,7 +432,8 @@ pub async fn is_space_deleted(state: &AppState, space_id: &str) -> bool {
     state
         .persistence
         .realm_meta()
-        .get(space_id).await
+        .get(space_id)
+        .await
         .ok()
         .flatten()
         .is_some_and(|record| record.deleted)
@@ -434,7 +443,8 @@ pub async fn space_discoverability(state: &AppState, space_id: &str) -> String {
     state
         .persistence
         .realm_meta()
-        .get(space_id).await
+        .get(space_id)
+        .await
         .ok()
         .flatten()
         .map(|record| record.discoverability)
@@ -521,7 +531,9 @@ pub async fn space_search_visible_to(
         return true;
     }
     matches!(
-        space_discoverability(state, space.realm_id.as_str()).await.as_str(),
+        space_discoverability(state, space.realm_id.as_str())
+            .await
+            .as_str(),
         "public" | "listed" | "restricted"
     )
 }
@@ -541,12 +553,13 @@ pub async fn space_resolvable_to(
     }) {
         return true;
     }
-    match space_discoverability(state, space.realm_id.as_str()).await.as_str() {
+    match space_discoverability(state, space.realm_id.as_str())
+        .await
+        .as_str()
+    {
         "public" | "listed" | "restricted" | "unlisted" => true,
         "invite_only" => match invite_token {
-            Some(token) => {
-                invite_token_matches_space(state, space.realm_id.as_str(), token).await
-            }
+            Some(token) => invite_token_matches_space(state, space.realm_id.as_str(), token).await,
             None => false,
         },
         "secret" => signed_link.is_some_and(|link| !link.trim().is_empty()),
@@ -556,7 +569,8 @@ pub async fn space_resolvable_to(
 
 pub async fn invite_token_matches_space(state: &AppState, space_id: &str, token: &str) -> bool {
     invite_token_space_id(state, token)
-        .await.is_some_and(|resolved_space_id| resolved_space_id == space_id)
+        .await
+        .is_some_and(|resolved_space_id| resolved_space_id == space_id)
 }
 
 pub async fn invite_token_space_id(state: &AppState, token: &str) -> Option<String> {
@@ -568,7 +582,8 @@ pub async fn invite_token_space_id(state: &AppState, token: &str) -> Option<Stri
     state
         .persistence
         .space_invites()
-        .snapshot_all().await
+        .snapshot_all()
+        .await
         .unwrap_or_default()
         .into_iter()
         .find(|invite| {
@@ -631,7 +646,8 @@ pub async fn space_history_visibility(state: &AppState, space_id: &str) -> Strin
     state
         .persistence
         .realm_meta()
-        .get(space_id).await
+        .get(space_id)
+        .await
         .ok()
         .flatten()
         .map(|record| record.history_visibility.clone())
@@ -655,7 +671,13 @@ pub async fn space_member_joined_at(
     {
         return Some(member.joined_at);
     }
-    let meta = state.persistence.realm_meta().get(space_id).await.ok().flatten();
+    let meta = state
+        .persistence
+        .realm_meta()
+        .get(space_id)
+        .await
+        .ok()
+        .flatten();
     if meta.as_ref().is_some_and(|record| record.owner == actor) {
         return meta.map(|record| record.created_at);
     }
@@ -668,7 +690,9 @@ pub async fn space_allows_plaintext_service(state: &AppState, space_id: &str) ->
     };
     let realm_id = {
         let spaces = state.realms.lock().expect("spaces lock");
-        spaces.get(&sid).map(|space| space.realm_id.as_str().to_owned())
+        spaces
+            .get(&sid)
+            .map(|space| space.realm_id.as_str().to_owned())
     };
     if let Some(realm_id) = realm_id {
         if space_discoverability(state, &realm_id).await == "public" {
@@ -678,7 +702,8 @@ pub async fn space_allows_plaintext_service(state: &AppState, space_id: &str) ->
     state
         .persistence
         .realm_meta()
-        .get(space_id).await
+        .get(space_id)
+        .await
         .ok()
         .flatten()
         .is_some_and(|record| {
@@ -706,7 +731,8 @@ pub async fn typing_ephemeral_for_space(
     let typing_records = state
         .persistence
         .typing()
-        .list_for_space(space_id).await
+        .list_for_space(space_id)
+        .await
         .unwrap_or_default();
     for record in &typing_records {
         let scope_id = record

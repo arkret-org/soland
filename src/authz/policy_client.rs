@@ -215,6 +215,7 @@ pub struct PolicyClient {
     /// synthesised deny.
     local_service_did: String,
     verification_key_resolver: Option<VerificationKeyResolver>,
+    allow_private_network_egress: bool,
 }
 
 impl PolicyClient {
@@ -224,7 +225,13 @@ impl PolicyClient {
             cache: PolicyCache::new(),
             local_service_did: local_service_did.into(),
             verification_key_resolver: None,
+            allow_private_network_egress: false,
         }
+    }
+
+    pub fn with_private_network_egress(mut self, allowed: bool) -> Self {
+        self.allow_private_network_egress = allowed;
+        self
     }
 
     /// Attach the DID resolver used to verify genuine policy-server
@@ -318,6 +325,15 @@ impl PolicyClient {
         url: &str,
         body: &PolicyCheckRequest,
     ) -> Result<PolicyCheckResponse, PolicyClientError> {
+        let url = reqwest::Url::parse(url).map_err(|error| {
+            PolicyClientError::Configuration(format!("invalid policy_server_url: {error}"))
+        })?;
+        crate::security::validate_url_for_egress(
+            &url,
+            "policy server check",
+            self.allow_private_network_egress,
+        )
+        .map_err(PolicyClientError::Transport)?;
         let response = self
             .http
             .post(url)
@@ -725,6 +741,7 @@ mod tests {
 
     fn client_with_policy_key(signing: &SigningKey) -> PolicyClient {
         PolicyClient::new(reqwest::Client::new(), "did:web:soland.local")
+            .with_private_network_egress(true)
             .with_policy_did_resolver(test_policy_resolver(signing))
     }
 
@@ -762,7 +779,8 @@ mod tests {
 
     #[tokio::test]
     async fn check_cache_hit_returns_cached() {
-        let client = PolicyClient::new(reqwest::Client::new(), "did:web:soland.local");
+        let client = PolicyClient::new(reqwest::Client::new(), "did:web:soland.local")
+            .with_private_network_egress(true);
         let cfg = realm_config("http://127.0.0.1:1/never-reached");
         let input = sample_input(false);
         let key = input.canonical_request_hash();
@@ -833,7 +851,8 @@ mod tests {
         let url = format!("http://{addr}/api/v1/policy/check");
         let mut cfg = realm_config(&url);
         cfg.timeout_ms = 150;
-        let client = PolicyClient::new(reqwest::Client::new(), "did:web:soland.local");
+        let client = PolicyClient::new(reqwest::Client::new(), "did:web:soland.local")
+            .with_private_network_egress(true);
         let input = sample_input(true); // bypass_cache=true so we always hit network
 
         let cfg_clone = cfg.clone();

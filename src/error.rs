@@ -310,7 +310,10 @@ pub mod reasons {
             "routing::events::event_log envelope verification_method check",
         ),
         (AGENT_PAUSED, "reducer::apply_agent_lifecycle FSM reject"),
-        (AGENT_DEACTIVATED, "reducer::apply_agent_lifecycle FSM reject"),
+        (
+            AGENT_DEACTIVATED,
+            "reducer::apply_agent_lifecycle FSM reject",
+        ),
         (
             APPROVAL_ALREADY_CONSUMED,
             "routing::identity::agents action_approve idempotency",

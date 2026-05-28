@@ -195,7 +195,8 @@ async fn dev_login(
     let account = state
         .persistence
         .accounts()
-        .get(&body.actor).await
+        .get(&body.actor)
+        .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     if let Some(error) = account_new_session_error(state, &body.actor) {
         return Err(error);
@@ -217,7 +218,8 @@ async fn dev_login(
         state
             .persistence
             .accounts()
-            .put(&record).await
+            .put(&record)
+            .await
             .map_err(|error| AppError::internal(error.to_string()))?;
         append_audit_log(
             state,
@@ -243,7 +245,8 @@ async fn dev_login(
     state
         .persistence
         .sessions()
-        .put(&session).await
+        .put(&session)
+        .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     let seen_at = now();
     let device_payload = json!({
@@ -265,7 +268,8 @@ async fn dev_login(
     state
         .persistence
         .devices()
-        .put(&device).await
+        .put(&device)
+        .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     append_audit_log(
         state,
@@ -311,7 +315,8 @@ async fn exchange_session_grant(
     let account = state
         .persistence
         .accounts()
-        .get(&body.principal_did).await
+        .get(&body.principal_did)
+        .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     if account.is_none() {
         return Err(AppError::not_found("account is not registered"));
@@ -363,7 +368,8 @@ async fn exchange_session_grant(
     state
         .persistence
         .sessions()
-        .put(&session).await
+        .put(&session)
+        .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     let seen_at = now();
     let device_payload = json!({
@@ -386,7 +392,8 @@ async fn exchange_session_grant(
     state
         .persistence
         .devices()
-        .put(&device).await
+        .put(&device)
+        .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     append_audit_log(
         state,
@@ -493,7 +500,22 @@ pub(crate) async fn validate_session_grant_binding(
         audience: state.config.service_did.as_str(),
         proof: input.proof,
     };
-    let response = reqwest::Client::new()
+    let introspection_url = crate::security::validate_http_url_for_egress(
+        introspection_url,
+        "session grant introspection",
+        state.config.development_mode,
+    )
+    .map_err(AppError::capability_denied)?;
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|error| {
+            AppError::new(
+                ErrorCode::TemporarilyUnavailable,
+                format!("session grant introspection client init failed: {error}"),
+            )
+        })?;
+    let response = client
         .post(introspection_url)
         .bearer_auth(bearer)
         .json(&request)
@@ -585,7 +607,8 @@ async fn logout(
     let revoked_session = match state
         .persistence
         .sessions()
-        .get(&token_hash).await
+        .get(&token_hash)
+        .await
         .map_err(|error| AppError::internal(error.to_string()))?
     {
         Some(mut session) if session.revoked_at.is_none() => {
@@ -593,7 +616,8 @@ async fn logout(
             state
                 .persistence
                 .sessions()
-                .put(&session).await
+                .put(&session)
+                .await
                 .map_err(|error| AppError::internal(error.to_string()))?;
             Some(session)
         }
@@ -602,7 +626,8 @@ async fn logout(
     let revoked = revoked_session.is_some();
     if let Some(session) = revoked_session {
         revoke_device_record(state, &session.actor, &session.device_id)
-            .await.map_err(AppError::internal)?;
+            .await
+            .map_err(AppError::internal)?;
         append_audit_log(
             state,
             Some(&session.actor),
@@ -613,7 +638,8 @@ async fn logout(
         let _ = state
             .persistence
             .device_messages()
-            .purge(&session.actor, &session.device_id).await;
+            .purge(&session.actor, &session.device_id)
+            .await;
     }
     json_ok(LogoutResponse { ok: true, revoked })
 }
@@ -670,13 +696,18 @@ pub async fn authenticated_session(
         "missing bearer token",
     ))?;
     let token_hash = session_token_hash(token, &state.config.service_did);
-    let session = state.persistence.sessions().get(&token_hash).await.map_err(|_| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "internal_error",
-            "session store unavailable",
-        )
-    })?;
+    let session = state
+        .persistence
+        .sessions()
+        .get(&token_hash)
+        .await
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                "session store unavailable",
+            )
+        })?;
     let Some(session) = session else {
         return authenticated_oauth_session(state, token, token_hash).await;
     };
@@ -755,7 +786,12 @@ async fn authenticated_oauth_session(
         ));
     };
 
-    let value = request_oauth_introspection(introspection_url, introspection_bearer, token)?;
+    let value = request_oauth_introspection(
+        introspection_url,
+        introspection_bearer,
+        token,
+        state.config.development_mode,
+    )?;
     let oauth = parse_oauth_introspection(&value, token)?;
     ensure_oauth_account(state, &oauth).await?;
     if let Some(error) = account_new_session_tuple(state, &oauth.actor) {
@@ -798,6 +834,7 @@ fn request_oauth_introspection(
     introspection_url: &str,
     introspection_bearer: &str,
     token: &str,
+    development_mode: bool,
 ) -> Result<Value, (StatusCode, &'static str, &'static str)> {
     let introspection_url = introspection_url.to_owned();
     let introspection_bearer = introspection_bearer.to_owned();
@@ -814,6 +851,7 @@ fn request_oauth_introspection(
                 &introspection_url,
                 &introspection_bearer,
                 &token,
+                development_mode,
             );
         }
     };
@@ -822,9 +860,13 @@ fn request_oauth_introspection(
         runtime_handle.block_on(async move {
             let started = tokio::time::Instant::now();
             let jitter_micros = jitter_micros(OAUTH_INTROSPECTION_JITTER_MAX);
-            let result =
-                perform_oauth_introspection(&introspection_url, &introspection_bearer, &token)
-                    .await;
+            let result = perform_oauth_introspection(
+                &introspection_url,
+                &introspection_bearer,
+                &token,
+                development_mode,
+            )
+            .await;
             // Constant-time floor: regardless of whether the upstream
             // returned 200, 401, or timed out, sleep until at least
             // `min_latency + jitter` has elapsed. This collapses the
@@ -847,13 +889,28 @@ async fn perform_oauth_introspection(
     introspection_url: &str,
     introspection_bearer: &str,
     token: &str,
+    development_mode: bool,
 ) -> Result<Value, (StatusCode, &'static str, &'static str)> {
     let request = OAuthIntrospectionRequest {
         token,
         token_type_hint: OAUTH_INTROSPECTION_TOKEN_TYPE_HINT,
     };
+    let introspection_url = crate::security::validate_http_url_for_egress(
+        introspection_url,
+        "OAuth introspection",
+        development_mode,
+    )
+    .map_err(|error| {
+        tracing::warn!(%error, "OAuth introspection denied by egress policy");
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "auth_unavailable",
+            "OAuth introspection service unavailable",
+        )
+    })?;
     let client = reqwest::Client::builder()
         .timeout(OAUTH_INTROSPECTION_TIMEOUT)
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|error| {
             tracing::warn!(%error, "OAuth introspection client build failed");
@@ -924,12 +981,36 @@ fn legacy_blocking_introspection(
     introspection_url: &str,
     introspection_bearer: &str,
     token: &str,
+    development_mode: bool,
 ) -> Result<Value, (StatusCode, &'static str, &'static str)> {
     let request = OAuthIntrospectionRequest {
         token,
         token_type_hint: OAUTH_INTROSPECTION_TOKEN_TYPE_HINT,
     };
-    let response = reqwest::blocking::Client::new()
+    let introspection_url = crate::security::validate_http_url_for_egress(
+        introspection_url,
+        "OAuth introspection",
+        development_mode,
+    )
+    .map_err(|error| {
+        tracing::warn!(%error, "OAuth introspection denied by egress policy");
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "auth_unavailable",
+            "OAuth introspection service unavailable",
+        )
+    })?;
+    let response = reqwest::blocking::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|error| {
+            tracing::warn!(%error, "OAuth introspection client build failed");
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "auth_unavailable",
+                "OAuth introspection service unavailable",
+            )
+        })?
         .post(introspection_url)
         .bearer_auth(introspection_bearer)
         .form(&request)
@@ -1045,7 +1126,8 @@ async fn ensure_oauth_account(
     let accounts = state.persistence.accounts();
     if accounts
         .get(&oauth.actor)
-        .await.map_err(|_| {
+        .await
+        .map_err(|_| {
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "internal_error",
@@ -1105,13 +1187,16 @@ async fn ensure_oauth_device(
     oauth: &OAuthIntrospectionSession,
 ) -> Result<(), (StatusCode, &'static str, &'static str)> {
     let devices = state.persistence.devices();
-    match devices.get(&oauth.actor, &oauth.device_id).await.map_err(|_| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "internal_error",
-            "device store unavailable",
-        )
-    })? {
+    match devices
+        .get(&oauth.actor, &oauth.device_id)
+        .await
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                "device store unavailable",
+            )
+        })? {
         Some(record) if record.revoked_at.is_some() => {
             return Err((
                 StatusCode::UNAUTHORIZED,
@@ -1242,7 +1327,8 @@ pub async fn revoke_sessions_for_actor(state: &AppState, actor: &str) -> Result<
     let sessions = state
         .persistence
         .sessions()
-        .snapshot_all().await
+        .snapshot_all()
+        .await
         .map_err(|error| error.to_string())?;
     let mut count = 0usize;
     for mut session in sessions
@@ -1253,7 +1339,8 @@ pub async fn revoke_sessions_for_actor(state: &AppState, actor: &str) -> Result<
         state
             .persistence
             .sessions()
-            .put(&session).await
+            .put(&session)
+            .await
             .map_err(|error| error.to_string())?;
         count += 1;
     }
@@ -1266,7 +1353,8 @@ pub async fn revoke_devices_for_actor(state: &AppState, actor: &str) -> Result<u
     let devices = state
         .persistence
         .devices()
-        .list().await
+        .list()
+        .await
         .map_err(|error| error.to_string())?;
     let mut count = 0usize;
     for mut device in devices
@@ -1278,7 +1366,8 @@ pub async fn revoke_devices_for_actor(state: &AppState, actor: &str) -> Result<u
         state
             .persistence
             .devices()
-            .put(&device).await
+            .put(&device)
+            .await
             .map_err(|error| error.to_string())?;
         count += 1;
     }
@@ -1287,12 +1376,17 @@ pub async fn revoke_devices_for_actor(state: &AppState, actor: &str) -> Result<u
 
 /// Persist that the device is revoked. Used by `logout` and by the
 /// device-management handlers in mod.rs.
-pub async fn revoke_device_record(state: &AppState, actor: &str, device_id: &str) -> Result<(), String> {
+pub async fn revoke_device_record(
+    state: &AppState,
+    actor: &str,
+    device_id: &str,
+) -> Result<(), String> {
     let revoked_at = now();
     let mut record = state
         .persistence
         .devices()
-        .get(actor, device_id).await
+        .get(actor, device_id)
+        .await
         .map_err(|error| error.to_string())?
         .unwrap_or_else(|| DeviceInventoryRecord {
             actor: actor.to_owned(),
@@ -1309,7 +1403,8 @@ pub async fn revoke_device_record(state: &AppState, actor: &str, device_id: &str
     state
         .persistence
         .devices()
-        .put(&record).await
+        .put(&record)
+        .await
         .map_err(|error| error.to_string())?;
     Ok(())
 }

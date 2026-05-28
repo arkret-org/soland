@@ -153,7 +153,22 @@ pub(crate) async fn introspect_admin_scopes(
             )
         })?;
 
-    let response = reqwest::Client::new()
+    let url = crate::security::validate_http_url_for_egress(
+        url,
+        "admin session grant introspection",
+        state.config.development_mode,
+    )
+    .map_err(AppError::capability_denied)?;
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|error| {
+            AppError::new(
+                ErrorCode::TemporarilyUnavailable,
+                format!("admin scope introspection client init failed: {error}"),
+            )
+        })?;
+    let response = client
         .post(url)
         .bearer_auth(bearer)
         .json(&serde_json::json!({ "token": token, "audience": state.config.service_did }))

@@ -483,7 +483,8 @@ mod tests {
         let outbox = state
             .persistence
             .federation_outbox()
-            .snapshot_all().await
+            .snapshot_all()
+            .await
             .unwrap();
         assert_eq!(outbox.len(), 1);
         assert_eq!(outbox[0].peer_url, "http://127.0.0.1:9");

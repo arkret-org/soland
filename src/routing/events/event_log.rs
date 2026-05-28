@@ -35,6 +35,7 @@ use super::{
 use crate::error::{AppError, ErrorCode, error_http_status};
 use crate::result::{JsonResult, json_ok};
 use crate::routing::organizations;
+use crate::routing::policy_gate::{self, PolicyGateSurface};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::{AppState, CanonicalEventRecord, SessionRecord};
 use crate::wire::{
@@ -275,7 +276,8 @@ async fn get_event(
     let record = state
         .persistence
         .events()
-        .get(&event_id).await
+        .get(&event_id)
+        .await
         .ok()
         .flatten()
         .ok_or_else(|| AppError::not_found("event not found"))?;
@@ -399,7 +401,8 @@ pub(super) async fn events_query_durable_scope_impl(
     let scoped = state
         .persistence
         .events()
-        .snapshot_all().await
+        .snapshot_all()
+        .await
         .unwrap_or_default()
         .into_iter()
         .filter(|record| {
@@ -518,7 +521,8 @@ async fn events_frontier(
     let events = state
         .persistence
         .events()
-        .snapshot_all().await
+        .snapshot_all()
+        .await
         .unwrap_or_default();
     let mut actor_frontier: BTreeMap<String, u64> = BTreeMap::new();
     let mut realm_frontier: BTreeMap<String, Value> = BTreeMap::new();
@@ -843,7 +847,12 @@ async fn submit_event_batch(
     })));
 }
 
-async fn submit_federation_events(state: &AppState, req: &Request, body: Value, res: &mut Response) {
+async fn submit_federation_events(
+    state: &AppState,
+    req: &Request,
+    body: Value,
+    res: &mut Response,
+) {
     let Some(object) = body.as_object() else {
         render_error(
             res,
@@ -1156,11 +1165,27 @@ async fn submit_event_value(
                 message,
             ));
         }
-        if let Err(message) = validate_operation_policy(state, std::slice::from_ref(operation)).await {
+        if let Err(message) =
+            validate_operation_policy(state, std::slice::from_ref(operation)).await
+        {
             return Err(SubmitOneError::new(
                 StatusCode::FORBIDDEN,
                 "capability_denied",
                 message,
+            ));
+        }
+        if let Err(rejection) = policy_gate::enforce_operation_policy_server(
+            state,
+            &parsed.actor_id,
+            operation,
+            PolicyGateSurface::LocalSubmit,
+        )
+        .await
+        {
+            return Err(SubmitOneError::new(
+                rejection.status,
+                rejection.code,
+                rejection.message,
             ));
         }
         if let Ok(proj) = state.projection.lock() {
@@ -1226,18 +1251,21 @@ async fn submit_event_value(
     }
 
     let envelope_for_bootstrap = envelope.clone();
-    if let Err(error) = store.put(CanonicalEventRecord {
-        event_id: parsed.event_id.clone(),
-        actor_id: parsed.actor_id.clone(),
-        actor_seq: parsed.actor_seq,
-        space_id: parsed.space_id.clone(),
-        kind: parsed.kind.clone(),
-        schema_id: parsed.schema_id.clone(),
-        canonical_digest: parsed.canonical_digest.clone(),
-        canonical_bytes: parsed.canonical_bytes.clone(),
-        envelope,
-        received_at,
-    }).await {
+    if let Err(error) = store
+        .put(CanonicalEventRecord {
+            event_id: parsed.event_id.clone(),
+            actor_id: parsed.actor_id.clone(),
+            actor_seq: parsed.actor_seq,
+            space_id: parsed.space_id.clone(),
+            kind: parsed.kind.clone(),
+            schema_id: parsed.schema_id.clone(),
+            canonical_digest: parsed.canonical_digest.clone(),
+            canonical_bytes: parsed.canonical_bytes.clone(),
+            envelope,
+            received_at,
+        })
+        .await
+    {
         tracing::error!(%error, "failed to persist canonical event");
         return Err(SubmitOneError::new(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -1704,7 +1732,8 @@ async fn validate_event_envelope(
         &event_id,
         &actor_id,
         &canonical_digest,
-    ).await?;
+    )
+    .await?;
     validate_event_proofs(
         object,
         state,
@@ -1935,7 +1964,8 @@ async fn audit_disclosure_policy_for_realm(state: &AppState, realm_id: &str) -> 
     state
         .persistence
         .events()
-        .snapshot_all().await
+        .snapshot_all()
+        .await
         .ok()?
         .into_iter()
         .filter(|record| {
@@ -2253,7 +2283,8 @@ async fn validate_flow_watch_audit_pair(
     let audit_record = state
         .persistence
         .events()
-        .get(audit_ref).await
+        .get(audit_ref)
+        .await
         .map_err(|_| manage_others_audit_error("audit_pair event lookup failed"))?
         .ok_or_else(|| manage_others_audit_error("audit_pair event is not accepted"))?;
     if audit_record.kind != CX_AUDIT_ACCESSED {
@@ -2475,10 +2506,8 @@ fn validate_r3_2_wire_shape(kind: &str, payload: &Value) -> Result<(), EventVali
         crate::wire_validators::member_identity::validate_member_identity_update_payload(payload)
             .map_err(wire_rejection_to_validation_error)?;
     }
-    if matches!(
-        kind,
-        kinds::CX_MESSAGE_CREATE | kinds::CX_MESSAGE_REVISE
-    ) && let Some(content) = payload.get("content")
+    if matches!(kind, kinds::CX_MESSAGE_CREATE | kinds::CX_MESSAGE_REVISE)
+        && let Some(content) = payload.get("content")
     {
         crate::wire_validators::mention::validate_content_mention_references(content)
             .map_err(wire_rejection_to_validation_error)?;
@@ -3712,7 +3741,8 @@ mod proof_strictness_tests {
                     created_at: now,
                     updated_at: now,
                 },
-            ).await
+            )
+            .await
             .unwrap();
 
         let payload = json!({ "media_service_decrypts": true });

@@ -431,7 +431,8 @@ async fn put_key_backup(
     let duplicate = store.get(&backup_id).await.ok().flatten().is_some();
     store
         .put(backup_id.clone(), backup.clone())
-        .await.map_err(|error| AppError::internal(error.to_string()))?;
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
     json_ok(KeysBackupsPutResBody {
         ok: true,
         backup: serde_json::json!({
@@ -476,7 +477,8 @@ async fn list_key_backups(
     let mut backups: Vec<Value> = state
         .persistence
         .key_backups()
-        .snapshot_all().await
+        .snapshot_all()
+        .await
         .unwrap_or_default()
         .into_iter()
         .filter(|backup| backup.get("actor_id").and_then(Value::as_str) == Some(&session.actor))
@@ -524,7 +526,8 @@ async fn get_key_backup(
     let Some(backup) = state
         .persistence
         .key_backups()
-        .get(&backup_id).await
+        .get(&backup_id)
+        .await
         .ok()
         .flatten()
     else {

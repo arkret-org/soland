@@ -21,8 +21,8 @@ use super::auth::{revoke_devices_for_actor, revoke_sessions_for_actor};
 use super::consent::{has_active_consent_for_scope, normalize_scope, record_pending_request};
 use super::device_messages::{NOTIFICATION_READ_MARKER_UPDATE_TYPE, fanout_actor_private_update};
 use super::{
-    AuthArgs, append_audit_log, classify_handle, handle_for_did, normalize_handle, now,
-    sha256_hex, validate_did,
+    AuthArgs, append_audit_log, classify_handle, handle_for_did, normalize_handle, now, sha256_hex,
+    validate_did,
 };
 use crate::error::AppError;
 use crate::routing::spaces::space::realm_has_member;
@@ -117,7 +117,8 @@ async fn account_register(
     let accounts = state
         .persistence
         .accounts()
-        .list().await
+        .list()
+        .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     if accounts
         .iter()
@@ -139,7 +140,8 @@ async fn account_register(
     state
         .persistence
         .accounts()
-        .put(&account).await
+        .put(&account)
+        .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     if let Some(device_id) = body.device_id.as_deref() {
         let registered_at = now();
@@ -161,7 +163,8 @@ async fn account_register(
         state
             .persistence
             .devices()
-            .put(&device).await
+            .put(&device)
+            .await
             .map_err(|error| AppError::internal(error.to_string()))?;
     }
     append_audit_log(
@@ -191,7 +194,8 @@ async fn account_me(
     match state
         .persistence
         .accounts()
-        .get(&session.actor).await
+        .get(&session.actor)
+        .await
         .map_err(|error| AppError::internal(error.to_string()))?
     {
         Some(account) => json_ok(account_response(account, state)),
@@ -227,7 +231,8 @@ async fn claim_handle(
     let accounts_store = state.persistence.accounts();
     let mut current = accounts_store
         .get(&session.actor)
-        .await.map_err(|error| AppError::internal(error.to_string()))?
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?
         .ok_or_else(|| AppError::not_found("account not found"))?;
     if current.handle == normalized {
         return json_ok(ClaimHandleResponse {
@@ -238,7 +243,8 @@ async fn claim_handle(
     }
     let all_accounts = accounts_store
         .list()
-        .await.map_err(|error| AppError::internal(error.to_string()))?;
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
     if all_accounts
         .iter()
         .any(|account| account.did != session.actor && account.handle == normalized)
@@ -260,7 +266,8 @@ async fn claim_handle(
     current.handle = normalized.clone();
     accounts_store
         .put(&current)
-        .await.map_err(|error| AppError::internal(error.to_string()))?;
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
     record_handle_release(state, &previous_handle);
     append_audit_log(
         state,
@@ -302,7 +309,8 @@ async fn update_profile(
     let accounts_store = state.persistence.accounts();
     let mut current = accounts_store
         .get(&session.actor)
-        .await.map_err(|error| AppError::internal(error.to_string()))?
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?
         .ok_or_else(|| AppError::not_found("account not found"))?;
     if let Some(value) = body.display_name {
         current.display_name = empty_to_none(value);
@@ -324,7 +332,8 @@ async fn update_profile(
     }
     accounts_store
         .put(&current)
-        .await.map_err(|error| AppError::internal(error.to_string()))?;
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
     append_audit_log(
         state,
         Some(&session.actor),
@@ -385,11 +394,13 @@ async fn transfer_handle(
     let accounts_store = state.persistence.accounts();
     let mut source = accounts_store
         .get(&session.actor)
-        .await.map_err(|error| AppError::internal(error.to_string()))?
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?
         .ok_or_else(|| AppError::not_found("source account not found"))?;
     let mut target = match accounts_store
         .get(&body.target_did)
-        .await.map_err(|error| AppError::internal(error.to_string()))?
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?
     {
         Some(account) => account,
         None => {
@@ -403,7 +414,8 @@ async fn transfer_handle(
     let parked_handle = normalize_handle(&super::handle_for_did(&source.did));
     let all_accounts = accounts_store
         .list()
-        .await.map_err(|error| AppError::internal(error.to_string()))?;
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
     if all_accounts
         .iter()
         .any(|account| account.did != source.did && account.handle == parked_handle)
@@ -419,10 +431,12 @@ async fn transfer_handle(
     target.handle = transferred.clone();
     accounts_store
         .put(&source)
-        .await.map_err(|error| AppError::internal(error.to_string()))?;
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
     accounts_store
         .put(&target)
-        .await.map_err(|error| AppError::internal(error.to_string()))?;
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
     append_audit_log(
         state,
         Some(&session.actor),
@@ -467,7 +481,8 @@ async fn export_account(
     let account = state
         .persistence
         .accounts()
-        .get(&actor).await
+        .get(&actor)
+        .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     let profile = account.as_ref().map(|account| {
         json!({
@@ -481,7 +496,8 @@ async fn export_account(
     let devices = state
         .persistence
         .devices()
-        .list().await
+        .list()
+        .await
         .unwrap_or_default()
         .into_iter()
         .filter(|device| device.actor == actor)
@@ -499,7 +515,8 @@ async fn export_account(
     let spaces: Vec<serde_json::Value> = state
         .persistence
         .realm_meta()
-        .list().await
+        .list()
+        .await
         .unwrap_or_default()
         .into_iter()
         .filter(|(_sid, meta)| meta.owner == actor)
@@ -527,7 +544,8 @@ async fn export_account(
     let audit_log = state
         .persistence
         .audit()
-        .list_for_actor(&actor).await
+        .list_for_actor(&actor)
+        .await
         .unwrap_or_default();
 
     let bundle = json!({
@@ -595,7 +613,8 @@ pub(crate) async fn set_account_lifecycle_state(
     if state
         .persistence
         .accounts()
-        .get(did).await
+        .get(did)
+        .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .is_none()
     {
@@ -630,10 +649,14 @@ pub(crate) async fn set_account_lifecycle_state(
             },
         );
         if matches!(next_state, "locked" | "deactivated") {
-            sessions_revoked = revoke_sessions_for_actor(state, did).await.map_err(AppError::internal)?;
+            sessions_revoked = revoke_sessions_for_actor(state, did)
+                .await
+                .map_err(AppError::internal)?;
         }
         if matches!(next_state, "locked" | "deactivated") {
-            devices_revoked = revoke_devices_for_actor(state, did).await.map_err(AppError::internal)?;
+            devices_revoked = revoke_devices_for_actor(state, did)
+                .await
+                .map_err(AppError::internal)?;
         }
         append_account_state_change_audit(
             state,
@@ -723,7 +746,8 @@ async fn deactivate_account(
         "deactivated",
         &actor,
         Some("user_deactivate".to_owned()),
-    ).await?;
+    )
+    .await?;
     json_ok(json!({
         "did": change.did,
         "previous_state": change.previous_state,
@@ -943,7 +967,8 @@ async fn erase_account(
     let audit_log = state
         .persistence
         .audit()
-        .list_for_actor(&actor).await
+        .list_for_actor(&actor)
+        .await
         .unwrap_or_default();
     json_ok(json!({
         "did": actor,
@@ -993,7 +1018,8 @@ async fn append_audit_redaction_marker(state: &AppState, actor: &str) {
     let prior = state
         .persistence
         .audit()
-        .list_for_actor(actor).await
+        .list_for_actor(actor)
+        .await
         .unwrap_or_default();
     let entries: Vec<Value> = prior
         .iter()
@@ -1024,7 +1050,8 @@ async fn affected_erasure_realms_for_actor(state: &AppState, actor: &str) -> Vec
     for event in state
         .persistence
         .projection_events()
-        .snapshot_all().await
+        .snapshot_all()
+        .await
         .unwrap_or_default()
     {
         if projection_event_belongs_to_actor(&event, actor) {
@@ -1175,7 +1202,8 @@ async fn list_notifications(
     let actor_handle = state
         .persistence
         .accounts()
-        .get(&session.actor).await
+        .get(&session.actor)
+        .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .map(|account| account.handle)
         .unwrap_or_else(|| handle_for_did(&session.actor));
@@ -1609,7 +1637,8 @@ async fn contact_request(
     let target_account = state
         .persistence
         .accounts()
-        .get(&body.target).await
+        .get(&body.target)
+        .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     if target_account.is_none() {
         return Err(AppError::not_found("not found"));
@@ -1625,7 +1654,8 @@ async fn contact_request(
     let store = state.persistence.contacts();
     if let Some(mut existing) = store
         .get_scoped(&session.actor, &body.target, &scope)
-        .await.map_err(|error| AppError::internal(error.to_string()))?
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?
     {
         if existing.status == "rejected" {
             return json_ok(contact_response(existing));
@@ -1635,13 +1665,15 @@ async fn contact_request(
             existing.updated_at = now();
             store
                 .put(&existing)
-                .await.map_err(|error| AppError::internal(error.to_string()))?;
+                .await
+                .map_err(|error| AppError::internal(error.to_string()))?;
         }
         return json_ok(contact_response(existing));
     }
     if store
         .get_scoped(&body.target, &session.actor, &scope)
-        .await.map_err(|error| AppError::internal(error.to_string()))?
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?
         .is_some()
     {
         return Err(AppError::new(
@@ -1659,7 +1691,8 @@ async fn contact_request(
     };
     store
         .put(&contact)
-        .await.map_err(|error| AppError::internal(error.to_string()))?;
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
     res.status_code(StatusCode::CREATED);
     json_ok(contact_response(contact))
 }
@@ -1685,7 +1718,8 @@ async fn contact_respond(
     let store = state.persistence.contacts();
     let Some(mut contact) = store
         .get(&body.requester, &session.actor)
-        .await.map_err(|error| AppError::internal(error.to_string()))?
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?
     else {
         return Err(AppError::not_found("not found"));
     };
@@ -1711,7 +1745,8 @@ async fn contact_respond(
     contact.updated_at = now();
     store
         .put(&contact)
-        .await.map_err(|error| AppError::internal(error.to_string()))?;
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
     json_ok(contact_response(contact))
 }
 
@@ -1731,7 +1766,8 @@ async fn list_contacts(
     let result = state
         .persistence
         .contacts()
-        .list_for_actor(&session.actor).await
+        .list_for_actor(&session.actor)
+        .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .into_iter()
         .map(contact_response)
