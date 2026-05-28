@@ -685,6 +685,14 @@ async fn timeline_events_for_space(
         {
             continue;
         }
+        if !circle_scope_visible_to_session(
+            projection,
+            message_scope_circle_id(&message.content),
+            session,
+            Some(&message.sender),
+        ) {
+            continue;
+        }
         let mut event = sync_timeline_message_json_with_projection(message, projection);
         if let Some(tombstone) = retention_tombstone_for_event(state, &message.event_id) {
             tombstone_timeline_event_for_retention(&mut event, &tombstone);
@@ -714,6 +722,14 @@ async fn timeline_events_for_space(
         )
         .await
         {
+            continue;
+        }
+        if !circle_scope_visible_to_session(
+            projection,
+            message_scope_circle_id(&message.content),
+            session,
+            Some(&message.sender),
+        ) {
             continue;
         }
         let mut event = sync_timeline_message_record_json_with_projection(&message, projection);
@@ -1033,6 +1049,48 @@ fn blocklist_value_is_sender(value: &Value, sender: &str) -> bool {
     value.as_str().is_some_and(|value| value == sender)
 }
 
+fn message_scope_circle_id(content: &Value) -> Option<&str> {
+    content
+        .get("scope_circle_id")
+        .and_then(Value::as_str)
+        .filter(|value| value.starts_with("cx:circle:"))
+}
+
+fn circle_scope_visible_to_session(
+    projection: &ProjectionState,
+    scope_circle_id: Option<&str>,
+    session: Option<&SessionRecord>,
+    sender: Option<&str>,
+) -> bool {
+    let Some(scope_circle_id) = scope_circle_id else {
+        return true;
+    };
+    if sender.is_some_and(|sender| session.is_some_and(|session| session.actor == sender)) {
+        return true;
+    }
+    let Some(session) = session else {
+        return false;
+    };
+    projection.circle_scope_visible_to_actor(scope_circle_id, &session.actor)
+}
+
+fn add_scope_circle_metadata(event: &mut serde_json::Value, content: &serde_json::Value) {
+    let Some(scope_circle_id) = message_scope_circle_id(content) else {
+        return;
+    };
+    let Some(object) = event.as_object_mut() else {
+        return;
+    };
+    object.insert(
+        "scope_circle_id".to_owned(),
+        serde_json::Value::String(scope_circle_id.to_owned()),
+    );
+    object.insert(
+        "effective_scope".to_owned(),
+        serde_json::Value::String(scope_circle_id.to_owned()),
+    );
+}
+
 fn sync_timeline_message_record_json(message: &crate::state::MessageRecord) -> serde_json::Value {
     // flow_id is always derived from space_id (one flow per space for
     // the message timeline) — thread_id is the discussion *track* within
@@ -1042,7 +1100,7 @@ fn sync_timeline_message_record_json(message: &crate::state::MessageRecord) -> s
     // `track` field is the v1 replacement.
     let flow_id = flow_id_from_space_id(&message.space_id);
     let track_id = message.thread_id.clone();
-    json!({
+    let mut event = json!({
         "kind": "cx.message.create",
         "event_id": message.event_id,
         "message_id": super::message_id_from_event_id(&message.event_id),
@@ -1055,7 +1113,9 @@ fn sync_timeline_message_record_json(message: &crate::state::MessageRecord) -> s
         "encrypted": message.encrypted,
         "decryption_state": if message.encrypted { "opaque" } else { "cleartext" },
         "created_at": message.created_at,
-    })
+    });
+    add_scope_circle_metadata(&mut event, &message.content);
+    event
 }
 
 fn sync_timeline_message_record_json_with_projection(

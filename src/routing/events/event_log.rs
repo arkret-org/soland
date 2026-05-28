@@ -3544,9 +3544,30 @@ pub(super) async fn event_visible_to_session(
                 Some(session),
             )
             .await
+                && circle_event_visible_to_session(state, record, session)
         }
         None => false,
     }
+}
+
+fn circle_event_visible_to_session(
+    state: &AppState,
+    record: &CanonicalEventRecord,
+    session: &SessionRecord,
+) -> bool {
+    let Some(scope_circle_id) = effective_scope_for_envelope(&record.envelope)
+        .filter(|scope| scope.starts_with("cx:circle:"))
+    else {
+        return true;
+    };
+    if record.actor_id == session.actor {
+        return true;
+    }
+    state
+        .projection
+        .lock()
+        .expect("projection mutex")
+        .circle_scope_visible_to_actor(&scope_circle_id, &session.actor)
 }
 
 /// Scan the durable Event store for the most

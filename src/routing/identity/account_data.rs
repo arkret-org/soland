@@ -214,7 +214,8 @@ async fn put_account_data(
         "account_data.set",
         serde_json::json!({"data_type": data_type}),
         "accepted",
-    );
+    )
+    .await;
     fanout_actor_private_update(
         state,
         &session.actor,
@@ -226,7 +227,8 @@ async fn put_account_data(
             "content": record.payload.clone(),
             "updated_at": record.updated_at,
         }),
-    );
+    )
+    .await;
     if is_blocklist_update {
         crate::routing::federation::federation::fanout_blocklist_hints_to_peers(
             state,
@@ -325,7 +327,8 @@ async fn delete_account_data(
         "account_data.delete",
         serde_json::json!({"data_type": data_type}),
         "accepted",
-    );
+    )
+    .await;
     fanout_actor_private_update(
         state,
         &session.actor,
@@ -336,7 +339,8 @@ async fn delete_account_data(
             "data_type": data_type,
             "deleted_at": now(),
         }),
-    );
+    )
+    .await;
 
     json_ok(serde_json::json!({"ok": true, "data_type": data_type}))
 }

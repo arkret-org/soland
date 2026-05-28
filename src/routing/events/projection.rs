@@ -305,7 +305,7 @@ pub fn sync_timeline_message_json(message: &crate::reducer::MessageState) -> ser
     // emitted on v1 wire.
     let flow_id = flow_id_from_space_id(&message.space_id);
     let track_id = message.thread_id.clone();
-    json!({
+    let mut event = json!({
         "kind": "cx.message.create",
         "event_id": message.event_id,
         "message_id": message_id_from_event_id(&message.event_id),
@@ -318,7 +318,9 @@ pub fn sync_timeline_message_json(message: &crate::reducer::MessageState) -> ser
         "encrypted": message.encrypted,
         "decryption_state": if message.encrypted { "opaque" } else { "cleartext" },
         "created_at": message.created_at,
-    })
+    });
+    add_scope_circle_metadata(&mut event, &message.content);
+    event
 }
 
 pub fn sync_timeline_message_json_with_projection(
@@ -2382,8 +2384,33 @@ fn message_content_from_payload(payload: &Value) -> Value {
                 object.insert(key.to_owned(), value.clone());
             }
         }
+        if !object.contains_key("scope_circle_id")
+            && let Some(value) = payload.get("scope_circle_id")
+        {
+            object.insert("scope_circle_id".to_owned(), value.clone());
+        }
     }
     content
+}
+
+fn add_scope_circle_metadata(event: &mut serde_json::Value, content: &serde_json::Value) {
+    let Some(scope_circle_id) = content
+        .get("scope_circle_id")
+        .and_then(serde_json::Value::as_str)
+    else {
+        return;
+    };
+    let Some(object) = event.as_object_mut() else {
+        return;
+    };
+    object.insert(
+        "scope_circle_id".to_owned(),
+        serde_json::Value::String(scope_circle_id.to_owned()),
+    );
+    object.insert(
+        "effective_scope".to_owned(),
+        serde_json::Value::String(scope_circle_id.to_owned()),
+    );
 }
 
 #[cfg(test)]

@@ -890,6 +890,11 @@ fn message_content_from_payload(payload: &Value) -> Value {
                 object.insert(key.to_owned(), value.clone());
             }
         }
+        if !object.contains_key("scope_circle_id")
+            && let Some(value) = payload.get("scope_circle_id")
+        {
+            object.insert("scope_circle_id".to_owned(), value.clone());
+        }
     }
     content
 }
@@ -7136,6 +7141,7 @@ impl ProjectionState {
         let target_state = payload
             .get("state")
             .and_then(Value::as_str)
+            .or_else(|| payload.get("membership").and_then(Value::as_str))
             .unwrap_or("active")
             .to_owned();
         // Snapshot the parent Realm id BEFORE taking a mutable borrow on
@@ -7251,6 +7257,12 @@ impl ProjectionState {
             .values()
             .filter(|c| c.realm_id == realm_id && c.state != CircleLifecycleState::Tombstoned)
             .collect()
+    }
+
+    pub fn circle_scope_visible_to_actor(&self, circle_id: &str, actor: &str) -> bool {
+        self.circles.get(circle_id).is_some_and(|circle| {
+            circle.state != CircleLifecycleState::Tombstoned && circle.members.contains(actor)
+        })
     }
 
     /// Apply `cx.applet.registration`. Upserts the

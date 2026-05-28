@@ -188,6 +188,7 @@ async fn mls_lifecycle_end_to_end() {
             .persistence
             .mls_key_packages()
             .get(keypackage_id)
+            .await
             .unwrap()
             .is_some(),
         "publish must mirror into the store"
@@ -332,6 +333,7 @@ async fn mls_lifecycle_end_to_end() {
             .persistence
             .mls_commits()
             .get(group_id)
+            .await
             .unwrap()
             .expect("genesis persisted")
             .epoch,
@@ -380,6 +382,7 @@ async fn mls_lifecycle_end_to_end() {
             .persistence
             .mls_welcomes()
             .snapshot_all()
+            .await
             .unwrap()
             .len(),
         1
@@ -437,6 +440,7 @@ async fn mls_lifecycle_end_to_end() {
             .persistence
             .mls_commits()
             .get(group_id)
+            .await
             .unwrap()
             .expect("commit persisted")
             .epoch,

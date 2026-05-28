@@ -22,7 +22,8 @@ use contrix_sdk::{Did, Operation, OperationId, RealmId};
 use serde_json::{Value, json};
 use soland::hlc::ServerHlc;
 use soland::kinds::{
-    CX_CIRCLE_CREATE, CX_CIRCLE_MEMBER_STATE, CX_CIRCLE_TOMBSTONE, CX_FLOW_CREATE, CX_REALM_CREATE,
+    CX_CIRCLE_CREATE, CX_CIRCLE_MEMBER_STATE, CX_CIRCLE_TOMBSTONE, CX_FLOW_CREATE,
+    CX_MESSAGE_CREATE, CX_REALM_CREATE,
 };
 use soland::reducer::{CircleLifecycleState, MembershipState, ProjectionEffect, ProjectionState};
 
@@ -33,6 +34,7 @@ const CIRCLE_B: &str = "cx:circle:01904100-0000-7000-8000-c22222222222";
 const FLOW_X: &str = "cx:flow:01904100-0000-7000-8000-f11111111111";
 const ALICE: &str = "did:web:alice.example";
 const BOB: &str = "did:web:bob.example";
+const MALLORY: &str = "did:web:mallory.example";
 
 fn op(kind: &str, realm_id: &str, payload: Value) -> Operation {
     Operation::create(
@@ -179,6 +181,140 @@ fn circle_member_must_be_realm_member() {
     ));
     let circle = state.circle(CIRCLE_A).expect("circle live");
     assert!(circle.members.contains(BOB), "Bob is now a Circle member");
+}
+
+#[test]
+fn circle_member_remove_updates_active_set_and_scope_visibility() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("circles-member-remove-test");
+    seed_realm(&mut state, &hlc, REALM_A, ALICE);
+    add_realm_member(&mut state, &hlc, REALM_A, ALICE);
+    add_realm_member(&mut state, &hlc, REALM_A, BOB);
+    state.apply(
+        &op(
+            CX_CIRCLE_CREATE,
+            REALM_A,
+            json!({
+                "object": {
+                    "id": CIRCLE_A,
+                    "realm_id": REALM_A,
+                    "title": "Private Ops",
+                    "created_by": ALICE,
+                }
+            }),
+        ),
+        &hlc,
+    );
+    state.apply(
+        &op(
+            CX_CIRCLE_MEMBER_STATE,
+            REALM_A,
+            json!({
+                "circle_id": CIRCLE_A,
+                "actor": BOB,
+                "state": "active",
+            }),
+        ),
+        &hlc,
+    );
+    assert!(
+        state.circle_scope_visible_to_actor(CIRCLE_A, BOB),
+        "active Circle member should see Circle-scoped content"
+    );
+
+    let removed = state.apply(
+        &op(
+            CX_CIRCLE_MEMBER_STATE,
+            REALM_A,
+            json!({
+                "circle_id": CIRCLE_A,
+                "actor_id": BOB,
+                "membership": "left",
+            }),
+        ),
+        &hlc,
+    );
+    assert!(matches!(
+        removed,
+        ProjectionEffect::CircleMemberStateChanged { ref member, ref target_state, .. }
+            if member == BOB && target_state == "left"
+    ));
+    let circle = state.circle(CIRCLE_A).expect("circle live");
+    assert!(!circle.members.contains(BOB), "Bob left the active set");
+    assert!(
+        !state.circle_scope_visible_to_actor(CIRCLE_A, BOB),
+        "removed Circle member must not see new Circle-scoped content"
+    );
+}
+
+#[test]
+fn circle_scoped_message_preserves_scope_for_visibility_filtering() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("circles-message-scope-test");
+    seed_realm(&mut state, &hlc, REALM_A, ALICE);
+    for actor in [ALICE, BOB, MALLORY] {
+        add_realm_member(&mut state, &hlc, REALM_A, actor);
+    }
+    state.apply(
+        &op(
+            CX_CIRCLE_CREATE,
+            REALM_A,
+            json!({
+                "object": {
+                    "id": CIRCLE_A,
+                    "realm_id": REALM_A,
+                    "title": "Private Ops",
+                    "created_by": ALICE,
+                }
+            }),
+        ),
+        &hlc,
+    );
+    for actor in [ALICE, BOB] {
+        state.apply(
+            &op(
+                CX_CIRCLE_MEMBER_STATE,
+                REALM_A,
+                json!({
+                    "circle_id": CIRCLE_A,
+                    "actor": actor,
+                    "state": "active",
+                }),
+            ),
+            &hlc,
+        );
+    }
+
+    let effect = state.apply(
+        &op(
+            CX_MESSAGE_CREATE,
+            REALM_A,
+            json!({
+                "event_id": "cx:event:01904100-0000-7000-8000-c1c1eeee0001",
+                "sender": ALICE,
+                "scope_circle_id": CIRCLE_A,
+                "content": {
+                    "body": "circle-only ciphertext placeholder",
+                    "encrypted": true
+                },
+                "encrypted": true,
+            }),
+        ),
+        &hlc,
+    );
+    let ProjectionEffect::MessageCreated(message) = effect else {
+        panic!("circle-scoped message should be projected, got {effect:?}");
+    };
+    assert_eq!(
+        message.content["scope_circle_id"], CIRCLE_A,
+        "projection must retain Circle scope so sync/event readers can filter"
+    );
+    assert!(state.circle_scope_visible_to_actor(CIRCLE_A, ALICE));
+    assert!(state.circle_scope_visible_to_actor(CIRCLE_A, BOB));
+    assert!(
+        !state.circle_scope_visible_to_actor(CIRCLE_A, MALLORY),
+        "Realm member outside the Circle must not be eligible for Circle-scoped content"
+    );
 }
 
 #[test]
