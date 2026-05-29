@@ -54,6 +54,7 @@ jobs:
         with:
           repository: ${{ github.repository_owner }}/contrix-rust-sdk
           path: contrix-rust-sdk
+          token: ${{ secrets.CI_REPO_TOKEN || github.token }}
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
