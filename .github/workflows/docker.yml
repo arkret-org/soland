@@ -31,6 +31,13 @@ jobs:
           path: contrix-rust-sdk
           token: ${{ secrets.CI_REPO_TOKEN || github.token }}
 
+      - name: Checkout Contrix Spec
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ github.repository_owner }}/contrix-spec
+          path: contrix-spec
+          token: ${{ secrets.CI_REPO_TOKEN || github.token }}
+
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v4
 
@@ -56,6 +63,7 @@ jobs:
           file: soland/Dockerfile
           build-contexts: |
             contrix-rust-sdk=contrix-rust-sdk
+            contrix-spec=contrix-spec
           load: true
           tags: ${{ env.IMAGE_NAME }}
           labels: ${{ steps.meta.outputs.labels }}

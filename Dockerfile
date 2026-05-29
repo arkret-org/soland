@@ -5,6 +5,7 @@ FROM --platform=$BUILDPLATFORM rust:1-bookworm AS builder
 WORKDIR /workspace
 
 COPY --from=contrix-rust-sdk . ./contrix-rust-sdk
+COPY --from=contrix-spec . ./contrix-spec
 COPY . ./soland
 
 WORKDIR /workspace/soland
