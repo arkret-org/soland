@@ -33,7 +33,7 @@ use uuid::Uuid;
 use super::{
     default_discussion_track, discussion_track_for_projection_event, flow_id_for_projection_event,
     flow_id_from_space_id, is_valid_discoverability, message_id_from_event_id, now, touch_realm,
-    validate_operation_policy, validate_operation_semantics,
+    validate_content_encryption_floor, validate_operation_policy, validate_operation_semantics,
 };
 use crate::ids;
 use crate::kinds;
@@ -957,6 +957,16 @@ pub async fn ingest_federation_operations(
             continue;
         }
         if let Err(message) =
+            validate_content_encryption_floor(state, std::slice::from_ref(&operation)).await
+        {
+            rejected.push(json!({
+                "operation_id": operation_id,
+                "reason": message,
+                "message": message,
+            }));
+            continue;
+        }
+        if let Err(message) =
             validate_operation_policy(state, std::slice::from_ref(&operation)).await
         {
             rejected.push(json!({
@@ -1019,6 +1029,7 @@ pub async fn accept_local_operations(
     operations: &[Operation],
 ) -> Result<(), &'static str> {
     validate_operation_semantics(state, operations)?;
+    validate_content_encryption_floor(state, operations).await?;
     validate_operation_policy(state, operations).await?;
     project_accepted_operations(state, actor, operations).await;
     Ok(())

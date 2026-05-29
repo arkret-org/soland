@@ -366,6 +366,91 @@ async fn flow_morph_lifecycle_state_machine_returns_412_for_illegal_transitions(
 }
 
 #[tokio::test]
+async fn encrypted_realm_rejects_plaintext_flow_content_before_event_log_persist() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+    let now = chrono::Utc::now();
+    state
+        .persistence
+        .realm_meta()
+        .put(
+            DEMO_REALM_ID,
+            &RealmMetaRecord {
+                owner: "did:web:alice.example".to_owned(),
+                deleted: false,
+                discoverability: "invite_only".to_owned(),
+                history_visibility: "joined".to_owned(),
+                encryption_profile: Some("mls_rfc9420".to_owned()),
+                plaintext_visible_services: std::collections::BTreeSet::new(),
+                created_at: now,
+                updated_at: now,
+            },
+        )
+        .await
+        .unwrap();
+
+    let flow_id = "cx:flow:01904100-0000-7000-8000-e30dc0000001";
+    let create_flow = signed_flow_event(
+        "cx:event:01904100-0000-7000-8000-e30ec0000001",
+        1,
+        "cx.flow.create",
+        serde_json::json!({
+            "object": {
+                "id": flow_id,
+                "space_id": DEMO_REALM_ID,
+                "title": "Encrypted realm metadata title",
+                "created_by": "did:web:alice.example",
+            }
+        }),
+        Vec::new(),
+    );
+    let response: Value = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&create_flow)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(response["status"], "accepted");
+
+    let plaintext_body_update = signed_flow_event(
+        "cx:event:01904100-0000-7000-8000-e30ec0000002",
+        2,
+        "cx.flow.update",
+        serde_json::json!({
+            "target_ref": flow_id,
+            "flow_id": flow_id,
+            "patch": {
+                "body": {
+                    "$op": "set",
+                    "value": "private body must be encrypted"
+                }
+            }
+        }),
+        vec!["cx:event:01904100-0000-7000-8000-e30ec0000001"],
+    );
+    let mut response = TestClient::post("http://server/api/v1/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&plaintext_body_update)
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(response.status_code.unwrap().as_u16(), 412);
+    let body: Value = response.take_json().await.unwrap();
+    assert_eq!(body["error"]["code"], "content_encryption_floor_violation");
+    assert!(
+        state
+            .persistence
+            .events()
+            .get("cx:event:01904100-0000-7000-8000-e30ec0000002")
+            .await
+            .unwrap()
+            .is_none(),
+        "rejected plaintext content event must not be persisted"
+    );
+}
+
+#[tokio::test]
 async fn flow_update_status_fsm_rejects_skipped_terminal_transitions() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;

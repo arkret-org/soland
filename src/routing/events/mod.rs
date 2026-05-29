@@ -16,7 +16,9 @@ use flow::{
     default_discussion_track, discussion_track_for_projection_event, flow_id_for_projection_event,
     flow_id_from_space_id, flow_projection_for_space, message_id_from_event_id,
 };
-use operations::{validate_operation_policy, validate_operation_semantics};
+use operations::{
+    validate_content_encryption_floor, validate_operation_policy, validate_operation_semantics,
+};
 use projection::{
     augment_timeline_message_json, backfill_gap_events, project_accepted_operations,
     projected_event_page, projection_event_json, sync_timeline_message_json_with_projection,

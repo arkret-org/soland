@@ -32,6 +32,7 @@ use crate::state::AppState;
 
 const CX_CROSS_SIGNING_RESET: &str = "cx.cross_signing.reset";
 const CROSS_SIGNING_RESET_MAX_CLOCK_SKEW_SECONDS: i64 = 300;
+const CONTENT_ENCRYPTION_FLOOR_VIOLATION: &str = "content_encryption_floor_violation";
 
 type OperationValidator = fn(&Operation) -> Result<(), &'static str>;
 
@@ -1503,6 +1504,20 @@ pub async fn validate_operation_policy(
     Ok(())
 }
 
+pub async fn validate_content_encryption_floor(
+    state: &AppState,
+    operations: &[Operation],
+) -> Result<(), &'static str> {
+    for operation in operations {
+        if flow_operation_carries_plaintext_private_content(operation)
+            && realm_requires_content_encryption(state, operation.realm_id.as_str()).await
+        {
+            return Err(CONTENT_ENCRYPTION_FLOOR_VIOLATION);
+        }
+    }
+    Ok(())
+}
+
 async fn validate_member_state_policy(
     state: &AppState,
     operation: &Operation,
@@ -1625,6 +1640,140 @@ fn validate_morph_schema_migrate_capability(operation: &Operation) -> Result<(),
         return Err("cx.morph.schema_migrate requires cx.morph.schema.migrate capability");
     }
     Ok(())
+}
+
+async fn realm_requires_content_encryption(state: &AppState, realm_id: &str) -> bool {
+    let store = state.persistence.realm_meta();
+    let mut realm_meta = store.get(realm_id).await.ok().flatten();
+    if realm_meta.is_none()
+        && let Some(space_id) = realm_id
+            .strip_prefix("cx:realm:")
+            .map(|suffix| format!("cx:space:{suffix}"))
+    {
+        realm_meta = store.get(&space_id).await.ok().flatten();
+    }
+    realm_meta.is_some_and(|record| {
+        encryption_profile_requires_content_encryption(record.encryption_profile.as_deref())
+    })
+}
+
+fn encryption_profile_requires_content_encryption(profile: Option<&str>) -> bool {
+    // Current soland RealmMetaRecord projects the encryption mechanism but not
+    // the separate content_encryption_floor field yet. Treat any non-plaintext
+    // profile as content-only E2EE for Flow content admission.
+    profile
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_some_and(|profile| !matches!(profile, "none" | "plaintext" | "allow_plaintext"))
+}
+
+fn flow_operation_carries_plaintext_private_content(operation: &Operation) -> bool {
+    match kinds::canonical_kind_for_operation(operation) {
+        Some(kinds::CX_FLOW_CREATE) => [
+            &["body"][..],
+            &["object", "body"][..],
+            &["synthesis"][..],
+            &["object", "synthesis"][..],
+            &["content"][..],
+            &["object", "content"][..],
+            &["attachments"][..],
+            &["object", "attachments"][..],
+            &["fields", "body"][..],
+            &["object", "fields", "body"][..],
+            &["fields", "synthesis"][..],
+            &["object", "fields", "synthesis"][..],
+        ]
+        .iter()
+        .any(|path| {
+            value_at_path(&operation.payload, path).is_some_and(value_is_plaintext_content)
+        }),
+        Some(kinds::CX_FLOW_UPDATE) => patch_touches_plaintext_content_path(
+            &operation.payload,
+            &[
+                "body",
+                "synthesis",
+                "content",
+                "attachments",
+                "fields.body",
+                "fields.synthesis",
+                "tracks.synthesis.body",
+                "tracks.discussion.body",
+            ],
+        ),
+        _ => false,
+    }
+}
+
+fn value_at_path<'a>(value: &'a Value, path: &[&str]) -> Option<&'a Value> {
+    let mut current = value;
+    for segment in path {
+        current = current.get(*segment)?;
+    }
+    Some(current)
+}
+
+fn value_is_plaintext_content(value: &Value) -> bool {
+    match value {
+        Value::Null => false,
+        Value::String(text) => !text.trim().is_empty(),
+        Value::Array(values) => !values.is_empty(),
+        Value::Object(object) => {
+            !object.is_empty()
+                && !encrypted_payload_value(value)
+                && !object
+                    .get("encrypted_payload")
+                    .is_some_and(encrypted_payload_value)
+        }
+        Value::Bool(_) | Value::Number(_) => true,
+    }
+}
+
+fn encrypted_payload_value(value: &Value) -> bool {
+    value
+        .as_object()
+        .is_some_and(|object| object.contains_key("ciphertext"))
+        && validate_encrypted_payload_envelope(value).is_ok()
+}
+
+fn patch_operation_value_is_plaintext_content(value: &Value) -> bool {
+    if let Some(object) = value.as_object()
+        && object.get("$op").and_then(Value::as_str) == Some("unset")
+    {
+        return false;
+    }
+    value.get("value").map_or_else(
+        || value_is_plaintext_content(value),
+        value_is_plaintext_content,
+    )
+}
+
+fn patch_value_contains_plaintext_content_path(value: &Value, path: &str) -> bool {
+    let Some(candidate) = value.get("value").unwrap_or(value).pointer(&format!(
+        "/{}",
+        path.split('.').collect::<Vec<_>>().join("/")
+    )) else {
+        return false;
+    };
+    value_is_plaintext_content(candidate)
+}
+
+fn patch_touches_plaintext_content_path(payload: &Value, private_paths: &[&str]) -> bool {
+    payload
+        .get("patch")
+        .and_then(Value::as_object)
+        .is_some_and(|patch| {
+            patch.iter().any(|(key, value)| {
+                private_paths.iter().any(|private_path| {
+                    if key == private_path || key.starts_with(&format!("{private_path}.")) {
+                        patch_operation_value_is_plaintext_content(value)
+                    } else if let Some(suffix) = private_path.strip_prefix(&format!("{key}.")) {
+                        patch_value_contains_plaintext_content_path(value, suffix)
+                    } else {
+                        false
+                    }
+                })
+            })
+        })
 }
 
 pub fn message_operation_is_encrypted(operation: &Operation) -> bool {
@@ -2002,6 +2151,49 @@ mod flow_tracks_update_tests {
             validate_operation_schema(&missing_patch_or_tracks, schema),
             Err("flow tracks update requires patch or tracks")
         );
+    }
+
+    #[test]
+    fn encrypted_realm_flow_content_detector_matches_content_only_boundary() {
+        let flow_id = "cx:flow:01904100-0000-7000-8000-000000000001";
+        let body_update = flow_position_op(
+            kinds::CX_FLOW_UPDATE,
+            json!({
+                "flow_id": flow_id,
+                "patch": {
+                    "body": {"$op": "set", "value": "private description"}
+                }
+            }),
+        );
+        assert!(flow_operation_carries_plaintext_private_content(
+            &body_update
+        ));
+
+        let summary_update = flow_position_op(
+            kinds::CX_FLOW_UPDATE,
+            json!({
+                "flow_id": flow_id,
+                "patch": {
+                    "summary": {"$op": "set", "value": "wire metadata"}
+                }
+            }),
+        );
+        assert!(!flow_operation_carries_plaintext_private_content(
+            &summary_update
+        ));
+
+        let title_create = flow_position_op(
+            kinds::CX_FLOW_CREATE,
+            json!({
+                "object": {
+                    "id": flow_id,
+                    "title": "wire metadata"
+                }
+            }),
+        );
+        assert!(!flow_operation_carries_plaintext_private_content(
+            &title_create
+        ));
     }
 
     fn flow_position_op(kind: &'static str, payload: serde_json::Value) -> Operation {

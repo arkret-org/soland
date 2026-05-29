@@ -29,8 +29,8 @@ use super::projection::{retention_tombstone_for_event, retention_tombstone_paylo
 use super::{
     append_audit_log, auth_or_render, is_valid_sha256_digest, now, project_accepted_operations,
     query_param, query_param_all, realm_allows_plaintext_service, realm_event_visible_to_session,
-    realm_has_member, render_error, sha256_hex, validate_did, validate_operation_policy,
-    validate_operation_semantics, validate_space_id,
+    realm_has_member, render_error, sha256_hex, validate_content_encryption_floor, validate_did,
+    validate_operation_policy, validate_operation_semantics, validate_space_id,
 };
 use crate::error::{AppError, ErrorCode, error_http_status};
 use crate::result::{JsonResult, json_ok};
@@ -1165,6 +1165,15 @@ async fn submit_event_value(
                 StatusCode::BAD_REQUEST,
                 "schema_violation",
                 message,
+            ));
+        }
+        if let Err(reason) =
+            validate_content_encryption_floor(state, std::slice::from_ref(operation)).await
+        {
+            return Err(SubmitOneError::new(
+                StatusCode::PRECONDITION_FAILED,
+                reason,
+                reason,
             ));
         }
         if let Err(message) =
