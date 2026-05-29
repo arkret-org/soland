@@ -33,6 +33,10 @@ use crate::state::AppState;
 const CX_CROSS_SIGNING_RESET: &str = "cx.cross_signing.reset";
 const CROSS_SIGNING_RESET_MAX_CLOCK_SKEW_SECONDS: i64 = 300;
 const CONTENT_ENCRYPTION_FLOOR_VIOLATION: &str = "content_encryption_floor_violation";
+const REALM_ENCRYPTION_PROFILE_CREATE_LOCKED: &str = "realm_encryption_profile_create_locked";
+const CIRCLE_ENCRYPTION_PROFILE_CREATE_LOCKED: &str = "circle_encryption_profile_create_locked";
+const CIRCLE_ENCRYPTION_BELOW_REALM_FLOOR: &str =
+    contrix_sdk::error::REASON_CIRCLE_ENCRYPTION_BELOW_REALM_FLOOR;
 
 type OperationValidator = fn(&Operation) -> Result<(), &'static str>;
 
@@ -1509,6 +1513,23 @@ pub async fn validate_content_encryption_floor(
     operations: &[Operation],
 ) -> Result<(), &'static str> {
     for operation in operations {
+        match kinds::canonical_kind_for_operation(operation) {
+            Some(kinds::CX_REALM_UPDATE) if operation_touches_encryption_profile(operation) => {
+                return Err(REALM_ENCRYPTION_PROFILE_CREATE_LOCKED);
+            }
+            Some(kinds::CX_CIRCLE_UPDATE) if operation_touches_encryption_profile(operation) => {
+                return Err(CIRCLE_ENCRYPTION_PROFILE_CREATE_LOCKED);
+            }
+            Some(kinds::CX_CIRCLE_CREATE) => {
+                if let Some(profile) = operation_circle_encryption_profile(operation)
+                    && !encryption_profile_requires_content_encryption(Some(profile))
+                    && realm_requires_content_encryption(state, operation.realm_id.as_str()).await
+                {
+                    return Err(CIRCLE_ENCRYPTION_BELOW_REALM_FLOOR);
+                }
+            }
+            _ => {}
+        }
         if flow_operation_carries_plaintext_private_content(operation)
             && realm_requires_content_encryption(state, operation.realm_id.as_str()).await
         {
@@ -1665,6 +1686,77 @@ fn encryption_profile_requires_content_encryption(profile: Option<&str>) -> bool
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .is_some_and(|profile| !matches!(profile, "none" | "plaintext" | "allow_plaintext"))
+}
+
+fn operation_circle_encryption_profile(operation: &Operation) -> Option<&str> {
+    operation
+        .payload
+        .get("object")
+        .and_then(|object| object.get("encryption_profile"))
+        .and_then(Value::as_str)
+        .or_else(|| {
+            operation
+                .payload
+                .get("encryption_profile")
+                .and_then(Value::as_str)
+        })
+}
+
+fn operation_touches_encryption_profile(operation: &Operation) -> bool {
+    operation.payload.get("encryption_profile").is_some()
+        || operation
+            .payload
+            .get("object")
+            .is_some_and(|object| value_has_direct_field(object, "encryption_profile"))
+        || patch_touches_field(&operation.payload, "encryption_profile")
+}
+
+fn value_has_direct_field(value: &Value, field: &str) -> bool {
+    value
+        .as_object()
+        .is_some_and(|object| object.contains_key(field))
+}
+
+fn patch_touches_field(payload: &Value, field: &str) -> bool {
+    payload
+        .get("patch")
+        .and_then(Value::as_object)
+        .is_some_and(|patch| {
+            patch
+                .iter()
+                .any(|(key, value)| patch_entry_touches_field(key, value, field))
+        })
+}
+
+fn patch_entry_touches_field(key: &str, value: &Value, field: &str) -> bool {
+    patch_key_touches_field(key, field)
+        || (key == "object" && patch_operation_value_has_direct_field(value, field))
+}
+
+fn patch_key_touches_field(key: &str, field: &str) -> bool {
+    let dotted = format!("{field}.");
+    let pointer = format!("/{field}");
+    let pointer_child = format!("/{field}/");
+    let object_dotted = format!("object.{field}");
+    let object_dotted_child = format!("object.{field}.");
+    let object_pointer = format!("/object/{field}");
+    let object_pointer_child = format!("/object/{field}/");
+    key == field
+        || key.starts_with(&dotted)
+        || key == pointer
+        || key.starts_with(&pointer_child)
+        || key == object_dotted
+        || key.starts_with(&object_dotted_child)
+        || key == object_pointer
+        || key.starts_with(&object_pointer_child)
+}
+
+fn patch_operation_value_has_direct_field(value: &Value, field: &str) -> bool {
+    value
+        .get("value")
+        .unwrap_or(value)
+        .as_object()
+        .is_some_and(|object| object.contains_key(field))
 }
 
 fn flow_operation_carries_plaintext_private_content(operation: &Operation) -> bool {
@@ -2194,6 +2286,43 @@ mod flow_tracks_update_tests {
         assert!(!flow_operation_carries_plaintext_private_content(
             &title_create
         ));
+    }
+
+    #[test]
+    fn create_locked_encryption_profile_detector_matches_update_shapes() {
+        let direct_patch = flow_position_op(
+            kinds::CX_REALM_UPDATE,
+            json!({
+                "patch": {
+                    "encryption_profile": "none"
+                }
+            }),
+        );
+        assert!(operation_touches_encryption_profile(&direct_patch));
+
+        let pointer_patch = flow_position_op(
+            kinds::CX_CIRCLE_UPDATE,
+            json!({
+                "circle_id": "cx:circle:01904100-0000-7000-8000-000000000001",
+                "patch": {
+                    "/object/encryption_profile": {
+                        "$op": "replace",
+                        "value": "none"
+                    }
+                }
+            }),
+        );
+        assert!(operation_touches_encryption_profile(&pointer_patch));
+
+        let metadata_patch = flow_position_op(
+            kinds::CX_REALM_UPDATE,
+            json!({
+                "patch": {
+                    "title": "Still mutable"
+                }
+            }),
+        );
+        assert!(!operation_touches_encryption_profile(&metadata_patch));
     }
 
     fn flow_position_op(kind: &'static str, payload: serde_json::Value) -> Operation {

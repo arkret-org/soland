@@ -22,8 +22,8 @@ use contrix_sdk::{Did, Operation, OperationId, RealmId};
 use serde_json::{Value, json};
 use soland::hlc::ServerHlc;
 use soland::kinds::{
-    CX_CIRCLE_CREATE, CX_CIRCLE_MEMBER_STATE, CX_CIRCLE_TOMBSTONE, CX_FLOW_CREATE,
-    CX_MESSAGE_CREATE, CX_REALM_CREATE,
+    CX_CIRCLE_CREATE, CX_CIRCLE_MEMBER_STATE, CX_CIRCLE_TOMBSTONE, CX_CIRCLE_UPDATE,
+    CX_FLOW_CREATE, CX_MESSAGE_CREATE, CX_REALM_CREATE,
 };
 use soland::reducer::{CircleLifecycleState, MembershipState, ProjectionEffect, ProjectionState};
 
@@ -54,6 +54,22 @@ fn seed_realm(state: &mut ProjectionState, hlc: &ServerHlc, realm_id: &str, owne
                 "action": "create",
                 "owner": owner,
                 "public": true,
+            }),
+        ),
+        hlc,
+    );
+}
+
+fn seed_encrypted_realm(state: &mut ProjectionState, hlc: &ServerHlc, realm_id: &str, owner: &str) {
+    state.apply(
+        &op(
+            CX_REALM_CREATE,
+            realm_id,
+            json!({
+                "action": "create",
+                "owner": owner,
+                "public": true,
+                "encryption_profile": "mls_rfc9420",
             }),
         ),
         hlc,
@@ -116,6 +132,80 @@ fn circle_create_writes_projection() {
     assert_eq!(circle.realm_id, REALM_A);
     assert_eq!(circle.state, CircleLifecycleState::Active);
     assert!(circle.members.is_empty(), "Circle starts with no members");
+}
+
+#[test]
+fn circle_create_plaintext_under_e2ee_realm_rejected() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("circles-e2ee-floor-test");
+    seed_encrypted_realm(&mut state, &hlc, REALM_A, ALICE);
+
+    let rejected = state.apply(
+        &op(
+            CX_CIRCLE_CREATE,
+            REALM_A,
+            json!({
+                "object": {
+                    "id": CIRCLE_A,
+                    "realm_id": REALM_A,
+                    "title": "Plaintext Ops",
+                    "encryption_profile": "none",
+                    "created_by": ALICE,
+                }
+            }),
+        ),
+        &hlc,
+    );
+
+    assert!(
+        matches!(rejected, ProjectionEffect::Rejected { ref reason }
+                 if reason == "circle_encryption_below_realm_floor"),
+        "plaintext Circle under E2EE Realm MUST reject as circle_encryption_below_realm_floor; got {rejected:?}"
+    );
+}
+
+#[test]
+fn circle_update_rejects_encryption_profile_patch() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("circles-e2ee-lock-test");
+    seed_realm(&mut state, &hlc, REALM_A, ALICE);
+    state.apply(
+        &op(
+            CX_CIRCLE_CREATE,
+            REALM_A,
+            json!({
+                "object": {
+                    "id": CIRCLE_A,
+                    "realm_id": REALM_A,
+                    "title": "Ops",
+                    "encryption_profile": "mls_rfc9420",
+                    "created_by": ALICE,
+                }
+            }),
+        ),
+        &hlc,
+    );
+
+    let rejected = state.apply(
+        &op(
+            CX_CIRCLE_UPDATE,
+            REALM_A,
+            json!({
+                "circle_id": CIRCLE_A,
+                "patch": {
+                    "encryption_profile": "none"
+                },
+                "sender": ALICE,
+            }),
+        ),
+        &hlc,
+    );
+
+    assert!(
+        matches!(rejected, ProjectionEffect::Rejected { ref reason }
+                 if reason == "circle_encryption_profile_create_locked"),
+        "Circle encryption_profile updates MUST reject as circle_encryption_profile_create_locked; got {rejected:?}"
+    );
 }
 
 #[test]

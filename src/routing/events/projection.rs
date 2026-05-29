@@ -1828,11 +1828,12 @@ pub async fn ensure_projected_space(state: &AppState, origin: &str, operation: &
                     changed = true;
                 }
             }
-            if let Some(encryption_profile) = operation_realm_encryption_profile(operation) {
-                if record.encryption_profile.as_deref() != Some(encryption_profile) {
-                    record.encryption_profile = Some(encryption_profile.to_owned());
-                    changed = true;
-                }
+            if record.encryption_profile.is_none()
+                && kinds::canonical_kind_for_operation(operation) == Some(kinds::CX_REALM_CREATE)
+                && let Some(encryption_profile) = operation_realm_encryption_profile(operation)
+            {
+                record.encryption_profile = Some(encryption_profile.to_owned());
+                changed = true;
             }
             for service in plaintext_services_from_operation(operation) {
                 if !record

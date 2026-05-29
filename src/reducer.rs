@@ -42,6 +42,9 @@ use crate::hlc::ServerHlc;
 use crate::wire::{ReadCursorPositionWire, ReadScopeWire};
 
 pub const CHILD_ORDER_CELL_FAMILY: &str = "cx.component.child_order.v1";
+const REALM_ENCRYPTION_PROFILE_CREATE_LOCKED: &str = "realm_encryption_profile_create_locked";
+const CIRCLE_ENCRYPTION_PROFILE_CREATE_LOCKED: &str = "circle_encryption_profile_create_locked";
+const CIRCLE_ENCRYPTION_BELOW_REALM_FLOOR: &str = "circle_encryption_below_realm_floor";
 
 /// In-memory projection state produced by the reducer.
 #[derive(Clone, Debug, Default)]
@@ -3083,6 +3086,80 @@ fn document_version_from_operation(
     }
 }
 
+fn operation_encryption_profile(operation: &Operation) -> Option<&str> {
+    operation
+        .payload
+        .get("encryption_profile")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            operation
+                .payload
+                .get("object")
+                .and_then(|object| object.get("encryption_profile"))
+                .and_then(Value::as_str)
+        })
+}
+
+fn operation_touches_encryption_profile(operation: &Operation) -> bool {
+    operation.payload.get("encryption_profile").is_some()
+        || operation
+            .payload
+            .get("object")
+            .is_some_and(|object| value_has_direct_field(object, "encryption_profile"))
+        || operation_patch_touches_field(&operation.payload, "encryption_profile")
+}
+
+fn value_has_direct_field(value: &Value, field: &str) -> bool {
+    value
+        .as_object()
+        .is_some_and(|object| object.contains_key(field))
+}
+
+fn operation_patch_touches_field(payload: &Value, field: &str) -> bool {
+    payload
+        .get("patch")
+        .and_then(Value::as_object)
+        .is_some_and(|patch| {
+            patch.iter().any(|(key, value)| {
+                patch_key_touches_field(key, field)
+                    || (key == "object" && patch_value_has_direct_field(value, field))
+            })
+        })
+}
+
+fn patch_key_touches_field(key: &str, field: &str) -> bool {
+    let dotted = format!("{field}.");
+    let pointer = format!("/{field}");
+    let pointer_child = format!("/{field}/");
+    let object_dotted = format!("object.{field}");
+    let object_dotted_child = format!("object.{field}.");
+    let object_pointer = format!("/object/{field}");
+    let object_pointer_child = format!("/object/{field}/");
+    key == field
+        || key.starts_with(&dotted)
+        || key == pointer
+        || key.starts_with(&pointer_child)
+        || key == object_dotted
+        || key.starts_with(&object_dotted_child)
+        || key == object_pointer
+        || key.starts_with(&object_pointer_child)
+}
+
+fn patch_value_has_direct_field(value: &Value, field: &str) -> bool {
+    value
+        .get("value")
+        .unwrap_or(value)
+        .as_object()
+        .is_some_and(|object| object.contains_key(field))
+}
+
+fn encryption_profile_requires_content_encryption(profile: Option<&str>) -> bool {
+    profile
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_some_and(|profile| !matches!(profile, "none" | "plaintext" | "allow_plaintext"))
+}
+
 impl ProjectionState {
     pub fn new() -> Self {
         Self::default()
@@ -5175,6 +5252,14 @@ impl ProjectionState {
             .or_else(|| payload_object.and_then(|object| object.get("trust_domain")))
             .and_then(Value::as_str)
             .map(ToOwned::to_owned);
+        let payload_encryption_profile =
+            operation_encryption_profile(operation).map(ToOwned::to_owned);
+        if kind == crate::kinds::CX_REALM_UPDATE && operation_touches_encryption_profile(operation)
+        {
+            return ProjectionEffect::Rejected {
+                reason: REALM_ENCRYPTION_PROFILE_CREATE_LOCKED.to_owned(),
+            };
+        }
         if let Some(ref new_td) = payload_trust_domain {
             // Shape MUST be `cx:trust_domain:<scope>` — delegate to SDK
             // typed id validator.
@@ -5355,6 +5440,7 @@ impl ProjectionState {
                         "title": title,
                         "security_class": payload_security_class,
                         "federation_policy": payload_federation_policy,
+                        "encryption_profile": payload_encryption_profile,
                         "created_at": now.to_rfc3339(),
                         "operation_id": operation.operation_id.as_str(),
                     });
@@ -6969,6 +7055,13 @@ impl ProjectionState {
             .and_then(Value::as_str)
             .unwrap_or("mls_rfc9420")
             .to_owned();
+        if !encryption_profile_requires_content_encryption(Some(encryption_profile.as_str()))
+            && self.realm_requires_content_encryption(&realm_id)
+        {
+            return ProjectionEffect::Rejected {
+                reason: CIRCLE_ENCRYPTION_BELOW_REALM_FLOOR.to_owned(),
+            };
+        }
         let created_by = object
             .get("created_by")
             .and_then(Value::as_str)
@@ -7022,6 +7115,11 @@ impl ProjectionState {
         if circle.state != CircleLifecycleState::Active {
             return ProjectionEffect::Rejected {
                 reason: "circle_not_active".to_owned(),
+            };
+        }
+        if operation_touches_encryption_profile(operation) {
+            return ProjectionEffect::Rejected {
+                reason: CIRCLE_ENCRYPTION_PROFILE_CREATE_LOCKED.to_owned(),
             };
         }
         if let Some(patch) = payload.get("patch").and_then(Value::as_object) {
@@ -7811,6 +7909,22 @@ impl ProjectionState {
             .get(realm_id)
             .map(|v| v.as_slice())
             .unwrap_or(&[])
+    }
+
+    /// Read the create-locked Realm encryption profile from the genesis
+    /// create-log. `cx.realm.update` must never mutate this value.
+    pub fn realm_encryption_profile(&self, realm_id: &str) -> Option<String> {
+        self.space_create_log(realm_id)
+            .and_then(|entries| entries.last())
+            .and_then(|entry| entry.get("encryption_profile"))
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned)
+    }
+
+    pub fn realm_requires_content_encryption(&self, realm_id: &str) -> bool {
+        encryption_profile_requires_content_encryption(
+            self.realm_encryption_profile(realm_id).as_deref(),
+        )
     }
 
     /// R3.4 — read the projected Realm `security_class` (from the

@@ -147,6 +147,49 @@ fn high_assurance_rejects_post_create_open_federation_update() {
     }
 }
 
+#[test]
+fn realm_update_rejects_encryption_profile_patch() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("test");
+    let create = op(
+        soland::kinds::CX_REALM_CREATE,
+        REALM_STANDARD,
+        json!({
+            "owner": "did:web:alice",
+            "title": "Encrypted Room",
+            "encryption_profile": "mls_rfc9420",
+        }),
+    );
+    assert!(matches!(
+        state.apply(&create, &hlc),
+        ProjectionEffect::SpaceLifecycle { .. }
+    ));
+    assert_eq!(
+        state.realm_encryption_profile(REALM_STANDARD).as_deref(),
+        Some("mls_rfc9420")
+    );
+
+    let downgrade = op(
+        soland::kinds::CX_REALM_UPDATE,
+        REALM_STANDARD,
+        json!({
+            "patch": {
+                "encryption_profile": "none",
+            },
+        }),
+    );
+    match state.apply(&downgrade, &hlc) {
+        ProjectionEffect::Rejected { reason } => {
+            assert_eq!(reason, "realm_encryption_profile_create_locked");
+        }
+        other => panic!("expected Rejected(realm_encryption_profile_create_locked), got {other:?}"),
+    }
+    assert_eq!(
+        state.realm_encryption_profile(REALM_STANDARD).as_deref(),
+        Some("mls_rfc9420")
+    );
+}
+
 /// Standard Realms (no security_class set) freely accept
 /// `federation_policy=open` — this guard is high_assurance-specific.
 #[test]
