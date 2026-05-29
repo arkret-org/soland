@@ -62,6 +62,7 @@ use crate::wire::{
 
 const TIMELINE_POSITION_SUBTICKS: i64 = 1024;
 const PERSONAL_BLOCKLIST_DATA_TYPES: &[&str] = &["cx.account.blocklist", "cx.account.blocklist.v1"];
+const PRESENCE_ONLINE_TTL_SECONDS: i64 = 3;
 
 pub(super) fn router() -> Router {
     Router::new()
@@ -314,6 +315,49 @@ fn account_delta_frame(response: contrix_sdk::model::SyncResBody) -> Value {
     })
 }
 
+fn roster_member_actor_id(member: &Value) -> Option<String> {
+    member
+        .get("actor_id")
+        .or_else(|| member.get("actor"))
+        .or_else(|| member.get("did"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|actor| !actor.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+async fn presence_events_for_actors(state: &AppState, actors: BTreeSet<String>) -> Vec<Value> {
+    let mut events = Vec::new();
+    for actor in actors {
+        if let Ok(Some(record)) = state.persistence.presence().get(&actor).await {
+            events.push(presence_sync_event_json(record));
+        }
+    }
+    events
+}
+
+fn presence_sync_event_json(record: PresenceRecord) -> Value {
+    let is_stale_online = record.status == "online"
+        && now().signed_duration_since(record.updated_at)
+            > ChronoDuration::seconds(PRESENCE_ONLINE_TTL_SECONDS);
+    let status = if is_stale_online {
+        "offline".to_owned()
+    } else {
+        record.status.clone()
+    };
+    let mut event = json!({
+        "user_id": record.actor,
+        "actor_id": record.actor,
+        "presence": status,
+        "status": status,
+        "updated_at": record.updated_at,
+    });
+    if is_stale_online && let Some(object) = event.as_object_mut() {
+        object.insert("last_active".to_owned(), json!(record.updated_at));
+    }
+    event
+}
+
 /// Build one snapshot of the account-aggregate sync response for the next
 /// `cx.account.subscribe` delta frame.
 async fn build_sync_snapshot(
@@ -376,6 +420,20 @@ async fn build_sync_snapshot(
         Vec::new()
     };
     drop(visible_space_ids);
+
+    let mut presence_actors = BTreeSet::new();
+    for (_, _, _, _, _, members) in &visible_spaces {
+        for member in members {
+            if let Some(actor) = roster_member_actor_id(member) {
+                presence_actors.insert(actor);
+            }
+        }
+    }
+    let presence = if body.after.is_none() {
+        presence_events_for_actors(state, presence_actors).await
+    } else {
+        Vec::new()
+    };
 
     // Clone the projection so the per-space loop below can `.await` async
     // visibility/timeline helpers without holding the (non-Send) lock guard
@@ -545,7 +603,7 @@ async fn build_sync_snapshot(
         to_device,
         device_lists: json!({"changed": [], "left": []}),
         account_data,
-        presence: Vec::new(),
+        presence,
         notifications: serde_json::Value::Null,
         partial: false,
     }
@@ -2567,5 +2625,21 @@ mod tests {
 
         assert_ne!(realm_create, welcome_message);
         assert!(welcome_message > realm_create);
+    }
+
+    #[test]
+    fn presence_sync_event_marks_stale_online_offline() {
+        let record = PresenceRecord {
+            actor: "did:web:alice.example".to_owned(),
+            status: "online".to_owned(),
+            updated_at: now() - ChronoDuration::seconds(PRESENCE_ONLINE_TTL_SECONDS + 1),
+        };
+
+        let event = presence_sync_event_json(record);
+
+        assert_eq!(event["user_id"], "did:web:alice.example");
+        assert_eq!(event["presence"], "offline");
+        assert_eq!(event["status"], "offline");
+        assert!(event.get("last_active").is_some());
     }
 }
