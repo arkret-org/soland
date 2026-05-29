@@ -8,9 +8,11 @@
 //! - `GET  /api/v1/blob/get`            — content (supports `Range` and the `?purpose=`
 //!   discriminator)
 //!
-//! Blob metadata still misses the spec `space_id` association, and
-//! plaintext-visibility is enforced at write time but not at GC.
+//! Blob metadata carries the spec `space_id` association; plaintext-visibility
+//! is enforced at write time but not at GC.
 
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use ed25519_dalek::Signer;
 use salvo::http::{Method, StatusCode};
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
@@ -408,12 +410,10 @@ async fn blob_get(depot: &mut Depot, req: &mut Request, res: &mut Response) {
                 salvo::http::header::HeaderName::from_static("accept-ranges"),
                 "bytes".parse().unwrap(),
             );
-            // Set Content-Disposition: attachment for HTML/JS/SVG to prevent stored XSS
-            let dangerous_types = ["text/html", "application/javascript", "image/svg+xml"];
-            if dangerous_types.contains(&blob.media_type.as_str()) {
+            if let Some(disposition) = blob_content_disposition(blob, &purpose) {
                 res.headers_mut().insert(
                     salvo::http::header::CONTENT_DISPOSITION,
-                    "attachment".parse().unwrap(),
+                    disposition.parse().unwrap(),
                 );
             }
             if let Some(content_range) = content_range {
@@ -567,12 +567,20 @@ fn validate_presign_query(state: &AppState, req: &Request, blob_ref: &str, purpo
 }
 
 fn presign_token(state: &AppState, blob_ref: &str, purpose: &str, expires_at: i64) -> String {
-    sha256_hex(
-        format!(
-            "{}:{}:{}:{}",
-            state.config.service_did, blob_ref, purpose, expires_at
-        )
-        .as_bytes(),
+    let signing_input = presign_signing_input(state, blob_ref, purpose, expires_at);
+    let signature = state.anchorer_signing_key().sign(signing_input.as_bytes());
+    URL_SAFE_NO_PAD.encode(signature.to_bytes())
+}
+
+fn presign_signing_input(
+    state: &AppState,
+    blob_ref: &str,
+    purpose: &str,
+    expires_at: i64,
+) -> String {
+    format!(
+        "soland.blob.presign.v1\nservice_did={}\ntrust_domain={}\nblob_ref={}\npurpose={}\nexpires_at={}",
+        state.config.service_did, state.config.trust_domain, blob_ref, purpose, expires_at
     )
 }
 
@@ -594,6 +602,26 @@ fn query_escape(value: &str) -> String {
         .replace(' ', "%20")
         .replace('&', "%26")
         .replace('=', "%3D")
+}
+
+fn blob_content_disposition(blob: &BlobRecord, purpose: &str) -> Option<String> {
+    let dangerous_types = ["text/html", "application/javascript", "image/svg+xml"];
+    let force_attachment =
+        dangerous_types.contains(&blob.media_type.as_str()) || purpose != "profile_avatar";
+    let disposition = if force_attachment {
+        "attachment"
+    } else {
+        "inline"
+    };
+    match blob
+        .filename
+        .as_deref()
+        .and_then(|filename| sanitize_blob_filename_value(filename).ok())
+    {
+        Some(filename) => Some(format!("{disposition}; filename=\"{filename}\"")),
+        None if force_attachment => Some("attachment".to_owned()),
+        None => None,
+    }
 }
 
 fn expected_blob_content_digest(req: &Request) -> Result<Option<String>, &'static str> {
@@ -847,4 +875,51 @@ async fn blob_visible_to_session(
         return false;
     }
     space_has_member(state, space_id, &session.actor).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn blob_record(media_type: &str, filename: Option<&str>) -> BlobRecord {
+        BlobRecord {
+            sha256: "0".repeat(64),
+            size_bytes: 1,
+            storage_backend: "memory".to_owned(),
+            storage_key: "sha256/test".to_owned(),
+            media_type: media_type.to_owned(),
+            filename: filename.map(ToOwned::to_owned),
+            space_id: Some("cx:realm:0196419b-0000-7000-8000-000000000000".to_owned()),
+            encryption: None,
+            uploaded_by: "did:web:alice.example".to_owned(),
+            created_at: now(),
+        }
+    }
+
+    #[test]
+    fn content_disposition_for_message_attachment_sanitizes_filename() {
+        let blob = blob_record("text/plain", Some("..\\report final.txt"));
+        assert_eq!(
+            blob_content_disposition(&blob, "message_attachment").as_deref(),
+            Some("attachment; filename=\"report_final.txt\"")
+        );
+    }
+
+    #[test]
+    fn content_disposition_for_safe_profile_avatar_can_inline() {
+        let blob = blob_record("image/png", Some("avatar.png"));
+        assert_eq!(
+            blob_content_disposition(&blob, "profile_avatar").as_deref(),
+            Some("inline; filename=\"avatar.png\"")
+        );
+    }
+
+    #[test]
+    fn content_disposition_for_dangerous_profile_avatar_forces_attachment() {
+        let blob = blob_record("image/svg+xml", Some("avatar.svg"));
+        assert_eq!(
+            blob_content_disposition(&blob, "profile_avatar").as_deref(),
+            Some("attachment; filename=\"avatar.svg\"")
+        );
+    }
 }

@@ -645,6 +645,94 @@ async fn auth_keys_device_messages_and_blobs_work() {
         "did:web:blob-bob.example",
     );
 
+    let service_did = state.config.service_did.clone();
+    let shared_plaintext_space = seed_test_realm(
+        &state,
+        "did:web:alice.example",
+        "Shared Plaintext Blob Space",
+        None,
+        "invite_only",
+        &[service_did.as_str()],
+        &[],
+    );
+    add_test_realm_member(
+        &state,
+        shared_plaintext_space["space_id"].as_str().unwrap(),
+        "did:web:blob-bob.example",
+    );
+    let plaintext_blob: Value = TestClient::post("http://server/api/v1/blob/upload")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .add_header("content-type", "text/plain; charset=utf-8", true)
+        .add_header("x-contrix-filename", "report final.txt", true)
+        .add_header(
+            "x-contrix-space-id",
+            shared_plaintext_space["space_id"].as_str().unwrap(),
+            true,
+        )
+        .body("shared plaintext")
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(
+        plaintext_blob["upload_receipt"]["space_id"],
+        shared_plaintext_space["space_id"]
+    );
+    assert_eq!(
+        plaintext_blob["upload_receipt"]["filename"],
+        "report_final.txt"
+    );
+
+    let mut bob_plaintext = TestClient::get(format!(
+        "http://server/api/v1/blob/get?blob_ref={}&purpose=message_attachment",
+        plaintext_blob["blob_ref"].as_str().unwrap()
+    ))
+    .add_header("authorization", format!("Bearer {bob}"), true)
+    .send(&app_from_state(state.clone()))
+    .await;
+    assert_eq!(bob_plaintext.status_code.unwrap().as_u16(), 200);
+    assert_eq!(
+        bob_plaintext
+            .headers()
+            .get("content-disposition")
+            .unwrap()
+            .to_str()
+            .unwrap(),
+        "attachment; filename=\"report_final.txt\""
+    );
+    assert_eq!(
+        bob_plaintext.take_string().await.unwrap(),
+        "shared plaintext"
+    );
+
+    let mut plaintext_presign = TestClient::post("http://server/api/v1/blob/presign")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({
+            "blob_ref": plaintext_blob["blob_ref"].as_str().unwrap(),
+            "purpose": "message_attachment",
+            "space_id": shared_plaintext_space["space_id"].as_str().unwrap()
+        }))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(plaintext_presign.status_code.unwrap().as_u16(), 200);
+    let plaintext_presign_body: Value = plaintext_presign.take_json().await.unwrap();
+    let plaintext_presign_url = plaintext_presign_body["url"].as_str().unwrap();
+    let mut presigned_plaintext = TestClient::get(plaintext_presign_url)
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(presigned_plaintext.status_code.unwrap().as_u16(), 200);
+    assert_eq!(
+        presigned_plaintext.take_string().await.unwrap(),
+        "shared plaintext"
+    );
+    let forged_presign_url =
+        plaintext_presign_url.replace("presign_token=", "presign_token=forged");
+    let forged_plaintext = TestClient::get(forged_presign_url)
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(forged_plaintext.status_code.unwrap().as_u16(), 401);
+
     let mut bob_blob = TestClient::get(format!(
         "http://server/api/v1/blob/get?blob_ref={}&purpose=message_attachment",
         blob["blob_ref"].as_str().unwrap()
