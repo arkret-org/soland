@@ -540,8 +540,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn agent_echo_bridge_emits_status_and_result_for_session_start() {
+    #[tokio::test]
+    async fn agent_echo_bridge_emits_status_and_result_for_session_start() {
         let state = test_state();
         let session = "cx:session:01904100-0000-7000-8000-cccccccccccc";
         let agent_did = "did:web:agent.example";
@@ -549,7 +549,7 @@ mod tests {
         let echo_params = json!({"op": "summarize", "doc": "hello"});
         let op = build_agent_session_start(session, agent_did, echo_params.clone());
         let actor = "did:web:alice.example";
-        maybe_emit_echo_result_for_session_start(&state, actor, &op);
+        maybe_emit_echo_result_for_session_start(&state, actor, &op).await;
         let projections = state
             .persistence
             .projection_events()
@@ -615,15 +615,15 @@ mod tests {
     /// `cx.agent.protocol_session.result` with `status=failed` +
     /// `error.code=unknown_agent` instead of the status/result
     /// success pair.
-    #[test]
-    fn agent_echo_bridge_fails_closed_for_unknown_agent() {
+    #[tokio::test]
+    async fn agent_echo_bridge_fails_closed_for_unknown_agent() {
         let state = test_state();
         let session = "cx:session:01904100-0000-7000-8000-deadbeefdead";
         let agent_did = "did:web:unregistered-agent.example";
         // Intentionally do NOT call register_agent — this is the
         // dispatch-failure path we want to exercise.
         let op = build_agent_session_start(session, agent_did, json!({"op": "ping"}));
-        maybe_emit_echo_result_for_session_start(&state, "did:web:alice.example", &op);
+        maybe_emit_echo_result_for_session_start(&state, "did:web:alice.example", &op).await;
         let projections = state
             .persistence
             .projection_events()
@@ -669,8 +669,8 @@ mod tests {
     /// `soland.deployment.agent_echo.ed25519_v1` so verifiers can
     /// tell deployment-keyed signatures apart from reference-keyed
     /// ones.
-    #[test]
-    fn agent_echo_bridge_uses_config_signing_seed_when_set() {
+    #[tokio::test]
+    async fn agent_echo_bridge_uses_config_signing_seed_when_set() {
         let mut state = test_state();
         let deployment_seed = [0x99u8; 32];
         // Replace the AppConfig with a copy that carries the
@@ -683,7 +683,7 @@ mod tests {
         let echo = json!({"op": "ping"});
         let op = build_agent_session_start(session, agent_did, echo.clone());
         let actor = "did:web:alice.example";
-        maybe_emit_echo_result_for_session_start(&state, actor, &op);
+        maybe_emit_echo_result_for_session_start(&state, actor, &op).await;
         let projections = state
             .persistence
             .projection_events()
@@ -745,7 +745,7 @@ mod tests {
         let endpoint_url = "http://127.0.0.1:1/agent-runtime";
         register_agent_with_endpoint(&state, agent_did, Some(endpoint_url));
         let op = build_agent_session_start(session, agent_did, json!({"op": "ping"}));
-        maybe_emit_echo_result_for_session_start(&state, "did:web:alice.example", &op);
+        maybe_emit_echo_result_for_session_start(&state, "did:web:alice.example", &op).await;
         // The status(running) event fires synchronously, then the
         // tokio task does the HTTP. Wait for the result event up
         // to ~3 s.
@@ -803,14 +803,14 @@ mod tests {
     /// renders the field as JSON null rather than omitting it. This
     /// keeps the wire shape stable so consumers can rely on a single
     /// path instead of probing for missing keys.
-    #[test]
-    fn agent_echo_bridge_renders_null_endpoint_url_when_not_registered() {
+    #[tokio::test]
+    async fn agent_echo_bridge_renders_null_endpoint_url_when_not_registered() {
         let state = test_state();
         let session = "cx:session:01904100-0000-7000-8000-ffffffffffff";
         let agent_did = "did:web:agent-no-endpoint.example";
         register_agent_with_endpoint(&state, agent_did, None);
         let op = build_agent_session_start(session, agent_did, json!({}));
-        maybe_emit_echo_result_for_session_start(&state, "did:web:alice.example", &op);
+        maybe_emit_echo_result_for_session_start(&state, "did:web:alice.example", &op).await;
         let projections = state
             .persistence
             .projection_events()
@@ -831,8 +831,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn agent_echo_bridge_ignores_non_session_start_operations() {
+    #[tokio::test]
+    async fn agent_echo_bridge_ignores_non_session_start_operations() {
         let state = test_state();
         let mut op = Operation::create(
             OperationId::new("cx:operation:01904100-0000-7bbb-8bbb-000000000002".to_owned())
@@ -842,7 +842,7 @@ mod tests {
             json!({"endpoint_url": "https://agent.example/api"}),
         );
         op.object_id = Some("did:web:agent.example".to_owned());
-        maybe_emit_echo_result_for_session_start(&state, "did:web:alice.example", &op);
+        maybe_emit_echo_result_for_session_start(&state, "did:web:alice.example", &op).await;
         let projections = state
             .persistence
             .projection_events()
@@ -858,8 +858,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn agent_echo_bridge_ignores_session_start_without_session_id() {
+    #[tokio::test]
+    async fn agent_echo_bridge_ignores_session_start_without_session_id() {
         let state = test_state();
         let mut op = Operation::create(
             OperationId::new("cx:operation:01904100-0000-7bbb-8bbb-000000000003".to_owned())
@@ -869,7 +869,7 @@ mod tests {
             json!({"agent_did": "did:web:agent.example"}),
         );
         op.object_id = None;
-        maybe_emit_echo_result_for_session_start(&state, "did:web:alice.example", &op);
+        maybe_emit_echo_result_for_session_start(&state, "did:web:alice.example", &op).await;
         let projections = state
             .persistence
             .projection_events()

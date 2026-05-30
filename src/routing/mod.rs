@@ -1724,13 +1724,24 @@ mod operation_conformance_tests {
             OperationVector {
                 name: "read marker missing event_id",
                 kind: kinds::CX_READ_MARKER,
-                payload: json!({"actor": "did:web:alice.example"}),
+                payload: json!({
+                    "actor_id": "did:web:alice.example",
+                    "read_scope": {"kind": "realm"},
+                    "position": {"hlc": "019041000000-0000-00000001"}
+                }),
                 valid: false,
             },
             OperationVector {
                 name: "read marker valid",
                 kind: kinds::CX_READ_MARKER,
-                payload: json!({"actor": "did:web:alice.example", "event_id": "cx:event:01904100-0000-7000-8000-79a90338768b"}),
+                payload: json!({
+                    "actor_id": "did:web:alice.example",
+                    "read_scope": {"kind": "realm"},
+                    "position": {
+                        "event_id": "cx:event:01904100-0000-7000-8000-79a90338768b",
+                        "hlc": "019041000000-0000-00000001"
+                    }
+                }),
                 valid: true,
             },
             OperationVector {
@@ -1765,7 +1776,12 @@ mod operation_conformance_tests {
             OperationVector {
                 name: "space update",
                 kind: kinds::CX_REALM_UPDATE,
-                payload: json!({"action": "update", "title": "Launch 2"}),
+                payload: json!({
+                    "target_ref": "cx:realm:01904100-0000-7000-8000-000000000001",
+                    "patch": {
+                        "title": "Launch 2"
+                    }
+                }),
                 valid: true,
             },
             OperationVector {

@@ -472,8 +472,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn skips_rows_below_threshold() {
+    #[tokio::test]
+    async fn skips_rows_below_threshold() {
         let state = test_state();
         let cfg = MultisigWatchdogConfig::for_service(&state.config.service_did);
         let record = make_record("cx:anchor:sha256:01", 3, 1);
@@ -483,14 +483,14 @@ mod tests {
             .upsert(record)
             .await
             .unwrap();
-        let report = run_watchdog_pass(&state, &cfg);
+        let report = run_watchdog_pass(&state, &cfg).await;
         assert_eq!(report.scanned, 1);
         assert!(report.claimed.is_empty());
         assert!(report.aggregated.is_empty());
     }
 
-    #[test]
-    fn skips_rows_with_empty_canonical_bytes() {
+    #[tokio::test]
+    async fn skips_rows_with_empty_canonical_bytes() {
         let state = test_state();
         let cfg = MultisigWatchdogConfig::for_service(&state.config.service_did);
         let mut record = make_record("cx:anchor:sha256:02", 1, 1);
@@ -501,12 +501,12 @@ mod tests {
             .upsert(record)
             .await
             .unwrap();
-        let report = run_watchdog_pass(&state, &cfg);
+        let report = run_watchdog_pass(&state, &cfg).await;
         assert!(report.claimed.is_empty());
     }
 
-    #[test]
-    fn claims_eligible_row_and_records_failure_on_invalid_canonical_bytes() {
+    #[tokio::test]
+    async fn claims_eligible_row_and_records_failure_on_invalid_canonical_bytes() {
         let state = test_state();
         let cfg = MultisigWatchdogConfig::for_service(&state.config.service_did);
         let record = make_record("cx:anchor:sha256:03", 1, 1);
@@ -516,7 +516,7 @@ mod tests {
             .upsert(record)
             .await
             .unwrap();
-        let report = run_watchdog_pass(&state, &cfg);
+        let report = run_watchdog_pass(&state, &cfg).await;
         // canonical_b64 decodes to bytes "empty" — not valid JSON, so the
         // aggregate path fails, the claim is released, and the row stays.
         assert_eq!(report.claimed.len(), 1);
@@ -533,8 +533,8 @@ mod tests {
         assert!(row_back.claimed_by_node_id.is_none());
     }
 
-    #[test]
-    fn other_node_lease_is_respected_until_deadline() {
+    #[tokio::test]
+    async fn other_node_lease_is_respected_until_deadline() {
         let state = test_state();
         let cfg = MultisigWatchdogConfig::for_service(&state.config.service_did);
         let mut record = make_record("cx:anchor:sha256:04", 1, 1);
@@ -546,7 +546,7 @@ mod tests {
             .upsert(record)
             .await
             .unwrap();
-        let report = run_watchdog_pass(&state, &cfg);
+        let report = run_watchdog_pass(&state, &cfg).await;
         assert!(report.claimed.is_empty());
     }
 
@@ -563,8 +563,8 @@ mod tests {
     /// and starts its own aggregation. Node A finishes first and tries to
     /// publish via `delete_with_fence(seq=1)` — the fencing token bumped to
     /// 2, so the fenced delete is rejected and the row stays for Node B.
-    #[test]
-    fn partition_scenario_a_split_brain_stale_leader_publish_is_fenced() {
+    #[tokio::test]
+    async fn partition_scenario_a_split_brain_stale_leader_publish_is_fenced() {
         let state = test_state();
         let cfg_a = MultisigWatchdogConfig {
             tick_interval: Duration::from_secs(30),
@@ -579,7 +579,7 @@ mod tests {
 
         let store = state.persistence.multisig_pending();
         let record = make_record("cx:anchor:sha256:partition-a", 1, 1);
-        store.upsert(record).unwrap();
+        store.upsert(record).await.unwrap();
 
         // t=0: Node A claims. Snapshot fence_seq for the post-aggregate
         // delete it will eventually attempt.
@@ -587,6 +587,7 @@ mod tests {
         let lease_a_until = t0 + chrono::Duration::seconds(60);
         let (won_a, fence_seq_a) = store
             .try_claim("cx:anchor:sha256:partition-a", "node-A", t0, lease_a_until)
+            .await
             .unwrap();
         assert!(won_a);
         assert_eq!(fence_seq_a, 1);
@@ -597,6 +598,7 @@ mod tests {
         let lease_b_until = t70 + chrono::Duration::seconds(60);
         let (won_b, fence_seq_b) = store
             .try_claim("cx:anchor:sha256:partition-a", "node-B", t70, lease_b_until)
+            .await
             .unwrap();
         assert!(won_b);
         assert_eq!(fence_seq_b, 2, "claim_seq must bump on every re-claim");
@@ -607,6 +609,7 @@ mod tests {
         // is rejected.
         let stale_delete_ok = store
             .delete_with_fence("cx:anchor:sha256:partition-a", "node-A", fence_seq_a)
+            .await
             .unwrap();
         assert!(
             !stale_delete_ok,
@@ -616,6 +619,7 @@ mod tests {
         // The row is still around for Node B to publish against.
         let row = store
             .get("cx:anchor:sha256:partition-a")
+            .await
             .unwrap()
             .expect("row must survive the rejected stale publish");
         assert_eq!(row.claimed_by_node_id.as_deref(), Some("node-B"));
@@ -624,9 +628,16 @@ mod tests {
         // Node B — the live leader — finishes and publishes successfully.
         let live_delete_ok = store
             .delete_with_fence("cx:anchor:sha256:partition-a", "node-B", fence_seq_b)
+            .await
             .unwrap();
         assert!(live_delete_ok);
-        assert!(store.get("cx:anchor:sha256:partition-a").unwrap().is_none());
+        assert!(
+            store
+                .get("cx:anchor:sha256:partition-a")
+                .await
+                .unwrap()
+                .is_none()
+        );
 
         // Drop the cfgs so the test variables aren't reported as unused.
         let _ = cfg_a;
@@ -637,8 +648,8 @@ mod tests {
     /// before publishing. The lease is still recorded against the dead
     /// node. After the lease expires, the next watchdog pass on the
     /// surviving node must re-claim the row, bump claim_seq, and proceed.
-    #[test]
-    fn partition_scenario_b_leader_crashes_after_claim_before_publish() {
+    #[tokio::test]
+    async fn partition_scenario_b_leader_crashes_after_claim_before_publish() {
         let state = test_state();
         let cfg_b = MultisigWatchdogConfig {
             tick_interval: Duration::from_secs(30),
@@ -648,7 +659,7 @@ mod tests {
 
         let store = state.persistence.multisig_pending();
         let record = make_record("cx:anchor:sha256:partition-b", 1, 1);
-        store.upsert(record).unwrap();
+        store.upsert(record).await.unwrap();
 
         // Simulate the dead leader: it had successfully claimed at t=-90s
         // (claim_seq=1) and then crashed before publishing. Its lease
@@ -662,12 +673,17 @@ mod tests {
                 now - chrono::Duration::seconds(90),
                 dead_lease_until,
             )
+            .await
             .unwrap();
         assert!(won_dead);
 
         // Inspect: the row is still leased to node-DEAD on paper, even
         // though that lease is in the past.
-        let row_pre = store.get("cx:anchor:sha256:partition-b").unwrap().unwrap();
+        let row_pre = store
+            .get("cx:anchor:sha256:partition-b")
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(row_pre.claimed_by_node_id.as_deref(), Some("node-DEAD"));
         assert_eq!(row_pre.claim_seq, 1);
 
@@ -686,6 +702,7 @@ mod tests {
                 later,
                 later + chrono::Duration::seconds(60),
             )
+            .await
             .unwrap();
         assert!(won_b, "expired lease must be re-claimable");
         assert_eq!(
@@ -693,7 +710,11 @@ mod tests {
             "fencing token bumps even when the previous holder was dead"
         );
 
-        let row_post = store.get("cx:anchor:sha256:partition-b").unwrap().unwrap();
+        let row_post = store
+            .get("cx:anchor:sha256:partition-b")
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(row_post.claimed_by_node_id.as_deref(), Some("node-B"));
         assert_eq!(row_post.claim_seq, 2);
 
@@ -703,6 +724,7 @@ mod tests {
         // node.
         let stale_delete_ok = store
             .delete_with_fence("cx:anchor:sha256:partition-b", "node-DEAD", 1)
+            .await
             .unwrap();
         assert!(
             !stale_delete_ok,
@@ -714,8 +736,8 @@ mod tests {
     /// aggregation is mid-flight. Another node re-claims, bumping
     /// claim_seq. The original (now-stale) leader's `renew_claim` is
     /// rejected — its fencing token no longer matches.
-    #[test]
-    fn partition_scenario_c_lease_expires_mid_aggregation_renew_rejected() {
+    #[tokio::test]
+    async fn partition_scenario_c_lease_expires_mid_aggregation_renew_rejected() {
         let state = test_state();
         let cfg_a = MultisigWatchdogConfig {
             tick_interval: Duration::from_secs(30),
@@ -725,7 +747,7 @@ mod tests {
 
         let store = state.persistence.multisig_pending();
         let record = make_record("cx:anchor:sha256:partition-c", 1, 1);
-        store.upsert(record).unwrap();
+        store.upsert(record).await.unwrap();
 
         // Node A claims at t=0; lease until t=60.
         let t0 = Utc::now();
@@ -736,6 +758,7 @@ mod tests {
                 t0,
                 t0 + chrono::Duration::seconds(60),
             )
+            .await
             .unwrap();
         assert_eq!(fence_seq_a, 1);
 
@@ -748,6 +771,7 @@ mod tests {
                 t70,
                 t70 + chrono::Duration::seconds(60),
             )
+            .await
             .unwrap();
         assert!(won_b);
         assert_eq!(fence_seq_b, 2);
@@ -761,6 +785,7 @@ mod tests {
                 fence_seq_a,
                 t70 + chrono::Duration::seconds(60),
             )
+            .await
             .unwrap();
         assert!(
             !renewed,
@@ -768,7 +793,11 @@ mod tests {
         );
 
         // The row's lease is unchanged from Node B's claim.
-        let row = store.get("cx:anchor:sha256:partition-c").unwrap().unwrap();
+        let row = store
+            .get("cx:anchor:sha256:partition-c")
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(row.claimed_by_node_id.as_deref(), Some("node-B"));
         assert_eq!(row.claim_seq, 2);
 
@@ -780,8 +809,8 @@ mod tests {
     /// `renew_lease_during_aggregation` to push `claimed_until`
     /// forward without bumping `claim_seq`. The post-aggregate
     /// `delete_with_fence(original_seq)` still succeeds.
-    #[test]
-    fn happy_path_lease_renewal_during_long_aggregation() {
+    #[tokio::test]
+    async fn happy_path_lease_renewal_during_long_aggregation() {
         let state = test_state();
         let cfg = MultisigWatchdogConfig {
             tick_interval: Duration::from_secs(30),
@@ -791,7 +820,7 @@ mod tests {
 
         let store = state.persistence.multisig_pending();
         let record = make_record("cx:anchor:sha256:happy-renewal", 1, 1);
-        store.upsert(record).unwrap();
+        store.upsert(record).await.unwrap();
 
         // Initial claim — fence_seq bumps to 1.
         let t0 = Utc::now();
@@ -802,6 +831,7 @@ mod tests {
                 t0,
                 t0 + chrono::Duration::seconds(60),
             )
+            .await
             .unwrap();
         assert!(won);
         assert_eq!(fence_seq, 1);
@@ -815,11 +845,13 @@ mod tests {
             "cx:anchor:sha256:happy-renewal",
             fence_seq,
         )
+        .await
         .expect("renewal should not error");
         assert!(renewed, "happy-path renewal must land");
 
         let row_after_renew = store
             .get("cx:anchor:sha256:happy-renewal")
+            .await
             .unwrap()
             .unwrap();
         assert_eq!(
@@ -842,11 +874,13 @@ mod tests {
         // fence_seq still works because the renewal didn't bump it.
         let deleted = store
             .delete_with_fence("cx:anchor:sha256:happy-renewal", "node-A", fence_seq)
+            .await
             .unwrap();
         assert!(deleted);
         assert!(
             store
                 .get("cx:anchor:sha256:happy-renewal")
+                .await
                 .unwrap()
                 .is_none()
         );

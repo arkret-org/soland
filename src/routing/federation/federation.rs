@@ -727,7 +727,10 @@ fn projection_event_matches_actor(
 /// first, so peer pull/backfill can replay the same item if the live push path
 /// is partitioned. Outbox rows are deterministic on `(origin, destination,
 /// operation_id)`, making restart-time replays idempotent.
-pub(crate) fn fanout_accepted_operations_to_peers(state: &AppState, operations: &[Operation]) {
+pub(crate) async fn fanout_accepted_operations_to_peers(
+    state: &AppState,
+    operations: &[Operation],
+) {
     if operations.is_empty() || state.config.federation_peers.is_empty() {
         return;
     }
@@ -740,17 +743,12 @@ pub(crate) fn fanout_accepted_operations_to_peers(state: &AppState, operations: 
         .iter()
         .filter(|operation| operation_should_fanout(operation))
     {
-        let state = state.clone();
-        let operation = operation.clone();
-        let peers = peers.clone();
-        tokio::spawn(async move {
-            persist_local_federation_operation(&state, &operation).await;
-            for peer in peers {
-                if outbound_operation_allowed(&state, &operation, &peer).await {
-                    enqueue_operation_push(&state, &operation, &peer).await;
-                }
+        persist_local_federation_operation(state, operation).await;
+        for peer in peers.clone() {
+            if outbound_operation_allowed(state, operation, &peer).await {
+                enqueue_operation_push(state, operation, &peer).await;
             }
-        });
+        }
     }
 }
 
@@ -2314,32 +2312,27 @@ pub(super) async fn federation_anchors_push(
 /// - [`FederationPolicy::Mesh`]: every peer in `state.config.federation_peers`.
 /// - [`FederationPolicy::Hub`]: only the first peer (`federation_peers[0]`).
 ///
-/// Returns the list of peer URLs the broadcast targeted; the actual HTTP
-/// dispatch is fire-and-forget (best-effort) and runs on a background
-/// tokio task so the inbound write path never blocks on a slow peer.
-pub fn broadcast_move_to_peers(state: &AppState, move_id: &str) -> Vec<String> {
+/// Returns the list of peer URLs the broadcast targeted. This helper persists
+/// the retry transcript and durable outbox row; the actual HTTP dispatch still
+/// happens later in the federation outbox worker.
+pub async fn broadcast_move_to_peers(state: &AppState, move_id: &str) -> Vec<String> {
     let peers = configured_peer_targets(state);
     for peer in &peers {
-        let state = state.clone();
-        let peer = peer.clone();
         let peer_url = peer.url.clone();
-        let move_id_owned = move_id.to_owned();
-        tokio::spawn(async move {
-            record_outbound_fanout_attempt(&state, "move", &move_id_owned, peer.url.as_str()).await;
-            // G3.S0 — durable enqueue. The transcript persisted above remains
-            // the human-readable audit record; the outbox row is what the
-            // background dispatcher (`routing::federation::outbox`) actually
-            // POSTs. Failures to enqueue are logged but don't fail the
-            // inbound write — the transcript still gives operators a way to
-            // re-trigger delivery once the storage hiccup clears.
-            enqueue_outbound_for(&state, "move", &move_id_owned, &peer).await;
-            tracing::debug!(
-                worker = "federation_outbox_enqueue",
-                peer = %peer_url,
-                move_id = %move_id_owned,
-                "federation broadcast move signed request transcript persisted for retry worker"
-            );
-        });
+        record_outbound_fanout_attempt(state, "move", move_id, peer.url.as_str()).await;
+        // G3.S0 — durable enqueue. The transcript persisted above remains
+        // the human-readable audit record; the outbox row is what the
+        // background dispatcher (`routing::federation::outbox`) actually
+        // POSTs. Failures to enqueue are logged but don't fail the
+        // inbound write — the transcript still gives operators a way to
+        // re-trigger delivery once the storage hiccup clears.
+        enqueue_outbound_for(state, "move", move_id, peer).await;
+        tracing::debug!(
+            worker = "federation_outbox_enqueue",
+            peer = %peer_url,
+            move_id = %move_id,
+            "federation broadcast move signed request transcript persisted for retry worker"
+        );
     }
     peers.into_iter().map(|peer| peer.url).collect()
 }
@@ -2347,25 +2340,19 @@ pub fn broadcast_move_to_peers(state: &AppState, move_id: &str) -> Vec<String> {
 /// Symmetric helper for Anchor replication. The hub policy still pushes
 /// to a single upstream so the broadcast list is `[hub]`; mesh fans out
 /// to every peer.
-pub fn broadcast_anchor_to_peers(state: &AppState, anchor_id: &str) -> Vec<String> {
+pub async fn broadcast_anchor_to_peers(state: &AppState, anchor_id: &str) -> Vec<String> {
     let peers = configured_peer_targets(state);
     for peer in &peers {
-        let state = state.clone();
-        let peer = peer.clone();
         let peer_url = peer.url.clone();
-        let anchor_id_owned = anchor_id.to_owned();
-        tokio::spawn(async move {
-            record_outbound_fanout_attempt(&state, "anchor", &anchor_id_owned, peer.url.as_str())
-                .await;
-            // G3.S0 — durable enqueue (see broadcast_move_to_peers).
-            enqueue_outbound_for(&state, "anchor", &anchor_id_owned, &peer).await;
-            tracing::debug!(
-                worker = "federation_outbox_enqueue",
-                peer = %peer_url,
-                anchor_id = %anchor_id_owned,
-                "federation broadcast anchor signed request transcript persisted for retry worker"
-            );
-        });
+        record_outbound_fanout_attempt(state, "anchor", anchor_id, peer.url.as_str()).await;
+        // G3.S0 — durable enqueue (see broadcast_move_to_peers).
+        enqueue_outbound_for(state, "anchor", anchor_id, peer).await;
+        tracing::debug!(
+            worker = "federation_outbox_enqueue",
+            peer = %peer_url,
+            anchor_id = %anchor_id,
+            "federation broadcast anchor signed request transcript persisted for retry worker"
+        );
     }
     peers.into_iter().map(|peer| peer.url).collect()
 }
@@ -2728,7 +2715,7 @@ pub struct OutboundFanoutRetryReport {
 }
 
 #[cfg(test)]
-fn run_outbound_fanout_retry_pass_at(
+async fn run_outbound_fanout_retry_pass_at(
     state: &AppState,
     node_id: &str,
     limit: usize,
@@ -3173,7 +3160,7 @@ mod tests {
             ],
         );
         let state = AppState::new(cfg, Db { pool: None });
-        let targets = broadcast_move_to_peers(&state, "sha256:01");
+        let targets = broadcast_move_to_peers(&state, "sha256:01").await;
         assert_eq!(targets.len(), 3);
         let peer_hash = sha256_hex("https://peer-a.example".as_bytes());
         let move_hash = sha256_hex("sha256:01".as_bytes());
@@ -3244,7 +3231,7 @@ mod tests {
             ],
         );
         let state = AppState::new(cfg, Db { pool: None });
-        let targets = broadcast_move_to_peers(&state, "sha256:02");
+        let targets = broadcast_move_to_peers(&state, "sha256:02").await;
         assert_eq!(targets, vec!["https://hub.example".to_owned()]);
     }
 
@@ -3252,7 +3239,7 @@ mod tests {
     async fn empty_peers_list_is_a_no_op() {
         let cfg = config_with_policy(FederationPolicy::Mesh, Vec::new());
         let state = AppState::new(cfg, Db { pool: None });
-        let targets = broadcast_anchor_to_peers(&state, "cx:anchor:sha256:01");
+        let targets = broadcast_anchor_to_peers(&state, "cx:anchor:sha256:01").await;
         assert!(targets.is_empty());
     }
 
@@ -3415,7 +3402,7 @@ mod tests {
             .await
             .unwrap();
         let before =
-            operation_frontier_value(&state, "cx:realm:01904100-0000-7000-8000-000000000061");
+            operation_frontier_value(&state, "cx:realm:01904100-0000-7000-8000-000000000061").await;
         state
             .persistence
             .federation_operations()
@@ -3423,7 +3410,7 @@ mod tests {
             .await
             .unwrap();
         let after =
-            operation_frontier_value(&state, "cx:realm:01904100-0000-7000-8000-000000000061");
+            operation_frontier_value(&state, "cx:realm:01904100-0000-7000-8000-000000000061").await;
 
         assert_eq!(before["operation_count"], 1);
         assert_eq!(after["operation_count"], 2);
@@ -3448,7 +3435,7 @@ mod tests {
             vec!["https://peer-anchor.example".to_owned()],
         );
         let state = AppState::new(cfg, Db { pool: None });
-        let targets = broadcast_anchor_to_peers(&state, "cx:anchor:sha256:02");
+        let targets = broadcast_anchor_to_peers(&state, "cx:anchor:sha256:02").await;
         assert_eq!(targets, vec!["https://peer-anchor.example".to_owned()]);
 
         let peer_hash = sha256_hex("https://peer-anchor.example".as_bytes());
@@ -3484,7 +3471,7 @@ mod tests {
             vec!["https://peer-retry.example".to_owned()],
         );
         let state = AppState::new(cfg, Db { pool: None });
-        broadcast_move_to_peers(&state, "sha256:retry");
+        broadcast_move_to_peers(&state, "sha256:retry").await;
 
         let peer_hash = sha256_hex("https://peer-retry.example".as_bytes());
         let move_hash = sha256_hex("sha256:retry".as_bytes());
@@ -3500,6 +3487,7 @@ mod tests {
 
         let report =
             run_outbound_fanout_retry_pass_at(&state, "node-a", 10, due_at + Duration::seconds(1))
+                .await
                 .unwrap();
         assert_eq!(report.due, 1);
         assert_eq!(report.retried, 1);

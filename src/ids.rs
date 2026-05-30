@@ -70,11 +70,9 @@ pub fn generate_read_cursor_id() -> String {
     generate("read_cursor")
 }
 
-/// Notification id helper. Spec uses `cx:notification:` (id-kind-registry), not
-/// `cx:notification:`. Callers haven't landed yet but the helper is the
-/// spec-correct shape.
+/// Notification id helper. Spec uses the full `cx:notification:` kind.
 pub fn generate_notification_id() -> String {
-    generate("notif")
+    generate("notification")
 }
 
 pub fn generate_view_id() -> String {
@@ -82,7 +80,7 @@ pub fn generate_view_id() -> String {
 }
 
 pub fn generate_request_id() -> String {
-    generate("req")
+    generate("request")
 }
 
 /// Convert a wire-form `cx:<kind>:<uuid>` typed ID to its raw `Uuid` for

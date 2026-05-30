@@ -1417,7 +1417,7 @@ async fn write_through_projection(state: &AppState, operation: &Operation) {
 }
 
 pub async fn project_accepted_operations(state: &AppState, origin: &str, operations: &[Operation]) {
-    crate::routing::federation::fanout_accepted_operations_to_peers(state, operations);
+    crate::routing::federation::fanout_accepted_operations_to_peers(state, operations).await;
     for operation in operations {
         tracing::debug!(
             kind = ?crate::kinds::canonical_kind_for_operation(operation),

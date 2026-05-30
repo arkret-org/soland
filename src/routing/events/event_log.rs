@@ -3754,8 +3754,8 @@ mod proof_strictness_tests {
         }
     }
 
-    #[test]
-    fn policy_components_media_plaintext_reads_realm_meta() {
+    #[tokio::test]
+    async fn policy_components_media_plaintext_reads_realm_meta() {
         let state = make_state(true);
         let realm_id = "cx:realm:01904100-0000-7000-8000-a11ce0000001";
         let now = chrono::Utc::now();
@@ -3783,9 +3783,7 @@ mod proof_strictness_tests {
 
         let payload = json!({ "media_service_decrypts": true });
 
-        assert!(projected_media_plaintext_service_present(
-            &state, realm_id, &payload
-        ));
+        assert!(projected_media_plaintext_service_present(&state, realm_id, &payload).await);
     }
 
     #[test]
@@ -3930,7 +3928,7 @@ mod proof_strictness_tests {
         let flow_id = "cx:flow:01904100-0000-7000-8000-f10dc0000001";
         let valid = json!({
             "payload": {
-                "flow_id": flow_id,
+                "target_ref": flow_id,
                 "patch": {
                     "fields.document": {
                         "$op": "set",
@@ -3968,7 +3966,7 @@ mod proof_strictness_tests {
 
         let invalid_patch_op = json!({
             "payload": {
-                "flow_id": flow_id,
+                "target_ref": flow_id,
                 "patch": {
                     "fields.document": {
                         "$op": "replace",
@@ -4029,9 +4027,10 @@ mod proof_strictness_tests {
                 .validate_payload(
                     event_kind,
                     &json!({
-                        "patch": {
-                            "title": { "$op": "set", "value": "Roadmap" }
-                        }
+                            "target_ref": "cx:flow:01904100-0000-7000-8000-f10dc0000001",
+                            "patch": {
+                                "title": { "$op": "set", "value": "Roadmap" }
+                            }
                     }),
                 )
                 .unwrap_or_else(|err| {
@@ -4048,6 +4047,7 @@ mod proof_strictness_tests {
                     .validate_payload(
                         event_kind,
                         &json!({
+                            "target_ref": "cx:flow:01904100-0000-7000-8000-f10dc0000001",
                             "patch": {
                                 "title": { "$op": "replace", "value": "Roadmap" }
                             }
@@ -4100,7 +4100,7 @@ mod proof_strictness_tests {
             object,
         )
         .expect_err("encrypted world-readable Realm history must fail closed");
-        assert_eq!(err.code, "schema_violation");
+        assert_eq!(err.code, "incompatible_history_with_encryption");
     }
 
     #[test]

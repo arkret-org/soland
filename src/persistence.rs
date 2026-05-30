@@ -7982,7 +7982,7 @@ impl ProjectionEventStore for PgProjectionEventStore {
 mod tests {
     use super::*;
 
-    #[test]
+    #[tokio::test]
     async fn memory_account_store_crud() {
         let store = MemoryAccountStore::new();
         let record = AccountRecord {
@@ -7995,22 +7995,22 @@ mod tests {
         };
 
         // Create
-        store.put(&record).unwrap();
+        store.put(&record).await.unwrap();
 
         // Read
-        let fetched = store.get("did:web:test").unwrap().unwrap();
+        let fetched = store.get("did:web:test").await.unwrap().unwrap();
         assert_eq!(fetched.did, "did:web:test");
 
         // List
-        let all = store.list().unwrap();
+        let all = store.list().await.unwrap();
         assert_eq!(all.len(), 1);
 
         // Delete
-        store.delete("did:web:test").unwrap();
-        assert!(store.get("did:web:test").unwrap().is_none());
+        store.delete("did:web:test").await.unwrap();
+        assert!(store.get("did:web:test").await.unwrap().is_none());
     }
 
-    #[test]
+    #[tokio::test]
     async fn memory_session_store_expiry() {
         let store = MemorySessionStore::new();
         let expired = SessionRecord {
@@ -8032,16 +8032,16 @@ mod tests {
             revoked_at: None,
         };
 
-        store.put(&expired).unwrap();
-        store.put(&valid).unwrap();
+        store.put(&expired).await.unwrap();
+        store.put(&valid).await.unwrap();
 
-        let cleaned = store.cleanup_expired().unwrap();
+        let cleaned = store.cleanup_expired().await.unwrap();
         assert_eq!(cleaned, 1);
-        assert!(store.get("expired").unwrap().is_none());
-        assert!(store.get("valid").unwrap().is_some());
+        assert!(store.get("expired").await.unwrap().is_none());
+        assert!(store.get("valid").await.unwrap().is_some());
     }
 
-    #[test]
+    #[tokio::test]
     async fn memory_contact_store_filtering() {
         let store = MemoryContactStore::new();
         let now = Utc::now();
@@ -8055,6 +8055,7 @@ mod tests {
                 created_at: now,
                 updated_at: now,
             })
+            .await
             .unwrap();
 
         store
@@ -8066,16 +8067,17 @@ mod tests {
                 created_at: now,
                 updated_at: now,
             })
+            .await
             .unwrap();
 
-        let alice_contacts = store.list_for_actor("alice").unwrap();
+        let alice_contacts = store.list_for_actor("alice").await.unwrap();
         assert_eq!(alice_contacts.len(), 2);
 
-        let bob_contacts = store.list_for_actor("bob").unwrap();
+        let bob_contacts = store.list_for_actor("bob").await.unwrap();
         assert_eq!(bob_contacts.len(), 1);
     }
 
-    #[test]
+    #[tokio::test]
     async fn memory_device_inventory_store_crud() {
         let store = MemoryDeviceInventoryStore::new();
         let now = Utc::now();
@@ -8094,21 +8096,22 @@ mod tests {
             revoked_at: None,
         };
 
-        store.put(&record).unwrap();
+        store.put(&record).await.unwrap();
 
         assert_eq!(
             store
                 .get("did:web:test", "DEVICE")
+                .await
                 .unwrap()
                 .unwrap()
                 .device_id,
             "DEVICE"
         );
-        assert_eq!(store.list_for_actor("did:web:test").unwrap().len(), 1);
-        assert_eq!(store.list().unwrap().len(), 1);
+        assert_eq!(store.list_for_actor("did:web:test").await.unwrap().len(), 1);
+        assert_eq!(store.list().await.unwrap().len(), 1);
     }
 
-    #[test]
+    #[tokio::test]
     async fn memory_federation_transaction_store_is_origin_scoped() {
         let store = MemoryFederationTransactionStore::new();
         let now = Utc::now();
@@ -8124,11 +8127,12 @@ mod tests {
             processed_at: Some(now),
         };
 
-        store.put(&record).unwrap();
+        store.put(&record).await.unwrap();
 
         assert_eq!(
             store
                 .get("did:web:remote.example", "txn1")
+                .await
                 .unwrap()
                 .unwrap()
                 .content_digest,
@@ -8137,12 +8141,13 @@ mod tests {
         assert!(
             store
                 .get("did:web:other.example", "txn1")
+                .await
                 .unwrap()
                 .is_none()
         );
     }
 
-    #[test]
+    #[tokio::test]
     async fn memory_push_bridge_cache_store_crud() {
         let store = MemoryPushBridgeCacheStore::new();
         let now = Utc::now();
@@ -8165,11 +8170,11 @@ mod tests {
             etag: "W/\"v1\"".to_owned(),
         };
 
-        store.put(url, record.clone()).unwrap();
-        assert_eq!(store.len().unwrap(), 1);
-        assert!(!store.is_empty().unwrap());
+        store.put(url, record.clone()).await.unwrap();
+        assert_eq!(store.len().await.unwrap(), 1);
+        assert!(!store.is_empty().await.unwrap());
 
-        let fetched = store.get(url).unwrap().unwrap();
+        let fetched = store.get(url).await.unwrap().unwrap();
         assert_eq!(fetched.contract_digest, "sha256:abc");
         assert_eq!(fetched.fetch_state, "fresh");
 
@@ -8178,18 +8183,18 @@ mod tests {
             cache_state: "stale".to_owned(),
             ..record
         };
-        store.put(url, updated).unwrap();
-        let after = store.get(url).unwrap().unwrap();
+        store.put(url, updated).await.unwrap();
+        let after = store.get(url).await.unwrap().unwrap();
         assert_eq!(after.contract_digest, "sha256:def");
         assert_eq!(after.cache_state, "stale");
-        assert_eq!(store.len().unwrap(), 1);
+        assert_eq!(store.len().await.unwrap(), 1);
 
-        let snapshot = store.snapshot_all().unwrap();
+        let snapshot = store.snapshot_all().await.unwrap();
         assert_eq!(snapshot.len(), 1);
 
-        assert!(store.delete(url).unwrap());
-        assert!(!store.delete(url).unwrap());
-        assert!(store.is_empty().unwrap());
+        assert!(store.delete(url).await.unwrap());
+        assert!(!store.delete(url).await.unwrap());
+        assert!(store.is_empty().await.unwrap());
     }
 
     // ── C33.1 (T0-3a) ──────────────────────────────────────────────────────
@@ -8198,7 +8203,7 @@ mod tests {
     // Memory backend asserts the decision matrix; Pg parity rides on the
     // trait surface (same `evaluate_drift` callee).
 
-    #[test]
+    #[tokio::test]
     async fn push_bridge_record_contract_snapshot_first_time_stored_pending_then_trusted() {
         let store = MemoryPushBridgeCacheStore::new();
         let url = "https://floria.example/api/v1/push/bridge/describe";
@@ -8206,14 +8211,16 @@ mod tests {
         // First snapshot: pending trust → stored, but verify rejects as Unknown.
         store
             .record_contract_snapshot(url, "sha256:v1", "W/\"v1\"", "pending")
+            .await
             .unwrap();
-        let stored = store.current_contract(url).unwrap().unwrap();
+        let stored = store.current_contract(url).await.unwrap().unwrap();
         assert_eq!(stored.contract_digest, "sha256:v1");
         assert_eq!(stored.etag, "W/\"v1\"");
         assert_eq!(stored.trust_level, "pending");
         assert_eq!(
             store
                 .verify_contract_freshness(url, "sha256:v1", chrono::Duration::hours(1))
+                .await
                 .unwrap(),
             DriftResult::Unknown,
             "pending snapshot must fail closed even with matching digest",
@@ -8222,37 +8229,43 @@ mod tests {
         // Promote to trusted → match.
         store
             .record_contract_snapshot(url, "sha256:v1", "W/\"v1\"", "trusted")
+            .await
             .unwrap();
         assert_eq!(
             store
                 .verify_contract_freshness(url, "sha256:v1", chrono::Duration::hours(1))
+                .await
                 .unwrap(),
             DriftResult::Match,
         );
     }
 
-    #[test]
+    #[tokio::test]
     async fn push_bridge_verify_contract_freshness_digest_match() {
         let store = MemoryPushBridgeCacheStore::new();
         let url = "https://floria.example/api/v1/push/bridge/describe";
         store
             .record_contract_snapshot(url, "sha256:abc", "etag-abc", "trusted")
+            .await
             .unwrap();
         let result = store
             .verify_contract_freshness(url, "sha256:abc", chrono::Duration::hours(24))
+            .await
             .unwrap();
         assert_eq!(result, DriftResult::Match);
     }
 
-    #[test]
+    #[tokio::test]
     async fn push_bridge_verify_contract_freshness_digest_mismatch_rejected() {
         let store = MemoryPushBridgeCacheStore::new();
         let url = "https://floria.example/api/v1/push/bridge/describe";
         store
             .record_contract_snapshot(url, "sha256:abc", "etag-abc", "trusted")
+            .await
             .unwrap();
         let result = store
             .verify_contract_freshness(url, "sha256:rotated", chrono::Duration::hours(24))
+            .await
             .unwrap();
         assert_eq!(
             result,
@@ -8261,12 +8274,13 @@ mod tests {
         );
     }
 
-    #[test]
+    #[tokio::test]
     async fn push_bridge_verify_contract_freshness_stale_rejected() {
         let store = MemoryPushBridgeCacheStore::new();
         let url = "https://floria.example/api/v1/push/bridge/describe";
         store
             .record_contract_snapshot(url, "sha256:abc", "etag-abc", "trusted")
+            .await
             .unwrap();
         // Force-age the persisted snapshot by rewriting freshness_at into the
         // distant past. Mirrors what would happen if the refresh worker fell
@@ -8278,6 +8292,7 @@ mod tests {
         }
         let result = store
             .verify_contract_freshness(url, "sha256:abc", chrono::Duration::hours(24))
+            .await
             .unwrap();
         assert_eq!(
             result,
@@ -8286,7 +8301,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[tokio::test]
     async fn push_bridge_verify_contract_freshness_unknown_gateway_rejected() {
         let store = MemoryPushBridgeCacheStore::new();
         let result = store
@@ -8295,6 +8310,7 @@ mod tests {
                 "sha256:abc",
                 chrono::Duration::hours(24),
             )
+            .await
             .unwrap();
         assert_eq!(
             result,
@@ -8303,24 +8319,27 @@ mod tests {
         );
     }
 
-    #[test]
+    #[tokio::test]
     async fn push_bridge_verify_contract_freshness_revoked_snapshot_rejected() {
         let store = MemoryPushBridgeCacheStore::new();
         let url = "https://floria.example/api/v1/push/bridge/describe";
         store
             .record_contract_snapshot(url, "sha256:abc", "etag-abc", "trusted")
+            .await
             .unwrap();
         // Revocation flips trust state; even a digest-match must be rejected.
         store
             .record_contract_snapshot(url, "sha256:abc", "etag-abc", "revoked")
+            .await
             .unwrap();
         let result = store
             .verify_contract_freshness(url, "sha256:abc", chrono::Duration::hours(24))
+            .await
             .unwrap();
         assert_eq!(result, DriftResult::DigestMismatch);
     }
 
-    #[test]
+    #[tokio::test]
     async fn push_bridge_drift_result_label_is_stable_for_audit() {
         // Audit consumers key off `DriftResult::as_str`; lock the labels so a
         // future rename doesn't silently break dashboards.
@@ -8338,7 +8357,7 @@ mod tests {
     // Here we only assert the Memory path because pure-unit tests run
     // without Pg.
 
-    #[test]
+    #[tokio::test]
     async fn memory_audit_store_actor_scoped_filter_matches_trait() {
         let store = MemoryAuditStore::new();
         let alice_a =
@@ -8347,24 +8366,24 @@ mod tests {
             serde_json::json!({"audit_id": "a2", "actor": "alice", "action": "y", "outcome": "ok"});
         let bob_a =
             serde_json::json!({"audit_id": "b1", "actor": "bob", "action": "z", "outcome": "ok"});
-        store.append(alice_a.clone()).unwrap();
-        store.append(bob_a.clone()).unwrap();
-        store.append(alice_b.clone()).unwrap();
+        store.append(alice_a.clone()).await.unwrap();
+        store.append(bob_a.clone()).await.unwrap();
+        store.append(alice_b.clone()).await.unwrap();
 
-        let alice = store.list_for_actor("alice").unwrap();
+        let alice = store.list_for_actor("alice").await.unwrap();
         assert_eq!(alice.len(), 2);
         assert_eq!(alice[0]["audit_id"], "a1");
         assert_eq!(alice[1]["audit_id"], "a2");
 
-        let bob = store.list_for_actor("bob").unwrap();
+        let bob = store.list_for_actor("bob").await.unwrap();
         assert_eq!(bob.len(), 1);
         assert_eq!(bob[0]["audit_id"], "b1");
 
-        let all = store.snapshot_all().unwrap();
+        let all = store.snapshot_all().await.unwrap();
         assert_eq!(all.len(), 3);
     }
 
-    #[test]
+    #[tokio::test]
     async fn memory_push_device_store_register_unregister_and_snapshot() {
         let store = MemoryPushDeviceStore::new();
         let dev1 = serde_json::json!({
@@ -8383,26 +8402,28 @@ mod tests {
             "push_key": "k2",
             "app_id": "yougen"
         });
-        store.register(dev1.clone()).unwrap();
-        store.register(dev2.clone()).unwrap();
-        let snap = store.snapshot_all().unwrap();
+        store.register(dev1.clone()).await.unwrap();
+        store.register(dev2.clone()).await.unwrap();
+        let snap = store.snapshot_all().await.unwrap();
         assert_eq!(snap.len(), 2);
 
         let removed = store
             .unregister("did:web:alice.example", "dev-1", Some("k1"), Some("yougen"))
+            .await
             .unwrap();
         assert_eq!(removed, 1);
-        let after = store.snapshot_all().unwrap();
+        let after = store.snapshot_all().await.unwrap();
         assert_eq!(after.len(), 1);
         assert_eq!(after[0]["actor"], "did:web:bob.example");
 
         let no_match = store
             .unregister("did:web:alice.example", "dev-1", Some("k1"), Some("yougen"))
+            .await
             .unwrap();
         assert_eq!(no_match, 0);
     }
 
-    #[test]
+    #[tokio::test]
     async fn memory_event_store_round_trip_with_actor_seq() {
         let store = MemoryEventStore::new();
         let now = Utc::now();
@@ -8418,24 +8439,24 @@ mod tests {
             envelope: serde_json::json!({"event_id": event_id}),
             received_at: now,
         };
-        store.put(make("e1", "alice", 1)).unwrap();
-        store.put(make("e2", "alice", 2)).unwrap();
-        store.put(make("e3", "bob", 1)).unwrap();
+        store.put(make("e1", "alice", 1)).await.unwrap();
+        store.put(make("e2", "alice", 2)).await.unwrap();
+        store.put(make("e3", "bob", 1)).await.unwrap();
 
-        assert!(store.contains("e1").unwrap());
-        assert!(!store.contains("missing").unwrap());
-        assert_eq!(store.get("e2").unwrap().unwrap().actor_seq, 2);
-        assert_eq!(store.max_actor_seq("alice").unwrap(), Some(2));
-        assert_eq!(store.max_actor_seq("bob").unwrap(), Some(1));
-        assert_eq!(store.max_actor_seq("nobody").unwrap(), None);
-        assert_eq!(store.snapshot_all().unwrap().len(), 3);
+        assert!(store.contains("e1").await.unwrap());
+        assert!(!store.contains("missing").await.unwrap());
+        assert_eq!(store.get("e2").await.unwrap().unwrap().actor_seq, 2);
+        assert_eq!(store.max_actor_seq("alice").await.unwrap(), Some(2));
+        assert_eq!(store.max_actor_seq("bob").await.unwrap(), Some(1));
+        assert_eq!(store.max_actor_seq("nobody").await.unwrap(), None);
+        assert_eq!(store.snapshot_all().await.unwrap().len(), 3);
     }
 
     // ── Memory parity tests for the FederationOperationsStore + the
     // MAL-11 leader-election columns. Pg parity is enforced by the trait
     // surface itself.
 
-    async fn make_test_operation(operation_id: &str, space_id: &str) -> Operation {
+    fn make_test_operation(operation_id: &str, space_id: &str) -> Operation {
         use contrix_sdk::{OperationId, RealmId};
         let mut op = Operation::create(
             OperationId::new(operation_id.to_owned()).unwrap(),
@@ -8447,7 +8468,7 @@ mod tests {
         op
     }
 
-    #[test]
+    #[tokio::test]
     async fn memory_federation_operations_store_dedups_and_filters_by_space() {
         let store = MemoryFederationOperationsStore::new();
         let space_a = "cx:realm:0196419b-0000-7000-8000-00000000aaaa";
@@ -8456,18 +8477,18 @@ mod tests {
         let op2 = make_test_operation("cx:operation:0196419b-0000-7000-8000-000000000002", space_a);
         let op3 = make_test_operation("cx:operation:0196419b-0000-7000-8000-000000000003", space_b);
 
-        store.append(op1.clone()).unwrap();
-        store.append(op2.clone()).unwrap();
-        store.append(op3.clone()).unwrap();
+        store.append(op1.clone()).await.unwrap();
+        store.append(op2.clone()).await.unwrap();
+        store.append(op3.clone()).await.unwrap();
 
-        assert!(store.contains(op1.operation_id.as_str()).unwrap());
-        assert!(!store.contains("cx:operation:missing").unwrap());
-        assert_eq!(store.list_for_space(space_a).unwrap().len(), 2);
-        assert_eq!(store.list_for_space(space_b).unwrap().len(), 1);
-        assert_eq!(store.snapshot_all().unwrap().len(), 3);
+        assert!(store.contains(op1.operation_id.as_str()).await.unwrap());
+        assert!(!store.contains("cx:operation:missing").await.unwrap());
+        assert_eq!(store.list_for_space(space_a).await.unwrap().len(), 2);
+        assert_eq!(store.list_for_space(space_b).await.unwrap().len(), 1);
+        assert_eq!(store.snapshot_all().await.unwrap().len(), 3);
     }
 
-    #[test]
+    #[tokio::test]
     async fn memory_multisig_pending_lease_acquire_release_round_trip() {
         let store = MemoryMultisigPendingStore::new();
         let now = Utc::now();
@@ -8489,18 +8510,20 @@ mod tests {
             claimed_until: None,
             claim_seq: 0,
         };
-        store.upsert(record.clone()).unwrap();
+        store.upsert(record.clone()).await.unwrap();
 
         let lease_until = now + chrono::Duration::seconds(60);
         // First node successfully claims.
         let (won_a, seq_a) = store
             .try_claim("cx:anchor:sha256:lease", "node-A", now, lease_until)
+            .await
             .unwrap();
         assert!(won_a);
         assert_eq!(seq_a, 1);
         // Second node bounces while lease is live.
         let (won_b, seq_b) = store
             .try_claim("cx:anchor:sha256:lease", "node-B", now, lease_until)
+            .await
             .unwrap();
         assert!(!won_b);
         assert_eq!(seq_b, 1, "claim_seq must not bump on a failed try_claim");
@@ -8513,14 +8536,16 @@ mod tests {
                 later,
                 later + chrono::Duration::seconds(60),
             )
+            .await
             .unwrap();
         assert!(won_b2);
         assert_eq!(seq_b2, 2, "claim_seq must bump on every successful claim");
         // Release by node-B clears the lease so anyone can re-claim.
         store
             .release_claim("cx:anchor:sha256:lease", "node-B")
+            .await
             .unwrap();
-        let row = store.get("cx:anchor:sha256:lease").unwrap().unwrap();
+        let row = store.get("cx:anchor:sha256:lease").await.unwrap().unwrap();
         assert!(row.claimed_by_node_id.is_none());
         assert_eq!(
             row.claim_seq, 2,
@@ -8528,7 +8553,7 @@ mod tests {
         );
 
         // snapshot_all surfaces every row regardless of claim state.
-        assert_eq!(store.snapshot_all().unwrap().len(), 1);
+        assert_eq!(store.snapshot_all().await.unwrap().len(), 1);
     }
 
     // ── Memory parity tests for the wire-facing sub-stores
@@ -8536,7 +8561,7 @@ mod tests {
     // by the trait surface itself; the integration tests in
     // `tests/http_api.rs` exercise the Pg path when `DATABASE_URL` is set.
 
-    #[test]
+    #[tokio::test]
     async fn memory_moderation_store_append_and_list_matches_trait() {
         let store = MemoryModerationStore::new();
         let report = serde_json::json!({
@@ -8552,19 +8577,19 @@ mod tests {
             "action_kind": "warn"
         });
 
-        store.append_report(report.clone()).unwrap();
-        store.append_action(action.clone()).unwrap();
+        store.append_report(report.clone()).await.unwrap();
+        store.append_action(action.clone()).await.unwrap();
 
-        let reports = store.list_reports().unwrap();
+        let reports = store.list_reports().await.unwrap();
         assert_eq!(reports.len(), 1);
         assert_eq!(reports[0]["report_id"], "cx:report:01");
 
-        let actions = store.list_actions().unwrap();
+        let actions = store.list_actions().await.unwrap();
         assert_eq!(actions.len(), 1);
         assert_eq!(actions[0]["action_kind"], "warn");
     }
 
-    #[test]
+    #[tokio::test]
     async fn memory_presence_store_put_get_matches_trait() {
         let store = MemoryPresenceStore::new();
         let now = Utc::now();
@@ -8573,9 +8598,9 @@ mod tests {
             status: "online".to_owned(),
             updated_at: now,
         };
-        store.put(record.clone()).unwrap();
+        store.put(record.clone()).await.unwrap();
 
-        let fetched = store.get("did:web:alice.example").unwrap().unwrap();
+        let fetched = store.get("did:web:alice.example").await.unwrap().unwrap();
         assert_eq!(fetched.status, "online");
         assert_eq!(fetched.actor, "did:web:alice.example");
 
@@ -8585,15 +8610,15 @@ mod tests {
             status: "away".to_owned(),
             updated_at: now + chrono::Duration::seconds(30),
         };
-        store.put(update).unwrap();
-        let after = store.get("did:web:alice.example").unwrap().unwrap();
+        store.put(update).await.unwrap();
+        let after = store.get("did:web:alice.example").await.unwrap().unwrap();
         assert_eq!(after.status, "away");
 
         // Missing actor → None.
-        assert!(store.get("did:web:nobody").unwrap().is_none());
+        assert!(store.get("did:web:nobody").await.unwrap().is_none());
     }
 
-    #[test]
+    #[tokio::test]
     async fn memory_webvh_store_document_and_log_round_trip_matches_trait() {
         let store = MemoryWebvhStore::new();
         let now = Utc::now();
@@ -8608,10 +8633,11 @@ mod tests {
             method_evidence: serde_json::json!({"method": "key-rotation"}),
             updated_at: now,
         };
-        store.put_document(doc.clone()).unwrap();
+        store.put_document(doc.clone()).await.unwrap();
 
         let fetched = store
             .get_document("did:web:alice.example")
+            .await
             .unwrap()
             .unwrap();
         assert_eq!(fetched.did, "did:web:alice.example");
@@ -8633,20 +8659,35 @@ mod tests {
             operation: serde_json::json!({"op": "rotate", "n": 2}),
             created_at: now + chrono::Duration::seconds(5),
         };
-        store.append_log_event(log1).unwrap();
-        store.append_log_event(log2).unwrap();
+        store.append_log_event(log1).await.unwrap();
+        store.append_log_event(log2).await.unwrap();
 
-        let log = store.list_log_events("did:web:alice.example").unwrap();
+        let log = store
+            .list_log_events("did:web:alice.example")
+            .await
+            .unwrap();
         assert_eq!(log.len(), 2);
         assert_eq!(log[0].seq, 1);
         assert_eq!(log[1].seq, 2);
 
         // Unrelated DID → empty.
-        assert!(store.list_log_events("did:web:nobody").unwrap().is_empty());
-        assert!(store.get_document("did:web:nobody").unwrap().is_none());
+        assert!(
+            store
+                .list_log_events("did:web:nobody")
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            store
+                .get_document("did:web:nobody")
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
 
-    #[test]
+    #[tokio::test]
     async fn memory_space_invite_store_put_get_snapshot_matches_trait() {
         let store = MemorySpaceInviteStore::new();
         let now = Utc::now();
@@ -8660,9 +8701,9 @@ mod tests {
             expires_at: Some(now + chrono::Duration::hours(24)),
             created_at: now,
         };
-        store.put(record.clone()).unwrap();
+        store.put(record.clone()).await.unwrap();
 
-        let fetched = store.get("cx:invite:01").unwrap().unwrap();
+        let fetched = store.get("cx:invite:01").await.unwrap().unwrap();
         assert_eq!(fetched.invite_token, "tok-abc");
         assert_eq!(fetched.status, "pending");
         assert_eq!(fetched.invitee.as_deref(), Some("did:web:bob.example"));
@@ -8672,13 +8713,13 @@ mod tests {
             status: "accepted".to_owned(),
             ..record
         };
-        store.put(updated).unwrap();
-        let after = store.get("cx:invite:01").unwrap().unwrap();
+        store.put(updated).await.unwrap();
+        let after = store.get("cx:invite:01").await.unwrap().unwrap();
         assert_eq!(after.status, "accepted");
 
-        let snapshot = store.snapshot_all().unwrap();
+        let snapshot = store.snapshot_all().await.unwrap();
         assert_eq!(snapshot.len(), 1);
-        assert!(store.get("cx:invite:missing").unwrap().is_none());
+        assert!(store.get("cx:invite:missing").await.unwrap().is_none());
     }
 
     // ── Memory parity tests for the recovery / realtime sub-stores
@@ -8686,7 +8727,7 @@ mod tests {
     // the shared trait surface; the integration tests in
     // `tests/http_api.rs` exercise the Pg path when `DATABASE_URL` is set.
 
-    #[test]
+    #[tokio::test]
     async fn memory_key_backup_store_put_get_snapshot_matches_trait() {
         let store = MemoryKeyBackupStore::new();
         let envelope = serde_json::json!({
@@ -8699,21 +8740,22 @@ mod tests {
         });
         store
             .put("cx:backup:01".to_owned(), envelope.clone())
+            .await
             .unwrap();
 
-        let fetched = store.get("cx:backup:01").unwrap().unwrap();
+        let fetched = store.get("cx:backup:01").await.unwrap().unwrap();
         assert_eq!(fetched["backup_id"], "cx:backup:01");
         assert_eq!(fetched["scheme"], "x25519-aead-ratchet");
 
-        let snapshot = store.snapshot_all().unwrap();
+        let snapshot = store.snapshot_all().await.unwrap();
         assert_eq!(snapshot.len(), 1);
 
-        assert!(store.delete("cx:backup:01").unwrap());
-        assert!(!store.delete("cx:backup:01").unwrap());
-        assert!(store.get("cx:backup:01").unwrap().is_none());
+        assert!(store.delete("cx:backup:01").await.unwrap());
+        assert!(!store.delete("cx:backup:01").await.unwrap());
+        assert!(store.get("cx:backup:01").await.unwrap().is_none());
     }
 
-    #[test]
+    #[tokio::test]
     async fn memory_webrtc_store_put_get_append_signal_matches_trait() {
         let store = MemoryWebrtcSessionStore::new();
         let now = Utc::now();
@@ -8734,9 +8776,9 @@ mod tests {
             next_seq: 0,
             signals: Vec::new(),
         };
-        store.put(record).unwrap();
+        store.put(record).await.unwrap();
 
-        let fetched = store.get("cx:call:01").unwrap().unwrap();
+        let fetched = store.get("cx:call:01").await.unwrap().unwrap();
         assert_eq!(fetched.session_id, "cx:call:01");
         assert_eq!(fetched.participants.len(), 2);
         assert_eq!(fetched.next_seq, 0);
@@ -8755,10 +8797,11 @@ mod tests {
                     created_at: now,
                 }),
             )
+            .await
             .unwrap();
         assert_eq!(appended.seq, 0);
 
-        let after = store.get("cx:call:01").unwrap().unwrap();
+        let after = store.get("cx:call:01").await.unwrap().unwrap();
         assert_eq!(after.next_seq, 1);
         assert_eq!(after.signals.len(), 1);
         assert_eq!(after.signals[0].message_type, "offer");
@@ -8778,15 +8821,16 @@ mod tests {
                         created_at: now,
                     }),
                 )
+                .await
                 .is_err()
         );
 
         // Delete clears the row.
-        assert!(store.delete("cx:call:01").unwrap());
-        assert!(store.get("cx:call:01").unwrap().is_none());
+        assert!(store.delete("cx:call:01").await.unwrap());
+        assert!(store.get("cx:call:01").await.unwrap().is_none());
     }
 
-    #[test]
+    #[tokio::test]
     async fn memory_policy_document_store_put_list_owner_matches_trait() {
         let store = MemoryPolicyDocumentStore::new();
         let now = Utc::now();
@@ -8814,34 +8858,36 @@ mod tests {
             active: true,
             updated_at: now,
         };
-        store.put(alice_doc.clone()).unwrap();
-        store.put(bob_doc.clone()).unwrap();
+        store.put(alice_doc.clone()).await.unwrap();
+        store.put(bob_doc.clone()).await.unwrap();
 
-        let fetched = store.get("cx:policy:01").unwrap().unwrap();
+        let fetched = store.get("cx:policy:01").await.unwrap().unwrap();
         assert_eq!(fetched.owner, "did:web:alice.example");
         assert_eq!(fetched.payload["version"], 5);
 
-        let alice_only = store.list_for_owner("did:web:alice.example").unwrap();
+        let alice_only = store.list_for_owner("did:web:alice.example").await.unwrap();
         assert_eq!(alice_only.len(), 1);
         assert_eq!(alice_only[0].policy_id, "cx:policy:01");
 
-        let snapshot = store.snapshot_all().unwrap();
+        let snapshot = store.snapshot_all().await.unwrap();
         assert_eq!(snapshot.len(), 2);
 
-        // find_active filters by predicate.
+        // list_active filters out inactive rows; the test-level predicate
+        // then selects the subject we care about.
         let found = store
-            .find_active(&|record: &PolicyDocumentRecord| {
-                record.subject_ref.ends_with("000000000002")
-            })
+            .list_active()
+            .await
             .unwrap()
+            .into_iter()
+            .find(|record| record.subject_ref.ends_with("000000000002"))
             .unwrap();
         assert_eq!(found.policy_id, "cx:policy:02");
 
-        assert!(store.delete("cx:policy:01").unwrap());
-        assert!(store.get("cx:policy:01").unwrap().is_none());
+        assert!(store.delete("cx:policy:01").await.unwrap());
+        assert!(store.get("cx:policy:01").await.unwrap().is_none());
     }
 
-    #[test]
+    #[tokio::test]
     async fn memory_restore_store_ticket_executor_approval_round_trip_matches_trait() {
         // The restore-ticket FSM is reachable via KeyBackupStore's
         // `put_ticket / put_executor_run / put_approval_run` triple. Each
@@ -8866,34 +8912,53 @@ mod tests {
 
         store
             .put_ticket("cx:restore:01".to_owned(), ticket.clone())
+            .await
             .unwrap();
         store
             .put_executor_run("cx:restore:01".to_owned(), executor.clone())
+            .await
             .unwrap();
         store
             .put_approval_run("cx:restore:01".to_owned(), approval.clone())
+            .await
             .unwrap();
 
-        let fetched_ticket = store.get_ticket("cx:restore:01").unwrap().unwrap();
+        let fetched_ticket = store.get_ticket("cx:restore:01").await.unwrap().unwrap();
         assert_eq!(fetched_ticket["account_id"], "did:web:alice.example");
 
-        let fetched_executor = store.get_executor_run("cx:restore:01").unwrap().unwrap();
+        let fetched_executor = store
+            .get_executor_run("cx:restore:01")
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(fetched_executor["stage"], "ExecutorRunning");
 
-        let fetched_approval = store.get_approval_run("cx:restore:01").unwrap().unwrap();
+        let fetched_approval = store
+            .get_approval_run("cx:restore:01")
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(fetched_approval["approver"], "did:web:carol.example");
 
         // Missing keys → None.
-        assert!(store.get_ticket("cx:restore:missing").unwrap().is_none());
+        assert!(
+            store
+                .get_ticket("cx:restore:missing")
+                .await
+                .unwrap()
+                .is_none()
+        );
         assert!(
             store
                 .get_executor_run("cx:restore:missing")
+                .await
                 .unwrap()
                 .is_none()
         );
         assert!(
             store
                 .get_approval_run("cx:restore:missing")
+                .await
                 .unwrap()
                 .is_none()
         );
@@ -8901,27 +8966,33 @@ mod tests {
         // C32.5 — snapshot_* surfaces every row currently in the store, used
         // by the routing layer for per-actor filtering of restore-state
         // export and the ticket-collection listing.
-        let tickets = store.snapshot_tickets().unwrap();
+        let tickets = store.snapshot_tickets().await.unwrap();
         assert_eq!(tickets.len(), 1);
         assert_eq!(tickets[0].0, "cx:restore:01");
-        let executors = store.snapshot_executor_runs().unwrap();
+        let executors = store.snapshot_executor_runs().await.unwrap();
         assert_eq!(executors.len(), 1);
         assert_eq!(executors[0].1["stage"], "ExecutorRunning");
-        let approvals = store.snapshot_approval_runs().unwrap();
+        let approvals = store.snapshot_approval_runs().await.unwrap();
         assert_eq!(approvals.len(), 1);
 
         // delete_executor_run / delete_approval_run clear the side-band
         // sub-envelopes without dropping the ticket envelope itself.
-        assert!(store.delete_executor_run("cx:restore:01").unwrap());
-        assert!(!store.delete_executor_run("cx:restore:01").unwrap());
-        assert!(store.get_executor_run("cx:restore:01").unwrap().is_none());
-        assert!(store.get_ticket("cx:restore:01").unwrap().is_some());
-        assert!(store.delete_approval_run("cx:restore:01").unwrap());
+        assert!(store.delete_executor_run("cx:restore:01").await.unwrap());
+        assert!(!store.delete_executor_run("cx:restore:01").await.unwrap());
+        assert!(
+            store
+                .get_executor_run("cx:restore:01")
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(store.get_ticket("cx:restore:01").await.unwrap().is_some());
+        assert!(store.delete_approval_run("cx:restore:01").await.unwrap());
 
         // delete_ticket evicts the whole row.
-        assert!(store.delete_ticket("cx:restore:01").unwrap());
-        assert!(!store.delete_ticket("cx:restore:01").unwrap());
-        assert!(store.snapshot_tickets().unwrap().is_empty());
+        assert!(store.delete_ticket("cx:restore:01").await.unwrap());
+        assert!(!store.delete_ticket("cx:restore:01").await.unwrap());
+        assert!(store.snapshot_tickets().await.unwrap().is_empty());
     }
 
     // ── C32.5 — fence-token CAS for the restore-ticket FSM. ───────────────
@@ -8931,28 +9002,37 @@ mod tests {
     // `cas_ticket_status` bumps the row's monotonic `fence_token`; a
     // concurrent writer carrying the pre-bump token finds its CAS rejected
     // (returns `Ok(None)`).
-    #[test]
+    #[tokio::test]
     async fn memory_key_backup_store_cas_ticket_status_bumps_fence_and_blocks_stale_writer() {
         let store = MemoryKeyBackupStore::new();
         // Brand-new ticket: fence starts at 0; first transition seeds the
         // row at fence=1.
-        assert_eq!(store.ticket_fence_token("cx:restore:fence").unwrap(), 0);
+        assert_eq!(
+            store.ticket_fence_token("cx:restore:fence").await.unwrap(),
+            0
+        );
         let new_fence = store
             .cas_ticket_status("cx:restore:fence", 0, "pending")
+            .await
             .unwrap()
             .expect("seed transition must land");
         assert_eq!(new_fence, 1);
-        assert_eq!(store.ticket_fence_token("cx:restore:fence").unwrap(), 1);
+        assert_eq!(
+            store.ticket_fence_token("cx:restore:fence").await.unwrap(),
+            1
+        );
 
         // Two concurrent writers both snapshot fence=1; only one can land
         // a fence=1→2 bump.
-        let snapshot_a = store.ticket_fence_token("cx:restore:fence").unwrap();
+        let snapshot_a = store.ticket_fence_token("cx:restore:fence").await.unwrap();
         let snapshot_b = snapshot_a;
         let landed_a = store
             .cas_ticket_status("cx:restore:fence", snapshot_a, "approved")
+            .await
             .unwrap();
         let landed_b = store
             .cas_ticket_status("cx:restore:fence", snapshot_b, "approved")
+            .await
             .unwrap();
         assert_eq!(landed_a, Some(2), "first writer must observe fence=2");
         assert_eq!(landed_b, None, "stale writer must be fenced off");
@@ -8961,15 +9041,20 @@ mod tests {
         assert_eq!(
             store
                 .cas_ticket_status("cx:restore:fence", 2, "executed")
+                .await
                 .unwrap(),
             Some(3)
         );
         assert_eq!(
             store
                 .cas_ticket_status("cx:restore:fence", 3, "revoked")
+                .await
                 .unwrap(),
             Some(4)
         );
-        assert_eq!(store.ticket_fence_token("cx:restore:fence").unwrap(), 4);
+        assert_eq!(
+            store.ticket_fence_token("cx:restore:fence").await.unwrap(),
+            4
+        );
     }
 }

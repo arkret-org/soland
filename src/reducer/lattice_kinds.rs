@@ -19,11 +19,12 @@ pub use contrix_sdk::lattice_registry::{
 // `ViewUpdate`, `ViewReconcile` mentioned in `routing/events/operations.rs`
 // comments) continues to compile.
 pub use contrix_sdk::lattice_registry::{
-    AccountStatus, AgentKey, AnchorerCell, CapabilityDelegate, CapabilityDerived, CapabilityGrant,
-    ConsentGrant, CoveredFrontier, CrossSigningPublish, CrossSigningReset, DeviceAuthorized,
-    DeviceListUpdate, FlowPosition, FlowStage, MemberState, MimiRoomBinding, MlsEpoch, MorphStage,
-    PlaceParent, PolicyRule, ProfileCreate, SessionGrant, SpaceArchive, SpaceAssetPrivacyPolicy,
-    SpaceChild, SpaceCreate, SpaceDestroy, SpaceDiscovery, SpaceFreeze, SpaceHistorySharingPolicy,
+    AccountStatus, AgentKey, AgentStatus, AnchorerCell, CapabilityDelegate, CapabilityDerived,
+    CapabilityGrant, CircleCreate, CircleMember, CircleTombstone, ConsentGrant, CoveredFrontier,
+    CrossSigningPublish, CrossSigningReset, DeviceAuthorized, DeviceListUpdate, FlowPosition,
+    FlowStage, MemberIdentity, MemberState, MimiRoomBinding, MlsEpoch, MorphStage, PlaceParent,
+    PolicyRule, ProfileCreate, SessionGrant, SpaceArchive, SpaceAssetPrivacyPolicy, SpaceChild,
+    SpaceCreate, SpaceDestroy, SpaceDiscovery, SpaceFreeze, SpaceHistorySharingPolicy,
     SpaceHistoryVisibility, SpaceInheritancePolicy, SpaceJoinRule, SpaceMediaService,
     SpaceModerationPolicy, SpaceOrganization, SpaceParent, SpacePlaintextVisibleServices,
     SpacePolicy, SpacePolicyComponents, SpacePolicyServer, SpaceReadReceiptPolicyLattice,
@@ -115,15 +116,15 @@ mod tests {
     }
 
     /// Sanity: the SDK-defined registry covers every spec-normative
-    /// cell family. Locked at 74 after the R1.2 Realm-rename plus new
-    /// flow/morph stage and agent-key families landed in the spec registry —
+    /// cell family. Locked at 79 after the agent status, Circle, and
+    /// member-identity families landed in the spec registry —
     /// see the matching assertion in
     /// `contrix-rust-sdk/crates/sdk/src/lattice_registry.rs` for the
     /// breakdown. Bump deliberately when a new spec family lands.
     #[test]
     fn default_registry_still_covers_every_spec_family() {
         let registry = default_lattice_registry();
-        assert_eq!(registry.len(), 74);
+        assert_eq!(registry.len(), 79);
     }
 
     #[test]

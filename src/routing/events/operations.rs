@@ -253,7 +253,10 @@ const FLOW_CREATE_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::Re
     "flow create operation requires object",
 )];
 const FLOW_UPDATE_REQUIREMENTS: &[PayloadRequirement] = &[
-    PayloadRequirement::Required("flow_id", "flow update operation requires flow_id"),
+    PayloadRequirement::AnyOf(
+        &["target_ref", "flow_id"],
+        "flow update operation requires target_ref",
+    ),
     PayloadRequirement::Required("patch", "flow update operation requires patch"),
 ];
 // `cx.morph.archive` / `cx.morph.restore` payload: just `morph_id`.
@@ -476,7 +479,10 @@ const CROSS_SIGNING_RESET_REQUIREMENTS: &[PayloadRequirement] = &[
         "new_generation",
         "cross_signing reset requires new_generation",
     ),
-    PayloadRequirement::Required("reset_reason", "cross_signing reset requires reset_reason"),
+    PayloadRequirement::Required(
+        "reset_reason_code",
+        "cross_signing reset requires reset_reason_code",
+    ),
     PayloadRequirement::Required("proof", "cross_signing reset requires proof"),
     PayloadRequirement::Required("issued_at", "cross_signing reset requires issued_at"),
     // Round R2/R3 (T08) — wire-breaking required fields.
@@ -2586,10 +2592,10 @@ mod sdk_artifact_schema_tests {
             "principal_id": "did:web:alice.example",
             "previous_generation": 1,
             "new_generation": 2,
-            "reset_reason": "rotation",
+            "reset_reason_code": "rotation",
             "proof": {
                 "kind": "principal_signing",
-                "signed_by": "did:web:alice.example#key-1",
+                "verification_method": "did:web:alice.example#key-1",
                 "alg": "EdDSA",
                 "signature": "abc"
             },
@@ -2613,7 +2619,7 @@ mod sdk_artifact_schema_tests {
             "principal_id": "did:web:alice.example",
             "previous_generation": 1,
             "new_generation": 2,
-            "reset_reason": "rotation",
+            "reset_reason_code": "rotation",
             "trust_domain": "cx:trust_domain:soland.local",
             "reset_event_id": "cx:event:01904100-0000-7000-8000-000000000001",
             "issued_at": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
@@ -2628,10 +2634,10 @@ mod sdk_artifact_schema_tests {
             "principal_id": "did:web:alice.example",
             "previous_generation": 1,
             "new_generation": 2,
-            "reset_reason": "rotation",
+            "reset_reason_code": "rotation",
             "proof": {
                 "kind": "principal_signing",
-                "signed_by": "did:web:alice.example#key-1",
+                "verification_method": "did:web:alice.example#key-1",
                 "alg": "EdDSA",
                 "signature": "abc"
             },
@@ -2653,10 +2659,10 @@ mod sdk_artifact_schema_tests {
             "principal_id": "did:web:alice.example",
             "previous_generation": 1,
             "new_generation": 2,
-            "reset_reason": "rotation",
+            "reset_reason_code": "rotation",
             "proof": {
                 "kind": "principal_signing",
-                "signed_by": "did:web:alice.example#key-1",
+                "verification_method": "did:web:alice.example#key-1",
                 "alg": "EdDSA",
                 "signature": "abc"
             },
@@ -2673,10 +2679,10 @@ mod sdk_artifact_schema_tests {
             "principal_id": "did:web:alice.example",
             "previous_generation": 1,
             "new_generation": 2,
-            "reset_reason": "rotation",
+            "reset_reason_code": "rotation",
             "proof": {
                 "kind": "principal_signing",
-                "signed_by": "did:web:alice.example#key-1",
+                "verification_method": "did:web:alice.example#key-1",
                 "alg": "EdDSA",
                 "signature": "abc"
             },

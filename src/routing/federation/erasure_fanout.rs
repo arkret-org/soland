@@ -73,7 +73,7 @@ struct ErasurePeerTarget {
 /// 内容的 federation peer". We use the full configured peer set as a
 /// conservative super-set; per-Realm peer-set tracking ships when
 /// the federation membership projection grows that surface.
-pub fn fanout_erasure_receipt(state: &AppState, receipt_id: &str) {
+pub async fn fanout_erasure_receipt(state: &AppState, receipt_id: &str) {
     let receipt_snapshot = {
         let Ok(proj) = state.projection.lock() else {
             return;
@@ -107,10 +107,7 @@ pub fn fanout_erasure_receipt(state: &AppState, receipt_id: &str) {
         crate::kinds::CX_AUDIT_ERASURE_RECEIPT,
         receipt.payload,
     );
-    let state = state.clone();
-    tokio::spawn(async move {
-        fanout_erasure_receipt_operation(&state, &operation).await;
-    });
+    fanout_erasure_receipt_operation(state, &operation).await;
 }
 
 /// Fan out a durable `cx.audit.erasure_receipt` operation through the normal
@@ -443,8 +440,8 @@ mod tests {
         )
     }
 
-    #[test]
-    fn fanout_seeds_peer_status_with_sent_at() {
+    #[tokio::test]
+    async fn fanout_seeds_peer_status_with_sent_at() {
         let state = fake_state();
         // Inject a receipt with a scope.realm_id.
         {
@@ -472,7 +469,7 @@ mod tests {
                 }),
             });
         }
-        fanout_erasure_receipt(&state, "r1");
+        fanout_erasure_receipt(&state, "r1").await;
         let proj = state.projection.lock().unwrap();
         let record = proj
             .erasure_receipts

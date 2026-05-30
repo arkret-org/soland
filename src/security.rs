@@ -412,6 +412,7 @@ mod tests {
 
     #[test]
     fn egress_guard_rejects_loopback_and_private_literals() {
+        let _guard = env_lock().lock().expect("env test lock");
         for raw in [
             "http://127.0.0.1:8080/x",
             "http://10.0.0.1/x",
@@ -431,12 +432,14 @@ mod tests {
 
     #[test]
     fn egress_guard_allows_private_when_explicitly_configured() {
+        let _guard = env_lock().lock().expect("env test lock");
         let url = Url::parse("http://127.0.0.1:8080/x").unwrap();
         assert!(validate_url_for_egress(&url, "test", true).is_ok());
     }
 
     #[test]
     fn egress_guard_rejects_dns_answers_that_resolve_private() {
+        let _guard = env_lock().lock().expect("env test lock");
         let url = Url::parse("https://relay.example/federation").unwrap();
         let error = validate_url_for_egress_with_resolver(&url, "test", false, |_host, _port| {
             Ok(vec![IpAddr::V4(Ipv4Addr::new(10, 42, 0, 12))])
@@ -447,6 +450,7 @@ mod tests {
 
     #[test]
     fn egress_guard_allows_public_dns_answers() {
+        let _guard = env_lock().lock().expect("env test lock");
         let url = Url::parse("https://relay.example/federation").unwrap();
         assert!(
             validate_url_for_egress_with_resolver(&url, "test", false, |_host, _port| {
@@ -458,6 +462,7 @@ mod tests {
 
     #[test]
     fn egress_guard_rejects_any_private_answer_to_limit_rebinding() {
+        let _guard = env_lock().lock().expect("env test lock");
         let url = Url::parse("https://relay.example/federation").unwrap();
         let error = validate_url_for_egress_with_resolver(&url, "test", false, |_host, _port| {
             Ok(vec![
