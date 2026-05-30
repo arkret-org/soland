@@ -31,7 +31,7 @@ use contrix_sdk::lattice::CellState;
 use contrix_sdk::{EphemeralSubmitResBody, RealmId};
 use ed25519_dalek::{Signature, Signer as _, Verifier as _};
 use futures_util::stream::StreamExt;
-use salvo::http::StatusCode;
+use salvo::http::{StatusCode, header};
 use salvo::prelude::*;
 use serde_json::{Value, json};
 use tokio::sync::broadcast::error::RecvError;
@@ -134,6 +134,8 @@ const ACCOUNT_SUBSCRIBE_DEFAULT_WAIT_MS: u64 = 25_000;
 /// `max_duration_ms` cap so an idle stream cannot live forever and tie up
 /// connection slots.
 const ACCOUNT_SUBSCRIBE_MAX_WAIT_MS: u64 = 60_000;
+/// Default reconnect guard advertised on subscribe terminal control frames.
+const SUBSCRIBE_RECONNECT_AFTER_MS: u64 = 10_000;
 
 #[endpoint(
     operation_id = "cx.account.subscribe",
@@ -146,6 +148,10 @@ async fn account_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Respo
     let body = account_subscribe_query(req);
     let max_wait_ms = parse_max_wait_ms(req);
     let session = authenticated_session(&state, req).await.ok();
+    let subscribe_scope_key = account_subscribe_scope_key(req, session.as_ref(), &body);
+    if reject_subscribe_reconnect(&state, &subscribe_scope_key, res) {
+        return;
+    }
     let after_cursor = if let Some(after) = body.after.as_deref() {
         match parse_and_validate_sync_cursor(
             after,
@@ -223,6 +229,7 @@ async fn account_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Respo
     // missed.
     let mut rx = state.event_broadcast.subscribe();
     let mut response = build_sync_snapshot(&state, session.as_ref(), &body, &after_cursor).await;
+    let mut control_frame: Option<Value> = None;
 
     // Long-poll only when the client supplied an `after` cursor (true
     // incremental sync) AND the snapshot is delta-empty. Full sync always
@@ -252,11 +259,20 @@ async fn account_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Respo
                         }
                         Err(RecvError::Lagged(_)) => {
                             // We lost some notifications; rebuild and let the
-                            // delta speak for itself.
+                            // delta speak for itself. If the rebuilt delta is
+                            // still empty, close with a terminal control frame
+                            // and gate immediate reconnect for the same scope.
                             response = build_sync_snapshot(&state, session.as_ref(), &body, &after_cursor).await;
                             if !delta_is_empty(&response) {
                                 break;
                             }
+                            arm_subscribe_reconnect(&state, &subscribe_scope_key, SUBSCRIBE_RECONNECT_AFTER_MS);
+                            control_frame = Some(account_reconnect_control_frame(
+                                body.after.as_deref(),
+                                "broadcast_lagged",
+                                SUBSCRIBE_RECONNECT_AFTER_MS,
+                            ));
+                            break;
                         }
                         Err(RecvError::Closed) => break,
                     }
@@ -265,14 +281,19 @@ async fn account_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Respo
         }
     }
 
-    let cursor = response.cursor.clone();
-    let mut frames = vec![ndjson_line(&account_delta_frame(response))];
-    if body.catchup.unwrap_or(false) {
-        frames.push(ndjson_line(&json!({
-            "kind": "catchup_complete",
-            "cursor": cursor,
-        })));
-    }
+    let frames = if let Some(control_frame) = control_frame {
+        vec![ndjson_line(&control_frame)]
+    } else {
+        let cursor = response.cursor.clone();
+        let mut frames = vec![ndjson_line(&account_delta_frame(response))];
+        if body.catchup.unwrap_or(false) {
+            frames.push(ndjson_line(&json!({
+                "kind": "catchup_complete",
+                "cursor": cursor,
+            })));
+        }
+        frames
+    };
 
     let body_stream = async_stream::stream! {
         for frame in frames {
@@ -323,6 +344,39 @@ fn account_delta_frame(response: contrix_sdk::model::SyncResBody) -> Value {
         "notifications": response.notifications,
         "partial": response.partial,
     })
+}
+
+fn account_reconnect_control_frame(
+    after: Option<&str>,
+    reason: impl Into<String>,
+    reconnect_after_ms: u64,
+) -> Value {
+    let reason = reason.into();
+    match after {
+        Some(cursor) if !cursor.is_empty() => json!({
+            "kind": "dropped",
+            "cursor": cursor,
+            "reason": reason,
+            "reconnect_after_ms": reconnect_after_ms,
+        }),
+        _ => json!({
+            "kind": "resync_required",
+            "reason": reason,
+            "reconnect_after_ms": reconnect_after_ms,
+        }),
+    }
+}
+
+fn account_subscribe_scope_key(
+    req: &Request,
+    session: Option<&SessionRecord>,
+    body: &ClientSyncRequest,
+) -> String {
+    format!(
+        "cx.account.subscribe|{}|filter={}",
+        subscribe_subject(req, session),
+        sync_filter_digest(body.filter.as_ref())
+    )
 }
 
 fn roster_member_actor_id(member: &Value) -> Option<String> {
@@ -1463,7 +1517,8 @@ pub(super) fn encode_sync_cursor_value(cursor: Value) -> String {
 
 fn store_sync_cursor_handle(state: &AppState, stored: Value) -> String {
     loop {
-        let handle = contrix_sdk::cursor::generate_cursor_handle();
+        let handle = contrix_sdk::cursor::generate_cursor_handle()
+            .unwrap_or_else(|error| fallback_sync_cursor_handle(&error));
         let mut handles = state
             .sync_cursor_handles
             .lock()
@@ -1473,6 +1528,17 @@ fn store_sync_cursor_handle(state: &AppState, stored: Value) -> String {
             return handle;
         }
     }
+}
+
+fn fallback_sync_cursor_handle(error: &contrix_sdk::Error) -> String {
+    let seed = format!(
+        "soland-sync-cursor-fallback:{}:{:?}",
+        Utc::now().timestamp_nanos_opt().unwrap_or_default(),
+        std::thread::current().id()
+    );
+    let digest = sha256_hex(seed.as_bytes());
+    tracing::error!(%error, "cursor handle RNG unavailable; using deterministic emergency handle");
+    format!("fallback{}", &digest[..54])
 }
 
 fn stored_sync_cursor_by_handle(state: &AppState, handle: &str) -> Result<Value, SyncCursorError> {
@@ -2240,11 +2306,17 @@ pub(super) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(100)
         .min(100);
-    let cursor = query_param(req, "from");
+    // `after` is the canonical subscribe resume parameter. `from` remains
+    // accepted for older clients.
+    let cursor = query_param(req, "after").or_else(|| query_param(req, "from"));
     let include_history = query_param(req, "include_history")
         .as_deref()
         .map(|value| matches!(value, "true" | "1" | "yes"))
         .unwrap_or(true);
+    let subscribe_scope_key = events_subscribe_scope_key(req, session.as_ref(), &accessible_spaces);
+    if reject_subscribe_reconnect(&state, &subscribe_scope_key, res) {
+        return;
+    }
     // Cap how long the stream stays open. Default 60s; tests
     // typically pass `max_duration_ms=500` to bound assertion latency.
     // Production clients reconnect after the close (HTTP/1.1 long-poll
@@ -2315,6 +2387,7 @@ pub(super) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
     let space_filter: BTreeSet<String> = accessible_spaces.iter().cloned().collect();
     let stream_deadline = tokio::time::Instant::now() + Duration::from_millis(max_duration_ms);
     let session_for_stream = session.clone();
+    let subscribe_scope_key_for_stream = subscribe_scope_key.clone();
 
     // The async stream — yields one NDJSON line (Bytes) per frame.
     let body_stream = async_stream::stream! {
@@ -2357,6 +2430,7 @@ pub(super) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
                             // Dispatch on notification.kind to
                             // produce the right NDJSON frame shape.
                             use crate::state::EventNotificationKind;
+                            let mut terminal = false;
                             let frame = match notification.kind {
                                 EventNotificationKind::Event { cursor, event_payload } => {
                                     if !projection_event_value_visible_to_session(
@@ -2390,11 +2464,22 @@ pub(super) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
                                         "anchor_id": anchor_id,
                                     })
                                 }
-                                EventNotificationKind::ResyncRequired { reason } => {
+                                EventNotificationKind::ResyncRequired { reason, reconnect_after_ms } => {
+                                    let reconnect_after_ms =
+                                        reconnect_after_ms
+                                            .filter(|value| *value > 0)
+                                            .unwrap_or(SUBSCRIBE_RECONNECT_AFTER_MS);
+                                    arm_subscribe_reconnect(
+                                        &state,
+                                        &subscribe_scope_key_for_stream,
+                                        reconnect_after_ms,
+                                    );
+                                    terminal = true;
                                     json!({
                                         "kind": "resync_required",
                                         "space_id": notification.space_id,
                                         "reason": reason,
+                                        "reconnect_after_ms": reconnect_after_ms,
                                     })
                                 }
                                 EventNotificationKind::Unauthorized { reason } => {
@@ -2406,6 +2491,9 @@ pub(super) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
                                 }
                             };
                             yield Ok(ndjson_line(&frame));
+                            if terminal {
+                                break;
+                            }
                         }
                         Err(RecvError::Lagged(skipped)) => {
                             // Round 4 (B1.5) — broadcast capacity exceeded.
@@ -2421,9 +2509,15 @@ pub(super) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
                             // not the cursor::Cursor struct.
                             let cursor_typed =
                                 contrix_sdk::identifiers::Cursor::new(cursor_str.clone()).ok();
+                            arm_subscribe_reconnect(
+                                &state,
+                                &subscribe_scope_key_for_stream,
+                                SUBSCRIBE_RECONNECT_AFTER_MS,
+                            );
                             let body = crate::round4::dropped_or_resync(
                                 cursor_typed,
                                 format!("broadcast_lagged skipped={skipped}"),
+                                Some(SUBSCRIBE_RECONNECT_AFTER_MS),
                             );
                             // Emit the typed frame body fields at the top
                             // level (matches the SDK `kind`-tagged shape).
@@ -2437,6 +2531,7 @@ pub(super) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
                                 );
                             }
                             yield Ok(ndjson_line(&frame));
+                            break;
                         }
                         Err(RecvError::Closed) => {
                             // Server shutdown / channel dropped.
@@ -2467,6 +2562,75 @@ fn ndjson_line(value: &serde_json::Value) -> Bytes {
     let mut s = serde_json::to_string(value).unwrap_or_else(|_| "{}".to_owned());
     s.push('\n');
     Bytes::from(s)
+}
+
+fn subscribe_subject(req: &Request, session: Option<&SessionRecord>) -> String {
+    match session {
+        Some(session) => format!("session:{}:{}", session.actor, session.device_id),
+        None => format!("remote:{}", req.remote_addr()),
+    }
+}
+
+fn events_subscribe_scope_key(
+    req: &Request,
+    session: Option<&SessionRecord>,
+    accessible_spaces: &[String],
+) -> String {
+    let realms = accessible_spaces
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>()
+        .join(",");
+    format!(
+        "cx.events.subscribe|{}|realms={realms}",
+        subscribe_subject(req, session)
+    )
+}
+
+fn reject_subscribe_reconnect(
+    state: &AppState,
+    subscribe_scope_key: &str,
+    res: &mut Response,
+) -> bool {
+    let retry_after_ms = state
+        .subscribe_reconnect_gate
+        .lock()
+        .expect("subscribe reconnect gate lock")
+        .retry_after_ms(subscribe_scope_key, Utc::now());
+    if let Some(retry_after_ms) = retry_after_ms {
+        render_subscribe_rate_limited(res, retry_after_ms);
+        return true;
+    }
+    false
+}
+
+fn arm_subscribe_reconnect(state: &AppState, subscribe_scope_key: &str, reconnect_after_ms: u64) {
+    state
+        .subscribe_reconnect_gate
+        .lock()
+        .expect("subscribe reconnect gate lock")
+        .arm(
+            subscribe_scope_key.to_owned(),
+            Utc::now(),
+            reconnect_after_ms,
+        );
+}
+
+fn render_subscribe_rate_limited(res: &mut Response, retry_after_ms: u64) {
+    let retry_after_seconds = retry_after_ms.div_ceil(1000).max(1);
+    res.status_code(StatusCode::TOO_MANY_REQUESTS);
+    res.headers_mut()
+        .insert(header::RETRY_AFTER, retry_after_seconds.into());
+    res.render(Json(
+        contrix_sdk::ErrorEnvelope::new(
+            "rate_limited",
+            "Subscribe reconnect window is still active.",
+        )
+        .with_request_id(ids::generate_request_id())
+        .with_retry_after_ms(Some(retry_after_ms)),
+    ));
 }
 
 #[derive(Clone, Debug)]

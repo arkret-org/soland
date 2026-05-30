@@ -415,11 +415,19 @@ pub struct SubscribeFrameEnvelope {
 pub fn dropped_or_resync(
     cursor: Option<contrix_sdk::identifiers::Cursor>,
     reason: impl Into<String>,
+    reconnect_after_ms: Option<u64>,
 ) -> EventsSubscribeFrameBody {
     let reason = reason.into();
     match cursor {
-        Some(cursor) => EventsSubscribeFrameBody::Dropped { cursor, reason },
-        None => EventsSubscribeFrameBody::ResyncRequired { reason },
+        Some(cursor) => EventsSubscribeFrameBody::Dropped {
+            cursor,
+            reason,
+            reconnect_after_ms,
+        },
+        None => EventsSubscribeFrameBody::ResyncRequired {
+            reason,
+            reconnect_after_ms,
+        },
     }
 }
 
@@ -1157,14 +1165,20 @@ mod tests {
 
     #[test]
     fn dropped_without_cursor_downgrades_to_resync() {
-        let body = dropped_or_resync(None, "broadcast_lag");
+        let body = dropped_or_resync(None, "broadcast_lag", Some(10_000));
         assert!(matches!(
             body,
             EventsSubscribeFrameBody::ResyncRequired { .. }
         ));
         let cursor = Cursor::new("cx:cursor:resume").unwrap();
-        let body = dropped_or_resync(Some(cursor), "broadcast_lag");
-        assert!(matches!(body, EventsSubscribeFrameBody::Dropped { .. }));
+        let body = dropped_or_resync(Some(cursor), "broadcast_lag", Some(10_000));
+        assert!(matches!(
+            body,
+            EventsSubscribeFrameBody::Dropped {
+                reconnect_after_ms: Some(10_000),
+                ..
+            }
+        ));
     }
 
     #[test]

@@ -35,8 +35,9 @@ pub(super) fn router() -> Router {
 }
 
 /// Request body for the resync-required / unauthorized triggers. Both
-/// endpoints share the same shape — a target Space and a free-form reason
-/// surfaced verbatim to subscribers in the control frame.
+/// endpoints share a target Space and a free-form reason surfaced verbatim
+/// to subscribers in the control frame. `reconnect_after_ms` applies only to
+/// `resync_required`.
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct AdminControlFrameRequest {
     /// The Space whose subscribers should receive the frame.
@@ -45,6 +46,9 @@ pub struct AdminControlFrameRequest {
     /// as the `reason` field for client-side telemetry / UX.
     #[serde(default)]
     pub reason: Option<String>,
+    /// Optional minimum reconnect delay for `resync_required` frames.
+    #[serde(default)]
+    pub reconnect_after_ms: Option<u64>,
 }
 
 /// Response body — reports how many subscribers received the frame
@@ -90,7 +94,11 @@ async fn admin_emit_resync_required(
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
 
-    let AdminControlFrameRequest { space_id, reason } = body.into_inner();
+    let AdminControlFrameRequest {
+        space_id,
+        reason,
+        reconnect_after_ms,
+    } = body.into_inner();
     if space_id.is_empty() {
         return Err(
             AppError::new(ErrorCode::InvalidParam, "space_id is required".to_owned())
@@ -101,7 +109,10 @@ async fn admin_emit_resync_required(
 
     let notification = EventNotification {
         space_id: space_id.clone(),
-        kind: EventNotificationKind::ResyncRequired { reason },
+        kind: EventNotificationKind::ResyncRequired {
+            reason,
+            reconnect_after_ms,
+        },
     };
     let receivers = state.event_broadcast.send(notification).unwrap_or(0);
     json_ok(AdminControlFrameResponse {
@@ -134,7 +145,9 @@ async fn admin_emit_unauthorized(
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
 
-    let AdminControlFrameRequest { space_id, reason } = body.into_inner();
+    let AdminControlFrameRequest {
+        space_id, reason, ..
+    } = body.into_inner();
     if space_id.is_empty() {
         return Err(
             AppError::new(ErrorCode::InvalidParam, "space_id is required".to_owned())
@@ -169,6 +182,7 @@ mod tests {
             space_id: "cx:space:01904100-0000-7000-8000-000000000001".to_owned(),
             kind: EventNotificationKind::ResyncRequired {
                 reason: "compaction".to_owned(),
+                reconnect_after_ms: Some(7_500),
             },
         };
         tx.send(n).expect("broadcast send");
@@ -178,8 +192,12 @@ mod tests {
             "cx:space:01904100-0000-7000-8000-000000000001"
         );
         match received.kind {
-            EventNotificationKind::ResyncRequired { reason } => {
+            EventNotificationKind::ResyncRequired {
+                reason,
+                reconnect_after_ms,
+            } => {
                 assert_eq!(reason, "compaction");
+                assert_eq!(reconnect_after_ms, Some(7_500));
             }
             other => panic!("expected ResyncRequired, got {other:?}"),
         }
@@ -218,8 +236,10 @@ mod tests {
         let req = AdminControlFrameRequest {
             space_id: String::new(),
             reason: Some("x".to_owned()),
+            reconnect_after_ms: Some(10_000),
         };
         assert!(req.space_id.is_empty());
         assert_eq!(req.reason.as_deref(), Some("x"));
+        assert_eq!(req.reconnect_after_ms, Some(10_000));
     }
 }

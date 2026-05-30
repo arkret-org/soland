@@ -44,6 +44,8 @@ use crate::routing::policy_gate::{self, PolicyGateSurface};
 use crate::state::{AppState, FederationBlockHintRecord, FederationTransactionRecord};
 use crate::{ids, kinds};
 
+const MAX_INBOUND_FEDERATION_OPERATIONS: usize = 500;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct FederationPeerTarget {
     url: String,
@@ -86,6 +88,7 @@ pub(super) async fn federation_transaction(
     )
     .map_err(|error| AppError::internal(format!("configured trust_domain invalid: {error}")))?;
     validate_round4_federation_headers(&trust_headers, &expected_destination, &content_digest)?;
+    verify_inbound_transaction_http_signature(state, req, &body)?;
     let fragment = trust_headers.transcript_fragment();
     tracing::trace!(transcript_fragment = %fragment, "round-4 federation transcript fragment");
     // Round 4 (B1.8) — round-4 federation idempotency cache key. The
@@ -96,34 +99,27 @@ pub(super) async fn federation_transaction(
     // key matches, the cached body is returned marked
     // `reason_code=historical_only` (no fresh side effects).
     //
-    // The request_canonical_digest and origin_key_state_digest inputs are
-    // sourced from round-4 federation headers + the origin's current
-    // key state record. We pull what is available now and fall back to
-    // placeholders for the rest.
-    // TODO(round4-fed-binding-verify): wire origin_key_state_digest from
-    // the resolver chain's last observed cross-signing publish for the
-    // origin DID.
+    // The request_canonical_digest comes from the round-4 federation
+    // headers. The origin key-state digest is derived from the same
+    // service verification key that passed the HTTP Message Signature
+    // check, so idempotency no longer falls back to placeholder material.
+    let origin_key_state_digest = origin_key_state_digest_for_service(state, body.origin.as_str())?;
     let r4_idem_key = Some(crate::round4::FederationIdempotencyKey {
         source_did: body.origin.to_string(),
         dest_did: body.destination.to_string(),
         request_canonical_digest: trust_headers.request_canonical_digest.as_str().to_owned(),
         idempotency_key: txn_id.clone(),
-        origin_key_state_digest: "sha256:0000".to_owned(),
+        origin_key_state_digest,
     });
     let _service_binding = crate::round23::FederationIdempotencyServiceBinding {
         source_service_did: body.origin.to_string(),
-        verification_method: r4_idem_key
-            .as_ref()
-            .map(|k| k.strict())
-            .unwrap_or_else(|| "<TODO(round4-fed-headers)>".to_owned()),
-        service_binding_ref: r4_idem_key
-            .as_ref()
-            .map(|k| k.canonical_replay())
-            .unwrap_or_else(|| "<TODO(round4-fed-headers)>".to_owned()),
+        verification_method: r4_idem_key.as_ref().expect("round4 key").strict(),
+        service_binding_ref: r4_idem_key.as_ref().expect("round4 key").canonical_replay(),
         origin_key_state_digest: r4_idem_key
             .as_ref()
-            .map(|k| k.origin_key_state_digest.clone())
-            .unwrap_or_else(|| "<TODO(round4-fed-headers)>".to_owned()),
+            .expect("round4 key")
+            .origin_key_state_digest
+            .clone(),
     };
     match state
         .persistence
@@ -757,6 +753,18 @@ async fn enforce_inbound_operation_batch_policy(
     origin_service_did: &str,
     operations: &[Operation],
 ) -> Result<(), AppError> {
+    if operations.len() > MAX_INBOUND_FEDERATION_OPERATIONS {
+        return Err(AppError::new(
+            crate::error::ErrorCode::PayloadTooLarge,
+            format!(
+                "federation operation batch exceeds limit: {} > {}",
+                operations.len(),
+                MAX_INBOUND_FEDERATION_OPERATIONS
+            ),
+        )
+        .with_status(StatusCode::PAYLOAD_TOO_LARGE)
+        .with_wire_code("payload_too_large"));
+    }
     for operation in operations {
         enforce_realm_federation_policy(
             state,
@@ -1386,14 +1394,51 @@ fn verify_inbound_push_http_signature(
             "federation push body serialization failed: {error}"
         ))
     })?;
-    let body_bytes =
-        contrix_sdk::canonical::canonical_json_bytes(&body_value).map_err(|error| {
-            AppError::new(
-                crate::error::ErrorCode::SchemaViolation,
-                format!("federation push body is not canonical JSON: {error}"),
-            )
-            .with_status(StatusCode::BAD_REQUEST)
-        })?;
+    verify_inbound_federation_http_signature(
+        state,
+        req,
+        &body_value,
+        body.origin.as_str(),
+        body.destination.as_str(),
+        "federation_push",
+    )
+}
+
+fn verify_inbound_transaction_http_signature(
+    state: &AppState,
+    req: &Request,
+    body: &contrix_sdk::FederationTransactionReqBody,
+) -> Result<(), AppError> {
+    let body_value = serde_json::to_value(body).map_err(|error| {
+        AppError::internal(format!(
+            "federation transaction body serialization failed: {error}"
+        ))
+    })?;
+    verify_inbound_federation_http_signature(
+        state,
+        req,
+        &body_value,
+        body.origin.as_str(),
+        body.destination.as_str(),
+        "federation_transaction",
+    )
+}
+
+fn verify_inbound_federation_http_signature(
+    state: &AppState,
+    req: &Request,
+    body_value: &Value,
+    body_origin: &str,
+    body_destination: &str,
+    metric_label: &'static str,
+) -> Result<(), AppError> {
+    let body_bytes = contrix_sdk::canonical::canonical_json_bytes(body_value).map_err(|error| {
+        AppError::new(
+            crate::error::ErrorCode::SchemaViolation,
+            format!("federation request body is not canonical JSON: {error}"),
+        )
+        .with_status(StatusCode::BAD_REQUEST)
+    })?;
     let expected_content_digest = content_digest_header(&body_bytes);
     let expected_request_digest = format!("sha256:{}", sha256_hex(&body_bytes));
     validate_round4_federation_request_binding(
@@ -1404,14 +1449,14 @@ fn verify_inbound_push_http_signature(
 
     let content_digest = required_header(req, "content-digest")?;
     if content_digest != expected_content_digest {
-        crate::metrics::record_digest_mismatch("federation_push_content_digest");
+        crate::metrics::record_digest_mismatch(&format!("{metric_label}_content_digest"));
         return Err(signature_error(
             "Content-Digest does not match federation canonical request body",
         ));
     }
     let request_digest = required_header(req, "request-canonical-digest")?;
     if request_digest != expected_request_digest {
-        crate::metrics::record_digest_mismatch("federation_push_request_digest");
+        crate::metrics::record_digest_mismatch(&format!("{metric_label}_request_digest"));
         return Err(signature_error(
             "Request-Canonical-Digest does not match federation canonical request body",
         ));
@@ -1421,11 +1466,11 @@ fn verify_inbound_push_http_signature(
     let destination_service_did = required_header(req, "destination-service-did")?;
     let source_trust_domain = required_header(req, "source-trust-domain")?;
     let destination_trust_domain = required_header(req, "destination-trust-domain")?;
-    if destination_service_did != body.destination.as_str()
+    if destination_service_did != body_destination
         || destination_service_did != state.config.service_did
     {
         return Err(signature_error(
-            "Destination-Service-DID does not match the federation push destination",
+            "Destination-Service-DID does not match the federation request destination",
         ));
     }
     if destination_trust_domain != state.config.trust_domain {
@@ -1466,14 +1511,14 @@ fn verify_inbound_push_http_signature(
         "outer",
     )?;
 
-    if source_service_did != body.origin.as_str() {
+    if source_service_did != body_origin {
         verify_relay_inner_signature(
             state,
             req,
             &method,
             &target_uri,
             &content_digest,
-            body.origin.as_str(),
+            body_origin,
             &source_service_did,
             &destination_service_did,
             &request_digest,
@@ -1636,6 +1681,18 @@ fn verify_signature_header(
         })
 }
 
+fn origin_key_state_digest_for_service(
+    state: &AppState,
+    service_did: &str,
+) -> Result<String, AppError> {
+    let verifying_key = verifying_key_for_service_did(state, service_did)?;
+    let mut hasher = Sha256::new();
+    hasher.update(b"soland:federation-origin-key-state:v1:");
+    hasher.update(service_did.as_bytes());
+    hasher.update(verifying_key.to_bytes());
+    Ok(format!("sha256:{:x}", hasher.finalize()))
+}
+
 fn decode_signature_header(value: &str) -> Result<Signature, &'static str> {
     let signature_b64 = value
         .strip_prefix("sig1=:")
@@ -1657,12 +1714,16 @@ fn verifying_key_for_service_did(
     if let Some(key) = configured_peer_verifying_key(service_did)? {
         return Ok(key);
     }
+    if state.config.development_mode {
+        tracing::warn!(
+            service_did,
+            "development_mode accepted deterministic federation service key fallback"
+        );
+        return Ok(development_service_signing_key(service_did).verifying_key());
+    }
     let verification_method = format!("{service_did}#federation-fanout-key");
     if let Ok(key) = crate::jws_verify::resolve_ed25519_pubkey(state, &verification_method) {
         return Ok(key);
-    }
-    if state.config.development_mode {
-        return Ok(development_service_signing_key(service_did).verifying_key());
     }
     Err(signature_error(
         "source service key unavailable; key_rotation_hint=refresh_origin_service_did",

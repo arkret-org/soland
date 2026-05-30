@@ -194,9 +194,49 @@ fn operation_realm_discoverability(operation: &Operation) -> Option<&str> {
 }
 
 fn operation_realm_history_visibility(operation: &Operation) -> Option<&str> {
-    first_string_field(&operation.payload, &["history_visibility"])
+    operation
+        .payload
+        .get("value")
+        .and_then(Value::as_str)
+        .or_else(|| first_string_field(&operation.payload, &["history_visibility"]))
         .or_else(|| object_string_field(operation, &["history_visibility"]))
         .or_else(|| patch_string_field(operation, "history_visibility"))
+}
+
+fn operation_realm_history_sharing_policy(operation: &Operation) -> Option<Value> {
+    match kinds::canonical_kind_for_operation(operation) {
+        Some(kinds::CX_REALM_HISTORY_SHARING_POLICY) => operation.payload.get("value").cloned(),
+        Some(kinds::CX_REALM_CREATE) => operation
+            .payload
+            .get("object")
+            .and_then(|object| object.get("history_sharing_policy"))
+            .cloned(),
+        _ => None,
+    }
+}
+
+fn operation_realm_preview_policy(operation: &Operation) -> Option<Value> {
+    match kinds::canonical_kind_for_operation(operation) {
+        Some(kinds::CX_REALM_PREVIEW_POLICY) => operation.payload.get("value").cloned(),
+        Some(kinds::CX_REALM_CREATE) => operation
+            .payload
+            .get("object")
+            .and_then(|object| object.get("preview_policy"))
+            .cloned(),
+        _ => None,
+    }
+}
+
+fn canonical_value_digest(value: &Value) -> Option<String> {
+    let bytes = contrix_sdk::canonical::canonical_json_bytes(value).ok()?;
+    Some(contrix_sdk::canonical::sha256_digest(bytes))
+}
+
+fn is_valid_history_visibility(value: &str) -> bool {
+    matches!(
+        value,
+        "world_readable" | "shared" | "invited" | "joined" | "restricted"
+    )
 }
 
 fn operation_realm_encryption_profile(operation: &Operation) -> Option<&str> {
@@ -1441,7 +1481,8 @@ pub async fn project_accepted_operations(state: &AppState, origin: &str, operati
         // `cx.member.identity.update` events into the in-memory registry.
         // Reducer-shape validation (segment whitelist, cross-cell guard,
         // digest binding) runs inside `project_member_identity_update`;
-        // cryptographic proof verification is TODO(R4).
+        // plaintext Ed25519 proof verification has already run at event
+        // ingest, and unsupported proof forms fail closed there.
         if kinds::canonical_kind_string(operation) == kinds::CX_MEMBER_IDENTITY_UPDATE {
             project_member_identity_update(state, operation);
         }
@@ -1766,6 +1807,12 @@ pub async fn ensure_projected_space(state: &AppState, origin: &str, operation: &
     let store = state.persistence.realm_meta();
     match store.get(space_id.as_str()).await {
         Ok(None) => {
+            let history_sharing_policy = operation_realm_history_sharing_policy(operation);
+            let history_sharing_policy_digest = history_sharing_policy
+                .as_ref()
+                .and_then(canonical_value_digest);
+            let preview_policy = operation_realm_preview_policy(operation);
+            let preview_policy_digest = preview_policy.as_ref().and_then(canonical_value_digest);
             let record = RealmMetaRecord {
                 owner: origin.to_owned(),
                 deleted: false,
@@ -1785,11 +1832,13 @@ pub async fn ensure_projected_space(state: &AppState, origin: &str, operation: &
                     })
                     .to_owned(),
                 history_visibility: operation_realm_history_visibility(operation)
-                    .filter(|value| {
-                        matches!(*value, "shared" | "joined" | "invited" | "world_readable")
-                    })
+                    .filter(|value| is_valid_history_visibility(value))
                     .unwrap_or("joined")
                     .to_owned(),
+                history_sharing_policy,
+                history_sharing_policy_digest,
+                preview_policy,
+                preview_policy_digest,
                 encryption_profile: operation_realm_encryption_profile(operation)
                     .map(ToOwned::to_owned),
                 plaintext_visible_services: operation
@@ -1820,15 +1869,23 @@ pub async fn ensure_projected_space(state: &AppState, origin: &str, operation: &
                     changed = true;
                 }
             }
-            if let Some(history_visibility) =
-                operation_realm_history_visibility(operation).filter(|value| {
-                    matches!(*value, "shared" | "joined" | "invited" | "world_readable")
-                })
+            if let Some(history_visibility) = operation_realm_history_visibility(operation)
+                .filter(|value| is_valid_history_visibility(value))
             {
                 if record.history_visibility != history_visibility {
                     record.history_visibility = history_visibility.to_owned();
                     changed = true;
                 }
+            }
+            if let Some(policy) = operation_realm_history_sharing_policy(operation) {
+                record.history_sharing_policy_digest = canonical_value_digest(&policy);
+                record.history_sharing_policy = Some(policy);
+                changed = true;
+            }
+            if let Some(policy) = operation_realm_preview_policy(operation) {
+                record.preview_policy_digest = canonical_value_digest(&policy);
+                record.preview_policy = Some(policy);
+                changed = true;
             }
             if record.encryption_profile.is_none()
                 && kinds::canonical_kind_for_operation(operation) == Some(kinds::CX_REALM_CREATE)
@@ -1957,7 +2014,7 @@ pub async fn project_membership_operation(state: &AppState, origin: &str, operat
         if let Ok(member) = Did::new(member) {
             if matches!(membership, Some("leave" | "ban")) {
                 entry.members.remove(&member);
-            } else if matches!(membership, Some("join" | "invite" | "knock")) {
+            } else if membership == Some("join") {
                 entry.members.insert(member);
                 // HDLREN-3/4 (contrix-spec @ 7157ee8) — `handle` is no longer
                 // a roster field. The spec §8.1 MUST NOT put it on the per-Realm
@@ -1984,9 +2041,10 @@ pub async fn project_membership_operation(state: &AppState, origin: &str, operat
 /// referencing event still drops the earlier one from the effective
 /// set (matches the SDK helper `effective_identity_events`).
 ///
-/// Cryptographic proof verification (`MemberIdentityProof.signature` via
-/// the verification method DID document) is TODO(R4); reducer-shape
-/// validation IS real per MID-2.
+/// Plaintext Ed25519 `MemberIdentityProof` verification runs on event
+/// ingest before projection; encrypted carriers and non-Ed25519 proof
+/// algorithms are refused fail-closed instead of being shape-accepted.
+/// Reducer-shape validation IS real per MID-2.
 pub fn project_member_identity_update(state: &AppState, operation: &Operation) {
     use crate::state::{
         MemberIdentityEventRecord, MemberIdentityReplacementEdge, MemberIdentitySubjectKey,

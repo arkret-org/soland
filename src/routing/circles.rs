@@ -14,14 +14,13 @@
 //! - `GET    /api/v1/circles/{circle_id}`                  read Circle
 //! - `POST   /api/v1/circles/{circle_id}/members`          add member
 //! - `DELETE /api/v1/circles/{circle_id}/members/{actor}`  remove member
-//! - `POST   /api/v1/circles/{circle_id}/scope-rotate`     rotate MLS scope (TODO)
+//! - `POST   /api/v1/circles/{circle_id}/scope-rotate`     rotate MLS scope (501 until wired)
 //! - `POST   /api/v1/circles/{circle_id}/archive`          archive Circle
 //! - `POST   /api/v1/circles/{circle_id}/tombstone`        tombstone Circle
 //!
-//! The `scope-rotate` route currently emits a `cx.circle.update` Move with a
-//! reducer-side `mls_group_ref` rotation hook — full MLS-key plumbing lives
-//! in `reducer/mls.rs` and is TODO(circle-rollout-P2A.4); see the inline
-//! comment on `post_scope_rotate`.
+//! `scope-rotate` intentionally returns `501 unsupported_feature` until the
+//! MLS genesis / commit / welcome cascade is wired end-to-end. It must not
+//! acknowledge a rotation without actually changing the cryptographic scope.
 
 use contrix_sdk::{Operation, OperationId, RealmId};
 use salvo::http::StatusCode;
@@ -35,7 +34,6 @@ use crate::error::{AppError, ErrorCode};
 use crate::ids;
 use crate::kinds::{
     CX_CIRCLE_ARCHIVE, CX_CIRCLE_CREATE, CX_CIRCLE_MEMBER_STATE, CX_CIRCLE_TOMBSTONE,
-    CX_CIRCLE_UPDATE,
 };
 use crate::reducer::CircleProjection;
 use crate::result::{JsonResult, json_ok};
@@ -337,37 +335,16 @@ async fn post_scope_rotate(
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let circle_id = circle_id.into_inner();
-    let realm_scope = circle_realm_scope(state, &circle_id)?;
-    // TODO(circle-rollout-P2A.4): wire the actual MLS group rotation
-    // (genesis -> commit -> welcome cascade) through `reducer/mls.rs`.
-    // For now the route emits a `cx.circle.update` Move with an empty
-    // patch so authz hooks fire and the reducer's `circle_not_active`
-    // / `circle_already_terminal` precondition checks run.
-    let payload = json!({
-        "circle_id": circle_id,
-        "patch": {},
-        "scope_rotate": true,
-        "sender": session.actor.clone(),
-    });
-    let op_id = OperationId::new(ids::generate_operation_id())
-        .map_err(|e| AppError::invalid_param(format!("operation_id: {e}")))?;
-    let operation = Operation::create(op_id, realm_scope, CX_CIRCLE_UPDATE, payload);
-    accept_local_operations(state, &session.actor, std::slice::from_ref(&operation))
-        .await
-        .map_err(reducer_reject_to_app_error)?;
-    let projection = state.projection.lock().expect("projection mutex");
-    let circle = projection
-        .circle(&circle_id)
-        .ok_or_else(|| AppError::not_found("circle not found"))?;
-    json_ok(CircleScopeRotateResponse {
-        circle_id: circle.circle_id.clone(),
-        mls_group_ref: circle.mls_group_ref.clone(),
-        note: Some(
-            "MLS scope rotation acknowledged; full key rotation is \
-             TODO(circle-rollout-P2A.4)"
-                .to_owned(),
-        ),
-    })
+    let _realm_scope = circle_realm_scope(state, &circle_id)?;
+    tracing::info!(
+        actor = %session.actor,
+        %circle_id,
+        "circle scope rotation rejected because MLS key rotation is not implemented"
+    );
+    Err(AppError::unsupported_feature(
+        "circle scope rotation requires MLS genesis/commit/welcome key rotation; no rotation was applied",
+    )
+    .with_status(StatusCode::NOT_IMPLEMENTED))
 }
 
 #[endpoint(

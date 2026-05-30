@@ -31,7 +31,7 @@ use salvo::prelude::*;
 use serde_json::{Value, json};
 
 use super::{AuthArgs, append_audit_log, now, validate_did};
-use crate::error::{AppError, ErrorCode};
+use crate::error::AppError;
 use crate::ids;
 use crate::result::{JsonResult, json_ok};
 use crate::state::AppState;
@@ -105,27 +105,25 @@ async fn agent_key_pair(
     // controller, and APPROVAL_ALREADY_CONSUMED when the controller
     // approval token has been re-played.
     //
-    // TODO(R4): wire the runtime attestation verifier + controller
-    // approval ledger so this handler can short-circuit with those
-    // canonical reasons.
+    // Runtime attestations are currently refused below with
+    // `unsupported_feature`; once the verifier + controller approval
+    // ledger land this handler should emit those canonical reasons from
+    // the concrete failing check.
     let _proof_invalid_reason: &str = crate::error::reasons::PROOF_INVALID;
     let _verification_method_mismatch_reason: &str =
         crate::error::reasons::VERIFICATION_METHOD_PRINCIPAL_MISMATCH;
     let _approval_consumed_reason: &str = crate::error::reasons::APPROVAL_ALREADY_CONSUMED;
-    // Spec: agent_key_authorize_payload `runtime_attestation` baseline kind
-    // is `self_asserted`; unknown kinds fail-closed. TODO(P2-impl): full
-    // validator + reducer write to `cx.agent.key.authorize`.
+    // The runtime-attestation verifier is not wired yet. Refuse every
+    // supplied attestation fail-closed instead of accepting a shape-only
+    // `self_asserted` placeholder as if it were a verified binding.
     if let Some(attestation) = body.runtime_attestation.as_ref() {
         let kind = attestation
             .get("kind")
             .and_then(Value::as_str)
             .unwrap_or_default();
-        if !matches!(kind, "self_asserted") {
-            return Err(AppError::new(
-                ErrorCode::SchemaViolation,
-                format!("unsupported runtime_attestation.kind `{kind}`"),
-            ));
-        }
+        return Err(AppError::unsupported_feature(format!(
+            "runtime_attestation verifier is not wired; refusing kind `{kind}` fail-closed"
+        )));
     }
     let authorized_at = chrono::Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
     append_audit_log(
@@ -147,6 +145,7 @@ async fn agent_key_pair(
         todos: vec![
             "P2-impl: write cx.agent.key.authorize event into the event log".to_owned(),
             "P2-impl: enforce verification_method↔agent_principal_id consistency".to_owned(),
+            "P2-impl: wire runtime_attestation verifier before accepting attested key authorization".to_owned(),
         ],
     })
 }

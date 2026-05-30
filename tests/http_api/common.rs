@@ -143,6 +143,25 @@ pub(crate) fn signed_federation_push_headers(
     target_uri: &str,
     body: &Value,
 ) -> Vec<(&'static str, String)> {
+    signed_federation_request_headers("POST", origin, destination, target_uri, body)
+}
+
+pub(crate) fn signed_federation_transaction_headers(
+    origin: &str,
+    destination: &str,
+    target_uri: &str,
+    body: &Value,
+) -> Vec<(&'static str, String)> {
+    signed_federation_request_headers("PUT", origin, destination, target_uri, body)
+}
+
+fn signed_federation_request_headers(
+    method: &str,
+    origin: &str,
+    destination: &str,
+    target_uri: &str,
+    body: &Value,
+) -> Vec<(&'static str, String)> {
     let body_bytes = contrix_sdk::canonical::canonical_json_bytes(body).unwrap();
     let content_digest = format!("sha-256=:{}:", STANDARD.encode(Sha256::digest(&body_bytes)));
     let request_digest = format!("sha256:{:x}", Sha256::digest(&body_bytes));
@@ -156,7 +175,7 @@ pub(crate) fn signed_federation_push_headers(
     );
     let authority = authority_from_target_uri(target_uri);
     let signature_base = format!(
-        "\"@method\": POST\n\
+        "\"@method\": {method}\n\
          \"@target-uri\": {target_uri}\n\
          \"@authority\": {authority}\n\
          \"content-digest\": {content_digest}\n\
@@ -278,6 +297,10 @@ pub(crate) async fn seed_test_realm(
                 deleted: false,
                 discoverability: discoverability.to_owned(),
                 history_visibility: "joined".to_owned(),
+                history_sharing_policy: None,
+                history_sharing_policy_digest: None,
+                preview_policy: None,
+                preview_policy_digest: None,
                 encryption_profile: None,
                 plaintext_visible_services,
                 created_at: now,

@@ -550,15 +550,13 @@ fn evaluate_constraint(
             }
             None
         }
-        Constraint::AllowedCircleRefs {
-            allowed_circle_refs,
-        } => {
+        Constraint::AllowedCircleIds { allowed_circle_ids } => {
             // CXP-0007 (spec b7d35be) — narrow a Circle-management
             // capability (`cx.circle.manage`, `cx.circle.member.manage`,
             // `cx.circle.member.add.others`, `cx.circle.audit`) to a
             // specific Circle id set. The spec
             // `capability-action-registry.json` declares
-            // `required_constraints=["allowed_circle_refs"]` on each
+            // `required_constraints=["allowed_circle_ids"]` on each
             // gated action; unconstrained Realm-wide grants for these
             // actions MUST be rejected (a separate guard at grant-issue
             // time).
@@ -570,9 +568,9 @@ fn evaluate_constraint(
             // be a member of the allowed set; otherwise the constraint
             // does not apply and silently passes (caller-policy: any
             // non-Circle resource is out of this constraint's scope).
-            if allowed_circle_refs.is_empty() {
+            if allowed_circle_ids.is_empty() {
                 return Some(
-                    "allowed_circle_refs constraint requires a non-empty allow list".to_owned(),
+                    "allowed_circle_ids constraint requires a non-empty allow list".to_owned(),
                 );
             }
             if !resource.starts_with("cx:circle:") {
@@ -580,12 +578,12 @@ fn evaluate_constraint(
                 // out of scope; pass through.
                 return None;
             }
-            if allowed_circle_refs.iter().any(|c| c.as_ref() == resource) {
+            if allowed_circle_ids.iter().any(|c| c.as_ref() == resource) {
                 None
             } else {
-                let allowed: Vec<&str> = allowed_circle_refs.iter().map(AsRef::as_ref).collect();
+                let allowed: Vec<&str> = allowed_circle_ids.iter().map(AsRef::as_ref).collect();
                 Some(format!(
-                    "allowed_circle_refs constraint not satisfied: {resource:?} not in {allowed:?}"
+                    "allowed_circle_ids constraint not satisfied: {resource:?} not in {allowed:?}"
                 ))
             }
         }

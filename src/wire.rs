@@ -478,6 +478,14 @@ pub struct ResolveHandleRequest {
     /// present, the directory MUST issue an audience-bearing claim.
     #[serde(default)]
     pub audience: Option<String>,
+    /// Target Realm for membership-builder resolves (`member_add` / `invite`).
+    /// Required by the protocol when the response is used as admission
+    /// material rather than display-only lookup data.
+    #[serde(default)]
+    pub realm_id: Option<String>,
+    /// Optional requester proofs for proof-gated disclosure.
+    #[serde(default)]
+    pub proofs: Vec<String>,
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
@@ -568,6 +576,9 @@ pub struct HandleClaimProof {
 pub struct ResolveHandleResponse {
     pub handle: String,
     pub did: String,
+    /// Principal DID of the handle holder. Kept byte-identical with `did`
+    /// while legacy clients still consume that field name.
+    pub subject: String,
     pub actor: Value,
     /// Audience the claim is bound to (echoes the `audience` request param
     /// or the inferred default — typically the requester / target Space).
@@ -578,6 +589,14 @@ pub struct ResolveHandleResponse {
     /// Embedded handle claim envelope when the resolver issued one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub handle_claim: Option<HandleClaim>,
+    /// Top-level membership-builder routing evidence. For
+    /// `intent=member_add|invite` this mirrors
+    /// `handle_claim.member_delivery_binding` so verifiers can consume the
+    /// candidate shape defined by `member-delivery-binding-candidate.schema`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub member_delivery_binding: Option<HandleClaimDeliveryBinding>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub source_refs: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
@@ -1778,6 +1797,41 @@ fn profile_limitations() -> Vec<Value> {
             "status": "unsupported",
             "reason": "current profile accepts one Event Envelope per request"
         }),
+        json!({
+            "area": "member_identity.proof",
+            "status": "partial_fail_closed",
+            "supported": "plaintext identity_payload.member_identity with Ed25519 raw signature verified against the subject_id DID verification method",
+            "unsupported": [
+                "encrypted identity_payload proof verification",
+                "ES256 / ES384 MemberIdentityProof.signature_algorithm"
+            ],
+            "reason": "non-Ed25519 and encrypted MemberIdentity proof forms are refused rather than shape-accepted"
+        }),
+        json!({
+            "area": "agents.runtime_attestation",
+            "status": "unsupported_fail_closed",
+            "reason": "runtime_attestation verifier/controller approval ledger is not wired; supplied attestations are rejected"
+        }),
+        json!({
+            "area": "extensions.tsp",
+            "status": "stub_contract",
+            "reason": "TSP transport/route/audit endpoints are process-local scaffolding; real envelope verify/decrypt and persistent signed audit chain are not claimed"
+        }),
+        json!({
+            "area": "extensions.bot_actor",
+            "status": "stub_contract",
+            "reason": "bot/ghost actor endpoints use a process-local registry; durable provisioning, accountability grants, and restart-safe state are not claimed"
+        }),
+        json!({
+            "area": "extensions.sovereign",
+            "status": "stub_contract",
+            "reason": "sovereign deployment endpoints are local boundary/scenario scaffolding; outbound guard integration is incomplete outside startup/profile checks"
+        }),
+        json!({
+            "area": "blob.presign",
+            "status": "local_direct_serve",
+            "reason": "presign issues a short-lived soland-signed local /blob/get URL; backend-native object-store presign is not claimed"
+        }),
     ]
 }
 
@@ -1936,6 +1990,7 @@ pub fn describe(
             "webrtc.signaling".to_owned(),
             "blob.upload".to_owned(),
             "blob.authenticated_download".to_owned(),
+            "blob.presigned_download.local_direct_serve".to_owned(),
             "blob.upload_policy".to_owned(),
             "federation.transaction_idempotency".to_owned(),
             "policy.documents".to_owned(),

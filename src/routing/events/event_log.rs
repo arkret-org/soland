@@ -15,11 +15,13 @@
 
 use std::collections::BTreeMap;
 
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{DateTime, Duration, Utc};
 use contrix_sdk::{
     EventsSubmitFederationRequest, Hlc, Operation, OperationId, RealmId, TypedTrustDomainId,
     canonical,
 };
+use ed25519_dalek::Verifier as _;
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
@@ -139,7 +141,16 @@ async fn events_describe(depot: &mut Depot, res: &mut Response) {
             "frontier": true,
             "snapshot": false,
             "witness": false,
-            "high_assurance": false
+            "high_assurance": false,
+            "member_identity_proof": {
+                "status": "partial",
+                "supported": "plaintext identity_payload.member_identity proof with Ed25519 raw signature",
+                "unsupported": [
+                    "encrypted identity_payload proof verification",
+                    "ES256 / ES384 MemberIdentityProof.signature_algorithm"
+                ],
+                "fail_closed": true
+            }
         }),
     }));
 }
@@ -1649,6 +1660,9 @@ async fn validate_event_envelope(
         ));
     }
     validate_event_schema_and_payload(state, &kind, &schema_id, envelope, object)?;
+    if kind == kinds::CX_MEMBER_IDENTITY_UPDATE {
+        validate_member_identity_proof(state, object.get("payload").unwrap_or(&Value::Null))?;
+    }
     validate_audit_accessed_payload(&kind, object)?;
     validate_sender_commitment_binding(object)?;
     // Round R2/R3 (T08) — cross_domain replay defence MUST run BEFORE the
@@ -1897,6 +1911,52 @@ fn validate_event_critical_features(
                     "unknown critical Event feature is not supported",
                 ));
             }
+        }
+    }
+    let Some(critical_extensions) = object
+        .get("requirements")
+        .and_then(|requirements| requirements.get("critical_extensions"))
+    else {
+        return Ok(());
+    };
+    let Some(critical_extensions) = critical_extensions.as_array() else {
+        return Err(event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            "requirements.critical_extensions must be an array",
+        ));
+    };
+    for extension in critical_extensions {
+        let (id, fail_closed) = match extension {
+            Value::String(id) => (id.as_str(), true),
+            Value::Object(object) => {
+                let id = object.get("id").and_then(Value::as_str).ok_or_else(|| {
+                    event_validation_error(
+                        StatusCode::BAD_REQUEST,
+                        "schema_violation",
+                        "requirements.critical_extensions[].id is required",
+                    )
+                })?;
+                let fail_closed = object
+                    .get("fail_closed")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(true);
+                (id, fail_closed)
+            }
+            _ => {
+                return Err(event_validation_error(
+                    StatusCode::BAD_REQUEST,
+                    "schema_violation",
+                    "requirements.critical_extensions entries must be strings or objects",
+                ));
+            }
+        };
+        if fail_closed && !supported.contains(&id) {
+            return Err(event_validation_error(
+                StatusCode::NOT_IMPLEMENTED,
+                "unsupported_feature",
+                "unknown requirements.critical_extensions entry is not supported",
+            ));
         }
     }
     Ok(())
@@ -2529,6 +2589,126 @@ fn wire_rejection_to_validation_error(
     event_validation_error(StatusCode::BAD_REQUEST, rejection.reason, rejection.message)
 }
 
+fn validate_member_identity_proof(
+    state: &AppState,
+    payload: &Value,
+) -> Result<(), EventValidationError> {
+    let Some(identity_payload) = payload.get("identity_payload") else {
+        return Ok(());
+    };
+    let Some(member_identity_value) = identity_payload.get("member_identity") else {
+        if identity_payload.get("encrypted_payload").is_some() {
+            return Err(event_validation_error(
+                StatusCode::NOT_IMPLEMENTED,
+                "unsupported_feature",
+                "encrypted MemberIdentity proof verification is not wired; refusing fail-closed",
+            ));
+        }
+        return Err(event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            "identity_payload must carry member_identity or encrypted_payload",
+        ));
+    };
+    let identity: contrix_sdk::MemberIdentity =
+        serde_json::from_value(member_identity_value.clone()).map_err(|error| {
+            event_validation_error(
+                StatusCode::BAD_REQUEST,
+                "schema_violation",
+                format!("MemberIdentity payload shape is invalid: {error}"),
+            )
+        })?;
+    let payload_realm = payload.get("realm_id").and_then(Value::as_str);
+    let payload_actor = payload.get("actor_id").and_then(Value::as_str);
+    if payload_realm != Some(identity.realm_id.as_str())
+        || payload_actor != Some(identity.actor_id.as_str())
+    {
+        return Err(event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            "MemberIdentity realm_id/actor_id must match the update payload subject",
+        ));
+    }
+    let canonical_bytes = identity.canonical_payload_bytes().map_err(|error| {
+        event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            format!("MemberIdentity canonical payload failed: {error}"),
+        )
+    })?;
+    let payload_digest = identity.canonical_payload_sha256().map_err(|error| {
+        event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            format!("MemberIdentity payload digest failed: {error}"),
+        )
+    })?;
+    if identity.proof.payload_digest.as_str() != payload_digest {
+        crate::metrics::record_digest_mismatch("member_identity_payload_digest");
+        return Err(event_validation_error(
+            StatusCode::CONFLICT,
+            "proof_event_digest_mismatch",
+            "MemberIdentityProof.payload_digest does not match the canonical payload",
+        ));
+    }
+    if !matches!(
+        identity.proof.signature_algorithm,
+        contrix_sdk::MemberIdentitySignatureAlgorithm::Ed25519
+    ) {
+        return Err(event_validation_error(
+            StatusCode::NOT_IMPLEMENTED,
+            "unsupported_feature",
+            "only Ed25519 MemberIdentityProof.signature_algorithm is supported",
+        ));
+    }
+    crate::jws_verify::validate_verification_method_controller(
+        identity.subject_id.as_str(),
+        &identity.proof.verification_method,
+    )
+    .map_err(|error| {
+        event_validation_error(
+            StatusCode::FORBIDDEN,
+            "proof_invalid",
+            format!("MemberIdentity proof controller mismatch: {error}"),
+        )
+    })?;
+    let public_key =
+        crate::jws_verify::resolve_ed25519_pubkey(state, &identity.proof.verification_method)
+            .map_err(|error| {
+                event_validation_error(
+                    StatusCode::FORBIDDEN,
+                    "proof_invalid",
+                    format!("MemberIdentity proof verification key resolution failed: {error}"),
+                )
+            })?;
+    let signature_bytes = URL_SAFE_NO_PAD
+        .decode(identity.proof.signature.as_bytes())
+        .map_err(|error| {
+            event_validation_error(
+                StatusCode::BAD_REQUEST,
+                "proof_invalid",
+                format!("MemberIdentity proof signature is not base64url: {error}"),
+            )
+        })?;
+    let signature_array: [u8; 64] = signature_bytes.try_into().map_err(|_| {
+        event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "proof_invalid",
+            "MemberIdentity proof signature must be 64 bytes",
+        )
+    })?;
+    let signature = ed25519_dalek::Signature::from_bytes(&signature_array);
+    public_key
+        .verify(&canonical_bytes, &signature)
+        .map_err(|error| {
+            event_validation_error(
+                StatusCode::FORBIDDEN,
+                "proof_invalid",
+                format!("MemberIdentity proof signature verification failed: {error}"),
+            )
+        })
+}
+
 fn validate_conflict_repair_event_payload(payload: &Value) -> Result<(), EventValidationError> {
     let Some(object) = payload.as_object() else {
         return Err(event_validation_error(
@@ -2619,6 +2799,18 @@ fn validate_realm_create_policy_constraints(
             StatusCode::BAD_REQUEST,
             "incompatible_history_with_encryption",
             "world_readable history requires encryption_profile=none",
+        ));
+    }
+    if history_visibility == "restricted"
+        && object
+            .get("history_sharing_policy")
+            .and_then(Value::as_object)
+            .is_none()
+    {
+        return Err(event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "history_sharing_policy_missing",
+            "restricted history_visibility requires an effective history_sharing_policy",
         ));
     }
     Ok(())
@@ -3063,6 +3255,16 @@ async fn bootstrap_realm_member_index(
         .and_then(|create_object| create_object.get("encryption_profile"))
         .and_then(Value::as_str)
         .map(ToOwned::to_owned);
+    let history_sharing_policy = payload_object
+        .and_then(|create_object| create_object.get("history_sharing_policy"))
+        .cloned();
+    let history_sharing_policy_digest = history_sharing_policy
+        .as_ref()
+        .and_then(canonical_value_digest);
+    let preview_policy = payload_object
+        .and_then(|create_object| create_object.get("preview_policy"))
+        .cloned();
+    let preview_policy_digest = preview_policy.as_ref().and_then(canonical_value_digest);
     let plaintext_visible_services = object
         .get("payload")
         .and_then(|payload| payload.get("plaintext_visible_services"))
@@ -3089,6 +3291,10 @@ async fn bootstrap_realm_member_index(
         deleted: false,
         discoverability,
         history_visibility,
+        history_sharing_policy,
+        history_sharing_policy_digest,
+        preview_policy,
+        preview_policy_digest,
         encryption_profile,
         plaintext_visible_services,
         created_at: super::now(),
@@ -3097,6 +3303,11 @@ async fn bootstrap_realm_member_index(
     if let Err(error) = state.persistence.realm_meta().put(space_id, &meta).await {
         tracing::error!(%error, %space_id, "bootstrap_realm_member_index: failed to persist Realm meta record");
     }
+}
+
+fn canonical_value_digest(value: &Value) -> Option<String> {
+    let bytes = canonical::canonical_json_bytes(value).ok()?;
+    Some(canonical::sha256_digest(bytes))
 }
 
 /// CXP-0007 — recursively scan `value` for the first key listed in the SDK's
@@ -3729,7 +3940,7 @@ mod proof_strictness_tests {
             oauth_introspection_bearer: None,
             session_grant_introspection_url: None,
             session_grant_introspection_bearer: None,
-            did_resolver_allow_methods: vec!["web".to_owned()],
+            did_resolver_allow_methods: vec!["web".to_owned(), "key".to_owned()],
             embedded_webvh_provider_enabled: false,
             embedded_webvh_registration_bearer: None,
             external_webvh_provider_url: None,
@@ -3792,6 +4003,134 @@ mod proof_strictness_tests {
         }
     }
 
+    fn did_key_for(signing_key: &ed25519_dalek::SigningKey) -> String {
+        let mut bytes = Vec::with_capacity(34);
+        bytes.extend_from_slice(&[0xed, 0x01]);
+        bytes.extend_from_slice(signing_key.verifying_key().as_bytes());
+        format!("did:key:z{}", bs58::encode(bytes).into_string())
+    }
+
+    fn signed_member_identity_payload(signing_key: &ed25519_dalek::SigningKey) -> (String, Value) {
+        use ed25519_dalek::Signer as _;
+
+        let did = did_key_for(signing_key);
+        let did_key_fragment = did.strip_prefix("did:key:").expect("did:key prefix");
+        let verification_method = format!("{did}#{did_key_fragment}");
+        let realm_id =
+            contrix_sdk::RealmId::new("cx:realm:01904100-0000-7000-8000-a11ce0000001".to_owned())
+                .unwrap();
+        let actor_id = contrix_sdk::Did::new(did.clone()).unwrap();
+        let subject_id = actor_id.clone();
+        let zero_hash = contrix_sdk::Hash::new(format!("sha256:{}", "0".repeat(64))).unwrap();
+        let mut identity = contrix_sdk::MemberIdentity::new(
+            realm_id.clone(),
+            actor_id.clone(),
+            subject_id,
+            contrix_sdk::DisplayProfile {
+                display_name: "Alice".to_owned(),
+                avatar_blob_ref: None,
+            },
+            chrono::Utc::now(),
+            contrix_sdk::MemberIdentityProof {
+                verification_method,
+                signature_algorithm: contrix_sdk::MemberIdentitySignatureAlgorithm::Ed25519,
+                payload_digest: zero_hash,
+                signature: "AA".to_owned(),
+            },
+        );
+        let canonical_bytes = identity.canonical_payload_bytes().unwrap();
+        identity.proof.payload_digest =
+            contrix_sdk::Hash::new(identity.canonical_payload_sha256().unwrap()).unwrap();
+        identity.proof.signature =
+            URL_SAFE_NO_PAD.encode(signing_key.sign(&canonical_bytes).to_bytes());
+        let payload = json!({
+            "realm_id": realm_id.as_str(),
+            "actor_id": actor_id.as_str(),
+            "segment": "member_identity",
+            "identity_payload": {
+                "member_identity": identity
+            }
+        });
+        (did, payload)
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn member_identity_plaintext_ed25519_proof_verifies() {
+        let state = make_state(false);
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&[7u8; 32]);
+        let (_, payload) = signed_member_identity_payload(&signing_key);
+
+        validate_member_identity_proof(&state, &payload)
+            .expect("valid MemberIdentity proof should verify");
+    }
+
+    #[test]
+    fn member_identity_tampered_payload_fails_closed() {
+        let state = make_state(false);
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&[8u8; 32]);
+        let (_, mut payload) = signed_member_identity_payload(&signing_key);
+        payload["identity_payload"]["member_identity"]["display_profile"]["display_name"] =
+            json!("Mallory");
+
+        let err = validate_member_identity_proof(&state, &payload)
+            .expect_err("tampered MemberIdentity payload must fail");
+        assert_eq!(err.code, "proof_event_digest_mismatch");
+    }
+
+    #[test]
+    fn member_identity_encrypted_payload_is_unsupported_fail_closed() {
+        let state = make_state(false);
+        let payload = json!({
+            "realm_id": "cx:realm:01904100-0000-7000-8000-a11ce0000001",
+            "actor_id": "did:key:z6MkeTG3bFFSLYVU7VqhgZxqr6YzpaGrQtFMh1uvqGy1vDnP",
+            "segment": "member_identity",
+            "identity_payload": {
+                "encrypted_payload": {
+                    "alg": "stub"
+                }
+            }
+        });
+
+        let err = validate_member_identity_proof(&state, &payload)
+            .expect_err("encrypted MemberIdentity proof verification is not wired");
+        assert_eq!(err.code, "unsupported_feature");
+    }
+
+    #[test]
+    fn unknown_fail_closed_critical_extension_is_not_implemented() {
+        let envelope = json!({
+            "requirements": {
+                "critical_extensions": [{
+                    "id": "cx.extension.unknown",
+                    "fail_closed": true
+                }]
+            }
+        });
+        let object = envelope.as_object().unwrap();
+
+        let err = validate_event_critical_features(object)
+            .expect_err("unknown fail-closed extensions must reject writes");
+
+        assert_eq!(err.status, StatusCode::NOT_IMPLEMENTED);
+        assert_eq!(err.code, "unsupported_feature");
+    }
+
+    #[test]
+    fn unknown_advisory_critical_extension_is_ignored() {
+        let envelope = json!({
+            "requirements": {
+                "critical_extensions": [{
+                    "id": "cx.extension.unknown",
+                    "fail_closed": false
+                }]
+            }
+        });
+        let object = envelope.as_object().unwrap();
+
+        validate_event_critical_features(object)
+            .expect("non-fail-closed extensions are advisory and may be ignored");
+    }
+
     #[tokio::test]
     async fn policy_components_media_plaintext_reads_realm_meta() {
         let state = make_state(true);
@@ -3807,6 +4146,10 @@ mod proof_strictness_tests {
                     deleted: false,
                     discoverability: "restricted".to_owned(),
                     history_visibility: "joined".to_owned(),
+                    history_sharing_policy: None,
+                    history_sharing_policy_digest: None,
+                    preview_policy: None,
+                    preview_policy_digest: None,
                     encryption_profile: Some("mls_rfc9420".to_owned()),
                     plaintext_visible_services: std::collections::BTreeSet::from([state
                         .config

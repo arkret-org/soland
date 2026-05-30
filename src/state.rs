@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use arc_swap::ArcSwap;
+use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use contrix_sdk::identity::CompositeDidResolver;
 use contrix_sdk::{Did, RealmId};
 use ed25519_dalek::SigningKey;
@@ -19,6 +20,8 @@ use crate::object_storage::{ObjectStorage, build_object_storage};
 use crate::persistence::{MemoryPersistenceStore, PersistenceStore, PgPersistenceStore};
 use crate::reducer::ProjectionState;
 use crate::verified_profiles::VerifiedProfileDescriptor;
+
+const MAX_SUBSCRIBE_RECONNECT_WINDOW_MS: u64 = 86_400_000;
 
 // `did_resolver_chain.rs` lives at `src/did_resolver_chain.rs`; declare it as
 // a submodule of `state` so `AppState::new` can construct the resolver chain
@@ -75,7 +78,10 @@ pub enum EventNotificationKind {
     },
     /// Per-subscriber drift / corrupted-cursor signal. Clients SHOULD
     /// drop local cache + restart subscription with no `from`.
-    ResyncRequired { reason: String },
+    ResyncRequired {
+        reason: String,
+        reconnect_after_ms: Option<u64>,
+    },
     /// Session token invalidated mid-stream — client MUST close.
     Unauthorized { reason: String },
 }
@@ -113,6 +119,68 @@ impl EventNotification {
                 anchor_id,
             },
         }
+    }
+}
+
+/// In-process reconnect gate for `cx.events.subscribe` and
+/// `cx.account.subscribe`. Keys are operation + caller identity + selector
+/// scope, and values are the earliest accepted reconnect time.
+#[derive(Clone, Debug, Default)]
+pub struct SubscribeReconnectGate {
+    deadlines: BTreeMap<String, DateTime<Utc>>,
+}
+
+impl SubscribeReconnectGate {
+    pub fn retry_after_ms(&mut self, key: &str, now: DateTime<Utc>) -> Option<u64> {
+        self.prune_expired(now);
+        let deadline = self.deadlines.get(key)?;
+        if *deadline <= now {
+            self.deadlines.remove(key);
+            return None;
+        }
+        Some((*deadline - now).num_milliseconds().max(1) as u64)
+    }
+
+    pub fn arm(&mut self, key: impl Into<String>, now: DateTime<Utc>, delay_ms: u64) {
+        if delay_ms == 0 {
+            return;
+        }
+        let clamped_ms = delay_ms.min(MAX_SUBSCRIBE_RECONNECT_WINDOW_MS) as i64;
+        self.deadlines
+            .insert(key.into(), now + ChronoDuration::milliseconds(clamped_ms));
+        self.prune_expired(now);
+    }
+
+    fn prune_expired(&mut self, now: DateTime<Utc>) {
+        self.deadlines.retain(|_, deadline| *deadline > now);
+    }
+}
+
+#[cfg(test)]
+mod subscribe_reconnect_gate_tests {
+    use super::*;
+
+    #[test]
+    fn reports_remaining_window_and_expires() {
+        let mut gate = SubscribeReconnectGate::default();
+        let now = Utc::now();
+        gate.arm("cx.events.subscribe|alice|realm-a", now, 10_000);
+
+        let retry_after = gate
+            .retry_after_ms(
+                "cx.events.subscribe|alice|realm-a",
+                now + ChronoDuration::milliseconds(2_500),
+            )
+            .expect("cooldown active");
+        assert!((7_400..=7_500).contains(&retry_after));
+
+        assert!(
+            gate.retry_after_ms(
+                "cx.events.subscribe|alice|realm-a",
+                now + ChronoDuration::milliseconds(10_000),
+            )
+            .is_none()
+        );
     }
 }
 
@@ -295,10 +363,12 @@ fn realm_directory_score(entry: &RealmDirectoryEntry, query: &RealmDirectoryQuer
 ///
 /// Storage is in-memory for now; durable persistence (alongside the
 /// other event-log surfaces) lands when the MID schema migration ships.
-/// Internal proof verification (cryptographic signature on
-/// `MemberIdentityProof`) is `// TODO(R4)`; reducer-shape validation
-/// (segment whitelist, replacement-digest binding, cross-(realm,actor,
-/// segment) guard) IS real per MID-2.
+/// Plaintext Ed25519 `MemberIdentityProof` verification runs on the
+/// event-ingest path before records reach this registry. Encrypted
+/// carriers and non-Ed25519 proof algorithms are currently refused
+/// fail-closed rather than stored after shape-only validation. Reducer-
+/// shape validation (segment whitelist, replacement-digest binding,
+/// cross-(realm,actor, segment) guard) IS real per MID-2.
 #[derive(Clone, Debug, Default)]
 pub struct MemberIdentityRegistry {
     /// All accepted events, keyed by `event_id`.
@@ -872,6 +942,11 @@ pub struct AppState {
     /// `RecvError::Lagged` and emit a `dropped` control frame to nudge
     /// the client to resync.
     pub event_broadcast: broadcast::Sender<EventNotification>,
+    /// Server-enforced reconnect windows advertised by subscribe control
+    /// frames. This prevents a faulty or overloaded client from immediately
+    /// re-opening the same subscribe scope after `dropped` /
+    /// `resync_required`.
+    pub subscribe_reconnect_gate: Arc<Mutex<SubscribeReconnectGate>>,
     /// Persistent Ed25519 signing key for AnchorerWorker +
     /// admin endpoints (`admin_reconfigure_anchorer`, `admin_repair_bottom`).
     /// Loaded from `AppConfig::anchorer_signing_key_seed` at boot when set;
@@ -916,9 +991,10 @@ pub struct AppState {
     /// projection (`SYNC-MEM-1..3`) both go through this. See
     /// [`MemberIdentityRegistry`] above for storage and effective-set
     /// semantics; durable persistence lands when the MID schema migration
-    /// ships. Internal cryptographic proof verification is TODO(R4);
-    /// reducer-shape validation (digest binding, segment whitelist) IS
-    /// real per MID-2.
+    /// ships. Plaintext Ed25519 MemberIdentity proofs are verified on
+    /// event ingest; encrypted/non-Ed25519 proof forms are refused
+    /// fail-closed. Reducer-shape validation (digest binding, segment
+    /// whitelist) IS real per MID-2.
     pub member_identity: Arc<Mutex<MemberIdentityRegistry>>,
 }
 
@@ -1129,11 +1205,19 @@ pub struct RealmMetaRecord {
     pub owner: String,
     pub deleted: bool,
     pub discoverability: String,
-    /// One of `shared` / `joined` / `invited` / `world_readable`. Owner can
-    /// flip this via `PUT /api/v1/spaces/{id}/policy`; `world_readable` opens
-    /// the event-stream read endpoints to non-members and anonymous callers
-    /// (space-and-place.md §3.4 + §3.7).
+    /// One of `world_readable` / `shared` / `invited` / `joined` /
+    /// `restricted`. `restricted` is fail-closed unless
+    /// `history_sharing_policy` has an explicit matching rule.
     pub history_visibility: String,
+    /// Effective `cx.realm.history_sharing_policy.value` plus its canonical
+    /// digest. The policy gates E2EE history key shares and restricted history
+    /// reads; history visibility alone never grants old epoch keys.
+    pub history_sharing_policy: Option<Value>,
+    pub history_sharing_policy_digest: Option<String>,
+    /// Effective `cx.realm.preview_policy.value` plus its canonical digest.
+    /// Directory/object preview must fail closed when this is missing.
+    pub preview_policy: Option<Value>,
+    pub preview_policy_digest: Option<String>,
     /// Optional encryption profile (`mls_rfc9420` / `plaintext`). Cross-checked
     /// against `history_visibility` at create time — `mls_rfc9420` is
     /// incompatible with `world_readable` (space-and-place.md §3.1.3).
@@ -1816,6 +1900,7 @@ impl AppState {
             // Capacity 1024 events; readers
             // falling behind get `Lagged` and emit `dropped` control frames.
             event_broadcast: broadcast::channel::<EventNotification>(1024).0,
+            subscribe_reconnect_gate: Arc::new(Mutex::new(SubscribeReconnectGate::default())),
             anchorer_signing_key,
             anchorer_signing_key_origin,
             admin_keystore,
@@ -1859,6 +1944,10 @@ impl AppState {
                 deleted: false,
                 discoverability: "public".to_owned(),
                 history_visibility: "shared".to_owned(),
+                history_sharing_policy: None,
+                history_sharing_policy_digest: None,
+                preview_policy: None,
+                preview_policy_digest: None,
                 encryption_profile: None,
                 plaintext_visible_services: BTreeSet::new(),
                 created_at: now,
@@ -2209,6 +2298,13 @@ async fn hydrate_realms_from_canonical_events(
     for record in events {
         if record.kind == "cx.realm.create" {
             hydrate_realm_create_event(persistence, realms, &record).await;
+        } else if matches!(
+            record.kind.as_str(),
+            "cx.realm.history_visibility"
+                | "cx.realm.history_sharing_policy"
+                | "cx.realm.preview_policy"
+        ) {
+            hydrate_realm_policy_event(persistence, &record).await;
         }
     }
 }
@@ -2267,6 +2363,16 @@ async fn hydrate_realm_create_event(
         .and_then(|object| object.get("encryption_profile"))
         .and_then(Value::as_str)
         .map(ToOwned::to_owned);
+    let history_sharing_policy = payload_object
+        .and_then(|object| object.get("history_sharing_policy"))
+        .cloned();
+    let history_sharing_policy_digest = history_sharing_policy
+        .as_ref()
+        .and_then(canonical_value_digest);
+    let preview_policy = payload_object
+        .and_then(|object| object.get("preview_policy"))
+        .cloned();
+    let preview_policy_digest = preview_policy.as_ref().and_then(canonical_value_digest);
     let plaintext_visible_services = record
         .envelope
         .get("payload")
@@ -2292,6 +2398,10 @@ async fn hydrate_realm_create_event(
         deleted: false,
         discoverability,
         history_visibility,
+        history_sharing_policy,
+        history_sharing_policy_digest,
+        preview_policy,
+        preview_policy_digest,
         encryption_profile,
         plaintext_visible_services,
         created_at: record.received_at,
@@ -2300,6 +2410,59 @@ async fn hydrate_realm_create_event(
     if let Err(error) = persistence.realm_meta().put(&space_id, &meta).await {
         tracing::warn!(%error, space_id = %space_id, "failed to hydrate persisted realm meta");
     }
+}
+
+async fn hydrate_realm_policy_event(
+    persistence: &dyn crate::persistence::PersistenceStore,
+    record: &CanonicalEventRecord,
+) {
+    let Some(realm_id) = event_record_realm_id(record) else {
+        return;
+    };
+    let Ok(Some(mut meta)) = persistence.realm_meta().get(&realm_id).await else {
+        return;
+    };
+    let Some(payload) = record.envelope.get("payload") else {
+        return;
+    };
+    match record.kind.as_str() {
+        "cx.realm.history_visibility" => {
+            if let Some(value) = payload.get("value").and_then(Value::as_str) {
+                meta.history_visibility = value.to_owned();
+            }
+        }
+        "cx.realm.history_sharing_policy" => {
+            if let Some(value) = payload.get("value") {
+                meta.history_sharing_policy = Some(value.clone());
+                meta.history_sharing_policy_digest = canonical_value_digest(value);
+            }
+        }
+        "cx.realm.preview_policy" => {
+            if let Some(value) = payload.get("value") {
+                meta.preview_policy = Some(value.clone());
+                meta.preview_policy_digest = canonical_value_digest(value);
+            }
+        }
+        _ => {}
+    }
+    meta.updated_at = record.received_at;
+    if let Err(error) = persistence.realm_meta().put(&realm_id, &meta).await {
+        tracing::warn!(%error, realm_id = %realm_id, "failed to hydrate Realm policy event");
+    }
+}
+
+fn event_record_realm_id(record: &CanonicalEventRecord) -> Option<String> {
+    record
+        .envelope
+        .get("realm_id")
+        .and_then(Value::as_str)
+        .or(record.space_id.as_deref())
+        .map(normalize_persisted_realm_id)
+}
+
+fn canonical_value_digest(value: &Value) -> Option<String> {
+    let bytes = contrix_sdk::canonical::canonical_json_bytes(value).ok()?;
+    Some(contrix_sdk::canonical::sha256_digest(bytes))
 }
 
 fn normalize_persisted_realm_id(id: &str) -> String {

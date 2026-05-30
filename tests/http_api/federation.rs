@@ -350,6 +350,7 @@ async fn federation_verify_actor_request_binding_can_pass_while_actor_signature_
 #[tokio::test]
 async fn federation_transactions_are_idempotent_by_origin_and_body() {
     let state = AppState::new(test_config(), Db { pool: None });
+    let txn_url = "http://server/api/v1/federation/transactions/txn-idem";
     let operation = Operation::create(
         OperationId::new("cx:operation:01904100-0000-7000-8000-91a2f2e7a3b4").unwrap(),
         RealmId::new("cx:realm:01904100-0000-7000-8000-788d17d38a52").unwrap(),
@@ -368,8 +369,16 @@ async fn federation_transactions_are_idempotent_by_origin_and_body() {
         "service_binding_ref": "did:web:remote.example#soland",
         "operations": [operation]
     });
-    let first: Value = TestClient::put("http://server/api/v1/federation/transactions/txn-idem")
-        .json(&transaction_body)
+    let mut first_req = TestClient::put(txn_url).json(&transaction_body);
+    for (name, value) in signed_federation_transaction_headers(
+        "did:web:remote.example",
+        "did:web:soland.local",
+        txn_url,
+        &transaction_body,
+    ) {
+        first_req = first_req.add_header(name, value, true);
+    }
+    let first: Value = first_req
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
@@ -380,8 +389,16 @@ async fn federation_transactions_are_idempotent_by_origin_and_body() {
         "cx:operation:01904100-0000-7000-8000-91a2f2e7a3b4"
     );
 
-    let duplicate: Value = TestClient::put("http://server/api/v1/federation/transactions/txn-idem")
-        .json(&transaction_body)
+    let mut duplicate_req = TestClient::put(txn_url).json(&transaction_body);
+    for (name, value) in signed_federation_transaction_headers(
+        "did:web:remote.example",
+        "did:web:soland.local",
+        txn_url,
+        &transaction_body,
+    ) {
+        duplicate_req = duplicate_req.add_header(name, value, true);
+    }
+    let duplicate: Value = duplicate_req
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
@@ -393,29 +410,62 @@ async fn federation_transactions_are_idempotent_by_origin_and_body() {
     );
     assert!(duplicate["rejected"].as_array().unwrap().is_empty());
 
-    let conflict = TestClient::put("http://server/api/v1/federation/transactions/txn-idem")
-        .json(&serde_json::json!({
-            "origin": "did:web:remote.example",
-            "destination": "did:web:soland.local",
-            "service_binding_ref": "did:web:remote.example#soland",
-            "operations": [],
-            "receipts": [{"changed": true}]
-        }))
-        .send(&app_from_state(state.clone()))
-        .await;
+    let conflict_body = serde_json::json!({
+        "origin": "did:web:remote.example",
+        "destination": "did:web:soland.local",
+        "service_binding_ref": "did:web:remote.example#soland",
+        "operations": [],
+        "receipts": [{"changed": true}]
+    });
+    let mut conflict_req = TestClient::put(txn_url).json(&conflict_body);
+    for (name, value) in signed_federation_transaction_headers(
+        "did:web:remote.example",
+        "did:web:soland.local",
+        txn_url,
+        &conflict_body,
+    ) {
+        conflict_req = conflict_req.add_header(name, value, true);
+    }
+    let conflict = conflict_req.send(&app_from_state(state.clone())).await;
     assert_eq!(conflict.status_code.unwrap().as_u16(), 409);
 
-    let wrong_destination =
-        TestClient::put("http://server/api/v1/federation/transactions/txn-wrong-destination")
-            .json(&serde_json::json!({
-                "origin": "did:web:remote.example",
-                "destination": "did:web:other.example",
-                "service_binding_ref": "did:web:remote.example#soland",
-                "operations": []
-            }))
-            .send(&app_from_state(state.clone()))
-            .await;
-    assert_eq!(wrong_destination.status_code.unwrap().as_u16(), 403);
+    let wrong_destination_url =
+        "http://server/api/v1/federation/transactions/txn-wrong-destination";
+    let wrong_destination_body = serde_json::json!({
+        "origin": "did:web:remote.example",
+        "destination": "did:web:other.example",
+        "service_binding_ref": "did:web:remote.example#soland",
+        "operations": []
+    });
+    let mut wrong_destination_req =
+        TestClient::put(wrong_destination_url).json(&wrong_destination_body);
+    for (name, value) in signed_federation_transaction_headers(
+        "did:web:remote.example",
+        "did:web:soland.local",
+        wrong_destination_url,
+        &wrong_destination_body,
+    ) {
+        wrong_destination_req = wrong_destination_req.add_header(name, value, true);
+    }
+    let wrong_destination = wrong_destination_req
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(wrong_destination.status_code.unwrap().as_u16(), 401);
+
+    let unsigned_url = "http://server/api/v1/federation/transactions/txn-unsigned";
+    let mut unsigned_req = TestClient::put(unsigned_url).json(&transaction_body);
+    for (name, value) in signed_federation_transaction_headers(
+        "did:web:remote.example",
+        "did:web:soland.local",
+        unsigned_url,
+        &transaction_body,
+    ) {
+        if !matches!(name, "signature" | "signature-input") {
+            unsigned_req = unsigned_req.add_header(name, value, true);
+        }
+    }
+    let unsigned = unsigned_req.send(&app_from_state(state.clone())).await;
+    assert_eq!(unsigned.status_code.unwrap().as_u16(), 401);
 }
 
 fn production_federation_state() -> AppState {

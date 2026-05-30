@@ -122,6 +122,10 @@ pub const CX_REALM_UPDATE: &str = "cx.realm.update";
 pub const CX_REALM_DESTROY: &str = "cx.realm.destroy";
 pub const CX_REALM_TOMBSTONE: &str = "cx.realm.tombstone";
 pub const CX_REALM_MODERATION_POLICY: &str = "cx.realm.moderation_policy";
+pub const CX_REALM_HISTORY_VISIBILITY: &str = "cx.realm.history_visibility";
+pub const CX_REALM_HISTORY_SHARING_POLICY: &str = "cx.realm.history_sharing_policy";
+pub const CX_REALM_PREVIEW_POLICY: &str = "cx.realm.preview_policy";
+pub const CX_REALM_KEY_SHARE: &str = "cx.realm_key.share";
 pub const CX_CONFLICT_REPAIR: &str = "cx.conflict.repair";
 pub const CX_AUDIT_ERASURE_RECEIPT: &str = "cx.audit.erasure_receipt";
 pub const CX_REDACTION: &str = "cx.redaction";
@@ -254,7 +258,7 @@ pub const CX_REALM_INHERITANCE_POLICY: &str = "cx.realm.inheritance_policy";
 // `cx.component.capability.derived.v1`; full derive logic now runs
 // through the same chain as the rest of the Realm-graph family. Any
 // remaining cross-Realm derivation gaps are tracked as
-// TODO(circle-rollout-P2A.4): cross-Realm `allowed_circle_refs`
+// TODO(circle-rollout-P2A.4): cross-Realm `allowed_circle_ids`
 // derivation under audited-high-risk policies.
 pub const CX_CAPABILITY_DERIVED: &str = "cx.capability.derived";
 
@@ -462,6 +466,10 @@ fn canonical_registered_kind(object_type: &str) -> Option<&str> {
             })
         }
         CX_REALM_MODERATION_POLICY => Some(CX_REALM_MODERATION_POLICY),
+        CX_REALM_HISTORY_VISIBILITY => Some(CX_REALM_HISTORY_VISIBILITY),
+        CX_REALM_HISTORY_SHARING_POLICY => Some(CX_REALM_HISTORY_SHARING_POLICY),
+        CX_REALM_PREVIEW_POLICY => Some(CX_REALM_PREVIEW_POLICY),
+        CX_REALM_KEY_SHARE => Some(CX_REALM_KEY_SHARE),
         CX_CONFLICT_REPAIR => Some(CX_CONFLICT_REPAIR),
         CX_AUDIT_ERASURE_RECEIPT => Some(CX_AUDIT_ERASURE_RECEIPT),
         CX_MEMBER_STATE => Some(CX_MEMBER_STATE),

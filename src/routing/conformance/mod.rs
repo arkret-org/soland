@@ -13,6 +13,8 @@
 //!   - `cursor`
 //!   - `envelope`
 //!   - `redact`
+//!   - `snapshot`
+//!   - `query`
 //!
 //! **Gating.** Production builds do not advertise these endpoints. The router
 //! is registered in [`crate::routing::api_v1_router`] but every handler short-
@@ -45,6 +47,8 @@ pub fn router() -> Router {
         .push(Router::with_path("cursor").post(handlers::cursor))
         .push(Router::with_path("envelope").post(handlers::envelope))
         .push(Router::with_path("redact").post(handlers::redact))
+        .push(Router::with_path("snapshot").post(handlers::snapshot))
+        .push(Router::with_path("query").post(handlers::query))
         .push(Router::with_path("chaos/operation").get(handlers::chaos_operation))
 }
 

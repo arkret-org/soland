@@ -103,6 +103,10 @@ async fn create_plaintext_space(state: AppState, _token: &str, title: &str) -> S
                 deleted: false,
                 discoverability: "invite_only".to_owned(),
                 history_visibility: "joined".to_owned(),
+                history_sharing_policy: None,
+                history_sharing_policy_digest: None,
+                preview_policy: None,
+                preview_policy_digest: None,
                 encryption_profile: None,
                 plaintext_visible_services: std::collections::BTreeSet::from([
                     "did:web:soland.local".to_owned(),

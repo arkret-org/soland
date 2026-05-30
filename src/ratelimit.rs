@@ -12,6 +12,11 @@
 //!
 //! Each class can carry its own quota; absent overrides fall back to the
 //! default (`max_requests` / `window`).
+//!
+//! Reverse-proxy deployments can opt into sanitized `X-Forwarded-For`
+//! client extraction with `SOLAND_RATE_LIMIT_TRUST_X_FORWARDED_FOR=1`.
+//! Directly exposed deployments keep the default fail-closed behaviour and
+//! bucket on the TCP peer address.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -167,6 +172,37 @@ impl RateLimiterMiddleware {
     }
 }
 
+fn forwarded_for_trusted() -> bool {
+    std::env::var("SOLAND_RATE_LIMIT_TRUST_X_FORWARDED_FOR")
+        .or_else(|_| std::env::var("SOLAND_TRUST_X_FORWARDED_FOR"))
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "on" | "yes"
+            )
+        })
+        .unwrap_or(false)
+}
+
+fn trusted_forwarded_client(req: &Request) -> Option<String> {
+    if !forwarded_for_trusted() {
+        return None;
+    }
+    let header = req
+        .headers()
+        .get("x-forwarded-for")
+        .and_then(|value| value.to_str().ok())?;
+    header
+        .split(',')
+        .map(str::trim)
+        .find(|part| !part.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn rate_limit_peer_key(req: &Request) -> String {
+    trusted_forwarded_client(req).unwrap_or_else(|| req.remote_addr().to_string())
+}
+
 #[async_trait]
 impl Handler for RateLimiterMiddleware {
     async fn handle(
@@ -181,7 +217,7 @@ impl Handler for RateLimiterMiddleware {
         // surface for the same peer, and a low ceiling on /auth/* makes
         // credential-stuffing prohibitively slow.
         let class = EndpointClass::classify(req.uri().path());
-        let key = format!("{}:{}", req.remote_addr(), class.label());
+        let key = format!("{}:{}", rate_limit_peer_key(req), class.label());
         let ceiling = self.limiter.ceiling_for(class);
 
         if !self.limiter.check_with_ceiling(&key, ceiling) {

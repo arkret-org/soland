@@ -57,11 +57,12 @@ use identity::device_messages::{device_message_events_after, prune_acked_device_
 use identity::did::validate_did_document_services;
 use spaces::directory::demo_actors;
 use spaces::space::{
-    invite_token_space_id, is_realm_deleted, is_space_deleted, prune_expired_typing,
-    realm_allows_plaintext_service, realm_discoverability, realm_event_visible_to_session,
-    realm_has_member, realm_history_visibility, realm_id_accessible, realm_visible_to,
-    space_allows_plaintext_service, space_discoverability, space_has_member, space_resolvable_to,
-    space_search_discoverability, space_search_visible_to, touch_realm, typing_ephemeral_for_space,
+    invite_token_matches_space, invite_token_space_id, is_realm_deleted, is_space_deleted,
+    prune_expired_typing, realm_allows_plaintext_service, realm_discoverability,
+    realm_event_visible_to_session, realm_has_member, realm_history_visibility,
+    realm_id_accessible, realm_visible_to, space_allows_plaintext_service, space_discoverability,
+    space_has_member, space_history_visibility, space_resolvable_to, space_search_discoverability,
+    space_search_visible_to, touch_realm, typing_ephemeral_for_space,
 };
 use system::extract::AuthArgs;
 use system::util::{

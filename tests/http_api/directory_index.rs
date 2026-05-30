@@ -184,6 +184,147 @@ async fn directory_demo_projection_rejects_outside_development_mode() {
 }
 
 #[tokio::test]
+async fn directory_resolve_target_preview_requires_effective_preview_policy() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let realm = seed_test_realm(
+        &state,
+        "did:web:alice.example",
+        "Preview gated realm",
+        Some("stripped preview only"),
+        "invite_only",
+        &[],
+        &[],
+    )
+    .await;
+    let realm_id = realm["space_id"].as_str().unwrap();
+    let realm_uuid = realm_id.strip_prefix("cx:realm:").unwrap();
+    let flow_id = new_prefixed_uuid7("cx:flow:");
+    let flow_uuid = flow_id.strip_prefix("cx:flow:").unwrap();
+    let address = format!(
+        "web+contrix:realm/{realm_uuid}/flow/{flow_uuid}?via=did:web:soland.local&lt=preview"
+    );
+    let token = preview_token_for_address(
+        &state,
+        &address,
+        realm_id,
+        "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    );
+    let unauthorized = TestClient::post("http://server/api/v1/directory/resolve-target")
+        .json(&serde_json::json!({
+            "address": format!("{address}&tok={token}"),
+            "token": token,
+        }))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(unauthorized.status_code.unwrap(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn directory_resolve_target_preview_returns_policy_limited_projection() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let realm = seed_test_realm(
+        &state,
+        "did:web:alice.example",
+        "Preview realm",
+        Some("visible summary"),
+        "invite_only",
+        &[],
+        &[],
+    )
+    .await;
+    let realm_id = realm["space_id"].as_str().unwrap();
+    let policy = serde_json::json!({
+        "mode": "stripped_state",
+        "audiences": ["link_token_holder"],
+        "fields": ["title", "summary", "join_rule", "history_visibility", "member_count_bucket"]
+    });
+    let policy_digest = contrix_sdk::canonical::canonical_sha256(&policy).unwrap();
+    let mut meta = state
+        .persistence
+        .realm_meta()
+        .get(realm_id)
+        .await
+        .unwrap()
+        .unwrap();
+    meta.preview_policy = Some(policy);
+    meta.preview_policy_digest = Some(policy_digest.clone());
+    state
+        .persistence
+        .realm_meta()
+        .put(realm_id, &meta)
+        .await
+        .unwrap();
+
+    let realm_uuid = realm_id.strip_prefix("cx:realm:").unwrap();
+    let flow_id = new_prefixed_uuid7("cx:flow:");
+    let flow_uuid = flow_id.strip_prefix("cx:flow:").unwrap();
+    let address = format!(
+        "web+contrix:realm/{realm_uuid}/flow/{flow_uuid}?via=did:web:soland.local&lt=preview"
+    );
+    let token = preview_token_for_address(&state, &address, realm_id, &policy_digest);
+    let resolved: Value = TestClient::post("http://server/api/v1/directory/resolve-target")
+        .json(&serde_json::json!({
+            "address": format!("{address}&tok={token}"),
+            "token": token,
+        }))
+        .send(&app_from_state(state))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+
+    assert_eq!(resolved["target_kind"], "flow");
+    assert_eq!(resolved["realm_preview"]["realm_id"], realm_id);
+    assert_eq!(
+        resolved["realm_preview"]["preview"]["title"],
+        "Preview realm"
+    );
+    assert_eq!(
+        resolved["realm_preview"]["preview"]["history_visibility"],
+        "joined"
+    );
+    assert_eq!(resolved["object_preview"]["flow_id"], flow_id);
+    assert!(resolved.get("join_candidates").is_none());
+}
+
+fn preview_token_for_address(
+    state: &AppState,
+    address: &str,
+    realm_id: &str,
+    preview_policy_digest: &str,
+) -> String {
+    let parsed = contrix_sdk::parse_address(address).unwrap();
+    let mut descriptor = contrix_sdk::TargetDescriptor::from_parsed(&parsed);
+    descriptor.set_realm_id(realm_id);
+    descriptor.link_type = contrix_sdk::LinkType::Preview;
+    let target_digest = contrix_sdk::target_digest(&descriptor).unwrap();
+    let mut claim = serde_json::json!({
+        "iss": state.config.service_did.clone(),
+        "aud": "anonymous",
+        "exp": (chrono::Utc::now() + chrono::Duration::minutes(10)).to_rfc3339(),
+        "nonce": new_prefixed_uuid7("cx:nonce:"),
+        "target_digest": target_digest,
+        "link_type": "preview",
+        "preview_policy_digest": preview_policy_digest,
+    });
+    let canonical_bytes = contrix_sdk::canonical::canonical_json_bytes(&claim).unwrap();
+    let payload_digest = contrix_sdk::canonical::sha256_digest(&canonical_bytes);
+    let signing_key = state.anchorer_signing_key();
+    let jws = contrix_sdk::jws::sign_jws_ed25519(&canonical_bytes, signing_key.as_ref()).unwrap();
+    claim["proof"] = serde_json::json!({
+        "kind": "detached_jws",
+        "alg": "EdDSA",
+        "verification_method": format!("{}#preview-token", state.config.service_did),
+        "payload_digest": payload_digest,
+        "jws": jws,
+    });
+    format!(
+        "cx:preview-token:{}",
+        URL_SAFE_NO_PAD.encode(claim.to_string())
+    )
+}
+
+#[tokio::test]
 async fn index_product_endpoints_return_demo_projection_shapes() {
     // `/api/v1/index/object` is the polymorphic typed-id describe (renamed
     // from `/index/entity` in round 6); it returns `{object: {object_id,

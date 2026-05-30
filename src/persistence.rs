@@ -6115,7 +6115,9 @@ impl KeyBackupStore for PgKeyBackupStore {
                 .and_then(Value::as_str)
                 .map(ToOwned::to_owned)
         };
-        let account_id = extract_str("account_id").or_else(|| extract_str("actor"));
+        let account_id = extract_str("account_id")
+            .or_else(|| extract_str("actor_id"))
+            .or_else(|| extract_str("actor"));
         let device_id = extract_str("device_id");
         let scheme = extract_str("scheme").or_else(|| extract_str("algorithm"));
         let version: i32 = payload

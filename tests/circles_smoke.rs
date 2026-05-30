@@ -91,6 +91,7 @@ fn add_realm_member(state: &mut ProjectionState, _hlc: &ServerHlc, realm_id: &st
             space_id: realm_id.to_owned(),
             state: "join".to_owned(),
             role: "member".to_owned(),
+            invited_at: None,
             joined_at: now,
             updated_at: now,
         },

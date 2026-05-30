@@ -1055,6 +1055,10 @@ pub struct MembershipState {
     /// mirror updated on every membership transition.
     pub state: String,
     pub role: String,
+    /// First effective invite frontier retained after a later join so
+    /// `history_visibility=invited` can start at the invite boundary while
+    /// `history_visibility=joined` starts at the join boundary.
+    pub invited_at: Option<chrono::DateTime<chrono::Utc>>,
     pub joined_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
@@ -4862,7 +4866,21 @@ impl ProjectionState {
             .unwrap_or("member")
             .to_owned();
         let key = (space_id.clone(), member.clone());
-        let joined_at = self.members.get(&key).map(|m| m.joined_at).unwrap_or(now);
+        let previous = self.members.get(&key);
+        let invited_at = match new_state {
+            "invite" => previous.and_then(|m| m.invited_at).or(Some(now)),
+            "join" => previous.and_then(|m| {
+                m.invited_at
+                    .or_else(|| (m.state == "invite").then_some(m.updated_at))
+            }),
+            _ => previous.and_then(|m| m.invited_at),
+        };
+        let joined_at = match (new_state, previous) {
+            ("join", Some(previous)) if previous.state == "join" => previous.joined_at,
+            ("join", _) => now,
+            (_, Some(previous)) => previous.joined_at,
+            _ => now,
+        };
 
         // Update the structured cache with side-band + FSM state mirror.
         self.members.insert(
@@ -4872,6 +4890,7 @@ impl ProjectionState {
                 space_id: space_id.clone(),
                 state: new_state.to_owned(),
                 role,
+                invited_at,
                 joined_at,
                 updated_at: now,
             },

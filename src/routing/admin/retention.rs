@@ -156,6 +156,7 @@ async fn sweep_retention_policy(
             space_id: space_id.clone(),
             kind: EventNotificationKind::ResyncRequired {
                 reason: "retention_policy_ttl".to_owned(),
+                reconnect_after_ms: None,
             },
         });
     }

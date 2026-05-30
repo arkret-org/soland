@@ -186,6 +186,10 @@ const REALM_UPDATE_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::R
     "cx.realm.update operation requires patch",
 )];
 const REALM_MODERATION_POLICY_REQUIREMENTS: &[PayloadRequirement] = &[];
+const REALM_POLICY_VALUE_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::Required(
+    "value",
+    "realm policy event requires value",
+)];
 // `cx.realm.update` / `cx.realm.destroy` carry an `action` string +
 // per-action fields (mirrors space-container / morph lifecycle for non-create
 // paths).
@@ -983,6 +987,20 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
             requirements: REALM_MODERATION_POLICY_REQUIREMENTS,
             validate: None,
         },
+        kinds::CX_REALM_HISTORY_VISIBILITY => OperationPayloadSchema {
+            requirements: REALM_POLICY_VALUE_REQUIREMENTS,
+            validate: Some(validate_history_visibility_payload),
+        },
+        kinds::CX_REALM_HISTORY_SHARING_POLICY | kinds::CX_REALM_PREVIEW_POLICY => {
+            OperationPayloadSchema {
+                requirements: REALM_POLICY_VALUE_REQUIREMENTS,
+                validate: None,
+            }
+        }
+        kinds::CX_REALM_KEY_SHARE => OperationPayloadSchema {
+            requirements: REALM_POLICY_VALUE_REQUIREMENTS,
+            validate: None,
+        },
         kinds::CX_CONFLICT_REPAIR => OperationPayloadSchema {
             requirements: CONFLICT_REPAIR_REQUIREMENTS,
             validate: Some(validate_conflict_repair_payload),
@@ -1262,6 +1280,30 @@ fn validate_read_marker_payload(operation: &Operation) -> Result<(), &'static st
     Ok(())
 }
 
+fn validate_history_visibility_payload(operation: &Operation) -> Result<(), &'static str> {
+    let value = operation
+        .payload
+        .get("value")
+        .and_then(Value::as_str)
+        .ok_or("cx.realm.history_visibility requires string value")?;
+    match value {
+        "world_readable" | "shared" | "invited" | "joined" => Ok(()),
+        "restricted" => {
+            if operation
+                .payload
+                .get("restricted_policy_digest")
+                .and_then(Value::as_str)
+                .is_some_and(|digest| digest.starts_with("sha256:"))
+            {
+                Ok(())
+            } else {
+                Err("history_sharing_policy_missing")
+            }
+        }
+        _ => Err("cx.realm.history_visibility value is unknown"),
+    }
+}
+
 fn validate_observed_dots_payload(operation: &Operation) -> Result<(), &'static str> {
     if operation
         .payload
@@ -1508,6 +1550,8 @@ pub async fn validate_operation_policy(
             validate_morph_schema_migrate_capability(operation)?;
         }
         validate_member_state_policy(state, operation).await?;
+        validate_history_visibility_policy(state, operation).await?;
+        validate_realm_key_share_policy(state, operation).await?;
         validate_realm_moderation_policy(state, operation)?;
         validate_poll_operation_policy(state, operation)?;
     }
@@ -1577,6 +1621,77 @@ async fn validate_member_state_policy(
         return Ok(());
     }
     Err("missing_capability")
+}
+
+async fn validate_history_visibility_policy(
+    state: &AppState,
+    operation: &Operation,
+) -> Result<(), &'static str> {
+    if kinds::canonical_kind_for_operation(operation) != Some(kinds::CX_REALM_HISTORY_VISIBILITY) {
+        return Ok(());
+    }
+    if operation.payload.get("value").and_then(Value::as_str) != Some("restricted") {
+        return Ok(());
+    }
+    let Some(meta) = state
+        .persistence
+        .realm_meta()
+        .get(operation.realm_id.as_str())
+        .await
+        .ok()
+        .flatten()
+    else {
+        return Err("history_sharing_policy_missing");
+    };
+    let Some(policy_digest) = meta.history_sharing_policy_digest.as_deref() else {
+        return Err("history_sharing_policy_missing");
+    };
+    let requested_digest = operation
+        .payload
+        .get("restricted_policy_digest")
+        .and_then(Value::as_str);
+    if requested_digest == Some(policy_digest) {
+        Ok(())
+    } else {
+        Err("history_sharing_policy_missing")
+    }
+}
+
+async fn validate_realm_key_share_policy(
+    state: &AppState,
+    operation: &Operation,
+) -> Result<(), &'static str> {
+    if kinds::canonical_kind_for_operation(operation) != Some(kinds::CX_REALM_KEY_SHARE) {
+        return Ok(());
+    }
+    let Some(meta) = state
+        .persistence
+        .realm_meta()
+        .get(operation.realm_id.as_str())
+        .await
+        .ok()
+        .flatten()
+    else {
+        return Err("history_sharing_policy_missing");
+    };
+    let Some(policy) = meta.history_sharing_policy.as_ref() else {
+        return Err("history_sharing_policy_missing");
+    };
+    if policy
+        .get("default_key_share")
+        .and_then(Value::as_str)
+        .is_some_and(|value| value == "event_time_visibility")
+    {
+        return Ok(());
+    }
+    if policy
+        .get("restricted_rules")
+        .and_then(Value::as_array)
+        .is_some_and(|rules| !rules.is_empty())
+    {
+        return Ok(());
+    }
+    Err("history_not_visible")
 }
 
 fn membership_target(operation: &Operation) -> Option<&str> {

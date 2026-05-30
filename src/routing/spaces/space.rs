@@ -404,18 +404,39 @@ pub async fn realm_event_visible_to_session(
             }
             match session {
                 Some(session) => {
-                    realm_has_member(state, realm_or_internal_id, &session.actor).await
+                    realm_active_member_at_read_time(state, realm_or_internal_id, &session.actor)
+                        .await
                 }
                 None => false,
             }
         }
-        "joined" | "invited" => {
+        "invited" => {
+            let Some(session) = session else {
+                return false;
+            };
+            realm_member_invited_or_joined_at(state, realm_or_internal_id, &session.actor)
+                .await
+                .is_some_and(|visible_at| event_created_at >= visible_at)
+        }
+        "joined" => {
             let Some(session) = session else {
                 return false;
             };
             realm_member_joined_at(state, realm_or_internal_id, &session.actor)
                 .await
                 .is_some_and(|joined_at| event_created_at >= joined_at)
+        }
+        "restricted" => {
+            let Some(session) = session else {
+                return false;
+            };
+            realm_restricted_history_policy_allows(
+                state,
+                realm_or_internal_id,
+                &session.actor,
+                event_created_at,
+            )
+            .await
         }
         _ => false,
     }
@@ -682,6 +703,125 @@ pub async fn space_member_joined_at(
         return meta.map(|record| record.created_at);
     }
     None
+}
+
+pub async fn realm_member_invited_or_joined_at(
+    state: &AppState,
+    realm_or_internal_id: &str,
+    actor: &str,
+) -> Option<DateTime<Utc>> {
+    match realm_scope_to_realm_id(realm_or_internal_id) {
+        Some(realm_id) => space_member_invited_or_joined_at(state, &realm_id, actor).await,
+        None => None,
+    }
+}
+
+pub async fn space_member_invited_or_joined_at(
+    state: &AppState,
+    space_id: &str,
+    actor: &str,
+) -> Option<DateTime<Utc>> {
+    if let Ok(projection) = state.projection.lock()
+        && let Some(member) = projection.member(space_id, actor)
+    {
+        if let Some(invited_at) = member.invited_at {
+            return Some(invited_at);
+        }
+        if matches!(member.state.as_str(), "invite" | "join") {
+            return Some(member.updated_at);
+        }
+    }
+    space_member_joined_at(state, space_id, actor).await
+}
+
+async fn realm_active_member_at_read_time(
+    state: &AppState,
+    realm_or_internal_id: &str,
+    actor: &str,
+) -> bool {
+    match realm_scope_to_realm_id(realm_or_internal_id) {
+        Some(realm_id) => {
+            if let Ok(projection) = state.projection.lock()
+                && let Some(member) = projection.member(&realm_id, actor)
+            {
+                return member.state == "join";
+            }
+            space_has_member(state, &realm_id, actor).await
+        }
+        None => false,
+    }
+}
+
+async fn realm_restricted_history_policy_allows(
+    state: &AppState,
+    realm_or_internal_id: &str,
+    actor: &str,
+    event_created_at: DateTime<Utc>,
+) -> bool {
+    let Some(realm_id) = realm_scope_to_realm_id(realm_or_internal_id) else {
+        return false;
+    };
+    let Some(meta) = state
+        .persistence
+        .realm_meta()
+        .get(&realm_id)
+        .await
+        .ok()
+        .flatten()
+    else {
+        return false;
+    };
+    let Some(policy) = meta.history_sharing_policy.as_ref() else {
+        return false;
+    };
+    let Some(rules) = policy.get("restricted_rules").and_then(Value::as_array) else {
+        return false;
+    };
+    let active_member = realm_active_member_at_read_time(state, &realm_id, actor).await;
+    let joined_at = space_member_joined_at(state, &realm_id, actor).await;
+    let invited_at = space_member_invited_or_joined_at(state, &realm_id, actor).await;
+    rules.iter().any(|rule| {
+        restricted_rule_matches_actor(rule, actor, active_member)
+            && restricted_rule_matches_range(rule, event_created_at, invited_at, joined_at)
+    })
+}
+
+fn restricted_rule_matches_actor(rule: &Value, actor: &str, active_member: bool) -> bool {
+    let audiences: Vec<&str> = rule
+        .get("audiences")
+        .or_else(|| rule.get("audience"))
+        .and_then(Value::as_array)
+        .map(|items| items.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default();
+    if audiences.contains(&"realm_member") && active_member {
+        return true;
+    }
+    if audiences.contains(&"authenticated") {
+        return true;
+    }
+    rule.get("actors")
+        .or_else(|| rule.get("principals"))
+        .and_then(Value::as_array)
+        .is_some_and(|actors| actors.iter().any(|value| value.as_str() == Some(actor)))
+}
+
+fn restricted_rule_matches_range(
+    rule: &Value,
+    event_created_at: DateTime<Utc>,
+    invited_at: Option<DateTime<Utc>>,
+    joined_at: Option<DateTime<Utc>>,
+) -> bool {
+    match rule
+        .get("range")
+        .or_else(|| rule.get("event_range"))
+        .and_then(Value::as_str)
+        .unwrap_or("rule_only")
+    {
+        "all" | "event_time_visibility" => true,
+        "from_invite" => invited_at.is_some_and(|at| event_created_at >= at),
+        "from_join" => joined_at.is_some_and(|at| event_created_at >= at),
+        _ => false,
+    }
 }
 
 pub async fn space_allows_plaintext_service(state: &AppState, space_id: &str) -> bool {

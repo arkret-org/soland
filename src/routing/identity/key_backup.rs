@@ -2,6 +2,7 @@
 
 use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::error::{AppError, ErrorCode};
@@ -55,6 +56,23 @@ const KEY_BACKUP_CONTENT_TYPES: &[&str] = &[
     "private_account_state",
 ];
 const DELETE_PROOF_HEADER: &str = "x-contrix-key-backup-delete-proof";
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+struct KeyBackupDeleteProofHeader {
+    issuer: String,
+    verification_method: String,
+    jws: String,
+}
+
+#[derive(Debug, Serialize)]
+struct KeyBackupDeleteProofTranscript<'a> {
+    kind: &'static str,
+    actor_id: &'a str,
+    backup_id: &'a str,
+    action: &'static str,
+    audience: &'static str,
+}
 
 fn schema_error(message: impl Into<String>) -> AppError {
     AppError::new(ErrorCode::SchemaViolation, message)
@@ -486,7 +504,74 @@ async fn enforce_key_backup_series_chain(
     Ok(())
 }
 
-fn delete_ownership_proof_matches(req: &Request, backup_id: &str, actor_id: &str) -> bool {
+fn key_backup_delete_proof_canonical_bytes(
+    actor_id: &str,
+    backup_id: &str,
+) -> Result<Vec<u8>, AppError> {
+    let transcript = KeyBackupDeleteProofTranscript {
+        kind: "cx.key_backup.delete_proof.v1",
+        actor_id,
+        backup_id,
+        action: "DELETE /api/v1/keys/backups/{backup_id}",
+        audience: "soland.key_backup.delete",
+    };
+    contrix_sdk::canonical::canonical_json_bytes(&transcript).map_err(|error| {
+        AppError::internal(format!(
+            "key backup delete proof transcript failed: {error}"
+        ))
+    })
+}
+
+fn verify_key_backup_delete_jws_proof(
+    state: &AppState,
+    proof: &str,
+    backup_id: &str,
+    actor_id: &str,
+) -> Result<(), AppError> {
+    let proof: KeyBackupDeleteProofHeader = serde_json::from_str(proof).map_err(|error| {
+        AppError::capability_denied(format!(
+            "key backup delete proof must be JSON detached-JWS metadata: {error}"
+        ))
+    })?;
+    if proof.issuer != actor_id {
+        return Err(AppError::capability_denied(
+            "key backup delete proof issuer must match authenticated actor",
+        ));
+    }
+    crate::jws_verify::validate_verification_method_controller(
+        actor_id,
+        &proof.verification_method,
+    )
+    .map_err(|error| {
+        AppError::capability_denied(format!(
+            "key backup delete proof verification method invalid: {error}"
+        ))
+    })?;
+    let canonical = key_backup_delete_proof_canonical_bytes(actor_id, backup_id)?;
+    crate::jws_verify::verify_jws_ed25519(
+        &canonical,
+        &proof.jws,
+        &proof.verification_method,
+        actor_id,
+        state,
+    )
+    .map_err(|error| {
+        AppError::capability_denied(format!(
+            "key backup delete proof signature invalid: {error}"
+        ))
+    })
+}
+
+fn is_development_delete_proof(proof: &str, backup_id: &str, actor_id: &str) -> bool {
+    proof == format!("dev-ssk-delete:v1:{actor_id}:{backup_id}")
+}
+
+fn verify_delete_ownership_proof(
+    state: &AppState,
+    req: &Request,
+    backup_id: &str,
+    actor_id: &str,
+) -> Result<(), AppError> {
     let Some(proof) = req
         .headers()
         .get(salvo::http::header::HeaderName::from_static(
@@ -495,13 +580,34 @@ fn delete_ownership_proof_matches(req: &Request, backup_id: &str, actor_id: &str
         .and_then(|value| value.to_str().ok())
         .map(str::trim)
     else {
-        return false;
+        return Err(AppError::capability_denied(format!(
+            "key backup delete requires `{DELETE_PROOF_HEADER}` ownership proof"
+        )));
     };
-    // Development-mode proof shape used by cotest and the reference UI until
-    // full SSK/JWS verification lands on this REST surface. It still binds
-    // the destructive delete to the current actor and backup id so a bearer
-    // token alone is not sufficient.
-    proof == format!("dev-ssk-delete:v1:{actor_id}:{backup_id}")
+    if is_development_delete_proof(proof, backup_id, actor_id) {
+        if state.config.development_mode {
+            return Ok(());
+        }
+        return Err(AppError::capability_denied(
+            "development key-backup delete proofs are disabled outside development_mode",
+        ));
+    }
+    verify_key_backup_delete_jws_proof(state, proof, backup_id, actor_id)
+}
+
+fn key_backup_duplicate_for_actor(
+    existing: Option<&Value>,
+    actor_id: &str,
+) -> Result<bool, AppError> {
+    if let Some(existing) = existing
+        && existing.get("actor_id").and_then(Value::as_str) != Some(actor_id)
+    {
+        return Err(
+            AppError::capability_denied("backup_id is already owned by a different actor")
+                .with_status(StatusCode::CONFLICT),
+        );
+    }
+    Ok(existing.is_some())
 }
 
 #[endpoint(
@@ -532,7 +638,8 @@ async fn put_key_backup(
         .unwrap_or_default()
         .to_owned();
     let store = state.persistence.key_backups();
-    let duplicate = store.get(&backup_id).await.ok().flatten().is_some();
+    let existing = store.get(&backup_id).await.ok().flatten();
+    let duplicate = key_backup_duplicate_for_actor(existing.as_ref(), &session.actor)?;
     store
         .put(backup_id.clone(), backup.clone())
         .await
@@ -675,11 +782,7 @@ async fn delete_key_backup(
             todos: Vec::new(),
         });
     }
-    if !delete_ownership_proof_matches(req, &backup_id, &session.actor) {
-        return Err(AppError::capability_denied(format!(
-            "key backup delete requires `{DELETE_PROOF_HEADER}` ownership proof"
-        )));
-    }
+    verify_delete_ownership_proof(state, req, &backup_id, &session.actor)?;
     let deleted = store.delete(&backup_id).await.unwrap_or(false);
     json_ok(KeysBackupsDeleteResBody {
         ok: true,
@@ -822,5 +925,64 @@ mod tests {
             .expect_err("soland must store only opaque MLS backup ciphertext");
         assert_eq!(err.code, ErrorCode::SchemaViolation);
         assert!(err.message.contains("plaintext field"));
+    }
+
+    #[test]
+    fn duplicate_backup_id_rejects_cross_actor_overwrite() {
+        let existing = json!({
+            "backup_id": BACKUP_ID,
+            "actor_id": "did:web:bob.example"
+        });
+
+        let err = key_backup_duplicate_for_actor(Some(&existing), ACTOR)
+            .expect_err("other actor must not overwrite backup_id");
+
+        assert_eq!(err.code, ErrorCode::CapabilityDenied);
+        assert_eq!(err.http_status(), StatusCode::CONFLICT);
+    }
+
+    #[test]
+    fn duplicate_backup_id_accepts_same_actor_retry() {
+        let existing = json!({
+            "backup_id": BACKUP_ID,
+            "actor_id": ACTOR
+        });
+
+        let duplicate = key_backup_duplicate_for_actor(Some(&existing), ACTOR)
+            .expect("same actor idempotent retry is allowed");
+
+        assert!(duplicate);
+    }
+
+    #[test]
+    fn delete_dev_proof_binds_actor_and_backup_id_exactly() {
+        let proof = format!("dev-ssk-delete:v1:{ACTOR}:{BACKUP_ID}");
+
+        assert!(is_development_delete_proof(&proof, BACKUP_ID, ACTOR));
+        assert!(!is_development_delete_proof(
+            &proof,
+            BACKUP_ID,
+            "did:web:bob.example"
+        ));
+        assert!(!is_development_delete_proof(
+            &proof,
+            "cx:backup:01964137-0000-7000-8000-000000000099",
+            ACTOR
+        ));
+    }
+
+    #[test]
+    fn delete_jws_proof_transcript_is_stable() {
+        let canonical = key_backup_delete_proof_canonical_bytes(ACTOR, BACKUP_ID)
+            .expect("canonical delete proof transcript");
+        let value: Value = serde_json::from_slice(&canonical).expect("canonical JSON");
+
+        assert_eq!(value["kind"], "cx.key_backup.delete_proof.v1");
+        assert_eq!(value["actor_id"], ACTOR);
+        assert_eq!(value["backup_id"], BACKUP_ID);
+        assert_eq!(
+            contrix_sdk::canonical::sha256_digest(&canonical),
+            "sha256:45b12aa842a30b12869c571c4fd4d70089c02ffa47b1cf68f55c99bbf35ffb06"
+        );
     }
 }

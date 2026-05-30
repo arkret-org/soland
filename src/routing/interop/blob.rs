@@ -332,12 +332,9 @@ async fn blob_get(depot: &mut Depot, req: &mut Request, res: &mut Response) {
                 return;
             }
             // Round R2/R3 (T11) — fail-closed gates for E2EE / legal_hold /
-            // redacted / actor_private. The blob_get path here serves the
-            // bytes directly rather than issuing a presign URL; the gates +
-            // headers below give the spec-required protection even for the
-            // direct-serve path. TODO(round23-T11): wire dedicated presign
-            // endpoint once object storage backend supports it; for now
-            // direct-serve carries the same response shape requirements.
+            // redacted / actor_private. `/blob/presign` issues a short-lived
+            // local direct-serve URL that re-enters this handler without a
+            // bearer session; the same gates + response headers apply here.
             let blob_value = presign_blob_policy_value(blob);
             let actor = session
                 .as_ref()
