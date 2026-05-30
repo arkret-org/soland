@@ -268,7 +268,7 @@ pub const CX_ORGANIZATION_MODERATION_POLICY: &str = "cx.organization.moderation_
 // G3.S1 — MLS / E2EE lifecycle event kinds.
 //
 // Canonical kinds per
-// `contrix-spec/spec/v1/artifacts/schemas/event-schema.json` (kind enum):
+// `contrix-spec/spec/v1/artifacts/schemas/event-envelope.schema.json` (kind enum):
 //   - `cx.mls.keypackage`    — KeyPackage publication. The publish/claim
 //                              distinction lives at the HTTP operation_id
 //                              layer (`cx.keys.keypackages.upload` /

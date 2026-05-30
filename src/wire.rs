@@ -397,7 +397,28 @@ pub struct ResolveRealmResponse {
     pub space_preview: RealmDirectoryEntry,
     pub stripped_state: Vec<Value>,
     pub join_rule: String,
-    pub via_services: Vec<String>,
+    pub join_candidates: Vec<RealmJoinCandidate>,
+}
+
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
+pub struct RealmJoinCandidate {
+    pub realm_id: String,
+    pub service_did: String,
+    pub service_type: String,
+    pub role: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub endpoint: Option<String>,
+    pub operations: Vec<String>,
+    pub join_methods: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub priority: Option<u16>,
+    pub source: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_refs: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frontier_ref: Option<String>,
+    pub as_of: String,
+    pub expires_at: String,
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]

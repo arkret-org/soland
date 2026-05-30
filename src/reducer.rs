@@ -2373,7 +2373,7 @@ fn apply_realm_audit_policy_downgrade_dispatch(
 // module can grow independently (see top-level `pub mod mls;`).
 //
 // Canonical event kinds per
-// `contrix-spec/spec/v1/artifacts/schemas/event-schema.json`: a single
+// `contrix-spec/spec/v1/artifacts/schemas/event-envelope.schema.json`: a single
 // `cx.mls.keypackage` kind covers both publish and claim. The reducer
 // dispatches on `payload.action == "publish" | "claim"` (the publish-
 // vs-claim split lives at the HTTP operation_id layer:

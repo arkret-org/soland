@@ -93,7 +93,7 @@ async fn events_describe(depot: &mut Depot, res: &mut Response) {
             ],
             "hashing": {
                 "canonical_digest": "server-computed sha256 over Event Envelope JSON with proofs and unsigned removed",
-                "proof_payload_digest": "sha256 over Event Envelope JSON with proofs and unsigned removed"
+                "proof_event_digest": "sha256 over Event Envelope JSON with proofs and unsigned removed"
             },
             "causality": {
                 "actor_seq": "strictly increasing per actor",
@@ -1748,14 +1748,7 @@ async fn validate_event_envelope(
         &canonical_digest,
     )
     .await?;
-    validate_event_proofs(
-        object,
-        state,
-        session,
-        &actor_id,
-        &canonical_digest,
-        &canonical_bytes,
-    )?;
+    validate_event_proofs(object, state, session, &actor_id, &canonical_digest)?;
 
     Ok(ValidatedEventEnvelope {
         event_id,
@@ -1875,7 +1868,7 @@ fn validate_event_critical_features(
     let supported = [
         "cx.event_envelope.v1",
         "cx.profile.core_event_store.v1",
-        "cx.proof.payload_digest.v1",
+        "cx.proof.event_digest.v1",
     ];
     for key in ["crit", "critical", "critical_features"] {
         let Some(value) = object.get(key) else {
@@ -2743,7 +2736,6 @@ fn validate_event_proofs(
     session: &SessionRecord,
     actor_id: &str,
     expected_payload_digest: &str,
-    canonical_bytes: &[u8],
 ) -> Result<(), EventValidationError> {
     let proofs = object
         .get("proofs")
@@ -2765,7 +2757,7 @@ fn validate_event_proofs(
     // Proof validation forks on `state.config.development_mode`:
     // - **Production** (`development_mode=false`): EVERY proof MUST be a full
     //   detached-JWS proof with `kind`/`alg`/`verification_method`/
-    //   `payload_digest`/`created_at`/`jws`, hashing the full canonical envelope.
+    //   `event_digest`/`created_at`/`jws`, hashing the full canonical envelope.
     //   The `type=="dev-proof"` and payload-only hash forms are NOT accepted
     //   under any circumstance — a malicious client claiming
     //   `type="dev-proof"` in production fails-closed here.
@@ -2793,7 +2785,7 @@ fn validate_event_proofs(
                 "kind",
                 "alg",
                 "verification_method",
-                "payload_digest",
+                "event_digest",
                 "created_at",
                 "jws",
             ]
@@ -2823,15 +2815,20 @@ fn validate_event_proofs(
                 "event proof alg must be EdDSA",
             ));
         }
-        let payload_digest =
-            event_string_field(proof_object, &["payload_digest"]).ok_or_else(|| {
+        let proof_digest_key = if is_dev_proof {
+            "payload_digest"
+        } else {
+            "event_digest"
+        };
+        let proof_event_digest =
+            event_string_field(proof_object, &[proof_digest_key]).ok_or_else(|| {
                 event_validation_error(
                     StatusCode::BAD_REQUEST,
                     "invalid_proof",
-                    "proof payload_digest is required",
+                    "proof event_digest is required",
                 )
             })?;
-        // Production: the proof's payload_digest MUST match the canonical
+        // Production: the proof's event_digest MUST match the canonical
         // envelope digest. Dev-only: also accept the payload-only sha256 form
         // so test fixtures keep round-tripping. Production never falls back.
         let payload_only_hash_accept = if is_dev_proof {
@@ -2842,13 +2839,13 @@ fn validate_event_proofs(
         } else {
             None
         };
-        if payload_digest != expected_payload_digest
-            && payload_only_hash_accept.as_deref() != Some(&payload_digest)
+        if proof_event_digest != expected_payload_digest
+            && payload_only_hash_accept.as_deref() != Some(&proof_event_digest)
         {
             return Err(event_validation_error(
                 StatusCode::BAD_REQUEST,
-                "proof_payload_digest_mismatch",
-                "proof payload_digest does not match the event payload",
+                "proof_event_digest_mismatch",
+                "proof event_digest does not match the event payload",
             ));
         }
         validate_event_audience_fields(proof_object, state, session)?;
@@ -2877,8 +2874,23 @@ fn validate_event_proofs(
                     "proof jws is required",
                 )
             })?;
+            let created_at =
+                event_string_field(proof_object, &["created_at"]).ok_or_else(|| {
+                    event_validation_error(
+                        StatusCode::BAD_REQUEST,
+                        "invalid_proof",
+                        "proof created_at is required",
+                    )
+                })?;
+            let proof_binding_bytes = event_proof_binding_bytes(
+                &proof_event_digest,
+                actor_id,
+                &verification_method,
+                &created_at,
+                proof_object,
+            )?;
             crate::jws_verify::verify_jws_ed25519(
-                canonical_bytes,
+                &proof_binding_bytes,
                 &jws,
                 &verification_method,
                 actor_id,
@@ -2895,6 +2907,32 @@ fn validate_event_proofs(
         }
     }
     Ok(())
+}
+
+fn event_proof_binding_bytes(
+    event_digest: &str,
+    actor_id: &str,
+    verification_method: &str,
+    created_at: &str,
+    proof_object: &serde_json::Map<String, Value>,
+) -> Result<Vec<u8>, EventValidationError> {
+    let mut binding = serde_json::Map::new();
+    binding.insert("event_digest".to_owned(), json!(event_digest));
+    binding.insert("actor_id".to_owned(), json!(actor_id));
+    binding.insert("verification_method".to_owned(), json!(verification_method));
+    binding.insert("created_at".to_owned(), json!(created_at));
+    for optional in ["domain", "audience"] {
+        if let Some(value) = proof_object.get(optional) {
+            binding.insert(optional.to_owned(), value.clone());
+        }
+    }
+    canonical::canonical_json_bytes(&Value::Object(binding)).map_err(|error| {
+        event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_proof",
+            &format!("proof binding canonicalization failed: {error}"),
+        )
+    })
 }
 
 fn event_string_field(object: &serde_json::Map<String, Value>, keys: &[&str]) -> Option<String> {
@@ -3225,7 +3263,7 @@ fn event_semantic_refs(
 
 fn event_canonical_source(envelope: &Value) -> Value {
     // Per contrix-spec conformance-vectors.md §1.6: both the event digest and
-    // every proof's `payload_digest` MUST be derived from canonical event bytes
+    // every proof's `event_digest` MUST be derived from canonical event bytes
     // with `proofs` and `unsigned` removed. Stripping derived `canonical_*`
     // slots as well keeps fixtures that round-trip them in the envelope from
     // poisoning the digest.
@@ -4114,7 +4152,6 @@ mod proof_strictness_tests {
             &session,
             "did:web:alice.example",
             "sha256:dead",
-            b"canonical-event",
         )
         .expect_err("production must reject dev-proof shape");
         // Missing strict-JWS fields trips `invalid_proof` first.
@@ -4143,7 +4180,6 @@ mod proof_strictness_tests {
             &session,
             "did:web:alice.example",
             "sha256:dead",
-            b"canonical-event",
         );
         assert!(
             result.is_ok(),
@@ -4156,7 +4192,7 @@ mod proof_strictness_tests {
         let state = make_state(false);
         let session = session();
         let canonical_bytes = br#"{"actor_id":"did:web:alice.example","event_id":"cx:event:test"}"#;
-        let payload_digest = format!("sha256:{}", sha256_hex(canonical_bytes));
+        let event_digest = format!("sha256:{}", sha256_hex(canonical_bytes));
         let mut object = serde_json::Map::new();
         object.insert(
             "proofs".to_owned(),
@@ -4164,7 +4200,7 @@ mod proof_strictness_tests {
                 "kind": "detached_jws",
                 "alg": "EdDSA",
                 "verification_method": "did:web:alice.example#k1",
-                "payload_digest": payload_digest,
+                "event_digest": event_digest,
                 "created_at": "2026-05-17T00:00:00Z",
                 "jws": "eyJhbGciOiJFZERTQSJ9..AAAAAAAA"
             }]),
@@ -4177,7 +4213,6 @@ mod proof_strictness_tests {
             &session,
             "did:web:alice.example",
             &format!("sha256:{}", sha256_hex(canonical_bytes)),
-            canonical_bytes,
         )
         .expect_err("production must reject unsigned/fake JWS proofs");
         assert_eq!(err.code, "invalid_proof");

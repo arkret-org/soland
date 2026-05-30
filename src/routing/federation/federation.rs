@@ -1087,7 +1087,19 @@ pub(super) async fn federation_pull_operations(
             "manifest": manifest,
             "state_digest": state_digest,
             "chunks": [],
-            "via_services": [state.config.service_did.clone()],
+            "join_candidates": [{
+                "realm_id": realm_id,
+                "service_did": state.config.service_did.clone(),
+                "service_type": "principal_server",
+                "role": "primary",
+                "endpoint": state.config.public_base_url.clone(),
+                "operations": ["cx.events.submit"],
+                "join_methods": ["invite_accept", "member_join", "knock", "application"],
+                "priority": 0,
+                "source": "directory_ingest",
+                "as_of": now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                "expires_at": (now() + Duration::minutes(10)).to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            }],
         })
     });
     let mut seen_cursor = after_cursor.is_none();

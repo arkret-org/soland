@@ -231,6 +231,17 @@ async fn server_describe_advertises_auth_server_url_when_configured() {
 async fn service_did_is_config_driven_across_public_metadata() {
     let service_did = "did:web:configured.example";
     let state = AppState::new(test_config_with_service_did(service_did), Db { pool: None });
+    let resolved_realm = seed_test_realm(
+        &state,
+        "did:web:alice.example",
+        "Configured Service DID",
+        Some("Public metadata test Realm"),
+        "public",
+        &[],
+        &[],
+    )
+    .await;
+    let resolved_realm_id = resolved_realm["space_id"].as_str().unwrap();
     let token = dev_token(state.clone()).await;
     let service = app_from_state(state.clone());
 
@@ -275,13 +286,20 @@ async fn service_did_is_config_driven_across_public_metadata() {
     assert_eq!(directory["service_did"], service_did);
 
     let resolved: Value = TestClient::post("http://server/api/v1/directory/resolve-realm")
-        .json(&serde_json::json!({"realm_id": DEMO_REALM_ID}))
+        .json(&serde_json::json!({"realm_id": resolved_realm_id}))
         .send(&service)
         .await
         .take_json()
         .await
         .unwrap();
-    assert_eq!(resolved["via_services"], serde_json::json!([service_did]));
+    assert_eq!(
+        resolved["join_candidates"][0]["service_did"], service_did,
+        "resolve-realm response: {resolved}"
+    );
+    assert_eq!(
+        resolved["join_candidates"][0]["operations"],
+        serde_json::json!(["cx.events.submit"])
+    );
 
     let index: Value = TestClient::get("http://server/api/v1/index/describe")
         .send(&service)

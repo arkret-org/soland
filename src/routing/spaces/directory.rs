@@ -34,10 +34,10 @@ use crate::routing::organizations;
 use crate::state::{AppState, RealmDirectoryEntry, RealmDirectoryQuery, SessionRecord};
 use crate::wire::{
     DirectoryDescribeResBody, DirectoryValueSearchResponse, HandleClaim,
-    HandleClaimDeliveryBinding, HandleClaimProof, ResolveHandleRequest, ResolveHandleResponse,
-    ResolveOrganizationRequest, ResolveOrganizationResponse, ResolveRealmRequest,
-    ResolveRealmResponse, SearchActorsRequest, SearchOrganizationsRequest, SearchRealmsRequest,
-    SearchRealmsResponse, SearchUsersRequest,
+    HandleClaimDeliveryBinding, HandleClaimProof, RealmJoinCandidate, ResolveHandleRequest,
+    ResolveHandleResponse, ResolveOrganizationRequest, ResolveOrganizationResponse,
+    ResolveRealmRequest, ResolveRealmResponse, SearchActorsRequest, SearchOrganizationsRequest,
+    SearchRealmsRequest, SearchRealmsResponse, SearchUsersRequest,
 };
 
 /// Snapshot the in-memory realm directory (under a short lock) and return the
@@ -220,11 +220,48 @@ async fn resolve_realm(
                 } else {
                     "invite_or_request".to_owned()
                 },
-                via_services: vec![state.config.service_did.clone()],
+                join_candidates: join_candidates_for_resolved_realm(
+                    state,
+                    space.realm_id.as_str(),
+                    discoverability.as_str(),
+                ),
             })
         }
         None => Err(AppError::not_found("not found")),
     }
+}
+
+fn join_candidates_for_resolved_realm(
+    state: &AppState,
+    realm_id: &str,
+    discoverability: &str,
+) -> Vec<RealmJoinCandidate> {
+    let observed_at = now();
+    let join_methods = if discoverability == "public" {
+        vec!["member_join".to_owned(), "invite_accept".to_owned()]
+    } else {
+        vec![
+            "invite_accept".to_owned(),
+            "knock".to_owned(),
+            "application".to_owned(),
+        ]
+    };
+    vec![RealmJoinCandidate {
+        realm_id: realm_id.to_owned(),
+        service_did: state.config.service_did.clone(),
+        service_type: "principal_server".to_owned(),
+        role: "primary".to_owned(),
+        endpoint: Some(state.config.public_base_url.clone()),
+        operations: vec!["cx.events.submit".to_owned()],
+        join_methods,
+        priority: Some(0),
+        source: "directory_ingest".to_owned(),
+        source_refs: None,
+        frontier_ref: None,
+        as_of: observed_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        expires_at: (observed_at + chrono::Duration::minutes(10))
+            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+    }]
 }
 
 #[endpoint(
