@@ -47,6 +47,7 @@ const KEY_BACKUP_CONTENT_TYPES: &[&str] = &[
     "self_signing_key",
     "user_signing_key",
     "recovery_secret",
+    "mls_account_secret",
     "mls_group_secrets_backup_key",
     "mls_group_state",
     "mls_epoch_secret",
