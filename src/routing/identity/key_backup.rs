@@ -76,11 +76,55 @@ fn required_u64(parent: &Value, field: &str) -> Result<u64, AppError> {
         .ok_or_else(|| schema_error(format!("key backup kdf.params `{field}` is required")))
 }
 
-fn validate_key_backup_kdf(backup: &Value, encryption: &Value) -> Result<(), AppError> {
-    if encryption.get("recipient_method").and_then(Value::as_str) != Some("passphrase_kdf") {
-        return Ok(());
+fn validate_key_backup_encryption(
+    backup: &Value,
+    backup_class: &str,
+    encryption: &Value,
+) -> Result<(), AppError> {
+    let method = encryption
+        .get("recipient_method")
+        .and_then(Value::as_str)
+        .ok_or_else(|| schema_error("key backup encryption.recipient_method is required"))?;
+    match method {
+        "passphrase_kdf" => {
+            if backup_class == "mls_history" {
+                return Err(schema_error(
+                    "mls_history key backups must use device_snapshot_secret",
+                ));
+            }
+            validate_key_backup_kdf(backup, encryption)
+        }
+        "device_snapshot_secret" => {
+            if backup_class != "mls_history" {
+                return Err(schema_error(
+                    "device_snapshot_secret is only valid for mls_history key backups",
+                ));
+            }
+            if encryption.get("kdf").is_some() {
+                return Err(schema_error(
+                    "device_snapshot_secret key backups must not carry encryption.kdf",
+                ));
+            }
+            let recipient = encryption
+                .get("recipient_key_ref")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    schema_error("device_snapshot_secret key backup requires recipient_key_ref")
+                })?;
+            if !is_protocol_device_id(recipient) {
+                return Err(schema_error(
+                    "device_snapshot_secret recipient_key_ref must be cx:device:<uuidv7>",
+                ));
+            }
+            Ok(())
+        }
+        other => Err(schema_error(format!(
+            "unsupported key backup recipient_method `{other}`"
+        ))),
     }
+}
 
+fn validate_key_backup_kdf(backup: &Value, encryption: &Value) -> Result<(), AppError> {
     let kdf = encryption
         .get("kdf")
         .ok_or_else(|| schema_error("passphrase_kdf key backup requires encryption.kdf"))?;
@@ -142,6 +186,19 @@ fn validate_key_backup_kdf(backup: &Value, encryption: &Value) -> Result<(), App
         None => return Err(schema_error("key backup kdf.name is required")),
     }
     Ok(())
+}
+
+fn is_protocol_device_id(value: &str) -> bool {
+    let Some(rest) = value.strip_prefix("cx:device:") else {
+        return false;
+    };
+    rest.len() == 36
+        && rest.chars().enumerate().all(|(idx, ch)| match idx {
+            8 | 13 | 18 | 23 => ch == '-',
+            14 => ch == '7',
+            19 => matches!(ch, '8' | '9' | 'a' | 'b'),
+            _ => ch.is_ascii_hexdigit() && !ch.is_ascii_uppercase(),
+        })
 }
 
 fn validate_key_backup_body(
@@ -248,7 +305,10 @@ fn validate_key_backup_body(
     let encryption = backup
         .get("encryption")
         .ok_or_else(|| schema_error("key backup encryption is required"))?;
-    validate_key_backup_kdf(backup, encryption)?;
+    validate_key_backup_encryption(backup, backup_class, encryption)?;
+    if backup_class == "mls_history" {
+        validate_mls_history_opaque_only(backup)?;
+    }
 
     let contents = backup
         .get("contents")
@@ -269,6 +329,49 @@ fn validate_key_backup_body(
         }
     }
     Ok(())
+}
+
+fn validate_mls_history_opaque_only(backup: &Value) -> Result<(), AppError> {
+    fn scan(value: &Value, path: &str) -> Result<(), AppError> {
+        match value {
+            Value::Object(map) => {
+                for (key, child) in map {
+                    let key_lower = key.to_ascii_lowercase();
+                    if matches!(
+                        key_lower.as_str(),
+                        "plaintext"
+                            | "plain_text"
+                            | "serialized_state"
+                            | "state_bytes"
+                            | "group_state"
+                            | "passphrase"
+                            | "mls_passphrase"
+                            | "snapshot_secret"
+                    ) {
+                        return Err(schema_error(format!(
+                            "mls_history key backups must not carry plaintext field {path}/{key}"
+                        )));
+                    }
+                    let child_path = if path.is_empty() {
+                        format!("/{key}")
+                    } else {
+                        format!("{path}/{key}")
+                    };
+                    scan(child, &child_path)?;
+                }
+                Ok(())
+            }
+            Value::Array(items) => {
+                for (idx, child) in items.iter().enumerate() {
+                    scan(child, &format!("{path}/{idx}"))?;
+                }
+                Ok(())
+            }
+            _ => Ok(()),
+        }
+    }
+
+    scan(backup, "")
 }
 
 /// CXP-0008 / CXP-0009 (spec head 37ce729) — series monotonicity check
@@ -584,4 +687,139 @@ async fn delete_key_backup(
         state: if deleted { "deleted" } else { "missing" }.to_owned(),
         todos: Vec::new(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    const ACTOR: &str = "did:web:alice.example";
+    const BACKUP_ID: &str = "cx:backup:01964137-0000-7000-8000-000000000001";
+    const DEVICE_ID: &str = "cx:device:01964137-0000-7000-8000-000000000001";
+
+    fn key_backup_body(backup_class: &str, item_type: &str, encryption: Value) -> Value {
+        json!({
+            "backup_id": BACKUP_ID,
+            "actor_id": ACTOR,
+            "backup_class": backup_class,
+            "backup_version": "kb_1",
+            "created_at": "2026-05-30T00:00:00Z",
+            "series_id": "cx:backup_series:01964137-0000-7000-8000-000000000001",
+            "series_seq": 0,
+            "encryption": encryption,
+            "contents": [{
+                "item_type": item_type,
+                "secret_id": "test-secret"
+            }],
+            "ciphertext": "AAAA",
+            "ciphertext_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+        })
+    }
+
+    fn passphrase_encryption() -> Value {
+        json!({
+            "recipient_method": "passphrase_kdf",
+            "recipient_key_ref": DEVICE_ID,
+            "kdf": {
+                "name": "argon2id",
+                "salt": "salt",
+                "params": {
+                    "memory_kib": 65_536,
+                    "iterations": 3,
+                    "parallelism": 1
+                }
+            },
+            "aead": {
+                "name": "xchacha20_poly1305",
+                "nonce": "nonce"
+            }
+        })
+    }
+
+    fn device_snapshot_encryption() -> Value {
+        json!({
+            "recipient_method": "device_snapshot_secret",
+            "recipient_key_ref": DEVICE_ID,
+            "aead": {
+                "name": "xchacha20_poly1305",
+                "nonce": "nonce"
+            }
+        })
+    }
+
+    #[test]
+    fn mls_history_accepts_device_snapshot_secret() {
+        let body = key_backup_body(
+            "mls_history",
+            "mls_group_state",
+            device_snapshot_encryption(),
+        );
+
+        validate_key_backup_body(BACKUP_ID, ACTOR, &body)
+            .expect("MLS history device snapshot backup should validate");
+    }
+
+    #[test]
+    fn non_mls_backup_rejects_device_snapshot_secret() {
+        let body = key_backup_body(
+            "secret_storage",
+            "recovery_secret",
+            device_snapshot_encryption(),
+        );
+
+        let err = validate_key_backup_body(BACKUP_ID, ACTOR, &body)
+            .expect_err("device snapshot keys are MLS-history only");
+        assert_eq!(err.code, ErrorCode::SchemaViolation);
+        assert!(err.message.contains("mls_history"));
+    }
+
+    #[test]
+    fn unsupported_recipient_method_is_rejected() {
+        let mut encryption = passphrase_encryption();
+        encryption["recipient_method"] = json!("legacy_magic_key");
+        let body = key_backup_body("secret_storage", "recovery_secret", encryption);
+
+        let err = validate_key_backup_body(BACKUP_ID, ACTOR, &body)
+            .expect_err("unknown recipient methods must not pass schema validation");
+        assert_eq!(err.code, ErrorCode::SchemaViolation);
+        assert!(err.message.contains("recipient_method"));
+    }
+
+    #[test]
+    fn passphrase_kdf_still_requires_kdf_metadata() {
+        let mut encryption = passphrase_encryption();
+        encryption.as_object_mut().unwrap().remove("kdf");
+        let body = key_backup_body("secret_storage", "recovery_secret", encryption);
+
+        let err = validate_key_backup_body(BACKUP_ID, ACTOR, &body)
+            .expect_err("passphrase_kdf without kdf metadata is invalid");
+        assert_eq!(err.code, ErrorCode::SchemaViolation);
+        assert!(err.message.contains("encryption.kdf"));
+    }
+
+    #[test]
+    fn mls_history_rejects_passphrase_kdf() {
+        let body = key_backup_body("mls_history", "mls_group_state", passphrase_encryption());
+
+        let err = validate_key_backup_body(BACKUP_ID, ACTOR, &body)
+            .expect_err("MLS history passphrase KDF backups are no longer supported");
+        assert_eq!(err.code, ErrorCode::SchemaViolation);
+        assert!(err.message.contains("device_snapshot_secret"));
+    }
+
+    #[test]
+    fn mls_history_rejects_plaintext_fields() {
+        let mut body = key_backup_body(
+            "mls_history",
+            "mls_group_state",
+            device_snapshot_encryption(),
+        );
+        body["plaintext"] = json!("raw group state");
+
+        let err = validate_key_backup_body(BACKUP_ID, ACTOR, &body)
+            .expect_err("soland must store only opaque MLS backup ciphertext");
+        assert_eq!(err.code, ErrorCode::SchemaViolation);
+        assert!(err.message.contains("plaintext field"));
+    }
 }
