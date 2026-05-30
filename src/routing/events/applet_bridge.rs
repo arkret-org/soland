@@ -64,7 +64,7 @@ fn lookup_bridge_url(state: &AppState, applet_id: &str) -> Option<String> {
 /// Called from `project_accepted_operations` AFTER the `start` event
 /// itself has been broadcast + persisted, so a subscriber sees them
 /// in causal order.
-pub fn maybe_emit_echo_status_for_session_start(
+pub async fn maybe_emit_echo_status_for_session_start(
     state: &AppState,
     origin: &str,
     operation: &contrix_sdk::Operation,
@@ -117,7 +117,8 @@ pub fn maybe_emit_echo_status_for_session_start(
                 &bridge_url_clone,
                 &origin_owned,
                 outcome,
-            );
+            )
+            .await;
         });
         return;
     }
@@ -148,7 +149,7 @@ pub fn maybe_emit_echo_status_for_session_start(
         record.event_id.clone(),
         super::projection::projection_event_json(&record),
     ));
-    append_projection_event(state, record);
+    append_projection_event(state, record).await;
 }
 
 /// Outcome of an applet bridge invocation.
@@ -189,19 +190,17 @@ async fn forward_to_applet_bridge(
             };
         }
     };
-    let client = match reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-    {
-        Ok(c) => c,
-        Err(err) => {
-            return AppletBridgeOutcome::UpstreamFailure {
-                code: "client_init_failed".to_owned(),
-                message: format!("reqwest client init: {err}"),
-            };
-        }
-    };
+    let client =
+        match crate::security::build_default_egress_http_client(std::time::Duration::from_secs(10))
+        {
+            Ok(c) => c,
+            Err(err) => {
+                return AppletBridgeOutcome::UpstreamFailure {
+                    code: "client_init_failed".to_owned(),
+                    message: format!("reqwest client init: {err}"),
+                };
+            }
+        };
     let body = json!({
         "session_id": session_id,
         "applet_id": applet_id,
@@ -236,7 +235,7 @@ async fn forward_to_applet_bridge(
 
 /// Emit either `cx.applet.protocol_session.status` (success) or
 /// `cx.applet.bridge_error` (failure) based on the outcome.
-fn emit_applet_outcome_event(
+async fn emit_applet_outcome_event(
     state: &AppState,
     space_id: &str,
     session_id: &str,
@@ -289,7 +288,7 @@ fn emit_applet_outcome_event(
         record.event_id.clone(),
         super::projection::projection_event_json(&record),
     ));
-    append_projection_event(state, record);
+    append_projection_event(state, record).await;
 }
 
 #[cfg(test)]

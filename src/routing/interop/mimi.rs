@@ -382,7 +382,8 @@ async fn mimi_room_message(
             "quarantine": mapped_content.quarantine,
         }),
         mapped_content.status,
-    );
+    )
+    .await;
     json_ok(json!({
         "ok": true,
         "status": mapped_content.status,

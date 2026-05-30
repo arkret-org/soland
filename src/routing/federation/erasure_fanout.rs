@@ -107,7 +107,10 @@ pub fn fanout_erasure_receipt(state: &AppState, receipt_id: &str) {
         crate::kinds::CX_AUDIT_ERASURE_RECEIPT,
         receipt.payload,
     );
-    fanout_erasure_receipt_operation(state, &operation);
+    let state = state.clone();
+    tokio::spawn(async move {
+        fanout_erasure_receipt_operation(&state, &operation).await;
+    });
 }
 
 /// Fan out a durable `cx.audit.erasure_receipt` operation through the normal
@@ -154,7 +157,7 @@ pub async fn fanout_erasure_receipt_operation(state: &AppState, operation: &Oper
     if receipt.scope_realm_id.is_none() {
         return;
     }
-    persist_erasure_operation_for_pull(state, operation);
+    persist_erasure_operation_for_pull(state, operation).await;
 
     let mut sent_statuses: std::collections::BTreeMap<String, FanoutPeerStatus> =
         std::collections::BTreeMap::new();

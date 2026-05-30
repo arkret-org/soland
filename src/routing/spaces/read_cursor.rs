@@ -81,7 +81,8 @@ pub(super) async fn set_read_cursor(
             "position": body.position.clone(),
             "updated_at": read_at,
         }),
-    );
+    )
+    .await;
     json_ok(ReadMarkerResponse {
         realm_id: realm_id.clone(),
         actor_id: session.actor.clone(),

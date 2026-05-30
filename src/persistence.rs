@@ -26,8 +26,9 @@ use crate::state::{
     DeviceInventoryRecord, DeviceMessageRecord, FederationOutboxDeadLetterRecord,
     FederationOutboxRecord, FederationTransactionRecord, MessageRecord, MultisigPendingRecord,
     OutboundPushBridgeCacheRecord, PolicyDocumentRecord, PresenceRecord, ProjectionEventRecord,
-    PushRuleRecord, RealmMetaRecord, SessionRecord, SpaceInviteRecord, TypingRecord,
-    WebrtcSessionRecord, WebrtcSignalRecord, WebvhDocumentRecord, WebvhLogRecord,
+    PushRuleRecord, RealmMetaRecord, RecoveryPolicyRecord, RecoveryReceiptRecord, SessionRecord,
+    SpaceInviteRecord, TypingRecord, WebrtcSessionRecord, WebrtcSignalRecord, WebvhDocumentRecord,
+    WebvhLogRecord,
 };
 
 /// Error type for persistence operations.
@@ -936,6 +937,33 @@ pub trait PolicyDocumentStore: Send + Sync {
     async fn list_active(&self) -> PersistenceResult<Vec<PolicyDocumentRecord>>;
 }
 
+/// Durable recovery policy store. Implementations enforce policy_id
+/// uniqueness, `(principal_id, version)` uniqueness, and the per-principal
+/// supersedes/version monotonicity check before accepting a new snapshot.
+#[async_trait]
+pub trait RecoveryPolicyStore: Send + Sync {
+    async fn get_by_policy_id(
+        &self,
+        policy_id: &str,
+    ) -> PersistenceResult<Option<RecoveryPolicyRecord>>;
+    async fn get_active_for_principal(
+        &self,
+        principal_id: &str,
+    ) -> PersistenceResult<Option<RecoveryPolicyRecord>>;
+    async fn insert(&self, record: RecoveryPolicyRecord) -> PersistenceResult<()>;
+}
+
+/// Durable recovery receipt store. `recovery_session_id` is globally unique
+/// because it is the replay fence for completed recovery attempts.
+#[async_trait]
+pub trait RecoveryReceiptStore: Send + Sync {
+    async fn get_by_session_id(
+        &self,
+        recovery_session_id: &str,
+    ) -> PersistenceResult<Option<RecoveryReceiptRecord>>;
+    async fn insert(&self, record: RecoveryReceiptRecord) -> PersistenceResult<()>;
+}
+
 /// Combined persistence store trait. Every state surface that used to live
 /// behind an `Arc<Mutex<...>>` on `AppState` is reachable through one of
 /// these accessors.
@@ -960,6 +988,8 @@ pub trait PersistenceStore: Send + Sync {
     fn push_bridge_cache(&self) -> &dyn PushBridgeCacheStore;
     fn webrtc(&self) -> &dyn WebrtcSessionStore;
     fn policy_documents(&self) -> &dyn PolicyDocumentStore;
+    fn recovery_policies(&self) -> &dyn RecoveryPolicyStore;
+    fn recovery_receipts(&self) -> &dyn RecoveryReceiptStore;
     fn webvh(&self) -> &dyn WebvhStore;
     fn space_invites(&self) -> &dyn SpaceInviteStore;
     fn events(&self) -> &dyn EventStore;
@@ -1000,6 +1030,8 @@ pub struct MemoryPersistenceStore {
     push_bridge_cache: MemoryPushBridgeCacheStore,
     webrtc: MemoryWebrtcSessionStore,
     policy_documents: MemoryPolicyDocumentStore,
+    recovery_policies: MemoryRecoveryPolicyStore,
+    recovery_receipts: MemoryRecoveryReceiptStore,
     webvh: MemoryWebvhStore,
     space_invites: MemorySpaceInviteStore,
     events: MemoryEventStore,
@@ -1041,6 +1073,8 @@ impl MemoryPersistenceStore {
             push_bridge_cache: MemoryPushBridgeCacheStore::new(),
             webrtc: MemoryWebrtcSessionStore::new(),
             policy_documents: MemoryPolicyDocumentStore::new(),
+            recovery_policies: MemoryRecoveryPolicyStore::new(),
+            recovery_receipts: MemoryRecoveryReceiptStore::new(),
             webvh: MemoryWebvhStore::new(),
             space_invites: MemorySpaceInviteStore::new(),
             events: MemoryEventStore::new(),
@@ -1146,6 +1180,14 @@ impl PersistenceStore for MemoryPersistenceStore {
 
     fn policy_documents(&self) -> &dyn PolicyDocumentStore {
         &self.policy_documents
+    }
+
+    fn recovery_policies(&self) -> &dyn RecoveryPolicyStore {
+        &self.recovery_policies
+    }
+
+    fn recovery_receipts(&self) -> &dyn RecoveryReceiptStore {
+        &self.recovery_receipts
     }
 
     fn webvh(&self) -> &dyn WebvhStore {
@@ -2730,6 +2772,136 @@ impl PolicyDocumentStore for MemoryPolicyDocumentStore {
     }
 }
 
+#[derive(Default)]
+struct MemoryRecoveryPolicyStore {
+    data: Mutex<BTreeMap<String, RecoveryPolicyRecord>>,
+}
+
+impl MemoryRecoveryPolicyStore {
+    fn new() -> Self {
+        Self::default()
+    }
+}
+
+fn recovery_active_policy_locked(
+    data: &BTreeMap<String, RecoveryPolicyRecord>,
+    principal_id: &str,
+) -> Option<RecoveryPolicyRecord> {
+    data.values()
+        .filter(|record| record.principal_id == principal_id)
+        .max_by_key(|record| record.version)
+        .cloned()
+}
+
+#[async_trait]
+impl RecoveryPolicyStore for MemoryRecoveryPolicyStore {
+    async fn get_by_policy_id(
+        &self,
+        policy_id: &str,
+    ) -> PersistenceResult<Option<RecoveryPolicyRecord>> {
+        Ok(self
+            .data
+            .lock()
+            .expect("recovery policy lock")
+            .get(policy_id)
+            .cloned())
+    }
+
+    async fn get_active_for_principal(
+        &self,
+        principal_id: &str,
+    ) -> PersistenceResult<Option<RecoveryPolicyRecord>> {
+        let data = self.data.lock().expect("recovery policy lock");
+        Ok(recovery_active_policy_locked(&data, principal_id))
+    }
+
+    async fn insert(&self, record: RecoveryPolicyRecord) -> PersistenceResult<()> {
+        let mut data = self.data.lock().expect("recovery policy lock");
+        if data.contains_key(&record.policy_id) {
+            return Err(PersistenceError::Conflict(format!(
+                "recovery policy_id `{}` already exists",
+                record.policy_id
+            )));
+        }
+        if data.values().any(|existing| {
+            existing.principal_id == record.principal_id && existing.version == record.version
+        }) {
+            return Err(PersistenceError::Conflict(format!(
+                "recovery policy principal/version ({}, {}) already exists",
+                record.principal_id, record.version
+            )));
+        }
+        if let Some(active) = recovery_active_policy_locked(&data, &record.principal_id) {
+            if record.version <= active.version {
+                return Err(PersistenceError::Conflict(format!(
+                    "recovery policy version {} is not greater than active {}",
+                    record.version, active.version
+                )));
+            }
+            if record.supersedes.as_deref() != Some(active.policy_id.as_str()) {
+                return Err(PersistenceError::Conflict(format!(
+                    "recovery policy supersedes {:?} does not match active `{}`",
+                    record.supersedes, active.policy_id
+                )));
+            }
+        } else if record.version != 1 {
+            return Err(PersistenceError::Conflict(format!(
+                "recovery genesis policy for `{}` must have version=1",
+                record.principal_id
+            )));
+        }
+        data.insert(record.policy_id.clone(), record);
+        Ok(())
+    }
+}
+
+#[derive(Default)]
+struct MemoryRecoveryReceiptStore {
+    by_session: Mutex<BTreeMap<String, RecoveryReceiptRecord>>,
+    receipt_ids: Mutex<BTreeSet<String>>,
+}
+
+impl MemoryRecoveryReceiptStore {
+    fn new() -> Self {
+        Self::default()
+    }
+}
+
+#[async_trait]
+impl RecoveryReceiptStore for MemoryRecoveryReceiptStore {
+    async fn get_by_session_id(
+        &self,
+        recovery_session_id: &str,
+    ) -> PersistenceResult<Option<RecoveryReceiptRecord>> {
+        Ok(self
+            .by_session
+            .lock()
+            .expect("recovery receipt lock")
+            .get(recovery_session_id)
+            .cloned())
+    }
+
+    async fn insert(&self, record: RecoveryReceiptRecord) -> PersistenceResult<()> {
+        let mut by_session = self.by_session.lock().expect("recovery receipt lock");
+        let mut receipt_ids = self.receipt_ids.lock().expect("recovery receipt id lock");
+        if receipt_ids.contains(&record.receipt_id) {
+            return Err(PersistenceError::Conflict(format!(
+                "recovery receipt_id `{}` already exists",
+                record.receipt_id
+            )));
+        }
+        if by_session.contains_key(&record.recovery_session_id) {
+            return Err(PersistenceError::Conflict(format!(
+                "recovery_session_id `{}` already accepted",
+                record.recovery_session_id
+            )));
+        }
+        receipt_ids.insert(record.receipt_id.clone());
+        by_session.insert(record.recovery_session_id.clone(), record);
+        Ok(())
+    }
+}
+
 // ── Phase 2 in-memory sub-stores ────────────────────────────────────────────
 
 #[derive(Default)]
@@ -3538,6 +3710,8 @@ pub struct PgPersistenceStore {
     key_backups: PgKeyBackupStore,
     webrtc: PgWebrtcSessionStore,
     policy_documents: PgPolicyDocumentStore,
+    recovery_policies: PgRecoveryPolicyStore,
+    recovery_receipts: PgRecoveryReceiptStore,
     space_container_projections: PgSpaceContainerProjectionStore,
     flow_projections: PgFlowProjectionStore,
     morph_projections: PgMorphProjectionStore,
@@ -3570,6 +3744,8 @@ impl PgPersistenceStore {
             key_backups: PgKeyBackupStore { pool: pool.clone() },
             webrtc: PgWebrtcSessionStore { pool: pool.clone() },
             policy_documents: PgPolicyDocumentStore { pool: pool.clone() },
+            recovery_policies: PgRecoveryPolicyStore { pool: pool.clone() },
+            recovery_receipts: PgRecoveryReceiptStore { pool: pool.clone() },
             space_container_projections: PgSpaceContainerProjectionStore { pool: pool.clone() },
             flow_projections: PgFlowProjectionStore { pool: pool.clone() },
             morph_projections: PgMorphProjectionStore { pool: pool.clone() },
@@ -3661,6 +3837,14 @@ impl PersistenceStore for PgPersistenceStore {
 
     fn policy_documents(&self) -> &dyn PolicyDocumentStore {
         &self.policy_documents
+    }
+
+    fn recovery_policies(&self) -> &dyn RecoveryPolicyStore {
+        &self.recovery_policies
+    }
+
+    fn recovery_receipts(&self) -> &dyn RecoveryReceiptStore {
+        &self.recovery_receipts
     }
 
     fn webvh(&self) -> &dyn WebvhStore {
@@ -6665,6 +6849,311 @@ impl PolicyDocumentStore for PgPolicyDocumentStore {
         .load::<PolicyDocumentRow>(&mut *conn).await
         .map_err(PersistenceError::from)?;
         Ok(rows.into_iter().map(PolicyDocumentRecord::from).collect())
+    }
+}
+
+struct PgRecoveryPolicyStore {
+    pool: PgPool,
+}
+
+#[derive(QueryableByName)]
+struct RecoveryPolicyRow {
+    #[diesel(sql_type = Text)]
+    policy_id: String,
+    #[diesel(sql_type = Text)]
+    principal_id: String,
+    #[diesel(sql_type = Integer)]
+    version: i32,
+    #[diesel(sql_type = Text)]
+    trust_domain: String,
+    #[diesel(sql_type = Array<Text>)]
+    allowed_proof_kinds: Vec<String>,
+    #[diesel(sql_type = Nullable<Text>)]
+    supersedes: Option<String>,
+    #[diesel(sql_type = Nullable<Timestamptz>)]
+    expires_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[diesel(sql_type = Timestamptz)]
+    issued_at: chrono::DateTime<chrono::Utc>,
+    #[diesel(sql_type = Text)]
+    verification_method: String,
+    #[diesel(sql_type = Jsonb)]
+    raw_payload: Value,
+    #[diesel(sql_type = Timestamptz)]
+    accepted_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl TryFrom<RecoveryPolicyRow> for RecoveryPolicyRecord {
+    type Error = PersistenceError;
+
+    fn try_from(row: RecoveryPolicyRow) -> Result<Self, Self::Error> {
+        let version = u32::try_from(row.version).map_err(|_| {
+            PersistenceError::Internal(format!(
+                "recovery policy `{}` has invalid version {}",
+                row.policy_id, row.version
+            ))
+        })?;
+        Ok(Self {
+            policy_id: row.policy_id,
+            principal_id: row.principal_id,
+            version,
+            trust_domain: row.trust_domain,
+            allowed_proof_kinds: row.allowed_proof_kinds,
+            supersedes: row.supersedes,
+            expires_at: row.expires_at,
+            issued_at: row.issued_at,
+            raw_payload: row.raw_payload,
+            accepted_at: row.accepted_at,
+            verification_method: row.verification_method,
+        })
+    }
+}
+
+impl PgRecoveryPolicyStore {
+    async fn get_by_principal_version(
+        &self,
+        principal_id: &str,
+        version: u32,
+    ) -> PersistenceResult<Option<RecoveryPolicyRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        sql_query(
+            "SELECT policy_id, principal_id, version, trust_domain, allowed_proof_kinds, supersedes, \
+                    expires_at, issued_at, verification_method, raw_payload, accepted_at \
+             FROM recovery_policies WHERE principal_id = $1 AND version = $2",
+        )
+        .bind::<Text, _>(principal_id)
+        .bind::<Integer, _>(version as i32)
+        .get_result::<RecoveryPolicyRow>(&mut *conn)
+        .await
+        .optional()?
+        .map(RecoveryPolicyRecord::try_from)
+        .transpose()
+    }
+}
+
+#[async_trait]
+impl RecoveryPolicyStore for PgRecoveryPolicyStore {
+    async fn get_by_policy_id(
+        &self,
+        policy_id: &str,
+    ) -> PersistenceResult<Option<RecoveryPolicyRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        sql_query(
+            "SELECT policy_id, principal_id, version, trust_domain, allowed_proof_kinds, supersedes, \
+                    expires_at, issued_at, verification_method, raw_payload, accepted_at \
+             FROM recovery_policies WHERE policy_id = $1",
+        )
+        .bind::<Text, _>(policy_id)
+        .get_result::<RecoveryPolicyRow>(&mut *conn)
+        .await
+        .optional()?
+        .map(RecoveryPolicyRecord::try_from)
+        .transpose()
+    }
+
+    async fn get_active_for_principal(
+        &self,
+        principal_id: &str,
+    ) -> PersistenceResult<Option<RecoveryPolicyRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        sql_query(
+            "SELECT policy_id, principal_id, version, trust_domain, allowed_proof_kinds, supersedes, \
+                    expires_at, issued_at, verification_method, raw_payload, accepted_at \
+             FROM recovery_policies WHERE principal_id = $1 \
+             ORDER BY version DESC, accepted_at DESC LIMIT 1",
+        )
+        .bind::<Text, _>(principal_id)
+        .get_result::<RecoveryPolicyRow>(&mut *conn)
+        .await
+        .optional()?
+        .map(RecoveryPolicyRecord::try_from)
+        .transpose()
+    }
+
+    async fn insert(&self, record: RecoveryPolicyRecord) -> PersistenceResult<()> {
+        if self.get_by_policy_id(&record.policy_id).await?.is_some() {
+            return Err(PersistenceError::Conflict(format!(
+                "recovery policy_id `{}` already exists",
+                record.policy_id
+            )));
+        }
+        if self
+            .get_by_principal_version(&record.principal_id, record.version)
+            .await?
+            .is_some()
+        {
+            return Err(PersistenceError::Conflict(format!(
+                "recovery policy principal/version ({}, {}) already exists",
+                record.principal_id, record.version
+            )));
+        }
+        if let Some(active) = self.get_active_for_principal(&record.principal_id).await? {
+            if record.version <= active.version {
+                return Err(PersistenceError::Conflict(format!(
+                    "recovery policy version {} is not greater than active {}",
+                    record.version, active.version
+                )));
+            }
+            if record.supersedes.as_deref() != Some(active.policy_id.as_str()) {
+                return Err(PersistenceError::Conflict(format!(
+                    "recovery policy supersedes {:?} does not match active `{}`",
+                    record.supersedes, active.policy_id
+                )));
+            }
+        } else if record.version != 1 {
+            return Err(PersistenceError::Conflict(format!(
+                "recovery genesis policy for `{}` must have version=1",
+                record.principal_id
+            )));
+        }
+
+        let mut conn = pg_conn(&self.pool).await?;
+        sql_query(
+            "INSERT INTO recovery_policies \
+             (policy_id, principal_id, version, trust_domain, allowed_proof_kinds, supersedes, \
+              expires_at, issued_at, verification_method, raw_payload, accepted_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
+        )
+        .bind::<Text, _>(&record.policy_id)
+        .bind::<Text, _>(&record.principal_id)
+        .bind::<Integer, _>(record.version as i32)
+        .bind::<Text, _>(&record.trust_domain)
+        .bind::<Array<Text>, _>(&record.allowed_proof_kinds)
+        .bind::<Nullable<Text>, _>(&record.supersedes)
+        .bind::<Nullable<Timestamptz>, _>(record.expires_at)
+        .bind::<Timestamptz, _>(record.issued_at)
+        .bind::<Text, _>(&record.verification_method)
+        .bind::<Jsonb, _>(&record.raw_payload)
+        .bind::<Timestamptz, _>(record.accepted_at)
+        .execute(&mut *conn)
+        .await
+        .map(|_| ())
+        .map_err(PersistenceError::from)
+    }
+}
+
+struct PgRecoveryReceiptStore {
+    pool: PgPool,
+}
+
+#[derive(QueryableByName)]
+struct RecoveryReceiptRow {
+    #[diesel(sql_type = Text)]
+    receipt_id: String,
+    #[diesel(sql_type = Text)]
+    principal_id: String,
+    #[diesel(sql_type = Text)]
+    recovery_session_id: String,
+    #[diesel(sql_type = Text)]
+    policy_id: String,
+    #[diesel(sql_type = Integer)]
+    policy_version: i32,
+    #[diesel(sql_type = Text)]
+    trust_domain: String,
+    #[diesel(sql_type = Text)]
+    new_device_id: String,
+    #[diesel(sql_type = Text)]
+    proof_digest: String,
+    #[diesel(sql_type = Text)]
+    outcome: String,
+    #[diesel(sql_type = Timestamptz)]
+    started_at: chrono::DateTime<chrono::Utc>,
+    #[diesel(sql_type = Timestamptz)]
+    completed_at: chrono::DateTime<chrono::Utc>,
+    #[diesel(sql_type = Text)]
+    verification_method: String,
+    #[diesel(sql_type = Jsonb)]
+    raw_payload: Value,
+    #[diesel(sql_type = Timestamptz)]
+    accepted_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl TryFrom<RecoveryReceiptRow> for RecoveryReceiptRecord {
+    type Error = PersistenceError;
+
+    fn try_from(row: RecoveryReceiptRow) -> Result<Self, Self::Error> {
+        let policy_version = u32::try_from(row.policy_version).map_err(|_| {
+            PersistenceError::Internal(format!(
+                "recovery receipt `{}` has invalid policy_version {}",
+                row.receipt_id, row.policy_version
+            ))
+        })?;
+        Ok(Self {
+            receipt_id: row.receipt_id,
+            principal_id: row.principal_id,
+            recovery_session_id: row.recovery_session_id,
+            policy_id: row.policy_id,
+            policy_version,
+            trust_domain: row.trust_domain,
+            new_device_id: row.new_device_id,
+            proof_digest: row.proof_digest,
+            outcome: row.outcome,
+            started_at: row.started_at,
+            completed_at: row.completed_at,
+            raw_payload: row.raw_payload,
+            verification_method: row.verification_method,
+            accepted_at: row.accepted_at,
+        })
+    }
+}
+
+#[async_trait]
+impl RecoveryReceiptStore for PgRecoveryReceiptStore {
+    async fn get_by_session_id(
+        &self,
+        recovery_session_id: &str,
+    ) -> PersistenceResult<Option<RecoveryReceiptRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        sql_query(
+            "SELECT receipt_id, principal_id, recovery_session_id, policy_id, policy_version, \
+                    trust_domain, new_device_id, proof_digest, outcome, started_at, completed_at, \
+                    verification_method, raw_payload, accepted_at \
+             FROM recovery_receipts WHERE recovery_session_id = $1",
+        )
+        .bind::<Text, _>(recovery_session_id)
+        .get_result::<RecoveryReceiptRow>(&mut *conn)
+        .await
+        .optional()?
+        .map(RecoveryReceiptRecord::try_from)
+        .transpose()
+    }
+
+    async fn insert(&self, record: RecoveryReceiptRecord) -> PersistenceResult<()> {
+        if self
+            .get_by_session_id(&record.recovery_session_id)
+            .await?
+            .is_some()
+        {
+            return Err(PersistenceError::Conflict(format!(
+                "recovery_session_id `{}` already accepted",
+                record.recovery_session_id
+            )));
+        }
+        let mut conn = pg_conn(&self.pool).await?;
+        sql_query(
+            "INSERT INTO recovery_receipts \
+             (receipt_id, principal_id, recovery_session_id, policy_id, policy_version, \
+              trust_domain, new_device_id, proof_digest, outcome, started_at, completed_at, \
+              verification_method, raw_payload, accepted_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
+        )
+        .bind::<Text, _>(&record.receipt_id)
+        .bind::<Text, _>(&record.principal_id)
+        .bind::<Text, _>(&record.recovery_session_id)
+        .bind::<Text, _>(&record.policy_id)
+        .bind::<Integer, _>(record.policy_version as i32)
+        .bind::<Text, _>(&record.trust_domain)
+        .bind::<Text, _>(&record.new_device_id)
+        .bind::<Text, _>(&record.proof_digest)
+        .bind::<Text, _>(&record.outcome)
+        .bind::<Timestamptz, _>(record.started_at)
+        .bind::<Timestamptz, _>(record.completed_at)
+        .bind::<Text, _>(&record.verification_method)
+        .bind::<Jsonb, _>(&record.raw_payload)
+        .bind::<Timestamptz, _>(record.accepted_at)
+        .execute(&mut *conn)
+        .await
+        .map(|_| ())
+        .map_err(PersistenceError::from)
     }
 }
 

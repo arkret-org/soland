@@ -126,7 +126,8 @@ async fn moderation_report(
         "moderation.report",
         json!({"report_id": report_id.clone(), "id": queue_item_ref}),
         "queued",
-    );
+    )
+    .await;
     let mut routed_to = vec![moderation_service];
     if let Some(agent_did) =
         notify_audit_agent_for_report(state, audit_policy.as_ref(), &report_payload).await
@@ -277,11 +278,7 @@ async fn notify_audit_agent_for_report(
             return None;
         }
     };
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(3))
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .ok()?;
+    let client = crate::security::build_default_egress_http_client(Duration::from_secs(3)).ok()?;
     let identity = match client.get(identity_url).send().await {
         Ok(response) if response.status().is_success() => {
             response.json::<Value>().await.unwrap_or(Value::Null)
@@ -580,7 +577,8 @@ async fn moderation_appeal_submit(
             "decision_ref": body.decision_ref,
         }),
         "submitted",
-    );
+    )
+    .await;
     json_ok(ModerationAppealSubmitResBody {
         appeal_id,
         state: "submitted".to_owned(),

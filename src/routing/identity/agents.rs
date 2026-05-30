@@ -137,7 +137,8 @@ async fn agent_key_pair(
             "verification_method": body.verification_method,
         }),
         "accepted",
-    );
+    )
+    .await;
     json_ok(AgentKeyPairResBody {
         ok: true,
         agent_principal_id: body.agent_principal_id,
@@ -198,7 +199,8 @@ async fn provision_agent(
             "display_name": body.display_name,
         }),
         "accepted",
-    );
+    )
+    .await;
     res.status_code(StatusCode::CREATED);
     json_ok(AgentResBody {
         agent_principal_id,
@@ -303,7 +305,7 @@ async fn lifecycle_transition(
             .expect("payload object")
             .insert("reason".to_owned(), Value::String(reason.clone()));
     }
-    append_audit_log(state, Some(&session.actor), event_kind, payload, "accepted");
+    append_audit_log(state, Some(&session.actor), event_kind, payload, "accepted").await;
     let mut todos = vec![format!(
         "P2-impl: emit {event_kind} event + fan-out capability cache invalidation"
     )];
@@ -447,7 +449,8 @@ async fn rotate_agent_key(
             "previous_key_id": body.previous_key_id,
         }),
         "accepted",
-    );
+    )
+    .await;
     json_ok(AgentRotateKeyResBody {
         ok: true,
         agent_principal_id: agent_id,
@@ -498,7 +501,8 @@ async fn attach_agent_grant(
             "scope": body.scope,
         }),
         "accepted",
-    );
+    )
+    .await;
     res.status_code(StatusCode::CREATED);
     json_ok(AgentGrantResBody {
         ok: true,
@@ -548,7 +552,8 @@ async fn detach_agent_grant(
             "grant_id": grant_id,
         }),
         "accepted",
-    );
+    )
+    .await;
     json_ok(AgentGrantDetachResBody {
         ok: true,
         agent_principal_id: agent_id,
@@ -600,7 +605,8 @@ async fn ensure_sidecar_thread(
             "realm_id": realm_id,
         }),
         "accepted",
-    );
+    )
+    .await;
     let _ = now();
     json_ok(AgentSidecarThreadEnsureResBody {
         ok: true,

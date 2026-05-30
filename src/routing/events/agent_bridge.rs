@@ -75,7 +75,7 @@ pub const REFERENCE_AGENT_AUDIT_ED25519_KEY_ID: &str = "soland.reference.agent_e
 /// the bridge fails closed with a single result
 /// (`status=failed`, `error.code=unknown_agent`) and emits no
 /// status(running) event.
-pub fn maybe_emit_echo_result_for_session_start(
+pub async fn maybe_emit_echo_result_for_session_start(
     state: &AppState,
     origin: &str,
     operation: &contrix_sdk::Operation,
@@ -142,7 +142,7 @@ pub fn maybe_emit_echo_result_for_session_start(
             error_record.event_id.clone(),
             super::projection::projection_event_json(&error_record),
         ));
-        append_projection_event(state, error_record);
+        append_projection_event(state, error_record).await;
         return;
     };
 
@@ -176,7 +176,7 @@ pub fn maybe_emit_echo_result_for_session_start(
         status_record.event_id.clone(),
         super::projection::projection_event_json(&status_record),
     ));
-    append_projection_event(state, status_record);
+    append_projection_event(state, status_record).await;
 
     // If the registered agent carries a real endpoint_url, spawn an
     // async tokio task that POSTs to that URL and emits the result
@@ -214,7 +214,8 @@ pub fn maybe_emit_echo_result_for_session_start(
                 Some(&endpoint_url_for_detail),
                 &origin_clone,
                 outcome,
-            );
+            )
+            .await;
         });
         return;
     }
@@ -229,7 +230,8 @@ pub fn maybe_emit_echo_result_for_session_start(
         None,
         origin,
         AgentInvocationOutcome::Echo { echo: echo_value },
-    );
+    )
+    .await;
 }
 
 /// Outcome of an agent invocation as surfaced into the
@@ -281,19 +283,17 @@ async fn forward_to_agent_endpoint(
             };
         }
     };
-    let client = match reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-    {
-        Ok(c) => c,
-        Err(err) => {
-            return AgentInvocationOutcome::UpstreamFailure {
-                code: "client_init_failed".to_owned(),
-                message: format!("reqwest client init: {err}"),
-            };
-        }
-    };
+    let client =
+        match crate::security::build_default_egress_http_client(std::time::Duration::from_secs(10))
+        {
+            Ok(c) => c,
+            Err(err) => {
+                return AgentInvocationOutcome::UpstreamFailure {
+                    code: "client_init_failed".to_owned(),
+                    message: format!("reqwest client init: {err}"),
+                };
+            }
+        };
     let body = json!({
         "session_id": session_id,
         "agent_did": agent_did,
@@ -329,7 +329,7 @@ async fn forward_to_agent_endpoint(
 /// Build the result envelope for the supplied outcome and broadcast
 /// + persist it through the standard projection path.
 #[allow(clippy::too_many_arguments)]
-fn emit_agent_result_envelope(
+async fn emit_agent_result_envelope(
     state: &AppState,
     space_id: &str,
     session_id: &str,
@@ -431,7 +431,7 @@ fn emit_agent_result_envelope(
         record.event_id.clone(),
         super::projection::projection_event_json(&record),
     ));
-    append_projection_event(state, record);
+    append_projection_event(state, record).await;
 }
 
 #[cfg(test)]

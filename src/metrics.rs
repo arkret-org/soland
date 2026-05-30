@@ -174,6 +174,60 @@ fn federation_outbox_dead_letter_total() -> u64 {
         .federation_outbox_dead_letters
 }
 
+pub fn record_egress_denied(reason: &str, target_class: &str) {
+    let mut metrics = metrics_state().lock().expect("metrics lock");
+    *metrics
+        .egress_denied
+        .entry((normalize_label(reason), normalize_label(target_class)))
+        .or_insert(0) += 1;
+}
+
+fn egress_denied_totals() -> Vec<((String, String), u64)> {
+    metrics_state()
+        .lock()
+        .expect("metrics lock")
+        .egress_denied
+        .iter()
+        .map(|(labels, count)| (labels.clone(), *count))
+        .collect()
+}
+
+pub fn record_digest_mismatch(scope: &str) {
+    let mut metrics = metrics_state().lock().expect("metrics lock");
+    *metrics
+        .digest_mismatches
+        .entry(normalize_label(scope))
+        .or_insert(0) += 1;
+}
+
+fn digest_mismatch_totals() -> Vec<(String, u64)> {
+    metrics_state()
+        .lock()
+        .expect("metrics lock")
+        .digest_mismatches
+        .iter()
+        .map(|(scope, count)| (scope.clone(), *count))
+        .collect()
+}
+
+pub fn record_federation_retry_state(state: &str) {
+    let mut metrics = metrics_state().lock().expect("metrics lock");
+    *metrics
+        .federation_retry_states
+        .entry(normalize_label(state))
+        .or_insert(0) += 1;
+}
+
+fn federation_retry_totals() -> Vec<(String, u64)> {
+    metrics_state()
+        .lock()
+        .expect("metrics lock")
+        .federation_retry_states
+        .iter()
+        .map(|(state, count)| (state.clone(), *count))
+        .collect()
+}
+
 async fn federation_outbox_depth(state: &AppState) -> usize {
     state
         .persistence
@@ -272,6 +326,41 @@ fn render_http_metrics() -> String {
             histogram.count
         ));
     }
+
+    output.push_str(
+        "# HELP soland_egress_denied_total Outbound requests denied by the deployment egress policy.\n",
+    );
+    output.push_str("# TYPE soland_egress_denied_total counter\n");
+    for ((reason, target_class), count) in egress_denied_totals() {
+        output.push_str(&format!(
+            "soland_egress_denied_total{{reason=\"{}\",target_class=\"{}\"}} {}\n",
+            escape_label(&reason),
+            escape_label(&target_class),
+            count
+        ));
+    }
+    output.push_str(
+        "# HELP soland_digest_mismatch_total Payload digest mismatches rejected by admission paths.\n",
+    );
+    output.push_str("# TYPE soland_digest_mismatch_total counter\n");
+    for (scope, count) in digest_mismatch_totals() {
+        output.push_str(&format!(
+            "soland_digest_mismatch_total{{scope=\"{}\"}} {}\n",
+            escape_label(&scope),
+            count
+        ));
+    }
+    output.push_str(
+        "# HELP soland_federation_retry_total Federation delivery retry state transitions.\n",
+    );
+    output.push_str("# TYPE soland_federation_retry_total counter\n");
+    for (state, count) in federation_retry_totals() {
+        output.push_str(&format!(
+            "soland_federation_retry_total{{state=\"{}\"}} {}\n",
+            escape_label(&state),
+            count
+        ));
+    }
     output
 }
 
@@ -292,6 +381,9 @@ struct HttpMetrics {
     /// row is moved to the DLQ ledger. Pairs with
     /// `soland_federation_outbox_depth` for queue alerting.
     federation_outbox_dead_letters: u64,
+    egress_denied: BTreeMap<(String, String), u64>,
+    digest_mismatches: BTreeMap<String, u64>,
+    federation_retry_states: BTreeMap<String, u64>,
     /// P5 (5.4 metrics cardinality cap) — sticky one-shot flag so we
     /// emit the cardinality-threshold warning once per process even
     /// when the operator never lowers the cardinality back below the
@@ -358,6 +450,26 @@ fn escape_label(value: &str) -> String {
         .replace('"', "\\\"")
 }
 
+fn normalize_label(value: &str) -> String {
+    let normalized = value
+        .trim()
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' {
+                ch.to_ascii_lowercase()
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    let normalized = normalized.trim_matches('_').to_owned();
+    if normalized.is_empty() {
+        "unknown".to_owned()
+    } else {
+        normalized
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -373,6 +485,22 @@ mod tests {
         assert!(rendered.contains("soland_request_duration_seconds_bucket"));
         assert!(rendered.contains("soland_request_duration_seconds_sum"));
         assert!(rendered.contains("soland_request_duration_seconds_count"));
+    }
+
+    #[test]
+    fn metrics_render_operational_counters() {
+        record_egress_denied("blocked address", "federation outbox");
+        record_digest_mismatch("blob upload");
+        record_federation_retry_state("retry scheduled");
+        let rendered = render_http_metrics();
+
+        assert!(rendered.contains("soland_egress_denied_total"));
+        assert!(rendered.contains("reason=\"blocked_address\""));
+        assert!(rendered.contains("target_class=\"federation_outbox\""));
+        assert!(rendered.contains("soland_digest_mismatch_total"));
+        assert!(rendered.contains("scope=\"blob_upload\""));
+        assert!(rendered.contains("soland_federation_retry_total"));
+        assert!(rendered.contains("state=\"retry_scheduled\""));
     }
 
     #[test]

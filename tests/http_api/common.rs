@@ -244,7 +244,7 @@ pub(crate) async fn dev_token_for_device(
     login["access_token"].as_str().unwrap().to_owned()
 }
 
-pub(crate) fn seed_test_realm(
+pub(crate) async fn seed_test_realm(
     state: &AppState,
     owner: &str,
     title: &str,
@@ -284,6 +284,7 @@ pub(crate) fn seed_test_realm(
                 updated_at: now,
             },
         )
+        .await
         .unwrap();
 
     for invitee in invitees {
@@ -302,6 +303,7 @@ pub(crate) fn seed_test_realm(
                 expires_at: None,
                 created_at: now,
             })
+            .await
             .unwrap();
     }
 
@@ -370,12 +372,12 @@ fn realm_member_roster(entry: &RealmDirectoryEntry) -> Vec<Value> {
         .collect()
 }
 
-pub(crate) fn delete_test_realm(state: &AppState, realm_id: &str) -> Value {
+pub(crate) async fn delete_test_realm(state: &AppState, realm_id: &str) -> Value {
     let store = state.persistence.realm_meta();
-    if let Some(mut meta) = store.get(realm_id).unwrap() {
+    if let Some(mut meta) = store.get(realm_id).await.unwrap() {
         meta.deleted = true;
         meta.updated_at = chrono::Utc::now();
-        store.put(realm_id, &meta).unwrap();
+        store.put(realm_id, &meta).await.unwrap();
     }
     serde_json::json!({
         "ok": true,
@@ -1141,7 +1143,7 @@ pub(crate) fn signed_redaction_event(
 // returning immediately, and quiet realms drop out of the delta until
 // they have new state.
 
-pub(crate) fn persist_test_message(
+pub(crate) async fn persist_test_message(
     state: &AppState,
     space_id: &str,
     sender: &str,
@@ -1157,6 +1159,6 @@ pub(crate) fn persist_test_message(
         encrypted: false,
         created_at: chrono::Utc::now(),
     };
-    state.persistence.messages().put(&record).unwrap();
+    state.persistence.messages().put(&record).await.unwrap();
     record
 }

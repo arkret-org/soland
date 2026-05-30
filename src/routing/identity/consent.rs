@@ -253,7 +253,8 @@ async fn grant_consent_cell(
             "valid_until": body.valid_until,
         }),
         "accepted",
-    );
+    )
+    .await;
     json_ok(consent_response(&updated, now()))
 }
 
@@ -290,7 +291,8 @@ async fn revoke_consent_cell(
             "observed_dots": updated.revoked_dots.iter().cloned().collect::<Vec<_>>(),
         }),
         "accepted",
-    );
+    )
+    .await;
     json_ok(consent_response(&updated, now()))
 }
 

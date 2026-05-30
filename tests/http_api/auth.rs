@@ -30,6 +30,7 @@ async fn oauth_bearer_introspection_authenticates_directly() {
         .persistence
         .devices()
         .list_for_actor("did:web:oauth.example")
+        .await
         .unwrap();
     let oauth_device = devices
         .iter()
@@ -167,7 +168,9 @@ async fn postgres_startup_migrations_are_gated_by_database_url() {
         return;
     }
 
-    let db = Db::from_env().expect("postgres migrations should run");
+    let db = Db::from_env()
+        .await
+        .expect("postgres migrations should run");
     let health: Value = TestClient::get("http://server/health")
         .send(&app_from_state(AppState::new(test_config(), db)))
         .await

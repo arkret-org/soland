@@ -159,9 +159,7 @@ pub(crate) async fn introspect_admin_scopes(
         state.config.development_mode,
     )
     .map_err(AppError::capability_denied)?;
-    let client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
+    let client = crate::security::build_default_egress_http_client(Duration::from_secs(10))
         .map_err(|error| {
             AppError::new(
                 ErrorCode::TemporarilyUnavailable,

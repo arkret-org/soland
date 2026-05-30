@@ -17,18 +17,25 @@ async fn account_subscribe_projects_realm_encryption_profile() {
         "listed",
         &[],
         &[],
-    );
+    )
+    .await;
     let space_id = created["space_id"].as_str().unwrap();
 
     let mut meta = state
         .persistence
         .realm_meta()
         .get(space_id)
+        .await
         .unwrap()
         .expect("seeded realm meta");
     meta.history_visibility = "joined".to_owned();
     meta.encryption_profile = Some("mls_rfc9420".to_owned());
-    state.persistence.realm_meta().put(space_id, &meta).unwrap();
+    state
+        .persistence
+        .realm_meta()
+        .put(space_id, &meta)
+        .await
+        .unwrap();
 
     let sync = account_subscribe_frame(state.clone(), Some(&alice), "catchup=true").await;
     let realm = &sync["realms"][space_id];
@@ -590,7 +597,8 @@ async fn index_query_supports_structured_filters_sort_and_cursor() {
             "public",
             &[],
             &[],
-        );
+        )
+        .await;
         assert!(created["space_id"].as_str().is_some());
     }
 
@@ -772,7 +780,8 @@ async fn incremental_sync_emits_realm_with_new_timeline_event() {
         DEMO_REALM_ID,
         "did:web:alice.example",
         "incremental wake-up",
-    );
+    )
+    .await;
 
     let delta = account_subscribe_frame(
         state.clone(),
@@ -845,7 +854,8 @@ async fn account_subscribe_long_poll_wakes_on_broadcast() {
             DEMO_REALM_ID,
             "did:web:alice.example",
             "wake up the poll",
-        );
+        )
+        .await;
         let _ = waker_state.event_broadcast.send(EventNotification::event(
             DEMO_REALM_ID.to_owned(),
             message.event_id.clone(),

@@ -33,6 +33,8 @@
 //!   advertised (instead of the fixed `cx.push.notify` defaults). Stays
 //!   read-only here — the actual binding lives in the delivery loop.
 
+use std::time::Duration;
+
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde_json::{Value, json};
@@ -283,9 +285,7 @@ async fn outbound_push_bridge_fetch(
         }
     }
 
-    let client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
+    let client = crate::security::build_default_egress_http_client(Duration::from_secs(10))
         .map_err(|error| AppError::internal(format!("build push bridge client: {error}")))?;
     let response = client
         .get(bridge_describe_target)

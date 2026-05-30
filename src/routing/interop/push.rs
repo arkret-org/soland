@@ -185,7 +185,8 @@ pub(super) async fn push_unregister(
             "removed_count": removed,
         }),
         if removed == 0 { "no_match" } else { "accepted" },
-    );
+    )
+    .await;
     json_ok(OkResBody { ok: true })
 }
 
@@ -375,7 +376,8 @@ pub(super) async fn push_notify(
                     "drift_result": drift_label,
                 }),
                 "rejected",
-            );
+            )
+            .await;
             rejected.push(push_rejection(
                 device,
                 "contract_drift",

@@ -306,6 +306,10 @@ pub struct MemberIdentityRegistry {
     /// Index from `(realm_id, actor_id, segment)` → event_ids that
     /// landed against that cell subject, in arrival order.
     by_subject: BTreeMap<MemberIdentitySubjectKey, Vec<String>>,
+    /// Local handle-claim evidence cache keyed by claim `subject`.
+    /// Sources are deliberately local-only: directory-issued signed claims
+    /// and handle-claim envelopes carried by accepted identity events.
+    handle_claims_by_subject: BTreeMap<String, Vec<HandleClaimEvidenceRecord>>,
 }
 
 /// Cell subject key for [`MemberIdentityRegistry`]. Mirrors the
@@ -337,6 +341,27 @@ pub struct MemberIdentityEventRecord {
     /// envelope verbatim; no query-time re-encryption, no projection
     /// rewrite.
     pub raw_event: Value,
+}
+
+#[derive(Clone, Debug)]
+pub struct HandleClaimEvidenceRecord {
+    pub digest: String,
+    pub subject_id: String,
+    pub issuer: String,
+    pub issuer_service_did: Option<String>,
+    pub audience: Option<String>,
+    pub binding_state: String,
+    pub visibility: Option<String>,
+    pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub revoked: bool,
+    pub envelope: Value,
+}
+
+#[derive(Clone, Debug)]
+pub struct HandleClaimDigestInput {
+    pub claim_digest: String,
+    pub binding_state: String,
+    pub expires_at: Option<String>,
 }
 
 /// One replacement edge resolved from `payload.replaces[]`.
@@ -419,6 +444,76 @@ impl MemberIdentityRegistry {
             bucket.push(event_id.clone());
         }
         self.events.insert(event_id, record);
+    }
+
+    /// Insert one canonical signed handle-claim envelope into the local
+    /// evidence cache. The digest is always SHA-256 over RFC 8785 canonical
+    /// JSON of the full envelope as stored, including proofs/signatures.
+    pub fn upsert_handle_claim_envelope(&mut self, envelope: Value) -> Option<String> {
+        let subject_id = envelope.get("subject")?.as_str()?.to_owned();
+        let issuer = envelope.get("issuer")?.as_str()?.to_owned();
+        let digest = canonical_digest(&envelope, "", subject_id.as_str(), "handle_claim_digest")?;
+        let binding_state = envelope
+            .get("binding_state")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown")
+            .to_owned();
+        let audience = envelope
+            .get("audience")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        let issuer_service_did = envelope
+            .get("issuer_service_did")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        let visibility = envelope
+            .get("visibility")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        let expires_at = envelope
+            .get("expires_at")
+            .and_then(Value::as_str)
+            .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+            .map(|value| value.with_timezone(&chrono::Utc));
+        let revoked = envelope
+            .get("revoked")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+            || envelope.get("revoked_at").is_some()
+            || binding_state == "revoked";
+        let record = HandleClaimEvidenceRecord {
+            digest: digest.clone(),
+            subject_id: subject_id.clone(),
+            issuer,
+            issuer_service_did,
+            audience,
+            binding_state,
+            visibility,
+            expires_at,
+            revoked,
+            envelope,
+        };
+        let bucket = self.handle_claims_by_subject.entry(subject_id).or_default();
+        if let Some(existing) = bucket.iter_mut().find(|existing| existing.digest == digest) {
+            *existing = record;
+        } else {
+            bucket.push(record);
+            bucket.sort_by(|a, b| a.digest.cmp(&b.digest));
+        }
+        Some(digest)
+    }
+
+    pub fn upsert_handle_claims_from_identity_payload(&mut self, identity_payload: &Value) {
+        for claim in handle_claim_envelopes_in_identity_payload(identity_payload) {
+            let _ = self.upsert_handle_claim_envelope(claim.clone());
+        }
+    }
+
+    pub fn handle_claims_for_subject(&self, subject_id: &str) -> Vec<HandleClaimEvidenceRecord> {
+        self.handle_claims_by_subject
+            .get(subject_id)
+            .cloned()
+            .unwrap_or_default()
     }
 
     /// MIU-SOL-3 (R3.2) — compute the current writer-observed
@@ -522,7 +617,7 @@ impl MemberIdentityRegistry {
         // empty until the local handle-claim evidence cache is wired
         // (TODO(R3.2.1)); the digest inputs are otherwise stable.
         let member_display_state_digest =
-            display_state_digest(realm_id, actor_id, &effective_entries);
+            display_state_digest(realm_id, actor_id, &effective_entries, &[]);
 
         Some(MemberIdentitySnapshot {
             identity_event_ids: effective.iter().map(|r| r.event_id.clone()).collect(),
@@ -532,6 +627,24 @@ impl MemberIdentityRegistry {
             identity_events: effective.iter().map(|r| r.raw_event.clone()).collect(),
         })
     }
+}
+
+fn handle_claim_envelopes_in_identity_payload(identity_payload: &Value) -> Vec<&Value> {
+    let mut out = Vec::new();
+    if let Some(claims) = identity_payload
+        .get("handle_claims")
+        .and_then(Value::as_array)
+    {
+        out.extend(claims.iter());
+    }
+    if let Some(claims) = identity_payload
+        .get("member_identity")
+        .and_then(|member_identity| member_identity.get("handle_claims"))
+        .and_then(Value::as_array)
+    {
+        out.extend(claims.iter());
+    }
+    out
 }
 
 /// JCS-sorted `effective_events` array shared by both R3.2 digest formulas.
@@ -584,14 +697,37 @@ fn effective_set_digest(
 /// [{event_id, segment, payload_digest}], handle_claims:[{claim_digest,
 /// binding_state, expires_at}]}` (handle_claims sorted by claim_digest).
 /// Byte-compatible with the SDK `member_display_state_digest` helper. The
-/// handle-claim set is empty until the local evidence cache lands —
-/// TODO(R3.2.1) (ROST-SOL-3).
-fn display_state_digest(
+/// caller passes the disclosure-visible handle-claim digest set; contexts
+/// without visible handle evidence pass an empty slice.
+pub(crate) fn display_state_digest(
     realm_id: &str,
     actor_id: &str,
     entries: &[EffectiveIdentityEntry],
+    handle_claims: &[HandleClaimDigestInput],
 ) -> Option<String> {
-    let handle_claims: Vec<Value> = Vec::new();
+    let mut handle_claims: Vec<Value> = handle_claims
+        .iter()
+        .map(|claim| {
+            let mut value = serde_json::Map::new();
+            value.insert(
+                "claim_digest".to_owned(),
+                serde_json::json!(claim.claim_digest),
+            );
+            value.insert(
+                "binding_state".to_owned(),
+                serde_json::json!(claim.binding_state),
+            );
+            if let Some(expires_at) = &claim.expires_at {
+                value.insert("expires_at".to_owned(), serde_json::json!(expires_at));
+            }
+            Value::Object(value)
+        })
+        .collect();
+    handle_claims.sort_by(|a, b| {
+        a.get("claim_digest")
+            .and_then(Value::as_str)
+            .cmp(&b.get("claim_digest").and_then(Value::as_str))
+    });
     let projection = serde_json::json!({
         "realm_id": realm_id,
         "actor_id": actor_id,
@@ -774,17 +910,6 @@ pub struct AppState {
     /// is unset / file missing / file malformed — that's the dev-mode
     /// invariant in service-surface.md §3.0.
     pub verified_profiles: Arc<Vec<VerifiedProfileDescriptor>>,
-    /// REC-1 (R3 spec-sync 2026-05-27, contrix-spec b47ff6ec) — in-memory
-    /// recovery policy projection keyed by `principal_id`. Each entry
-    /// records the currently-accepted policy snapshot so policy_version
-    /// monotonicity can be enforced. The durable `recovery_session` table
-    /// (migrations/20260526030000_agent_personal_provisioning) is the
-    /// restart mirror; this map is the hot read path.
-    pub recovery_policies: Arc<Mutex<BTreeMap<String, RecoveryPolicyRecord>>>,
-    /// REC-1 — in-memory recovery receipt projection keyed by
-    /// `recovery_session_id`. Rejects duplicate session id reuse against
-    /// the same principal (spec recovery-receipt.schema.json §3).
-    pub recovery_receipts: Arc<Mutex<BTreeMap<String, RecoveryReceiptRecord>>>,
     /// MID-1..6 (R3.1 spec-sync 2026-05-27, contrix-spec @ 7157ee8) — in-
     /// memory registry of `cx.member.identity.update` events. Reducer
     /// dispatch (`apply_member_identity_update`) and the sync roster
@@ -844,8 +969,7 @@ pub struct AccountLifecycleRecord {
 }
 
 /// REC-1 (R3 spec-sync 2026-05-27, contrix-spec b47ff6ec) — accepted
-/// recovery policy snapshot. Backs `AppState::recovery_policies`. The
-/// durable `recovery_session` table is the restart mirror.
+/// recovery policy snapshot persisted by `RecoveryPolicyStore`.
 ///
 /// Spec: `contrix-spec/spec/v1/artifacts/schemas/recovery-policy.schema.json`.
 #[derive(Clone, Debug)]
@@ -859,6 +983,7 @@ pub struct RecoveryPolicyRecord {
     pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
     pub issued_at: chrono::DateTime<chrono::Utc>,
     pub raw_payload: Value,
+    pub accepted_at: chrono::DateTime<chrono::Utc>,
     /// Verification-method DID URL of the issuer. The full proof
     /// verification (signature + signed_fields enforcement) is flagged
     /// `TODO(R4): wire principal signing-key resolver + signature
@@ -876,9 +1001,15 @@ pub struct RecoveryReceiptRecord {
     pub recovery_session_id: String,
     pub policy_id: String,
     pub policy_version: u32,
+    pub trust_domain: String,
+    pub new_device_id: String,
+    pub proof_digest: String,
     pub outcome: String,
+    pub started_at: chrono::DateTime<chrono::Utc>,
     pub completed_at: chrono::DateTime<chrono::Utc>,
     pub raw_payload: Value,
+    pub verification_method: String,
+    pub accepted_at: chrono::DateTime<chrono::Utc>,
 }
 
 /// Per-actor failed-login bookkeeping. Spec: A.3 — five failures within
@@ -1453,14 +1584,6 @@ impl AppState {
     }
 
     pub fn new(config: AppConfig, db: Db) -> Self {
-        let mut realms = RealmDirectoryIndex::new();
-        let now = chrono::Utc::now();
-
-        let service_did = config.service_did.clone();
-
-        let object_storage = build_object_storage(&config.object_storage)
-            .expect("object storage backend initializes");
-
         let persistence: Arc<dyn PersistenceStore> = db
             .pool
             .as_ref()
@@ -1468,6 +1591,21 @@ impl AppState {
                 Arc::new(PgPersistenceStore::new(pool.clone())) as Arc<dyn PersistenceStore>
             })
             .unwrap_or_else(|| Arc::new(MemoryPersistenceStore::new()));
+        Self::new_with_persistence(config, db, persistence)
+    }
+
+    pub fn new_with_persistence(
+        config: AppConfig,
+        db: Db,
+        persistence: Arc<dyn PersistenceStore>,
+    ) -> Self {
+        let mut realms = RealmDirectoryIndex::new();
+        let now = chrono::Utc::now();
+
+        let service_did = config.service_did.clone();
+
+        let object_storage = build_object_storage(&config.object_storage)
+            .expect("object storage backend initializes");
 
         // Seed the deterministic demo Realm into the in-memory directory index
         // when explicitly opted in (tests via `test_config()`, dev harnesses via
@@ -1687,8 +1825,6 @@ impl AppState {
             // crate::verified_profiles::load_from_env for the file
             // schema and logging policy.
             verified_profiles: crate::verified_profiles::load_from_env(),
-            recovery_policies: Arc::new(Mutex::new(BTreeMap::new())),
-            recovery_receipts: Arc::new(Mutex::new(BTreeMap::new())),
             member_identity: Arc::new(Mutex::new(MemberIdentityRegistry::new())),
         }
     }

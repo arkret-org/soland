@@ -1,1 +1,166 @@
-#!/usr/bin/env bashfi# soland production restore drill.fi#fi# Inverse of `backup-drill.sh`. Accepts a tarball produced by that script,fi# restores the database + keystore, then walks every row infi# `multisig_pending` and asserts each is *still aggregable* (thresholdfi# arithmetic survives, partials decode, members[] still references thefi# row's signers, claim_seq is non-negative, lease invariants hold).fi#fi# Output:fi#   - PASS / FAIL line per row to stdout.fi#   - Final summary `RESTORE PASS|FAIL  rows_total=N rows_ok=K rows_bad=M`.fi#   - Exit 0 on full PASS, 1 if any row fails the post-restore invariants,fi#     2 on prerequisite/IO failure.fi#fi# Honours PASION_* / SOLAND_* env conventions (same set as backup-drill.sh).fifiset -euo pipefailfifiif [ "$#" -ne 1 ]; thenfi    echo "usage: restore-drill.sh <tarball>" >&2fi    exit 2fififiTARBALL="$1"fiif [ ! -f "$TARBALL" ]; thenfi    echo "[restore-drill] FATAL: tarball not found: $TARBALL" >&2fi    exit 2fifififiDATABASE_URL="${PASION_DATABASE_URL:-${DATABASE_URL:-}}"fiSERVICE_DID="${SOLAND_SERVICE_DID:-did:web:soland.local}"fiUSE_KEYSTORE="${SOLAND_USE_KEYSTORE:-false}"fiWORKDIR="$(mktemp -d -t soland-restore-XXXXXX)"fitrap 'rm -rf "$WORKDIR"' EXITfifiif [ -z "$DATABASE_URL" ]; thenfi    echo "[restore-drill] FATAL: DATABASE_URL (or PASION_DATABASE_URL) is unset" >&2fi    exit 2fififififor cmd in pg_restore psql sha256sum tar jq; dofi    if ! command -v "$cmd" >/dev/null 2>&1; thenfi        echo "[restore-drill] FATAL: missing prerequisite '$cmd'" >&2fi        exit 2fi    fifidonefifiecho "[restore-drill] tarball=$TARBALL service_did=$SERVICE_DID workdir=$WORKDIR"fifitar -xzf "$TARBALL" -C "$WORKDIR"fifi# ── verify manifest checksums ────────────────────────────────────────────fiMANIFEST="$WORKDIR/manifest.json"fiif [ ! -f "$MANIFEST" ]; thenfi    echo "[restore-drill] FATAL: tarball missing manifest.json" >&2fi    exit 1fifififideclare -A EXPECTED_SHAfiwhile IFS=$'\t' read -r name sha; dofi    EXPECTED_SHA[$name]="$sha"fidone < <(jq -r '.artifacts | to_entries[] | "\(.key)\t\(.value.sha256)"' "$MANIFEST")fififor name in soland-database.dump keystore.json multisig_pending.jsonl; dofi    f="$WORKDIR/$name"fi    if [ ! -f "$f" ]; thenfi        echo "[restore-drill] FATAL: tarball missing artifact '$name'" >&2fi        exit 1fi    fifi    actual="$(sha256sum "$f" | awk '{print $1}')"fi    expected="${EXPECTED_SHA[$name]:-}"fi    if [ -z "$expected" ] || [ "$actual" != "$expected" ]; thenfi        echo "[restore-drill] FATAL: checksum mismatch on '$name'" >&2fi        echo "  expected=$expected actual=$actual" >&2fi        exit 1fi    fifidonefiecho "[restore-drill] manifest checksums verified"fifi# ── 1. pg_restore ────────────────────────────────────────────────────────fiecho "[restore-drill] step 1/3: pg_restore (clean+if-exists)"fipg_restore --clean --if-exists --no-owner --no-acl \fi    --dbname="$DATABASE_URL" "$WORKDIR/soland-database.dump"fifi# ── 2. keystore restore ──────────────────────────────────────────────────fiif [ "$USE_KEYSTORE" = "true" ] && \fi   [ "$(jq -r '.skipped // false' "$WORKDIR/keystore.json")" != "true" ]; thenfi    echo "[restore-drill] step 2/3: keystore restore via soland-rotate-drill --import-only"fi    cargo run --quiet --bin soland-rotate-drill -- \fi        --import-only \fi        --service-did "$SERVICE_DID" \fi        --input "$WORKDIR/keystore.json"fielsefi    echo "[restore-drill] step 2/3: keystore restore skipped"fifififi# ── 3. walk multisig_pending and assert per-row aggregability ────────────fiecho "[restore-drill] step 3/3: walk multisig_pending — per-row aggregability check"fifiROWS_TOTAL=0fiROWS_OK=0fiROWS_BAD=0fifiwhile IFS= read -r line; dofi    [ -z "$line" ] && continuefi    ROWS_TOTAL=$((ROWS_TOTAL + 1))fi    anchor_id="$(echo "$line" | jq -r '.anchor_id')"fi    threshold_k="$(echo "$line" | jq -r '.threshold_k')"fi    threshold_n="$(echo "$line" | jq -r '.threshold_n')"fi    member_count="$(echo "$line" | jq -r '(.members // []) | length')"fi    partial_count="$(echo "$line" | jq -r '(.partials // {}) | length')"fi    canonical_len="$(echo "$line" | jq -r '(.canonical_b64 // "") | length')"fi    claim_seq="$(echo "$line" | jq -r '.claim_seq // 0')"fi    claimed_by="$(echo "$line" | jq -r '.claimed_by_node_id // ""')"fi    claimed_until="$(echo "$line" | jq -r '.claimed_until // ""')"fifi    bad_reason=""fifi    # Threshold arithmetic invariant: 1 <= k <= n.fi    if ! [ "$threshold_k" -ge 1 ] 2>/dev/null || \fi       ! [ "$threshold_n" -ge "$threshold_k" ] 2>/dev/null; thenfi        bad_reason="threshold arithmetic violated (k=$threshold_k n=$threshold_n)"fi    fififi    # members[] cardinality must match threshold_n.fi    if [ -z "$bad_reason" ] && [ "$member_count" -ne "$threshold_n" ]; thenfi        bad_reason="members[] cardinality $member_count != threshold_n $threshold_n"fi    fififi    # Every key in partials{} must appear in members[] (no orphaned partials).fi    if [ -z "$bad_reason" ]; thenfi        orphans="$(echo "$line" | jq -r 'fi            (.partials // {} | keys) - (.members // [])fi            | join(",")fi        ')"fi        if [ -n "$orphans" ]; thenfi            bad_reason="orphan partials not in members[]: $orphans"fi        fifi    fififi    # Each partial must carry signature_b64 + kid.fi    if [ -z "$bad_reason" ]; thenfi        missing_fields="$(echo "$line" | jq -r 'fi            [.partials // {} | to_entries[]fi             | select((.value.signature_b64 // "") == ""fi                  or  (.value.kid // "") == "")fi             | .key] | join(",")fi        ')"fi        if [ -n "$missing_fields" ]; thenfi            bad_reason="partials missing signature_b64/kid: $missing_fields"fi        fifi    fififi    # claim_seq is monotonic + non-negative.fi    if [ -z "$bad_reason" ] && [ "$claim_seq" -lt 0 ] 2>/dev/null; thenfi        bad_reason="negative claim_seq=$claim_seq"fi    fififi    # Lease invariant: when claimed_by_node_id is set, claimed_until mustfi    # also be present.fi    if [ -z "$bad_reason" ] && [ -n "$claimed_by" ] && [ -z "$claimed_until" ]; thenfi        bad_reason="claimed_by_node_id set but claimed_until is NULL"fi    fififi    # canonical_b64 may be empty (smoke buffer pre-aggregation), so wefi    # don't require it. partials may be < threshold_k (in-flight).fi    # Threshold-met rows additionally require canonical_b64 non-empty:fi    if [ -z "$bad_reason" ] && [ "$partial_count" -ge "$threshold_k" ] && \fi       [ "$canonical_len" -eq 0 ]; thenfi        bad_reason="threshold met (partials=$partial_count >= k=$threshold_k) but canonical_b64 is empty"fi    fififi    if [ -z "$bad_reason" ]; thenfi        ROWS_OK=$((ROWS_OK + 1))fi        printf "  PASS  %s  (k=%s/n=%s partials=%s claim_seq=%s)\n" \fi            "$anchor_id" "$threshold_k" "$threshold_n" "$partial_count" "$claim_seq"fi    elsefi        ROWS_BAD=$((ROWS_BAD + 1))fi        printf "  FAIL  %s  %s\n" "$anchor_id" "$bad_reason"fi    fifidone <"$WORKDIR/multisig_pending.jsonl"fifi# ── final summary ────────────────────────────────────────────────────────fiif [ "$ROWS_BAD" -eq 0 ]; thenfi    echo "[restore-drill] RESTORE PASS  rows_total=$ROWS_TOTAL rows_ok=$ROWS_OK rows_bad=$ROWS_BAD"fi    exit 0fielsefi    echo "[restore-drill] RESTORE FAIL  rows_total=$ROWS_TOTAL rows_ok=$ROWS_OK rows_bad=$ROWS_BAD"fi    exit 1fififi
+#!/usr/bin/env bash
+# soland production restore drill.
+#
+# Inverse of `backup-drill.sh`. Accepts a tarball produced by that script,
+# restores the database + keystore, then walks every row in
+# `multisig_pending` and asserts each is still aggregable.
+
+set -euo pipefail
+
+if [ "$#" -ne 1 ]; then
+    echo "usage: restore-drill.sh <tarball>" >&2
+    exit 2
+fi
+
+TARBALL="$1"
+if [ ! -f "$TARBALL" ]; then
+    echo "[restore-drill] FATAL: tarball not found: $TARBALL" >&2
+    exit 2
+fi
+
+DATABASE_URL="${SOLAND_DATABASE_URL:-${DATABASE_URL:-${PASION_DATABASE_URL:-}}}"
+SERVICE_DID="${SOLAND_SERVICE_DID:-did:web:soland.local}"
+USE_KEYSTORE="${SOLAND_USE_KEYSTORE:-false}"
+WORKDIR="$(mktemp -d -t soland-restore-XXXXXX)"
+trap 'rm -rf "$WORKDIR"' EXIT
+
+if [ -z "$DATABASE_URL" ]; then
+    echo "[restore-drill] FATAL: SOLAND_DATABASE_URL or DATABASE_URL is unset" >&2
+    exit 2
+fi
+
+for cmd in pg_restore psql sha256sum tar jq; do
+    if ! command -v "$cmd" >/dev/null 2>&1; then
+        echo "[restore-drill] FATAL: missing prerequisite '$cmd'" >&2
+        exit 2
+    fi
+done
+
+echo "[restore-drill] tarball=$TARBALL service_did=$SERVICE_DID workdir=$WORKDIR"
+tar -xzf "$TARBALL" -C "$WORKDIR"
+
+MANIFEST="$WORKDIR/manifest.json"
+if [ ! -f "$MANIFEST" ]; then
+    echo "[restore-drill] FATAL: tarball missing manifest.json" >&2
+    exit 1
+fi
+
+declare -A EXPECTED_SHA
+while IFS=$'\t' read -r name sha; do
+    EXPECTED_SHA[$name]="$sha"
+done < <(jq -r '.artifacts | to_entries[] | "\(.key)\t\(.value.sha256)"' "$MANIFEST")
+
+for name in soland-database.dump keystore.json multisig_pending.jsonl; do
+    f="$WORKDIR/$name"
+    if [ ! -f "$f" ]; then
+        echo "[restore-drill] FATAL: tarball missing artifact '$name'" >&2
+        exit 1
+    fi
+
+    actual="$(sha256sum "$f" | awk '{print $1}')"
+    expected="${EXPECTED_SHA[$name]:-}"
+    if [ -z "$expected" ] || [ "$actual" != "$expected" ]; then
+        echo "[restore-drill] FATAL: checksum mismatch on '$name'" >&2
+        echo "  expected=$expected actual=$actual" >&2
+        exit 1
+    fi
+done
+echo "[restore-drill] manifest checksums verified"
+
+echo "[restore-drill] step 1/3: pg_restore (clean+if-exists)"
+pg_restore --clean --if-exists --no-owner --no-acl \
+    --dbname="$DATABASE_URL" "$WORKDIR/soland-database.dump"
+
+if [ "$USE_KEYSTORE" = "true" ] && \
+   [ "$(jq -r '.skipped // false' "$WORKDIR/keystore.json")" != "true" ]; then
+    echo "[restore-drill] step 2/3: keystore restore via soland-rotate-drill --import-only"
+    cargo run --quiet --bin soland-rotate-drill -- \
+        --import-only \
+        --service-did "$SERVICE_DID" \
+        --input "$WORKDIR/keystore.json"
+else
+    echo "[restore-drill] step 2/3: keystore restore skipped"
+fi
+
+echo "[restore-drill] step 3/3: walk multisig_pending - per-row aggregability check"
+
+ROWS_TOTAL=0
+ROWS_OK=0
+ROWS_BAD=0
+
+while IFS= read -r line; do
+    [ -z "$line" ] && continue
+    ROWS_TOTAL=$((ROWS_TOTAL + 1))
+    anchor_id="$(echo "$line" | jq -r '.anchor_id')"
+    threshold_k="$(echo "$line" | jq -r '.threshold_k')"
+    threshold_n="$(echo "$line" | jq -r '.threshold_n')"
+    member_count="$(echo "$line" | jq -r '(.members // []) | length')"
+    partial_count="$(echo "$line" | jq -r '(.partials // {}) | length')"
+    canonical_len="$(echo "$line" | jq -r '(.canonical_b64 // "") | length')"
+    claim_seq="$(echo "$line" | jq -r '.claim_seq // 0')"
+    claimed_by="$(echo "$line" | jq -r '.claimed_by_node_id // ""')"
+    claimed_until="$(echo "$line" | jq -r '.claimed_until // ""')"
+
+    bad_reason=""
+
+    if ! [ "$threshold_k" -ge 1 ] 2>/dev/null || \
+       ! [ "$threshold_n" -ge "$threshold_k" ] 2>/dev/null; then
+        bad_reason="threshold arithmetic violated (k=$threshold_k n=$threshold_n)"
+    fi
+
+    if [ -z "$bad_reason" ] && [ "$member_count" -ne "$threshold_n" ]; then
+        bad_reason="members[] cardinality $member_count != threshold_n $threshold_n"
+    fi
+
+    if [ -z "$bad_reason" ]; then
+        orphans="$(echo "$line" | jq -r '
+            (.partials // {} | keys) - (.members // [])
+            | join(",")
+        ')"
+        if [ -n "$orphans" ]; then
+            bad_reason="orphan partials not in members[]: $orphans"
+        fi
+    fi
+
+    if [ -z "$bad_reason" ]; then
+        missing_fields="$(echo "$line" | jq -r '
+            [.partials // {} | to_entries[]
+             | select((.value.signature_b64 // "") == ""
+                  or  (.value.kid // "") == "")
+             | .key] | join(",")
+        ')"
+        if [ -n "$missing_fields" ]; then
+            bad_reason="partials missing signature_b64/kid: $missing_fields"
+        fi
+    fi
+
+    if [ -z "$bad_reason" ] && [ "$claim_seq" -lt 0 ] 2>/dev/null; then
+        bad_reason="negative claim_seq=$claim_seq"
+    fi
+
+    if [ -z "$bad_reason" ] && [ -n "$claimed_by" ] && [ -z "$claimed_until" ]; then
+        bad_reason="claimed_by_node_id set but claimed_until is NULL"
+    fi
+
+    if [ -z "$bad_reason" ] && [ "$partial_count" -ge "$threshold_k" ] && \
+       [ "$canonical_len" -eq 0 ]; then
+        bad_reason="threshold met (partials=$partial_count >= k=$threshold_k) but canonical_b64 is empty"
+    fi
+
+    if [ -z "$bad_reason" ]; then
+        ROWS_OK=$((ROWS_OK + 1))
+        printf "  PASS  %s  (k=%s/n=%s partials=%s claim_seq=%s)\n" \
+            "$anchor_id" "$threshold_k" "$threshold_n" "$partial_count" "$claim_seq"
+    else
+        ROWS_BAD=$((ROWS_BAD + 1))
+        printf "  FAIL  %s  %s\n" "$anchor_id" "$bad_reason"
+    fi
+done <"$WORKDIR/multisig_pending.jsonl"
+
+if [ "$ROWS_BAD" -eq 0 ]; then
+    echo "[restore-drill] RESTORE PASS  rows_total=$ROWS_TOTAL rows_ok=$ROWS_OK rows_bad=$ROWS_BAD"
+    exit 0
+fi
+
+echo "[restore-drill] RESTORE FAIL  rows_total=$ROWS_TOTAL rows_ok=$ROWS_OK rows_bad=$ROWS_BAD"
+exit 1

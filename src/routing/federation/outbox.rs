@@ -273,11 +273,7 @@ fn next_backoff_unix_secs(attempts: i32, now: i64) -> i64 {
 /// POST. Pulled out so the integration test can re-use the exact same
 /// timeouts the production worker hits.
 fn build_http_client() -> reqwest::Client {
-    reqwest::Client::builder()
-        .connect_timeout(CONNECT_TIMEOUT)
-        .timeout(REQUEST_TIMEOUT)
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
+    crate::security::build_egress_http_client(CONNECT_TIMEOUT, REQUEST_TIMEOUT)
         .expect("federation dispatcher reqwest client must build")
 }
 
@@ -424,6 +420,7 @@ impl FederationDispatcher {
                 row.last_response_excerpt = Some(excerpt(&body_text));
                 if (200..300).contains(&status) {
                     row.delivered_at = Some(now_unix_secs());
+                    crate::metrics::record_federation_retry_state("delivered");
                     tracing::info!(
                         target = "federation_outbox",
                         worker = "federation_outbox",
@@ -434,17 +431,17 @@ impl FederationDispatcher {
                         "federation outbox delivery succeeded"
                     );
                 } else if is_retryable_status(status) {
-                    self.schedule_retry(&mut row, status);
+                    self.schedule_retry(&mut row, status).await;
                 } else {
                     // Permanent 4xx — record and stop retrying.
-                    self.mark_terminal_failure(&mut row, status);
+                    self.mark_terminal_failure(&mut row, status).await;
                 }
             }
             Err(error) => {
                 // Network error / timeout — always retryable.
                 row.last_status = None;
                 row.last_response_excerpt = Some(excerpt(&format!("network_error: {error}")));
-                self.schedule_retry(&mut row, 0);
+                self.schedule_retry(&mut row, 0).await;
             }
         }
 
@@ -465,14 +462,16 @@ impl FederationDispatcher {
         }
     }
 
-    fn schedule_retry(&self, row: &mut FederationOutboxRecord, observed_status: i32) {
+    async fn schedule_retry(&self, row: &mut FederationOutboxRecord, observed_status: i32) {
         if row.attempts >= MAX_ATTEMPTS {
             // Out of retries — mark as gave-up with the sentinel status
             // so observability tools can distinguish "permanent 4xx" from
             // "exceeded retry budget on a retryable error".
             row.delivered_at = Some(now_unix_secs());
             row.last_status = Some(GAVE_UP_STATUS_SENTINEL);
-            self.insert_dead_letter(row, GAVE_UP_STATUS_SENTINEL, "retry_budget_exhausted");
+            self.insert_dead_letter(row, GAVE_UP_STATUS_SENTINEL, "retry_budget_exhausted")
+                .await;
+            crate::metrics::record_federation_retry_state("retry_budget_exhausted");
             tracing::warn!(
                 target = "federation_outbox",
                 worker = "federation_outbox",
@@ -484,12 +483,15 @@ impl FederationDispatcher {
             );
         } else {
             row.next_attempt_at = next_backoff_unix_secs(row.attempts, now_unix_secs());
+            crate::metrics::record_federation_retry_state("retry_scheduled");
         }
     }
 
-    fn mark_terminal_failure(&self, row: &mut FederationOutboxRecord, status: i32) {
+    async fn mark_terminal_failure(&self, row: &mut FederationOutboxRecord, status: i32) {
         row.delivered_at = Some(now_unix_secs());
-        self.insert_dead_letter(row, status, "terminal_http_status");
+        self.insert_dead_letter(row, status, "terminal_http_status")
+            .await;
+        crate::metrics::record_federation_retry_state("terminal_http_status");
         tracing::warn!(
             target = "federation_outbox",
             worker = "federation_outbox",

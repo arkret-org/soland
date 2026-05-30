@@ -240,7 +240,8 @@ async fn admin_set_account_status(
             "reason": reason,
         }),
         "accepted",
-    );
+    )
+    .await;
     json_ok(account_lifecycle_change_response(change))
 }
 
@@ -317,7 +318,8 @@ async fn revoke_device(
             "reason": body.get("reason").cloned(),
         }),
         "accepted",
-    );
+    )
+    .await;
     json_ok(json!({
         "actor": target_actor,
         "device_id": device_id,

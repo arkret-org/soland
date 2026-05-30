@@ -12,8 +12,8 @@
 #      partials), exported as JSONL, so the restore drill can walk
 #      every row and assert its aggregability post-restore.
 #
-# Honours the existing PASION_* / SOLAND_* env conventions:
-#   - `DATABASE_URL` (or `PASION_DATABASE_URL` as override)
+# Honours the existing SOLAND_* env conventions:
+#   - `SOLAND_DATABASE_URL` or `DATABASE_URL`
 #   - `SOLAND_SERVICE_DID` — used to scope the keystore lookup
 #   - `SOLAND_USE_KEYSTORE` — when "true", export the platform keystore seed
 #   - `SOLAND_BACKUP_DIR`  — where the output tarball is written
@@ -28,7 +28,7 @@ DRILL_TS="$(date -u +%Y%m%dT%H%M%SZ)"
 WORKDIR="$(mktemp -d -t soland-backup-XXXXXX)"
 trap 'rm -rf "$WORKDIR"' EXIT
 
-DATABASE_URL="${PASION_DATABASE_URL:-${DATABASE_URL:-}}"
+DATABASE_URL="${SOLAND_DATABASE_URL:-${DATABASE_URL:-${PASION_DATABASE_URL:-}}}"
 SERVICE_DID="${SOLAND_SERVICE_DID:-did:web:soland.local}"
 USE_KEYSTORE="${SOLAND_USE_KEYSTORE:-false}"
 BACKUP_DIR="${SOLAND_BACKUP_DIR:-./backups}"
@@ -36,7 +36,7 @@ mkdir -p "$BACKUP_DIR"
 OUTPUT="${BACKUP_DIR}/soland-${DRILL_TS}.tar.gz"
 
 if [ -z "$DATABASE_URL" ]; then
-    echo "[backup-drill] FATAL: DATABASE_URL (or PASION_DATABASE_URL) is unset" >&2
+    echo "[backup-drill] FATAL: SOLAND_DATABASE_URL or DATABASE_URL is unset" >&2
     exit 2
 fi
 

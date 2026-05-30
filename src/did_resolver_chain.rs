@@ -146,11 +146,7 @@ pub async fn probe_webvh_provider_describe(
         "external webvh provider describe",
         development_mode,
     )?;
-    let client = reqwest::Client::builder()
-        .timeout(timeout)
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .map_err(|e| format!("failed to build reqwest client: {e}"))?;
+    let client = crate::security::build_default_egress_http_client(timeout)?;
     let resp = client
         .get(describe_url)
         .send()

@@ -806,6 +806,7 @@ async fn projection_persistence_write_through_mirrors_lifecycle_events() {
         .persistence
         .space_container_projections()
         .get(container_space_id)
+        .await
         .unwrap()
         .expect("place projection MUST be mirrored to persistence after create+archive");
     assert_eq!(place_row.state, "archived");
@@ -816,6 +817,7 @@ async fn projection_persistence_write_through_mirrors_lifecycle_events() {
         .persistence
         .space_container_projections()
         .list_for_space(DEMO_REALM_ID)
+        .await
         .unwrap();
     assert!(
         by_space
@@ -827,6 +829,7 @@ async fn projection_persistence_write_through_mirrors_lifecycle_events() {
         .persistence
         .space_container_projections()
         .snapshot_all()
+        .await
         .unwrap();
     assert!(
         snapshot
@@ -862,6 +865,7 @@ async fn projection_persistence_write_through_mirrors_lifecycle_events() {
         .persistence
         .flow_projections()
         .get(flow_id)
+        .await
         .unwrap()
         .expect("flow projection MUST be mirrored to persistence after create");
     assert_eq!(flow_row.state, "active");
@@ -889,6 +893,7 @@ async fn projection_persistence_write_through_mirrors_lifecycle_events() {
         .persistence
         .flow_projections()
         .get(flow_id)
+        .await
         .unwrap()
         .expect("flow projection MUST still exist after redaction");
     assert_eq!(
@@ -942,6 +947,7 @@ async fn projection_persistence_write_through_mirrors_lifecycle_events() {
         .persistence
         .morph_projections()
         .get(morph_id)
+        .await
         .unwrap()
         .expect("morph projection MUST be mirrored to persistence");
     assert_eq!(morph_row.state, "archived");

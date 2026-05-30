@@ -927,6 +927,7 @@ async fn submit_federation_events(
         }
     };
     if request_hash != trust_headers.request_canonical_digest.as_str() {
+        crate::metrics::record_digest_mismatch("events_federation_request_binding");
         render_error(
             res,
             StatusCode::CONFLICT,

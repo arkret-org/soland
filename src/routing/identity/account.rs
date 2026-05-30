@@ -173,7 +173,8 @@ async fn account_register(
         "account.register",
         json!({"handle": account.handle.clone()}),
         "accepted",
-    );
+    )
+    .await;
     res.status_code(StatusCode::CREATED);
     json_ok(account_response(account, state))
 }
@@ -278,7 +279,8 @@ async fn claim_handle(
             "handle": normalized.clone(),
         }),
         "accepted",
-    );
+    )
+    .await;
     json_ok(ClaimHandleResponse {
         did: current.did,
         handle: current.handle,
@@ -344,7 +346,8 @@ async fn update_profile(
             "avatar_url": current.avatar_url.clone(),
         }),
         "accepted",
-    );
+    )
+    .await;
     json_ok(UpdateProfileResponse {
         did: current.did,
         handle: current.handle,
@@ -447,7 +450,8 @@ async fn transfer_handle(
             "to": body.target_did.clone(),
         }),
         "accepted",
-    );
+    )
+    .await;
     json_ok(TransferHandleResponse {
         handle: transferred,
         from_did: source.did,
@@ -540,7 +544,8 @@ async fn export_account(
         "cx.audit.exported",
         json!({"actor": actor.clone()}),
         "accepted",
-    );
+    )
+    .await;
     let audit_log = state
         .persistence
         .audit()
@@ -668,7 +673,8 @@ pub(crate) async fn set_account_lifecycle_state(
             changed_at,
             sessions_revoked,
             devices_revoked,
-        );
+        )
+        .await;
     }
 
     Ok(AccountLifecycleChange {
@@ -684,7 +690,7 @@ pub(crate) async fn set_account_lifecycle_state(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn append_account_state_change_audit(
+async fn append_account_state_change_audit(
     state: &AppState,
     did: &str,
     changed_by: &str,
@@ -713,7 +719,8 @@ fn append_account_state_change_audit(
         "cx.account.state_change",
         payload.clone(),
         "accepted",
-    );
+    )
+    .await;
     if changed_by != did {
         append_audit_log(
             state,
@@ -721,7 +728,8 @@ fn append_account_state_change_audit(
             "cx.account.state_change",
             payload,
             "accepted",
-        );
+        )
+        .await;
     }
 }
 
@@ -787,7 +795,8 @@ async fn erase_account(
         "cx.audit.erasure_initiated",
         json!({"actor": actor.clone()}),
         "accepted",
-    );
+    )
+    .await;
 
     // Pseudonymize the account record (replace display_name / bio /
     // avatar_url with placeholders; retain DID + a release-marked
@@ -850,7 +859,8 @@ async fn erase_account(
         changed_at,
         sessions_revoked,
         devices_revoked,
-    );
+    )
+    .await;
 
     // Spec: A.3 GDPR erasure cascade — emit a single audit row that
     // catalogues every previously-recorded audit entry by `audit_id` +
@@ -859,7 +869,7 @@ async fn erase_account(
     // chain of custody is preserved; downstream consumers honour this
     // marker by replacing the prior bodies with `[redacted]` on render
     // (timestamps + audit_ids retained for forensic reconstruction).
-    append_audit_redaction_marker(state, &actor);
+    append_audit_redaction_marker(state, &actor).await;
 
     let completed_at = now();
     let completed_at_wire = completed_at.to_rfc3339_opts(SecondsFormat::Millis, true);
@@ -930,7 +940,8 @@ async fn erase_account(
         "cx.audit.erasure_receipt",
         erasure_receipt.clone(),
         "accepted",
-    );
+    )
+    .await;
     let realm_operations = realm_erasure_receipts
         .iter()
         .filter_map(|receipt| erasure_receipt_operation(receipt.clone()))
@@ -958,7 +969,8 @@ async fn erase_account(
                 "reason": error,
             }),
             "failed",
-        );
+        )
+        .await;
     }
     // Snapshot the audit log inline so the response is the canonical
     // last-known-good view of the actor's audit trail — subsequent
@@ -1042,7 +1054,8 @@ async fn append_audit_redaction_marker(state: &AppState, actor: &str) {
             "entries": entries,
         }),
         "accepted",
-    );
+    )
+    .await;
 }
 
 async fn affected_erasure_realms_for_actor(state: &AppState, actor: &str) -> Vec<String> {
@@ -1597,7 +1610,8 @@ async fn notifications_mark_all_read(
         "notifications.mark_all_read",
         json!({"marked_at": marked_at.to_rfc3339()}),
         "accepted",
-    );
+    )
+    .await;
     fanout_actor_private_update(
         state,
         &session.actor,
@@ -1608,7 +1622,8 @@ async fn notifications_mark_all_read(
             "device_id": session.device_id,
             "marked_at": marked_at,
         }),
-    );
+    )
+    .await;
     json_ok(json!({
         "marked_at": marked_at.to_rfc3339(),
         "actor": session.actor,
@@ -1842,7 +1857,8 @@ async fn account_principal_space(
         "account.principal_space.lookup",
         json!({"space_id": space_id, "mapping_kind": "deterministic"}),
         "accepted",
-    );
+    )
+    .await;
     json_ok(PrincipalSpaceResponse {
         did,
         space_id,

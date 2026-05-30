@@ -68,7 +68,8 @@ async fn configure_retention_policy(
             "ttl_seconds": ttl_seconds,
         }),
         "accepted",
-    );
+    )
+    .await;
     json_ok(policy_json(&record))
 }
 
@@ -169,7 +170,8 @@ async fn sweep_retention_policy(
             "physical_delete_count": 0,
         }),
         "accepted",
-    );
+    )
+    .await;
     json_ok(json!({
         "space_id": space_id,
         "policy": policy_json(&policy),

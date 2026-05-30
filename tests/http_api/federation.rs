@@ -268,6 +268,85 @@ async fn federation_push_rejects_bad_rfc9421_and_missing_relay_inner_signature()
     assert!(relay_body.contains("relay-inner-signature-input"));
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn federation_verify_actor_accepts_real_did_key_signature_in_production() {
+    let state = production_federation_state();
+    let signing = SigningKey::from_bytes(&[31u8; 32]);
+    let (actor_id, verification_method) = did_key_actor(&signing);
+    let body = signed_verify_actor_body(&signing, &actor_id, &verification_method, None);
+
+    let verified = post_verify_actor(state, body).await;
+
+    assert_eq!(verified["valid"], true);
+    assert_eq!(verified["actor_id"], actor_id);
+    assert_eq!(verified["verified_key_id"], verification_method);
+    assert_eq!(verified["did_document_ref"], format!("{actor_id}#document"));
+    assert!(
+        verified["key_log_head"]
+            .as_str()
+            .is_some_and(|head| head.starts_with("sha256:"))
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn federation_verify_actor_rejects_tampered_actor_signature() {
+    let state = production_federation_state();
+    let signing = SigningKey::from_bytes(&[32u8; 32]);
+    let (actor_id, verification_method) = did_key_actor(&signing);
+    let mut body = signed_verify_actor_body(&signing, &actor_id, &verification_method, None);
+    body["signature"]["sig"] = serde_json::json!(URL_SAFE_NO_PAD.encode([0u8; 64]));
+
+    let (status, _) = post_verify_actor_error(state, body).await;
+
+    assert_eq!(status, 401);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn federation_verify_actor_rejects_unknown_kid() {
+    let state = production_federation_state();
+    let signing = SigningKey::from_bytes(&[33u8; 32]);
+    let (actor_id, verification_method) = did_key_actor(&signing);
+    let wrong_method = format!("{actor_id}#wrong-key");
+    let body = signed_verify_actor_body(&signing, &actor_id, &wrong_method, None);
+
+    let (status, text) = post_verify_actor_error(state, body).await;
+
+    assert_eq!(status, 401);
+    assert!(text.contains("verification method is not present"));
+    assert!(!text.contains(&verification_method));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn federation_verify_actor_rejects_kid_controller_mismatch() {
+    let state = production_federation_state();
+    let signing = SigningKey::from_bytes(&[34u8; 32]);
+    let (actor_id, verification_method) = did_key_actor(&signing);
+    let (_, other_method) = did_key_actor(&SigningKey::from_bytes(&[35u8; 32]));
+    let body = signed_verify_actor_body(&signing, &actor_id, &other_method, None);
+
+    let (status, text) = post_verify_actor_error(state, body).await;
+
+    assert_eq!(status, 401);
+    assert!(text.contains("controller does not match actor_id"));
+    assert!(!text.contains(&verification_method));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn federation_verify_actor_request_binding_can_pass_while_actor_signature_fails() {
+    let state = production_federation_state();
+    let signing = SigningKey::from_bytes(&[36u8; 32]);
+    let (actor_id, verification_method) = did_key_actor(&signing);
+    let mut body = signed_verify_actor_body(&signing, &actor_id, &verification_method, None);
+    body["purpose"] = serde_json::json!("federation.verify_actor.tampered-after-signing");
+
+    let (status, _) = post_verify_actor_error(state, body).await;
+
+    assert_eq!(
+        status, 401,
+        "headers are recomputed for the tampered body, so request binding passes and actor signature fails"
+    );
+}
+
 #[tokio::test]
 async fn federation_transactions_are_idempotent_by_origin_and_body() {
     let state = AppState::new(test_config(), Db { pool: None });
@@ -337,4 +416,102 @@ async fn federation_transactions_are_idempotent_by_origin_and_body() {
             .send(&app_from_state(state.clone()))
             .await;
     assert_eq!(wrong_destination.status_code.unwrap().as_u16(), 403);
+}
+
+fn production_federation_state() -> AppState {
+    let mut config = test_config();
+    config.development_mode = false;
+    AppState::new(config, Db { pool: None })
+}
+
+fn did_key_actor(signing: &SigningKey) -> (String, String) {
+    let multibase = test_ed25519_multibase_public(signing);
+    let actor_id = format!("did:key:{multibase}");
+    let verification_method = format!("{actor_id}#{multibase}");
+    (actor_id, verification_method)
+}
+
+fn signed_verify_actor_body(
+    signing: &SigningKey,
+    actor_id: &str,
+    verification_method: &str,
+    payload_digest: Option<&str>,
+) -> Value {
+    let mut body = serde_json::json!({
+        "actor_id": actor_id,
+        "challenge": "verify-actor-challenge",
+        "purpose": "federation.verify_actor",
+    });
+    if let Some(payload_digest) = payload_digest {
+        body["signed_payload_digest"] = serde_json::json!(payload_digest);
+    }
+    let unsigned_digest = verify_actor_unsigned_digest(&body);
+    let transcript = verify_actor_signature_transcript(&body, &unsigned_digest);
+    let transcript_bytes = contrix_sdk::canonical::canonical_json_bytes(&transcript).unwrap();
+    let signature = signing.sign(&transcript_bytes);
+    body["signature"] = serde_json::json!({
+        "kid": verification_method,
+        "alg": "Ed25519",
+        "sig": URL_SAFE_NO_PAD.encode(signature.to_bytes())
+    });
+    body
+}
+
+fn verify_actor_unsigned_digest(body: &Value) -> String {
+    let mut unsigned = body.clone();
+    if let Value::Object(object) = &mut unsigned {
+        object.remove("signature");
+    }
+    contrix_sdk::canonical::canonical_sha256(&unsigned).unwrap()
+}
+
+fn verify_actor_signature_transcript(body: &Value, unsigned_digest: &str) -> Value {
+    serde_json::json!({
+        "type": "cx.federation.verify_actor.signature.v1",
+        "actor_id": body["actor_id"].as_str().unwrap(),
+        "purpose": body["purpose"].as_str().unwrap(),
+        "challenge": body.get("challenge").cloned().unwrap_or(Value::Null),
+        "signed_payload_digest": body.get("signed_payload_digest").cloned().unwrap_or(Value::Null),
+        "space_id": body.get("space_id").cloned().unwrap_or(Value::Null),
+        "request_binding_digest": unsigned_digest,
+    })
+}
+
+async fn post_verify_actor(state: AppState, body: Value) -> Value {
+    let mut request = TestClient::post("http://server/api/v1/federation/verify-actor").json(&body);
+    for (name, value) in verify_actor_headers(&body) {
+        request = request.add_header(name, value, true);
+    }
+    request
+        .send(&app_from_state(state))
+        .await
+        .take_json()
+        .await
+        .unwrap()
+}
+
+async fn post_verify_actor_error(state: AppState, body: Value) -> (u16, String) {
+    let mut request = TestClient::post("http://server/api/v1/federation/verify-actor").json(&body);
+    for (name, value) in verify_actor_headers(&body) {
+        request = request.add_header(name, value, true);
+    }
+    let mut response = request.send(&app_from_state(state)).await;
+    let status = response.status_code.unwrap().as_u16();
+    let body = response.take_string().await.unwrap();
+    (status, body)
+}
+
+fn verify_actor_headers(body: &Value) -> Vec<(&'static str, String)> {
+    let digest = contrix_sdk::canonical::canonical_sha256(body).unwrap();
+    vec![
+        (
+            "source-trust-domain",
+            "cx:trust_domain:remote.example".to_owned(),
+        ),
+        (
+            "destination-trust-domain",
+            "cx:trust_domain:soland.local".to_owned(),
+        ),
+        ("request-canonical-digest", digest),
+    ]
 }

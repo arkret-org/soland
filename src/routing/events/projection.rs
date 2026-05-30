@@ -1516,7 +1516,8 @@ pub async fn project_accepted_operations(state: &AppState, origin: &str, operati
         // round trip without a real applet service plugged in. See
         // `routing::events::applet_bridge::maybe_emit_echo_status_for_session_start`
         // for the body shape contract.
-        super::applet_bridge::maybe_emit_echo_status_for_session_start(state, origin, operation);
+        super::applet_bridge::maybe_emit_echo_status_for_session_start(state, origin, operation)
+            .await;
         // Reference agent runtime: if the accepted operation is
         // `cx.agent.protocol_session.start`, fan out a synthetic
         // `cx.agent.protocol_session.status` (running) followed by a
@@ -1524,7 +1525,8 @@ pub async fn project_accepted_operations(state: &AppState, origin: &str, operati
         // an `audit_binding` placeholder so the lifecycle is observable
         // end-to-end. See
         // `routing::events::agent_bridge::maybe_emit_echo_result_for_session_start`.
-        super::agent_bridge::maybe_emit_echo_result_for_session_start(state, origin, operation);
+        super::agent_bridge::maybe_emit_echo_result_for_session_start(state, origin, operation)
+            .await;
     }
 }
 
@@ -2110,11 +2112,9 @@ pub fn project_member_identity_update(state: &AppState, operation: &Operation) {
         replaces,
         raw_event,
     };
-    state
-        .member_identity
-        .lock()
-        .expect("member_identity lock")
-        .insert(record);
+    let mut registry = state.member_identity.lock().expect("member_identity lock");
+    registry.insert(record);
+    registry.upsert_handle_claims_from_identity_payload(identity_payload);
 }
 
 async fn project_invite_acceptance(state: &AppState, member: &str, operation: &Operation) {

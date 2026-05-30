@@ -87,7 +87,8 @@ async fn seed_member_invite_event_surfaces_via_authz_invites() {
         "invite_only",
         &[],
         &[],
-    );
+    )
+    .await;
     let space_id = created_space["space_id"].as_str().unwrap().to_owned();
 
     // Submit alice's cx.member.state{membership=invite} pointing at bob.

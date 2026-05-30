@@ -184,7 +184,7 @@ async fn post_user_action(
         "note": note,
         "recorded_at": body.get("recorded_at").cloned().unwrap_or(Value::Null),
     });
-    append_audit_log(state, Some(&actor), &action, target, outcome);
+    append_audit_log(state, Some(&actor), &action, target, outcome).await;
     json_ok(json!({"ok": true}))
 }
 

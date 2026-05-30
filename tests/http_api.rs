@@ -43,3 +43,5 @@ mod policy_snapshot;
 mod projection;
 #[path = "http_api/push_keys.rs"]
 mod push_keys;
+#[path = "http_api/recovery.rs"]
+mod recovery;

@@ -14,7 +14,7 @@ use std::collections::BTreeSet;
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use chrono::Duration;
+use chrono::{DateTime, Duration, Utc};
 use contrix_sdk::RealmId;
 use ed25519_dalek::Signer as _;
 use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
@@ -340,7 +340,7 @@ async fn create_webrtc_session(
         participants.insert(participant);
     }
 
-    prune_expired_webrtc_sessions(state);
+    prune_expired_webrtc_sessions(state).await;
     let created_at = now();
     let ttl_ms = body.ttl_ms.unwrap_or(600_000).clamp(60_000, 3_600_000);
     let expires_at = created_at + Duration::milliseconds(ttl_ms as i64);
@@ -433,7 +433,7 @@ async fn put_webrtc_signal(
         }
     }
 
-    prune_expired_webrtc_sessions(state);
+    prune_expired_webrtc_sessions(state).await;
     let actor = session.actor.clone();
     let message_type = body.message_type;
     let payload = body.payload;
@@ -504,7 +504,7 @@ async fn get_webrtc_signals(
     let since = since.into_inner().unwrap_or(0);
     let limit = limit.into_inner().unwrap_or(50).clamp(1, 100);
 
-    prune_expired_webrtc_sessions(state);
+    prune_expired_webrtc_sessions(state).await;
     let Some(record) = state
         .persistence
         .webrtc()
@@ -571,7 +571,7 @@ async fn delete_webrtc_session(
         return Err(AppError::invalid_param("invalid webrtc session id"));
     }
 
-    prune_expired_webrtc_sessions(state);
+    prune_expired_webrtc_sessions(state).await;
     let Some(record) = state
         .persistence
         .webrtc()
@@ -610,7 +610,7 @@ async fn start_recording(
     if !is_valid_webrtc_session_id(&call_id) {
         return Err(AppError::invalid_param("invalid call_id"));
     }
-    prune_expired_webrtc_sessions(state);
+    prune_expired_webrtc_sessions(state).await;
     let mut record = state
         .persistence
         .webrtc()
@@ -674,19 +674,142 @@ async fn start_recording(
 //   - `focus_id` must equal the call's committed session_focus →
 //     `focus_mismatch` (MEDIA-2, REDU-3).
 //   - Focus selection is oldest-membership-wins; until the session_focus
-//     cell is wired through the reducer (TODO(R3.1)), the handler
-//     synthesises the focus from the persisted webrtc session record.
+//     cell is wired through the reducer, the handler derives the focus from
+//     the call participants and their latest `foci_preferred[]` signal.
 //   - Token TTL ≤ `MEDIA_TOKEN_TTL_MAX_SECS` (600s); default
 //     `MEDIA_TOKEN_TTL_SHOULD_SECS` (300s) (MEDIA-1).
 //   - `service_signature.kid` / `participant_binding.issuer_kid` resolves
 //     to the current `cx.realm.media_service.service_id` epoch →
-//     `token_issuer_unauthorised` (MEDIA-1). Until the realm.media_service
-//     epoch projection is wired, the issuer kid is taken from the
-//     anchorer signing identity.
-//
-// TODO(R3.1): real focus selection (oldest call_member.foci_preferred[0]
-// per `webrtc-signaling.md §10.5`), real LiveKit / Mediasoup token mint,
-// participant_binding signature, e2ee key source resolution.
+//     `token_issuer_unauthorised` (MEDIA-1).
+const REALM_MEDIA_SERVICE_CELL_FAMILY: &str = "cx.component.realm.media_service.v1";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MediaProviderKind {
+    ContrixNative,
+    LiveKit,
+    Mediasoup,
+}
+
+impl MediaProviderKind {
+    fn parse(value: &str) -> Result<Self, AppError> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "contrix-native" | "contrix_native" => Ok(Self::ContrixNative),
+            "livekit" => Ok(Self::LiveKit),
+            "mediasoup" => Ok(Self::Mediasoup),
+            _ => Err(AppError::new(
+                ErrorCode::UnknownFocusType,
+                format!("unknown media focus provider `{value}`"),
+            )),
+        }
+    }
+
+    fn as_wire(self) -> &'static str {
+        match self {
+            Self::ContrixNative => "contrix-native",
+            Self::LiveKit => "livekit",
+            Self::Mediasoup => "mediasoup",
+        }
+    }
+
+    fn token_prefix(self) -> &'static str {
+        match self {
+            Self::ContrixNative => "contrix-native",
+            Self::LiveKit => "livekit",
+            Self::Mediasoup => "mediasoup",
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct MediaProviderConfig {
+    provider: MediaProviderKind,
+    focus_id: String,
+    issuer_kid: String,
+    audience: String,
+    ttl_seconds: u64,
+    connect_url: Option<String>,
+    e2ee_key_source: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+struct MediaServiceEpoch {
+    service_id: String,
+    issuer_kids: BTreeSet<String>,
+    foci: Vec<MediaProviderConfig>,
+    e2ee_key_sources_allowed: BTreeSet<String>,
+}
+
+impl MediaServiceEpoch {
+    fn focus(&self, focus_id: &str) -> Option<&MediaProviderConfig> {
+        self.foci.iter().find(|focus| focus.focus_id == focus_id)
+    }
+
+    fn focus_ids(&self) -> Vec<String> {
+        self.foci
+            .iter()
+            .map(|focus| focus.focus_id.clone())
+            .collect()
+    }
+}
+
+struct MediaTokenIssueRequest<'a> {
+    focus: &'a MediaProviderConfig,
+    realm_id: &'a str,
+    call_id: &'a str,
+    actor_id: &'a str,
+    device_id: &'a str,
+    participant_identity: &'a str,
+    issued_at: DateTime<Utc>,
+    expires_at: DateTime<Utc>,
+}
+
+struct IssuedMediaToken {
+    backend_token: String,
+    connect_url: Option<String>,
+}
+
+trait MediaTokenIssuer {
+    fn issue(
+        &self,
+        request: &MediaTokenIssueRequest<'_>,
+        signing_key: &ed25519_dalek::SigningKey,
+    ) -> IssuedMediaToken;
+}
+
+struct ContrixNativeMediaIssuer;
+struct LiveKitMediaIssuer;
+struct MediasoupMediaIssuer;
+
+impl MediaTokenIssuer for ContrixNativeMediaIssuer {
+    fn issue(
+        &self,
+        request: &MediaTokenIssueRequest<'_>,
+        signing_key: &ed25519_dalek::SigningKey,
+    ) -> IssuedMediaToken {
+        issue_signed_backend_token(MediaProviderKind::ContrixNative, request, signing_key)
+    }
+}
+
+impl MediaTokenIssuer for LiveKitMediaIssuer {
+    fn issue(
+        &self,
+        request: &MediaTokenIssueRequest<'_>,
+        signing_key: &ed25519_dalek::SigningKey,
+    ) -> IssuedMediaToken {
+        issue_signed_backend_token(MediaProviderKind::LiveKit, request, signing_key)
+    }
+}
+
+impl MediaTokenIssuer for MediasoupMediaIssuer {
+    fn issue(
+        &self,
+        request: &MediaTokenIssueRequest<'_>,
+        signing_key: &ed25519_dalek::SigningKey,
+    ) -> IssuedMediaToken {
+        issue_signed_backend_token(MediaProviderKind::Mediasoup, request, signing_key)
+    }
+}
+
 async fn handle_rtc_token(
     state: &AppState,
     session: &SessionRecord,
@@ -761,11 +884,13 @@ async fn handle_rtc_token(
     let _recording_bypass_reason: &str =
         crate::error::reasons::RECORDING_ARTIFACT_PIPELINE_BYPASSED;
 
-    // MEDIA-2 — focus selection (oldest-membership-wins). Until the
-    // call.state.session_focus reducer cell lands (TODO(R3.1)) we use the
-    // call session's created_by-derived focus as the canonical
-    // session_focus; the caller's `focus_id` MUST match.
-    let session_focus = session_focus_for_call(state, &webrtc);
+    let media_epoch = media_service_epoch_for_realm(state, &body.realm_id)?;
+
+    // MEDIA-2 — focus selection (oldest-membership-wins). A committed
+    // `cx.call.state.session_focus` projection wins when present; otherwise we
+    // derive from call members ordered by realm membership age and the latest
+    // per-member `foci_preferred[]` signal in the call.
+    let session_focus = session_focus_for_call(state, &webrtc, &media_epoch)?;
     if body.focus_id != session_focus {
         return Err(AppError::new(
             ErrorCode::FocusMismatch,
@@ -775,41 +900,66 @@ async fn handle_rtc_token(
             ),
         ));
     }
+    let focus = media_epoch.focus(&session_focus).ok_or_else(|| {
+        focus_unavailable_error("selected focus is not present in media_service epoch")
+    })?;
+    if !media_epoch.issuer_kids.contains(&focus.issuer_kid)
+        || !issuer_kid_belongs_to_service(&focus.issuer_kid, &media_epoch.service_id)
+    {
+        return Err(token_issuer_unauthorised(format!(
+            "issuer_kid `{}` is not anchored to media_service service_id `{}`",
+            focus.issuer_kid, media_epoch.service_id
+        )));
+    }
+    if let Some(e2ee_key_source) = &focus.e2ee_key_source
+        && !media_epoch.e2ee_key_sources_allowed.is_empty()
+        && !media_epoch
+            .e2ee_key_sources_allowed
+            .contains(e2ee_key_source)
+    {
+        return Err(AppError::new(
+            ErrorCode::FailedPrecondition,
+            format!("e2ee_key_source `{e2ee_key_source}` is not authorized by media_service epoch"),
+        )
+        .with_wire_code(crate::error::reasons::E2EE_KEY_SOURCE_UNAUTHORISED));
+    }
 
-    // MEDIA-1 — token TTL default 300s (cap 600s).
-    let ttl_secs =
-        contrix_sdk::MEDIA_TOKEN_TTL_SHOULD_SECS.min(contrix_sdk::MEDIA_TOKEN_TTL_MAX_SECS);
+    // MEDIA-1 — token TTL defaults to 300s and is capped at the spec ceiling
+    // even if the realm focus advertises a larger backend TTL.
+    let ttl_secs = focus
+        .ttl_seconds
+        .clamp(1, contrix_sdk::MEDIA_TOKEN_TTL_MAX_SECS);
     let issued_at = now();
     let expires_at = issued_at + Duration::seconds(ttl_secs as i64);
 
-    // TODO(R3.1): mint a real backend-specific token (LiveKit JWT /
-    // Mediasoup ticket / Contrix-native challenge response). For now we
-    // emit a stable deterministic placeholder so cross-project HTTP
-    // smoke tests can exercise the surface.
-    let backend_token_seed = format!(
-        "soland-media-token-v1\0{}\0{}\0{}\0{}\0{}",
-        state.config.service_did, body.realm_id, body.call_id, body.actor_id, body.device_id
-    );
     let participant_identity = format!(
         "cx:rtcpart:{}",
-        &sha256_hex(backend_token_seed.as_bytes())[..32]
+        &sha256_hex(
+            format!(
+                "participant\0{}\0{}\0{}\0{}",
+                body.realm_id, body.call_id, body.actor_id, body.device_id
+            )
+            .as_bytes()
+        )[..32]
     );
-    let backend_token = URL_SAFE_NO_PAD.encode(sha256_hex(backend_token_seed.as_bytes()));
+    let signing_key = state.anchorer_signing_key();
+    let issue_request = MediaTokenIssueRequest {
+        focus,
+        realm_id: &body.realm_id,
+        call_id: &body.call_id,
+        actor_id: &body.actor_id,
+        device_id: &body.device_id,
+        participant_identity: &participant_identity,
+        issued_at,
+        expires_at,
+    };
+    let issued_token = media_token_issuer_for(focus.provider).issue(&issue_request, &signing_key);
 
-    // MEDIA-1 — issuer_kid bound to the anchorer signing identity. When
-    // the `cx.realm.media_service` epoch projection lands, this kid MUST
-    // resolve to the realm's current `service_id`. Mismatch emits the
-    // spec-canonical `token_issuer_unauthorised` (ERR-1).
-    //
-    // TODO(R4): resolve the issuer_kid against the per-realm
-    // `cx.realm.media_service.service_id` cell and reject when the
-    // current epoch's authorized issuer doesn't include this kid.
-    let issuer_kid = format!("{}#media-token", state.config.service_did);
-    // ERR-1 — referencing `token_issuer_unauthorised` so the constant
-    // stays grep-discoverable from the issuer-binding code path. The
-    // actual rejection path lights up in R4 when the realm.media_service
-    // epoch resolver lands.
+    // ERR-1 — emit `token_issuer_unauthorised` whenever the participant
+    // binding issuer is not authorized by the current realm media-service
+    // epoch.
     let _token_issuer_reason: &str = crate::error::reasons::TOKEN_ISSUER_UNAUTHORISED;
+    let issuer_kid = focus.issuer_kid.clone();
     let binding_payload = json!({
         "scheme": contrix_sdk::PARTICIPANT_BINDING_SCHEMA,
         "issuer_kid": issuer_kid.clone(),
@@ -823,7 +973,6 @@ async fn handle_rtc_token(
     });
     let binding_bytes = contrix_sdk::canonical::canonical_json_bytes(&binding_payload)
         .unwrap_or_else(|_| binding_payload.to_string().into_bytes());
-    let signing_key = state.anchorer_signing_key();
     let mut signing_input =
         Vec::with_capacity(b"soland-media-participant-binding-v1".len() + binding_bytes.len() + 1);
     signing_input.extend_from_slice(b"soland-media-participant-binding-v1");
@@ -841,7 +990,8 @@ async fn handle_rtc_token(
     service_input.extend_from_slice(&binding_bytes);
     let service_sig = signing_key.sign(&service_input);
     let service_signature = format!(
-        "eddsa-ed25519:{}",
+        "{}:eddsa-ed25519:{}",
+        issuer_kid,
         URL_SAFE_NO_PAD.encode(service_sig.to_bytes())
     );
 
@@ -859,37 +1009,376 @@ async fn handle_rtc_token(
     };
 
     json_ok(MediaTokenExchangeResBody {
-        backend_token,
+        backend_token: issued_token.backend_token,
         participant_identity,
         participant_binding,
         expires_at,
         service_signature,
-        connect_url: None,
-        todos: vec![
-            "R3.1: resolve focus from cx.realm.media_service oldest-membership-wins selection"
-                .to_owned(),
-            "R3.1: mint real backend_token via livekit/mediasoup/contrix-native binding".to_owned(),
-            "R3.1: validate issuer_kid against current cx.realm.media_service.service_id epoch"
-                .to_owned(),
-        ],
+        connect_url: issued_token.connect_url,
+        todos: Vec::new(),
     })
 }
 
 /// MEDIA-2 oldest-membership-wins focus selection.
-///
-/// Stub: until the `cx.realm.media_service.foci[]` + per-participant
-/// `foci_preferred[]` cells are wired through the reducer (TODO(R3.1)),
-/// we derive a deterministic focus id from the call session creator's
-/// identity so the caller can echo it back. The real implementation
-/// consults the call state's `members[]` ordered by join_order and
-/// picks the first preferred focus that's present in the realm
-/// media_service binding.
-fn session_focus_for_call(state: &AppState, webrtc: &WebrtcSessionRecord) -> String {
-    let _ = state;
+fn session_focus_for_call(
+    state: &AppState,
+    webrtc: &WebrtcSessionRecord,
+    media_epoch: &MediaServiceEpoch,
+) -> Result<String, AppError> {
+    let (committed_focus, mut member_order) = {
+        let projection = state
+            .projection
+            .lock()
+            .map_err(|error| AppError::internal(format!("projection lock: {error}")))?;
+        let committed_focus = projection
+            .call_session_focus
+            .get(&webrtc.session_id)
+            .cloned();
+        let member_order = webrtc
+            .participants
+            .iter()
+            .map(|actor| {
+                let joined_at = projection
+                    .member(&webrtc.space_id, actor)
+                    .map(|member| member.joined_at)
+                    .unwrap_or_else(|| {
+                        if actor == &webrtc.created_by {
+                            webrtc.created_at
+                        } else {
+                            webrtc.created_at + Duration::milliseconds(1)
+                        }
+                    });
+                (actor.clone(), joined_at)
+            })
+            .collect::<Vec<_>>();
+        (committed_focus, member_order)
+    };
+    if let Some(focus) = committed_focus {
+        if media_epoch.focus(&focus).is_some() {
+            return Ok(focus);
+        }
+        return Err(focus_unavailable_error(
+            "committed session_focus is not present in current media_service epoch",
+        ));
+    }
+
+    member_order.sort_by(|left, right| left.1.cmp(&right.1).then_with(|| left.0.cmp(&right.0)));
+    let default_focus_ids = media_epoch.focus_ids();
+    for (actor, _) in member_order {
+        let preferences = focus_preferences_for_member(webrtc, &actor);
+        if preferences.is_empty() {
+            if let Some(focus_id) = default_focus_ids.first() {
+                return Ok(focus_id.clone());
+            }
+            break;
+        }
+        for focus_id in preferences {
+            if media_epoch.focus(&focus_id).is_some() {
+                return Ok(focus_id);
+            }
+        }
+        return Err(focus_unavailable_error(format!(
+            "no media_service focus intersects foci_preferred[] for {actor}"
+        )));
+    }
+    Err(focus_unavailable_error(
+        "realm media_service epoch has no available foci",
+    ))
+}
+
+fn media_service_epoch_for_realm(
+    state: &AppState,
+    realm_id: &str,
+) -> Result<MediaServiceEpoch, AppError> {
+    let cell_id = contrix_sdk::CellRef::new(format!(
+        "cx:cell:{REALM_MEDIA_SERVICE_CELL_FAMILY}:{realm_id}"
+    ))
+    .map_err(|error| AppError::internal(format!("invalid media_service cell id: {error}")))?;
+    let value = {
+        let projection = state
+            .projection
+            .lock()
+            .map_err(|error| AppError::internal(format!("projection lock: {error}")))?;
+        projection.cell_value(&cell_id).cloned()
+    }
+    .ok_or_else(|| {
+        token_issuer_unauthorised(format!(
+            "realm `{realm_id}` has no projected cx.realm.media_service epoch"
+        ))
+    })?;
+    parse_media_service_epoch(realm_id, &value)
+}
+
+fn parse_media_service_epoch(realm_id: &str, value: &Value) -> Result<MediaServiceEpoch, AppError> {
+    let config = value.get("media_service").unwrap_or(value);
+    let service_id = config
+        .get("service_id")
+        .or_else(|| config.get("service_did"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    let foci_value = normalized_media_foci(realm_id, config)?;
+    let mut foci = Vec::new();
+    for focus_value in foci_value {
+        let focus_id = required_json_string(&focus_value, "focus_id")?;
+        if !focus_id.starts_with("cx:focus:") {
+            return Err(AppError::invalid_param(
+                "media focus_id must start with cx:focus:",
+            ));
+        }
+        let provider = focus_value
+            .get("type")
+            .or_else(|| focus_value.get("backend"))
+            .and_then(Value::as_str)
+            .ok_or_else(|| AppError::invalid_param("media focus backend/type is required"))
+            .and_then(MediaProviderKind::parse)?;
+        let issuer_kid = focus_value
+            .get("issuer_kid")
+            .or_else(|| config.get("issuer_kid"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                token_issuer_unauthorised("media focus issuer_kid is required".to_owned())
+            })?
+            .to_owned();
+        let audience = focus_value
+            .get("audience")
+            .or_else(|| config.get("audience"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| format!("contrix:media:{realm_id}:{focus_id}"));
+        let ttl_seconds = focus_value
+            .get("ttl_seconds")
+            .or_else(|| focus_value.get("token_ttl_seconds"))
+            .or_else(|| config.get("ttl_seconds"))
+            .and_then(Value::as_u64)
+            .unwrap_or(contrix_sdk::MEDIA_TOKEN_TTL_SHOULD_SECS);
+        let connect_url = focus_value
+            .get("connect_url")
+            .or_else(|| focus_value.get("sfu_endpoint"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned);
+        let e2ee_key_source = focus_value
+            .get("e2ee_key_source")
+            .or_else(|| config.get("e2ee_key_source"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned);
+        foci.push(MediaProviderConfig {
+            provider,
+            focus_id,
+            issuer_kid,
+            audience,
+            ttl_seconds,
+            connect_url,
+            e2ee_key_source,
+        });
+    }
+    if foci.is_empty() {
+        return Err(focus_unavailable_error(
+            "realm media_service epoch has no foci",
+        ));
+    }
+    let service_id = service_id
+        .or_else(|| {
+            foci.first()
+                .and_then(|focus| service_id_from_issuer_kid(&focus.issuer_kid))
+        })
+        .ok_or_else(|| {
+            token_issuer_unauthorised("media_service service_id is required".to_owned())
+        })?;
+    let issuer_kids = foci
+        .iter()
+        .map(|focus| focus.issuer_kid.clone())
+        .collect::<BTreeSet<_>>();
+    let e2ee_key_sources_allowed = config
+        .get("e2ee_key_sources_allowed")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .collect::<BTreeSet<_>>();
+    Ok(MediaServiceEpoch {
+        service_id,
+        issuer_kids,
+        foci,
+        e2ee_key_sources_allowed,
+    })
+}
+
+fn normalized_media_foci(realm_id: &str, config: &Value) -> Result<Vec<Value>, AppError> {
+    if let Some(foci) = config.get("foci").and_then(Value::as_array) {
+        return Ok(foci.clone());
+    }
+    if let Some(endpoint) = config.get("sfu_endpoint").and_then(Value::as_str) {
+        let backend = config
+            .get("backend")
+            .or_else(|| config.get("type"))
+            .and_then(Value::as_str)
+            .unwrap_or("contrix-native");
+        let issuer_kid = config.get("issuer_kid").cloned().unwrap_or_else(|| {
+            let service_id = config
+                .get("service_id")
+                .or_else(|| config.get("service_did"))
+                .and_then(Value::as_str)
+                .unwrap_or("did:web:media.local");
+            json!(format!("{service_id}#media-token"))
+        });
+        return Ok(vec![json!({
+            "focus_id": legacy_focus_id(realm_id, endpoint),
+            "backend": backend,
+            "connect_url": endpoint,
+            "issuer_kid": issuer_kid,
+            "audience": config.get("audience").cloned().unwrap_or(Value::Null),
+            "ttl_seconds": config.get("ttl_seconds").cloned().unwrap_or(Value::Null),
+            "e2ee_key_source": config.get("e2ee_key_source").cloned().unwrap_or(Value::Null),
+        })]);
+    }
+    Err(focus_unavailable_error(
+        "realm media_service epoch must contain foci[]",
+    ))
+}
+
+fn focus_preferences_for_member(webrtc: &WebrtcSessionRecord, actor: &str) -> Vec<String> {
+    for signal in webrtc.signals.iter().rev() {
+        if signal.sender != actor {
+            continue;
+        }
+        if let Some(preferences) = signal
+            .payload
+            .get("foci_preferred")
+            .and_then(Value::as_array)
+        {
+            let values = preferences
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>();
+            if !values.is_empty() {
+                return values;
+            }
+        }
+        if let Some(focus_id) = signal
+            .payload
+            .get("focus_id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            return vec![focus_id.to_owned()];
+        }
+    }
+    Vec::new()
+}
+
+fn media_token_issuer_for(provider: MediaProviderKind) -> Box<dyn MediaTokenIssuer> {
+    match provider {
+        MediaProviderKind::ContrixNative => Box::new(ContrixNativeMediaIssuer),
+        MediaProviderKind::LiveKit => Box::new(LiveKitMediaIssuer),
+        MediaProviderKind::Mediasoup => Box::new(MediasoupMediaIssuer),
+    }
+}
+
+fn issue_signed_backend_token(
+    provider: MediaProviderKind,
+    request: &MediaTokenIssueRequest<'_>,
+    signing_key: &ed25519_dalek::SigningKey,
+) -> IssuedMediaToken {
+    let nonce = ids::generate("media_token");
+    let token_payload = json!({
+        "iss": request.focus.issuer_kid,
+        "aud": request.focus.audience,
+        "provider": provider.as_wire(),
+        "realm_id": request.realm_id,
+        "call_id": request.call_id,
+        "focus_id": request.focus.focus_id,
+        "actor_id": request.actor_id,
+        "device_id": request.device_id,
+        "participant_identity": request.participant_identity,
+        "e2ee_key_source": request.focus.e2ee_key_source,
+        "iat": request.issued_at,
+        "exp": request.expires_at,
+        "nonce": nonce,
+    });
+    let token_bytes = contrix_sdk::canonical::canonical_json_bytes(&token_payload)
+        .unwrap_or_else(|_| token_payload.to_string().into_bytes());
+    let payload_b64 = URL_SAFE_NO_PAD.encode(&token_bytes);
+    let signing_input = format!(
+        "soland-media-backend-token-v1\0{}\0{}",
+        provider.as_wire(),
+        payload_b64
+    );
+    let sig = signing_key.sign(signing_input.as_bytes());
+    IssuedMediaToken {
+        backend_token: format!(
+            "{}.{}.{}",
+            provider.token_prefix(),
+            payload_b64,
+            URL_SAFE_NO_PAD.encode(sig.to_bytes())
+        ),
+        connect_url: request.focus.connect_url.clone(),
+    }
+}
+
+fn required_json_string(value: &Value, field: &str) -> Result<String, AppError> {
+    value
+        .get(field)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| AppError::invalid_param(format!("{field} is required")))
+}
+
+fn legacy_focus_id(realm_id: &str, endpoint: &str) -> String {
+    let realm_short = realm_id
+        .rsplit(':')
+        .next()
+        .unwrap_or("realm")
+        .chars()
+        .take(8)
+        .collect::<String>();
     format!(
-        "cx:focus:{}",
-        &sha256_hex(format!("focus\0{}\0{}", webrtc.space_id, webrtc.session_id).as_bytes())[..32]
+        "cx:focus:legacy:{realm_short}:{}",
+        &sha256_hex(endpoint.as_bytes())[..8]
     )
+}
+
+fn service_id_from_issuer_kid(issuer_kid: &str) -> Option<String> {
+    issuer_kid
+        .split_once('#')
+        .map(|(service_id, _)| service_id)
+        .filter(|service_id| !service_id.trim().is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn issuer_kid_belongs_to_service(issuer_kid: &str, service_id: &str) -> bool {
+    issuer_kid == service_id
+        || issuer_kid
+            .strip_prefix(service_id)
+            .is_some_and(|rest| rest.starts_with('#'))
+}
+
+fn token_issuer_unauthorised(message: impl Into<String>) -> AppError {
+    AppError::new(ErrorCode::TokenIssuerUnauthorised, message)
+        .with_wire_code(crate::error::reasons::TOKEN_ISSUER_UNAUTHORISED)
+}
+
+fn focus_unavailable_error(message: impl Into<String>) -> AppError {
+    AppError::new(ErrorCode::FailedPrecondition, message)
+        .with_wire_code(crate::error::reasons::FOCUS_UNAVAILABLE_FOR_CLIENT)
 }
 
 #[endpoint(

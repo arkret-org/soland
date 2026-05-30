@@ -1,0 +1,106 @@
+{
+  "title": "soland operational health",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "tags": ["soland", "contrix", "operations"],
+  "timezone": "browser",
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Egress denied",
+      "targets": [
+        {
+          "expr": "sum by (reason, target_class) (rate(soland_egress_denied_total[5m]))",
+          "legendFormat": "{{target_class}} {{reason}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        }
+      }
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Digest mismatches",
+      "targets": [
+        {
+          "expr": "sum by (scope) (rate(soland_digest_mismatch_total[5m]))",
+          "legendFormat": "{{scope}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        }
+      }
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Federation retry states",
+      "targets": [
+        {
+          "expr": "sum by (state) (rate(soland_federation_retry_total[5m]))",
+          "legendFormat": "{{state}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        }
+      }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Federation outbox depth",
+      "targets": [
+        {
+          "expr": "soland_federation_outbox_depth",
+          "legendFormat": "undelivered rows"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        }
+      }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Federation dead letters",
+      "targets": [
+        {
+          "expr": "rate(soland_federation_outbox_dead_letter_total[5m])",
+          "legendFormat": "dead letters"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        }
+      }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Audit append failures",
+      "targets": [
+        {
+          "expr": "rate(soland_audit_append_failures_total[5m])",
+          "legendFormat": "audit append failures"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        }
+      }
+    }
+  ]
+}

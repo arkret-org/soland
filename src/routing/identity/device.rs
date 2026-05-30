@@ -109,7 +109,8 @@ async fn device_revoke(
             "by_device_id": session.device_id,
         }),
         "accepted",
-    );
+    )
+    .await;
     json_ok(json!({
         "revoked_device_id": target_device_id,
         "revoked_at": now().to_rfc3339(),
@@ -158,7 +159,8 @@ async fn device_pairing_challenge(
             "challenge_id": challenge_id,
         }),
         "accepted",
-    );
+    )
+    .await;
     json_ok(json!({
         "challenge_id": challenge_id,
         "actor": session.actor,
@@ -249,7 +251,8 @@ async fn device_authorize_pairing(
             "authorization_event": authorization_event,
         }),
         "accepted",
-    );
+    )
+    .await;
     json_ok(json!({
         "status": "authorized",
         "device": device_json,

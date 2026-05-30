@@ -175,6 +175,7 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let content_digest = format!("sha256:{sha256}");
     match expected_blob_content_digest(req) {
         Ok(Some(expected_sha256)) if expected_sha256 != sha256 => {
+            crate::metrics::record_digest_mismatch("blob_upload_header");
             render_error(
                 res,
                 StatusCode::CONFLICT,
@@ -195,6 +196,7 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
             .and_then(Value::as_str)
             .is_some_and(|digest| digest != content_digest)
         {
+            crate::metrics::record_digest_mismatch("blob_upload_ciphertext_digest");
             render_error(
                 res,
                 StatusCode::CONFLICT,
@@ -435,7 +437,8 @@ async fn blob_get(depot: &mut Depot, req: &mut Request, res: &mut Response) {
                     "status": status.as_u16()
                 }),
                 "accepted",
-            );
+            )
+            .await;
             if req.method() != Method::HEAD {
                 let blob_bytes = match state.object_storage.get(&blob.storage_key).await {
                     Ok(bytes) => bytes,

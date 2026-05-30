@@ -7,18 +7,25 @@
 //!
 //! Wire-level validation lands here (proof_kind enum, recovery_session
 //! uuid pattern, expires/policy_version monotonicity,
-//! `recovery_witness_revoke_lagging` freshness window). Internal proof
-//! cryptographic verification is flagged `TODO(R4)` so the surrounding
-//! receipt accounting is wire-discoverable today.
+//! `recovery_witness_revoke_lagging` freshness window) plus the REC-1
+//! Ed25519 principal signature checks over canonical signed_fields
+//! transcripts.
 
+use std::collections::BTreeSet;
+
+use base64::Engine as _;
+use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use chrono::SecondsFormat;
+use contrix_sdk::Did;
+use ed25519_dalek::{Signature, Verifier as _};
 use salvo::http::StatusCode;
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 use super::{AuthArgs, append_audit_log};
-use crate::error::AppError;
+use crate::error::{AppError, ErrorCode};
+use crate::persistence::PersistenceError;
 use crate::result::{JsonResult, json_ok};
 use crate::state::{AppState, RecoveryPolicyRecord, RecoveryReceiptRecord};
 
@@ -37,6 +44,54 @@ const ALLOWED_PROOF_KINDS: &[&str] = &[
 /// `recovery_witness_revoke_lagging`. The window matches spec
 /// `device-lifecycle.md §14.5` (default 24h).
 const RECOVERY_WITNESS_FRESHNESS_SECS: i64 = 86_400;
+
+const POLICY_SIGNATURE_TYPE: &str = "cx.identity.recovery_policy.signature.v1";
+const RECEIPT_SIGNATURE_TYPE: &str = "cx.identity.recovery_receipt.signature.v1";
+
+const POLICY_ALLOWED_SIGNED_FIELDS: &[&str] = &[
+    "schema",
+    "policy_id",
+    "principal_id",
+    "version",
+    "trust_domain",
+    "allowed_proof_kinds",
+    "supersedes",
+    "issued_at",
+    "expires_at",
+];
+
+const POLICY_REQUIRED_SIGNED_FIELDS: &[&str] = POLICY_ALLOWED_SIGNED_FIELDS;
+
+const RECEIPT_ALLOWED_SIGNED_FIELDS: &[&str] = &[
+    "schema",
+    "receipt_id",
+    "principal_id",
+    "recovery_session_id",
+    "policy_id",
+    "policy_version",
+    "trust_domain",
+    "new_device_id",
+    "proof_summary",
+    "outcome",
+    "outcome_reason_code",
+    "started_at",
+    "completed_at",
+];
+
+const RECEIPT_REQUIRED_SIGNED_FIELDS: &[&str] = &[
+    "schema",
+    "receipt_id",
+    "principal_id",
+    "recovery_session_id",
+    "policy_id",
+    "policy_version",
+    "trust_domain",
+    "new_device_id",
+    "proof_summary",
+    "outcome",
+    "started_at",
+    "completed_at",
+];
 
 pub(super) fn router() -> Router {
     Router::with_path("identity")
@@ -62,46 +117,60 @@ async fn recovery_policy_put(
     let session = aa.authenticated_session(state, req).await?;
     let payload = body.into_inner();
 
-    let record = validate_recovery_policy(&payload)?;
+    let mut record = validate_recovery_policy(&payload)?;
+    verify_recovery_auth_signature(
+        state,
+        &payload,
+        &record.principal_id,
+        POLICY_SIGNATURE_TYPE,
+        POLICY_ALLOWED_SIGNED_FIELDS,
+        POLICY_REQUIRED_SIGNED_FIELDS,
+    )
+    .await?;
+
     // Per-principal monotonicity check (spec
     // recovery-policy.schema.json §version: receivers MUST reject a
     // publish whose version is not strictly greater than the currently
     // accepted policy).
+    if let Some(existing) = state
+        .persistence
+        .recovery_policies()
+        .get_active_for_principal(&record.principal_id)
+        .await
+        .map_err(recovery_store_error)?
     {
-        let mut policies = state
-            .recovery_policies
-            .lock()
-            .expect("recovery_policies lock");
-        if let Some(existing) = policies.get(&record.principal_id) {
-            if record.version <= existing.version {
-                return Err(AppError::conflict(format!(
-                    "policy_version {} is not strictly greater than current {}",
-                    record.version, existing.version
-                ))
-                .with_wire_code("recovery_policy_version_not_monotonic"));
-            }
-            // Schema constraint: when version > 1, supersedes MUST name
-            // the predecessor.
-            if record.supersedes.as_deref() != Some(existing.policy_id.as_str()) {
-                return Err(AppError::conflict(format!(
-                    "supersedes {:?} does not match current policy_id `{}`",
-                    record.supersedes, existing.policy_id
-                ))
-                .with_wire_code("recovery_policy_supersedes_invalid"));
-            }
-        } else if record.version != 1 {
-            return Err(AppError::invalid_param(format!(
-                "genesis policy MUST have version=1; got {}",
-                record.version
+        if record.version <= existing.version {
+            return Err(AppError::conflict(format!(
+                "policy_version {} is not strictly greater than current {}",
+                record.version, existing.version
             ))
-            .with_wire_code("recovery_policy_genesis_not_v1"));
+            .with_wire_code("recovery_policy_version_not_monotonic"));
         }
-        policies.insert(record.principal_id.clone(), record.clone());
+        // Schema constraint: when version > 1, supersedes MUST name
+        // the predecessor.
+        if record.supersedes.as_deref() != Some(existing.policy_id.as_str()) {
+            return Err(AppError::conflict(format!(
+                "supersedes {:?} does not match current policy_id `{}`",
+                record.supersedes, existing.policy_id
+            ))
+            .with_wire_code("recovery_policy_supersedes_invalid"));
+        }
+    } else if record.version != 1 {
+        return Err(AppError::invalid_param(format!(
+            "genesis policy MUST have version=1; got {}",
+            record.version
+        ))
+        .with_wire_code("recovery_policy_genesis_not_v1"));
     }
 
-    // TODO(R4): persist to the `recovery_session` table (already exists in
-    // migrations/20260526030000_agent_personal_provisioning) and emit
-    // the canonical `cx.identity.recovery_policy.publish` audit event.
+    let accepted_at = chrono::Utc::now();
+    record.accepted_at = accepted_at;
+    state
+        .persistence
+        .recovery_policies()
+        .insert(record.clone())
+        .await
+        .map_err(recovery_policy_store_error)?;
 
     append_audit_log(
         state,
@@ -114,7 +183,8 @@ async fn recovery_policy_put(
             "trust_domain": record.trust_domain.clone(),
         }),
         "accepted",
-    );
+    )
+    .await;
 
     res.status_code(StatusCode::CREATED);
     json_ok(json!({
@@ -122,11 +192,7 @@ async fn recovery_policy_put(
         "policy_id": record.policy_id,
         "principal_id": record.principal_id,
         "version": record.version,
-        "accepted_at": chrono::Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
-        "todos": [
-            "TODO(R4): verify auth_data.signature against principal_id verification key",
-            "TODO(R4): persist into recovery_session/recovery_policy durable table",
-        ],
+        "accepted_at": accepted_at.to_rfc3339_opts(SecondsFormat::Millis, true),
     }))
 }
 
@@ -148,32 +214,16 @@ async fn recovery_receipt_put(
     let session = aa.authenticated_session(state, req).await?;
     let payload = body.into_inner();
 
-    let record = validate_recovery_receipt(&payload)?;
-
-    // Reject duplicate recovery_session_id (spec
-    // recovery-receipt.schema.json: receivers MUST reject receipts that
-    // reuse a session id already accepted for the same principal).
-    {
-        let mut receipts = state
-            .recovery_receipts
-            .lock()
-            .expect("recovery_receipts lock");
-        if let Some(existing) = receipts.get(&record.recovery_session_id) {
-            if existing.principal_id != record.principal_id {
-                return Err(AppError::conflict(format!(
-                    "recovery_session_id `{}` already bound to principal `{}`",
-                    record.recovery_session_id, existing.principal_id
-                ))
-                .with_wire_code("recovery_session_id_reused"));
-            }
-            return Err(AppError::conflict(format!(
-                "recovery_session_id `{}` already accepted (receipt_id `{}`)",
-                record.recovery_session_id, existing.receipt_id
-            ))
-            .with_wire_code("recovery_session_id_reused"));
-        }
-        receipts.insert(record.recovery_session_id.clone(), record.clone());
-    }
+    let mut record = validate_recovery_receipt(&payload)?;
+    verify_recovery_auth_signature(
+        state,
+        &payload,
+        &record.principal_id,
+        RECEIPT_SIGNATURE_TYPE,
+        RECEIPT_ALLOWED_SIGNED_FIELDS,
+        RECEIPT_REQUIRED_SIGNED_FIELDS,
+    )
+    .await?;
 
     // REC-1 — recovery_witness_revoke_lagging freshness check on the
     // optional witness ref (when the receipt's proof_summary carries
@@ -202,28 +252,52 @@ async fn recovery_receipt_put(
 
     // Cross-check against the active policy when one is recorded —
     // policy_id + policy_version MUST match the accepted snapshot.
-    {
-        let policies = state
-            .recovery_policies
-            .lock()
-            .expect("recovery_policies lock");
-        if let Some(active) = policies.get(&record.principal_id) {
-            if active.policy_id != record.policy_id {
-                return Err(AppError::conflict(format!(
-                    "receipt policy_id `{}` does not match active policy `{}`",
-                    record.policy_id, active.policy_id
-                ))
-                .with_wire_code("recovery_policy_id_mismatch"));
-            }
-            if active.version != record.policy_version {
-                return Err(AppError::conflict(format!(
-                    "receipt policy_version {} does not match active version {}",
-                    record.policy_version, active.version
-                ))
-                .with_wire_code("recovery_policy_version_mismatch"));
-            }
-        }
+    let active = state
+        .persistence
+        .recovery_policies()
+        .get_active_for_principal(&record.principal_id)
+        .await
+        .map_err(recovery_store_error)?
+        .ok_or_else(|| {
+            AppError::conflict(format!(
+                "no accepted recovery policy for principal `{}`",
+                record.principal_id
+            ))
+            .with_wire_code("recovery_policy_missing")
+        })?;
+    if active.policy_id != record.policy_id {
+        crate::metrics::record_digest_mismatch("recovery_receipt_policy_binding");
+        return Err(AppError::conflict(format!(
+            "receipt policy_id `{}` does not match active policy `{}`",
+            record.policy_id, active.policy_id
+        ))
+        .with_wire_code("recovery_policy_id_mismatch"));
     }
+    if active.version != record.policy_version {
+        crate::metrics::record_digest_mismatch("recovery_receipt_policy_binding");
+        return Err(AppError::conflict(format!(
+            "receipt policy_version {} does not match active version {}",
+            record.policy_version, active.version
+        ))
+        .with_wire_code("recovery_policy_version_mismatch"));
+    }
+    if active.trust_domain != record.trust_domain {
+        crate::metrics::record_digest_mismatch("recovery_receipt_policy_binding");
+        return Err(AppError::conflict(format!(
+            "receipt trust_domain `{}` does not match active policy `{}`",
+            record.trust_domain, active.trust_domain
+        ))
+        .with_wire_code("recovery_policy_trust_domain_mismatch"));
+    }
+
+    let accepted_at = chrono::Utc::now();
+    record.accepted_at = accepted_at;
+    state
+        .persistence
+        .recovery_receipts()
+        .insert(record.clone())
+        .await
+        .map_err(recovery_receipt_store_error)?;
 
     append_audit_log(
         state,
@@ -237,7 +311,8 @@ async fn recovery_receipt_put(
             "outcome": record.outcome.clone(),
         }),
         "accepted",
-    );
+    )
+    .await;
 
     res.status_code(StatusCode::CREATED);
     json_ok(json!({
@@ -246,11 +321,7 @@ async fn recovery_receipt_put(
         "principal_id": record.principal_id,
         "recovery_session_id": record.recovery_session_id,
         "outcome": record.outcome,
-        "accepted_at": chrono::Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
-        "todos": [
-            "TODO(R4): verify auth_data.signature + proof_digest binding",
-            "TODO(R4): persist into recovery_session durable table + emit audit chain",
-        ],
+        "accepted_at": accepted_at.to_rfc3339_opts(SecondsFormat::Millis, true),
     }))
 }
 
@@ -335,18 +406,19 @@ fn validate_recovery_policy(payload: &Value) -> Result<RecoveryPolicyRecord, App
         .get("signature_alg")
         .and_then(Value::as_str)
         .ok_or_else(|| AppError::invalid_param("auth_data.signature_alg is required"))?;
-    if !matches!(signature_alg, "EdDSA" | "ES256") {
+    if !matches!(signature_alg, "EdDSA" | "Ed25519") {
         return Err(AppError::invalid_param(format!(
-            "auth_data.signature_alg `{signature_alg}` not in {{EdDSA, ES256}}",
+            "auth_data.signature_alg `{signature_alg}` not in {{EdDSA, Ed25519}}",
         )));
     }
     auth_data
         .get("signature")
         .and_then(Value::as_str)
         .ok_or_else(|| AppError::invalid_param("auth_data.signature is required"))?;
-    // TODO(R4): verify signature with `verification_method`-resolved
-    // public key + RFC 8785 JCS canonical bytes over the policy's
-    // signed_fields[]. Today we accept the presence of the field.
+    auth_data
+        .get("signed_fields")
+        .and_then(Value::as_array)
+        .ok_or_else(|| AppError::invalid_param("auth_data.signed_fields is required"))?;
 
     Ok(RecoveryPolicyRecord {
         policy_id,
@@ -359,6 +431,7 @@ fn validate_recovery_policy(payload: &Value) -> Result<RecoveryPolicyRecord, App
         issued_at,
         verification_method: verification_method.to_owned(),
         raw_payload: payload.clone(),
+        accepted_at: chrono::Utc::now(),
     })
 }
 
@@ -393,7 +466,7 @@ fn validate_recovery_receipt(payload: &Value) -> Result<RecoveryReceiptRecord, A
     let policy_id = require_string(payload, "policy_id")?;
     require_policy_id_pattern(&policy_id)?;
     let policy_version = require_u32_min(payload, "policy_version", 1)?;
-    require_string(payload, "trust_domain")?;
+    let trust_domain = require_string(payload, "trust_domain")?;
     let new_device_id = require_string(payload, "new_device_id")?;
     if !new_device_id.starts_with("cx:device:") {
         return Err(AppError::invalid_param(format!(
@@ -414,10 +487,11 @@ fn validate_recovery_receipt(payload: &Value) -> Result<RecoveryReceiptRecord, A
         ))
         .with_wire_code("recovery_proof_kind_unknown"));
     }
-    proof_summary
+    let proof_digest = proof_summary
         .get("proof_digest")
         .and_then(Value::as_str)
-        .ok_or_else(|| AppError::invalid_param("proof_summary.proof_digest is required"))?;
+        .ok_or_else(|| AppError::invalid_param("proof_summary.proof_digest is required"))?
+        .to_owned();
     let outcome = require_string(payload, "outcome")?;
     if !matches!(
         outcome.as_str(),
@@ -437,13 +511,38 @@ fn validate_recovery_receipt(payload: &Value) -> Result<RecoveryReceiptRecord, A
             "outcome `{outcome}` requires outcome_reason_code",
         )));
     }
-    let _started_at = require_rfc3339(payload, "started_at")?;
+    let started_at = require_rfc3339(payload, "started_at")?;
     let completed_at = require_rfc3339(payload, "completed_at")?;
-    payload
+    if completed_at < started_at {
+        return Err(AppError::invalid_param(
+            "completed_at MUST be greater than or equal to started_at",
+        ));
+    }
+    let auth_data = payload
         .get("auth_data")
         .and_then(Value::as_object)
         .ok_or_else(|| AppError::invalid_param("auth_data is required"))?;
-    // TODO(R4): verify auth_data signature; see policy validator above.
+    let verification_method = auth_data
+        .get("verification_method")
+        .and_then(Value::as_str)
+        .ok_or_else(|| AppError::invalid_param("auth_data.verification_method is required"))?;
+    let signature_alg = auth_data
+        .get("signature_alg")
+        .and_then(Value::as_str)
+        .ok_or_else(|| AppError::invalid_param("auth_data.signature_alg is required"))?;
+    if !matches!(signature_alg, "EdDSA" | "Ed25519") {
+        return Err(AppError::invalid_param(format!(
+            "auth_data.signature_alg `{signature_alg}` not in {{EdDSA, Ed25519}}",
+        )));
+    }
+    auth_data
+        .get("signature")
+        .and_then(Value::as_str)
+        .ok_or_else(|| AppError::invalid_param("auth_data.signature is required"))?;
+    auth_data
+        .get("signed_fields")
+        .and_then(Value::as_array)
+        .ok_or_else(|| AppError::invalid_param("auth_data.signed_fields is required"))?;
 
     Ok(RecoveryReceiptRecord {
         receipt_id,
@@ -451,10 +550,190 @@ fn validate_recovery_receipt(payload: &Value) -> Result<RecoveryReceiptRecord, A
         recovery_session_id,
         policy_id,
         policy_version,
+        trust_domain,
+        new_device_id,
+        proof_digest,
         outcome,
+        started_at,
         completed_at,
         raw_payload: payload.clone(),
+        verification_method: verification_method.to_owned(),
+        accepted_at: chrono::Utc::now(),
     })
+}
+
+async fn verify_recovery_auth_signature(
+    state: &AppState,
+    payload: &Value,
+    principal_id: &str,
+    transcript_type: &str,
+    allowed_fields: &[&str],
+    required_fields: &[&str],
+) -> Result<(), AppError> {
+    let auth_data = payload
+        .get("auth_data")
+        .and_then(Value::as_object)
+        .ok_or_else(|| AppError::invalid_param("auth_data is required"))?;
+    let verification_method = auth_data
+        .get("verification_method")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| AppError::invalid_param("auth_data.verification_method is required"))?;
+    let principal_did = Did::new(principal_id.to_owned())
+        .map_err(|error| recovery_signature_error(format!("principal_id DID invalid: {error}")))?;
+    let resolved_key = crate::jws_verify::resolve_ed25519_verification_key_for_did(
+        state,
+        &principal_did,
+        verification_method,
+    )
+    .await
+    .map_err(|error| {
+        recovery_signature_error(format!("recovery verification key invalid: {error}"))
+    })?;
+
+    let signed_fields = parse_signed_fields(auth_data, allowed_fields, required_fields, payload)?;
+    let transcript = recovery_signature_transcript(transcript_type, payload, &signed_fields);
+    let transcript_bytes = contrix_sdk::canonical::canonical_json_bytes(&transcript)
+        .map_err(|error| AppError::internal(format!("recovery transcript failed: {error}")))?;
+
+    let signature_b64 = auth_data
+        .get("signature")
+        .and_then(Value::as_str)
+        .ok_or_else(|| AppError::invalid_param("auth_data.signature is required"))?;
+    let raw = URL_SAFE_NO_PAD
+        .decode(signature_b64.as_bytes())
+        .or_else(|_| STANDARD.decode(signature_b64.as_bytes()))
+        .map_err(|_| recovery_signature_error("auth_data.signature is not base64/base64url"))?;
+    let signature = Signature::from_slice(&raw)
+        .map_err(|_| recovery_signature_error("auth_data.signature must be 64 Ed25519 bytes"))?;
+    resolved_key
+        .public_key
+        .verify(&transcript_bytes, &signature)
+        .map_err(|_| {
+            crate::metrics::record_digest_mismatch("recovery_canonical_digest");
+            recovery_signature_error("recovery signature verification failed")
+        })
+}
+
+fn parse_signed_fields(
+    auth_data: &Map<String, Value>,
+    allowed_fields: &[&str],
+    required_fields: &[&str],
+    payload: &Value,
+) -> Result<Vec<String>, AppError> {
+    let allowed: BTreeSet<&str> = allowed_fields.iter().copied().collect();
+    let required: BTreeSet<&str> = required_fields.iter().copied().collect();
+    let mut seen = BTreeSet::new();
+    let fields = auth_data
+        .get("signed_fields")
+        .and_then(Value::as_array)
+        .ok_or_else(|| AppError::invalid_param("auth_data.signed_fields is required"))?;
+    let mut parsed = Vec::with_capacity(fields.len());
+    for field in fields {
+        let name = field
+            .as_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                AppError::invalid_param("auth_data.signed_fields entries must be strings")
+            })?;
+        if !allowed.contains(name) {
+            return Err(recovery_signature_error(format!(
+                "auth_data.signed_fields contains unsupported field `{name}`"
+            )));
+        }
+        if !seen.insert(name.to_owned()) {
+            return Err(recovery_signature_error(format!(
+                "auth_data.signed_fields repeats field `{name}`"
+            )));
+        }
+        parsed.push(name.to_owned());
+    }
+    for required_field in required {
+        if !seen.contains(required_field) {
+            return Err(recovery_signature_error(format!(
+                "auth_data.signed_fields missing required field `{required_field}`"
+            )));
+        }
+    }
+    for optional_signed in ["expires_at", "supersedes", "outcome_reason_code"] {
+        if payload.get(optional_signed).is_some()
+            && allowed.contains(optional_signed)
+            && !seen.contains(optional_signed)
+        {
+            return Err(recovery_signature_error(format!(
+                "auth_data.signed_fields missing present optional field `{optional_signed}`"
+            )));
+        }
+    }
+    Ok(parsed)
+}
+
+fn recovery_signature_transcript(
+    transcript_type: &str,
+    payload: &Value,
+    signed_fields: &[String],
+) -> Value {
+    let mut signed_payload = Map::new();
+    for field in signed_fields {
+        signed_payload.insert(
+            field.clone(),
+            payload.get(field).cloned().unwrap_or(Value::Null),
+        );
+    }
+    json!({
+        "type": transcript_type,
+        "signed_fields": signed_fields,
+        "payload": Value::Object(signed_payload),
+    })
+}
+
+fn recovery_signature_error(message: impl Into<String>) -> AppError {
+    AppError::new(ErrorCode::InvalidSignature, message.into())
+        .with_status(StatusCode::UNAUTHORIZED)
+        .with_wire_code(crate::error::reasons::PROOF_INVALID)
+}
+
+fn recovery_store_error(error: PersistenceError) -> AppError {
+    match error {
+        PersistenceError::Conflict(message) => AppError::conflict(message),
+        PersistenceError::NotFound(message) => AppError::not_found(message),
+        PersistenceError::Database(error) => {
+            AppError::internal(format!("recovery persistence database error: {error}"))
+        }
+        PersistenceError::Internal(message) => AppError::internal(message),
+    }
+}
+
+fn recovery_policy_store_error(error: PersistenceError) -> AppError {
+    match error {
+        PersistenceError::Conflict(message) if message.contains("principal/version") => {
+            AppError::conflict(message).with_wire_code("recovery_policy_version_not_monotonic")
+        }
+        PersistenceError::Conflict(message) if message.contains("version") => {
+            AppError::conflict(message).with_wire_code("recovery_policy_version_not_monotonic")
+        }
+        PersistenceError::Conflict(message) if message.contains("supersedes") => {
+            AppError::conflict(message).with_wire_code("recovery_policy_supersedes_invalid")
+        }
+        PersistenceError::Conflict(message) => {
+            AppError::conflict(message).with_wire_code("recovery_policy_conflict")
+        }
+        other => recovery_store_error(other),
+    }
+}
+
+fn recovery_receipt_store_error(error: PersistenceError) -> AppError {
+    match error {
+        PersistenceError::Conflict(message) if message.contains("recovery_session_id") => {
+            AppError::conflict(message).with_wire_code("recovery_session_id_reused")
+        }
+        PersistenceError::Conflict(message) => {
+            AppError::conflict(message).with_wire_code("recovery_receipt_conflict")
+        }
+        other => recovery_store_error(other),
+    }
 }
 
 // ── Small helpers ─────────────────────────────────────────────────────

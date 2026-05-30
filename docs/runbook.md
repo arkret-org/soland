@@ -51,6 +51,41 @@ If the deployment uses Loki, the equivalent LogQL queries are:
 {service="soland"} | json | status >= 500
 ```
 
+## Metrics dashboard and alerts
+
+Import `docs/grafana-operational-dashboard.json` into Grafana for the
+release-blocking operations view. It covers the four alert families that
+usually need immediate operator action: egress denies, digest mismatches,
+federation retry/dead-letter health, and audit append failures.
+
+Recommended PromQL alert expressions:
+
+```promql
+# Outbound calls blocked by the configured egress policy.
+sum by (reason, target_class) (increase(soland_egress_denied_total[10m])) > 0
+
+# Payload integrity mismatch on an admission path.
+sum by (scope) (increase(soland_digest_mismatch_total[10m])) > 0
+
+# Federation retry budget exhausted or terminal 4xx dead-lettering.
+sum by (state) (
+  increase(soland_federation_retry_total{state=~"retry_budget_exhausted|terminal_http_status"}[15m])
+) > 0
+
+# Durable audit append failure.
+increase(soland_audit_append_failures_total[5m]) > 0
+```
+
+Operator actions:
+
+| Alert | First query | Owner action |
+|---|---|---|
+| `soland_egress_denied_total` | `sum by (reason,target_class) (increase(soland_egress_denied_total[30m]))` | Confirm the target is expected. If it is a real dependency, add the explicit allow-list or public endpoint; otherwise treat as SSRF or peer misconfiguration. |
+| `soland_digest_mismatch_total` | `sum by (scope) (increase(soland_digest_mismatch_total[30m]))` | Pull the rejected request logs for the same `scope`; compare client canonical bytes, `Content-Digest`, and SDK version. |
+| `soland_federation_retry_total` | `sum by (state) (increase(soland_federation_retry_total[30m]))` | For `retry_scheduled`, inspect peer health. For terminal states, inspect the dead-letter row and replay only after the peer/config issue is fixed. |
+| `soland_audit_append_failures_total` | `increase(soland_audit_append_failures_total[10m])` | Check Postgres availability and audit-table permissions first; stop admin rollout if audit durability is unavailable. |
+| `soland_federation_outbox_dead_letter_total` | `increase(soland_federation_outbox_dead_letter_total[30m])` | Read dead-letter reasons, group by peer DID, and coordinate with the peer before replay. |
+
 ## Restart strategy
 
 soland is stateless apart from its in-process projection caches; restart
@@ -315,4 +350,3 @@ Pre-flip checklist:
    minutes; alert if it exceeds the staleness baseline by >20%.
 5. If above threshold, rollback (toggle off), file a bug against the
    noisiest peer, retry later.
-

@@ -1860,7 +1860,8 @@ pub(super) async fn admin_rotate_signing_key(
         "admin.anchorer.rotate_signing_key",
         json!({"space_id": space_id_str, "kid": kid, "keystore_persisted": keystore_persisted}),
         "accepted",
-    );
+    )
+    .await;
 
     json_ok(RotateSigningKeyResponse {
         kid,

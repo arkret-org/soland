@@ -64,6 +64,7 @@ async fn push_profile_and_moderation_contracts_work() {
             status: "online".to_owned(),
             updated_at: chrono::Utc::now() - chrono::Duration::seconds(10),
         })
+        .await
         .unwrap();
     let stale_profile: Value =
         TestClient::get("http://server/api/v1/profile/presence?did=did:web:alice.example")
@@ -115,6 +116,7 @@ async fn push_profile_and_moderation_contracts_work() {
         .persistence
         .typing()
         .list_for_space(DEMO_REALM_ID)
+        .await
         .unwrap();
     assert_eq!(active_typing.len(), 1);
     assert_eq!(active_typing[0].actor, "did:web:alice.example");
@@ -145,6 +147,7 @@ async fn push_profile_and_moderation_contracts_work() {
         .persistence
         .typing()
         .list_for_space(DEMO_REALM_ID)
+        .await
         .unwrap();
     assert!(cleared_typing.is_empty());
 
@@ -267,6 +270,7 @@ async fn push_profile_and_moderation_contracts_work() {
             .persistence
             .audit()
             .snapshot_all()
+            .await
             .unwrap()
             .iter()
             .any(|entry| {
@@ -278,6 +282,7 @@ async fn push_profile_and_moderation_contracts_work() {
             .persistence
             .moderation()
             .list_actions()
+            .await
             .unwrap()
             .iter()
             .any(|action| action["report_id"] == report["report_id"] && action["status"] == "open")
@@ -533,7 +538,8 @@ async fn auth_keys_device_messages_and_blobs_work() {
         "invite_only",
         &[],
         &[],
-    );
+    )
+    .await;
     let plaintext_private_blob = TestClient::post("http://server/api/v1/blob/upload")
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header(
@@ -654,7 +660,8 @@ async fn auth_keys_device_messages_and_blobs_work() {
         "invite_only",
         &[service_did.as_str()],
         &[],
-    );
+    )
+    .await;
     add_test_realm_member(
         &state,
         shared_plaintext_space["space_id"].as_str().unwrap(),

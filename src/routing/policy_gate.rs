@@ -1,4 +1,5 @@
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use contrix_sdk::identity::{CompositeDidResolver, DidDocument, DidResolver};
 use contrix_sdk::{Did, Error as SdkError, Hash, Operation, RealmId};
@@ -165,9 +166,7 @@ impl PolicyGateRejection {
 }
 
 fn policy_client_for_state(state: &AppState) -> Result<PolicyClient, PolicyGateRejection> {
-    let http = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
+    let http = crate::security::build_default_egress_http_client(Duration::from_secs(10))
         .map_err(|error| PolicyGateRejection::internal(format!("policy client: {error}")))?;
     Ok(PolicyClient::new(http, state.config.service_did.clone())
         .with_private_network_egress(crate::security::private_networks_allowed(

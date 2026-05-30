@@ -140,7 +140,8 @@ async fn assign_queue_item(
         "admin.moderation.queue.assign",
         json!({ "id": item_id }),
         "ok",
-    );
+    )
+    .await;
     json_ok(item)
 }
 
@@ -201,7 +202,8 @@ async fn prioritise_queue_item(
         "admin.moderation.queue.priority",
         json!({ "id": item_id, "priority": priority }),
         "ok",
-    );
+    )
+    .await;
     json_ok(item)
 }
 
@@ -291,7 +293,8 @@ async fn issue_decision(
         "admin.moderation.decision",
         json!({ "decision_id": decision_id, "action": body.action }),
         "issued",
-    );
+    )
+    .await;
     json_ok(DecisionResBody { decision_id })
 }
 
@@ -356,7 +359,8 @@ async fn lift_decision(
         "admin.moderation.decision.lift",
         json!({ "decision_id": decision_id }),
         "lifted",
-    );
+    )
+    .await;
     json_ok(lift)
 }
 
@@ -516,7 +520,8 @@ async fn review_appeal(
         "admin.moderation.appeal.review",
         json!({ "appeal_id": appeal_id }),
         "under_review",
-    );
+    )
+    .await;
     json_ok(event)
 }
 
@@ -656,7 +661,8 @@ async fn decide_appeal(
         "admin.moderation.appeal.decision",
         json!({ "appeal_id": appeal_id, "verdict": body.verdict }),
         "decided",
-    );
+    )
+    .await;
     json_ok(event)
 }
 
@@ -712,6 +718,7 @@ async fn close_appeal(
         "admin.moderation.appeal.close",
         json!({ "appeal_id": appeal_id, "auto_closed": body.auto_closed }),
         "closed",
-    );
+    )
+    .await;
     json_ok(event)
 }

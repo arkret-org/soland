@@ -29,6 +29,7 @@ use bytes::Bytes;
 use chrono::{DateTime, Duration as ChronoDuration, SecondsFormat, Utc};
 use contrix_sdk::lattice::CellState;
 use contrix_sdk::{EphemeralSubmitResBody, RealmId};
+use ed25519_dalek::{Signature, Signer as _, Verifier as _};
 use futures_util::stream::StreamExt;
 use salvo::http::StatusCode;
 use salvo::prelude::*;
@@ -52,8 +53,8 @@ use super::{
 use crate::ids;
 use crate::reducer::ProjectionState;
 use crate::state::{
-    AppState, PresenceRecord, ProjectionEventRecord, RealmDirectoryEntry, SessionRecord,
-    TypingRecord,
+    AppState, HandleClaimDigestInput, HandleClaimEvidenceRecord, PresenceRecord,
+    ProjectionEventRecord, RealmDirectoryEntry, SessionRecord, TypingRecord,
 };
 use crate::wire::{
     AccountDescribeResBody, BackfillResBody, ClientSyncRequest, EventsQueryPostRequest,
@@ -63,6 +64,11 @@ use crate::wire::{
 const TIMELINE_POSITION_SUBTICKS: i64 = 1024;
 const PERSONAL_BLOCKLIST_DATA_TYPES: &[&str] = &["cx.account.blocklist", "cx.account.blocklist.v1"];
 const PRESENCE_ONLINE_TTL_SECONDS: i64 = 3;
+const HANDLE_CLAIMS_INLINE_MAX_BYTES: usize = 8 * 1024;
+
+#[cfg(test)]
+static TEST_STATELESS_CURSOR_PROFILE_DECLARED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 pub(super) fn router() -> Router {
     Router::new()
@@ -92,18 +98,22 @@ fn normalize_scope_selectors(values: Vec<String>) -> Result<Vec<String>, crate::
 #[tracing::instrument(skip_all, fields(op = "account_describe"))]
 async fn account_describe(depot: &mut Depot, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
+    let mut supported_sync_profiles = vec![
+        "initial".to_owned(),
+        "incremental".to_owned(),
+        "board".to_owned(),
+        "chat".to_owned(),
+        "topic".to_owned(),
+        "offline_queue_flush".to_owned(),
+        "backfill_gap".to_owned(),
+        "bottom_cell_repair".to_owned(),
+    ];
+    if is_stateless_cursor_profile_declared(state) {
+        supported_sync_profiles.push("cx.profile.stateless_cursor.v1".to_owned());
+    }
     res.render(Json(AccountDescribeResBody {
         service_did: state.config.service_did.clone(),
-        supported_sync_profiles: vec![
-            "initial".to_owned(),
-            "incremental".to_owned(),
-            "board".to_owned(),
-            "chat".to_owned(),
-            "topic".to_owned(),
-            "offline_queue_flush".to_owned(),
-            "backfill_gap".to_owned(),
-            "bottom_cell_repair".to_owned(),
-        ],
+        supported_sync_profiles,
         limits: json!({
             "max_spaces": 50,
             "max_timeline_events": 100,
@@ -206,7 +216,7 @@ async fn account_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Respo
             tracing::error!(%error, "failed to persist presence");
         }
     }
-    prune_expired_typing(&state);
+    prune_expired_typing(&state).await;
 
     // Subscribe to broadcast BEFORE building the initial snapshot so an
     // event landing between snapshot-build and long-poll subscribe is not
@@ -389,7 +399,7 @@ async fn build_sync_snapshot(
         Vec::new();
     for space in &candidate_spaces {
         if realm_visible_to(state, space, session).await {
-            let members = roster_members_for_realm(state, space);
+            let members = roster_members_for_realm(state, space, session, body);
             visible_spaces.push((
                 space.realm_id.to_string(),
                 space.name.clone(),
@@ -541,7 +551,7 @@ async fn build_sync_snapshot(
 
     let mut to_device_position = after_cursor.to_device_position;
     let to_device = if let Some(session) = session {
-        prune_acked_device_messages(state, session, after_cursor.to_device_position);
+        prune_acked_device_messages(state, session, after_cursor.to_device_position).await;
         let queued = state
             .persistence
             .device_messages()
@@ -636,8 +646,11 @@ async fn build_sync_snapshot(
 fn roster_members_for_realm(
     state: &AppState,
     space: &crate::state::RealmDirectoryEntry,
+    session: Option<&SessionRecord>,
+    body: &ClientSyncRequest,
 ) -> Vec<Value> {
     let registry = state.member_identity_registry();
+    let context = RosterDisclosureContext::new(state, space, session, body);
     space
         .members
         .iter()
@@ -667,7 +680,7 @@ fn roster_members_for_realm(
                 // holder DID. When disclosed, the gated companion fields MAY
                 // be populated; otherwise they MUST all be omitted (the SDK
                 // `MemberRosterEntry::validate` dependentRequired rule).
-                if subject_disclosed_to_caller(state, space, did_str)
+                if subject_disclosed_to_caller(&context, did_str)
                     && let Some(subject_id) = snapshot.subject_id.as_deref()
                 {
                     entry.insert("subject_id".to_owned(), json!(subject_id));
@@ -681,15 +694,47 @@ fn roster_members_for_realm(
                             json!(snapshot.identity_events),
                         );
                     }
-                    // ROST-SOL-3 — populate real handle-claim evidence from
-                    // the local handle-claim cache once it lands.
-                    // TODO(R3.2.1): select the context-visible claim subset,
-                    // compute `contrix::identity::claim_digest` into
-                    // `handle_claim_digests[]`, inline the signed
-                    // `handle_claims[]` (size-bounded, setting
-                    // `handle_claims_limited=true` on truncation). For now we
-                    // disclose `subject_id` only; the gated claim fields stay
-                    // omitted, which the dependentRequired rule permits.
+                    let visible_claims: Vec<HandleClaimEvidenceRecord> = registry
+                        .handle_claims_for_subject(subject_id)
+                        .into_iter()
+                        .filter(|claim| handle_claim_visible_to_caller(&context, claim))
+                        .collect();
+                    if !visible_claims.is_empty() {
+                        let digest_inputs: Vec<HandleClaimDigestInput> = visible_claims
+                            .iter()
+                            .map(|claim| HandleClaimDigestInput {
+                                claim_digest: claim.digest.clone(),
+                                binding_state: claim.binding_state.clone(),
+                                expires_at: claim.expires_at.map(|expires_at| {
+                                    expires_at.to_rfc3339_opts(SecondsFormat::Millis, true)
+                                }),
+                            })
+                            .collect();
+                        if let Some(digest) = crate::state::display_state_digest(
+                            space.realm_id.as_str(),
+                            did_str,
+                            &snapshot.effective_entries,
+                            &digest_inputs,
+                        ) {
+                            entry.insert("member_display_state_digest".to_owned(), json!(digest));
+                        }
+                        entry.insert(
+                            "handle_claim_digests".to_owned(),
+                            json!(
+                                visible_claims
+                                    .iter()
+                                    .map(|claim| claim.digest.clone())
+                                    .collect::<Vec<_>>()
+                            ),
+                        );
+                        let (claims, limited) = inline_handle_claims(&visible_claims);
+                        if !claims.is_empty() {
+                            entry.insert("handle_claims".to_owned(), json!(claims));
+                        }
+                        if limited {
+                            entry.insert("handle_claims_limited".to_owned(), json!(true));
+                        }
+                    }
                 }
             }
             Value::Object(entry)
@@ -697,21 +742,125 @@ fn roster_members_for_realm(
         .collect()
 }
 
-/// ROST-SOL-2 (R3.2) — decide whether the current Realm discloses the
-/// `subject_id` (principal / holder DID) of `actor_id` to the caller.
-///
-/// TODO(R3.2.1): wire the real Realm disclosure policy (issuer trust /
-/// audience scope / intent). For now soland fails closed — `subject_id`
-/// and every gated companion field are omitted until the disclosure-policy
-/// engine is wired, so principal/holder DIDs never leak across disclosure
-/// boundaries. This is a per-Realm policy hook, not a per-handle one; the
-/// handle-claim evidence remains gated separately (ROST-SOL-3).
-fn subject_disclosed_to_caller(
-    _state: &AppState,
-    _space: &crate::state::RealmDirectoryEntry,
-    _actor_id: &str,
+struct RosterDisclosureContext<'a> {
+    service_did: &'a str,
+    realm_public: bool,
+    realm_members: &'a BTreeSet<contrix_sdk::Did>,
+    caller: Option<&'a str>,
+    audience: String,
+    now: DateTime<Utc>,
+}
+
+impl<'a> RosterDisclosureContext<'a> {
+    fn new(
+        state: &'a AppState,
+        space: &'a RealmDirectoryEntry,
+        session: Option<&'a SessionRecord>,
+        body: &ClientSyncRequest,
+    ) -> Self {
+        Self {
+            service_did: &state.config.service_did,
+            realm_public: space.public,
+            realm_members: &space.members,
+            caller: session.map(|session| session.actor.as_str()),
+            audience: roster_handle_claim_audience(state, session, body),
+            now: now(),
+        }
+    }
+
+    fn caller_is_realm_member(&self) -> bool {
+        self.caller.is_some_and(|caller| {
+            contrix_sdk::Did::new(caller.to_owned())
+                .ok()
+                .is_some_and(|did| self.realm_members.contains(&did))
+        })
+    }
+}
+
+fn roster_handle_claim_audience(
+    state: &AppState,
+    session: Option<&SessionRecord>,
+    body: &ClientSyncRequest,
+) -> String {
+    body.filter
+        .as_ref()
+        .and_then(|filter| filter.get("handle_claim_audience"))
+        .or_else(|| {
+            body.filter
+                .as_ref()
+                .and_then(|filter| filter.get("audience"))
+        })
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .or_else(|| session.map(|session| session.audience.clone()))
+        .unwrap_or_else(|| state.config.service_did.clone())
+}
+
+/// ROST-SOL-2/3 — subject and companion fields disclose only when the Realm
+/// policy admits the caller. Public Realms can reveal public evidence; private
+/// Realms require the caller to be a member. A caller may always see their own
+/// subject binding.
+fn subject_disclosed_to_caller(context: &RosterDisclosureContext<'_>, actor_id: &str) -> bool {
+    context.caller == Some(actor_id) || context.realm_public || context.caller_is_realm_member()
+}
+
+fn handle_claim_visible_to_caller(
+    context: &RosterDisclosureContext<'_>,
+    claim: &HandleClaimEvidenceRecord,
 ) -> bool {
-    false
+    if !trusted_handle_claim_issuer(context, claim) {
+        return false;
+    }
+    if claim.revoked || claim.binding_state != "verified" {
+        return false;
+    }
+    if claim
+        .expires_at
+        .is_some_and(|expires_at| expires_at <= context.now)
+    {
+        return false;
+    }
+    if claim
+        .audience
+        .as_deref()
+        .is_some_and(|audience| audience != context.audience)
+    {
+        return false;
+    }
+    match claim.visibility.as_deref().unwrap_or("restricted") {
+        "public" => subject_disclosed_to_caller(context, &claim.subject_id),
+        "members" | "restricted" => {
+            context.caller == Some(claim.subject_id.as_str()) || context.caller_is_realm_member()
+        }
+        _ => false,
+    }
+}
+
+fn trusted_handle_claim_issuer(
+    context: &RosterDisclosureContext<'_>,
+    claim: &HandleClaimEvidenceRecord,
+) -> bool {
+    claim.issuer == context.service_did
+        || claim.issuer_service_did.as_deref() == Some(context.service_did)
+}
+
+fn inline_handle_claims(claims: &[HandleClaimEvidenceRecord]) -> (Vec<Value>, bool) {
+    let mut used = 0usize;
+    let mut out = Vec::new();
+    let mut limited = false;
+    for claim in claims {
+        let Ok(bytes) = serde_json::to_vec(&claim.envelope) else {
+            limited = true;
+            continue;
+        };
+        if used + bytes.len() > HANDLE_CLAIMS_INLINE_MAX_BYTES {
+            limited = true;
+            continue;
+        }
+        used += bytes.len();
+        out.push(claim.envelope.clone());
+    }
+    (out, limited)
 }
 
 async fn timeline_events_for_space(
@@ -1230,6 +1379,28 @@ pub fn sync_token_for_client_sync(
         "devices": device_positions,
         "to_device": to_device_position
     });
+    if is_stateless_cursor_profile_declared(state) {
+        let cursor = json!({
+            "v": "1",
+            "purpose": "stream",
+            "t": issued_at.to_rfc3339_opts(SecondsFormat::Millis, true),
+            "x": expires_at_ms,
+            "issuer_kid": stateless_cursor_issuer_kid(state),
+            "target": {
+                "principal_id": principal_id,
+                "device_id": device_id,
+                "service_id": state.config.service_did.clone()
+            },
+            "scope": {
+                "filter_digest": filter_digest
+            },
+            "positions": positions,
+            "issued_at_ms": issued_at_ms
+        });
+        let signed = sign_stateless_sync_cursor(state, cursor)
+            .expect("stateless sync cursor must be signable");
+        return encode_sync_cursor_value(signed);
+    }
     let ctx = json!({
         "principal_id": principal_id,
         "device_id": device_id,
@@ -1319,10 +1490,254 @@ fn stored_sync_cursor_by_handle(state: &AppState, handle: &str) -> Result<Value,
 /// (mirrors the gating pattern used by `accountable_to.strict_reject.v1`
 /// in `routing/events/operations.rs`). Default: stateful-only.
 fn is_stateless_cursor_profile_declared(_state: &AppState) -> bool {
+    #[cfg(test)]
+    if TEST_STATELESS_CURSOR_PROFILE_DECLARED.load(std::sync::atomic::Ordering::SeqCst) {
+        return true;
+    }
+
     matches!(
         std::env::var("SOLAND_PROFILE_STATELESS_CURSOR").as_deref(),
         Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes")
     )
+}
+
+fn has_stateless_cursor_marker(value: &Value) -> bool {
+    value.get("_mac").is_some()
+        || value.get("_sig").is_some()
+        || value.get("positions").is_some()
+        || value.get("scope").is_some()
+        || value.get("s").is_some()
+        || value.get("d").is_some()
+        || value.get("target").is_some()
+        || value.get("issuer_kid").is_some()
+}
+
+fn stateless_cursor_issuer_kid(state: &AppState) -> String {
+    format!("{}#anchorer-key", state.config.service_did)
+}
+
+fn stateless_cursor_canonical_body(cursor: &Value) -> Result<Vec<u8>, SyncCursorError> {
+    let mut body = cursor.clone();
+    let Some(object) = body.as_object_mut() else {
+        return Err(SyncCursorError::Invalid(
+            "stateless cursor body must be a JSON object",
+        ));
+    };
+    object.remove("_sig");
+    object.remove("_mac");
+    contrix_sdk::canonical::canonical_json_bytes(&body)
+        .map_err(|_| SyncCursorError::Integrity("stateless cursor canonical body is invalid"))
+}
+
+fn sign_stateless_sync_cursor(
+    state: &AppState,
+    mut cursor: Value,
+) -> Result<Value, SyncCursorError> {
+    let issuer_kid = stateless_cursor_issuer_kid(state);
+    {
+        let Some(object) = cursor.as_object_mut() else {
+            return Err(SyncCursorError::Invalid(
+                "stateless cursor body must be a JSON object",
+            ));
+        };
+        object.insert("issuer_kid".to_owned(), Value::String(issuer_kid));
+        object.remove("_sig");
+        object.remove("_mac");
+    }
+    let canonical_body = stateless_cursor_canonical_body(&cursor)?;
+    let signature = state.anchorer_signing_key().sign(&canonical_body);
+    let Some(object) = cursor.as_object_mut() else {
+        return Err(SyncCursorError::Invalid(
+            "stateless cursor body must be a JSON object",
+        ));
+    };
+    object.insert(
+        "_sig".to_owned(),
+        json!({
+            "alg": "Ed25519",
+            "sig": URL_SAFE_NO_PAD.encode(signature.to_bytes())
+        }),
+    );
+    Ok(cursor)
+}
+
+fn stateless_cursor_signature(cursor: &Value) -> Result<Signature, SyncCursorError> {
+    let sig_b64 = match cursor.get("_sig") {
+        Some(Value::String(sig)) => sig.as_str(),
+        Some(Value::Object(sig)) => {
+            let alg = sig
+                .get("alg")
+                .and_then(Value::as_str)
+                .ok_or(SyncCursorError::Integrity(
+                    "stateless cursor signature missing alg",
+                ))?;
+            if !matches!(alg, "Ed25519" | "EdDSA") {
+                return Err(SyncCursorError::Integrity(
+                    "stateless cursor signature alg is unsupported",
+                ));
+            }
+            sig.get("sig")
+                .or_else(|| sig.get("signature"))
+                .or_else(|| sig.get("signature_b64"))
+                .and_then(Value::as_str)
+                .ok_or(SyncCursorError::Integrity(
+                    "stateless cursor signature missing sig",
+                ))?
+        }
+        Some(_) => {
+            return Err(SyncCursorError::Integrity(
+                "stateless cursor _sig must be a signature string or object",
+            ));
+        }
+        None => {
+            return Err(SyncCursorError::Integrity(
+                "stateless cursor missing _sig integrity tag",
+            ));
+        }
+    };
+    let bytes = URL_SAFE_NO_PAD
+        .decode(sig_b64.as_bytes())
+        .map_err(|_| SyncCursorError::Integrity("stateless cursor signature is not base64url"))?;
+    Signature::from_slice(&bytes)
+        .map_err(|_| SyncCursorError::Integrity("stateless cursor signature is invalid length"))
+}
+
+fn verify_stateless_sync_cursor_signature(
+    cursor: &Value,
+    state: &AppState,
+) -> Result<(), SyncCursorError> {
+    let issuer_kid =
+        cursor
+            .get("issuer_kid")
+            .and_then(Value::as_str)
+            .ok_or(SyncCursorError::Integrity(
+                "stateless cursor missing issuer_kid binding",
+            ))?;
+    let expected_issuer_kid = stateless_cursor_issuer_kid(state);
+    if issuer_kid != expected_issuer_kid {
+        return Err(SyncCursorError::Integrity(
+            "stateless cursor issuer_kid is not this service issuer",
+        ));
+    }
+
+    let signature = stateless_cursor_signature(cursor).map_err(|error| {
+        crate::metrics::record_digest_mismatch("cursor_canonical_digest");
+        error
+    })?;
+    let canonical_body = stateless_cursor_canonical_body(cursor).map_err(|error| {
+        crate::metrics::record_digest_mismatch("cursor_canonical_digest");
+        error
+    })?;
+    state
+        .anchorer_signing_key()
+        .verifying_key()
+        .verify(&canonical_body, &signature)
+        .map_err(|_| {
+            crate::metrics::record_digest_mismatch("cursor_canonical_digest");
+            SyncCursorError::Integrity("stateless cursor signature verification failed")
+        })
+}
+
+fn sync_cursor_from_stateless_value(
+    value: &Value,
+    state: &AppState,
+    session: Option<&SessionRecord>,
+    filter: Option<&serde_json::Value>,
+) -> Result<SyncCursor, SyncCursorError> {
+    let target =
+        value
+            .get("target")
+            .and_then(Value::as_object)
+            .ok_or(SyncCursorError::Integrity(
+                "stateless cursor missing target binding",
+            ))?;
+    let expected_principal = session
+        .map(|session| session.actor.as_str())
+        .unwrap_or("anonymous");
+    let expected_device = session
+        .map(|session| session.device_id.as_str())
+        .unwrap_or("anonymous");
+    if target
+        .get("principal_id")
+        .and_then(Value::as_str)
+        .is_none_or(|principal| principal != expected_principal)
+    {
+        return Err(SyncCursorError::Mismatch(
+            "cursor principal does not match request actor",
+        ));
+    }
+    if target
+        .get("device_id")
+        .and_then(Value::as_str)
+        .is_none_or(|device| device != expected_device)
+    {
+        return Err(SyncCursorError::Mismatch(
+            "cursor device does not match request device",
+        ));
+    }
+    if target
+        .get("service_id")
+        .and_then(Value::as_str)
+        .is_none_or(|service| service != state.config.service_did)
+    {
+        return Err(SyncCursorError::Mismatch(
+            "cursor service does not match this service DID",
+        ));
+    }
+
+    let scope = value
+        .get("scope")
+        .and_then(Value::as_object)
+        .ok_or(SyncCursorError::Integrity(
+            "stateless cursor missing scope binding",
+        ))?;
+    let expected_filter_digest = sync_filter_digest(filter);
+    if scope
+        .get("filter_digest")
+        .and_then(Value::as_str)
+        .is_none_or(|filter_digest| filter_digest != expected_filter_digest)
+    {
+        return Err(SyncCursorError::Mismatch(
+            "cursor filter digest does not match request filter",
+        ));
+    }
+
+    let positions_value = value.get("positions").ok_or(SyncCursorError::Integrity(
+        "stateless cursor missing positions",
+    ))?;
+    let positions = positions_value
+        .get("spaces")
+        .and_then(Value::as_object)
+        .ok_or(SyncCursorError::Integrity(
+            "stateless cursor missing positions.spaces",
+        ))?
+        .iter()
+        .filter_map(|(space_id, position)| {
+            position
+                .as_i64()
+                .map(|position| (space_id.clone(), position))
+        })
+        .collect();
+    let to_device_position = positions_value
+        .get("to_device")
+        .and_then(Value::as_i64)
+        .unwrap_or_default();
+    let issued_at_ms = value
+        .get("issued_at_ms")
+        .and_then(Value::as_i64)
+        .or_else(|| {
+            value
+                .get("t")
+                .and_then(Value::as_str)
+                .and_then(|issued_at| DateTime::parse_from_rfc3339(issued_at).ok())
+                .map(|issued_at| issued_at.timestamp_millis())
+        });
+
+    Ok(SyncCursor {
+        positions,
+        to_device_position,
+        issued_at_ms,
+    })
 }
 
 pub fn parse_and_validate_sync_cursor(
@@ -1359,12 +1774,7 @@ pub fn parse_and_validate_sync_cursor(
     // `issuer_kid`. Also keeps the existing `_ctx` / `_positions`
     // rejects which are soland-specific stateful-only fields.
     let stateless_cursor_declared = is_stateless_cursor_profile_declared(state);
-    let has_stateless_marker = value.get("_mac").is_some()
-        || value.get("_sig").is_some()
-        || value.get("s").is_some()
-        || value.get("d").is_some()
-        || value.get("target").is_some()
-        || value.get("issuer_kid").is_some();
+    let has_stateless_marker = has_stateless_cursor_marker(&value);
     if has_stateless_marker && !stateless_cursor_declared {
         return Err(SyncCursorError::Integrity(
             "core cursor must use stateful handle form (stateless body \
@@ -1377,24 +1787,9 @@ pub fn parse_and_validate_sync_cursor(
         ));
     };
     if stateless_cursor_declared && has_stateless_marker {
-        // CURSOR-1 — stateless cursor path. Integrity binding check:
-        // the cursor MUST carry both `_sig` (or `_mac`) and `issuer_kid`
-        // so the receiver can resolve the issuer's verification key and
-        // verify the integrity tag. Absence of either fails with
-        // `cursor_integrity_invalid`.
-        // TODO(R4): cryptographic verification of `_sig` against the
-        // `issuer_kid`-resolved verification key over canonical-JSON
-        // bytes of the stateless cursor body. Until then we only
-        // enforce the wire-shape contract.
-        if value.get("issuer_kid").and_then(Value::as_str).is_none() {
-            return Err(SyncCursorError::Integrity(
-                "stateless cursor missing issuer_kid binding",
-            ));
-        }
-        if value.get("_sig").is_none() && value.get("_mac").is_none() {
-            return Err(SyncCursorError::Integrity(
-                "stateless cursor missing _sig / _mac integrity tag",
-            ));
+        verify_stateless_sync_cursor_signature(&value, state)?;
+        if value.get("h").is_none() {
+            return sync_cursor_from_stateless_value(&value, state, session, filter);
         }
     }
     let Some(handle) = value.get("h").and_then(|h| h.as_str()) else {
@@ -1529,17 +1924,31 @@ pub async fn resolve_sync_cursor_to_event_id(
     }
     let value = decode_sync_cursor_value(&cursor)
         .map_err(|_| "sync cursor is not a valid cx:cursor token")?;
-    let handle = value
-        .get("h")
-        .and_then(Value::as_str)
-        .ok_or("sync cursor is missing stateful handle")?;
-    let stored =
-        stored_sync_cursor_by_handle(state, handle).map_err(|_| "sync cursor handle is unknown")?;
-    let checkpoint = stored
-        .get("positions")
-        .and_then(|positions| positions.get("spaces"))
-        .and_then(|spaces| spaces.get(space_id))
-        .and_then(|position| position.as_i64());
+    let has_stateless_marker = has_stateless_cursor_marker(&value);
+    if has_stateless_marker {
+        if !is_stateless_cursor_profile_declared(state) {
+            return Err("sync cursor integrity invalid");
+        }
+        verify_stateless_sync_cursor_signature(&value, state)
+            .map_err(|_| "sync cursor integrity invalid")?;
+    }
+    let checkpoint = if let Some(handle) = value.get("h").and_then(Value::as_str) {
+        let stored = stored_sync_cursor_by_handle(state, handle)
+            .map_err(|_| "sync cursor handle is unknown")?;
+        stored
+            .get("positions")
+            .and_then(|positions| positions.get("spaces"))
+            .and_then(|spaces| spaces.get(space_id))
+            .and_then(|position| position.as_i64())
+    } else if has_stateless_marker {
+        value
+            .get("positions")
+            .and_then(|positions| positions.get("spaces"))
+            .and_then(|spaces| spaces.get(space_id))
+            .and_then(|position| position.as_i64())
+    } else {
+        return Err("sync cursor is missing stateful handle");
+    };
     let Some(checkpoint) = checkpoint else {
         return Ok(None);
     };
@@ -2608,6 +3017,7 @@ async fn snapshot_chunk(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, MutexGuard, OnceLock};
 
     #[test]
     fn timeline_position_disambiguates_same_second_events() {
@@ -2641,5 +3051,530 @@ mod tests {
         assert_eq!(event["presence"], "offline");
         assert_eq!(event["status"], "offline");
         assert!(event.get("last_active").is_some());
+    }
+
+    fn test_config() -> crate::config::AppConfig {
+        crate::config::AppConfig {
+            bind: "127.0.0.1:0".parse().unwrap(),
+            metrics_bind: "127.0.0.1:0".parse().unwrap(),
+            public_base_url: "http://server".to_owned(),
+            service_did: "did:web:soland.local".to_owned(),
+            tls_cert_path: None,
+            tls_key_path: None,
+            database_url: None,
+            object_storage: crate::config::ObjectStorageConfig::local(
+                std::env::temp_dir().join("soland-sync-cursor-test-blobs"),
+            ),
+            cors_allow_origin: None,
+            auth_server_url: None,
+            development_mode: true,
+            oauth_introspection_url: None,
+            oauth_introspection_bearer: None,
+            session_grant_introspection_url: None,
+            session_grant_introspection_bearer: None,
+            did_resolver_allow_methods: vec!["web".to_owned(), "key".to_owned()],
+            embedded_webvh_provider_enabled: false,
+            embedded_webvh_registration_bearer: None,
+            external_webvh_provider_url: None,
+            external_webvh_provider_active: false,
+            default_webvh_provider_id: None,
+            jws_replay_window_seconds: 0,
+            jws_replay_window_per_family: BTreeMap::new(),
+            anchorer_signing_key_seed: Some([9u8; 32]),
+            agent_audit_binding_signing_seed: None,
+            use_keystore: false,
+            federation_policy: crate::config::FederationPolicy::Mesh,
+            federation_peers: Vec::new(),
+            federation_outbound_enabled: false,
+            admin_default_page_limit: 100,
+            admin_max_page_limit: 1000,
+            admin_principal_dids: Vec::new(),
+            push_bridge_cache_ttl_seconds: 900,
+            push_bridge_trusted_service_dids: Vec::new(),
+            compaction_min_anchor_age_seconds: 604_800,
+            compaction_min_witnesses: 1,
+            compaction_preserve_genesis: true,
+            compaction_prune_only_singleton_successors: true,
+            compaction_prune_walk_interval_seconds: 0,
+            compaction_prune_walk_per_space_limit: 50,
+            seed_demo_data: true,
+            trust_domain: "cx:trust_domain:soland.local".to_owned(),
+            sovereign_enclave_enabled: false,
+            sovereign_enclave_allowed_outbound_hosts: Vec::new(),
+            erasure_propagation_window_ms: 604_800_000,
+            log_format: crate::config::LogFormat::Plain,
+        }
+    }
+
+    fn test_state() -> AppState {
+        AppState::new(test_config(), crate::db::Db { pool: None })
+    }
+
+    const ROSTER_REALM: &str = "cx:realm:01904100-0000-7000-8000-00000000a001";
+    const ROSTER_ACTOR: &str = "did:web:alice.example";
+    const ROSTER_SUBJECT: &str = "did:web:alice-principal.example";
+    const ROSTER_CALLER: &str = "did:web:bob.example";
+
+    fn roster_body(audience: &str) -> ClientSyncRequest {
+        ClientSyncRequest {
+            after: None,
+            catchup: None,
+            filter: Some(json!({ "audience": audience })),
+            set_presence: None,
+        }
+    }
+
+    fn roster_session(state: &AppState, actor: &str) -> SessionRecord {
+        SessionRecord {
+            token_hash: "token".to_owned(),
+            actor: actor.to_owned(),
+            device_id: "device-1".to_owned(),
+            audience: state.config.service_did.clone(),
+            expires_at: now() + ChronoDuration::hours(1),
+            created_at: now(),
+            revoked_at: None,
+        }
+    }
+
+    fn roster_realm(public: bool, include_caller: bool) -> RealmDirectoryEntry {
+        let mut entry = RealmDirectoryEntry::new(
+            RealmId::new(ROSTER_REALM.to_owned()).unwrap(),
+            "Roster evidence",
+        );
+        entry.public = public;
+        entry
+            .members
+            .insert(contrix_sdk::Did::new(ROSTER_ACTOR.to_owned()).unwrap());
+        if include_caller {
+            entry
+                .members
+                .insert(contrix_sdk::Did::new(ROSTER_CALLER.to_owned()).unwrap());
+        }
+        entry
+    }
+
+    fn insert_member_identity_subject(state: &AppState) {
+        use crate::state::{MemberIdentityEventRecord, MemberIdentitySubjectKey};
+        let identity_payload = json!({
+            "member_identity": {
+                "subject_id": ROSTER_SUBJECT,
+                "display_profile": { "display_name": "Alice" }
+            }
+        });
+        let payload_digest = contrix_sdk::canonical::sha256_digest(
+            contrix_sdk::canonical::canonical_json_bytes(&identity_payload).unwrap(),
+        );
+        state
+            .member_identity
+            .lock()
+            .expect("member_identity lock")
+            .insert(MemberIdentityEventRecord {
+                event_id: "cx:operation:roster-identity-1".to_owned(),
+                subject: MemberIdentitySubjectKey {
+                    realm_id: ROSTER_REALM.to_owned(),
+                    actor_id: ROSTER_ACTOR.to_owned(),
+                    segment: "member_identity".to_owned(),
+                },
+                payload_digest,
+                replaces: Vec::new(),
+                raw_event: json!({
+                    "operation_id": "cx:operation:roster-identity-1",
+                    "event_kind": crate::kinds::CX_MEMBER_IDENTITY_UPDATE,
+                    "realm_id": ROSTER_REALM,
+                    "created_at": now(),
+                    "payload": {
+                        "realm_id": ROSTER_REALM,
+                        "actor_id": ROSTER_ACTOR,
+                        "segment": "member_identity",
+                        "identity_payload": identity_payload,
+                    }
+                }),
+            });
+    }
+
+    fn handle_claim(
+        state: &AppState,
+        issuer: &str,
+        audience: &str,
+        expires_at: DateTime<Utc>,
+        binding_state: &str,
+        extra: Option<Value>,
+    ) -> Value {
+        let mut claim = json!({
+            "schema": "cx.schema.handle_claim.v1",
+            "handle": "alice:soland.local",
+            "subject": ROSTER_SUBJECT,
+            "issuer": issuer,
+            "issuer_service_did": issuer,
+            "binding_state": binding_state,
+            "claim_type": "user_handle",
+            "visibility": "public",
+            "audience": audience,
+            "created_at": (now() - ChronoDuration::minutes(1)).to_rfc3339_opts(SecondsFormat::Millis, true),
+            "expires_at": expires_at.to_rfc3339_opts(SecondsFormat::Millis, true),
+            "proofs": [{
+                "kind": "detached_jws",
+                "alg": "EdDSA",
+                "verification_method": format!("{issuer}#directory-handle-claim"),
+                "payload_digest": "sha256:unsigned-payload",
+                "jws": "detached"
+            }]
+        });
+        if let Some(extra) = extra
+            && let Some(object) = claim.as_object_mut()
+        {
+            object.insert("claims".to_owned(), extra);
+        }
+        // Keep tests honest: use the configured service DID unless a test is
+        // intentionally exercising issuer trust rejection.
+        if issuer == state.config.service_did {
+            claim["issuer_service_did"] = json!(state.config.service_did);
+        }
+        claim
+    }
+
+    fn cache_claim(state: &AppState, claim: Value) -> String {
+        state
+            .member_identity
+            .lock()
+            .expect("member_identity lock")
+            .upsert_handle_claim_envelope(claim)
+            .expect("claim cached")
+    }
+
+    fn roster_row(
+        state: &AppState,
+        realm: &RealmDirectoryEntry,
+        session: Option<&SessionRecord>,
+    ) -> Value {
+        let body = roster_body(&state.config.service_did);
+        roster_members_for_realm(state, realm, session, &body)
+            .into_iter()
+            .find(|row| row["actor_id"] == ROSTER_ACTOR)
+            .expect("actor row")
+    }
+
+    fn canonical_value_digest(value: &Value) -> String {
+        contrix_sdk::canonical::sha256_digest(
+            contrix_sdk::canonical::canonical_json_bytes(value).unwrap(),
+        )
+    }
+
+    #[test]
+    fn roster_discloses_handle_claim_for_visible_trusted_issuer() {
+        let state = test_state();
+        insert_member_identity_subject(&state);
+        let claim = handle_claim(
+            &state,
+            &state.config.service_did,
+            &state.config.service_did,
+            now() + ChronoDuration::hours(1),
+            "verified",
+            None,
+        );
+        let digest = cache_claim(&state, claim);
+        let realm = roster_realm(false, true);
+        let session = roster_session(&state, ROSTER_CALLER);
+
+        let row = roster_row(&state, &realm, Some(&session));
+
+        assert_eq!(row["subject_id"], ROSTER_SUBJECT);
+        assert_eq!(row["handle_claim_digests"], json!([digest]));
+        assert_eq!(
+            canonical_value_digest(&row["handle_claims"][0]),
+            row["handle_claim_digests"][0].as_str().unwrap()
+        );
+        assert!(row.get("handle_claims_limited").is_none());
+    }
+
+    #[test]
+    fn roster_hides_handle_claim_from_untrusted_issuer() {
+        let state = test_state();
+        insert_member_identity_subject(&state);
+        cache_claim(
+            &state,
+            handle_claim(
+                &state,
+                "did:web:evil.example",
+                &state.config.service_did,
+                now() + ChronoDuration::hours(1),
+                "verified",
+                None,
+            ),
+        );
+        let realm = roster_realm(false, true);
+        let session = roster_session(&state, ROSTER_CALLER);
+
+        let row = roster_row(&state, &realm, Some(&session));
+
+        assert_eq!(row["subject_id"], ROSTER_SUBJECT);
+        assert!(row.get("handle_claim_digests").is_none());
+        assert!(row.get("handle_claims").is_none());
+    }
+
+    #[test]
+    fn roster_hides_expired_handle_claim() {
+        let state = test_state();
+        insert_member_identity_subject(&state);
+        cache_claim(
+            &state,
+            handle_claim(
+                &state,
+                &state.config.service_did,
+                &state.config.service_did,
+                now() - ChronoDuration::seconds(1),
+                "verified",
+                None,
+            ),
+        );
+        let realm = roster_realm(false, true);
+        let session = roster_session(&state, ROSTER_CALLER);
+
+        let row = roster_row(&state, &realm, Some(&session));
+
+        assert_eq!(row["subject_id"], ROSTER_SUBJECT);
+        assert!(row.get("handle_claim_digests").is_none());
+    }
+
+    #[test]
+    fn roster_hides_revoked_handle_claim() {
+        let state = test_state();
+        insert_member_identity_subject(&state);
+        cache_claim(
+            &state,
+            handle_claim(
+                &state,
+                &state.config.service_did,
+                &state.config.service_did,
+                now() + ChronoDuration::hours(1),
+                "revoked",
+                None,
+            ),
+        );
+        let realm = roster_realm(false, true);
+        let session = roster_session(&state, ROSTER_CALLER);
+
+        let row = roster_row(&state, &realm, Some(&session));
+
+        assert_eq!(row["subject_id"], ROSTER_SUBJECT);
+        assert!(row.get("handle_claim_digests").is_none());
+    }
+
+    #[test]
+    fn roster_disclosure_depends_on_realm_policy() {
+        let state = test_state();
+        insert_member_identity_subject(&state);
+        let digest = cache_claim(
+            &state,
+            handle_claim(
+                &state,
+                &state.config.service_did,
+                &state.config.service_did,
+                now() + ChronoDuration::hours(1),
+                "verified",
+                None,
+            ),
+        );
+
+        let private_realm = roster_realm(false, false);
+        let private_row = roster_row(&state, &private_realm, None);
+        assert!(private_row.get("subject_id").is_none());
+        assert!(private_row.get("handle_claim_digests").is_none());
+        assert!(private_row.get("handle_claims").is_none());
+
+        let public_realm = roster_realm(true, false);
+        let public_row = roster_row(&state, &public_realm, None);
+        assert_eq!(public_row["subject_id"], ROSTER_SUBJECT);
+        assert_eq!(public_row["handle_claim_digests"], json!([digest]));
+    }
+
+    #[test]
+    fn roster_limits_large_inline_handle_claim_payloads() {
+        let state = test_state();
+        insert_member_identity_subject(&state);
+        let claim = handle_claim(
+            &state,
+            &state.config.service_did,
+            &state.config.service_did,
+            now() + ChronoDuration::hours(1),
+            "verified",
+            Some(json!([{"blob": "x".repeat(HANDLE_CLAIMS_INLINE_MAX_BYTES + 1)}])),
+        );
+        let digest = cache_claim(&state, claim);
+        let realm = roster_realm(false, true);
+        let session = roster_session(&state, ROSTER_CALLER);
+
+        let row = roster_row(&state, &realm, Some(&session));
+
+        assert_eq!(row["subject_id"], ROSTER_SUBJECT);
+        assert_eq!(row["handle_claim_digests"], json!([digest]));
+        assert!(row.get("handle_claims").is_none());
+        assert_eq!(row["handle_claims_limited"], true);
+    }
+
+    struct StatelessCursorProfileGuard {
+        _guard: MutexGuard<'static, ()>,
+    }
+
+    impl Drop for StatelessCursorProfileGuard {
+        fn drop(&mut self) {
+            TEST_STATELESS_CURSOR_PROFILE_DECLARED
+                .store(false, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    fn stateless_cursor_profile_guard() -> StatelessCursorProfileGuard {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        let guard = LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("stateless cursor test lock");
+        TEST_STATELESS_CURSOR_PROFILE_DECLARED.store(true, std::sync::atomic::Ordering::SeqCst);
+        StatelessCursorProfileGuard { _guard: guard }
+    }
+
+    fn issued_stateless_cursor(state: &AppState) -> Value {
+        let token = sync_token_for_client_sync(
+            state,
+            None,
+            None,
+            BTreeMap::from([("cx:realm:stateless-cursor-test".to_owned(), 7)]),
+            12,
+        );
+        decode_sync_cursor_value(&token).expect("issued cursor decodes")
+    }
+
+    fn assert_integrity_error(error: SyncCursorError) {
+        match error {
+            SyncCursorError::Integrity(_) => {}
+            other => panic!("expected cursor integrity error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn stateless_cursor_issuance_signs_and_verifies_current_service_cursor() {
+        let _profile = stateless_cursor_profile_guard();
+        let state = test_state();
+        let cursor = issued_stateless_cursor(&state);
+
+        assert_eq!(cursor["issuer_kid"], "did:web:soland.local#anchorer-key");
+        assert!(cursor.get("_sig").is_some());
+        assert!(cursor.get("h").is_none());
+
+        let token = encode_sync_cursor_value(cursor);
+        let parsed = parse_and_validate_sync_cursor(
+            &token,
+            &state,
+            None,
+            None,
+            chrono::Utc::now().timestamp_millis(),
+        )
+        .expect("signed stateless cursor must verify");
+
+        assert_eq!(
+            parsed.positions.get("cx:realm:stateless-cursor-test"),
+            Some(&7)
+        );
+        assert_eq!(parsed.to_device_position, 12);
+        assert!(parsed.issued_at_ms.is_some());
+    }
+
+    #[test]
+    fn stateless_cursor_rejects_body_tamper() {
+        let _profile = stateless_cursor_profile_guard();
+        let state = test_state();
+        let mut cursor = issued_stateless_cursor(&state);
+        cursor["positions"]["to_device"] = json!(99);
+
+        let token = encode_sync_cursor_value(cursor);
+        let error = parse_and_validate_sync_cursor(
+            &token,
+            &state,
+            None,
+            None,
+            chrono::Utc::now().timestamp_millis(),
+        )
+        .expect_err("tampered cursor body must fail verification");
+
+        assert_integrity_error(error);
+    }
+
+    #[test]
+    fn stateless_cursor_rejects_issuer_kid_tamper() {
+        let _profile = stateless_cursor_profile_guard();
+        let state = test_state();
+        let mut cursor = issued_stateless_cursor(&state);
+        cursor["issuer_kid"] = json!("did:web:other.example#anchorer-key");
+
+        let token = encode_sync_cursor_value(cursor);
+        let error = parse_and_validate_sync_cursor(
+            &token,
+            &state,
+            None,
+            None,
+            chrono::Utc::now().timestamp_millis(),
+        )
+        .expect_err("tampered issuer kid must fail verification");
+
+        assert_integrity_error(error);
+    }
+
+    #[test]
+    fn stateless_cursor_rejects_missing_signature() {
+        let _profile = stateless_cursor_profile_guard();
+        let state = test_state();
+        let mut cursor = issued_stateless_cursor(&state);
+        cursor.as_object_mut().unwrap().remove("_sig");
+
+        let token = encode_sync_cursor_value(cursor);
+        let error = parse_and_validate_sync_cursor(
+            &token,
+            &state,
+            None,
+            None,
+            chrono::Utc::now().timestamp_millis(),
+        )
+        .expect_err("unsigned stateless cursor must fail verification");
+
+        assert_integrity_error(error);
+    }
+
+    #[test]
+    fn stateless_cursor_rejects_expired_signed_cursor() {
+        let _profile = stateless_cursor_profile_guard();
+        let state = test_state();
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let issued_at = chrono::Utc::now() - ChronoDuration::hours(2);
+        let cursor = sign_stateless_sync_cursor(
+            &state,
+            json!({
+                "v": "1",
+                "purpose": "stream",
+                "t": issued_at.to_rfc3339_opts(SecondsFormat::Millis, true),
+                "x": now_ms - 1,
+                "issuer_kid": stateless_cursor_issuer_kid(&state),
+                "target": {
+                    "principal_id": "anonymous",
+                    "device_id": "anonymous",
+                    "service_id": state.config.service_did.clone()
+                },
+                "scope": {
+                    "filter_digest": sync_filter_digest(None)
+                },
+                "positions": {
+                    "spaces": {},
+                    "devices": {},
+                    "to_device": 0
+                },
+                "issued_at_ms": issued_at.timestamp_millis()
+            }),
+        )
+        .expect("expired fixture signs");
+
+        let token = encode_sync_cursor_value(cursor);
+        let error = parse_and_validate_sync_cursor(&token, &state, None, None, now_ms)
+            .expect_err("expired signed stateless cursor must fail");
+
+        assert!(matches!(error, SyncCursorError::Expired));
     }
 }

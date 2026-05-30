@@ -106,7 +106,7 @@ fn account_lockout_error(state: &AppState, actor: &str) -> Option<AppError> {
 /// Record a failed auth attempt against the actor and emit a single audit
 /// row + warn-level tracing breadcrumb. Called from every auth-failure
 /// branch in the dev-login / session-grant exchange paths.
-pub(super) fn record_failed_login_attempt(state: &AppState, actor: &str, surface: &str) {
+pub(super) async fn record_failed_login_attempt(state: &AppState, actor: &str, surface: &str) {
     let record = state.record_failed_login(actor);
     let locked_until = record
         .locked_until
@@ -121,7 +121,8 @@ pub(super) fn record_failed_login_attempt(state: &AppState, actor: &str, surface
             "locked_until": locked_until,
         }),
         "denied",
-    );
+    )
+    .await;
     if record.locked_until.is_some() {
         tracing::warn!(
             actor,
@@ -227,7 +228,8 @@ async fn dev_login(
             "account.register",
             json!({"handle": record.handle.clone(), "via": "dev_login"}),
             "accepted",
-        );
+        )
+        .await;
     }
 
     let expires_at = now() + Duration::hours(12);
@@ -277,7 +279,8 @@ async fn dev_login(
         "auth.dev_login",
         json!({"device_id": body.device_id.clone()}),
         "accepted",
-    );
+    )
+    .await;
     state.clear_failed_login(&body.actor);
 
     json_ok(DevLoginResponse {
@@ -342,7 +345,7 @@ async fn exchange_session_grant(
             // the rolling lockout window. Account is locked after 5
             // failures in 15 min; clearing happens on the success
             // path below.
-            record_failed_login_attempt(state, &body.principal_did, "session_grant_exchange");
+            record_failed_login_attempt(state, &body.principal_did, "session_grant_exchange").await;
             return Err(error);
         }
     };
@@ -406,7 +409,8 @@ async fn exchange_session_grant(
             "one_time_use_consumed": grant.as_ref().map(|grant| grant.one_time_use_consumed).unwrap_or(false),
         }),
         "accepted",
-    );
+    )
+    .await;
     state.clear_failed_login(&body.principal_did);
 
     json_ok(DevLoginResponse {
@@ -504,15 +508,14 @@ pub(crate) async fn validate_session_grant_binding(
         state.config.development_mode,
     )
     .map_err(AppError::capability_denied)?;
-    let client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .map_err(|error| {
-            AppError::new(
-                ErrorCode::TemporarilyUnavailable,
-                format!("session grant introspection client init failed: {error}"),
-            )
-        })?;
+    let client =
+        crate::security::build_default_egress_http_client(std::time::Duration::from_secs(10))
+            .map_err(|error| {
+                AppError::new(
+                    ErrorCode::TemporarilyUnavailable,
+                    format!("session grant introspection client init failed: {error}"),
+                )
+            })?;
     let response = client
         .post(introspection_url)
         .bearer_auth(bearer)
@@ -632,7 +635,8 @@ async fn logout(
             "auth.logout",
             json!({"device_id": session.device_id, "revoked_at": session.revoked_at}),
             "accepted",
-        );
+        )
+        .await;
         let _ = state
             .persistence
             .device_messages()
@@ -906,10 +910,7 @@ async fn perform_oauth_introspection(
             "OAuth introspection service unavailable",
         )
     })?;
-    let client = reqwest::Client::builder()
-        .timeout(OAUTH_INTROSPECTION_TIMEOUT)
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
+    let client = crate::security::build_default_egress_http_client(OAUTH_INTROSPECTION_TIMEOUT)
         .map_err(|error| {
             tracing::warn!(%error, "OAuth introspection client build failed");
             (
@@ -998,30 +999,28 @@ fn legacy_blocking_introspection(
             "OAuth introspection service unavailable",
         )
     })?;
-    let response = reqwest::blocking::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .map_err(|error| {
-            tracing::warn!(%error, "OAuth introspection client build failed");
-            (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "auth_unavailable",
-                "OAuth introspection service unavailable",
-            )
-        })?
-        .post(introspection_url)
-        .bearer_auth(introspection_bearer)
-        .form(&request)
-        .timeout(OAUTH_INTROSPECTION_TIMEOUT)
-        .send()
-        .map_err(|error| {
-            tracing::warn!(%error, "OAuth introspection request failed");
-            (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "auth_unavailable",
-                "OAuth introspection service unavailable",
-            )
-        })?;
+    let response =
+        crate::security::build_default_blocking_egress_http_client(OAUTH_INTROSPECTION_TIMEOUT)
+            .map_err(|error| {
+                tracing::warn!(%error, "OAuth introspection client build failed");
+                (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "auth_unavailable",
+                    "OAuth introspection service unavailable",
+                )
+            })?
+            .post(introspection_url)
+            .bearer_auth(introspection_bearer)
+            .form(&request)
+            .send()
+            .map_err(|error| {
+                tracing::warn!(%error, "OAuth introspection request failed");
+                (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "auth_unavailable",
+                    "OAuth introspection service unavailable",
+                )
+            })?;
     if !response.status().is_success() {
         tracing::warn!(
             status = response.status().as_u16(),
@@ -1176,7 +1175,8 @@ async fn ensure_oauth_account(
         "auth.oauth_account_autoprovision",
         json!({"handle": account.handle}),
         "accepted",
-    );
+    )
+    .await;
     Ok(())
 }
 

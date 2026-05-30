@@ -128,6 +128,36 @@ The image runs as UID `10001`. Mounted volumes for
 Docker volume so Docker handles it). S3-compatible backends do not need a media
 volume.
 
+### Helm
+
+The production chart lives at `deploy/helm/soland`. Render it before applying
+so secrets and network ranges are explicit in the release artifact:
+
+```bash
+helm template soland ./deploy/helm/soland \
+  --namespace contrix \
+  --set image.tag=<tag> \
+  --set env.SOLAND_PUBLIC_BASE_URL=https://soland.example \
+  --set env.SOLAND_SERVICE_DID=did:web:soland.example \
+  --set secretEnv.DATABASE_URL='postgres://soland:<password>@db.internal:5432/soland?sslmode=verify-full' \
+  --set secretEnv.SOLAND_OAUTH_INTROSPECTION_URL=https://coauth.example/oauth2/introspect \
+  --set secretEnv.SOLAND_OAUTH_INTROSPECTION_BEARER='<shared-secret-configured-in-coauth>'
+```
+
+Install the same values with:
+
+```bash
+helm upgrade --install soland ./deploy/helm/soland \
+  --namespace contrix --create-namespace \
+  -f production-values.yaml
+```
+
+For production, set `networkPolicy.enabled=true` and provide
+`networkPolicy.egress.databaseCidrs`, `objectStorageCidrs`, and `oauthCidrs`
+for the actual PostgreSQL, S3-compatible object storage, and coauth
+introspection endpoints. Leave `SOLAND_DEVELOPMENT_MODE` unset; the chart
+does not set it by default.
+
 ## 4. Front with TLS
 
 soland speaks plaintext HTTP — terminate TLS in the reverse proxy.

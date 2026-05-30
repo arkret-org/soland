@@ -127,7 +127,8 @@ pub(super) async fn admin_collection(
             "count": page.len(),
         }),
         "accepted",
-    );
+    )
+    .await;
 
     let mut body = serde_json::Map::new();
     body.insert("resource".to_owned(), json!(resource));

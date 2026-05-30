@@ -14,6 +14,16 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  typos:
+    name: Typos
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout soland
+        uses: actions/checkout@v6
+
+      - name: Check spelling
+        uses: crate-ci/typos@v1.45.2
+
   rust:
     name: Rust (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -48,8 +58,10 @@ jobs:
         with:
           workspaces: soland -> target
 
-      # rustfmt enforcement was dropped intentionally in commit 99aa7a7;
-      # restore via `cargo fmt --all -- --check` before tagging a release.
+      - name: Rustfmt
+        run: cargo fmt --all -- --check
+        working-directory: soland
+
       - name: Clippy
         run: cargo clippy --all-targets --locked -- -D warnings
         working-directory: soland

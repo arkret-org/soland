@@ -4,6 +4,8 @@
 
 #![allow(unused_imports)]
 use super::common::*;
+use contrix_sdk::CellRef;
+use contrix_sdk::lattice::CellState;
 
 #[tokio::test]
 async fn device_pairing_challenge_and_authorization_surface_work() {
@@ -87,6 +89,7 @@ async fn device_pairing_challenge_and_authorization_surface_work() {
             .persistence
             .audit()
             .snapshot_all()
+            .await
             .unwrap()
             .iter()
             .any(|event| {
@@ -339,4 +342,286 @@ async fn webrtc_signaling_contracts_work() {
     .send(&app_from_state(state))
     .await;
     assert_eq!(after_close.status_code.unwrap().as_u16(), 404);
+}
+
+#[tokio::test]
+async fn rtc_media_token_uses_projected_media_service_epoch() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    install_media_service_epoch(&state, good_media_service_epoch());
+    let token = dev_token(state.clone()).await;
+    let session_id = create_webrtc_session_for_alice(state.clone(), &token).await;
+
+    let focus_signal: Value = TestClient::post(format!(
+        "http://server/api/v1/webrtc/sessions/{session_id}/signals"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .json(&serde_json::json!({
+        "message_type": "focus_join",
+        "payload": {
+            "foci_preferred": ["cx:focus:mediasoup:blue", "cx:focus:livekit:green"]
+        },
+        "proofs": [{"kid": "did:web:alice.example#device", "sig": "dev"}]
+    }))
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    assert_eq!(focus_signal["seq"], 1);
+
+    let issued_before = chrono::Utc::now();
+    let token_response: Value = TestClient::post("http://server/api/v1/rtc/token")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({
+            "realm_id": DEMO_REALM_ID,
+            "call_id": session_id,
+            "actor_id": "did:web:alice.example",
+            "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
+            "focus_id": "cx:focus:mediasoup:blue"
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+
+    assert_eq!(
+        token_response["connect_url"],
+        "wss://media.example/mediasoup"
+    );
+    assert!(token_response["todos"].as_array().unwrap().is_empty());
+    assert_eq!(
+        token_response["participant_binding"]["issuer_kid"],
+        "did:web:media.example#mediasoup-2026-05"
+    );
+    assert_eq!(
+        token_response["participant_binding"]["realm_id"],
+        DEMO_REALM_ID
+    );
+    assert_eq!(token_response["participant_binding"]["call_id"], session_id);
+    assert_eq!(
+        token_response["participant_binding"]["device_id"],
+        "cx:device:01904100-0000-7000-8000-a11ce0000001"
+    );
+    assert_eq!(
+        token_response["participant_binding"]["focus_id"],
+        "cx:focus:mediasoup:blue"
+    );
+    assert!(
+        token_response["service_signature"]
+            .as_str()
+            .unwrap()
+            .starts_with("did:web:media.example#mediasoup-2026-05:eddsa-ed25519:")
+    );
+
+    let expires_at =
+        chrono::DateTime::parse_from_rfc3339(token_response["expires_at"].as_str().unwrap())
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+    assert!(
+        expires_at <= issued_before + chrono::Duration::seconds(605),
+        "realm TTL must be capped at the 600s media-token ceiling"
+    );
+
+    let backend_token = token_response["backend_token"].as_str().unwrap();
+    assert!(backend_token.starts_with("mediasoup."));
+    let backend_payload = decode_backend_token_payload(backend_token);
+    assert_eq!(
+        backend_payload["iss"],
+        "did:web:media.example#mediasoup-2026-05"
+    );
+    assert_eq!(backend_payload["aud"], "mediasoup-demo");
+    assert_eq!(backend_payload["provider"], "mediasoup");
+    assert_eq!(backend_payload["realm_id"], DEMO_REALM_ID);
+    assert_eq!(backend_payload["call_id"], session_id);
+    assert_eq!(backend_payload["actor_id"], "did:web:alice.example");
+    assert_eq!(
+        backend_payload["device_id"],
+        "cx:device:01904100-0000-7000-8000-a11ce0000001"
+    );
+
+    let second_token_response: Value = TestClient::post("http://server/api/v1/rtc/token")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({
+            "realm_id": DEMO_REALM_ID,
+            "call_id": session_id,
+            "actor_id": "did:web:alice.example",
+            "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
+            "focus_id": "cx:focus:mediasoup:blue"
+        }))
+        .send(&app_from_state(state))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_ne!(
+        second_token_response["backend_token"], token_response["backend_token"],
+        "backend tokens must include issuer entropy and not be deterministic placeholders"
+    );
+}
+
+#[tokio::test]
+async fn rtc_media_token_rejects_epoch_and_focus_mismatches() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    install_media_service_epoch(&state, good_media_service_epoch());
+    let token = dev_token(state.clone()).await;
+    let session_id = create_webrtc_session_for_alice(state.clone(), &token).await;
+
+    let _: Value = TestClient::post(format!(
+        "http://server/api/v1/webrtc/sessions/{session_id}/signals"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .json(&serde_json::json!({
+        "message_type": "focus_join",
+        "payload": {"foci_preferred": ["cx:focus:mediasoup:blue"]},
+        "proofs": [{"kid": "did:web:alice.example#device", "sig": "dev"}]
+    }))
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
+
+    let mut focus_mismatch = TestClient::post("http://server/api/v1/rtc/token")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({
+            "realm_id": DEMO_REALM_ID,
+            "call_id": session_id,
+            "actor_id": "did:web:alice.example",
+            "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
+            "focus_id": "cx:focus:livekit:green"
+        }))
+        .send(&app_from_state(state.clone()))
+        .await;
+    let focus_mismatch_body: Value = focus_mismatch.take_json().await.unwrap();
+    assert_eq!(focus_mismatch_body["error"]["code"], "focus_mismatch");
+
+    install_media_service_epoch(
+        &state,
+        serde_json::json!({
+            "service_id": "did:web:media.example",
+            "foci": [{
+                "focus_id": "cx:focus:mediasoup:blue",
+                "backend": "mediasoup",
+                "connect_url": "wss://media.example/mediasoup",
+                "issuer_kid": "did:web:rogue.example#kid-1",
+                "audience": "mediasoup-demo"
+            }]
+        }),
+    );
+    let mut issuer_mismatch = TestClient::post("http://server/api/v1/rtc/token")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({
+            "realm_id": DEMO_REALM_ID,
+            "call_id": session_id,
+            "actor_id": "did:web:alice.example",
+            "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
+            "focus_id": "cx:focus:mediasoup:blue"
+        }))
+        .send(&app_from_state(state))
+        .await;
+    let issuer_mismatch_body: Value = issuer_mismatch.take_json().await.unwrap();
+    assert_eq!(
+        issuer_mismatch_body["error"]["code"],
+        "token_issuer_unauthorised"
+    );
+}
+
+#[tokio::test]
+async fn rtc_media_token_rejects_non_member_actor() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    install_media_service_epoch(&state, good_media_service_epoch());
+    let token = dev_token(state.clone()).await;
+    let session_id = create_webrtc_session_for_alice(state.clone(), &token).await;
+    let bob_token = dev_token_for_device(
+        state.clone(),
+        "did:web:bob.example",
+        "cx:device:01904100-0000-7000-8000-b0b000000001",
+        "Bob Phone",
+    )
+    .await;
+
+    let mut response = TestClient::post("http://server/api/v1/rtc/token")
+        .add_header("authorization", format!("Bearer {bob_token}"), true)
+        .json(&serde_json::json!({
+            "realm_id": DEMO_REALM_ID,
+            "call_id": session_id,
+            "actor_id": "did:web:bob.example",
+            "device_id": "cx:device:01904100-0000-7000-8000-b0b000000001",
+            "focus_id": "cx:focus:livekit:green"
+        }))
+        .send(&app_from_state(state))
+        .await;
+    assert_eq!(response.status_code, Some(StatusCode::FORBIDDEN));
+    let body: Value = response.take_json().await.unwrap();
+    assert_eq!(body["error"]["code"], "capability_denied");
+}
+
+async fn create_webrtc_session_for_alice(state: AppState, token: &str) -> String {
+    let session: Value = TestClient::post("http://server/api/v1/webrtc/sessions")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({
+            "space_id": DEMO_REALM_ID,
+            "participants": ["did:web:alice.example"],
+            "mode": "sfu",
+            "recording_policy": "none",
+            "ttl_ms": 60000
+        }))
+        .send(&app_from_state(state))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    session["session_id"].as_str().unwrap().to_owned()
+}
+
+fn install_media_service_epoch(state: &AppState, media_service: Value) {
+    let cell_id = CellRef::new(format!(
+        "cx:cell:cx.component.realm.media_service.v1:{DEMO_REALM_ID}"
+    ))
+    .unwrap();
+    state.projection.lock().unwrap().cells.insert(
+        cell_id,
+        CellState::Value(serde_json::json!({ "media_service": media_service })),
+    );
+}
+
+fn good_media_service_epoch() -> Value {
+    serde_json::json!({
+        "service_id": "did:web:media.example",
+        "e2ee_key_sources_allowed": ["mls_epoch"],
+        "foci": [
+            {
+                "focus_id": "cx:focus:livekit:green",
+                "backend": "livekit",
+                "connect_url": "wss://media.example/livekit",
+                "issuer_kid": "did:web:media.example#livekit-2026-05",
+                "audience": "livekit-demo",
+                "ttl_seconds": 300,
+                "e2ee_key_source": "mls_epoch"
+            },
+            {
+                "focus_id": "cx:focus:mediasoup:blue",
+                "backend": "mediasoup",
+                "connect_url": "wss://media.example/mediasoup",
+                "issuer_kid": "did:web:media.example#mediasoup-2026-05",
+                "audience": "mediasoup-demo",
+                "ttl_seconds": 900,
+                "e2ee_key_source": "mls_epoch"
+            }
+        ]
+    })
+}
+
+fn decode_backend_token_payload(token: &str) -> Value {
+    let parts = token.split('.').collect::<Vec<_>>();
+    assert_eq!(
+        parts.len(),
+        3,
+        "backend token should be provider.payload.sig"
+    );
+    let bytes = URL_SAFE_NO_PAD
+        .decode(parts[1])
+        .expect("backend token payload base64url");
+    serde_json::from_slice(&bytes).expect("backend token payload json")
 }

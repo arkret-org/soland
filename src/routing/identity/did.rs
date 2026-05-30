@@ -310,7 +310,8 @@ pub(super) async fn embedded_webvh_register(
             "version_id": version_id,
         }),
         "accepted",
-    );
+    )
+    .await;
     res.status_code(StatusCode::CREATED);
     json_ok(EmbeddedWebvhRegisterResponse {
         status: "created".to_owned(),
@@ -692,7 +693,8 @@ pub(super) async fn identity_submit_did_operation(
             "head_event_digest": event_digest.clone(),
         }),
         "accepted",
-    );
+    )
+    .await;
     json_ok(json!({
         "status": "accepted",
         "did": did.clone(),

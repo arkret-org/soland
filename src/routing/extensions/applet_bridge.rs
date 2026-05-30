@@ -104,7 +104,8 @@ async fn register_endpoint(
         verified,
         idempotency_key,
         res,
-    )?;
+    )
+    .await?;
     json_ok(response)
 }
 
@@ -245,7 +246,8 @@ async fn revoke_endpoint(aa: AuthArgs, depot: &mut Depot, req: &mut Request) -> 
             "ghost_count": record.ghosts.len(),
         }),
         "accepted",
-    );
+    )
+    .await;
     json_ok(json!({
         "applet_id": record.applet_id,
         "status": "revoked",
@@ -293,7 +295,7 @@ pub fn did_document_for_extension_actor(did: &str) -> Option<Value> {
     None
 }
 
-fn register_verified_applet(
+async fn register_verified_applet(
     state: &AppState,
     owner_actor_did: &str,
     manifest: AppletManifest,
@@ -371,7 +373,8 @@ fn register_verified_applet(
             "portal_realm_id": record.portal_realm_id,
         }),
         "accepted",
-    );
+    )
+    .await;
     res.status_code(StatusCode::CREATED);
     Ok(applet_response(&record))
 }

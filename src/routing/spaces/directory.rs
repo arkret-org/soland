@@ -585,7 +585,7 @@ fn signed_handle_claim(
     let signature = MoveSigner::sign_payload(&signer, &canonical_bytes)
         .map_err(|err| AppError::internal(format!("handle claim signing failed: {err}")))?;
 
-    Ok(HandleClaim {
+    let claim = HandleClaim {
         schema: "cx.schema.handle_claim.v1".to_owned(),
         handle: canonical_handle,
         handle_aliases: vec![format!("acct:{localpart}@{service_domain}")],
@@ -627,7 +627,15 @@ fn signed_handle_claim(
             created_at: Some(signature.created_at.to_rfc3339()),
             jws: Some(signature.jws),
         }],
-    })
+    };
+    if let Ok(envelope) = serde_json::to_value(&claim) {
+        let _ = state
+            .member_identity
+            .lock()
+            .expect("member_identity lock")
+            .upsert_handle_claim_envelope(envelope);
+    }
+    Ok(claim)
 }
 
 #[endpoint(

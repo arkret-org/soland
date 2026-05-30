@@ -129,7 +129,8 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         "invite_only",
         &["did:web:soland.local"],
         &[],
-    );
+    )
+    .await;
     let space_id = created_space["space_id"].as_str().unwrap().to_owned();
     assert!(space_id.starts_with("cx:realm:"));
     let realm_id = space_id.clone();
@@ -152,7 +153,8 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         "invite_only",
         &[],
         &["did:web:bob.example"],
-    );
+    )
+    .await;
     let invite_space_id = invite_space["space_id"].as_str().unwrap().to_owned();
     let bob_invites: Value = TestClient::get("http://server/api/v1/authz/invites")
         .add_header("authorization", format!("Bearer {bob}"), true)
@@ -189,7 +191,8 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         "listed",
         &[],
         &[],
-    );
+    )
+    .await;
     let listed_space_id = listed_space["space_id"].as_str().unwrap().to_owned();
     let listed_search: Value = TestClient::post("http://server/api/v1/directory/search-realms")
         .json(&serde_json::json!({"query": "Listed Directory Space"}))
@@ -219,7 +222,8 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         "unlisted",
         &[],
         &[],
-    );
+    )
+    .await;
     let unlisted_space_id = unlisted_space["space_id"].as_str().unwrap().to_owned();
     let unlisted_search: Value = TestClient::post("http://server/api/v1/directory/search-realms")
         .json(&serde_json::json!({"query": "Unlisted Directory Space"}))
@@ -265,7 +269,8 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         "invite_only",
         &[],
         &[],
-    );
+    )
+    .await;
     let locked_space_id = locked_space["space_id"].as_str().unwrap();
     let plaintext_without_service = post_message_event(
         state.clone(),
@@ -695,7 +700,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
             .any(|member| member["did"] == "did:web:bob.example")
     );
 
-    let deleted = delete_test_realm(&state, &space_id);
+    let deleted = delete_test_realm(&state, &space_id).await;
     assert_eq!(deleted["deleted"], true);
 
     let directory: Value = TestClient::post("http://server/api/v1/directory/search-realms")
@@ -766,7 +771,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         .unwrap();
     assert_eq!(logout["revoked"], true);
     {
-        let sessions = state.persistence.sessions().snapshot_all().unwrap();
+        let sessions = state.persistence.sessions().snapshot_all().await.unwrap();
         assert!(!sessions.iter().any(|session| session.token_hash == bob));
         let bob_session = sessions
             .iter()
@@ -786,6 +791,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         .persistence
         .audit()
         .snapshot_all()
+        .await
         .unwrap()
         .iter()
         .filter_map(|entry| entry["action"].as_str().map(ToOwned::to_owned))

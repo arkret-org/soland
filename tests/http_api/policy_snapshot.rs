@@ -149,7 +149,8 @@ async fn snapshot_v2_audit_path_verifies_against_merkle_root() {
         "public",
         &[],
         &[],
-    );
+    )
+    .await;
     let space_id = space["space_id"].as_str().unwrap().to_owned();
 
     let head: Value = TestClient::get(format!(
@@ -238,7 +239,8 @@ async fn snapshot_v2_multi_chunk_fixture_verifies_non_empty_audit_path() {
         "public",
         &[],
         &[],
-    );
+    )
+    .await;
     let space_id = space["space_id"].as_str().unwrap().to_owned();
 
     // 64 messages × ~4 KB body each ≈ 256 KB serialized — should land
