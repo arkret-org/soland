@@ -520,7 +520,7 @@ pub struct HandleClaim {
     pub issuer_service_did: Option<String>,
     pub binding_state: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub claim_type: Option<String>,
+    pub claim_kind: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub visibility: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -554,7 +554,7 @@ pub struct HandleClaimDeliveryBinding {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub service_acceptance_ref: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub policy_ref: Option<String>,
+    pub policy_event_ref: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, salvo::oapi::ToSchema)]
@@ -2309,7 +2309,7 @@ mod tests {
             issuer: "did:web:acme.example".to_owned(),
             issuer_service_did: Some("did:web:principal.acme.example".to_owned()),
             binding_state: "verified".to_owned(),
-            claim_type: Some("organization_handle".to_owned()),
+            claim_kind: Some("organization_handle".to_owned()),
             visibility: Some("restricted".to_owned()),
             audience: Some("cx:realm:0196419b-0000-7000-8000-000000000000".to_owned()),
             challenge: None,
@@ -2320,7 +2320,7 @@ mod tests {
                 binding_source: "organization_policy".to_owned(),
                 delivery_modes: vec!["events".to_owned(), "sync".to_owned()],
                 service_acceptance_ref: None,
-                policy_ref: None,
+                policy_event_ref: None,
             }),
             claims: Vec::new(),
             created_at: "2026-05-19T00:00:00Z".to_owned(),

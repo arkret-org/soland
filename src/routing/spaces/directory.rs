@@ -1104,7 +1104,7 @@ fn signed_handle_claim(
         // is removed from `cx.schema.handle_claim.v1`. The demo directory
         // issues a user/principal handle claim, so `user_handle` is the
         // correct class here.
-        "claim_type": "user_handle",
+        "claim_kind": "handle_binding",
         "visibility": "public",
         "audience": audience,
         "member_delivery_binding": {
@@ -1140,7 +1140,7 @@ fn signed_handle_claim(
         binding_state: "verified".to_owned(),
         // HC-SOL-1 — see the unsigned-projection comment above; v1 dropped
         // `service_handle`.
-        claim_type: Some("user_handle".to_owned()),
+        claim_kind: Some("handle_binding".to_owned()),
         visibility: Some("public".to_owned()),
         audience: Some(audience.to_owned()),
         challenge: None,
@@ -1157,7 +1157,7 @@ fn signed_handle_claim(
                 "key_packages".to_owned(),
             ],
             service_acceptance_ref: None,
-            policy_ref: None,
+            policy_event_ref: None,
         }),
         claims: Vec::new(),
         created_at: created_at.to_rfc3339(),

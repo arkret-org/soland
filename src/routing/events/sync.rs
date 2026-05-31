@@ -3371,7 +3371,7 @@ mod tests {
             "issuer": issuer,
             "issuer_service_did": issuer,
             "binding_state": binding_state,
-            "claim_type": "user_handle",
+            "claim_kind": "handle_binding",
             "visibility": "public",
             "audience": audience,
             "created_at": (now() - ChronoDuration::minutes(1)).to_rfc3339_opts(SecondsFormat::Millis, true),

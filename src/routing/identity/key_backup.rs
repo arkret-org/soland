@@ -175,16 +175,21 @@ fn validate_key_backup_kdf(backup: &Value, encryption: &Value) -> Result<(), App
             }
         }
         Some("pbkdf2") => {
+            if params.get("hash").is_some() {
+                return Err(schema_error(
+                    "pbkdf2 params.hash is forbidden; use digest_algorithm",
+                ));
+            }
             if required_u64(&Value::Object(params.clone()), "iterations")? < 600_000 {
                 return Err(schema_error("pbkdf2 params.iterations must be >= 600000"));
             }
-            let hash = params
-                .get("hash")
+            let digest_algorithm = params
+                .get("digest_algorithm")
                 .and_then(Value::as_str)
                 .unwrap_or_default();
-            if !matches!(hash, "sha256" | "sha384" | "sha512") {
+            if !matches!(digest_algorithm, "sha256" | "sha384" | "sha512") {
                 return Err(schema_error(
-                    "pbkdf2 params.hash must be sha256, sha384, or sha512",
+                    "pbkdf2 params.digest_algorithm must be sha256, sha384, or sha512",
                 ));
             }
             if kdf
